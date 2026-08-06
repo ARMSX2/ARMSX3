@@ -8,9 +8,9 @@ Uses the latest RPCS3 upstream code (the recent ARM64 improvements included).
 Status
 ------
 
-Skate 3 boots, loads and reaches gameplay at roughly 20 to 30 fps on a
+From my testing, I only tried Skate 3. It boots, loads and reaches gameplay at roughly 20 to 30 fps on a
 Snapdragon 8 Gen 2. Rendering, audio, touch controls and physical controllers
-work. Almost nothing else has been tested.
+work. Almost nothing else has been tested. So the main stop gap at the moment is performance/speed. 
 
 Differences from upstream RPCS3
 -------------------------------
