@@ -201,7 +201,7 @@ val EN: Map<String, String> = mapOf(
     "about.display" to "Display",
     "about.architecture" to "Architecture",
     "about.pageSize" to "Memory page",
-    "about.pcsx2.title" to "PCSX2 project",
+    "about.pcsx2.title" to "RPCS3 project",
     "about.pcsx2.description" to "ARMSX3 is built on the open-source RPCS3 emulator.",
     // --- drawer About section: external links ---
     "about.section.header" to "About",

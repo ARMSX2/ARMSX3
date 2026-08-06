@@ -35,8 +35,8 @@ import com.armsx2.ui.common.ArmsTopBar
 import com.armsx2.ui.common.GlassPanel
 import com.armsx2.ui.common.RoundAction
 
-private const val RepositoryUrl = "https://github.com/ARMSX2/ARMSX2"
-private const val Pcsx2RepositoryUrl = "https://github.com/PCSX2/pcsx2"
+private const val RepositoryUrl = "https://github.com/ARMSX2/ARMSX3"
+private const val Rpcs3RepositoryUrl = "https://github.com/RPCS3/rpcs3"
 
 @Composable
 fun AboutScreen(onBack: () -> Unit, viewModel: AboutViewModel = viewModel()) {
@@ -108,24 +108,24 @@ fun AboutScreen(onBack: () -> Unit, viewModel: AboutViewModel = viewModel()) {
                     if (compact) {
                         ProjectCard(
                             title = str("about.repository.title"),
-                            repository = "ARMSX2/ARMSX2",
+                            repository = "ARMSX2/ARMSX3",
                             description = str("about.repository.description"),
                             glyph = "⌘",
                             onOpen = { uriHandler.openUri(RepositoryUrl) },
                         )
                         ProjectCard(
                             title = str("about.pcsx2.title"),
-                            repository = "PCSX2/pcsx2",
+                            repository = "RPCS3/rpcs3",
                             description = str("about.pcsx2.description"),
-                            glyph = "PS2",
+                            glyph = "PS3",
                             secondary = true,
-                            onOpen = { uriHandler.openUri(Pcsx2RepositoryUrl) },
+                            onOpen = { uriHandler.openUri(Rpcs3RepositoryUrl) },
                         )
                     } else {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             ProjectCard(
                                 title = str("about.repository.title"),
-                                repository = "ARMSX2/ARMSX2",
+                                repository = "ARMSX2/ARMSX3",
                                 description = str("about.repository.description"),
                                 glyph = "⌘",
                                 modifier = Modifier.weight(1f),
@@ -133,12 +133,12 @@ fun AboutScreen(onBack: () -> Unit, viewModel: AboutViewModel = viewModel()) {
                             )
                             ProjectCard(
                                 title = str("about.pcsx2.title"),
-                                repository = "PCSX2/pcsx2",
+                                repository = "RPCS3/rpcs3",
                                 description = str("about.pcsx2.description"),
-                                glyph = "PS2",
+                                glyph = "PS3",
                                 modifier = Modifier.weight(1f),
                                 secondary = true,
-                                onOpen = { uriHandler.openUri(Pcsx2RepositoryUrl) },
+                                onOpen = { uriHandler.openUri(Rpcs3RepositoryUrl) },
                             )
                         }
                     }
