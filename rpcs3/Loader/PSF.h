@@ -4,6 +4,10 @@
 #include <map>
 #include <string>
 #include <string_view>
+// ARMSX3: save_object() returns and takes std::vector<u8> but <vector> was
+// never included -- it only ever compiled because every previous includer
+// happened to pull <vector> in first.
+#include <vector>
 
 namespace fs
 {

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:keepScreenOn="true"
+    tools:context=".RPCSXActivity">
+
+    <net.rpcsx.GraphicsFrame
+        android:id="@+id/surfaceView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <net.rpcsx.overlay.PadOverlay
+        android:id="@+id/padOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <ImageButton
+        android:id="@+id/osc_toggle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="?android:attr/actionBarItemBackground"
+        android:padding="8dp"
+        android:src="@drawable/ic_show_osc"
+        app:tint="#40FFFFFF"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        android:layout_marginEnd="10dp"
+        android:layout_marginBottom="10dp" />
+
+    <!--
+      ARMSX3: opens RPCS3's own in-game home menu, which already contains the
+      full savestate page (save / save and exit / reload slot), plus trophies,
+      screenshot, restart and exit. The JNI entry point openHomeMenu() existed
+      but had zero call sites, so all of that was unreachable on Android.
+      Surfacing the core's menu beats building a parallel savestate UI that
+      would drift out of sync with it.
+    -->
+    <ImageButton
+        android:id="@+id/home_menu"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="?android:attr/actionBarItemBackground"
+        android:contentDescription="@string/home_menu"
+        android:padding="8dp"
+        android:src="@drawable/ic_settings"
+        app:tint="#40FFFFFF"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/osc_toggle"
+        android:layout_marginEnd="4dp"
+        android:layout_marginBottom="10dp" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

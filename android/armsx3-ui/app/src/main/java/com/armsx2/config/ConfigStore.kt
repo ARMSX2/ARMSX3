@@ -1,0 +1,551 @@
+package com.armsx2.config
+
+import com.armsx2.runtime.MainActivityRuntime
+import org.json.JSONObject
+import androidx.core.content.edit
+import java.io.File
+
+/**
+ * Persistence + resolution for emu [Settings].
+ *
+ * Two storage tiers, both in `MainActivityRuntime.prefs`:
+ *   - **Global** under `config.global` — the user's baseline. Stored as a
+ *     full Settings JSON.
+ *   - **Per-game** under `config.game.<serial>` — sparse JSON containing
+ *     ONLY the fields the user explicitly overrode for that title. Sparse
+ *     storage means future global tweaks still flow through fields the
+ *     user hasn't touched per-game.
+ *
+ * [resolveForGame] is the only method anyone outside the settings UI
+ * should call. It returns the merged Settings to push at VM launch.
+ *
+ * No caching — load on demand. Writes are rare (user clicked Save) and
+ * reads happen at game launch (once per launch). Both well within
+ * SharedPreferences' overhead.
+ */
+/**
+ * Where overlay setting changes land. The overlay header picks one at
+ * runtime via a switch; default is [Game] when a game is loaded,
+ * [Global] otherwise.
+ *
+ *   - [Global] writes the full Settings to `config.global`. Affects every
+ *     future game launch that doesn't have its own per-game override.
+ *   - [Game] writes the SPARSE diff (only fields differing from current
+ *     global) to `config.game.<serial>`. Global stays untouched; only
+ *     this title sees the change.
+ */
+enum class SettingsScope { Global, Game }
+
+object ConfigStore {
+    private const val KEY_GLOBAL = "config.global"
+    private const val KEY_BLEND_BASIC_MIGRATED = "config.migrated.blendBasic"
+    // One-time seed of the (now per-game) renderer/upscale fields from the legacy
+    // global prefs, so updating doesn't reset everyone's backend/resolution.
+    private const val KEY_RENDERER_MIGRATED = "config.migrated.rendererUpscale"
+    // One-time seed of the (now per-game) screen orientation + custom Vulkan driver from
+    // their legacy global prefs, so updating doesn't reset a user's rotation lock or GPU driver.
+    private const val KEY_ORIENTATION_DRIVER_MIGRATED = "config.migrated.orientationDriver"
+    // One-time flip of existing saves to the new Adreno framebuffer-fetch default-on.
+    // One-time seed of the (now per-game) output-scaler fields from their legacy
+    // global-only prefs, so updating doesn't reset a user's display resolution.
+    private const val KEY_OUTPUT_SCALE_MIGRATED = "config.migrated.outputScale"
+    private const val KEY_ADRENO_FBFETCH_MIGRATED = "config.migrated.adrenoFbFetchOn"
+    // One-time flip of existing all-on OSD saves to the new default-off.
+    private const val KEY_OSD_OFF_MIGRATED = "config.migrated.osdDefaultOff"
+    private const val KEY_OSD_SCALE_MIGRATED = "config.migrated.osdScale65"
+    // One-time reconcile for the fresh-install + reused-data-folder case (people who
+    // can't update in place and re-point setup at their old folder). See reconcileReusedFolder.
+    private const val KEY_FOLDER_RECONCILE = "config.migrated.folderReconcile"
+    private const val KEY_SHADER_INTERP_MIGRATED = "config.migrated.shaderInterpOff"
+    private const val KEY_XFLOAT_ACCURATE_MIGRATED = "config.migrated.xfloatAccurate"
+    private const val KEY_SPU_DECODER_RESTORE = "config.migrated.spuDecoderRestoreLlvm"
+    private const val KEY_XFLOAT_BACK_TO_APPROX = "config.migrated.xfloatBackToApprox"
+    private const val KEY_PRECISE_SPU_OFF = "config.migrated.preciseSpuVerifyOff"
+    private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
+    private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
+    private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
+    private const val KEY_TIMESTRETCH_OFF = "config.migrated.audioTimeStretchOff"
+    // Mirror of the settings, written INTO the data folder so a later fresh install that
+    // reuses the same folder can restore them (SharedPreferences don't survive uninstall).
+    private const val BACKUP_FILENAME = "armsx2-settings.json"
+    private fun keyForGame(serial: String) = "config.game.$serial"
+
+    fun loadGlobal(): Settings {
+        val raw = MainActivityRuntime.prefs.getString(KEY_GLOBAL, null)
+        var parsed = if (raw != null) {
+            try { Settings.fromJson(JSONObject(raw)) } catch (_: Exception) { Settings() }
+        } else {
+            Settings()
+        }
+        var dirty = false
+
+        // Legacy: the HW scaler + screen-resolution override were global-only prefs
+        // before they became per-game scoped. Adopt whatever the user had set.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_OUTPUT_SCALE_MIGRATED, false))
+        {
+            val legacyScaler = MainActivityRuntime.prefs.getInt("ui.hwScaler", 0)
+            val legacyRes = MainActivityRuntime.prefs.getString("ui.screenResOverride", "auto") ?: "auto"
+            if (legacyScaler != 0 || legacyRes != "auto")
+            {
+                parsed = parsed.copy(hwScaler = legacyScaler, screenResOverride = legacyRes)
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_OUTPUT_SCALE_MIGRATED, true) }
+        }
+
+        // A diagnostic build pinned the SPU decoder to the interpreter to prove the
+        // ARM64 SPU LLVM recompiler was miscompiling. That value persists in the
+        // settings store, so put anyone carrying it back on the recompiler once --
+        // the interpreter is a debugging tool, not something to ship someone.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_SPU_DECODER_RESTORE, false)) {
+            if (raw != null && parsed.ps3.spuDecoder == 0) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(spuDecoder = 3))
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_SPU_DECODER_RESTORE, true) }
+        }
+
+        // Audio time-stretching costs real CPU for no benefit on a handheld: a
+        // profile of Skate 3 put soundtouch's FIRFilter::evaluateFilterMulti and
+        // TDStretch::calcCrossCorrAccumulate together at ~8% of all emulator C++
+        // time. Upstream defaults it off; a stale stored value had it on.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_TIMESTRETCH_OFF, false)) {
+            if (raw != null && parsed.ps3.audioTimeStretch) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(audioTimeStretch = false))
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_TIMESTRETCH_OFF, true) }
+        }
+
+        // Turn the scheduler on so the new big.LITTLE affinity mask applies.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_AFFINITY_ON, false)) {
+            if (raw != null && parsed.affinityMode == 0) {
+                parsed = parsed.copy(affinityMode = 2)
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_AFFINITY_ON, true) }
+        }
+
+        // Undo the relaxed-ZCULL default: it stopped Skate 3 rendering.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_RELAXED_ZCULL_OFF, false)) {
+            if (raw != null && parsed.ps3.relaxedZcull) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(relaxedZcull = false))
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_RELAXED_ZCULL_OFF, true) }
+        }
+
+
+        // The ARM64 block checksum is fixed, so the full-compare workaround can go.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_PRECISE_SPU_OFF, false)) {
+            if (raw != null && parsed.ps3.preciseSpuVerification) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(preciseSpuVerification = false))
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_PRECISE_SPU_OFF, true) }
+        }
+
+        // ...and back off it again: Accurate was a wrong guess at the SPU freeze,
+        // which was really the block-verification checksum. Return anyone carrying
+        // the forced Accurate value to upstream's Approximate.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_XFLOAT_BACK_TO_APPROX, false)) {
+            if (raw != null && parsed.ps3.spuXFloat == 0) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(spuXFloat = 1))
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_XFLOAT_BACK_TO_APPROX, true) }
+        }
+
+        // Move anyone still on the old Approximate xfloat default onto Accurate.
+        // Approximate corrupted SPU float registers badly enough that a job
+        // manager built a DMA command out of one; see Settings.spuXFloat. A
+        // deliberate choice of Relaxed/Inaccurate is left alone.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_XFLOAT_ACCURATE_MIGRATED, false)) {
+            if (raw != null && parsed.ps3.spuXFloat == 1) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(spuXFloat = 0))
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_XFLOAT_ACCURATE_MIGRATED, true) }
+        }
+
+        // The shader interpreter cannot compile on Adreno -- vkCreateGraphicsPipelines
+        // returns VK_ERROR_UNKNOWN and the link ensure() kills the process during
+        // boot, before any game renders. Anyone carrying the old default (2, the
+        // upstream one) has a config that cannot boot, so move it to plain Async
+        // Recompiler once. Interpreter-only (3) is left alone: that is a deliberate
+        // choice, not an inherited default.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_SHADER_INTERP_MIGRATED, false)) {
+            if (raw != null && parsed.ps3.shaderMode == 2) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(shaderMode = 1))
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_SHADER_INTERP_MIGRATED, true) }
+        }
+
+        // Legacy: "Basic" blending migration.
+        if (raw != null && !MainActivityRuntime.prefs.getBoolean(KEY_BLEND_BASIC_MIGRATED, false) &&
+            parsed.accurateBlendingUnit == 4) {
+            parsed = parsed.copy(accurateBlendingUnit = 1)
+            dirty = true
+        }
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_BLEND_BASIC_MIGRATED, false)) {
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_BLEND_BASIC_MIGRATED, true) }
+        }
+
+        // Seed renderer/upscale from the legacy global prefs (where they used to
+        // live) into the Settings tier, once. After this they're scope-aware like
+        // every other setting; the old prefs become vestigial.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_RENDERER_MIGRATED, false)) {
+            MainActivityRuntime.prefs.getString("renderer", null)?.takeIf { it.isNotBlank() }?.let {
+                parsed = parsed.copy(renderer = it)
+                dirty = true
+            }
+            legacyUpscalePref()?.let {
+                parsed = parsed.copy(upscaleFloat = it)
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_RENDERER_MIGRATED, true) }
+        }
+
+        // Same one-time seed for screen orientation + the custom Vulkan driver, which used
+        // to be global-only prefs ("ui.orientation" / "customDriverId"). After this they're
+        // scope-aware (global ∘ per-game) like renderer; the old prefs become vestigial.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_ORIENTATION_DRIVER_MIGRATED, false)) {
+            val legacyOrient = MainActivityRuntime.prefs.getInt("ui.orientation", 0)
+            if (legacyOrient != parsed.orientation) {
+                parsed = parsed.copy(orientation = legacyOrient)
+                dirty = true
+            }
+            MainActivityRuntime.prefs.getString("customDriverId", null)?.takeIf { it.isNotBlank() }?.let {
+                parsed = parsed.copy(customDriverId = it)
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_ORIENTATION_DRIVER_MIGRATED, true) }
+        }
+
+        // Adreno framebuffer-fetch is now default-on. Flip existing global saves that
+        // still carry the old default-off ONCE, so updating users get the fast
+        // accurate-blending path too (they can turn it back off in the Renderer tab).
+        if (raw != null && !MainActivityRuntime.prefs.getBoolean(KEY_ADRENO_FBFETCH_MIGRATED, false) &&
+            !parsed.adrenoFbFetch) {
+            parsed = parsed.copy(adrenoFbFetch = true)
+            dirty = true
+        }
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_ADRENO_FBFETCH_MIGRATED, false)) {
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_ADRENO_FBFETCH_MIGRATED, true) }
+        }
+
+        // The perf OSD (FPS/stats counters) now defaults OFF — it read as clutter.
+        // Flip existing saves that still sit at the old all-on default ONCE; a user
+        // who'd already turned any element off is left untouched, and the in-game
+        // "OSD" toggle re-enables everything. (The bottom-left/right summaries are
+        // handled by their own absent-key default for pre-2.6 saves.)
+        if (raw != null && !MainActivityRuntime.prefs.getBoolean(KEY_OSD_OFF_MIGRATED, false) &&
+            parsed.osdShowFps && parsed.osdShowVps && parsed.osdShowSpeed &&
+            parsed.osdShowCpu && parsed.osdShowGpu && parsed.osdShowResolution &&
+            parsed.osdShowGsStats && parsed.osdShowFrameTimes &&
+            parsed.osdShowHardwareInfo && parsed.osdShowVersion) {
+            parsed = parsed.copy(
+                osdShowFps = false, osdShowVps = false, osdShowSpeed = false,
+                osdShowCpu = false, osdShowGpu = false, osdShowResolution = false,
+                osdShowGsStats = false, osdShowFrameTimes = false,
+                osdShowHardwareInfo = false, osdShowVersion = false,
+            )
+            dirty = true
+        }
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_OSD_OFF_MIGRATED, false)) {
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_OSD_OFF_MIGRATED, true) }
+        }
+
+        // OSD text now defaults to 65% (was 100%) to match NetherSX2 — at 100 the stats block eats
+        // a handheld screen. Only saves sitting on the exact old default are moved; anyone who
+        // picked their own size keeps it.
+        if (raw != null && !MainActivityRuntime.prefs.getBoolean(KEY_OSD_SCALE_MIGRATED, false) &&
+            parsed.osdScale == 100) {
+            parsed = parsed.copy(osdScale = 65)
+            dirty = true
+        }
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_OSD_SCALE_MIGRATED, false)) {
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_OSD_SCALE_MIGRATED, true) }
+        }
+
+        if (dirty) saveGlobal(parsed)
+        return parsed
+    }
+
+    /** Read the legacy global upscale pref (float, or older int/string), or null. */
+    private fun legacyUpscalePref(): Float? {
+        val all = MainActivityRuntime.prefs.all
+        fun coerce(raw: Any?): Float? = when (raw) {
+            is Float -> raw
+            is Double -> raw.toFloat()
+            is Int -> raw.toFloat()
+            is Long -> raw.toFloat()
+            is String -> raw.toFloatOrNull()
+            else -> null
+        }?.coerceIn(0.25f, 8.0f)
+        return coerce(all["upscaleFloat"]) ?: coerce(all["upscale"])
+    }
+
+    fun saveGlobal(s: Settings) {
+        MainActivityRuntime.prefs.edit { putString(KEY_GLOBAL, s.toJson().toString()) }
+        writeBackupMirror()
+    }
+
+    /**
+     * Persist capability-aware defaults only when this is genuinely a fresh install.
+     *
+     * Call after [reconcileReusedFolder]: a reused data directory gets first chance to
+     * restore its prior global settings, while an empty install starts with the
+     * zero-frame GS queue on capable devices. Low-end devices retain the smoother
+     * two-frame queue. Once persisted, this never changes an existing user's choice.
+     */
+    fun seedFreshInstallDefaults(context: android.content.Context) {
+        if (MainActivityRuntime.prefs.getString(KEY_GLOBAL, null) != null) return
+        // Low Latency (zero-frame GS queue) is NOT the default any more — it was briefly seeded on
+        // capable devices, but a zero-frame queue gives the GS thread no slack and cost smoothness
+        // on too many setups. Everyone starts on PCSX2's two-frame queue and can opt in from the
+        // Performance tab. Settings.vsyncQueueSize already defaults to 2, so this just materialises
+        // the global save that the rest of the config layer keys "is this a fresh install?" off.
+        saveGlobal(Settings())
+    }
+
+    // Migration 1 (config.migrated.lowLatencyDefault) flipped existing capable devices ON. It is
+    // retired rather than deleted: the key must never be reused, or an install that already ran it
+    // would skip the correction below.
+    private const val KEY_LOWLATENCY_OFF_MIGRATED = "config.migrated.lowLatencyOff"
+    /**
+     * One-time correction that undoes migration 1: puts existing installs back on the two-frame GS
+     * queue. Keyed separately so it runs exactly once even on devices that already took the earlier
+     * flip, and after it runs the user's own choice sticks.
+     *
+     * Caveat, deliberately accepted: this cannot distinguish "queue 0 because migration 1 set it"
+     * from "queue 0 because the user chose it", so anyone who opted in during the short window that
+     * shipped the ON default gets reset once and has to re-enable it.
+     */
+    fun migrateLowLatencyOff(context: android.content.Context) {
+        if (MainActivityRuntime.prefs.getBoolean(KEY_LOWLATENCY_OFF_MIGRATED, false)) return
+        MainActivityRuntime.prefs.edit().putBoolean(KEY_LOWLATENCY_OFF_MIGRATED, true).apply()
+        // Fresh installs are handled by seedFreshInstallDefaults; only touch an existing global save.
+        if (MainActivityRuntime.prefs.getString(KEY_GLOBAL, null) == null) return
+        val g = loadGlobal()
+        if (g.vsyncQueueSize == 0) saveGlobal(g.copy(vsyncQueueSize = 2))
+    }
+
+    /** Load the sparse per-game override blob, or null if there are none. */
+    fun loadOverrides(serial: String): JSONObject? {
+        val raw = MainActivityRuntime.prefs.getString(keyForGame(serial), null) ?: return null
+        return try {
+            JSONObject(raw)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveOverrides(serial: String, overrides: JSONObject) {
+        MainActivityRuntime.prefs.edit { putString(keyForGame(serial), overrides.toString()) }
+        writeBackupMirror()
+    }
+
+    fun clearOverrides(serial: String) {
+        MainActivityRuntime.prefs.edit { remove(keyForGame(serial)) }
+        writeBackupMirror()
+    }
+
+    /**
+     * Resolve effective Settings for a VM launch:
+     *   per-game override (if present) ∘ global ∘ defaults.
+     *
+     * Pass null serial to skip the per-game tier (BIOS boots, anonymous
+     * launches via Swap/Boot Disc when no GameInfo was carried through).
+     */
+    fun resolveForGame(serial: String?): Settings {
+        val global = loadGlobal()
+        if (serial == null) return global
+        val overrides = loadOverrides(serial) ?: return global
+        return Settings.merge(global, overrides)
+    }
+
+    /**
+     * Single entry point for overlay tabs to persist a settings change.
+     * Scope picks the storage tier; serial may be null (Global is the
+     * only valid scope in that case).
+     *
+     * Game scope stores a SPARSE override: a field the user never touched for this title
+     * is absent, so a later global tweak still reaches it. That inheritance is the point
+     * and is unchanged.
+     *
+     * What IS new: an override is STICKY once it exists. The old rule — store exactly the
+     * fields that differ from global right now — could not tell "the user set this for
+     * this game, and it happens to match global" from "the user never touched it", so it
+     * stored nothing in both cases. Set Cheats on for a game while global also had them
+     * on, later turn global off, and the game silently lost its setting; that's the
+     * reported "global overwrites per-game and vice versa". Now a field is pinned to the
+     * game once it's overridden — by differing from global, by the user changing it here
+     * ([previous]), or by already being pinned — and only [clearOverrides] unpins it.
+     */
+    fun save(scope: SettingsScope, serial: String?, updated: Settings, previous: Settings? = null) {
+        if (scope == SettingsScope.Game && serial != null) {
+            val global = loadGlobal()
+            val overrides = Settings.diff(global, updated)
+            // Every field, so a pinned key can be given its CURRENT value even when that
+            // value equals global's (the diff above necessarily omits it).
+            val full = updated.toJson()
+            val existing = loadOverrides(serial)
+            val pinned = LinkedHashSet<String>()
+            existing?.keys()?.forEach { pinned.add(it) }
+            // What the user just changed, pinned even if it landed on global's value —
+            // otherwise editing a field in Game scope could silently un-pin it.
+            val changedNow = LinkedHashSet<String>()
+            previous?.let { Settings.diff(it, updated).keys().forEach { k -> changedNow.add(k); pinned.add(k) } }
+            pinned.forEach { key ->
+                if (overrides.has(key))
+                    return@forEach
+                // ★ For a pinned key the caller did NOT touch in this save, keep the value ALREADY
+                // STORED rather than re-pinning whatever `updated` happens to hold. Every screen
+                // writes the whole Settings object, so `updated` can be a stale snapshot; the old
+                // unconditional `full.get(key)` then wrote that stale value straight back over a
+                // good override. That is how a per-game FPS cap of 30 came back as 0 and STAYED 0 —
+                // the pin made the wrong value sticky, so it survived even after the writers were
+                // fixed. Only trust `updated` for keys `previous` proves the caller just changed.
+                //
+                // When `previous` is absent the caller cannot tell us what it changed, so fall back
+                // to the original behaviour rather than silently altering semantics for those paths.
+                val trustUpdated = changedNow.contains(key) || previous == null
+                when {
+                    trustUpdated && full.has(key) -> overrides.put(key, full.get(key))
+                    existing != null && existing.has(key) -> overrides.put(key, existing.get(key))
+                    full.has(key) -> overrides.put(key, full.get(key))
+                }
+            }
+            saveOverrides(serial, overrides)
+        } else {
+            saveGlobal(updated)
+        }
+    }
+
+    // ---- Fresh-install + reused-data-folder recovery (#9) ----
+    //
+    // SharedPreferences (where config.global lives) are WIPED when the app is
+    // uninstalled. People who can't update in place — different signing key between the
+    // old-UI and new-UI builds — must uninstall+reinstall, then re-point setup at their
+    // existing data folder to keep their games/BIOS/saves. That folder still holds their
+    // old native config (PCSX2-Android.ini) + per-game gamesettings/*.ini, so the core
+    // applies old settings while the new UI shows defaults and then clobbers them.
+    //
+    // Fix: mirror settings INTO the folder on every save, and on first run — when there
+    // is NO config.global in prefs — restore from that mirror (lossless) or, failing that,
+    // seed from the old PCSX2-Android.ini (best-effort). The `config.global == null` guard
+    // means anyone ALREADY on the new UI is never touched: with settings present there is
+    // nothing to recover, so this can only ADD when there are none, never overwrite.
+
+    private fun backupFile(): File? {
+        val root = MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return null
+        return File(root, BACKUP_FILENAME)
+    }
+
+    /** Write the in-folder settings mirror (global + every per-game blob). Cheap; called
+     *  on each save. Silently no-ops until the data root is known. */
+    private fun writeBackupMirror() {
+        val file = backupFile() ?: return
+        runCatching {
+            val root = JSONObject()
+            MainActivityRuntime.prefs.getString(KEY_GLOBAL, null)?.let { root.put("global", JSONObject(it)) }
+            val games = JSONObject()
+            for ((k, v) in MainActivityRuntime.prefs.all) {
+                if (k.startsWith("config.game.") && v is String) {
+                    runCatching { games.put(k.removePrefix("config.game."), JSONObject(v)) }
+                }
+            }
+            if (games.length() > 0) root.put("games", games)
+            file.parentFile?.mkdirs()
+            file.writeText(root.toString())
+        }
+    }
+
+    /** One-time, guarded recovery for the fresh-install + reused-folder case. Call once at
+     *  app init (after the data root is resolved). Ordered: (1) restore losslessly from the
+     *  in-folder mirror a prior new-UI install left; (2) else seed config.global from the
+     *  folder's PCSX2-Android.ini. NEVER runs when config.global already exists. */
+    fun reconcileReusedFolder() {
+        if (MainActivityRuntime.prefs.getBoolean(KEY_FOLDER_RECONCILE, false)) return
+        MainActivityRuntime.prefs.edit { putBoolean(KEY_FOLDER_RECONCILE, true) }
+        // Hard guard: an existing new-UI user (has config.global) is off-limits.
+        if (MainActivityRuntime.prefs.getString(KEY_GLOBAL, null) != null) return
+
+        // (1) Lossless restore from the in-folder mirror (written by a prior new-UI install).
+        val mirror = backupFile()
+        if (mirror != null && mirror.exists() && mirror.length() > 0L) {
+            val restored = runCatching {
+                val root = JSONObject(mirror.readText())
+                root.optJSONObject("global")?.let { g ->
+                    MainActivityRuntime.prefs.edit { putString(KEY_GLOBAL, g.toString()) }
+                }
+                root.optJSONObject("games")?.let { games ->
+                    val it = games.keys()
+                    while (it.hasNext()) {
+                        val serial = it.next()
+                        games.optJSONObject(serial)?.let { g ->
+                            MainActivityRuntime.prefs.edit { putString(keyForGame(serial), g.toString()) }
+                        }
+                    }
+                }
+                MainActivityRuntime.prefs.getString(KEY_GLOBAL, null) != null
+            }.getOrDefault(false)
+            if (restored) return
+        }
+
+        // (2) Best-effort seed from the folder's old native PCSX2-Android.ini (old-UI case).
+        val root = MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return
+        val ini = File(root, "PCSX2-Android.ini")
+        if (!ini.exists() || ini.length() == 0L) return
+        runCatching {
+            val map = parseIni(ini.readText())
+            if (map.isNotEmpty()) saveGlobal(Settings().readFromIni(map))
+        }
+    }
+
+    /**
+     * Delete every settings layer that lives OUTSIDE SharedPreferences. Part of the full app
+     * reset, and it is not optional: prefs are only one of four stores, and clearing them alone
+     * leaves the reset silently undone.
+     *
+     *  - the in-folder mirror ([BACKUP_FILENAME]): [reconcileReusedFolder] re-seeds prefs from
+     *    it precisely BECAUSE config.global is missing, which is exactly the state a reset
+     *    creates — so the next launch would restore everything just wiped.
+     *  - `PCSX2-Android.ini`: the fallback seed for the same recovery path.
+     *  - the `gamesettings` directory of per-game INIs. The core reads those directly and they
+     *    SHADOW the global tier, so leaving them behind means per-game tweaks survive a reset
+     *    and then look like settings that "do nothing".
+     *
+     * Games, BIOS, saves, memory cards, save states, covers and texture packs are untouched.
+     */
+    fun purgeAllSettingsFiles() {
+        runCatching { backupFile()?.delete() }
+        val root = MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return
+        runCatching { File(root, "PCSX2-Android.ini").delete() }
+        runCatching { File(root, "gamesettings").deleteRecursively() }
+    }
+
+    /** Minimal INI reader: "[Section]" + "Key = Value" -> map keyed "Section/Key". Comments
+     *  (# / ;) and blank lines ignored. Section text is taken verbatim (it can itself contain
+     *  slashes, e.g. "EmuCore/GS"), matching the (section,key) applyTo/readFromIni use. */
+    private fun parseIni(text: String): Map<String, String> {
+        val map = HashMap<String, String>()
+        var section = ""
+        for (raw in text.lineSequence()) {
+            val line = raw.trim()
+            if (line.isEmpty() || line.startsWith("#") || line.startsWith(";")) continue
+            if (line.startsWith("[") && line.endsWith("]")) {
+                section = line.substring(1, line.length - 1).trim()
+                continue
+            }
+            val eq = line.indexOf('=')
+            if (eq <= 0) continue
+            val key = line.substring(0, eq).trim()
+            val value = line.substring(eq + 1).trim()
+            if (key.isNotEmpty()) map["$section/$key"] = value
+        }
+        return map
+    }
+}

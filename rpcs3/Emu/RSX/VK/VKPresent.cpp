@@ -9,6 +9,9 @@
 #include "upscalers/bilinear_pass.hpp"
 #include "upscalers/fsr_pass.h"
 #include "upscalers/nearest_pass.hpp"
+#ifdef __ANDROID__
+#include "upscalers/librashader_pass.h"
+#endif
 #include "util/asm.hpp"
 #include "util/video_provider.h"
 
@@ -36,6 +39,26 @@ namespace
 
 bool VKGSRender::reinitialize_swapchain()
 {
+	if (m_surface_lost)
+	{
+		// handle() blocks until the app hands us a live native window again, so
+		// this parks here for as long as the user is away and resumes the moment
+		// they come back.
+		if (auto* wsi = dynamic_cast<vk::swapchain_WSI*>(m_swapchain.get()))
+		{
+			rsx_log.warning("Surface was lost; rebuilding it from the current native window.");
+
+			// ORDER MATTERS. The swapchain has to be destroyed before the surface
+			// it was built from -- Vulkan forbids destroying a surface that a live
+			// swapchain still references, and doing it the other way round faulted
+			// inside the driver on the very next present.
+			wsi->destroy_swapchain_only();
+			wsi->replace_surface(m_instance.recreate_surface(m_frame->handle()));
+		}
+
+		m_surface_lost = false;
+	}
+
 	m_swapchain_dims.width = m_frame->client_width();
 	m_swapchain_dims.height = m_frame->client_height();
 
@@ -160,6 +183,12 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 			break;
 		case VK_ERROR_OUT_OF_DATE_KHR:
 			swapchain_unavailable = true;
+			break;
+		case VK_ERROR_SURFACE_LOST_KHR:
+			// See the acquire path: the window went away, so the surface has to be
+			// rebuilt before the swapchain can be.
+			swapchain_unavailable = true;
+			m_surface_lost = true;
 			break;
 		default:
 			// Other errors not part of rpcs3. This can be caused by 3rd party injectors with bad code, of which we have no control over.
@@ -614,6 +643,27 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			reinitialize_swapchain();
 			ensure(m_current_frame, "Could not reinitialize swapchain after VK_ERROR_OUT_OF_DATE_KHR signal!");
 			continue;
+		case VK_ERROR_SURFACE_LOST_KHR:
+		{
+			// Recoverable, and on Android routine: the ANativeWindow is destroyed
+			// every time the app leaves the foreground, taking the VkSurfaceKHR
+			// with it. This fell through to die_with_error below, which killed the
+			// RSX thread outright -- the picture never came back and the game ran
+			// on with sound only until it was force-closed.
+			rsx_log.warning("vkAcquireNextImageKHR failed with VK_ERROR_SURFACE_LOST. Rebuilding the surface.");
+			swapchain_unavailable = true;
+			m_surface_lost = true;
+
+			if (!reinitialize_swapchain())
+			{
+				// Still no usable window. Drop this frame rather than spinning in
+				// the acquire loop; the next flip retries.
+				m_frame->flip(m_context);
+				rsx::thread::flip(info);
+				return;
+			}
+			continue;
+		}
 		default:
 			vk::die_with_error(status);
 		}
@@ -793,6 +843,12 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		{
 			m_upscaler = std::make_unique<vk::fsr_upscale_pass>();
 		}
+#ifdef __ANDROID__
+		else if (m_output_scaling == output_scaling_mode::shader)
+		{
+			m_upscaler = std::make_unique<vk::librashader_upscale_pass>();
+		}
+#endif
 		else
 		{
 			m_upscaler = std::make_unique<vk::bilinear_upscale_pass>();

@@ -15,6 +15,17 @@
 
 namespace vk
 {
+	std::string ubo_array_dim(u32 element_size)
+	{
+		const auto* pdev = vk::get_current_renderer();
+		if (!pdev || pdev->get_unsized_array_support())
+		{
+			return "[]";
+		}
+
+		return fmt::format("[%u]", pdev->ubo_array_bound(element_size));
+	}
+
 	extern chip_class g_chip_class;
 
 	std::unordered_map<u32, std::unique_ptr<vk::compute_task>> g_compute_tasks;
@@ -148,6 +159,20 @@ namespace vk
 			break;
 		case driver_vendor::ARM_MALI:
 			// Needs more testing
+			break;
+		case driver_vendor::ADRENO:
+		case driver_vendor::TURNIP:
+			// Adreno is the bulk of the Android install base. No FP sanitising:
+			// unlike NVIDIA it is not NaN-poisoning prone, and the pass is not
+			// free on a tiler.
+			break;
+		case driver_vendor::POWERVR:
+		case driver_vendor::XCLIPSE:
+		case driver_vendor::BROADCOM:
+		case driver_vendor::VERISILICON:
+			// Detected but untested by us. Nothing special applied -- saying so
+			// beats a warning that reads like a fault.
+			rsx_log.notice("Mobile GPU with limited testing: %s", gpu_name);
 			break;
 		default:
 			rsx_log.warning("Unsupported device: %s", gpu_name);

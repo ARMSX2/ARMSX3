@@ -189,6 +189,17 @@ namespace vk
 			case driver_vendor::HONEYKRISP:
 			case driver_vendor::PANVK:
 			case driver_vendor::ARM_MALI:
+			case driver_vendor::ADRENO:
+			case driver_vendor::TURNIP:
+			case driver_vendor::POWERVR:
+			case driver_vendor::XCLIPSE:
+			case driver_vendor::BROADCOM:
+			case driver_vendor::VERISILICON:
+				// Tilers: no extra image usage or mutable-format flags. Same
+				// outcome as the fallthrough, but reached deliberately rather
+				// than through the "Unknown driver vendor!" error path, which
+				// would otherwise fire for every render target on every mobile
+				// GPU now that they are actually detected.
 				break;
 			}
 

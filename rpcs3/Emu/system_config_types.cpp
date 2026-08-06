@@ -698,6 +698,11 @@ void fmt_class_string<output_scaling_mode>::format(std::string& out, u64 arg)
 		case output_scaling_mode::nearest: return "Nearest";
 		case output_scaling_mode::bilinear: return "Bilinear";
 		case output_scaling_mode::fsr: return "FidelityFX Super Resolution";
+#ifdef __ANDROID__
+		// Missing case here would serialise as `unknown` and the mode would
+		// silently never be selectable -- same trap as pad_handler::virtual_pad.
+		case output_scaling_mode::shader: return "Shader chain (librashader)";
+#endif
 		}
 
 		return unknown;

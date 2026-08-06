@@ -196,6 +196,33 @@ namespace vk
 			allocatorInfo.pHeapSizeLimit = heap_limits.data();
 		}
 
+#ifdef __ANDROID__
+		// Android builds with VK_NO_PROTOTYPES so the driver behind every vkFoo
+		// can be swapped (adrenotools). That also switches VMA from its static
+		// import path to the dynamic one -- and the dynamic path needs the two
+		// proc-address getters handed to it, which nothing was doing.
+		//
+		// VMA does not fail loudly when they are missing: VMA_ASSERT compiles out
+		// in release, so it called straight through a null pointer and took the
+		// process down inside VmaAllocator_T's constructor, on every single boot.
+		//
+		// Only these two are needed; VMA fetches the rest through them. Feeding it
+		// OUR getters (rather than the system ones) is also what keeps VMA on the
+		// same driver as the rest of the renderer when a custom one is loaded.
+		VmaVulkanFunctions vulkan_functions{};
+		vulkan_functions.vkGetInstanceProcAddr = ::vkGetInstanceProcAddr;
+		vulkan_functions.vkGetDeviceProcAddr = ::vkGetDeviceProcAddr;
+
+		if (!vulkan_functions.vkGetInstanceProcAddr || !vulkan_functions.vkGetDeviceProcAddr)
+		{
+			fmt::throw_exception("Vulkan dispatch table is not loaded (vkGetInstanceProcAddr=%p, vkGetDeviceProcAddr=%p)",
+				reinterpret_cast<void*>(vulkan_functions.vkGetInstanceProcAddr),
+				reinterpret_cast<void*>(vulkan_functions.vkGetDeviceProcAddr));
+		}
+
+		allocatorInfo.pVulkanFunctions = &vulkan_functions;
+#endif
+
 		CHECK_RESULT(vmaCreateAllocator(&allocatorInfo, &m_allocator));
 
 		// Allow fastest possible allocation on start

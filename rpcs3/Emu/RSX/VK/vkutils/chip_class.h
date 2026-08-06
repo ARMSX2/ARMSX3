@@ -57,7 +57,18 @@ namespace vk
 		V3DV,
 		HONEYKRISP,
 		PANVK,
-		ARM_MALI
+		ARM_MALI,
+
+		// ARMSX3: mobile vendors. Upstream stops at ARM_MALI and sends everything
+		// else to `unknown` (its own comment in device.cpp says "// Mobile?"),
+		// which means the entire Android install base except Mali gets generic
+		// desktop behaviour. Adreno alone is most of it.
+		ADRENO,      // Qualcomm proprietary
+		TURNIP,      // Mesa's open Adreno driver, the one adrenotools installs
+		POWERVR,     // Imagination, proprietary or Mesa
+		XCLIPSE,     // Samsung, RDNA-derived
+		BROADCOM,
+		VERISILICON
 	};
 
 	driver_vendor get_driver_vendor();
@@ -83,4 +94,24 @@ namespace vk
 	static inline bool is_NVIDIA(driver_vendor vendor) { return vendor == driver_vendor::NVIDIA || vendor == driver_vendor::NVK; }
 	static inline bool is_AMD(driver_vendor vendor) { return vendor == driver_vendor::AMD || vendor == driver_vendor::RADV; }
 	static inline bool is_INTEL(driver_vendor vendor) { return vendor == driver_vendor::INTEL || vendor == driver_vendor::ANV; }
+
+	/// Adreno, either driver. Turnip and the proprietary stack differ in
+	/// extension support but share the same tiler architecture, so most tuning
+	/// applies to both -- gate on the specific vendor only where a driver bug is
+	/// involved, not where the hardware is.
+	static inline bool is_ADRENO(driver_vendor vendor) { return vendor == driver_vendor::ADRENO || vendor == driver_vendor::TURNIP; }
+
+	/// Mali, proprietary or Panfrost.
+	static inline bool is_MALI(driver_vendor vendor) { return vendor == driver_vendor::ARM_MALI || vendor == driver_vendor::PANVK; }
+
+	/// Any tile-based mobile GPU. These share the properties that matter for RSX
+	/// emulation: tile memory instead of a wide bus, expensive render-target
+	/// reloads, and no free framebuffer readback.
+	static inline bool is_MOBILE(driver_vendor vendor)
+	{
+		return is_ADRENO(vendor) || is_MALI(vendor) ||
+		       vendor == driver_vendor::POWERVR || vendor == driver_vendor::XCLIPSE ||
+		       vendor == driver_vendor::BROADCOM || vendor == driver_vendor::VERISILICON ||
+		       vendor == driver_vendor::V3DV;
+	}
 }

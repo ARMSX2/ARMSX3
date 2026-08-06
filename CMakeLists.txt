@@ -102,6 +102,13 @@ if(MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:/wd4530;/utf-8>") # C++ exception handler used, but unwind semantics are not enabled
 endif()
 
+# ARMSX3: upstream skips its FFMPEG block on Android (3rdparty/CMakeLists.txt
+# `if(NOT ANDROID)`) but still aliases 3rdparty::ffmpeg -> 3rdparty_ffmpeg
+# unguarded, so the target has to exist before 3rdparty/ is processed.
+if(ANDROID)
+    include(${CMAKE_CURRENT_SOURCE_DIR}/android/ffmpeg.cmake)
+endif()
+
 add_subdirectory(3rdparty)
 
 if (DISABLE_LTO)
@@ -135,5 +142,11 @@ if(BUILD_RPCS3_TESTS)
     enable_testing()
 endif()
 add_subdirectory(rpcs3)
+
+# ARMSX3: the Android JNI shared library. Kept behind ANDROID so desktop builds
+# are byte-for-byte unaffected.
+if(ANDROID)
+    add_subdirectory(android)
+endif()
 
 set_directory_properties(PROPERTIES VS_STARTUP_PROJECT rpcs3)

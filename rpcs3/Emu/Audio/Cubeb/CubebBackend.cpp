@@ -112,7 +112,7 @@ bool CubebBackend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSize
 
 	device_handle device = GetDevice(use_default_device ? "" : dev_id);
 
-	if (!device.handle)
+	if (!device.valid)
 	{
 		if (use_default_device) Cubeb.error("Opening default device failed");
 		else Cubeb.error("Device with id=%s not found", dev_id);
@@ -273,6 +273,21 @@ CubebBackend::device_handle CubebBackend::GetDevice(std::string_view dev_id)
 	cubeb_device_collection dev_collection{};
 	if (int err = cubeb_enumerate_devices(m_ctx, CUBEB_DEVICE_TYPE_OUTPUT, &dev_collection))
 	{
+		// Enumeration is optional, and cubeb's AAudio backend (Android) does not
+		// implement it -- it returns CUBEB_ERROR_NOT_SUPPORTED. Treating that as
+		// "no audio device exists" left Android with NO SOUND AT ALL, and
+		// cellAudio retried the open several times a second forever.
+		//
+		// A backend that cannot enumerate can still open its default output: that
+		// is what a null devid means to cubeb_stream_init. So when the caller
+		// asked for the default anyway, hand back the null handle and let the
+		// stream open. Only a request for a SPECIFIC device is unanswerable here.
+		if (err == CUBEB_ERROR_NOT_SUPPORTED && default_dev)
+		{
+			Cubeb.notice("cubeb_enumerate_devices() is unsupported by this backend; using the default output");
+			return { .handle = nullptr, .id = {}, .ch_cnt = 0, .valid = true };
+		}
+
 		Cubeb.error("cubeb_enumerate_devices() failed: %i", err);
 		return {};
 	}
@@ -298,6 +313,7 @@ CubebBackend::device_handle CubebBackend::GetDevice(std::string_view dev_id)
 		device_handle device{};
 		device.handle = dev_info.devid;
 		device.ch_cnt = dev_info.max_channels;
+		device.valid = true;
 
 		if (dev_info.device_id)
 		{
@@ -325,7 +341,7 @@ CubebBackend::device_handle CubebBackend::GetDevice(std::string_view dev_id)
 		}
 	}
 
-	if (result.handle)
+	if (result.valid)
 	{
 		Cubeb.notice("Found device '%s' with %d channels", result.id, result.ch_cnt);
 	}

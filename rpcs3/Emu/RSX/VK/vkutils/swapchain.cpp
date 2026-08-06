@@ -133,6 +133,15 @@ namespace vk
 		}
 	}
 
+	void swapchain_WSI::destroy_swapchain_only()
+	{
+		if (VkDevice pdev = dev; pdev && m_vk_swapchain)
+		{
+			_vkDestroySwapchainKHR(pdev, m_vk_swapchain, nullptr);
+			m_vk_swapchain = nullptr;
+		}
+	}
+
 	void swapchain_WSI::destroy(bool)
 	{
 		if (VkDevice pdev = dev)

@@ -13,7 +13,11 @@ enum class native_core_arrangement : u32
 	undefined,
 	generic,
 	intel_ht,
-	amd_ccx
+	amd_ccx,
+	// ARM heterogeneous (big.LITTLE / DynamIQ). Cores differ in throughput by
+	// ~3x, so "any core" is not a sane default for a thread that must keep up
+	// with an emulated SPE.
+	arm_big_little
 };
 
 enum class thread_class : u32

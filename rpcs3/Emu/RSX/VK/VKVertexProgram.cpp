@@ -73,11 +73,18 @@ void VKVertexDecompilerThread::insertHeader(std::stringstream& OS)
 {
 	prepareBindingTable();
 
-	OS <<
-		"#version 450\n\n"
-		"#extension GL_EXT_scalar_block_layout : require\n"
-		"#extension GL_EXT_uniform_buffer_unsized_array : require\n"
-		"#extension GL_ARB_separate_shader_objects : enable\n\n";
+	OS << "#version 450\n\n"
+		  "#extension GL_EXT_scalar_block_layout : require\n";
+
+	// Only claim the extension when the device actually has it; requiring it on a
+	// driver that does not (Adreno) fails every pipeline. The arrays below switch
+	// to concrete bounds in that case.
+	if (vk::get_current_renderer()->get_unsized_array_support())
+	{
+		OS << "#extension GL_EXT_uniform_buffer_unsized_array : require\n";
+	}
+
+	OS << "#extension GL_ARB_separate_shader_objects : enable\n\n";
 
 	glsl::insert_subheader_block(OS);
 
@@ -92,7 +99,7 @@ void VKVertexDecompilerThread::insertHeader(std::stringstream& OS)
 	OS <<
 		"layout(std430, set=0, binding=" << vk_prog->binding_table.context_buffer_location << ") uniform VertexContextBuffer\n"
 		"{\n"
-		"	vertex_context_t vertex_contexts[];\n"
+		"	vertex_context_t vertex_contexts" << vk::ubo_array_dim(96) << ";\n"
 		"};\n\n";
 
 	vk::glsl::program_input context_input
@@ -127,7 +134,7 @@ void VKVertexDecompilerThread::insertHeader(std::stringstream& OS)
 	OS <<
 		"layout(std430, set=0, binding=" << vk_prog->binding_table.vertex_buffers_location + 2 << ") readonly restrict buffer DrawParametersBuffer\n"
 		"{\n"
-		"	draw_parameters_t draw_parameters[];\n"
+		"	draw_parameters_t draw_parameters" << vk::ubo_array_dim(168) << ";\n"
 		"};\n\n";
 
 	vk::glsl::program_input layouts_input
@@ -200,7 +207,7 @@ void VKVertexDecompilerThread::insertConstants(std::stringstream& OS, const std:
 				{
 					OS << "layout(std430, set=0, binding=" << vk_prog->binding_table.cbuf_location << ") uniform VertexConstantsBuffer\n";
 					OS << "{\n";
-					OS << "	vec4 vc[];\n";
+					OS << "	vec4 vc" << vk::ubo_array_dim(16) << ";\n";
 					OS << "};\n\n";
 
 					in.location = vk_prog->binding_table.cbuf_location;
@@ -215,7 +222,7 @@ void VKVertexDecompilerThread::insertConstants(std::stringstream& OS, const std:
 					// 1. Bind indirection lookup buffer
 					OS << "layout(std430, set=0, binding=" << vk_prog->binding_table.instanced_lut_buffer_location << ") readonly restrict buffer InstancingData\n";
 					OS << "{\n";
-					OS << "	int constants_addressing_lookup[];\n";
+					OS << "	int constants_addressing_lookup" << vk::ubo_array_dim(4) << ";\n";
 					OS << "};\n\n";
 
 					in.location = vk_prog->binding_table.instanced_lut_buffer_location;
@@ -226,7 +233,7 @@ void VKVertexDecompilerThread::insertConstants(std::stringstream& OS, const std:
 					// 2. Bind actual constants buffer
 					OS << "layout(std430, set=0, binding=" << vk_prog->binding_table.instanced_cbuf_location << ") readonly restrict buffer VertexConstantsBuffer\n";
 					OS << "{\n";
-					OS << "	vec4 instanced_constants_array[];\n";
+					OS << "	vec4 instanced_constants_array" << vk::ubo_array_dim(16) << ";\n";
 					OS << "};\n\n";
 
 					OS << "#define CONSTANTS_ARRAY_LENGTH " << (properties.has_indexed_constants ? 468 : ::size32(m_constant_ids)) << "\n\n";

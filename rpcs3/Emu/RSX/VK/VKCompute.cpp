@@ -58,7 +58,17 @@ namespace vk
 			case vk::driver_vendor::V3DV:
 			case vk::driver_vendor::PANVK:
 			case vk::driver_vendor::ARM_MALI:
-				// TODO: Actually bench this. Using 32 for now to match other common configurations.
+			case vk::driver_vendor::ADRENO:
+			case vk::driver_vendor::TURNIP:
+			case vk::driver_vendor::POWERVR:
+			case vk::driver_vendor::XCLIPSE:
+			case vk::driver_vendor::BROADCOM:
+			case vk::driver_vendor::VERISILICON:
+				// Mobile tilers. Falls through to 32 with everything else.
+				// Adreno and Mali both have a 64-wide wave, so 32 likely leaves
+				// half of each wave idle -- but that is reasoning, not a
+				// measurement, and guessing wrong here costs performance
+				// silently. Left at 32 until benched on device.
 			case vk::driver_vendor::DOZEN:
 				// Actual optimal size depends on the D3D device. Use 32 since it should work well on both AMD and NVIDIA
 			case vk::driver_vendor::NVIDIA:

@@ -4,6 +4,12 @@
 #include "util/endian.hpp"
 #include "util/types.hpp"
 #include "Utilities/File.h"
+// ARMSX3: this header calls fmt::format() with printf-style specifiers but
+// never declared it -- it relied on a transitive include that does not reach
+// here. Without the declaration the call resolves to std::format, whose
+// consteval basic_format_string then rejects "%x" and demands std::formatter
+// specialisations for be_t/se_t. Include what we use.
+#include "Utilities/StrFmt.h"
 #include <sstream>
 #include <iomanip>
 #include <span>

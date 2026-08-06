@@ -1,10 +1,16 @@
 #include "stdafx.h"
 #include "mouse_gyro_handler.h"
 
+// ARMSX3: only handle_event() touches Qt (the header merely forward-declares
+// QEvent/QWindow). pad_thread holds a mouse_gyro_handler BY VALUE and calls
+// set_enabled()/apply_gyro(), so Android needs this translation unit even
+// though it has no mouse -- just not the Qt half.
+#ifndef __ANDROID__
 #include <QEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QWindow>
+#endif
 
 #include <algorithm>
 
@@ -62,6 +68,7 @@ void mouse_gyro_handler::set_gyro_y(s32 steps)
 	m_gyro_y = static_cast<u16>(std::clamp(m_gyro_y + steps, 0, DEFAULT_MOTION_Y * 2 - 1));
 }
 
+#ifndef __ANDROID__
 void mouse_gyro_handler::handle_event(QEvent* ev, const QWindow& win)
 {
 	if (!m_enabled)
@@ -127,6 +134,7 @@ void mouse_gyro_handler::handle_event(QEvent* ev, const QWindow& win)
 	}
 	}
 }
+#endif // !__ANDROID__
 
 void mouse_gyro_handler::apply_gyro(const std::shared_ptr<Pad>& pad)
 {

@@ -55,9 +55,13 @@ private:
 
 	struct device_handle
 	{
+		// A NULL handle is meaningful: cubeb_stream_init() takes it to mean "the
+		// backend's default output". So a handle alone cannot say whether a
+		// device was found -- hence `valid`.
 		cubeb_devid handle{};
 		std::string id;
 		u32 ch_cnt{};
+		bool valid{};
 	};
 
 	device_handle GetDevice(std::string_view dev_id = "");

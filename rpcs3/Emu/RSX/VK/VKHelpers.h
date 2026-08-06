@@ -17,6 +17,18 @@ namespace rsx
 
 namespace vk
 {
+	/**
+	 * "[]" when the device supports unsized arrays in uniform blocks, otherwise a
+	 * concrete "[N]" sized to the bindable window.
+	 *
+	 * Upstream declares these arrays unsized unconditionally, which requires
+	 * VK_EXT_shader_uniform_buffer_unsized_array. Adreno does not have it, so every
+	 * game pipeline failed to compile (VK_ERROR_UNKNOWN) and nothing but overlays
+	 * ever drew. element_size is the divisor the C++ side already uses to turn a
+	 * dynamic offset into a shader index (see VKGSRender's *_offset locals).
+	 */
+	std::string ubo_array_dim(u32 element_size);
+
 	// Forward declarations
 	struct buffer;
 	class command_buffer;

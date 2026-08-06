@@ -87,6 +87,18 @@ namespace vk
 #endif
 	bool instance::create(const char* app_name, bool fast)
 	{
+#ifdef __ANDROID__
+		// Bind the dispatch table before the first Vulkan call. If the user picked
+		// a custom driver it was already staged by _rpcsx_setCustomDriver; if not,
+		// this opens the system libvulkan.so. Everything below -- including the
+		// extension enumeration above -- calls through pointers this fills in.
+		if (!vk::android::ensure_loaded())
+		{
+			rsx_log.fatal("No usable Vulkan driver: %s", vk::android::last_error());
+			return false;
+		}
+#endif
+
 		// Initialize a vulkan instance
 		VkApplicationInfo app = {};
 
@@ -225,6 +237,12 @@ namespace vk
 			return false;
 		}
 
+#ifdef __ANDROID__
+		// Instance-level entry points cannot resolve against a null instance, so
+		// the table has holes until now. Re-resolve against the real instance.
+		vk::android::resolve_instance(m_instance);
+#endif
+
 		return true;
 	}
 #ifdef __clang__
@@ -261,6 +279,23 @@ namespace vk
 		}
 
 		return gpus;
+	}
+
+	VkSurfaceKHR instance::recreate_surface(display_handle_t window_handle)
+	{
+		if (m_surface != VK_NULL_HANDLE)
+		{
+			vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
+			m_surface = VK_NULL_HANDLE;
+		}
+
+		WSI_config surface_config
+		{
+			.supports_automatic_wm_reports = true
+		};
+
+		m_surface = make_WSI_surface(m_instance, window_handle, &surface_config);
+		return m_surface;
 	}
 
 	swapchain_base* instance::create_swapchain(display_handle_t window_handle, vk::physical_device& dev)

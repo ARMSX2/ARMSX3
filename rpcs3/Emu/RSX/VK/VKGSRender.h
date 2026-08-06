@@ -95,6 +95,11 @@ private:
 	std::unique_ptr<vk::program_cache> m_prog_buffer;
 
 	std::unique_ptr<vk::swapchain_base> m_swapchain;
+	// Set when a swapchain call reported VK_ERROR_SURFACE_LOST. The VkSurfaceKHR
+	// has to be rebuilt from the current native window before anything else can
+	// succeed -- recreating only the swapchain against a dead surface just fails
+	// again. Android hits this every time the app is backgrounded.
+	bool m_surface_lost = false;
 	vk::instance m_instance;
 	vk::render_device *m_device;
 

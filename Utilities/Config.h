@@ -109,6 +109,21 @@ namespace cfg
 			return {};
 		}
 
+		// ARMSX3: expose the numeric range through the base interface.
+		// _int/_float/uint carry Min/Max as static constexpr TEMPLATE parameters,
+		// which are unreachable from a _base* -- so a generic settings UI cannot
+		// tell a slider from a free-text field without these. Mirrors the
+		// to_string/def_to_string pattern; empty means "not a bounded numeric".
+		virtual std::string min_to_string() const
+		{
+			return {};
+		}
+
+		virtual std::string max_to_string() const
+		{
+			return {};
+		}
+
 		// Try to convert from string (optional)
 		virtual bool from_string(std::string_view value, bool dynamic = false);
 
@@ -382,6 +397,16 @@ namespace cfg
 			return std::to_string(def);
 		}
 
+		std::string min_to_string() const override
+		{
+			return std::to_string(min);
+		}
+
+		std::string max_to_string() const override
+		{
+			return std::to_string(max);
+		}
+
 		bool from_string(std::string_view value, bool /*dynamic*/ = false) override
 		{
 			s64 result;
@@ -473,6 +498,16 @@ namespace cfg
 			return "0.0";
 		}
 
+		std::string min_to_string() const override
+		{
+			return std::to_string(min);
+		}
+
+		std::string max_to_string() const override
+		{
+			return std::to_string(max);
+		}
+
 		bool from_string(std::string_view value, bool /*dynamic*/ = false) override
 		{
 			f64 result;
@@ -558,6 +593,16 @@ namespace cfg
 		std::string def_to_string() const override
 		{
 			return std::to_string(def);
+		}
+
+		std::string min_to_string() const override
+		{
+			return std::to_string(min);
+		}
+
+		std::string max_to_string() const override
+		{
+			return std::to_string(max);
 		}
 
 		bool from_string(std::string_view value, bool /*dynamic*/ = false) override

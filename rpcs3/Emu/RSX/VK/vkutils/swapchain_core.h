@@ -165,6 +165,22 @@ namespace vk
 	class swapchain_WSI : public WSI_swapchain_base
 	{
 		VkSurfaceKHR m_surface = VK_NULL_HANDLE;
+
+	public:
+		// Tear down ONLY the VkSwapchainKHR, keeping the device and everything else.
+		//
+		// Must run before the surface it was created from is destroyed: a
+		// VkSurfaceKHR with a live swapchain still referencing it may not be
+		// destroyed, and doing so faults inside the driver on the next present.
+		// init() tolerates a null m_vk_swapchain (its oldSwapchain path is guarded),
+		// so the next rebuild is unaffected.
+		void destroy_swapchain_only();
+
+		// Point this swapchain at a freshly created surface. Only meaningful after
+		// the old one was lost, and only once destroy_swapchain_only() has run.
+		void replace_surface(VkSurfaceKHR surface) { m_surface = surface; }
+
+	protected:
 		VkColorSpaceKHR m_color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 		VkSwapchainKHR m_vk_swapchain = nullptr;
 

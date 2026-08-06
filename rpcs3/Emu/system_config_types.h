@@ -346,7 +346,13 @@ enum class output_scaling_mode
 {
 	nearest,
 	bilinear,
-	fsr
+	fsr,
+#ifdef __ANDROID__
+	// ARMSX3: RetroArch (.slangp) chain via librashader, run as the output pass.
+	// Appended, never inserted -- these are serialised by ordinal in savestates
+	// and per-game configs, so inserting would silently remap existing settings.
+	shader
+#endif
 };
 
 enum class stereo_render_mode_options

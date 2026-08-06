@@ -1,0 +1,422 @@
+package com.armsx3
+
+import net.rpcsx.RPCSX
+
+/**
+ * ARMSX2 UI setting -> RPCS3 config node.
+ *
+ * THIS FILE IS THE WHOLE POINT OF THE SETTINGS PORT. Every path and every enum
+ * string below was read out of RPCS3's own config tree
+ * (rpcs3/Emu/system_config.h, 258 entries) and its serialisers
+ * (system_config_types.cpp). They are matched LITERALLY by the core:
+ *
+ *   _rpcsx_settingsSet(path, jsonValue)
+ *     -> find_cfg_node() splits `path` on "@@" and compares each element
+ *        against cfg node names with ==
+ *     -> cfg::_enum::from_string() compares the value against the exact string
+ *        its fmt_class_string formatter emits
+ *
+ * So "Video@@Resolution Scale" works and "Video@@ResolutionScale" silently does
+ * nothing - from_string returns false, settingsSet returns false, and the UI
+ * shows the old value back with no error. Same for enum values: "16:9" is
+ * right, "16_9" is not. Do not guess names here; read them out of the tree.
+ *
+ * Section names are node names and DO contain spaces and slashes:
+ *   Core, VFS, Video, Video@@Vulkan, Video@@Performance Overlay,
+ *   Audio, Input/Output, System, Net, Savestate, Miscellaneous
+ */
+object Rpcs3Settings {
+
+    // ---- value encoding -------------------------------------------------
+    // settingsSet takes JSON: bools and numbers bare, enums and strings quoted.
+
+    private fun setRaw(path: String, jsonValue: String): Boolean =
+        runCatching { RPCSX.instance.settingsSet(path, jsonValue) }.getOrDefault(false)
+
+    fun setBool(path: String, value: Boolean) = setRaw(path, if (value) "true" else "false")
+    fun setInt(path: String, value: Int) = setRaw(path, value.toString())
+    fun setFloat(path: String, value: Float) = setRaw(path, value.toString())
+    fun setEnum(path: String, value: String) =
+        setRaw(path, "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"")
+
+    fun setString(path: String, value: String) = setEnum(path, value)
+
+    // ---- paths ----------------------------------------------------------
+
+    private const val CORE = "Core"
+    private const val VIDEO = "Video"
+    private const val VULKAN = "Video@@Vulkan"
+    private const val OVERLAY = "Video@@Performance Overlay"
+    private const val AUDIO = "Audio"
+    private const val IO = "Input/Output"
+    private const val SAVESTATE = "Savestate"
+    private const val MISC = "Miscellaneous"
+
+    // ---- Renderer -------------------------------------------------------
+
+    /**
+     * video_renderer: exactly "Null" | "OpenGL" | "Vulkan".
+     *
+     * The UI sends ARMSX2's own lowercase ids ("vulkan", "opengl", "auto",
+     * "software"), which from_string would reject outright -- the renderer
+     * picker would appear to do nothing. So normalise here.
+     *
+     * "auto" and "software" have no RPCS3 equivalent (there is no PS3 software
+     * rasteriser), and both mean "just render" to the user, so they resolve to
+     * Vulkan -- the only backend currently complete on Android.
+     */
+    fun setRenderer(name: String): Boolean {
+        val renderer = when (name.trim().lowercase()) {
+            "vulkan", "auto", "software" -> "Vulkan"
+            "opengl", "gl", "gles", "angle" -> "OpenGL"
+            "null", "none" -> "Null"
+            else -> "Vulkan"
+        }
+        return setEnum("$VIDEO@@Renderer", renderer)
+    }
+
+    /**
+     * ARMSX2 sends an upscale MULTIPLIER (1.0 = native). RPCS3 wants a
+     * PERCENTAGE (100 = native), clamped 25..800 by the config itself - values
+     * outside that are rejected, not clamped, so clamp here.
+     */
+    fun setUpscaleMultiplier(multiplier: Float) =
+        setInt("$VIDEO@@Resolution Scale", (multiplier * 100f).toInt().coerceIn(25, 800))
+
+    /** video_aspect: exactly "4:3" or "16:9". */
+    fun setAspectRatio(sixteenNine: Boolean) =
+        setEnum("$VIDEO@@Aspect ratio", if (sixteenNine) "16:9" else "4:3")
+
+    /**
+     * frame_limit_type is an ENUM of preset rates, not a free integer:
+     * Off | 30 | 50 | 60 | 120 | Display | Auto | PS3 Native | Infinite
+     */
+    fun setFrameLimitMode(mode: String) = setEnum("$VIDEO@@Frame limit", mode)
+
+    /**
+     * ARMSX2's Display FPS Cap slider is free-form (0..60, any value), which the
+     * enum above cannot express -- snapping 47 to "50" would silently give the
+     * user a rate they did not pick.
+     *
+     * So: exact presets use the enum, and everything else goes to Second Frame
+     * Limit, which IS a free float. Only one of the two is ever armed, otherwise
+     * the lower of the pair wins and the slider appears to stick.
+     */
+    fun setFrameLimit(fps: Int) {
+        val preset = when (fps) {
+            30, 50, 60, 120 -> fps.toString()
+            else -> null
+        }
+        if (fps <= 0) {
+            setFrameLimitMode("Off")
+            setSecondFrameLimit(0f)
+        } else if (preset != null) {
+            setFrameLimitMode(preset)
+            setSecondFrameLimit(0f)
+        } else {
+            setFrameLimitMode("Off")
+            setSecondFrameLimit(fps.toFloat())
+        }
+    }
+
+    /** Free-form secondary cap (0 disables). Use for values the enum cannot express. */
+    fun setSecondFrameLimit(fps: Float) =
+        setFloat("$VIDEO@@Second Frame Limit", fps.coerceIn(0f, 1000f))
+
+    fun setDisableShaderCache(disabled: Boolean) =
+        setBool("$VIDEO@@Disable On-Disk Shader Cache", disabled)
+
+    fun setVsync(enabled: Boolean) =
+        setEnum("$VIDEO@@VSync Mode", if (enabled) "Full" else "Disabled")
+
+    fun setFrameSkip(skip: Int) {
+        setBool("$VIDEO@@Enable Frame Skip", skip > 0)
+        if (skip > 0) setInt("$VIDEO@@Consecutive Frames To Skip", skip.coerceIn(1, 8))
+    }
+
+    fun setVblankRate(hz: Int) = setInt("$VIDEO@@Vblank Rate", hz.coerceIn(1, 6000))
+
+    fun setAnisotropicFilter(level: Int) =
+        setInt("$VIDEO@@Anisotropic Filter Override", level.coerceIn(0, 16))
+
+    fun setStretchToDisplay(enabled: Boolean) = setBool("$VIDEO@@Stretch To Display Area", enabled)
+
+    fun setWriteColorBuffers(enabled: Boolean) = setBool("$VIDEO@@Write Color Buffers", enabled)
+
+    fun setOutputScaling(mode: String) = setEnum("$VIDEO@@Output Scaling Mode", mode)
+
+    fun setShaderPresetPath(path: String) = setString("$VIDEO@@Shader Preset Path", path)
+
+    /** FidelityFX CAS sharpening, 0..100. Only applies with FSR output scaling. */
+    fun setCasSharpening(percent: Int) =
+        setInt("$VIDEO@@FidelityFX CAS Sharpening Intensity", percent.coerceIn(0, 100))
+
+    fun setVramLimitMb(mb: Int) =
+        setInt("$VULKAN@@VRAM allocation limit (MB)", mb.coerceIn(256, 65536))
+
+    fun setAsyncTextureStreaming(enabled: Boolean) =
+        setBool("$VULKAN@@Asynchronous Texture Streaming", enabled)
+
+    // ---- Performance overlay --------------------------------------------
+    //
+    // ARMSX2 has a boolean per element (osdShowFPS, osdShowCPU, ...). RPCS3
+    // does NOT: it has one Enabled flag plus a detail_level enum that decides
+    // which elements appear. So the per-element toggles collapse onto this.
+
+    fun setOverlayEnabled(enabled: Boolean) = setBool("$OVERLAY@@Enabled", enabled)
+
+    /** detail_level: None | Minimal | Low | Medium | High */
+    fun setOverlayDetail(level: String) = setEnum("$OVERLAY@@Detail level", level)
+
+    fun setOverlayFramerateGraph(enabled: Boolean) =
+        setBool("$OVERLAY@@Enable Framerate Graph", enabled)
+
+    fun setOverlayFrametimeGraph(enabled: Boolean) =
+        setBool("$OVERLAY@@Enable Frametime Graph", enabled)
+
+    fun setOverlayFontSize(px: Int) = setInt("$OVERLAY@@Font size (px)", px.coerceIn(4, 36))
+
+    fun setOverlayOpacity(percent: Int) = setInt("$OVERLAY@@Opacity (%)", percent.coerceIn(0, 100))
+
+    // ---- Audio ----------------------------------------------------------
+
+    /** Master Volume is 0..200 (percent), so "muted" is volume 0. */
+    fun setMasterVolume(percent: Int) = setInt("$AUDIO@@Master Volume", percent.coerceIn(0, 200))
+
+    fun setAudioFormat(format: String) = setEnum("$AUDIO@@Audio Format", format)
+
+    fun setAudioBuffering(enabled: Boolean) = setBool("$AUDIO@@Enable Buffering", enabled)
+
+    /**
+     * Desired buffer duration in ms. cfg::_int<4, 250> -- out-of-range values
+     * are REJECTED, not clamped, so the clamp has to match exactly. ARMSX2's
+     * slider goes to 200, which fits.
+     */
+    fun setAudioBufferDuration(ms: Int) =
+        setInt("$AUDIO@@Desired Audio Buffer Duration", ms.coerceIn(4, 250))
+
+    fun setTimeStretching(enabled: Boolean) = setBool("$AUDIO@@Enable Time Stretching", enabled)
+
+    // ---- Core / CPU -----------------------------------------------------
+
+    /**
+     * thread_scheduler_mode strings are verbose and NOT the enum identifiers:
+     * "Operating System" | "RPCS3 Scheduler" | "RPCS3 Alternative Scheduler"
+     */
+    fun setThreadScheduler(mode: String) = setEnum("$CORE@@Thread Scheduler Mode", mode)
+
+    /** Emulated clock speed as a percentage, 10..3000. ARMSX2 calls this nominal speed. */
+    fun setClocksScale(percent: Int) = setInt("$CORE@@Clocks scale", percent.coerceIn(10, 3000))
+
+    fun setPpuThreads(count: Int) = setInt("$CORE@@PPU Threads", count.coerceIn(1, 8))
+
+    /**
+     * How many PPU modules LLVM compiles at once. 0 = one per host core.
+     *
+     * The upstream auto value is a desktop assumption. Each in-flight module
+     * compile holds its whole LLVM module in memory, and a big title's modules
+     * run to hundreds of thousands of blocks -- eight at once exhausted the
+     * allocator on an 8 GB phone and scudo aborted the process partway through
+     * precompilation.
+     */
+    fun setLlvmThreads(count: Int) = setInt("$CORE@@Max LLVM Compile Threads", count.coerceIn(0, 1024))
+
+    /**
+     * Verify cached SPU blocks by full compare instead of the xorsum checksum.
+     *
+     * Matters because SPU job managers stream different job code through the SAME
+     * local-store addresses. The checksum is what decides whether a cached
+     * compiled block still matches what is in local store; a collision runs one
+     * job's code against another's data. The checksum has its own hand-written
+     * ARM64 NEON implementation, so a fault there would be invisible on desktop.
+     */
+    fun setPreciseSpuVerification(enabled: Boolean) =
+        setBool("$CORE@@Precise SPU Verification", enabled)
+
+    fun setMaxSpursThreads(count: Int) = setInt("$CORE@@Max SPURS Threads", count.coerceIn(1, 6))
+
+    fun setLlvmPrecompilation(enabled: Boolean) = setBool("$CORE@@LLVM Precompilation", enabled)
+
+    fun setSpuCache(enabled: Boolean) = setBool("$CORE@@SPU Cache", enabled)
+
+    /** sleep_timers_accuracy_level. */
+    fun setSleepTimersAccuracy(level: String) = setEnum("$CORE@@Sleep Timers Accuracy", level)
+
+    // ---- Savestates -----------------------------------------------------
+
+    fun setStartPaused(enabled: Boolean) = setBool("$SAVESTATE@@Start Paused", enabled)
+
+    fun setSuspendModeSavestates(enabled: Boolean) =
+        setBool("$SAVESTATE@@Suspend Emulation Savestate Mode", enabled)
+
+    fun setMaxSavestateFiles(count: Int) =
+        setInt("$SAVESTATE@@Maximum SaveState Files", count.coerceIn(0, 64))
+
+    // ---- Input ----------------------------------------------------------
+
+    fun setBackgroundInput(enabled: Boolean) = setBool("$IO@@Background input enabled", enabled)
+
+    fun setKeepPadsConnected(enabled: Boolean) = setBool("$IO@@Keep pads connected", enabled)
+
+    // ---- Misc -----------------------------------------------------------
+
+    fun setShowTrophyPopups(enabled: Boolean) = setBool("$MISC@@Show trophy popups", enabled)
+
+    fun setPauseOnHomeMenu(enabled: Boolean) =
+        setBool("$MISC@@Pause Emulation During Home Menu", enabled)
+
+    fun setPreventDisplaySleep(enabled: Boolean) =
+        setBool("$MISC@@Prevent display sleep while running games", enabled)
+
+    fun setShaderCompilationHint(enabled: Boolean) =
+        setBool("$MISC@@Show shader compilation hint", enabled)
+
+    fun setPpuCompilationHint(enabled: Boolean) =
+        setBool("$MISC@@Show PPU compilation hint", enabled)
+
+    // ---- PS3 core (PPU / SPU) ------------------------------------------
+    //
+    // Enum VALUES are matched literally by cfg::_enum::from_string, so these
+    // arrays are the exact fmt_class_string output, in ordinal order. An index
+    // that falls off the end would send a bare number and silently no-op.
+
+    private val PPU_DECODERS = arrayOf("Interpreter (static)", "Recompiler (LLVM)")
+    private val SPU_DECODERS = arrayOf(
+        "Interpreter (static)", "Interpreter (dynamic)",
+        "Recompiler (ASMJIT)", "Recompiler (LLVM)",
+    )
+    private val SPU_BLOCK_SIZES = arrayOf("Safe", "Mega", "Giga")
+
+    fun setPpuDecoder(index: Int) =
+        setEnum("$CORE@@PPU Decoder", PPU_DECODERS.getOrElse(index) { PPU_DECODERS.last() })
+
+    fun setSpuDecoder(index: Int) =
+        setEnum("$CORE@@SPU Decoder", SPU_DECODERS.getOrElse(index) { SPU_DECODERS.last() })
+
+    fun setSpuBlockSize(index: Int) =
+        setEnum("$CORE@@SPU Block Size", SPU_BLOCK_SIZES.getOrElse(index) { SPU_BLOCK_SIZES.first() })
+
+    fun setPreferredSpuThreads(count: Int) =
+        setInt("$CORE@@Preferred SPU Threads", count.coerceIn(0, 6))
+
+    fun setSpuLoopDetection(enabled: Boolean) =
+        setBool("$CORE@@SPU loop detection", enabled)
+
+    fun setAccurateSpuDma(enabled: Boolean) =
+        setBool("$CORE@@Accurate SPU DMA", enabled)
+
+    // ---- PS3 video / audio / net ---------------------------------------
+
+    private val MSAA_LEVELS = arrayOf("Disabled", "Auto")
+    private val SHADER_MODES = arrayOf(
+        "Legacy Recompiler (single-threaded)",
+        "Async Recompiler (multi-threaded)",
+        "Async Recompiler with Shader Interpreter",
+        "Shader Interpreter only",
+    )
+    private val AUDIO_FORMATS = arrayOf("Stereo", "Surround 5.1", "Surround 7.1", "Automatic", "Manual")
+    private val CHANNEL_LAYOUTS = arrayOf(
+        "Automatic", "Mono", "Stereo", "Stereo LFE",
+        "Quadraphonic", "Quadraphonic LFE", "Surround 5.1", "Surround 7.1",
+    )
+
+    fun setResolutionScalePercent(percent: Int) =
+        setInt("$VIDEO@@Resolution Scale", percent.coerceIn(25, 800))
+
+    fun setMsaa(index: Int) =
+        setEnum("$VIDEO@@MSAA", MSAA_LEVELS.getOrElse(index) { "Auto" })
+
+    fun setShaderMode(index: Int) =
+        setEnum("$VIDEO@@Shader Mode", SHADER_MODES.getOrElse(index) { SHADER_MODES[2] })
+
+    fun setWriteDepthBuffer(v: Boolean) = setBool("$VIDEO@@Write Depth Buffer", v)
+    fun setReadColorBuffers(v: Boolean) = setBool("$VIDEO@@Read Color Buffers", v)
+    fun setReadDepthBuffer(v: Boolean) = setBool("$VIDEO@@Read Depth Buffer", v)
+    fun setStrictRendering(v: Boolean) = setBool("$VIDEO@@Strict Rendering Mode", v)
+    fun setMultithreadedRsx(v: Boolean) = setBool("$VIDEO@@Multithreaded RSX", v)
+    fun setDisableZcull(v: Boolean) = setBool("$VIDEO@@Disable ZCull Occlusion Queries", v)
+    fun setRelaxedZcull(v: Boolean) = setBool("$VIDEO@@Relaxed ZCULL Sync", v)
+    fun setGpuTextureScaling(v: Boolean) = setBool("$VIDEO@@Use GPU texture scaling", v)
+    fun setForceCpuBlit(v: Boolean) = setBool("$VIDEO@@Force CPU Blit", v)
+
+    /** 0 = auto (RPCS3 picks from core count). */
+    fun setShaderCompilerThreads(n: Int) =
+        setInt("$VIDEO@@Shader Compiler Threads", n.coerceIn(0, 16))
+
+    fun setTextureLodBias(bias: Int) =
+        setFloat("$VIDEO@@Texture LOD Bias Addend", bias.coerceIn(-16, 16).toFloat())
+
+    fun setAudioFormat(index: Int) =
+        setEnum("$AUDIO@@Audio Format", AUDIO_FORMATS.getOrElse(index) { "Stereo" })
+
+    fun setAudioChannelLayout(index: Int) =
+        setEnum("$AUDIO@@Audio Channel Layout", CHANNEL_LAYOUTS.getOrElse(index) { "Automatic" })
+
+    /** np_internet_status: "Disconnected" | "Connected". */
+    fun setInternetEnabled(enabled: Boolean) =
+        setEnum("Net@@Internet enabled", if (enabled) "Connected" else "Disconnected")
+
+    /** np_psn_status: "Disconnected" | "Simulated" | "RPCN". Simulated is offline-safe. */
+    fun setPsnStatus(enabled: Boolean) =
+        setEnum("Net@@PSN status", if (enabled) "Simulated" else "Disconnected")
+
+    fun setUpnp(enabled: Boolean) = setBool("Net@@UPNP Enabled", enabled)
+
+    // ---- PS3 advanced (core accuracy) ----------------------------------
+
+    private val XFLOAT = arrayOf("Accurate", "Approximate", "Relaxed", "Inaccurate")
+    private val SLEEP_TIMERS = arrayOf("As Host", "Usleep Only", "All Timers")
+    private val AUDIO_RENDERERS = arrayOf("Null", "XAudio2", "Cubeb", "FAudio")
+
+    /** PS3 output resolution. Ordinals must match video_resolution exactly. */
+    val RESOLUTIONS = arrayOf(
+        "1920x1080", "1920x1080i", "1280x720", "720x480", "720x480i",
+        "720x576", "720x576i", "1600x1080", "1440x1080", "1280x1080", "960x1080",
+    )
+
+    fun setSpuXFloat(index: Int) =
+        setEnum("$CORE@@SPU XFloat Accuracy", XFLOAT.getOrElse(index) { "Approximate" })
+
+    fun setAccurateSpuReservations(v: Boolean) = setBool("$CORE@@Accurate SPU Reservations", v)
+    fun setAccurateCacheLineStores(v: Boolean) = setBool("$CORE@@Accurate Cache Line Stores", v)
+    fun setAccurateRsxReservation(v: Boolean) = setBool("$CORE@@Accurate RSX reservation access", v)
+    fun setPpuReservationPriority(v: Boolean) = setBool("$CORE@@PPU Reservation Priority Over SPUs", v)
+    fun setSpuVerification(v: Boolean) = setBool("$CORE@@SPU Verification", v)
+    fun setPpuNanHandling(v: Boolean) = setBool("$CORE@@PPU Vector NaN Handling", v)
+    fun setAccurateDfma(v: Boolean) = setBool("$CORE@@Use Accurate DFMA", v)
+    fun setDazFtz(v: Boolean) = setBool("$CORE@@Set DAZ and FTZ", v)
+    fun setHleLwmutex(v: Boolean) = setBool("$CORE@@HLE lwmutex", v)
+    fun setDebugConsoleMode(v: Boolean) = setBool("$CORE@@Debug Console Mode", v)
+
+    fun setSleepTimersIndex(index: Int) =
+        setEnum("$CORE@@Sleep Timers Accuracy", SLEEP_TIMERS.getOrElse(index) { "As Host" })
+
+    fun setResolution(index: Int) =
+        setEnum("$VIDEO@@Resolution", RESOLUTIONS.getOrElse(index) { "1280x720" })
+
+    /**
+     * Audio backend. Only Cubeb and Null are real on Android -- XAudio2 is
+     * Windows and FAudio is not built here -- so the UI must not offer the other
+     * two, or picking one silently kills audio.
+     */
+    fun setAudioRenderer(index: Int) =
+        setEnum("$AUDIO@@Renderer", AUDIO_RENDERERS.getOrElse(index) { "Cubeb" })
+
+    // ---- Performance overlay (custom colours) ---------------------------
+
+    fun setOverlayPosition(index: Int) = setEnum(
+        "$OVERLAY@@Position",
+        arrayOf("Top Left", "Top Right", "Bottom Left", "Bottom Right").getOrElse(index) { "Top Left" },
+    )
+
+    fun setOverlayDetailIndex(index: Int) = setEnum(
+        "$OVERLAY@@Detail level",
+        arrayOf("None", "Minimal", "Low", "Medium", "High").getOrElse(index) { "Medium" },
+    )
+
+    /** Colours are "#RRGGBBAA" strings; the caller has already formatted them. */
+    fun setOverlayBodyColor(hex: String) = setString("$OVERLAY@@Body Color (hex)", hex)
+    fun setOverlayBodyBackground(hex: String) = setString("$OVERLAY@@Body Background (hex)", hex)
+    fun setOverlayTitleColor(hex: String) = setString("$OVERLAY@@Title Color (hex)", hex)
+    fun setOverlayTitleBackground(hex: String) = setString("$OVERLAY@@Title Background (hex)", hex)
+}

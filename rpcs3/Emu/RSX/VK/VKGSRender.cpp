@@ -734,6 +734,35 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 			backend_config.supports_passthrough_dma = false;
 		}
 		break;
+	case vk::driver_vendor::ADRENO:
+	case vk::driver_vendor::TURNIP:
+	case vk::driver_vendor::ARM_MALI:
+	case vk::driver_vendor::PANVK:
+	case vk::driver_vendor::POWERVR:
+	case vk::driver_vendor::XCLIPSE:
+	case vk::driver_vendor::BROADCOM:
+	case vk::driver_vendor::VERISILICON:
+		// Mobile tilers, treated like MVK above.
+		//
+		// Async compute assumes a discrete queue that can run alongside graphics.
+		// Tilers generally expose a "compute" family that is the same hardware
+		// time-slicing the graphics queue, so async decode competes with rendering
+		// instead of overlapping it -- and several mobile drivers fault outright
+		// when a compute queue writes an image the graphics queue is sampling.
+		//
+		// Passthrough DMA relies on importing host memory, which no mobile driver
+		// here supports.
+		if (backend_config.supports_asynchronous_compute)
+		{
+			rsx_log.notice("Disabling asynchronous compute on a mobile GPU: the compute queue is not independent hardware.");
+			backend_config.supports_asynchronous_compute = false;
+		}
+		if (backend_config.supports_passthrough_dma)
+		{
+			rsx_log.notice("Disabling passthrough DMA on a mobile GPU: host memory import is not supported.");
+			backend_config.supports_passthrough_dma = false;
+		}
+		break;
 	default: break;
 	}
 

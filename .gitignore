@@ -126,3 +126,38 @@ CMakeUserPresets.json
 
 .cache/
 .lldbinit
+
+# --- ARMSX3 (Android port) ---
+# Gradle / Android Studio build output
+android/**/build/
+android/**/.gradle/
+android/**/.cxx/
+android/**/local.properties
+android/**/*.iml
+.idea/
+
+# Built native libraries. libarmsx3-core.so alone is ~98 MB stripped; these are
+# build products and must not enter git history. See BUILDING.md.
+android/**/jniLibs/**/*.so
+android/**/cpp/**/*.so
+
+# Discord Social SDK is proprietary and has no published license, so it is not
+# redistributed here. Fetch it from Discord's developer portal into
+# app/libs/ and app/src/main/cpp/discord_sdk/ before building that flavour.
+android/**/libs/discord_partner_sdk.aar
+android/**/discord_sdk/
+
+# Signing material
+*.keystore
+*.jks
+android/**/keystore.properties
+
+# Secrets kept out of source (see RA user-agent handling)
+**/ra_ua_secret.h
+
+# Third party checkouts. Not submodules, clone these yourself before building.
+#   librashader  https://github.com/SnowflakePowered/librashader
+#   libadrenotools  https://github.com/bylaws/libadrenotools
+3rdparty/librashader/
+android/app-upstream/
+android/**/cpp/libadrenotools/

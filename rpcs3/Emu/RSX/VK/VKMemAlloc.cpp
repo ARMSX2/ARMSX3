@@ -55,6 +55,11 @@ private:
 #pragma GCC diagnostic ignored "-Wsuggest-attribute=noreturn"
 #endif
 #endif
+// VulkanAPI.h FIRST: it is what defines VK_NO_PROTOTYPES on Android, and that
+// macro decides whether VMA compiles its static or its dynamic import path.
+// Including vk_mem_alloc.h without it left this translation unit configured
+// differently from every other one that includes VMA through memory.h.
+#include "VulkanAPI.h"
 #include <vk_mem_alloc.h>
 #if defined(_MSC_VER) && !defined(__clang__)
 #pragma warning(pop)

@@ -6,6 +6,9 @@
 #include "dualsense_pad_handler.h"
 #include "skateboard_pad_handler.h"
 #include "ps_move_handler.h"
+#ifdef __ANDROID__
+#include "virtual_pad_handler.h"
+#endif
 #ifdef _WIN32
 #include "xinput_pad_handler.h"
 #include "mm_joystick_handler.h"
@@ -885,6 +888,12 @@ std::shared_ptr<PadHandlerBase> pad_thread::GetHandler(pad_handler type)
 #ifdef HAVE_LIBEVDEV
 	case pad_handler::evdev:
 		return std::make_shared<evdev_joystick_handler>();
+#endif
+#ifdef __ANDROID__
+	// ARMSX3: on-screen touch controls. Guard must match the enum value in
+	// Emu/Io/pad_config_types.h and the fmt_class_string case beside it.
+	case pad_handler::virtual_pad:
+		return std::make_shared<virtual_pad_handler>();
 #endif
 	}
 

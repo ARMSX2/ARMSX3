@@ -1,0 +1,337 @@
+package com.armsx2.ui.settings
+
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.armsx2.config.Settings
+import com.armsx2.i18n.str
+import com.armsx2.ui.InGameOverlay
+import androidx.core.content.edit
+import kotlin.math.roundToInt
+
+/**
+ * Performance section of the in-game settings overlay.
+ *
+ * Mutates the live [Settings] state and routes the write through
+ * [InGameOverlay.saveSettings], which picks the global or per-game
+ * storage tier based on the overlay's current scope. Applies via
+ * [Settings.applyTo] so toggles take effect immediately on a running
+ * VM. Every visible setting maps 1-1 onto an EmuCore key (see Settings
+ * field comments for the exact `<section>/<key>`).
+ *
+ * Column + verticalScroll instead of LazyColumn so the tab can sit
+ * inside the wrap-content RootTabs container without needing a hard
+ * height bound. List is short (~9 rows) so non-lazy is fine.
+ */
+@Composable
+fun PerformanceTab(state: MutableState<Settings>) {
+    val s = state.value
+    val scroll = settingsScrollState()
+    ControllerAutoScroll(scroll)
+
+    fun apply(updated: Settings) = InGameOverlay.saveSettings(updated)
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth(),
+    ) {
+        // Prominent latency preset: zero queued GS frames keeps the emulated CPU
+        // from running ahead of presentation, and the Surface requests a matching
+        // high-refresh display mode. Settings scope is supplied by InGameOverlay,
+        // so the same switch naturally supports Global and Game overrides. Off
+        // restores the small, smoother queue and Android's automatic refresh policy.
+        // Removed: PCSX2's GS vsync queue depth. RPCS3 has no equivalent knob.
+        // Speedhack profile presets. Equality against s.copy(...) means the
+        // segment auto-reflects "Custom" once the user tweaks any speedhack below.
+        run {
+            val safe = s.copy(eeCycleRate = 0, eeCycleSkip = 0, mtvu = true, vu1Instant = true,
+                vuFlagHack = true, intcStat = true, waitLoop = true, fastCDVD = false,
+                // Restore the GPU-quality levers the Fast/Low-End presets lower, so
+                // Optimal is a COMPLETE reset to recommended defaults — not just the
+                // speedhacks (e.g. Texture Preloading back to Full, blending to Basic).
+                // Resolution is left as-is so upscalers aren't dropped to native.
+                accurateBlendingUnit = 1, hwMipmap = true, texturePreloading = 2, hwRov = false)
+            // Fast = speed-first: EE cycle skip + fast CDVD, plus render-side wins
+            // that are safe for most games (native resolution + Basic blending).
+            val fast = s.copy(eeCycleRate = 0, eeCycleSkip = 2, mtvu = true, vu1Instant = true,
+                vuFlagHack = true, intcStat = true, waitLoop = true, fastCDVD = true,
+                upscaleFloat = 1.0f, accurateBlendingUnit = 1)
+            // Low-End = every cheap GPU/CPU lever, MTVU gated on core count. Built
+            // from the shared Settings.lowEndPreset so it matches the setup wizard.
+            val lowEnd = Settings.lowEndPreset(
+                s.copy(eeCycleRate = 0, mtvu = true, vu1Instant = true,
+                    vuFlagHack = true, intcStat = true, waitLoop = true, fastCDVD = true),
+                mtvu = com.armsx2.DeviceTier.mtvuDefault(),
+            )
+            // -1 = no preset matches (custom): no segment highlighted.
+            val idx = when (s) { safe -> 0; fast -> 1; lowEnd -> 2; else -> -1 }
+        // Removed: PS2 speedhack presets (EE cycle rate/skip bundles). No PS3 analogue.
+        }
+        HelpText(str("perf.speedhackProfile.help"))
+        SettingsDivider()
+        // ---- Display Resolution (HW scaler), NetherSX2-style ----------------
+        // Shrinks the game's OUTPUT surface (hardware-composer upscales to the
+        // screen) to cut GPU present cost, heat and battery. Global pref (not a
+        // Settings field) applied live to the active output surface.
+        run {
+            // Per-game scoped (Duda, 2026-07-28): this used to write MainActivityRuntime.prefs
+            // directly, so changing it in Game scope silently moved the Global value too —
+            // there was no per-game copy to write. Now it routes through the same
+            // saveSettings() path as every other row in this tab.
+            SegmentedRow(
+                label = str("perf.displayResolution.label"),
+                // Short-side render heights, not PS2 multiples. This scales the Android
+                // surface, so it works regardless of core -- but 448*n was the PS2's
+                // native height and meant nothing for a 720p console.
+                options = listOf(str("perf.displayResolution.screen"), "1080p", "720p", "540p"),
+                selectedIndex = when (s.hwScaler) { 3 -> 1; 2 -> 2; 1 -> 3; else -> 0 },
+                description = str("perf.displayResolution.description"),
+                onChange = {
+                    apply(s.copy(hwScaler = when (it) { 1 -> 1080; 2 -> 720; 3 -> 540; else -> 0 }))
+                    com.armsx2.runtime.MainActivityRuntime.surface.value?.applyOutputScale()
+                },
+            )
+        }
+        SettingsDivider()
+        // ---- Screen resolution override (#398) ------------------------------
+        // Forces the game's OUTPUT surface to a fixed 16:9 resolution instead of the
+        // detected panel size — fixes 16:10 / mis-detected panels (e.g. reported 1920x1200
+        // on a 1080p screen) that squish 16:9 games and widescreen patches. Global pref,
+        // live-applied to the output surface; composes with the HW scaler above.
+        run {
+            // Per-game scoped for the same reason as the HW scaler above.
+            val presets = listOf("auto", "2560x1440", "1920x1080", "1280x720")
+            SegmentedRow(
+                label = str("perf.screenRes.label"),
+                options = listOf(str("perf.screenRes.auto"), "1440p", "1080p", "720p"),
+                selectedIndex = presets.indexOf(s.screenResOverride).let { if (it >= 0) it else 0 },
+                description = str("perf.screenRes.description"),
+                onChange = { idx ->
+                    apply(s.copy(screenResOverride = presets[idx]))
+                    com.armsx2.runtime.MainActivityRuntime.surface.value?.applyOutputScale()
+                },
+            )
+        }
+        // ---- Sustained Performance (#128) ---------------------------------------
+        // Asks Android to hold a steady, thermally-sustainable clock instead of
+        // boost-then-throttle. Better for long sessions on handhelds, but it CAPS the
+        // peak clock so peak-hungry games can lose fps — a user choice, default Off.
+        // Global pref, applied at launch (MainActivityRuntime.onCreate) and live here via the window.
+        run {
+            val sustained = remember { androidx.compose.runtime.mutableStateOf(com.armsx2.runtime.MainActivityRuntime.prefs.getBoolean("ui.sustainedPerf", false)) }
+            SegmentedRow(
+                label = str("perf.sustainedPerformance.label"),
+                options = listOf(str("common.off"), str("common.on")),
+                selectedIndex = if (sustained.value) 1 else 0,
+                description = str("perf.sustainedPerformance.description"),
+                onChange = {
+                    val on = it == 1
+                    sustained.value = on
+                    com.armsx2.runtime.MainActivityRuntime.prefs.edit {
+                        putBoolean(
+                            "ui.sustainedPerf",
+                            on
+                        )
+                    }
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                        runCatching {
+                            (com.armsx2.runtime.MainActivityRuntime.surface.value?.context as? android.app.Activity)
+                                ?.window?.setSustainedPerformanceMode(on)
+                        }
+                    }
+                },
+            )
+        }
+        // ---- CPU clock hint (ADPF) ---------------------------------------------
+        // PerformanceHintManager: reports the per-frame CPU work to the OS scheduler so it can
+        // raise the EE/GS/MTVU threads' CPU frequency toward the frame deadline, countering the
+        // DVFS governor under-clocking emulation's bursty load. EXPERIMENTAL, default OFF.
+        // No-op below API 33. Applied at launch (MainActivityRuntime) + live here.
+        run {
+            val adpf = remember { androidx.compose.runtime.mutableStateOf(com.armsx2.runtime.MainActivityRuntime.prefs.getBoolean("ui.adpf", false)) }
+            SegmentedRow(
+                label = str("perf.adpf.label"),
+                options = listOf(str("common.off"), str("common.on")),
+                selectedIndex = if (adpf.value) 1 else 0,
+                description = str("perf.adpf.description"),
+                onChange = {
+                    val on = it == 1
+                    adpf.value = on
+                    com.armsx2.runtime.MainActivityRuntime.prefs.edit { putBoolean("ui.adpf", on) }
+                    runCatching { com.armsx3.NativeApp.setAdpfEnabled(on) }
+                },
+            )
+        }
+        SettingsDivider()
+        // Affinity Control Mode — opt-in CPU pinning for the EE/VU/GS threads. Android normally
+        // leaves them unpinned on purpose (EAS puts the busiest thread on the prime core, and
+        // pinning VU to a mid-tier big core measured ~1.4x slower), so this is EXPERIMENTAL and
+        // default Disabled. It exists because the tradeoff is workload-dependent: GS-bound titles
+        // benefited from an explicitly placed GS thread. Applies on the next boot.
+        // The PS3 has no EE/VU/GS -- those are PS2 silicon. RPCS3's analogue is
+        // Thread Scheduler Mode, which is three modes, not six orderings. The old
+        // picker offered eight options that all collapsed onto these three, so
+        // five of them silently did the same thing.
+        SegmentedGridRow(
+            label = str("perf.scheduler.label"),
+            options = listOf(
+                str("perf.scheduler.os"),
+                str("perf.scheduler.rpcs3"),
+                str("perf.scheduler.rpcs3Alt"),
+            ),
+            selectedIndex = s.affinityMode.coerceIn(0, 2),
+            columns = 1,
+            description = str("perf.scheduler.description"),
+            onChange = { apply(s.copy(affinityMode = it)) },
+        )
+        SettingsDivider()
+        // PS3 CPU. The PS2 speedhacks that were here (EE cycle rate/skip, VU
+        // clamping, FPU round modes) describe silicon the PS3 does not have --
+        // none of them had anywhere to go in the RPCS3 config.
+        CollapsibleSection(str("perf.ps3cpu.title"), initiallyExpanded = true) {
+            SegmentedGridRow(
+                label = str("perf.ppuDecoder.label"),
+                options = listOf(str("perf.decoder.interpreter"), str("perf.decoder.llvm")),
+                selectedIndex = s.ps3.ppuDecoder.coerceIn(0, 1),
+                columns = 2,
+                description = str("perf.ppuDecoder.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(ppuDecoder = it))) },
+            )
+            SettingsDivider()
+            SegmentedGridRow(
+                label = str("perf.spuDecoder.label"),
+                options = listOf(
+                    str("perf.decoder.interpreter"),
+                    str("perf.decoder.interpreterDyn"),
+                    str("perf.decoder.asmjit"),
+                    str("perf.decoder.llvm"),
+                ),
+                selectedIndex = s.ps3.spuDecoder.coerceIn(0, 3),
+                columns = 2,
+                description = str("perf.spuDecoder.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(spuDecoder = it))) },
+            )
+            SettingsDivider()
+            SegmentedGridRow(
+                label = str("perf.spuBlockSize.label"),
+                options = listOf("Safe", "Mega", "Giga"),
+                selectedIndex = s.ps3.spuBlockSize.coerceIn(0, 2),
+                columns = 3,
+                description = str("perf.spuBlockSize.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(spuBlockSize = it))) },
+            )
+            SettingsDivider()
+            // str() is @Composable, so it cannot be called from inside the
+            // (non-composable) valueFormatter lambda -- resolve it up front.
+            val autoLabel = str("common.auto")
+            IntSliderRow(
+                label = str("perf.preferredSpuThreads.label"),
+                value = s.ps3.preferredSpuThreads.coerceIn(0, 6),
+                min = 0,
+                max = 6,
+                description = str("perf.preferredSpuThreads.description"),
+                valueFormatter = { if (it == 0) autoLabel else "$it" },
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(preferredSpuThreads = it))) },
+            )
+            SettingsDivider()
+            IntSliderRow(
+                label = str("perf.llvmThreads.label"),
+                value = s.ps3.llvmThreads.coerceIn(0, 8),
+                min = 0,
+                max = 8,
+                description = str("perf.llvmThreads.description"),
+                valueFormatter = { if (it == 0) autoLabel else "$it" },
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(llvmThreads = it))) },
+            )
+            SettingsDivider()
+            IntSliderRow(
+                label = str("perf.maxSpursThreads.label"),
+                value = s.ps3.maxSpursThreads.coerceIn(1, 6),
+                min = 1,
+                max = 6,
+                description = str("perf.maxSpursThreads.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(maxSpursThreads = it))) },
+            )
+            SettingsDivider()
+            IntSliderRow(
+                label = str("perf.clocksScale.label"),
+                value = s.ps3.clocksScale.coerceIn(10, 300),
+                min = 10,
+                max = 300,
+                description = str("perf.clocksScale.description"),
+                valueFormatter = { "$it%" },
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(clocksScale = it))) },
+            )
+            SettingsDivider()
+            ToggleRow(
+                label = str("perf.spuCache.label"),
+                value = s.ps3.spuCache,
+                description = str("perf.spuCache.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(spuCache = it))) },
+            )
+            SettingsDivider()
+            ToggleRow(
+                label = str("perf.llvmPrecompile.label"),
+                value = s.ps3.llvmPrecompile,
+                description = str("perf.llvmPrecompile.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(llvmPrecompile = it))) },
+            )
+            SettingsDivider()
+            ToggleRow(
+                label = str("perf.spuLoopDetection.label"),
+                value = s.ps3.spuLoopDetection,
+                description = str("perf.spuLoopDetection.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(spuLoopDetection = it))) },
+            )
+            SettingsDivider()
+            ToggleRow(
+                label = str("perf.accurateSpuDma.label"),
+                value = s.ps3.accurateSpuDma,
+                description = str("perf.accurateSpuDma.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(accurateSpuDma = it))) },
+            )
+        }
+        SettingsDivider()
+        // The PS2 speedhacks here (INTC/wait-loop detection, fast CDVD, instant
+        // VU1, VU flag hacks, deferred VU writes, NEON fusions, stall-sim skip)
+        // are all EE/VU tricks. The PS3's equivalent tuning is SPU-side and
+        // lives in the PS3 CPU section above; the accuracy trade-offs are in
+        // Advanced.
+        CollapsibleSection(str("perf.spuTuning.title")) {
+            ToggleRow(
+                str("adv.accurateSpuRsv.label"),
+                s.ps3.accurateSpuRsv,
+                description = str("adv.accurateSpuRsv.description"),
+            ) { apply(s.copy(ps3 = s.ps3.copy(accurateSpuRsv = it))) }
+            SettingsDivider()
+            ToggleRow(
+                str("adv.accurateCacheLine.label"),
+                s.ps3.accurateCacheLine,
+                description = str("adv.accurateCacheLine.description"),
+            ) { apply(s.copy(ps3 = s.ps3.copy(accurateCacheLine = it))) }
+            SettingsDivider()
+            SegmentedGridRow(
+                label = str("adv.xfloat.label"),
+                options = listOf(
+                    str("adv.xfloat.accurate"),
+                    str("adv.xfloat.approximate"),
+                    str("adv.xfloat.relaxed"),
+                    str("adv.xfloat.inaccurate"),
+                ),
+                selectedIndex = s.ps3.spuXFloat.coerceIn(0, 3),
+                columns = 2,
+                description = str("adv.xfloat.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(spuXFloat = it))) },
+            )
+        }
+    }
+}

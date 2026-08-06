@@ -1,4 +1,11 @@
 #pragma once
+// ARMSX3: Android targets OpenGL ES 3.2, which has no GLEW and no desktop GL
+// entry points. OpenGL_ES.hpp stands in for both. Everything ES-specific lives
+// in that file and OpenGL_ES.cpp; this guard is the whole upstream footprint.
+#ifdef __ANDROID__
+#include "OpenGL_ES.hpp"
+#else
+
 #ifndef _WIN32
 #include <GL/glew.h>
 #endif
@@ -29,6 +36,8 @@ typedef BOOL (WINAPI* PFNWGLSWAPINTERVALEXTPROC) (int interval);
 #include <GL/glxext.h>
 #endif
 #endif
+
+#endif // __ANDROID__
 
 #ifndef GL_TEXTURE_BUFFER_BINDING
 //During spec release, this enum was removed during upgrade from ARB equivalent

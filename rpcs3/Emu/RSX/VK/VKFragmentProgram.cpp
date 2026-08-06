@@ -104,9 +104,16 @@ void VKFragmentDecompilerThread::insertHeader(std::stringstream & OS)
 
 	std::vector<const char*> required_extensions =
 	{
-		"GL_EXT_scalar_block_layout",
-		"GL_EXT_uniform_buffer_unsized_array"
+		"GL_EXT_scalar_block_layout"
 	};
+
+	// Requiring this on a driver that lacks the extension fails every pipeline
+	// (Adreno returns VK_ERROR_UNKNOWN). The arrays below take concrete bounds
+	// instead when it is missing.
+	if (vk::get_current_renderer()->get_unsized_array_support())
+	{
+		required_extensions.emplace_back("GL_EXT_uniform_buffer_unsized_array");
+	}
 
 	if (device_props.has_native_half_support)
 	{
@@ -279,7 +286,7 @@ void VKFragmentDecompilerThread::insertConstants(std::stringstream & OS)
 	{
 		OS << "layout(std430, set=1, binding=" << vk_prog->binding_table.cbuf_location << ") uniform FragmentConstantsBuffer\n";
 		OS << "{\n";
-		OS << "	vec4 fc[];\n";
+		OS << "	vec4 fc" << vk::ubo_array_dim(16) << ";\n";
 		OS << "};\n";
 		OS << "#define _fetch_constant(x) fc[x + _fs_constants_offset]\n\n";
 	}
@@ -287,17 +294,17 @@ void VKFragmentDecompilerThread::insertConstants(std::stringstream & OS)
 	OS <<
 		"layout(std430, set=1, binding=" << vk_prog->binding_table.context_buffer_location << ") uniform FragmentStateBuffer\n"
 		"{\n"
-		"	fragment_context_t fs_contexts[];\n"
+		"	fragment_context_t fs_contexts" << vk::ubo_array_dim(32) << ";\n"
 		"};\n\n";
 
 	OS << "layout(std430, set=1, binding=" << vk_prog->binding_table.tex_param_location << ") uniform TextureParametersBuffer\n";
 	OS << "{\n";
-	OS << "	sampler_info texture_parameters[];\n";
+	OS << "	sampler_info texture_parameters" << vk::ubo_array_dim(48) << ";\n";
 	OS << "};\n\n";
 
 	OS << "layout(std430, set=1, binding=" << vk_prog->binding_table.polygon_stipple_params_location << ") readonly buffer RasterizerHeap\n";
 	OS << "{\n";
-	OS << "	uvec4 stipple_pattern[];\n";
+	OS << "	uvec4 stipple_pattern" << vk::ubo_array_dim(16) << ";\n";
 	OS << "};\n\n";
 
 	vk::glsl::program_input in

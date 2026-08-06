@@ -9,6 +9,7 @@
 #include "Thread.h"
 #include "Utilities/JIT.h"
 #include <cfenv>
+#include <charconv>
 
 #ifdef ARCH_ARM64
 #include "Emu/CPU/Backends/AArch64/AArch64Signal.h"
@@ -3550,10 +3551,78 @@ void thread_ctrl::silent_exit() noexcept
 	std::abort();
 }
 
+
+#if defined(ARCH_ARM64) && defined(__linux__)
+// Per-core capacity from sysfs, read ONCE.
+//
+// Deliberately plain POSIX I/O rather than fs::file: sysfs nodes report
+// st_size == 0, so a size-based read returns nothing, and fs::file raised
+// "Unexpected fs::error OK" from whichever thread asked -- which killed the RSX
+// thread outright, since get_affinity_mask() runs on it.
+static const std::array<u32, 64>& get_arm_core_capacities()
+{
+	static const std::array<u32, 64> s_caps = []
+	{
+		std::array<u32, 64> caps{};
+
+		for (u32 core = 0; core < 64u; core++)
+		{
+			char path[128];
+			std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%u/cpu_capacity", core);
+
+			const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+			if (fd < 0)
+			{
+				continue;
+			}
+
+			char buf[32]{};
+			const auto got = ::read(fd, buf, sizeof(buf) - 1);
+			::close(fd);
+
+			if (got > 0)
+			{
+				caps[core] = static_cast<u32>(std::atoi(buf));
+			}
+		}
+
+		return caps;
+	}();
+
+	return s_caps;
+}
+#endif
+
 void thread_ctrl::detect_cpu_layout()
 {
 	if (!g_native_core_layout.compare_and_swap_test(native_core_arrangement::undefined, native_core_arrangement::generic))
 		return;
+
+#if defined(ARCH_ARM64) && defined(__linux__)
+	// Heterogeneous if the kernel reports differing per-core capacity. Every
+	// big.LITTLE/DynamIQ SoC exposes cpu_capacity; a uniform machine reports the
+	// same value everywhere (or nothing at all), and falls through to generic.
+	{
+		const auto& caps = get_arm_core_capacities();
+		u32 lowest = umax, highest = 0;
+
+		for (u32 core = 0; core < 64u; core++)
+		{
+			if (caps[core])
+			{
+				lowest = std::min(lowest, caps[core]);
+				highest = std::max(highest, caps[core]);
+			}
+		}
+
+		if (highest && lowest != umax && highest > lowest)
+		{
+			sig_log.notice("Detected ARM heterogeneous CPU (capacity %u..%u)", lowest, highest);
+			g_native_core_layout.store(native_core_arrangement::arm_big_little);
+			return;
+		}
+	}
+#endif
 
 	const auto system_id = utils::get_cpu_brand();
 	if (system_id.find("Ryzen") != umax)
@@ -3623,6 +3692,58 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 		case native_core_arrangement::generic:
 		{
 			return all_cores_mask;
+		}
+		case native_core_arrangement::arm_big_little:
+		{
+			// Put the threads that gate the frame -- SPU and RSX -- on the cores
+			// that can actually keep up, and leave the little cluster for PPU and
+			// helpers. Without this the OS spreads six SPU threads across a mix of
+			// big and LITTLE cores, and the slow ones set the pace.
+			const auto& caps = get_arm_core_capacities();
+			u64 fast_mask = 0;
+			u64 slow_mask = 0;
+			u32 threshold = 0;
+
+			for (u32 core = 0; core < 64u; core++)
+			{
+				threshold = std::max(threshold, caps[core]);
+			}
+
+			// Anything within 25% of the fastest core counts as "fast", so a
+			// mid cluster (A715/A710) joins the prime core rather than being
+			// lumped in with the A510s.
+			threshold = threshold * 3 / 4;
+
+			for (u32 core = 0; core < 64u; core++)
+			{
+				if (~process_affinity_mask & (u64{1} << core))
+				{
+					continue;
+				}
+
+				const u32 capacity = caps[core];
+
+				((capacity && capacity >= threshold) ? fast_mask : slow_mask) |= (u64{1} << core);
+			}
+
+			if (!fast_mask || !slow_mask)
+			{
+				// Degenerate reading -- do not fence anything off.
+				return all_cores_mask;
+			}
+
+			switch (group)
+			{
+			case thread_class::spu:
+			case thread_class::rsx:
+				return fast_mask;
+			case thread_class::ppu:
+				// PPU still needs a fast core for the main thread, but letting it
+				// spill to the little cluster keeps it out of the SPUs' way.
+				return all_cores_mask;
+			default:
+				return slow_mask;
+			}
 		}
 		case native_core_arrangement::amd_ccx:
 		{
@@ -3890,7 +4011,11 @@ void thread_ctrl::set_thread_affinity_mask(u64 mask)
 	thread_affinity_policy_data_t policy = { static_cast<integer_t>(std::countr_zero(mask)) };
 	thread_port_t mach_thread = pthread_mach_thread_np(pthread_self());
 	thread_policy_set(mach_thread, THREAD_AFFINITY_POLICY, reinterpret_cast<thread_policy_t>(&policy), !mask ? 0 : 1);
-#elif !defined(ANDROID) && (defined(__linux__) || defined(__DragonFly__) || defined(__FreeBSD__))
+// NOTE: Android was excluded here upstream, which made every affinity request a
+// silent no-op -- Thread Scheduler Mode looked settable but did nothing. bionic
+// provides pthread_setaffinity_np, and RPCSX runs this path on Android without
+// the carve-out. Failures are already logged rather than fatal.
+#elif (defined(__linux__) || defined(__DragonFly__) || defined(__FreeBSD__))
 	if (!mask)
 	{
 		// Reset affinity mask
@@ -3918,10 +4043,19 @@ void thread_ctrl::set_thread_affinity_mask(u64 mask)
 		}
 	}
 
+#ifdef ANDROID
+	// bionic has no pthread_setaffinity_np. sched_setaffinity with pid 0 targets
+	// the calling THREAD on Linux, which is what we want.
+	if (sched_setaffinity(0, sizeof(cpu_set_t), &cs) != 0)
+	{
+		sig_log.error("Failed to set thread affinity 0x%x: errno %d.", mask, errno);
+	}
+#else
 	if (int err = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cs))
 	{
 		sig_log.error("Failed to set thread affinity 0x%x: error %d.", mask, err);
 	}
+#endif
 #endif
 }
 

@@ -21,6 +21,15 @@
 #pragma warning( disable : 4005 )
 #endif
 
+// ANDROID: no prototypes. Every vkFoo below is a function POINTER supplied by
+// vk_android_loader, so the driver behind it can be the system one or a
+// user-installed one loaded through adrenotools. With prototypes on, every call
+// binds straight to the system libvulkan.so at link time and no driver swap is
+// possible -- an APK cannot shadow libvulkan.so, it is a public library.
+#ifdef __ANDROID__
+#define VK_NO_PROTOTYPES
+#endif
+
 #include <vulkan/vulkan.h>
 
 #ifdef _MSC_VER
@@ -60,3 +69,7 @@ namespace vk
 {
 	void init();
 }
+
+#ifdef __ANDROID__
+#include "vk_android_loader.h"
+#endif

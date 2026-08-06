@@ -301,6 +301,17 @@ public:
 		return m_title_id;
 	}
 
+#ifdef __ANDROID__
+	// ARMSX3: the Android PPU precompilation flow runs outside a normal boot.
+	// progress_dialog_server bails when the emulator reads as stopped, so the
+	// compile queue marks the state running for the duration and restores it
+	// afterwards, and stamps the title id it parsed from PARAM.SFO for the
+	// dialog caption. Android-only on purpose -- nothing else should be
+	// reaching in and setting emulator state directly.
+	void SetState(system_state state) { m_state = state; }
+	void SetTitleID(std::string title_id) { m_title_id = std::move(title_id); }
+#endif
+
 	const std::string& GetTitle() const
 	{
 		return m_title;

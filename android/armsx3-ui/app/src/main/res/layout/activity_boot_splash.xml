@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  TextureView, not VideoView. VideoView can only fit-inside, which pillarboxes
+  the square intro on every non-square screen (the black bars either side of the
+  logo). TextureView accepts a transform matrix, so BootSplashActivity can
+  centre-crop it to fill the display.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/boot_splash_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <TextureView
+        android:id="@+id/boot_splash_video"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:keepScreenOn="true" />
+
+</FrameLayout>

@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.USB_PERMISSION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.usb.host" />
+    <uses-feature android:name="android.hardware.usb.accessory" />
+
+    <application
+        android:allowBackup="true"
+        android:allowNativeHeapPointerTagging="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_armsx3"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_armsx3_round"
+        android:supportsRtl="true"
+        android:appCategory="game"
+        android:theme="@style/Theme.RPCSX"
+        tools:targetApi="31">
+
+        <service
+            android:name=".PrecompilerService"
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+        </service>
+
+        <meta-data 
+            android:name="android.game_mode_config"
+            android:resource="@xml/game_config" />
+        
+        <activity
+            android:name=".RPCSXActivity"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:screenOrientation="sensorLandscape"
+            android:launchMode="singleTask"
+            android:exported="false" >
+            <intent-filter>
+                <action android:name="rpcsx.intent.action.Emulator" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".overlay.OverlayEditActivity"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:screenOrientation="sensorLandscape"
+            android:launchMode="singleTask"
+            android:exported="false" >
+        </activity>
+        
+        <!-- ARMSX3: the boot logo is the launcher entry; it hands off to
+             MainActivity (forwarding the original intent's action/data/extras
+             and URI grants, so share/open-with still work). Falls through to
+             MainActivity on tap, Back, playback error, or a 6s hard timeout,
+             so a bad codec can never strand the user on black. -->
+        <activity
+            android:name=".BootSplashActivity"
+            android:theme="@style/Theme.ARMSX3.Boot"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize"
+            android:exported="true">
+        </activity>
+        
+        <provider
+            android:authorities="net.rpcsx.documents"
+            android:name="net.rpcsx.provider.AppDataDocumentProvider"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+
+        <receiver
+            android:name=".utils.PackageInstallStatusReceiver"
+            android:exported="false" />
+    </application>
+</manifest>

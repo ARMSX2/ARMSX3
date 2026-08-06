@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Resource shrinking removed EVERY res/raw entry from the release APK: the boot
+  video, the library music, the pause music and all 12 menu sound effects. They
+  are reached through R.raw.* inside helpers the shrinker cannot trace back to a
+  usage, so it judged them dead.
+
+  Silent failure mode: the app still builds, installs and runs. It just has no
+  audio and no boot logo, and only in release builds. Hence an explicit keep.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@raw/*" />

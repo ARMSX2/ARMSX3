@@ -22,6 +22,9 @@ extern "C" {
 #include "libswscale/swscale.h"
 #include "libswresample/swresample.h"
 }
+// ARMSX3: the only ffmpeg prebuilt that exists for Android is 5.1, but upstream
+// targets 7.1+ APIs. This supplies the gap and self-disables on a modern ffmpeg.
+#include "util/ffmpeg_compat.h"
 constexpr int averror_eof = AVERROR_EOF; // workaround for old-style-cast error
 constexpr int averror_invalid_data = AVERROR_INVALIDDATA; // workaround for old-style-cast error
 #ifdef _MSC_VER

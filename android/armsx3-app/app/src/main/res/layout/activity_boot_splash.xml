@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ARMSX3 boot splash.
+
+  TextureView, not VideoView. Two reasons:
+   1. VideoView fits the video INSIDE its bounds, so the 1080x1080 source
+      pillarboxes on any non-square screen - the black bars.  TextureView lets us
+      apply a centre-crop matrix and fill the display.
+   2. VideoView wraps a SurfaceView, which can end up never receiving a surface -
+      that shows up as a black splash with no MediaPlayer error at all, and it
+      cost ARMSX1 a debugging session. TextureView reports readiness directly.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/boot_splash_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <TextureView
+        android:id="@+id/boot_splash_video"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:keepScreenOn="true" />
+
+</FrameLayout>

@@ -51,6 +51,15 @@ namespace vk
 
 		void destroy();
 
+		// Rebuild the presentation surface against a new native window.
+		//
+		// Android destroys the ANativeWindow whenever the app leaves the
+		// foreground, which permanently invalidates the VkSurfaceKHR built from
+		// it -- every later swapchain call returns VK_ERROR_SURFACE_LOST. The
+		// surface is created once in create_swapchain() and was never rebuilt,
+		// so there was no way back from that.
+		VkSurfaceKHR recreate_surface(display_handle_t window_handle);
+
 		void enable_debugging();
 
 		bool create(const char* app_name, bool fast = false);

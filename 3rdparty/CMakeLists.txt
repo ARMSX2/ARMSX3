@@ -112,6 +112,14 @@ if (NOT ANDROID AND NOT APPLE)
 	else()
 		target_link_libraries(3rdparty_opengl INTERFACE OpenGL::GL OpenGL::GLU OpenGL::GLX)
 	endif()
+elseif (ANDROID)
+	# ARMSX3: Android has OpenGL, it just spells it OpenGL ES 3.2. The headers come
+	# from the NDK sysroot, so nothing needs to be found or added to the include
+	# path. Nothing is LINKED either, on purpose: rpcs3/Emu/RSX/GL/OpenGL_ES.cpp
+	# dlopen()s libEGL/libGLESv2 and resolves every entry point by hand, because a
+	# NEEDED dependency on libGLESv2.so would bind to the system driver forever and
+	# make ANGLE impossible. libdl comes with the NDK by default.
+	add_library(3rdparty_opengl INTERFACE)
 else()
 	add_library(3rdparty_opengl INTERFACE)
 	target_compile_definitions(3rdparty_opengl INTERFACE WITHOUT_OPENGL=1)
@@ -237,6 +245,12 @@ if (NOT ANDROID)
 else()
 	add_library(3rdparty_openal INTERFACE)
 	target_compile_definitions(3rdparty_openal INTERFACE WITHOUT_OPENAL=1)
+	# ARMSX3: WITHOUT_OPENAL compiles out every OpenAL *call* (cellMic.cpp guards
+	# all 7 sites) but cellMic.h still includes "alc.h" unconditionally for the
+	# ALC types in its declarations. Expose the headers so the include resolves;
+	# nothing links against OpenAL on Android.
+	target_include_directories(3rdparty_openal INTERFACE
+		"${CMAKE_CURRENT_SOURCE_DIR}/OpenAL/openal-soft/include/AL")
 endif()
 
 # FAudio

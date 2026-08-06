@@ -60,6 +60,9 @@ namespace vk
 			features2.pNext               = &shader_barycentric_info;
 		}
 
+		unsized_array_support = device_extensions.is_supported(VK_EXT_SHADER_UNIFORM_BUFFER_UNSIZED_ARRAY_EXTENSION_NAME);
+		max_ubo_range = props.limits.maxUniformBufferRange;
+
 		if (device_extensions.is_supported(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME))
 		{
 			custom_border_color_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT;
@@ -267,6 +270,23 @@ namespace vk
 			// Disable fp16 if driver uses LLVM emitter. It does fine with AMD proprietary drivers though.
 			shader_types_support.allow_float16 = (driver_properties.driverID == VK_DRIVER_ID_AMD_PROPRIETARY_KHR);
 		}
+
+		if (is_MOBILE(get_driver_vendor()) && shader_types_support.allow_float16)
+		{
+			// Adreno advertises shaderFloat16, but its shader compiler rejects the
+			// SPIR-V RPCS3 generates with native float16_t in it -- every game
+			// pipeline came back VK_ERROR_UNKNOWN from vkCreateGraphicsPipelines,
+			// which killed the async shader-compiler workers. The result looked
+			// like a renderer bug rather than a shader one: the compile-progress
+			// overlay drew fine (built on the RSX thread) while the game itself
+			// stayed black, with sound and a working performance overlay.
+			//
+			// Same shape as the AMD Vega case above -- the capability bit is
+			// honest about the hardware and wrong about the compiler. Emulating
+			// float16 with float32 costs some bandwidth and renders correctly.
+			rsx_log.warning("Mobile GPU: disabling native float16 shader types (driver shader compiler rejects them).");
+			shader_types_support.allow_float16 = false;
+		}
 	}
 
 	std::string physical_device::get_name() const
@@ -344,6 +364,29 @@ namespace vk
 				return driver_vendor::ARM_MALI;
 			}
 
+			// ARMSX3: mobile. Names are what old Android drivers report when
+			// VK_KHR_driver_properties is missing, which is common on the
+			// pre-Vulkan-1.2 devices this most needs to work on.
+			if (gpu_name.find("Turnip") != umax)
+			{ // "Turnip Adreno (TM) 740" -- check before Adreno, the name contains both
+				return driver_vendor::TURNIP;
+			}
+
+			if (gpu_name.find("Adreno") != umax)
+			{
+				return driver_vendor::ADRENO;
+			}
+
+			if (gpu_name.find("PowerVR") != umax || gpu_name.find("Imagination") != umax)
+			{
+				return driver_vendor::POWERVR;
+			}
+
+			if (gpu_name.find("Xclipse") != umax || gpu_name.find("Samsung") != umax)
+			{
+				return driver_vendor::XCLIPSE;
+			}
+
 			return driver_vendor::unknown;
 		}
 		else
@@ -375,8 +418,21 @@ namespace vk
 				return driver_vendor::PANVK;
 			case VK_DRIVER_ID_ARM_PROPRIETARY:
 				return driver_vendor::ARM_MALI;
+			// ARMSX3: the mobile IDs upstream's "// Mobile?" default was swallowing.
+			case VK_DRIVER_ID_QUALCOMM_PROPRIETARY:
+				return driver_vendor::ADRENO;
+			case VK_DRIVER_ID_MESA_TURNIP:
+				return driver_vendor::TURNIP;
+			case VK_DRIVER_ID_IMAGINATION_PROPRIETARY:
+			case VK_DRIVER_ID_IMAGINATION_OPEN_SOURCE_MESA:
+				return driver_vendor::POWERVR;
+			case VK_DRIVER_ID_SAMSUNG_PROPRIETARY:
+				return driver_vendor::XCLIPSE;
+			case VK_DRIVER_ID_BROADCOM_PROPRIETARY:
+				return driver_vendor::BROADCOM;
+			case VK_DRIVER_ID_VERISILICON_PROPRIETARY:
+				return driver_vendor::VERISILICON;
 			default:
-				// Mobile?
 				return driver_vendor::unknown;
 			}
 		}
@@ -512,6 +568,15 @@ namespace vk
 		// 1. Anisotropic sampling
 		// 2. Indexable storage buffers
 		VkPhysicalDeviceFeatures enabled_features{};
+		if (pgpu->unsized_array_support)
+		{
+			// Must go in HERE, not next to the feature struct further down: the
+			// list is handed to VkDeviceCreateInfo well before that point, so a
+			// later push_back is both invisible to vkCreateDevice and able to
+			// reallocate the vector out from under ppEnabledExtensionNames.
+			requested_extensions.push_back(VK_EXT_SHADER_UNIFORM_BUFFER_UNSIZED_ARRAY_EXTENSION_NAME);
+		}
+
 		if (pgpu->custom_border_color_support)
 		{
 			requested_extensions.push_back(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
@@ -733,12 +798,29 @@ namespace vk
 			rsx_log.notice("GPU/driver lacks support for float16 data types. All float16_t arithmetic will be emulated with float32_t.");
 		}
 
-		// FIXME: Fall back to something. Idk how that would even work though, this really is a hard requirement
+		// Runtime-sized arrays inside uniform blocks.
+		//
+		// Upstream chained this feature struct UNCONDITIONALLY and never added the
+		// extension to requested_extensions -- enabling a feature whose extension
+		// is not enabled is a spec violation. Desktop drivers shrug it off; Adreno
+		// does not, and since every vertex/fragment program emits
+		// "#extension GL_EXT_uniform_buffer_unsized_array : require", every single
+		// game pipeline came back VK_ERROR_UNKNOWN from vkCreateGraphicsPipelines.
+		// Overlays do not use these blocks, so the compile-progress screen and the
+		// performance overlay drew fine while the game stayed black.
 		VkPhysicalDeviceShaderUniformBufferUnsizedArrayFeaturesEXT ubo_unsized_array_feature{};
-		ubo_unsized_array_feature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNIFORM_BUFFER_UNSIZED_ARRAY_FEATURES_EXT;
-		ubo_unsized_array_feature.shaderUniformBufferUnsizedArray = VK_TRUE;
-		ubo_unsized_array_feature.pNext = const_cast<void*>(device.pNext);
-		device.pNext = &ubo_unsized_array_feature;
+		if (pgpu->unsized_array_support)
+		{
+			ubo_unsized_array_feature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_UNIFORM_BUFFER_UNSIZED_ARRAY_FEATURES_EXT;
+			ubo_unsized_array_feature.shaderUniformBufferUnsizedArray = VK_TRUE;
+			ubo_unsized_array_feature.pNext = const_cast<void*>(device.pNext);
+			device.pNext = &ubo_unsized_array_feature;
+		}
+		else
+		{
+			rsx_log.error("VK_EXT_shader_uniform_buffer_unsized_array is NOT supported by this driver. "
+				"Shaders that declare unsized uniform arrays cannot be compiled here.");
+		}
 
 		VkPhysicalDeviceCustomBorderColorFeaturesEXT custom_border_color_features{};
 		if (pgpu->custom_border_color_support)

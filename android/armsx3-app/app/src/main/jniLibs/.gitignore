@@ -1,0 +1,15 @@
+# ARMSX3: the repo root .gitignore has a blanket `*.so` rule (it is upstream
+# RPCS3's, meant for build output). That rule silently swallowed ARMSX2's bundled
+# ANGLE libraries: they never reached the release staging directory, the APK
+# shipped without them, and the core fell back to the system GLES driver in
+# silence - which read to users as "ANGLE is broken" and could not be diagnosed
+# from a log.
+#
+# So the ANGLE libraries are un-ignored EXPLICITLY here, by name. They are
+# redistributable prebuilts (ANGLE is BSD-3-Clause), not build output, and they
+# have to be in version control for the APK to be reproducible.
+#
+# Everything else under jniLibs/ stays ignored: libarmsx3-core.so and
+# librashader.so are genuinely build products, staged at build time.
+!arm64-v8a/libEGL_angle.so
+!arm64-v8a/libGLESv2_angle.so
