@@ -82,9 +82,7 @@ Discord's developer portal and drop it in app/libs/ and
 app/src/main/cpp/discord_sdk/ if you want that feature. The build skips it
 otherwise.
 
-Running it needs PS3 firmware, which is not included. Install PS3UPDAT.PUP from
-Sony's support site through the setup screen in the app.
-
+Running it needs PS3 firmware, which is not included. 
 License
 -------
 
