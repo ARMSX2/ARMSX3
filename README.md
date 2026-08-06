@@ -3,8 +3,7 @@ ARMSX3
 
 Proof of concept Android port of RPCS3.
 
-This is early work. A game boots and plays, but it is slow and most of it is
-untested. It is not a usable emulator yet.
+Uses the latest RPCS3 upstream code (the recent ARM64 improvements included). 
 
 Status
 ------
