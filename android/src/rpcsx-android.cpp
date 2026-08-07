@@ -1540,6 +1540,20 @@ private:
 
     rpcsx_android.error("Finalization");
     g_fxo->reset();
+
+    // Pairs with the vm::init() above. Nothing else unmaps it, since vm::close()
+    // is only reached from Emu.Stop() and precompilation never boots, so the
+    // blocks this pass mapped outlive it and stay valid.
+    //
+    // The next vm::init(), either the next workload or Emulator::Load() booting
+    // a game, assigns over g_locations. That destroys blocks that are still
+    // valid and aborts the process in ~block_t()'s ensure(!is_valid()).
+    //
+    // Has to come after g_fxo->reset(): vm::close() requires each block to be
+    // uniquely owned, and _unmap_block throws "External memory usage at block"
+    // if anything still holds one of its shm references.
+    vm::close();
+
     Emu.SetState(system_state::stopped);
 
     MessageDialog::popPendingProgressId(workload.progressId);
