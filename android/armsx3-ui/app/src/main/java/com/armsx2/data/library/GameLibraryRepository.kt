@@ -57,6 +57,40 @@ class GameLibraryRepository(private val context: Context) {
      *
      * Both hold games in folder form, so [isPs3GameFolder] is what actually finds them.
      */
+    /**
+     * Keep game art out of the user's gallery.
+     *
+     * An .iso is one opaque file, so the media scanner sees nothing inside it. A disc in
+     * FOLDER form lays its ICON0.PNG, PIC1.PNG and every DLC image out on shared storage,
+     * where the scanner indexes them and they land in the camera roll. One Minecraft folder
+     * accounted for 245 images, which was every image in the whole ROM tree.
+     *
+     * The marker goes at the ROM directory root the user configured, not inside a game
+     * folder: it covers current and future folder games in one file, and it never puts a
+     * stray file inside content the emulator mounts as a disc.
+     *
+     * Zero bytes and reversible, deleting it restores the old behaviour. Best effort, since
+     * the ROM folder may be read-only or reached over SAF.
+     */
+    private fun shieldFromMediaScanner(directory: File) {
+        runCatching {
+            val marker = File(directory, ".nomedia")
+            if (marker.exists()) return
+
+            if (marker.createNewFile()) {
+                android.util.Log.i(ScanTag, "wrote .nomedia in ${directory.absolutePath}")
+                // Adding the marker does not retroactively drop what MediaStore already
+                // indexed. Re-scanning the path is what makes the provider re-evaluate the
+                // subtree and forget it.
+                runCatching {
+                    android.media.MediaScannerConnection.scanFile(
+                        context, arrayOf(directory.absolutePath), null, null,
+                    )
+                }
+            }
+        }
+    }
+
     /** True when the emulator's own storage holds games, ROM folders or not. */
     fun hasInternalGames(): Boolean = internalGameDirectories().any {
         runCatching { it.listFiles()?.isNotEmpty() }.getOrNull() == true
@@ -123,6 +157,7 @@ class GameLibraryRepository(private val context: Context) {
             val rawRoot = if (canUseRawStorage()) posix?.let(::File) else null
             android.util.Log.i(ScanTag, "dir=$rawUri -> posix=$posix isDir=${rawRoot?.isDirectory}")
             if (rawRoot?.isDirectory == true) {
+                shieldFromMediaScanner(rawRoot)
                 scanRawDirectory(rawRoot, collected, 0)
             } else {
                 val tree = DocumentFile.fromTreeUri(context, uri)

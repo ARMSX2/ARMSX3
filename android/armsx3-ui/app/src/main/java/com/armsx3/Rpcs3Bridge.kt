@@ -88,11 +88,38 @@ object Rpcs3Bridge {
     @Volatile
     private var pumpsStarted = false
 
+    /**
+     * Keep the emulator's data out of the user's gallery.
+     *
+     * The data root holds hundreds of real PNGs that are not the user's pictures: trophy
+     * icons under dev_hdd0/home, the whole dev_flash VSH resource set, and an ICON0.PNG for
+     * every installed game. On a device where the data root is on shared storage the media
+     * scanner indexes all of it, and they turn up in the camera roll. Reported with 216
+     * images already indexed.
+     *
+     * An empty ".nomedia" at the root excludes the entire subtree. Writing it before the
+     * core initialises matters, because that is what unpacks the firmware and creates most
+     * of those files -- once they are indexed, getting them back out is the hard part.
+     *
+     * Cheap and idempotent, so it runs on every startup rather than being gated on a pref:
+     * a user who wipes their data folder gets it back automatically.
+     */
+    private fun shieldFromMediaScanner(root: String) {
+        runCatching {
+            val marker = java.io.File(root, ".nomedia")
+            if (!marker.exists()) {
+                marker.parentFile?.mkdirs()
+                marker.createNewFile()
+            }
+        }
+    }
+
     @JvmStatic
     fun initialize(rootPath: String) {
         if (RPCSX.initialized) return
 
         RPCSX.rootDirectory = if (rootPath.endsWith("/")) rootPath else "$rootPath/"
+        shieldFromMediaScanner(RPCSX.rootDirectory)
         RPCSX.instance.initialize(RPCSX.rootDirectory, "00000001")
         RPCSX.initialized = true
 
