@@ -384,6 +384,28 @@ void progress_dialog_server::operator()()
 				break;
 			}
 
+			// Watchdog: all work is accounted for, but the progress TEXT is still held.
+			//
+			// g_progr_text is refcounted across nested scoped_progress_dialog scopes, and a
+			// leaked reference leaves this loop spinning forever: the dialog is never closed
+			// and the cleanup below never runs, so g_progr_ptotal also never returns to 0 --
+			// which is what ppu_thread::cpu_task waits on before switching to overlay-message
+			// mode. Observed on Android with a booted, running game sitting behind a
+			// "Building SPU Cache... 941 of 941" dialog for 10+ minutes with nothing left to
+			// compile.
+			//
+			// Safe because it is gated on the counters being COMPLETE and completely idle:
+			// wait_no_update_count resets on any change to any counter or to the text, so
+			// real work in progress can never reach this threshold. 500 * 10ms = ~5s, well
+			// under the 20s force-update that also resets the counter.
+			if (ftotal == fdone && ptotal == pdone && wait_no_update_count >= 500)
+			{
+				sys_log.warning("Progress dialog: closing after %u idle polls with a held "
+					"text reference (f:%u/%u p:%u/%u, text='%s')",
+					wait_no_update_count, fdone, ftotal, pdone, ptotal, text1);
+				break;
+			}
+
 			sleep_for = 10'000;
 			wait_no_update_count++;
 		}
