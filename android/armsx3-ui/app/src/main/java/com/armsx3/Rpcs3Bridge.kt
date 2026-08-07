@@ -398,6 +398,13 @@ object Rpcs3Bridge {
                 "Asynchronous Texture Streaming" -> Rpcs3Settings.setAsyncTextureStreaming(asBool(value))
                 "Resolution" -> Rpcs3Settings.setResolution(asInt(value))
                 "Anisotropic Filter Override" -> Rpcs3Settings.setAnisotropicFilter(asInt(value))
+                // Both of these were written by applyTo() but had no case here, so they hit
+                // `else -> return false` and vanished into Unsupported.note(). Stretch only
+                // ever reached the core through the legacy EmuCore/GS AspectRatio key above,
+                // which is why the Display Mode row looked inert and the new Screen Aspect
+                // Ratio row did nothing at all.
+                "Stretch To Display Area" -> Rpcs3Settings.setStretchToDisplay(asBool(value))
+                "Display Aspect Override" -> Rpcs3Settings.setDisplayAspectPermille(asInt(value))
                 else -> return false
             }
 

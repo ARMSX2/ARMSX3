@@ -85,6 +85,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
+/** Screen-aspect presets in permille, index-aligned with the in-game picker. Mirrors
+ *  SCREEN_ASPECTS in RendererTab minus the Custom entry (no slider in the quick menu). */
+private val IN_GAME_SCREEN_ASPECTS = listOf(0, 1333, 1600, 1778, 2000, 2167, 2222, 2333)
+
 @Composable
 fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
     val state = viewModel.state.value
@@ -809,6 +813,24 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
             ).mapIndexed { index, label -> index to label },
             selected = if (settings.displayFitMode == 1) 1 else 0,
             onSelect = { v -> viewModel.updateSettings { it.copy(displayFitMode = v) } },
+        )
+        Spacer(Modifier.height(6.dp))
+        // Screen aspect, same list as the Renderer tab. In-game is where you actually
+        // want this -- you are looking at the picture while you change it. Custom is
+        // omitted here on purpose: a slider belongs on the settings screen, and the
+        // presets are what a handheld user needs. A custom value set in Settings shows
+        // as no selection here and is left alone unless a preset is picked.
+        HorizontalOptions(
+            title = str("renderer.screenAspect.label"),
+            options = listOf(
+                str("common.auto"), "4:3", "16:10", "16:9", "18:9", "19.5:9", "20:9", "21:9",
+            ).mapIndexed { index, label -> index to label },
+            selected = IN_GAME_SCREEN_ASPECTS.indexOf(settings.ps3.displayAspect),
+            onSelect = { v ->
+                viewModel.updateSettings {
+                    it.copy(ps3 = it.ps3.copy(displayAspect = IN_GAME_SCREEN_ASPECTS[v]))
+                }
+            },
         )
         Spacer(Modifier.height(6.dp))
         // RSX accuracy -- the levers that actually matter on this core, and the

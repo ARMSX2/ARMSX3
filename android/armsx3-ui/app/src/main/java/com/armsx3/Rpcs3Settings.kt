@@ -141,6 +141,10 @@ object Rpcs3Settings {
 
     fun setStretchToDisplay(enabled: Boolean) = setBool("$VIDEO@@Stretch To Display Area", enabled)
 
+    /** Output aspect override in permille (1778 = 16:9), 0 = follow the game. */
+    fun setDisplayAspectPermille(permille: Int) =
+        setInt("$VIDEO@@Display Aspect Override", permille.coerceIn(0, 4000))
+
     fun setWriteColorBuffers(enabled: Boolean) = setBool("$VIDEO@@Write Color Buffers", enabled)
 
     fun setOutputScaling(mode: String) = setEnum("$VIDEO@@Output Scaling Mode", mode)

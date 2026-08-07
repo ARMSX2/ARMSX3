@@ -9,6 +9,7 @@
 #include <sys/resource.h>
 #include <unistd.h>
 #include <utility>
+#include <vector>
 
 #if defined(__aarch64__)
 #include <adrenotools/driver.h>
@@ -45,6 +46,8 @@ struct RPCSXApi {
   bool (*settingsSet)(std::string_view path, std::string_view valueString);
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
+  bool (*installSplitPkg)(JNIEnv *env, const int *fds, int count, long progressId);
+  bool (*uninstallGame)(std::string_view path);
   std::string (*getVersion)();
   void *(*setCustomDriver)(void *driverHandle);
   bool (*saveState)();
@@ -118,6 +121,8 @@ struct RPCSXLibrary : RPCSXApi {
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
     result.settingsBeginBatch = reinterpret_cast<decltype(settingsBeginBatch)>(dlsym(handle, "_rpcsx_settingsBeginBatch"));
     result.settingsEndBatch = reinterpret_cast<decltype(settingsEndBatch)>(dlsym(handle, "_rpcsx_settingsEndBatch"));
+    result.installSplitPkg = reinterpret_cast<decltype(installSplitPkg)>(dlsym(handle, "_rpcsx_installSplitPkg"));
+    result.uninstallGame = reinterpret_cast<decltype(uninstallGame)>(dlsym(handle, "_rpcsx_uninstallGame"));
     result.getVersion = reinterpret_cast<decltype(getVersion)>(dlsym(handle, "_rpcsx_getVersion"));
     result.setCustomDriver = reinterpret_cast<decltype(setCustomDriver)>(dlsym(handle, "_rpcsx_setCustomDriver"));
     result.saveState = reinterpret_cast<decltype(saveState)>(dlsym(handle, "_rpcsx_saveState"));
@@ -474,6 +479,35 @@ Java_net_rpcsx_RPCSX_settingsEndBatch(JNIEnv *, jobject) {
   if (rpcsxLib.settingsEndBatch != nullptr) {
     rpcsxLib.settingsEndBatch();
   }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_installSplitPkg(
+    JNIEnv *env, jobject, jintArray jfds, jlong progressId) {
+  if (rpcsxLib.installSplitPkg == nullptr || jfds == nullptr) {
+    return false;
+  }
+
+  const jsize count = env->GetArrayLength(jfds);
+  if (count <= 0) {
+    return false;
+  }
+
+  // Copy out rather than pinning: the install blocks for minutes, and holding a
+  // critical/pinned array across that would fight the GC the whole time.
+  std::vector<int> fds(static_cast<std::size_t>(count));
+  env->GetIntArrayRegion(jfds, 0, count, reinterpret_cast<jint *>(fds.data()));
+
+  return rpcsxLib.installSplitPkg(env, fds.data(), static_cast<int>(count),
+                                  static_cast<long>(progressId));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_uninstallGame(JNIEnv *env, jobject, jstring jpath) {
+  if (rpcsxLib.uninstallGame == nullptr) {
+    return false;
+  }
+
+  return rpcsxLib.uninstallGame(unwrap(env, jpath));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

@@ -3,8 +3,11 @@ package com.armsx2.ui.packages
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -20,6 +23,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import android.os.ParcelFileDescriptor
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -46,6 +53,18 @@ import net.rpcsx.RPCSX
  * title shows up in the library on the next scan. The cache is keyed by folder set and
  * would not notice a new game inside a folder it already knows, hence invalidateCache().
  */
+/**
+ * Titles installed into the emulator's own storage, i.e. everything a PKG install
+ * produced. Read from disk rather than from the library, so uninstall still works when
+ * the library cache is stale and can never point at a user's ROM folder.
+ */
+private fun readInstalled(): List<java.io.File> =
+    java.io.File(RPCSX.rootDirectory, "config/dev_hdd0/game")
+        .listFiles()
+        ?.filter { it.isDirectory }
+        ?.sortedBy { it.name }
+        .orEmpty()
+
 @Composable
 fun PackageInstallerScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -53,6 +72,8 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
     var message by remember { mutableStateOf<String?>(null) }
     var showBrowser by remember { mutableStateOf(false) }
     var progressId by remember { mutableStateOf<Long?>(null) }
+    var installed by remember { mutableStateOf(readInstalled()) }
+    var confirmRemove by remember { mutableStateOf<java.io.File?>(null) }
 
     // getItem returns MutableState<ProgressEntry>; reading .value here and .longValue
     // below is what subscribes this composable to the native progress callbacks.
@@ -60,6 +81,82 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
     val fraction = progress?.let {
         if (it.isIndeterminate()) null
         else (it.value.longValue.toFloat() / it.max.longValue.coerceAtLeast(1)).coerceIn(0f, 1f)
+    }
+
+    // One path for both the single pick and the multi-part pick. Every descriptor stays
+    // open for the whole install: the native side takes raw fds and releases the handles
+    // itself, so closing them early would pull the file out from under the extractor.
+    fun install(files: List<java.io.File>) {
+        if (files.isEmpty()) return
+        showBrowser = false
+        busy = true
+        message = null
+        MainActivityRuntime.invoke {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val label = if (files.size == 1) files[0].name
+                    else "${files.size} package parts"
+                    val id = ProgressRepository.create(context, "Installing $label")
+                    progressId = id
+                    val descriptors = files.map {
+                        ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY)
+                    }
+                    try {
+                        if (descriptors.size == 1) {
+                            RPCSX.instance.install(descriptors[0].fd, id)
+                        } else {
+                            RPCSX.instance.installSplitPkg(
+                                descriptors.map { it.fd }.toIntArray(), id,
+                            )
+                        }
+                    } finally {
+                        descriptors.forEach { runCatching { it.close() } }
+                    }
+                }.getOrDefault(false)
+            }
+            busy = false
+            progressId = null
+            // I18n.get, not str(): this runs inside a coroutine, and str() is a
+            // @Composable that can only be called during composition.
+            message = if (ok) {
+                // Force the library to re-read storage; the folder set is unchanged
+                // so nothing else would prompt a rescan.
+                GameLibraryRepository(context).invalidateCache()
+                installed = readInstalled()
+                I18n.get("packages.install.done")
+            } else {
+                I18n.get("packages.install.failed")
+            }
+        }
+    }
+
+    // Deleting a game folder is not undoable, so it is confirmed rather than done on tap.
+    confirmRemove?.let { target ->
+        AlertDialog(
+            onDismissRequest = { confirmRemove = null },
+            title = { Text(str("packages.uninstall.confirmTitle")) },
+            text = { Text(str("packages.uninstall.confirmBody").format(target.name)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmRemove = null
+                    MainActivityRuntime.invoke {
+                        val ok = withContext(Dispatchers.IO) {
+                            runCatching {
+                                RPCSX.instance.uninstallGame(target.absolutePath)
+                            }.getOrDefault(false)
+                        }
+                        installed = readInstalled()
+                        if (ok) GameLibraryRepository(context).invalidateCache()
+                        message = I18n.get(
+                            if (ok) "packages.uninstall.done" else "packages.uninstall.failed",
+                        )
+                    }
+                }) { Text(str("packages.uninstall")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRemove = null }) { Text(str("action.cancel")) }
+            },
+        )
     }
 
     if (showBrowser) {
@@ -70,38 +167,11 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
             // nothing about it. EDAT rides along because _rpcsx_install handles it and
             // it is what DLC licences arrive as.
             extensions = setOf("pkg", "edat"),
-            onPick = { file ->
-                showBrowser = false
-                busy = true
-                message = null
-                MainActivityRuntime.invoke {
-                    val ok = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val id = ProgressRepository.create(context, "Installing ${file.name}")
-                            progressId = id
-                            context.contentResolver
-                                .openAssetFileDescriptor(android.net.Uri.fromFile(file), "r")
-                                .use { afd ->
-                                    val fd = afd?.parcelFileDescriptor?.fd
-                                        ?: return@runCatching false
-                                    RPCSX.instance.install(fd, id)
-                                }
-                        }.getOrDefault(false)
-                    }
-                    busy = false
-                    progressId = null
-                    // I18n.get, not str(): this runs inside a coroutine, and str() is a
-                    // @Composable that can only be called during composition.
-                    message = if (ok) {
-                        // Force the library to re-read storage; the folder set is unchanged
-                        // so nothing else would prompt a rescan.
-                        GameLibraryRepository(context).invalidateCache()
-                        I18n.get("packages.install.done")
-                    } else {
-                        I18n.get("packages.install.failed")
-                    }
-                }
-            },
+            // Split releases ship as several .pkg parts that only install correctly when
+            // handed to the installer together, the way RPCS3 desktop does it.
+            allowMultiple = true,
+            onPickMultiple = { files -> install(files) },
+            onPick = { file -> install(listOf(file)) },
             onDismiss = { showBrowser = false },
         )
     }
@@ -135,6 +205,11 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Text(
+                        str("packages.multiHint"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
 
                     if (busy) {
                         if (fraction != null) {
@@ -162,6 +237,44 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
+                    }
+                }
+            }
+
+            // Installed titles, with uninstall. Only what is under the emulator's own
+            // dev_hdd0/game is listed, so this can never remove a disc or ROM folder.
+            if (installed.isNotEmpty()) {
+                Text(
+                    str("packages.installed.header"),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    items(installed, key = { it.absolutePath }) { dir ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(start = 14.dp, end = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    dir.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                TextButton(onClick = { confirmRemove = dir }) {
+                                    Text(str("packages.uninstall"))
+                                }
+                            }
+                        }
                     }
                 }
             }

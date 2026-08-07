@@ -2067,6 +2067,21 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
     path.pop_back();
   }
 
+  // Folder-format games boot through their EBOOT, not the directory.
+  //
+  // A PKG install and a JB folder dump both land as a directory, and RPCSX's own UI
+  // boots them by the bootable path the installer reported -- which is the EBOOT.BIN,
+  // never the folder. Handing BootGame the directory instead came up as a permanent
+  // black screen on an installed title. locateEbootPath handles both layouts
+  // (PS3_GAME/USRDIR for a disc, USRDIR for an installed game); if it finds nothing we
+  // fall through to the original behaviour rather than failing the boot outright.
+  if (fs::is_dir(path)) {
+    if (auto eboot = locateEbootPath(path); !eboot.empty() && fs::is_file(eboot)) {
+      rpcsx_android.notice("boot: resolved directory '%s' to '%s'", path, eboot);
+      path = eboot;
+    }
+  }
+
   return static_cast<int>(Emu.BootGame(path, "", false, cfg_mode::custom));
 }
 
@@ -2719,12 +2734,27 @@ static bool installPup(JNIEnv *env, fs::file &&pup_f, jlong progressId) {
   return true;
 }
 
-static bool installPkg(JNIEnv *env, fs::file &&file, jlong progressId) {
+// Install one or more PKG files as a single package.
+//
+// A split release ships as .pkg_0/.pkg_1/... and only installs correctly when every
+// part is handed to package_reader::extract_data TOGETHER -- which already takes a
+// deque and has always supported this. Only the entry point was single-file, so a
+// split game could not be installed at all. Parts must arrive in order; the caller
+// sorts them by filename.
+static bool installPkg(JNIEnv *env, std::vector<fs::file> &&files,
+                       jlong progressId) {
   Progress progress(env, progressId);
+
+  if (files.empty()) {
+    progress.failure("No package files selected");
+    return false;
+  }
 
   std::deque<package_reader> readers;
   std::deque<std::string> bootable_paths;
-  readers.emplace_back("dummy.pkg", std::move(file));
+  for (std::size_t i = 0; i < files.size(); ++i) {
+    readers.emplace_back(fmt::format("part%u.pkg", i), std::move(files[i]));
+  }
 
   AtExit atExit{[&] {
     for (auto &reader : readers) {
@@ -2781,9 +2811,20 @@ static bool installPkg(JNIEnv *env, fs::file &&file, jlong progressId) {
     auto paths = std::vector(bootable_paths.begin(), bootable_paths.end());
     collectGameInfo(env, -1, paths);
 
-    for (auto &path : paths) {
-      g_compilationQueue.push(progress, std::move(path));
-    }
+    // Deliberately NOT queued for precompilation.
+    //
+    // CompilationQueue::impl does Emu.SetState(running), g_fxo->init<>() of the
+    // progress-dialog server and main_ppu_module, and vm::init(). That is only safe in
+    // a process that has not already brought those up -- which is true during onboarding
+    // (firmware install) and false for a PKG installed from the library after a game has
+    // been booted. init<> returns null the second time and vm::init() re-maps an address
+    // space that already exists, which crashed the app the moment extraction finished.
+    // The extraction itself had already completed, which is why the game still appeared
+    // in the library on the next launch.
+    //
+    // Nothing is lost by skipping it: the game precompiles on its first boot, with the
+    // normal compile screen, exactly as a disc game does. RPCS3 desktop does not
+    // precompile on install either.
   }
 
   return true;
@@ -3058,6 +3099,70 @@ extern "C" jstring _rpcsx_getDirInstallPath(JNIEnv *env, jint fd) {
   return nullptr;
 }
 
+// Install a set of PKG parts as one package. All parts must be PKGs, in order.
+// Single-file installs keep going through _rpcsx_install, which also handles
+// PUP/EDAT/ISO by sniffing the file type.
+extern "C" bool _rpcsx_installSplitPkg(JNIEnv *env, const int *fds, int count,
+                                       long progressId) {
+  if (fds == nullptr || count <= 0) {
+    Progress(env, progressId).failure("No package files selected");
+    return false;
+  }
+
+  std::vector<fs::file> files;
+  files.reserve(count);
+  for (int i = 0; i < count; ++i) {
+    files.push_back(fs::file::from_native_handle(fds[i]));
+  }
+
+  // The Java side owns every fd; release each handle so closing the
+  // ParcelFileDescriptors there is not a double close.
+  AtExit atExit{[&] {
+    for (auto &f : files) {
+      f.release_handle();
+    }
+  }};
+
+  for (auto &f : files) {
+    if (getFileType(f) != FileType::Pkg) {
+      Progress(env, progressId)
+          .failure("Every selected file must be a .pkg part");
+      return false;
+    }
+    f.seek(0);
+  }
+
+  return installPkg(env, std::move(files), progressId);
+}
+
+// Delete an installed title's directory (dev_hdd0/game/<TITLEID> and its
+// matching save-data-free content). Path comes from the app, which only offers
+// this for games it found under the emulator's own game directories.
+extern "C" bool _rpcsx_uninstallGame(std::string_view path) {
+  if (path.empty()) {
+    return false;
+  }
+
+  const std::string dir(path);
+
+  // Refuse anything that is not inside the emulator's own game storage, so a
+  // mis-sent path cannot delete a user's ROM folder.
+  const std::string hdd0 = rpcs3::utils::get_hdd0_dir();
+  const std::string games = hdd0 + "game/";
+  if (!dir.starts_with(games)) {
+    rpcsx_android.error("uninstallGame: refusing path outside %s: %s", games,
+                        dir);
+    return false;
+  }
+
+  if (!fs::is_dir(dir)) {
+    return false;
+  }
+
+  rpcsx_android.notice("uninstallGame: removing %s", dir);
+  return fs::remove_all(dir);
+}
+
 extern "C" bool _rpcsx_install(JNIEnv *env, int fd, long progressId) {
   auto file = fs::file::from_native_handle(fd);
   AtExit atExit{[&] { file.release_handle(); }};
@@ -3073,8 +3178,11 @@ extern "C" bool _rpcsx_install(JNIEnv *env, int fd, long progressId) {
   case FileType::Pup:
     return installPup(env, std::move(file), progressId);
 
-  case FileType::Pkg:
-    return installPkg(env, std::move(file), progressId);
+  case FileType::Pkg: {
+    std::vector<fs::file> files;
+    files.push_back(std::move(file));
+    return installPkg(env, std::move(files), progressId);
+  }
 
   case FileType::Edat:
     return installEdat(env, std::move(file), progressId);

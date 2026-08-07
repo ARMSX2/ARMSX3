@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -65,8 +66,14 @@ fun FileBrowserDialog(
     extensions: Set<String> = emptySet(),
     onPick: (File) -> Unit,
     onDismiss: () -> Unit,
+    /** Let the user tick several files and confirm once. Used for split .pkg sets,
+     *  whose parts only install correctly when handed over together. */
+    allowMultiple: Boolean = false,
+    onPickMultiple: ((List<File>) -> Unit)? = null,
 ) {
     var dir by remember { mutableStateOf(defaultBrowseRoot()) }
+    // Absolute paths, so a selection survives navigating away and back.
+    val selected = remember { mutableStateListOf<File>() }
 
     // Directories first, then matching files, each alphabetical — the order
     // people expect from a file manager.
@@ -119,6 +126,13 @@ fun FileBrowserDialog(
                             overflow = TextOverflow.MiddleEllipsis,
                         )
                     }
+                    if (allowMultiple && selected.isNotEmpty()) {
+                        // Sorted by name: split parts are .pkg_0/.pkg_1/... and the
+                        // installer requires them in order.
+                        TextButton(onClick = {
+                            onPickMultiple?.invoke(selected.sortedBy { it.name.lowercase() })
+                        }) { Text(str("browse.installSelected").format(selected.size)) }
+                    }
                     TextButton(onClick = onDismiss) { Text(str("action.cancel")) }
                 }
 
@@ -140,16 +154,25 @@ fun FileBrowserDialog(
                         item { BrowserRow("..", isDir = true) { dir = parent } }
                     }
                     items(entries) { entry ->
+                        val ticked = allowMultiple && entry in selected
                         BrowserRow(
-                            label = entry.name,
+                            label = if (ticked) "✓ ${entry.name}" else entry.name,
                             isDir = entry.isDirectory,
                             detail = if (entry.isFile) {
                                 "%.1f MB".format(entry.length() / 1_048_576f)
                             } else {
                                 null
                             },
+                            highlighted = ticked,
                         ) {
-                            if (entry.isDirectory) dir = entry else onPick(entry)
+                            when {
+                                entry.isDirectory -> dir = entry
+                                // In multi-select a tap toggles instead of confirming;
+                                // confirming is the button in the header.
+                                allowMultiple ->
+                                    if (!selected.remove(entry)) selected.add(entry)
+                                else -> onPick(entry)
+                            }
                         }
                     }
                     if (entries.isEmpty()) {
@@ -174,14 +197,18 @@ private fun BrowserRow(
     label: String,
     isDir: Boolean,
     detail: String? = null,
+    highlighted: Boolean = false,
     onClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .background(
-                if (isDir) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                else MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                when {
+                    highlighted -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                    isDir -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                    else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+                },
                 RoundedCornerShape(12.dp),
             )
             .clickable(onClick = onClick)
