@@ -335,7 +335,20 @@ object Rpcs3Bridge {
                     if (asBool(value)) Rpcs3Settings.setFrameLimitMode("Display")
                 "VsyncEnable" -> Rpcs3Settings.setVsync(asBool(value))
                 "MaxAnisotropy" -> Rpcs3Settings.setAnisotropicFilter(asInt(value))
-                "SkipDuplicateFrames" -> Rpcs3Settings.setFrameSkip(if (asBool(value)) 1 else 0)
+                // PCSX2's "skip duplicate frames" means "do not present a frame identical to
+                // the last one". It is harmless there and on by default, which is why Settings
+                // defaults it to true. RPCS3 has no equivalent, and this used to map onto
+                // Enable Frame Skip, which means something else entirely: drop one frame in
+                // every two, unconditionally. Every title therefore presented at half the rate
+                // the guest asked for, out of the box, on a fresh install.
+                //
+                // It also made the frameskip row inert, since applyToInner pushes the explicit
+                // frameskip first and this key afterwards, so this one always won. Measured on
+                // Mirror's Edge: the guest asks for 30 flips/s, SurfaceFlinger presented 15.0.
+                //
+                // Dropped rather than remapped. Frameskip belongs to the explicit control,
+                // which is the one the user actually set.
+                "SkipDuplicateFrames" -> return true
                 "DisableShaderCache" -> Rpcs3Settings.setDisableShaderCache(asBool(value))
                 "IntegerScaling" ->
                     // Nearest-neighbour is the closest RPCS3 has to integer scaling;
