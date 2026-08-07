@@ -12,10 +12,30 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import com.armsx2.EmuState
 import com.armsx2.config.Settings
+import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
+import com.armsx2.runtime.MainActivityRuntime
+import com.armsx2.ui.Colors
 import com.armsx2.ui.InGameOverlay
 import androidx.core.content.edit
+import java.io.File
 import kotlin.math.roundToInt
 
 /**
@@ -331,6 +351,128 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 columns = 2,
                 description = str("adv.xfloat.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(spuXFloat = it))) },
+            )
+        }
+        SettingsDivider()
+        // Compiled-code caches. Separate from the shader cache on the Renderer tab:
+        // these hold recompiled PPU/SPU code, not GPU pipelines.
+        CollapsibleSection(str("perf.caches.title")) {
+            ClearCacheRow(spuOnly = true)
+            SettingsDivider()
+            ClearCacheRow(spuOnly = false)
+        }
+    }
+}
+
+/**
+ * Root of RPCS3's compiled-code cache: `<files>/cache/cache/`.
+ *
+ * Holds `ppu-<hash>-<name>` directories for firmware modules at the top level, plus
+ * `<TITLEID>/ppu-<hash>-EBOOT.BIN` per game. The SPU cache is a `spu-*.dat` file INSIDE
+ * those directories, which is why clearing PPU necessarily clears SPU with it.
+ */
+private fun recompilerCacheRoot(context: Context): File =
+    File(MainActivityRuntime.assetCopyRoot(context), "cache/cache")
+
+/** Every `ppu-*` directory, both the top-level firmware ones and the per-title ones. */
+private fun ppuCacheDirs(root: File): List<File> = buildList {
+    root.listFiles()?.forEach { entry ->
+        if (!entry.isDirectory) return@forEach
+        if (entry.name.startsWith("ppu-")) add(entry)
+        // A title id directory; its ppu-* dirs live one level down.
+        else entry.listFiles()?.forEach { if (it.isDirectory && it.name.startsWith("ppu-")) add(it) }
+    }
+}
+
+private fun File.sizeRecursive(): Long =
+    runCatching { walkTopDown().filter { it.isFile }.sumOf { it.length() } }.getOrDefault(0L)
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024 * 1024 -> "%.1f GB".format(bytes / (1024.0 * 1024 * 1024))
+    bytes >= 1024L * 1024 -> "%.0f MB".format(bytes / (1024.0 * 1024))
+    bytes > 0 -> "%.0f KB".format(bytes / 1024.0)
+    else -> "0 KB"
+}
+
+/**
+ * Delete the SPU cache only, or the whole PPU cache.
+ *
+ * SPU-only leaves the compiled PPU modules in place, so booting stays as fast as it was and
+ * only the SPU programs rebuild. Clearing PPU removes the directories outright, which takes
+ * the SPU caches nested inside them too.
+ */
+private fun clearRecompilerCache(root: File, spuOnly: Boolean): Pair<Int, Long> {
+    var count = 0
+    var bytes = 0L
+
+    if (spuOnly) {
+        root.walkTopDown()
+            .filter { it.isFile && it.name.startsWith("spu-") && it.extension == "dat" }
+            .toList() // materialise before deleting, so the walk is not mutated under itself
+            .forEach { file ->
+                val size = file.length()
+                if (runCatching { file.delete() }.getOrDefault(false)) {
+                    count++
+                    bytes += size
+                }
+            }
+        return count to bytes
+    }
+
+    ppuCacheDirs(root).forEach { dir ->
+        val size = dir.sizeRecursive()
+        if (runCatching { dir.deleteRecursively() }.getOrDefault(false)) {
+            count++
+            bytes += size
+        }
+    }
+    return count to bytes
+}
+
+@Composable
+private fun ClearCacheRow(spuOnly: Boolean) {
+    val context = LocalContext.current
+    val status = remember { mutableStateOf("") }
+    val labelKey = if (spuOnly) "perf.clearSpuCache.label" else "perf.clearPpuCache.label"
+    val descKey = if (spuOnly) "perf.clearSpuCache.description" else "perf.clearPpuCache.description"
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(rowAura())
+            .clickable {
+                // Refuse while a game is loaded: the running VM holds these files open and
+                // is still writing to them, so deleting underneath it achieves nothing useful
+                // and risks a half-written cache on the next boot.
+                if (MainActivityRuntime.eState.value != EmuState.STOPPED) {
+                    status.value = I18n.get("perf.clearCache.stopFirst")
+                } else {
+                    val (count, bytes) = clearRecompilerCache(recompilerCacheRoot(context), spuOnly)
+                    status.value = if (count > 0) {
+                        I18n.get("perf.clearCache.done").format(count, formatBytes(bytes))
+                    } else {
+                        I18n.get("perf.clearCache.alreadyEmpty")
+                    }
+                }
+                Toast.makeText(context, status.value, Toast.LENGTH_SHORT).show()
+            }
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Column {
+            Text(
+                str(labelKey),
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                status.value.ifEmpty { I18n.get(descKey) },
+                color = Colors.pasx2_blue,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
             )
         }
     }
