@@ -211,6 +211,16 @@ object InGameOverlay {
             s.osdShowVersion, s.osdShowSettings, s.osdShowInputs,
         )
         NativeApp.osdShowGpuStats(s.osdShowGpuStats)
+        // RPCS3 has a Performance Overlay switch of its own (OverlayTab and the in-game menu,
+        // both writing ps3.overlayEnabled) on top of ARMSX2's twelve per-stat flags. They drive
+        // the same core node, and osdApplyFlags derives it purely from the twelve, all of which
+        // default to off, so it pushed Enabled=false straight over the switch. Boot order gave
+        // it the last word: MainActivityRuntime calls applyTo() and then applyStoredOsdMode().
+        // The switch was therefore inert, and only that one key was affected, because
+        // osdApplyFlags returns early when nothing is on and never reaches the graph settings.
+        if (s.ps3.overlayEnabled) {
+            com.armsx3.Rpcs3Settings.setOverlayEnabled(true)
+        }
     }
 
     fun editTouchLayout() {
