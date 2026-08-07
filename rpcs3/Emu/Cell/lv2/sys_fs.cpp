@@ -1594,6 +1594,45 @@ error_code sys_fs_opendir(ppu_thread& ppu, vm::cptr<char> path, vm::ptr<u32> fd)
 		data.back().is_directory = true;
 	}
 
+	// Guarantee "." and ".." are present, and are the first two entries.
+	//
+	// The real-directory branch above is a raw ::readdir() passthrough (fs::unix_dir),
+	// so it reports exactly what the host filesystem chooses to report, in whatever
+	// order. ext4 conventionally yields "." and ".." first; Android's FUSE layer over
+	// exFAT does not emit them at all. A one-file directory therefore left a single
+	// entry here, and the stable_sort below starts at data.begin() + 2 -- so it ran
+	// with first past last, which is undefined behaviour, not a no-op. It corrupted
+	// memory and the guest died later inside libfs, far from the cause.
+	//
+	// Not just a crash guard: the PS3 expects both entries back from opendir, so a
+	// game walking a directory on the host filesystem was getting a listing the real
+	// console would never produce. The iso_device path synthesises them already, which
+	// is why the same game booted from an .iso was unaffected.
+	{
+		const auto promote_or_insert = [&data](std::string_view name)
+		{
+			const auto it = std::find_if(data.begin(), data.end(),
+				[&](const fs::dir_entry& entry) { return entry.name == name; });
+
+			if (it != data.end())
+			{
+				fs::dir_entry existing = std::move(*it);
+				data.erase(it);
+				data.insert(data.begin(), std::move(existing));
+				return;
+			}
+
+			fs::dir_entry entry{};
+			entry.name = std::string(name);
+			entry.is_directory = true;
+			data.insert(data.begin(), std::move(entry));
+		};
+
+		// Inserted in reverse so "." ends up at index 0 and ".." at index 1.
+		promote_or_insert("..");
+		promote_or_insert(".");
+	}
+
 	// Add mount points (TODO)
 	for (auto&& ex : ext)
 	{
