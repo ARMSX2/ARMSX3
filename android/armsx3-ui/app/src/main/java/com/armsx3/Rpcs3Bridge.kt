@@ -337,17 +337,29 @@ object Rpcs3Bridge {
                 "MaxAnisotropy" -> Rpcs3Settings.setAnisotropicFilter(asInt(value))
                 "SkipDuplicateFrames" -> Rpcs3Settings.setFrameSkip(if (asBool(value)) 1 else 0)
                 "DisableShaderCache" -> Rpcs3Settings.setDisableShaderCache(asBool(value))
-                "IntegerScaling" ->
-                    // Nearest-neighbour is the closest RPCS3 has to integer scaling;
-                    // bilinear otherwise. Overridden below if CAS/librashader is on.
-                    Rpcs3Settings.setOutputScaling(if (asBool(value)) "Nearest" else "Bilinear")
-                "linear_present_mode" ->
-                    Rpcs3Settings.setOutputScaling(if (asInt(value) == 0) "Nearest" else "Bilinear")
-                // CAS and the librashader chain are both OUTPUT SCALING MODES in
-                // RPCS3, not independent post-effects, so enabling either has to
-                // claim the mode. Shader chain wins -- it is the more specific ask.
-                "CASMode" ->
-                    if (asInt(value) > 0) Rpcs3Settings.setOutputScaling("FidelityFX Super Resolution")
+                // Four keys used to write Output Scaling Mode, and the two with no UI behind
+                // them were winning. IntegerScaling and linear_present_mode are PCSX2 keys that
+                // no screen in this app exposes, and both wrote the node unconditionally, with
+                // IntegerScaling emitted last. So whatever the visible Scaling Mode row asked
+                // for was overwritten a moment later.
+                //
+                // They own nothing the user can see, so they no longer write it at all.
+                "IntegerScaling" -> return true
+                "linear_present_mode" -> return true
+                // This is the visible Scaling Mode row in RendererTab: Nearest, Bilinear, FSR.
+                // It used to be read as PCSX2's CAS mode, where anything above zero meant "CAS
+                // on", so picking Bilinear asked for FSR and picking Nearest asked for nothing.
+                // Map the row's own indices instead.
+                //
+                // Writes unconditionally, so it has to be emitted before ShaderChainEnabled for
+                // the chain to keep the last word, which is what applyToInner now does.
+                "CASMode" -> Rpcs3Settings.setOutputScaling(
+                    when (asInt(value)) {
+                        0 -> "Nearest"
+                        2 -> "FidelityFX Super Resolution"
+                        else -> "Bilinear"
+                    },
+                )
                 "CASSharpness" -> Rpcs3Settings.setCasSharpening(asInt(value))
                 "ShaderChainEnabled" ->
                     if (asBool(value)) Rpcs3Settings.setOutputScaling("Shader chain (librashader)")

@@ -723,7 +723,9 @@ data class Settings(
      *  No EmuCore key mirrors this — see applyTo. */
     val shaderChainParams: Map<String, Map<String, Float>> = emptyMap(),
     /** EmuCore/GS/CASMode — GSCASMode: 0 Off / 1 Sharpen Only / 2 Sharpen + Resize. */
-    val casMode: Int = 0,
+    /** Scaling Mode row: 0 Nearest, 1 Bilinear, 2 FSR. Bilinear because that is what the
+     *  core has always actually used, and what RPCS3 itself defaults to. */
+    val casMode: Int = 1,
     /** EmuCore/GS/CASSharpness — sharpening strength 0..100 (%). */
     val casSharpness: Int = 50,
     /** EmuCore/GS/LoadTextureReplacements. */
@@ -1601,6 +1603,10 @@ data class Settings(
         put("EmuCore/GS", "ShadeBoost_Saturation", "int", shadeBoostSaturation.coerceIn(1, 100).toString())
         put("EmuCore/GS", "ShadeBoost_Gamma", "int", shadeBoostGamma.coerceIn(1, 100).toString())
         put("EmuCore/GS", "fxaa", "bool", fxaa.toString())
+        // Scaling Mode writes Output Scaling Mode unconditionally, the shader chain only
+        // when it is on, so CAS has to go first for the chain to keep the last word.
+        put("EmuCore/GS", "CASMode", "int", casMode.coerceIn(0, 2).toString())
+        put("EmuCore/GS", "CASSharpness", "int", casSharpness.coerceIn(0, 100).toString())
         put("EmuCore/GS", "ShaderChainEnabled", "bool", shaderChainEnabled.toString())
         put("EmuCore/GS", "ShaderChainPreset", "string", shaderChainPreset)
         // Parameter overrides, as one opaque JSON blob. Nothing in emucore reads this key —
@@ -1617,8 +1623,6 @@ data class Settings(
         // Skipped under emitSink: an export has no renderer to push to.
         if (emitSink == null)
             ShaderParams.push(shaderChainPreset, shaderChainParams[shaderChainPreset].orEmpty())
-        put("EmuCore/GS", "CASMode", "int", casMode.coerceIn(0, 2).toString())
-        put("EmuCore/GS", "CASSharpness", "int", casSharpness.coerceIn(0, 100).toString())
         put("EmuCore/GS", "LoadTextureReplacements", "bool", loadTextureReplacements.toString())
         put("EmuCore/GS", "LoadTextureReplacementsAsync", "bool", loadTextureReplacementsAsync.toString())
         put("EmuCore/GS", "PrecacheTextureReplacements", "bool", precacheTextureReplacements.toString())
