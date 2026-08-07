@@ -3466,7 +3466,31 @@ struct jit_core_allocator
 
 	static s16 limit()
 	{
-		return static_cast<s16>(std::min<s32>(0x7fff, utils::get_thread_count()));
+		const s32 by_cores = std::min<s32>(0x7fff, utils::get_thread_count());
+
+#ifdef __ANDROID__
+		// Bound the compile workers by RAM as well as by core count.
+		//
+		// Each LLVM PPU compile worker carries its own context, module and relocation
+		// buffers, which run to hundreds of MB on a large module. Upstream sizes this
+		// purely on thread count, which is correct on a desktop and an out-of-memory
+		// abort on a handheld: eight workers on a 7 GB device died in
+		// llvm::report_bad_alloc_error partway through compiling a big title, taking
+		// the whole process with it (SIGABRT, no recovery).
+		//
+		// Roughly one worker per 1.5 GB of physical memory, never below one. The
+		// emulator still needs several GB of that for the PS3 address space, the RSX
+		// and its caches, so this is deliberately conservative. A user who wants more
+		// can still raise Max LLVM Compile Threads; this only caps the automatic
+		// "use every core" default.
+		if (const u64 total_mem = utils::get_total_memory())
+		{
+			const s32 by_memory = static_cast<s32>(total_mem / (1536ull * 1024 * 1024));
+			return static_cast<s16>(std::max<s32>(1, std::min<s32>(by_cores, by_memory)));
+		}
+#endif
+
+		return static_cast<s16>(by_cores);
 	}
 };
 

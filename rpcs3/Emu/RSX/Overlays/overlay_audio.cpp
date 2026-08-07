@@ -15,7 +15,20 @@ namespace rsx
 		{
 			if (audio_path.empty()) return;
 
-			m_video_source = ensure(Emu.GetCallbacks().make_video_source());
+			// A platform with no media backend legitimately has no video source: the
+			// Android callbacks return nullptr from make_video_source, and ensure() on
+			// that aborted the whole process. It fired for any game whose folder holds a
+			// SND0.AT3 boot sound -- which is every folder-format game, since for an .iso
+			// the fs::is_file check in rsx::thread::thread looks inside the mounted
+			// virtual device and never finds one. Boot music simply does not play.
+			m_video_source = Emu.GetCallbacks().make_video_source();
+
+			if (!m_video_source)
+			{
+				rsx_log.notice("Overlay audio unavailable: no video source on this platform");
+				return;
+			}
+
 			m_video_source->set_audio_path(audio_path);
 		}
 
