@@ -43,7 +43,7 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
         "shadeBoost", "shadeBoostBrightness", "shadeBoostContrast", "shadeBoostGamma",
         "shadeBoostSaturation", "shaderChainEnabled", "shaderChainParams", "shaderChainPreset",
         "textureFiltering", "texturePreloading", "triFilter", "tvShader", "upscaleFloat",
-        "vsyncEnable",
+        "vsyncEnable", "displayFitMode", "ps3DisplayAspect",
     ),
     // AudioTab.kt
     SettingsCategory.Audio to listOf(
@@ -64,6 +64,10 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
         "osdShowGpuStats", "osdShowGsStats", "osdShowHardwareInfo", "osdShowInputs",
         "osdShowMessages", "osdShowResolution", "osdShowSettings", "osdShowSpeed",
         "osdShowVersion", "osdShowVps",
+        // RPCS3's own performance overlay (the lower half of the tab).
+        "ps3OverlayEnabled", "ps3OverlayDetail", "ps3OverlayPosition", "ps3OverlayFontSize",
+        "ps3OverlayOpacity", "ps3OverlayFramerateGraph", "ps3OverlayFrametimeGraph",
+        "ps3OverlayBodyColor", "ps3OverlayBodyBg", "ps3OverlayTitleColor", "ps3OverlayTitleBg",
     ),
     // FixesTab.kt — also owns the GameDB fixes and the recompiler toggles, which moved here
     // from Performance and from the retired Recompiler tab.

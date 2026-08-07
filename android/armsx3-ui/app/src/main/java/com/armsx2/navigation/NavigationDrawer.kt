@@ -201,6 +201,10 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // ARMSX3: RetroAchievements removed - RA has no PS3 support at all, so
         // the screen could only ever be empty.
         DrawerItem("action.settings", "⚙️", AppRoute.Settings()),
+        // Everything the core exposes, generated from its config tree rather than
+        // hand-written. The curated tabs above stay small on purpose; this is the
+        // escape hatch for the rest of the PS3 config.
+        DrawerItem("core.settings.title", "🧩", AppRoute.CoreSettings),
     )
     val managers = listOf(
         // Moved off the library overflow menu, which was its only entry point. Sits first, beside
@@ -208,6 +212,9 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         DrawerItem("games.overflow.setup", "📂",
             onAction = { MainActivityRuntime.reopenSetup(); onDismiss() }),
         DrawerItem("setup.step.bios.title", "📀", AppRoute.BiosManager()),
+        // Install .pkg games/updates/DLC. The native installer was always there; this
+        // is the entry point it never had.
+        DrawerItem("packages.title", "📦", AppRoute.PackageInstaller),
         // ARMSX3: PS2 memory cards removed - PS3 uses HDD save data instead.
         DrawerItem("savestate.title.loadManage", "📥", AppRoute.SaveManager),
         DrawerItem("tab.controls", "🕹️", AppRoute.ControllerManager),
@@ -356,6 +363,8 @@ private fun sameDestination(current: AppRoute, target: AppRoute): Boolean = when
     AppRoute.Home -> current is AppRoute.Home
     is AppRoute.Settings -> current is AppRoute.Settings
     is AppRoute.BiosManager -> current is AppRoute.BiosManager
+    AppRoute.PackageInstaller -> current is AppRoute.PackageInstaller
+    AppRoute.CoreSettings -> current is AppRoute.CoreSettings
     AppRoute.MemoryCardManager -> current is AppRoute.MemoryCardManager
     AppRoute.SaveManager -> current is AppRoute.SaveManager
     AppRoute.ControllerManager -> current is AppRoute.ControllerManager

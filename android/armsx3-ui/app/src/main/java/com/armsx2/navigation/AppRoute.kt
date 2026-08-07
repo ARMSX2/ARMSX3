@@ -13,6 +13,8 @@ sealed interface AppRoute {
     // (from the library long-press) without the game being loaded; null = global,
     // opened from the drawer (falls back to the currently loaded game if any).
     data class BiosManager(val game: GameInfo? = null) : AppRoute
+    data object PackageInstaller : AppRoute
+    data object CoreSettings : AppRoute
     data object MemoryCardManager : AppRoute
     data object SaveManager : AppRoute
     data object ControllerManager : AppRoute

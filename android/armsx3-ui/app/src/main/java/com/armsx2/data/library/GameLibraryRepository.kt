@@ -43,7 +43,43 @@ class GameLibraryRepository(private val context: Context) {
      * scanner starts extracting a field it did not before.
      */
     fun cacheKey(directories: List<String>): String =
-        "v$ScanSchemaVersion|" + directories.sorted().joinToString("|")
+        "v$ScanSchemaVersion|" +
+            (directories.sorted() + internalGameDirectories().map { it.absolutePath })
+                .joinToString("|")
+
+    /**
+     * The emulator's OWN game storage, always scanned on top of the user's ROM folders.
+     *
+     * A PKG install and anything dropped into RPCS3's games directory land here, never in
+     * a ROM folder, so neither was reachable: this library replaced net.rpcsx's
+     * GameRepository, which did read both of these, and the paths came with it. Reported as
+     * "doesn't detect disc games from config folder like other ps3 emus".
+     *
+     * Both hold games in folder form, so [isPs3GameFolder] is what actually finds them.
+     */
+    /** True when the emulator's own storage holds games, ROM folders or not. */
+    fun hasInternalGames(): Boolean = internalGameDirectories().any {
+        runCatching { it.listFiles()?.isNotEmpty() }.getOrNull() == true
+    }
+
+    private fun internalGameDirectories(): List<File> = listOf(
+        File(RPCSX.rootDirectory, "config/dev_hdd0/game"),
+        File(RPCSX.rootDirectory, "config/games"),
+    ).filter { runCatching { it.isDirectory }.getOrDefault(false) }
+
+    /**
+     * Drop the cached scan so the next library load re-reads storage.
+     *
+     * Needed after an install: it adds a game inside a directory that was already in the
+     * cache key, so nothing about the key changes and the library would keep serving the
+     * pre-install list.
+     */
+    fun invalidateCache() {
+        MainActivityRuntime.prefs.edit {
+            remove("gamesCacheKey")
+            remove("gamesCacheDir")
+        }
+    }
 
     fun loadCached(): CachedLibrary {
         val cachedKey = MainActivityRuntime.prefs.getString("gamesCacheKey", null)
@@ -93,6 +129,10 @@ class GameLibraryRepository(private val context: Context) {
                 android.util.Log.i(ScanTag, "  SAF fallback: tree=${tree?.uri} canRead=${tree?.canRead()} children=${runCatching { tree?.listFiles()?.size }.getOrNull()}")
                 tree?.let { scanDocumentTree(it, collected, 0) }
             }
+        }
+        internalGameDirectories().forEach { dir ->
+            android.util.Log.i(ScanTag, "internal dir=${dir.absolutePath}")
+            scanRawDirectory(dir, collected, 0)
         }
         android.util.Log.i(ScanTag, "scan done: ${collected.size} game(s)")
         collected.values.sortedBy { it.title.lowercase() }.also { saveCache(directories, it) }
@@ -203,6 +243,16 @@ class GameLibraryRepository(private val context: Context) {
         val children = runCatching { directory.listFiles() }.getOrNull() ?: return
         children.forEach { file ->
             if (file.isDirectory) {
+                // Same leaf rule as the raw scan. No SFO probe here: the core opens
+                // by path and a content:// tree has none to give, so the title comes
+                // from the folder name -- as it already does for a SAF-listed .iso.
+                if (runCatching { isPs3GameDocument(file) }.getOrDefault(false)) {
+                    output.putIfAbsent(
+                        file.uri.toString(),
+                        createGame(file.uri, file.name ?: "", "folder", null),
+                    )
+                    return@forEach
+                }
                 scanDocumentTree(file, output, depth + 1)
                 return@forEach
             }
@@ -214,6 +264,46 @@ class GameLibraryRepository(private val context: Context) {
         }
     }
 
+    /**
+     * True when this directory IS a game rather than a folder containing games.
+     *
+     * Two shapes, both common and neither an .iso:
+     *   - a JB folder dump, which keeps the disc layout: <dir>/PS3_GAME/PARAM.SFO
+     *     (PS3_DISC.SFB alongside it on a real disc rip)
+     *   - an installed/HDD game folder -- PARAM.SFO next to USRDIR. This is what
+     *     RPCS3's own games directory holds, and the shape prototypes that never
+     *     got a retail master ship in.
+     *
+     * Case-insensitive: these come off FAT/exFAT cards and out of archives, so
+     * "PS3_GAME" is as likely to be "ps3_game".
+     */
+    private fun isPs3GameFolder(directory: File): Boolean {
+        fun child(vararg path: String): File? {
+            var current: File = directory
+            for (segment in path) {
+                current = current.listFiles()
+                    ?.firstOrNull { it.name.equals(segment, ignoreCase = true) }
+                    ?: return null
+            }
+            return current
+        }
+        if (child("PS3_GAME", "PARAM.SFO")?.isFile == true) return true
+        if (child("PS3_DISC.SFB")?.isFile == true) return true
+        return child("PARAM.SFO")?.isFile == true && child("USRDIR")?.isDirectory == true
+    }
+
+    /** [isPs3GameFolder] over a SAF tree. */
+    private fun isPs3GameDocument(directory: DocumentFile): Boolean {
+        val children = runCatching { directory.listFiles() }.getOrNull() ?: return false
+        fun find(name: String) = children.firstOrNull { it.name.equals(name, ignoreCase = true) }
+        if (find("PS3_DISC.SFB")?.isFile == true) return true
+        find("PS3_GAME")?.takeIf { it.isDirectory }?.let { gameDir ->
+            val inner = runCatching { gameDir.listFiles() }.getOrNull().orEmpty()
+            if (inner.any { it.isFile && it.name.equals("PARAM.SFO", ignoreCase = true) }) return true
+        }
+        return find("PARAM.SFO")?.isFile == true && find("USRDIR")?.isDirectory == true
+    }
+
     private fun scanRawDirectory(
         directory: File,
         output: MutableMap<String, GameInfo>,
@@ -223,6 +313,18 @@ class GameLibraryRepository(private val context: Context) {
         val children = runCatching { directory.listFiles() }.getOrNull() ?: return
         children.forEach { file ->
             if (file.isDirectory) {
+                // A game folder is a leaf: emit it and do NOT descend. Descending
+                // also used to add USRDIR/EBOOT.BIN as its own bogus entry, since
+                // "bin" is in gameExtensions.
+                if (runCatching { isPs3GameFolder(file) }.getOrDefault(false)) {
+                    val folderUri = Uri.fromFile(file)
+                    android.util.Log.i(ScanTag, "  game folder '${file.name}'")
+                    output.putIfAbsent(
+                        folderUri.toString(),
+                        createGame(folderUri, file.name, "folder", null, probeDisc(file)),
+                    )
+                    return@forEach
+                }
                 scanRawDirectory(file, output, depth + 1)
                 return@forEach
             }
@@ -380,8 +482,9 @@ class GameLibraryRepository(private val context: Context) {
     data class CachedLibrary(val key: String?, val games: List<GameInfo>)
 
     private companion object {
-        /** v2: PS3 title ID + title + ICON0.PNG read from the disc's PARAM.SFO. */
-        const val ScanSchemaVersion = 4
+        /** v2: PS3 title ID + title + ICON0.PNG read from the disc's PARAM.SFO.
+         *  v5: folder-format games (JB folder / installed game folder). */
+        const val ScanSchemaVersion = 5
         const val ScanTag = "ARMSX3-Scan"
         /** Staging name for an extracted icon, renamed once the title ID is known. */
         const val PendingIcon = "__pending"

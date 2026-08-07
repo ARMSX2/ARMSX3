@@ -43,6 +43,8 @@ struct RPCSXApi {
   std::string (*getUser)();
   std::string (*settingsGet)(std::string_view path);
   bool (*settingsSet)(std::string_view path, std::string_view valueString);
+  void (*settingsBeginBatch)();
+  void (*settingsEndBatch)();
   std::string (*getVersion)();
   void *(*setCustomDriver)(void *driverHandle);
   bool (*saveState)();
@@ -114,6 +116,8 @@ struct RPCSXLibrary : RPCSXApi {
     result.getUser = reinterpret_cast<decltype(getUser)>(dlsym(handle, "_rpcsx_getUser"));
     result.settingsGet = reinterpret_cast<decltype(settingsGet)>(dlsym(handle, "_rpcsx_settingsGet"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
+    result.settingsBeginBatch = reinterpret_cast<decltype(settingsBeginBatch)>(dlsym(handle, "_rpcsx_settingsBeginBatch"));
+    result.settingsEndBatch = reinterpret_cast<decltype(settingsEndBatch)>(dlsym(handle, "_rpcsx_settingsEndBatch"));
     result.getVersion = reinterpret_cast<decltype(getVersion)>(dlsym(handle, "_rpcsx_getVersion"));
     result.setCustomDriver = reinterpret_cast<decltype(setCustomDriver)>(dlsym(handle, "_rpcsx_setCustomDriver"));
     result.saveState = reinterpret_cast<decltype(saveState)>(dlsym(handle, "_rpcsx_saveState"));
@@ -454,6 +458,22 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_settingsSet(
   }
 
   return rpcsxLib.settingsSet(unwrap(env, jpath), unwrap(env, jvalue));
+}
+
+// Defer the config file write until endBatch. Null-safe like the rest: an older core
+// .so simply has no such symbol, and every settingsSet then saves as it always did.
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_settingsBeginBatch(JNIEnv *, jobject) {
+  if (rpcsxLib.settingsBeginBatch != nullptr) {
+    rpcsxLib.settingsBeginBatch();
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_settingsEndBatch(JNIEnv *, jobject) {
+  if (rpcsxLib.settingsEndBatch != nullptr) {
+    rpcsxLib.settingsEndBatch();
+  }
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

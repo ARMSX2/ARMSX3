@@ -86,6 +86,9 @@ class RPCSX {
     external fun systemInfo(): String
     external fun settingsGet(path: String): String
     external fun settingsSet(path: String, value: String): Boolean
+    /** Coalesce the config file writes of every settingsSet until [settingsEndBatch]. */
+    external fun settingsBeginBatch()
+    external fun settingsEndBatch()
     external fun getState() : Int
     external fun kill()
     external fun resume()

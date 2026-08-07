@@ -181,6 +181,14 @@ data class Ps3Settings(
     val resolution: Int = 2,
     val anisoFilter: Int = 0,
     val audioRenderer: Int = 2,
+    /**
+     * Output aspect override in permille (1778 = 16:9, 1333 = 4:3), 0 = follow the game.
+     *
+     * The PS3 only ever signalled 4:3 or 16:9, so RPCS3's video_aspect cannot express a
+     * handheld panel (20:9, 19.5:9) and Stretch was the only way to fill one -- at the cost
+     * of distorting the image. Permille because RPCS3's cfg has no float type.
+     */
+    val displayAspect: Int = 0,
     // ---- Performance overlay (RPCS3 perf_overlay) ----
     /** PS3: Video/Performance Overlay / Enabled. */
     val overlayEnabled: Boolean = false,
@@ -878,8 +886,29 @@ data class Settings(
         return "#%06X%02X".format(rgb, a)
     }
 
-    /** Push every field into emucore via NativeApp.setSetting + commit. */
+    /**
+     * Push every field into emucore via NativeApp.setSetting + commit.
+     *
+     * Wrapped in a settings batch. Each PS3 key reaching the core ran
+     * Emulator::SaveSettings(g_cfg.to_string(), ""), which serialises the ENTIRE config
+     * to YAML and writes it out -- and [applyToInner] pushes ~165 keys, so one toggle in
+     * the in-game menu cost 165 full serialisations plus 165 file writes on the UI thread.
+     * That is the reported menu lag. Batching collapses them into one write.
+     *
+     * try/finally because applyToInner has an early return on the INI-export path; leaving
+     * the batch open there would defer the NEXT change's save indefinitely.
+     */
     fun applyTo() {
+        val batched = emitSink == null && MainActivityRuntime.nativeReady.value
+        if (batched) runCatching { net.rpcsx.RPCSX.instance.settingsBeginBatch() }
+        try {
+            applyToInner()
+        } finally {
+            if (batched) runCatching { net.rpcsx.RPCSX.instance.settingsEndBatch() }
+        }
+    }
+
+    private fun applyToInner() {
         // Speedhacks
         // PS3 core settings, routed by Rpcs3Bridge to the RPCS3 config tree.
         put("PS3/Core", "PPU Decoder", "enum", ps3.ppuDecoder.toString())
@@ -898,6 +927,7 @@ data class Settings(
         // Stretch is the only fit mode the CORE participates in; the rest are
         // surface layout. Keeping them in sync stops "Stretch" looking inert.
         put("PS3/Video", "Stretch To Display Area", "bool", (displayFitMode == 1).toString())
+        put("PS3/Video", "Display Aspect Override", "int", ps3.displayAspect.coerceIn(0, 4000).toString())
         put("PS3/Overlay", "Enabled", "bool", ps3.overlayEnabled.toString())
         put("PS3/Overlay", "Detail level", "enum", ps3.overlayDetail.toString())
         put("PS3/Overlay", "Enable Framerate Graph", "bool", ps3.overlayFramerateGraph.toString())
@@ -1848,6 +1878,24 @@ data class Settings(
         put("ps3PpuNanHandling", ps3.ppuNanHandling)
         put("ps3AccurateDfma", ps3.accurateDfma)
         put("ps3SetDazFtz", ps3.setDazFtz)
+        // RPCS3 performance-overlay fields. These were declared on Ps3Settings and wired
+        // into OverlayTab but never added to ANY of the four serialisation paths, so every
+        // one of them lived only in memory: changing "Performance Overlay" or "Detail Level"
+        // worked until SettingsViewModel.load() re-read the store on the next screen entry,
+        // which snapped them back to the defaults. Reported as "anything I change on this
+        // settings tab just reverts to default".
+        put("ps3DisplayAspect", ps3.displayAspect)
+        put("ps3OverlayEnabled", ps3.overlayEnabled)
+        put("ps3OverlayDetail", ps3.overlayDetail)
+        put("ps3OverlayPosition", ps3.overlayPosition)
+        put("ps3OverlayFontSize", ps3.overlayFontSize)
+        put("ps3OverlayOpacity", ps3.overlayOpacity)
+        put("ps3OverlayFramerateGraph", ps3.overlayFramerateGraph)
+        put("ps3OverlayFrametimeGraph", ps3.overlayFrametimeGraph)
+        put("ps3OverlayBodyColor", ps3.overlayBodyColor)
+        put("ps3OverlayBodyBg", ps3.overlayBodyBg)
+        put("ps3OverlayTitleColor", ps3.overlayTitleColor)
+        put("ps3OverlayTitleBg", ps3.overlayTitleBg)
         put("ps3HleLwmutex", ps3.hleLwmutex)
         put("ps3SleepTimers", ps3.sleepTimers)
         put("ps3DebugConsoleMode", ps3.debugConsoleMode)
@@ -2164,6 +2212,18 @@ data class Settings(
                     ppuNanHandling = json.optBoolean("ps3PpuNanHandling", def.ps3.ppuNanHandling),
                     accurateDfma = json.optBoolean("ps3AccurateDfma", def.ps3.accurateDfma),
                     setDazFtz = json.optBoolean("ps3SetDazFtz", def.ps3.setDazFtz),
+                    displayAspect = json.optInt("ps3DisplayAspect", def.ps3.displayAspect),
+                    overlayEnabled = json.optBoolean("ps3OverlayEnabled", def.ps3.overlayEnabled),
+                    overlayDetail = json.optInt("ps3OverlayDetail", def.ps3.overlayDetail),
+                    overlayPosition = json.optInt("ps3OverlayPosition", def.ps3.overlayPosition),
+                    overlayFontSize = json.optInt("ps3OverlayFontSize", def.ps3.overlayFontSize),
+                    overlayOpacity = json.optInt("ps3OverlayOpacity", def.ps3.overlayOpacity),
+                    overlayFramerateGraph = json.optBoolean("ps3OverlayFramerateGraph", def.ps3.overlayFramerateGraph),
+                    overlayFrametimeGraph = json.optBoolean("ps3OverlayFrametimeGraph", def.ps3.overlayFrametimeGraph),
+                    overlayBodyColor = json.optInt("ps3OverlayBodyColor", def.ps3.overlayBodyColor),
+                    overlayBodyBg = json.optInt("ps3OverlayBodyBg", def.ps3.overlayBodyBg),
+                    overlayTitleColor = json.optInt("ps3OverlayTitleColor", def.ps3.overlayTitleColor),
+                    overlayTitleBg = json.optInt("ps3OverlayTitleBg", def.ps3.overlayTitleBg),
                     hleLwmutex = json.optBoolean("ps3HleLwmutex", def.ps3.hleLwmutex),
                     sleepTimers = json.optInt("ps3SleepTimers", def.ps3.sleepTimers),
                     debugConsoleMode = json.optBoolean("ps3DebugConsoleMode", def.ps3.debugConsoleMode),
@@ -2466,6 +2526,18 @@ data class Settings(
             if (current.ps3.ppuNanHandling != base.ps3.ppuNanHandling) j.put("ps3PpuNanHandling", current.ps3.ppuNanHandling)
             if (current.ps3.accurateDfma != base.ps3.accurateDfma) j.put("ps3AccurateDfma", current.ps3.accurateDfma)
             if (current.ps3.setDazFtz != base.ps3.setDazFtz) j.put("ps3SetDazFtz", current.ps3.setDazFtz)
+            if (current.ps3.displayAspect != base.ps3.displayAspect) j.put("ps3DisplayAspect", current.ps3.displayAspect)
+            if (current.ps3.overlayEnabled != base.ps3.overlayEnabled) j.put("ps3OverlayEnabled", current.ps3.overlayEnabled)
+            if (current.ps3.overlayDetail != base.ps3.overlayDetail) j.put("ps3OverlayDetail", current.ps3.overlayDetail)
+            if (current.ps3.overlayPosition != base.ps3.overlayPosition) j.put("ps3OverlayPosition", current.ps3.overlayPosition)
+            if (current.ps3.overlayFontSize != base.ps3.overlayFontSize) j.put("ps3OverlayFontSize", current.ps3.overlayFontSize)
+            if (current.ps3.overlayOpacity != base.ps3.overlayOpacity) j.put("ps3OverlayOpacity", current.ps3.overlayOpacity)
+            if (current.ps3.overlayFramerateGraph != base.ps3.overlayFramerateGraph) j.put("ps3OverlayFramerateGraph", current.ps3.overlayFramerateGraph)
+            if (current.ps3.overlayFrametimeGraph != base.ps3.overlayFrametimeGraph) j.put("ps3OverlayFrametimeGraph", current.ps3.overlayFrametimeGraph)
+            if (current.ps3.overlayBodyColor != base.ps3.overlayBodyColor) j.put("ps3OverlayBodyColor", current.ps3.overlayBodyColor)
+            if (current.ps3.overlayBodyBg != base.ps3.overlayBodyBg) j.put("ps3OverlayBodyBg", current.ps3.overlayBodyBg)
+            if (current.ps3.overlayTitleColor != base.ps3.overlayTitleColor) j.put("ps3OverlayTitleColor", current.ps3.overlayTitleColor)
+            if (current.ps3.overlayTitleBg != base.ps3.overlayTitleBg) j.put("ps3OverlayTitleBg", current.ps3.overlayTitleBg)
             if (current.ps3.hleLwmutex != base.ps3.hleLwmutex) j.put("ps3HleLwmutex", current.ps3.hleLwmutex)
             if (current.ps3.sleepTimers != base.ps3.sleepTimers) j.put("ps3SleepTimers", current.ps3.sleepTimers)
             if (current.ps3.debugConsoleMode != base.ps3.debugConsoleMode) j.put("ps3DebugConsoleMode", current.ps3.debugConsoleMode)
@@ -2749,6 +2821,18 @@ data class Settings(
                     ppuNanHandling = if (overrides.has("ps3PpuNanHandling")) overrides.getBoolean("ps3PpuNanHandling") else base.ps3.ppuNanHandling,
                     accurateDfma = if (overrides.has("ps3AccurateDfma")) overrides.getBoolean("ps3AccurateDfma") else base.ps3.accurateDfma,
                     setDazFtz = if (overrides.has("ps3SetDazFtz")) overrides.getBoolean("ps3SetDazFtz") else base.ps3.setDazFtz,
+                    displayAspect = if (overrides.has("ps3DisplayAspect")) overrides.getInt("ps3DisplayAspect") else base.ps3.displayAspect,
+                    overlayEnabled = if (overrides.has("ps3OverlayEnabled")) overrides.getBoolean("ps3OverlayEnabled") else base.ps3.overlayEnabled,
+                    overlayDetail = if (overrides.has("ps3OverlayDetail")) overrides.getInt("ps3OverlayDetail") else base.ps3.overlayDetail,
+                    overlayPosition = if (overrides.has("ps3OverlayPosition")) overrides.getInt("ps3OverlayPosition") else base.ps3.overlayPosition,
+                    overlayFontSize = if (overrides.has("ps3OverlayFontSize")) overrides.getInt("ps3OverlayFontSize") else base.ps3.overlayFontSize,
+                    overlayOpacity = if (overrides.has("ps3OverlayOpacity")) overrides.getInt("ps3OverlayOpacity") else base.ps3.overlayOpacity,
+                    overlayFramerateGraph = if (overrides.has("ps3OverlayFramerateGraph")) overrides.getBoolean("ps3OverlayFramerateGraph") else base.ps3.overlayFramerateGraph,
+                    overlayFrametimeGraph = if (overrides.has("ps3OverlayFrametimeGraph")) overrides.getBoolean("ps3OverlayFrametimeGraph") else base.ps3.overlayFrametimeGraph,
+                    overlayBodyColor = if (overrides.has("ps3OverlayBodyColor")) overrides.getInt("ps3OverlayBodyColor") else base.ps3.overlayBodyColor,
+                    overlayBodyBg = if (overrides.has("ps3OverlayBodyBg")) overrides.getInt("ps3OverlayBodyBg") else base.ps3.overlayBodyBg,
+                    overlayTitleColor = if (overrides.has("ps3OverlayTitleColor")) overrides.getInt("ps3OverlayTitleColor") else base.ps3.overlayTitleColor,
+                    overlayTitleBg = if (overrides.has("ps3OverlayTitleBg")) overrides.getInt("ps3OverlayTitleBg") else base.ps3.overlayTitleBg,
                     hleLwmutex = if (overrides.has("ps3HleLwmutex")) overrides.getBoolean("ps3HleLwmutex") else base.ps3.hleLwmutex,
                     sleepTimers = if (overrides.has("ps3SleepTimers")) overrides.getInt("ps3SleepTimers") else base.ps3.sleepTimers,
                     debugConsoleMode = if (overrides.has("ps3DebugConsoleMode")) overrides.getBoolean("ps3DebugConsoleMode") else base.ps3.debugConsoleMode,

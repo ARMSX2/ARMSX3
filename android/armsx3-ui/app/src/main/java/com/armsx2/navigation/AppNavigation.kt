@@ -93,6 +93,10 @@ fun AppNavigation() {
                     onOpenAbout = { UiNavigator.navigate(AppRoute.About) },
                 )
                 is AppRoute.BiosManager -> BiosManagerScreen(onBack = UiNavigator::home, game = destination.game)
+                AppRoute.PackageInstaller ->
+                    com.armsx2.ui.packages.PackageInstallerScreen(onBack = UiNavigator::home)
+                AppRoute.CoreSettings ->
+                    com.armsx2.ui.settings.CoreSettingsScreen(onBack = UiNavigator::home)
                 AppRoute.MemoryCardManager -> MemoryCardScreen(onBack = UiNavigator::home)
                 AppRoute.SaveManager -> SaveManagerScreen(onBack = UiNavigator::home)
                 AppRoute.ControllerManager -> ControllerManagerScreen(onBack = UiNavigator::home)

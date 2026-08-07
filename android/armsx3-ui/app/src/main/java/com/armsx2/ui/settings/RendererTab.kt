@@ -92,6 +92,23 @@ internal val UPSCALE_OPTIONS = listOf(
     UpscaleOption(8.0f, "8x"),
 )
 
+/** Screen-aspect presets in permille, index-aligned with the picker's options. Anything not
+ *  in this list is a custom value, which is what selects the Custom entry and its slider. */
+private val SCREEN_ASPECTS = listOf(
+    0,    // Auto - follow whatever the game signalled (4:3 or 16:9)
+    1333, // 4:3
+    1600, // 16:10
+    1778, // 16:9
+    2000, // 18:9
+    2167, // 19.5:9
+    2222, // 20:9
+    2333, // 21:9
+)
+
+/** Seed for Custom. Deliberately NOT a preset value: landing on one would re-select that
+ *  preset and hide the slider the user just asked for. */
+private const val CUSTOM_ASPECT_SEED = 2100
+
 @Composable
 fun RendererTab(state: MutableState<Settings>) {
     val s = state.value
@@ -206,6 +223,42 @@ fun RendererTab(state: MutableState<Settings>) {
                 description = str("renderer.displayMode.description"),
                 onChange = { apply(s.copy(displayFitMode = it)) },
             )
+            SettingsDivider()
+            // SCREEN aspect, distinct from Console Aspect above. Console aspect is what the
+            // GAME thinks it is drawing (4:3 or 16:9, all the PS3 could signal); this is the
+            // shape of the letterbox its image is fitted into on YOUR panel. Without it a
+            // 20:9 handheld had only Fit (pillarboxed) or Stretch (distorted), which is what
+            // "no way to adjust between custom aspect ratios like armsx2" was about.
+            // Stored in permille to match the core's cfg::_int.
+            SegmentedGridRow(
+                label = str("renderer.screenAspect.label"),
+                options = listOf(
+                    str("common.auto"), "4:3", "16:10", "16:9", "18:9", "19.5:9", "20:9", "21:9",
+                    str("renderer.screenAspect.custom"),
+                ),
+                selectedIndex = SCREEN_ASPECTS.indexOf(s.ps3.displayAspect)
+                    .let { if (it >= 0) it else SCREEN_ASPECTS.size },
+                columns = 3,
+                description = str("renderer.screenAspect.description"),
+                onChange = { index ->
+                    // Last option is Custom: seed the slider from the panel's own ratio so it
+                    // starts somewhere useful instead of snapping the image on selection.
+                    val permille = SCREEN_ASPECTS.getOrNull(index) ?: CUSTOM_ASPECT_SEED
+                    apply(s.copy(ps3 = s.ps3.copy(displayAspect = permille)))
+                },
+            )
+            if (s.ps3.displayAspect !in SCREEN_ASPECTS) {
+                SettingsDivider()
+                IntSliderRow(
+                    label = str("renderer.screenAspect.customValue"),
+                    value = s.ps3.displayAspect.coerceIn(1000, 3000),
+                    min = 1000,
+                    max = 3000,
+                    description = str("renderer.screenAspect.customValue.description"),
+                    valueFormatter = { String.format(java.util.Locale.US, "%.2f:1", it / 1000f) },
+                    onChange = { apply(s.copy(ps3 = s.ps3.copy(displayAspect = it))) },
+                )
+            }
             SettingsDivider()
             // PS3 output resolution -- what the console reports to the game.
             // Separate from Resolution Scale above, which is internal upscaling.

@@ -59,7 +59,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             // pins the library empty forever: the key still matches on every
             // later launch, so nothing ever rescans. An empty library is never
             // a useful cached result, so never trust one.
-            pendingInitialScan = romDirectories.isNotEmpty() &&
+            // Installed (PKG) games live in the emulator's own storage, so a user with no
+            // ROM folder at all can still have a library worth scanning.
+            pendingInitialScan = (romDirectories.isNotEmpty() || repository.hasInternalGames()) &&
                 (cached.games.isEmpty() || cached.key != repository.cacheKey(romDirectories))
             android.util.Log.i("ARMSX3-Scan", "load(first): dirs=$romDirectories nativeReady=$nativeReady cachedKey=${cached.key} newKey=${repository.cacheKey(romDirectories)} cachedGames=${cached.games.size} pending=$pendingInitialScan")
             state.value = buildState(
@@ -80,7 +82,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refresh() {
-        if (directories.isEmpty() || scanJob?.isActive == true) return
+        if ((directories.isEmpty() && !repository.hasInternalGames()) ||
+            scanJob?.isActive == true
+        ) return
         scanJob = scope.launch {
             val initialScan = pendingInitialScan && state.value.allGames.isEmpty()
             state.value = state.value.copy(

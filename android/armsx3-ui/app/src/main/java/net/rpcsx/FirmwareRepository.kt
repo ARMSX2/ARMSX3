@@ -39,9 +39,13 @@ class FirmwareRepository {
         }
 
         fun load() {
+                // No fw.json is the normal first-run state, not an error. Reading it blind
+                // threw FileNotFoundException and printStackTrace() put the whole trace in
+                // the diagnostic log, where it reads as a crash -- it was reported as one.
+                val file = File(RPCSX.rootDirectory + "fw.json")
+                if (!file.isFile) return
                 try {
-                    val info =
-                        Json.decodeFromString<FirmwareInfo>(File(RPCSX.rootDirectory + "fw.json").readText())
+                    val info = Json.decodeFromString<FirmwareInfo>(file.readText())
                     status.value = info.status
                     version.value = info.version
                 } catch (_: NotFoundException) {

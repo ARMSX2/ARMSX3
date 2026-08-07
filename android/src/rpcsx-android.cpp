@@ -2221,6 +2221,48 @@ extern "C" int _rpcsx_patchesImport(std::string_view content) {
  * Must not run while a game is loaded: load_iso installs a process-wide virtual
  * device, so probing mid-session would swap the running title's disc.
  */
+// Read TITLE_ID/TITLE out of <root>/PARAM.SFO and, when iconOut is set, copy
+// <root>/ICON0.PNG next to it. Returns "{}" when the folder has no usable SFO.
+// Shared by the ISO path (root inside the mounted virtual device) and the
+// folder path (root on real storage), which read identically once mounted.
+static std::string read_sfo_game_info(const std::string &root,
+                                      std::string_view iconOut) {
+  if (!fs::is_file(root + "/PARAM.SFO")) {
+    return "{}";
+  }
+
+  fs::file sfo{root + "/PARAM.SFO"};
+  if (!sfo) {
+    return "{}";
+  }
+
+  const auto psf = psf::load_object(sfo, root + "/PARAM.SFO");
+  const auto titleId = std::string(psf::get_string(psf, "TITLE_ID"));
+  const auto title = std::string(psf::get_string(psf, "TITLE"));
+
+  if (titleId.empty()) {
+    return "{}";
+  }
+
+  bool haveIcon = false;
+
+  if (!iconOut.empty() && fs::is_file(root + "/ICON0.PNG")) {
+    if (fs::file icon{root + "/ICON0.PNG"}) {
+      const auto bytes = icon.to_vector<u8>();
+      if (!bytes.empty()) {
+        if (fs::file out{std::string(iconOut), fs::rewrite}) {
+          out.write(bytes.data(), bytes.size());
+          haveIcon = true;
+        }
+      }
+    }
+  }
+
+  // json_quote() supplies the surrounding quotes itself.
+  return "{\"titleId\":" + json_quote(titleId) + ",\"title\":" +
+         json_quote(title) + ",\"icon\":" + (haveIcon ? "true" : "false") + "}";
+}
+
 extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
                                             std::string_view iconOut) {
   if (isoPath.empty() || !Emu.IsStopped()) {
@@ -2228,6 +2270,24 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
   }
 
   const std::string path(isoPath);
+
+  // Folder-format games need no mount at all: a JB folder dump keeps its
+  // metadata in <dir>/PS3_GAME, and an installed/HDD game folder (what
+  // RPCS3's own games directory holds, and the shape some prototype dumps
+  // ship in) keeps it at the top level next to USRDIR.
+  if (fs::is_dir(path)) {
+    std::string result = "{}";
+    try {
+      result = read_sfo_game_info(path + "/PS3_GAME", iconOut);
+      if (result == "{}") {
+        result = read_sfo_game_info(path, iconOut);
+      }
+    } catch (const std::exception &e) {
+      rpcsx_android.error("probeDiscInfo('%s') [folder] failed: %s", path,
+                          e.what());
+    }
+    return result;
+  }
 
   if (!is_iso_file(path)) {
     return "{}";
@@ -2239,37 +2299,8 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
   // next boot's disc with whichever image was scanned last.
   try {
     load_iso(path);
-
-    const std::string root = iso_device::virtual_device_name + "/PS3_GAME";
-
-    if (fs::is_file(root + "/PARAM.SFO")) {
-      if (fs::file sfo{root + "/PARAM.SFO"}) {
-        const auto psf = psf::load_object(sfo, root + "/PARAM.SFO");
-        const auto titleId = std::string(psf::get_string(psf, "TITLE_ID"));
-        const auto title = std::string(psf::get_string(psf, "TITLE"));
-
-        if (!titleId.empty()) {
-          bool haveIcon = false;
-
-          if (!iconOut.empty() && fs::is_file(root + "/ICON0.PNG")) {
-            if (fs::file icon{root + "/ICON0.PNG"}) {
-              const auto bytes = icon.to_vector<u8>();
-              if (!bytes.empty()) {
-                if (fs::file out{std::string(iconOut), fs::rewrite}) {
-                  out.write(bytes.data(), bytes.size());
-                  haveIcon = true;
-                }
-              }
-            }
-          }
-
-          // json_quote() supplies the surrounding quotes itself.
-          result = "{\"titleId\":" + json_quote(titleId) +
-                   ",\"title\":" + json_quote(title) +
-                   ",\"icon\":" + (haveIcon ? "true" : "false") + "}";
-        }
-      }
-    }
+    result = read_sfo_game_info(iso_device::virtual_device_name + "/PS3_GAME",
+                                iconOut);
   } catch (const std::exception &e) {
     rpcsx_android.error("probeDiscInfo('%s') failed: %s", path, e.what());
   }
@@ -3288,6 +3319,31 @@ extern void reset_performance_overlay();
 extern void reset_debug_overlay();
 } // namespace rsx::overlays
 
+// Settings batching.
+//
+// Every settingsSet used to end in Emulator::SaveSettings(g_cfg.to_string(), ""), which
+// serialises the WHOLE PS3 config to YAML and writes it to disk. The app pushes its full
+// settings block on each change -- ~165 keys -- so one toggle in the in-game menu cost 165
+// whole-config serialisations and 165 file writes, synchronously, on the UI thread. That is
+// the reported "lag when switching settings in the in game menu".
+//
+// Between begin/end the save is deferred and coalesced into exactly one write. Single
+// settingsSet calls (the dynamic settings screen) are unaffected and still save immediately.
+static std::atomic<int> g_settings_batch_depth{0};
+static std::atomic<bool> g_settings_batch_dirty{false};
+
+extern "C" void _rpcsx_settingsBeginBatch() { g_settings_batch_depth.fetch_add(1); }
+
+extern "C" void _rpcsx_settingsEndBatch() {
+  // Nested/unbalanced calls must not drop the save; only the outermost end flushes.
+  if (g_settings_batch_depth.fetch_sub(1) != 1) {
+    return;
+  }
+  if (g_settings_batch_dirty.exchange(false)) {
+    Emulator::SaveSettings(g_cfg.to_string(), "");
+  }
+}
+
 extern "C" bool _rpcsx_settingsSet(std::string_view path,
                                    std::string_view valueString) {
   auto root = find_cfg_node(&g_cfg, path);
@@ -3328,7 +3384,11 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
     return false;
   }
 
-  Emulator::SaveSettings(g_cfg.to_string(), "");
+  if (g_settings_batch_depth.load() > 0) {
+    g_settings_batch_dirty.store(true);
+  } else {
+    Emulator::SaveSettings(g_cfg.to_string(), "");
+  }
 
   // The overlays own live objects built from the config; they are not re-read
   // per frame. reset_*_overlay() is what applies a change to the running one

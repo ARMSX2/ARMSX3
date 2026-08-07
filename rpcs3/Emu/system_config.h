@@ -139,6 +139,12 @@ struct cfg_root : cfg::node
 		cfg::_bool renderdoc_compatiblity{ this, "Renderdoc Compatibility Mode" };
 		cfg::_bool use_gpu_texture_scaling{ this, "Use GPU texture scaling", false };
 		cfg::_bool stretch_to_display_area{ this, "Stretch To Display Area", false, true };
+		// Output aspect override, in permille (1778 = 16:9, 1333 = 4:3, 2333 = 21:9), 0 = off.
+		// The PS3 only ever signalled 4:3 or 16:9, so avconf::aspect cannot express anything
+		// else and get_aspect_ratio() throws on any other value. Handhelds are routinely
+		// neither (20:9, 19.5:9), which left no way to fill the panel without Stretch
+		// distorting the image. Permille because cfg has no float type.
+		cfg::_int<0, 4000> display_aspect_permille{ this, "Display Aspect Override", 0, true };
 		cfg::_bool force_high_precision_z_buffer{ this, "Force High Precision Z buffer" };
 		cfg::_bool strict_rendering_mode{ this, "Strict Rendering Mode" };
 		cfg::_enum<framebuffer_aliasing_bias> fb_aliasing_bias{ this, "Framebuffer Aliasing Heuristic Bias", framebuffer_aliasing_bias::_auto, true };

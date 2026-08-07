@@ -179,6 +179,14 @@ namespace rsx
 
 	double avconf::get_aspect_ratio() const
 	{
+		// A user override wins over whatever the game signalled. Applies to both users of
+		// this value: fitting the virtual display into the physical one (the letterbox the
+		// player actually sees) and aspect_convert_dimensions.
+		if (const s32 permille = g_cfg.video.display_aspect_permille; permille > 0)
+		{
+			return permille / 1000.;
+		}
+
 		switch (aspect)
 		{
 		case CELL_VIDEO_OUT_ASPECT_16_9: return 16. / 9.;

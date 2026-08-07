@@ -161,3 +161,6 @@ android/**/keystore.properties
 3rdparty/librashader/
 android/app-upstream/
 android/**/cpp/libadrenotools/
+
+# Kotlin incremental-compile scratch dir
+android/armsx3-ui/.kotlin/
