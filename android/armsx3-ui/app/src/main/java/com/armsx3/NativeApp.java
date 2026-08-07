@@ -315,16 +315,24 @@ public final class NativeApp {
     public static void setPreferVulkan(boolean e) { /* Vulkan is the only backend */ }
 
     /**
-     * [MAPPED] ARMSX2's aspect enum: 0 = stretch/native, 1 = 4:3, 2 = 16:9.
+     * [MAPPED] The console aspect index the UI stores, which is RendererTab's
+     * picker: 0 = stretch, 1 = Auto, 2 = 4:3, 3 = 16:9, 4..8 = the ultrawide
+     * ratios ARMSX2 offered.
+     *
      * RPCS3 only has 4:3 and 16:9 plus a separate "Stretch To Display Area"
-     * flag, so mode 0 maps to the flag rather than a third enum value.
+     * flag, so index 0 maps to the flag rather than a third enum value, and
+     * everything that is not 4:3 lands on 16:9.
+     *
+     * The doc here used to describe ARMSX2's PS2 enum, where 1 was 4:3, and the
+     * check below was written against it. ARMSX3's picker inserted Auto at 1 and
+     * pushed 4:3 to 2, so Auto was resolving to 4:3.
      */
     public static void setAspectRatio(int type) {
         if (type == 0) {
             Rpcs3Settings.INSTANCE.setStretchToDisplay(true);
         } else {
             Rpcs3Settings.INSTANCE.setStretchToDisplay(false);
-            Rpcs3Settings.INSTANCE.setAspectRatio(type != 1);
+            Rpcs3Settings.INSTANCE.setAspectRatio(type != 2);
         }
     }
 
