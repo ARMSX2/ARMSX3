@@ -70,11 +70,38 @@ import java.io.File
 private fun ConfigDatabaseRow() {
     val status = remember { mutableStateOf("") }
     val busy = remember { mutableStateOf(false) }
+    // Mirrored into state so the toggle and the remove row recompose on change; both read
+    // through to SharedPreferences, which Compose cannot observe on its own.
+    val stored = remember { mutableStateOf(com.armsx2.config.ConfigDatabase.titleCount()) }
+    val applying = remember { mutableStateOf(com.armsx2.config.ConfigDatabase.isEnabled()) }
+    val confirmRemove = remember { mutableStateOf(false) }
 
     val summary = status.value.ifEmpty {
-        val count = com.armsx2.config.ConfigDatabase.titleCount()
+        val count = stored.value
         if (count > 0) I18n.get("perf.configDb.have").format(count)
         else I18n.get("perf.configDb.description")
+    }
+
+    if (confirmRemove.value) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmRemove.value = false },
+            title = { Text(str("perf.configDb.remove")) },
+            text = { Text(I18n.get("perf.configDb.removeConfirm").format(stored.value)) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    confirmRemove.value = false
+                    com.armsx2.config.ConfigDatabase.remove()
+                    stored.value = 0
+                    applying.value = true
+                    status.value = I18n.get("perf.configDb.removed")
+                }) { Text(str("perf.configDb.remove")) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmRemove.value = false }) {
+                    Text(str("action.cancel"))
+                }
+            },
+        )
     }
 
     Surface(
@@ -92,6 +119,7 @@ private fun ConfigDatabaseRow() {
                 // not called Looper.prepare()", which crashed the app on every download.
                 // Compose state is safe to write from any thread.
                 status.value = if (written >= 0) {
+                    stored.value = written
                     I18n.get("perf.configDb.done").format(written)
                 } else {
                     I18n.get("perf.configDb.failed")
@@ -115,6 +143,45 @@ private fun ConfigDatabaseRow() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 14.sp,
             )
+        }
+    }
+
+    // Only meaningful once something has been downloaded, so they stay hidden until then
+    // rather than offering to toggle and delete nothing.
+    if (stored.value > 0) {
+        ToggleRow(
+            label = str("perf.configDb.apply"),
+            value = applying.value,
+            description = str(
+                if (applying.value) "perf.configDb.applyOn" else "perf.configDb.applyOff",
+            ),
+            onChange = {
+                com.armsx2.config.ConfigDatabase.setEnabled(it)
+                applying.value = it
+                status.value = ""
+            },
+        )
+
+        Surface(
+            onClick = { confirmRemove.value = true },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(
+                    str("perf.configDb.remove"),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    str("perf.configDb.removeSummary"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp,
+                )
+            }
         }
     }
 }

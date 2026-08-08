@@ -33,9 +33,10 @@ object ConfigDatabase {
     private const val KEY_UPDATED = "configDb.updatedAt"
     private const val KEY_COUNT = "configDb.titleCount"
     private const val KEY_FORMAT = "configDb.formatVersion"
+    private const val KEY_ENABLED = "configDb.enabled"
 
     /** Bump to discard already-split configs, e.g. after changing [UNSAFE_ON_ANDROID]. */
-    private const val FORMAT_VERSION = 2
+    private const val FORMAT_VERSION = 3
 
     /**
      * Settings from the database that must not be applied on this port.
@@ -50,10 +51,14 @@ object ConfigDatabase {
      *
      * Keep this to settings with EVIDENCE, not suspicion. Every entry should name what broke.
      */
-    private val UNSAFE_ON_ANDROID = setOf(
-        // Minecraft's entry sets this and the game froze on load. The RSX here is
-        // single threaded by design and this path is not exercised on Android.
-        "Multithreaded RSX",
+    private val UNSAFE_ON_ANDROID = setOf<String>(
+        // Empty on purpose. "Multithreaded RSX" was listed here on the belief that it froze
+        // Minecraft. It did not: the freeze was Accurate SPU DMA plus Accurate Cache Line
+        // Stores turning every SPU DMA into an atomic reservation store, and it reproduced
+        // with Multithreaded RSX off and an empty database. Multithreaded RSX is a real
+        // upstream feature backed by the RSXOffload thread, not a desktop-only path, so
+        // there was never evidence against it. Use the enable toggle to A/B the database
+        // rather than denying a setting on suspicion.
     )
 
     /** Drop denied settings from one title's YAML, keeping everything else intact. */
@@ -65,8 +70,62 @@ object ConfigDatabase {
             }
             .joinToString("\n")
 
+    /**
+     * Where the native side looks. get_database_config reads config/config_db/<TITLE>.yml
+     * on the boot path, so this exact name is what makes the database live.
+     */
+    private fun liveDir(): File = File(RPCSX.rootDirectory, "config/config_db")
+
+    /**
+     * Where the split files sit while the database is switched off.
+     *
+     * Disabling moves them aside rather than deleting them, so a tester can flip the
+     * database on and off across boots to compare without re-downloading 2000-odd titles
+     * each time, which is the whole point of having the switch.
+     */
+    private fun parkedDir(): File = File(RPCSX.rootDirectory, "config/config_db_off")
+
     private fun directory(): File =
-        File(RPCSX.rootDirectory, "config/config_db").apply { mkdirs() }
+        (if (isEnabled()) liveDir() else parkedDir()).apply { mkdirs() }
+
+    /** Whether downloaded configs are being applied at boot. */
+    fun isEnabled(): Boolean = MainActivityRuntime.prefs.getBoolean(KEY_ENABLED, true)
+
+    /**
+     * Turn the database on or off, keeping whatever was downloaded.
+     *
+     * A single rename either exposes the files under the name the native callback reads or
+     * hides them from it, so nothing has to be re-parsed and the core needs no flag of its
+     * own. Takes effect on the next boot, since the config is read during Emulator::Load.
+     */
+    fun setEnabled(enabled: Boolean) {
+        if (enabled == isEnabled()) return
+        val from = if (enabled) parkedDir() else liveDir()
+        val to = if (enabled) liveDir() else parkedDir()
+        runCatching {
+            if (from.isDirectory) {
+                if (to.exists()) to.deleteRecursively()
+                from.renameTo(to)
+            }
+        }
+        MainActivityRuntime.prefs.edit { putBoolean(KEY_ENABLED, enabled) }
+    }
+
+    /**
+     * Delete everything downloaded and go back to stock settings.
+     *
+     * Both directories go, so this is a true revert rather than a disable: the row returns
+     * to offering a download and no title carries a database setting any more.
+     */
+    fun remove() {
+        runCatching { liveDir().deleteRecursively() }
+        runCatching { parkedDir().deleteRecursively() }
+        MainActivityRuntime.prefs.edit {
+            putInt(KEY_COUNT, 0)
+            remove(KEY_UPDATED)
+            putBoolean(KEY_ENABLED, true)
+        }
+    }
 
     /**
      * Throw away configs split by an older build.
@@ -82,7 +141,10 @@ object ConfigDatabase {
         if (MainActivityRuntime.prefs.getInt(KEY_FORMAT, 0) == FORMAT_VERSION) return
         if (titleCount() == 0) return
 
-        runCatching { directory().listFiles()?.forEach { it.delete() } }
+        // Both, since the parked copy is restored verbatim by the enable toggle and would
+        // otherwise carry stale sanitising back in the moment someone switched it on.
+        runCatching { liveDir().listFiles()?.forEach { it.delete() } }
+        runCatching { parkedDir().listFiles()?.forEach { it.delete() } }
         MainActivityRuntime.prefs.edit {
             putInt(KEY_COUNT, 0)
             remove(KEY_UPDATED)
