@@ -55,6 +55,70 @@ import com.armsx2.ui.theme.LibraryBackgroundColorPreferences
 import com.armsx2.ui.theme.LibraryChromePreferences
 import java.io.File
 
+/**
+ * Fetch RPCS3's per-title recommended settings.
+ *
+ * Lives here rather than under Performance because it is a one-off maintenance action like
+ * the language and theme rows around it, not a tuning knob, and it was unfindable at the
+ * bottom of a long tuning list.
+ *
+ * The core already applies these at boot through get_database_config; this only keeps the
+ * on-disk copy current. Manual rather than automatic on launch, since it is a network call
+ * to a third party and an emulator should not reach out unasked.
+ */
+@Composable
+private fun ConfigDatabaseRow() {
+    val status = remember { mutableStateOf("") }
+    val busy = remember { mutableStateOf(false) }
+
+    val summary = status.value.ifEmpty {
+        val count = com.armsx2.config.ConfigDatabase.titleCount()
+        if (count > 0) I18n.get("perf.configDb.have").format(count)
+        else I18n.get("perf.configDb.description")
+    }
+
+    Surface(
+        onClick = {
+            if (busy.value) return@Surface
+            busy.value = true
+            status.value = I18n.get("perf.configDb.downloading")
+            MainActivityRuntime.invoke {
+                val written = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.armsx2.config.ConfigDatabase.refresh()
+                }
+                busy.value = false
+                // Status text only, no Toast. MainActivityRuntime.invoke resumes on a pool
+                // thread, and Toast.makeText there throws "Can't toast on a thread that has
+                // not called Looper.prepare()", which crashed the app on every download.
+                // Compose state is safe to write from any thread.
+                status.value = if (written >= 0) {
+                    I18n.get("perf.configDb.done").format(written)
+                } else {
+                    I18n.get("perf.configDb.failed")
+                }
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Text(
+                str("perf.configDb.label"),
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                summary,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 14.sp,
+            )
+        }
+    }
+}
+
 @Composable
 fun AppTab() {
     val currentLanguage = I18n.languages.firstOrNull { it.code == I18n.current }
@@ -70,6 +134,7 @@ fun AppTab() {
         if (com.armsx2.BuildConfig.IN_APP_UPDATER) {
             /* ARMSX3: no in-app updater */ Unit
         }
+        ConfigDatabaseRow()
         Surface(
             onClick = { UiNavigator.navigate(AppRoute.Language) },
             modifier = Modifier.fillMaxWidth()

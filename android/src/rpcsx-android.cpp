@@ -1609,13 +1609,39 @@ static void setupCallbacks() {
       // the moment anything booted -- including Boot XMB.
       //
       // GameMode is a Linux desktop daemon and has no Android equivalent, so it is
-      // a no-op. get_database_config returns the path RPCS3 reads the game
-      // database from; the desktop build points it at its own config dir, so we
-      // point it at ours.
+      // a no-op.
       .enable_gamemode = [](bool) {},
+      // Recommended settings for this title, as a config YAML string.
+      //
+      // This used to return a PATH, which was simply the wrong thing: Emulator::Load
+      // takes the return value as the config CONTENT and hands it to BootGame as
+      // db_config, so what it actually got was a filename that failed to parse and was
+      // discarded. The feature has therefore never done anything here.
+      //
+      // Desktop reaches api.rpcs3.net through Qt's downloader and parses the JSON with
+      // QJsonDocument, neither of which exists in this build. The app fetches and splits
+      // the database instead (see ConfigDatabase.kt), leaving one YAML per title on disk,
+      // so all that is needed here is to read it back.
       .get_database_config =
-          [](const std::string &name) {
-            return g_cfg_vfs.get_dev_flash() + "../config/" + name;
+          [](const std::string &title_id) -> std::string {
+            if (title_id.empty()) {
+              return {};
+            }
+
+            const std::string path =
+                fs::get_config_dir(true) + "config_db/" + title_id + ".yml";
+
+            if (!fs::is_file(path)) {
+              return {};
+            }
+
+            fs::file config{path};
+            if (!config) {
+              return {};
+            }
+
+            rpcsx_android.notice("using database config for %s", title_id);
+            return config.to_string();
           },
       .get_photo_path = [](std::string_view) { return std::string{}; },
       .try_to_quit = [](bool, std::function<void()> on_exit) {

@@ -120,6 +120,9 @@ object Rpcs3Bridge {
 
         RPCSX.rootDirectory = if (rootPath.endsWith("/")) rootPath else "$rootPath/"
         shieldFromMediaScanner(RPCSX.rootDirectory)
+        // Discard database configs split by an older build, so a setting later found to
+        // break a game is not left applying forever on machines that already downloaded.
+        runCatching { com.armsx2.config.ConfigDatabase.purgeIfStale() }
         RPCSX.instance.initialize(RPCSX.rootDirectory, "00000001")
         RPCSX.initialized = true
 
