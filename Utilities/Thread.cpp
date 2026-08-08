@@ -7,6 +7,7 @@
 #include "Emu/Cell/lv2/sys_process.h"
 #include "Emu/RSX/RSXThread.h"
 #include "Thread.h"
+#include <bit>
 #include <cstring>
 #include <cerrno>
 #include "Utilities/JIT.h"
@@ -3734,9 +3735,42 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 				return all_cores_mask;
 			}
 
+			// Reserve the single fastest core for RSX where there is one to spare.
+			//
+			// RSX and all the SPU threads previously shared one mask, so on a 4+3+1 phone
+			// that was six hot threads over five cores. RSX is the thread the frame waits
+			// on: it was measured spending about 10ms per frame inside its own loop without
+			// running, not blocked on the GPU and not faulting, simply waiting for a core.
+			//
+			// Keeping the SPUs off the prime core leaves it for RSX without fencing RSX in,
+			// since RSX keeps the whole fast cluster and only loses the contention for the
+			// best core. Only applied when doing so still leaves the SPUs more than one
+			// core, otherwise they would be crowded worse than the problem being fixed.
+			u64 prime_mask = 0;
+			u32 best_capacity = 0;
+
+			for (u32 core = 0; core < 64u; core++)
+			{
+				if (~fast_mask & (u64{1} << core))
+				{
+					continue;
+				}
+
+				if (caps[core] > best_capacity)
+				{
+					best_capacity = caps[core];
+					prime_mask = (u64{1} << core);
+				}
+			}
+
+			const u64 spu_mask = (std::popcount(fast_mask & ~prime_mask) > 1)
+				? (fast_mask & ~prime_mask)
+				: fast_mask;
+
 			switch (group)
 			{
 			case thread_class::spu:
+				return spu_mask;
 			case thread_class::rsx:
 				return fast_mask;
 			case thread_class::ppu:
