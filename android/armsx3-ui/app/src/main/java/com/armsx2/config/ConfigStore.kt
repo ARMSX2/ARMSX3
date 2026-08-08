@@ -61,6 +61,7 @@ object ConfigStore {
     private const val KEY_SPU_DECODER_RESTORE = "config.migrated.spuDecoderRestoreLlvm"
     private const val KEY_XFLOAT_BACK_TO_APPROX = "config.migrated.xfloatBackToApprox"
     private const val KEY_PRECISE_SPU_OFF = "config.migrated.preciseSpuVerifyOff"
+    private const val KEY_ATOMIC_DMA_OFF = "config.migrated.atomicDmaStoresOff"
     private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
@@ -174,6 +175,27 @@ object ConfigStore {
                 dirty = true
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_XFLOAT_BACK_TO_APPROX, true) }
+        }
+
+        // Return the two reservation settings to upstream's defaults, both off.
+        //
+        // Accurate SPU DMA + Accurate Cache Line Stores together route every 128-byte
+        // SPU DMA store through do_cell_atomic_128_store, so bulk DMA turns into one
+        // atomic reservation store per cache line. Contention then outruns the rate the
+        // reservations can drain and an SPU spins in do_putllc indefinitely, taking the
+        // PPU down with it. Minecraft froze on world chunk load, which is bulk SPU DMA
+        // and nothing else. Load-dependent, hence the intermittency.
+        //
+        // Both are stored true on existing installs, so the default change alone would
+        // not reach anyone who has already run the app.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_ATOMIC_DMA_OFF, false)) {
+            if (raw != null && (parsed.ps3.accurateCacheLine || parsed.ps3.accurateSpuDma)) {
+                parsed = parsed.copy(
+                    ps3 = parsed.ps3.copy(accurateCacheLine = false, accurateSpuDma = false),
+                )
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_ATOMIC_DMA_OFF, true) }
         }
 
         // Move anyone still on the old Approximate xfloat default onto Accurate.

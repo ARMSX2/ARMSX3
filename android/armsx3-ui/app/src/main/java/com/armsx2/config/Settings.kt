@@ -156,7 +156,19 @@ data class Ps3Settings(
      */
     val spuXFloat: Int = 1,
     val accurateSpuRsv: Boolean = true,
-    val accurateCacheLine: Boolean = true,
+    /**
+     * Off, matching upstream, which is what this always should have been.
+     *
+     * With this on AND Accurate SPU DMA on, every 128-byte SPU DMA store is routed through
+     * do_cell_atomic_128_store, i.e. an atomic reservation store per cache line of every
+     * transfer. A game doing bulk DMA then generates reservation contention faster than it
+     * can drain, and an SPU sits in do_putllc retrying forever while the PPU stalls behind
+     * it and the RSX spins idle. Minecraft froze loading world chunks, which is almost
+     * nothing but bulk SPU DMA.
+     *
+     * Load-dependent, so it presented as an intermittent freeze rather than a clean failure.
+     */
+    val accurateCacheLine: Boolean = false,
     val accurateRsxRsv: Boolean = false,
     val ppuRsvPriority: Boolean = false,
     val spuVerification: Boolean = true,
