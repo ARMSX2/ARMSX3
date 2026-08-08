@@ -191,6 +191,27 @@ namespace rsx::prof
 	// One counter per submission site. Three hand-picked candidates all came back at zero
 	// while submissions stayed near five per frame, so this covers every caller rather than
 	// guessing another.
+	// Render pass begins per frame.
+	//
+	// Each one is a tile store and reload on a tiled GPU such as Adreno, which is the most
+	// expensive thing that architecture does. The GPU timer could not measure them because
+	// its per-frame event cap was blown out by roughly 1800 per frame, so count them plainly.
+	extern u64 g_render_passes;
+
+	// Page protection traffic. Every change is an mprotect, which on ARM forces TLB
+	// maintenance, and every fault on a protected page is a SIGSEGV round trip through the
+	// handler before it. The RSX thread was measured at about 34% kernel time reached
+	// through exactly that path, from a memcpy in the vertex upload.
+	extern u64 g_mprotect_calls;
+	extern u64 g_mprotect_bytes;
+	extern u64 g_access_violations;
+
+	// Which site tore the pass down. Every one of these is a tile store and reload on a
+	// tiler, so the distribution decides what is worth batching or deferring.
+	inline constexpr u32 rp_site_count = 12;
+	extern u64 g_rp_sites[rp_site_count];
+	extern const char* g_rp_site_names[rp_site_count];
+
 	inline constexpr u32 flush_site_count = 21;
 	extern u64 g_flush_sites[flush_site_count];
 	extern const char* g_flush_site_names[flush_site_count];

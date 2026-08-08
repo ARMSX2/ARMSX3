@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Emu/RSX/rsx_profiler.h"
 
 #include "Utilities/mutex.h"
 #include "VKRenderPass.h"
@@ -384,6 +385,14 @@ namespace vk
 		rp_begin.renderArea.offset.y = static_cast<s32>(framebuffer_region.y);
 		rp_begin.renderArea.extent.width = framebuffer_region.width;
 		rp_begin.renderArea.extent.height = framebuffer_region.height;
+
+		// Counted here, at the only place a pass actually starts. Counting calls to the
+		// wrapper instead gave about 1900 per frame, because it early-outs when the same
+		// pass and framebuffer are already bound, and almost every call takes that path.
+		if (rsx::prof::enabled()) [[unlikely]]
+		{
+			rsx::prof::g_render_passes++;
+		}
 
 		vkCmdBeginRenderPass(cmd, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
 		renderpass_info = { pass, target };

@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include "util/vm.hpp"
 #include "util/asm.hpp"
 #ifdef _WIN32
@@ -423,6 +424,15 @@ namespace utils
 
 	void memory_protect(void* pointer, usz size, protection prot)
 	{
+		// Counted here because this is the syscall itself. On ARM a protection change forces
+		// TLB maintenance, and each fault that leads to one costs a SIGSEGV round trip
+		// through the handler first, so the rate matters more than it would on x86.
+		if (rsx::prof::enabled()) [[unlikely]]
+		{
+			rsx::prof::g_mprotect_calls++;
+			rsx::prof::g_mprotect_bytes += size;
+		}
+
 		if (!size)
 		{
 			return;

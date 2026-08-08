@@ -928,6 +928,11 @@ bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 {
 	RSX_PROF_SCOPE(texcache_lookup);
 
+	if (rsx::prof::enabled()) [[unlikely]]
+	{
+		rsx::prof::g_access_violations++;
+	}
+
 	rsx::mm_flush(address);
 
 	vk::texture_cache::thrashed_set result;

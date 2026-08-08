@@ -6,6 +6,7 @@
 #include "VKAsyncScheduler.h"
 #include "VKGSRender.h"
 #include "vkutils/gpu_timer.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include "vkutils/buffer_object.h"
 #include "vkutils/chip_class.h"
 #include <vulkan/vulkan_core.h>
@@ -123,11 +124,6 @@ namespace vk
 
 void VKGSRender::begin_render_pass()
 {
-	// Everything the GPU does between here and close_render_pass is drawing the game.
-	// Whatever is left of the frame region after this, the readbacks, the blits and the
-	// uploads is emulation overhead rather than rendering, which is the split worth knowing:
-	// 17 to 19ms of GPU time for Minecraft at 720p is far more than the game itself costs.
-	vk::get_gpu_timer().begin(*m_current_command_buffer, vk::gpu_timer::region::draw);
 
 	vk::begin_renderpass(
 		*m_current_command_buffer,
@@ -139,7 +135,6 @@ void VKGSRender::begin_render_pass()
 void VKGSRender::close_render_pass()
 {
 	vk::end_renderpass(*m_current_command_buffer);
-	vk::get_gpu_timer().end(*m_current_command_buffer, vk::gpu_timer::region::draw);
 }
 
 VkRenderPass VKGSRender::get_render_pass()
@@ -1038,7 +1033,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		if (vk::use_strict_query_scopes() &&
 			vk::is_renderpass_open(*m_current_command_buffer))
 		{
-			vk::end_renderpass(*m_current_command_buffer);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[0]++; vk::end_renderpass(*m_current_command_buffer);
 			emergency_query_cleanup(m_current_command_buffer);
 		}
 
@@ -1087,7 +1082,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		if (pass)
 		{
 			// Subpass mismatch, end it before proceeding
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[1]++; vk::end_renderpass(cmd);
 		}
 
 		// Starting a new renderpass should clobber dynamic state

@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include "VKAsyncScheduler.h"
 #include "VKCompute.h"
 #include "VKDMA.h"
@@ -57,7 +58,7 @@ namespace vk
 
 		if (vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[4]++; vk::end_renderpass(cmd);
 		}
 
 		ensure((region.imageExtent.width + region.imageOffset.x) <= src->width());
@@ -222,7 +223,7 @@ namespace vk
 
 		if (vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[5]++; vk::end_renderpass(cmd);
 		}
 
 		switch (dst->format())
@@ -349,7 +350,7 @@ namespace vk
 
 		if (vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[6]++; vk::end_renderpass(cmd);
 		}
 
 		if (src != dst) [[likely]]
@@ -491,7 +492,7 @@ namespace vk
 
 		if (vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[7]++; vk::end_renderpass(cmd);
 		}
 
 		if (src != dst)
@@ -531,7 +532,7 @@ namespace vk
 
 		if (vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[8]++; vk::end_renderpass(cmd);
 		}
 
 		//TODO: Use an array of offsets/dimensions for mipmapped blits (mipmap count > 1) since subimages will have different dimensions
@@ -918,7 +919,7 @@ namespace vk
 		{
 			if (vk::is_renderpass_open(primary_cb))
 			{
-				vk::end_renderpass(primary_cb);
+				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[9]++; vk::end_renderpass(primary_cb);
 			}
 
 			pcmd = &primary_cb;

@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include "vkutils/query_pool.hpp"
 #include "VKHelpers.h"
 #include "VKQueryPool.h"
@@ -214,7 +215,7 @@ namespace vk
 			// TODO: Alternatively, use VK_EXT_host_pool_reset to reset an old pool with no references and swap that in
 			if (vk::is_renderpass_open(cmd))
 			{
-				vk::end_renderpass(cmd);
+				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[2]++; vk::end_renderpass(cmd);
 			}
 
 			reallocate_pool(cmd);

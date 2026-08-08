@@ -1,4 +1,5 @@
 #include "VKCompute.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include "VKHelpers.h"
 #include "VKRenderPass.h"
 #include "vkutils/buffer_object.h"
@@ -143,7 +144,7 @@ namespace vk
 		// CmdDispatch is outside renderpass scope only
 		if (vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[3]++; vk::end_renderpass(cmd);
 		}
 
 		load_program(cmd);

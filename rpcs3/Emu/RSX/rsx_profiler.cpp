@@ -18,6 +18,24 @@ namespace rsx::prof
 	u64 g_fifo_refill_bytes = 0;
 	u64 g_fifo_refill_stalls = 0;
 	u64 g_fifo_refill_stall_us = 0;
+	u64 g_render_passes = 0;
+	u64 g_mprotect_calls = 0;
+	u64 g_mprotect_bytes = 0;
+	u64 g_access_violations = 0;
+	u64 g_rp_sites[rp_site_count] = {};
+	const char* g_rp_site_names[rp_site_count] = {
+		"Draw:1044",
+		"Draw:1093",
+		"QueryPool:217",
+		"Compute:146",
+		"Texture:60",
+		"Texture:225",
+		"Texture:352",
+		"Texture:494",
+		"Texture:534",
+		"Texture:921",
+		
+	};
 	u64 g_flush_sites[flush_site_count] = {};
 	const char* g_flush_site_names[flush_site_count] = {
 		"GSR:996",
@@ -185,7 +203,26 @@ namespace rsx::prof
 					fmt::append(drains, "%s%s %.2f", drains.empty() ? "" : ", ",
 						g_flush_site_names[i], static_cast<double>(g_flush_sites[i]) / frames);
 				}
-				fmt::append(report, "\n\tdrains/frame    %s", drains.empty() ? "none" : drains);
+				fmt::append(report, "\n\tpage protect    %.1f mprotect/frame, %.2f MB, %.1f faults/frame",
+				static_cast<double>(g_mprotect_calls) / frames,
+				static_cast<double>(g_mprotect_bytes) / 1048576.0 / frames,
+				static_cast<double>(g_access_violations) / frames);
+
+			fmt::append(report, "\n\trender passes   %.1f/frame",
+				static_cast<double>(g_render_passes) / frames);
+
+			{
+				std::string sites;
+				for (u32 i = 0; i < rp_site_count; i++)
+				{
+					if (!g_rp_sites[i]) continue;
+					fmt::append(sites, "%s%s %.1f", sites.empty() ? "" : ", ",
+						g_rp_site_names[i], static_cast<double>(g_rp_sites[i]) / frames);
+				}
+				fmt::append(report, "\n\trp closes/frame %s", sites.empty() ? "none" : sites);
+			}
+
+			fmt::append(report, "\n\tdrains/frame    %s", drains.empty() ? "none" : drains);
 			}
 
 			fmt::append(report, "\n\tFIFO stalls     %.1f/frame, %.3f ms/frame spinning",
@@ -203,6 +240,11 @@ namespace rsx::prof
 		g_fifo_refill_bytes = 0;
 		g_fifo_refill_stalls = 0;
 		g_fifo_refill_stall_us = 0;
+		g_render_passes = 0;
+		g_mprotect_calls = 0;
+		g_mprotect_bytes = 0;
+		g_access_violations = 0;
+		for (auto& c : g_rp_sites) c = 0;
 		for (auto& c : g_flush_sites) c = 0;
 
 		g_acc = {};
