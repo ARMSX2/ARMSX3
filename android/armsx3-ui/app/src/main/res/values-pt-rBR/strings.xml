@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ARMSX3</string>
+    <string name="unexpected_error">Unexpected error</string>
+    <string name="legacy_file">Arquivo</string>
+    <string name="legacy_save">Salvar</string>
+    <string name="legacy_load">Carregar</string>
+    <string name="legacy_select">Selecionar</string>
+    <string name="legacy_start">Iniciar</string>
+</resources>

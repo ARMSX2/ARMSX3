@@ -267,7 +267,13 @@ void gui_application::SwitchTranslator(const QString& language_code)
 	m_qt_translators.clear();
 
 	const QString default_code = QLocale(QLocale::English).bcp47Name();
-	const QString lang_path = QLibraryInfo::path(QLibraryInfo::TranslationsPath) + QStringLiteral("/");
+	QString lang_path = QLibraryInfo::path(QLibraryInfo::TranslationsPath) + QStringLiteral("/");
+	const QString local_lang_path = applicationDirPath() + QStringLiteral("/translations/");
+	if (!QFileInfo(lang_path + QStringLiteral("rpcs3_%1.qm").arg(language_code)).isFile()
+		&& QFileInfo(local_lang_path + QStringLiteral("rpcs3_%1.qm").arg(language_code)).isFile())
+	{
+		lang_path = local_lang_path;
+	}
 
 	// Load qt translation files
 	const QDir dir(lang_path);
@@ -318,11 +324,8 @@ void gui_application::SwitchTranslator(const QString& language_code)
 	}
 	else if (language_code != default_code)
 	{
-		// show error, but ignore default case "en", since it is handled in source code
-		gui_log.error("No translation file found in: '%s'", file_path);
-
-		// reset current language to default "en"
-		set_language_code(default_code);
+		// Keep the selected locale and use the English source strings as fallback.
+		gui_log.notice("No translation file found in '%s'; using English source strings", file_path);
 	}
 }
 
@@ -368,7 +371,13 @@ QStringList gui_application::GetAvailableLanguageCodes()
 {
 	QStringList language_codes;
 
-	const QString language_path = QLibraryInfo::path(QLibraryInfo::TranslationsPath);
+	QString language_path = QLibraryInfo::path(QLibraryInfo::TranslationsPath);
+	const QString local_language_path = applicationDirPath() + QStringLiteral("/translations");
+	if (QDir(language_path).entryList(QStringList("rpcs3_*.qm"), QDir::Files | QDir::Readable).empty()
+		&& QDir(local_language_path).exists())
+	{
+		language_path = local_language_path;
+	}
 	gui_log.notice("Checking languages in '%s'", language_path);
 
 	if (QFileInfo(language_path).isDir())
@@ -396,6 +405,19 @@ QStringList gui_application::GetAvailableLanguageCodes()
 	else
 	{
 		gui_log.error("Language dir not found: '%s'", language_path);
+	}
+
+	QFile language_list(applicationDirPath() + QStringLiteral("/translations/languages.txt"));
+	if (language_list.open(QIODevice::ReadOnly | QIODevice::Text))
+	{
+		while (!language_list.atEnd())
+		{
+			const QString language_code = QString::fromUtf8(language_list.readLine()).trimmed();
+			if (!language_code.isEmpty() && !language_code.startsWith(QLatin1Char('#')) && !language_codes.contains(language_code))
+			{
+				language_codes << language_code;
+			}
+		}
 	}
 
 	return language_codes;

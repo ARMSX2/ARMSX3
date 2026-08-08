@@ -56,6 +56,11 @@
 /bin/GuiConfigs/*.dat
 /bin/GuiConfigs/*.dat.*
 
+# Bundled RPCS3 interface translations
+!/bin/translations/
+!/bin/translations/*.qm
+!/bin/translations/languages.txt
+
 # Visual Studio Files
 .vs/*
 .vscode/*

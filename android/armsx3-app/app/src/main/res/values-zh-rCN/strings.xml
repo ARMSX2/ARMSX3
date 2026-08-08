@@ -1,5 +1,6 @@
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version='1.0' encoding='utf-8'?>
 <resources>
+    <string name="app_name" translatable="false">ARMSX3</string>
     <string name="add">添加</string>
     <string name="close">关闭</string>
     <string name="error">错误</string>
@@ -7,7 +8,10 @@
     <string name="import_">导入</string>
     <string name="none">无</string>
     <string name="reset">重置</string>
-
+    <string name="boot_game">Boot Game</string>
+    <string name="install_game">Install Game</string>
+    <string name="install_firmware">Install Firmware</string>
+    <string name="run_sample">Run Sample</string>
     <!-- AppNavHost -->
     <string name="about">关于</string>
     <string name="copied_to_clipboard">已复制到剪切板！</string>
@@ -18,10 +22,8 @@
     <string name="rpcsx_download_channel">RPCSX 下载渠道</string>
     <string name="settings">设置</string>
     <string name="ui_update_channel">RPCSX UI Android 更新渠道</string>
-
     <!-- FileUtil -->
     <string name="installing_dir">正在安装目录</string>
-
     <!-- GamesScreen -->
     <string name="current_and_new_version">当前版本：%1$s\n新版本：%2$s</string>
     <string name="deleting_game">正在删除游戏</string>
@@ -47,7 +49,6 @@
     <string name="update">更新</string>
     <string name="wait_until_firmware_install">请等待固件安装成功后再继续。</string>
     <string name="wait_until_game_compile">请等待游戏编译后再继续。</string>
-
     <!-- GpuDriversScreen -->
     <string name="choose">选择</string>
     <string name="download">下载</string>
@@ -59,12 +60,10 @@
     <string name="installing">正在安装…</string>
     <string name="please_wait">请稍候</string>
     <string name="select_driver">选择一个 GPU 驱动程序</string>
-
     <!-- MainActivity -->
     <string name="failed_to_load_new_version">加载新版本失败，之前的版本已恢复。</string>
     <string name="failed_to_update_rpcsx">更新 RPCSX 失败</string>
     <string name="installation_progress">安装进度</string>
-
     <!-- OverlayEditActivity -->
     <string name="ask_if_reset_button">重置 %1$s？</string>
     <string name="ask_if_reset_button_description">您确定要重置 %1$s 吗？</string>
@@ -72,18 +71,14 @@
     <string name="editing">正在编辑</string>
     <string name="opacity">不透明度</string>
     <string name="scale">大小比例</string>
-
     <!-- PrecompilerService -->
     <string name="firmware_installation">固件安装</string>
     <string name="package_installation">包安装</string>
-
     <!-- RPCSXActivity -->
     <string name="error_with_msg">错误：%1$s</string>
     <string name="failed_to_boot">启动失败</string>
-
     <!-- RpcsxUpdater -->
     <string name="restart_ui_to_apply_change">重启 RPCSX UI 以应用更改</string>
-
     <!-- SettingsScreen -->
     <string name="active_user">当前用户</string>
     <string name="advanced_settings">高级设置</string>
@@ -108,26 +103,24 @@
     <string name="no_activity_to_handle_action">未找到处理此操作的活动</string>
     <string name="perform_input">执行输入</string>
     <string name="reset_setting">重置设置</string>
+    <string name="search">Search</string>
     <string name="share_log">分享日志</string>
     <string name="share_log_description">分享 RPCSX 的日志文件以帮助调试问题</string>
     <string name="users">用户</string>
     <string name="view_internal_dir">查看内部目录</string>
     <string name="view_internal_dir_description">在文件管理器中打开 RPCSX 的内部目录</string>
-
     <!-- SliderPreference -->
     <string name="slider_value_supporting">值必须是 %2$.0f 至 %3$.0f 范围内步长 %1$d 的节点</string>
     <string name="value">值</string>
-
     <!-- UiUpdater -->
     <string name="failed_to_update_ui">更新 UI 失败</string>
     <string name="permission_required">需要权限</string>
     <string name="permission_required_description">授予从本来源安装的权限以更新。</string>
-
     <!-- UpdateChannelListScreen -->
     <string name="enter_repo_url">输入仓库 URL</string>
     <string name="select_repo">选择仓库</string>
-
     <!-- UsersScreen -->
     <string name="ask_if_stop_emu">停止模拟器？</string>
     <string name="ask_if_stop_emu_description">为了更换用户，您必须先停止模拟器。\n\n要停止模拟器吗？</string>
+    <string name="home_menu">Home menu</string>
 </resources>

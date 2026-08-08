@@ -82,6 +82,24 @@ app/src/main/cpp/discord_sdk/ if you want that feature. The build skips it
 otherwise.
 
 Running it needs PS3 firmware, which is not included. 
+
+Translations
+------------
+
+ARMSX3 has localization scaffolding for the same 43 locales exposed by ARMSX2.
+Brazilian Portuguese and the pre-existing Chinese catalog contain translations;
+catalogs which have not been translated yet fall back to the English source
+text. See [TRANSLATIONS.md](TRANSLATIONS.md) for the locale list, file layout,
+translator workflow and maintenance commands.
+
+Synchronize every Android and Qt catalog after adding or changing user-facing
+text with:
+
+    python3 tools/update_translations.py
+
+The Android-only workflow has no external dependencies. Updating Qt catalogs
+also requires the Qt 6 Linguist tools (`lupdate` and `lrelease`).
+
 License
 -------
 
