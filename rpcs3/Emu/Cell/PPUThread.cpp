@@ -3464,6 +3464,30 @@ struct jit_core_allocator
 	// Initialize global semaphore with the max number of threads
 	::semaphore<0x7fff> sem{std::max<s16>(thread_count, 1)};
 
+#ifdef __ANDROID__
+	// Held around a single module's compilation when memory is short, so that workers fall
+	// back to one at a time instead of all of them holding an LLVM context at once.
+	//
+	// thread_count above is decided ONCE, from a reading taken before the emulator has
+	// mapped the PS3 address space or the game has loaded a texture. On a cold cache that
+	// reading goes badly stale: measured on Arkham City, a first boot peaked at 5228MB
+	// against 2636MB once the modules were cached, and the growth was RssAnon, which is the
+	// compilers rather than the GPU caches. By then the worker count is fixed and cannot
+	// respond.
+	//
+	// Rechecking at the point of use is what makes this adaptive. With headroom nothing is
+	// serialised and there is no cost; only under pressure does it become one at a time.
+	std::mutex low_memory_mutex;
+
+	// Enough left for the emulator plus a single worker. Below that, running two workers is
+	// how the process gets killed rather than how it finishes sooner.
+	static bool memory_is_tight()
+	{
+		const u64 avail = utils::get_avail_memory();
+		return avail != 0 && avail < (2048ull * 1024 * 1024);
+	}
+#endif
+
 	static s16 limit()
 	{
 		const s32 by_cores = std::min<s32>(0x7fff, utils::get_thread_count());
@@ -5436,6 +5460,21 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 					ppu_log.warning("LLVM: Compiling module %s%s", cache_path, obj_name);
 
 					{
+#ifdef __ANDROID__
+						// Compile alone while memory is short. Checked per module rather
+						// than once at startup, because that is exactly the reading that
+						// goes stale: workers are sized before the game has loaded.
+						//
+						// Scoped to the compile and nothing else, so a worker waiting here
+						// is never holding an LLVM context while it waits.
+						std::unique_lock<std::mutex> serialise_compiles;
+
+						if (jit_core_allocator::memory_is_tight())
+						{
+							serialise_compiles = std::unique_lock{g_fxo->get<jit_core_allocator>().low_memory_mutex};
+						}
+#endif
+
 						// Use another JIT instance
 						jit_compiler jit2({}, g_cfg.core.llvm_cpu.to_string(), 0x1);
 						ppu_initialize2(jit2, part, cache_path, obj_name);
