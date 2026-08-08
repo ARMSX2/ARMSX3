@@ -52,8 +52,8 @@ arguments such as `%1$s`, `%2$d`, and line breaks such as `\n` intact.
 
 The main Compose interface also provides an in-app live language picker. Its
 catalogs are stored in `android/armsx3-ui/app/src/main/assets/i18n/<locale>.json`
-and its generated locale metadata is in `GeneratedLanguages.kt`. To add an
-idioma, add its metadata to `translations/languages.json` and run the update
+and its generated locale metadata is in `GeneratedLanguages.kt`. To add a
+language, add its metadata to `translations/languages.json` and run the update
 script. It generates the Kotlin picker list, the Qt locale list, Android resource
 directory and JSON catalog automatically. Missing JSON keys fall back to the
 canonical English map embedded in `I18n.kt`, so partially translated languages
