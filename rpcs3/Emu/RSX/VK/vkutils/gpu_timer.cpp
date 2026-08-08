@@ -16,6 +16,7 @@ namespace vk
 		case region::readback_dma: return "GPU readback";
 		case region::blit: return "GPU blit";
 		case region::upload: return "GPU upload";
+		case region::draw: return "GPU draw";
 		default: return "?";
 		}
 	}
@@ -113,10 +114,16 @@ namespace vk
 
 		const u32 q = index_of(m_write_slot, r, state.events[idx], false);
 
-		// Reset immediately before writing, in the same command buffer, so ordering holds
-		// even when a region is recorded into a secondary buffer submitted out of step with
-		// the primary one.
-		vkCmdResetQueryPool(cmd, *m_pool, q, 2);
+		// Reset the slot's whole query range once, here, where no render pass can be open.
+		// Doing it per timestamp recorded vkCmdResetQueryPool inside a render pass for the
+		// blit and upload regions, which is invalid: it did not fail cleanly, it corrupted
+		// rendering and hung the game on exit.
+		if (r == region::frame && state.needs_reset)
+		{
+			vkCmdResetQueryPool(cmd, *m_pool, m_write_slot * queries_per_slot, queries_per_slot);
+			state.needs_reset = false;
+		}
+
 		vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *m_pool, q);
 	}
 
@@ -219,7 +226,9 @@ namespace vk
 			std::array<u64, 2> probe{};
 			const u32 frame_q = index_of(s, region::frame, 0, false);
 
-			if (!state.events[static_cast<u32>(region::frame)])
+			// No frame region means the slot was never reset this cycle, so its queries hold
+			// whatever the previous user left behind.
+			if (!state.events[static_cast<u32>(region::frame)] || state.needs_reset)
 			{
 				continue;
 			}

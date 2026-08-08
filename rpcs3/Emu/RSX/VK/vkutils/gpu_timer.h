@@ -38,6 +38,7 @@ namespace vk
 			readback_dma, // Copying render targets back to guest memory
 			blit,         // Scaled copies and resolves
 			upload,       // Texture uploads
+			draw,         // Inside a render pass, i.e. actually drawing the game
 
 			count
 		};
@@ -77,7 +78,7 @@ namespace vk
 		// cost in total, so each region gets room for several timed events per frame rather
 		// than one. Events past this are not timed; the overflow is reported so a truncated
 		// frame is never mistaken for a cheap one.
-		static constexpr u32 max_events = 32;
+		static constexpr u32 max_events = 96;
 
 		static constexpr u32 queries_per_slot = region_count * max_events * 2;
 
@@ -100,6 +101,13 @@ namespace vk
 			std::array<u32, region_count> events{};
 			std::array<u32, region_count> dropped{};
 			bool in_flight = false;
+
+			// Queries must be reset before reuse, but vkCmdResetQueryPool is illegal inside
+			// a render pass, and regions such as blit and upload are reached with one open.
+			// So the reset is hoisted: done once for the whole slot at the frame region's
+			// begin, which is recorded at command buffer start where no pass can be active.
+			// Everything else only writes timestamps, which is legal anywhere.
+			bool needs_reset = true;
 		};
 
 		// Open regions are tracked here rather than on the slot, and remember which slot

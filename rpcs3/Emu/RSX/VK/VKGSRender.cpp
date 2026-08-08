@@ -2754,6 +2754,8 @@ bool VKGSRender::scaled_image_from_memory(const rsx::blit_src_info& src, const r
 	if (swapchain_unavailable)
 		return false;
 
+	vk::gpu_scope blit_gpu_scope(*m_current_command_buffer, vk::gpu_timer::region::blit);
+
 	if (m_texture_cache.blit(src, dst, interpolate, m_rtts, *m_current_command_buffer))
 	{
 		m_samplers_dirty.store(true);

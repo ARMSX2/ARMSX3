@@ -1,4 +1,5 @@
 #include "util/sysinfo.hpp"
+#include <cstdio>
 #include "Utilities/StrFmt.h"
 #include "Utilities/File.h"
 #include "Emu/vfs_config.h"
@@ -1104,6 +1105,30 @@ u64 utils::get_total_memory()
 #else
 	return ::sysconf(_SC_PHYS_PAGES) * ::sysconf(_SC_PAGE_SIZE);
 #endif
+}
+
+u64 utils::get_avail_memory()
+{
+#ifdef __linux__
+	// MemAvailable is the kernel's own estimate of what can be handed out without
+	// swapping, which is the number that matters here; MemFree alone understates it
+	// badly because it ignores reclaimable page cache.
+	if (fs::file meminfo{"/proc/meminfo"})
+	{
+		const std::string data = meminfo.to_string();
+
+		if (const usz pos = data.find("MemAvailable:"); pos != umax)
+		{
+			u64 kb = 0;
+			if (std::sscanf(data.c_str() + pos, "MemAvailable: %llu kB", reinterpret_cast<unsigned long long*>(&kb)) == 1)
+			{
+				return kb * 1024;
+			}
+		}
+	}
+#endif
+
+	return 0;
 }
 
 u32 utils::get_thread_count()

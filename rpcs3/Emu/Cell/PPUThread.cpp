@@ -3483,9 +3483,28 @@ struct jit_core_allocator
 		// and its caches, so this is deliberately conservative. A user who wants more
 		// can still raise Max LLVM Compile Threads; this only caps the automatic
 		// "use every core" default.
+		// Budgeted against free memory where the platform reports it, not just total.
+		//
+		// One worker per 1.5GB of total RAM was still too many. A 7.3GB device sat at
+		// 76MB free with the emulator resident, and clearing the shader cache forces every
+		// module to recompile at once: four workers died in scudo with "internal map
+		// failure (NO MEMORY) requesting 4KB" inside RuntimeDyldELF relocation processing,
+		// aborting the process outright.
+		//
+		// Total memory says nothing about what is actually available on a phone that is
+		// also holding the launcher, the browser and whatever else. Where meminfo can be
+		// read, size against that and keep a 1.5GB floor for the emulator itself; fall back
+		// to a more conservative slice of total otherwise.
+		if (const u64 avail_mem = utils::get_avail_memory())
+		{
+			const u64 spare = (avail_mem > (1536ull * 1024 * 1024)) ? avail_mem - (1536ull * 1024 * 1024) : 0;
+			const s32 by_memory = static_cast<s32>(spare / (1024ull * 1024 * 1024));
+			return static_cast<s16>(std::max<s32>(1, std::min<s32>(by_cores, by_memory)));
+		}
+
 		if (const u64 total_mem = utils::get_total_memory())
 		{
-			const s32 by_memory = static_cast<s32>(total_mem / (1536ull * 1024 * 1024));
+			const s32 by_memory = static_cast<s32>(total_mem / (3072ull * 1024 * 1024));
 			return static_cast<s16>(std::max<s32>(1, std::min<s32>(by_cores, by_memory)));
 		}
 #endif
