@@ -1207,6 +1207,19 @@ data class Settings(
         // USB devices, so drive the device (re)creation explicitly. No-op before
         // the VM exists — the persisted Type above handles the cold boot.
         NativeApp.usbSetKeyboardEnabled(0, usbKeyboard)
+        // Vblank at the PS3's own rate, pushed on every apply rather than left to a
+        // migration.
+        //
+        // A PS3 runs a 60Hz vblank and every game was written against it. The stored value
+        // was 120, which asks the emulator for twice the frames the hardware ever produced:
+        // twice the RSX command volume, twice the vertex upload, twice the GPU work, on a
+        // handheld. Recording it as a core override did not hold, so it goes through the
+        // curated push like any other default.
+        //
+        // A deliberate change in All Core Settings still wins, because CoreSettingOverrides
+        // replays immediately below this.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Vblank Rate", "60") }
+
         // Settings a specific title needs in order to run at all, then the user's own core
         // edits on top. Order matters: game defaults are a floor, an explicit user choice
         // still wins over them, and both have to land after the curated push above.

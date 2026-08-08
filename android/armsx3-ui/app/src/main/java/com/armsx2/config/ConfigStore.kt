@@ -62,7 +62,8 @@ object ConfigStore {
     private const val KEY_XFLOAT_BACK_TO_APPROX = "config.migrated.xfloatBackToApprox"
     private const val KEY_PRECISE_SPU_OFF = "config.migrated.preciseSpuVerifyOff"
     private const val KEY_ATOMIC_DMA_OFF = "config.migrated.atomicDmaStoresOff"
-    private const val KEY_VBLANK_60 = "config.migrated.vblankRate60"
+    // Bumped: the first pass recorded only Vblank Rate, which did not hold on its own.
+    private const val KEY_VBLANK_60 = "config.migrated.frameCap60"
     private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
@@ -212,6 +213,11 @@ object ConfigStore {
         // survives the settings push on every boot and stays changeable afterwards.
         if (!MainActivityRuntime.prefs.getBoolean(KEY_VBLANK_60, false)) {
             runCatching { CoreSettingOverrides.record("Video@@Vblank Rate", "60") }
+            // Frame limit as well as Vblank Rate. Vblank alone did not hold: the override is
+            // stored and the two beside it apply, yet the live value came back as 120. Frame
+            // limit is the dedicated cap and does not depend on the vblank path at all, so
+            // whichever of the two takes, the result is 60.
+            runCatching { CoreSettingOverrides.record("Video@@Frame limit", "60") }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_VBLANK_60, true) }
         }
 

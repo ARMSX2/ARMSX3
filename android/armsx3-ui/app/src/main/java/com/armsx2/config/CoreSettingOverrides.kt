@@ -60,7 +60,11 @@ object CoreSettingOverrides {
         runCatching { RPCSX.instance.settingsBeginBatch() }
         try {
             overrides.forEach { (path, value) ->
-                runCatching { RPCSX.instance.settingsSet(path, value) }
+                // Report per setting rather than assuming. A stored override that silently
+                // fails to apply looks identical to one that was never recorded, which is
+                // exactly the confusion Vblank Rate caused.
+                val ok = runCatching { RPCSX.instance.settingsSet(path, value) }.getOrDefault(false)
+                android.util.Log.i("ARMSX3-Override", "replay $path = $value -> $ok")
             }
         } finally {
             runCatching { RPCSX.instance.settingsEndBatch() }
