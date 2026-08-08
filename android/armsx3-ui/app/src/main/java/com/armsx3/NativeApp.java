@@ -345,10 +345,25 @@ public final class NativeApp {
     /** [MAPPED] -> Video@@Enable Frame Skip + Consecutive Frames To Skip */
     public static void setFrameSkip(int skip) { Rpcs3Settings.INSTANCE.setFrameSkip(skip); }
 
-    /** [MAPPED] -> Video@@Vblank Rate */
-    public static void setDisplayRefreshRate(float hz) {
-        Rpcs3Settings.INSTANCE.setVblankRate(Math.round(hz));
-    }
+    /**
+     * The HOST PANEL's refresh rate. Deliberately dropped.
+     *
+     * This used to write it to Video@@Vblank Rate, which is a different thing entirely:
+     * that is the frequency of the emulated console's vblank, and a PS3 runs 60Hz no
+     * matter what display is attached. On a 120Hz handheld the panel rate went in as the
+     * console rate and the emulator was asked to produce 120 frames a second, twice the
+     * RSX command volume and twice the GPU work, for frames no PS3 game was written to
+     * produce. Frame limit Auto follows vblank, so the 60 cap went with it.
+     *
+     * It also could not be corrected from settings: EmulationSurface reports the panel
+     * rate on every surfaceChanged, which is after ApplySettings on boot and again on
+     * every rotation and resume, so it overwrote the pushed 60 every time.
+     *
+     * Nothing is lost by dropping it. RPCS3 reads the host rate itself through
+     * get_display_refresh_rate() and uses it for Frame limit "Display"; it never wanted
+     * to be told.
+     */
+    public static void setDisplayRefreshRate(float hz) { Unsupported.note("setDisplayRefreshRate"); }
 
     /** [MAPPED] emulated clock speed -> Core@@Clocks scale (10..3000 %) */
     public static void setNominalSpeed(int percent) {

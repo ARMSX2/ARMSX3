@@ -44,6 +44,16 @@ object CoreSettingOverrides {
 
     fun clear() = MainActivityRuntime.prefs.edit { remove(KEY) }
 
+    /** Drop recorded edits by path. For nodes a build no longer has, or no longer wants set. */
+    fun forget(vararg paths: String) {
+        val current = load()
+        if (paths.none { it in current }) return
+
+        val json = JSONObject()
+        current.filterKeys { it !in paths }.forEach { (k, v) -> json.put(k, v) }
+        MainActivityRuntime.prefs.edit { putString(KEY, json.toString()) }
+    }
+
     fun count(): Int = load().size
 
     /**

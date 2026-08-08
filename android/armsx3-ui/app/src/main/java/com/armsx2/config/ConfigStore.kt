@@ -64,6 +64,8 @@ object ConfigStore {
     private const val KEY_ATOMIC_DMA_OFF = "config.migrated.atomicDmaStoresOff"
     // Bumped: the first pass recorded only Vblank Rate, which did not hold on its own.
     private const val KEY_VBLANK_60 = "config.migrated.frameCap60"
+    // Clears core overrides left behind by the profiling work.
+    private const val KEY_DIAG_OVERRIDES_PURGED = "config.migrated.diagOverridesPurged"
     private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
@@ -219,6 +221,23 @@ object ConfigStore {
             // whichever of the two takes, the result is 60.
             runCatching { CoreSettingOverrides.record("Video@@Frame limit", "60") }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_VBLANK_60, true) }
+        }
+
+        // Diagnostic settings that got recorded as core overrides during the profiling work
+        // and would otherwise follow people into a release build.
+        //
+        // RSX Profiler defaults to false and belongs that way: it is instrumentation, kept
+        // for the next investigation rather than for playing. Eager Surface Readback names a
+        // node this build no longer has at all, so replaying it only produces a failed set
+        // and a log line.
+        //
+        // An override is a record of a deliberate choice, so these are removed by path
+        // rather than by clearing the store, which would take the user's real edits with it.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_DIAG_OVERRIDES_PURGED, false)) {
+            runCatching {
+                CoreSettingOverrides.forget("Video@@RSX Profiler", "Video@@Eager Surface Readback")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_DIAG_OVERRIDES_PURGED, true) }
         }
 
         // Move anyone still on the old Approximate xfloat default onto Accurate.

@@ -1219,6 +1219,10 @@ data class Settings(
         // A deliberate change in All Core Settings still wins, because CoreSettingOverrides
         // replays immediately below this.
         runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Vblank Rate", "60") }
+        // And the cap itself. Frame limit Auto resolves to the vblank rate, so with the line
+        // above it would already be 60; setting it explicitly means the cap does not depend
+        // on the vblank path holding, which it did not. Enum node, so the value is quoted.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Frame limit", "\"60\"") }
 
         // Settings a specific title needs in order to run at all, then the user's own core
         // edits on top. Order matters: game defaults are a floor, an explicit user choice
