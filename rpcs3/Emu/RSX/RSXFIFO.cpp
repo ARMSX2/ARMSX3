@@ -120,7 +120,11 @@ namespace rsx
 				}
 
 				// Make mask of cache lines to fetch
-				u8 to_fetch = static_cast<u8>((1u << (m_cache_size / 128)) - 1);
+				// A full mask cannot be built by shifting, since 1u << 32 is undefined.
+				const u32 lines_to_fetch = m_cache_size / 128;
+				u32 to_fetch = (lines_to_fetch >= cache_line_count)
+					? ~0u
+					: ((1u << lines_to_fetch) - 1);
 
 				if (addr < put && put < m_cache_addr + m_cache_size)
 				{
@@ -145,7 +149,7 @@ namespace rsx
 				u32 bytes_read = 0;
 
 				// Find the next set bit after every iteration
-				for (int i = 0;; i = (std::countr_zero<u32>(std::rotl<u8>(to_fetch, 0 - i - 1)) + i + 1) % 8)
+				for (int i = 0;; i = (std::countr_zero<u32>(std::rotl<u32>(to_fetch, 0 - i - 1)) + i + 1) % cache_line_count)
 				{
 					// If a reservation is being updated, try to load another
 					const auto& res = vm::reservation_acquire(addr1 + i * 128);
@@ -181,6 +185,11 @@ namespace rsx
 						}
 
 						start_time = get_system_time();
+
+						if (rsx::prof::enabled()) [[unlikely]]
+						{
+							rsx::prof::g_fifo_refill_stalls++;
+						}
 					}
 
 					auto now = get_system_time();
@@ -207,8 +216,15 @@ namespace rsx
 
 					if (strict_fetch_ordering)
 					{
-						i = (i - 1) % 8;
+						i = (i - 1) % cache_line_count;
 					}
+				}
+
+				// start_time is only set once the refill has had to wait, so this charges
+				// exactly the spin and nothing else.
+				if (start_time && rsx::prof::enabled()) [[unlikely]]
+				{
+					rsx::prof::g_fifo_refill_stall_us += (get_system_time() - start_time);
 				}
 			}
 

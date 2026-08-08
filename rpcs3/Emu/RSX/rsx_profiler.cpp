@@ -14,6 +14,10 @@ namespace rsx::prof
 	bucket g_current = bucket::unclassified;
 	u64 g_last_switch = 0;
 	const void* g_owner_thread = nullptr;
+	u64 g_fifo_refills = 0;
+	u64 g_fifo_refill_bytes = 0;
+	u64 g_fifo_refill_stalls = 0;
+	u64 g_fifo_refill_stall_us = 0;
 
 	void bind_to_current_thread()
 	{
@@ -147,7 +151,23 @@ namespace rsx::prof
 				static_cast<double>(gap) * 100.0 / static_cast<double>(window));
 		}
 
+		if (g_fifo_refills)
+		{
+			fmt::append(report, "\n\tFIFO stalls     %.1f/frame, %.3f ms/frame spinning",
+				static_cast<double>(g_fifo_refill_stalls) / frames,
+				static_cast<double>(g_fifo_refill_stall_us) / 1000.0 / frames);
+
+			fmt::append(report, "\n\tFIFO cache      %.1f refills/frame, %.0f bytes each",
+				static_cast<double>(g_fifo_refills) / frames,
+				static_cast<double>(g_fifo_refill_bytes) / static_cast<double>(g_fifo_refills));
+		}
+
 		prof_log.success("%s", report);
+
+		g_fifo_refills = 0;
+		g_fifo_refill_bytes = 0;
+		g_fifo_refill_stalls = 0;
+		g_fifo_refill_stall_us = 0;
 
 		g_acc = {};
 		g_acc.window_start = now;

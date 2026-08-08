@@ -160,6 +160,26 @@ namespace rsx::prof
 		scope& operator=(const scope&) = delete;
 	};
 
+	/**
+	 * Ad-hoc counters, reported alongside the buckets.
+	 *
+	 * fetch_u32 refills the 1KB FIFO cache under a reservation lock, copying and then
+	 * re-comparing every 128-byte line, so a refill moves 256 bytes per line fetched. Serving
+	 * 256 commands that is negligible; once per command it is not. The refill also trims
+	 * itself to whatever the guest has actually written, so when RSX keeps pace with the
+	 * producer the cache can shrink to a few bytes and refill constantly. These say which of
+	 * those two worlds we are in.
+	 */
+	extern u64 g_fifo_refills;
+	extern u64 g_fifo_refill_bytes;
+
+	// Refills that could not take their data immediately and fell into the retry spin, plus
+	// the microseconds burned there. That spin is billed to the FIFO bucket rather than to
+	// idle, so without these there is no way to tell RSX doing work from RSX waiting on the
+	// guest to produce commands.
+	extern u64 g_fifo_refill_stalls;
+	extern u64 g_fifo_refill_stall_us;
+
 	/** Call once per frame from the RSX thread so the report can express per-frame cost. */
 	void tick_frame();
 

@@ -146,7 +146,17 @@ namespace rsx
 
 			u32 m_cache_addr = 0;
 			u32 m_cache_size = 0;
-			alignas(64) std::byte m_cache[8][128];
+			// 32 lines rather than 8.
+			//
+			// The refill's fixed cost -- read_put, the iotable lookup, the reservation lock
+			// and one reservation_acquire per line -- is paid once per refill regardless of
+			// how much it fetches. Measured on Minecraft at about 10us per refill against
+			// roughly 1us of actual copying, so nine tenths of it was that fixed cost, and
+			// a heavy scene took over 1200 refills per frame for 1.29MB of FIFO. Fetching
+			// 4KB at a time pays it a quarter as often for the same bytes moved.
+			static constexpr u32 cache_line_count = 32;
+
+			alignas(64) std::byte m_cache[cache_line_count][128];
 
 		public:
 			FIFO_control(rsx::thread* pctrl);
