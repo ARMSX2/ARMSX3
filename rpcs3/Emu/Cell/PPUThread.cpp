@@ -3497,8 +3497,23 @@ struct jit_core_allocator
 		// to a more conservative slice of total otherwise.
 		if (const u64 avail_mem = utils::get_avail_memory())
 		{
-			const u64 spare = (avail_mem > (1536ull * 1024 * 1024)) ? avail_mem - (1536ull * 1024 * 1024) : 0;
-			const s32 by_memory = static_cast<s32>(spare / (1024ull * 1024 * 1024));
+			// Reserve for the emulator first, then budget what is left per worker.
+			//
+			// Both numbers were too optimistic before. Skate 3 still aborted in
+			// llvm::report_bad_alloc_error with 4.6GB reported available, where the previous
+			// figures allowed three workers: a single large PPU module can take well over a
+			// gigabyte through MCJIT and relocation processing, and the reading is taken
+			// before the emulator has mapped the PS3 address space, so the memory counted
+			// here is partly already spoken for.
+			//
+			// 2GB reserved, 1.5GB per worker. On a 7GB phone with 4.6GB free that is one
+			// worker, which compiles more slowly but finishes; three was fast right up until
+			// it killed the process, and a user cannot boot the game at all in that state.
+			constexpr u64 emulator_reserve = 2048ull * 1024 * 1024;
+			constexpr u64 per_worker = 1536ull * 1024 * 1024;
+
+			const u64 spare = (avail_mem > emulator_reserve) ? avail_mem - emulator_reserve : 0;
+			const s32 by_memory = static_cast<s32>(spare / per_worker);
 			return static_cast<s16>(std::max<s32>(1, std::min<s32>(by_cores, by_memory)));
 		}
 
