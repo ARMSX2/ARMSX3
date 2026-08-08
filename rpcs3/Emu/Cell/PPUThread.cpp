@@ -4749,7 +4749,26 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 	// each additional split of JIT instance results in a downgraded version of around (100% / N-1th) - (100% / Nth) percent of instructions
 	// where N is the total amunt of JIT instances
 	// Subject to change
+#ifdef __ANDROID__
+	// Lowered here, because the memory this trades away is the difference between booting
+	// a large title and being killed partway through compiling it.
+	//
+	// The module part carrying jit_bounds also builds the symbol resolver, and that spans
+	// every function across its whole JIT instance, not just its own: one LLVM Function
+	// declaration and one constant-array entry each, then a relocation per entry through
+	// MCJIT. Batman: Arkham City analyses to roughly 457k functions, and at 100 modules per
+	// instance the first resolver covered all of them in a single module. It added 2.3GB in
+	// seventeen seconds on top of a 4GB baseline (RAM 4010MB -> 6323MB, log ending
+	// mid-compile with no tombstone) and the kernel took the process on a 7GB device. Every
+	// other module in that run reported between 2800 and 4900 functions.
+	//
+	// The resolver's cost is linear in the functions it spans, so a quarter of the group is
+	// a quarter of the peak. The cost is the disadvantage described above and nothing else:
+	// more instances means more branches unable to reach with a direct B.
+	constexpr u32 c_moudles_per_jit = 25;
+#else
 	constexpr u32 c_moudles_per_jit = 100;
+#endif
 
 	std::shared_ptr<std::pair<u32, u32>> local_jit_bounds = std::make_shared<std::pair<u32, u32>>(u32{umax}, 0);
 
