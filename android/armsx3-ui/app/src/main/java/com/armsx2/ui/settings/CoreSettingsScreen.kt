@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.armsx2.config.CoreSettingOverrides
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.ui.common.ArmsBackdrop
@@ -130,6 +131,9 @@ fun CoreSettingsScreen(onBack: () -> Unit) {
             else -> JSONObject.quote(raw)
         }
         runCatching { RPCSX.instance.settingsSet(setting.path, encoded) }
+        // Remember it, or applyTo will write the curated store back over this node the next
+        // time any setting changes or the next time a game boots.
+        runCatching { CoreSettingOverrides.record(setting.path, encoded) }
         revision++
     }
 

@@ -65,6 +65,8 @@ object ConfigStore {
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
     private const val KEY_TIMESTRETCH_OFF = "config.migrated.audioTimeStretchOff"
+    // Scaling Mode row changed meaning; a stored 0 used to resolve to Bilinear, now Nearest.
+    private const val KEY_CAS_MODE_BILINEAR = "config.migrated.casModeBilinear"
     // Mirror of the settings, written INTO the data folder so a later fresh install that
     // reuses the same folder can restore them (SharedPreferences don't survive uninstall).
     private const val BACKUP_FILENAME = "armsx2-settings.json"
@@ -115,6 +117,24 @@ object ConfigStore {
                 dirty = true
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_TIMESTRETCH_OFF, true) }
+        }
+
+        // The Scaling Mode row changed meaning, so a stored 0 has to move with it.
+        //
+        // casMode used to be read as PCSX2's CAS mode, where 0 meant "CAS off" and the mode
+        // then fell through to what IntegerScaling wrote, which was Bilinear. It is now the
+        // row's own index, where 0 means Nearest. Every existing save holds 0, so leaving it
+        // alone would silently move everyone from Bilinear to Nearest -- a visibly harder,
+        // more aliased image that nobody asked for.
+        //
+        // Safe to move all of them: until this change the row could not express Nearest at
+        // all (picking it asked for nothing), so a stored 0 never meant a deliberate choice.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_CAS_MODE_BILINEAR, false)) {
+            if (raw != null && parsed.casMode == 0) {
+                parsed = parsed.copy(casMode = 1)
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_CAS_MODE_BILINEAR, true) }
         }
 
         // Turn the scheduler on so the new big.LITTLE affinity mask applies.

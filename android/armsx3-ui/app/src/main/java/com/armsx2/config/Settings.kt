@@ -1195,6 +1195,11 @@ data class Settings(
         // USB devices, so drive the device (re)creation explicitly. No-op before
         // the VM exists — the persisted Type above handles the cold boot.
         NativeApp.usbSetKeyboardEnabled(0, usbKeyboard)
+        // Settings a specific title needs in order to run at all, then the user's own core
+        // edits on top. Order matters: game defaults are a floor, an explicit user choice
+        // still wins over them, and both have to land after the curated push above.
+        runCatching { GameDefaults.apply(MainActivityRuntime.currentGame.value?.serial) }
+        runCatching { CoreSettingOverrides.replay() }
         NativeApp.commitSettings()
     }
 

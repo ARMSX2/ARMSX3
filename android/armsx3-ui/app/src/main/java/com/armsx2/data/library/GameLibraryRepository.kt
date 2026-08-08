@@ -149,6 +149,23 @@ class GameLibraryRepository(private val context: Context) {
     }
 
     suspend fun scan(directories: List<String>): List<GameInfo> = withContext(Dispatchers.IO) {
+        // Seed the probe cache from the last scan before touching anything.
+        //
+        // probeDisc mounts the image into the emulator's GLOBAL vfs to read its PARAM.SFO,
+        // and discInfoCache only ever lived in memory on one repository instance, so every
+        // rescan re-mounted every disc from scratch. That is slow on a 7 GB image and it is
+        // the window in which a scan can collide with a boot or a teardown, which crashed
+        // the process inside vfs::mount.
+        //
+        // Everything the probe produces is already durable: the serial and title are in the
+        // library cache, and the icon is on disk under disc-icons. So a disc we have seen
+        // before never needs mounting again.
+        loadCached().games.forEach { game ->
+            val serial = game.serial?.takeIf { it.isNotBlank() } ?: return@forEach
+            val path = runCatching { game.uri.path }.getOrNull() ?: return@forEach
+            discInfoCache.putIfAbsent(path, DiscInfo(serial, game.title))
+        }
+
         val collected = linkedMapOf<String, GameInfo>()
         android.util.Log.i(ScanTag, "scan start: ${directories.size} dir(s), rawStorage=${canUseRawStorage()}")
         directories.forEach { rawUri ->

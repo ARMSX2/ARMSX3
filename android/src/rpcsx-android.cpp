@@ -75,6 +75,7 @@
 #include <functional>
 #include <iterator>
 #include <jni.h>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -2072,9 +2073,58 @@ extern "C" bool _rpcsx_collectGameInfo(JNIEnv *env, std::string_view rootDir,
   return true;
 }
 
-extern "C" void _rpcsx_shutdown() { Emu.Kill(); }
+// Serialises disc probing against everything that owns g_fxo: booting AND shutdown.
+//
+// probeDiscInfo mounts the image into the GLOBAL vfs to read its PARAM.SFO, and the library
+// scan runs it on a background thread. vfs::mount starts with g_fxo->need<vfs_manager>(),
+// so it is not just the mount table that has to be quiet, it is g_fxo itself.
+//
+// Closing a game calls Emu.Kill(), which resets g_fxo, and closing also returns to the
+// library, which starts a rescan. Those two overlap, and the probe aborted the process
+// inside vfs::mount. Booting another game immediately made it far more likely, which is
+// what "crashes if I open a new game within ~2s, fine after ~10s" actually was: waiting
+// let the teardown and the scan finish, not the boot.
+//
+// An Emu.IsStopped() check alone is not enough. It is a plain read, the state reaches
+// stopped before g_fxo teardown has finished, and a boot or kill can start right after it.
+static std::mutex g_vfs_probe_mutex;
+
+// Held so a probe cannot be inside vfs::mount while this resets g_fxo underneath it.
+extern "C" void _rpcsx_shutdown() {
+  std::lock_guard vfs_lock(g_vfs_probe_mutex);
+  Emu.Kill();
+}
 
 extern "C" int _rpcsx_boot(std::string_view path_) {
+  // Do not start a boot until the previous VM has actually finished stopping.
+  //
+  // BootGame's restore_on_no_boot path does ensure(IsStopped()) whenever the boot
+  // fails, so a failed boot entered while the emulator is still winding down aborts
+  // the process outright (System.cpp, "Verification failed (object: 0x0)"). That is
+  // the reported "close a game and immediately open another one crashes, waiting ten
+  // seconds is fine": teardown is asynchronous and nothing here waited for it.
+  //
+  // Kill() is idempotent and returns quickly when already stopped, so the common case
+  // costs one state read. The bound is generous because a real teardown has to join
+  // the RSX and SPU threads and flush caches; past it we boot anyway and let BootGame
+  // report a normal error rather than hanging the UI forever.
+  if (!Emu.IsStopped()) {
+    rpcsx_android.notice("boot: previous VM still running, stopping it first");
+    Emu.Kill();
+
+    for (int waited = 0; !Emu.IsStopped() && waited < 10000; waited += 20) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    if (!Emu.IsStopped()) {
+      rpcsx_android.error("boot: previous VM did not stop in time, booting anyway");
+    }
+  }
+
+  // Blocks until any in-flight disc probe has unmounted. Both mount into the same global
+  // vfs, and a scan racing a boot there aborts the process.
+  std::lock_guard vfs_lock(g_vfs_probe_mutex);
+
   Emu.SetForceBoot(true);
   std::string path = std::string(path_);
   while (path.ends_with('/')) {
@@ -2102,7 +2152,10 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
 extern "C" int _rpcsx_getState() {
   return static_cast<int>(Emu.GetStatus(false));
 }
-extern "C" void _rpcsx_kill() { Emu.Kill(); }
+extern "C" void _rpcsx_kill() {
+  std::lock_guard vfs_lock(g_vfs_probe_mutex);
+  Emu.Kill();
+}
 extern "C" void _rpcsx_resume() { Emu.Resume(); }
 
 extern "C" void _rpcsx_openHomeMenu() {
@@ -2323,6 +2376,15 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
   }
 
   std::string result = "{}";
+
+  // Held across the whole mount/read/unmount so a boot cannot mount underneath us.
+  std::lock_guard vfs_lock(g_vfs_probe_mutex);
+
+  // Re-checked under the lock: a boot may have started while we were waiting for it,
+  // and mounting into a live VM's vfs would shadow the disc it is running from.
+  if (!Emu.IsStopped()) {
+    return "{}";
+  }
 
   // unload_iso() on every exit: leaving the device mounted would shadow the
   // next boot's disc with whichever image was scanned last.
@@ -3524,11 +3586,28 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
   //
   // Scoped to the overlay nodes on purpose: applyTo() pushes ~200 settings at
   // boot and re-applying every overlay property 200 times would be pure waste.
+  //
+  // POSTED, not called here. Both of these walk the overlay display manager and end up in
+  // perf_metrics_overlay::update(), which touches RSX-owned state. This function runs on
+  // whichever thread called through JNI, so doing it inline raced the RSX thread and the
+  // teardown that Emu.Kill() performs. It aborted inside update() when a settings apply
+  // landed while a game was closing or starting, which is the reported "changing any
+  // setting in game crashes the app".
+  //
+  // CallFromMainThread is drained by the processor thread started in Rpcs3Bridge, so the
+  // work is serialised against the rest of the emulator's main-thread queue instead.
+  //
+  // Skipped entirely when stopped: there is no overlay to reset, and posting would only
+  // queue work against an emulator that is being torn down.
+  if (Emu.IsStopped()) {
+    return true;
+  }
+
   if (path.starts_with("Video@@Performance Overlay")) {
-    rsx::overlays::reset_performance_overlay();
+    Emu.CallFromMainThread([]() { rsx::overlays::reset_performance_overlay(); });
   } else if (path.starts_with("Video@@Debug overlay") ||
              path.starts_with("Miscellaneous@@Debug overlay")) {
-    rsx::overlays::reset_debug_overlay();
+    Emu.CallFromMainThread([]() { rsx::overlays::reset_debug_overlay(); });
   }
   return true;
 }
