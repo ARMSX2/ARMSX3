@@ -5,6 +5,7 @@
 #include "Emu/RSX/Overlays/overlay_manager.h"
 #include "Emu/RSX/Overlays/overlay_debug_overlay.h"
 #include "Emu/Cell/Modules/cellVideoOut.h"
+#include "Emu/RSX/rsx_profiler.h"
 
 #include "upscalers/bilinear_pass.hpp"
 #include "upscalers/fsr_pass.h"
@@ -615,6 +616,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	ensure(m_current_frame->swap_command_buffer == nullptr);
 
 	u64 timeout = m_swapchain->get_swap_image_count() <= 2? 0ull: 100000000ull;
+	rsx::prof::scope acquire_scope{rsx::prof::bucket::present_wait};
 	while (VkResult status = m_swapchain->acquire_next_swapchain_image(m_current_frame->acquire_signal_semaphore, timeout, &m_current_frame->present_image))
 	{
 		switch (status)

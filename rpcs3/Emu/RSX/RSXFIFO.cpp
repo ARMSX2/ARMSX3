@@ -8,6 +8,7 @@
 #include "Emu/Memory/vm_reservation.h"
 #include "Emu/Cell/lv2/sys_rsx.h"
 #include "NV47/HW/context.h"
+#include "rsx_profiler.h"
 
 #include "util/asm.hpp"
 
@@ -131,6 +132,12 @@ namespace rsx
 				const bool force_cache_fill = g_cfg.core.rsx_fifo_accuracy == rsx_fifo_mode::atomic_ordered;
 				const bool strict_fetch_ordering = g_cfg.core.rsx_fifo_accuracy >= rsx_fifo_mode::atomic_ordered;
 
+				if (rsx::prof::enabled()) [[unlikely]]
+				{
+					rsx::prof::g_fifo_refills++;
+					rsx::prof::g_fifo_refill_bytes += m_cache_size;
+				}
+
 				rsx::reservation_lock<true, 1> rsx_lock(addr1, m_cache_size, true);
 				const auto src = vm::_ptr<spu_rdata_t>(addr1);
 
@@ -184,7 +191,10 @@ namespace rsx
 							return {};
 						}
 
-						m_thread->cpu_wait({});
+						{
+							RSX_PROF_SCOPE(idle);
+							m_thread->cpu_wait({});
+						}
 
 						const auto then = std::exchange(now, get_system_time());
 						start_time = now;
@@ -641,6 +651,8 @@ namespace rsx
 
 	void thread::run_FIFO()
 	{
+		RSX_PROF_SCOPE(fifo_decode);
+
 		FIFO::register_pair command;
 		fifo_ctrl->read(command);
 		const auto cmd = command.reg;

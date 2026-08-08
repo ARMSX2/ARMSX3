@@ -7,6 +7,7 @@
 #include "shared.h"
 
 #include "Emu/Cell/timers.hpp"
+#include "Emu/RSX/rsx_profiler.h"
 
 #include "util/sysinfo.hpp"
 #include "util/asm.hpp"
@@ -561,6 +562,8 @@ namespace vk
 
 	VkResult wait_for_fence(fence* pFence, u64 timeout)
 	{
+		RSX_PROF_SCOPE(fence_wait);
+
 		pFence->wait_flush();
 
 		if (timeout)
@@ -588,6 +591,8 @@ namespace vk
 
 	VkResult wait_for_event(event* pEvent, u64 timeout)
 	{
+		RSX_PROF_SCOPE(fence_wait);
+
 		// Convert timeout to TSC cycles. Timeout accuracy isn't super-important, only fast response when event is signaled (within 10us if possible)
 		const u64 freq = utils::get_tsc_freq();
 

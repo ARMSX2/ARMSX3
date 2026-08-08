@@ -3,6 +3,7 @@
 #include "nv47_sync.hpp"
 
 #include "Emu/RSX/RSXThread.h"
+#include "Emu/RSX/rsx_profiler.h"
 
 #include "context_accessors.define.h"
 
@@ -88,6 +89,8 @@ namespace rsx
 				}
 
 				RSX(ctx)->on_semaphore_acquire_wait();
+
+				RSX_PROF_SCOPE(idle);
 
 				// Wait until the value changes or until 100us pass.
 				utils::spin_on_cacheline_once(atomic_sema, sema, 100);

@@ -10,6 +10,7 @@
 #include "NV47/HW/context.h"
 #include "Program/GLSLCommon.h"
 #include "rsx_methods.h"
+#include "rsx_profiler.h"
 
 #include "gcm_printing.h"
 #include "RSXDisAsm.h"
@@ -3204,6 +3205,11 @@ namespace rsx
 
 	void thread::on_frame_end(u32 buffer, bool forced)
 	{
+		// Cheap enough to re-read every frame, and being able to arm the profiler while a
+		// slowdown is already happening matters more here than saving a config lookup.
+		prof::set_enabled(g_cfg.video.rsx_profiler.get());
+		prof::tick_frame();
+
 		bool pause_emulator = false;
 
 		// MM sync. This is a pre-emptive operation, so we can use a deferred request.
@@ -3429,7 +3435,10 @@ namespace rsx
 				if (target_rsx_flip_time > time + 1000)
 				{
 					const auto delay_us = target_rsx_flip_time - time;
-					lv2_obj::wait_timeout(delay_us, nullptr, false);
+					{
+						RSX_PROF_SCOPE(idle);
+						lv2_obj::wait_timeout(delay_us, nullptr, false);
+					}
 					performance_counters.idle_time += delay_us;
 				}
 			}

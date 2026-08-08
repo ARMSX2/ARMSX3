@@ -574,6 +574,7 @@ target_sources(rpcs3_emu PRIVATE
     RSX/RSXThread.cpp
     RSX/RSXZCULL.cpp
     RSX/rsx_methods.cpp
+    RSX/rsx_profiler.cpp
     RSX/rsx_utils.cpp
     RSX/rsx_vertex_data.cpp
 )

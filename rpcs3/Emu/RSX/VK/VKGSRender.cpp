@@ -8,6 +8,7 @@
 #include "VKCommonPipelineLayout.h"
 #include "VKCompute.h"
 #include "VKGSRender.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include "VKHelpers.h"
 #include "VKRenderPass.h"
 #include "VKResourceManager.h"
@@ -923,6 +924,8 @@ VKGSRender::~VKGSRender()
 
 bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 {
+	RSX_PROF_SCOPE(texcache_lookup);
+
 	rsx::mm_flush(address);
 
 	vk::texture_cache::thrashed_set result;
@@ -1818,6 +1821,8 @@ void VKGSRender::do_local_task(rsx::FIFO::state state)
 
 bool VKGSRender::load_program()
 {
+	RSX_PROF_SCOPE(pipeline);
+
 	const auto shadermode = g_cfg.video.shadermode.get();
 
 	// TODO: EXT_dynamic_state should get rid of this sillyness soon (kd)
@@ -1986,6 +1991,8 @@ bool VKGSRender::load_program()
 
 void VKGSRender::load_program_env()
 {
+	RSX_PROF_SCOPE(descriptors);
+
 	if (!m_program)
 	{
 		fmt::throw_exception("Unreachable right now");
@@ -2368,6 +2375,8 @@ void VKGSRender::init_buffers(rsx::framebuffer_creation_context context, bool)
 
 void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore wait_semaphore, VkSemaphore signal_semaphore, VkPipelineStageFlags pipeline_stage_flags)
 {
+	RSX_PROF_SCOPE(submit);
+
 	ensure(!m_queue_status.test_and_set(flush_queue_state::flushing));
 
 	// Host MM sync before executing anything on the GPU
@@ -2474,6 +2483,8 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 
 void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)
 {
+	RSX_PROF_SCOPE(rt_prep);
+
 	const bool clipped_scissor = (context == rsx::framebuffer_creation_context::context_draw);
 	if (m_current_framebuffer_context == context && !m_graphics_state.test(rsx::rtt_config_dirty) && m_draw_fbo)
 	{
@@ -2731,6 +2742,8 @@ void VKGSRender::renderctl(u32 request_code, void* args)
 
 bool VKGSRender::scaled_image_from_memory(const rsx::blit_src_info& src, const rsx::blit_dst_info& dst, bool interpolate)
 {
+	RSX_PROF_SCOPE(blit_resolve);
+
 	if (swapchain_unavailable)
 		return false;
 
