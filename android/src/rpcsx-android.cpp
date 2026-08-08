@@ -2087,27 +2087,37 @@ extern "C" bool _rpcsx_collectGameInfo(JNIEnv *env, std::string_view rootDir,
 //
 // An Emu.IsStopped() check alone is not enough. It is a plain read, the state reaches
 // stopped before g_fxo teardown has finished, and a boot or kill can start right after it.
-static std::mutex g_vfs_probe_mutex;
+static std::mutex g_emu_lifecycle_mutex;
 
 // Held so a probe cannot be inside vfs::mount while this resets g_fxo underneath it.
 extern "C" void _rpcsx_shutdown() {
-  std::lock_guard vfs_lock(g_vfs_probe_mutex);
+  std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
   Emu.Kill();
 }
 
 extern "C" int _rpcsx_boot(std::string_view path_) {
-  // Do not start a boot until the previous VM has actually finished stopping.
+  // Taken FIRST, before the Kill below, and held across the whole boot.
   //
-  // BootGame's restore_on_no_boot path does ensure(IsStopped()) whenever the boot
-  // fails, so a failed boot entered while the emulator is still winding down aborts
-  // the process outright (System.cpp, "Verification failed (object: 0x0)"). That is
-  // the reported "close a game and immediately open another one crashes, waiting ten
-  // seconds is fine": teardown is asynchronous and nothing here waited for it.
+  // Emu.Kill() spawns an "Emulation Join Thread" that joins every emulator thread. It is
+  // not safe to have two of those in flight: they end up joining each other and neither
+  // finishes, which pins the emulator in a non-stopped state forever. Observed on device
+  // as FOUR live join threads plus six leaked AudioTrack threads after a few close-then-
+  // boot cycles, with the join thread logging "Thread [Emulation Join Thread] is too
+  // sleepy" against itself.
   //
-  // Kill() is idempotent and returns quickly when already stopped, so the common case
-  // costs one state read. The bound is generous because a real teardown has to join
-  // the RSX and SPU threads and flush caches; past it we boot anyway and let BootGame
-  // report a normal error rather than hanging the UI forever.
+  // This used to Kill() before taking the lock, so a Close (which calls _rpcsx_kill) and
+  // the boot that followed it each started their own teardown and deadlocked. The pile-up
+  // is what left the emulator never reaching stopped, and every later boot then failed and
+  // bounced the user back to the library.
+  std::lock_guard emu_lock(g_emu_lifecycle_mutex);
+
+  // BootGame's restore_on_no_boot path does ensure(IsStopped()) whenever the boot fails,
+  // so entering it while the emulator is still winding down aborts the process outright
+  // (System.cpp, "Verification failed (object: 0x0)").
+  //
+  // Kill() is idempotent and returns quickly when already stopped. The bound is generous
+  // because a real teardown joins the RSX and SPU threads and flushes caches; past it we
+  // boot anyway and let BootGame report a normal error rather than hanging the UI.
   if (!Emu.IsStopped()) {
     rpcsx_android.notice("boot: previous VM still running, stopping it first");
     Emu.Kill();
@@ -2120,10 +2130,6 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
       rpcsx_android.error("boot: previous VM did not stop in time, booting anyway");
     }
   }
-
-  // Blocks until any in-flight disc probe has unmounted. Both mount into the same global
-  // vfs, and a scan racing a boot there aborts the process.
-  std::lock_guard vfs_lock(g_vfs_probe_mutex);
 
   Emu.SetForceBoot(true);
   std::string path = std::string(path_);
@@ -2153,7 +2159,7 @@ extern "C" int _rpcsx_getState() {
   return static_cast<int>(Emu.GetStatus(false));
 }
 extern "C" void _rpcsx_kill() {
-  std::lock_guard vfs_lock(g_vfs_probe_mutex);
+  std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
   Emu.Kill();
 }
 extern "C" void _rpcsx_resume() { Emu.Resume(); }
@@ -2378,7 +2384,7 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
   std::string result = "{}";
 
   // Held across the whole mount/read/unmount so a boot cannot mount underneath us.
-  std::lock_guard vfs_lock(g_vfs_probe_mutex);
+  std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
 
   // Re-checked under the lock: a boot may have started while we were waiting for it,
   // and mounting into a live VM's vfs would shadow the disc it is running from.
