@@ -7,6 +7,8 @@
 #include "Emu/Cell/lv2/sys_process.h"
 #include "Emu/RSX/RSXThread.h"
 #include "Thread.h"
+#include <cstring>
+#include <cerrno>
 #include "Utilities/JIT.h"
 #include <cfenv>
 #include <charconv>
@@ -3953,6 +3955,30 @@ void thread_ctrl::set_native_priority(int priority)
 	if (!SetThreadPriority(_this_thread, native_priority))
 	{
 		sig_log.error("SetThreadPriority() failed: %s", fmt::win_error{GetLastError(), nullptr});
+	}
+#elif defined(__ANDROID__)
+	// Nice value, not sched_priority.
+	//
+	// Android threads run under SCHED_OTHER, where sched_priority must be 0 and
+	// sched_get_priority_max returns 0, so the pthread_setschedparam path below sets
+	// nothing at all. The RSX thread asks for a boost on startup and was still measured at
+	// nice 0, being involuntarily preempted about 5300 times a second, roughly 130 times
+	// per frame, by the PPU, SPU and audio threads sharing its cores.
+	//
+	// Under SCHED_OTHER the scheduler's weighting comes from nice, which setpriority does
+	// set. Android grants apps enough RLIMIT_NICE headroom to go negative for their own
+	// threads, which is how audio threads get their priority.
+	//
+	// Modest values on purpose: this is a hint to be scheduled ahead of the other emulator
+	// threads, not a bid to starve them, and the RSX thread is the one everything else
+	// waits on.
+	const int nice_value = (priority > 0) ? -8 : (priority < 0 ? 8 : 0);
+
+	errno = 0;
+	if (setpriority(PRIO_PROCESS, static_cast<id_t>(gettid()), nice_value) == -1 && errno)
+	{
+		// Not fatal. Without the headroom the thread simply keeps its default weighting.
+		sig_log.warning("setpriority(%d) failed: %s", nice_value, strerror(errno));
 	}
 #else
 	int policy;
