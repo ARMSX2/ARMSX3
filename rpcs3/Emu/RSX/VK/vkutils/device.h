@@ -145,6 +145,20 @@ namespace vk
 		bool is_integrated_gpu() const { return props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU; }
 	};
 
+	/**
+	 * Memory the GPU pools may size themselves against.
+	 *
+	 * On a discrete GPU this is simply the device local heap: a 3GB texture cache out of 8GB
+	 * of dedicated VRAM costs system RAM nothing. A phone has one pool for both, so
+	 * device_local_total_bytes reports system RAM, and sizing caches against it budgets
+	 * memory the OS also needs.
+	 *
+	 * Measured: the texture cache quota resolved to 2978MB on a 7.4GB device, the process
+	 * climbed to 4.3GB, drove available memory to 54MB and 3GB of swap, and was killed
+	 * mid-session.
+	 */
+	u64 get_budgetable_device_memory(u64 device_local_total);
+
 	class render_device
 	{
 		physical_device* pgpu = nullptr;

@@ -245,7 +245,7 @@ namespace vk
 	bool surface_cache::is_overallocated()
 	{
 		const auto surface_cache_vram_load = vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_SURFACE_CACHE);
-		const auto surface_cache_allocation_quota = get_surface_cache_memory_quota(get_current_renderer()->get_memory_mapping().device_local_total_bytes);
+		const auto surface_cache_allocation_quota = get_surface_cache_memory_quota(vk::get_budgetable_device_memory(get_current_renderer()->get_memory_mapping().device_local_total_bytes));
 		return (surface_cache_vram_load > surface_cache_allocation_quota);
 	}
 
@@ -253,7 +253,7 @@ namespace vk
 	{
 		// Determine how much memory we need to save to system RAM if any
 		const u64 current_surface_cache_memory = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_SURFACE_CACHE);
-		const u64 total_device_memory = vk::get_current_renderer()->get_memory_mapping().device_local_total_bytes;
+		const u64 total_device_memory = vk::get_budgetable_device_memory(vk::get_current_renderer()->get_memory_mapping().device_local_total_bytes);
 		const u64 target_memory = get_surface_cache_memory_quota(total_device_memory);
 
 		rsx_log.warning("Surface cache memory usage is %lluM", current_surface_cache_memory / 0x100000);

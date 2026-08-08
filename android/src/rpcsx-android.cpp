@@ -178,10 +178,19 @@ struct GraphicsFrame : GSFrameBase {
       }
 
       activeNativeWindow = result;
-
-      width = ANativeWindow_getWidth(result);
-      height = ANativeWindow_getHeight(result);
     }
+
+    // Size is re-read every time, not only when the window pointer changes.
+    //
+    // Rotating the device usually keeps the same ANativeWindow and simply changes its
+    // dimensions, so a pointer comparison never fires and the cached size stayed at
+    // whatever the first orientation was. The swapchain was then rebuilt at portrait
+    // extent inside a landscape window, which is the squashed picture reported after
+    // starting in portrait and rotating.
+    //
+    // Two cheap accessor calls; ANativeWindow keeps these as plain fields.
+    width = ANativeWindow_getWidth(result);
+    height = ANativeWindow_getHeight(result);
 
     return result;
   }
@@ -271,8 +280,17 @@ struct GraphicsFrame : GSFrameBase {
     }
 #endif
   }
-  int client_width() override { return width; }
-  int client_height() override { return height; }
+  // Ask the window rather than trusting the cache: these drive the swapchain resize
+  // check in VKGSRender::flip, so a stale value there is what makes the picture wrong
+  // rather than merely late.
+  int client_width() override {
+    getNativeWindow();
+    return width;
+  }
+  int client_height() override {
+    getNativeWindow();
+    return height;
+  }
   f64 client_display_rate() override { return 30.f; }
   bool has_alpha() override {
     return ANativeWindow_getFormat(getNativeWindow()) ==

@@ -1,4 +1,6 @@
 #include "device.h"
+#include <algorithm>
+#include "util/sysinfo.hpp"
 #include "instance.h"
 #include "util/logs.hpp"
 #include "Emu/system_config.h"
@@ -513,6 +515,41 @@ namespace vk
 	}
 
 	// Render Device - The actual usable device
+	u64 get_budgetable_device_memory(u64 device_local_total)
+	{
+		const u64 device_local = device_local_total;
+
+#ifdef __ANDROID__
+		// Unified memory: the "VRAM" figure is system RAM, most of which belongs to the OS
+		// and everything else running. Budget against what is actually free, keeping back
+		// room for the emulator itself, and clamp so the answer stays sane whether the phone
+		// is idle or loaded.
+		//
+		// Cached because both cache implementations ask on a periodic check and reading
+		// /proc/meminfo each time is not free.
+		static const u64 android_budget = []() -> u64
+		{
+			constexpr u64 mb = 0x100000;
+			constexpr u64 emulator_reserve = 1536 * mb;
+			constexpr u64 floor_bytes = 1024 * mb;
+			constexpr u64 ceiling_bytes = 2560 * mb;
+
+			const u64 avail = utils::get_avail_memory();
+			if (!avail)
+			{
+				return floor_bytes;
+			}
+
+			const u64 spare = (avail > emulator_reserve) ? avail - emulator_reserve : 0;
+			return std::clamp(spare, floor_bytes, ceiling_bytes);
+		}();
+
+		return std::min(device_local, android_budget);
+#else
+		return device_local;
+#endif
+	}
+
 	void render_device::create(vk::physical_device& pdev, u32 graphics_queue_idx, u32 present_queue_idx, u32 transfer_queue_idx)
 	{
 		float queue_priorities[1] = { 0.f };

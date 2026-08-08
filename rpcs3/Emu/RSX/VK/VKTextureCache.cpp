@@ -1700,7 +1700,7 @@ namespace vk
 
 	bool texture_cache::is_overallocated() const
 	{
-		const auto total_device_memory = m_device->get_memory_mapping().device_local_total_bytes / 0x100000;
+		const auto total_device_memory = vk::get_budgetable_device_memory(m_device->get_memory_mapping().device_local_total_bytes) / 0x100000;
 		u64 quota = 0;
 
 		if (total_device_memory >= 2048)
