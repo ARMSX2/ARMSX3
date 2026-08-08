@@ -2904,6 +2904,27 @@ void VKGSRender::begin_conditional_rendering(const std::vector<rsx::reports::occ
 {
 	ensure(!sources.empty());
 
+	// Without the extension there is nothing that can read the predicate, so building it is
+	// pure cost.
+	//
+	// The aggregation below fills m_cond_render_buffer and only vkCmdBeginConditionalRendering
+	// consumes it. Where VK_EXT_conditional_rendering is absent the buffer is written, barriered
+	// and then dropped, and the code falls through to the base implementation regardless.
+	//
+	// On Adreno that waste is not merely wasted. Each insert_buffer_memory_barrier ends the
+	// open render pass, and that driver allocates on every vkCmdEndRenderPass without
+	// releasing it. A heap profile of a Skate 3 session put its largest allocation stacks,
+	// 157MB, 152MB, 150MB and more, on exactly this path through
+	// qglinternal::vkCmdEndRenderPass into calloc, and the process was killed at 4.3GB.
+	//
+	// The Qualcomm driver does not expose the extension at all, so this path could never
+	// have predicated anything there.
+	if (!m_device->get_conditional_render_support())
+	{
+		rsx::thread::begin_conditional_rendering(sources);
+		return;
+	}
+
 	// Flag check whether to calculate all entries or only one
 	bool partial_eval;
 
