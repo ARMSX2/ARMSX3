@@ -6,6 +6,7 @@
 #include "Emu/RSX/Overlays/overlay_debug_overlay.h"
 #include "Emu/Cell/Modules/cellVideoOut.h"
 #include "Emu/RSX/rsx_profiler.h"
+#include "vkutils/gpu_timer.h"
 
 #include "upscalers/bilinear_pass.hpp"
 #include "upscalers/fsr_pass.h"
@@ -448,6 +449,41 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 
 void VKGSRender::flip(const rsx::display_flip_info_t& info)
 {
+	// GPU timing is driven from the flip, the only place that corresponds to a real
+	// presented frame. collect() is non-blocking: anything the GPU has not finished is
+	// left for a later call rather than waited on.
+	if (g_cfg.video.rsx_profiler)
+	{
+		auto& timer = vk::get_gpu_timer();
+		timer.next_frame();
+		timer.collect();
+
+		if (timer.collected_frames() >= 300)
+		{
+			const auto ms = timer.per_frame_ms();
+			const auto counts = timer.event_counts();
+			std::string report = fmt::format("GPU profile over %u frames", timer.collected_frames());
+
+			for (u32 i = 0; i < vk::gpu_timer::region_count; i++)
+			{
+				if (ms[i] <= 0.0) continue;
+				fmt::append(report, "\n\t%-14s %7.3f ms/frame  %5.1f events/frame",
+					vk::gpu_timer::name_of(static_cast<vk::gpu_timer::region>(i)), ms[i],
+					static_cast<double>(counts[i]) / static_cast<double>(timer.collected_frames()));
+			}
+
+			if (const u64 dropped = timer.dropped_events())
+			{
+				// Untimed events mean the regions below are an underestimate, so say so
+				// rather than let the numbers read as complete.
+				fmt::append(report, "\n\t%llu events went untimed (per-frame cap reached)", dropped);
+			}
+
+			rsx_log.success("%s", report);
+			timer.reset();
+		}
+	}
+
 	// Check swapchain condition/status
 	if (!m_swapchain->supports_automatic_wm_reports())
 	{

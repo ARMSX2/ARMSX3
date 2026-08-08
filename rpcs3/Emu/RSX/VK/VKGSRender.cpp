@@ -9,6 +9,7 @@
 #include "VKCompute.h"
 #include "VKGSRender.h"
 #include "Emu/RSX/rsx_profiler.h"
+#include "vkutils/gpu_timer.h"
 #include "VKHelpers.h"
 #include "VKRenderPass.h"
 #include "VKResourceManager.h"
@@ -489,6 +490,7 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	m_primary_cb_list.create(m_command_buffer_pool, vk::command_buffer::access_type_hint::flush_only);
 	m_current_command_buffer = m_primary_cb_list.get();
 	m_current_command_buffer->begin();
+	vk::get_gpu_timer().begin(*m_current_command_buffer, vk::gpu_timer::region::frame);
 
 	// Create secondary command_buffer for parallel operations
 	m_secondary_command_buffer_pool.create((*m_device), m_device->get_graphics_queue_family());
@@ -1267,6 +1269,8 @@ void VKGSRender::on_init_thread()
 		fmt::throw_exception("No Vulkan device was created");
 	}
 
+	vk::get_gpu_timer().init(*m_device);
+
 	GSRender::on_init_thread();
 	zcull_ctrl.reset(static_cast<::rsx::reports::ZCULL_control*>(this));
 
@@ -1300,6 +1304,7 @@ void VKGSRender::on_init_thread()
 
 void VKGSRender::on_exit()
 {
+	vk::get_gpu_timer().destroy();
 	GSRender::on_exit();
 	vk::destroy_pipe_compiler(); // Ensure no pending shaders being compiled
 	zcull_ctrl.release();
@@ -1598,6 +1603,7 @@ void VKGSRender::flush_command_queue(bool hard_sync, bool do_not_switch)
 	}
 
 	m_current_command_buffer->begin();
+	vk::get_gpu_timer().begin(*m_current_command_buffer, vk::gpu_timer::region::frame);
 }
 
 std::pair<volatile vk::host_data_t*, VkBuffer> VKGSRender::map_host_object_data() const
@@ -2442,6 +2448,7 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 		m_host_dma_ctrl->host_ctx()->on_label_release();
 	}
 
+	vk::get_gpu_timer().end(*m_current_command_buffer, vk::gpu_timer::region::frame);
 	m_current_command_buffer->end();
 	m_current_command_buffer->tag();
 

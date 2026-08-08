@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "Emu/RSX/VK/VKGSRenderTypes.hpp"
 #include "VKTextureCache.h"
+#include "vkutils/gpu_timer.h"
 #include "VKCompute.h"
 #include "VKAsyncScheduler.h"
 #include "vkutils/data_heap.h"
@@ -65,6 +66,7 @@ namespace vk
 
 	void cached_texture_section::dma_transfer(vk::command_buffer& cmd, vk::image* src, const areai& src_area, const utils::address_range32& valid_range, u32 pitch)
 	{
+		vk::gpu_scope dma_gpu_scope(cmd, vk::gpu_timer::region::readback_dma);
 		ensure(src->samples() == 1);
 
 		if (!m_device)
