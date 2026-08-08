@@ -1121,6 +1121,20 @@ namespace rsx
 			manager->stop_audio();
 		}
 
+		// Scoped around the whole loop, not around run_FIFO.
+		//
+		// run_FIFO executes a single FIFO command, so a scope inside it ran tens of thousands
+		// of times per frame, each reading the counter-timer twice. On ARM that is an mrs
+		// cntvct_el0: expensive and partially serialising. run_FIFO's share of RSX thread
+		// samples went from about 3% uninstrumented to 35% with the scope inside it, so the
+		// bucket had become mostly a measurement of itself.
+		//
+		// Entered once here instead. Attribution is exclusive, so every nested scope still
+		// carves out its own time and returns here afterwards, leaving this bucket meaning
+		// "RSX loop time nothing more specific claimed", which is what was wanted from it,
+		// at no per-command cost.
+		RSX_PROF_SCOPE(fifo_decode);
+
 		while (!test_stopped())
 		{
 			// Wait for external pause events

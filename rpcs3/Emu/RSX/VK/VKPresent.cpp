@@ -652,6 +652,10 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	ensure(m_current_frame->swap_command_buffer == nullptr);
 
 	u64 timeout = m_swapchain->get_swap_image_count() <= 2? 0ull: 100000000ull;
+	// Braced so the scope covers the acquire and nothing else. Declared at function
+	// scope it lived until flip() returned, so the bucket was silently charging the
+	// whole present path -- overlays, blit, submit -- as swapchain wait.
+	{
 	rsx::prof::scope acquire_scope{rsx::prof::bucket::present_wait};
 	while (VkResult status = m_swapchain->acquire_next_swapchain_image(m_current_frame->acquire_signal_semaphore, timeout, &m_current_frame->present_image))
 	{
@@ -711,6 +715,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			// Image is valid, new swapchain will be generated later
 			break;
 		}
+	}
 	}
 
 	// Confirm that the driver did not silently fail

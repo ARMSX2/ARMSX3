@@ -10,9 +10,15 @@ LOG_CHANNEL(prof_log, "RSXPROF");
 namespace rsx::prof
 {
 	std::atomic<bool> g_enabled{false};
-	thread_local accounting g_acc{};
-	thread_local bucket g_current = bucket::unclassified;
-	thread_local u64 g_last_switch = 0;
+	accounting g_acc{};
+	bucket g_current = bucket::unclassified;
+	u64 g_last_switch = 0;
+	const void* g_owner_thread = nullptr;
+
+	void bind_to_current_thread()
+	{
+		g_owner_thread = current_thread_token();
+	}
 
 	const char* name_of(bucket b)
 	{
@@ -57,6 +63,7 @@ namespace rsx::prof
 		// never became active and its time fell through to unclassified.
 		g_current = bucket::fifo_decode;
 
+		bind_to_current_thread();
 		g_enabled.store(enabled, std::memory_order_relaxed);
 		prof_log.success("RSX profiling %s", enabled ? "enabled" : "disabled");
 	}

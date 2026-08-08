@@ -651,8 +651,6 @@ namespace rsx
 
 	void thread::run_FIFO()
 	{
-		RSX_PROF_SCOPE(fifo_decode);
-
 		FIFO::register_pair command;
 		fifo_ctrl->read(command);
 		const auto cmd = command.reg;

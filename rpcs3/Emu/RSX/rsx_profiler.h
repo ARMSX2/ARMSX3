@@ -67,9 +67,40 @@ namespace rsx::prof
 	};
 
 	extern std::atomic<bool> g_enabled;
-	extern thread_local accounting g_acc;
-	extern thread_local bucket g_current;
-	extern thread_local u64 g_last_switch;
+
+	/**
+	 * Plain globals, guarded by a thread-pointer check, rather than thread locals.
+	 *
+	 * These are read on every scope enter and exit. As thread locals the generic TLS model
+	 * routed each access through the linker's tlsdesc resolver, which measured 21% of RSX
+	 * thread samples against 0.07% on an uninstrumented build: the profiler dominated the
+	 * FIFO bucket it was supposed to be measuring. Pinning them to initial-exec removed that
+	 * cost but stopped every game booting, so that route is closed.
+	 *
+	 * Only the RSX thread's numbers are ever reported, so instead of giving every thread its
+	 * own copy, there is one copy and everyone else is turned away at the door. On ARM64 the
+	 * thread pointer is a single register read with no relocation and no resolver call, which
+	 * makes the check cheaper than one tlsdesc access, never mind the six a scope used to do.
+	 */
+	extern accounting g_acc;
+	extern bucket g_current;
+	extern u64 g_last_switch;
+	extern const void* g_owner_thread;
+
+	/** Cheap identity check: one register read, no TLS machinery. */
+	inline const void* current_thread_token()
+	{
+#if defined(__aarch64__)
+		return __builtin_thread_pointer();
+#else
+		// Falls back to a real thread local off the hot path's critical arch.
+		static thread_local char anchor = 0;
+		return &anchor;
+#endif
+	}
+
+	/** Claim the accounting for this thread. Called from the RSX thread when arming. */
+	void bind_to_current_thread();
 
 	/**
 	 * Charge elapsed time to the active bucket and make `next` active. Returns the old one.
@@ -108,7 +139,8 @@ namespace rsx::prof
 	public:
 		explicit scope(bucket b)
 			: m_prev(bucket::unclassified)
-			, m_active(g_enabled.load(std::memory_order_relaxed))
+			, m_active(g_enabled.load(std::memory_order_relaxed) &&
+				current_thread_token() == g_owner_thread)
 		{
 			if (m_active) [[unlikely]]
 			{
