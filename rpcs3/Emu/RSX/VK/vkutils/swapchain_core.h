@@ -75,6 +75,20 @@ namespace vk
 			return init();
 		}
 
+		// The extent the swapchain ACTUALLY has, which is not always the one init() was
+		// handed: the WSI backend replaces it with the surface's currentExtent whenever the
+		// platform reports one. Anything sized against the swapchain images - framebuffers
+		// above all - has to use this and not the requested value.
+		u32 get_width() const
+		{
+			return m_width;
+		}
+
+		u32 get_height() const
+		{
+			return m_height;
+		}
+
 		const vk::render_device& get_device()
 		{
 			return dev;

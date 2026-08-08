@@ -126,6 +126,25 @@ bool VKGSRender::reinitialize_swapchain()
 		return false;
 	}
 
+	// Adopt the size the swapchain came back with. The WSI backend prefers the surface's
+	// currentExtent over the requested one, and every platform that reports an extent will
+	// therefore hand back something we did not ask for the moment the window changes shape.
+	//
+	// m_swapchain_dims is not just bookkeeping: it sizes the framebuffer that the swapchain
+	// image is attached to, and the present blit region. Leaving the requested value in it
+	// draws a frame of one size into images of another, which on Android rotation is a
+	// screenful of garbage that never recovers -- the mismatch is also what the resize check
+	// in flip() compares against, so it re-confirms the stale size forever.
+	if (m_swapchain->get_width() != m_swapchain_dims.width ||
+		m_swapchain->get_height() != m_swapchain_dims.height)
+	{
+		rsx_log.notice("Swapchain: surface returned %dx%d for a %dx%d request.",
+			m_swapchain->get_width(), m_swapchain->get_height(), m_swapchain_dims.width, m_swapchain_dims.height);
+
+		m_swapchain_dims.width = m_swapchain->get_width();
+		m_swapchain_dims.height = m_swapchain->get_height();
+	}
+
 	// Re-initialize CPU frame contexts
 	m_max_async_frames = m_swapchain->get_swap_image_count();
 	m_frame_context_storage.resize(m_max_async_frames);

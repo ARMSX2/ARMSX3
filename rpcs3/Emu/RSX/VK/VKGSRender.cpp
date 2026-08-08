@@ -484,6 +484,13 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	{
 		swapchain_unavailable = true;
 	}
+	else
+	{
+		// Same as in reinitialize_swapchain: the surface can hand back a different extent
+		// than the one requested, and m_swapchain_dims sizes the present framebuffer.
+		m_swapchain_dims.width = m_swapchain->get_width();
+		m_swapchain_dims.height = m_swapchain->get_height();
+	}
 
 	// create command buffer...
 	m_command_buffer_pool.create((*m_device), m_device->get_graphics_queue_family());

@@ -94,6 +94,22 @@ struct AtExit {
 static bool g_initialized;
 static std::atomic<ANativeWindow *> g_native_window;
 
+// The surface size Android last reported, packed as (width << 32 | height) so the RSX
+// thread reads both halves from one atomic and can never see a width from one orientation
+// paired with a height from the next.
+//
+// SurfaceHolder.Callback::surfaceChanged is the only authoritative source for this. The
+// activity handles orientation itself (configChanges in the manifest), so rotating keeps
+// the same Surface and the same ANativeWindow -- there is no new handle to notice, and
+// ANativeWindow_getWidth on a window a swapchain is already connected to answers about the
+// buffers, not the window. Both of those made the renderer keep drawing at the size the
+// game booted in.
+static std::atomic<u64> g_native_window_size;
+
+// Set when losing the surface is what paused the emulator, so getting it back resumes only
+// the pause we caused.
+static std::atomic<bool> g_paused_by_surface_loss;
+
 extern std::string g_android_executable_dir;
 extern std::string g_android_config_dir;
 extern std::string g_android_cache_dir;
@@ -180,15 +196,8 @@ struct GraphicsFrame : GSFrameBase {
       activeNativeWindow = result;
     }
 
-    // Size is re-read every time, not only when the window pointer changes.
-    //
-    // Rotating the device usually keeps the same ANativeWindow and simply changes its
-    // dimensions, so a pointer comparison never fires and the cached size stayed at
-    // whatever the first orientation was. The swapchain was then rebuilt at portrait
-    // extent inside a landscape window, which is the squashed picture reported after
-    // starting in portrait and rotating.
-    //
-    // Two cheap accessor calls; ANativeWindow keeps these as plain fields.
+    // Fallback size only, for the window we have never been told a size for. The real
+    // one arrives through surfaceChanged; see client_width().
     width = ANativeWindow_getWidth(result);
     height = ANativeWindow_getHeight(result);
 
@@ -280,14 +289,26 @@ struct GraphicsFrame : GSFrameBase {
     }
 #endif
   }
-  // Ask the window rather than trusting the cache: these drive the swapchain resize
-  // check in VKGSRender::flip, so a stale value there is what makes the picture wrong
-  // rather than merely late.
+  // These two drive the resize check in VKGSRender::flip, so a stale value here does not
+  // make the picture late, it makes it wrong: the swapchain keeps the extent it had and
+  // the present framebuffer is built to match, whatever shape the window is now.
+  //
+  // Take the size Android reported for the surface. Falling back to the window is for the
+  // window that has arrived but not yet been measured, which only happens before the first
+  // surfaceChanged.
   int client_width() override {
+    if (const u64 packed = g_native_window_size.load()) {
+      return static_cast<int>(packed >> 32);
+    }
+
     getNativeWindow();
     return width;
   }
   int client_height() override {
+    if (const u64 packed = g_native_window_size.load()) {
+      return static_cast<int>(packed & 0xffffffffu);
+    }
+
     getNativeWindow();
     return height;
   }
@@ -2566,6 +2587,24 @@ extern "C" bool _rpcsx_hasState(unsigned int index) {
   return boot_current_game_savestate(true, index);
 }
 
+// The surface's real size, straight from SurfaceHolder.Callback::surfaceChanged.
+//
+// Called before the matching surfaceEvent so the renderer never sees a live window it has
+// no size for. Zero is ignored rather than stored: a torn-down surface reports 0x0 and
+// clearing the size would only make the renderer fall back to guessing again.
+extern "C" void _rpcsx_surfaceSizeChanged(int width, int height) {
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+
+  const u64 packed = (static_cast<u64>(static_cast<u32>(width)) << 32) |
+                     static_cast<u32>(height);
+
+  if (g_native_window_size.exchange(packed) != packed) {
+    rpcsx_android.notice("surface size now %dx%d", width, height);
+  }
+}
+
 extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
   rpcsx_android.warning("surface event %p, %d", surface, event);
 
@@ -2587,8 +2626,17 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
       padThread->open_home_menu();
     }
 
+    // Remember whether this pause is ours. The app pauses for its own reasons too (the
+    // in-game overlay), and resuming on the next surface would then undo a pause the user
+    // asked for, behind an overlay still showing the game as paused.
+    g_paused_by_surface_loss = !Emu.IsPaused();
     Emu.Pause();
   } else {
+    // fromSurface hands back a reference that is already acquired, and that is the one
+    // stored below. Acquiring on top of it leaked a window per surfaceChanged -- every
+    // rotation -- and worse when the surface was unchanged, which is the usual case here
+    // since the activity handles orientation itself: fromSurface then returns the SAME
+    // window, the pointers match, and the extra reference was not released either.
     auto newWindow = ANativeWindow_fromSurface(env, surface);
 
     if (newWindow == nullptr) {
@@ -2599,15 +2647,12 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
 
     auto prevWindow = g_native_window.exchange(newWindow);
 
-    if (newWindow != prevWindow) {
-      ANativeWindow_acquire(newWindow);
-
-      if (prevWindow != nullptr) {
-        ANativeWindow_release(prevWindow);
-      }
+    if (prevWindow != nullptr) {
+      ANativeWindow_release(prevWindow);
     }
 
-    if (event == 0 && Emu.IsPaused()) {
+    if (event == 0 && g_paused_by_surface_loss && Emu.IsPaused()) {
+      g_paused_by_surface_loss = false;
       Emu.Resume();
     }
   }

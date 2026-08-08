@@ -274,8 +274,17 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun surfaceChanged(surface: Surface, width: Int, height: Int) {
-        currentSurface = surface
+        // BEFORE the event. The core reads the size off the renderer thread as soon as it
+        // has a live window, and a window whose size it has not been told yet is the case
+        // this whole path exists to avoid.
+        runCatching { RPCSX.instance.surfaceSizeChanged(width, height) }
+
+        // Read the previous surface first. This assigned currentSurface and THEN tested it
+        // for null, so the test could never be true and the event was always CHANGED --
+        // which the core does not treat as a reason to resume, leaving the emulator paused
+        // after a surface came back.
         val event = if (currentSurface == null) SURFACE_CREATED else SURFACE_CHANGED
+        currentSurface = surface
         RPCSX.instance.surfaceEvent(surface, event)
     }
 
