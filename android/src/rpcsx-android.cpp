@@ -3619,27 +3619,28 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
   // Scoped to the overlay nodes on purpose: applyTo() pushes ~200 settings at
   // boot and re-applying every overlay property 200 times would be pure waste.
   //
-  // POSTED, not called here. Both of these walk the overlay display manager and end up in
-  // perf_metrics_overlay::update(), which touches RSX-owned state. This function runs on
-  // whichever thread called through JNI, so doing it inline raced the RSX thread and the
-  // teardown that Emu.Kill() performs. It aborted inside update() when a settings apply
-  // landed while a game was closing or starting, which is the reported "changing any
-  // setting in game crashes the app".
+  // Not reset while stopped. Both of these walk the overlay display manager into
+  // perf_metrics_overlay::update(), which touches RSX-owned state, and a settings apply
+  // landing while a game is starting or closing aborted inside update(). That is the
+  // reported "changing any setting in game crashes the app". Nothing worth resetting
+  // exists when no game is running, so this guard is the whole fix.
   //
-  // CallFromMainThread is drained by the processor thread started in Rpcs3Bridge, so the
-  // work is serialised against the rest of the emulator's main-thread queue instead.
-  //
-  // Skipped entirely when stopped: there is no overlay to reset, and posting would only
-  // queue work against an emulator that is being torn down.
+  // Do NOT route these through Emu.CallFromMainThread hoping to make them safer. It
+  // defers nothing here: the Android call_from_main_thread callback runs the function
+  // INLINE on the caller's thread. All it adds is RPCS3's state-guard wrapper, a
+  // std::function allocation and a log call, on a path applyTo hits eleven times per
+  // settings change. Doing that livelocked Minecraft on load: one SPU pinned in
+  // do_putllc retrying a reservation forever, the PPU stalled behind it and the RSX
+  // spinning idle. Bisected to this single line, and reverting it restored the game.
   if (Emu.IsStopped()) {
     return true;
   }
 
   if (path.starts_with("Video@@Performance Overlay")) {
-    Emu.CallFromMainThread([]() { rsx::overlays::reset_performance_overlay(); });
+    rsx::overlays::reset_performance_overlay();
   } else if (path.starts_with("Video@@Debug overlay") ||
              path.starts_with("Miscellaneous@@Debug overlay")) {
-    Emu.CallFromMainThread([]() { rsx::overlays::reset_debug_overlay(); });
+    rsx::overlays::reset_debug_overlay();
   }
   return true;
 }
