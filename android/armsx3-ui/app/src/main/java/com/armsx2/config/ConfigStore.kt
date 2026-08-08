@@ -62,6 +62,7 @@ object ConfigStore {
     private const val KEY_XFLOAT_BACK_TO_APPROX = "config.migrated.xfloatBackToApprox"
     private const val KEY_PRECISE_SPU_OFF = "config.migrated.preciseSpuVerifyOff"
     private const val KEY_ATOMIC_DMA_OFF = "config.migrated.atomicDmaStoresOff"
+    private const val KEY_VBLANK_60 = "config.migrated.vblankRate60"
     private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
@@ -196,6 +197,22 @@ object ConfigStore {
                 dirty = true
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_ATOMIC_DMA_OFF, true) }
+        }
+
+        // Put Vblank Rate back to 60, which is both upstream's default and what a PS3
+        // actually runs at.
+        //
+        // It was sitting at 120. Nothing in this app sets that, so it came from the core
+        // settings screen, and it makes the emulator aim for 120fps: twice the frames, twice
+        // the RSX command volume, twice the GPU work, on a handheld. Chasing a 120Hz panel
+        // in PS3 emulation costs battery and heat for frames the games were never designed
+        // to produce.
+        //
+        // Recorded as a core override rather than written to config.yml directly, so it
+        // survives the settings push on every boot and stays changeable afterwards.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_VBLANK_60, false)) {
+            runCatching { CoreSettingOverrides.record("Video@@Vblank Rate", "60") }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_VBLANK_60, true) }
         }
 
         // Move anyone still on the old Approximate xfloat default onto Accurate.

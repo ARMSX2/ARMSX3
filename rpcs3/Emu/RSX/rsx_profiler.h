@@ -180,6 +180,21 @@ namespace rsx::prof
 	extern u64 g_fifo_refill_stalls;
 	extern u64 g_fifo_refill_stall_us;
 
+	/**
+	 * Pipeline drains by cause.
+	 *
+	 * Each flush_command_queue submits and then the next readback wait drains everything
+	 * queued, which is what keeps CPU and GPU serialised: GPU work and fence wait sum to the
+	 * whole frame instead of overlapping. Texture cache misses are now zero, so the readback
+	 * faults that were assumed responsible are not, and these say what is.
+	 */
+	// One counter per submission site. Three hand-picked candidates all came back at zero
+	// while submissions stayed near five per frame, so this covers every caller rather than
+	// guessing another.
+	inline constexpr u32 flush_site_count = 21;
+	extern u64 g_flush_sites[flush_site_count];
+	extern const char* g_flush_site_names[flush_site_count];
+
 	/** Call once per frame from the RSX thread so the report can express per-frame cost. */
 	void tick_frame();
 

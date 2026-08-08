@@ -74,7 +74,7 @@ bool VKGSRender::reinitialize_swapchain()
 	}
 
 	// NOTE: This operation will create a hard sync point
-	close_and_submit_command_buffer();
+	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[12]++; close_and_submit_command_buffer();
 	m_current_command_buffer->reset();
 	m_current_command_buffer->begin();
 
@@ -153,7 +153,7 @@ bool VKGSRender::reinitialize_swapchain()
 	vk::fence resize_fence(*m_device);
 
 	// Flush the command buffer
-	close_and_submit_command_buffer(&resize_fence);
+	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[13]++; close_and_submit_command_buffer(&resize_fence);
 	vk::wait_for_fence(&resize_fence);
 
 	m_current_command_buffer->reset();
@@ -244,11 +244,11 @@ void VKGSRender::queue_swap_request()
 	if (m_swapchain->is_headless())
 	{
 		m_swapchain->end_frame(*m_current_command_buffer, m_current_frame->present_image);
-		close_and_submit_command_buffer();
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[14]++; close_and_submit_command_buffer();
 	}
 	else
 	{
-		close_and_submit_command_buffer(nullptr,
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[15]++; close_and_submit_command_buffer(nullptr,
 			m_current_frame->acquire_signal_semaphore,
 			m_current_frame->present_wait_semaphore,
 			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
@@ -410,7 +410,7 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 		if (m_current_command_buffer->flags & vk::command_buffer::cb_has_dma_transfer)
 		{
 			// Submit for processing to lower hard fault penalty
-			flush_command_queue();
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[16]++; flush_command_queue();
 		}
 
 		m_texture_cache.invalidate_range(*m_current_command_buffer, range, rsx::invalidation_cause::read);
@@ -478,6 +478,17 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 				// rather than let the numbers read as complete.
 				fmt::append(report, "\n\t%llu events went untimed (per-frame cap reached)", dropped);
 			}
+
+			// The texture cache's own view of the same frames. Readbacks per frame have
+			// stayed near seven under load despite the eager copy, and these separate the
+			// possible reasons: speculations are copies made before the guest asked, misses
+			// are sections faulted on regardless, and unavoidable hard faults are the ones
+			// upstream considers unpredictable because they are flush_always.
+			fmt::append(report, "\n\ttexture cache   %u flushes, %u misses, %u speculations, %u hard faults (this frame)",
+				m_texture_cache.get_num_flush_requests(),
+				m_texture_cache.get_num_cache_misses(),
+				m_texture_cache.get_num_cache_speculative_writes(),
+				m_texture_cache.get_num_unavoidable_hard_faults());
 
 			rsx_log.success("%s", report);
 			timer.reset();
@@ -559,7 +570,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 			// Perform a mini-flip here without invoking present code
 			m_current_frame->swap_command_buffer = m_current_command_buffer;
-			flush_command_queue(true);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[17]++; flush_command_queue(true);
 			vk::advance_frame_counter();
 			frame_context_cleanup(m_current_frame);
 		}
@@ -831,7 +842,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		vk::copy_image_to_buffer(*m_current_command_buffer, image_to_copy, &sshot_vkbuf, copy_info);
 		image_to_copy->pop_layout(*m_current_command_buffer);
 
-		flush_command_queue(true);
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[18]++; flush_command_queue(true);
 		const auto src = sshot_vkbuf.map(0, sshot_size);
 		std::vector<u8> sshot_frame(sshot_size);
 		memcpy(sshot_frame.data(), src, sshot_size);
@@ -1077,7 +1088,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		if (const auto severity = vk::vmm_determine_memory_load_severity();
 			severity > rsx::problem_severity::low && m_rtts.handle_memory_pressure(*m_current_command_buffer, severity))
 		{
-			flush_command_queue(true);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[19]++; flush_command_queue(true);
 		}
 
 		// Then apply the change
@@ -1088,7 +1099,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		if (const auto severity = vk::vmm_determine_memory_load_severity();
 			severity > rsx::problem_severity::low && m_rtts.handle_memory_pressure(*m_current_command_buffer, severity))
 		{
-			flush_command_queue(true);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[20]++; flush_command_queue(true);
 		}
 	}
 }

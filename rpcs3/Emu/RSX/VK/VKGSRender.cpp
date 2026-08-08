@@ -993,7 +993,7 @@ bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 			}
 
 			// Flush primary cb queue to sync pending changes (e.g image transitions!)
-			flush_command_queue();
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[0]++; flush_command_queue();
 		}
 
 		if (has_queue_ref)
@@ -1061,7 +1061,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 	{
 		// Hard sync before trying to evict anything. This guarantees no UAF crashes in the driver.
 		// As a bonus, we also get a free gc pass
-		flush_command_queue(true, true);
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[1]++; flush_command_queue(true, true);
 
 		if (m_texture_cache.is_overallocated())
 		{
@@ -1153,7 +1153,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 	}
 
 	// Imminent crash, full GPU sync is the least of our problems
-	flush_command_queue(true, true);
+	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[2]++; flush_command_queue(true, true);
 
 	return any_cache_relieved;
 }
@@ -1168,7 +1168,7 @@ void VKGSRender::on_descriptor_pool_fragmentation(bool is_fatal)
 	}
 
 	// Just flush everything. Unless the hardware is very deficient, this should happen very rarely.
-	flush_command_queue(true, true);
+	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[3]++; flush_command_queue(true, true);
 }
 
 void VKGSRender::notify_tile_unbound(u32 tile)
@@ -1562,7 +1562,7 @@ void VKGSRender::clear_surface(u32 mask)
 
 void VKGSRender::flush_command_queue(bool hard_sync, bool do_not_switch)
 {
-	close_and_submit_command_buffer();
+	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[4]++; close_and_submit_command_buffer();
 
 	if (hard_sync)
 	{
@@ -1647,7 +1647,7 @@ bool VKGSRender::release_GCM_label(u32 type, u32 address, u32 args)
 	if (host_ctx->has_unflushed_texture_loads())
 	{
 		vkCmdUpdateBuffer(*m_current_command_buffer, mapping.second->value, mapping.first, 4, &write_data);
-		flush_command_queue();
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[5]++; flush_command_queue();
 	}
 	else
 	{
@@ -1743,7 +1743,7 @@ void VKGSRender::sync_hint(rsx::FIFO::interrupt_hint hint, rsx::reports::sync_hi
 		// Unavoidable hard sync coming up, flush immediately
 		// This heavyweight hint should be used with caution
 		std::lock_guard lock(m_flush_queue_mutex);
-		flush_command_queue();
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[6]++; flush_command_queue();
 
 		if (m_flush_requests.pending())
 		{
@@ -1778,7 +1778,7 @@ void VKGSRender::do_local_task(rsx::FIFO::state state)
 		{
 			// TODO: Determine if a hard sync is necessary
 			// Pipeline barriers later may do a better job synchronizing than wholly stalling the pipeline
-			flush_command_queue();
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[7]++; flush_command_queue();
 
 			m_flush_requests.clear_pending_flag();
 			m_flush_requests.consumer_wait();
@@ -1817,7 +1817,7 @@ void VKGSRender::do_local_task(rsx::FIFO::state state)
 		const auto should_ignore = in_begin_end && state != rsx::FIFO::state::empty;
 		if ((async_flip_requested & flip_request::native_ui) && !should_ignore && !is_stopped())
 		{
-			flush_command_queue(true);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[8]++; flush_command_queue(true);
 			rsx::display_flip_info_t info{};
 			info.buffer = current_display_buffer;
 			flip(info);
@@ -2604,7 +2604,7 @@ void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)
 	// Before messing with memory properties, flush command queue if there are dma transfers queued up
 	if (m_current_command_buffer->flags & vk::command_buffer::cb_has_dma_transfer)
 	{
-		flush_command_queue();
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[9]++; flush_command_queue();
 	}
 
 	if (!m_rtts.superseded_surfaces.empty())
@@ -2763,7 +2763,7 @@ bool VKGSRender::scaled_image_from_memory(const rsx::blit_src_info& src, const r
 		{
 			// A dma transfer has been queued onto this cb
 			// This likely means that we're done with the tranfers to the target (writes_likely_completed=1)
-			flush_command_queue();
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[10]++; flush_command_queue();
 		}
 		return true;
 	}
@@ -2837,7 +2837,7 @@ void VKGSRender::get_occlusion_query_result(rsx::reports::occlusion_query_info* 
 		if (data.is_current(m_current_command_buffer))
 		{
 			std::lock_guard lock(m_flush_queue_mutex);
-			flush_command_queue();
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[11]++; flush_command_queue();
 
 			if (m_flush_requests.pending())
 			{

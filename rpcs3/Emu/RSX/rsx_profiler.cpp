@@ -18,6 +18,30 @@ namespace rsx::prof
 	u64 g_fifo_refill_bytes = 0;
 	u64 g_fifo_refill_stalls = 0;
 	u64 g_fifo_refill_stall_us = 0;
+	u64 g_flush_sites[flush_site_count] = {};
+	const char* g_flush_site_names[flush_site_count] = {
+		"GSR:996",
+		"GSR:1064",
+		"GSR:1156",
+		"GSR:1171",
+		"GSR:1565",
+		"GSR:1650",
+		"GSR:1746",
+		"GSR:1781",
+		"GSR:1820",
+		"GSR:2628",
+		"GSR:2787",
+		"GSR:2861",
+		"Present:77",
+		"Present:156",
+		"Present:247",
+		"Present:251",
+		"Present:413",
+		"Present:573",
+		"Present:845",
+		"Present:1091",
+		"Present:1102",
+	};
 
 	void bind_to_current_thread()
 	{
@@ -153,6 +177,17 @@ namespace rsx::prof
 
 		if (g_fifo_refills)
 		{
+			{
+				std::string drains;
+				for (u32 i = 0; i < flush_site_count; i++)
+				{
+					if (!g_flush_sites[i]) continue;
+					fmt::append(drains, "%s%s %.2f", drains.empty() ? "" : ", ",
+						g_flush_site_names[i], static_cast<double>(g_flush_sites[i]) / frames);
+				}
+				fmt::append(report, "\n\tdrains/frame    %s", drains.empty() ? "none" : drains);
+			}
+
 			fmt::append(report, "\n\tFIFO stalls     %.1f/frame, %.3f ms/frame spinning",
 				static_cast<double>(g_fifo_refill_stalls) / frames,
 				static_cast<double>(g_fifo_refill_stall_us) / 1000.0 / frames);
@@ -168,6 +203,7 @@ namespace rsx::prof
 		g_fifo_refill_bytes = 0;
 		g_fifo_refill_stalls = 0;
 		g_fifo_refill_stall_us = 0;
+		for (auto& c : g_flush_sites) c = 0;
 
 		g_acc = {};
 		g_acc.window_start = now;
