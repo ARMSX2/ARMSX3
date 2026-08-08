@@ -343,10 +343,7 @@ object Rpcs3Bridge {
                     // "Auto" is RPCS3's per-title native pacing -- the right
                     // meaning of "limit on" for a console that isn't fixed at 60.
                     Rpcs3Settings.setFrameLimitMode(if (asBool(value)) "Auto" else "Off")
-                "SyncToHostRefreshRate" ->
-                    if (asBool(value)) Rpcs3Settings.setFrameLimitMode("Display")
                 "VsyncEnable" -> Rpcs3Settings.setVsync(asBool(value))
-                "MaxAnisotropy" -> Rpcs3Settings.setAnisotropicFilter(asInt(value))
                 // PCSX2's "skip duplicate frames" means "do not present a frame identical to
                 // the last one". It is harmless there and on by default, which is why Settings
                 // defaults it to true. RPCS3 has no equivalent, and this used to map onto
@@ -396,23 +393,49 @@ object Rpcs3Bridge {
                 else -> return key.startsWith("Osd")
             }
 
-            "Framerate" -> when (key) {
-                // 100 = full speed in both, but RPCS3 clamps to 10..3000.
-                "NominalScalar" -> Rpcs3Settings.setClocksScale((asFloat(value) * 100f).toInt())
-                else -> return false
-            }
+            // NominalScalar used to drive Core@@Clocks scale from here. It is now unhandled,
+            // for the reason described above the PS3 pseudo-sections below: PS3/Core writes
+            // the same node from ps3.clocksScale, which is what the Performance tab and the
+            // in-game menu are bound to, and this ran afterwards and overwrote it. The live
+            // turbo path does not come through here at all (NativeApp.setTurboScalar calls
+            // Rpcs3Settings directly), so it is unaffected.
+            "Framerate" -> return false
 
-            "SPU2/Output" -> when (key) {
-                "SyncMode" -> Rpcs3Settings.setTimeStretching(value == "TimeStretch")
-                // PCSX2 splits buffer and output latency; RPCS3 has one duration.
-                // OutputLatencyMS is the one the user's slider actually paces on.
-                "OutputLatencyMS" -> Rpcs3Settings.setAudioBufferDuration(asInt(value))
-                "BufferMS" -> Rpcs3Settings.setAudioBuffering(asInt(value) > 0)
-                else -> return false
-            }
+            // SyncMode, OutputLatencyMS and BufferMS: all unhandled now, same reason. Each
+            // had a PS3/Audio counterpart writing the same RPCS3 node, and being emitted
+            // later, these won every time. BufferMS was wrong on its own terms besides: it
+            // turned a buffer size in milliseconds into the boolean "buffering enabled".
+            "SPU2/Output" -> return false
 
             // Settings.applyTo emits these with a "PS3/<section>" pseudo-section so
             // they are unambiguous against the PCSX2 keys sharing this function.
+            //
+            // Being unambiguous HERE was never enough, though. Six PCSX2 keys used to reach
+            // the same RPCS3 nodes these do, from a leftover mapping written before the
+            // pseudo-sections existed:
+            //
+            //   Enable Time Stretching        <- SPU2/Output/SyncMode
+            //   Desired Audio Buffer Duration <- SPU2/Output/OutputLatencyMS
+            //   Enable Buffering              <- SPU2/Output/BufferMS
+            //   Anisotropic Filter Override   <- EmuCore/GS/MaxAnisotropy
+            //   Clocks scale                  <- Framerate/NominalScalar
+            //   Frame limit                   <- EmuCore/GS/SyncToHostRefreshRate
+            //
+            // put() calls setSetting immediately rather than collecting into a map, so the
+            // order in applyTo IS the call order, and every one of these PS3 writes happens
+            // first (L939-994) with the PCSX2 write later (L1044-1765). The leftover won
+            // every single time, and the field the UI is bound to is the PS3 one. That is
+            // why the Audio tab's Time Stretching toggle did nothing: it wrote false, and
+            // SyncMode wrote true ninety lines later.
+            //
+            // SyncToHostRefreshRate was the worst of them. It mapped to Frame limit
+            // "Display", which resolves to the host panel's refresh, so on a 120Hz handheld
+            // it asked for a 120fps cap. It was also guarded by `if (asBool(value))`, so it
+            // could only ever set the mode and never clear it: turning the setting off left
+            // the cap where it was.
+            //
+            // Anything added here in future needs the same check. A PCSX2 key and a PS3 key
+            // reaching one node is not a merge, it is a race that the source order decides.
             "PS3/Core" -> when (key) {
                 "PPU Decoder" -> Rpcs3Settings.setPpuDecoder(asInt(value))
                 "SPU Decoder" -> Rpcs3Settings.setSpuDecoder(asInt(value))
