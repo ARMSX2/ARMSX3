@@ -4762,10 +4762,46 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 	// mid-compile with no tombstone) and the kernel took the process on a 7GB device. Every
 	// other module in that run reported between 2800 and 4900 functions.
 	//
-	// The resolver's cost is linear in the functions it spans, so a quarter of the group is
-	// a quarter of the peak. The cost is the disadvantage described above and nothing else:
-	// more instances means more branches unable to reach with a direct B.
-	constexpr u32 c_moudles_per_jit = 25;
+	// The resolver's cost is linear in the functions it spans, so splitting the group splits
+	// the peak. The cost is the disadvantage described above and nothing else, so the group
+	// is kept as large as the device can afford rather than lowered across the board:
+	// splitting a title that was never going to run out of memory buys nothing and gives up
+	// reachable branches for it.
+	//
+	// Two thresholds matter. A title whose parts all fit in one group gets a single JIT
+	// instance at any setting at or above its part count, so anything below the limit is
+	// completely unaffected: same instances, same codegen. And when there is memory to
+	// spare this stays at upstream's 100, so a device with room behaves exactly as before.
+	const u32 c_moudles_per_jit = []() -> u32
+	{
+		// Measured on the Arkham City run: 2.3GB across roughly 457k functions, so about
+		// 5KB of LLVM per function once the declaration, the constant-array entry and the
+		// relocation are counted. Module parts in that same run held 2800 to 4900 functions
+		// each, so 4000 is the figure used to turn a function budget into a module count.
+		constexpr u64 c_resolver_bytes_per_func = 5120;
+		constexpr u64 c_funcs_per_module = 4000;
+
+		const u64 avail_mem = utils::get_avail_memory();
+
+		if (!avail_mem)
+		{
+			// No reading to size against. Take the conservative group rather than assume.
+			return 25;
+		}
+
+		// A quarter of what is free. The emulator still needs the rest for the PS3 address
+		// space, the RSX and the modules already compiled, and the reading is taken before
+		// most of that is mapped.
+		//
+		// The ceiling is what a full group of 100 costs, so a device with memory to spare
+		// lands on upstream's value and is not split at all; there is no point budgeting
+		// past the point where nothing would be split anyway.
+		constexpr u64 c_full_group_cost = 100 * c_funcs_per_module * c_resolver_bytes_per_func;
+		const u64 budget = std::min<u64>(avail_mem / 4, c_full_group_cost);
+		const u64 by_memory = budget / c_resolver_bytes_per_func / c_funcs_per_module;
+
+		return static_cast<u32>(std::clamp<u64>(by_memory, 8, 100));
+	}();
 #else
 	constexpr u32 c_moudles_per_jit = 100;
 #endif
