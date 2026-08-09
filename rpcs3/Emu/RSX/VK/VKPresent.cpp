@@ -989,6 +989,9 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 				target_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 			}
 
+			// target_image is the swapchain image, so the swapchain owns its format. Passes that
+			// render into it rather than blitting need the real one; see upscaler::set_present_format.
+			m_upscaler->set_present_format(m_swapchain->get_surface_format());
 			m_upscaler->scale_output(*m_current_command_buffer, image_to_flip, target_image, target_layout, rgn, UPSCALE_AND_COMMIT | UPSCALE_DEFAULT_VIEW);
 		}
 	}
