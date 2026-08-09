@@ -1,0 +1,52 @@
+Version: 1.2
+
+# Canary patches bundled with ARMSX3.
+#
+# RPCS3's official feed (rpcs3.net/compatibility?patch&api=v1&v=1.2) does not carry
+# these. They live on the RPCS3 wiki as "canary" patches that a desktop user adds by
+# hand through the Patch Manager's import button -- a step there is no equivalent of
+# on Android, so without bundling them the affected games are simply broken for us.
+#
+# Only patches that fix a game which is otherwise unplayable belong here. This is not
+# a place for 60fps unlocks or resolution mods: those are the online database's job,
+# and shipping them would fork a database we would then have to maintain.
+#
+# Ps3PatchRepo.BUNDLED must list every patch here, or it is imported but never enabled.
+
+# SONIC THE HEDGEHOG (2006) -- upstream RPCS3 issue #4122, open since 2018.
+#
+# A PPU/SPU race: an SNR (signal notification register) is overwritten while still
+# non-empty, so the SPU jobs that feed geometry lose their signal and whole draw
+# batches never render. The game shows the HUD and the skybox and flickers everything
+# else in and out of existence. Desktop RPCS3 behaves identically without this patch.
+#
+# Hooks RPCS3_HLE_LIBRARY:WaitForSPUsToEmptySNRs, which is in the core at
+# rpcs3/Emu/Cell/Modules/HLE_PATCHES.cpp and exists solely to serve this patch.
+#
+# ARM64 needs three upstream fixes for this to work rather than crash, all present in
+# this tree: PR #16022 (calloc code-cave blocks registered in ppu_patch_block_registry_t),
+# the is_faux_function guard in AArch64JIT.cpp that stops the tail-call return trap from
+# firing on a patch-point, and PR #17526 (PPU LLVM filters functions carrying patches).
+#
+# Keyed by PPU hash, so it applies only to the dump it was built for -- other regions
+# and revisions (BLES00028, v01.00) need their own entry with their own hash.
+PPU-4b46d0161ca657ab16b0a779d9062810ea5ea2dd:
+  Graphics Fix:
+    Games:
+      "SONIC THE HEDGEHOG":
+        BLUS30008:
+          # Quoted deliberately. The official database writes these bare (- 01.00) and
+          # yaml-cpp is fine with that because it hands back the raw scalar text, but a
+          # bare 01.01 is a float to most YAML readers and round-trips as "1.01". This
+          # key is compared against PARAM.SFO's VERSION at apply time, so if it ever
+          # became 1.01 the patch would silently stop matching the disc.
+          - "01.01"
+    Author: elad335
+    Patch Version: 1.0
+    Notes: Fixes missing graphics ingame.
+    Patch:
+      - [ calloc, 0x00f07714, 0x04 ]
+      - [ be32, 0x00000000, 0x38800003 ] # li r4, 3
+      - [ jumpf, 0x00000000, "RPCS3_HLE_LIBRARY:WaitForSPUsToEmptySNRs" ] # Args: (SPU ID, 3)
+      - [ be32, 0x00000000, 0x38800000 ] # li r4, 0
+      - [ be32, 0x00000000, 0x44000002 ] # sc

@@ -168,6 +168,15 @@ object Rpcs3Bridge {
             }
             vsh.absolutePath
         }
+        // Canary patches must be in patch.yml BEFORE the core reads it, which happens
+        // inside boot. Doing it here rather than at app start also means it runs after
+        // the config directory exists: patchesImport writes into it, and on a first-ever
+        // run that directory only appears once setup has picked a storage location.
+        //
+        // Cheap after the first success -- it is a single preference read once the
+        // bundled revision matches.
+        appContext?.let { com.armsx2.Ps3PatchRepo.ensureBundledPatches(it) }
+
         if (RPCSX.boot(target).ordinal != 0) {
             return false
         }
