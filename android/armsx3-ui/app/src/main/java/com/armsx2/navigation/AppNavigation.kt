@@ -95,8 +95,15 @@ fun AppNavigation() {
                 is AppRoute.BiosManager -> BiosManagerScreen(onBack = UiNavigator::home, game = destination.game)
                 AppRoute.PackageInstaller ->
                     com.armsx2.ui.packages.PackageInstallerScreen(onBack = UiNavigator::home)
+                // The drawer route is the global one: it is opened from the library, where no
+                // title is selected, so an edit here is meant for every game. The in-game menu
+                // opens the same screen in the running title's scope (see WindowImpl).
                 AppRoute.CoreSettings ->
-                    com.armsx2.ui.settings.CoreSettingsScreen(onBack = UiNavigator::home)
+                    com.armsx2.ui.settings.CoreSettingsScreen(
+                        onBack = UiNavigator::home,
+                        scope = com.armsx2.config.SettingsScope.Global,
+                        serial = null,
+                    )
                 AppRoute.MemoryCardManager -> MemoryCardScreen(onBack = UiNavigator::home)
                 AppRoute.SaveManager -> SaveManagerScreen(onBack = UiNavigator::home)
                 AppRoute.ControllerManager -> ControllerManagerScreen(onBack = UiNavigator::home)

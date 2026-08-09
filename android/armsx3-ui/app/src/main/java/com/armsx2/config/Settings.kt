@@ -1228,7 +1228,14 @@ data class Settings(
         // edits on top. Order matters: game defaults are a floor, an explicit user choice
         // still wins over them, and both have to land after the curated push above.
         runCatching { GameDefaults.apply(MainActivityRuntime.currentGame.value?.serial) }
-        runCatching { CoreSettingOverrides.replay() }
+        // Core edits are global plus this title's own set, and replay orders them that way.
+        // Keyed on settingsKey, the identity ConfigStore keys per-game settings on, so the
+        // two stores agree on which title is being configured (serial for discs, filename
+        // stem for serial-less ELF/homebrew). Null with no game loaded, which skips the
+        // per-game tier rather than letting the last title played leak into a BIOS boot.
+        runCatching {
+            CoreSettingOverrides.replay(MainActivityRuntime.currentGame.value?.settingsKey)
+        }
         NativeApp.commitSettings()
     }
 

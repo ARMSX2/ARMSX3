@@ -213,13 +213,20 @@ object ConfigStore {
         //
         // Recorded as a core override rather than written to config.yml directly, so it
         // survives the settings push on every boot and stays changeable afterwards.
+        //
+        // Global tier, like every migration in this method: it is correcting the baseline
+        // everyone inherited, not a choice made for one title.
         if (!MainActivityRuntime.prefs.getBoolean(KEY_VBLANK_60, false)) {
-            runCatching { CoreSettingOverrides.record("Video@@Vblank Rate", "60") }
+            runCatching {
+                CoreSettingOverrides.record(SettingsScope.Global, null, "Video@@Vblank Rate", "60")
+            }
             // Frame limit as well as Vblank Rate. Vblank alone did not hold: the override is
             // stored and the two beside it apply, yet the live value came back as 120. Frame
             // limit is the dedicated cap and does not depend on the vblank path at all, so
             // whichever of the two takes, the result is 60.
-            runCatching { CoreSettingOverrides.record("Video@@Frame limit", "60") }
+            runCatching {
+                CoreSettingOverrides.record(SettingsScope.Global, null, "Video@@Frame limit", "60")
+            }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_VBLANK_60, true) }
         }
 
@@ -233,9 +240,15 @@ object ConfigStore {
         //
         // An override is a record of a deliberate choice, so these are removed by path
         // rather than by clearing the store, which would take the user's real edits with it.
+        //
+        // Global tier only: the per-game sets did not exist while the profiling build was
+        // out, so there is nowhere else these can have been recorded.
         if (!MainActivityRuntime.prefs.getBoolean(KEY_DIAG_OVERRIDES_PURGED, false)) {
             runCatching {
-                CoreSettingOverrides.forget("Video@@RSX Profiler", "Video@@Eager Surface Readback")
+                CoreSettingOverrides.forget(
+                    SettingsScope.Global, null,
+                    "Video@@RSX Profiler", "Video@@Eager Surface Readback",
+                )
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_DIAG_OVERRIDES_PURGED, true) }
         }

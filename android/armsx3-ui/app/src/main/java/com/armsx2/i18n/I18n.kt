@@ -391,6 +391,8 @@ val EN: Map<String, String> = mapOf(
     "core.settings.title" to "All Core Settings",
     "core.settings.description" to "Every setting the emulator core exposes, read straight from it. Advanced: there are no safety rails here, and most people want the normal Settings screens instead.",
     "core.settings.unavailable" to "The emulator core is not loaded, so its settings cannot be read.",
+    "core.settings.scope.game" to "Changes are remembered for this game only",
+    "core.settings.scope.global" to "Changes are remembered for every game",
     "packages.title" to "Install Package",
     "packages.description" to "Install a .pkg game, update or DLC, or a .rap licence file. Some games need both: the .pkg holds the content and the .rap unlocks it. Installed titles are added to your library automatically, and updates and DLC need the base game installed first.",
     "packages.select.title" to "Select a .pkg or .rap file",
