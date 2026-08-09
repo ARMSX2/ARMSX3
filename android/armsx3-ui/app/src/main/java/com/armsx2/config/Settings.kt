@@ -184,7 +184,20 @@ data class Ps3Settings(
      * to pay for permanently on a handheld.
      */
     val preciseSpuVerification: Boolean = false,
-    val ppuNanHandling: Boolean = false,
+    /**
+     * true, matching RPCS3's own default for "PPU Vector NaN Handling" (system_config.h:68).
+     *
+     * This was false, so the curated push wrote false over a node upstream ships as true and
+     * every install ran with an accuracy fixup disabled that RPCS3 wants on. Games that rely
+     * on it get NaNs through vector maths, which surfaces as geometry behaving impossibly
+     * rather than as an error.
+     *
+     * It is also in the PPU cache key (PPUThread.cpp:5343 sets ppu_settings::fixup_vnan from
+     * it), so the disagreement was not free: flipping it renames every compiled object and
+     * the next boot recompiles the lot. A device here has both variants on disk, 76 modules
+     * under one key and 58 under the other, from a single flip.
+     */
+    val ppuNanHandling: Boolean = true,
     val accurateDfma: Boolean = true,
     val setDazFtz: Boolean = false,
     val hleLwmutex: Boolean = false,
