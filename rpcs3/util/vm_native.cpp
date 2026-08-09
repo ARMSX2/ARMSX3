@@ -427,11 +427,22 @@ namespace utils
 		// Counted here because this is the syscall itself. On ARM a protection change forces
 		// TLB maintenance, and each fault that leads to one costs a SIGSEGV round trip
 		// through the handler first, so the rate matters more than it would on x86.
+		//
+		// Timed as well as counted, because the count alone could not settle it. Arkham City
+		// under load reports 16.8 calls covering 40MB per frame, which is roughly ten
+		// thousand pages of kernel page-table work plus TLB shootdowns across eight cores,
+		// and it is reached from RSX state handling so all of it lands in fifo_decode: the
+		// bucket holding 36.9ms of a 46.5ms frame. Either this is most of that hole or it is
+		// nearly none of it, and guessing which has no value.
+		//
+		// Charged only on the RSX thread; the scope ignores every other caller.
 		if (rsx::prof::enabled()) [[unlikely]]
 		{
 			rsx::prof::g_mprotect_calls++;
 			rsx::prof::g_mprotect_bytes += size;
 		}
+
+		RSX_PROF_SCOPE(page_protect);
 
 		if (!size)
 		{

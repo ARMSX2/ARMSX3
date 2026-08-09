@@ -86,6 +86,7 @@ namespace rsx::prof
 		case bucket::submit: return "Submit";
 		case bucket::fence_wait: return "Fence wait";
 		case bucket::present_wait: return "Present wait";
+		case bucket::page_protect: return "Page protect";
 		case bucket::idle: return "Idle";
 		case bucket::unclassified: return "Unclassified";
 		default: return "?";
