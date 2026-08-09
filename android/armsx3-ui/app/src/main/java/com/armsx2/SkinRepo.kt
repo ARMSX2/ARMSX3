@@ -18,8 +18,12 @@ import java.io.File
  * INDEX: `manifest.json` at the repo root is preferred, because it carries the
  * author's display name, a preview image and the button count. The git-trees
  * fallback exists so the browser still works if the manifest is missing or
- * malformed, but it can only recover filenames — no previews, no names beyond the
- * file stem.
+ * malformed; it recovers filenames, and previews where a Previews/ image pairs with
+ * a skin by name, but no author or button count.
+ *
+ * The manifest is published by someone else, so BOTH paths have to survive it being
+ * wrong — see [dropTrailingCommas]. A broken index should cost detail, never the
+ * whole browser.
  */
 object SkinRepo {
     private const val TAG = "SkinRepo"
@@ -83,10 +87,52 @@ object SkinRepo {
         return fetchFromTree()
     }
 
+    /**
+     * Drop `,` separated only by whitespace from the `}` or `]` that closes its container.
+     *
+     * A trailing comma is invalid JSON and org.json rejects it, so ONE stray comma in the
+     * published manifest took down the whole skin index — [fetch] fell through to
+     * [fetchFromTree], which recovers filenames and nothing else, and the browser lost every
+     * preview, author and button count at once. That is a lot of blast radius for a comma in a
+     * file this app does not own and cannot fix from here, and the failure is silent from the
+     * user's side: skins still list, they just go blank.
+     *
+     * String-aware rather than a regex, so a name that genuinely contains `, ]` survives.
+     */
+    private fun dropTrailingCommas(body: String): String {
+        val out = StringBuilder(body.length)
+        var inString = false
+        var escaped = false
+        for (c in body) {
+            if (inString) {
+                out.append(c)
+                when {
+                    escaped -> escaped = false
+                    c == '\\' -> escaped = true
+                    c == '"' -> inString = false
+                }
+                continue
+            }
+            if (c == '"') inString = true
+            else if (c == '}' || c == ']') {
+                var i = out.length
+                while (i > 0 && out[i - 1].isWhitespace()) i--
+                if (i > 0 && out[i - 1] == ',') out.deleteCharAt(i - 1)
+            }
+            out.append(c)
+        }
+        return out.toString()
+    }
+
     private fun parseManifest(body: String?): List<RemoteSkin>? {
         if (body.isNullOrBlank()) return null
+        // Strict first: a manifest that is already valid must not be rewritten on the way in.
+        val root = runCatching { JSONObject(body) }.getOrNull()
+            ?: runCatching { JSONObject(dropTrailingCommas(body)) }.getOrNull()
+                ?.also { Log.w(TAG, "manifest has trailing commas, parsed after repair") }
+            ?: return null
         return runCatching {
-            val arr = JSONObject(body).getJSONArray("skins")
+            val arr = root.getJSONArray("skins")
             (0 until arr.length()).mapNotNull { i ->
                 val o = arr.optJSONObject(i) ?: return@mapNotNull null
                 val file = o.optString("file").takeIf { it.isNotBlank() } ?: return@mapNotNull null
@@ -104,14 +150,32 @@ object SkinRepo {
         }.getOrNull()
     }
 
-    /** Filenames only — used when the manifest can't be read. */
+    /** Comparison key for pairing a skin with its preview across the naming schemes the repo
+     *  actually uses — "ARMSX1 Skin.zip" against "ARMSX1_Skin_preview.png", "Black Gold
+     *  Frosted.zip" against "black-gold-frosted.png". Letters and digits only, trailing
+     *  "preview" dropped. Near misses just go without a thumbnail. */
+    private fun matchKey(name: String): String =
+        name.lowercase().filter { it.isLetterOrDigit() }.removeSuffix("preview")
+
+    /** Filenames plus whatever previews pair by name — used when the manifest can't be read. */
     private fun fetchFromTree(): List<RemoteSkin> {
         val body = get(TREE_URL, maxBytes = 4L * 1024 * 1024)?.toString(Charsets.UTF_8)
             ?: return emptyList()
         return runCatching {
             val arr = JSONObject(body).getJSONArray("tree")
-            (0 until arr.length()).mapNotNull { i ->
-                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val paths = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+
+            // Previews recovered by name. This fallback used to hand back previewPath = null for
+            // everything, so the one time it ran — a malformed manifest — the browser showed a
+            // list of bare filenames. The tree lists Previews/ too; the images were sitting right
+            // there. Pair what pairs, rather than dropping the lot because the index is broken.
+            val previews = paths.mapNotNull { o ->
+                val p = o.optString("path")
+                if (!p.startsWith("Previews/") || !p.endsWith(".png")) null
+                else matchKey(p.substringAfterLast('/').removeSuffix(".png")) to p
+            }.toMap()
+
+            paths.mapNotNull { o ->
                 val path = o.optString("path")
                 if (!path.startsWith("Skins/") || !path.endsWith(".zip")) return@mapNotNull null
                 // The two-byte CRLF placeholders that used to sit in this repo would
@@ -120,10 +184,11 @@ object SkinRepo {
                 // installs to nothing.
                 val size = o.optLong("size", 0L)
                 if (size in 1 until 1024) return@mapNotNull null
+                val name = path.substringAfterLast('/').removeSuffix(".zip")
                 RemoteSkin(
-                    name = path.substringAfterLast('/').removeSuffix(".zip"),
+                    name = name,
                     filePath = path,
-                    previewPath = null,
+                    previewPath = previews[matchKey(name)],
                     author = "community",
                     buttons = 0,
                     sizeBytes = size,
