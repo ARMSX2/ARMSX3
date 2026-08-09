@@ -15,6 +15,7 @@ namespace rsx::prof
 	u64 g_last_switch = 0;
 	const void* g_owner_thread = nullptr;
 	u64 g_fifo_refills = 0;
+	u64 g_fifo_commands = 0;
 	u64 g_fifo_refill_bytes = 0;
 	u64 g_fifo_refill_stalls = 0;
 	u64 g_fifo_refill_stall_us = 0;
@@ -237,8 +238,20 @@ namespace rsx::prof
 				static_cast<double>(g_fifo_refill_bytes) / static_cast<double>(g_fifo_refills));
 		}
 
+		if (g_fifo_commands)
+		{
+			// The per-command figure is against fifo_decode specifically, since that is the
+			// bucket with no owner left in it.
+			const u64 decode_ticks = g_acc.ticks[static_cast<usz>(bucket::fifo_decode)];
+
+			fmt::append(report, "\n\tFIFO commands   %.0f/frame, %.0f ns each in FIFO decode",
+				static_cast<double>(g_fifo_commands) / frames,
+				static_cast<double>(decode_ticks) * to_ms * 1'000'000.0 / static_cast<double>(g_fifo_commands));
+		}
+
 		prof_log.success("%s", report);
 
+		g_fifo_commands = 0;
 		g_fifo_refills = 0;
 		g_fifo_refill_bytes = 0;
 		g_fifo_refill_stalls = 0;

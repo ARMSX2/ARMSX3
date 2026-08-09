@@ -176,6 +176,19 @@ namespace rsx::prof
 	extern u64 g_fifo_refills;
 	extern u64 g_fifo_refill_bytes;
 
+	/**
+	 * Iterations of the RSX dispatch loop, one per FIFO command.
+	 *
+	 * With every sub-unit in that loop now measured and small, whatever remains in
+	 * fifo_decode is the dispatch itself, and the only question left is whether that is a
+	 * lot of commands at a reasonable cost each or a few at an unreasonable one. Those want
+	 * opposite fixes, and the per-command cost this yields is the number that decides.
+	 *
+	 * An increment behind the existing enabled() branch, with no counter-timer read, so it
+	 * does not repeat the mistake of a per-command scope measuring mostly itself.
+	 */
+	extern u64 g_fifo_commands;
+
 	// Refills that could not take their data immediately and fell into the retry spin, plus
 	// the microseconds burned there. That spin is billed to the FIFO bucket rather than to
 	// idle, so without these there is no way to tell RSX doing work from RSX waiting on the

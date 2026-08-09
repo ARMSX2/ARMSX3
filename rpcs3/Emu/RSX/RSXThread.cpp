@@ -1159,6 +1159,8 @@ namespace rsx
 			// Update sub-units every 64 cycles. The local handler is invoked for other functions externally on-demand anyway.
 			// This avoids expensive calls to check timestamps which involves reading some values from TLS storage on windows.
 			// If something is going on in the backend that requires an update, set the interrupt bit explicitly.
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_fifo_commands++;
+
 			if ((m_cycles_counter++ & 63) == 0 || m_eng_interrupt_mask)
 			{
 				// Execute backend-local tasks first
