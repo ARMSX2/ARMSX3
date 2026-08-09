@@ -27,7 +27,9 @@ import com.armsx2.runtime.MainActivityRuntime
 import kotlinx.coroutines.flow.first
 
 /** A full manager screen shown as an overlay over the paused game (in-game menu). */
-enum class InGameScreen { Settings, Achievements, Memcard, Patches, Controls, Skins, Textures, SaveState, LoadState }
+enum class InGameScreen {
+    Settings, CoreSettings, Achievements, Memcard, Patches, Controls, Skins, Textures, SaveState, LoadState
+}
 
 object WindowImpl {
     val toolbarVisible = mutableStateOf(true)
@@ -159,6 +161,16 @@ object WindowImpl {
                             initialCategory = com.armsx2.navigation.SettingsCategory.General,
                             game = MainActivityRuntime.currentGame.value,
                             onBack = dismiss,
+                        )
+                        // Every core node, over the paused game. Scope and serial come from the
+                        // overlay's own scope state, which InGameOverlay.open() resolves for the
+                        // running title, so an edit made mid-session is remembered for that title
+                        // instead of following the next game that boots. The drawer route stays
+                        // global (see AppNavigation).
+                        InGameScreen.CoreSettings -> com.armsx2.ui.settings.CoreSettingsScreen(
+                            onBack = dismiss,
+                            scope = InGameOverlay.settingsScope.value,
+                            serial = InGameOverlay.currentSerial.value,
                         )
                         InGameScreen.Achievements -> com.armsx2.ui.achievements.AchievementsScreen(onBack = dismiss)
                         InGameScreen.Memcard -> com.armsx2.ui.memorycards.MemoryCardScreen(
