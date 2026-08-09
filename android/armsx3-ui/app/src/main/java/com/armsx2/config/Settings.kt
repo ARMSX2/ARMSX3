@@ -1223,20 +1223,19 @@ data class Settings(
         // above it would already be 60; setting it explicitly means the cap does not depend
         // on the vblank path holding, which it did not. Enum node, so the value is quoted.
         runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Frame limit", "\"60\"") }
-        // Savestates do not work at all without this.
+        // Held at the upstream default, which is off.
         //
-        // Saving locks every SPU thread into a state it can be serialised from, and with this
-        // off that lock fails on any title with SPU work running: the save is abandoned
-        // ("Failed to savestate: failed to lock SPU threads execution"), and the SPU it gave
-        // up on then never answers the stop request, so the join thread spins and the app
-        // hangs on the next save or load. What looked like a savestate deadlock was this
-        // setting the whole time.
+        // Savestates cannot work without it: saving has to lock every SPU thread into a state
+        // it can be serialised from, and with this off that lock fails on any title with SPU
+        // work running. It was turned on for exactly that reason and then turned back off,
+        // because a PS3 savestate runs 500MB to 3GB and the feature was dropped rather than
+        // ship something that fills a phone in a handful of saves.
         //
-        // Upstream defaults it off because it costs SPU performance, which is the right
-        // default for a desktop where savestates are optional. Here the feature is on the
-        // in-game menu and the touch overlay, and a save that wedges the emulator is worse
-        // than SPU emulation being a little slower.
-        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Savestate@@Compatible Savestate Mode", "true") }
+        // Written explicitly rather than left alone: it was pushed as true for a while, so
+        // installs from that window have true persisted in config.yml and would keep paying
+        // for it. It costs SPU performance, which is the whole reason upstream defaults it
+        // off, and nothing here uses what it buys.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Savestate@@Compatible Savestate Mode", "false") }
 
         // Settings a specific title needs in order to run at all, then the user's own core
         // edits on top. Order matters: game defaults are a floor, an explicit user choice
