@@ -2690,7 +2690,21 @@ void sigpipe_signaling_handler(int)
 const bool s_exception_handler_set = []() -> bool
 {
 	struct ::sigaction sa;
+#ifdef __ANDROID__
+	// Run the handler on the alternate stack installed per thread in
+	// thread_base::initialize. Without this the handler runs on the faulting thread's own
+	// stack, so a stack overflow has nowhere to report itself from: the handler faults
+	// again immediately and the kernel applies the default action, killing the process
+	// having written nothing.
+	//
+	// Arkham City does exactly that. The only record anywhere of the crash was a single
+	// Zygote line, "exited due to signal 11 (Segmentation fault)", with no tombstone, no
+	// crash-buffer entry and no line from this handler, which cost hours of diagnosing it
+	// as an external kill.
+	sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+#else
 	sa.sa_flags = SA_SIGINFO;
+#endif
 	sigemptyset(&sa.sa_mask);
 	sa.sa_sigaction = signal_handler;
 
@@ -2794,6 +2808,33 @@ void thread_base::start()
 
 void thread_base::initialize(void (*error_cb)())
 {
+#ifdef __ANDROID__
+	// Somewhere for the SIGSEGV handler to run, per thread. See SA_ONSTACK above.
+	//
+	// Deliberately a thread_local rather than a shared buffer: the handler can fire on any
+	// thread, two threads can fault at once, and a shared stack would corrupt whichever
+	// report lost the race. It is released with the thread, after which no handler can run
+	// on it.
+	//
+	// 128KB because the handler formats and logs rather than just setting a flag. That is
+	// real memory across the emulator's thread count, and it buys turning a silent death
+	// into a reported one.
+	static thread_local std::array<u8, 128 * 1024> s_signal_stack;
+
+	stack_t alt{};
+	alt.ss_sp = s_signal_stack.data();
+	alt.ss_size = s_signal_stack.size();
+	alt.ss_flags = 0;
+
+	if (::sigaltstack(&alt, nullptr) == -1)
+	{
+		// Not fatal: the handler simply falls back to the faulting stack, which is the
+		// behaviour everywhere else. Worth knowing about, because it means a stack
+		// overflow will go unreported again.
+		sig_log.error("sigaltstack failed (%d); stack overflows will not be reported", errno);
+	}
+#endif
+
 #ifndef _WIN32
 #ifdef __APPLE__
 	while (!m_thread)
