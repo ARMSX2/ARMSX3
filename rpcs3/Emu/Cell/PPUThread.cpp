@@ -3486,6 +3486,39 @@ struct jit_core_allocator
 		const u64 avail = utils::get_avail_memory();
 		return avail != 0 && avail < (2048ull * 1024 * 1024);
 	}
+
+	// Below this the next module should not start at all yet.
+	//
+	// Serialising is not enough on its own. Demon's Souls precompiles for 27 minutes and sat
+	// between 4.3GB and 5.8GB the whole time on a 7GB device, then was killed when the system
+	// wanted memory back: Zygote logged signal 9 for four processes at once, so the pressure
+	// was not ours alone. One worker at a time still walks into that, it just walks slower.
+	//
+	// So a worker about to start a module waits for the system to recover instead of adding
+	// to the pressure. Precompilation writes each object to disk and, because the modules are
+	// not mapped into the VM, links none of them into memory, so pausing costs time and
+	// nothing else.
+	static bool memory_is_critical()
+	{
+		const u64 avail = utils::get_avail_memory();
+		return avail != 0 && avail < (1024ull * 1024 * 1024);
+	}
+
+	// Give the system a chance to reclaim before starting another module. Bounded, because
+	// never compiling is worse than compiling under pressure, and the caller has already
+	// serialised itself by this point.
+	static void wait_for_memory()
+	{
+		for (u32 waited_ms = 0; waited_ms < 10'000 && memory_is_critical(); waited_ms += 100)
+		{
+			if (Emu.IsStopped())
+			{
+				return;
+			}
+
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		}
+	}
 #endif
 
 	static s16 limit()
@@ -5472,6 +5505,11 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						if (jit_core_allocator::memory_is_tight())
 						{
 							serialise_compiles = std::unique_lock{g_fxo->get<jit_core_allocator>().low_memory_mutex};
+
+							// Holding the lock first is deliberate: whoever waits should be the
+							// only one running, otherwise the other worker keeps allocating and
+							// the wait watches memory it is not allowed to influence.
+							jit_core_allocator::wait_for_memory();
 						}
 #endif
 
