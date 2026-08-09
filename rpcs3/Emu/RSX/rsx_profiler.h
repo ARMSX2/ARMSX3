@@ -189,6 +189,19 @@ namespace rsx::prof
 	 */
 	extern u64 g_fifo_commands;
 
+	/**
+	 * Commands seen per RSX method register, indexed by (id >> 2).
+	 *
+	 * The per-command figure came out around a microsecond, which is far too much for
+	 * reading a word and calling a handler, so the cost is in a handler rather than spread
+	 * evenly. Counting says which methods make up the volume; a handful dominating means a
+	 * fast path is worth writing, an even spread means the dispatch itself is the problem.
+	 *
+	 * 64KB of counters, only touched while profiling is armed.
+	 */
+	inline constexpr usz method_slot_count = 0x4000;
+	extern u32 g_method_counts[method_slot_count];
+
 	// Refills that could not take their data immediately and fell into the retry spin, plus
 	// the microseconds burned there. That spin is billed to the FIFO bucket rather than to
 	// idle, so without these there is no way to tell RSX doing work from RSX waiting on the

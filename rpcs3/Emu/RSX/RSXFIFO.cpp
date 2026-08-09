@@ -912,6 +912,8 @@ namespace rsx
 
 			m_ctx->register_state->decode(reg, value);
 
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_method_counts[reg & (rsx::prof::method_slot_count - 1)]++;
+
 			if (auto method = methods[reg])
 			{
 				method(m_ctx, reg, value);

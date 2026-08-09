@@ -4,6 +4,9 @@
 #include "util/sysinfo.hpp"
 
 #include <string>
+#include <algorithm>
+#include <utility>
+#include "gcm_printing.h"
 
 LOG_CHANNEL(prof_log, "RSXPROF");
 
@@ -16,6 +19,7 @@ namespace rsx::prof
 	const void* g_owner_thread = nullptr;
 	u64 g_fifo_refills = 0;
 	u64 g_fifo_commands = 0;
+	u32 g_method_counts[method_slot_count] = {};
 	u64 g_fifo_refill_bytes = 0;
 	u64 g_fifo_refill_stalls = 0;
 	u64 g_fifo_refill_stall_us = 0;
@@ -249,9 +253,40 @@ namespace rsx::prof
 				static_cast<double>(decode_ticks) * to_ms * 1'000'000.0 / static_cast<double>(g_fifo_commands));
 		}
 
+		{
+			// Top methods by volume. Names via gcm_printing, which is the same table the
+			// command dumps use, so these read the same as the log's own FIFO traces.
+			std::pair<u32, u32> top[8] = {};
+			for (u32 i = 0; i < method_slot_count; i++)
+			{
+				if (!g_method_counts[i]) continue;
+				if (g_method_counts[i] <= top[7].second) continue;
+				top[7] = { i, g_method_counts[i] };
+				std::sort(std::begin(top), std::end(top),
+					[](const auto& a, const auto& b) { return a.second > b.second; });
+			}
+
+			if (top[0].second)
+			{
+				std::string list;
+				for (const auto& [slot, count] : top)
+				{
+					if (!count) continue;
+					std::string scratch;
+					const auto name = rsx::get_method_name(slot << 2, scratch).second;
+					fmt::append(list, "\n\t  %-46s %8.0f/frame  %4.1f%%",
+						name.empty() ? fmt::format("0x%05x", slot << 2) : std::string(name),
+						static_cast<double>(count) / frames,
+						static_cast<double>(count) * 100.0 / static_cast<double>(g_fifo_commands));
+				}
+				fmt::append(report, "\n\ttop methods%s", list);
+			}
+		}
+
 		prof_log.success("%s", report);
 
 		g_fifo_commands = 0;
+		std::fill(std::begin(g_method_counts), std::end(g_method_counts), 0u);
 		g_fifo_refills = 0;
 		g_fifo_refill_bytes = 0;
 		g_fifo_refill_stalls = 0;
