@@ -200,8 +200,13 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
                 )
             }
 
+            // weight(1f), not just fillMaxWidth: an unweighted LazyColumn in a Column takes the
+            // whole remaining height, which left the Back button below it with nothing to lay out
+            // in. The button was always here, it was simply off the bottom of the screen, and on a
+            // touch-only device that made this the one screen with no visible way out. Weighting
+            // the list makes it share the space and keeps Back on screen at every list length.
             LazyColumn(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(filtered, key = { it.path }) { setting ->
