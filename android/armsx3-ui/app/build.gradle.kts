@@ -32,12 +32,16 @@ android {
         versionCode = 3
         versionName = "0.2.2-alpha"
 
-        // ARMSX2's UI reads these. STORAGE_ALL_FILES gates the all-files
-        // storage path in onboarding; IN_APP_UPDATER gates self-update (off:
-        // ARMSX3 updates come from its own release channel, and shipping an
-        // in-app APK installer is a Play-policy problem).
+        // ARMSX2's UI reads these. STORAGE_ALL_FILES gates the all-files storage path in
+        // onboarding; IN_APP_UPDATER gates the in-app GitHub-release updater.
+        //
+        // On because ARMSX3 ships as a sideloaded APK from its own GitHub releases, which is
+        // exactly the case an in-app updater is for. It must go back off, and the code and the
+        // REQUEST_INSTALL_PACKAGES permission must move into a github-only flavor, before any
+        // Play build exists: Play forbids self-updating apps, and it is the PERMISSION in the
+        // bundle that gets rejected, which this runtime flag does nothing about.
         buildConfigField("boolean", "STORAGE_ALL_FILES", "true")
-        buildConfigField("boolean", "IN_APP_UPDATER", "false")
+        buildConfigField("boolean", "IN_APP_UPDATER", "true")
 
         ndk {
             // The core is arm64-only.

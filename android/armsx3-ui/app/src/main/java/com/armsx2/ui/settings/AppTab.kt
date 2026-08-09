@@ -195,11 +195,11 @@ fun AppTab() {
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // In-app GitHub-release updater. Github (sideload) flavor only: the play flavor's
-        // UpdaterEntry is a no-op stub and IN_APP_UPDATER is false, so no updater code or
-        // REQUEST_INSTALL_PACKAGES ships in the AAB (build-play-aab.sh also fails closed).
+        // In-app GitHub-release updater, gated on IN_APP_UPDATER. ARMSX3 has no Play build, so
+        // unlike ARMSX2 this is not behind a flavor split; see UpdaterEntry's header for what
+        // has to change first if that ever stops being true.
         if (com.armsx2.BuildConfig.IN_APP_UPDATER) {
-            /* ARMSX3: no in-app updater */ Unit
+            com.armsx2.update.UpdaterEntry()
         }
         ConfigDatabaseRow()
         Surface(
