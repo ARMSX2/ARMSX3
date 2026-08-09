@@ -1835,7 +1835,13 @@ val EN: Map<String, String> = mapOf(
     "setup.welcome.subheading" to "Hit Next to get started",
     "skins.activeSkin" to "Active skin",
     "skins.activeSkin.game" to "Active skin (this game)",
+    // Kept because older locale files still carry it, but no longer used for a row name:
+    // it read "Built-in (default)" on the ARMSX2 row, which stopped being true when
+    // ARMSX3 Textured became the default.
     "skins.builtinDefault" to "Built-in (default)",
+    // Appended to whichever skin is the default, so the label follows DEFAULT_SKIN_ID
+    // instead of being baked into one row's name and going stale the next time it moves.
+    "skins.defaultTag" to "default",
     "skins.perGame.description" to "Off, this game uses whatever skin you picked for all games. On, it keeps its own — handy for giving a light-gun or racing game its own look without touching the rest of your library.",
     "skins.perGame.label" to "Use a different skin for this game",
     "skins.description" to "Import a folder or .zip of ic_controller_*.png images (iOS-format skin packs work). ",

@@ -259,13 +259,19 @@ fun SkinsTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
         // then ARMSX2, then ARMSX1, then the two NetherSX2 packs. ARMSX2 is the null id
         // (the built-in drawables) rather than an asset pack, so it is drawn between the
         // first BUILTIN entry and the rest instead of being in that list.
+        // One place decides what "(default)" is attached to, and it reads the store rather
+        // than assuming, so moving DEFAULT_SKIN_ID moves the label with it.
+        val defaultTag = str("skins.defaultTag")
+        fun label(name: String, id: String?): String =
+            if (id == ControllerSkinStore.DEFAULT_SKIN_ID) "$name  ·  $defaultTag" else name
+
         val builtinPreviews = remember {
             ControllerSkinStore.BUILTIN.associate { it.id to ControllerSkinStore.builtinPreview(ctx, it) }
         }
 
         ControllerSkinStore.BUILTIN.firstOrNull()?.let { first ->
             SkinRow(
-                name = first.name,
+                name = label(first.name, first.id),
                 selected = activeId == first.id,
                 controllerId = "skin-${first.id}",
                 onSelect = { ControllerSkinStore.setActive(ctx, first.id, editSerial); refresh.intValue++ },
@@ -276,7 +282,9 @@ fun SkinsTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
         }
 
         SkinRow(
-            name = str("skins.builtinDefault"),
+            // The built-in drawables, which are ARMSX2's pad. Named plainly now that it is
+            // an ordinary choice rather than the default.
+            name = "ARMSX2",
             selected = activeId == null,
             controllerId = "skin-builtin",
             onSelect = { ControllerSkinStore.setActive(ctx, null, editSerial); refresh.intValue++ },
@@ -287,7 +295,7 @@ fun SkinsTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
         for (b in ControllerSkinStore.BUILTIN.drop(1)) {
             SettingsDivider()
             SkinRow(
-                name = b.name,
+                name = label(b.name, b.id),
                 selected = activeId == b.id,
                 controllerId = "skin-${b.id}",
                 onSelect = { ControllerSkinStore.setActive(ctx, b.id, editSerial); refresh.intValue++ },
