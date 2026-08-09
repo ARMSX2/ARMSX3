@@ -119,8 +119,8 @@ public final class NativeApp {
     /** [MAPPED] */
     public static boolean loadStateFromSlot(int slot) { return Rpcs3Bridge.loadState(slot); }
 
-    /** [TODO] RPCS3 supports savestates; slot screenshots are not wired yet. */
-    public static byte[] getImageSlot(int slot) { Unsupported.note("getImageSlot"); return null; }
+    /** [MAPPED] Slot preview, captured by the core at save time. Null if the slot has none. */
+    public static byte[] getImageSlot(int slot) { return Rpcs3Bridge.thumbnailForSlot(slot); }
 
     /** [TODO] */
     public static byte[] getSaveStateImage(String path) { Unsupported.note("getSaveStateImage"); return null; }

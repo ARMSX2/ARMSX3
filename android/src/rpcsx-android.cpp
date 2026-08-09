@@ -201,6 +201,92 @@ struct LogListener : logs::listener {
   }
 } static g_androidLogListener;
 
+// ---------------------------------------------------------------------------
+// Save slot thumbnails.
+//
+// The most recently captured frame, downscaled, held until a save asks for it.
+//
+// It has to be cached rather than captured on demand. A save kills the VM, and the point
+// where the state is known to be on disk is after_kill_callback, by which time there is no
+// renderer left to ask for a picture. So the save requests a screenshot on its way in, this
+// catches whatever the renderer produces, and the capture step writes it out afterwards.
+//
+// Stored small (long edge ~320px) because it is only ever drawn as a tile, and because the
+// alternative is parking several megabytes of full-resolution frame per save.
+// ---------------------------------------------------------------------------
+
+// Owned by RSXThread.cpp. Setting it makes the next present hand its frame to
+// GSFrameBase::take_screenshot.
+extern atomic_t<bool> g_user_asked_for_screenshot;
+
+static constexpr u32 kThumbMaxEdge = 320;
+
+static shared_mutex g_thumb_mutex;
+static std::vector<u8> g_thumb_rgba; // tightly packed RGBA8
+static u32 g_thumb_width = 0;
+static u32 g_thumb_height = 0;
+
+static void armsx3_store_thumbnail(const std::vector<u8> &src, u32 width,
+                                   u32 height, bool is_bgra) {
+  if (src.empty() || width == 0 || height == 0 ||
+      src.size() < static_cast<usz>(width) * height * 4) {
+    return;
+  }
+
+  // Integer step nearest-neighbour. Point sampling is more than enough at tile size, and it
+  // reads only the pixels it keeps rather than walking the whole frame.
+  const u32 step = std::max<u32>(1, (std::max(width, height) + kThumbMaxEdge - 1) / kThumbMaxEdge);
+  const u32 out_w = std::max<u32>(1, width / step);
+  const u32 out_h = std::max<u32>(1, height / step);
+
+  std::vector<u8> out(static_cast<usz>(out_w) * out_h * 4);
+
+  for (u32 y = 0; y < out_h; y++) {
+    const u8 *row = src.data() + static_cast<usz>(y) * step * width * 4;
+    u8 *dst = out.data() + static_cast<usz>(y) * out_w * 4;
+
+    for (u32 x = 0; x < out_w; x++) {
+      const u8 *px = row + static_cast<usz>(x) * step * 4;
+
+      // Normalised to RGBA here so the Kotlin side never has to care which backend or
+      // surface format produced the frame.
+      dst[0] = is_bgra ? px[2] : px[0];
+      dst[1] = px[1];
+      dst[2] = is_bgra ? px[0] : px[2];
+      dst[3] = 0xff; // the frame's alpha is not meaningful for a preview
+      dst += 4;
+    }
+  }
+
+  std::lock_guard lock(g_thumb_mutex);
+  g_thumb_rgba = std::move(out);
+  g_thumb_width = out_w;
+  g_thumb_height = out_h;
+}
+
+// "AX3T", u32 width, u32 height, then width*height RGBA8. A private format on purpose:
+// encoding a PNG here would mean a compressor in the core for a picture that is decoded
+// two centimetres away by code that can build a Bitmap from raw pixels directly.
+static bool armsx3_write_thumbnail(const std::string &path) {
+  std::lock_guard lock(g_thumb_mutex);
+
+  if (g_thumb_rgba.empty()) {
+    return false;
+  }
+
+  fs::file out(path, fs::rewrite);
+
+  if (!out) {
+    return false;
+  }
+
+  const u32 header[2] = {g_thumb_width, g_thumb_height};
+  out.write("AX3T", 4);
+  out.write(header, sizeof(header));
+  out.write(g_thumb_rgba.data(), g_thumb_rgba.size());
+  return true;
+}
+
 struct GraphicsFrame : GSFrameBase {
   mutable ANativeWindow *activeNativeWindow = nullptr;
   mutable int width = 0;
@@ -362,8 +448,15 @@ struct GraphicsFrame : GSFrameBase {
   // signature no longer overrides, which left GraphicsFrame abstract.
   void present_frame(std::vector<u8> &&data, u32 pitch, u32 width, u32 height,
                      bool is_bgra) const override {}
+  // Save slot thumbnails. RPCS3 already renders and hands over the finished frame here
+  // whenever a screenshot is requested; this used to drop it, which is why the slot picker
+  // had nothing to show. Kept as the most recent frame rather than written straight out:
+  // the save that wants it happens later, after the VM has been killed, and there is no
+  // frame to ask for by then.
   void take_screenshot(std::vector<u8> &&sshot_data, u32 sshot_width,
-                       u32 sshot_height, bool is_bgra) override {}
+                       u32 sshot_height, bool is_bgra) override {
+    armsx3_store_thumbnail(sshot_data, sshot_width, sshot_height, is_bgra);
+  }
   // Added upstream after RPCSX forked. The Android UI draws its own FPS via
   // the perf overlay, so there is no host window title to update.
   void update_title(double fps = 0.0) override {}
@@ -2421,6 +2514,12 @@ static void armsx3_slot_capture(unsigned int slot, const std::string& title,
     return;
   }
 
+  // Best effort. A slot with no picture still loads, so a missing frame must not turn a
+  // successful save into a failed one.
+  if (!armsx3_write_thumbnail(dir + "slot" + std::to_string(slot) + ".thumb")) {
+    rpcsx_android.notice("saveState: slot %u has no frame to preview", slot);
+  }
+
   rpcsx_android.success("saveState: slot %u <- '%s'", slot, newest);
 }
 
@@ -2439,6 +2538,10 @@ extern "C" bool _rpcsx_saveStateToSlot(unsigned int slot) {
     rpcsx_android.error("saveState: no title id, cannot address a slot");
     return false;
   }
+
+  // Ask for a frame now, while there is still a renderer to draw one. It arrives at
+  // take_screenshot and is written out by armsx3_slot_capture once the state is on disk.
+  g_user_asked_for_screenshot = true;
 
   Emu.CallFromMainThread([slot, title, boot]() {
     // Outside suspend mode the game comes straight back up from the state it just

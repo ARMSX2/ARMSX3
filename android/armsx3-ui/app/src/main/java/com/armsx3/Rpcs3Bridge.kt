@@ -590,6 +590,47 @@ object Rpcs3Bridge {
      * Empty when no game is running, since slots are per title and the core cannot resolve
      * which title's slots to answer for.
      */
+    /**
+     * Slot preview as PNG bytes, or null.
+     *
+     * The core writes "AX3T" + u32 width + u32 height + RGBA8 beside the state when it saves.
+     * Read here rather than through JNI because the file sits under a path this side already
+     * knows, and re-encoded to PNG because the picker decodes with BitmapFactory. Encoding on
+     * this side keeps a compressor out of the emulator core for what is only ever a tile.
+     */
+    @JvmStatic
+    fun thumbnailForSlot(slot: Int): ByteArray? = runCatching {
+        val title = RPCSX.instance.getTitleId().takeIf { it.isNotEmpty() } ?: return null
+        val root = com.armsx2.runtime.MainActivityRuntime.systemDirPosix() ?: return null
+        val file = java.io.File(root, "config/savestates/$title/armsx3_slots/slot$slot.thumb")
+        if (!file.isFile) return null
+
+        val raw = file.readBytes()
+        val header = 12
+        if (raw.size < header || raw[0] != 'A'.code.toByte() || raw[1] != 'X'.code.toByte() ||
+            raw[2] != '3'.code.toByte() || raw[3] != 'T'.code.toByte()
+        ) return null
+
+        val buf = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        val width = buf.getInt(4)
+        val height = buf.getInt(8)
+        // Trust nothing about a file on shared storage: a bad size here is an allocation, not
+        // a parse error.
+        if (width !in 1..4096 || height !in 1..4096) return null
+        if (raw.size < header + width * height * 4) return null
+
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            width, height, android.graphics.Bitmap.Config.ARGB_8888
+        )
+        bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(raw, header, width * height * 4))
+
+        java.io.ByteArrayOutputStream().use { out ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            bitmap.recycle()
+            out.toByteArray()
+        }
+    }.getOrNull()
+
     @JvmStatic
     fun gamePathForSlot(slot: Int): String {
         if (!hasState(slot)) return ""
