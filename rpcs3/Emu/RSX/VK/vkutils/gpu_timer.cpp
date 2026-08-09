@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "gpu_timer.h"
+#include "Emu/RSX/rsx_profiler.h"
 
 #include "device.h"
 #include "commands.h"
@@ -87,6 +88,17 @@ namespace vk
 
 	void gpu_timer::begin(command_buffer& cmd, region r)
 	{
+		// Nothing recorded unless the profiler is armed.
+		//
+		// The readback in VKPresent was already gated on the setting, but these were not, so
+		// a release build with the profiler off still paid a vkCmdResetQueryPool and two
+		// vkCmdWriteTimestamp calls per region per frame for results nobody would read.
+		// Timestamp writes are not free on a tiled GPU: they are pipeline sync points.
+		if (!rsx::prof::enabled()) [[likely]]
+		{
+			return;
+		}
+
 		if (!m_pool)
 		{
 			return;
@@ -138,6 +150,16 @@ namespace vk
 
 		if (!m_open[idx].active)
 		{
+			return;
+		}
+
+		// Disarmed between this region's begin and its end. Clear the flag anyway rather than
+		// returning early: leaving it set would make every later begin for this region drop
+		// itself as unbalanced, so a single toggle mid-region would silently kill that region's
+		// timing for the rest of the session. The timestamp is skipped, the bookkeeping is not.
+		if (!rsx::prof::enabled()) [[likely]]
+		{
+			m_open[idx].active = false;
 			return;
 		}
 
