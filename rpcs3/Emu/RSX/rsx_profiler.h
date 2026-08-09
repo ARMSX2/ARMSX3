@@ -237,7 +237,7 @@ namespace rsx::prof
 
 	// Which site tore the pass down. Every one of these is a tile store and reload on a
 	// tiler, so the distribution decides what is worth batching or deferring.
-	inline constexpr u32 rp_site_count = 12;
+	inline constexpr u32 rp_site_count = 20;
 	extern u64 g_rp_sites[rp_site_count];
 	extern const char* g_rp_site_names[rp_site_count];
 

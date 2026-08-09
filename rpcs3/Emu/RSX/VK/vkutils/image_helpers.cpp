@@ -1,3 +1,4 @@
+#include "Emu/RSX/rsx_profiler.h"
 #include "stdafx.h"
 #include "image_helpers.h"
 #include "image.h"
@@ -40,7 +41,7 @@ namespace vk
 	{
 		if (vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[16]++; vk::end_renderpass(cmd);
 		}
 
 		//Prepare an image to match the new layout..

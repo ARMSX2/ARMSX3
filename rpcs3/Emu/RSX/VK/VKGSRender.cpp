@@ -2808,7 +2808,7 @@ void VKGSRender::end_occlusion_query(rsx::reports::occlusion_query_info* query)
 		if (vk::use_strict_query_scopes() &&
 			vk::is_renderpass_open(*m_current_command_buffer))
 		{
-			vk::end_renderpass(*m_current_command_buffer);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[17]++; vk::end_renderpass(*m_current_command_buffer);
 		}
 
 		// End query

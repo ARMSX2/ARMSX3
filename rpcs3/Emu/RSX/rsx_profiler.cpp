@@ -39,7 +39,14 @@ namespace rsx::prof
 		"Texture:494",
 		"Texture:534",
 		"Texture:921",
-		
+		"Barrier:img",
+		"Barrier:buf",
+		"Barrier:mem",
+		"Barrier:inout",
+		"TexCache:87",
+		"TexCache:1227",
+		"ImgHelper:43",
+		"GSR:2811",
 	};
 	u64 g_flush_sites[flush_site_count] = {};
 	const char* g_flush_site_names[flush_site_count] = {

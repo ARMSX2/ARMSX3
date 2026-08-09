@@ -1,3 +1,4 @@
+#include "Emu/RSX/rsx_profiler.h"
 #include "barriers.h"
 #include "commands.h"
 #include "image.h"
@@ -17,7 +18,7 @@ namespace vk
 	{
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[10]++; vk::end_renderpass(cmd);
 		}
 
 		VkImageMemoryBarrier barrier = {};
@@ -44,7 +45,7 @@ namespace vk
 	{
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[11]++; vk::end_renderpass(cmd);
 		}
 
 		VkBufferMemoryBarrier barrier = {};
@@ -68,7 +69,7 @@ namespace vk
 	{
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[12]++; vk::end_renderpass(cmd);
 		}
 
 		VkMemoryBarrier barrier = {};
@@ -91,7 +92,7 @@ namespace vk
 		// TODO: This likely throws out hw optimizations on the rest of the renderpass, manage carefully
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[13]++; vk::end_renderpass(cmd);
 		}
 
 		VkAccessFlags src_access, dst_access;

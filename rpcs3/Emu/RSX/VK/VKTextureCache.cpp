@@ -1,3 +1,4 @@
+#include "Emu/RSX/rsx_profiler.h"
 #include "stdafx.h"
 #include "Emu/RSX/VK/VKGSRenderTypes.hpp"
 #include "VKTextureCache.h"
@@ -84,7 +85,7 @@ namespace vk
 
 		if (vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[14]++; vk::end_renderpass(cmd);
 		}
 
 		src->push_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -1224,7 +1225,7 @@ namespace vk
 		{
 			if (vk::is_renderpass_open(cmd))
 			{
-				vk::end_renderpass(cmd);
+				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[15]++; vk::end_renderpass(cmd);
 			}
 		}
 
