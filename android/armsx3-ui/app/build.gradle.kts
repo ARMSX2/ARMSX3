@@ -29,8 +29,8 @@ android {
         applicationId = "com.armsx3"
         minSdk = 26
         targetSdk = 37
-        versionCode = 4
-        versionName = "0.3"
+        versionCode = 5
+        versionName = "0.3.1"
 
         // ARMSX2's UI reads these. STORAGE_ALL_FILES gates the all-files storage path in
         // onboarding; IN_APP_UPDATER gates the in-app GitHub-release updater.
