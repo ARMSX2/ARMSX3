@@ -1746,7 +1746,30 @@ static void setupCallbacks() {
       .on_stop = [](auto...) {},
       .on_ready = [](auto...) {},
       .on_missing_fw = [](auto...) {},
-      .on_emulation_stop_no_response = [](auto...) {},
+      // RPCS3's stop watchdog calls this when shutting the VM down has taken about 10
+      // seconds, and again later if it is still going. It was a no-op, so the one thing
+      // upstream does about a deadlocked stop -- tell somebody -- did not happen here: the
+      // join thread went on spinning, the progress overlay sat at its last figure, and the
+      // app looked frozen with nothing in the log to say why.
+      //
+      // Reported, not aborted. The desktop build offers to terminate, but it asks first, and
+      // a stop that is merely slow is not the same as one that is stuck: a savestate write
+      // was measured here taking 71 seconds legitimately. Killing the process on a timer
+      // would trade a hang for a corrupted save, so this says what is happening and leaves
+      // the choice to the user, who can still close the app.
+      .on_emulation_stop_no_response =
+          [](std::shared_ptr<atomic_t<bool>> closed_successfully,
+             int seconds_waiting_already) {
+            if (closed_successfully && *closed_successfully) {
+              return;
+            }
+
+            rpcsx_android.error(
+                "Emulation has not stopped after %d seconds. A thread is not "
+                "responding to the stop request; the app will stay on the last "
+                "frame until it does.",
+                seconds_waiting_already);
+          },
       .on_save_state_progress = [](auto...) {},
       .enable_disc_eject = [](auto...) {},
       .enable_disc_insert = [](auto...) {},
