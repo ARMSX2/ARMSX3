@@ -125,8 +125,8 @@ public final class NativeApp {
     /** [TODO] */
     public static byte[] getSaveStateImage(String path) { Unsupported.note("getSaveStateImage"); return null; }
 
-    /** [TODO] */
-    public static String getGamePathSlot(int slot) { Unsupported.note("getGamePathSlot"); return ""; }
+    /** [MAPPED] Occupancy for the save slot picker. Non-empty means the slot holds a state. */
+    public static String getGamePathSlot(int slot) { return Rpcs3Bridge.gamePathForSlot(slot); }
 
     /** [TODO] Autosave is an ARMSX2 feature layered on PCSX2 savestates. */
     public static boolean hasAutosaveState() { Unsupported.note("hasAutosaveState"); return false; }

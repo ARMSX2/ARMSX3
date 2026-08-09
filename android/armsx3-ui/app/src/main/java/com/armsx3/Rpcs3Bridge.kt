@@ -577,6 +577,25 @@ object Rpcs3Bridge {
     fun hasState(slot: Int): Boolean =
         runCatching { RPCSX.instance.hasStateInSlot(slot) }.getOrDefault(false)
 
+    /**
+     * Occupancy for the slot picker, which treats a non-empty string as "this slot has
+     * something in it" and shows the last path segment as the tile's subtitle.
+     *
+     * This was a stub returning "", so every tile read as empty and Load was disabled on all
+     * ten of them no matter what was on disk. Saving had been working the whole time and
+     * there was no way to see it. hasState was written for exactly this and had no callers.
+     *
+     * The title id is the subtitle rather than a file path: the picker strips to the last
+     * segment and drops the extension, which would turn the real path into "slot0.SAVESTAT".
+     * Empty when no game is running, since slots are per title and the core cannot resolve
+     * which title's slots to answer for.
+     */
+    @JvmStatic
+    fun gamePathForSlot(slot: Int): String {
+        if (!hasState(slot)) return ""
+        return runCatching { RPCSX.instance.getTitleId() }.getOrDefault("").ifEmpty { "SAVESTATE" }
+    }
+
     // ---------------------------------------------------------------
     // Identity / stats
     // ---------------------------------------------------------------
