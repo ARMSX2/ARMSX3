@@ -290,6 +290,20 @@ namespace utils
 		{
 			perf_log.error("Failed to open /proc/stat (%s)", strerror(errno));
 		}
+#else
+		// Android has no per-core numbers to report: an app is not allowed to read the
+		// per-cpu lines of /proc/stat, which is why this branch was excluded in the first
+		// place. But excluding it left total_usage at 0.0 and per_core_usage full of the
+		// zeros filled in above, so the monitor did not go quiet -- it reported an idle
+		// machine. Observed on device logging "CPU Usage: Total: 0.0%, Cores: 0.0%, 0.0%,
+		// ..." while three emulator threads were pegged at 100%, which actively hides the
+		// class of bug this monitor exists to surface.
+		//
+		// times() is process-wide, POSIX, and readable by our own process, so report that
+		// and leave the per-core vector empty. perf_monitor only prints the "Cores:" list
+		// when it is non-empty, so nothing fabricates a per-core figure we cannot measure.
+		per_core_usage.clear();
+		total_usage = get_usage();
 #endif
 #else
 		total_usage = get_usage();
