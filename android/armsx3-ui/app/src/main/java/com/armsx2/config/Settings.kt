@@ -1223,6 +1223,20 @@ data class Settings(
         // above it would already be 60; setting it explicitly means the cap does not depend
         // on the vblank path holding, which it did not. Enum node, so the value is quoted.
         runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Frame limit", "\"60\"") }
+        // Savestates do not work at all without this.
+        //
+        // Saving locks every SPU thread into a state it can be serialised from, and with this
+        // off that lock fails on any title with SPU work running: the save is abandoned
+        // ("Failed to savestate: failed to lock SPU threads execution"), and the SPU it gave
+        // up on then never answers the stop request, so the join thread spins and the app
+        // hangs on the next save or load. What looked like a savestate deadlock was this
+        // setting the whole time.
+        //
+        // Upstream defaults it off because it costs SPU performance, which is the right
+        // default for a desktop where savestates are optional. Here the feature is on the
+        // in-game menu and the touch overlay, and a save that wedges the emulator is worse
+        // than SPU emulation being a little slower.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Savestate@@Compatible Savestate Mode", "true") }
 
         // Settings a specific title needs in order to run at all, then the user's own core
         // edits on top. Order matters: game defaults are a floor, an explicit user choice
