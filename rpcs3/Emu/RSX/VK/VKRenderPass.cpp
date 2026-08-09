@@ -335,12 +335,48 @@ namespace vk
 			subpass.pInputAttachments = input_attachments.data();
 		}
 
+		// A self-dependency, so a barrier may be issued INSIDE the pass for the feedback case:
+		// an attachment sampled while it is still bound.
+		//
+		// Vulkan forbids vkCmdPipelineBarrier inside a render pass unless the subpass declares
+		// a dependency on itself, and this cache declared none at all. The only legal option
+		// was therefore to end the pass, which is exactly what insert_texture_barrier did, 20
+		// to 23 times per frame in Arkham City out of roughly 83 passes. On a tiled GPU every
+		// one of those is a tile store and a reload of the whole attachment.
+		//
+		// Framebuffer-local stages only. VK_DEPENDENCY_BY_REGION_BIT is what makes the
+		// dependency tile-local rather than a full pipeline flush, and it requires every stage
+		// named here to be framebuffer-space, which rules out the vertex stage.
+		VkSubpassDependency self_dependency = {};
+		self_dependency.srcSubpass = 0;
+		self_dependency.dstSubpass = 0;
+		self_dependency.srcStageMask =
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+			VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+			VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+		self_dependency.dstStageMask =
+			VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+			VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+			VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+		self_dependency.srcAccessMask =
+			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+			VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+		self_dependency.dstAccessMask =
+			VK_ACCESS_SHADER_READ_BIT |
+			VK_ACCESS_INPUT_ATTACHMENT_READ_BIT |
+			VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+			VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+		self_dependency.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+
 		VkRenderPassCreateInfo rp_info = {};
 		rp_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
 		rp_info.attachmentCount = ::size32(attachments);
 		rp_info.pAttachments = attachments.data();
 		rp_info.subpassCount = 1;
 		rp_info.pSubpasses = &subpass;
+		rp_info.dependencyCount = 1;
+		rp_info.pDependencies = &self_dependency;
 
 		VkRenderPass result;
 		CHECK_RESULT(vkCreateRenderPass(dev, &rp_info, NULL, &result));

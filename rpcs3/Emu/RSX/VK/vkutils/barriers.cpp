@@ -112,7 +112,22 @@ namespace vk
 			dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
 		}
 
-		dst_stage |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+		if (preserve_renderpass)
+		{
+			// Issued inside the pass, so it must match the by-region self-dependency the
+			// render pass declares, and that permits framebuffer-local stages only. The
+			// vertex stage is not one, and naming it here would make the barrier invalid.
+			//
+			// Correct for what this is used for: the feedback case is a fragment shader
+			// sampling the attachment its own fragments write. A vertex shader sampling a
+			// live render target would need the pass ended anyway, which is what the caller
+			// gets by leaving preserve_renderpass false.
+			dst_stage |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		}
+		else
+		{
+			dst_stage |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+		}
 
 		VkImageMemoryBarrier barrier = {};
 		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
