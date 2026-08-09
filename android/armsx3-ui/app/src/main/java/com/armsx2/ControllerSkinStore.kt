@@ -37,6 +37,9 @@ object ControllerSkinStore {
     private const val KEY_ACTIVE_GAME_PREFIX = "skin.active.game."
     private const val NONE = "__none__"
 
+    /** Set once [migrateToBundledDefault] has run, so it never second-guesses a later choice. */
+    private const val KEY_MIGRATED_DEFAULT = "skin.migrated.armsx3default"
+
     /** RESOLVED skin id for what's on screen now, or null = built-in. Backed state so
      *  the overlay recomposes when it changes.
      *
@@ -181,8 +184,32 @@ object ControllerSkinStore {
 
     private fun root(ctx: Context): File = File(ctx.filesDir, "controllerskins").apply { mkdirs() }
 
+    /**
+     * One-time move of installs that predate the bundled default onto it.
+     *
+     * [resolveRaw] only applies [DEFAULT_SKIN_ID] when NOTHING was ever stored, which covers a
+     * fresh install and nobody else. Every install from before the default changed has a stored
+     * value already — [NONE], meaning the built-in drawables — so changing the default moved
+     * exactly zero existing users, and the pad kept looking the way it always had. Reported as
+     * "ARMSX2 is still selected for me".
+     *
+     * Only [NONE] and absent are rewritten. An install pointing at a real skin, bundled or
+     * imported, picked that skin on purpose and is left alone. The flag is set either way, so
+     * choosing the ARMSX2 row after this runs sticks rather than being undone on next launch.
+     */
+    private fun migrateToBundledDefault() {
+        val prefs = MainActivityRuntime.prefs
+        if (prefs.getBoolean(KEY_MIGRATED_DEFAULT, false)) return
+        val raw = prefs.getString(KEY_ACTIVE, null)
+        prefs.edit()
+            .putBoolean(KEY_MIGRATED_DEFAULT, true)
+            .apply { if (raw == null || raw == NONE) putString(KEY_ACTIVE, DEFAULT_SKIN_ID) }
+            .apply()
+    }
+
     private fun ensureLoaded(ctx: Context) {
         if (loaded) return
+        migrateToBundledDefault()
         activeSkinId.value = resolveRaw(ctx, MainActivityRuntime.prefs.getString(KEY_ACTIVE, null))
         loaded = true
     }
