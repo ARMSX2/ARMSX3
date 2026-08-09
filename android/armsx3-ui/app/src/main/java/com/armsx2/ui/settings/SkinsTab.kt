@@ -34,6 +34,10 @@ import androidx.compose.ui.unit.sp
 import android.graphics.BitmapFactory
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.imageResource
+import com.armsx2.R
 import androidx.compose.ui.graphics.asImageBitmap
 import com.armsx2.ControllerSkinStore
 import com.armsx2.SkinRepo
@@ -251,14 +255,36 @@ fun SkinsTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
             modifier = Modifier.padding(bottom = 4.dp),
         )
 
+        // Bundled skins, in the order they are offered: ARMSX3 Textured (the default),
+        // then ARMSX2, then ARMSX1, then the two NetherSX2 packs. ARMSX2 is the null id
+        // (the built-in drawables) rather than an asset pack, so it is drawn between the
+        // first BUILTIN entry and the rest instead of being in that list.
+        val builtinPreviews = remember {
+            ControllerSkinStore.BUILTIN.associate { it.id to ControllerSkinStore.builtinPreview(ctx, it) }
+        }
+
+        ControllerSkinStore.BUILTIN.firstOrNull()?.let { first ->
+            SkinRow(
+                name = first.name,
+                selected = activeId == first.id,
+                controllerId = "skin-${first.id}",
+                onSelect = { ControllerSkinStore.setActive(ctx, first.id, editSerial); refresh.intValue++ },
+                onDelete = null,
+                preview = builtinPreviews[first.id],
+            )
+            SettingsDivider()
+        }
+
         SkinRow(
             name = str("skins.builtinDefault"),
             selected = activeId == null,
             controllerId = "skin-builtin",
             onSelect = { ControllerSkinStore.setActive(ctx, null, editSerial); refresh.intValue++ },
             onDelete = null,
+            preview = ImageBitmap.imageResource(R.drawable.skin_preview_builtin),
         )
-        for (b in ControllerSkinStore.BUILTIN) {
+
+        for (b in ControllerSkinStore.BUILTIN.drop(1)) {
             SettingsDivider()
             SkinRow(
                 name = b.name,
@@ -266,6 +292,7 @@ fun SkinsTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
                 controllerId = "skin-${b.id}",
                 onSelect = { ControllerSkinStore.setActive(ctx, b.id, editSerial); refresh.intValue++ },
                 onDelete = null,
+                preview = builtinPreviews[b.id],
             )
         }
         for (s in skins) {
@@ -384,16 +411,28 @@ private fun SkinRow(
     controllerId: String,
     onSelect: () -> Unit,
     onDelete: (() -> Unit)?,
+    preview: ImageBitmap? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(64.dp)
+            // Taller than the plain text row was, so a strip of buttons is legible rather
+            // than a smear. Rows without a preview keep the same height so the list does
+            // not step up and down as you scroll past the bundled ones.
+            .height(if (preview != null) 88.dp else 64.dp)
             .clickable { onSelect() }
             .controllerFocusable(controllerId = controllerId, onConfirm = { onSelect() })
             .padding(horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (preview != null) {
+            Image(
+                bitmap = preview,
+                contentDescription = null,
+                modifier = Modifier.height(52.dp).padding(end = 10.dp),
+                contentScale = ContentScale.Fit,
+            )
+        }
         Text(
             (if (selected) "● " else "○ ") + name,
             color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,

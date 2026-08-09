@@ -107,3 +107,65 @@ target_link_libraries(rpcsx-android
     android
     log
 )
+
+# ---------------------------------------------------------------------------
+# Profile-guided optimisation
+# ---------------------------------------------------------------------------
+#
+# Scoped to rpcs3_emu and rpcsx-android deliberately, NOT to the whole build.
+# 3rdparty is mostly LLVM, which is only hot while compiling guest code; adding
+# instrumentation to it would multiply an already 1.2GB unstripped artifact for
+# a payoff in compile speed rather than in frame time. What we measured as hot
+# lives in these two: a simpleperf profile of the RSX thread during gameplay put
+# 24.9% in vk::query_pool_manager::get_query_result, 9.4% in
+# FIFO_control::fetch_u32_refill and the rest across the VK backend and the FIFO
+# dispatch, all of which are rpcs3_emu.
+#
+#   -DARMSX3_PGO=generate                       instrumented build, writes .profraw
+#   -DARMSX3_PGO=use -DARMSX3_PGO_PROFILE=<abs> optimised build against a profile
+#
+# Configure these into a SEPARATE build directory (BUILD_DIR=... android/configure.sh)
+# so the instrumented objects never mix with the normal ones.
+set(ARMSX3_PGO "off" CACHE STRING "Profile-guided optimisation: off, generate, or use")
+set(ARMSX3_PGO_PROFILE "" CACHE FILEPATH "Merged .profdata, required when ARMSX3_PGO=use")
+
+if(ARMSX3_PGO STREQUAL "generate")
+    # -fprofile-generate on BOTH compile and link: the link is what pulls in the
+    # profile runtime that writes the file.
+    foreach(pgo_target rpcs3_emu rpcsx-android)
+        target_compile_options(${pgo_target} PRIVATE -fprofile-generate)
+        target_link_options(${pgo_target} PRIVATE -fprofile-generate)
+    endforeach()
+
+    # Tells src/rpcsx-android.cpp to name the profile somewhere the app can
+    # actually write, and to flush it when the app goes to the background.
+    # Without that the runtime writes to the process CWD, which on Android is /
+    # and is not writable, so a whole play session produces nothing.
+    target_compile_definitions(rpcsx-android PRIVATE ARMSX3_PGO_GENERATE=1)
+
+    message(STATUS "ARMSX3: PGO instrumentation ON for rpcs3_emu and rpcsx-android")
+elseif(ARMSX3_PGO STREQUAL "use")
+    if(NOT ARMSX3_PGO_PROFILE)
+        message(FATAL_ERROR "ARMSX3_PGO=use requires -DARMSX3_PGO_PROFILE=<absolute .profdata>")
+    endif()
+    if(NOT EXISTS "${ARMSX3_PGO_PROFILE}")
+        message(FATAL_ERROR "ARMSX3_PGO_PROFILE does not exist: ${ARMSX3_PGO_PROFILE}")
+    endif()
+
+    foreach(pgo_target rpcs3_emu rpcsx-android)
+        # Drift is tolerated rather than fatal: the profile ages the moment the
+        # code changes, and a warning per stale function would otherwise turn
+        # into thousands of errors under -Werror. Stale enough to matter shows up
+        # as a regression, which is why the profile gets regenerated rather than
+        # carried forward. A stale profile has actively pessimised this codebase's
+        # sibling project before, so treat age as a real risk, not a formality.
+        target_compile_options(${pgo_target} PRIVATE
+            -fprofile-use=${ARMSX3_PGO_PROFILE}
+            -Wno-error=profile-instr-out-of-date
+            -Wno-error=profile-instr-unprofiled
+            -Wno-profile-instr-out-of-date
+            -Wno-profile-instr-unprofiled)
+    endforeach()
+
+    message(STATUS "ARMSX3: PGO optimising against ${ARMSX3_PGO_PROFILE}")
+endif()

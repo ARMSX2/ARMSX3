@@ -109,11 +109,9 @@ static std::atomic<u64> g_native_window_size;
 // Set when losing the surface is what paused the emulator, so getting it back resumes only
 // the pause we caused.
 static std::atomic<bool> g_paused_by_surface_loss;
-
 extern std::string g_android_executable_dir;
 extern std::string g_android_config_dir;
 extern std::string g_android_cache_dir;
-
 static std::mutex g_virtual_pad_mutex;
 // One per PS3 pad port. This was a single pad, which silently capped local
 // co-op at one player: every port above the first registered a Pad the app
@@ -124,6 +122,44 @@ std::string g_input_config_override;
 cfg_input_configurations g_cfg_input_configs;
 
 LOG_CHANNEL(rpcsx_android, "ANDROID");
+
+#ifdef ARMSX3_PGO_GENERATE
+// PGO instrumentation support. Present only in a -DARMSX3_PGO=generate build.
+//
+// The profile runtime defaults to writing "default.profraw" relative to the
+// process working directory, which on Android is / and is not writable, so an
+// instrumented build otherwise plays a whole session and produces nothing.
+// %p expands to the pid so several runs do not overwrite each other.
+extern "C" void __llvm_profile_set_filename(const char*);
+extern "C" int __llvm_profile_write_file(void);
+
+static void pgo_set_output_path()
+{
+    const std::string dir = g_android_cache_dir + "/pgo";
+    fs::create_path(dir);
+
+    const std::string pattern = dir + "/armsx3-%p.profraw";
+    __llvm_profile_set_filename(pattern.c_str());
+    rpcsx_android.success("PGO: writing profiles to %s", pattern);
+}
+
+// Counters live in memory until the runtime writes them, and that normally
+// happens at exit. This process is routinely killed rather than exited (the OOM
+// killer took it repeatedly during this work), so waiting for exit loses the
+// session. Flushed when the app is backgrounded instead, which is a point the
+// user reaches deliberately and which happens before any kill.
+static void pgo_flush()
+{
+    if (__llvm_profile_write_file() == 0)
+    {
+        rpcsx_android.success("PGO: profile written");
+    }
+    else
+    {
+        rpcsx_android.error("PGO: failed to write profile");
+    }
+}
+#endif
 
 struct LogListener : logs::listener {
   LogListener() { logs::listener::add(this); }
@@ -1924,6 +1960,11 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
     g_android_config_dir = rootDirStr + "config/";
     g_android_cache_dir = rootDirStr + "cache/";
 
+#ifdef ARMSX3_PGO_GENERATE
+  // Now, not earlier: the path is built from g_android_cache_dir.
+  pgo_set_output_path();
+#endif
+
     std::filesystem::create_directories(g_android_config_dir);
     std::error_code ec;
     // std::filesystem::remove_all(g_android_cache_dir, ec);
@@ -2631,6 +2672,11 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
     // asked for, behind an overlay still showing the game as paused.
     g_paused_by_surface_loss = !Emu.IsPaused();
     Emu.Pause();
+
+#ifdef ARMSX3_PGO_GENERATE
+    // Backgrounding is the reliable flush point; see pgo_flush.
+    pgo_flush();
+#endif
   } else {
     // fromSurface hands back a reference that is already acquired, and that is the one
     // stored below. Acquiring on top of it leaked a window per surfaceChanged -- every
