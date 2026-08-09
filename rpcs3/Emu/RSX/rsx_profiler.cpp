@@ -87,6 +87,8 @@ namespace rsx::prof
 		case bucket::fence_wait: return "Fence wait";
 		case bucket::present_wait: return "Present wait";
 		case bucket::page_protect: return "Page protect";
+		case bucket::zcull: return "ZCULL update";
+		case bucket::local_task: return "Local task";
 		case bucket::idle: return "Idle";
 		case bucket::unclassified: return "Unclassified";
 		default: return "?";

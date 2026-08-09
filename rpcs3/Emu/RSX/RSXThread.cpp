@@ -1162,10 +1162,27 @@ namespace rsx
 			if ((m_cycles_counter++ & 63) == 0 || m_eng_interrupt_mask)
 			{
 				// Execute backend-local tasks first
-				do_local_task(performance_counters.state);
+				//
+				// These two run once per 64 FIFO commands rather than per command, so
+				// scoping them costs a counter read every 64th iteration instead of the
+				// per-command cost that made an earlier attempt measure mostly itself.
+				//
+				// Split out because fifo_decode holds 38ms of a 54ms frame in Arkham City
+				// and nothing else accounts for it: the whole draw path is under 5ms and
+				// page protection turned out to be 0.09ms. ZCULL is a live suspect here in
+				// particular, since this title trips "Reports area at location
+				// CELL_GCM_LOCATION_MAIN was accessed, ZCULL optimizations will be
+				// disabled" and then runs the unoptimised path for the entire session.
+				{
+					RSX_PROF_SCOPE(local_task);
+					do_local_task(performance_counters.state);
+				}
 
 				// Update other sub-units
-				zcull_ctrl->update(this);
+				{
+					RSX_PROF_SCOPE(zcull);
+					zcull_ctrl->update(this);
+				}
 
 				if (m_host_dma_ctrl)
 				{

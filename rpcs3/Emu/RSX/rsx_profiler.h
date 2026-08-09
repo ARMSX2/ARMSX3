@@ -49,6 +49,8 @@ namespace rsx::prof
 		fence_wait,       // Waiting on fences and events, including readback sync
 		present_wait,     // Swapchain acquire and present
 		page_protect,     // mprotect for guest write tracking, including its TLB maintenance
+		zcull,            // ZCULL occlusion report update
+		local_task,       // Backend local task queue drained from the FIFO loop
 		idle,             // Deliberately idle: FIFO empty, frame limiter, semaphore
 		unclassified,     // RSX thread time not covered by any scope above
 
