@@ -2474,13 +2474,31 @@ extern "C" bool _rpcsx_loadStateFromSlot(unsigned int slot) {
   }
 
   Emu.CallFromMainThread([path]() {
-    // Same sequence boot_current_game_savestate uses, with an explicit path.
+    // Boot from after_kill_callback rather than straight after GracefulShutdown.
+    //
+    // The obvious version -- SetContinuousMode, GracefulShutdown, BootGame, which is what
+    // boot_current_game_savestate does -- failed instantly, in the same millisecond it was
+    // called, without ever reading the file, and the "Emulation Join Thread is too sleepy"
+    // warnings then ran for seconds afterwards: the previous VM was still coming down while
+    // BootGame was already being asked to bring the next one up, so it bailed and the user
+    // was dropped to the library. That call site gets away with it because it runs from a
+    // shortcut handler, not from inside the emulation callback queue like this does.
+    //
+    // Kill first and boot from the callback, which is the same shape the save path uses and
+    // the reason that one works: the callback is the point teardown is actually finished.
     Emu.SetContinuousMode(true);
-    Emu.GracefulShutdown(false, false, false, true);
 
-    if (Emu.BootGame(path, "", true) != game_boot_result::no_errors) {
-      rpcsx_android.error("loadState: failed to boot '%s'", path);
-    }
+    Emu.after_kill_callback = [path]() {
+      if (const game_boot_result result = Emu.BootGame(path, "", true);
+          result != game_boot_result::no_errors) {
+        // The reason, not just the failure. A bare "failed to boot" cannot tell a corrupt
+        // state from a version mismatch from a path the loader never accepted.
+        rpcsx_android.error("loadState: failed to boot '%s': %s", path,
+                            fmt::format("%s", result));
+      }
+    };
+
+    Emu.Kill(false, false);
   });
 
   return true;
