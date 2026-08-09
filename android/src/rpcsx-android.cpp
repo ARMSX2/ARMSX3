@@ -2333,6 +2333,164 @@ extern "C" bool _rpcsx_loadState(unsigned int index) {
 }
 
 // ---------------------------------------------------------------------------
+// Numbered save slots.
+//
+// RPCS3 keeps savestates as a rolling history: every save writes a new file with
+// an auto-incrementing id and you address them by age, 1 == most recent. The app
+// UI offers ten numbered slots instead, so before this the slot number was simply
+// dropped on save and read as an age on load -- "save to slot 3" pushed a new
+// newest state and "load slot 3" fetched the fourth-newest. Slots that quietly
+// mean something else are worse than no slots.
+//
+// So the history stays exactly as RPCS3 manages it, and a slot is a COPY of a
+// state parked under savestates/<title>/armsx3_slots/. A separate directory on
+// purpose: get_savestate_file() derives the next auto id by listing the title's
+// directory, and dropping our own filenames in there would feed that scheme names
+// it never generated.
+// ---------------------------------------------------------------------------
+
+static std::string armsx3_slot_dir(std::string_view title) {
+  return fs::get_config_dir() + "/savestates/" + std::string(title) +
+         "/armsx3_slots/";
+}
+
+// The stored file for this slot, or empty. The extension is whatever the core
+// wrote (.zst today, .gz and bare historically), so it is discovered rather than
+// assumed -- a slot written by one build must still load in another.
+static std::string armsx3_slot_find(std::string_view title, unsigned int slot) {
+  if (title.empty()) {
+    return {};
+  }
+
+  const std::string base =
+      armsx3_slot_dir(title) + "slot" + std::to_string(slot) + ".SAVESTAT";
+
+  for (std::string_view ext : {".zst", ".gz", ""}) {
+    if (std::string path = base + std::string(ext); fs::is_file(path)) {
+      return path;
+    }
+  }
+
+  return {};
+}
+
+// Copy the state the core has just written into [slot]. Runs from
+// after_kill_callback, which is the first point the file is complete on disk.
+static void armsx3_slot_capture(unsigned int slot, const std::string& title,
+                                const std::string& boot) {
+  const std::string newest = get_savestate_file(title, boot, 1);
+
+  if (!fs::is_file(newest)) {
+    rpcsx_android.error("saveState: slot %u, nothing written at '%s'", slot,
+                        newest);
+    return;
+  }
+
+  const std::string dir = armsx3_slot_dir(title);
+
+  if (!fs::create_path(dir)) {
+    rpcsx_android.error("saveState: cannot create '%s' (%s)", dir,
+                        fs::g_tls_error);
+    return;
+  }
+
+  // Carry the source's extension across so the copy stays readable by whatever
+  // wrote it, compressed or not.
+  constexpr std::string_view stem = ".SAVESTAT";
+  const usz pos = newest.rfind(stem);
+  const std::string suffix =
+      pos == umax ? std::string{} : newest.substr(pos + stem.size());
+  const std::string dest =
+      dir + "slot" + std::to_string(slot) + std::string(stem) + suffix;
+
+  // Clear the slot's other spellings first, or a re-save in a different
+  // compression mode leaves two files and armsx3_slot_find returns the stale one.
+  for (std::string_view ext : {".zst", ".gz", ""}) {
+    if (std::string old = dir + "slot" + std::to_string(slot) +
+                          std::string(stem) + std::string(ext);
+        old != dest && fs::is_file(old)) {
+      fs::remove_file(old);
+    }
+  }
+
+  // COPY, never move: the restart below boots from the very file the core just
+  // wrote, so taking it away would resume nothing.
+  if (!fs::copy_file(newest, dest, true)) {
+    rpcsx_android.error("saveState: slot %u copy failed '%s' -> '%s' (%s)", slot,
+                        newest, dest, fs::g_tls_error);
+    return;
+  }
+
+  rpcsx_android.success("saveState: slot %u <- '%s'", slot, newest);
+}
+
+extern "C" bool _rpcsx_saveStateToSlot(unsigned int slot) {
+  if (!Emu.IsRunning() && !Emu.IsPaused()) {
+    rpcsx_android.error("saveState: no game is running");
+    return false;
+  }
+
+  // Read now, not in the callback: by the time after_kill_callback runs the VM is
+  // torn down and Emu no longer reliably answers for the title that was playing.
+  const std::string title = Emu.GetTitleID();
+  const std::string boot = Emu.GetBoot();
+
+  if (title.empty()) {
+    rpcsx_android.error("saveState: no title id, cannot address a slot");
+    return false;
+  }
+
+  Emu.CallFromMainThread([slot, title, boot]() {
+    // Outside suspend mode the game comes straight back up from the state it just
+    // wrote; in suspend mode it is meant to exit. Capture in both, resume in one.
+    const bool resume = !g_cfg.savestate.suspend_emu.get();
+
+    Emu.after_kill_callback = [slot, title, boot, resume]() {
+      armsx3_slot_capture(slot, title, boot);
+
+      if (resume) {
+        Emu.Restart(true, false);
+      }
+    };
+
+    if (resume) {
+      Emu.SetContinuousMode(true);
+    }
+
+    Emu.Kill(false, true);
+  });
+
+  return true;
+}
+
+extern "C" bool _rpcsx_loadStateFromSlot(unsigned int slot) {
+  const std::string path = armsx3_slot_find(Emu.GetTitleID(), slot);
+
+  // Checked before anything is torn down, matching loadState: a missing slot must
+  // report back, not kill a running game and then fail to boot.
+  if (path.empty()) {
+    rpcsx_android.error("loadState: slot %u is empty", slot);
+    return false;
+  }
+
+  Emu.CallFromMainThread([path]() {
+    // Same sequence boot_current_game_savestate uses, with an explicit path.
+    Emu.SetContinuousMode(true);
+    Emu.GracefulShutdown(false, false, false, true);
+
+    if (Emu.BootGame(path, "", true) != game_boot_result::no_errors) {
+      rpcsx_android.error("loadState: failed to boot '%s'", path);
+    }
+  });
+
+  return true;
+}
+
+extern "C" bool _rpcsx_hasStateInSlot(unsigned int slot) {
+  return !armsx3_slot_find(Emu.GetTitleID(), slot).empty();
+}
+
+// ---------------------------------------------------------------------------
 // Patches / graphics mods
 //
 // RPCS3 keeps two files:

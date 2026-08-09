@@ -550,29 +550,32 @@ object Rpcs3Bridge {
     // ---------------------------------------------------------------
 
     /**
-     * SLOT SEMANTICS DIFFER FROM PCSX2 -- read this before touching it.
+     * Addressable slots: save to 3, load 3, get that state back.
      *
-     * PCSX2 slots are addressable: save to 3, load 3, get that state back.
-     * RPCS3 keeps a rolling HISTORY instead: writing a state pushes it to the
-     * front, so index 1 is the newest, 2 the one before it, and so on (depth is
-     * Savestate@@"Maximum SaveState Files"). There is no way to pin a state to a
-     * chosen number.
+     * RPCS3 natively offers only a rolling HISTORY -- writing a state pushes it to the front,
+     * so index 1 is the newest, 2 the one before it (depth is Savestate@@"Maximum SaveState
+     * Files") -- and nothing can be pinned to a chosen number. These used to hand that model
+     * straight through, dropping the slot on save and reading it as an age on load, so "save
+     * to slot 3" pushed a new newest state and "load slot 3" fetched the fourth-newest. The
+     * numbers on screen meant nothing and states appeared to wander between slots.
      *
-     * So saving ignores the slot entirely, and loading treats it as "how many
-     * states back". The ARMSX2 slot UI is 0-based, RPCS3's index is 1-based.
+     * The history is still RPCS3's to manage. The core now also parks a COPY of each save
+     * under its slot number, so a slot holds what was put in it until it is overwritten.
+     * See _rpcsx_saveStateToSlot in rpcsx-android.cpp. Slot numbers are 0-based on both
+     * sides now, with no index arithmetic in between.
      */
     @JvmStatic
     fun saveState(slot: Int): Boolean =
-        runCatching { RPCSX.instance.saveState() }.getOrDefault(false)
+        runCatching { RPCSX.instance.saveStateToSlot(slot) }.getOrDefault(false)
 
     @JvmStatic
     fun loadState(slot: Int): Boolean =
-        runCatching { RPCSX.instance.loadState(slot + 1) }.getOrDefault(false)
+        runCatching { RPCSX.instance.loadStateFromSlot(slot) }.getOrDefault(false)
 
-    /** Whether a state exists that far back in the history. */
+    /** Whether this slot holds a state. */
     @JvmStatic
     fun hasState(slot: Int): Boolean =
-        runCatching { RPCSX.instance.hasState(slot + 1) }.getOrDefault(false)
+        runCatching { RPCSX.instance.hasStateInSlot(slot) }.getOrDefault(false)
 
     // ---------------------------------------------------------------
     // Identity / stats

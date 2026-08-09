@@ -54,6 +54,12 @@ struct RPCSXApi {
   bool (*saveState)();
   bool (*loadState)(unsigned int index);
   bool (*hasState)(unsigned int index);
+  // Numbered slots, distinct from the three above: those address RPCS3's rolling
+  // history by age, these address a fixed slot. Resolved separately so an older
+  // core without them degrades to the history rather than failing to load.
+  bool (*saveStateToSlot)(unsigned int slot);
+  bool (*loadStateFromSlot)(unsigned int slot);
+  bool (*hasStateInSlot)(unsigned int slot);
   int (*patchesImport)(std::string_view content);
   std::string (*patchesList)(std::string_view serial);
   std::string (*probeDiscInfo)(std::string_view isoPath, std::string_view iconOut);
@@ -130,6 +136,9 @@ struct RPCSXLibrary : RPCSXApi {
     result.saveState = reinterpret_cast<decltype(saveState)>(dlsym(handle, "_rpcsx_saveState"));
     result.loadState = reinterpret_cast<decltype(loadState)>(dlsym(handle, "_rpcsx_loadState"));
     result.hasState = reinterpret_cast<decltype(hasState)>(dlsym(handle, "_rpcsx_hasState"));
+    result.saveStateToSlot = reinterpret_cast<decltype(saveStateToSlot)>(dlsym(handle, "_rpcsx_saveStateToSlot"));
+    result.loadStateFromSlot = reinterpret_cast<decltype(loadStateFromSlot)>(dlsym(handle, "_rpcsx_loadStateFromSlot"));
+    result.hasStateInSlot = reinterpret_cast<decltype(hasStateInSlot)>(dlsym(handle, "_rpcsx_hasStateInSlot"));
     result.patchesImport = reinterpret_cast<decltype(patchesImport)>(dlsym(handle, "_rpcsx_patchesImport"));
     result.patchesList = reinterpret_cast<decltype(patchesList)>(dlsym(handle, "_rpcsx_patchesList"));
     result.probeDiscInfo = reinterpret_cast<decltype(probeDiscInfo)>(dlsym(handle, "_rpcsx_probeDiscInfo"));
@@ -613,6 +622,33 @@ Java_net_rpcsx_RPCSX_hasState(JNIEnv *, jobject, jint index) {
   }
 
   return rpcsxLib.hasState(static_cast<unsigned int>(index));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_saveStateToSlot(JNIEnv *, jobject, jint slot) {
+  if (rpcsxLib.saveStateToSlot == nullptr || slot < 0) {
+    return false;
+  }
+
+  return rpcsxLib.saveStateToSlot(static_cast<unsigned int>(slot));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_loadStateFromSlot(JNIEnv *, jobject, jint slot) {
+  if (rpcsxLib.loadStateFromSlot == nullptr || slot < 0) {
+    return false;
+  }
+
+  return rpcsxLib.loadStateFromSlot(static_cast<unsigned int>(slot));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_hasStateInSlot(JNIEnv *, jobject, jint slot) {
+  if (rpcsxLib.hasStateInSlot == nullptr || slot < 0) {
+    return false;
+  }
+
+  return rpcsxLib.hasStateInSlot(static_cast<unsigned int>(slot));
 }
 
 // ---------------------------------------------------------------------------

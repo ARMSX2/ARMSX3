@@ -113,6 +113,12 @@ class RPCSX {
     external fun saveState(): Boolean
     external fun loadState(index: Int): Boolean
     external fun hasState(index: Int): Boolean
+
+    // Numbered slots. The three above walk RPCS3's rolling history by age (1 = most
+    // recent); these address a fixed slot, which is what the ten-slot UI means.
+    external fun saveStateToSlot(slot: Int): Boolean
+    external fun loadStateFromSlot(slot: Int): Boolean
+    external fun hasStateInSlot(slot: Int): Boolean
     external fun patchesImport(content: String): Int
     external fun patchesList(serial: String): String
     external fun probeDiscInfo(isoPath: String, iconOut: String): String
