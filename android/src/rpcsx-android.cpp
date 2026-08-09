@@ -4,6 +4,7 @@
 #include "Emu/Audio/Null/NullAudioBackend.h"
 #include "Emu/Cell/PPUAnalyser.h"
 #include "Emu/Cell/SPURecompiler.h"
+#include "Emu/Cell/SPUThread.h"
 #include "Emu/IdManager.h"
 #include "Emu/Io/KeyboardHandler.h"
 #include "Emu/Io/Null/NullKeyboardHandler.h"
@@ -1769,6 +1770,19 @@ static void setupCallbacks() {
                 "responding to the stop request; the app will stay on the last "
                 "frame until it does.",
                 seconds_waiting_already);
+
+            // Name the threads that have not stopped, and their state flags.
+            //
+            // This is the whole diagnosis and it cannot be recovered from outside: by the
+            // time the hang can be looked at, /proc shows a sleeping thread with no CPU time
+            // and nothing about WHY. The flags say whether it was ever told to exit
+            // (cpu_flag::exit), whether it is parked waiting (cpu_flag::wait), or whether it
+            // never left its initial stopped state, which is what a thread with no CPU time
+            // at all suggests.
+            idm::select<named_thread<spu_thread>>([](u32 id, spu_thread &spu) {
+              rpcsx_android.error("  SPU 0x%x has not stopped, state = %s", id,
+                                  spu.state.load());
+            });
           },
       .on_save_state_progress = [](auto...) {},
       .enable_disc_eject = [](auto...) {},
