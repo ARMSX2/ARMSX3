@@ -21,6 +21,8 @@ namespace rsx::prof
 	u64 g_fifo_commands = 0;
 	u64 g_fifo_dispatches = 0;
 	u64 g_draw_calls = 0;
+	u64 g_present_checks = 0;
+	u64 g_frame_cleanups = 0;
 	u32 g_method_counts[method_slot_count] = {};
 	u64 g_fifo_refill_bytes = 0;
 	u64 g_fifo_refill_stalls = 0;
@@ -92,6 +94,8 @@ namespace rsx::prof
 		case bucket::rtt_write: return "RTT on_write";
 		case bucket::tex_release: return "Temp tex release";
 		case bucket::present_check: return "Present check";
+		case bucket::swap_wait: return "Swap fence wait";
+		case bucket::res_trim: return "Resource trim";
 		case bucket::vertex: return "Vertex/index";
 		case bucket::shader_translate: return "Shader translate";
 		case bucket::shader_compile: return "Shader compile";
@@ -294,6 +298,16 @@ namespace rsx::prof
 				static_cast<double>(g_draw_calls) / frames,
 				ns_per_draw(bucket::draw_setup));
 
+			fmt::append(report, "\n\tpresent checks  %.1f/frame, %.1f cleanups/frame, %.1f us each",
+				static_cast<double>(g_present_checks) / frames,
+				static_cast<double>(g_frame_cleanups) / frames,
+				g_present_checks
+					? static_cast<double>(g_acc.ticks[static_cast<usz>(bucket::present_check)]
+						+ g_acc.ticks[static_cast<usz>(bucket::swap_wait)]
+						+ g_acc.ticks[static_cast<usz>(bucket::res_trim)])
+						* to_ms * 1000.0 / static_cast<double>(g_present_checks)
+					: 0.0);
+
 			fmt::append(report, "\n\tper draw        prologue %.0f, epilogue %.0f, wr barrier %.0f, on_write %.0f, tex release %.0f ns",
 				ns_per_draw(bucket::draw_prologue),
 				ns_per_draw(bucket::draw_epilogue),
@@ -337,6 +351,8 @@ namespace rsx::prof
 		g_fifo_commands = 0;
 		g_fifo_dispatches = 0;
 		g_draw_calls = 0;
+		g_present_checks = 0;
+		g_frame_cleanups = 0;
 		std::fill(std::begin(g_method_counts), std::end(g_method_counts), 0u);
 		g_fifo_refills = 0;
 		g_fifo_refill_bytes = 0;

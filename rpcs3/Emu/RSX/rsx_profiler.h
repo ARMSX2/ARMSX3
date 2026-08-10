@@ -40,6 +40,8 @@ namespace rsx::prof
 		rtt_write,        // Render target on_write bookkeeping after the draw is recorded
 		tex_release,      // Releasing uncached temporary texture subresources
 		present_check,    // Mid-draw present status check when the frame context went dirty
+		swap_wait,        // Blocking wait on the presented frame's command buffer fence
+		res_trim,         // Per-frame resource reclaim: overlay dispose, heap trim, snapshot restore
 		vertex,           // Vertex and index processing, including layout conversion
 		shader_translate, // RSX shader decompilation to GLSL/SPIR-V
 		shader_compile,   // Host driver compiling the translated shader
@@ -212,6 +214,16 @@ namespace rsx::prof
 	 * is the denominator that tells them apart, the same way g_fifo_dispatches did for decode.
 	 */
 	extern u64 g_draw_calls;
+
+	/**
+	 * Entries into the mid-draw present check, and frame contexts actually reclaimed by one.
+	 *
+	 * The block is written as a rare async-flip fixup and measured as two thirds of the RSX
+	 * thread, so the first thing to establish is whether that is one long stall per frame or
+	 * a short one repeated per draw. Those are the same milliseconds and different bugs.
+	 */
+	extern u64 g_present_checks;
+	extern u64 g_frame_cleanups;
 
 	/**
 	 * Commands seen per RSX method register, indexed by (id >> 2).

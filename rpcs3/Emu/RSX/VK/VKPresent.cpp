@@ -289,15 +289,26 @@ void VKGSRender::frame_context_cleanup(vk::frame_context_t *ctx)
 {
 	ensure(ctx->swap_command_buffer);
 
+	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_frame_cleanups++;
+
 	// Perform hard swap here
-	if (ctx->swap_command_buffer->wait(FRAME_PRESENT_TIMEOUT) != VK_SUCCESS)
 	{
-		// Lost surface/device, release swapchain
-		swapchain_unavailable = true;
+		// Split from the reclaim below because the two mean opposite things: time here is the
+		// RSX thread blocked on the GPU, time below is the RSX thread doing CPU work. Both
+		// were unscoped and landed in whatever called this.
+		RSX_PROF_SCOPE(swap_wait);
+
+		if (ctx->swap_command_buffer->wait(FRAME_PRESENT_TIMEOUT) != VK_SUCCESS)
+		{
+			// Lost surface/device, release swapchain
+			swapchain_unavailable = true;
+		}
 	}
 
 	// Resource cleanup.
 	{
+		RSX_PROF_SCOPE(res_trim);
+
 		if (m_overlay_manager && m_overlay_manager->has_dirty())
 		{
 			auto ui_renderer = vk::get_overlay_pass<vk::ui_overlay_renderer>();

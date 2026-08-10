@@ -1264,6 +1264,8 @@ void VKGSRender::end()
 	{
 		RSX_PROF_SCOPE(present_check);
 
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_present_checks++;
+
 		check_present_status();
 
 		if (m_current_frame->swap_command_buffer) [[unlikely]]
