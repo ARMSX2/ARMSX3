@@ -31,6 +31,8 @@ namespace rsx::prof
 	u16 g_pass_width[pass_slot_count] = {};
 	u16 g_pass_height[pass_slot_count] = {};
 	u64 g_pass_vertices[pass_slot_count] = {};
+	u64 g_pass_barriers[pass_slot_count] = {};
+	u64 g_pass_cyclic[pass_slot_count] = {};
 	u64 g_xform_program_calls = 0;
 	u64 g_xform_program_words = 0;
 	u64 g_xform_const_calls = 0;
@@ -383,10 +385,12 @@ namespace rsx::prof
 					const double draws_per_frame = static_cast<double>(count) / frames;
 					const double verts_per_frame = static_cast<double>(g_pass_vertices[ordinal]) / frames;
 
-					fmt::append(list, "\n\t  pass #%-3u %5.0f draws  %8.0f verts  %5.0f verts/draw  %ux%u",
+					fmt::append(list, "\n\t  pass #%-3u %5.0f draws  %8.0f verts  %5.0f v/draw  %ux%u  barriers %.1f (cyclic %.1f)",
 						ordinal, draws_per_frame, verts_per_frame,
 						count ? static_cast<double>(g_pass_vertices[ordinal]) / static_cast<double>(count) : 0.0,
-						g_pass_width[ordinal], g_pass_height[ordinal]);
+						g_pass_width[ordinal], g_pass_height[ordinal],
+						static_cast<double>(g_pass_barriers[ordinal]) / frames,
+						static_cast<double>(g_pass_cyclic[ordinal]) / frames);
 				}
 				fmt::append(report, "\n\tby pass%s", list);
 			}
@@ -531,6 +535,8 @@ namespace rsx::prof
 		for (auto& c : g_rp_sites) c = 0;
 		for (auto& c : g_pass_draws) c = 0;
 		for (auto& c : g_pass_vertices) c = 0;
+		for (auto& c : g_pass_barriers) c = 0;
+		for (auto& c : g_pass_cyclic) c = 0;
 		for (auto& level : g_rp_caller_counts) for (auto& c : level) c = 0;
 		for (auto& level : g_rp_callers) for (auto& a : level) a = nullptr;
 		for (auto& c : g_flush_sites) c = 0;

@@ -272,6 +272,27 @@ namespace rsx::prof
 	extern u16 g_pass_height[pass_slot_count];
 	extern u64 g_pass_vertices[pass_slot_count];
 
+	/**
+	 * Barriers issued while a pass is open, and how many were cyclic-reference barriers.
+	 *
+	 * Pass #6 spends 9.8 ms on 44 draws and 33k vertices, which is neither vertex work nor,
+	 * apparently, pixel work. What is left is the GPU being serialised inside the pass. A
+	 * by-region self-dependency barrier makes a tiler resolve the tile and fetch it back, so
+	 * one per draw would cost about what is being measured -- and texture_barrier now
+	 * deliberately keeps the pass open on Android and issues exactly that.
+	 *
+	 * Counted separately from the render pass teardowns, which are the cost this replaced.
+	 */
+	extern u64 g_pass_barriers[pass_slot_count];
+	extern u64 g_pass_cyclic[pass_slot_count];
+
+	inline void note_pass_barrier(bool cyclic)
+	{
+		if (g_pass_ordinal >= pass_slot_count) return;
+		g_pass_barriers[g_pass_ordinal]++;
+		if (cyclic) g_pass_cyclic[g_pass_ordinal]++;
+	}
+
 	extern u64 g_xform_program_calls;
 	extern u64 g_xform_program_words;
 	extern u64 g_xform_const_calls;
