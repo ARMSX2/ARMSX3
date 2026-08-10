@@ -1,3 +1,4 @@
+#include <fstream>
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
 #include "Emu/Audio/Cubeb/CubebBackend.h"
@@ -2146,6 +2147,33 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
     std::error_code ec;
     // std::filesystem::remove_all(g_android_cache_dir, ec);
     std::filesystem::create_directories(g_android_cache_dir);
+
+    // Mesa driver options, from <root>/driver_env.txt, one NAME=VALUE per line.
+    //
+    // This device needs Turnip -- the stock Adreno driver does not render at all -- and
+    // Turnip's behaviour is steered by environment variables such as TU_DEBUG. The usual way
+    // to set those, the wrap.<package> property, is ignored on a user build: it can be set and
+    // read back while never reaching the process environment, which makes a flag that did
+    // nothing look exactly like a flag that made no difference.
+    //
+    // Read before any Vulkan instance exists, because Mesa caches each option the first time
+    // it is queried. A missing file is the normal case and does nothing.
+    if (std::ifstream env_file(rootDirStr + "driver_env.txt"); env_file.is_open()) {
+      std::string line;
+      while (std::getline(env_file, line)) {
+        if (const auto eq = line.find('=');
+            eq != std::string::npos && !line.empty() && line[0] != '#') {
+          auto name = line.substr(0, eq);
+          auto value = line.substr(eq + 1);
+
+          while (!value.empty() && (value.back() == '\r' || value.back() == ' ')) {
+            value.pop_back();
+          }
+
+          setenv(name.c_str(), value.c_str(), 1);
+        }
+      }
+    }
   }
 
   if (g_initialized) {
