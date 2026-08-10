@@ -1767,14 +1767,79 @@ private:
   }
 } static g_compilationQueue;
 
+// Runs the callbacks Emu posts to the main thread.
+//
+// CallFromMainThread with no wake_up is a POST, not a call: upstream hands it to the GUI
+// thread and returns immediately. Running it inline instead executes it under whatever
+// locks the caller happens to hold, and lv2_obj::sleep_unlocked posts one while holding
+// lv2_obj::g_mutex -- the comment upstream put on that call site says to run it on the main
+// thread for exactly that reason. The callback is FinalizeRunRequest, the wake for a
+// restored savestate, so it took g_mutex against itself and every thread stopped there:
+// loading a state, and saving one (a save stops and restarts into the state), parked with
+// the SPUs spinning and the progress overlay frozen on the figure it last drew.
+//
+// Callers that pass wake_up are synchronising on completion (BlockingCallFromMainThread
+// waits on it), so those keep running inline exactly as before.
+static struct main_thread_dispatcher {
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::deque<std::function<void()>> queue;
+  std::thread worker;
+  bool started = false;
+
+  void post(std::function<void()> cb) {
+    std::unique_lock lock(mutex);
+
+    if (!started) {
+      started = true;
+      worker = std::thread([this] { run(); });
+      worker.detach();
+    }
+
+    queue.push_back(std::move(cb));
+    cv.notify_one();
+  }
+
+  void run() {
+    pthread_setname_np(pthread_self(), "Main Callbacks");
+
+    for (;;) {
+      std::function<void()> cb;
+
+      {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [this] { return !queue.empty(); });
+        cb = std::move(queue.front());
+        queue.pop_front();
+      }
+
+      // One callback throwing must not take the dispatcher with it: everything posted
+      // after it would be dropped, including the savestate wake.
+      try {
+        cb();
+      } catch (const std::exception &e) {
+        rpcsx_android.error("Main-thread callback threw: %s", e.what());
+      } catch (...) {
+        rpcsx_android.error("Main-thread callback threw an unknown exception");
+      }
+    }
+  }
+} g_mainThreadDispatcher;
+
 static void setupCallbacks() {
   Emu.SetCallbacks({
       .call_from_main_thread =
           [](std::function<void()> cb, atomic_t<u32> *wake_up) {
-            cb();
             if (wake_up) {
+              // The caller is waiting on this one; running it here is what it
+              // already did and is what BlockingCallFromMainThread expects.
+              cb();
               *wake_up = true;
+              wake_up->notify_one();
+              return;
             }
+
+            g_mainThreadDispatcher.post(std::move(cb));
           },
       .on_run = [](auto...) {},
       .on_pause = [](auto...) {},
