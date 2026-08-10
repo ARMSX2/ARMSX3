@@ -262,7 +262,16 @@ void VKGSRender::advance_queued_frames()
 	// out. Allowing the full count would hand out a context that is still in flight and push
 	// every frame down the single aux context borrow path, which has room for one such frame
 	// and an ensure() waiting for the second.
-	const u32 max_frames_in_flight = std::max(m_max_async_frames, 2u) - 1u;
+	// Pipelining costs memory: a second frame in flight means a second frame's resources are
+	// alive before anything retires them. That is worth it at rest and not worth a fatal
+	// VK_ERROR_OUT_OF_DEVICE_MEMORY, which on this GPU means system memory, shared with
+	// everything else on a handheld. Under pressure, fall back to the single frame this used
+	// to run with: slower, and slower is recoverable.
+	const u32 depth_limit = (vk::vmm_determine_memory_load_severity() > rsx::problem_severity::low)
+		? 2u
+		: std::max(m_max_async_frames, 2u);
+
+	const u32 max_frames_in_flight = depth_limit - 1u;
 
 	while (m_queued_frames.size() >= max_frames_in_flight)
 	{
