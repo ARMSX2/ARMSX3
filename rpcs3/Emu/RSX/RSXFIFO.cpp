@@ -715,6 +715,21 @@ namespace rsx
 			}
 			case FIFO::FIFO_EMPTY:
 			{
+				// Publish GET before going idle.
+				//
+				// GET is published on a bounded lag -- every eighth packet -- to keep a
+				// cross-cluster coherence miss off the per-packet path. That is only safe while
+				// something is still coming to flush it. Draining the ring is precisely when
+				// nothing is: the guest reads GET to see how far we have consumed, and with up
+				// to seven packets of lag frozen into it and no further packets to publish, it
+				// waits forever for progress that was made and never announced.
+				//
+				// Presents as a boot that hangs with the RSX perfectly healthy and idle, every
+				// guest thread in a legitimate wait, and sys_timer_usleep climbing -- and only
+				// when the packet count is not a multiple of eight as the ring drains, which is
+				// why it is game- and timing-dependent rather than reliable.
+				fifo_ctrl->sync_get_force();
+
 				if (performance_counters.state == FIFO::state::running)
 				{
 					performance_counters.FIFO_idle_timestamp = get_system_time();
@@ -729,7 +744,9 @@ namespace rsx
 			}
 			case FIFO::FIFO_BUSY:
 			{
-				// Do something else
+				// Do something else. Same reasoning as the empty case: this leaves the consume
+				// loop, so GET goes out rather than sitting behind the lag counter.
+				fifo_ctrl->sync_get_force();
 				return;
 			}
 			case FIFO::FIFO_ERROR:
