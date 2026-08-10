@@ -184,7 +184,11 @@ class GameLibraryRepository(private val context: Context) {
         }
         internalGameDirectories().forEach { dir ->
             android.util.Log.i(ScanTag, "internal dir=${dir.absolutePath}")
-            scanRawDirectory(dir, collected, 0)
+            // dev_hdd0/game is the emulator's own install root and its shape is known: one
+            // directory per title, nothing else. It gets the strict scan. Everything else is
+            // a folder a user pointed us at, where games legitimately sit at any depth.
+            if (dir.name == "game") scanInstalledTitles(dir, collected)
+            else scanRawDirectory(dir, collected, 0)
         }
         android.util.Log.i(ScanTag, "scan done: ${collected.size} game(s)")
         collected.values.sortedBy { it.title.lowercase() }.also { saveCache(directories, it) }
@@ -399,6 +403,37 @@ class GameLibraryRepository(private val context: Context) {
             if (inner.any { it.isFile && it.name.equals("PARAM.SFO", ignoreCase = true) }) return true
         }
         return find("PARAM.SFO")?.isFile == true && find("USRDIR")?.isDirectory == true
+    }
+
+    /**
+     * dev_hdd0/game, scanned as what it is: one directory per installed title.
+     *
+     * The recursive scan cannot be used here. It descends into anything that is not itself a
+     * game folder and then accepts any file whose extension is in [gameExtensions], and "img"
+     * is one of those. A title's own data is full of them, so once a package unpacked its
+     * contents over this directory rather than into a title folder of its own, GTA IV's
+     * archives arrived in the library as games: manhat01, props_ab, vehicles, script,
+     * weapons. Every one of them a .img sitting where the scanner was willing to look.
+     *
+     * The extractor no longer unpacks into this directory (see unpkg.cpp set_install_path),
+     * but nothing should be relying on that to keep the library clean, and existing installs
+     * still have the debris. A direct child here is a title or it is not listed.
+     */
+    private fun scanInstalledTitles(directory: File, output: MutableMap<String, GameInfo>) {
+        val children = runCatching { directory.listFiles() }.getOrNull() ?: return
+        children.forEach { file ->
+            if (!file.isDirectory) return@forEach
+            if (!runCatching { isPs3GameFolder(file) }.getOrDefault(false)) {
+                android.util.Log.i(ScanTag, "  skipping non-title '${file.name}' in dev_hdd0/game")
+                return@forEach
+            }
+            val uri = Uri.fromFile(file)
+            android.util.Log.i(ScanTag, "  installed title '${file.name}'")
+            output.putIfAbsent(
+                uri.toString(),
+                createGame(uri, file.name, "folder", null, probeDisc(file)),
+            )
+        }
     }
 
     private fun scanRawDirectory(
