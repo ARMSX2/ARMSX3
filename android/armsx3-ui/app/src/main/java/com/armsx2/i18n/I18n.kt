@@ -600,6 +600,7 @@ val EN: Map<String, String> = mapOf(
     "patches.ps3.serverError" to "RPCS3's patch server returned an error.",
     "patches.ps3.parseFailed" to "The patch database downloaded but could not be read. It may be for a newer patch format than this build supports.",
     "patches.ps3.toggleFailed" to "Could not change that patch.",
+    "patches.ps3.restartNeeded" to "Patches are applied while the game loads. A change here takes effect the next time you launch it, not in a game that is already running.",
     "patches.ps3.emptyAll" to "No patches yet. Download the database above to get started.",
     "patches.ps3.emptyGame" to "No patches available for this game. Try downloading the database above.",
     "common.off" to "Off",

@@ -2865,14 +2865,22 @@ extern "C" std::string _rpcsx_patchesList(std::string_view serial) {
 
       if (!applies) continue;
 
+      // Enabled state has to be read for THIS serial only. patchSetEnabled
+      // writes per serial, so a patch switched on from another game's list has
+      // an enabled entry under that game's serial and none under this one --
+      // counting any enabled entry reported it as on for every game the patch
+      // covers, and the row then showed a toggle the game was not getting.
+      // "all" is RPCS3's wildcard serial and does apply here, so it counts.
       bool is_on = false;
       if (auto it = enabled.find(hash); it != enabled.end()) {
         if (auto p = it->second.patch_info_map.find(description);
             p != it->second.patch_info_map.end()) {
           for (const auto &[title, serials] : p->second.titles)
-            for (const auto &[ser, versions] : serials)
+            for (const auto &[ser, versions] : serials) {
+              if (!serial.empty() && ser != serial && ser != "all") continue;
               for (const auto &[ver, values] : versions)
                 if (values.enabled) is_on = true;
+            }
         }
       }
 
