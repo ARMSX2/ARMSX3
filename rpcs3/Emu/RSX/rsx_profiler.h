@@ -260,6 +260,18 @@ namespace rsx::prof
 	extern u32 g_pass_ordinal;
 	extern u64 g_pass_draws[pass_slot_count];
 
+	/**
+	 * What each pass is, so an expensive ordinal can be named in the game's terms.
+	 *
+	 * Pass #6 costs 76us a draw against 2.4us in pass #8, and is insensitive to resolution, so
+	 * it is not fragment work. Target size says whether it is a shadow map, a reflection or the
+	 * main scene; vertices per draw separates a lot of geometry from a lot of cost per vertex.
+	 * Those want different fixes and nothing measured so far tells them apart.
+	 */
+	extern u16 g_pass_width[pass_slot_count];
+	extern u16 g_pass_height[pass_slot_count];
+	extern u64 g_pass_vertices[pass_slot_count];
+
 	extern u64 g_xform_program_calls;
 	extern u64 g_xform_program_words;
 	extern u64 g_xform_const_calls;

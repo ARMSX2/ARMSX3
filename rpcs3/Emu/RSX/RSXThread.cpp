@@ -850,6 +850,8 @@ namespace rsx
 			if (rsx::prof::g_pass_ordinal < rsx::prof::pass_slot_count)
 			{
 				rsx::prof::g_pass_draws[rsx::prof::g_pass_ordinal]++;
+				rsx::prof::g_pass_vertices[rsx::prof::g_pass_ordinal] +=
+					method_registers.current_draw_clause.get_elements_count();
 			}
 		}
 

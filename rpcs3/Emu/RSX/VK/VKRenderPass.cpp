@@ -430,6 +430,12 @@ namespace vk
 		{
 			rsx::prof::g_render_passes++;
 			rsx::prof::g_pass_ordinal++;
+
+			if (rsx::prof::g_pass_ordinal < rsx::prof::pass_slot_count)
+			{
+				rsx::prof::g_pass_width[rsx::prof::g_pass_ordinal] = static_cast<u16>(framebuffer_region.width);
+				rsx::prof::g_pass_height[rsx::prof::g_pass_ordinal] = static_cast<u16>(framebuffer_region.height);
+			}
 		}
 
 		// The draw region was declared and never recorded anywhere, so the one figure that
