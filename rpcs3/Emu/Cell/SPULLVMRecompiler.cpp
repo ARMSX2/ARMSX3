@@ -1671,6 +1671,15 @@ public:
 					return nullptr;
 				}
 
+				// The owner finished and published nothing. It is not coming back, so
+				// waiting on `compiled` here is waiting forever -- state 2 is set after
+				// the publication it promises, so seeing it with nothing published means
+				// there is nothing to wait for.
+				if (add_loc->llvm_compile_state == 2)
+				{
+					return nullptr;
+				}
+
 				add_loc->compiled.wait(nullptr, atomic_wait_timeout{10'000'000});
 			}
 
@@ -1684,9 +1693,14 @@ public:
 		// of cold compilation work.
 		if (add_loc->llvm_compile_state.compare_and_swap(0, 1) != 0)
 		{
+			// Bounded, like the duplicate wait above. An untimed wait on a claim is only
+			// as sound as every path the owner can leave by, and a waiter that misses the
+			// transition waits for the rest of the session -- SPURS brings all its kernels
+			// to the same block at once, so it is five threads, and the game sits polling
+			// for an SPU that will never answer.
 			while (add_loc->llvm_compile_state == 1)
 			{
-				add_loc->llvm_compile_state.wait(1);
+				add_loc->llvm_compile_state.wait(1, atomic_wait_timeout{10'000'000});
 			}
 
 			if (add_loc->llvm_compile_state == 2)
