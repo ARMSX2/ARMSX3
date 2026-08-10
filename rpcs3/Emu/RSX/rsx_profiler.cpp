@@ -201,6 +201,38 @@ namespace rsx::prof
 			return;
 		}
 
+		// Re-bind if the RSX thread is not the one we armed against.
+		//
+		// Booting a second game without restarting the app builds a new RSX thread, and
+		// set_enabled -- the only thing that binds -- early-returns when the setting has not
+		// changed, so the profiler stayed bound to the previous game's thread. Every scope
+		// then failed its owner check, nothing ever switched buckets, and the whole window was
+		// charged to whichever bucket happened to be current. The result reads as "FIFO decode
+		// 100%", which is indistinguishable from a real finding and was briefly taken for one.
+		if (current_thread_token() != g_owner_thread) [[unlikely]]
+		{
+			bind_to_current_thread();
+
+			// The window so far belongs to a thread that is gone; keeping it would blend two
+			// games into one report.
+			g_acc = {};
+			g_acc.window_start = utils::get_tsc();
+			g_last_switch = g_acc.window_start;
+			g_current = bucket::fifo_decode;
+
+			for (auto& c : g_pass_draws) c = 0;
+			for (auto& c : g_pass_vertices) c = 0;
+			for (auto& c : g_pass_barriers) c = 0;
+			for (auto& c : g_pass_cyclic) c = 0;
+			for (auto& c : g_pass_vp_words) c = 0;
+			for (auto& c : g_pass_fp_words) c = 0;
+			for (auto& c : g_pass_subdraws) c = 0;
+			for (auto& c : g_pass_queries) c = 0;
+
+			prof_log.warning("RSX profiling re-bound to the current RSX thread");
+			return;
+		}
+
 		g_acc.frames++;
 
 		// Restart pass numbering so an ordinal means the same pass here as it does in the GPU
