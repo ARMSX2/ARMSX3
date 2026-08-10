@@ -101,9 +101,29 @@ private fun installLicence(file: java.io.File): Boolean = runCatching {
 private fun readInstalled(): List<java.io.File> =
     java.io.File(RPCSX.rootDirectory, "config/dev_hdd0/game")
         .listFiles()
-        ?.filter { it.isDirectory }
+        ?.filter { it.isDirectory && isInstalledContent(it) }
         ?.sortedBy { it.name }
         .orEmpty()
+
+/**
+ * True for a directory under dev_hdd0/game that is actually installed content.
+ *
+ * Everything in there used to be listed with an Uninstall button beside it, including
+ * things that are not titles at all. RPCS3 keeps its own "$locks" directory in here
+ * (rpcs3::utils::get_hdd0_locks_dir is get_hdd0_game_dir() + "$locks/", which reaches
+ * Android as the escaped ＄locks), so the screen offered to delete the emulator's lock
+ * state, and any stray folder a failed install left behind was offered as a title too.
+ *
+ * A PARAM.SFO is the test. Game data installs keep theirs and are deliberately still
+ * listed: a 1.1GB BLUS30464_INSTALL is exactly the kind of thing someone comes here to
+ * reclaim, even though it is not bootable.
+ */
+private fun isInstalledContent(dir: java.io.File): Boolean {
+    if (dir.name.startsWith("$") || dir.name.startsWith("＄")) return false
+    return runCatching {
+        dir.listFiles()?.any { it.isFile && it.name.equals("PARAM.SFO", ignoreCase = true) }
+    }.getOrNull() == true
+}
 
 @Composable
 fun PackageInstallerScreen(onBack: () -> Unit) {
