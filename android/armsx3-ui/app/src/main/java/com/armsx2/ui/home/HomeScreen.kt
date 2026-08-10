@@ -799,8 +799,10 @@ fun HomeScreen(
         }
     }
 
-    // The game itself is not needed to install the key -- a RAP's filename is the content id
-    // it unlocks -- so this only has to know that a locked game asked for one.
+    // The game IS needed, when we have it. A RAP's filename is only conventionally the content
+    // id it unlocks: one saved as "license(1).rap" or renamed on the way over installs under a
+    // name nothing looks for, so the install reports success and the game stays locked. Asking
+    // the game's own EBOOT for the id gets it right whatever the file is called.
     if (licenceGame != null) {
         // Resolved during composition: str() is @Composable and cannot be called from the
         // pick callback, the same reason games.addToHome.unsupported is hoisted above.
@@ -813,8 +815,10 @@ fun HomeScreen(
             // key that belongs to THIS game.
             extensions = setOf("rap"),
             onPick = { file ->
+                val gamePath = licenceGame?.uri?.path
                 licenceGame = null
-                val ok = com.armsx2.data.library.Licences.installRap(file)
+                val ok = com.armsx2.data.library.Licences
+                    .installRapForGame(context, file, gamePath)
                 Toast.makeText(context, if (ok) installedMsg else failedMsg, Toast.LENGTH_LONG).show()
                 // The folder set is unchanged, so only the lock state is stale — nothing else
                 // would prompt a rescan.

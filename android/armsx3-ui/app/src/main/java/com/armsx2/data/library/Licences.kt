@@ -1,5 +1,8 @@
 package com.armsx2.data.library
 
+import android.content.Context
+import android.os.ParcelFileDescriptor
+import net.rpcsx.ProgressRepository
 import net.rpcsx.RPCSX
 import java.io.File
 
@@ -29,6 +32,34 @@ object Licences {
      * The extension is written lower-case because that is what unself.cpp looks for when it
      * searches exdata for a licence matching a game's content id.
      */
+    /**
+     * Install [file] as the licence for the game at [gamePath].
+     *
+     * Prefers the content id read out of the game's own EBOOT over the one in the file name.
+     * The name is only a convention: a licence saved as "license(1).rap", renamed, or handed
+     * around by someone who tidied it up copies into exdata under a name nothing looks for,
+     * so the install reports success and the game stays locked -- which is exactly what it
+     * looks like from the outside, and what it was reported as.
+     *
+     * The native path decrypts the EBOOT's supplemental header to read the content id, which
+     * works on a LOCKED game because that header is not what the licence protects. Falls back
+     * to the name when there is no game to ask, or when the header cannot be read.
+     */
+    fun installRapForGame(context: Context, file: File, gamePath: String?): Boolean {
+        if (!gamePath.isNullOrBlank() && RPCSX.initialized) {
+            val installed = runCatching {
+                val id = ProgressRepository.create(context, "Installing ${file.name}")
+                ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+                    RPCSX.instance.installKey(fd.fd, id, gamePath)
+                }
+            }.getOrDefault(false)
+
+            if (installed) return true
+        }
+
+        return installRap(file)
+    }
+
     fun installRap(file: File): Boolean = runCatching {
         val bytes = file.readBytes()
         // Same floor as InstallFileInExData: anything shorter is not a key.
