@@ -506,8 +506,10 @@ namespace rsx::prof
 	void dump_and_reset();
 
 	/** Report the bucket the RSX thread is stuck in when frames have stopped arriving.
-	 *  Rate-limited internally; safe to call from the FIFO loop. */
-	void poll_stall();
+	 *  Rate-limited internally; safe to call from the FIFO loop.
+	 *  Returns true on the calls that actually reported, so a caller can attach its own
+	 *  diagnosis to the same condition without repeating the rate limit. */
+	bool poll_stall();
 
 	void set_enabled(bool enabled);
 	inline bool enabled() { return g_enabled.load(std::memory_order_relaxed); }

@@ -1304,6 +1304,33 @@ namespace rsx
 		return t + timestamp_subvalue;
 	}
 
+	// Say where every guest thread is parked once frames have stopped arriving.
+	//
+	// A hang with the RSX idle is a guest-side wait, and nothing named the thread or the place.
+	// The syscall stats report sys_timer_usleep without saying who called it, /proc shows a
+	// thread that never started as indistinguishable from one that is blocked, and the RSX
+	// profiler only covers this side of the boundary. Name, state, PC and the function each
+	// PPU is in separate all of those.
+	//
+	// idm::unlocked deliberately: this runs on the RSX thread, and taking the id lock here to
+	// diagnose a hang would add exactly the kind of dependency being diagnosed. A torn read of
+	// a diagnostic line costs nothing.
+	static void dump_guest_threads_stalled()
+	{
+		std::string out;
+
+		idm::select<named_thread<ppu_thread>>([&out](u32 id, ppu_thread& ppu)
+		{
+			const auto func = ppu.current_function ? ppu.current_function : ppu.last_function;
+
+			fmt::append(out, "\n  PPU 0x%07x '%s': state=%s cia=0x%08x %s func='%s'",
+				id, *ppu.ppu_tname.load(), ppu.state.load(), ppu.cia,
+				ppu.current_function ? "in" : "last", func ? func : "");
+		}, idm::unlocked);
+
+		rsx_log.error("Guest PPU threads while no frame has completed:%s", out);
+	}
+
 	void thread::do_local_task(FIFO::state state)
 	{
 		// Arm and poll from here as well as on_frame_end. Both of those run only once a frame
@@ -1311,7 +1338,13 @@ namespace rsx
 		// and silent -- and that is the case where what the RSX thread is looping in is the
 		// whole question. Both calls return immediately once armed and are rate-limited.
 		prof::set_enabled(g_cfg.video.rsx_profiler.get());
-		prof::poll_stall();
+
+		// Both halves on the same condition. Every hang chased so far has been the guest
+		// waiting while the RSX idles, and only the RSX half was ever visible.
+		if (prof::poll_stall()) [[unlikely]]
+		{
+			dump_guest_threads_stalled();
+		}
 
 		m_eng_interrupt_mask.clear(rsx::backend_interrupt);
 

@@ -266,31 +266,31 @@ namespace rsx::prof
 	// the case worth instrumenting: a boot that never presents, where the compile has finished
 	// and the thread is looping somewhere without consuming. Called from do_local_task, which
 	// the FIFO loop reaches whether or not frames advance.
-	void poll_stall()
+	bool poll_stall()
 	{
 		if (!g_enabled.load(std::memory_order_relaxed)) [[likely]]
 		{
-			return;
+			return false;
 		}
 
 		// Only the thread the buckets are armed against; anyone else's clock is meaningless.
 		if (current_thread_token() != g_owner_thread)
 		{
-			return;
+			return false;
 		}
 
 		const u64 freq = utils::get_tsc_freq();
 
 		if (!freq)
 		{
-			return;
+			return false;
 		}
 
 		const u64 now = utils::get_tsc();
 
 		if (now - g_last_stall_check < freq * 5)
 		{
-			return;
+			return false;
 		}
 
 		g_last_stall_check = now;
@@ -300,19 +300,21 @@ namespace rsx::prof
 			// Frames are still arriving, so tick_frame is doing the reporting.
 			g_stall_frames = g_acc.frames;
 			g_stall_started = now;
-			return;
+			return false;
 		}
 
 		if (!g_stall_started)
 		{
 			g_stall_started = now;
-			return;
+			return false;
 		}
 
 		prof_log.error("RSX has not finished a frame in %.1fs; current bucket '%s', in it for %.2fs",
 			static_cast<double>(now - g_stall_started) / static_cast<double>(freq),
 			name_of(g_current),
 			static_cast<double>(now - g_last_switch) / static_cast<double>(freq));
+
+		return true;
 	}
 
 	void dump_and_reset()
