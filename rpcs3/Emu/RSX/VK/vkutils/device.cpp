@@ -580,6 +580,20 @@ namespace vk
 		float queue_priorities[1] = { 0.f };
 		pgpu = &pdev;
 
+		// Verdict for the adapter actually in use. Logged here rather than where the
+		// flag is resolved, because physical_device::create() runs for every GPU of
+		// every VkInstance (system-info queries make their own), and rather than in
+		// TextureUtils, whose fallback branches run per texture and per mip level.
+		// Reads the resolved flag, so the V3DV/PanVK exceptions still apply.
+		if (get_texture_compression_bc_support())
+		{
+			rsx_log.notice("BC1-BC3 texture compression supported; compressed DXT uploads use the GPU path.");
+		}
+		else
+		{
+			rsx_log.warning("BC1-BC3 texture compression unavailable; compressed DXT textures use CPU decoding.");
+		}
+
 		ensure(graphics_queue_idx == present_queue_idx || present_queue_idx == umax); // TODO
 		std::vector<VkDeviceQueueCreateInfo> device_queues;
 

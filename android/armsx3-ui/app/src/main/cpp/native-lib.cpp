@@ -20,6 +20,7 @@ struct RPCSXApi {
   bool (*overlayPadData)(int port, int digital1, int digital2, int leftStickX,
                          int leftStickY, int rightStickX, int rightStickY);
   bool (*initialize)(std::string_view rootDir, std::string_view user);
+  void (*setSocInfo)(std::string_view socInfo);
   bool (*processCompilationQueue)(JNIEnv *env);
   bool (*startMainThreadProcessor)(JNIEnv *env);
   bool (*collectGameInfo)(JNIEnv *env, std::string_view rootDir,
@@ -104,6 +105,7 @@ struct RPCSXLibrary : RPCSXApi {
     // clang-format off
     result.overlayPadData = reinterpret_cast<decltype(overlayPadData)>(dlsym(handle, "_rpcsx_overlayPadData"));
     result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_rpcsx_initialize"));
+    result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_rpcsx_setSocInfo"));
     result.processCompilationQueue = reinterpret_cast<decltype(processCompilationQueue)>(dlsym(handle, "_rpcsx_processCompilationQueue"));
     result.startMainThreadProcessor = reinterpret_cast<decltype(startMainThreadProcessor)>(dlsym(handle, "_rpcsx_startMainThreadProcessor"));
     result.collectGameInfo = reinterpret_cast<decltype(collectGameInfo)>(dlsym(handle, "_rpcsx_collectGameInfo"));
@@ -200,12 +202,18 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_overlayPadData(
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_initialize(
-    JNIEnv *env, jobject, jstring rootDir, jstring user) {
+    JNIEnv *env, jobject, jstring rootDir, jstring user, jstring socInfo) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
   if (rpcsxLib.initialize == nullptr) {
       return false;
+  }
+
+  // Before initialize(), which is where the core assembles its startup log.
+  // Null on cores older than this export; the SoC line then reads "unknown".
+  if (rpcsxLib.setSocInfo != nullptr) {
+      rpcsxLib.setSocInfo(unwrap(env, socInfo));
   }
 
   return rpcsxLib.initialize(unwrap(env, rootDir), unwrap(env, user));

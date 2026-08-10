@@ -67,13 +67,8 @@ class AboutViewModel(application: Application) : AndroidViewModel(application) {
         val memoryInfo = ActivityManager.MemoryInfo().also(activityManager::getMemoryInfo)
         val metrics = context.resources.displayMetrics
         val pageBytes = runCatching { Os.sysconf(OsConstants._SC_PAGESIZE) }.getOrDefault(4096L)
-        val soc = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            listOf(Build.SOC_MANUFACTURER, Build.SOC_MODEL).filter(String::isNotBlank).joinToString(" ")
-        } else {
-            Build.HARDWARE
-        }
         return DeviceDetails(
-            soc = soc.ifBlank { "—" },
+            soc = com.armsx2.DeviceTier.socIdentity().ifBlank { "—" },
             gpu = queryGpuRenderer().ifBlank { "—" },
             cpu = Runtime.getRuntime().availableProcessors().toString(),
             memory = String.format(Locale.US, "%.1f GB", memoryInfo.totalMem / 1_073_741_824.0),
