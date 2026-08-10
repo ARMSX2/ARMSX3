@@ -1567,66 +1567,8 @@ void VKGSRender::clear_surface(u32 mask)
 
 	if (!clear_descriptors.empty())
 	{
-		// Clear at pass begin rather than inside the pass, when that is provably the same
-		// thing. vkCmdClearAttachments needs the pass open, and opening it with LOAD_OP_LOAD
-		// reads the whole framebuffer into tile memory only for the clear to overwrite it.
-		// LOAD_OP_CLEAR skips the read.
-		//
-		// Only when the clear covers the entire render area and no pass is already open.
-		// A partial clear is not a load op, and ending an open pass to change its load ops
-		// would store the framebuffer to discard it, which costs more than it saves.
-		u32 color_clears = 0;
-		bool clear_depth = false, clear_stencil = false;
-
-		for (const auto& desc : clear_descriptors)
-		{
-			if (desc.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) color_clears++;
-			if (desc.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) clear_depth = true;
-			if (desc.aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) clear_stencil = true;
-		}
-
-		const u32 color_attachments = ::size32(m_draw_buffers);
-		const bool has_depth_attachment = !!std::get<1>(m_rtts.m_bound_depth_stencil);
-
-		// Every colour attachment or none: a load op applies to the attachment as a whole, so
-		// clearing a subset of them this way would wipe the ones the guest left alone.
-		const bool clear_color = (color_clears > 0) && (color_clears == color_attachments);
-		const bool colors_consistent = (color_clears == 0) || clear_color;
-
-		if (full_frame && colors_consistent &&
-			!vk::is_renderpass_open(*m_current_command_buffer))
-		{
-			// Indexed by attachment, colours first then depth, matching the order the render
-			// pass builds its attachment list in.
-			std::vector<VkClearValue> clear_values(color_attachments + (has_depth_attachment ? 1 : 0));
-
-			for (u32 i = 0; i < color_attachments; ++i)
-			{
-				clear_values[i] = color_clear_values;
-			}
-
-			if (has_depth_attachment)
-			{
-				clear_values.back() = depth_stencil_clear_values;
-			}
-
-			const u64 clearing_key = vk::get_renderpass_key_with_clears(
-				m_current_renderpass_key, clear_color, clear_depth, clear_stencil);
-
-			vk::begin_renderpass(
-				*m_device,
-				*m_current_command_buffer,
-				clearing_key,
-				m_draw_fbo->value,
-				{ positionu{0u, 0u}, sizeu{m_draw_fbo->width(), m_draw_fbo->height()} },
-				clear_values.data(),
-				::size32(clear_values));
-		}
-		else
-		{
-			begin_render_pass();
-			vkCmdClearAttachments(*m_current_command_buffer, ::size32(clear_descriptors), clear_descriptors.data(), 1, &region);
-		}
+		begin_render_pass();
+		vkCmdClearAttachments(*m_current_command_buffer, ::size32(clear_descriptors), clear_descriptors.data(), 1, &region);
 	}
 }
 

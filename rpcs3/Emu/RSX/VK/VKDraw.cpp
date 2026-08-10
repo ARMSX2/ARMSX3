@@ -125,15 +125,11 @@ namespace vk
 void VKGSRender::begin_render_pass()
 {
 
-	// The key is handed over so an instance opened by the clearing variant is recognised as
-	// serving this request. Without it the pointer comparison would end that instance and
-	// begin the loading one, storing and reloading the framebuffer and discarding the clear.
 	vk::begin_renderpass(
 		*m_current_command_buffer,
 		get_render_pass(),
 		m_draw_fbo->value,
-		{ positionu{0u, 0u}, sizeu{m_draw_fbo->width(), m_draw_fbo->height()} },
-		m_current_renderpass_key);
+		{ positionu{0u, 0u}, sizeu{m_draw_fbo->width(), m_draw_fbo->height()} });
 }
 
 void VKGSRender::close_render_pass()

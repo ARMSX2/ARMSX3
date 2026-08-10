@@ -14,17 +14,6 @@ namespace vk
 	{
 		VkRenderPass pass = VK_NULL_HANDLE;
 		VkFramebuffer fbo = VK_NULL_HANDLE;
-
-		// The key with the clear bits masked off.
-		//
-		// Whether an open instance can serve a request is a question about render pass
-		// compatibility, and load ops do not affect compatibility: a pipeline built against
-		// the loading variant is valid inside the clearing one. Comparing the pass pointer
-		// instead would treat the two as different and end the instance to begin the other,
-		// which on a tiler stores and reloads the whole framebuffer for nothing, and would
-		// also discard the clear that was just performed.
-		u64 base_key = 0;
-		bool key_valid = false;
 	};
 
 	atomic_t<u64> g_cached_renderpass_key = 0;
@@ -84,16 +73,7 @@ namespace vk
 			u64 sample_count  : 6;
 			u64 layout_blob   : 15;
 			u64 input_attachments_mask : 5;
-
-			// Load ops. Separate bits for depth and stencil because a clear of one but not
-			// the other is common, and using CLEAR for both would wipe the aspect the guest
-			// asked to keep.
-			u64 clear_color   : 1;
-			u64 clear_depth   : 1;
-			u64 clear_stencil : 1;
 		};
-
-		static constexpr u64 clear_bits_mask = 0x7ull << 42;
 
 		renderpass_key_blob(u64 encoded_) : encoded(encoded_)
 		{}
@@ -316,11 +296,7 @@ namespace vk
 			VkAttachmentDescription color_attachment_description = {};
 			color_attachment_description.format = color_format;
 			color_attachment_description.samples = samples;
-			// CLEAR rather than LOAD skips reading the attachment into tile memory at all,
-			// which on a tiler is a full framebuffer read saved per pass.
-			color_attachment_description.loadOp = key.clear_color
-				? VK_ATTACHMENT_LOAD_OP_CLEAR
-				: VK_ATTACHMENT_LOAD_OP_LOAD;
+			color_attachment_description.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 			color_attachment_description.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
 			color_attachment_description.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 			color_attachment_description.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -336,13 +312,9 @@ namespace vk
 			VkAttachmentDescription depth_attachment_description = {};
 			depth_attachment_description.format = depth_format;
 			depth_attachment_description.samples = samples;
-			depth_attachment_description.loadOp = key.clear_depth
-				? VK_ATTACHMENT_LOAD_OP_CLEAR
-				: VK_ATTACHMENT_LOAD_OP_LOAD;
+			depth_attachment_description.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 			depth_attachment_description.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-			depth_attachment_description.stencilLoadOp = key.clear_stencil
-				? VK_ATTACHMENT_LOAD_OP_CLEAR
-				: VK_ATTACHMENT_LOAD_OP_LOAD;
+			depth_attachment_description.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
 			depth_attachment_description.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
 			depth_attachment_description.initialLayout = dsv_layout;
 			depth_attachment_description.finalLayout = dsv_layout;
@@ -430,20 +402,10 @@ namespace vk
 		g_renderpass_cache.clear();
 	}
 
-	void begin_renderpass(const vk::command_buffer& cmd, VkRenderPass pass, VkFramebuffer target, const coordu& framebuffer_region,
-		u64 base_key, const VkClearValue* clear_values, u32 clear_value_count)
+	void begin_renderpass(const vk::command_buffer& cmd, VkRenderPass pass, VkFramebuffer target, const coordu& framebuffer_region)
 	{
 		auto& renderpass_info = g_current_renderpass[cmd];
-
-		// An open instance serves the request when it is compatible, which for a render pass
-		// means matching attachments and not matching load ops. Requiring the same pass object
-		// would end the instance and begin an identical one whenever only the load ops differ,
-		// paying a framebuffer store and reload to do it.
-		const bool compatible = renderpass_info.fbo == target &&
-			((renderpass_info.key_valid && base_key && (renderpass_info.base_key == base_key)) ||
-				renderpass_info.pass == pass);
-
-		if (compatible)
+		if (renderpass_info.pass == pass && renderpass_info.fbo == target)
 		{
 			return;
 		}
@@ -460,8 +422,6 @@ namespace vk
 		rp_begin.renderArea.offset.y = static_cast<s32>(framebuffer_region.y);
 		rp_begin.renderArea.extent.width = framebuffer_region.width;
 		rp_begin.renderArea.extent.height = framebuffer_region.height;
-		rp_begin.clearValueCount = clear_value_count;
-		rp_begin.pClearValues = clear_value_count ? clear_values : nullptr;
 
 		// Counted here, at the only place a pass actually starts. Counting calls to the
 		// wrapper instead gave about 1900 per frame, because it early-outs when the same
@@ -481,11 +441,10 @@ namespace vk
 		vk::get_gpu_timer().begin(cmd, vk::gpu_timer::region::draw);
 
 		vkCmdBeginRenderPass(cmd, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
-		renderpass_info = { pass, target, base_key, base_key != 0 };
+		renderpass_info = { pass, target };
 	}
 
-	void begin_renderpass(VkDevice dev, const vk::command_buffer& cmd, u64 renderpass_key, VkFramebuffer target, const coordu& framebuffer_region,
-		const VkClearValue* clear_values, u32 clear_value_count)
+	void begin_renderpass(VkDevice dev, const vk::command_buffer& cmd, u64 renderpass_key, VkFramebuffer target, const coordu& framebuffer_region)
 	{
 		if (renderpass_key != g_cached_renderpass_key)
 		{
@@ -493,17 +452,7 @@ namespace vk
 			g_cached_renderpass_key = renderpass_key;
 		}
 
-		begin_renderpass(cmd, g_cached_renderpass, target, framebuffer_region,
-			renderpass_key & ~renderpass_key_blob::clear_bits_mask, clear_values, clear_value_count);
-	}
-
-	u64 get_renderpass_key_with_clears(u64 base_key, bool clear_color, bool clear_depth, bool clear_stencil)
-	{
-		renderpass_key_blob key(base_key & ~renderpass_key_blob::clear_bits_mask);
-		key.clear_color = clear_color ? 1 : 0;
-		key.clear_depth = clear_depth ? 1 : 0;
-		key.clear_stencil = clear_stencil ? 1 : 0;
-		return key.encoded;
+		begin_renderpass(cmd, g_cached_renderpass, target, framebuffer_region);
 	}
 
 	void end_renderpass(const vk::command_buffer& cmd)
