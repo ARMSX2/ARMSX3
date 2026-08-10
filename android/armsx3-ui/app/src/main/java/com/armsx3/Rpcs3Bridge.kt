@@ -190,7 +190,11 @@ object Rpcs3Bridge {
         appContext?.let { com.armsx2.Ps3PatchRepo.ensureBundledPatches(it) }
 
         val result = RPCSX.boot(target)
-        if (result != BootResult.NoErrors) {
+        // AlreadyAdded is not a failure: it says the title was already in games.yml, which is
+        // the normal case for anything booted before. RPCS3's own front-end passes it through
+        // for that reason. Treating it as an error turned a re-boot into "Game failed to
+        // start: AlreadyAdded" and sent the user back to the library.
+        if (result != BootResult.NoErrors && result != BootResult.AlreadyAdded) {
             lastBootError = result.name
             android.util.Log.e("ARMSX3", "boot failed: ${result.name} path=$target")
             return false
