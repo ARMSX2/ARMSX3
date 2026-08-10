@@ -541,7 +541,12 @@ namespace rsx::prof
 				{
 					if (!count) continue;
 					std::string scratch;
-					const auto name = rsx::get_method_name(slot << 2, scratch).second;
+					// The name table is keyed by register index, which is what a slot already is.
+					// Passing slot << 2 matched whichever unrelated method happened to have that
+					// value as its enum, so a hot slot could be reported under another method's
+					// name -- NV406E_SEMAPHORE_ACQUIRE came out as NV4097_SET_CONTEXT_DMA_VERTEX_B.
+					// The hex fallback below is still the byte offset, which is what a reader wants.
+					const auto name = rsx::get_method_name(slot, scratch).second;
 					fmt::append(list, "\n\t  %-46s %8.0f/frame  %4.1f%%",
 						name.empty() ? fmt::format("0x%05x", slot << 2) : std::string(name),
 						static_cast<double>(count) / frames,
@@ -571,7 +576,12 @@ namespace rsx::prof
 				{
 					if (!ticks) continue;
 					std::string scratch;
-					const auto name = rsx::get_method_name(slot << 2, scratch).second;
+					// The name table is keyed by register index, which is what a slot already is.
+					// Passing slot << 2 matched whichever unrelated method happened to have that
+					// value as its enum, so a hot slot could be reported under another method's
+					// name -- NV406E_SEMAPHORE_ACQUIRE came out as NV4097_SET_CONTEXT_DMA_VERTEX_B.
+					// The hex fallback below is still the byte offset, which is what a reader wants.
+					const auto name = rsx::get_method_name(slot, scratch).second;
 					fmt::append(list, "\n\t  %-46s %7.3f ms/frame  %6.0f ns each",
 						name.empty() ? fmt::format("0x%05x", slot << 2) : std::string(name),
 						static_cast<double>(ticks) * to_ms / frames,
