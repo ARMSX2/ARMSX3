@@ -189,6 +189,12 @@ object Rpcs3Bridge {
         // bundled revision matches.
         appContext?.let { com.armsx2.Ps3PatchRepo.ensureBundledPatches(it) }
 
+        // Before the core can draw a native overlay. cellSaveData's list is one, and it draws
+        // its rows with save.png/new.png -- absent, the load menu a game opens never appeared.
+        // Same reasoning as the patches above for doing it here: the config directory exists by
+        // now, and it is a preference read once staged.
+        appContext?.let { com.armsx2.OverlayIcons.ensureBundled(it) }
+
         val result = RPCSX.boot(target)
         // AlreadyAdded is not a failure: it says the title was already in games.yml, which is
         // the normal case for anything booted before. RPCS3's own front-end passes it through
