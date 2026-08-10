@@ -1563,6 +1563,8 @@ val EN: Map<String, String> = mapOf(
     "perf.llvmPrecompile.description" to "Compiles modules ahead of the game running instead of on demand. Longer wait at boot, fewer stutters in play.",
     "perf.spuLoopDetection.label" to "SPU Loop Detection",
     "perf.spuLoopDetection.description" to "Detects SPU wait loops and yields the thread instead of spinning. Can free CPU time on a handheld; a few games misbehave with it on.",
+    "perf.savestateCompatible.label" to "Allow save states (Compatible Savestate Mode)",
+    "perf.savestateCompatible.description" to "Required for save states to work at all: saving has to stop every SPU somewhere it can be written out, and without this that fails on any game with SPU work running. Costs SPU performance while it is on, and each save state is roughly 500 MB to 3 GB, so a few of them will fill your storage.",
     "perf.accurateSpuDma.label" to "Accurate SPU DMA",
     "perf.accurateSpuDma.description" to "Emulates SPU DMA transfers precisely. Slower, and only needed by a handful of games that corrupt without it.",
     "common.auto" to "Auto",
