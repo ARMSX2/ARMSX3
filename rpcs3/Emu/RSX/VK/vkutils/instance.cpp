@@ -107,7 +107,36 @@ namespace vk
 		app.applicationVersion = 0;
 		app.pEngineName = app_name;
 		app.engineVersion = 0;
-		app.apiVersion = VK_API_VERSION_1_2;
+
+		// Ask for no more than the loader actually supports.
+		//
+		// This was pinned at 1.2. A loader that predates it may answer
+		// VK_ERROR_INCOMPATIBLE_DRIVER to any higher request, and the spec tells
+		// applications to check the version before creating an instance for exactly that
+		// reason. On such a device the renderer never starts at all, which is a poor
+		// outcome for a value that is only an upper bound on what we intend to use.
+		//
+		// vkEnumerateInstanceVersion is itself a 1.1 entry point, so it is resolved through
+		// the global procedure address and its absence means 1.0. A no-op wherever 1.2 or
+		// better is available, so nothing changes on hardware that was already fine.
+		u32 loader_version = VK_API_VERSION_1_0;
+
+		if (const auto pfn_enumerate_instance_version = reinterpret_cast<PFN_vkEnumerateInstanceVersion>(
+				vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceVersion")))
+		{
+			if (pfn_enumerate_instance_version(&loader_version) != VK_SUCCESS)
+			{
+				loader_version = VK_API_VERSION_1_0;
+			}
+		}
+
+		app.apiVersion = std::min(loader_version, static_cast<u32>(VK_API_VERSION_1_2));
+
+		if (app.apiVersion != VK_API_VERSION_1_2)
+		{
+			rsx_log.warning("Vulkan: loader reports %u.%u, requesting that instead of 1.2.",
+				VK_VERSION_MAJOR(app.apiVersion), VK_VERSION_MINOR(app.apiVersion));
+		}
 
 		// Set up instance information
 
