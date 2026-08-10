@@ -774,15 +774,7 @@ open class MainActivityRuntime : ComponentActivity() {
             upscale.value = resolved.upscaleFloat
             renderer.value = resolved.renderer
 
-            // Drive this from the PS3 resolution scale, not the ARMSX2 upscale multiplier.
-            //
-            // Both end up at the same native node, Video@@Resolution Scale: applyTo writes the
-            // PS3 percentage and renderUpscalemultiplier writes the multiplier times a hundred.
-            // This call ran after applyTo, so a scale chosen before launch was overwritten by
-            // the ARMSX2-lineage default of 1.0 and the game booted at native while the UI went
-            // on showing the value the user picked. Changing it in game appeared to work only
-            // because nothing writes the node again afterwards.
-            NativeApp.renderUpscalemultiplier(resolved.ps3.resolutionScale / 100f)
+            NativeApp.renderUpscalemultiplier(upscale.value)
             // Pin custom Vulkan driver (if any) BEFORE the renderer write —
             // the renderer JNI may trigger MTGS::ApplySettings which can
             // re-open the GS device and run Vulkan::LoadVulkanLibrary. The

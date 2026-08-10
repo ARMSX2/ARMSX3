@@ -950,7 +950,19 @@ data class Settings(
         put("PS3/Core", "LLVM Precompilation", "bool", ps3.llvmPrecompile.toString())
         put("PS3/Core", "Accurate SPU DMA", "bool", ps3.accurateSpuDma.toString())
         put("PS3/Core", "Clocks scale", "int", ps3.clocksScale.toString())
-        put("PS3/Video", "Resolution Scale", "int", ps3.resolutionScale.toString())
+        // From upscaleFloat, which is the control that exists.
+        //
+        // ps3.resolutionScale has no writer anywhere in the UI, so it sits at its default of
+        // 100 forever and this line used to push that default onto the same native node the
+        // upscale multiplier writes, Video@@Resolution Scale. applyTo runs after the launch
+        // path, so picking a scale and then booting a game silently rendered at native while
+        // the UI kept showing the chosen value. Changing it in game worked only because
+        // nothing calls applyTo again afterwards.
+        //
+        // Same conversion and clamp as Rpcs3Settings.setUpscaleMultiplier, so the two writers
+        // cannot disagree about what a given multiplier means.
+        put("PS3/Video", "Resolution Scale", "int",
+            (upscaleFloat * 100f).toInt().coerceIn(25, 800).toString())
         // Stretch is the only fit mode the CORE participates in; the rest are
         // surface layout. Keeping them in sync stops "Stretch" looking inert.
         put("PS3/Video", "Stretch To Display Area", "bool", (displayFitMode == 1).toString())
