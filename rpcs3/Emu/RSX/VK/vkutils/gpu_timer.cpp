@@ -86,7 +86,7 @@ namespace vk
 		reset();
 	}
 
-	void gpu_timer::begin(command_buffer& cmd, region r)
+	void gpu_timer::begin(const command_buffer& cmd, region r)
 	{
 		// Nothing recorded unless the profiler is armed.
 		//
@@ -139,7 +139,7 @@ namespace vk
 		vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *m_pool, q);
 	}
 
-	void gpu_timer::end(command_buffer& cmd, region r)
+	void gpu_timer::end(const command_buffer& cmd, region r)
 	{
 		if (!m_pool)
 		{

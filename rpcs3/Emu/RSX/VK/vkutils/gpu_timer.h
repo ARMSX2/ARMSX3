@@ -55,8 +55,11 @@ namespace vk
 		bool usable() const { return m_pool != nullptr; }
 
 		// Bracket a region. Safe to call when uninitialised, in which case they do nothing.
-		void begin(command_buffer& cmd, region r);
-		void end(command_buffer& cmd, region r);
+		//
+		// By const reference because the render pass helpers hold one and only ever record
+		// commands into it, which the conversion operator already allows on a const buffer.
+		void begin(const command_buffer& cmd, region r);
+		void end(const command_buffer& cmd, region r);
 
 		// Call once per presented frame. Retires the current ring slot; see the definition
 		// for why this is not driven off the frame region closing.
@@ -153,11 +156,11 @@ namespace vk
 	 */
 	class gpu_scope
 	{
-		command_buffer& m_cmd;
+		const command_buffer& m_cmd;
 		gpu_timer::region m_region;
 
 	public:
-		gpu_scope(command_buffer& cmd, gpu_timer::region r)
+		gpu_scope(const command_buffer& cmd, gpu_timer::region r)
 			: m_cmd(cmd), m_region(r)
 		{
 			get_gpu_timer().begin(m_cmd, m_region);

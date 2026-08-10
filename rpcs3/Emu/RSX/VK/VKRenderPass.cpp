@@ -4,6 +4,7 @@
 #include "Utilities/mutex.h"
 #include "VKRenderPass.h"
 #include "vkutils/image.h"
+#include "vkutils/gpu_timer.h"
 
 #include "Emu/RSX/Common/unordered_map.hpp"
 
@@ -430,6 +431,15 @@ namespace vk
 			rsx::prof::g_render_passes++;
 		}
 
+		// The draw region was declared and never recorded anywhere, so the one figure that
+		// says how much of the GPU is actually drawing the game has been missing while
+		// everything else about the GPU was measured.
+		//
+		// Timed from outside the pass on both ends deliberately. On a tiler the load at the
+		// start and the store at the end are the expensive part, and a timestamp placed
+		// inside the pass would exclude exactly the cost worth knowing about.
+		vk::get_gpu_timer().begin(cmd, vk::gpu_timer::region::draw);
+
 		vkCmdBeginRenderPass(cmd, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
 		renderpass_info = { pass, target };
 	}
@@ -448,6 +458,10 @@ namespace vk
 	void end_renderpass(const vk::command_buffer& cmd)
 	{
 		vkCmdEndRenderPass(cmd);
+
+		// After the pass ends, so the tile store it triggers is charged to the region.
+		vk::get_gpu_timer().end(cmd, vk::gpu_timer::region::draw);
+
 		g_current_renderpass[cmd] = {};
 	}
 
