@@ -1266,13 +1266,33 @@ void VKGSRender::end()
 
 		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_present_checks++;
 
-		check_present_status();
-
+		// Deliberately not draining the present queue here.
+		//
+		// Draining means poking a fence, and on this driver a fence poke blocks until the
+		// fence signals -- vkGetFenceStatus and vkWaitForFences with a zero timeout both do,
+		// measured at 17-28 ms a call and never once returning not-ready. Doing that here put
+		// a full GPU sync in front of the first draw of every frame, so the CPU recorded only
+		// after the GPU had finished and frame time came to GPU plus CPU rather than the
+		// larger of the two: 42 ms of 27.7 GPU and 14.3 CPU, which is both of them in series.
+		//
+		// The pipeline is bounded at flip instead, which is the same wait moved to after this
+		// frame's recording rather than before it, so the recording happens while the GPU is
+		// still working.
 		if (m_current_frame->swap_command_buffer) [[unlikely]]
 		{
-			// Borrow time by using the auxilliary context
-			m_aux_frame_context.grab_resources(*m_current_frame);
-			m_current_frame = &m_aux_frame_context;
+			if (!m_aux_frame_context.swap_command_buffer)
+			{
+				// Borrow time by using the auxilliary context
+				m_aux_frame_context.grab_resources(*m_current_frame);
+				m_current_frame = &m_aux_frame_context;
+			}
+			else
+			{
+				// Rotated context and the one borrow slot are both still in flight. The
+				// throttle at flip is supposed to make this unreachable; if it ever is not,
+				// waiting is wrong but aborting is worse.
+				frame_context_cleanup(m_current_frame);
+			}
 		}
 
 		ensure(!m_current_frame->swap_command_buffer);

@@ -226,8 +226,9 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 
 void VKGSRender::advance_queued_frames()
 {
-	// Check all other frames for completion and clear resources
-	check_present_status();
+	// Reclaiming finished frames happens in the throttle below, not here. This call pokes the
+	// oldest frame's fence, and a poke blocks on this driver, so running it before the frame's
+	// own bookkeeping just moved the same GPU sync a few lines earlier.
 
 	// Run video memory balancer
 	m_device->rebalance_memory_type_usage();
