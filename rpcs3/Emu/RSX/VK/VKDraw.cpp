@@ -1052,6 +1052,8 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		}
 
 		// Begin query
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_pass_query();
+
 		m_occlusion_query_manager->begin_query(*m_current_command_buffer, occlusion_id);
 
 		auto& data = m_occlusion_map[m_active_query_info->driver_handle];

@@ -36,6 +36,7 @@ namespace rsx::prof
 	u64 g_pass_vp_words[pass_slot_count] = {};
 	u64 g_pass_fp_words[pass_slot_count] = {};
 	u64 g_pass_subdraws[pass_slot_count] = {};
+	u64 g_pass_queries[pass_slot_count] = {};
 	u64 g_xform_program_calls = 0;
 	u64 g_xform_program_words = 0;
 	u64 g_xform_const_calls = 0;
@@ -388,14 +389,15 @@ namespace rsx::prof
 					const double draws_per_frame = static_cast<double>(count) / frames;
 					const double verts_per_frame = static_cast<double>(g_pass_vertices[ordinal]) / frames;
 
-					fmt::append(list, "\n\t  pass #%-3u %5.0f draws  %8.0f verts  %5.0f v/draw  %ux%u  vp %.0f fp %.0f words/draw  SUBDRAWS %.0f (%.1f/draw)",
+					fmt::append(list, "\n\t  pass #%-3u %5.0f draws  %8.0f verts  %5.0f v/draw  %ux%u  vp %.0f fp %.0f words/draw  SUBDRAWS %.1f/draw  QUERIES %.0f (%.2f/draw)",
 						ordinal, draws_per_frame, verts_per_frame,
 						count ? static_cast<double>(g_pass_vertices[ordinal]) / static_cast<double>(count) : 0.0,
 						g_pass_width[ordinal], g_pass_height[ordinal],
 						count ? static_cast<double>(g_pass_vp_words[ordinal]) / static_cast<double>(count) : 0.0,
 						count ? static_cast<double>(g_pass_fp_words[ordinal]) / static_cast<double>(count) : 0.0,
-						static_cast<double>(g_pass_subdraws[ordinal]) / frames,
-						count ? static_cast<double>(g_pass_subdraws[ordinal]) / static_cast<double>(count) : 0.0);
+						count ? static_cast<double>(g_pass_subdraws[ordinal]) / static_cast<double>(count) : 0.0,
+						static_cast<double>(g_pass_queries[ordinal]) / frames,
+						count ? static_cast<double>(g_pass_queries[ordinal]) / static_cast<double>(count) : 0.0);
 				}
 				fmt::append(report, "\n\tby pass%s", list);
 			}
@@ -545,6 +547,7 @@ namespace rsx::prof
 		for (auto& c : g_pass_vp_words) c = 0;
 		for (auto& c : g_pass_fp_words) c = 0;
 		for (auto& c : g_pass_subdraws) c = 0;
+		for (auto& c : g_pass_queries) c = 0;
 		for (auto& level : g_rp_caller_counts) for (auto& c : level) c = 0;
 		for (auto& level : g_rp_callers) for (auto& a : level) a = nullptr;
 		for (auto& c : g_flush_sites) c = 0;

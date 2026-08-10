@@ -312,6 +312,24 @@ namespace rsx::prof
 	 */
 	extern u64 g_pass_subdraws[pass_slot_count];
 
+	/**
+	 * Occlusion queries opened inside each pass.
+	 *
+	 * The last category not measured. Everything counted so far describes what a draw
+	 * CONTAINS -- vertices, pixels, shader length, subdraws, barriers -- and by all of those
+	 * pass six should be the cheapest of the expensive passes rather than the dearest. An
+	 * occlusion query is none of those things: on a tiler it makes the visibility stream
+	 * resolve, it costs the same whatever the framebuffer size, and it is invisible to every
+	 * other counter here. A pass running one per draw would look exactly like this one.
+	 */
+	extern u64 g_pass_queries[pass_slot_count];
+
+	inline void note_pass_query()
+	{
+		if (g_pass_ordinal >= pass_slot_count) return;
+		g_pass_queries[g_pass_ordinal]++;
+	}
+
 	inline void note_subdraws(u32 count)
 	{
 		if (g_pass_ordinal >= pass_slot_count) return;
