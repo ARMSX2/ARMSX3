@@ -149,6 +149,23 @@ class GameLibraryRepository(private val context: Context) {
     }
 
     suspend fun scan(directories: List<String>): List<GameInfo> = withContext(Dispatchers.IO) {
+        // Seed the probe cache from the last scan before touching anything.
+        //
+        // probeDisc mounts the image into the emulator's GLOBAL vfs to read its PARAM.SFO,
+        // and discInfoCache only ever lived in memory on one repository instance, so every
+        // rescan re-mounted every disc from scratch. That is slow on a 7 GB image and it is
+        // the window in which a scan can collide with a boot or a teardown, which crashed
+        // the process inside vfs::mount.
+        //
+        // Everything the probe produces is already durable: the serial and title are in the
+        // library cache, and the icon is on disk under disc-icons. So a disc we have seen
+        // before never needs mounting again.
+        loadCached().games.forEach { game ->
+            val serial = game.serial?.takeIf { it.isNotBlank() } ?: return@forEach
+            val path = runCatching { game.uri.path }.getOrNull() ?: return@forEach
+            discInfoCache.putIfAbsent(path, DiscInfo(serial, game.title))
+        }
+
         val collected = linkedMapOf<String, GameInfo>()
         android.util.Log.i(ScanTag, "scan start: ${directories.size} dir(s), rawStorage=${canUseRawStorage()}")
         directories.forEach { rawUri ->
@@ -324,7 +341,52 @@ class GameLibraryRepository(private val context: Context) {
         }
         if (child("PS3_GAME", "PARAM.SFO")?.isFile == true) return true
         if (child("PS3_DISC.SFB")?.isFile == true) return true
-        return child("PARAM.SFO")?.isFile == true && child("USRDIR")?.isDirectory == true
+        val sfo = child("PARAM.SFO")?.takeIf { it.isFile } ?: return false
+        if (child("USRDIR")?.isDirectory != true) return false
+        // A game data install has this exact shape too, a PARAM.SFO next to USRDIR, so the
+        // layout alone cannot tell it apart from an HDD game. It holds no EBOOT, so listing it
+        // gave every title that installs data a second tile that cannot boot (Skate 3's 1.1 GB
+        // BLUS30464_INSTALL, sitting next to the disc it belongs to). CATEGORY is what
+        // separates them: GD is data, HG and DG are games. The native scanner already rejects
+        // these because fetchGameInfo requires BOOTABLE and game data does not set it. This
+        // applies the same rule to the folder path, which never opens the SFO at all.
+        return sfoCategory(sfo) != "GD"
+    }
+
+    /**
+     * CATEGORY out of a PARAM.SFO, or null when it cannot be read.
+     *
+     * Deliberately a reader for this one field rather than a general SFO parser: the scanner
+     * needs nothing else, and a malformed or truncated file must degrade to "list it" rather
+     * than hide a real game.
+     */
+    private fun sfoCategory(sfo: File): String? = try {
+        val bytes = sfo.readBytes()
+        val buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        // "\0PSF", then key-table start, data-table start, entry count.
+        if (bytes.size < 20 || buffer.getInt(0) != 0x46535000) {
+            null
+        } else {
+            val keyTable = buffer.getInt(8)
+            val dataTable = buffer.getInt(12)
+            var found: String? = null
+            for (index in 0 until buffer.getInt(16)) {
+                val entry = 20 + index * 16
+                if (entry + 16 > bytes.size) break
+                val keyStart = keyTable + (buffer.getShort(entry).toInt() and 0xFFFF)
+                var keyEnd = keyStart
+                while (keyEnd < bytes.size && bytes[keyEnd] != 0.toByte()) keyEnd++
+                if (keyEnd > bytes.size || String(bytes, keyStart, keyEnd - keyStart) != "CATEGORY") continue
+                val dataStart = dataTable + buffer.getInt(entry + 12)
+                val dataLength = buffer.getInt(entry + 4)
+                if (dataStart < 0 || dataLength < 0 || dataStart + dataLength > bytes.size) break
+                found = String(bytes, dataStart, dataLength).trimEnd('\u0000', ' ')
+                break
+            }
+            found
+        }
+    } catch (_: Throwable) {
+        null
     }
 
     /** [isPs3GameFolder] over a SAF tree. */
@@ -518,8 +580,9 @@ class GameLibraryRepository(private val context: Context) {
 
     private companion object {
         /** v2: PS3 title ID + title + ICON0.PNG read from the disc's PARAM.SFO.
-         *  v5: folder-format games (JB folder / installed game folder). */
-        const val ScanSchemaVersion = 5
+         *  v5: folder-format games (JB folder / installed game folder).
+         *  v6: PARAM.SFO CATEGORY read, to drop game-data installs. */
+        const val ScanSchemaVersion = 6
         const val ScanTag = "ARMSX3-Scan"
         /** Staging name for an extracted icon, renamed once the title ID is known. */
         const val PendingIcon = "__pending"

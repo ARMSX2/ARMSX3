@@ -10,6 +10,7 @@
 #include "NV47/HW/context.h"
 #include "Program/GLSLCommon.h"
 #include "rsx_methods.h"
+#include "rsx_profiler.h"
 
 #include "gcm_printing.h"
 #include "RSXDisAsm.h"
@@ -1120,6 +1121,20 @@ namespace rsx
 			manager->stop_audio();
 		}
 
+		// Scoped around the whole loop, not around run_FIFO.
+		//
+		// run_FIFO executes a single FIFO command, so a scope inside it ran tens of thousands
+		// of times per frame, each reading the counter-timer twice. On ARM that is an mrs
+		// cntvct_el0: expensive and partially serialising. run_FIFO's share of RSX thread
+		// samples went from about 3% uninstrumented to 35% with the scope inside it, so the
+		// bucket had become mostly a measurement of itself.
+		//
+		// Entered once here instead. Attribution is exclusive, so every nested scope still
+		// carves out its own time and returns here afterwards, leaving this bucket meaning
+		// "RSX loop time nothing more specific claimed", which is what was wanted from it,
+		// at no per-command cost.
+		RSX_PROF_SCOPE(fifo_decode);
+
 		while (!test_stopped())
 		{
 			// Wait for external pause events
@@ -1144,13 +1159,32 @@ namespace rsx
 			// Update sub-units every 64 cycles. The local handler is invoked for other functions externally on-demand anyway.
 			// This avoids expensive calls to check timestamps which involves reading some values from TLS storage on windows.
 			// If something is going on in the backend that requires an update, set the interrupt bit explicitly.
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_fifo_commands++;
+
 			if ((m_cycles_counter++ & 63) == 0 || m_eng_interrupt_mask)
 			{
 				// Execute backend-local tasks first
-				do_local_task(performance_counters.state);
+				//
+				// These two run once per 64 FIFO commands rather than per command, so
+				// scoping them costs a counter read every 64th iteration instead of the
+				// per-command cost that made an earlier attempt measure mostly itself.
+				//
+				// Split out because fifo_decode holds 38ms of a 54ms frame in Arkham City
+				// and nothing else accounts for it: the whole draw path is under 5ms and
+				// page protection turned out to be 0.09ms. ZCULL is a live suspect here in
+				// particular, since this title trips "Reports area at location
+				// CELL_GCM_LOCATION_MAIN was accessed, ZCULL optimizations will be
+				// disabled" and then runs the unoptimised path for the entire session.
+				{
+					RSX_PROF_SCOPE(local_task);
+					do_local_task(performance_counters.state);
+				}
 
 				// Update other sub-units
-				zcull_ctrl->update(this);
+				{
+					RSX_PROF_SCOPE(zcull);
+					zcull_ctrl->update(this);
+				}
 
 				if (m_host_dma_ctrl)
 				{
@@ -3204,6 +3238,11 @@ namespace rsx
 
 	void thread::on_frame_end(u32 buffer, bool forced)
 	{
+		// Cheap enough to re-read every frame, and being able to arm the profiler while a
+		// slowdown is already happening matters more here than saving a config lookup.
+		prof::set_enabled(g_cfg.video.rsx_profiler.get());
+		prof::tick_frame();
+
 		bool pause_emulator = false;
 
 		// MM sync. This is a pre-emptive operation, so we can use a deferred request.
@@ -3429,7 +3468,10 @@ namespace rsx
 				if (target_rsx_flip_time > time + 1000)
 				{
 					const auto delay_us = target_rsx_flip_time - time;
-					lv2_obj::wait_timeout(delay_us, nullptr, false);
+					{
+						RSX_PROF_SCOPE(idle);
+						lv2_obj::wait_timeout(delay_us, nullptr, false);
+					}
 					performance_counters.idle_time += delay_us;
 				}
 			}

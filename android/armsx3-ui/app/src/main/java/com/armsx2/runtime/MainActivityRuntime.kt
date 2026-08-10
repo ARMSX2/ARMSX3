@@ -2216,7 +2216,7 @@ open class MainActivityRuntime : ComponentActivity() {
             // default off). Renders nothing unless a newer GitHub release is found on boot, then
             // pops the update prompt. Play flavor's AutoUpdateGate is a no-op stub.
             if (com.armsx2.BuildConfig.IN_APP_UPDATER) {
-                /* ARMSX3: no in-app updater (see IN_APP_UPDATER=false) */ Unit
+                com.armsx2.update.AutoUpdateGate()
             }
             // First-time setup deferral: when the wizard finishes and
             // setupComplete flips to true, kick off the heavy emucore

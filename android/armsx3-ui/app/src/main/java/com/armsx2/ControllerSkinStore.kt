@@ -37,6 +37,9 @@ object ControllerSkinStore {
     private const val KEY_ACTIVE_GAME_PREFIX = "skin.active.game."
     private const val NONE = "__none__"
 
+    /** Set once [migrateToBundledDefault] has run, so it never second-guesses a later choice. */
+    private const val KEY_MIGRATED_DEFAULT = "skin.migrated.armsx3default"
+
     /** RESOLVED skin id for what's on screen now, or null = built-in. Backed state so
      *  the overlay recomposes when it changes.
      *
@@ -54,6 +57,28 @@ object ControllerSkinStore {
 
     private fun idOrNull(raw: String?): String? = if (raw == null || raw == NONE) null else raw
 
+    /**
+     * Stored value to the skin actually shown. The one place the default lives, because
+     * ensureLoaded and applyForSerial both resolve and disagreeing would mean the pad
+     * changed the first time a game started.
+     *
+     * Three cases, and they are genuinely different:
+     *   null   nothing ever chosen, so the default applies
+     *   NONE   the ARMSX2 row was chosen, meaning the built-in drawables, not the default
+     *   an id  that skin, or the default if it names something no longer installed
+     *
+     * Null and NONE used to be the same thing: null meant the drawables AND was the default,
+     * so nothing had to tell them apart. They are separate now that the default is a bundled
+     * pack, and setActive stores NONE at the global tier rather than removing the key so the
+     * distinction survives.
+     */
+    private fun resolveRaw(ctx: Context, raw: String?): String? = when {
+        raw == null -> DEFAULT_SKIN_ID
+        raw == NONE -> null
+        builtinFor(raw) != null || File(root(ctx), raw).isDirectory -> raw
+        else -> DEFAULT_SKIN_ID
+    }
+
     /** Re-resolve [activeSkinId] for [serial] (null = library/global). Called from the
      *  touch overlay on the same LaunchedEffect that applies the per-game layout, so a
      *  game's skin is up from the first frame rather than after a visit to Settings. */
@@ -65,7 +90,7 @@ object ControllerSkinStore {
                 ?: MainActivityRuntime.prefs.getString(KEY_ACTIVE, null)
         else MainActivityRuntime.prefs.getString(KEY_ACTIVE, null)
         activeSerial.value = eff
-        val resolved = idOrNull(raw)?.takeIf { builtinFor(it) != null || File(root(ctx), it).isDirectory }
+        val resolved = resolveRaw(ctx, raw)
         if (activeSkinId.value != resolved) {
             activeSkinId.value = resolved
             clearCache()
@@ -159,12 +184,33 @@ object ControllerSkinStore {
 
     private fun root(ctx: Context): File = File(ctx.filesDir, "controllerskins").apply { mkdirs() }
 
+    /**
+     * One-time move of installs that predate the bundled default onto it.
+     *
+     * [resolveRaw] only applies [DEFAULT_SKIN_ID] when NOTHING was ever stored, which covers a
+     * fresh install and nobody else. Every install from before the default changed has a stored
+     * value already — [NONE], meaning the built-in drawables — so changing the default moved
+     * exactly zero existing users, and the pad kept looking the way it always had. Reported as
+     * "ARMSX2 is still selected for me".
+     *
+     * Only [NONE] and absent are rewritten. An install pointing at a real skin, bundled or
+     * imported, picked that skin on purpose and is left alone. The flag is set either way, so
+     * choosing the ARMSX2 row after this runs sticks rather than being undone on next launch.
+     */
+    private fun migrateToBundledDefault() {
+        val prefs = MainActivityRuntime.prefs
+        if (prefs.getBoolean(KEY_MIGRATED_DEFAULT, false)) return
+        val raw = prefs.getString(KEY_ACTIVE, null)
+        prefs.edit()
+            .putBoolean(KEY_MIGRATED_DEFAULT, true)
+            .apply { if (raw == null || raw == NONE) putString(KEY_ACTIVE, DEFAULT_SKIN_ID) }
+            .apply()
+    }
+
     private fun ensureLoaded(ctx: Context) {
         if (loaded) return
-        val saved = MainActivityRuntime.prefs.getString(KEY_ACTIVE, null)
-        activeSkinId.value = saved?.takeIf {
-            builtinFor(it) != null || File(root(ctx), it).isDirectory
-        }
+        migrateToBundledDefault()
+        activeSkinId.value = resolveRaw(ctx, MainActivityRuntime.prefs.getString(KEY_ACTIVE, null))
         loaded = true
     }
 
@@ -181,9 +227,22 @@ object ControllerSkinStore {
      *  never collide with an imported skin's folder name. */
     data class BuiltinSkin(val id: String, val name: String, val assetDir: String)
     val BUILTIN: List<BuiltinSkin> = listOf(
+        BuiltinSkin("builtin:armsx3_textured", "ARMSX3 Textured", "controller_skins/armsx3_textured"),
+        BuiltinSkin("builtin:armsx1", "ARMSX1", "controller_skins/armsx1"),
         BuiltinSkin("builtin:nethersx2", "NetherSX2", "controller_skins/nethersx2"),
         BuiltinSkin("builtin:nethersx2_old", "NetherSX2 Old", "controller_skins/nethersx2_old"),
     )
+
+    /**
+     * What a fresh install gets, and what "no saved choice" resolves to.
+     *
+     * Null used to mean the built-in ARMSX2 drawables and was also the default, so the two were
+     * the same thing and nothing had to say which. They are separate now: ARMSX3 Textured is the
+     * default, ARMSX2 is still reachable as its own choice, and null still means the drawables.
+     * Anyone who had already picked a skin keeps it, because this only fills in the absence of a
+     * stored value rather than rewriting one.
+     */
+    const val DEFAULT_SKIN_ID = "builtin:armsx3_textured"
     private fun builtinFor(id: String?): BuiltinSkin? = BUILTIN.firstOrNull { it.id == id }
 
     /** Imported skins that have at least one recognized image. */
@@ -207,9 +266,12 @@ object ControllerSkinStore {
         ensureLoaded(ctx)
         val eff = serial?.takeIf { it.isNotEmpty() }
         MainActivityRuntime.prefs.edit().apply {
+            // NONE at both tiers now. Removing the global key used to mean the drawables,
+            // because that was also the default; with a bundled default it would instead
+            // mean "never chose", and picking ARMSX2 would silently hand back ARMSX3
+            // Textured on the next launch.
             if (eff != null) putString(KEY_ACTIVE_GAME_PREFIX + eff, id ?: NONE)
-            else if (id == null) remove(KEY_ACTIVE)
-            else putString(KEY_ACTIVE, id)
+            else putString(KEY_ACTIVE, id ?: NONE)
         }.apply()
         // Re-resolve rather than assigning id outright: editing the GLOBAL skin while a
         // game with its own override is running must not change what that game shows.
@@ -274,6 +336,24 @@ object ControllerSkinStore {
     }
 
     /** ImageBitmap for [key] from the active skin, or null to use the built-in. */
+    /**
+     * The strip shown next to a bundled skin's name, or null for one that has none.
+     *
+     * Baked into each pack as preview.png rather than composed at runtime from the button
+     * images: the list draws several of these at once and compositing ten bitmaps per row on
+     * every recomposition is not worth it for a picture that never changes. keyForFilename
+     * ignores the file, so it is not counted as a button and cannot be mistaken for one.
+     *
+     * The built-in ARMSX2 look has no asset folder, so its strip is a drawable instead and
+     * the caller supplies it.
+     */
+    fun builtinPreview(ctx: Context, skin: BuiltinSkin): ImageBitmap? =
+        runCatching {
+            ctx.assets.open("${skin.assetDir}/preview.png").use {
+                android.graphics.BitmapFactory.decodeStream(it)?.asImageBitmap()
+            }
+        }.getOrNull()
+
     fun bitmapForKey(ctx: Context, key: String): ImageBitmap? {
         ensureLoaded(ctx)
         val id = activeSkinId.value ?: return null

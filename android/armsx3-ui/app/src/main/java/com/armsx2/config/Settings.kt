@@ -156,7 +156,19 @@ data class Ps3Settings(
      */
     val spuXFloat: Int = 1,
     val accurateSpuRsv: Boolean = true,
-    val accurateCacheLine: Boolean = true,
+    /**
+     * Off, matching upstream, which is what this always should have been.
+     *
+     * With this on AND Accurate SPU DMA on, every 128-byte SPU DMA store is routed through
+     * do_cell_atomic_128_store, i.e. an atomic reservation store per cache line of every
+     * transfer. A game doing bulk DMA then generates reservation contention faster than it
+     * can drain, and an SPU sits in do_putllc retrying forever while the PPU stalls behind
+     * it and the RSX spins idle. Minecraft froze loading world chunks, which is almost
+     * nothing but bulk SPU DMA.
+     *
+     * Load-dependent, so it presented as an intermittent freeze rather than a clean failure.
+     */
+    val accurateCacheLine: Boolean = false,
     val accurateRsxRsv: Boolean = false,
     val ppuRsvPriority: Boolean = false,
     val spuVerification: Boolean = true,
@@ -172,7 +184,20 @@ data class Ps3Settings(
      * to pay for permanently on a handheld.
      */
     val preciseSpuVerification: Boolean = false,
-    val ppuNanHandling: Boolean = false,
+    /**
+     * true, matching RPCS3's own default for "PPU Vector NaN Handling" (system_config.h:68).
+     *
+     * This was false, so the curated push wrote false over a node upstream ships as true and
+     * every install ran with an accuracy fixup disabled that RPCS3 wants on. Games that rely
+     * on it get NaNs through vector maths, which surfaces as geometry behaving impossibly
+     * rather than as an error.
+     *
+     * It is also in the PPU cache key (PPUThread.cpp:5343 sets ppu_settings::fixup_vnan from
+     * it), so the disagreement was not free: flipping it renames every compiled object and
+     * the next boot recompiles the lot. A device here has both variants on disk, 76 modules
+     * under one key and 58 under the other, from a single flip.
+     */
+    val ppuNanHandling: Boolean = true,
     val accurateDfma: Boolean = true,
     val setDazFtz: Boolean = false,
     val hleLwmutex: Boolean = false,
@@ -723,7 +748,9 @@ data class Settings(
      *  No EmuCore key mirrors this — see applyTo. */
     val shaderChainParams: Map<String, Map<String, Float>> = emptyMap(),
     /** EmuCore/GS/CASMode — GSCASMode: 0 Off / 1 Sharpen Only / 2 Sharpen + Resize. */
-    val casMode: Int = 0,
+    /** Scaling Mode row: 0 Nearest, 1 Bilinear, 2 FSR. Bilinear because that is what the
+     *  core has always actually used, and what RPCS3 itself defaults to. */
+    val casMode: Int = 1,
     /** EmuCore/GS/CASSharpness — sharpening strength 0..100 (%). */
     val casSharpness: Int = 50,
     /** EmuCore/GS/LoadTextureReplacements. */
@@ -1193,6 +1220,48 @@ data class Settings(
         // USB devices, so drive the device (re)creation explicitly. No-op before
         // the VM exists — the persisted Type above handles the cold boot.
         NativeApp.usbSetKeyboardEnabled(0, usbKeyboard)
+        // Vblank at the PS3's own rate, pushed on every apply rather than left to a
+        // migration.
+        //
+        // A PS3 runs a 60Hz vblank and every game was written against it. The stored value
+        // was 120, which asks the emulator for twice the frames the hardware ever produced:
+        // twice the RSX command volume, twice the vertex upload, twice the GPU work, on a
+        // handheld. Recording it as a core override did not hold, so it goes through the
+        // curated push like any other default.
+        //
+        // A deliberate change in All Core Settings still wins, because CoreSettingOverrides
+        // replays immediately below this.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Vblank Rate", "60") }
+        // And the cap itself. Frame limit Auto resolves to the vblank rate, so with the line
+        // above it would already be 60; setting it explicitly means the cap does not depend
+        // on the vblank path holding, which it did not. Enum node, so the value is quoted.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Frame limit", "\"60\"") }
+        // Held at the upstream default, which is off.
+        //
+        // Savestates cannot work without it: saving has to lock every SPU thread into a state
+        // it can be serialised from, and with this off that lock fails on any title with SPU
+        // work running. It was turned on for exactly that reason and then turned back off,
+        // because a PS3 savestate runs 500MB to 3GB and the feature was dropped rather than
+        // ship something that fills a phone in a handful of saves.
+        //
+        // Written explicitly rather than left alone: it was pushed as true for a while, so
+        // installs from that window have true persisted in config.yml and would keep paying
+        // for it. It costs SPU performance, which is the whole reason upstream defaults it
+        // off, and nothing here uses what it buys.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Savestate@@Compatible Savestate Mode", "false") }
+
+        // Settings a specific title needs in order to run at all, then the user's own core
+        // edits on top. Order matters: game defaults are a floor, an explicit user choice
+        // still wins over them, and both have to land after the curated push above.
+        runCatching { GameDefaults.apply(MainActivityRuntime.currentGame.value?.serial) }
+        // Core edits are global plus this title's own set, and replay orders them that way.
+        // Keyed on settingsKey, the identity ConfigStore keys per-game settings on, so the
+        // two stores agree on which title is being configured (serial for discs, filename
+        // stem for serial-less ELF/homebrew). Null with no game loaded, which skips the
+        // per-game tier rather than letting the last title played leak into a BIOS boot.
+        runCatching {
+            CoreSettingOverrides.replay(MainActivityRuntime.currentGame.value?.settingsKey)
+        }
         NativeApp.commitSettings()
     }
 
@@ -1601,6 +1670,10 @@ data class Settings(
         put("EmuCore/GS", "ShadeBoost_Saturation", "int", shadeBoostSaturation.coerceIn(1, 100).toString())
         put("EmuCore/GS", "ShadeBoost_Gamma", "int", shadeBoostGamma.coerceIn(1, 100).toString())
         put("EmuCore/GS", "fxaa", "bool", fxaa.toString())
+        // Scaling Mode writes Output Scaling Mode unconditionally, the shader chain only
+        // when it is on, so CAS has to go first for the chain to keep the last word.
+        put("EmuCore/GS", "CASMode", "int", casMode.coerceIn(0, 2).toString())
+        put("EmuCore/GS", "CASSharpness", "int", casSharpness.coerceIn(0, 100).toString())
         put("EmuCore/GS", "ShaderChainEnabled", "bool", shaderChainEnabled.toString())
         put("EmuCore/GS", "ShaderChainPreset", "string", shaderChainPreset)
         // Parameter overrides, as one opaque JSON blob. Nothing in emucore reads this key —
@@ -1617,8 +1690,6 @@ data class Settings(
         // Skipped under emitSink: an export has no renderer to push to.
         if (emitSink == null)
             ShaderParams.push(shaderChainPreset, shaderChainParams[shaderChainPreset].orEmpty())
-        put("EmuCore/GS", "CASMode", "int", casMode.coerceIn(0, 2).toString())
-        put("EmuCore/GS", "CASSharpness", "int", casSharpness.coerceIn(0, 100).toString())
         put("EmuCore/GS", "LoadTextureReplacements", "bool", loadTextureReplacements.toString())
         put("EmuCore/GS", "LoadTextureReplacementsAsync", "bool", loadTextureReplacementsAsync.toString())
         put("EmuCore/GS", "PrecacheTextureReplacements", "bool", precacheTextureReplacements.toString())

@@ -5,6 +5,8 @@
 
 #include "VKAsyncScheduler.h"
 #include "VKGSRender.h"
+#include "vkutils/gpu_timer.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include "vkutils/buffer_object.h"
 #include "vkutils/chip_class.h"
 #include <vulkan/vulkan_core.h>
@@ -122,6 +124,7 @@ namespace vk
 
 void VKGSRender::begin_render_pass()
 {
+
 	vk::begin_renderpass(
 		*m_current_command_buffer,
 		get_render_pass(),
@@ -644,6 +647,10 @@ void VKGSRender::load_texture_env()
 
 bool VKGSRender::bind_texture_env()
 {
+	// Sampler setup and any upload the bind forces. texcache_lookup already covers the
+	// cache search itself, so nesting keeps the two separate rather than double counting.
+	RSX_PROF_SCOPE(texture_upload);
+
 	bool out_of_memory = false;
 
 	for (u32 textures_ref = current_fp_metadata.referenced_textures_mask, i = 0; textures_ref; textures_ref >>= 1, ++i)
@@ -952,6 +959,11 @@ bool VKGSRender::bind_interpreter_texture_env()
 
 void VKGSRender::emit_geometry(u32 sub_index)
 {
+	// Vertex and index upload plus the draw itself. Without this the whole cost landed in
+	// fifo_decode, which is the bucket the FIFO loop leaves active, so the first Arkham City
+	// profile read 83.9% there and could not say what any of it was.
+	RSX_PROF_SCOPE(vertex);
+
 	auto &draw_call = rsx::method_registers.current_draw_clause;
 	m_profiler.start();
 
@@ -1030,7 +1042,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		if (vk::use_strict_query_scopes() &&
 			vk::is_renderpass_open(*m_current_command_buffer))
 		{
-			vk::end_renderpass(*m_current_command_buffer);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[0]++; vk::end_renderpass(*m_current_command_buffer);
 			emergency_query_cleanup(m_current_command_buffer);
 		}
 
@@ -1079,7 +1091,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		if (pass)
 		{
 			// Subpass mismatch, end it before proceeding
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[1]++; vk::end_renderpass(cmd);
 		}
 
 		// Starting a new renderpass should clobber dynamic state
@@ -1197,6 +1209,11 @@ void VKGSRender::emit_geometry(u32 sub_index)
 
 void VKGSRender::begin()
 {
+	// Everything a draw costs before geometry is emitted. The scopes it calls into
+	// (pipeline, descriptors, texcache_lookup, texture_upload) nest inside and are charged
+	// to themselves, so what remains here is genuinely per-draw setup and nothing else.
+	RSX_PROF_SCOPE(draw_setup);
+
 	// Save shader state now before prefetch and loading happens
 	m_interpreter_state = (m_graphics_state.load() & rsx::pipeline_state::invalidate_pipeline_bits);
 

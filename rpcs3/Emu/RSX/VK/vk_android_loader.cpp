@@ -134,6 +134,7 @@ extern "C"
 	PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR = nullptr;
 	PFN_vkGetPhysicalDeviceSurfaceSupportKHR vkGetPhysicalDeviceSurfaceSupportKHR = nullptr;
 	PFN_vkGetQueryPoolResults vkGetQueryPoolResults = nullptr;
+	PFN_vkCmdWriteTimestamp vkCmdWriteTimestamp = nullptr;
 	PFN_vkInvalidateMappedMemoryRanges vkInvalidateMappedMemoryRanges = nullptr;
 	PFN_vkMapMemory vkMapMemory = nullptr;
 	PFN_vkQueueSubmit vkQueueSubmit = nullptr;
@@ -412,6 +413,8 @@ namespace vk::android
 			if (!vkGetPhysicalDeviceSurfaceSupportKHR) vkGetPhysicalDeviceSurfaceSupportKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(dlsym(handle, "vkGetPhysicalDeviceSurfaceSupportKHR"));
 			vkGetQueryPoolResults = reinterpret_cast<PFN_vkGetQueryPoolResults>(vkGetInstanceProcAddr(nullptr, "vkGetQueryPoolResults"));
 			if (!vkGetQueryPoolResults) vkGetQueryPoolResults = reinterpret_cast<PFN_vkGetQueryPoolResults>(dlsym(handle, "vkGetQueryPoolResults"));
+			vkCmdWriteTimestamp = reinterpret_cast<PFN_vkCmdWriteTimestamp>(vkGetInstanceProcAddr(nullptr, "vkCmdWriteTimestamp"));
+			if (!vkCmdWriteTimestamp) vkCmdWriteTimestamp = reinterpret_cast<PFN_vkCmdWriteTimestamp>(dlsym(handle, "vkCmdWriteTimestamp"));
 			vkInvalidateMappedMemoryRanges = reinterpret_cast<PFN_vkInvalidateMappedMemoryRanges>(vkGetInstanceProcAddr(nullptr, "vkInvalidateMappedMemoryRanges"));
 			if (!vkInvalidateMappedMemoryRanges) vkInvalidateMappedMemoryRanges = reinterpret_cast<PFN_vkInvalidateMappedMemoryRanges>(dlsym(handle, "vkInvalidateMappedMemoryRanges"));
 			vkMapMemory = reinterpret_cast<PFN_vkMapMemory>(vkGetInstanceProcAddr(nullptr, "vkMapMemory"));
@@ -566,6 +569,7 @@ namespace vk::android
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfacePresentModesKHR")) vkGetPhysicalDeviceSurfacePresentModesKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfacePresentModesKHR>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceSupportKHR")) vkGetPhysicalDeviceSurfaceSupportKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetQueryPoolResults")) vkGetQueryPoolResults = reinterpret_cast<PFN_vkGetQueryPoolResults>(p);
+		if (auto p = vkGetInstanceProcAddr(instance, "vkCmdWriteTimestamp")) vkCmdWriteTimestamp = reinterpret_cast<PFN_vkCmdWriteTimestamp>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkInvalidateMappedMemoryRanges")) vkInvalidateMappedMemoryRanges = reinterpret_cast<PFN_vkInvalidateMappedMemoryRanges>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkMapMemory")) vkMapMemory = reinterpret_cast<PFN_vkMapMemory>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkQueueSubmit")) vkQueueSubmit = reinterpret_cast<PFN_vkQueueSubmit>(p);

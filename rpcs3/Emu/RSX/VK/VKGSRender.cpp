@@ -8,6 +8,8 @@
 #include "VKCommonPipelineLayout.h"
 #include "VKCompute.h"
 #include "VKGSRender.h"
+#include "Emu/RSX/rsx_profiler.h"
+#include "vkutils/gpu_timer.h"
 #include "VKHelpers.h"
 #include "VKRenderPass.h"
 #include "VKResourceManager.h"
@@ -482,12 +484,20 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	{
 		swapchain_unavailable = true;
 	}
+	else
+	{
+		// Same as in reinitialize_swapchain: the surface can hand back a different extent
+		// than the one requested, and m_swapchain_dims sizes the present framebuffer.
+		m_swapchain_dims.width = m_swapchain->get_width();
+		m_swapchain_dims.height = m_swapchain->get_height();
+	}
 
 	// create command buffer...
 	m_command_buffer_pool.create((*m_device), m_device->get_graphics_queue_family());
 	m_primary_cb_list.create(m_command_buffer_pool, vk::command_buffer::access_type_hint::flush_only);
 	m_current_command_buffer = m_primary_cb_list.get();
 	m_current_command_buffer->begin();
+	vk::get_gpu_timer().begin(*m_current_command_buffer, vk::gpu_timer::region::frame);
 
 	// Create secondary command_buffer for parallel operations
 	m_secondary_command_buffer_pool.create((*m_device), m_device->get_graphics_queue_family());
@@ -923,6 +933,13 @@ VKGSRender::~VKGSRender()
 
 bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 {
+	RSX_PROF_SCOPE(texcache_lookup);
+
+	if (rsx::prof::enabled()) [[unlikely]]
+	{
+		rsx::prof::g_access_violations++;
+	}
+
 	rsx::mm_flush(address);
 
 	vk::texture_cache::thrashed_set result;
@@ -988,7 +1005,7 @@ bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 			}
 
 			// Flush primary cb queue to sync pending changes (e.g image transitions!)
-			flush_command_queue();
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[0]++; flush_command_queue();
 		}
 
 		if (has_queue_ref)
@@ -1056,7 +1073,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 	{
 		// Hard sync before trying to evict anything. This guarantees no UAF crashes in the driver.
 		// As a bonus, we also get a free gc pass
-		flush_command_queue(true, true);
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[1]++; flush_command_queue(true, true);
 
 		if (m_texture_cache.is_overallocated())
 		{
@@ -1148,7 +1165,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 	}
 
 	// Imminent crash, full GPU sync is the least of our problems
-	flush_command_queue(true, true);
+	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[2]++; flush_command_queue(true, true);
 
 	return any_cache_relieved;
 }
@@ -1163,7 +1180,7 @@ void VKGSRender::on_descriptor_pool_fragmentation(bool is_fatal)
 	}
 
 	// Just flush everything. Unless the hardware is very deficient, this should happen very rarely.
-	flush_command_queue(true, true);
+	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[3]++; flush_command_queue(true, true);
 }
 
 void VKGSRender::notify_tile_unbound(u32 tile)
@@ -1264,6 +1281,8 @@ void VKGSRender::on_init_thread()
 		fmt::throw_exception("No Vulkan device was created");
 	}
 
+	vk::get_gpu_timer().init(*m_device);
+
 	GSRender::on_init_thread();
 	zcull_ctrl.reset(static_cast<::rsx::reports::ZCULL_control*>(this));
 
@@ -1297,6 +1316,7 @@ void VKGSRender::on_init_thread()
 
 void VKGSRender::on_exit()
 {
+	vk::get_gpu_timer().destroy();
 	GSRender::on_exit();
 	vk::destroy_pipe_compiler(); // Ensure no pending shaders being compiled
 	zcull_ctrl.release();
@@ -1554,7 +1574,7 @@ void VKGSRender::clear_surface(u32 mask)
 
 void VKGSRender::flush_command_queue(bool hard_sync, bool do_not_switch)
 {
-	close_and_submit_command_buffer();
+	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[4]++; close_and_submit_command_buffer();
 
 	if (hard_sync)
 	{
@@ -1595,6 +1615,7 @@ void VKGSRender::flush_command_queue(bool hard_sync, bool do_not_switch)
 	}
 
 	m_current_command_buffer->begin();
+	vk::get_gpu_timer().begin(*m_current_command_buffer, vk::gpu_timer::region::frame);
 }
 
 std::pair<volatile vk::host_data_t*, VkBuffer> VKGSRender::map_host_object_data() const
@@ -1638,7 +1659,7 @@ bool VKGSRender::release_GCM_label(u32 type, u32 address, u32 args)
 	if (host_ctx->has_unflushed_texture_loads())
 	{
 		vkCmdUpdateBuffer(*m_current_command_buffer, mapping.second->value, mapping.first, 4, &write_data);
-		flush_command_queue();
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[5]++; flush_command_queue();
 	}
 	else
 	{
@@ -1734,7 +1755,7 @@ void VKGSRender::sync_hint(rsx::FIFO::interrupt_hint hint, rsx::reports::sync_hi
 		// Unavoidable hard sync coming up, flush immediately
 		// This heavyweight hint should be used with caution
 		std::lock_guard lock(m_flush_queue_mutex);
-		flush_command_queue();
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[6]++; flush_command_queue();
 
 		if (m_flush_requests.pending())
 		{
@@ -1769,7 +1790,7 @@ void VKGSRender::do_local_task(rsx::FIFO::state state)
 		{
 			// TODO: Determine if a hard sync is necessary
 			// Pipeline barriers later may do a better job synchronizing than wholly stalling the pipeline
-			flush_command_queue();
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[7]++; flush_command_queue();
 
 			m_flush_requests.clear_pending_flag();
 			m_flush_requests.consumer_wait();
@@ -1808,7 +1829,7 @@ void VKGSRender::do_local_task(rsx::FIFO::state state)
 		const auto should_ignore = in_begin_end && state != rsx::FIFO::state::empty;
 		if ((async_flip_requested & flip_request::native_ui) && !should_ignore && !is_stopped())
 		{
-			flush_command_queue(true);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[8]++; flush_command_queue(true);
 			rsx::display_flip_info_t info{};
 			info.buffer = current_display_buffer;
 			flip(info);
@@ -1818,6 +1839,8 @@ void VKGSRender::do_local_task(rsx::FIFO::state state)
 
 bool VKGSRender::load_program()
 {
+	RSX_PROF_SCOPE(pipeline);
+
 	const auto shadermode = g_cfg.video.shadermode.get();
 
 	// TODO: EXT_dynamic_state should get rid of this sillyness soon (kd)
@@ -1986,6 +2009,8 @@ bool VKGSRender::load_program()
 
 void VKGSRender::load_program_env()
 {
+	RSX_PROF_SCOPE(descriptors);
+
 	if (!m_program)
 	{
 		fmt::throw_exception("Unreachable right now");
@@ -2368,6 +2393,8 @@ void VKGSRender::init_buffers(rsx::framebuffer_creation_context context, bool)
 
 void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore wait_semaphore, VkSemaphore signal_semaphore, VkPipelineStageFlags pipeline_stage_flags)
 {
+	RSX_PROF_SCOPE(submit);
+
 	ensure(!m_queue_status.test_and_set(flush_queue_state::flushing));
 
 	// Host MM sync before executing anything on the GPU
@@ -2433,6 +2460,7 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 		m_host_dma_ctrl->host_ctx()->on_label_release();
 	}
 
+	vk::get_gpu_timer().end(*m_current_command_buffer, vk::gpu_timer::region::frame);
 	m_current_command_buffer->end();
 	m_current_command_buffer->tag();
 
@@ -2474,6 +2502,8 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 
 void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)
 {
+	RSX_PROF_SCOPE(rt_prep);
+
 	const bool clipped_scissor = (context == rsx::framebuffer_creation_context::context_draw);
 	if (m_current_framebuffer_context == context && !m_graphics_state.test(rsx::rtt_config_dirty) && m_draw_fbo)
 	{
@@ -2586,7 +2616,7 @@ void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)
 	// Before messing with memory properties, flush command queue if there are dma transfers queued up
 	if (m_current_command_buffer->flags & vk::command_buffer::cb_has_dma_transfer)
 	{
-		flush_command_queue();
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[9]++; flush_command_queue();
 	}
 
 	if (!m_rtts.superseded_surfaces.empty())
@@ -2731,8 +2761,12 @@ void VKGSRender::renderctl(u32 request_code, void* args)
 
 bool VKGSRender::scaled_image_from_memory(const rsx::blit_src_info& src, const rsx::blit_dst_info& dst, bool interpolate)
 {
+	RSX_PROF_SCOPE(blit_resolve);
+
 	if (swapchain_unavailable)
 		return false;
+
+	vk::gpu_scope blit_gpu_scope(*m_current_command_buffer, vk::gpu_timer::region::blit);
 
 	if (m_texture_cache.blit(src, dst, interpolate, m_rtts, *m_current_command_buffer))
 	{
@@ -2743,7 +2777,7 @@ bool VKGSRender::scaled_image_from_memory(const rsx::blit_src_info& src, const r
 		{
 			// A dma transfer has been queued onto this cb
 			// This likely means that we're done with the tranfers to the target (writes_likely_completed=1)
-			flush_command_queue();
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[10]++; flush_command_queue();
 		}
 		return true;
 	}
@@ -2774,7 +2808,7 @@ void VKGSRender::end_occlusion_query(rsx::reports::occlusion_query_info* query)
 		if (vk::use_strict_query_scopes() &&
 			vk::is_renderpass_open(*m_current_command_buffer))
 		{
-			vk::end_renderpass(*m_current_command_buffer);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[17]++; vk::end_renderpass(*m_current_command_buffer);
 		}
 
 		// End query
@@ -2817,7 +2851,7 @@ void VKGSRender::get_occlusion_query_result(rsx::reports::occlusion_query_info* 
 		if (data.is_current(m_current_command_buffer))
 		{
 			std::lock_guard lock(m_flush_queue_mutex);
-			flush_command_queue();
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[11]++; flush_command_queue();
 
 			if (m_flush_requests.pending())
 			{
@@ -2876,6 +2910,27 @@ void VKGSRender::emergency_query_cleanup(vk::command_buffer* commands)
 void VKGSRender::begin_conditional_rendering(const std::vector<rsx::reports::occlusion_query_info*>& sources)
 {
 	ensure(!sources.empty());
+
+	// Without the extension there is nothing that can read the predicate, so building it is
+	// pure cost.
+	//
+	// The aggregation below fills m_cond_render_buffer and only vkCmdBeginConditionalRendering
+	// consumes it. Where VK_EXT_conditional_rendering is absent the buffer is written, barriered
+	// and then dropped, and the code falls through to the base implementation regardless.
+	//
+	// On Adreno that waste is not merely wasted. Each insert_buffer_memory_barrier ends the
+	// open render pass, and that driver allocates on every vkCmdEndRenderPass without
+	// releasing it. A heap profile of a Skate 3 session put its largest allocation stacks,
+	// 157MB, 152MB, 150MB and more, on exactly this path through
+	// qglinternal::vkCmdEndRenderPass into calloc, and the process was killed at 4.3GB.
+	//
+	// The Qualcomm driver does not expose the extension at all, so this path could never
+	// have predicated anything there.
+	if (!m_device->get_conditional_render_support())
+	{
+		rsx::thread::begin_conditional_rendering(sources);
+		return;
+	}
 
 	// Flag check whether to calculate all entries or only one
 	bool partial_eval;

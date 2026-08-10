@@ -24,6 +24,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.armsx2.config.CoreSettingOverrides
+import com.armsx2.config.SettingsScope
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.ui.common.ArmsBackdrop
@@ -98,8 +100,19 @@ private fun flatten(
     }
 }
 
+/**
+ * [scope] and [serial] say where an edit is REMEMBERED, not where it is applied: every write
+ * goes straight into the live config tree either way, and the store is what decides whether the
+ * value comes back for one title or for all of them on the next apply.
+ *
+ * Both are passed in rather than read from the overlay here, because the two entry points want
+ * different answers and the shared scope state cannot tell them apart: the library drawer is a
+ * global screen and would inherit whatever scope the last per-game settings visit left behind,
+ * while the in-game menu opens with the running title already resolved.
+ */
 @Composable
-fun CoreSettingsScreen(onBack: () -> Unit) {
+fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?) {
+    val perGame = scope == SettingsScope.Game && !serial.isNullOrBlank()
     var all by remember { mutableStateOf<List<CoreSetting>>(emptyList()) }
     var query by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
@@ -130,6 +143,11 @@ fun CoreSettingsScreen(onBack: () -> Unit) {
             else -> JSONObject.quote(raw)
         }
         runCatching { RPCSX.instance.settingsSet(setting.path, encoded) }
+        // Remember it, or applyTo will write the curated store back over this node the next
+        // time any setting changes or the next time a game boots. Into this screen's tier:
+        // a node set from the in-game menu belongs to the title being played, not to the
+        // next game that boots.
+        runCatching { CoreSettingOverrides.record(scope, serial, setting.path, encoded) }
         revision++
     }
 
@@ -153,6 +171,16 @@ fun CoreSettingsScreen(onBack: () -> Unit) {
                 str("core.settings.description"),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+            // Which tier the next edit lands in. The screen looks identical either way, and a
+            // per-game edit that quietly went global is the whole reason this store grew a
+            // second tier, so it says so rather than leaving it to be discovered.
+            Text(
+                if (perGame) "${str("core.settings.scope.game")} · $serial"
+                else str("core.settings.scope.global"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
             )
             OutlinedTextField(
@@ -172,8 +200,13 @@ fun CoreSettingsScreen(onBack: () -> Unit) {
                 )
             }
 
+            // weight(1f), not just fillMaxWidth: an unweighted LazyColumn in a Column takes the
+            // whole remaining height, which left the Back button below it with nothing to lay out
+            // in. The button was always here, it was simply off the bottom of the screen, and on a
+            // touch-only device that made this the one screen with no visible way out. Weighting
+            // the list makes it share the space and keeps Back on screen at every list length.
             LazyColumn(
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 items(filtered, key = { it.path }) { setting ->

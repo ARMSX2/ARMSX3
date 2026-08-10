@@ -574,6 +574,7 @@ target_sources(rpcs3_emu PRIVATE
     RSX/RSXThread.cpp
     RSX/RSXZCULL.cpp
     RSX/rsx_methods.cpp
+    RSX/rsx_profiler.cpp
     RSX/rsx_utils.cpp
     RSX/rsx_vertex_data.cpp
 )
@@ -633,6 +634,7 @@ if(TARGET 3rdparty_vulkan)
         RSX/VK/vkutils/commands.cpp
         RSX/VK/vkutils/ex.cpp
         RSX/VK/vkutils/data_heap.cpp
+        RSX/VK/vkutils/gpu_timer.cpp
         RSX/VK/vkutils/descriptors.cpp
         RSX/VK/vkutils/image.cpp
         RSX/VK/vkutils/image_helpers.cpp

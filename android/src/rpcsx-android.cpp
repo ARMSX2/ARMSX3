@@ -4,6 +4,7 @@
 #include "Emu/Audio/Null/NullAudioBackend.h"
 #include "Emu/Cell/PPUAnalyser.h"
 #include "Emu/Cell/SPURecompiler.h"
+#include "Emu/Cell/SPUThread.h"
 #include "Emu/IdManager.h"
 #include "Emu/Io/KeyboardHandler.h"
 #include "Emu/Io/Null/NullKeyboardHandler.h"
@@ -75,6 +76,7 @@
 #include <functional>
 #include <iterator>
 #include <jni.h>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -93,10 +95,24 @@ struct AtExit {
 static bool g_initialized;
 static std::atomic<ANativeWindow *> g_native_window;
 
+// The surface size Android last reported, packed as (width << 32 | height) so the RSX
+// thread reads both halves from one atomic and can never see a width from one orientation
+// paired with a height from the next.
+//
+// SurfaceHolder.Callback::surfaceChanged is the only authoritative source for this. The
+// activity handles orientation itself (configChanges in the manifest), so rotating keeps
+// the same Surface and the same ANativeWindow -- there is no new handle to notice, and
+// ANativeWindow_getWidth on a window a swapchain is already connected to answers about the
+// buffers, not the window. Both of those made the renderer keep drawing at the size the
+// game booted in.
+static std::atomic<u64> g_native_window_size;
+
+// Set when losing the surface is what paused the emulator, so getting it back resumes only
+// the pause we caused.
+static std::atomic<bool> g_paused_by_surface_loss;
 extern std::string g_android_executable_dir;
 extern std::string g_android_config_dir;
 extern std::string g_android_cache_dir;
-
 static std::mutex g_virtual_pad_mutex;
 // One per PS3 pad port. This was a single pad, which silently capped local
 // co-op at one player: every port above the first registered a Pad the app
@@ -107,6 +123,44 @@ std::string g_input_config_override;
 cfg_input_configurations g_cfg_input_configs;
 
 LOG_CHANNEL(rpcsx_android, "ANDROID");
+
+#ifdef ARMSX3_PGO_GENERATE
+// PGO instrumentation support. Present only in a -DARMSX3_PGO=generate build.
+//
+// The profile runtime defaults to writing "default.profraw" relative to the
+// process working directory, which on Android is / and is not writable, so an
+// instrumented build otherwise plays a whole session and produces nothing.
+// %p expands to the pid so several runs do not overwrite each other.
+extern "C" void __llvm_profile_set_filename(const char*);
+extern "C" int __llvm_profile_write_file(void);
+
+static void pgo_set_output_path()
+{
+    const std::string dir = g_android_cache_dir + "/pgo";
+    fs::create_path(dir);
+
+    const std::string pattern = dir + "/armsx3-%p.profraw";
+    __llvm_profile_set_filename(pattern.c_str());
+    rpcsx_android.success("PGO: writing profiles to %s", pattern);
+}
+
+// Counters live in memory until the runtime writes them, and that normally
+// happens at exit. This process is routinely killed rather than exited (the OOM
+// killer took it repeatedly during this work), so waiting for exit loses the
+// session. Flushed when the app is backgrounded instead, which is a point the
+// user reaches deliberately and which happens before any kill.
+static void pgo_flush()
+{
+    if (__llvm_profile_write_file() == 0)
+    {
+        rpcsx_android.success("PGO: profile written");
+    }
+    else
+    {
+        rpcsx_android.error("PGO: failed to write profile");
+    }
+}
+#endif
 
 struct LogListener : logs::listener {
   LogListener() { logs::listener::add(this); }
@@ -148,6 +202,92 @@ struct LogListener : logs::listener {
   }
 } static g_androidLogListener;
 
+// ---------------------------------------------------------------------------
+// Save slot thumbnails.
+//
+// The most recently captured frame, downscaled, held until a save asks for it.
+//
+// It has to be cached rather than captured on demand. A save kills the VM, and the point
+// where the state is known to be on disk is after_kill_callback, by which time there is no
+// renderer left to ask for a picture. So the save requests a screenshot on its way in, this
+// catches whatever the renderer produces, and the capture step writes it out afterwards.
+//
+// Stored small (long edge ~320px) because it is only ever drawn as a tile, and because the
+// alternative is parking several megabytes of full-resolution frame per save.
+// ---------------------------------------------------------------------------
+
+// Owned by RSXThread.cpp. Setting it makes the next present hand its frame to
+// GSFrameBase::take_screenshot.
+extern atomic_t<bool> g_user_asked_for_screenshot;
+
+static constexpr u32 kThumbMaxEdge = 320;
+
+static shared_mutex g_thumb_mutex;
+static std::vector<u8> g_thumb_rgba; // tightly packed RGBA8
+static u32 g_thumb_width = 0;
+static u32 g_thumb_height = 0;
+
+static void armsx3_store_thumbnail(const std::vector<u8> &src, u32 width,
+                                   u32 height, bool is_bgra) {
+  if (src.empty() || width == 0 || height == 0 ||
+      src.size() < static_cast<usz>(width) * height * 4) {
+    return;
+  }
+
+  // Integer step nearest-neighbour. Point sampling is more than enough at tile size, and it
+  // reads only the pixels it keeps rather than walking the whole frame.
+  const u32 step = std::max<u32>(1, (std::max(width, height) + kThumbMaxEdge - 1) / kThumbMaxEdge);
+  const u32 out_w = std::max<u32>(1, width / step);
+  const u32 out_h = std::max<u32>(1, height / step);
+
+  std::vector<u8> out(static_cast<usz>(out_w) * out_h * 4);
+
+  for (u32 y = 0; y < out_h; y++) {
+    const u8 *row = src.data() + static_cast<usz>(y) * step * width * 4;
+    u8 *dst = out.data() + static_cast<usz>(y) * out_w * 4;
+
+    for (u32 x = 0; x < out_w; x++) {
+      const u8 *px = row + static_cast<usz>(x) * step * 4;
+
+      // Normalised to RGBA here so the Kotlin side never has to care which backend or
+      // surface format produced the frame.
+      dst[0] = is_bgra ? px[2] : px[0];
+      dst[1] = px[1];
+      dst[2] = is_bgra ? px[0] : px[2];
+      dst[3] = 0xff; // the frame's alpha is not meaningful for a preview
+      dst += 4;
+    }
+  }
+
+  std::lock_guard lock(g_thumb_mutex);
+  g_thumb_rgba = std::move(out);
+  g_thumb_width = out_w;
+  g_thumb_height = out_h;
+}
+
+// "AX3T", u32 width, u32 height, then width*height RGBA8. A private format on purpose:
+// encoding a PNG here would mean a compressor in the core for a picture that is decoded
+// two centimetres away by code that can build a Bitmap from raw pixels directly.
+static bool armsx3_write_thumbnail(const std::string &path) {
+  std::lock_guard lock(g_thumb_mutex);
+
+  if (g_thumb_rgba.empty()) {
+    return false;
+  }
+
+  fs::file out(path, fs::rewrite);
+
+  if (!out) {
+    return false;
+  }
+
+  const u32 header[2] = {g_thumb_width, g_thumb_height};
+  out.write("AX3T", 4);
+  out.write(header, sizeof(header));
+  out.write(g_thumb_rgba.data(), g_thumb_rgba.size());
+  return true;
+}
+
 struct GraphicsFrame : GSFrameBase {
   mutable ANativeWindow *activeNativeWindow = nullptr;
   mutable int width = 0;
@@ -177,10 +317,12 @@ struct GraphicsFrame : GSFrameBase {
       }
 
       activeNativeWindow = result;
-
-      width = ANativeWindow_getWidth(result);
-      height = ANativeWindow_getHeight(result);
     }
+
+    // Fallback size only, for the window we have never been told a size for. The real
+    // one arrives through surfaceChanged; see client_width().
+    width = ANativeWindow_getWidth(result);
+    height = ANativeWindow_getHeight(result);
 
     return result;
   }
@@ -270,8 +412,29 @@ struct GraphicsFrame : GSFrameBase {
     }
 #endif
   }
-  int client_width() override { return width; }
-  int client_height() override { return height; }
+  // These two drive the resize check in VKGSRender::flip, so a stale value here does not
+  // make the picture late, it makes it wrong: the swapchain keeps the extent it had and
+  // the present framebuffer is built to match, whatever shape the window is now.
+  //
+  // Take the size Android reported for the surface. Falling back to the window is for the
+  // window that has arrived but not yet been measured, which only happens before the first
+  // surfaceChanged.
+  int client_width() override {
+    if (const u64 packed = g_native_window_size.load()) {
+      return static_cast<int>(packed >> 32);
+    }
+
+    getNativeWindow();
+    return width;
+  }
+  int client_height() override {
+    if (const u64 packed = g_native_window_size.load()) {
+      return static_cast<int>(packed & 0xffffffffu);
+    }
+
+    getNativeWindow();
+    return height;
+  }
   f64 client_display_rate() override { return 30.f; }
   bool has_alpha() override {
     return ANativeWindow_getFormat(getNativeWindow()) ==
@@ -286,8 +449,15 @@ struct GraphicsFrame : GSFrameBase {
   // signature no longer overrides, which left GraphicsFrame abstract.
   void present_frame(std::vector<u8> &&data, u32 pitch, u32 width, u32 height,
                      bool is_bgra) const override {}
+  // Save slot thumbnails. RPCS3 already renders and hands over the finished frame here
+  // whenever a screenshot is requested; this used to drop it, which is why the slot picker
+  // had nothing to show. Kept as the most recent frame rather than written straight out:
+  // the save that wants it happens later, after the VM has been killed, and there is no
+  // frame to ask for by then.
   void take_screenshot(std::vector<u8> &&sshot_data, u32 sshot_width,
-                       u32 sshot_height, bool is_bgra) override {}
+                       u32 sshot_height, bool is_bgra) override {
+    armsx3_store_thumbnail(sshot_data, sshot_width, sshot_height, is_bgra);
+  }
   // Added upstream after RPCSX forked. The Android UI draws its own FPS via
   // the perf overlay, so there is no host window title to update.
   void update_title(double fps = 0.0) override {}
@@ -1540,6 +1710,20 @@ private:
 
     rpcsx_android.error("Finalization");
     g_fxo->reset();
+
+    // Pairs with the vm::init() above. Nothing else unmaps it, since vm::close()
+    // is only reached from Emu.Stop() and precompilation never boots, so the
+    // blocks this pass mapped outlive it and stay valid.
+    //
+    // The next vm::init(), either the next workload or Emulator::Load() booting
+    // a game, assigns over g_locations. That destroys blocks that are still
+    // valid and aborts the process in ~block_t()'s ensure(!is_valid()).
+    //
+    // Has to come after g_fxo->reset(): vm::close() requires each block to be
+    // uniquely owned, and _unmap_block throws "External memory usage at block"
+    // if anything still holds one of its shm references.
+    vm::close();
+
     Emu.SetState(system_state::stopped);
 
     MessageDialog::popPendingProgressId(workload.progressId);
@@ -1563,7 +1747,43 @@ static void setupCallbacks() {
       .on_stop = [](auto...) {},
       .on_ready = [](auto...) {},
       .on_missing_fw = [](auto...) {},
-      .on_emulation_stop_no_response = [](auto...) {},
+      // RPCS3's stop watchdog calls this when shutting the VM down has taken about 10
+      // seconds, and again later if it is still going. It was a no-op, so the one thing
+      // upstream does about a deadlocked stop -- tell somebody -- did not happen here: the
+      // join thread went on spinning, the progress overlay sat at its last figure, and the
+      // app looked frozen with nothing in the log to say why.
+      //
+      // Reported, not aborted. The desktop build offers to terminate, but it asks first, and
+      // a stop that is merely slow is not the same as one that is stuck: a savestate write
+      // was measured here taking 71 seconds legitimately. Killing the process on a timer
+      // would trade a hang for a corrupted save, so this says what is happening and leaves
+      // the choice to the user, who can still close the app.
+      .on_emulation_stop_no_response =
+          [](std::shared_ptr<atomic_t<bool>> closed_successfully,
+             int seconds_waiting_already) {
+            if (closed_successfully && *closed_successfully) {
+              return;
+            }
+
+            rpcsx_android.error(
+                "Emulation has not stopped after %d seconds. A thread is not "
+                "responding to the stop request; the app will stay on the last "
+                "frame until it does.",
+                seconds_waiting_already);
+
+            // Name the threads that have not stopped, and their state flags.
+            //
+            // This is the whole diagnosis and it cannot be recovered from outside: by the
+            // time the hang can be looked at, /proc shows a sleeping thread with no CPU time
+            // and nothing about WHY. The flags say whether it was ever told to exit
+            // (cpu_flag::exit), whether it is parked waiting (cpu_flag::wait), or whether it
+            // never left its initial stopped state, which is what a thread with no CPU time
+            // at all suggests.
+            idm::select<named_thread<spu_thread>>([](u32 id, spu_thread &spu) {
+              rpcsx_android.error("  SPU 0x%x has not stopped, state = %s", id,
+                                  spu.state.load());
+            });
+          },
       .on_save_state_progress = [](auto...) {},
       .enable_disc_eject = [](auto...) {},
       .enable_disc_insert = [](auto...) {},
@@ -1594,13 +1814,39 @@ static void setupCallbacks() {
       // the moment anything booted -- including Boot XMB.
       //
       // GameMode is a Linux desktop daemon and has no Android equivalent, so it is
-      // a no-op. get_database_config returns the path RPCS3 reads the game
-      // database from; the desktop build points it at its own config dir, so we
-      // point it at ours.
+      // a no-op.
       .enable_gamemode = [](bool) {},
+      // Recommended settings for this title, as a config YAML string.
+      //
+      // This used to return a PATH, which was simply the wrong thing: Emulator::Load
+      // takes the return value as the config CONTENT and hands it to BootGame as
+      // db_config, so what it actually got was a filename that failed to parse and was
+      // discarded. The feature has therefore never done anything here.
+      //
+      // Desktop reaches api.rpcs3.net through Qt's downloader and parses the JSON with
+      // QJsonDocument, neither of which exists in this build. The app fetches and splits
+      // the database instead (see ConfigDatabase.kt), leaving one YAML per title on disk,
+      // so all that is needed here is to read it back.
       .get_database_config =
-          [](const std::string &name) {
-            return g_cfg_vfs.get_dev_flash() + "../config/" + name;
+          [](const std::string &title_id) -> std::string {
+            if (title_id.empty()) {
+              return {};
+            }
+
+            const std::string path =
+                fs::get_config_dir(true) + "config_db/" + title_id + ".yml";
+
+            if (!fs::is_file(path)) {
+              return {};
+            }
+
+            fs::file config{path};
+            if (!config) {
+              return {};
+            }
+
+            rpcsx_android.notice("using database config for %s", title_id);
+            return config.to_string();
           },
       .get_photo_path = [](std::string_view) { return std::string{}; },
       .try_to_quit = [](bool, std::function<void()> on_exit) {
@@ -1844,6 +2090,11 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
     g_android_config_dir = rootDirStr + "config/";
     g_android_cache_dir = rootDirStr + "cache/";
 
+#ifdef ARMSX3_PGO_GENERATE
+  // Now, not earlier: the path is built from g_android_cache_dir.
+  pgo_set_output_path();
+#endif
+
     std::filesystem::create_directories(g_android_config_dir);
     std::error_code ec;
     // std::filesystem::remove_all(g_android_cache_dir, ec);
@@ -2058,9 +2309,64 @@ extern "C" bool _rpcsx_collectGameInfo(JNIEnv *env, std::string_view rootDir,
   return true;
 }
 
-extern "C" void _rpcsx_shutdown() { Emu.Kill(); }
+// Serialises disc probing against everything that owns g_fxo: booting AND shutdown.
+//
+// probeDiscInfo mounts the image into the GLOBAL vfs to read its PARAM.SFO, and the library
+// scan runs it on a background thread. vfs::mount starts with g_fxo->need<vfs_manager>(),
+// so it is not just the mount table that has to be quiet, it is g_fxo itself.
+//
+// Closing a game calls Emu.Kill(), which resets g_fxo, and closing also returns to the
+// library, which starts a rescan. Those two overlap, and the probe aborted the process
+// inside vfs::mount. Booting another game immediately made it far more likely, which is
+// what "crashes if I open a new game within ~2s, fine after ~10s" actually was: waiting
+// let the teardown and the scan finish, not the boot.
+//
+// An Emu.IsStopped() check alone is not enough. It is a plain read, the state reaches
+// stopped before g_fxo teardown has finished, and a boot or kill can start right after it.
+static std::mutex g_emu_lifecycle_mutex;
+
+// Held so a probe cannot be inside vfs::mount while this resets g_fxo underneath it.
+extern "C" void _rpcsx_shutdown() {
+  std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
+  Emu.Kill();
+}
 
 extern "C" int _rpcsx_boot(std::string_view path_) {
+  // Taken FIRST, before the Kill below, and held across the whole boot.
+  //
+  // Emu.Kill() spawns an "Emulation Join Thread" that joins every emulator thread. It is
+  // not safe to have two of those in flight: they end up joining each other and neither
+  // finishes, which pins the emulator in a non-stopped state forever. Observed on device
+  // as FOUR live join threads plus six leaked AudioTrack threads after a few close-then-
+  // boot cycles, with the join thread logging "Thread [Emulation Join Thread] is too
+  // sleepy" against itself.
+  //
+  // This used to Kill() before taking the lock, so a Close (which calls _rpcsx_kill) and
+  // the boot that followed it each started their own teardown and deadlocked. The pile-up
+  // is what left the emulator never reaching stopped, and every later boot then failed and
+  // bounced the user back to the library.
+  std::lock_guard emu_lock(g_emu_lifecycle_mutex);
+
+  // BootGame's restore_on_no_boot path does ensure(IsStopped()) whenever the boot fails,
+  // so entering it while the emulator is still winding down aborts the process outright
+  // (System.cpp, "Verification failed (object: 0x0)").
+  //
+  // Kill() is idempotent and returns quickly when already stopped. The bound is generous
+  // because a real teardown joins the RSX and SPU threads and flushes caches; past it we
+  // boot anyway and let BootGame report a normal error rather than hanging the UI.
+  if (!Emu.IsStopped()) {
+    rpcsx_android.notice("boot: previous VM still running, stopping it first");
+    Emu.Kill();
+
+    for (int waited = 0; !Emu.IsStopped() && waited < 10000; waited += 20) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    if (!Emu.IsStopped()) {
+      rpcsx_android.error("boot: previous VM did not stop in time, booting anyway");
+    }
+  }
+
   Emu.SetForceBoot(true);
   std::string path = std::string(path_);
   while (path.ends_with('/')) {
@@ -2088,7 +2394,10 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
 extern "C" int _rpcsx_getState() {
   return static_cast<int>(Emu.GetStatus(false));
 }
-extern "C" void _rpcsx_kill() { Emu.Kill(); }
+extern "C" void _rpcsx_kill() {
+  std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
+  Emu.Kill();
+}
 extern "C" void _rpcsx_resume() { Emu.Resume(); }
 
 extern "C" void _rpcsx_openHomeMenu() {
@@ -2151,6 +2460,192 @@ extern "C" bool _rpcsx_loadState(unsigned int index) {
   Emu.CallFromMainThread(
       [index]() { boot_current_game_savestate(false, index); });
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Numbered save slots.
+//
+// RPCS3 keeps savestates as a rolling history: every save writes a new file with
+// an auto-incrementing id and you address them by age, 1 == most recent. The app
+// UI offers ten numbered slots instead, so before this the slot number was simply
+// dropped on save and read as an age on load -- "save to slot 3" pushed a new
+// newest state and "load slot 3" fetched the fourth-newest. Slots that quietly
+// mean something else are worse than no slots.
+//
+// So the history stays exactly as RPCS3 manages it, and a slot is a COPY of a
+// state parked under savestates/<title>/armsx3_slots/. A separate directory on
+// purpose: get_savestate_file() derives the next auto id by listing the title's
+// directory, and dropping our own filenames in there would feed that scheme names
+// it never generated.
+// ---------------------------------------------------------------------------
+
+static std::string armsx3_slot_dir(std::string_view title) {
+  return fs::get_config_dir() + "/savestates/" + std::string(title) +
+         "/armsx3_slots/";
+}
+
+// The stored file for this slot, or empty. The extension is whatever the core
+// wrote (.zst today, .gz and bare historically), so it is discovered rather than
+// assumed -- a slot written by one build must still load in another.
+static std::string armsx3_slot_find(std::string_view title, unsigned int slot) {
+  if (title.empty()) {
+    return {};
+  }
+
+  const std::string base =
+      armsx3_slot_dir(title) + "slot" + std::to_string(slot) + ".SAVESTAT";
+
+  for (std::string_view ext : {".zst", ".gz", ""}) {
+    if (std::string path = base + std::string(ext); fs::is_file(path)) {
+      return path;
+    }
+  }
+
+  return {};
+}
+
+// Copy the state the core has just written into [slot]. Runs from
+// after_kill_callback, which is the first point the file is complete on disk.
+static void armsx3_slot_capture(unsigned int slot, const std::string& title,
+                                const std::string& boot) {
+  const std::string newest = get_savestate_file(title, boot, 1);
+
+  if (!fs::is_file(newest)) {
+    rpcsx_android.error("saveState: slot %u, nothing written at '%s'", slot,
+                        newest);
+    return;
+  }
+
+  const std::string dir = armsx3_slot_dir(title);
+
+  if (!fs::create_path(dir)) {
+    rpcsx_android.error("saveState: cannot create '%s' (%s)", dir,
+                        fs::g_tls_error);
+    return;
+  }
+
+  // Carry the source's extension across so the copy stays readable by whatever
+  // wrote it, compressed or not.
+  constexpr std::string_view stem = ".SAVESTAT";
+  const usz pos = newest.rfind(stem);
+  const std::string suffix =
+      pos == umax ? std::string{} : newest.substr(pos + stem.size());
+  const std::string dest =
+      dir + "slot" + std::to_string(slot) + std::string(stem) + suffix;
+
+  // Clear the slot's other spellings first, or a re-save in a different
+  // compression mode leaves two files and armsx3_slot_find returns the stale one.
+  for (std::string_view ext : {".zst", ".gz", ""}) {
+    if (std::string old = dir + "slot" + std::to_string(slot) +
+                          std::string(stem) + std::string(ext);
+        old != dest && fs::is_file(old)) {
+      fs::remove_file(old);
+    }
+  }
+
+  // COPY, never move: the restart below boots from the very file the core just
+  // wrote, so taking it away would resume nothing.
+  if (!fs::copy_file(newest, dest, true)) {
+    rpcsx_android.error("saveState: slot %u copy failed '%s' -> '%s' (%s)", slot,
+                        newest, dest, fs::g_tls_error);
+    return;
+  }
+
+  // Best effort. A slot with no picture still loads, so a missing frame must not turn a
+  // successful save into a failed one.
+  if (!armsx3_write_thumbnail(dir + "slot" + std::to_string(slot) + ".thumb")) {
+    rpcsx_android.notice("saveState: slot %u has no frame to preview", slot);
+  }
+
+  rpcsx_android.success("saveState: slot %u <- '%s'", slot, newest);
+}
+
+extern "C" bool _rpcsx_saveStateToSlot(unsigned int slot) {
+  if (!Emu.IsRunning() && !Emu.IsPaused()) {
+    rpcsx_android.error("saveState: no game is running");
+    return false;
+  }
+
+  // Read now, not in the callback: by the time after_kill_callback runs the VM is
+  // torn down and Emu no longer reliably answers for the title that was playing.
+  const std::string title = Emu.GetTitleID();
+  const std::string boot = Emu.GetBoot();
+
+  if (title.empty()) {
+    rpcsx_android.error("saveState: no title id, cannot address a slot");
+    return false;
+  }
+
+  // Ask for a frame now, while there is still a renderer to draw one. It arrives at
+  // take_screenshot and is written out by armsx3_slot_capture once the state is on disk.
+  g_user_asked_for_screenshot = true;
+
+  Emu.CallFromMainThread([slot, title, boot]() {
+    // Outside suspend mode the game comes straight back up from the state it just
+    // wrote; in suspend mode it is meant to exit. Capture in both, resume in one.
+    const bool resume = !g_cfg.savestate.suspend_emu.get();
+
+    Emu.after_kill_callback = [slot, title, boot, resume]() {
+      armsx3_slot_capture(slot, title, boot);
+
+      if (resume) {
+        Emu.Restart(true, false);
+      }
+    };
+
+    if (resume) {
+      Emu.SetContinuousMode(true);
+    }
+
+    Emu.Kill(false, true);
+  });
+
+  return true;
+}
+
+extern "C" bool _rpcsx_loadStateFromSlot(unsigned int slot) {
+  const std::string path = armsx3_slot_find(Emu.GetTitleID(), slot);
+
+  // Checked before anything is torn down, matching loadState: a missing slot must
+  // report back, not kill a running game and then fail to boot.
+  if (path.empty()) {
+    rpcsx_android.error("loadState: slot %u is empty", slot);
+    return false;
+  }
+
+  Emu.CallFromMainThread([path]() {
+    // Boot from after_kill_callback rather than straight after GracefulShutdown.
+    //
+    // The obvious version -- SetContinuousMode, GracefulShutdown, BootGame, which is what
+    // boot_current_game_savestate does -- failed instantly, in the same millisecond it was
+    // called, without ever reading the file, and the "Emulation Join Thread is too sleepy"
+    // warnings then ran for seconds afterwards: the previous VM was still coming down while
+    // BootGame was already being asked to bring the next one up, so it bailed and the user
+    // was dropped to the library. That call site gets away with it because it runs from a
+    // shortcut handler, not from inside the emulation callback queue like this does.
+    //
+    // Kill first and boot from the callback, which is the same shape the save path uses and
+    // the reason that one works: the callback is the point teardown is actually finished.
+    Emu.SetContinuousMode(true);
+
+    Emu.after_kill_callback = [path]() {
+      if (const game_boot_result result = Emu.BootGame(path, "", true);
+          result != game_boot_result::no_errors) {
+        // The reason, not just the failure. A bare "failed to boot" cannot tell a corrupt
+        // state from a version mismatch from a path the loader never accepted.
+        rpcsx_android.error("loadState: failed to boot '%s': %s", path,
+                            fmt::format("%s", result));
+      }
+    };
+
+    Emu.Kill(false, false);
+  });
+
+  return true;
+}
+
+extern "C" bool _rpcsx_hasStateInSlot(unsigned int slot) {
+  return !armsx3_slot_find(Emu.GetTitleID(), slot).empty();
 }
 
 // ---------------------------------------------------------------------------
@@ -2310,6 +2805,15 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
 
   std::string result = "{}";
 
+  // Held across the whole mount/read/unmount so a boot cannot mount underneath us.
+  std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
+
+  // Re-checked under the lock: a boot may have started while we were waiting for it,
+  // and mounting into a live VM's vfs would shadow the disc it is running from.
+  if (!Emu.IsStopped()) {
+    return "{}";
+  }
+
   // unload_iso() on every exit: leaving the device mounted would shadow the
   // next boot's disc with whichever image was scanned last.
   try {
@@ -2440,6 +2944,24 @@ extern "C" bool _rpcsx_hasState(unsigned int index) {
   return boot_current_game_savestate(true, index);
 }
 
+// The surface's real size, straight from SurfaceHolder.Callback::surfaceChanged.
+//
+// Called before the matching surfaceEvent so the renderer never sees a live window it has
+// no size for. Zero is ignored rather than stored: a torn-down surface reports 0x0 and
+// clearing the size would only make the renderer fall back to guessing again.
+extern "C" void _rpcsx_surfaceSizeChanged(int width, int height) {
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+
+  const u64 packed = (static_cast<u64>(static_cast<u32>(width)) << 32) |
+                     static_cast<u32>(height);
+
+  if (g_native_window_size.exchange(packed) != packed) {
+    rpcsx_android.notice("surface size now %dx%d", width, height);
+  }
+}
+
 extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
   rpcsx_android.warning("surface event %p, %d", surface, event);
 
@@ -2461,8 +2983,22 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
       padThread->open_home_menu();
     }
 
+    // Remember whether this pause is ours. The app pauses for its own reasons too (the
+    // in-game overlay), and resuming on the next surface would then undo a pause the user
+    // asked for, behind an overlay still showing the game as paused.
+    g_paused_by_surface_loss = !Emu.IsPaused();
     Emu.Pause();
+
+#ifdef ARMSX3_PGO_GENERATE
+    // Backgrounding is the reliable flush point; see pgo_flush.
+    pgo_flush();
+#endif
   } else {
+    // fromSurface hands back a reference that is already acquired, and that is the one
+    // stored below. Acquiring on top of it leaked a window per surfaceChanged -- every
+    // rotation -- and worse when the surface was unchanged, which is the usual case here
+    // since the activity handles orientation itself: fromSurface then returns the SAME
+    // window, the pointers match, and the extra reference was not released either.
     auto newWindow = ANativeWindow_fromSurface(env, surface);
 
     if (newWindow == nullptr) {
@@ -2473,15 +3009,12 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
 
     auto prevWindow = g_native_window.exchange(newWindow);
 
-    if (newWindow != prevWindow) {
-      ANativeWindow_acquire(newWindow);
-
-      if (prevWindow != nullptr) {
-        ANativeWindow_release(prevWindow);
-      }
+    if (prevWindow != nullptr) {
+      ANativeWindow_release(prevWindow);
     }
 
-    if (event == 0 && Emu.IsPaused()) {
+    if (event == 0 && g_paused_by_surface_loss && Emu.IsPaused()) {
+      g_paused_by_surface_loss = false;
       Emu.Resume();
     }
   }
@@ -3510,6 +4043,24 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
   //
   // Scoped to the overlay nodes on purpose: applyTo() pushes ~200 settings at
   // boot and re-applying every overlay property 200 times would be pure waste.
+  //
+  // Not reset while stopped. Both of these walk the overlay display manager into
+  // perf_metrics_overlay::update(), which touches RSX-owned state, and a settings apply
+  // landing while a game is starting or closing aborted inside update(). That is the
+  // reported "changing any setting in game crashes the app". Nothing worth resetting
+  // exists when no game is running, so this guard is the whole fix.
+  //
+  // Do NOT route these through Emu.CallFromMainThread hoping to make them safer. It
+  // defers nothing here: the Android call_from_main_thread callback runs the function
+  // INLINE on the caller's thread. All it adds is RPCS3's state-guard wrapper, a
+  // std::function allocation and a log call, on a path applyTo hits eleven times per
+  // settings change. Doing that livelocked Minecraft on load: one SPU pinned in
+  // do_putllc retrying a reservation forever, the PPU stalled behind it and the RSX
+  // spinning idle. Bisected to this single line, and reverting it restored the game.
+  if (Emu.IsStopped()) {
+    return true;
+  }
+
   if (path.starts_with("Video@@Performance Overlay")) {
     rsx::overlays::reset_performance_overlay();
   } else if (path.starts_with("Video@@Debug overlay") ||

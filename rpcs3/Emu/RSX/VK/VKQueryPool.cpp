@@ -1,10 +1,13 @@
 #include "stdafx.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include "vkutils/query_pool.hpp"
 #include "VKHelpers.h"
 #include "VKQueryPool.h"
 #include "VKRenderPass.h"
 #include "VKResourceManager.h"
 #include "util/asm.hpp"
+
+#include <thread>
 #include "VKGSRender.h"
 
 namespace vk
@@ -170,9 +173,38 @@ namespace vk
 		{
 			poke_query(query_info, index, result_flags);
 
-			while (!query_info.ready)
+			// Charged to fence_wait: this is the RSX thread blocked on a GPU result, which is
+			// what that bucket means. It was invisible before, and it is not small: a
+			// simpleperf profile of the RSX thread during Arkham City gameplay put 24.9% of
+			// all samples in this function, the single largest entry by a wide margin, while
+			// the bucket report showed nothing because no scope reached here.
+			RSX_PROF_SCOPE(fence_wait);
+
+			for (u32 spins = 0; !query_info.ready; spins++)
 			{
+#ifdef __ANDROID__
+				// Spin briefly, then hand the core back.
+				//
+				// A pure pause() spin is reasonable on a desktop, where the result lands in
+				// microseconds and there are cores to spare. On a tiled mobile GPU the
+				// result is not available until the tile pass resolves, so the wait is far
+				// longer, and this device runs eleven hot emulator threads across five
+				// usable cores. Burning one of them on a spin costs an SPU thread that had
+				// real work to do.
+				//
+				// The short spin first keeps the fast case fast, since a result that is
+				// nearly ready still returns without a scheduler round trip.
+				if (spins < 64)
+				{
+					utils::pause();
+				}
+				else
+				{
+					std::this_thread::yield();
+				}
+#else
 				utils::pause();
+#endif
 				poke_query(query_info, index, result_flags);
 			}
 		}
@@ -214,7 +246,7 @@ namespace vk
 			// TODO: Alternatively, use VK_EXT_host_pool_reset to reset an old pool with no references and swap that in
 			if (vk::is_renderpass_open(cmd))
 			{
-				vk::end_renderpass(cmd);
+				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[2]++; vk::end_renderpass(cmd);
 			}
 
 			reallocate_pool(cmd);

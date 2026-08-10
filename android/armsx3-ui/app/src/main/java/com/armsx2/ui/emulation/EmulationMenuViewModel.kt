@@ -188,6 +188,14 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
      */
     fun openFullSettings() = com.armsx2.ui.WindowImpl.openInGameScreen(com.armsx2.ui.InGameScreen.Settings)
 
+    /**
+     * All Core Settings, scoped to the running title. The screen was reachable only from the
+     * library drawer, which is global, so the one place where a core node is worth touching at
+     * all (a game that needs it, while that game is loaded) was also the one place it could not
+     * be set without setting it for everything else.
+     */
+    fun openCoreSettings() = com.armsx2.ui.WindowImpl.openInGameScreen(com.armsx2.ui.InGameScreen.CoreSettings)
+
     /** In-game access to the manager screens the library drawer exposes. */
     fun openMemcard() = com.armsx2.ui.WindowImpl.openInGameScreen(com.armsx2.ui.InGameScreen.Memcard)
 

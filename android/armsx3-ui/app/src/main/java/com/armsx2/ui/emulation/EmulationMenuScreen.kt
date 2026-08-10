@@ -1154,6 +1154,13 @@ private fun OptionsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVie
     // OSD, Skins, Audio, Hotkeys, Network, Recompiler, ...).
     CompactAction(str("action.allSettings"), "⚙", Modifier.fillMaxWidth(), viewModel::openFullSettings)
     Spacer(Modifier.height(6.dp))
+    // ...and the whole core config beneath it, scoped to this game. The rows in this pane are
+    // the handful of RPCS3 switches worth flipping mid-session; everything else lived behind
+    // the library drawer, where it could only be set globally.
+    // Glyph is one already proven to render in the shipped font: "▩" (U+25A9) and "⏻" (U+23FB)
+    // come out as tofu boxes on device, while "▣" is used by the BIOS/onboarding screens.
+    CompactAction(str("core.settings.title"), "▣", Modifier.fillMaxWidth(), viewModel::openCoreSettings)
+    Spacer(Modifier.height(6.dp))
     // In-game access to the manager screens. Memory cards and PNACH are gone
     // (no PS3 equivalent); patches now have their own per-game list above.
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

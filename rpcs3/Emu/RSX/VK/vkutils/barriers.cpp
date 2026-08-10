@@ -1,3 +1,4 @@
+#include "Emu/RSX/rsx_profiler.h"
 #include "barriers.h"
 #include "commands.h"
 #include "image.h"
@@ -17,7 +18,7 @@ namespace vk
 	{
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[10]++; vk::end_renderpass(cmd);
 		}
 
 		VkImageMemoryBarrier barrier = {};
@@ -44,7 +45,7 @@ namespace vk
 	{
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[11]++; vk::end_renderpass(cmd);
 		}
 
 		VkBufferMemoryBarrier barrier = {};
@@ -68,7 +69,7 @@ namespace vk
 	{
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[12]++; vk::end_renderpass(cmd);
 		}
 
 		VkMemoryBarrier barrier = {};
@@ -91,7 +92,7 @@ namespace vk
 		// TODO: This likely throws out hw optimizations on the rest of the renderpass, manage carefully
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[13]++; vk::end_renderpass(cmd);
 		}
 
 		VkAccessFlags src_access, dst_access;
@@ -111,7 +112,22 @@ namespace vk
 			dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
 		}
 
-		dst_stage |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+		if (preserve_renderpass)
+		{
+			// Issued inside the pass, so it must match the by-region self-dependency the
+			// render pass declares, and that permits framebuffer-local stages only. The
+			// vertex stage is not one, and naming it here would make the barrier invalid.
+			//
+			// Correct for what this is used for: the feedback case is a fragment shader
+			// sampling the attachment its own fragments write. A vertex shader sampling a
+			// live render target would need the pass ended anyway, which is what the caller
+			// gets by leaving preserve_renderpass false.
+			dst_stage |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+		}
+		else
+		{
+			dst_stage |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
+		}
 
 		VkImageMemoryBarrier barrier = {};
 		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;

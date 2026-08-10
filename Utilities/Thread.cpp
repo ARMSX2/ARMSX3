@@ -7,6 +7,9 @@
 #include "Emu/Cell/lv2/sys_process.h"
 #include "Emu/RSX/RSXThread.h"
 #include "Thread.h"
+#include <bit>
+#include <cstring>
+#include <cerrno>
 #include "Utilities/JIT.h"
 #include <cfenv>
 #include <charconv>
@@ -2687,7 +2690,21 @@ void sigpipe_signaling_handler(int)
 const bool s_exception_handler_set = []() -> bool
 {
 	struct ::sigaction sa;
+#ifdef __ANDROID__
+	// Run the handler on the alternate stack installed per thread in
+	// thread_base::initialize. Without this the handler runs on the faulting thread's own
+	// stack, so a stack overflow has nowhere to report itself from: the handler faults
+	// again immediately and the kernel applies the default action, killing the process
+	// having written nothing.
+	//
+	// Arkham City does exactly that. The only record anywhere of the crash was a single
+	// Zygote line, "exited due to signal 11 (Segmentation fault)", with no tombstone, no
+	// crash-buffer entry and no line from this handler, which cost hours of diagnosing it
+	// as an external kill.
+	sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+#else
 	sa.sa_flags = SA_SIGINFO;
+#endif
 	sigemptyset(&sa.sa_mask);
 	sa.sa_sigaction = signal_handler;
 
@@ -2791,6 +2808,33 @@ void thread_base::start()
 
 void thread_base::initialize(void (*error_cb)())
 {
+#ifdef __ANDROID__
+	// Somewhere for the SIGSEGV handler to run, per thread. See SA_ONSTACK above.
+	//
+	// Deliberately a thread_local rather than a shared buffer: the handler can fire on any
+	// thread, two threads can fault at once, and a shared stack would corrupt whichever
+	// report lost the race. It is released with the thread, after which no handler can run
+	// on it.
+	//
+	// 128KB because the handler formats and logs rather than just setting a flag. That is
+	// real memory across the emulator's thread count, and it buys turning a silent death
+	// into a reported one.
+	static thread_local std::array<u8, 128 * 1024> s_signal_stack;
+
+	stack_t alt{};
+	alt.ss_sp = s_signal_stack.data();
+	alt.ss_size = s_signal_stack.size();
+	alt.ss_flags = 0;
+
+	if (::sigaltstack(&alt, nullptr) == -1)
+	{
+		// Not fatal: the handler simply falls back to the faulting stack, which is the
+		// behaviour everywhere else. Worth knowing about, because it means a stack
+		// overflow will go unreported again.
+		sig_log.error("sigaltstack failed (%d); stack overflows will not be reported", errno);
+	}
+#endif
+
 #ifndef _WIN32
 #ifdef __APPLE__
 	while (!m_thread)
@@ -3732,9 +3776,42 @@ u64 thread_ctrl::get_affinity_mask(thread_class group)
 				return all_cores_mask;
 			}
 
+			// Reserve the single fastest core for RSX where there is one to spare.
+			//
+			// RSX and all the SPU threads previously shared one mask, so on a 4+3+1 phone
+			// that was six hot threads over five cores. RSX is the thread the frame waits
+			// on: it was measured spending about 10ms per frame inside its own loop without
+			// running, not blocked on the GPU and not faulting, simply waiting for a core.
+			//
+			// Keeping the SPUs off the prime core leaves it for RSX without fencing RSX in,
+			// since RSX keeps the whole fast cluster and only loses the contention for the
+			// best core. Only applied when doing so still leaves the SPUs more than one
+			// core, otherwise they would be crowded worse than the problem being fixed.
+			u64 prime_mask = 0;
+			u32 best_capacity = 0;
+
+			for (u32 core = 0; core < 64u; core++)
+			{
+				if (~fast_mask & (u64{1} << core))
+				{
+					continue;
+				}
+
+				if (caps[core] > best_capacity)
+				{
+					best_capacity = caps[core];
+					prime_mask = (u64{1} << core);
+				}
+			}
+
+			const u64 spu_mask = (std::popcount(fast_mask & ~prime_mask) > 1)
+				? (fast_mask & ~prime_mask)
+				: fast_mask;
+
 			switch (group)
 			{
 			case thread_class::spu:
+				return spu_mask;
 			case thread_class::rsx:
 				return fast_mask;
 			case thread_class::ppu:
@@ -3953,6 +4030,30 @@ void thread_ctrl::set_native_priority(int priority)
 	if (!SetThreadPriority(_this_thread, native_priority))
 	{
 		sig_log.error("SetThreadPriority() failed: %s", fmt::win_error{GetLastError(), nullptr});
+	}
+#elif defined(__ANDROID__)
+	// Nice value, not sched_priority.
+	//
+	// Android threads run under SCHED_OTHER, where sched_priority must be 0 and
+	// sched_get_priority_max returns 0, so the pthread_setschedparam path below sets
+	// nothing at all. The RSX thread asks for a boost on startup and was still measured at
+	// nice 0, being involuntarily preempted about 5300 times a second, roughly 130 times
+	// per frame, by the PPU, SPU and audio threads sharing its cores.
+	//
+	// Under SCHED_OTHER the scheduler's weighting comes from nice, which setpriority does
+	// set. Android grants apps enough RLIMIT_NICE headroom to go negative for their own
+	// threads, which is how audio threads get their priority.
+	//
+	// Modest values on purpose: this is a hint to be scheduled ahead of the other emulator
+	// threads, not a bid to starve them, and the RSX thread is the one everything else
+	// waits on.
+	const int nice_value = (priority > 0) ? -8 : (priority < 0 ? 8 : 0);
+
+	errno = 0;
+	if (setpriority(PRIO_PROCESS, static_cast<id_t>(gettid()), nice_value) == -1 && errno)
+	{
+		// Not fatal. Without the headroom the thread simply keeps its default weighting.
+		sig_log.warning("setpriority(%d) failed: %s", nice_value, strerror(errno));
 	}
 #else
 	int policy;

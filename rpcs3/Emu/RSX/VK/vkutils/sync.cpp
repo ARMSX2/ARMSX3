@@ -7,6 +7,10 @@
 #include "shared.h"
 
 #include "Emu/Cell/timers.hpp"
+#include "Emu/RSX/rsx_profiler.h"
+
+#include <chrono>
+#include <thread>
 
 #include "util/sysinfo.hpp"
 #include "util/asm.hpp"
@@ -561,6 +565,8 @@ namespace vk
 
 	VkResult wait_for_fence(fence* pFence, u64 timeout)
 	{
+		RSX_PROF_SCOPE(fence_wait);
+
 		pFence->wait_flush();
 
 		if (timeout)
@@ -588,6 +594,8 @@ namespace vk
 
 	VkResult wait_for_event(event* pEvent, u64 timeout)
 	{
+		RSX_PROF_SCOPE(fence_wait);
+
 		// Convert timeout to TSC cycles. Timeout accuracy isn't super-important, only fast response when event is signaled (within 10us if possible)
 		const u64 freq = utils::get_tsc_freq();
 
@@ -597,6 +605,20 @@ namespace vk
 		}
 
 		u64 start = 0;
+
+		// Poll hot for a short window, then stand back.
+		//
+		// Every iteration of this loop is a vkGetEventStatus, which on a tiled mobile part
+		// reads memory the GPU is writing. Spinning on it flat out for milliseconds does
+		// not make the event arrive sooner: it burns a core at peak clock and takes memory
+		// bandwidth away from the GPU we are waiting for, on a device where bandwidth is
+		// the scarce resource. A readback issued mid-frame queues behind everything already
+		// submitted, so these waits drain the whole pipeline and run into milliseconds.
+		//
+		// The hot window keeps the common short wait as fast as it was; past that the wait
+		// is long enough that 50us of granularity is noise against it.
+		u64 polls = 0;
+		constexpr u64 hot_polls = 512;
 
 		while (true)
 		{
@@ -629,7 +651,18 @@ namespace vk
 				}
 			}
 
-			utils::pause();
+			if (++polls <= hot_polls)
+			{
+				utils::pause();
+			}
+			else
+			{
+				// A plain sleep, deliberately not thread_ctrl::wait_for. That reads
+				// g_tls_this_thread and dereferences it in both branches without a null
+				// check, and this function is reached from threads RPCS3 did not create,
+				// where that pointer is null. Using it here crashed every boot.
+				std::this_thread::sleep_for(std::chrono::microseconds(50));
+			}
 		}
 	}
 }

@@ -79,7 +79,26 @@ namespace rsx
 				if (m_enqueued_count.load() == m_processed_count.load())
 				{
 					m_processed_count.notify_all();
-					std::this_thread::yield();
+
+					// Sleep until work arrives rather than spinning on yield().
+					//
+					// The queue is drained and every job is accounted for, so there is nothing
+					// to spin for, but yield() made this a busy loop that ate a whole core for
+					// as long as the emulator ran. Measured on an Adreno 740 handheld: 1142s of
+					// CPU over a 1145s session, 85% of it SYSTEM time -- that is the sched_yield
+					// syscall itself, not transfer work. On a 16-core desktop it merely wastes a
+					// core; on an 8-core handheld it competes with the RSX and SPU threads that
+					// actually need the silicon, and burns battery and thermal budget doing it.
+					//
+					// lf_queue::push notifies this atomic when the queue goes empty -> non-empty,
+					// so a real job still wakes us immediately and transfer latency is unchanged.
+					// If a push lands between the check above and the wait below, the atomic is
+					// already non-zero and wait() returns at once, so there is no lost wakeup.
+					//
+					// The timeout exists only so the loop can re-check thread_ctrl::state():
+					// aborting does not push anything, so an untimed wait would never return and
+					// shutdown would hang instead of spin -- a worse bug than the one being fixed.
+					m_work_queue.get_wait_atomic().wait(0, atomic_wait_timeout{5'000'000});
 				}
 			}
 

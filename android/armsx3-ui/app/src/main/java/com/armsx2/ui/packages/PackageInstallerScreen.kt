@@ -58,6 +58,11 @@ import net.rpcsx.RPCSX
  * produced. Read from disk rather than from the library, so uninstall still works when
  * the library cache is stale and can never point at a user's ROM folder.
  */
+/** Licence files, which install through a different native entry point than packages. */
+private fun isLicence(file: java.io.File): Boolean =
+    file.extension.equals("rap", ignoreCase = true) ||
+        file.extension.equals("edat", ignoreCase = true)
+
 private fun readInstalled(): List<java.io.File> =
     java.io.File(RPCSX.rootDirectory, "config/dev_hdd0/game")
         .listFiles()
@@ -102,7 +107,12 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                         ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY)
                     }
                     try {
-                        if (descriptors.size == 1) {
+                        if (descriptors.size == 1 && isLicence(files[0])) {
+                            // installKey, not install: _rpcsx_install rejects a RAP outright
+                            // ("cannot be preinstalled"). Empty game path means "work it out
+                            // from the licence", which is what the exdata directory needs.
+                            RPCSX.instance.installKey(descriptors[0].fd, id, "")
+                        } else if (descriptors.size == 1) {
                             RPCSX.instance.install(descriptors[0].fd, id)
                         } else {
                             RPCSX.instance.installSplitPkg(
@@ -166,7 +176,11 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
             // through here would let someone install firmware from a menu that says
             // nothing about it. EDAT rides along because _rpcsx_install handles it and
             // it is what DLC licences arrive as.
-            extensions = setOf("pkg", "edat"),
+            // RAP and EDAT are licence files, not packages, so they go through installKey
+            // rather than install. Some titles need both: the .pkg carries the content and
+            // the .rap is what unlocks it. PUP stays out on purpose, firmware has its own
+            // screen and should not be installable from a menu that says nothing about it.
+            extensions = setOf("pkg", "rap", "edat"),
             // Split releases ship as several .pkg parts that only install correctly when
             // handed to the installer together, the way RPCS3 desktop does it.
             allowMultiple = true,

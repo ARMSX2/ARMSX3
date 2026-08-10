@@ -155,6 +155,7 @@ extern "C"
 	extern PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR;
 	extern PFN_vkGetPhysicalDeviceSurfaceSupportKHR vkGetPhysicalDeviceSurfaceSupportKHR;
 	extern PFN_vkGetQueryPoolResults vkGetQueryPoolResults;
+	extern PFN_vkCmdWriteTimestamp vkCmdWriteTimestamp;
 	extern PFN_vkInvalidateMappedMemoryRanges vkInvalidateMappedMemoryRanges;
 	extern PFN_vkMapMemory vkMapMemory;
 	extern PFN_vkQueueSubmit vkQueueSubmit;

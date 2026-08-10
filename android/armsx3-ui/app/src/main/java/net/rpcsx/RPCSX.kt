@@ -82,6 +82,15 @@ class RPCSX {
     external fun installKey(fd: Int, requestId: Long, gamePath: String): Boolean
     external fun boot(path: String): Int
     external fun surfaceEvent(surface: Surface, event: Int): Boolean
+
+    /**
+     * The surface's pixel size, as SurfaceHolder reports it.
+     *
+     * Separate from surfaceEvent because rotation is a size change and nothing else: the
+     * activity keeps the same Surface, so the core has no other way to learn the window
+     * changed shape.
+     */
+    external fun surfaceSizeChanged(width: Int, height: Int)
     external fun usbDeviceEvent(fd: Int, vendorId: Int, productId: Int, event: Int): Boolean
     external fun processCompilationQueue(): Boolean
     external fun startMainThreadProcessor(): Boolean
@@ -104,6 +113,12 @@ class RPCSX {
     external fun saveState(): Boolean
     external fun loadState(index: Int): Boolean
     external fun hasState(index: Int): Boolean
+
+    // Numbered slots. The three above walk RPCS3's rolling history by age (1 = most
+    // recent); these address a fixed slot, which is what the ten-slot UI means.
+    external fun saveStateToSlot(slot: Int): Boolean
+    external fun loadStateFromSlot(slot: Int): Boolean
+    external fun hasStateInSlot(slot: Int): Boolean
     external fun patchesImport(content: String): Int
     external fun patchesList(serial: String): String
     external fun probeDiscInfo(isoPath: String, iconOut: String): String

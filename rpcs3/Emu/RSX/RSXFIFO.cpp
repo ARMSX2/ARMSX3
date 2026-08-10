@@ -8,6 +8,7 @@
 #include "Emu/Memory/vm_reservation.h"
 #include "Emu/Cell/lv2/sys_rsx.h"
 #include "NV47/HW/context.h"
+#include "rsx_profiler.h"
 
 #include "util/asm.hpp"
 
@@ -85,7 +86,7 @@ namespace rsx
 			}
 		}
 
-		std::pair<bool, u32> FIFO_control::fetch_u32(u32 addr)
+		std::pair<bool, u32> FIFO_control::fetch_u32_refill(u32 addr)
 		{
 			if (addr - m_cache_addr >= m_cache_size)
 			{
@@ -119,7 +120,11 @@ namespace rsx
 				}
 
 				// Make mask of cache lines to fetch
-				u8 to_fetch = static_cast<u8>((1u << (m_cache_size / 128)) - 1);
+				// A full mask cannot be built by shifting, since 1u << 32 is undefined.
+				const u32 lines_to_fetch = m_cache_size / 128;
+				u32 to_fetch = (lines_to_fetch >= cache_line_count)
+					? ~0u
+					: ((1u << lines_to_fetch) - 1);
 
 				if (addr < put && put < m_cache_addr + m_cache_size)
 				{
@@ -131,6 +136,12 @@ namespace rsx
 				const bool force_cache_fill = g_cfg.core.rsx_fifo_accuracy == rsx_fifo_mode::atomic_ordered;
 				const bool strict_fetch_ordering = g_cfg.core.rsx_fifo_accuracy >= rsx_fifo_mode::atomic_ordered;
 
+				if (rsx::prof::enabled()) [[unlikely]]
+				{
+					rsx::prof::g_fifo_refills++;
+					rsx::prof::g_fifo_refill_bytes += m_cache_size;
+				}
+
 				rsx::reservation_lock<true, 1> rsx_lock(addr1, m_cache_size, true);
 				const auto src = vm::_ptr<spu_rdata_t>(addr1);
 
@@ -138,7 +149,7 @@ namespace rsx
 				u32 bytes_read = 0;
 
 				// Find the next set bit after every iteration
-				for (int i = 0;; i = (std::countr_zero<u32>(std::rotl<u8>(to_fetch, 0 - i - 1)) + i + 1) % 8)
+				for (int i = 0;; i = (std::countr_zero<u32>(std::rotl<u32>(to_fetch, 0 - i - 1)) + i + 1) % cache_line_count)
 				{
 					// If a reservation is being updated, try to load another
 					const auto& res = vm::reservation_acquire(addr1 + i * 128);
@@ -174,6 +185,11 @@ namespace rsx
 						}
 
 						start_time = get_system_time();
+
+						if (rsx::prof::enabled()) [[unlikely]]
+						{
+							rsx::prof::g_fifo_refill_stalls++;
+						}
 					}
 
 					auto now = get_system_time();
@@ -184,7 +200,10 @@ namespace rsx
 							return {};
 						}
 
-						m_thread->cpu_wait({});
+						{
+							RSX_PROF_SCOPE(idle);
+							m_thread->cpu_wait({});
+						}
 
 						const auto then = std::exchange(now, get_system_time());
 						start_time = now;
@@ -197,8 +216,15 @@ namespace rsx
 
 					if (strict_fetch_ordering)
 					{
-						i = (i - 1) % 8;
+						i = (i - 1) % cache_line_count;
 					}
+				}
+
+				// start_time is only set once the refill has had to wait, so this charges
+				// exactly the spin and nothing else.
+				if (start_time && rsx::prof::enabled()) [[unlikely]]
+				{
+					rsx::prof::g_fifo_refill_stall_us += (get_system_time() - start_time);
 				}
 			}
 
@@ -885,6 +911,8 @@ namespace rsx
 			const u32 value = command.value;
 
 			m_ctx->register_state->decode(reg, value);
+
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_method_counts[reg & (rsx::prof::method_slot_count - 1)]++;
 
 			if (auto method = methods[reg])
 			{

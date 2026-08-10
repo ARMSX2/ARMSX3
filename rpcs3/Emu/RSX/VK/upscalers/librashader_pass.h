@@ -200,7 +200,11 @@ namespace vk
 
 			libra_image_vk_t output{};
 			output.handle = present_surface;
-			output.format = src->format();
+			// The present surface's own format, NOT the source's. These are different images
+			// and routinely different formats (BGRA swapchain, RGBA source); librashader builds
+			// its output view and render pass from what it is told here, so handing it the
+			// source format made it write through a mismatched view and swap red with blue.
+			output.format = m_present_format;
 			output.width = dst_w;
 			output.height = dst_h;
 

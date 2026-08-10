@@ -65,6 +65,14 @@ object TouchControls {
     private const val KEY_GESTURE_DTAP_HOLD = "touch.gesture.doubleTapHold"
     private const val KEY_MULTI_RADIUS = "touch.multiRadius"
     private const val KEY_DPAD_SPACING = "touch.dpadSpacing"
+
+    /** 7% of the pad's half-size: enough of a gap that the four direction keys read as a
+     *  D-pad with the bundled skin art, without opening a dead-zone big enough to swallow
+     *  diagonals. */
+    const val DEFAULT_DPAD_SPACING = 0.07f
+
+    /** Set once [migrateDpadSpacing] has run. */
+    private const val KEY_DPAD_SPACING_MIGRATED = "touch.dpadSpacing.migrated"
     private const val KEY_FLOATING_STICK = "touch.floatingStick"
     private const val KEY_FULL_HALF_STICKS = "touch.fullHalfSticks"
     private const val KEY_ANALOG_EXTRA = "touch.analogExtra"
@@ -211,8 +219,12 @@ object TouchControls {
     // directions meet at the center (a tight +). Higher pushes each direction OUT toward
     // its edge, opening a visible gap in the middle (NetherSX2-style) and growing the
     // center dead-zone to match. Edited in the Touch Layout editor (select the D-Pad).
-    // Persisted under KEY_DPAD_SPACING. Default 0 (normal tight D-pad).
-    val dpadSpacing = mutableFloatStateOf(0.0f)
+    // Persisted under KEY_DPAD_SPACING.
+    //
+    // Defaults to [DEFAULT_DPAD_SPACING] rather than 0: the bundled skin art draws four
+    // separate direction keys, and at 0 they meet in the middle and read as one clumped
+    // blob instead of a D-pad. A tight + only looks right on the flat built-in drawables.
+    val dpadSpacing = mutableFloatStateOf(DEFAULT_DPAD_SPACING)
 
     // Floating on-screen stick: the first touch-down inside a stick's zone becomes
     // its origin (the ring re-centers under your finger) instead of a fixed center —
@@ -644,6 +656,27 @@ object TouchControls {
         load()
     }
 
+    /**
+     * One-time move of installs that predate [DEFAULT_DPAD_SPACING] onto it.
+     *
+     * The default only applies where nothing is stored, and this key is written by the bulk
+     * save, so anyone who had ever touched a touch-control setting already had 0 on disk and
+     * would have kept the clumped D-pad no matter what the default said.
+     *
+     * Only a stored 0 is rewritten, and only once. Someone who deliberately wants the four
+     * keys meeting in the middle can set 0 again afterwards and it survives, because the flag
+     * is written either way.
+     */
+    private fun migrateDpadSpacing() {
+        val prefs = MainActivityRuntime.prefs
+        if (prefs.getBoolean(KEY_DPAD_SPACING_MIGRATED, false)) return
+        val stored = prefs.getFloat(KEY_DPAD_SPACING, DEFAULT_DPAD_SPACING)
+        prefs.edit()
+            .putBoolean(KEY_DPAD_SPACING_MIGRATED, true)
+            .apply { if (stored == 0.0f) putFloat(KEY_DPAD_SPACING, DEFAULT_DPAD_SPACING) }
+            .apply()
+    }
+
     private fun load() {
         val raw = MainActivityRuntime.prefs.getString(KEY_PROFILES, null)
         val list = mutableListOf<TouchProfile>()
@@ -685,7 +718,9 @@ object TouchControls {
         touchGliding.value = MainActivityRuntime.prefs.getBoolean(KEY_TOUCH_GLIDING, false)
         touchHaptics.value = MainActivityRuntime.prefs.getBoolean(KEY_TOUCH_HAPTICS, true)
         multiTouchRadius.floatValue = MainActivityRuntime.prefs.getFloat(KEY_MULTI_RADIUS, 0.62f).coerceIn(0.50f, 0.95f)
-        dpadSpacing.floatValue = MainActivityRuntime.prefs.getFloat(KEY_DPAD_SPACING, 0.0f).coerceIn(0.0f, 0.35f)
+        migrateDpadSpacing()
+        dpadSpacing.floatValue =
+            MainActivityRuntime.prefs.getFloat(KEY_DPAD_SPACING, DEFAULT_DPAD_SPACING).coerceIn(0.0f, 0.35f)
         floatingStick.value = MainActivityRuntime.prefs.getBoolean(KEY_FLOATING_STICK, false)
         fullHalfSticks.value = MainActivityRuntime.prefs.getBoolean(KEY_FULL_HALF_STICKS, false)
         analogExtraEnabled.value = MainActivityRuntime.prefs.getBoolean(KEY_ANALOG_EXTRA, false)

@@ -245,7 +245,7 @@ namespace vk
 	bool surface_cache::is_overallocated()
 	{
 		const auto surface_cache_vram_load = vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_SURFACE_CACHE);
-		const auto surface_cache_allocation_quota = get_surface_cache_memory_quota(get_current_renderer()->get_memory_mapping().device_local_total_bytes);
+		const auto surface_cache_allocation_quota = get_surface_cache_memory_quota(vk::get_budgetable_device_memory(get_current_renderer()->get_memory_mapping().device_local_total_bytes));
 		return (surface_cache_vram_load > surface_cache_allocation_quota);
 	}
 
@@ -253,7 +253,7 @@ namespace vk
 	{
 		// Determine how much memory we need to save to system RAM if any
 		const u64 current_surface_cache_memory = vk::vmm_get_application_pool_usage(VMM_ALLOCATION_POOL_SURFACE_CACHE);
-		const u64 total_device_memory = vk::get_current_renderer()->get_memory_mapping().device_local_total_bytes;
+		const u64 total_device_memory = vk::get_budgetable_device_memory(vk::get_current_renderer()->get_memory_mapping().device_local_total_bytes);
 		const u64 target_memory = get_surface_cache_memory_quota(total_device_memory);
 
 		rsx_log.warning("Surface cache memory usage is %lluM", current_surface_cache_memory / 0x100000);
@@ -861,7 +861,22 @@ namespace vk
 			return;
 		}
 
-		vk::insert_texture_barrier(cmd, this, optimal_layout);
+		// Keep the render pass open across this barrier on Android.
+		//
+		// This is the fragment feedback case, an attachment sampled while still bound, and it
+		// is now covered by the by-region self-dependency the render pass declares. Ending the
+		// pass here was costing 20 to 23 restarts a frame out of roughly 83 in Arkham City,
+		// and on a tiled GPU each is a tile store plus a reload of the attachment.
+		//
+		// Android only for now: the self-dependency is declared everywhere, but this device is
+		// where the tile traffic is measured and where it hurts.
+#ifdef __ANDROID__
+		constexpr bool preserve_renderpass = true;
+#else
+		constexpr bool preserve_renderpass = false;
+#endif
+
+		vk::insert_texture_barrier(cmd, this, optimal_layout, preserve_renderpass);
 		m_cyclic_ref_tracker.on_insert_texture_barrier();
 
 		if (is_framebuffer_read_only)

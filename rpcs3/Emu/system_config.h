@@ -161,6 +161,10 @@ struct cfg_root : cfg::node
 		cfg::_bool strict_texture_flushing{ this, "Strict Texture Flushing", false };
 		cfg::_bool multithreaded_rsx{ this, "Multithreaded RSX", false };
 		cfg::_bool relaxed_zcull_sync{ this, "Relaxed ZCULL Sync", false };
+		// Splits RSX thread time into exclusive buckets and reports them to the log every
+		// 300 frames. Dynamic, so it can be turned on mid-session to catch a slowdown that
+		// only appears after a while. See Emu/RSX/rsx_profiler.h.
+		cfg::_bool rsx_profiler{ this, "RSX Profiler", false, true };
 		cfg::_bool force_hw_MSAA_resolve{ this, "Force Hardware MSAA Resolve", false, true };
 		cfg::_bool stereo_enabled{ this, "3D Display Enabled", false };
 		cfg::_enum<stereo_render_mode_options> stereo_render_mode{ this, "3D Display Mode", stereo_render_mode_options::disabled, true };

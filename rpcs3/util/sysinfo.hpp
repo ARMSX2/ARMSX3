@@ -99,6 +99,11 @@ namespace utils
 
 	u64 get_total_memory();
 
+	// Memory the OS says is actually available right now, 0 when it cannot be determined.
+	// Distinct from total: a phone reports 7GB installed while sitting at 76MB free, and
+	// sizing worker pools against the former is how the process gets OOM-killed.
+	u64 get_avail_memory();
+
 	u32 get_thread_count();
 
 	u32 get_cpu_family();

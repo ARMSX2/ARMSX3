@@ -1,4 +1,6 @@
 #include "device.h"
+#include <algorithm>
+#include "util/sysinfo.hpp"
 #include "instance.h"
 #include "util/logs.hpp"
 #include "Emu/system_config.h"
@@ -123,6 +125,7 @@ namespace vk
 
 		optional_features_support.shader_stencil_export    = device_extensions.is_supported(VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
 		optional_features_support.conditional_rendering    = device_extensions.is_supported(VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
+
 		optional_features_support.external_memory_host     = device_extensions.is_supported(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
 		optional_features_support.synchronization_2        = device_extensions.is_supported(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
 		optional_features_support.unrestricted_depth_range = device_extensions.is_supported(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
@@ -286,6 +289,30 @@ namespace vk
 			// float16 with float32 costs some bandwidth and renders correctly.
 			rsx_log.warning("Mobile GPU: disabling native float16 shader types (driver shader compiler rejects them).");
 			shader_types_support.allow_float16 = false;
+		}
+
+		// Not on the Qualcomm proprietary driver: using it leaks driver memory until the
+		// process is killed.
+		//
+		// begin_conditional_rendering inserts a buffer memory barrier, which ends the render
+		// pass, and every vkCmdEndRenderPass makes the driver allocate memory it does not
+		// give back. A heap profile of a Skate 3 session put the top allocation stacks, 157,
+		// 152 and 150MB and more, all on that one path, through qglinternal::vkCmdEndRenderPass
+		// into calloc. The process reached 4.3GB of anonymous memory, drove the device to
+		// 54MB free with 3GB in swap, and was killed. Roughly 2.4GB of that arrived in eight
+		// seconds.
+		//
+		// Not our heap and not something we can free, so the only lever is to stop asking.
+		// Without the extension RSX falls back to thread::begin_conditional_rendering, which
+		// simply performs the draws: occlusion results stop culling them, which costs some
+		// GPU work in exchange for the session surviving.
+		//
+		// Scoped to the proprietary driver because that is what was measured. Turnip is a
+		// different implementation and is left alone until someone has evidence about it.
+		if (optional_features_support.conditional_rendering && get_driver_vendor() == driver_vendor::ADRENO)
+		{
+			rsx_log.notice("Conditional rendering disabled: the Adreno driver allocates on every render pass end and does not release it.");
+			optional_features_support.conditional_rendering = false;
 		}
 	}
 
@@ -513,6 +540,41 @@ namespace vk
 	}
 
 	// Render Device - The actual usable device
+	u64 get_budgetable_device_memory(u64 device_local_total)
+	{
+		const u64 device_local = device_local_total;
+
+#ifdef __ANDROID__
+		// Unified memory: the "VRAM" figure is system RAM, most of which belongs to the OS
+		// and everything else running. Budget against what is actually free, keeping back
+		// room for the emulator itself, and clamp so the answer stays sane whether the phone
+		// is idle or loaded.
+		//
+		// Cached because both cache implementations ask on a periodic check and reading
+		// /proc/meminfo each time is not free.
+		static const u64 android_budget = []() -> u64
+		{
+			constexpr u64 mb = 0x100000;
+			constexpr u64 emulator_reserve = 1536 * mb;
+			constexpr u64 floor_bytes = 1024 * mb;
+			constexpr u64 ceiling_bytes = 2560 * mb;
+
+			const u64 avail = utils::get_avail_memory();
+			if (!avail)
+			{
+				return floor_bytes;
+			}
+
+			const u64 spare = (avail > emulator_reserve) ? avail - emulator_reserve : 0;
+			return std::clamp(spare, floor_bytes, ceiling_bytes);
+		}();
+
+		return std::min(device_local, android_budget);
+#else
+		return device_local;
+#endif
+	}
+
 	void render_device::create(vk::physical_device& pdev, u32 graphics_queue_idx, u32 present_queue_idx, u32 transfer_queue_idx)
 	{
 		float queue_priorities[1] = { 0.f };

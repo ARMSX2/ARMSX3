@@ -119,14 +119,14 @@ public final class NativeApp {
     /** [MAPPED] */
     public static boolean loadStateFromSlot(int slot) { return Rpcs3Bridge.loadState(slot); }
 
-    /** [TODO] RPCS3 supports savestates; slot screenshots are not wired yet. */
-    public static byte[] getImageSlot(int slot) { Unsupported.note("getImageSlot"); return null; }
+    /** [MAPPED] Slot preview, captured by the core at save time. Null if the slot has none. */
+    public static byte[] getImageSlot(int slot) { return Rpcs3Bridge.thumbnailForSlot(slot); }
 
     /** [TODO] */
     public static byte[] getSaveStateImage(String path) { Unsupported.note("getSaveStateImage"); return null; }
 
-    /** [TODO] */
-    public static String getGamePathSlot(int slot) { Unsupported.note("getGamePathSlot"); return ""; }
+    /** [MAPPED] Occupancy for the save slot picker. Non-empty means the slot holds a state. */
+    public static String getGamePathSlot(int slot) { return Rpcs3Bridge.gamePathForSlot(slot); }
 
     /** [TODO] Autosave is an ARMSX2 feature layered on PCSX2 savestates. */
     public static boolean hasAutosaveState() { Unsupported.note("hasAutosaveState"); return false; }
@@ -315,16 +315,24 @@ public final class NativeApp {
     public static void setPreferVulkan(boolean e) { /* Vulkan is the only backend */ }
 
     /**
-     * [MAPPED] ARMSX2's aspect enum: 0 = stretch/native, 1 = 4:3, 2 = 16:9.
+     * [MAPPED] The console aspect index the UI stores, which is RendererTab's
+     * picker: 0 = stretch, 1 = Auto, 2 = 4:3, 3 = 16:9, 4..8 = the ultrawide
+     * ratios ARMSX2 offered.
+     *
      * RPCS3 only has 4:3 and 16:9 plus a separate "Stretch To Display Area"
-     * flag, so mode 0 maps to the flag rather than a third enum value.
+     * flag, so index 0 maps to the flag rather than a third enum value, and
+     * everything that is not 4:3 lands on 16:9.
+     *
+     * The doc here used to describe ARMSX2's PS2 enum, where 1 was 4:3, and the
+     * check below was written against it. ARMSX3's picker inserted Auto at 1 and
+     * pushed 4:3 to 2, so Auto was resolving to 4:3.
      */
     public static void setAspectRatio(int type) {
         if (type == 0) {
             Rpcs3Settings.INSTANCE.setStretchToDisplay(true);
         } else {
             Rpcs3Settings.INSTANCE.setStretchToDisplay(false);
-            Rpcs3Settings.INSTANCE.setAspectRatio(type != 1);
+            Rpcs3Settings.INSTANCE.setAspectRatio(type != 2);
         }
     }
 
@@ -337,10 +345,25 @@ public final class NativeApp {
     /** [MAPPED] -> Video@@Enable Frame Skip + Consecutive Frames To Skip */
     public static void setFrameSkip(int skip) { Rpcs3Settings.INSTANCE.setFrameSkip(skip); }
 
-    /** [MAPPED] -> Video@@Vblank Rate */
-    public static void setDisplayRefreshRate(float hz) {
-        Rpcs3Settings.INSTANCE.setVblankRate(Math.round(hz));
-    }
+    /**
+     * The HOST PANEL's refresh rate. Deliberately dropped.
+     *
+     * This used to write it to Video@@Vblank Rate, which is a different thing entirely:
+     * that is the frequency of the emulated console's vblank, and a PS3 runs 60Hz no
+     * matter what display is attached. On a 120Hz handheld the panel rate went in as the
+     * console rate and the emulator was asked to produce 120 frames a second, twice the
+     * RSX command volume and twice the GPU work, for frames no PS3 game was written to
+     * produce. Frame limit Auto follows vblank, so the 60 cap went with it.
+     *
+     * It also could not be corrected from settings: EmulationSurface reports the panel
+     * rate on every surfaceChanged, which is after ApplySettings on boot and again on
+     * every rotation and resume, so it overwrote the pushed 60 every time.
+     *
+     * Nothing is lost by dropping it. RPCS3 reads the host rate itself through
+     * get_display_refresh_rate() and uses it for Frame limit "Display"; it never wanted
+     * to be told.
+     */
+    public static void setDisplayRefreshRate(float hz) { Unsupported.note("setDisplayRefreshRate"); }
 
     /** [MAPPED] emulated clock speed -> Core@@Clocks scale (10..3000 %) */
     public static void setNominalSpeed(int percent) {

@@ -1,6 +1,8 @@
+#include "Emu/RSX/rsx_profiler.h"
 #include "stdafx.h"
 #include "Emu/RSX/VK/VKGSRenderTypes.hpp"
 #include "VKTextureCache.h"
+#include "vkutils/gpu_timer.h"
 #include "VKCompute.h"
 #include "VKAsyncScheduler.h"
 #include "vkutils/data_heap.h"
@@ -65,6 +67,7 @@ namespace vk
 
 	void cached_texture_section::dma_transfer(vk::command_buffer& cmd, vk::image* src, const areai& src_area, const utils::address_range32& valid_range, u32 pitch)
 	{
+		vk::gpu_scope dma_gpu_scope(cmd, vk::gpu_timer::region::readback_dma);
 		ensure(src->samples() == 1);
 
 		if (!m_device)
@@ -82,7 +85,7 @@ namespace vk
 
 		if (vk::is_renderpass_open(cmd))
 		{
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[14]++; vk::end_renderpass(cmd);
 		}
 
 		src->push_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -1216,11 +1219,13 @@ namespace vk
 	cached_texture_section* texture_cache::upload_image_from_cpu(vk::command_buffer& cmd, const utils::address_range32& rsx_range, u16 width, u16 height, u16 depth, u16 mipmaps, u32 pitch, u32 gcm_format,
 		rsx::texture_upload_context context, const std::vector<rsx::subresource_layout>& subresource_layout, rsx::texture_dimension_extended type, bool swizzled)
 	{
+		vk::gpu_scope upload_gpu_scope(cmd, vk::gpu_timer::region::upload);
+
 		if (context != rsx::texture_upload_context::shader_read)
 		{
 			if (vk::is_renderpass_open(cmd))
 			{
-				vk::end_renderpass(cmd);
+				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[15]++; vk::end_renderpass(cmd);
 			}
 		}
 
@@ -1696,7 +1701,7 @@ namespace vk
 
 	bool texture_cache::is_overallocated() const
 	{
-		const auto total_device_memory = m_device->get_memory_mapping().device_local_total_bytes / 0x100000;
+		const auto total_device_memory = vk::get_budgetable_device_memory(m_device->get_memory_mapping().device_local_total_bytes) / 0x100000;
 		u64 quota = 0;
 
 		if (total_device_memory >= 2048)

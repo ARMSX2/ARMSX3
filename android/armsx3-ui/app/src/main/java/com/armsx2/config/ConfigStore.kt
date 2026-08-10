@@ -61,10 +61,17 @@ object ConfigStore {
     private const val KEY_SPU_DECODER_RESTORE = "config.migrated.spuDecoderRestoreLlvm"
     private const val KEY_XFLOAT_BACK_TO_APPROX = "config.migrated.xfloatBackToApprox"
     private const val KEY_PRECISE_SPU_OFF = "config.migrated.preciseSpuVerifyOff"
+    private const val KEY_ATOMIC_DMA_OFF = "config.migrated.atomicDmaStoresOff"
+    // Bumped: the first pass recorded only Vblank Rate, which did not hold on its own.
+    private const val KEY_VBLANK_60 = "config.migrated.frameCap60"
+    // Clears core overrides left behind by the profiling work.
+    private const val KEY_DIAG_OVERRIDES_PURGED = "config.migrated.diagOverridesPurged"
     private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
     private const val KEY_TIMESTRETCH_OFF = "config.migrated.audioTimeStretchOff"
+    // Scaling Mode row changed meaning; a stored 0 used to resolve to Bilinear, now Nearest.
+    private const val KEY_CAS_MODE_BILINEAR = "config.migrated.casModeBilinear"
     // Mirror of the settings, written INTO the data folder so a later fresh install that
     // reuses the same folder can restore them (SharedPreferences don't survive uninstall).
     private const val BACKUP_FILENAME = "armsx2-settings.json"
@@ -117,6 +124,24 @@ object ConfigStore {
             MainActivityRuntime.prefs.edit { putBoolean(KEY_TIMESTRETCH_OFF, true) }
         }
 
+        // The Scaling Mode row changed meaning, so a stored 0 has to move with it.
+        //
+        // casMode used to be read as PCSX2's CAS mode, where 0 meant "CAS off" and the mode
+        // then fell through to what IntegerScaling wrote, which was Bilinear. It is now the
+        // row's own index, where 0 means Nearest. Every existing save holds 0, so leaving it
+        // alone would silently move everyone from Bilinear to Nearest -- a visibly harder,
+        // more aliased image that nobody asked for.
+        //
+        // Safe to move all of them: until this change the row could not express Nearest at
+        // all (picking it asked for nothing), so a stored 0 never meant a deliberate choice.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_CAS_MODE_BILINEAR, false)) {
+            if (raw != null && parsed.casMode == 0) {
+                parsed = parsed.copy(casMode = 1)
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_CAS_MODE_BILINEAR, true) }
+        }
+
         // Turn the scheduler on so the new big.LITTLE affinity mask applies.
         if (!MainActivityRuntime.prefs.getBoolean(KEY_AFFINITY_ON, false)) {
             if (raw != null && parsed.affinityMode == 0) {
@@ -154,6 +179,78 @@ object ConfigStore {
                 dirty = true
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_XFLOAT_BACK_TO_APPROX, true) }
+        }
+
+        // Return the two reservation settings to upstream's defaults, both off.
+        //
+        // Accurate SPU DMA + Accurate Cache Line Stores together route every 128-byte
+        // SPU DMA store through do_cell_atomic_128_store, so bulk DMA turns into one
+        // atomic reservation store per cache line. Contention then outruns the rate the
+        // reservations can drain and an SPU spins in do_putllc indefinitely, taking the
+        // PPU down with it. Minecraft froze on world chunk load, which is bulk SPU DMA
+        // and nothing else. Load-dependent, hence the intermittency.
+        //
+        // Both are stored true on existing installs, so the default change alone would
+        // not reach anyone who has already run the app.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_ATOMIC_DMA_OFF, false)) {
+            if (raw != null && (parsed.ps3.accurateCacheLine || parsed.ps3.accurateSpuDma)) {
+                parsed = parsed.copy(
+                    ps3 = parsed.ps3.copy(accurateCacheLine = false, accurateSpuDma = false),
+                )
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_ATOMIC_DMA_OFF, true) }
+        }
+
+        // Put Vblank Rate back to 60, which is both upstream's default and what a PS3
+        // actually runs at.
+        //
+        // It was sitting at 120. Nothing in this app sets that, so it came from the core
+        // settings screen, and it makes the emulator aim for 120fps: twice the frames, twice
+        // the RSX command volume, twice the GPU work, on a handheld. Chasing a 120Hz panel
+        // in PS3 emulation costs battery and heat for frames the games were never designed
+        // to produce.
+        //
+        // Recorded as a core override rather than written to config.yml directly, so it
+        // survives the settings push on every boot and stays changeable afterwards.
+        //
+        // Global tier, like every migration in this method: it is correcting the baseline
+        // everyone inherited, not a choice made for one title.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_VBLANK_60, false)) {
+            runCatching {
+                CoreSettingOverrides.record(SettingsScope.Global, null, "Video@@Vblank Rate", "60")
+            }
+            // Frame limit as well as Vblank Rate. Vblank alone did not hold: the override is
+            // stored and the two beside it apply, yet the live value came back as 120. Frame
+            // limit is the dedicated cap and does not depend on the vblank path at all, so
+            // whichever of the two takes, the result is 60.
+            runCatching {
+                CoreSettingOverrides.record(SettingsScope.Global, null, "Video@@Frame limit", "60")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_VBLANK_60, true) }
+        }
+
+        // Diagnostic settings that got recorded as core overrides during the profiling work
+        // and would otherwise follow people into a release build.
+        //
+        // RSX Profiler defaults to false and belongs that way: it is instrumentation, kept
+        // for the next investigation rather than for playing. Eager Surface Readback names a
+        // node this build no longer has at all, so replaying it only produces a failed set
+        // and a log line.
+        //
+        // An override is a record of a deliberate choice, so these are removed by path
+        // rather than by clearing the store, which would take the user's real edits with it.
+        //
+        // Global tier only: the per-game sets did not exist while the profiling build was
+        // out, so there is nowhere else these can have been recorded.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_DIAG_OVERRIDES_PURGED, false)) {
+            runCatching {
+                CoreSettingOverrides.forget(
+                    SettingsScope.Global, null,
+                    "Video@@RSX Profiler", "Video@@Eager Surface Readback",
+                )
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_DIAG_OVERRIDES_PURGED, true) }
         }
 
         // Move anyone still on the old Approximate xfloat default onto Accurate.

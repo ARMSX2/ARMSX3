@@ -120,6 +120,9 @@ object Rpcs3Bridge {
 
         RPCSX.rootDirectory = if (rootPath.endsWith("/")) rootPath else "$rootPath/"
         shieldFromMediaScanner(RPCSX.rootDirectory)
+        // Discard database configs split by an older build, so a setting later found to
+        // break a game is not left applying forever on machines that already downloaded.
+        runCatching { com.armsx2.config.ConfigDatabase.purgeIfStale() }
         RPCSX.instance.initialize(RPCSX.rootDirectory, "00000001")
         RPCSX.initialized = true
 
@@ -165,6 +168,15 @@ object Rpcs3Bridge {
             }
             vsh.absolutePath
         }
+        // Canary patches must be in patch.yml BEFORE the core reads it, which happens
+        // inside boot. Doing it here rather than at app start also means it runs after
+        // the config directory exists: patchesImport writes into it, and on a first-ever
+        // run that directory only appears once setup has picked a storage location.
+        //
+        // Cheap after the first success -- it is a single preference read once the
+        // bundled revision matches.
+        appContext?.let { com.armsx2.Ps3PatchRepo.ensureBundledPatches(it) }
+
         if (RPCSX.boot(target).ordinal != 0) {
             return false
         }
@@ -271,8 +283,17 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun surfaceChanged(surface: Surface, width: Int, height: Int) {
-        currentSurface = surface
+        // BEFORE the event. The core reads the size off the renderer thread as soon as it
+        // has a live window, and a window whose size it has not been told yet is the case
+        // this whole path exists to avoid.
+        runCatching { RPCSX.instance.surfaceSizeChanged(width, height) }
+
+        // Read the previous surface first. This assigned currentSurface and THEN tested it
+        // for null, so the test could never be true and the event was always CHANGED --
+        // which the core does not treat as a reason to resume, leaving the emulator paused
+        // after a surface came back.
         val event = if (currentSurface == null) SURFACE_CREATED else SURFACE_CHANGED
+        currentSurface = surface
         RPCSX.instance.surfaceEvent(surface, event)
     }
 
@@ -331,23 +352,45 @@ object Rpcs3Bridge {
                     // "Auto" is RPCS3's per-title native pacing -- the right
                     // meaning of "limit on" for a console that isn't fixed at 60.
                     Rpcs3Settings.setFrameLimitMode(if (asBool(value)) "Auto" else "Off")
-                "SyncToHostRefreshRate" ->
-                    if (asBool(value)) Rpcs3Settings.setFrameLimitMode("Display")
                 "VsyncEnable" -> Rpcs3Settings.setVsync(asBool(value))
-                "MaxAnisotropy" -> Rpcs3Settings.setAnisotropicFilter(asInt(value))
-                "SkipDuplicateFrames" -> Rpcs3Settings.setFrameSkip(if (asBool(value)) 1 else 0)
+                // PCSX2's "skip duplicate frames" means "do not present a frame identical to
+                // the last one". It is harmless there and on by default, which is why Settings
+                // defaults it to true. RPCS3 has no equivalent, and this used to map onto
+                // Enable Frame Skip, which means something else entirely: drop one frame in
+                // every two, unconditionally. Every title therefore presented at half the rate
+                // the guest asked for, out of the box, on a fresh install.
+                //
+                // It also made the frameskip row inert, since applyToInner pushes the explicit
+                // frameskip first and this key afterwards, so this one always won. Measured on
+                // Mirror's Edge: the guest asks for 30 flips/s, SurfaceFlinger presented 15.0.
+                //
+                // Dropped rather than remapped. Frameskip belongs to the explicit control,
+                // which is the one the user actually set.
+                "SkipDuplicateFrames" -> return true
                 "DisableShaderCache" -> Rpcs3Settings.setDisableShaderCache(asBool(value))
-                "IntegerScaling" ->
-                    // Nearest-neighbour is the closest RPCS3 has to integer scaling;
-                    // bilinear otherwise. Overridden below if CAS/librashader is on.
-                    Rpcs3Settings.setOutputScaling(if (asBool(value)) "Nearest" else "Bilinear")
-                "linear_present_mode" ->
-                    Rpcs3Settings.setOutputScaling(if (asInt(value) == 0) "Nearest" else "Bilinear")
-                // CAS and the librashader chain are both OUTPUT SCALING MODES in
-                // RPCS3, not independent post-effects, so enabling either has to
-                // claim the mode. Shader chain wins -- it is the more specific ask.
-                "CASMode" ->
-                    if (asInt(value) > 0) Rpcs3Settings.setOutputScaling("FidelityFX Super Resolution")
+                // Four keys used to write Output Scaling Mode, and the two with no UI behind
+                // them were winning. IntegerScaling and linear_present_mode are PCSX2 keys that
+                // no screen in this app exposes, and both wrote the node unconditionally, with
+                // IntegerScaling emitted last. So whatever the visible Scaling Mode row asked
+                // for was overwritten a moment later.
+                //
+                // They own nothing the user can see, so they no longer write it at all.
+                "IntegerScaling" -> return true
+                "linear_present_mode" -> return true
+                // This is the visible Scaling Mode row in RendererTab: Nearest, Bilinear, FSR.
+                // It used to be read as PCSX2's CAS mode, where anything above zero meant "CAS
+                // on", so picking Bilinear asked for FSR and picking Nearest asked for nothing.
+                // Map the row's own indices instead.
+                //
+                // Writes unconditionally, so it has to be emitted before ShaderChainEnabled for
+                // the chain to keep the last word, which is what applyToInner now does.
+                "CASMode" -> Rpcs3Settings.setOutputScaling(
+                    when (asInt(value)) {
+                        0 -> "Nearest"
+                        2 -> "FidelityFX Super Resolution"
+                        else -> "Bilinear"
+                    },
+                )
                 "CASSharpness" -> Rpcs3Settings.setCasSharpening(asInt(value))
                 "ShaderChainEnabled" ->
                     if (asBool(value)) Rpcs3Settings.setOutputScaling("Shader chain (librashader)")
@@ -359,23 +402,49 @@ object Rpcs3Bridge {
                 else -> return key.startsWith("Osd")
             }
 
-            "Framerate" -> when (key) {
-                // 100 = full speed in both, but RPCS3 clamps to 10..3000.
-                "NominalScalar" -> Rpcs3Settings.setClocksScale((asFloat(value) * 100f).toInt())
-                else -> return false
-            }
+            // NominalScalar used to drive Core@@Clocks scale from here. It is now unhandled,
+            // for the reason described above the PS3 pseudo-sections below: PS3/Core writes
+            // the same node from ps3.clocksScale, which is what the Performance tab and the
+            // in-game menu are bound to, and this ran afterwards and overwrote it. The live
+            // turbo path does not come through here at all (NativeApp.setTurboScalar calls
+            // Rpcs3Settings directly), so it is unaffected.
+            "Framerate" -> return false
 
-            "SPU2/Output" -> when (key) {
-                "SyncMode" -> Rpcs3Settings.setTimeStretching(value == "TimeStretch")
-                // PCSX2 splits buffer and output latency; RPCS3 has one duration.
-                // OutputLatencyMS is the one the user's slider actually paces on.
-                "OutputLatencyMS" -> Rpcs3Settings.setAudioBufferDuration(asInt(value))
-                "BufferMS" -> Rpcs3Settings.setAudioBuffering(asInt(value) > 0)
-                else -> return false
-            }
+            // SyncMode, OutputLatencyMS and BufferMS: all unhandled now, same reason. Each
+            // had a PS3/Audio counterpart writing the same RPCS3 node, and being emitted
+            // later, these won every time. BufferMS was wrong on its own terms besides: it
+            // turned a buffer size in milliseconds into the boolean "buffering enabled".
+            "SPU2/Output" -> return false
 
             // Settings.applyTo emits these with a "PS3/<section>" pseudo-section so
             // they are unambiguous against the PCSX2 keys sharing this function.
+            //
+            // Being unambiguous HERE was never enough, though. Six PCSX2 keys used to reach
+            // the same RPCS3 nodes these do, from a leftover mapping written before the
+            // pseudo-sections existed:
+            //
+            //   Enable Time Stretching        <- SPU2/Output/SyncMode
+            //   Desired Audio Buffer Duration <- SPU2/Output/OutputLatencyMS
+            //   Enable Buffering              <- SPU2/Output/BufferMS
+            //   Anisotropic Filter Override   <- EmuCore/GS/MaxAnisotropy
+            //   Clocks scale                  <- Framerate/NominalScalar
+            //   Frame limit                   <- EmuCore/GS/SyncToHostRefreshRate
+            //
+            // put() calls setSetting immediately rather than collecting into a map, so the
+            // order in applyTo IS the call order, and every one of these PS3 writes happens
+            // first (L939-994) with the PCSX2 write later (L1044-1765). The leftover won
+            // every single time, and the field the UI is bound to is the PS3 one. That is
+            // why the Audio tab's Time Stretching toggle did nothing: it wrote false, and
+            // SyncMode wrote true ninety lines later.
+            //
+            // SyncToHostRefreshRate was the worst of them. It mapped to Frame limit
+            // "Display", which resolves to the host panel's refresh, so on a 120Hz handheld
+            // it asked for a 120fps cap. It was also guarded by `if (asBool(value))`, so it
+            // could only ever set the mode and never clear it: turning the setting off left
+            // the cap where it was.
+            //
+            // Anything added here in future needs the same check. A PCSX2 key and a PS3 key
+            // reaching one node is not a merge, it is a race that the source order decides.
             "PS3/Core" -> when (key) {
                 "PPU Decoder" -> Rpcs3Settings.setPpuDecoder(asInt(value))
                 "SPU Decoder" -> Rpcs3Settings.setSpuDecoder(asInt(value))
@@ -490,29 +559,92 @@ object Rpcs3Bridge {
     // ---------------------------------------------------------------
 
     /**
-     * SLOT SEMANTICS DIFFER FROM PCSX2 -- read this before touching it.
+     * Addressable slots: save to 3, load 3, get that state back.
      *
-     * PCSX2 slots are addressable: save to 3, load 3, get that state back.
-     * RPCS3 keeps a rolling HISTORY instead: writing a state pushes it to the
-     * front, so index 1 is the newest, 2 the one before it, and so on (depth is
-     * Savestate@@"Maximum SaveState Files"). There is no way to pin a state to a
-     * chosen number.
+     * RPCS3 natively offers only a rolling HISTORY -- writing a state pushes it to the front,
+     * so index 1 is the newest, 2 the one before it (depth is Savestate@@"Maximum SaveState
+     * Files") -- and nothing can be pinned to a chosen number. These used to hand that model
+     * straight through, dropping the slot on save and reading it as an age on load, so "save
+     * to slot 3" pushed a new newest state and "load slot 3" fetched the fourth-newest. The
+     * numbers on screen meant nothing and states appeared to wander between slots.
      *
-     * So saving ignores the slot entirely, and loading treats it as "how many
-     * states back". The ARMSX2 slot UI is 0-based, RPCS3's index is 1-based.
+     * The history is still RPCS3's to manage. The core now also parks a COPY of each save
+     * under its slot number, so a slot holds what was put in it until it is overwritten.
+     * See _rpcsx_saveStateToSlot in rpcsx-android.cpp. Slot numbers are 0-based on both
+     * sides now, with no index arithmetic in between.
      */
     @JvmStatic
     fun saveState(slot: Int): Boolean =
-        runCatching { RPCSX.instance.saveState() }.getOrDefault(false)
+        runCatching { RPCSX.instance.saveStateToSlot(slot) }.getOrDefault(false)
 
     @JvmStatic
     fun loadState(slot: Int): Boolean =
-        runCatching { RPCSX.instance.loadState(slot + 1) }.getOrDefault(false)
+        runCatching { RPCSX.instance.loadStateFromSlot(slot) }.getOrDefault(false)
 
-    /** Whether a state exists that far back in the history. */
+    /** Whether this slot holds a state. */
     @JvmStatic
     fun hasState(slot: Int): Boolean =
-        runCatching { RPCSX.instance.hasState(slot + 1) }.getOrDefault(false)
+        runCatching { RPCSX.instance.hasStateInSlot(slot) }.getOrDefault(false)
+
+    /**
+     * Occupancy for the slot picker, which treats a non-empty string as "this slot has
+     * something in it" and shows the last path segment as the tile's subtitle.
+     *
+     * This was a stub returning "", so every tile read as empty and Load was disabled on all
+     * ten of them no matter what was on disk. Saving had been working the whole time and
+     * there was no way to see it. hasState was written for exactly this and had no callers.
+     *
+     * The title id is the subtitle rather than a file path: the picker strips to the last
+     * segment and drops the extension, which would turn the real path into "slot0.SAVESTAT".
+     * Empty when no game is running, since slots are per title and the core cannot resolve
+     * which title's slots to answer for.
+     */
+    /**
+     * Slot preview as PNG bytes, or null.
+     *
+     * The core writes "AX3T" + u32 width + u32 height + RGBA8 beside the state when it saves.
+     * Read here rather than through JNI because the file sits under a path this side already
+     * knows, and re-encoded to PNG because the picker decodes with BitmapFactory. Encoding on
+     * this side keeps a compressor out of the emulator core for what is only ever a tile.
+     */
+    @JvmStatic
+    fun thumbnailForSlot(slot: Int): ByteArray? = runCatching {
+        val title = RPCSX.instance.getTitleId().takeIf { it.isNotEmpty() } ?: return null
+        val root = com.armsx2.runtime.MainActivityRuntime.systemDirPosix() ?: return null
+        val file = java.io.File(root, "config/savestates/$title/armsx3_slots/slot$slot.thumb")
+        if (!file.isFile) return null
+
+        val raw = file.readBytes()
+        val header = 12
+        if (raw.size < header || raw[0] != 'A'.code.toByte() || raw[1] != 'X'.code.toByte() ||
+            raw[2] != '3'.code.toByte() || raw[3] != 'T'.code.toByte()
+        ) return null
+
+        val buf = java.nio.ByteBuffer.wrap(raw).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        val width = buf.getInt(4)
+        val height = buf.getInt(8)
+        // Trust nothing about a file on shared storage: a bad size here is an allocation, not
+        // a parse error.
+        if (width !in 1..4096 || height !in 1..4096) return null
+        if (raw.size < header + width * height * 4) return null
+
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            width, height, android.graphics.Bitmap.Config.ARGB_8888
+        )
+        bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(raw, header, width * height * 4))
+
+        java.io.ByteArrayOutputStream().use { out ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            bitmap.recycle()
+            out.toByteArray()
+        }
+    }.getOrNull()
+
+    @JvmStatic
+    fun gamePathForSlot(slot: Int): String {
+        if (!hasState(slot)) return ""
+        return runCatching { RPCSX.instance.getTitleId() }.getOrDefault("").ifEmpty { "SAVESTATE" }
+    }
 
     // ---------------------------------------------------------------
     // Identity / stats
