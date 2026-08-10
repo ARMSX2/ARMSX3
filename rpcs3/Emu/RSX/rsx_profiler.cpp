@@ -42,6 +42,7 @@ namespace rsx::prof
 	u64 g_xform_const_calls = 0;
 	u64 g_xform_const_words = 0;
 	u32 g_method_counts[method_slot_count] = {};
+	u64 g_method_ticks[method_slot_count] = {};
 	u64 g_fifo_refill_bytes = 0;
 	u64 g_fifo_refill_stalls = 0;
 	u64 g_fifo_refill_stall_us = 0;
@@ -550,6 +551,38 @@ namespace rsx::prof
 			}
 		}
 
+		{
+			// By cost, not by volume. The two disagree: the busiest method may be a register
+			// write and a rare one may be doing all the work, and only this ranking can say.
+			std::pair<u32, u64> top[8] = {};
+			for (u32 i = 0; i < method_slot_count; i++)
+			{
+				if (!g_method_ticks[i]) continue;
+				if (g_method_ticks[i] <= top[7].second) continue;
+				top[7] = { i, g_method_ticks[i] };
+				std::sort(std::begin(top), std::end(top),
+					[](const auto& a, const auto& b) { return a.second > b.second; });
+			}
+
+			if (top[0].second)
+			{
+				std::string list;
+				for (const auto& [slot, ticks] : top)
+				{
+					if (!ticks) continue;
+					std::string scratch;
+					const auto name = rsx::get_method_name(slot << 2, scratch).second;
+					fmt::append(list, "\n\t  %-46s %7.3f ms/frame  %6.0f ns each",
+						name.empty() ? fmt::format("0x%05x", slot << 2) : std::string(name),
+						static_cast<double>(ticks) * to_ms / frames,
+						g_method_counts[slot]
+							? static_cast<double>(ticks) * to_ms * 1'000'000.0 / static_cast<double>(g_method_counts[slot])
+							: 0.0);
+				}
+				fmt::append(report, "\n\tcostliest methods%s", list);
+			}
+		}
+
 		prof_log.success("%s", report);
 
 		g_fifo_commands = 0;
@@ -564,6 +597,7 @@ namespace rsx::prof
 		g_xform_const_calls = 0;
 		g_xform_const_words = 0;
 		std::fill(std::begin(g_method_counts), std::end(g_method_counts), 0u);
+		std::fill(std::begin(g_method_ticks), std::end(g_method_ticks), 0ull);
 		g_fifo_refills = 0;
 		g_fifo_refill_bytes = 0;
 		g_fifo_refill_stalls = 0;

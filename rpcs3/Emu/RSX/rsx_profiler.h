@@ -362,6 +362,60 @@ namespace rsx::prof
 	inline constexpr usz method_slot_count = 0x4000;
 	extern u32 g_method_counts[method_slot_count];
 
+	/**
+	 * Counter ticks spent inside each method's handler, indexed the same way as the counts.
+	 *
+	 * The handler bodies are 60% of the RSX thread in Arkham City and the dispatch machinery
+	 * around them is 3.5%, so the question is which handlers, and volume does not answer it:
+	 * the busiest method by count may be trivial and a rare one may be doing the work.
+	 *
+	 * Free to collect. The dispatch site already brackets the call with two counter reads to
+	 * fill the method_call bucket; this keeps the difference instead of discarding it.
+	 */
+	extern u64 g_method_ticks[method_slot_count];
+
+	/**
+	 * Bucket switch that also bills the elapsed time to a method slot.
+	 *
+	 * Inclusive of anything the handler calls into, including scopes that charge themselves
+	 * elsewhere -- for finding which handler is expensive that is the useful reading, and the
+	 * per-bucket totals remain exclusive as before.
+	 */
+	class method_scope
+	{
+		bucket m_prev;
+		bool m_active;
+		u32 m_slot;
+		u64 m_start;
+
+	public:
+		explicit method_scope(u32 slot)
+			: m_prev(bucket::unclassified)
+			, m_active(g_enabled.load(std::memory_order_relaxed) &&
+				current_thread_token() == g_owner_thread)
+			, m_slot(slot)
+			, m_start(0)
+		{
+			if (m_active) [[unlikely]]
+			{
+				m_prev = switch_to(bucket::method_call);
+				m_start = g_last_switch;
+			}
+		}
+
+		~method_scope()
+		{
+			if (m_active) [[unlikely]]
+			{
+				switch_to(m_prev);
+				g_method_ticks[m_slot] += g_last_switch - m_start;
+			}
+		}
+
+		method_scope(const method_scope&) = delete;
+		method_scope& operator=(const method_scope&) = delete;
+	};
+
 	// Refills that could not take their data immediately and fell into the retry spin, plus
 	// the microseconds burned there. That spin is billed to the FIFO bucket rather than to
 	// idle, so without these there is no way to tell RSX doing work from RSX waiting on the

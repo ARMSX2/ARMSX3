@@ -960,7 +960,10 @@ namespace rsx
 				// call: two counter reads against a handler body, not against a loop iteration.
 				// Still costs a few percent of the bucket it splits -- read the split, not the
 				// total.
-				RSX_PROF_SCOPE(method_call);
+				// Bills the same interval to this method's slot as well, so the handlers can be
+				// ranked by cost rather than by how often they are called.
+				::rsx::prof::method_scope method_prof_scope{
+					static_cast<u32>(reg & (::rsx::prof::method_slot_count - 1)) };
 
 				method(m_ctx, reg, value);
 
