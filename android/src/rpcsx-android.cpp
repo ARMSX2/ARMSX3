@@ -2685,6 +2685,19 @@ static std::string json_quote(std::string_view v) {
   return out + "\"";
 }
 
+/**
+ * The patch schema version this core can parse.
+ *
+ * rpcs3.net serves a different schema per version and patch_engine::load
+ * rejects a file whose Version header does not match, so the app has to ask
+ * for the version built into the core rather than name one itself. It had 1.2
+ * hardcoded in the download URL, which is right until upstream bumps the
+ * constant and every download starts failing to parse.
+ */
+extern "C" std::string _rpcsx_patchEngineVersion() {
+  return patch_engine_version;
+}
+
 extern "C" int _rpcsx_patchesImport(std::string_view content) {
   patch_engine::patch_map patches;
   std::stringstream log;
@@ -2841,17 +2854,24 @@ extern "C" std::string _rpcsx_patchesList(std::string_view serial) {
 
   for (const auto &[hash, container] : db) {
     for (const auto &[description, info] : container.patch_info_map) {
-      // A patch lists the titles it applies to; keep only ones naming this
-      // serial, or the "all games" wildcard RPCS3 uses.
-      // titles maps GAME TITLE -> serial -> app_version. "all" is RPCS3's
-      // wildcard serial, used by patches that are not tied to one release.
+      // A patch lists the titles it applies to; a per-game list keeps only the
+      // ones naming this serial.
+      //
+      // Deliberately NOT patch_key::all here. Wildcard patches are keyed by SPU
+      // or PPU hash and leave the serial as "All" because the hash is the
+      // filter, so they belong to no particular game: the database has 17 of
+      // them and listing them under every game buries each game's own handful,
+      // while toggling one from a game's list writes the shared "All" entry and
+      // changes every other game too. Desktop RPCS3 shows them once, under
+      // their own "All titles" node (patch_manager_dialog.cpp), and the global
+      // list below (empty serial) is this app's equivalent.
       bool applies = serial.empty();
       std::string app_version = "all";
       std::string game_title;
 
       for (const auto &[title, serials] : info.titles) {
         for (const auto &[ser, versions] : serials) {
-          const bool hit = (!serial.empty() && ser == serial) || ser == "all";
+          const bool hit = !serial.empty() && ser == serial;
           if (hit || serial.empty()) {
             if (game_title.empty()) game_title = title;
           }
@@ -2870,14 +2890,17 @@ extern "C" std::string _rpcsx_patchesList(std::string_view serial) {
       // an enabled entry under that game's serial and none under this one --
       // counting any enabled entry reported it as on for every game the patch
       // covers, and the row then showed a toggle the game was not getting.
-      // "all" is RPCS3's wildcard serial and does apply here, so it counts.
+      // A wildcard entry still counts: a patch listed here for its own serial
+      // can also carry an "All" entry, and an enabled one of those does reach
+      // this game even though wildcard-only patches are not listed above.
       bool is_on = false;
       if (auto it = enabled.find(hash); it != enabled.end()) {
         if (auto p = it->second.patch_info_map.find(description);
             p != it->second.patch_info_map.end()) {
           for (const auto &[title, serials] : p->second.titles)
             for (const auto &[ser, versions] : serials) {
-              if (!serial.empty() && ser != serial && ser != "all") continue;
+              if (!serial.empty() && ser != serial && ser != patch_key::all)
+                continue;
               for (const auto &[ver, values] : versions)
                 if (values.enabled) is_on = true;
             }
@@ -2934,10 +2957,13 @@ extern "C" bool _rpcsx_patchSetEnabled(std::string_view hash,
   auto &info = entry.patch_info_map[std::string(description)];
   info = p->second;
 
+  // patch_key::all is spelled "All"; the lowercase literal this used to compare
+  // against never matched, so a wildcard patch toggled from a game's own list
+  // wrote nothing and the switch did nothing.
   for (auto &[title, serials] : info.titles)
     for (auto &[ser, versions] : serials)
       for (auto &[ver, values] : versions)
-        if (ser == serial || serial.empty() || ser == "all")
+        if (ser == serial || serial.empty() || ser == patch_key::all)
           values.enabled = enabled;
 
   patch_engine::save_config(config);

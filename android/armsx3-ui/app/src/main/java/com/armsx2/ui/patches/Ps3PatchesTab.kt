@@ -108,6 +108,7 @@ fun Ps3PatchesTab(serial: String = "") {
                         is Ps3PatchRepo.Result.Server ->
                             str2("patches.ps3.serverError") + " (${r.code})"
                         Ps3PatchRepo.Result.Parse -> str2("patches.ps3.parseFailed")
+                        Ps3PatchRepo.Result.Checksum -> str2("patches.ps3.checksumFailed")
                     }
                 }
             },
