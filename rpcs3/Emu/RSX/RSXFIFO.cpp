@@ -950,6 +950,18 @@ namespace rsx
 
 			if (auto method = methods[reg])
 			{
+				// Splits the handler bodies out of fifo_decode, which is the enclosing scope of
+				// the whole loop and therefore holds both. Arkham City spends 38.5 ms a frame in
+				// there at 164 ns a dispatch against Sonic's 45 ns on the same machinery, so the
+				// difference is in what the handlers do, and nothing separates the two.
+				//
+				// This is the one per-dispatch scope in the profiler, and an earlier attempt at
+				// one measured mostly itself. It is affordable here only because it wraps a
+				// call: two counter reads against a handler body, not against a loop iteration.
+				// Still costs a few percent of the bucket it splits -- read the split, not the
+				// total.
+				RSX_PROF_SCOPE(method_call);
+
 				method(m_ctx, reg, value);
 
 				// Relaxed: `again` is only set by this thread, by the handler just called.

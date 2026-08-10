@@ -34,6 +34,7 @@ namespace rsx::prof
 	{
 		fifo_decode,      // Reading and dispatching FIFO commands
 		fifo_refill,      // Refilling the FIFO cache from guest memory under a reservation lock
+		method_call,      // Inside a method handler, as opposed to the loop that dispatches it
 		xform_program,    // NV4097_SET_TRANSFORM_PROGRAM: vertex ucode upload and dirty check
 		xform_const,      // NV4097_SET_TRANSFORM_CONSTANT: transform constant upload
 		draw_setup,       // Draw clause iteration glue left over once the scopes below are charged
