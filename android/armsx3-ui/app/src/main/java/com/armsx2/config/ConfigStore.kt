@@ -592,14 +592,8 @@ object ConfigStore {
             if (restored) return
         }
 
-        // (2) Best-effort seed from the folder's old native PCSX2-Android.ini (old-UI case).
-        val root = MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return
-        val ini = File(root, "PCSX2-Android.ini")
-        if (!ini.exists() || ini.length() == 0L) return
-        runCatching {
-            val map = parseIni(ini.readText())
-            if (map.isNotEmpty()) saveGlobal(Settings().readFromIni(map))
-        }
+        // The old native PCSX2-Android.ini seed is gone with the PS2 app: it is written by
+        // that emulator under its own package, so nothing under com.armsx3 can ever have one.
     }
 
     /**
@@ -610,17 +604,15 @@ object ConfigStore {
      *  - the in-folder mirror ([BACKUP_FILENAME]): [reconcileReusedFolder] re-seeds prefs from
      *    it precisely BECAUSE config.global is missing, which is exactly the state a reset
      *    creates — so the next launch would restore everything just wiped.
-     *  - `PCSX2-Android.ini`: the fallback seed for the same recovery path.
      *  - the `gamesettings` directory of per-game INIs. The core reads those directly and they
      *    SHADOW the global tier, so leaving them behind means per-game tweaks survive a reset
      *    and then look like settings that "do nothing".
      *
-     * Games, BIOS, saves, memory cards, save states, covers and texture packs are untouched.
+     * Games, firmware, save data, save states and covers are untouched.
      */
     fun purgeAllSettingsFiles() {
         runCatching { backupFile()?.delete() }
         val root = MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return
-        runCatching { File(root, "PCSX2-Android.ini").delete() }
         runCatching { File(root, "gamesettings").deleteRecursively() }
     }
 

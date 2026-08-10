@@ -1872,7 +1872,10 @@ open class MainActivityRuntime : ComponentActivity() {
             // own DS3/DS4/DualSense HID handlers plus the virtual pad, so SDL's
             // Java glue would only bind to native symbols that do not exist.
 
-            println("PCSX2_INIT")
+            // Goes into the session log users attach to bug reports, so it says which
+            // emulator they are running. Nothing parses it -- it was ARMSX2's marker and
+            // read as a PS2 emulator on every PS3 report.
+            println("ARMSX3_INIT")
 
             // Debug-build auto-boot to BIOS. Lets us drop straight into the
             // BIOS shell on app launch for perfape baseline captures —

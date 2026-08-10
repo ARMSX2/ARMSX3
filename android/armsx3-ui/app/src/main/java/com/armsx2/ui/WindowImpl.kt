@@ -28,7 +28,7 @@ import kotlinx.coroutines.flow.first
 
 /** A full manager screen shown as an overlay over the paused game (in-game menu). */
 enum class InGameScreen {
-    Settings, CoreSettings, Achievements, Memcard, Patches, Controls, Skins, Textures, SaveState, LoadState
+    Settings, CoreSettings, Achievements, Controls, Skins, Textures, SaveState, LoadState
 }
 
 object WindowImpl {
@@ -37,7 +37,7 @@ object WindowImpl {
     val overlayVisible = mutableStateOf(false)
     // Full manager screen shown over the (paused) game — null when none is open.
     // Replaces the earlier per-screen booleans; the in-game menu routes here so the
-    // library's Settings / RetroAchievements / Memory Cards / Patches / Controls
+    // library's Settings / Controls / Skins
     // screens are all reachable in-game, each resuming the game on dismiss.
     val inGameScreen = mutableStateOf<InGameScreen?>(null)
 
@@ -173,14 +173,6 @@ object WindowImpl {
                             serial = InGameOverlay.currentSerial.value,
                         )
                         InGameScreen.Achievements -> com.armsx2.ui.achievements.AchievementsScreen(onBack = dismiss)
-                        InGameScreen.Memcard -> com.armsx2.ui.memorycards.MemoryCardScreen(
-                            game = MainActivityRuntime.currentGame.value,
-                            onBack = dismiss,
-                        )
-                        InGameScreen.Patches -> com.armsx2.ui.patches.PatchManagerScreen(
-                            game = MainActivityRuntime.currentGame.value,
-                            onBack = dismiss,
-                        )
                         InGameScreen.Controls -> com.armsx2.ui.controls.ControllerManagerScreen(onBack = dismiss)
                         // Straight to the Skins tab of the real settings hub rather than a
                         // bespoke screen: it already has the scope plumbing, so opening it

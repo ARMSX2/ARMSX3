@@ -365,10 +365,8 @@ private fun sameDestination(current: AppRoute, target: AppRoute): Boolean = when
     is AppRoute.BiosManager -> current is AppRoute.BiosManager
     AppRoute.PackageInstaller -> current is AppRoute.PackageInstaller
     AppRoute.CoreSettings -> current is AppRoute.CoreSettings
-    AppRoute.MemoryCardManager -> current is AppRoute.MemoryCardManager
     AppRoute.SaveManager -> current is AppRoute.SaveManager
     AppRoute.ControllerManager -> current is AppRoute.ControllerManager
-    AppRoute.PatchManager -> current is AppRoute.PatchManager
     AppRoute.TextureManager -> current is AppRoute.TextureManager
     AppRoute.Achievements -> current is AppRoute.Achievements
     AppRoute.Language -> current is AppRoute.Language

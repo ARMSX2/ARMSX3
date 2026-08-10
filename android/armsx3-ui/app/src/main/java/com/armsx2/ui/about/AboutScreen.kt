@@ -114,9 +114,9 @@ fun AboutScreen(onBack: () -> Unit, viewModel: AboutViewModel = viewModel()) {
                             onOpen = { uriHandler.openUri(RepositoryUrl) },
                         )
                         ProjectCard(
-                            title = str("about.pcsx2.title"),
+                            title = str("about.rpcs3.title"),
                             repository = "RPCS3/rpcs3",
-                            description = str("about.pcsx2.description"),
+                            description = str("about.rpcs3.description"),
                             glyph = "PS3",
                             secondary = true,
                             onOpen = { uriHandler.openUri(Rpcs3RepositoryUrl) },
@@ -132,9 +132,9 @@ fun AboutScreen(onBack: () -> Unit, viewModel: AboutViewModel = viewModel()) {
                                 onOpen = { uriHandler.openUri(RepositoryUrl) },
                             )
                             ProjectCard(
-                                title = str("about.pcsx2.title"),
+                                title = str("about.rpcs3.title"),
                                 repository = "RPCS3/rpcs3",
-                                description = str("about.pcsx2.description"),
+                                description = str("about.rpcs3.description"),
                                 glyph = "PS3",
                                 modifier = Modifier.weight(1f),
                                 secondary = true,
