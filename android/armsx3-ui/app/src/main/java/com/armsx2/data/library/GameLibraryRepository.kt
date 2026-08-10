@@ -18,7 +18,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.armsx2.DiscIcons
 import com.armsx3.NativeApp
+import net.rpcsx.GameFlag
 import net.rpcsx.RPCSX
+import net.rpcsx.GameRepository as NativeGames
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -96,6 +98,34 @@ class GameLibraryRepository(private val context: Context) {
         runCatching { it.listFiles()?.isNotEmpty() }.getOrNull() == true
     }
 
+    /**
+     * Absolute paths of installed titles the core cannot decrypt without a licence.
+     *
+     * Asked of the CORE rather than worked out here. The flag comes from actually attempting
+     * decrypt_self on the game's EBOOT (fetchGameInfo, rpcsx-android.cpp), which is the only
+     * honest answer to "does this need a .rap". Checking PARAM.SFO's CONTENT_ID against
+     * exdata instead -- the obvious pure-Kotlin shortcut -- would call every PSN title locked,
+     * including the many whose EBOOT needs no licence at all.
+     *
+     * Canonical paths on both sides: the core resolves the paths it reports, and
+     * /storage/emulated/0 and /data/media/0 are one directory under two names.
+     *
+     * Only the emulator's own storage is asked about, which is where PKG installs land.
+     */
+    private fun lockedGamePaths(): Set<String> = runCatching {
+        if (!RPCSX.initialized) return emptySet()
+        // The native repository is a scratch buffer here: nothing else in this app reads it,
+        // and collectGameInfo appends into it.
+        NativeGames.clear()
+        internalGameDirectories().forEach { dir ->
+            RPCSX.instance.collectGameInfo(dir.absolutePath, -1)
+        }
+        NativeGames.list()
+            .filter { it.hasFlag(GameFlag.Locked) }
+            .mapNotNull { game -> runCatching { File(game.info.path).canonicalPath }.getOrNull() }
+            .toSet()
+    }.getOrDefault(emptySet())
+
     private fun internalGameDirectories(): List<File> = listOf(
         File(RPCSX.rootDirectory, "config/dev_hdd0/game"),
         File(RPCSX.rootDirectory, "config/games"),
@@ -140,6 +170,7 @@ class GameLibraryRepository(private val context: Context) {
                             // old cache degrades to the previous behaviour until a rescan.
                             titleSort = item.optString("titleSort"),
                             titleEn = item.optString("titleEn"),
+                            locked = item.optBoolean("locked", false),
                         ),
                     )
                 }
@@ -186,8 +217,15 @@ class GameLibraryRepository(private val context: Context) {
             android.util.Log.i(ScanTag, "internal dir=${dir.absolutePath}")
             scanRawDirectory(dir, collected, 0)
         }
-        android.util.Log.i(ScanTag, "scan done: ${collected.size} game(s)")
-        collected.values.sortedBy { it.title.lowercase() }.also { saveCache(directories, it) }
+        val locked = lockedGamePaths()
+        android.util.Log.i(ScanTag, "scan done: ${collected.size} game(s), ${locked.size} locked")
+        collected.values
+            .map { game ->
+                val path = runCatching { game.uri.path?.let { File(it).canonicalPath } }.getOrNull()
+                if (path != null && path in locked) game.copy(locked = true) else game
+            }
+            .sortedBy { it.title.lowercase() }
+            .also { saveCache(directories, it) }
     }
 
     fun recentGames(allGames: List<GameInfo>): List<GameInfo> {
@@ -565,6 +603,7 @@ class GameLibraryRepository(private val context: Context) {
                 put("platform", game.platform.key)
                 put("titleSort", game.titleSort)
                 put("titleEn", game.titleEn)
+                put("locked", game.locked)
             })
         }
         MainActivityRuntime.prefs.edit {
@@ -581,8 +620,9 @@ class GameLibraryRepository(private val context: Context) {
     private companion object {
         /** v2: PS3 title ID + title + ICON0.PNG read from the disc's PARAM.SFO.
          *  v5: folder-format games (JB folder / installed game folder).
-         *  v6: PARAM.SFO CATEGORY read, to drop game-data installs. */
-        const val ScanSchemaVersion = 6
+         *  v6: PARAM.SFO CATEGORY read, to drop game-data installs.
+         *  v7: licence-locked state, asked of the core per installed title. */
+        const val ScanSchemaVersion = 7
         const val ScanTag = "ARMSX3-Scan"
         /** Staging name for an extracted icon, renamed once the title ID is known. */
         const val PendingIcon = "__pending"

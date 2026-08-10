@@ -241,6 +241,24 @@ enum class GamePlatform(val key: String) {
     }
 }
 
+/**
+ * The licence-locked game whose launch was intercepted, or null.
+ *
+ * A top-level object rather than HomeViewModel state because the interception has to happen in
+ * [MainActivityRuntime.launchGame] — the choke point EVERY launch funnels through, including the
+ * settings screen's Play action and the Save Manager's post-exit re-launch — and that has no
+ * HomeViewModel to write to. HomeScreen observes this and raises the "Licence required" prompt,
+ * which reaches the settings path too because its Play action navigates Home before launching.
+ *
+ * The library's own taps are caught one level earlier, in HomeViewModel.launch, so that a refused
+ * launch never reaches markPlayed. Both routes set this same object, so there is one prompt.
+ */
+object LicencePrompt {
+    val game = mutableStateOf<GameInfo?>(null)
+    fun ask(target: GameInfo) { game.value = target }
+    fun clear() { game.value = null }
+}
+
 data class GameInfo(
     val uri: Uri,
     val title: String,
@@ -256,6 +274,10 @@ data class GameInfo(
     /** GameDB `name-en` — the romanised title, present only where the original isn't
      *  English. Its presence is exactly how we know [title] is non-English. */
     val titleEn: String = "",
+    /** The core could not decrypt this title's EBOOT, so it needs a .rap licence before it
+     *  will boot. Only ever set for games in the emulator's own storage, since that is where
+     *  a PKG install puts them and the only place the core is asked about. */
+    val locked: Boolean = false,
 ) {
     /** The title to show. Mirrors GameList.h's `GetTitle(force_en)`: the original unless
      *  English is asked for AND a separate English title exists. */

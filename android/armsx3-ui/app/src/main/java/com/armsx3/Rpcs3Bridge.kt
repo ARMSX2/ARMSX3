@@ -6,6 +6,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.Surface
+import net.rpcsx.BootResult
 import net.rpcsx.Digital1Flags
 import net.rpcsx.Digital2Flags
 import android.view.KeyEvent
@@ -158,11 +159,22 @@ object Rpcs3Bridge {
      * booting a missing vsh.self otherwise fails deep in the loader with a much
      * less obvious message than "install firmware first".
      */
+    /**
+     * Why the last boot() attempt failed — a [BootResult] name, or a short reason for
+     * pre-boot failures. Null after a successful boot. MainActivityRuntime reads this to
+     * tell the user WHY a launch bounced back to the library, because boot()'s Boolean
+     * cannot: BootGame's return code names the exact cause (DecryptionError = missing
+     * licence, FirmwareMissing, ...) and it used to be discarded right here.
+     */
+    @Volatile
+    var lastBootError: String? = null
+
     @JvmStatic
     fun boot(path: String): Boolean {
         val target = if (path.isNotEmpty()) path else {
             val vsh = File(RPCSX.rootDirectory + "config/dev_flash/vsh/module/vsh.self")
             if (!vsh.isFile) {
+                lastBootError = "firmware not installed"
                 android.util.Log.e("ARMSX3", "XMB requested but ${'$'}{vsh.absolutePath} is missing - install firmware first")
                 return false
             }
@@ -177,9 +189,13 @@ object Rpcs3Bridge {
         // bundled revision matches.
         appContext?.let { com.armsx2.Ps3PatchRepo.ensureBundledPatches(it) }
 
-        if (RPCSX.boot(target).ordinal != 0) {
+        val result = RPCSX.boot(target)
+        if (result != BootResult.NoErrors) {
+            lastBootError = result.name
+            android.util.Log.e("ARMSX3", "boot failed: ${result.name} path=$target")
             return false
         }
+        lastBootError = null
 
         // BLOCK until the emulator actually stops.
         //

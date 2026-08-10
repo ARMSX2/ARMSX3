@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.armsx2.data.library.GameLibraryRepository
+import com.armsx2.data.library.Licences
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.runtime.MainActivityRuntime
@@ -63,6 +64,7 @@ private fun isLicence(file: java.io.File): Boolean =
     file.extension.equals("rap", ignoreCase = true) ||
         file.extension.equals("edat", ignoreCase = true)
 
+
 private fun readInstalled(): List<java.io.File> =
     java.io.File(RPCSX.rootDirectory, "config/dev_hdd0/game")
         .listFiles()
@@ -88,40 +90,81 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
         else (it.value.longValue.toFloat() / it.max.longValue.coerceAtLeast(1)).coerceIn(0f, 1f)
     }
 
-    // One path for both the single pick and the multi-part pick. Every descriptor stays
-    // open for the whole install: the native side takes raw fds and releases the handles
-    // itself, so closing them early would pull the file out from under the extractor.
+    // One path for every pick: a lone package, several parts of a split one, a licence, or
+    // a package together with the licence that unlocks it.
+    //
+    // The selection is SPLIT BY KIND rather than by count. It used to be routed on count
+    // alone, so picking a game's .pkg and its .rap together -- which the file browser
+    // invites, since it allows multiple selection -- handed both to installSplitPkg, whose
+    // first act is to reject anything that is not a .pkg part. Choosing a game and its
+    // licence, the obvious thing to do, could therefore only ever fail.
+    //
+    // Packages install FIRST: a licence unlocks content the package has to have written.
     fun install(files: List<java.io.File>) {
         if (files.isEmpty()) return
         showBrowser = false
         busy = true
         message = null
         MainActivityRuntime.invoke {
+            // The reason the native side reported, if it failed. Held here because
+            // ProgressRepository drops its handler entry as soon as a request finishes, so
+            // the entry has to be captured while the install is still running.
+            var nativeFailure: String? = null
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
+                    val licences = files.filter { isLicence(it) }
+                    val packages = files.filterNot { isLicence(it) }
                     val label = if (files.size == 1) files[0].name
-                    else "${files.size} package parts"
+                    else "${files.size} files"
                     val id = ProgressRepository.create(context, "Installing $label")
                     progressId = id
-                    val descriptors = files.map {
-                        ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY)
-                    }
-                    try {
-                        if (descriptors.size == 1 && isLicence(files[0])) {
-                            // installKey, not install: _rpcsx_install rejects a RAP outright
-                            // ("cannot be preinstalled"). Empty game path means "work it out
-                            // from the licence", which is what the exdata directory needs.
-                            RPCSX.instance.installKey(descriptors[0].fd, id, "")
-                        } else if (descriptors.size == 1) {
-                            RPCSX.instance.install(descriptors[0].fd, id)
-                        } else {
-                            RPCSX.instance.installSplitPkg(
-                                descriptors.map { it.fd }.toIntArray(), id,
-                            )
+                    val progressEntry = ProgressRepository.getItem(id)
+
+                    // Every descriptor stays open for the whole install: the native side
+                    // takes raw fds and releases the handles itself, so closing them early
+                    // would pull the file out from under the extractor.
+                    var result = true
+                    if (packages.isNotEmpty()) {
+                        val descriptors = packages.map {
+                            ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY)
                         }
-                    } finally {
-                        descriptors.forEach { runCatching { it.close() } }
+                        try {
+                            result = if (descriptors.size == 1) {
+                                RPCSX.instance.install(descriptors[0].fd, id)
+                            } else {
+                                RPCSX.instance.installSplitPkg(
+                                    descriptors.map { it.fd }.toIntArray(), id,
+                                )
+                            }
+                        } finally {
+                            descriptors.forEach { runCatching { it.close() } }
+                        }
                     }
+
+                    for (licence in licences) {
+                        if (!result) break
+                        result = if (licence.extension.equals("rap", ignoreCase = true)) {
+                            Licences.installRap(licence)
+                        } else {
+                            // EDAT carries its own content id, so installKey works out the
+                            // exdata name from the file itself and needs no game path.
+                            val descriptor = ParcelFileDescriptor.open(
+                                licence, ParcelFileDescriptor.MODE_READ_ONLY,
+                            )
+                            try {
+                                RPCSX.instance.installKey(descriptor.fd, id, "")
+                            } finally {
+                                runCatching { descriptor.close() }
+                            }
+                        }
+                    }
+
+                    // Read after the calls return: onProgressEvent writes the message on the
+                    // calling thread before it reports, so a failure reason is already there.
+                    progressEntry?.value?.takeIf { it.isFailed() }?.let {
+                        nativeFailure = it.message.value
+                    }
+                    result
                 }.getOrDefault(false)
             }
             busy = false
@@ -135,7 +178,10 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                 installed = readInstalled()
                 I18n.get("packages.install.done")
             } else {
-                I18n.get("packages.install.failed")
+                // The native reason names the actual problem ("Game is broken: PARAM.SFO not
+                // found", "Every selected file must be a .pkg part"); the generic string
+                // guesses, and used to be all the user ever saw.
+                nativeFailure?.takeIf { it.isNotBlank() } ?: I18n.get("packages.install.failed")
             }
         }
     }
@@ -172,14 +218,11 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
     if (showBrowser) {
         FileBrowserDialog(
             title = str("packages.select.title"),
-            // PUP is deliberately absent: firmware has its own screen, and routing it
-            // through here would let someone install firmware from a menu that says
-            // nothing about it. EDAT rides along because _rpcsx_install handles it and
-            // it is what DLC licences arrive as.
-            // RAP and EDAT are licence files, not packages, so they go through installKey
-            // rather than install. Some titles need both: the .pkg carries the content and
-            // the .rap is what unlocks it. PUP stays out on purpose, firmware has its own
-            // screen and should not be installable from a menu that says nothing about it.
+            // RAP and EDAT are licence files, not packages, and install() routes them
+            // accordingly. Some titles need both: the .pkg carries the content and the .rap
+            // is what unlocks it, so both can be selected in one go. PUP stays out on
+            // purpose, firmware has its own screen and should not be installable from a
+            // menu that says nothing about it.
             extensions = setOf("pkg", "rap", "edat"),
             // Split releases ship as several .pkg parts that only install correctly when
             // handed to the installer together, the way RPCS3 desktop does it.
