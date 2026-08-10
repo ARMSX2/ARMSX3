@@ -11,7 +11,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -69,6 +71,41 @@ private fun readInstalled(): List<java.io.File> =
         ?.filter { it.isDirectory }
         ?.sortedBy { it.name }
         .orEmpty()
+
+/**
+ * A title's compiled-code and shader cache.
+ *
+ * Keyed by title id, which is also the name of the title's folder under dev_hdd0/game --
+ * rpcs3::utils::get_cache_dir() appends Emu.GetTitleID() to <root>/cache/cache/, and a PKG
+ * installs into a directory named for the same id. Measured at 7-58 MB per title, which is
+ * why uninstalling without it leaves the bulk of the disk usage behind.
+ */
+private fun cacheDirFor(titleId: String): java.io.File =
+    java.io.File(RPCSX.rootDirectory, "cache/cache/$titleId")
+
+private fun dirSize(dir: java.io.File): Long =
+    if (!dir.isDirectory) 0L else dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
+private fun formatSize(bytes: Long): String = when {
+    bytes >= 1024L * 1024L -> "%.0f MB".format(bytes / 1024.0 / 1024.0)
+    else -> "%.0f KB".format(bytes / 1024.0)
+}
+
+/**
+ * Delete a title's cache directory.
+ *
+ * The name is checked rather than trusted: it comes from a directory listing, but a path
+ * separator or a dot-dot in it would resolve outside the per-title folder and take the whole
+ * cache — or more — with it. Anything but a single plain segment is refused.
+ */
+private fun removeCacheFor(titleId: String): Boolean = runCatching {
+    if (titleId.isBlank() || titleId == "." || titleId == ".." ||
+        titleId.contains('/') || titleId.contains('\\')
+    ) return false
+    val dir = cacheDirFor(titleId)
+    if (!dir.isDirectory) return false
+    dir.deleteRecursively()
+}.getOrDefault(false)
 
 @Composable
 fun PackageInstallerScreen(onBack: () -> Unit) {
@@ -142,18 +179,53 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
 
     // Deleting a game folder is not undoable, so it is confirmed rather than done on tap.
     confirmRemove?.let { target ->
+        // Uninstall only ever removed dev_hdd0/game/<TITLEID>, so the title's compiled-code and
+        // shader cache -- by far the larger of the two on disk -- stayed forever. Offered as a
+        // checkbox rather than done silently, and defaulted on, which is how RPCS3 desktop's own
+        // remove dialog treats caches. Save data, trophies and licences are deliberately NOT
+        // touched: those are the user's, not the install's.
+        var alsoRemoveCache by remember(target) { mutableStateOf(true) }
+        // Off the main thread: a cache directory holds hundreds of files and this runs while the
+        // dialog is opening.
+        val cacheBytes by androidx.compose.runtime.produceState(0L, target) {
+            value = withContext(Dispatchers.IO) { dirSize(cacheDirFor(target.name)) }
+        }
         AlertDialog(
             onDismissRequest = { confirmRemove = null },
             title = { Text(str("packages.uninstall.confirmTitle")) },
-            text = { Text(str("packages.uninstall.confirmBody").format(target.name)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(str("packages.uninstall.confirmBody").format(target.name))
+                    // Hidden when there is no cache, so the row never offers to free nothing.
+                    if (cacheBytes > 0) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.clickable { alsoRemoveCache = !alsoRemoveCache },
+                        ) {
+                            Checkbox(checked = alsoRemoveCache, onCheckedChange = { alsoRemoveCache = it })
+                            Text(
+                                str("packages.uninstall.alsoCache").format(formatSize(cacheBytes)),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmRemove = null
+                    val removeCache = alsoRemoveCache
+                    val titleId = target.name
                     MainActivityRuntime.invoke {
                         val ok = withContext(Dispatchers.IO) {
                             runCatching {
                                 RPCSX.instance.uninstallGame(target.absolutePath)
                             }.getOrDefault(false)
+                        }
+                        // Only after the game itself is gone: dropping the cache for a title that
+                        // is still installed would just cost the user a recompile.
+                        if (ok && removeCache) {
+                            withContext(Dispatchers.IO) { removeCacheFor(titleId) }
                         }
                         installed = readInstalled()
                         if (ok) GameLibraryRepository(context).invalidateCache()

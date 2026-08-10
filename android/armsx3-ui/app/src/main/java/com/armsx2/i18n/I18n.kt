@@ -401,6 +401,7 @@ val EN: Map<String, String> = mapOf(
     "packages.install.done" to "Installed. It will appear in your library on the next scan.",
     "packages.install.failed" to "Install failed. The file may be encrypted, incomplete or not a PS3 package.",
     "packages.multiHint" to "Tap several .pkg files to select them all if a game is split into parts, then confirm. Licence files are installed one at a time.",
+    "packages.uninstall.alsoCache" to "Also remove cached shaders and compiled code (%s)",
     "packages.installed.header" to "Installed titles",
     "packages.uninstall" to "Uninstall",
     "packages.uninstall.confirmTitle" to "Uninstall this title?",
