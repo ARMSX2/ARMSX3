@@ -843,7 +843,15 @@ namespace rsx
 
 		// Counted here rather than at the backend call sites so every early return in
 		// VKGSRender::end is included; all of them route through this function.
-		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_draw_calls++;
+		if (rsx::prof::enabled()) [[unlikely]]
+		{
+			rsx::prof::g_draw_calls++;
+
+			if (rsx::prof::g_pass_ordinal < rsx::prof::pass_slot_count)
+			{
+				rsx::prof::g_pass_draws[rsx::prof::g_pass_ordinal]++;
+			}
+		}
 
 		method_registers.current_draw_clause.post_execute_cleanup(m_ctx);
 

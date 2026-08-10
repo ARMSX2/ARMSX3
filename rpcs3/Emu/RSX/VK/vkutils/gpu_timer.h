@@ -83,6 +83,26 @@ namespace vk
 
 		u64 flips() const { return m_flips; }
 
+		/**
+		 * Per-pass cost for the draw region, keyed by the pass's ordinal within the frame.
+		 *
+		 * The sum says the GPU is inside render passes and nothing more. Whether that is one
+		 * expensive pass or thirty even ones decides what to do about it, and those want
+		 * opposite fixes: a single heavy pass is a target, an even spread means the draw count
+		 * itself is the wall.
+		 *
+		 * Ordinal rather than identity because the frame structure is stable, so pass N is the
+		 * same logical pass from frame to frame, which is what makes the number actionable.
+		 */
+		struct pass_cost
+		{
+			u32 ordinal = 0;
+			double ms_per_frame = 0.0;
+			u64 samples = 0;
+		};
+
+		std::vector<pass_cost> draw_pass_costs() const;
+
 	private:
 		// A frame issues many readbacks and blits, and the interesting number is what they
 		// cost in total, so each region gets room for several timed events per frame rather
@@ -142,6 +162,10 @@ namespace vk
 
 		std::array<u64, region_count> m_totals_ns{};
 		std::array<u64, region_count> m_events_seen{};
+
+		// Draw region only, indexed by pass ordinal within the frame.
+		std::array<u64, max_events> m_draw_pass_ns{};
+		std::array<u64, max_events> m_draw_pass_samples{};
 		u64 m_dropped = 0;
 		u64 m_frames = 0;
 		u64 m_flips = 0;

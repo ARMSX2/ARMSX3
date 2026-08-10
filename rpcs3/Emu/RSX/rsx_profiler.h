@@ -249,6 +249,17 @@ namespace rsx::prof
 	 * methods, not calls, and dividing the bucket by the histogram would price a batch as if
 	 * it were one method. These are the call counts the buckets actually divide by.
 	 */
+	/**
+	 * Draws issued inside each render pass, keyed by the pass's ordinal within the frame.
+	 *
+	 * Pairs with the GPU timer's per-pass cost. A pass that is expensive with few draws is
+	 * expensive per draw; one that is expensive with most of the frame's draws in it is
+	 * carrying the geometry. Same milliseconds, opposite fixes.
+	 */
+	inline constexpr u32 pass_slot_count = 96;
+	extern u32 g_pass_ordinal;
+	extern u64 g_pass_draws[pass_slot_count];
+
 	extern u64 g_xform_program_calls;
 	extern u64 g_xform_program_words;
 	extern u64 g_xform_const_calls;

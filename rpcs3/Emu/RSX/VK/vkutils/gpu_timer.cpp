@@ -333,8 +333,16 @@ namespace vk
 						continue;
 					}
 
-					m_totals_ns[i] += static_cast<u64>(static_cast<double>(t1 - t0) * m_period_ns);
+					const u64 ns = static_cast<u64>(static_cast<double>(t1 - t0) * m_period_ns);
+
+					m_totals_ns[i] += ns;
 					m_events_seen[i]++;
+
+					if (r == region::draw)
+					{
+						m_draw_pass_ns[e] += ns;
+						m_draw_pass_samples[e]++;
+					}
 				}
 
 				m_dropped += state.dropped[i];
@@ -362,10 +370,43 @@ namespace vk
 		return out;
 	}
 
+	std::vector<gpu_timer::pass_cost> gpu_timer::draw_pass_costs() const
+	{
+		std::vector<pass_cost> out;
+
+		if (!m_frames)
+		{
+			return out;
+		}
+
+		for (u32 e = 0; e < max_events; e++)
+		{
+			if (!m_draw_pass_samples[e])
+			{
+				continue;
+			}
+
+			// Divided by frames, not by samples, so the entries sum to the draw region total
+			// and each one reads as its share of the frame rather than its cost when present.
+			out.push_back({
+				e,
+				static_cast<double>(m_draw_pass_ns[e]) / 1'000'000.0 / static_cast<double>(m_frames),
+				m_draw_pass_samples[e]
+			});
+		}
+
+		std::sort(out.begin(), out.end(),
+			[](const auto& a, const auto& b) { return a.ms_per_frame > b.ms_per_frame; });
+
+		return out;
+	}
+
 	void gpu_timer::reset()
 	{
 		m_totals_ns = {};
 		m_events_seen = {};
+		m_draw_pass_ns = {};
+		m_draw_pass_samples = {};
 		m_dropped = 0;
 		m_frames = 0;
 	}

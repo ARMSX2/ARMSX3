@@ -429,6 +429,7 @@ namespace vk
 		if (rsx::prof::enabled()) [[unlikely]]
 		{
 			rsx::prof::g_render_passes++;
+			rsx::prof::g_pass_ordinal++;
 		}
 
 		// The draw region was declared and never recorded anywhere, so the one figure that

@@ -552,6 +552,21 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 					static_cast<double>(counts[i]) / static_cast<double>(timer.collected_frames()));
 			}
 
+			// Per-pass, so the draw total stops being a single number that only says "inside
+			// render passes". One pass carrying most of it is a target; thirty even ones mean
+			// the pass and draw count is the wall.
+			if (const auto passes = timer.draw_pass_costs(); !passes.empty())
+			{
+				std::string list;
+				for (u32 i = 0; i < passes.size() && i < 8; i++)
+				{
+					fmt::append(list, "\n\t  pass #%-3u %7.3f ms/frame  seen %llu",
+						passes[i].ordinal, passes[i].ms_per_frame, passes[i].samples);
+				}
+
+				fmt::append(report, "\n\tdraw by pass (%u distinct)%s", ::size32(passes), list);
+			}
+
 			if (const u64 dropped = timer.dropped_events())
 			{
 				// Untimed events mean the regions below are an underestimate, so say so

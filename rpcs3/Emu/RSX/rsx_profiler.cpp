@@ -26,6 +26,8 @@ namespace rsx::prof
 	u64 g_frame_cleanups = 0;
 	u64 g_fence_polls = 0;
 	u64 g_fence_polls_not_ready = 0;
+	u32 g_pass_ordinal = 0;
+	u64 g_pass_draws[pass_slot_count] = {};
 	u64 g_xform_program_calls = 0;
 	u64 g_xform_program_words = 0;
 	u64 g_xform_const_calls = 0;
@@ -192,6 +194,11 @@ namespace rsx::prof
 
 		g_acc.frames++;
 
+		// Restart pass numbering so an ordinal means the same pass here as it does in the GPU
+		// timer, whose event index resets on the same boundary. Wraps to zero on the first
+		// pass; anything counted before one opens lands out of range and is discarded.
+		g_pass_ordinal = umax;
+
 		// Report on a frame boundary rather than a timer, so per-frame costs divide by a
 		// whole number of frames and a long stall lands in the window that contains it.
 		if (g_acc.frames >= 300)
@@ -350,6 +357,32 @@ namespace rsx::prof
 				level == 0 ? "direct caller" : "change_layout caller", list);
 		}
 
+		{
+			// Draws per pass, by the same ordinal the GPU timer reports its per-pass cost
+			// against, so the two can be read side by side.
+			std::pair<u32, u64> top[6] = {};
+			for (u32 i = 0; i < pass_slot_count; i++)
+			{
+				if (!g_pass_draws[i]) continue;
+				if (g_pass_draws[i] <= top[5].second) continue;
+				top[5] = { i, g_pass_draws[i] };
+				std::sort(std::begin(top), std::end(top),
+					[](const auto& a, const auto& b) { return a.second > b.second; });
+			}
+
+			if (top[0].second)
+			{
+				std::string list;
+				for (const auto& [ordinal, count] : top)
+				{
+					if (!count) continue;
+					fmt::append(list, "%s#%u %.0f", list.empty() ? "" : ", ", ordinal,
+						static_cast<double>(count) / frames);
+				}
+				fmt::append(report, "\n\tdraws by pass   %s", list);
+			}
+		}
+
 		if (g_xform_program_calls || g_xform_const_calls)
 		{
 			const auto ns_each = [&](bucket b, u64 calls)
@@ -487,6 +520,7 @@ namespace rsx::prof
 		g_mprotect_bytes = 0;
 		g_access_violations = 0;
 		for (auto& c : g_rp_sites) c = 0;
+		for (auto& c : g_pass_draws) c = 0;
 		for (auto& level : g_rp_caller_counts) for (auto& c : level) c = 0;
 		for (auto& level : g_rp_callers) for (auto& a : level) a = nullptr;
 		for (auto& c : g_flush_sites) c = 0;
