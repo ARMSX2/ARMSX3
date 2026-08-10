@@ -228,6 +228,18 @@ namespace rsx::prof
 	extern u64 g_frame_cleanups;
 
 	/**
+	 * vkGetFenceStatus calls, and how many came back VK_NOT_READY.
+	 *
+	 * The poll bucket is over half the RSX thread while every call site that reaches it looks
+	 * like it runs once or twice a frame. Either a status query is blocking for milliseconds,
+	 * which would make it a driver problem, or it is being called orders of magnitude more
+	 * often than the call sites suggest, which would make it ours. The count decides, and the
+	 * not-ready share says whether the driver is being asked about work that is still running.
+	 */
+	extern u64 g_fence_polls;
+	extern u64 g_fence_polls_not_ready;
+
+	/**
 	 * Commands seen per RSX method register, indexed by (id >> 2).
 	 *
 	 * The per-command figure came out around a microsecond, which is far too much for

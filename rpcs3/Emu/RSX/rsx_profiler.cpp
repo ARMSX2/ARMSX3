@@ -23,6 +23,8 @@ namespace rsx::prof
 	u64 g_draw_calls = 0;
 	u64 g_present_checks = 0;
 	u64 g_frame_cleanups = 0;
+	u64 g_fence_polls = 0;
+	u64 g_fence_polls_not_ready = 0;
 	u32 g_method_counts[method_slot_count] = {};
 	u64 g_fifo_refill_bytes = 0;
 	u64 g_fifo_refill_stalls = 0;
@@ -310,6 +312,15 @@ namespace rsx::prof
 						* to_ms * 1000.0 / static_cast<double>(g_present_checks)
 					: 0.0);
 
+			if (g_fence_polls)
+			{
+				fmt::append(report, "\n\tfence polls     %.1f/frame, %.0f ns each, %.1f%% not ready",
+					static_cast<double>(g_fence_polls) / frames,
+					static_cast<double>(g_acc.ticks[static_cast<usz>(bucket::fence_poll)])
+						* to_ms * 1'000'000.0 / static_cast<double>(g_fence_polls),
+					static_cast<double>(g_fence_polls_not_ready) * 100.0 / static_cast<double>(g_fence_polls));
+			}
+
 			fmt::append(report, "\n\tper draw        prologue %.0f, epilogue %.0f, wr barrier %.0f, on_write %.0f, tex release %.0f ns",
 				ns_per_draw(bucket::draw_prologue),
 				ns_per_draw(bucket::draw_epilogue),
@@ -355,6 +366,8 @@ namespace rsx::prof
 		g_draw_calls = 0;
 		g_present_checks = 0;
 		g_frame_cleanups = 0;
+		g_fence_polls = 0;
+		g_fence_polls_not_ready = 0;
 		std::fill(std::begin(g_method_counts), std::end(g_method_counts), 0u);
 		g_fifo_refills = 0;
 		g_fifo_refill_bytes = 0;

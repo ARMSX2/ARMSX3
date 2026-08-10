@@ -97,6 +97,12 @@ namespace vk
 				fence_status = vkGetFenceStatus(pool->get_owner(), m_submit_fence->handle);
 			}
 
+			if (rsx::prof::enabled()) [[unlikely]]
+			{
+				rsx::prof::g_fence_polls++;
+				if (fence_status != VK_SUCCESS) rsx::prof::g_fence_polls_not_ready++;
+			}
+
 			if (fence_status == VK_SUCCESS)
 			{
 				lock.upgrade();
