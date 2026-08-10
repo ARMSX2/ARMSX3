@@ -1062,10 +1062,26 @@ namespace rsx
 			u64 local_vblank_count = 0;
 
 			// TODO: exit condition
+			u64 last_heartbeat = 0;
+			u64 iterations = 0;
+
 			while (!is_stopped() && !unsent_gcm_events && thread_ctrl::state() != thread_state::aborting)
 			{
 				// Get current time
 				const u64 current = get_system_time();
+
+				// Heartbeat. This thread is the only source of the interrupt gcm waits on, so
+				// when it stops the guest hangs after gcm init with everything else looking
+				// idle -- and it said nothing either way. Distinguishes "still looping" from
+				// "blocked inside post_vblank_event" from "left the loop", which need
+				// different fixes and are indistinguishable from outside.
+				if (current - last_heartbeat >= 5'000'000)
+				{
+					last_heartbeat = current;
+					rsx_log.notice("VBlank: alive, iterations=%u, vblank_count=%u", iterations, local_vblank_count);
+				}
+
+				iterations++;
 
 				// Calculate the time at which we need to send a new VBLANK signal
 				const u64 post_event_time = start_time + (local_vblank_count + 1) * vblank_period / vblank_rate;
@@ -1124,6 +1140,13 @@ namespace rsx
 					start_time = get_system_time() - start_time;
 				}
 			}
+
+			// Which condition ended it. unsent_gcm_events is the savestate hand-off, so seeing
+			// it here outside a savestate means a live send failed and took the vblank source
+			// down with it -- permanently, since nothing restarts this thread.
+			rsx_log.error("VBlank: loop exited after %u iterations (stopped=%d, unsent_gcm_events=0x%x, aborting=%d)",
+				iterations, is_stopped() ? 1 : 0, unsent_gcm_events.load(),
+				thread_ctrl::state() == thread_state::aborting ? 1 : 0);
 		})));
 
 		struct join_vblank
@@ -1283,6 +1306,13 @@ namespace rsx
 
 	void thread::do_local_task(FIFO::state state)
 	{
+		// Arm and poll from here as well as on_frame_end. Both of those run only once a frame
+		// has completed, so a boot that hangs before presenting left the profiler switched off
+		// and silent -- and that is the case where what the RSX thread is looping in is the
+		// whole question. Both calls return immediately once armed and are rate-limited.
+		prof::set_enabled(g_cfg.video.rsx_profiler.get());
+		prof::poll_stall();
+
 		m_eng_interrupt_mask.clear(rsx::backend_interrupt);
 
 		if (async_flip_requested & flip_request::emu_requested)

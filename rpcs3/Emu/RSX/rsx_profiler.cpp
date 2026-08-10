@@ -18,6 +18,11 @@ namespace rsx::prof
 	bucket g_current = bucket::unclassified;
 	u64 g_last_switch = 0;
 	const void* g_owner_thread = nullptr;
+
+	// Stall reporting state. See poll_stall.
+	u64 g_last_stall_check = 0;
+	u64 g_stall_frames = umax;
+	u64 g_stall_started = 0;
 	u64 g_fifo_refills = 0;
 	u64 g_fifo_commands = 0;
 	u64 g_fifo_dispatches = 0;
@@ -251,6 +256,63 @@ namespace rsx::prof
 		{
 			dump_and_reset();
 		}
+	}
+
+	// Say what the RSX thread is sitting in when frames have stopped arriving.
+	//
+	// tick_frame is the only thing that reports and set_enabled is the only thing that arms,
+	// and both are reached from on_frame_end -- so a hang that happens before a frame completes
+	// leaves the profiler switched off and silent however the setting is set. That is exactly
+	// the case worth instrumenting: a boot that never presents, where the compile has finished
+	// and the thread is looping somewhere without consuming. Called from do_local_task, which
+	// the FIFO loop reaches whether or not frames advance.
+	void poll_stall()
+	{
+		if (!g_enabled.load(std::memory_order_relaxed)) [[likely]]
+		{
+			return;
+		}
+
+		// Only the thread the buckets are armed against; anyone else's clock is meaningless.
+		if (current_thread_token() != g_owner_thread)
+		{
+			return;
+		}
+
+		const u64 freq = utils::get_tsc_freq();
+
+		if (!freq)
+		{
+			return;
+		}
+
+		const u64 now = utils::get_tsc();
+
+		if (now - g_last_stall_check < freq * 5)
+		{
+			return;
+		}
+
+		g_last_stall_check = now;
+
+		if (g_acc.frames != g_stall_frames)
+		{
+			// Frames are still arriving, so tick_frame is doing the reporting.
+			g_stall_frames = g_acc.frames;
+			g_stall_started = now;
+			return;
+		}
+
+		if (!g_stall_started)
+		{
+			g_stall_started = now;
+			return;
+		}
+
+		prof_log.error("RSX has not finished a frame in %.1fs; current bucket '%s', in it for %.2fs",
+			static_cast<double>(now - g_stall_started) / static_cast<double>(freq),
+			name_of(g_current),
+			static_cast<double>(now - g_last_switch) / static_cast<double>(freq));
 	}
 
 	void dump_and_reset()

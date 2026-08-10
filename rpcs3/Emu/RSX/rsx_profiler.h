@@ -505,6 +505,10 @@ namespace rsx::prof
 	/** Write the current window to the log and start a new one. Safe to call from anywhere. */
 	void dump_and_reset();
 
+	/** Report the bucket the RSX thread is stuck in when frames have stopped arriving.
+	 *  Rate-limited internally; safe to call from the FIFO loop. */
+	void poll_stall();
+
 	void set_enabled(bool enabled);
 	inline bool enabled() { return g_enabled.load(std::memory_order_relaxed); }
 }
