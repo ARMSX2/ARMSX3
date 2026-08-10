@@ -114,6 +114,7 @@ import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.common.ArmsBackdrop
 import com.armsx2.ui.common.ArmsTopBar
 import com.armsx2.ui.common.EmptyState
+import com.armsx2.ui.common.FileBrowserDialog
 import com.armsx2.ui.common.RoundAction
 import com.armsx2.ui.common.SearchField
 import com.armsx2.ui.common.SectionTitle
@@ -140,6 +141,8 @@ fun HomeScreen(
     var overflowMenu by remember { mutableStateOf(false) }
     var showExitConfirm by remember { mutableStateOf(false) }
     var menuGame by remember { mutableStateOf<GameInfo?>(null) }
+    // Set by the context menu's "Install licence" entry; drives the .rap file browser.
+    var licenceGame by remember { mutableStateOf<GameInfo?>(null) }
     var showClearRecentsConfirm by remember { mutableStateOf(false) }
     // #9 custom library background — inert until the user picks an image.
     LaunchedEffect(Unit) { LibraryBackground.ensureLoaded(); CoverArtStyle.load() }
@@ -696,6 +699,24 @@ fun HomeScreen(
         )
     }
 
+    // Tapping a licence-locked game asks for the key instead of booting into a failure.
+    // ConfirmOverlay rather than a Compose Dialog for the reason given above: this has to stay
+    // reachable from a controller, and a dialog window swallows the D-pad.
+    com.armsx2.LicencePrompt.game.value?.let { game ->
+        com.armsx2.ui.common.ConfirmOverlay(
+            title = str("games.locked.title"),
+            message = str("games.locked.message").format(game.displayTitle(EnglishTitles.enabled.value)),
+            confirmLabel = str("games.installLicence"),
+            idPrefix = "install-licence",
+            onConfirm = {
+                // Same picker the context menu opens, so both routes share one flow.
+                licenceGame = game
+                com.armsx2.LicencePrompt.clear()
+            },
+            onDismiss = { com.armsx2.LicencePrompt.clear() },
+        )
+    }
+
     menuGame?.let { game ->
         // Tri-state on purpose: null while identifying, blank when the image cannot be identified.
         // produceState alone cannot tell those apart — both are null — so an unidentifiable game
@@ -761,6 +782,14 @@ fun HomeScreen(
                         menuGame = null
                     }
                 }
+                // Only for a game the core said it cannot decrypt. Offering it on every game
+                // would invite installing a licence against a title it does not belong to.
+                if (game.locked) {
+                    GameMenuAction("🔑", str("games.installLicence")) {
+                        licenceGame = game
+                        menuGame = null
+                    }
+                }
                 val hidden = com.armsx2.HiddenGames.isHidden(game)
                 GameMenuAction(if (hidden) "◍" else "🚫", str(if (hidden) "games.unhide" else "games.hide")) {
                     viewModel.setHidden(game, !hidden)
@@ -768,6 +797,31 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    // The game itself is not needed to install the key -- a RAP's filename is the content id
+    // it unlocks -- so this only has to know that a locked game asked for one.
+    if (licenceGame != null) {
+        // Resolved during composition: str() is @Composable and cannot be called from the
+        // pick callback, the same reason games.addToHome.unsupported is hoisted above.
+        val installedMsg = str("games.installLicence.done")
+        val failedMsg = str("games.installLicence.failed")
+        FileBrowserDialog(
+            title = str("games.installLicence.title"),
+            // .rap only. An EDAT is a licence too, but it carries its own content id and
+            // installs through the package screen's native path; this button exists for the
+            // key that belongs to THIS game.
+            extensions = setOf("rap"),
+            onPick = { file ->
+                licenceGame = null
+                val ok = com.armsx2.data.library.Licences.installRap(file)
+                Toast.makeText(context, if (ok) installedMsg else failedMsg, Toast.LENGTH_LONG).show()
+                // The folder set is unchanged, so only the lock state is stale — nothing else
+                // would prompt a rescan.
+                if (ok) viewModel.refreshAfterLicenceInstall()
+            },
+            onDismiss = { licenceGame = null },
+        )
     }
 }
 
@@ -1059,7 +1113,9 @@ private fun GameListCard(game: GameInfo, selected: Boolean, onClick: () -> Unit,
         ),
     ) {
         Row(Modifier.padding(7.dp), verticalAlignment = Alignment.CenterVertically) {
-            GameCover(game, Modifier.width(54.dp).aspectRatio(coverAspectRatio()))
+            // No overlay badge on a 54.dp cover, it would swamp it; GameMetadata below
+            // carries the lock as a chip alongside the other per-game marks.
+            GameCover(game, Modifier.width(54.dp).aspectRatio(coverAspectRatio()), showBadges = false)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(game.displayTitle(EnglishTitles.enabled.value), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -1093,6 +1149,7 @@ private fun RecentGameCard(game: GameInfo, selected: Boolean = false, onClick: (
 private fun GameMetadata(game: GameInfo) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         StatusChip(game.extension.ifBlank { game.platform.key.uppercase() })
+        if (game.locked) StatusChip(str("games.locked.chip"), Color(0xFFFFC857))
         game.regionFlag?.let { Text(it, fontSize = 13.sp) }
         if (game.compatibility > 0) {
             Text("★".repeat(game.compatibility), color = Color(0xFFFFC857), fontSize = 9.sp, maxLines = 1)
@@ -1198,6 +1255,9 @@ private fun GameCover(
     // covers whose source art is a touch taller than the 0.7 slot.
     contentScale: ContentScale = ContentScale.Fit,
     placeholderText: Boolean = true,
+    /** Off for the shelf's mirrored reflection, which would otherwise render the badge
+     *  upside down, and for the list card, whose 54.dp cover shows it as a chip instead. */
+    showBadges: Boolean = true,
 ) {
     val context = LocalContext.current
     // Read the 3D-cover flag explicitly (not just via game.coverUrl, which is
@@ -1251,6 +1311,24 @@ private fun GameCover(
                 },
             )
         }
+        // A licence-locked game looks exactly like any other until it refuses to boot, so
+        // the cover is where it has to be said.
+        if (showBadges && game.locked) {
+            LockedBadge(Modifier.align(Alignment.TopEnd).padding(5.dp))
+        }
+    }
+}
+
+/** Gold to match the library's other "worth noticing" marks (compat stars, the HC pill),
+ *  and shaped like HardcoreBadge so it reads as the same family of badge. */
+@Composable
+private fun LockedBadge(modifier: Modifier = Modifier) {
+    Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFFFFC857), modifier = modifier) {
+        Text(
+            "🔒",
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            fontSize = 11.sp,
+        )
     }
 }
 
@@ -1626,6 +1704,7 @@ private fun ShelfGameCard(game: GameInfo, width: Dp, reflectionHeight: Dp, selec
                 cornerRadius = 0.dp,
                 contentScale = ContentScale.Fit,
                 placeholderText = false,
+                showBadges = false,
             )
             // Fade the reflection out toward the front of the shelf.
             Box(Modifier.matchParentSize().background(Brush.verticalGradient(listOf(Color.Transparent, Color(0x55000000)))))
