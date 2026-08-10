@@ -217,8 +217,15 @@ namespace rsx
 			}
 			case transform_constant_load_modifier_barrier:
 			{
-				// Change the transform load target. Does not change result mask.
-				REGS(ctx)->decode(NV4097_SET_TRANSFORM_PROGRAM_LOAD, barrier.arg0);
+				// Change the transform CONSTANT load target. Does not change result mask.
+				//
+				// This decoded into NV4097_SET_TRANSFORM_PROGRAM_LOAD, which is a different
+				// register for a different thing. The barrier is pushed by
+				// nv4097::set_transform_constant_load, so a title that moves its constant
+				// load pointer mid-draw got the move dropped -- every constant after it
+				// landing at the old offset -- and had its vertex PROGRAM upload position
+				// overwritten with a constant index as well.
+				REGS(ctx)->decode(NV4097_SET_TRANSFORM_CONSTANT_LOAD, barrier.arg0);
 				break;
 			}
 			case transform_constant_update_barrier:
