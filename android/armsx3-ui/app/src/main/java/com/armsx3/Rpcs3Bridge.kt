@@ -552,6 +552,16 @@ object Rpcs3Bridge {
                 else -> return false
             }
 
+            // Named for the config node it writes, unlike the PS3/* pseudo-sections above.
+            // Without this case the key fell through to the else and was dropped, so the
+            // setting never reached the core: savestates failed to lock the SPUs and told
+            // the user to enable an option that had no effect however they set it.
+            "Savestate" -> when (key) {
+                "Compatible Savestate Mode" ->
+                    Rpcs3Settings.setCompatibleSavestateMode(asBool(value))
+                else -> return false
+            }
+
             else -> return false
         }
         return true

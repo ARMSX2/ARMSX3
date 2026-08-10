@@ -253,6 +253,10 @@ object Rpcs3Settings {
     fun setSuspendModeSavestates(enabled: Boolean) =
         setBool("$SAVESTATE@@Suspend Emulation Savestate Mode", enabled)
 
+    /** SPU codegen that keeps the thread state capturable, which savestates require. */
+    fun setCompatibleSavestateMode(enabled: Boolean) =
+        setBool("$SAVESTATE@@Compatible Savestate Mode", enabled)
+
     fun setMaxSavestateFiles(count: Int) =
         setInt("$SAVESTATE@@Maximum SaveState Files", count.coerceIn(0, 64))
 
