@@ -102,12 +102,14 @@ data class Ps3Settings(
     /** Locks every SPU thread into a state a savestate can be serialised from.
      *
      *  Savestates cannot be taken without it: the save has to stop each SPU somewhere it can
-     *  be written out, and with this off that fails on any title with SPU work running. It is
-     *  off by default because it costs SPU performance -- which is why upstream defaults it
-     *  off too -- and because a PS3 savestate runs 500MB to 3GB, so a handful of them fills a
-     *  phone. Both costs are the user's to accept, which is the only reason this is a setting
-     *  rather than a decision made for them. */
-    val savestateCompatibleMode: Boolean = false,
+     *  be written out, and with this off that fails on any title with SPU work running.
+     *
+     *  On by default, unlike upstream, so the feature works for someone who never opens
+     *  settings -- a save that fails with "missing SPU setting" reads as broken, not as a
+     *  setting waiting to be found. The costs are real and are stated on the switch: it slows
+     *  the SPUs while it is on, and a PS3 state runs 500MB to 3GB. Turning it off restores
+     *  upstream behaviour and gives the SPU performance back. */
+    val savestateCompatibleMode: Boolean = true,
     val clocksScale: Int = 100,
     val resolutionScale: Int = 100,
     /** 0 = Disabled. Off by default: mobile drivers routinely lack the MSAA
@@ -1261,9 +1263,9 @@ data class Settings(
         // Compatible Savestate Mode is no longer forced off here; applyTo writes it from
         // ps3.savestateCompatibleMode above, so the two costs it carries -- SPU performance
         // and a 500MB to 3GB state file -- are the user's to accept rather than a decision
-        // taken for them. Still off by default, so nobody pays for a feature they did not ask
-        // for, and installs from the window where it was pushed as true are corrected by the
-        // same write.
+        // taken for them. Defaulted on so the feature works without hunting for a switch,
+        // and written every boot either way, so a user who turns it off has that respected
+        // rather than re-enabled on the next launch.
 
         // Settings a specific title needs in order to run at all, then the user's own core
         // edits on top. Order matters: game defaults are a floor, an explicit user choice
