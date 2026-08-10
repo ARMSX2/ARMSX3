@@ -2122,6 +2122,11 @@ namespace rsx
 
 	void thread::analyse_current_rsx_pipeline()
 	{
+		// Vertex and fragment ucode analysis: a full program walk with recursive visitors
+		// and per-call allocations, run before load_program, so the pipeline scope never
+		// saw it and shader_translate had no site at all.
+		RSX_PROF_SCOPE(shader_translate);
+
 		m_program_cache_hint.invalidate(m_graphics_state.load());
 
 		constexpr u32 fs_export_config_mask = (RSX_SHADER_CONTROL_EMULATE_DEPTH_COMPARE | RSX_SHADER_CONTROL_MULTISAMPLED_ZBUFFER);

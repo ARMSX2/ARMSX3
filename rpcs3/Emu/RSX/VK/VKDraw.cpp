@@ -264,6 +264,11 @@ void VKGSRender::update_draw_state()
 
 void VKGSRender::load_texture_env()
 {
+	// Per-draw texture cache search, surface-cache expiry tests and sampler lookup.
+	// texcache_lookup's only other site is on_access_violation, which runs on guest
+	// threads, so none of this draw-path work was ever attributed.
+	RSX_PROF_SCOPE(texcache_lookup);
+
 	// Load textures
 	bool check_for_cyclic_refs = false;
 	auto check_surface_cache_sampler_valid = [&](auto descriptor, const auto& tex)
@@ -1238,6 +1243,12 @@ void VKGSRender::begin()
 
 void VKGSRender::end()
 {
+	// begin() carries a scope and end() did not, so every per-draw cost here fell through
+	// to fifo_decode -- which is the ENCLOSING scope of the whole RSX loop, not a decode
+	// measurement. That is why fifo_decode read as 100% of the RSX thread while the FIFO
+	// itself only accounts for a couple of milliseconds.
+	RSX_PROF_SCOPE(draw_setup);
+
 	if (skip_current_frame || !m_graphics_state.test(rsx::rtt_config_valid) || swapchain_unavailable || cond_render_ctrl.disable_rendering())
 	{
 		execute_nop_draw();
