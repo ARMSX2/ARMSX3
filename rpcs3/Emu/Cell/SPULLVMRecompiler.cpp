@@ -1730,19 +1730,6 @@ public:
 			u8 output[20];
 
 			sha1_starts(&ctx);
-
-			// Savestate-compatible mode changes the code generated for blocking channel reads:
-			// the GPRs are stored instead of the thread being marked unsavable. The key was the
-			// guest code alone, and the compiled object is cached under it, so a block built in
-			// one mode was silently reused in the other -- turning the setting on left the old
-			// unsavable blocks in place and savestates kept failing to lock the SPUs. Mixed in
-			// only when set, so caches built in the default mode stay valid.
-			if (g_cfg.savestate.compatible_mode)
-			{
-				const u8 savestate_compatible = 1;
-				sha1_update(&ctx, &savestate_compatible, sizeof(savestate_compatible));
-			}
-
 			sha1_update(&ctx, reinterpret_cast<const u8*>(func.data.data()), func.data.size() * 4);
 			sha1_finish(&ctx, output);
 
