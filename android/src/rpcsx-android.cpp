@@ -113,6 +113,9 @@ static std::atomic<bool> g_paused_by_surface_loss;
 extern std::string g_android_executable_dir;
 extern std::string g_android_config_dir;
 extern std::string g_android_cache_dir;
+// Exact SoC identity as reported by Android (Build.SOC_MANUFACTURER/SOC_MODEL),
+// handed in through _rpcsx_setSocInfo. MIDRs cannot identify the SoC.
+static std::string g_android_soc_info;
 static std::mutex g_virtual_pad_mutex;
 // One per PS3 pad port. This was a single pad, which silently capped local
 // co-op at one player: every port above the first registered a Pad the app
@@ -2081,6 +2084,19 @@ extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,
   return true;
 }
 
+// Hand the core Android's exact SoC identity. Deliberately a separate export
+// rather than an extra _rpcsx_initialize parameter: the core is dlopen()ed and
+// can be updated independently of the JNI glue that calls it, so changing an
+// existing export's signature would make older glue call it with a garbage
+// argument. Glue that predates this export simply never calls it, and glue that
+// has it null-checks the symbol against older cores.
+//
+// Must be called before _rpcsx_initialize, which is where the startup messages
+// are assembled.
+extern "C" void _rpcsx_setSocInfo(std::string_view socInfo) {
+  g_android_soc_info = std::string(socInfo);
+}
+
 extern "C" bool _rpcsx_initialize(std::string_view rootDir,
                                   std::string_view user) {
   auto rootDirStr = fix_dir_path(std::string(rootDir));
@@ -2143,6 +2159,11 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
   logs::stored_message ver{rpcsx_android.always()};
   ver.text = fmt::format("RPCSX-ps3-android v%s", rpcs3::get_version().to_string());
 
+  // Write exact SoC identity (from Android, not inferred from MIDRs)
+  logs::stored_message soc{rpcsx_android.always()};
+  soc.text = fmt::format(
+      "SoC: %s", g_android_soc_info.empty() ? "unknown" : g_android_soc_info);
+
   // Write System information
   logs::stored_message sys{rpcsx_android.always()};
   sys.text = utils::get_system_info();
@@ -2155,8 +2176,8 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
   logs::stored_message time{rpcsx_android.always()};
   time.text = fmt::format("Current Time: %s", std::chrono::system_clock::now());
 
-  logs::set_init(
-      {std::move(ver), std::move(sys), std::move(os), std::move(time)});
+  logs::set_init({std::move(ver), std::move(soc), std::move(sys), std::move(os),
+                  std::move(time)});
 
   auto set_rlim = [](int resource, std::uint64_t limit) {
     rlimit64 rlim{};
@@ -3756,8 +3777,12 @@ extern "C" bool _rpcsx_installKey(JNIEnv *env, int fd, long progressId,
 extern "C" std::string _rpcsx_systemInfo() {
   std::string result;
 
-  fmt::append(result, "%s\n\nLLVM CPU: %s\n\n", utils::get_system_info(),
-              fallback_cpu_detection());
+  // LLVM CPU reports the same resolution path the JIT actually uses (configured
+  // CPU -> LLVM host detection -> project fallback), not just the fallback guess.
+  fmt::append(result, "SoC: %s\n\n%s\n\nLLVM CPU: %s\n\n",
+              g_android_soc_info.empty() ? "unknown" : g_android_soc_info,
+              utils::get_system_info(),
+              jit_compiler::cpu(g_cfg.core.llvm_cpu.to_string()));
 
   {
     vk::instance device_enum_context;

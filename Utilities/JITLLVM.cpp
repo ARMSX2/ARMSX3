@@ -1033,13 +1033,13 @@ const char * fallback_cpu_detection()
 #ifdef ANDROID
 	static std::string s_result = []() -> std::string
 	{
+		// get_cpu_name() already returns a canonical LLVM processor name
 		std::string result = aarch64::get_cpu_name();
 		if (result.empty())
 		{
 			return "cortex-a78";
 		}
 
-		std::transform(result.begin(), result.end(), result.begin(), ::tolower);
 		return result;
 	}();
 

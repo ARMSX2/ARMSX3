@@ -83,4 +83,53 @@ object DeviceTier {
     } catch (_: Throwable) {
         "unknown"
     }
+
+    /** Known annotations for exact SoC model strings. Exact matches only —
+     *  equivalences are never guessed from CPU topology.
+     *
+     *  CQ8725S is the Qualcomm Dragonwing Q8 part in the AYN Odin 3, confirmed
+     *  from the device itself (ro.soc.model=CQ8725S, reporting 8 Oryon cores and
+     *  an Adreno 830). "-class" is deliberate: it is 8 Elite-family silicon, not
+     *  a claim that the part is identical to the phone SKU. */
+    private val socAnnotations = mapOf(
+        "QCS8550" to "Snapdragon 8 Gen 2-class",
+        "QCS9075" to "Snapdragon 8 Elite-class",
+        "CQ8725S" to "Snapdragon 8 Elite-class",
+    )
+
+    /** Android reports missing Build fields as the literal [Build.UNKNOWN]
+     *  ("unknown") rather than null, so that value counts as "not reported" —
+     *  otherwise diagnostics read "unknown unknown" instead of falling back to
+     *  Build.HARDWARE. */
+    private fun String?.orNotReported(): String? =
+        this?.takeIf { it.isNotBlank() && !it.equals(Build.UNKNOWN, ignoreCase = true) }
+
+    /**
+     * Pure, JVM-testable formatter for the device's SoC identity, e.g.
+     * "Qualcomm QCS8550 (Snapdragon 8 Gen 2-class)".
+     *
+     * The model is what identifies the SoC, so a manufacturer on its own is not
+     * an identity: without a model this falls back to [hardware], the platform
+     * codename, which at least names the silicon. Model strings without a known
+     * annotation are preserved unchanged. Returns "" when nothing is reported.
+     */
+    fun formatSocIdentity(manufacturer: String?, model: String?, hardware: String?): String {
+        val socModel = model.orNotReported()
+            ?: return hardware.orNotReported() ?: ""
+
+        val base = listOfNotNull(manufacturer.orNotReported(), socModel).joinToString(" ")
+        val annotation = socAnnotations[socModel]
+        return if (annotation != null) "$base ($annotation)" else base
+    }
+
+    /** SoC identity from Android's public fields: Build.SOC_MANUFACTURER /
+     *  Build.SOC_MODEL on API 31+, Build.HARDWARE before that. */
+    fun socIdentity(): String = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+            formatSocIdentity(Build.SOC_MANUFACTURER, Build.SOC_MODEL, Build.HARDWARE)
+        else
+            formatSocIdentity(null, null, Build.HARDWARE)
+    } catch (_: Throwable) {
+        ""
+    }
 }
