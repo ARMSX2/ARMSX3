@@ -98,6 +98,21 @@ private fun installLicence(file: java.io.File): Boolean = runCatching {
     true
 }.getOrDefault(false)
 
+/**
+ * Licence files sitting in exdata.
+ *
+ * Installing one is a silent copy into a directory nothing else on this screen reads, so a
+ * success looked exactly like a failure: a licence belongs to no title, never appears under
+ * Installed titles, and left no trace anywhere in the app. Reported as "I installed the .rap
+ * but nothing seemed to happen" -- the file was there the whole time.
+ */
+private fun readLicences(): List<java.io.File> =
+    java.io.File(RPCSX.rootDirectory, "config/dev_hdd0/home/$EXDATA_USER/exdata")
+        .listFiles()
+        ?.filter { it.isFile && isLicence(it) }
+        ?.sortedBy { it.name }
+        .orEmpty()
+
 private fun readInstalled(): List<java.io.File> =
     java.io.File(RPCSX.rootDirectory, "config/dev_hdd0/game")
         .listFiles()
@@ -133,6 +148,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
     var showBrowser by remember { mutableStateOf(false) }
     var progressId by remember { mutableStateOf<Long?>(null) }
     var installed by remember { mutableStateOf(readInstalled()) }
+    var licences by remember { mutableStateOf(readLicences()) }
     var confirmRemove by remember { mutableStateOf<java.io.File?>(null) }
 
     // getItem returns MutableState<ProgressEntry>; reading .value here and .longValue
@@ -190,6 +206,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                 // so nothing else would prompt a rescan.
                 GameLibraryRepository(context).invalidateCache()
                 installed = readInstalled()
+                licences = readLicences()
                 I18n.get("packages.install.done")
             } else {
                 I18n.get("packages.install.failed")
@@ -213,6 +230,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                             }.getOrDefault(false)
                         }
                         installed = readInstalled()
+                        licences = readLicences()
                         if (ok) GameLibraryRepository(context).invalidateCache()
                         message = I18n.get(
                             if (ok) "packages.uninstall.done" else "packages.uninstall.failed",
@@ -307,6 +325,32 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                             it,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+
+            // Installed licences. Read from exdata, which is where installLicence puts
+            // them: without this the screen showed nothing at all after a .rap install and
+            // a success was indistinguishable from a failure.
+            if (licences.isNotEmpty()) {
+                Text(
+                    str("packages.licences.header"),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                licences.forEach { file ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            file.name,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
                         )
                     }
                 }
