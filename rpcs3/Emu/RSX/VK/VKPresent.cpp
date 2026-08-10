@@ -313,6 +313,16 @@ void VKGSRender::queue_swap_request()
 	m_current_command_buffer->reset();
 	m_current_command_buffer->begin();
 
+	// Open the frame region here, on the path every frame actually takes.
+	//
+	// It was only opened at device init and in flush_command_queue, and this title triggers
+	// flush_command_queue about zero times a frame, so the region opened once at boot, closed
+	// on the first submit and never reopened. Everything downstream depends on it: the slot's
+	// query range is reset when this region opens, the ring only advances once a slot has a
+	// completed region in it, and collection refuses a slot that was never reset. So the timer
+	// reported nothing at all for the whole session while looking perfectly healthy.
+	vk::get_gpu_timer().begin(*m_current_command_buffer, vk::gpu_timer::region::frame);
+
 	// Set up new pointers for the next frame
 	advance_queued_frames();
 }
