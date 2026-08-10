@@ -138,6 +138,9 @@ namespace rsx::prof
 		case bucket::fifo_decode: return "FIFO decode";
 		case bucket::fifo_refill: return "FIFO refill";
 		case bucket::method_call: return "Method handlers";
+		case bucket::rsx_barrier: return "RSX barrier";
+		case bucket::dma_copy: return "DMA copy";
+		case bucket::blit_scale: return "Blit SW scale";
 		case bucket::xform_program: return "Xform program";
 		case bucket::xform_const: return "Xform constant";
 		case bucket::draw_setup: return "Draw setup";

@@ -6,6 +6,7 @@
 #include "Emu/RSX/Host/MM.h"
 
 #include "Utilities/deferred_op.hpp"
+#include "Emu/RSX/rsx_profiler.h"
 
 #include "context_accessors.define.h"
 
@@ -77,6 +78,10 @@ namespace rsx
 
 			RSX(ctx)->invalidate_fragment_program(dst_dma, dst_offset, write_length);
 
+			// Can force a readback of anything the GPU wrote into this range, which is the one
+			// thing here that is not a memory copy and the one that can stall.
+			rsx::prof::scope read_barrier_prof{ rsx::prof::bucket::rsx_barrier };
+
 			if (const auto result = RSX(ctx)->read_barrier(read_address, read_length, !is_block_transfer);
 				result == rsx::result_zcull_intr)
 			{
@@ -88,9 +93,12 @@ namespace rsx
 				}
 			}
 
+			read_barrier_prof.close();
+
 			// Deferred write_barrier on RSX side
 			utils::deferred_op deferred([&]()
 			{
+				RSX_PROF_SCOPE(rsx_barrier);
 				RSX(ctx)->write_barrier(write_address, write_length);
 				// res->release(0);
 			});
@@ -114,6 +122,9 @@ namespace rsx
 				return (src_offset >= dst_offset && src_offset < dst_max) ||
 				 (dst_offset >= src_offset && dst_offset < src_max);
 			}();
+
+			// Everything below is the transfer this method exists to perform.
+			RSX_PROF_SCOPE(dma_copy);
 
 			if (in_format > 1 || out_format > 1) [[ unlikely ]]
 			{

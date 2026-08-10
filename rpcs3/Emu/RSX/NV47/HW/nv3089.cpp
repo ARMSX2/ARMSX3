@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "nv3089.h"
+#include "Emu/RSX/rsx_profiler.h"
 
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/RSX/Core/RSXReservationLock.hpp"
@@ -214,6 +215,7 @@ namespace rsx
 
 				RSX(ctx)->invalidate_fragment_program(dst_dma, dst_offset, data_length);
 
+				rsx::prof::scope read_barrier_prof{ rsx::prof::bucket::rsx_barrier };
 				if (const auto result = RSX(ctx)->read_barrier(src_address, data_length, false);
 					result == rsx::result_zcull_intr)
 				{
@@ -237,7 +239,10 @@ namespace rsx
 				}
 
 				RSX(ctx)->invalidate_fragment_program(dst_dma, dst_offset, data_length);
-				RSX(ctx)->read_barrier(src_address, data_length, true);
+				{
+					RSX_PROF_SCOPE(rsx_barrier);
+					RSX(ctx)->read_barrier(src_address, data_length, true);
+				}
 			}
 
 			if (src_address == dst_address &&

@@ -35,6 +35,9 @@ namespace rsx::prof
 		fifo_decode,      // Reading and dispatching FIFO commands
 		fifo_refill,      // Refilling the FIFO cache from guest memory under a reservation lock
 		method_call,      // Inside a method handler, as opposed to the loop that dispatches it
+		rsx_barrier,      // read_barrier/write_barrier from the DMA and blit engines
+		dma_copy,         // The memory copy a DMA or blit transfer exists to perform
+		blit_scale,       // Software scale/convert fallback in the 2D blit engine
 		xform_program,    // NV4097_SET_TRANSFORM_PROGRAM: vertex ucode upload and dirty check
 		xform_const,      // NV4097_SET_TRANSFORM_CONSTANT: transform constant upload
 		draw_setup,       // Draw clause iteration glue left over once the scopes below are charged
@@ -162,6 +165,22 @@ namespace rsx::prof
 			if (m_active) [[unlikely]]
 			{
 				m_prev = switch_to(b);
+			}
+		}
+
+		/**
+		 * End the scope before it goes out of scope. Idempotent.
+		 *
+		 * For the case where the region worth measuring ends part-way through a function and
+		 * the rest belongs to a different bucket, without having to introduce a block whose
+		 * only purpose is to close a brace.
+		 */
+		void close()
+		{
+			if (m_active) [[unlikely]]
+			{
+				switch_to(m_prev);
+				m_active = false;
 			}
 		}
 
