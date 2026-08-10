@@ -37,6 +37,21 @@ namespace rsx
 
 		void FIFO_control::sync_get() const
 		{
+			// Every 8th packet. The guest reads GET to work out how much ring space is
+			// free, and it is far ahead of us here (FIFO stalls measure 0.1/frame), so a
+			// bounded lag is invisible to it. Anything that can idle or block publishes
+			// immediately via sync_get_force so a waiting producer is never held up.
+			if (++m_get_sync_counter & 7)
+			{
+				return;
+			}
+
+			m_ctrl->get.release(m_internal_get);
+		}
+
+		void FIFO_control::sync_get_force() const
+		{
+			m_get_sync_counter = 0;
 			m_ctrl->get.release(m_internal_get);
 		}
 
@@ -58,7 +73,7 @@ namespace rsx
 			{
 				// NOTE: Only supposed to be invoked to wait for a single arg on command[0] (4 bytes)
 				// Wait for put to allow us to procceed execution
-				sync_get();
+				sync_get_force();
 				invalidate_cache();
 
 				while (read_put() == m_internal_get && !Emu.IsStopped())
@@ -257,7 +272,7 @@ namespace rsx
 				return {};
 			}
 
-			if (g_cfg.core.rsx_fifo_accuracy)
+			if (m_accurate_fetch)
 			{
 				// Return a pointer to the cache storage with confined access
 				const u32 cache_offset_in_words = (m_internal_get - m_cache_addr) / 4;
@@ -365,6 +380,8 @@ namespace rsx
 
 		void FIFO_control::read(register_pair& data)
 		{
+			m_accurate_fetch = !!g_cfg.core.rsx_fifo_accuracy;
+
 			if (m_remaining_commands)
 			{
 				// Previous block aborted to wait for PUT pointer
@@ -391,7 +408,7 @@ namespace rsx
 				m_memwatch_cmp = 0;
 			}
 
-			if (!g_cfg.core.rsx_fifo_accuracy) [[ likely ]]
+			if (!m_accurate_fetch) [[ likely ]]
 			{
 				const u32 put = read_put();
 
@@ -684,6 +701,9 @@ namespace rsx
 					performance_counters.state = FIFO::state::nop;
 				}
 
+				// Going idle: publish GET now rather than carrying up to seven packets of
+				// lag into a period where the producer may be waiting on ring space.
+				fifo_ctrl->sync_get_force();
 				return;
 			}
 			case FIFO::FIFO_EMPTY:
@@ -925,7 +945,9 @@ namespace rsx
 			{
 				method(m_ctx, reg, value);
 
-				if (state & cpu_flag::again)
+				// Relaxed: `again` is only set by this thread, by the handler just called.
+				// The seq_cst default is an ldar on ARM64 for no benefit here.
+				if (state.observe() & cpu_flag::again)
 				{
 					m_ctx->register_state->decode(reg, m_ctx->register_state->latch);
 					break;

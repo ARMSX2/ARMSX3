@@ -190,7 +190,18 @@ namespace rsx
 
 			u32 get_pos() const { return m_internal_get; }
 			u32 last_cmd() const { return m_cmd; }
+			// Publishing GET is a release store into guest DMA memory, and `get` shares a
+			// 64-byte line with `put` which the guest PPU writes from another CPU cluster. At
+			// ~36700 packets/frame that is a cross-cluster coherence miss per packet. Bounded
+			// lag instead, with sync_get_force on every path that can idle or block.
 			void sync_get() const;
+			void sync_get_force() const;
+			mutable u32 m_get_sync_counter = 0;
+
+			// Snapshot of g_cfg.core.rsx_fifo_accuracy, refreshed once per packet. Reading the
+			// config goes through a seq_cst atomic load, an ldar on ARM64 the compiler cannot
+			// hoist, and it was consulted once per FIFO argument.
+			bool m_accurate_fetch = false;
 			std::span<const u32> get_current_arg_ptr(u32 length_in_words) const;
 			u32 get_remaining_args_count() const { return m_remaining_commands; }
 			void restore_state(u32 cmd, u32 count);
