@@ -120,6 +120,16 @@ namespace vk
 			return;
 		}
 
+		// Writing a timestamp into a range that has not been reset is invalid, and the reset
+		// only happens when the frame region opens. Anything reaching a fresh slot first --
+		// the passes flip() runs after next_frame() has already rotated the slot, for one --
+		// would be writing into stale queries. Drop those rather than corrupt the slot.
+		if (state.needs_reset && r != region::frame)
+		{
+			state.dropped[idx]++;
+			return;
+		}
+
 		m_open[idx].active = true;
 		m_open[idx].slot = m_write_slot;
 		m_open[idx].event = state.events[idx];
@@ -175,12 +185,48 @@ namespace vk
 		state.in_flight = true;
 	}
 
+	std::string gpu_timer::debug_state() const
+	{
+		if (!m_pool)
+		{
+			return "pool not initialised";
+		}
+
+		std::string out = fmt::format("collected=%u flips=%u write_slot=%u dropped=%u",
+			m_frames, m_flips, m_write_slot, m_dropped);
+
+		for (u32 i = 0; i < region_count; i++)
+		{
+			if (!m_open[i].active) continue;
+			fmt::append(out, " | OPEN %s slot=%u", name_of(static_cast<region>(i)), m_open[i].slot);
+		}
+
+		for (u32 s = 0; s < ring_depth; s++)
+		{
+			const auto& st = m_slots[s];
+			if (!st.in_flight && !st.needs_reset) continue;
+
+			fmt::append(out, " | s%u%s%s ev=", s,
+				st.in_flight ? " inflight" : "",
+				st.needs_reset ? " needsreset" : "");
+
+			for (u32 i = 0; i < region_count; i++)
+			{
+				fmt::append(out, "%s%u", i ? "/" : "", st.events[i]);
+			}
+		}
+
+		return out;
+	}
+
 	void gpu_timer::next_frame()
 	{
 		if (!m_pool)
 		{
 			return;
 		}
+
+		m_flips++;
 
 		// Retiring the slot is driven from the frame boundary rather than from a region
 		// closing. The primary command buffer is submitted several times per frame, once

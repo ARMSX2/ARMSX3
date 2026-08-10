@@ -520,6 +520,14 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		timer.next_frame();
 		timer.collect();
 
+		// A collector that harvests nothing prints nothing, which reads exactly like a GPU
+		// doing nothing. Say so periodically instead, with enough state to tell which of the
+		// collection preconditions is the one not being met.
+		if (timer.collected_frames() < 300 && timer.flips() && (timer.flips() % 300) == 0)
+		{
+			rsx_log.warning("[gpu_timer] no report yet: %s", timer.debug_state());
+		}
+
 		if (timer.collected_frames() >= 300)
 		{
 			const auto ms = timer.per_frame_ms();

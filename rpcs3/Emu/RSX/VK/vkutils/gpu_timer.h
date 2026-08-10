@@ -76,6 +76,13 @@ namespace vk
 
 		static const char* name_of(region r);
 
+		// Why nothing has been collected yet. A collector that silently returns nothing is
+		// indistinguishable from a GPU that is doing nothing, and the report only prints once
+		// 300 frames have been gathered, so a stuck collector prints nothing at all forever.
+		std::string debug_state() const;
+
+		u64 flips() const { return m_flips; }
+
 	private:
 		// A frame issues many readbacks and blits, and the interesting number is what they
 		// cost in total, so each region gets room for several timed events per frame rather
@@ -137,6 +144,7 @@ namespace vk
 		std::array<u64, region_count> m_events_seen{};
 		u64 m_dropped = 0;
 		u64 m_frames = 0;
+		u64 m_flips = 0;
 
 	public:
 		u64 dropped_events() const { return m_dropped; }
