@@ -6,6 +6,7 @@
 #include "VKResourceManager.h"
 
 #include "Emu/RSX/Common/simple_array.hpp"
+#include "Emu/RSX/rsx_profiler.h"
 #include "Emu/RSX/rsx_utils.h"
 #include "Emu/RSX/rsx_cache.h"
 #include "Utilities/mutex.h"
@@ -90,7 +91,13 @@ namespace vk
 				return false;
 			}
 
-			if (vkGetFenceStatus(pool->get_owner(), m_submit_fence->handle) == VK_SUCCESS)
+			VkResult fence_status;
+			{
+				RSX_PROF_SCOPE(fence_poll);
+				fence_status = vkGetFenceStatus(pool->get_owner(), m_submit_fence->handle);
+			}
+
+			if (fence_status == VK_SUCCESS)
 			{
 				lock.upgrade();
 

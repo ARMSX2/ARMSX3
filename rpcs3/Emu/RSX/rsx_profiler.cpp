@@ -96,6 +96,8 @@ namespace rsx::prof
 		case bucket::present_check: return "Present check";
 		case bucket::swap_wait: return "Swap fence wait";
 		case bucket::res_trim: return "Resource trim";
+		case bucket::res_gc: return "Resource destroy";
+		case bucket::fence_poll: return "Fence poll";
 		case bucket::vertex: return "Vertex/index";
 		case bucket::shader_translate: return "Shader translate";
 		case bucket::shader_compile: return "Shader compile";

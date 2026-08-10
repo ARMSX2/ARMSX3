@@ -2,6 +2,7 @@
 #include "VKResourceManager.h"
 #include "VKGSRender.h"
 #include "VKCommandStream.h"
+#include "Emu/RSX/rsx_profiler.h"
 
 namespace vk
 {
@@ -98,7 +99,14 @@ namespace vk
 			return;
 		}
 
-		g_resource_manager.eid_completed(event_id);
+		{
+			// Runs inline on whoever noticed the event, which without multithreaded RSX is the
+			// RSX thread itself. Popping a scope runs the destructors for every GPU object it
+			// retired, and on a tiler those free calls go into the kernel driver.
+			RSX_PROF_SCOPE(res_gc);
+			g_resource_manager.eid_completed(event_id);
+		}
+
 		g_last_completed_event = std::max(event_id, g_last_completed_event.load());
 	}
 

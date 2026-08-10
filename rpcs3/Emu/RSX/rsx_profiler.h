@@ -42,6 +42,8 @@ namespace rsx::prof
 		present_check,    // Mid-draw present status check when the frame context went dirty
 		swap_wait,        // Blocking wait on the presented frame's command buffer fence
 		res_trim,         // Per-frame resource reclaim: overlay dispose, heap trim, snapshot restore
+		res_gc,           // Destroying the GPU objects retired by a completed event
+		fence_poll,       // vkGetFenceStatus on the presented frame's fence
 		vertex,           // Vertex and index processing, including layout conversion
 		shader_translate, // RSX shader decompilation to GLSL/SPIR-V
 		shader_compile,   // Host driver compiling the translated shader
