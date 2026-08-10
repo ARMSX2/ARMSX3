@@ -850,6 +850,18 @@ class Progress {
   jmethodID onProgressEventMethodId;
 
 public:
+  // Every JNI object handed back to native code is a LOCAL reference, and local
+  // references are only reclaimed when the frame that made them returns to Java.
+  // The frames this runs on do not return: MainThreadProcessor::process and the
+  // compilation queue are infinite loops inside a single JNI call, so anything
+  // taken here is held for the life of the process.
+  //
+  // FindClass and NewStringUTF were both leaking, once per Progress and once per
+  // report(). The progress dialog server pushes several updates per tick and a
+  // firmware precompile emits thousands of ticks, so ART's local reference table
+  // (512 entries) filled and the runtime aborted with "local reference table
+  // overflow". Time-proportional, which is why it showed up on slow devices during
+  // long installs and not on fast ones.
   Progress(JNIEnv *env, jlong progressId) : env(env), progressId(progressId) {
     progressRepositoryClass =
         ensure(env->FindClass("net/rpcsx/ProgressRepository"));
@@ -857,10 +869,29 @@ public:
         progressRepositoryClass, "onProgressEvent", "(JJJLjava/lang/String;)Z");
   }
 
+  ~Progress() {
+    if (progressRepositoryClass != nullptr) {
+      env->DeleteLocalRef(progressRepositoryClass);
+    }
+  }
+
+  // Owns a local reference, so it cannot be copied: the second destructor would
+  // delete a reference the first already released.
+  Progress(const Progress &) = delete;
+  Progress &operator=(const Progress &) = delete;
+
   bool report(jlong value, jlong max, const std::string &message = {}) {
-    return env->CallStaticBooleanMethod(
+    jstring text = message.empty() ? nullptr : wrap(env, message);
+
+    const bool result = env->CallStaticBooleanMethod(
         progressRepositoryClass, onProgressEventMethodId, progressId, value,
-        max, message.empty() ? nullptr : wrap(env, message));
+        max, text);
+
+    if (text != nullptr) {
+      env->DeleteLocalRef(text);
+    }
+
+    return result;
   }
 
   void failure(const std::string &message = {}) { report(-1, 0, message); }
