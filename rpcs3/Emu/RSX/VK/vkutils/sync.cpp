@@ -575,20 +575,43 @@ namespace vk
 		}
 		else
 		{
-			while (auto status = vkGetFenceStatus(*g_render_device, pFence->handle))
+			// An unbounded wait used to poll vkGetFenceStatus in a tight loop with nothing
+			// but a pause hint between calls. That is a core pinned at 100% for the whole
+			// duration of a GPU wait, plus a driver entry point hammered while the driver is
+			// trying to do the very work being waited on.
+			//
+			// It costs little on a desktop with cores to spare. It is expensive here: this
+			// is reached from command_buffer::flush() for the submit fence, so it is the
+			// path a frame takes when it waits on the GPU, and it competes with the SPU and
+			// PPU threads for a handful of cores. Arkham City measured 24ms of a 53ms frame
+			// in this function with the GPU only 71-77% busy, which is what a stall looks
+			// like when the waiter is too busy spinning to prepare the next submission.
+			//
+			// Poll briefly first, since most waits here are for a fence that is about to
+			// signal and blocking would cost a syscall and a wake-up for no reason, then
+			// hand the wait to the driver, which can sleep the thread and free the core.
+			// Same shape as wait_for_event below, which already got this treatment.
+			constexpr u64 hot_polls = 512;
+
+			for (u64 poll = 0; poll < hot_polls; poll++)
 			{
-				switch (status)
+				const VkResult status = vkGetFenceStatus(*g_render_device, pFence->handle);
+
+				if (status == VK_SUCCESS)
 				{
-				case VK_NOT_READY:
-					utils::pause();
-					continue;
-				default:
+					return VK_SUCCESS;
+				}
+
+				if (status != VK_NOT_READY)
+				{
 					die_with_error(status);
 					return status;
 				}
+
+				utils::pause();
 			}
 
-			return VK_SUCCESS;
+			return vkWaitForFences(*g_render_device, 1, &pFence->handle, VK_FALSE, UINT64_MAX);
 		}
 	}
 
