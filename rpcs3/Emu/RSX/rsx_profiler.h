@@ -190,6 +190,15 @@ namespace rsx::prof
 	extern u64 g_fifo_commands;
 
 	/**
+	 * Methods actually dispatched, as opposed to [g_fifo_commands], which counts entries
+	 * into run_FIFO. One of those drains a WHOLE packet, so dividing by it prices a packet
+	 * and not a method. Sonic '06 averages roughly 17 methods per packet, so the two differ
+	 * by more than an order of magnitude and the per-packet figure was being read as a
+	 * per-command one.
+	 */
+	extern u64 g_fifo_dispatches;
+
+	/**
 	 * Commands seen per RSX method register, indexed by (id >> 2).
 	 *
 	 * The per-command figure came out around a microsecond, which is far too much for

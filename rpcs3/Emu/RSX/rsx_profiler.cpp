@@ -19,6 +19,7 @@ namespace rsx::prof
 	const void* g_owner_thread = nullptr;
 	u64 g_fifo_refills = 0;
 	u64 g_fifo_commands = 0;
+	u64 g_fifo_dispatches = 0;
 	u32 g_method_counts[method_slot_count] = {};
 	u64 g_fifo_refill_bytes = 0;
 	u64 g_fifo_refill_stalls = 0;
@@ -255,9 +256,20 @@ namespace rsx::prof
 			// bucket with no owner left in it.
 			const u64 decode_ticks = g_acc.ticks[static_cast<usz>(bucket::fifo_decode)];
 
-			fmt::append(report, "\n\tFIFO commands   %.0f/frame, %.0f ns each in FIFO decode",
+			// Labelled packets, because that is what it counts. fifo_decode is also a
+			// catch-all holding every method handler body, since no handler carries its
+			// own scope, so neither figure is dispatch overhead alone.
+			fmt::append(report, "\n\tFIFO packets    %.0f/frame, %.0f ns each in FIFO decode",
 				static_cast<double>(g_fifo_commands) / frames,
 				static_cast<double>(decode_ticks) * to_ms * 1'000'000.0 / static_cast<double>(g_fifo_commands));
+
+			if (g_fifo_dispatches)
+			{
+				fmt::append(report, "\n\tFIFO dispatches %.0f/frame, %.1f/packet, %.0f ns each",
+					static_cast<double>(g_fifo_dispatches) / frames,
+					static_cast<double>(g_fifo_dispatches) / static_cast<double>(g_fifo_commands),
+					static_cast<double>(decode_ticks) * to_ms * 1'000'000.0 / static_cast<double>(g_fifo_dispatches));
+			}
 		}
 
 		{
@@ -284,7 +296,7 @@ namespace rsx::prof
 					fmt::append(list, "\n\t  %-46s %8.0f/frame  %4.1f%%",
 						name.empty() ? fmt::format("0x%05x", slot << 2) : std::string(name),
 						static_cast<double>(count) / frames,
-						static_cast<double>(count) * 100.0 / static_cast<double>(g_fifo_commands));
+						static_cast<double>(count) * 100.0 / static_cast<double>(g_fifo_dispatches ? g_fifo_dispatches : g_fifo_commands));
 				}
 				fmt::append(report, "\n\ttop methods%s", list);
 			}
@@ -293,6 +305,7 @@ namespace rsx::prof
 		prof_log.success("%s", report);
 
 		g_fifo_commands = 0;
+		g_fifo_dispatches = 0;
 		std::fill(std::begin(g_method_counts), std::end(g_method_counts), 0u);
 		g_fifo_refills = 0;
 		g_fifo_refill_bytes = 0;

@@ -912,7 +912,14 @@ namespace rsx
 
 			m_ctx->register_state->decode(reg, value);
 
-			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_method_counts[reg & (rsx::prof::method_slot_count - 1)]++;
+			if (rsx::prof::enabled()) [[unlikely]]
+			{
+				// The sequential counter is what the per-method figure should divide by.
+				// g_fifo_commands is incremented once per run_FIFO entry, which is a whole
+				// packet, so it prices packets.
+				rsx::prof::g_fifo_dispatches++;
+				rsx::prof::g_method_counts[reg & (rsx::prof::method_slot_count - 1)]++;
+			}
 
 			if (auto method = methods[reg])
 			{

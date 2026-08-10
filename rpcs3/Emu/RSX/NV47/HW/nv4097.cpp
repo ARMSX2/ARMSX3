@@ -64,7 +64,12 @@ namespace rsx
 			const u32 method_range = 32 - index;
 
 			// Get limit imposed by FIFO PUT (if put is behind get it will result in a number ignored by min)
-			const u32 fifo_read_limit = static_cast<u32>(((RSX(ctx)->ctrl->put & ~3ull) - (RSX(ctx)->fifo_ctrl->get_pos())) / 4);
+			// observe(), not the default load: atomic_t reads are seq_cst here, which is an
+			// ldar on ARM64, and `put` shares a cache line with `get` that the guest PPU writes
+			// from another cluster. This is one of the two hottest handlers in the FIFO, so the
+			// barrier was paid thousands of times a frame on a contended line. A stale value is
+			// harmless: it only ever shrinks the batch, and the remainder is picked up next time.
+			const u32 fifo_read_limit = static_cast<u32>(((RSX(ctx)->ctrl->put.observe() & ~3ull) - (RSX(ctx)->fifo_ctrl->get_pos())) / 4);
 
 			const u32 count = std::min<u32>({ fifo_args_cnt, fifo_read_limit, method_range });
 
@@ -141,7 +146,12 @@ namespace rsx
 			const u32 method_range = 32 - index;
 
 			// Get limit imposed by FIFO PUT (if put is behind get it will result in a number ignored by min)
-			const u32 fifo_read_limit = static_cast<u32>(((RSX(ctx)->ctrl->put & ~3ull) - (RSX(ctx)->fifo_ctrl->get_pos())) / 4);
+			// observe(), not the default load: atomic_t reads are seq_cst here, which is an
+			// ldar on ARM64, and `put` shares a cache line with `get` that the guest PPU writes
+			// from another cluster. This is one of the two hottest handlers in the FIFO, so the
+			// barrier was paid thousands of times a frame on a contended line. A stale value is
+			// harmless: it only ever shrinks the batch, and the remainder is picked up next time.
+			const u32 fifo_read_limit = static_cast<u32>(((RSX(ctx)->ctrl->put.observe() & ~3ull) - (RSX(ctx)->fifo_ctrl->get_pos())) / 4);
 
 			const u32 count = std::min<u32>({ fifo_args_cnt, fifo_read_limit, method_range });
 
