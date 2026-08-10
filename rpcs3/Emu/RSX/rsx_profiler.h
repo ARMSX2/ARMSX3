@@ -33,7 +33,13 @@ namespace rsx::prof
 	enum class bucket : u8
 	{
 		fifo_decode,      // Reading and dispatching FIFO commands
-		draw_setup,       // Draw clause setup and state validation
+		draw_setup,       // Draw clause iteration glue left over once the scopes below are charged
+		draw_prologue,    // rsx::thread::begin: conditional render eval and draw mode classify
+		draw_epilogue,    // rsx::thread::end: clause cleanup, push buffers, ZCULL on_draw
+		wr_barrier,       // Depth/colour surface write barriers issued before binding resources
+		rtt_write,        // Render target on_write bookkeeping after the draw is recorded
+		tex_release,      // Releasing uncached temporary texture subresources
+		present_check,    // Mid-draw present status check when the frame context went dirty
 		vertex,           // Vertex and index processing, including layout conversion
 		shader_translate, // RSX shader decompilation to GLSL/SPIR-V
 		shader_compile,   // Host driver compiling the translated shader
@@ -197,6 +203,15 @@ namespace rsx::prof
 	 * per-command one.
 	 */
 	extern u64 g_fifo_dispatches;
+
+	/**
+	 * Draws that reached rsx::thread::end, so the per-draw buckets can be priced.
+	 *
+	 * Draw setup being the largest bucket says nothing on its own: a lot of draws at a sane
+	 * cost each and a few at an insane one are the same number and want opposite fixes. This
+	 * is the denominator that tells them apart, the same way g_fifo_dispatches did for decode.
+	 */
+	extern u64 g_draw_calls;
 
 	/**
 	 * Commands seen per RSX method register, indexed by (id >> 2).

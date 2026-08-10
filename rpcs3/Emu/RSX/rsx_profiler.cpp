@@ -20,6 +20,7 @@ namespace rsx::prof
 	u64 g_fifo_refills = 0;
 	u64 g_fifo_commands = 0;
 	u64 g_fifo_dispatches = 0;
+	u64 g_draw_calls = 0;
 	u32 g_method_counts[method_slot_count] = {};
 	u64 g_fifo_refill_bytes = 0;
 	u64 g_fifo_refill_stalls = 0;
@@ -85,6 +86,12 @@ namespace rsx::prof
 		{
 		case bucket::fifo_decode: return "FIFO decode";
 		case bucket::draw_setup: return "Draw setup";
+		case bucket::draw_prologue: return "Draw prologue";
+		case bucket::draw_epilogue: return "Draw epilogue";
+		case bucket::wr_barrier: return "Write barrier";
+		case bucket::rtt_write: return "RTT on_write";
+		case bucket::tex_release: return "Temp tex release";
+		case bucket::present_check: return "Present check";
 		case bucket::vertex: return "Vertex/index";
 		case bucket::shader_translate: return "Shader translate";
 		case bucket::shader_compile: return "Shader compile";
@@ -272,6 +279,29 @@ namespace rsx::prof
 			}
 		}
 
+		if (g_draw_calls)
+		{
+			// Every bucket named here is entered exactly once per draw, so dividing by the
+			// draw count turns "this bucket is big" into "each draw pays this much", which is
+			// the form that says whether to cut the per-draw cost or the number of draws.
+			const auto ns_per_draw = [&](bucket b)
+			{
+				return static_cast<double>(g_acc.ticks[static_cast<usz>(b)]) * to_ms * 1'000'000.0
+					/ static_cast<double>(g_draw_calls);
+			};
+
+			fmt::append(report, "\n\tdraws           %.0f/frame, %.0f ns each in draw setup",
+				static_cast<double>(g_draw_calls) / frames,
+				ns_per_draw(bucket::draw_setup));
+
+			fmt::append(report, "\n\tper draw        prologue %.0f, epilogue %.0f, wr barrier %.0f, on_write %.0f, tex release %.0f ns",
+				ns_per_draw(bucket::draw_prologue),
+				ns_per_draw(bucket::draw_epilogue),
+				ns_per_draw(bucket::wr_barrier),
+				ns_per_draw(bucket::rtt_write),
+				ns_per_draw(bucket::tex_release));
+		}
+
 		{
 			// Top methods by volume. Names via gcm_printing, which is the same table the
 			// command dumps use, so these read the same as the log's own FIFO traces.
@@ -306,6 +336,7 @@ namespace rsx::prof
 
 		g_fifo_commands = 0;
 		g_fifo_dispatches = 0;
+		g_draw_calls = 0;
 		std::fill(std::begin(g_method_counts), std::end(g_method_counts), 0u);
 		g_fifo_refills = 0;
 		g_fifo_refill_bytes = 0;

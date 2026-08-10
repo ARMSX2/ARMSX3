@@ -777,6 +777,11 @@ namespace rsx
 
 	void thread::begin()
 	{
+		// Backend-independent draw prologue. The read_barrier below is a hard sync on the
+		// software conditional render path, so this is not always the trivial flag work it
+		// looks like, and unscoped it was billed to draw_setup along with everything else.
+		RSX_PROF_SCOPE(draw_prologue);
+
 		if (cond_render_ctrl.hw_cond_active)
 		{
 			if (!cond_render_ctrl.eval_pending())
@@ -824,6 +829,10 @@ namespace rsx
 
 	void thread::end()
 	{
+		// Backend-independent draw epilogue: clause cleanup, push buffer teardown and the
+		// ZCULL draw hook, all of which scale with draw count rather than with frame count.
+		RSX_PROF_SCOPE(draw_epilogue);
+
 		if (capture_current_frame)
 		{
 			capture::capture_draw_memory(this);
@@ -831,6 +840,10 @@ namespace rsx
 
 		in_begin_end = false;
 		m_frame_stats.draw_calls++;
+
+		// Counted here rather than at the backend call sites so every early return in
+		// VKGSRender::end is included; all of them route through this function.
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_draw_calls++;
 
 		method_registers.current_draw_clause.post_execute_cleanup(m_ctx);
 

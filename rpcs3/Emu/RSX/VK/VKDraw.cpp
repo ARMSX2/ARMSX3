@@ -1214,9 +1214,10 @@ void VKGSRender::emit_geometry(u32 sub_index)
 
 void VKGSRender::begin()
 {
-	// Everything a draw costs before geometry is emitted. The scopes it calls into
-	// (pipeline, descriptors, texcache_lookup, texture_upload) nest inside and are charged
-	// to themselves, so what remains here is genuinely per-draw setup and nothing else.
+	// Everything a draw costs before geometry is emitted. The scopes it calls into nest inside
+	// and are charged to themselves; draw_setup is only ever the remainder. Calling that
+	// remainder "setup" hid 23 ms/frame of barriers and epilogue work behind a plausible name,
+	// so every block with a body of its own now carries a scope and this keeps the leftovers.
 	RSX_PROF_SCOPE(draw_setup);
 
 	// Save shader state now before prefetch and loading happens
@@ -1261,6 +1262,8 @@ void VKGSRender::end()
 	// Check for frame resource status here because it is possible for an async flip to happen between begin/end
 	if (m_current_frame->flags & frame_context_state::dirty) [[unlikely]]
 	{
+		RSX_PROF_SCOPE(present_check);
+
 		check_present_status();
 
 		if (m_current_frame->swap_command_buffer) [[unlikely]]
@@ -1297,32 +1300,38 @@ void VKGSRender::end()
 	m_frame_stats.setup_time += m_profiler.duration();
 
 	// Apply write memory barriers
-	if (auto ds = std::get<1>(m_rtts.m_bound_depth_stencil))
 	{
-		ds->write_barrier(*m_current_command_buffer);
+		// Each write_barrier can resolve, copy or tear down the render pass, which on a tiler
+		// is the most expensive thing available. Unscoped it read as flat per-draw setup cost.
+		RSX_PROF_SCOPE(wr_barrier);
 
-		if (m_graphics_state.test(rsx::zeta_address_cyclic_barrier) &&
-			ds->current_layout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+		if (auto ds = std::get<1>(m_rtts.m_bound_depth_stencil))
 		{
-			// We actually need to end the subpass as a minimum. Without this, early-Z optimiazations in following draws will clobber reads from previous draws and cause flickering.
-			// Since we're ending the subpass, might as well restore DCC/HiZ for extra performance
-			ds->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-			ds->reset_surface_counters();
+			ds->write_barrier(*m_current_command_buffer);
 
-			// Regenerate render pass key
-			invalidate_render_pass();
+			if (m_graphics_state.test(rsx::zeta_address_cyclic_barrier) &&
+				ds->current_layout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+			{
+				// We actually need to end the subpass as a minimum. Without this, early-Z optimiazations in following draws will clobber reads from previous draws and cause flickering.
+				// Since we're ending the subpass, might as well restore DCC/HiZ for extra performance
+				ds->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+				ds->reset_surface_counters();
+
+				// Regenerate render pass key
+				invalidate_render_pass();
+			}
 		}
-	}
 
-	for (auto &rtt : m_rtts.m_bound_render_targets)
-	{
-		if (auto surface = std::get<1>(rtt))
+		for (auto &rtt : m_rtts.m_bound_render_targets)
 		{
-			surface->write_barrier(*m_current_command_buffer);
+			if (auto surface = std::get<1>(rtt))
+			{
+				surface->write_barrier(*m_current_command_buffer);
+			}
 		}
-	}
 
-	m_graphics_state.clear(rsx::zeta_address_cyclic_barrier);
+		m_graphics_state.clear(rsx::zeta_address_cyclic_barrier);
+	}
 
 	m_frame_stats.setup_time += m_profiler.duration();
 
@@ -1359,7 +1368,11 @@ void VKGSRender::end()
 		}
 	}
 
-	m_texture_cache.release_uncached_temporary_subresources();
+	{
+		RSX_PROF_SCOPE(tex_release);
+		m_texture_cache.release_uncached_temporary_subresources();
+	}
+
 	m_frame_stats.textures_upload_time += m_profiler.duration();
 
 	u32 sub_index = 0;               // RSX subdraw ID
@@ -1390,7 +1403,12 @@ void VKGSRender::end()
 		m_current_command_buffer->flags &= ~(vk::command_buffer::cb_has_conditional_render);
 	}
 
-	m_rtts.on_write(m_framebuffer_layout.color_write_enabled, m_framebuffer_layout.zeta_write_enabled);
+	{
+		// Touches every bound surface and can queue cache invalidations, so it is per-draw
+		// work in the same class as the write barriers rather than bookkeeping.
+		RSX_PROF_SCOPE(rtt_write);
+		m_rtts.on_write(m_framebuffer_layout.color_write_enabled, m_framebuffer_layout.zeta_write_enabled);
+	}
 
 	rsx::thread::end();
 }
