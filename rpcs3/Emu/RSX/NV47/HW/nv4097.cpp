@@ -193,8 +193,15 @@ namespace rsx
 				const usz first_index_off = 0;
 				const usz second_index_off = (((rcount / 4) - 1) / 2) * 4;
 
-				const u64 src_op1_2 = read_from_ptr<be_t<u64>>(fifo_span, first_index_off);
-				const u64 src_op2_2 = read_from_ptr<be_t<u64>>(fifo_span, second_index_off);
+				// Rotated by 32: the destination holds each word already byte-swapped
+				// individually (copy_data_swap_u32), but be_t<u64> swaps all eight bytes,
+				// which additionally EXCHANGES the two words. Without the rotate this
+				// compares (w0,w1) against (w1,w0) and can only match when w0 == w1, so the
+				// redundant-upload check never fired: every upload set the ucode dirty,
+				// forcing a vertex program re-analysis, a program cache hint drop and a full
+				// transform constant re-upload on every draw.
+				const u64 src_op1_2 = std::rotl<u64>(read_from_ptr<be_t<u64>>(fifo_span, first_index_off), 32);
+				const u64 src_op2_2 = std::rotl<u64>(read_from_ptr<be_t<u64>>(fifo_span, second_index_off), 32);
 
 				// Fast comparison
 				if (src_op1_2 != read_from_ptr_unsafe<u64>(out_ptr, first_index_off) || src_op2_2 != read_from_ptr_unsafe<u64>(out_ptr, second_index_off))
