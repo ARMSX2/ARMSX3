@@ -640,7 +640,15 @@ object Rpcs3Bridge {
     @JvmStatic
     fun thumbnailForSlot(slot: Int): ByteArray? = runCatching {
         val title = RPCSX.instance.getTitleId().takeIf { it.isNotEmpty() } ?: return null
-        val root = com.armsx2.runtime.MainActivityRuntime.systemDirPosix() ?: return null
+        // systemDirPosix() is null on the DEFAULT install, where no folder was ever picked,
+        // so this returned no thumbnail at all for most setups -- the tiles read as empty
+        // while the files sat on disk beside the states they belong to. Same fallback
+        // inputProfilesDir() uses, and getExternalFilesDir is where the native core roots
+        // fs::get_config_dir(), which is where it wrote these.
+        val root = com.armsx2.runtime.MainActivityRuntime.systemDirPosix()
+            ?: com.armsx2.runtime.MainActivityRuntime.instance
+                ?.applicationContext?.getExternalFilesDir(null)?.absolutePath
+            ?: return null
         val file = java.io.File(root, "config/savestates/$title/armsx3_slots/slot$slot.thumb")
         if (!file.isFile) return null
 
