@@ -1972,6 +1972,12 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 		std::string fname;
 		fmt::append(fname, "__ub%u", m_flat_list.size());
 		jit_announce(wxptr, raw - wxptr, fname);
+
+#if defined(ARCH_ARM64)
+		// Flush the freshly written ubertrampoline BEFORE publishing it via the CAS
+		// below; other cores may branch into it immediately.
+		asmjit::VirtMem::flushInstructionCache(wxptr, raw - wxptr);
+#endif
 	}
 
 	if (auto _old = stuff_it->trampoline.compare_and_swap(nullptr, result))
@@ -2113,9 +2119,10 @@ spu_function_t spu_runtime::make_branch_patchpoint(u16 data) const
 	pthread_jit_write_protect_np(true);
 #endif
 
-	// Flush all cache lines after potentially writing executable code
-	asm("ISB");
-	asm("DSB ISH");
+	// ISB/DSB alone performs no D->I cache maintenance; the asmjit helper does the
+	// required DC CVAU + IC IVAU sequence (with trailing barriers) so other cores
+	// cannot fetch stale instructions for this freshly written patchpoint.
+	asmjit::VirtMem::flushInstructionCache(patch_fn, raw - patch_fn);
 
 	return reinterpret_cast<spu_function_t>(patch_fn);
 #else
@@ -2181,9 +2188,10 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 		pthread_jit_write_protect_np(true);
 #endif
 
-		// Flush all cache lines after potentially writing executable code
-		asm("ISB");
-		asm("DSB ISH");
+		// ISB/DSB alone performs no D->I cache maintenance and is mis-ordered for
+		// self-modifying code; the asmjit helper does DC CVAU + IC IVAU (with
+		// trailing barriers) for the rewritten 16-byte branch site.
+		asmjit::VirtMem::flushInstructionCache(rip, 16);
 #else
 #error "Unimplemented"
 #endif
@@ -2329,9 +2337,9 @@ void spu_recompiler_base::branch(spu_thread& spu, void*, u8* rip)
 	pthread_jit_write_protect_np(true);
 #endif
 
-	// Flush all cache lines after potentially writing executable code
-	asm("ISB");
-	asm("DSB ISH");
+	// See the matching site above: real icache maintenance for the rewritten
+	// 16-byte branch site.
+	asmjit::VirtMem::flushInstructionCache(rip, 16);
 #else
 #error "Unimplemented"
 #endif
