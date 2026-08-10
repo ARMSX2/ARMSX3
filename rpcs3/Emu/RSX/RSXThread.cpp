@@ -852,6 +852,10 @@ namespace rsx
 				rsx::prof::g_pass_draws[rsx::prof::g_pass_ordinal]++;
 				rsx::prof::g_pass_vertices[rsx::prof::g_pass_ordinal] +=
 					method_registers.current_draw_clause.get_elements_count();
+				rsx::prof::g_pass_vp_words[rsx::prof::g_pass_ordinal] +=
+					::size32(current_vertex_program.data);
+				rsx::prof::g_pass_fp_words[rsx::prof::g_pass_ordinal] +=
+					current_fragment_program.ucode_length;
 			}
 		}
 

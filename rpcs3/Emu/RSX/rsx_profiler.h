@@ -286,6 +286,18 @@ namespace rsx::prof
 	extern u64 g_pass_barriers[pass_slot_count];
 	extern u64 g_pass_cyclic[pass_slot_count];
 
+	/**
+	 * Shader ucode length summed per pass, so cost per vertex can be read against complexity.
+	 *
+	 * Pass six costs about 26 times what pass eight does per vertex, with no barriers, no
+	 * sensitivity to resolution and no change when tiling is bypassed entirely. The only thing
+	 * left that behaves that way is the vertex shader, and this decides whether there is a bug
+	 * here at all: shaders genuinely that much longer are the game's own workload and nothing
+	 * to fix, while comparable ones mean something is happening to them that should not be.
+	 */
+	extern u64 g_pass_vp_words[pass_slot_count];
+	extern u64 g_pass_fp_words[pass_slot_count];
+
 	inline void note_pass_barrier(bool cyclic)
 	{
 		if (g_pass_ordinal >= pass_slot_count) return;
