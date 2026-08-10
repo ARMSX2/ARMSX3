@@ -297,7 +297,7 @@ val EN: Map<String, String> = mapOf(
     "ra.library.syncing" to "Syncing…",
     "ra.library.notReady" to "Sign in and scan your library first.",
     "app.backup.export" to "Back up app data",
-    "app.backup.export.desc" to "Save states, memory cards, artwork, per-game settings, controller profiles, patches and all settings into one .zip. Games and BIOS are not included.",
+    "app.backup.export.desc" to "Save data, trophies, licences, save states, controller profiles, patches and all settings into one .zip. Installed games, firmware and BIOS are not included.",
     "app.backup.import" to "Restore app data",
     "app.backup.import.desc" to "Load a backup .zip. Files with the same name are replaced, and the app restarts.",
     "app.reset" to "Reset app",
