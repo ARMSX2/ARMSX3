@@ -25,6 +25,10 @@ namespace rsx::prof
 	u64 g_frame_cleanups = 0;
 	u64 g_fence_polls = 0;
 	u64 g_fence_polls_not_ready = 0;
+	u64 g_xform_program_calls = 0;
+	u64 g_xform_program_words = 0;
+	u64 g_xform_const_calls = 0;
+	u64 g_xform_const_words = 0;
 	u32 g_method_counts[method_slot_count] = {};
 	u64 g_fifo_refill_bytes = 0;
 	u64 g_fifo_refill_stalls = 0;
@@ -89,6 +93,9 @@ namespace rsx::prof
 		switch (b)
 		{
 		case bucket::fifo_decode: return "FIFO decode";
+		case bucket::fifo_refill: return "FIFO refill";
+		case bucket::xform_program: return "Xform program";
+		case bucket::xform_const: return "Xform constant";
 		case bucket::draw_setup: return "Draw setup";
 		case bucket::draw_prologue: return "Draw prologue";
 		case bucket::draw_epilogue: return "Draw epilogue";
@@ -265,6 +272,26 @@ namespace rsx::prof
 				static_cast<double>(g_fifo_refill_bytes) / static_cast<double>(g_fifo_refills));
 		}
 
+		if (g_xform_program_calls || g_xform_const_calls)
+		{
+			const auto ns_each = [&](bucket b, u64 calls)
+			{
+				return calls
+					? static_cast<double>(g_acc.ticks[static_cast<usz>(b)]) * to_ms * 1'000'000.0 / static_cast<double>(calls)
+					: 0.0;
+			};
+
+			fmt::append(report, "\n\txform program   %.0f calls/frame, %.1f words each, %.0f ns each",
+				static_cast<double>(g_xform_program_calls) / frames,
+				g_xform_program_calls ? static_cast<double>(g_xform_program_words) / static_cast<double>(g_xform_program_calls) : 0.0,
+				ns_each(bucket::xform_program, g_xform_program_calls));
+
+			fmt::append(report, "\n\txform constant  %.0f calls/frame, %.1f words each, %.0f ns each",
+				static_cast<double>(g_xform_const_calls) / frames,
+				g_xform_const_calls ? static_cast<double>(g_xform_const_words) / static_cast<double>(g_xform_const_calls) : 0.0,
+				ns_each(bucket::xform_const, g_xform_const_calls));
+		}
+
 		if (g_fifo_commands)
 		{
 			// The per-command figure is against fifo_decode specifically, since that is the
@@ -368,6 +395,10 @@ namespace rsx::prof
 		g_frame_cleanups = 0;
 		g_fence_polls = 0;
 		g_fence_polls_not_ready = 0;
+		g_xform_program_calls = 0;
+		g_xform_program_words = 0;
+		g_xform_const_calls = 0;
+		g_xform_const_words = 0;
 		std::fill(std::begin(g_method_counts), std::end(g_method_counts), 0u);
 		g_fifo_refills = 0;
 		g_fifo_refill_bytes = 0;

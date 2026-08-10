@@ -33,6 +33,9 @@ namespace rsx::prof
 	enum class bucket : u8
 	{
 		fifo_decode,      // Reading and dispatching FIFO commands
+		fifo_refill,      // Refilling the FIFO cache from guest memory under a reservation lock
+		xform_program,    // NV4097_SET_TRANSFORM_PROGRAM: vertex ucode upload and dirty check
+		xform_const,      // NV4097_SET_TRANSFORM_CONSTANT: transform constant upload
 		draw_setup,       // Draw clause iteration glue left over once the scopes below are charged
 		draw_prologue,    // rsx::thread::begin: conditional render eval and draw mode classify
 		draw_epilogue,    // rsx::thread::end: clause cleanup, push buffers, ZCULL on_draw
@@ -238,6 +241,18 @@ namespace rsx::prof
 	 */
 	extern u64 g_fence_polls;
 	extern u64 g_fence_polls_not_ready;
+
+	/**
+	 * Calls into the two batching FIFO handlers, and methods each consumed.
+	 *
+	 * Both take a run of methods and skip the rest, so their share of the method histogram is
+	 * methods, not calls, and dividing the bucket by the histogram would price a batch as if
+	 * it were one method. These are the call counts the buckets actually divide by.
+	 */
+	extern u64 g_xform_program_calls;
+	extern u64 g_xform_program_words;
+	extern u64 g_xform_const_calls;
+	extern u64 g_xform_const_words;
 
 	/**
 	 * Commands seen per RSX method register, indexed by (id >> 2).

@@ -4,6 +4,7 @@
 
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/RSX/Common/BufferUtils.h"
+#include "Emu/RSX/rsx_profiler.h"
 
 #define RSX(ctx) ctx->rsxthr
 #define REGS(ctx) (&rsx::method_registers)
@@ -53,6 +54,11 @@ namespace rsx
 
 		void set_transform_constant::impl(context* ctx, u32 reg, [[maybe_unused]] u32 arg)
 		{
+			// The other batching handler, and 13% of dispatches across its load/write pair.
+			RSX_PROF_SCOPE(xform_const);
+
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_const_calls++;
+
 			const u32 index = reg - NV4097_SET_TRANSFORM_CONSTANT;
 			const u32 constant_id = index / 4;
 			const u8 subreg = index % 4;
@@ -132,11 +138,21 @@ namespace rsx
 				}
 			}
 
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_const_words += rcount;
+
 			RSX(ctx)->fifo_ctrl->skip_methods(rcount - 1);
 		}
 
 		void set_transform_program::impl(context* ctx, u32 reg, u32 /*arg*/)
 		{
+			// Biggest single entry in the method histogram at 16% of all dispatches, and one
+			// of only two handlers that batches, so the histogram counts the methods it
+			// consumes rather than the times it ran. Scoped per call, which is the number the
+			// cost per batch actually divides by.
+			RSX_PROF_SCOPE(xform_program);
+
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_program_calls++;
+
 			const u32 index = reg - NV4097_SET_TRANSFORM_PROGRAM;
 
 			// FIFO args count including this one
@@ -218,6 +234,8 @@ namespace rsx
 			{
 				to_set_dirty = rsx::pipeline_state::vertex_program_ucode_dirty;
 			}
+
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_program_words += rcount;
 
 			RSX(ctx)->m_graphics_state |= to_set_dirty;
 			REGS(ctx)->transform_program_load_set(load_pos + ((rcount + index % 4) / 4));

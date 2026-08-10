@@ -157,6 +157,13 @@ namespace rsx
 					rsx::prof::g_fifo_refill_bytes += m_cache_size;
 				}
 
+				// Covers the reservation lock and the line fetch loop below. Refills run a few
+				// hundred times a frame rather than per command, so unlike a per-command scope
+				// this costs nothing measurable. Each one copies and then re-compares every
+				// 128-byte line, so it moves twice the bytes it fetches, against memory the
+				// guest PPU is actively writing.
+				RSX_PROF_SCOPE(fifo_refill);
+
 				rsx::reservation_lock<true, 1> rsx_lock(addr1, m_cache_size, true);
 				const auto src = vm::_ptr<spu_rdata_t>(addr1);
 
