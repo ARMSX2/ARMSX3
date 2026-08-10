@@ -245,6 +245,37 @@ void VKGSRender::advance_queued_frames()
 	m_vertex_cache->purge();
 	m_current_frame->tag_frame_end();
 
+	// Throttle here rather than by accident.
+	//
+	// The queue used to stay at one entry because the poll above blocked until the oldest
+	// frame had finished, so the pipeline was bounded by never actually having one. Now that
+	// the poll returns honestly, frames accumulate until the GPU retires them, and the
+	// rotation below would eventually hand out a context that is still in flight.
+	//
+	// Wait only when the pipeline is genuinely full, which is the one moment a wait is worth
+	// what it costs. It is charged to swap_wait, so what used to hide in a status query is
+	// now visible as the frame pacing it always was.
+	//
+	// One below the context count, not equal to it. The queue and the rotation below advance
+	// in the same order, so the frame this retires is the one the rotation is about to hand
+	// out. Allowing the full count would hand out a context that is still in flight and push
+	// every frame down the single aux context borrow path, which has room for one such frame
+	// and an ensure() waiting for the second.
+	const u32 max_frames_in_flight = std::max(m_max_async_frames, 2u) - 1u;
+
+	while (m_queued_frames.size() >= max_frames_in_flight)
+	{
+		auto frame = m_queued_frames.front();
+
+		if (!frame->swap_command_buffer)
+		{
+			m_queued_frames.pop_front();
+			continue;
+		}
+
+		frame_context_cleanup(frame);
+	}
+
 	m_queued_frames.push_back(m_current_frame);
 	ensure(m_queued_frames.size() <= m_max_async_frames);
 
