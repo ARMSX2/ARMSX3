@@ -41,7 +41,13 @@ namespace vk
 	{
 		if (vk::is_renderpass_open(cmd))
 		{
-			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[16]++; vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]]
+			{
+				rsx::prof::g_rp_sites[16]++;
+				rsx::prof::note_rp_teardown(__builtin_return_address(0), 0);
+			}
+
+			vk::end_renderpass(cmd);
 		}
 
 		//Prepare an image to match the new layout..

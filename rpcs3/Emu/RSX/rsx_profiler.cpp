@@ -6,6 +6,7 @@
 #include <string>
 #include <algorithm>
 #include <utility>
+#include <dlfcn.h>
 #include "gcm_printing.h"
 
 LOG_CHANNEL(prof_log, "RSXPROF");
@@ -82,6 +83,36 @@ namespace rsx::prof
 		"Present:1091",
 		"Present:1102",
 	};
+
+	const void* g_rp_callers[2][rp_caller_slots] = {};
+	u64 g_rp_caller_counts[2][rp_caller_slots] = {};
+
+	void note_rp_teardown(const void* caller, u32 level)
+	{
+		// Linear scan of a tiny table. The set of distinct callers is small and stable, so
+		// this finds a hit in the first few slots; if it ever overflows, the surplus is
+		// charged to the last slot rather than silently dropped.
+		auto& addrs = g_rp_callers[level];
+		auto& counts = g_rp_caller_counts[level];
+
+		for (usz i = 0; i < rp_caller_slots; i++)
+		{
+			if (addrs[i] == caller)
+			{
+				counts[i]++;
+				return;
+			}
+
+			if (!addrs[i])
+			{
+				addrs[i] = caller;
+				counts[i] = 1;
+				return;
+			}
+		}
+
+		counts[rp_caller_slots - 1]++;
+	}
 
 	void bind_to_current_thread()
 	{
@@ -272,6 +303,53 @@ namespace rsx::prof
 				static_cast<double>(g_fifo_refill_bytes) / static_cast<double>(g_fifo_refills));
 		}
 
+		for (u32 level = 0; level < 2; level++)
+		{
+			std::pair<const void*, u64> top[6] = {};
+			for (usz i = 0; i < rp_caller_slots; i++)
+			{
+				if (!g_rp_caller_counts[level][i]) continue;
+				if (g_rp_caller_counts[level][i] <= top[5].second) continue;
+				top[5] = { g_rp_callers[level][i], g_rp_caller_counts[level][i] };
+				std::sort(std::begin(top), std::end(top),
+					[](const auto& a, const auto& b) { return a.second > b.second; });
+			}
+
+			if (!top[0].second)
+			{
+				continue;
+			}
+
+			std::string list;
+			for (const auto& [addr, count] : top)
+			{
+				if (!count) continue;
+
+				// dladdr resolves exported names directly; everything else only yields the
+				// module base, which is enough to hand the offset to llvm-symbolizer against
+				// the unstripped core.
+				Dl_info info{};
+				std::string where;
+
+				if (addr && dladdr(addr, &info) && info.dli_fbase)
+				{
+					const uptr off = reinterpret_cast<uptr>(addr) - reinterpret_cast<uptr>(info.dli_fbase);
+					where = info.dli_sname
+						? fmt::format("%s +0x%x", info.dli_sname, off)
+						: fmt::format("+0x%x", off);
+				}
+				else
+				{
+					where = fmt::format("%p", addr);
+				}
+
+				fmt::append(list, "\n\t  %-44s %6.1f/frame", where, static_cast<double>(count) / frames);
+			}
+
+			fmt::append(report, "\n\trp teardown by %s%s",
+				level == 0 ? "direct caller" : "change_layout caller", list);
+		}
+
 		if (g_xform_program_calls || g_xform_const_calls)
 		{
 			const auto ns_each = [&](bucket b, u64 calls)
@@ -409,6 +487,8 @@ namespace rsx::prof
 		g_mprotect_bytes = 0;
 		g_access_violations = 0;
 		for (auto& c : g_rp_sites) c = 0;
+		for (auto& level : g_rp_caller_counts) for (auto& c : level) c = 0;
+		for (auto& level : g_rp_callers) for (auto& a : level) a = nullptr;
 		for (auto& c : g_flush_sites) c = 0;
 
 		g_acc = {};

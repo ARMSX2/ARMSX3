@@ -306,6 +306,27 @@ namespace rsx::prof
 	extern u64 g_rp_sites[rp_site_count];
 	extern const char* g_rp_site_names[rp_site_count];
 
+	/**
+	 * Render pass teardowns attributed by return address.
+	 *
+	 * change_image_layout ends the open pass and is reached from 75 call sites, so the single
+	 * counter on it says how many teardowns happened and never which code wanted them. Tagging
+	 * 75 sites by hand is not worth it and would still miss the next one; recording the return
+	 * address costs one instruction on a path taken about twenty times a frame.
+	 *
+	 * Two levels, because most callers do not call it directly: image::change_layout funnels
+	 * them, so a single level would report that function for nearly everything. The first table
+	 * is whoever called change_image_layout, the second is whoever called change_layout.
+	 *
+	 * Addresses are reported raw plus an offset from the module base, which llvm-symbolizer
+	 * turns into names against the unstripped build-android copy.
+	 */
+	inline constexpr usz rp_caller_slots = 24;
+	extern const void* g_rp_callers[2][rp_caller_slots];
+	extern u64 g_rp_caller_counts[2][rp_caller_slots];
+
+	void note_rp_teardown(const void* caller, u32 level);
+
 	inline constexpr u32 flush_site_count = 21;
 	extern u64 g_flush_sites[flush_site_count];
 	extern const char* g_flush_site_names[flush_site_count];
