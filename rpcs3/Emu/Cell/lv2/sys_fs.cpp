@@ -1663,7 +1663,12 @@ error_code sys_fs_readdir(ppu_thread& ppu, u32 fd, vm::ptr<CellFsDirent> dir, vm
 {
 	lv2_obj::sleep(ppu);
 
-	sys_fs.warning("sys_fs_readdir(fd=%d, dir=*0x%x, nread=*0x%x)", fd, dir, nread);
+	// trace, matching sys_fs_read: this fires once per directory ENTRY, not once per
+	// operation like opendir and closedir either side of it. A game scanning its own
+	// USRDIR emits a line per file, and one such scan was measured at 346 lines in 22ms,
+	// which is log bandwidth spent during boot for no diagnostic gain. opendir and
+	// closedir stay at warning, so the scan is still visible, just not enumerated.
+	sys_fs.trace("sys_fs_readdir(fd=%d, dir=*0x%x, nread=*0x%x)", fd, dir, nread);
 
 	if (!dir || !nread)
 	{
