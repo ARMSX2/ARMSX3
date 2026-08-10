@@ -25,6 +25,8 @@
 #include "Overlays/overlay_perf_metrics.h"
 #include "Overlays/overlay_debug_overlay.h"
 #include "Overlays/overlay_manager.h"
+#include "Overlays/overlay_message.h"
+#include "Emu/system_progress.hpp"
 
 #include "Utilities/date_time.h"
 
@@ -1304,6 +1306,55 @@ namespace rsx
 		return t + timestamp_subvalue;
 	}
 
+	// Frame-stall notice. See check_frame_stall.
+	static atomic_t<u64> g_last_frame_time{0};
+	static atomic_t<bool> g_frame_stall_reported{false};
+
+	// Say when the picture has stopped, instead of leaving the last frame standing.
+	//
+	// A guest that stops progressing presents nothing further, so whatever was last drawn stays
+	// on screen indefinitely. When that frame happens to contain the boot progress bar, it reads
+	// as "stuck compiling at 1s remaining" -- and it looked exactly the same across five
+	// unrelated faults, sending every report of them to the wrong place. Nothing contradicts it
+	// either: the emulator has not crashed, so there is no error to be found.
+	//
+	// Only fires while nothing is legitimately in progress. A shader or PPU compile presents no
+	// frames for minutes at a time, and it holds a progress dialog that says as much, so an
+	// empty progress text is what separates "working, quietly" from "stopped".
+	static void check_frame_stall()
+	{
+		const u64 now = get_system_time();
+
+		// Something is reporting progress, or no frame has ever landed yet: not a stall.
+		if (g_progr_text || !g_last_frame_time)
+		{
+			g_last_frame_time = now;
+			g_frame_stall_reported = false;
+			return;
+		}
+
+		const u64 since = now - g_last_frame_time;
+
+		if (since < 30'000'000 || g_frame_stall_reported)
+		{
+			return;
+		}
+
+		g_frame_stall_reported = true;
+
+		rsx_log.error("No frame presented in %us with nothing in progress: the game has stopped.",
+			since / 1'000'000);
+
+		// Draw it, rather than logging into a file nobody has when they file the report. The
+		// native UI flip is what gets it on screen at all -- the guest is not flipping, which is
+		// the whole point.
+		rsx::overlays::queue_message(
+			std::string("Game has stopped responding - it is no longer drawing frames"),
+			10'000'000);
+
+		set_native_ui_flip();
+	}
+
 	// Say where every guest thread is parked once frames have stopped arriving.
 	//
 	// A hang with the RSX idle is a guest-side wait, and nothing named the thread or the place.
@@ -1338,6 +1389,10 @@ namespace rsx
 		// and silent -- and that is the case where what the RSX thread is looping in is the
 		// whole question. Both calls return immediately once armed and are rate-limited.
 		prof::set_enabled(g_cfg.video.rsx_profiler.get());
+
+		// Always on, unlike the profiler-gated reports below: the whole point is that this
+		// reaches a user who has not enabled anything.
+		check_frame_stall();
 
 		// Both halves on the same condition. Every hang chased so far has been the guest
 		// waiting while the RSX idles, and only the RSX half was ever visible.
@@ -3335,6 +3390,9 @@ namespace rsx
 	{
 		// Cheap enough to re-read every frame, and being able to arm the profiler while a
 		// slowdown is already happening matters more here than saving a config lookup.
+		g_last_frame_time = get_system_time();
+		g_frame_stall_reported = false;
+
 		prof::set_enabled(g_cfg.video.rsx_profiler.get());
 		prof::tick_frame();
 
