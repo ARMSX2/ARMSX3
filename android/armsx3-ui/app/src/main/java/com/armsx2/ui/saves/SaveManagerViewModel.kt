@@ -228,11 +228,15 @@ internal fun importSaveStateToNextFreeSlot(context: android.content.Context, uri
     val active = MainActivityRuntime.currentGame.value
     if (active == null || active.serial.isNullOrBlank()) return SS_IMPORT_NO_GAME
     return runCatching {
-        val free = (0 until 10).firstOrNull { s ->
-            val p = NativeApp.getGamePathSlot(s)
-            p.isNullOrBlank() || !File(p).exists()
-        } ?: return@runCatching SS_IMPORT_SLOTS_FULL
-        val destPath = NativeApp.getGamePathSlot(free)?.takeIf(String::isNotBlank) ?: return@runCatching SS_IMPORT_FAILED
+        // Occupancy comes from the core. getGamePathSlot answers with the TITLE ID, so
+        // File(it).exists() was false for every slot: the first OCCUPIED slot read as free,
+        // and the destination built from the same value was a relative name that landed in
+        // the process working directory. The import then reported the slot it had not
+        // written, which is worse than failing.
+        val free = (0 until 10).firstOrNull { !NativeApp.hasStateInSlot(it) }
+            ?: return@runCatching SS_IMPORT_SLOTS_FULL
+        val destPath = NativeApp.getSlotFilePath(free)?.takeIf(String::isNotBlank)
+            ?: return@runCatching SS_IMPORT_FAILED
         val dest = File(destPath)
         dest.parentFile?.mkdirs()
         val ok = context.contentResolver.openInputStream(uri)?.use { input ->

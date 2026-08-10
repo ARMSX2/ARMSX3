@@ -129,9 +129,16 @@ public final class NativeApp {
     public static String getGamePathSlot(int slot) { return Rpcs3Bridge.gamePathForSlot(slot); }
 
     /** [TODO] Autosave is an ARMSX2 feature layered on PCSX2 savestates. */
-    public static boolean hasAutosaveState() { Unsupported.note("hasAutosaveState"); return false; }
-    public static boolean saveAutosaveState() { Unsupported.note("saveAutosaveState"); return false; }
-    public static boolean loadAutosaveState() { Unsupported.note("loadAutosaveState"); return false; }
+    /** [MAPPED] Auto-save state, kept in a reserved slot above the ten the picker shows. */
+    public static boolean hasAutosaveState() { return Rpcs3Bridge.hasAutosaveState(); }
+    public static boolean saveAutosaveState() { return Rpcs3Bridge.saveAutosaveState(); }
+    public static boolean loadAutosaveState() { return Rpcs3Bridge.loadAutosaveState(); }
+
+    /** [MAPPED] Where a slot's state file lives. Not getGamePathSlot, which answers a title id. */
+    public static String getSlotFilePath(int slot) { return Rpcs3Bridge.slotFilePath(slot); }
+
+    /** [MAPPED] Whether a slot holds a state. Ask this rather than probing a path. */
+    public static boolean hasStateInSlot(int slot) { return Rpcs3Bridge.hasState(slot); }
     public static String getAutosaveGamePath() { Unsupported.note("getAutosaveGamePath"); return ""; }
     public static byte[] getAutosaveImage() { Unsupported.note("getAutosaveImage"); return null; }
 

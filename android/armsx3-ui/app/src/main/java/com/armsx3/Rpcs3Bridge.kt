@@ -617,6 +617,44 @@ object Rpcs3Bridge {
         runCatching { RPCSX.instance.hasStateInSlot(slot) }.getOrDefault(false)
 
     /**
+     * The auto-save lives one slot above the ten the picker shows.
+     *
+     * Auto-save-on-exit, auto-load-on-boot and the interval auto-save were ARMSX2 shims that
+     * returned false and were never ported, so all three toggles persisted, read back, and
+     * did nothing -- the interval job woke on schedule for a function that always failed.
+     * Nothing bounds a slot number on either side of the JNI, so they reuse the numbered-slot
+     * path that works rather than growing a second mechanism, and the user's ten stay theirs.
+     */
+    private const val AUTOSAVE_SLOT = 10
+
+    @JvmStatic
+    fun hasAutosaveState(): Boolean = hasState(AUTOSAVE_SLOT)
+
+    @JvmStatic
+    fun saveAutosaveState(): Boolean = saveState(AUTOSAVE_SLOT)
+
+    @JvmStatic
+    fun loadAutosaveState(): Boolean = loadState(AUTOSAVE_SLOT)
+
+    /**
+     * Absolute path a slot's state file would occupy, whether or not one is there.
+     *
+     * gamePathForSlot answers with the TITLE ID -- the picker wants it as a subtitle -- so
+     * anything treating it as a path gets a relative name that resolves against the process
+     * working directory. Import did exactly that. This is the real location, built the way
+     * armsx3_slot_dir builds it natively.
+     */
+    @JvmStatic
+    fun slotFilePath(slot: Int): String? = runCatching {
+        val title = RPCSX.instance.getTitleId().takeIf { it.isNotEmpty() } ?: return null
+        val root = com.armsx2.runtime.MainActivityRuntime.systemDirPosix()
+            ?: com.armsx2.runtime.MainActivityRuntime.instance
+                ?.applicationContext?.getExternalFilesDir(null)?.absolutePath
+            ?: return null
+        java.io.File(root, "config/savestates/$title/armsx3_slots/slot$slot.SAVESTAT.zst").absolutePath
+    }.getOrNull()
+
+    /**
      * Occupancy for the slot picker, which treats a non-empty string as "this slot has
      * something in it" and shows the last path segment as the tile's subtitle.
      *
