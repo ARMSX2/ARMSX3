@@ -63,6 +63,41 @@ private fun isLicence(file: java.io.File): Boolean =
     file.extension.equals("rap", ignoreCase = true) ||
         file.extension.equals("edat", ignoreCase = true)
 
+/** RPCS3's default user. Licences live under this account's exdata. */
+private const val EXDATA_USER = "00000001"
+
+/**
+ * Install a licence by copying it into exdata, the way upstream does.
+ *
+ * A .rap is 16 raw bytes of key and carries nothing that says which content it unlocks:
+ * that lives in the FILENAME, as the content id (EP0102-NPEB00342_00-...). Upstream's
+ * InstallFileInExData copies the file to dev_hdd0/home/<usr>/exdata/ under its own name and
+ * is done, so the name is the whole mechanism.
+ *
+ * This used to call the native installKey with an empty game path. That path decrypts the
+ * GAME's EBOOT to read an NPDRM header out of it, so with no game path there is no EBOOT,
+ * no header, and every licence failed. The screen then reported "may be encrypted,
+ * incomplete or not a PS3 package", which described neither the file nor the failure and
+ * sent people looking at their dumps.
+ *
+ * Reported for Resident Evil 4 HD and for DLC licences generally.
+ */
+private fun installLicence(file: java.io.File): Boolean = runCatching {
+    val bytes = file.readBytes()
+
+    // Upstream's own guard: anything under 0x10 is not a licence, whatever it is named.
+    if (bytes.size < 0x10) return false
+
+    val dir = java.io.File(RPCSX.rootDirectory, "config/dev_hdd0/home/$EXDATA_USER/exdata")
+    if (!dir.isDirectory && !dir.mkdirs()) return false
+
+    // Name preserved, extension lower-cased: the loader looks the content id up by name and
+    // a licence dumped as .RAP would be missed on a case-sensitive filesystem.
+    java.io.File(dir, "${file.nameWithoutExtension}.${file.extension.lowercase()}")
+        .writeBytes(bytes)
+    true
+}.getOrDefault(false)
+
 private fun readInstalled(): List<java.io.File> =
     java.io.File(RPCSX.rootDirectory, "config/dev_hdd0/game")
         .listFiles()
@@ -101,18 +136,20 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                 runCatching {
                     val label = if (files.size == 1) files[0].name
                     else "${files.size} package parts"
+                    // Licences first, before any descriptor is opened: they are a file copy
+                    // keyed on the NAME, and handing the native installer a bare fd throws
+                    // that name away. See installLicence.
+                    if (files.size == 1 && isLicence(files[0])) {
+                        return@runCatching installLicence(files[0])
+                    }
+
                     val id = ProgressRepository.create(context, "Installing $label")
                     progressId = id
                     val descriptors = files.map {
                         ParcelFileDescriptor.open(it, ParcelFileDescriptor.MODE_READ_ONLY)
                     }
                     try {
-                        if (descriptors.size == 1 && isLicence(files[0])) {
-                            // installKey, not install: _rpcsx_install rejects a RAP outright
-                            // ("cannot be preinstalled"). Empty game path means "work it out
-                            // from the licence", which is what the exdata directory needs.
-                            RPCSX.instance.installKey(descriptors[0].fd, id, "")
-                        } else if (descriptors.size == 1) {
+                        if (descriptors.size == 1) {
                             RPCSX.instance.install(descriptors[0].fd, id)
                         } else {
                             RPCSX.instance.installSplitPkg(
