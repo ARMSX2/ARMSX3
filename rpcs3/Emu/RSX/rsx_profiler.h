@@ -298,6 +298,26 @@ namespace rsx::prof
 	extern u64 g_pass_vp_words[pass_slot_count];
 	extern u64 g_pass_fp_words[pass_slot_count];
 
+	/**
+	 * Draws the GPU actually receives, as opposed to draw clauses the guest issued.
+	 *
+	 * A clause is expanded over its subranges, so one entry in the draw count can become
+	 * thousands of draws. Batching them through VK_EXT_multi_draw saves the command overhead
+	 * on our side and changes nothing about how many the GPU processes.
+	 *
+	 * This is the one thing left that fits pass six: shorter shaders than the cheap passes, a
+	 * quarter of their vertices, no barriers, indifferent to resolution and to tiling being
+	 * switched off, and seven times the cost. Thousands of tiny draws at a fixed cost each look
+	 * exactly like that, and nothing measured so far would show them.
+	 */
+	extern u64 g_pass_subdraws[pass_slot_count];
+
+	inline void note_subdraws(u32 count)
+	{
+		if (g_pass_ordinal >= pass_slot_count) return;
+		g_pass_subdraws[g_pass_ordinal] += count;
+	}
+
 	inline void note_pass_barrier(bool cyclic)
 	{
 		if (g_pass_ordinal >= pass_slot_count) return;
