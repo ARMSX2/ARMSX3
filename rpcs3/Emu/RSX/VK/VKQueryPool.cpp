@@ -196,6 +196,14 @@ namespace vk
 
 			for (u32 spins = 0; !query_info.ready; spins++)
 			{
+				// Emulation is going away; a driver that never answers must not also wedge
+				// the exit path. The value is irrelevant once we are aborting.
+				if (thread_ctrl::state() == thread_state::aborting)
+				{
+					rsx_log.warning("Occlusion query %u abandoned: emulation is shutting down.", index);
+					break;
+				}
+
 				if ((spins & 0xffff) == 0xffff)
 				{
 					const auto waited = std::chrono::steady_clock::now() - wait_started;
@@ -208,7 +216,18 @@ namespace vk
 
 					if (waited > std::chrono::seconds(3))
 					{
-						rsx_log.error("Occlusion query %u never completed; abandoning the wait and using result=%u.", index, query_info.data);
+						// Ask once more directly before giving up, to record WHICH way the
+						// driver is stalling: VK_NOT_READY, or VK_SUCCESS with the
+						// availability word still clear. The two are indistinguishable
+						// through poke_query and need different conversations with whoever
+						// maintains the driver.
+						u32 probe[2] = { 0, 0 };
+						const VkResult status = vkGetQueryPoolResults(*owner, *query_info.pool, index, 1, 8, probe, 8,
+							result_flags | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+
+						rsx_log.error("Occlusion query %u never completed (last VkResult %d, result %u, availability %u); "
+							"abandoning the wait and using result=%u.",
+							index, static_cast<int>(status), probe[0], probe[1], query_info.data);
 						query_info.ready = true;
 						break;
 					}
