@@ -4342,22 +4342,40 @@ bool spu_thread::process_mfc_cmd()
 
 							// Check if LSA points to an OUT buffer on the stack from a caller - unlikely to be a loop
 							//
-							// First iteration of a spin sequence only. Everything the answer depends on --
-							// pc, ch_mfc_cmd.lsa, gpr[1] (the stack pointer) and addr -- was compared
-							// against the previous iteration just above, and any change resets the
-							// sequence, so the callstack cannot have moved underneath a spin.
+							// Memoised, because deriving it is expensive out of all proportion to what it
+							// decides. dump_callstack_list walks the whole stack and calls is_exec_code on
+							// each candidate, which allocates a vector<bool> sized to pc/4 and scans for
+							// branch targets. A whole-process profile of Spider-Man: Web of Shadows, whose
+							// SPU code spins on GETLLAR with an LSA in the top 64K of local store, put
+							// dump_callstack_list at 19.6% of all CPU inclusive -- the largest single item
+							// after process_mfc_cmd itself, and far more than the RSX thread spent on the
+							// frame.
 							//
-							// Deriving it every iteration is expensive out of proportion to what it
-							// decides: dump_callstack_list walks the stack and calls is_exec_code for each
-							// candidate, which allocates a vector<bool> and scans for branch targets. On a
-							// profile of Spider-Man: Web of Shadows, whose SPU code spins on GETLLAR with
-							// an LSA in the top 64K of local store, those three accounted for about 14% of
-							// all CPU across the process -- more than the RSX thread spent on the frame.
-							if (getllar_spin_count == 0 && last_getllar_lsa >= SPU_LS_SIZE - 0x10000 && last_getllar_lsa > last_getllar_gpr1)
+							// Only the innermost frame is wanted here, and it is a function of pc, the
+							// stack pointer and the link register, so it is recomputed only when one of
+							// those moves. Keying on the values rather than on getllar_spin_count matters:
+							// that counter is reset from several other paths, so it is frequently zero and
+							// gating on it still recomputed constantly.
+							//
+							// A stale answer across an unrelated LS write is acceptable. This decides only
+							// whether the address looks like a caller's OUT buffer, and calls it "unlikely
+							// to be a loop".
+							if (last_getllar_lsa >= SPU_LS_SIZE - 0x10000 && last_getllar_lsa > last_getllar_gpr1)
 							{
-								auto cs = dump_callstack_list();
+								const u32 cs_sp = gpr[1]._u32[3];
+								const u32 cs_lr = gpr[0]._u32[3];
 
-								if (!cs.empty() && last_getllar_lsa > cs[0].second)
+								if (getllar_cs_pc != pc || getllar_cs_sp != cs_sp || getllar_cs_lr != cs_lr)
+								{
+									getllar_cs_pc = pc;
+									getllar_cs_sp = cs_sp;
+									getllar_cs_lr = cs_lr;
+
+									const auto cs = dump_callstack_list();
+									getllar_cs_first = cs.empty() ? umax : cs[0].second;
+								}
+
+								if (getllar_cs_first != umax && last_getllar_lsa > getllar_cs_first)
 								{
 									getllar_busy_waiting_switch = umax;
 									getllar_spin_count = 0;

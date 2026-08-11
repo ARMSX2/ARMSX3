@@ -813,6 +813,15 @@ public:
 	u32 last_getllar_addr = umax;
 	u32 last_getllar_lsa = umax;
 	u32 getllar_spin_count = 0;
+
+	// Memo for the out-buffer check in the GETLLAR spin detector. That check needs only the
+	// innermost frame, but derives it from dump_callstack_list, which walks the whole stack and
+	// runs a code-flow scan per candidate. The answer is a function of pc, the stack pointer and
+	// the link register, so it is recomputed only when one of those moves.
+	u32 getllar_cs_pc = umax;
+	u32 getllar_cs_sp = umax;
+	u32 getllar_cs_lr = umax;
+	u32 getllar_cs_first = umax;
 	u32 getllar_busy_waiting_switch = umax; // umax means the test needs evaluation, otherwise it's a boolean
 	u64 getllar_evaluate_time = 0;
 
