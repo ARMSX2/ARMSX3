@@ -66,6 +66,9 @@ object ConfigStore {
     private const val KEY_VBLANK_60 = "config.migrated.frameCap60"
     // Clears core overrides left behind by the profiling work.
     private const val KEY_DIAG_OVERRIDES_PURGED = "config.migrated.diagOverridesPurged"
+    // Bumped: the profiler was recorded again during the 0.5 debugging work, after the first
+    // purge had already marked itself done.
+    private const val KEY_DIAG_OVERRIDES_PURGED_2 = "config.migrated.diagOverridesPurged2"
     private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
     // The relaxed-ZCULL default was recorded as a raw core override as well, and the OFF
@@ -86,6 +89,8 @@ object ConfigStore {
         // on, and Sonic Unleashed fails EARLIER with it off, so it is not safe to apply blindly.
         "BLUS30218" to mapOf("ps3AccurateSpuRsv" to false),
     )
+    // The VRAM limit is a hard heap cap, not an eviction threshold; too low fails allocations.
+    private const val KEY_VRAM_LIMIT_1024 = "config.migrated.vramCap3072"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
     // ...and back off it: the mask it enables confines six SPU threads to four cores.
     private const val KEY_AFFINITY_OS = "config.migrated.affinitySchedulerOff"
@@ -218,6 +223,21 @@ object ConfigStore {
             MainActivityRuntime.prefs.edit { putBoolean(KEY_PER_GAME_SEED, true) }
         }
 
+        // Bring stored VRAM caps up to 3072.
+        //
+        // This value is VMA's pHeapSizeLimit, a hard ceiling rather than an eviction threshold, so
+        // a low value does not make the cache release earlier -- it makes allocation fail earlier.
+        // The God of War 3 demo was measured failing a routine 24MB request at 1024 while holding
+        // 1.6GB resident and 280MB in that pool, and failing at 2048 one screen later. A
+        // deliberate choice of some other value is left alone.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_VRAM_LIMIT_1024, false)) {
+            if (raw != null && (parsed.ps3.vramLimitMb == 2048 || parsed.ps3.vramLimitMb == 1024)) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(vramLimitMb = 3072))
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_VRAM_LIMIT_1024, true) }
+        }
+
         // ...and take the raw override with it. The ON migration recorded the same setting a
         // second time as a core override, and the OFF migration above only corrected the
         // curated field, so the two stores disagreed: relaxedZcull was false everywhere the UI
@@ -331,6 +351,23 @@ object ConfigStore {
                 )
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_DIAG_OVERRIDES_PURGED, true) }
+        }
+
+        // Again, for the profiling done to fix Web of Shadows, Sonic Unleashed and God of War 3.
+        //
+        // The RSX profiler writes a bucket report every 300 frames and keeps per-scope timers on
+        // the RSX thread, so it is not something to leave switched on for a release. It was found
+        // still recorded as a raw core override -- config.yml read "RSX Profiler: true" while
+        // nothing in the UI said so, the same divergence as the relaxed-ZCULL one, because
+        // overrides re-push at the tail of applyTo.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_DIAG_OVERRIDES_PURGED_2, false)) {
+            runCatching {
+                CoreSettingOverrides.forget(
+                    SettingsScope.Global, null,
+                    "Video@@RSX Profiler", "Video@@Eager Surface Readback", "Video@@GPU Profiler",
+                )
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_DIAG_OVERRIDES_PURGED_2, true) }
         }
 
         // Move anyone still on the old Approximate xfloat default onto Accurate.

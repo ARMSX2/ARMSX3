@@ -146,7 +146,24 @@ data class Ps3Settings(
     val forceCpuBlit: Boolean = false,
     val shaderCompThreads: Int = 0,
     val textureLodBias: Int = 0,
-    val vramLimitMb: Int = 2048,
+    /**
+     * VRAM allocation limit in MB. 1024.
+     *
+     * NOT a soft budget. It is applied as VMA's pHeapSizeLimit, so it is a hard ceiling: once
+     * total allocations reach it VMA returns OUT_OF_DEVICE_MEMORY however much memory the device
+     * actually has free. Lowering it does not make the cache evict earlier, it makes allocation
+     * fail earlier.
+     *
+     * Measured on the God of War 3 demo at 1024: a routine 24MB request failed while the process
+     * held only 1.6GB resident and 280MB in that pool -- an artificial ceiling, not the hardware.
+     * At 2048 it failed too, one screen later.
+     *
+     * It still has to be finite. Upstream's 65536 means no cap at all, which suits a discrete
+     * card with its own memory; here the GPU shares system RAM, and an unbounded texture cache
+     * quota was previously measured driving the process to 4.3GB and getting it killed. 3072
+     * leaves the caches room to work while keeping that bound.
+     */
+    val vramLimitMb: Int = 3072,
     val asyncTexStream: Boolean = false,
     val audioFormat: Int = 0,
     val audioChannels: Int = 0,
@@ -1289,29 +1306,6 @@ data class Settings(
         // rather than on throughput, and sleeping to save a core that nobody wants only adds
         // wake-up latency to the chain that is actually holding the frame.
         runCatching { net.rpcsx.RPCSX.instance.settingsSet("Core@@SPU GETLLAR Busy Waiting Percentage", "100") }
-        // Give the texture cache a budget it can actually exceed, so it evicts before the wall.
-        //
-        // Upstream defaults this to 65536 MB, which is "no limit" and assumes a discrete card with
-        // its own VRAM. Here the GPU shares system memory with the OS and with the emulator's own
-        // host allocations, so nothing ever asks the cache to release anything and it grows until
-        // the allocator fails.
-        //
-        // Failing is not graceful. God of War 3 reaches its main menu, exhausts VRAM, and dies in
-        // on_vram_exhausted at VKGSRender.cpp:1069 on
-        // ensure(!vk::is_uninterruptible() && ...) -- VRAM ran out at a point where the renderer
-        // cannot safely evict, so the assertion kills the RSX thread. Audio keeps playing and no
-        // frame ever arrives again. Measured at the crash: 5355MB resident, 99MB free of 7.2GB.
-        //
-        // 1024, not 2048. The first attempt at 2048 still died: God of War 3 was measured at
-        // 5355MB resident with 99MB free of 7.2GB, so there was never 2GB of device memory to be
-        // had and the budget was never reached before the system ran dry. The allocator then
-        // failed for real with VK_ERROR_OUT_OF_DEVICE_MEMORY.
-        //
-        // The budget only helps if it is below what the device can actually give us, since its
-        // whole purpose is to start evicting while allocation still succeeds. A PS3 has 256MB of
-        // RSX memory; 1GB of host-side surfaces and textures at these resolutions is already
-        // generous, and eviction under a budget is far cheaper than the wall.
-        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@VRAM allocation limit (MB)", "1024") }
         // Compatible Savestate Mode is no longer forced off here; applyTo writes it from
         // ps3.savestateCompatibleMode above, so the two costs it carries -- SPU performance
         // and a 500MB to 3GB state file -- are the user's to accept rather than a decision
