@@ -71,6 +71,21 @@ object ConfigStore {
     // The relaxed-ZCULL default was recorded as a raw core override as well, and the OFF
     // migration above only ever corrected the curated field.
     private const val KEY_RELAXED_ZCULL_OVERRIDE_PURGED = "config.migrated.relaxedZcullOverridePurged"
+    // Per-title core settings that differ from the safe global default, seeded once into the
+    // title's own override so the global stays conservative. Keyed by serial; other regions of
+    // the same game need their own entry.
+    private const val KEY_PER_GAME_SEED = "config.migrated.perGameSeedV1"
+    private val PER_GAME_SEED: Map<String, Map<String, Any>> = mapOf(
+        // Spider-Man: Web of Shadows. Its SPURS reservation traffic serialises behind the global
+        // exclusive vm::writer_lock taken by every reservation_op, which no amount of CPU can
+        // help: measured all six SPU threads and several PPUs yielding at the same rate, 18.8% of
+        // total CPU in sched_yield. Turning accurate reservations off routes SPURS through the
+        // lock-free path in SPUThread.cpp and dropped vm::writer_lock from 8.06% to 0.96%.
+        //
+        // Deliberately per-game and not a global default. It is off-spec, upstream defaults it
+        // on, and Sonic Unleashed fails EARLIER with it off, so it is not safe to apply blindly.
+        "BLUS30218" to mapOf("ps3AccurateSpuRsv" to false),
+    )
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
     // ...and back off it: the mask it enables confines six SPU threads to four cores.
     private const val KEY_AFFINITY_OS = "config.migrated.affinitySchedulerOff"
@@ -182,6 +197,25 @@ object ConfigStore {
                 dirty = true
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_RELAXED_ZCULL_OFF, true) }
+        }
+
+        // Seed the per-title core settings once. Only fields the title does not already carry
+        // are written, so a deliberate change is never overwritten.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_PER_GAME_SEED, false)) {
+            runCatching {
+                for ((serial, fields) in PER_GAME_SEED) {
+                    val existing = loadOverrides(serial) ?: JSONObject()
+                    var changed = false
+                    for ((key, value) in fields) {
+                        if (!existing.has(key)) {
+                            existing.put(key, value)
+                            changed = true
+                        }
+                    }
+                    if (changed) saveOverrides(serial, existing)
+                }
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_PER_GAME_SEED, true) }
         }
 
         // ...and take the raw override with it. The ON migration recorded the same setting a
