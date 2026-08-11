@@ -4330,6 +4330,7 @@ bool spu_thread::process_mfc_cmd()
 								// Seemingly not
 								getllar_busy_waiting_switch = umax;
 								getllar_spin_count = 0;
+								getllar_outbuf_hits = 0;
 								return true;
 							}
 
@@ -4337,6 +4338,7 @@ bool spu_thread::process_mfc_cmd()
 							{
 								getllar_busy_waiting_switch = umax;
 								getllar_spin_count = 0;
+								getllar_outbuf_hits = 0;
 								return true;
 							}
 
@@ -4375,8 +4377,29 @@ bool spu_thread::process_mfc_cmd()
 									getllar_cs_first = cs.empty() ? umax : cs[0].second;
 								}
 
-								if (getllar_cs_first != umax && last_getllar_lsa > getllar_cs_first)
+								// Stop believing the verdict once it is contradicted by repetition.
+								//
+								// Saying "not a loop" here is not free. It resets the spin count and
+								// leaves the switch at umax, and the caller then skips both busy_wait
+								// and the sleep path and returns immediately, so the SPU re-executes
+								// GETLLAR at full rate with no backoff at all. The spin count never
+								// reaches 4, so the optimisation is never evaluated, and the 400ms
+								// "don't be stubborn" fallback that would force a sleep is never
+								// reached either. One SPU in that state holds a core flat out.
+								//
+								// Web of Shadows sits in exactly that case: its GETLLAR sites use an
+								// LSA in the top 64K of local store that looks like a caller's OUT
+								// buffer, and process_mfc_cmd measured 55% of all CPU across the
+								// process while the game ran at 10-15fps.
+								//
+								// Re-entering the same site with the same stack this many times is
+								// itself the evidence that it is a loop, whatever the LSA looks like,
+								// so hand it back to the normal spin detection and let that decide
+								// between busy-waiting and sleeping.
+								if (getllar_cs_first != umax && last_getllar_lsa > getllar_cs_first &&
+									getllar_outbuf_hits < 32)
 								{
+									getllar_outbuf_hits++;
 									getllar_busy_waiting_switch = umax;
 									getllar_spin_count = 0;
 									return true;

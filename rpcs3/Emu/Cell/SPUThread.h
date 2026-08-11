@@ -822,6 +822,11 @@ public:
 	u32 getllar_cs_sp = umax;
 	u32 getllar_cs_lr = umax;
 	u32 getllar_cs_first = umax;
+
+	// Consecutive "not a loop" verdicts from that check at the same site. The verdict suppresses
+	// both the busy-wait and the sleep, so believing it forever leaves the SPU re-entering
+	// GETLLAR at full rate; repetition is the evidence that it is wrong.
+	u32 getllar_outbuf_hits = 0;
 	u32 getllar_busy_waiting_switch = umax; // umax means the test needs evaluation, otherwise it's a boolean
 	u64 getllar_evaluate_time = 0;
 
