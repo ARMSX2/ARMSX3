@@ -307,11 +307,27 @@ namespace vk
 		// simply performs the draws: occlusion results stop culling them, which costs some
 		// GPU work in exchange for the session surviving.
 		//
-		// Scoped to the proprietary driver because that is what was measured. Turnip is a
-		// different implementation and is left alone until someone has evidence about it.
-		if (optional_features_support.conditional_rendering && get_driver_vendor() == driver_vendor::ADRENO)
+		// Turnip now has its own evidence, for a different failure. Spider-Man: Web of Shadows
+		// loses the Vulkan device a minute into gameplay on Turnip 26.0 / Adreno 740, reported
+		// against poke_query -- the first call that reads a result, not the one at fault.
+		//
+		// This path is the only place we record vkCmdCopyQueryPoolResults with
+		// VK_QUERY_RESULT_WAIT_BIT, which makes the GPU itself block until the query resolves.
+		// A query that never resolves therefore hangs the GPU rather than the caller, and the
+		// watchdog takes the device out. The same session logged 169 "Dubious query data pushed
+		// to cond render" warnings, which is this code being handed queries that are still
+		// pending, so the unresolved case is not hypothetical here.
+		//
+		// It is also the source of the render pass churn on this hardware: the aggregation
+		// barriers closed 42 of the 91 render passes in a measured frame, and closing a pass on
+		// a tiler costs a tile store and reload.
+		//
+		// Both drivers therefore fall back to thread::begin_conditional_rendering, which is what
+		// desktop already does wherever the extension is absent.
+		if (optional_features_support.conditional_rendering &&
+			(get_driver_vendor() == driver_vendor::ADRENO || get_driver_vendor() == driver_vendor::TURNIP))
 		{
-			rsx_log.notice("Conditional rendering disabled: the Adreno driver allocates on every render pass end and does not release it.");
+			rsx_log.notice("Conditional rendering disabled: unreliable on this driver (device loss on Turnip, unbounded render pass allocations on Adreno).");
 			optional_features_support.conditional_rendering = false;
 		}
 	}
