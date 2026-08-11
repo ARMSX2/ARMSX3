@@ -1260,6 +1260,21 @@ data class Settings(
         // above it would already be 60; setting it explicitly means the cap does not depend
         // on the vblank path holding, which it did not. Enum node, so the value is quoted.
         runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Frame limit", "\"60\"") }
+        // Let idle SPUs sleep instead of spinning on a reservation.
+        //
+        // Upstream defaults this to 100, which means always busy-wait. That is right for a
+        // desktop, where six SPU threads have cores of their own and spinning costs nothing
+        // else. Here they share eight cores with the PPUs and the RSX, so a spinning SPU is
+        // taking a core away from the threads doing the work.
+        //
+        // Measured on Spider-Man: Web of Shadows: process_mfc_cmd was 55% of all CPU across
+        // the process, and making its inner loop cheaper did not move the frame rate at all --
+        // the loop simply ran more iterations in the same wall clock, which is what identified
+        // it as a spin rather than as work.
+        //
+        // 20 still favours a short busy-wait, so a reservation that frees quickly is caught
+        // without a scheduler round trip; only a wait that history says is long goes to sleep.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Core@@SPU GETLLAR Busy Waiting Percentage", "20") }
         // Compatible Savestate Mode is no longer forced off here; applyTo writes it from
         // ps3.savestateCompatibleMode above, so the two costs it carries -- SPU performance
         // and a 500MB to 3GB state file -- are the user's to accept rather than a decision
