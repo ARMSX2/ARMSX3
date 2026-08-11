@@ -792,6 +792,8 @@ public:
 	std::unique_ptr<class spu_recompiler_base> jit; // Recompiler instance
 
 	bool interp_fallback = false;
+	// Consecutive interpreter fallback calls that did not advance pc. See cpu_task.
+	u32 interp_fallback_stuck = 0;
 
 	u64 block_counter = 0;
 	u64 block_recover = 0;

@@ -187,6 +187,7 @@ static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler
 	if (retry_program != program)
 	{
 		spu_log.error("[0x%05x] SPU analyser failed during TBL2/TBX2 retry, %u vs %u", retry_program.entry_point, retry_program.data.size(), program.data.size());
+		spu_mark_block_compile_failed(program.entry_point);
 		return nullptr;
 	}
 
@@ -212,9 +213,27 @@ static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler
 		static_cast<void>(compiler.release());
 		compiler = spu_recompiler_base::make_llvm_recompiler();
 		compiler->init();
-
-		spu_mark_block_compile_failed(program.entry_point);
 	}
+	else
+	{
+		// Compilation produced nothing and said nothing. Reached in practice, and it was the
+		// one path here that left the block unmarked.
+		spu_log.error("LLVM produced no code for SPU block 0x%x without TBL2/TBX2 and reported no error.", program.entry_point);
+	}
+
+	// Every path that gives up marks the block, so the thread falls back to the interpreter.
+	//
+	// Leaving it unmarked does not degrade to something slower, it hangs: the block has no code
+	// and nothing routes the thread anywhere else, so the SPU sits on that entry point forever.
+	//
+	// Sonic Unleashed deadlocks at the SEGA logo this way. Block 0x7350 fails register allocation
+	// on AArch64 -- "Cannot scavenge register without an emergency spill slot" -- the retry
+	// without TBL2/TBX2 then returned null with an empty error, fell through both branches above
+	// unmarked, and RsdxPrimaryCellSpursKernel4 was measured frozen at pc=0x07350 in every sample
+	// of a session while the other five kernels ran normally. Running the whole emulator on the
+	// SPU interpreter got past the logo, which is the same fallback this marking selects, for one
+	// block instead of all of them.
+	spu_mark_block_compile_failed(program.entry_point);
 
 	return nullptr;
 }
@@ -2266,6 +2285,15 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 #ifdef ARCH_ARM64
 	if (spu_interpreter_fallback_available() && spu_block_compile_failed(spu.pc))
 	{
+		// Log the switch once per thread. Marking a block failed is not the same as the thread
+		// actually running it: Sonic Unleashed marked 0x07350 and stayed frozen on that exact pc,
+		// so whether this fires at all is the difference between the fallback being unavailable,
+		// never reached, and reached but ineffective.
+		if (!spu.interp_fallback)
+		{
+			spu_log.error("SPU 0x%07x switching to the interpreter at pc=0x%05x (block cannot be compiled).", spu.lv2_id, spu.pc);
+		}
+
 		spu.interp_fallback = true;
 		spu_runtime::g_escape(&spu);
 		return;
@@ -2420,7 +2448,13 @@ void spu_recompiler_base::branch(spu_thread& spu, void*, u8* rip)
 
 void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* /*rip*/)
 {
-	if (g_cfg.core.spu_decoder != spu_decoder_type::_static)
+	// Also reachable with a recompiler selected, as the per-thread fallback for a block that
+	// cannot be compiled. See spu_thread::cpu_task.
+	//
+	// The loop below is self-contained -- it reads the opcode table, the thread and the local
+	// store, and nothing else -- so which decoder the user picked does not change whether it can
+	// run. The old check rejected exactly the case that needs it most.
+	if (g_cfg.core.spu_decoder != spu_decoder_type::_static && !spu.interp_fallback)
 	{
 		fmt::throw_exception("Invalid SPU decoder");
 	}

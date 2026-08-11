@@ -1566,7 +1566,28 @@ void spu_thread::cpu_task()
 			if (interp_fallback) [[unlikely]]
 			{
 				allow_interrupts_in_cpu_work = true;
-				spu_runtime::g_interpreter(*this, _ptr<u8>(0), nullptr);
+
+				// Check the fallback is actually executing, once.
+				//
+				// This loop re-enters unconditionally, so if g_interpreter returns without
+				// running an instruction the pc never moves and the thread spins here in C++ at
+				// a fixed pc while looking like it is running. Sonic Unleashed's
+				// RsdxPrimaryCellSpursKernel4 sits at pc=0x07350 with interp_fb=1 and is the only
+				// SPU in the process using this path, which is what this distinguishes: a guest
+				// spin loop that legitimately waits, versus a fallback that executes nothing.
+				// The legacy C++ interpreter, NOT spu_runtime::g_interpreter.
+				//
+				// g_interpreter is the LLVM-built interpreter when a recompiler is selected, and
+				// on ARM64 calling it here executes nothing: measured a million consecutive calls
+				// on Sonic Unleashed's stuck SPURS kernel without pc moving once. The thread then
+				// spins in this loop forever at a fixed pc with no flags set, which looks like a
+				// busy SPU and hangs the title with no diagnostic. Any block that fails to compile
+				// lands here, so this is not one game's problem.
+				//
+				// old_interpreter is what the static decoder ultimately runs, via tr_interpreter,
+				// and it is self-contained. It loops until the thread is interrupted, which is the
+				// intended semantic: the THREAD switches to the interpreter, as the log says.
+				spu_recompiler_base::old_interpreter(*this, _ptr<u8>(0), nullptr);
 				continue;
 			}
 

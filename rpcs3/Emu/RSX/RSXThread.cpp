@@ -1392,9 +1392,56 @@ namespace rsx
 		{
 			const auto func = spu.current_func;
 
-			fmt::append(spus, "\n  SPU 0x%07x '%s': state=%s pc=0x%05x block=0x%016llx func='%s'",
+			// Event state as well as position, because position alone cannot tell a lost wakeup
+			// from an idle wait. Both look like a thread parked in 'MFC Events read'.
+			//
+			// events is what has fired, mask is what this SPU asked to be woken for, waiting is
+			// whether it is parked in the channel read. events & mask non-zero while waiting is
+			// set means the wakeup it needs has ALREADY happened and was not delivered, which is
+			// a lost notification and our bug. events & mask == 0 means it is genuinely idle and
+			// whoever should signal it never did, which is a bug on the other side.
+			//
+			// Sonic Unleashed deadlocks at the SEGA logo with all six SPURS kernels parked here,
+			// in a different arrangement on different boots, so it is a race in this handshake.
+			// The VM lock diagnostics stayed silent across every boot, which ruled out the
+			// reservation path and left this one.
+			const auto ev = spu.ch_events.load();
+
+			fmt::append(spus, "\n  SPU 0x%07x '%s': state=%s pc=0x%05x block=0x%016llx func='%s' events=0x%04x mask=0x%08x waiting=%u pending=0x%04x",
 				spu.lv2_id, *spu.spu_tname.load(), spu.state.load(), spu.pc,
-				static_cast<u64>(spu.block_hash), func ? func : "");
+				static_cast<u64>(spu.block_hash), func ? func : "",
+				static_cast<u32>(ev.events), static_cast<u32>(ev.mask), static_cast<u32>(ev.waiting),
+				static_cast<u32>(ev.events) & static_cast<u32>(ev.mask));
+
+			// MFC state too, because an SPU can be stuck with no flag set at all.
+			//
+			// Sonic Unleashed hangs with RsdxPrimaryCellSpursKernel4 frozen at pc=0x07350 across
+			// every sample of a session, while its neighbours move through the kernel normally.
+			// state is 00, so it is not parked in a channel read -- it is spinning in guest code,
+			// which an SPU does while waiting for a transfer to land in local store. If a queued
+			// MFC command never retires, that spin never ends.
+			//
+			// mfc_size is the queue depth: non-zero and unchanging on the frozen thread means a
+			// transfer went in and never came out. tag_mask/stall are what it would be waiting on.
+			// interp_fallback distinguishes "the fallback never engaged" from "it engaged and the
+			// thread is stuck anyway". Sonic Unleashed marks block 0x07350 uncompilable and stays
+			// frozen on that pc; if this reads 1 there, the interpreter is looping too and the
+			// block is not miscompiled -- the SPU is genuinely waiting on something.
+			// intr/srr0 last, because they are what is left. Sonic Unleashed's stuck kernel holds
+			// an unmasked pending LR event, is not blocked on a channel or a transfer, and does
+			// not advance its pc even under the interpreter -- which is a branch-to-self idle
+			// loop. SPURS kernels leave that loop on an SPU interrupt, so either interrupts are
+			// disabled while an event is pending, or they are enabled and never delivered.
+			fmt::append(spus, " mfc_q=%u tag_mask=0x%08x stall_mask=0x%08x interp_fb=%u intr_en=%u srr0=0x%05x",
+				spu.mfc_size, spu.ch_tag_mask, spu.ch_stall_mask, spu.interp_fallback ? 1u : 0u,
+				spu.interrupts_enabled ? 1u : 0u, spu.srr0);
+
+			if (spu.mfc_size)
+			{
+				const auto& cmd = spu.mfc_queue[0];
+				fmt::append(spus, " head={cmd=0x%02x tag=%u lsa=0x%05x eal=0x%08x size=0x%x}",
+					+cmd.cmd, +cmd.tag, +cmd.lsa, +cmd.eal, +cmd.size);
+			}
 		}, idm::unlocked);
 
 		if (!spus.empty())
