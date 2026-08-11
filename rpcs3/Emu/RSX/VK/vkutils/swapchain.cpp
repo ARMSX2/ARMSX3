@@ -296,6 +296,26 @@ namespace vk
 		if (surface_descriptors.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
 			pre_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 
+		// Declaring IDENTITY when the surface is actually rotated hands the rotation to the
+		// compositor, which on Android can mean a full screen pass per frame and images held
+		// longer before they are released back for acquire. That would show up as time in
+		// check_present_status waiting on acquire_next_swapchain_image, which is where 30% of
+		// this game's frame currently goes.
+		//
+		// Logged rather than changed: matching currentTransform means applying the rotation
+		// ourselves across both the blit and the overlay pass, and it is only worth doing if
+		// the two actually differ here.
+		if (pre_transform != surface_descriptors.currentTransform)
+		{
+			rsx_log.notice("Swapchain: surface currentTransform=0x%x, overriding with IDENTITY (0x%x). Compositor will rotate.",
+				static_cast<u32>(surface_descriptors.currentTransform), static_cast<u32>(pre_transform));
+		}
+		else
+		{
+			rsx_log.notice("Swapchain: preTransform matches surface currentTransform=0x%x.",
+				static_cast<u32>(surface_descriptors.currentTransform));
+		}
+
 		VkSwapchainCreateInfoKHR swap_info = {};
 		swap_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 		swap_info.surface = m_surface;
