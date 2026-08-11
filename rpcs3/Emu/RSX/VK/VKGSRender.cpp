@@ -1606,8 +1606,26 @@ void VKGSRender::flush_command_queue(bool hard_sync, bool do_not_switch)
 		ensure(hard_sync);
 	}
 
-	// Just in case a queued frame holds a ref to this cb, drain the present queue
-	check_present_status();
+	// Deliberately NOT draining the present queue here.
+	//
+	// The drain exists in case a queued frame still holds a ref to the command buffer just
+	// taken. It cannot: next() hands them out from a 512 entry ring, and the queued frame list
+	// is bounded at flip to m_max_async_frames - 1, so the buffer being reused is hundreds of
+	// frames retired. The guard is unreachable and the cost is not.
+	//
+	// check_present_status pokes the oldest queued frame's swap command buffer, and on Adreno
+	// vkGetFenceStatus blocks until signalled instead of returning VK_NOT_READY, so a poll that
+	// is written to be cheap becomes a full GPU sync. Called from here it ran 1.32 times a frame
+	// at about 11ms, which is the 14.6ms of Fence poll -- 31% of the frame in Web of Shadows,
+	// second only to the whole RSX decode loop.
+	//
+	// Same fault as the two sites removed with the earlier [wait][record] to [record][wait]
+	// change; this third one was missed because it sits inside flush_command_queue rather than
+	// on the present path. Ruled out first: the frame time is unchanged at quarter resolution,
+	// so it is not GPU work, and forcing the swapchain pre-transform to match the surface left
+	// it at 14.6ms, so it is not compositor rotation either.
+	//
+	// Frames are still retired: the flip path drains and bounds the queue.
 
 	if (m_occlusion_query_active)
 	{

@@ -764,6 +764,19 @@ namespace rsx
 					// threads runnable, five idle. Nothing is waiting for the core this would
 					// give back, and the RSX sits on the frame's dependency chain, so sleeping
 					// only delays the moment it notices the guest has produced work.
+					//
+					// Charged to idle, because that is what it is. This yield sits inside the
+					// fifo_decode scope, and fifo_decode is the enclosing scope of the whole run
+					// loop, so without this the time the RSX spends waiting on an empty ring is
+					// reported as decode work. That reads as a saturated RSX -- Idle 0.003 ms
+					// against FIFO decode 20.4 ms -- while a native profile of the same thread
+					// put 34% of its cycles in sched_yield and its kernel path. The bucket
+					// report and the profiler disagreed, and the bucket report was wrong.
+					//
+					// It has now caused two wrong conclusions in one session: once reading a
+					// starving RSX as CPU-bound decode, and once reading a thread stuck in an
+					// occlusion query wait as the same thing.
+					RSX_PROF_SCOPE(idle);
 					std::this_thread::yield();
 				}
 
