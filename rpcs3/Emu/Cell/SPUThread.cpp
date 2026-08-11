@@ -4341,7 +4341,19 @@ bool spu_thread::process_mfc_cmd()
 							}
 
 							// Check if LSA points to an OUT buffer on the stack from a caller - unlikely to be a loop
-							if (last_getllar_lsa >= SPU_LS_SIZE - 0x10000 && last_getllar_lsa > last_getllar_gpr1)
+							//
+							// First iteration of a spin sequence only. Everything the answer depends on --
+							// pc, ch_mfc_cmd.lsa, gpr[1] (the stack pointer) and addr -- was compared
+							// against the previous iteration just above, and any change resets the
+							// sequence, so the callstack cannot have moved underneath a spin.
+							//
+							// Deriving it every iteration is expensive out of proportion to what it
+							// decides: dump_callstack_list walks the stack and calls is_exec_code for each
+							// candidate, which allocates a vector<bool> and scans for branch targets. On a
+							// profile of Spider-Man: Web of Shadows, whose SPU code spins on GETLLAR with
+							// an LSA in the top 64K of local store, those three accounted for about 14% of
+							// all CPU across the process -- more than the RSX thread spent on the frame.
+							if (getllar_spin_count == 0 && last_getllar_lsa >= SPU_LS_SIZE - 0x10000 && last_getllar_lsa > last_getllar_gpr1)
 							{
 								auto cs = dump_callstack_list();
 
