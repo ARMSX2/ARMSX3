@@ -1081,8 +1081,26 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 	// and it presented as a hang rather than a crash.
 	if (vk::is_uninterruptible())
 	{
-		rsx_log.warning("Video memory pressure hit while the renderer is uninterruptible; cannot evict now.");
-		return false;
+		// Do the half of the work that does not need a hard sync, instead of refusing outright.
+		//
+		// Only the fatal branch below needs the queue idle -- that is what the flush there is for,
+		// and it is why this used to assert here. Everything else is reachable: the texture cache
+		// purges its unreleased pool, and at severe it also drops unlocked sections. RPCS3 already
+		// runs exactly that with no flush whenever pressure is non-fatal, so doing it here is the
+		// existing contract rather than a new risk.
+		//
+		// Refusing outright is not free. The allocator's own recovery path is
+		// "if OUT_OF_DEVICE_MEMORY and vmm_handle_memory_pressure(...) then retry the allocation",
+		// so returning false skips the retry and the allocation dies. God of War 3 reached that
+		// with 0 reclaim attempts and 0 recoveries logged: it never got the chance to free
+		// anything. Clamped below fatal so the flush-dependent path stays unreachable.
+		const auto safe_severity = std::min(severity, rsx::problem_severity::severe);
+		const bool relieved = m_texture_cache.handle_memory_pressure(safe_severity);
+
+		rsx_log.warning("Video memory pressure while uninterruptible: %s without a hard sync.",
+			relieved ? "released some resources" : "found nothing to release");
+
+		return relieved;
 	}
 
 	bool texture_cache_relieved = false;
