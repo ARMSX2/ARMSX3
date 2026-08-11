@@ -214,8 +214,28 @@ namespace vk
 
 	void query_pool_manager::get_query_result_indirect(vk::command_buffer& cmd, u32 index, u32 count, VkBuffer dst, VkDeviceSize dst_offset)
 	{
-		// We're technically supposed to stop any active renderpasses before streaming the results out, but that doesn't matter on IMR hw
-		// On TBDR setups like the apple M series, the stop is required (results are all 0 if you don't flush the RP), but this introduces a very heavy performance loss.
+		// Not "technically supposed to" -- vkCmdCopyQueryPoolResults MUST be recorded outside a
+		// render pass instance. Inside one it is undefined behaviour, and an IMR desktop GPU
+		// tolerating it is not evidence that a tiler will.
+		//
+		// This device does not: with occlusion queries on, Spider-Man: Web of Shadows loses the
+		// Vulkan device shortly after a new game starts. The fault surfaces later, in poke_query,
+		// because that is the first call that waits on a GPU result -- so it reads as the query
+		// READ being at fault when the damage was done when this was recorded. Only the RSX
+		// thread dies, so the app keeps running with audio and vblank alive and it presents as a
+		// hard freeze rather than a crash.
+		//
+		// Turning occlusion queries off avoids it and is not an alternative: measured here at
+		// 80ms frames with broken visuals, because the game loses its culling results.
+		//
+		// The upstream comment feared the flush cost. It is paid only when a pass is actually
+		// open, on a path that already stalls for a GPU result.
+		if (vk::is_renderpass_open(cmd))
+		{
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[2]++;
+			vk::end_renderpass(cmd);
+		}
+
 		vkCmdCopyQueryPoolResults(cmd, *query_slot_status[index].pool, index, count, dst, dst_offset, 4, VK_QUERY_RESULT_WAIT_BIT);
 	}
 
