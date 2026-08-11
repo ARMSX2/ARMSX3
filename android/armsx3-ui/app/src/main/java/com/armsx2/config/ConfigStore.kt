@@ -72,6 +72,8 @@ object ConfigStore {
     // migration above only ever corrected the curated field.
     private const val KEY_RELAXED_ZCULL_OVERRIDE_PURGED = "config.migrated.relaxedZcullOverridePurged"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
+    // ...and back off it: the mask it enables confines six SPU threads to four cores.
+    private const val KEY_AFFINITY_OS = "config.migrated.affinitySchedulerOff"
     private const val KEY_TIMESTRETCH_OFF = "config.migrated.audioTimeStretchOff"
     // Scaling Mode row changed meaning; a stored 0 used to resolve to Bilinear, now Nearest.
     private const val KEY_CAS_MODE_BILINEAR = "config.migrated.casModeBilinear"
@@ -152,6 +154,25 @@ object ConfigStore {
                 dirty = true
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_AFFINITY_ON, true) }
+        }
+
+        // ...and undo it. The migration above turned the scheduler on so the big.LITTLE mask
+        // would apply, keeping SPU and RSX off the A510s. That is right for one thread per core
+        // and wrong at six: the mask hands the six SPU threads four cores between them, so each
+        // gets about two thirds of one, which is worse than a thread owning an A510 outright.
+        //
+        // Measured in game on a Snapdragon 8 Gen 2, from the masks the threads actually carry:
+        // Android grants the app cores 0-7, we confine SPU to 3-6, and the device sits at 60%
+        // with cores 0-2 idle while frames are slow. Web of Shadows is visibly better at OS.
+        //
+        // Same reason these devices are reported to do better under native Linux, which applies
+        // no such policy. The other modes stay selectable.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_AFFINITY_OS, false)) {
+            if (raw != null && parsed.affinityMode == 2) {
+                parsed = parsed.copy(affinityMode = 0)
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_AFFINITY_OS, true) }
         }
 
         // Undo the relaxed-ZCULL default: it stopped Skate 3 rendering.

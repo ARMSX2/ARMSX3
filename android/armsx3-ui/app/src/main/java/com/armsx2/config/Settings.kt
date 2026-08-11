@@ -576,13 +576,28 @@ data class Settings(
     /**
      * Thread Scheduler Mode: 0 = OS, 1 = RPCS3, 2 = RPCS3 Alternative.
      *
-     * 2 by default. Anything other than OS makes cpu_thread apply an affinity
-     * mask, which now means something on Android: the mask logic understands
-     * big.LITTLE and keeps SPU/RSX on the fast cluster instead of letting the
-     * scheduler drop them on A510s that run at ~27% of prime-core capacity.
-     * Left at OS this is a no-op and six SPU threads get scattered.
+     * 0 by default. This was 2, to keep SPU and RSX off the A510s, which run at
+     * roughly 27% of prime-core capacity. The reasoning holds for one thread per
+     * core and breaks down at six.
+     *
+     * Measured on a Snapdragon 8 Gen 2, in game, reading the masks the threads
+     * actually carry:
+     *
+     *     app cpuset (top-app)  0-7      Android grants every core
+     *     SPU[0..5]             3-6      six threads, four cores
+     *     rsx::thread           3-7
+     *
+     * Six SPU threads sharing four cores get about two thirds of a core each,
+     * which is worse than one thread owning an A510 outright, and it caps the
+     * whole emulator: the device sat at 60% with cores 0-2 idle while frames
+     * were slow. Spider-Man: Web of Shadows is visibly better at OS.
+     *
+     * The mask is ours, not Android's, which is also why these devices are
+     * reported to run better under native Linux, where no such policy applies.
+     *
+     * The other modes remain selectable for anyone whose device disagrees.
      */
-    val affinityMode: Int = 2,
+    val affinityMode: Int = 0,
     /** EmuCore/GS FramerateNTSC — the emulated PS2 vsync rate for NTSC games
      *  (PCSX2 default 59.94). Lowering it slows the game's target rate; raising it
      *  speeds it up. Mirrors NetherSX2's "Framerate For NTSC". */
