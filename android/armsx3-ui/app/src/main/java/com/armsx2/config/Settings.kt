@@ -1275,21 +1275,20 @@ data class Settings(
         // above it would already be 60; setting it explicitly means the cap does not depend
         // on the vblank path holding, which it did not. Enum node, so the value is quoted.
         runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Frame limit", "\"60\"") }
-        // Let idle SPUs sleep instead of spinning on a reservation.
+        // Left at upstream's 100: busy-wait on a reservation rather than sleeping.
         //
-        // Upstream defaults this to 100, which means always busy-wait. That is right for a
-        // desktop, where six SPU threads have cores of their own and spinning costs nothing
-        // else. Here they share eight cores with the PPUs and the RSX, so a spinning SPU is
-        // taking a core away from the threads doing the work.
+        // This was dropped to 20 while the emulator was starved for cores, on the reasoning that
+        // a spinning SPU steals a core from threads doing real work. That reasoning was sound
+        // for the machine as it was and is wrong for the machine as it is now. Two things
+        // changed underneath it: the affinity mask stopped confining six SPU threads to four
+        // cores, and turning off the global lock contention in the reservation path freed the
+        // rest. Measured after both, in game: 34% of eight cores busy, two to four threads
+        // runnable, five cores idle.
         //
-        // Measured on Spider-Man: Web of Shadows: process_mfc_cmd was 55% of all CPU across
-        // the process, and making its inner loop cheaper did not move the frame rate at all --
-        // the loop simply ran more iterations in the same wall clock, which is what identified
-        // it as a spin rather than as work.
-        //
-        // 20 still favours a short busy-wait, so a reservation that frees quickly is caught
-        // without a scheduler round trip; only a wait that history says is long goes to sleep.
-        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Core@@SPU GETLLAR Busy Waiting Percentage", "20") }
+        // Nothing is saturated at that point, so the frame is waiting on a dependency chain
+        // rather than on throughput, and sleeping to save a core that nobody wants only adds
+        // wake-up latency to the chain that is actually holding the frame.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Core@@SPU GETLLAR Busy Waiting Percentage", "100") }
         // Compatible Savestate Mode is no longer forced off here; applyTo writes it from
         // ps3.savestateCompatibleMode above, so the two costs it carries -- SPU performance
         // and a 500MB to 3GB state file -- are the user's to accept rather than a decision
