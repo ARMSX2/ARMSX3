@@ -4245,6 +4245,15 @@ extern "C" std::string _rpcsx_getVersion() {
 //
 // Returns the PREVIOUS handle so the caller can dlclose it. Passing nullptr
 // reverts to the system driver.
+// Lets the UI glue put a driver problem where bug reports will carry it.
+//
+// The glue can only reach logcat, which nobody attaches to an issue, and the reason a
+// custom driver was refused is exactly what a report needs. Routed through the emulator
+// log channel so it lands in RPCSX.log beside the driver identity it explains.
+extern "C" void _rpcsx_reportDriverProblem(std::string message) {
+  rpcsx_android.error("%s", message);
+}
+
 extern "C" void *_rpcsx_setCustomDriver(void *driverHandle) {
   void *previous = vk::android::set_driver_handle(driverHandle);
 
