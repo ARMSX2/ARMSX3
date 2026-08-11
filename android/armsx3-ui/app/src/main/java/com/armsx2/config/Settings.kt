@@ -1302,11 +1302,16 @@ data class Settings(
         // cannot safely evict, so the assertion kills the RSX thread. Audio keeps playing and no
         // frame ever arrives again. Measured at the crash: 5355MB resident, 99MB free of 7.2GB.
         //
-        // 2048 leaves room for the guest's own 256MB main + 256MB RSX memory, the host-side
-        // caches, and the OS, while still being far more than any PS3 title needs for surfaces
-        // and textures at these resolutions. Eviction under a budget is cheap; hitting the wall
-        // is fatal.
-        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@VRAM allocation limit (MB)", "2048") }
+        // 1024, not 2048. The first attempt at 2048 still died: God of War 3 was measured at
+        // 5355MB resident with 99MB free of 7.2GB, so there was never 2GB of device memory to be
+        // had and the budget was never reached before the system ran dry. The allocator then
+        // failed for real with VK_ERROR_OUT_OF_DEVICE_MEMORY.
+        //
+        // The budget only helps if it is below what the device can actually give us, since its
+        // whole purpose is to start evicting while allocation still succeeds. A PS3 has 256MB of
+        // RSX memory; 1GB of host-side surfaces and textures at these resolutions is already
+        // generous, and eviction under a budget is far cheaper than the wall.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@VRAM allocation limit (MB)", "1024") }
         // Compatible Savestate Mode is no longer forced off here; applyTo writes it from
         // ps3.savestateCompatibleMode above, so the two costs it carries -- SPU performance
         // and a 500MB to 3GB state file -- are the user's to accept rather than a decision

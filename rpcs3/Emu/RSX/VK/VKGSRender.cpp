@@ -1066,7 +1066,24 @@ void VKGSRender::on_semaphore_acquire_wait()
 
 bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 {
-	ensure(!vk::is_uninterruptible() && rsx::get_current_renderer()->is_current_thread());
+	ensure(rsx::get_current_renderer()->is_current_thread());
+
+	// Decline rather than abort when the renderer cannot be interrupted.
+	//
+	// Eviction here would touch resources the driver may still be reading, so it genuinely cannot
+	// run in this state -- but that is a reason to say no, not to kill the thread. Callers already
+	// expect a refusal: the OOM path in VKDraw treats false as "use placeholder textures, can
+	// cause graphics glitches but shouldn't crash otherwise".
+	//
+	// Asserting instead cost God of War 3 the RSX thread outright. Skipping the intro screens
+	// pushes a burst of surface and texture allocation through a point where the renderer is
+	// uninterruptible, and the assertion fired there: audio kept playing, no frame ever arrived,
+	// and it presented as a hang rather than a crash.
+	if (vk::is_uninterruptible())
+	{
+		rsx_log.warning("Video memory pressure hit while the renderer is uninterruptible; cannot evict now.");
+		return false;
+	}
 
 	bool texture_cache_relieved = false;
 	if (severity >= rsx::problem_severity::fatal)
