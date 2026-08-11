@@ -68,6 +68,9 @@ object ConfigStore {
     private const val KEY_DIAG_OVERRIDES_PURGED = "config.migrated.diagOverridesPurged"
     private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
+    // The relaxed-ZCULL default was recorded as a raw core override as well, and the OFF
+    // migration above only ever corrected the curated field.
+    private const val KEY_RELAXED_ZCULL_OVERRIDE_PURGED = "config.migrated.relaxedZcullOverridePurged"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
     private const val KEY_TIMESTRETCH_OFF = "config.migrated.audioTimeStretchOff"
     // Scaling Mode row changed meaning; a stored 0 used to resolve to Bilinear, now Nearest.
@@ -158,6 +161,28 @@ object ConfigStore {
                 dirty = true
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_RELAXED_ZCULL_OFF, true) }
+        }
+
+        // ...and take the raw override with it. The ON migration recorded the same setting a
+        // second time as a core override, and the OFF migration above only corrected the
+        // curated field, so the two stores disagreed: relaxedZcull was false everywhere the UI
+        // could show it while the override still held "true".
+        //
+        // The override wins, because overrides re-push at the tail of applyTo, after the curated
+        // store has written the setting. So the toggle read OFF, config.yml read
+        // "Relaxed ZCULL Sync: true" every boot, and nothing in the UI could change that.
+        //
+        // Not cosmetic: relaxed sync is what lets queries be read while still pending, which is
+        // the "Dubious query data pushed to cond render" path, and it also selects emulated
+        // predication in the VK backend.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_RELAXED_ZCULL_OVERRIDE_PURGED, false)) {
+            runCatching {
+                CoreSettingOverrides.forget(
+                    SettingsScope.Global, null,
+                    "Video@@Relaxed ZCULL Sync",
+                )
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_RELAXED_ZCULL_OVERRIDE_PURGED, true) }
         }
 
 
