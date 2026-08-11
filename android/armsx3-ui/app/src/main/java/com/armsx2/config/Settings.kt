@@ -158,12 +158,18 @@ data class Ps3Settings(
      * held only 1.6GB resident and 280MB in that pool -- an artificial ceiling, not the hardware.
      * At 2048 it failed too, one screen later.
      *
-     * It still has to be finite. Upstream's 65536 means no cap at all, which suits a discrete
-     * card with its own memory; here the GPU shares system RAM, and an unbounded texture cache
-     * quota was previously measured driving the process to 4.3GB and getting it killed. 3072
-     * leaves the caches room to work while keeping that bound.
+     * Back to 2048, the value shipped before 0.5. 3072 was set to get the God of War 3 demo past
+     * an allocation failure, but that failure was measured BEFORE the uninterruptible reclaim
+     * fix landed, and raising the ceiling has its own cost: the texture cache budgets itself up
+     * to 2560MB on Android, so a higher cap lets the total grow with it. Batman: Arkham City was
+     * measured at 5596MB resident with a 6246MB peak on a 7.2GB device and stalled after a while
+     * -- no allocation failure, but far enough into memory pressure that the present pipeline
+     * collapses to a single frame in flight.
+     *
+     * The cap and the texture cache budget are not coordinated, which is the underlying problem;
+     * 2048 keeps their sum where it was when this game worked.
      */
-    val vramLimitMb: Int = 3072,
+    val vramLimitMb: Int = 2048,
     val asyncTexStream: Boolean = false,
     val audioFormat: Int = 0,
     val audioChannels: Int = 0,

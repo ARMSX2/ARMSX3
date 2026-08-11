@@ -87,10 +87,9 @@ object ConfigStore {
         //
         // Deliberately per-game and not a global default. It is off-spec, upstream defaults it
         // on, and Sonic Unleashed fails EARLIER with it off, so it is not safe to apply blindly.
-        "BLUS30218" to mapOf("ps3AccurateSpuRsv" to false),
-    )
+        "BLUS30218" to mapOf("ps3AccurateSpuRsv" to false),    )
     // The VRAM limit is a hard heap cap, not an eviction threshold; too low fails allocations.
-    private const val KEY_VRAM_LIMIT_1024 = "config.migrated.vramCap3072"
+    private const val KEY_VRAM_LIMIT_1024 = "config.migrated.vramCap2048b"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
     // ...and back off it: the mask it enables confines six SPU threads to four cores.
     private const val KEY_AFFINITY_OS = "config.migrated.affinitySchedulerOff"
@@ -231,8 +230,8 @@ object ConfigStore {
         // 1.6GB resident and 280MB in that pool, and failing at 2048 one screen later. A
         // deliberate choice of some other value is left alone.
         if (!MainActivityRuntime.prefs.getBoolean(KEY_VRAM_LIMIT_1024, false)) {
-            if (raw != null && (parsed.ps3.vramLimitMb == 2048 || parsed.ps3.vramLimitMb == 1024)) {
-                parsed = parsed.copy(ps3 = parsed.ps3.copy(vramLimitMb = 3072))
+            if (raw != null && (parsed.ps3.vramLimitMb == 1024 || parsed.ps3.vramLimitMb == 3072)) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(vramLimitMb = 2048))
                 dirty = true
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_VRAM_LIMIT_1024, true) }
