@@ -69,6 +69,10 @@ object ConfigStore {
     // Bumped: the profiler was recorded again during the 0.5 debugging work, after the first
     // purge had already marked itself done.
     private const val KEY_DIAG_OVERRIDES_PURGED_2 = "config.migrated.diagOverridesPurged2"
+    // Core settings left pinned as raw overrides by the 0.5 debugging sessions.
+    private const val KEY_TUNING_OVERRIDES_PURGED = "config.migrated.tuningOverridesPurged"
+    // Per-title Accurate SPU Reservations values left behind by the same debugging.
+    private const val KEY_PERGAME_RSV_CLEARED = "config.migrated.perGameRsvCleared"
     private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
     // The relaxed-ZCULL default was recorded as a raw core override as well, and the OFF
@@ -235,6 +239,56 @@ object ConfigStore {
                 dirty = true
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_VRAM_LIMIT_1024, true) }
+        }
+
+        // Clear the core settings left pinned while debugging 0.5.
+        //
+        // These were set to test things and never unset, and a raw override beats the UI silently:
+        // the settings screen read SPU Block Size = Safe while config.yml read Mega for hours.
+        // Mega is the one that mattered -- it produces very large compilation units, and those are
+        // what fail AArch64 register allocation with "Cannot scavenge register without an
+        // emergency spill slot", which is what put threads on the interpreter fallback in the
+        // first place. Every "cannot be compiled" in those sessions traces back to it.
+        //
+        // Cleared in every scope, since a title can pin a key the global also pins: Arkham City
+        // carried Accurate SPU Reservations true per-title against false globally, so clearing one
+        // did nothing. Whatever the settings screens show becomes what actually runs.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_TUNING_OVERRIDES_PURGED, false)) {
+            runCatching {
+                CoreSettingOverrides.forgetEverywhere(
+                    "Core@@SPU Block Size",
+                    "Core@@SPU Decoder",
+                    "Core@@Accurate SPU Reservations",
+                    "Core@@Accurate SPU DMA",
+                )
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_TUNING_OVERRIDES_PURGED, true) }
+        }
+
+        // Drop per-title Accurate SPU Reservations values, except the one title that needs it.
+        //
+        // Turning it off was tried per-title as well as globally while debugging 0.5, and off is
+        // off-spec: it forces the SPURS scheduler to HLE and bypasses the reservation lock, so a
+        // title left that way desyncs and its SPU threads end up executing whatever they land on.
+        // Batman: Arkham City carried it off this way and died with "Unknown STOP code: 0x0".
+        //
+        // Web of Shadows keeps it, since it is the title the setting was measured on and it is
+        // the one that gains from it.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_PERGAME_RSV_CLEARED, false)) {
+            runCatching {
+                for (key in MainActivityRuntime.prefs.all.keys.toList()) {
+                    if (!key.startsWith("config.game.")) continue
+                    if (key == keyForGame("BLUS30218")) continue
+
+                    val serial = key.removePrefix("config.game.")
+                    val stored = loadOverrides(serial) ?: continue
+                    if (!stored.has("ps3AccurateSpuRsv")) continue
+
+                    stored.remove("ps3AccurateSpuRsv")
+                    saveOverrides(serial, stored)
+                }
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_PERGAME_RSV_CLEARED, true) }
         }
 
         // ...and take the raw override with it. The ON migration recorded the same setting a
