@@ -792,8 +792,11 @@ public:
 	std::unique_ptr<class spu_recompiler_base> jit; // Recompiler instance
 
 	bool interp_fallback = false;
-	// Consecutive interpreter fallback calls that did not advance pc. See cpu_task.
-	u32 interp_fallback_stuck = 0;
+	// Extent of the uncompilable block this thread is interpreting, cached so the interpreter loop
+	// can test it without touching the failed-block map. Looking it up per instruction put
+	// shared_mutex::imp_lock_shared at 28% of the whole process.
+	u32 interp_fallback_begin = 0;
+	u32 interp_fallback_end = 0;
 
 	u64 block_counter = 0;
 	u64 block_recover = 0;

@@ -1,4 +1,7 @@
 #include "stdafx.h"
+
+#include <map>
+#include <tuple>
 #include "SPURecompiler.h"
 
 #include "Emu/System.h"
@@ -114,7 +117,13 @@ static spu_program analyse_spu_llvm_program(spu_recompiler_base& compiler, const
 }
 
 static shared_mutex s_spu_failed_blocks_mutex;
-static std::unordered_set<u32> s_spu_failed_blocks;
+// Failed program ranges, keyed by lower_bound -> end address (exclusive).
+//
+// Ranges, not entry points. Marking only the entry made the interpreter release the thread after
+// one instruction, whereupon the recompiler tried the NEXT address, failed the same way, and
+// marked that too: 111 consecutive entries were recorded walking two blocks four bytes at a time,
+// each step paying a full failed LLVM compile.
+static std::map<u32, u32> s_spu_failed_blocks;
 
 static bool spu_interpreter_fallback_available()
 {
@@ -122,17 +131,55 @@ static bool spu_interpreter_fallback_available()
 	return interp && interp != spu_runtime::g_gateway;
 }
 
-static bool spu_block_compile_failed(u32 entry_point)
+// Range containing addr, or {0,0}. Same lookup as spu_block_compile_failed, but returns the extent
+// so a caller can cache it and stop consulting this map.
+static std::pair<u32, u32> spu_block_failed_range(u32 addr)
 {
 	reader_lock lock(s_spu_failed_blocks_mutex);
-	return s_spu_failed_blocks.find(entry_point) != s_spu_failed_blocks.end();
+
+	auto it = s_spu_failed_blocks.upper_bound(addr);
+
+	if (it == s_spu_failed_blocks.begin())
+	{
+		return {};
+	}
+
+	--it;
+
+	if (addr >= it->first && addr < it->second)
+	{
+		return {it->first, it->second};
+	}
+
+	return {};
 }
 
-static void spu_mark_block_compile_failed(u32 entry_point)
+static bool spu_block_compile_failed(u32 addr)
+{
+	reader_lock lock(s_spu_failed_blocks_mutex);
+
+	// Any recorded range containing addr, so execution stays interpreted for the whole of a block
+	// that cannot be compiled rather than only at its entry.
+	auto it = s_spu_failed_blocks.upper_bound(addr);
+
+	if (it == s_spu_failed_blocks.begin())
+	{
+		return false;
+	}
+
+	--it;
+	return addr >= it->first && addr < it->second;
+}
+
+static void spu_mark_block_compile_failed(u32 entry_point, u32 lower_bound = 0, u32 size_bytes = 0)
 {
 	std::lock_guard lock(s_spu_failed_blocks_mutex);
 
-	if (s_spu_failed_blocks.emplace(entry_point).second)
+	// Fall back to the entry alone when the caller has no program to describe the extent.
+	const u32 begin = size_bytes ? lower_bound : entry_point;
+	const u32 end = size_bytes ? lower_bound + size_bytes : entry_point + 4;
+
+	if (s_spu_failed_blocks.insert_or_assign(begin, std::max(end, s_spu_failed_blocks.count(begin) ? s_spu_failed_blocks[begin] : end)).second)
 	{
 		spu_log.error("SPU block 0x%05x cannot be compiled on this backend, its thread switches to the interpreter", entry_point);
 	}
@@ -178,7 +225,7 @@ static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler
 
 	if (!scavenge_failure)
 	{
-		spu_mark_block_compile_failed(program.entry_point);
+		spu_mark_block_compile_failed(program.entry_point, program.lower_bound, ::size32(program.data) * 4);
 		return nullptr;
 	}
 
@@ -187,7 +234,7 @@ static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler
 	if (retry_program != program)
 	{
 		spu_log.error("[0x%05x] SPU analyser failed during TBL2/TBX2 retry, %u vs %u", retry_program.entry_point, retry_program.data.size(), program.data.size());
-		spu_mark_block_compile_failed(program.entry_point);
+		spu_mark_block_compile_failed(program.entry_point, program.lower_bound, ::size32(program.data) * 4);
 		return nullptr;
 	}
 
@@ -233,7 +280,7 @@ static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler
 	// of a session while the other five kernels ran normally. Running the whole emulator on the
 	// SPU interpreter got past the logo, which is the same fallback this marking selects, for one
 	// block instead of all of them.
-	spu_mark_block_compile_failed(program.entry_point);
+	spu_mark_block_compile_failed(program.entry_point, program.lower_bound, ::size32(program.data) * 4);
 
 	return nullptr;
 }
@@ -2285,15 +2332,12 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 #ifdef ARCH_ARM64
 	if (spu_interpreter_fallback_available() && spu_block_compile_failed(spu.pc))
 	{
-		// Log the switch once per thread. Marking a block failed is not the same as the thread
-		// actually running it: Sonic Unleashed marked 0x07350 and stayed frozen on that exact pc,
-		// so whether this fires at all is the difference between the fallback being unavailable,
-		// never reached, and reached but ineffective.
-		if (!spu.interp_fallback)
-		{
-			spu_log.error("SPU 0x%07x switching to the interpreter at pc=0x%05x (block cannot be compiled).", spu.lv2_id, spu.pc);
-		}
-
+		// Deliberately not logged. The flag is cleared every time the thread leaves the block, so
+		// a "log once" guard on it fires on every re-entry instead, and execution crosses this
+		// boundary constantly: God of War 3 wrote thousands of lines a second ping-ponging
+		// between two addresses, which cost more than the interpretation. The block is already
+		// recorded once by spu_mark_block_compile_failed.
+		std::tie(spu.interp_fallback_begin, spu.interp_fallback_end) = spu_block_failed_range(spu.pc);
 		spu.interp_fallback = true;
 		spu_runtime::g_escape(&spu);
 		return;
@@ -2318,6 +2362,7 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 #if defined(__APPLE__)
 			pthread_jit_write_protect_np(true);
 #endif
+			std::tie(spu.interp_fallback_begin, spu.interp_fallback_end) = spu_block_failed_range(spu.pc);
 			spu.interp_fallback = true;
 			spu_runtime::g_escape(&spu);
 			return;
@@ -2486,7 +2531,7 @@ void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* /*rip*/
 		// execution moves on. Leaving is safe at any instruction boundary, since all SPU state
 		// lives in spu_thread, the same assumption the JIT dispatch makes. Re-entering the bad
 		// block simply sets the flag again.
-		if (spu.interp_fallback && !spu_block_compile_failed(spu.pc)) [[unlikely]]
+		if (spu.interp_fallback && (spu.pc < spu.interp_fallback_begin || spu.pc >= spu.interp_fallback_end)) [[unlikely]]
 		{
 			spu.interp_fallback = false;
 			break;

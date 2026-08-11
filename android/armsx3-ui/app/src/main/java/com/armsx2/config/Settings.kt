@@ -1289,6 +1289,24 @@ data class Settings(
         // rather than on throughput, and sleeping to save a core that nobody wants only adds
         // wake-up latency to the chain that is actually holding the frame.
         runCatching { net.rpcsx.RPCSX.instance.settingsSet("Core@@SPU GETLLAR Busy Waiting Percentage", "100") }
+        // Give the texture cache a budget it can actually exceed, so it evicts before the wall.
+        //
+        // Upstream defaults this to 65536 MB, which is "no limit" and assumes a discrete card with
+        // its own VRAM. Here the GPU shares system memory with the OS and with the emulator's own
+        // host allocations, so nothing ever asks the cache to release anything and it grows until
+        // the allocator fails.
+        //
+        // Failing is not graceful. God of War 3 reaches its main menu, exhausts VRAM, and dies in
+        // on_vram_exhausted at VKGSRender.cpp:1069 on
+        // ensure(!vk::is_uninterruptible() && ...) -- VRAM ran out at a point where the renderer
+        // cannot safely evict, so the assertion kills the RSX thread. Audio keeps playing and no
+        // frame ever arrives again. Measured at the crash: 5355MB resident, 99MB free of 7.2GB.
+        //
+        // 2048 leaves room for the guest's own 256MB main + 256MB RSX memory, the host-side
+        // caches, and the OS, while still being far more than any PS3 title needs for surfaces
+        // and textures at these resolutions. Eviction under a budget is cheap; hitting the wall
+        // is fatal.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@VRAM allocation limit (MB)", "2048") }
         // Compatible Savestate Mode is no longer forced off here; applyTo writes it from
         // ps3.savestateCompatibleMode above, so the two costs it carries -- SPU performance
         // and a 500MB to 3GB state file -- are the user's to accept rather than a decision
