@@ -1,39 +1,8 @@
 ARMSX3
 ======
 
-Proof of concept Android port of RPCS3.
-
 Uses the latest RPCS3 upstream code (the recent ARM64 improvements included). 
 
-Status
-------
-
-From my testing, I only tried Skate 3. It boots, loads and reaches gameplay at roughly 20 to 30 fps on a
-Snapdragon 8 Gen 2. Rendering, audio, touch controls and physical controllers
-work. Almost nothing else has been tested. So the main stop gap at the moment is performance/speed. 
-
-Differences from upstream RPCS3
--------------------------------
-
-Some of the fixes here are not in upstream and affect any ARM64 build, not only
-Android:
-
-* Shaders declared runtime sized arrays inside uniform blocks, which requires
-  VK_EXT_shader_uniform_buffer_unsized_array. Adreno does not support that
-  extension, so every game pipeline failed to compile and nothing rendered.
-  Concrete array bounds are emitted when the extension is missing.
-
-* The ARM64 SPU block verification checksum folded two thirds of every block
-  through an absolute difference. That collides on the near identical job
-  binaries an SPU job manager streams through the same local store address, so
-  a cached block could end up running against another job's code. It sums now.
-
-* Thread affinity was compiled out on Android, and the core had no ARM
-  big.LITTLE topology, so SPU and RSX threads were never placed on the fast
-  cores.
-
-* The LLVM JIT target was pinned to cortex-a34, an in order core from 2016. It
-  detects the host now.
 
 Building
 --------
