@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.armsx2.data.library.GameLibraryRepository
 import com.armsx2.data.library.Licences
+import com.armsx2.data.library.ParamSfo
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.runtime.MainActivityRuntime
@@ -63,9 +64,58 @@ import net.rpcsx.RPCSX
  * the library cache is stale and can never point at a user's ROM folder.
  */
 /** Licence files, which install through a different native entry point than packages. */
-private fun isLicence(file: java.io.File): Boolean =
-    file.extension.equals("rap", ignoreCase = true) ||
-        file.extension.equals("edat", ignoreCase = true)
+private fun isLicence(file: java.io.File): Boolean = isLicenceName(file.name)
+
+/**
+ * The same test against a NAME rather than a File.
+ *
+ * A pick made through the system picker has no File behind it at all -- the provider may be a
+ * USB-OTG app, a card reader or a network share -- so the display name the provider reports is
+ * the only thing there is to route on.
+ */
+private fun isLicenceName(name: String): Boolean =
+    name.endsWith(".rap", ignoreCase = true) || name.endsWith(".edat", ignoreCase = true)
+
+/**
+ * Order the parts of a split package the way a human numbers them.
+ *
+ * Part order is CORRECTNESS here, not presentation: installSplitPkg hands the parts to
+ * package_reader::extract_data in the order given and the extractor trusts it. The in-app
+ * browser sorts its selection by name before handing it over, but the system picker returns
+ * documents in the order the user happened to tap them, so a split game picked from a USB
+ * drive could arrive part 2 first and extract into a broken install rather than fail.
+ *
+ * Digit runs compare numerically because plain string order puts _10 between _1 and _2, and a
+ * release big enough to be split is exactly the one that reaches ten parts. Compared as digit
+ * strings rather than parsed, so a pathologically long run of digits cannot overflow.
+ */
+private val NaturalOrder = Comparator<String> { first, second ->
+    var i = 0
+    var j = 0
+    while (i < first.length && j < second.length) {
+        val a = first[i]
+        val b = second[j]
+        if (a.isDigit() && b.isDigit()) {
+            var ai = i
+            while (ai < first.length && first[ai].isDigit()) ai++
+            var bj = j
+            while (bj < second.length && second[bj].isDigit()) bj++
+            val da = first.substring(i, ai).trimStart('0')
+            val db = second.substring(j, bj).trimStart('0')
+            if (da.length != db.length) return@Comparator da.length - db.length
+            val order = da.compareTo(db)
+            if (order != 0) return@Comparator order
+            i = ai
+            j = bj
+        } else {
+            val order = a.lowercaseChar().compareTo(b.lowercaseChar())
+            if (order != 0) return@Comparator order
+            i++
+            j++
+        }
+    }
+    (first.length - i) - (second.length - j)
+}
 
 /**
  * Licence files sitting in exdata.
@@ -85,12 +135,61 @@ private fun readLicences(): List<java.io.File> =
         ?.sortedBy { it.name }
         .orEmpty()
 
-private fun readInstalled(): List<java.io.File> =
+/**
+ * An installed title, under the name a person would recognise it by.
+ *
+ * The folder under dev_hdd0/game is named for the title id, and that id was all this screen
+ * ever showed: a list of NPUB90434, BLES01807, BLUS30464 with an Uninstall button beside each.
+ * Reported in issue #16 -- "it should say Dragon Ball: Raging Blast 2 Demo" -- and it is worse
+ * than unhelpful for a delete button, because deciding which of two demos to reclaim space
+ * from meant looking the ids up somewhere else.
+ *
+ * The id is kept and still shown: it is what the compatibility lists, patches and cheat files
+ * are keyed by, so dropping it would cost as much as it gained.
+ */
+private data class InstalledTitle(
+    val dir: java.io.File,
+    val id: String,
+    val name: String,
+)
+
+/**
+ * TITLE out of an install's own PARAM.SFO, falling back to the folder name.
+ *
+ * Read straight off disk rather than through the library. The library is a cache that can be
+ * stale or empty, and this list exists precisely so uninstall keeps working when it is -- an
+ * install that the library has not scanned yet must still be named here.
+ */
+private fun installedTitleFor(dir: java.io.File): InstalledTitle {
+    val sfo = runCatching {
+        dir.listFiles()?.firstOrNull { it.isFile && it.name.equals("PARAM.SFO", ignoreCase = true) }
+    }.getOrNull()
+    val title = sfo?.let { ParamSfo.string(it, "TITLE") }?.trim().orEmpty()
+    return InstalledTitle(dir, dir.name, title.ifBlank { dir.name })
+}
+
+private fun readInstalled(): List<InstalledTitle> =
     java.io.File(RPCSX.rootDirectory, "config/dev_hdd0/game")
         .listFiles()
         ?.filter { it.isDirectory && isInstalledContent(it) }
-        ?.sortedBy { it.name }
+        ?.map { installedTitleFor(it) }
+        // By name now that there is one: sorting by title id groups a user's library by
+        // publisher prefix, which is not an order anyone is looking for.
+        ?.sortedBy { it.name.lowercase() }
         .orEmpty()
+
+/**
+ * The title id a licence file belongs to, or null when its name does not carry one.
+ *
+ * A RAP is named for the content id it unlocks -- UP0700-NPUB30910_00-XXXXXXXXXXXXXXXX -- so
+ * the id sits between the first dash and the underscore. Used only to put a recognisable name
+ * beside a licence; a file that has been renamed simply gets no name, which is what it had.
+ */
+private fun licenceTitleId(file: java.io.File): String? =
+    file.nameWithoutExtension
+        .substringAfter('-', "")
+        .substringBefore('_')
+        .takeIf { it.length == 9 && it.all { c -> c.isLetterOrDigit() } }
 
 /**
  * True for a directory under dev_hdd0/game that is actually installed content.
@@ -147,6 +246,154 @@ private fun removeCacheFor(titleId: String): Boolean = runCatching {
     dir.deleteRecursively()
 }.getOrDefault(false)
 
+/** A named reason an external pick could not be installed, kept so the user sees it. */
+private class ExternalPickFailure(message: String) : Exception(message)
+
+/**
+ * A picked document, opened as something the native installer can actually read.
+ *
+ * Owns the copy it may have had to make: [close] drops the staged file as well as the
+ * descriptor, so a failed or a finished install never leaves gigabytes behind.
+ */
+private class OpenedDocument(
+    val descriptor: ParcelFileDescriptor,
+    private val staged: java.io.File?,
+) {
+    fun close() {
+        runCatching { descriptor.close() }
+        staged?.let { runCatching { it.delete() } }
+    }
+}
+
+/**
+ * True when the installer can seek in this descriptor.
+ *
+ * Asked with the same call the native side will make. Every install entry point takes a raw fd
+ * and seeks in it -- getFileType sniffs the magic and rewinds, package_reader jumps around the
+ * archive -- so a descriptor that only streams forward is not usable, however valid the file
+ * behind it is.
+ */
+private fun isSeekable(descriptor: ParcelFileDescriptor): Boolean = runCatching {
+    android.system.Os.lseek(descriptor.fileDescriptor, 0, android.system.OsConstants.SEEK_CUR)
+    true
+}.getOrDefault(false)
+
+/** Bytes the provider says a document holds, or -1 when it will not say. */
+private fun documentSize(resolver: android.content.ContentResolver, uri: android.net.Uri): Long =
+    runCatching {
+        resolver.query(uri, null, null, null, null)?.use { cursor ->
+            val column = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+            if (column >= 0 && cursor.moveToFirst() && !cursor.isNull(column)) {
+                cursor.getLong(column)
+            } else {
+                null
+            }
+        }
+    }.getOrNull() ?: -1L
+
+/** Free bytes on the volume [dir] is on, asked of the nearest directory that exists. */
+private fun usableSpaceAt(dir: java.io.File): Long {
+    var probe: java.io.File? = dir
+    while (probe != null && !probe.exists()) probe = probe.parentFile
+    return runCatching { probe?.usableSpace ?: 0L }.getOrDefault(0L)
+}
+
+/**
+ * Where a package that has to be copied before it can be installed goes.
+ *
+ * Whichever of the emulator's own storage and the app cache has more room, because these are
+ * often different volumes: someone who put app data on an SD card did it because internal
+ * storage is full, and a staged package is the size of the package. The emulator's copy is
+ * under cache/ so a kill mid-copy leaves it somewhere users and cleaners already expect
+ * disposable data, not next to their games.
+ */
+private fun stagingDir(context: android.content.Context): java.io.File? {
+    val candidates = buildList {
+        if (RPCSX.rootDirectory.isNotBlank()) {
+            add(java.io.File(RPCSX.rootDirectory, "cache/install"))
+        }
+        add(java.io.File(context.cacheDir, "install"))
+    }
+    val best = candidates.maxByOrNull { usableSpaceAt(it) } ?: return null
+    return best.takeIf { it.isDirectory || it.mkdirs() }
+}
+
+/**
+ * A provider's display name reduced to something safe to create in a directory we own.
+ *
+ * The name is not trusted: it is a string the provider chose, and a path separator in it would
+ * put a multi-gigabyte copy somewhere other than the staging directory. Nothing reads the name
+ * afterwards -- the installer sniffs the file's magic, never its extension -- so reducing it to
+ * plain characters costs nothing.
+ */
+private fun stagedName(name: String): String =
+    name.substringAfterLast('/').substringAfterLast('\\')
+        .filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }
+        .trimStart('.')
+        .ifBlank { "staged.pkg" }
+
+/**
+ * Open a picked document for the native installer, copying it first only when it has to be.
+ *
+ * Providers backed by real storage -- internal storage, and the SD cards and USB volumes the
+ * platform itself mounts -- hand back a descriptor onto a real file, so the common case costs
+ * no copy and no extra space at all, which is what makes installing a 40 GB package off a USB
+ * drive possible in the first place. That is the whole point of issue #16: a package on OTG
+ * storage used to have to be copied to internal storage BY HAND before it could be installed.
+ *
+ * The providers that cannot do that are the third-party USB-OTG and cloud apps people reach
+ * for when the platform will not mount their drive: those hand back a PIPE. lseek on a pipe
+ * fails with ESPIPE, and the installer's first act is to seek, so the file was reported as
+ * unsupported or broken with nothing wrong with it. Those get copied, which is slow and costs
+ * the space, but is the only thing that can be done with a stream.
+ */
+private fun openForInstall(
+    context: android.content.Context,
+    uri: android.net.Uri,
+    name: String,
+): OpenedDocument {
+    val resolver = context.contentResolver
+    val direct = runCatching { resolver.openFileDescriptor(uri, "r") }.getOrNull()
+        ?: throw ExternalPickFailure(I18n.get("packages.install.unreadable").format(name))
+    if (isSeekable(direct)) return OpenedDocument(direct, null)
+
+    runCatching { direct.close() }
+
+    val size = documentSize(resolver, uri)
+    val dir = stagingDir(context)
+        ?: throw ExternalPickFailure(I18n.get("packages.install.noRoom").format(name))
+    // Headroom, not an exact fit: the install writes the extracted content to this same
+    // volume, and filling it completely with the staged copy would only move the failure.
+    if (size > 0 && usableSpaceAt(dir) < size + StagingHeadroom) {
+        throw ExternalPickFailure(I18n.get("packages.install.noRoom").format(name))
+    }
+
+    val staged = java.io.File(dir, stagedName(name))
+    val copied = runCatching {
+        resolver.openInputStream(uri)?.use { input ->
+            staged.outputStream().use { output -> input.copyTo(output) }
+        } != null
+    }.getOrDefault(false)
+    // Checked against the size the provider reported, because a copy that stops short does not
+    // throw: it produces a shorter file, and a truncated package fails much later as "broken",
+    // which is a bug report about the package rather than about the copy.
+    if (!copied || (size > 0 && staged.length() != size)) {
+        runCatching { staged.delete() }
+        throw ExternalPickFailure(I18n.get("packages.install.copyFailed").format(name))
+    }
+
+    val descriptor = runCatching {
+        ParcelFileDescriptor.open(staged, ParcelFileDescriptor.MODE_READ_ONLY)
+    }.getOrNull() ?: run {
+        runCatching { staged.delete() }
+        throw ExternalPickFailure(I18n.get("packages.install.copyFailed").format(name))
+    }
+    return OpenedDocument(descriptor, staged)
+}
+
+/** Room left over after a staged copy, so the install itself still has somewhere to write. */
+private const val StagingHeadroom = 256L * 1024L * 1024L
+
 @Composable
 fun PackageInstallerScreen(onBack: () -> Unit) {
     val context = LocalContext.current
@@ -156,7 +403,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
     var progressId by remember { mutableStateOf<Long?>(null) }
     var installed by remember { mutableStateOf(readInstalled()) }
     var licences by remember { mutableStateOf(readLicences()) }
-    var confirmRemove by remember { mutableStateOf<java.io.File?>(null) }
+    var confirmRemove by remember { mutableStateOf<InstalledTitle?>(null) }
 
     // getItem returns MutableState<ProgressEntry>; reading .value here and .longValue
     // below is what subscribes this composable to the native progress callbacks.
@@ -184,9 +431,11 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
      * cards is not reachable that way at all, so those users had to copy multi-gigabyte files
      * to internal storage first. Reported as issue #16.
      *
-     * Packages are handed over as the descriptor SAF already gave us: the native side takes a
-     * raw fd, so nothing is copied and a 4 GB package costs no extra space. Licences are 16
-     * bytes and their installer wants a real file, so those alone are staged into the cache.
+     * Packages are normally handed over as the descriptor SAF already gave us: the native side
+     * takes a raw fd, so nothing is copied and a 40 GB package costs no extra space. Only a
+     * provider that cannot produce a seekable descriptor forces a copy, which [openForInstall]
+     * decides per file. Licences are 16 bytes and their installer wants a real file, so those
+     * are always staged.
      */
     fun installFromUris(uris: List<android.net.Uri>) {
         if (uris.isEmpty()) return
@@ -207,12 +456,11 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                         }.getOrNull() ?: uri.lastPathSegment.orEmpty()
 
                     val named = uris.map { it to displayName(it) }
-                    val licenceUris = named.filter { (_, n) ->
-                        n.endsWith(".rap", true) || n.endsWith(".edat", true)
-                    }
-                    val packageUris = named.filterNot { (_, n) ->
-                        n.endsWith(".rap", true) || n.endsWith(".edat", true)
-                    }
+                    val licenceUris = named.filter { (_, n) -> isLicenceName(n) }
+                    // Sorted, because the picker returns the user's tap order and the split
+                    // installer takes the order given as the part order.
+                    val packageUris = named.filterNot { (_, n) -> isLicenceName(n) }
+                        .sortedWith(compareBy(NaturalOrder) { (_, n) -> n })
 
                     val label = if (uris.size == 1) named[0].second else "${uris.size} files"
                     val id = ProgressRepository.create(context, "Installing $label")
@@ -221,27 +469,45 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
 
                     var result = true
                     if (packageUris.isNotEmpty()) {
-                        val descriptors = packageUris.mapNotNull { (uri, _) ->
-                            runCatching { resolver.openFileDescriptor(uri, "r") }.getOrNull()
-                        }
-                        if (descriptors.size != packageUris.size) {
-                            descriptors.forEach { runCatching { it.close() } }
-                            return@runCatching false
-                        }
+                        val opened = mutableListOf<OpenedDocument>()
                         try {
-                            result = if (descriptors.size == 1) {
-                                RPCSX.instance.install(descriptors[0].fd, id)
-                            } else {
-                                RPCSX.instance.installSplitPkg(descriptors.map { it.fd }.toIntArray(), id)
+                            for ((uri, name) in packageUris) {
+                                // Reported on the notification because a copy of a package on
+                                // slow external storage takes minutes with nothing else to
+                                // show for it, and silence there reads as a hang.
+                                ProgressRepository.onProgressEvent(
+                                    id, 0, 0, I18n.get("packages.reading").format(name),
+                                )
+                                opened += openForInstall(context, uri, name)
                             }
+                            ProgressRepository.onProgressEvent(
+                                id, 0, 0, I18n.get("packages.installingFile").format(label),
+                            )
+                            result = if (opened.size == 1) {
+                                RPCSX.instance.install(opened[0].descriptor.fd, id)
+                            } else {
+                                RPCSX.instance.installSplitPkg(
+                                    opened.map { it.descriptor.fd }.toIntArray(), id,
+                                )
+                            }
+                        } catch (failure: ExternalPickFailure) {
+                            // The only failure with a reason worth showing: it names the file
+                            // and says what went wrong with it, which the generic string cannot.
+                            nativeFailure = failure.message
+                            result = false
+                            // Reported into the progress entry as well, the same way the native
+                            // installer reports its own failures. Bailing before the native call
+                            // means nothing else ever finishes that entry, and its notification
+                            // is an ongoing one that would sit in the shade forever.
+                            ProgressRepository.onProgressEvent(id, -1, 0, failure.message)
                         } finally {
-                            descriptors.forEach { runCatching { it.close() } }
+                            opened.forEach { it.close() }
                         }
                     }
 
                     for ((uri, name) in licenceUris) {
                         if (!result) break
-                        val staged = java.io.File(context.cacheDir, name)
+                        val staged = java.io.File(context.cacheDir, stagedName(name))
                         val copied = runCatching {
                             resolver.openInputStream(uri)?.use { input ->
                                 staged.outputStream().use { out -> input.copyTo(out) }
@@ -289,7 +555,10 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
                     val licences = files.filter { isLicence(it) }
+                    // Sorted here as well as in the browser: the browser's sort is plain
+                    // string order, which puts part 10 between part 1 and part 2.
                     val packages = files.filterNot { isLicence(it) }
+                        .sortedWith(compareBy(NaturalOrder) { it.name })
                     val label = if (files.size == 1) files[0].name
                     else "${files.size} files"
                     val id = ProgressRepository.create(context, "Installing $label")
@@ -374,14 +643,18 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
         // Off the main thread: a cache directory holds hundreds of files and this runs while the
         // dialog is opening.
         val cacheBytes by androidx.compose.runtime.produceState(0L, target) {
-            value = withContext(Dispatchers.IO) { dirSize(cacheDirFor(target.name)) }
+            value = withContext(Dispatchers.IO) { dirSize(cacheDirFor(target.id)) }
         }
         AlertDialog(
             onDismissRequest = { confirmRemove = null },
             title = { Text(str("packages.uninstall.confirmTitle")) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(str("packages.uninstall.confirmBody").format(target.name))
+                    Text(
+                        str("packages.uninstall.confirmBody").format(
+                            if (target.name == target.id) target.id else "${target.name} (${target.id})",
+                        ),
+                    )
                     // Hidden when there is no cache, so the row never offers to free nothing.
                     if (cacheBytes > 0) {
                         Row(
@@ -401,11 +674,11 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                 TextButton(onClick = {
                     confirmRemove = null
                     val removeCache = alsoRemoveCache
-                    val titleId = target.name
+                    val titleId = target.id
                     MainActivityRuntime.invoke {
                         val ok = withContext(Dispatchers.IO) {
                             runCatching {
-                                RPCSX.instance.uninstallGame(target.absolutePath)
+                                RPCSX.instance.uninstallGame(target.dir.absolutePath)
                             }.getOrDefault(false)
                         }
                         // Only after the game itself is gone: dropping the cache for a title that
@@ -494,6 +767,17 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                         } else {
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
+                        // What is happening right now, when anything says so. Copying a
+                        // package off storage that cannot be read directly takes minutes on
+                        // its own, before the install has started at all, and a bar with only
+                        // "Installing" under it reads as a hang for the whole of it.
+                        progress?.message?.value?.takeIf { it.isNotBlank() }?.let {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                        }
                         Text(
                             str("packages.installing"),
                             style = MaterialTheme.typography.bodySmall,
@@ -534,17 +818,34 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurface,
                 )
                 licences.forEach { file ->
+                    // A licence's name is its content id and nothing else, so a row of them is
+                    // sixteen indistinguishable hex-and-dash strings. The title id inside the
+                    // content id is the same id the install folder is named for, so when the
+                    // game this licence unlocks is installed, the row can say which game it is.
+                    val owner = licenceTitleId(file)
+                        ?.let { id -> installed.firstOrNull { it.id == id } }
+                        ?.takeIf { it.name != it.id }
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Text(
-                            file.name,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Column(
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                        )
+                        ) {
+                            owner?.let {
+                                Text(
+                                    it.name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                            Text(
+                                file.name,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                 }
             }
@@ -562,7 +863,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                     modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    items(installed, key = { it.absolutePath }) { dir ->
+                    items(installed, key = { it.dir.absolutePath }) { title ->
                         Surface(
                             shape = RoundedCornerShape(12.dp),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
@@ -572,13 +873,24 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                                 modifier = Modifier.padding(start = 14.dp, end = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Text(
-                                    dir.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                TextButton(onClick = { confirmRemove = dir }) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        title.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                    // Only when it adds something: an install whose PARAM.SFO
+                                    // could not be read is already named for its id, and the
+                                    // row would print it twice.
+                                    if (title.name != title.id) {
+                                        Text(
+                                            title.id,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                                TextButton(onClick = { confirmRemove = title }) {
                                     Text(str("packages.uninstall"))
                                 }
                             }

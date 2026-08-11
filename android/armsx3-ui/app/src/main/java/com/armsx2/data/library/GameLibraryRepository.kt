@@ -398,38 +398,10 @@ class GameLibraryRepository(private val context: Context) {
     /**
      * CATEGORY out of a PARAM.SFO, or null when it cannot be read.
      *
-     * Deliberately a reader for this one field rather than a general SFO parser: the scanner
-     * needs nothing else, and a malformed or truncated file must degrade to "list it" rather
-     * than hide a real game.
+     * A malformed or truncated file has to degrade to "list it" rather than hide a real game,
+     * which is what [ParamSfo] answering null for every failure buys here.
      */
-    private fun sfoCategory(sfo: File): String? = try {
-        val bytes = sfo.readBytes()
-        val buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-        // "\0PSF", then key-table start, data-table start, entry count.
-        if (bytes.size < 20 || buffer.getInt(0) != 0x46535000) {
-            null
-        } else {
-            val keyTable = buffer.getInt(8)
-            val dataTable = buffer.getInt(12)
-            var found: String? = null
-            for (index in 0 until buffer.getInt(16)) {
-                val entry = 20 + index * 16
-                if (entry + 16 > bytes.size) break
-                val keyStart = keyTable + (buffer.getShort(entry).toInt() and 0xFFFF)
-                var keyEnd = keyStart
-                while (keyEnd < bytes.size && bytes[keyEnd] != 0.toByte()) keyEnd++
-                if (keyEnd > bytes.size || String(bytes, keyStart, keyEnd - keyStart) != "CATEGORY") continue
-                val dataStart = dataTable + buffer.getInt(entry + 12)
-                val dataLength = buffer.getInt(entry + 4)
-                if (dataStart < 0 || dataLength < 0 || dataStart + dataLength > bytes.size) break
-                found = String(bytes, dataStart, dataLength).trimEnd('\u0000', ' ')
-                break
-            }
-            found
-        }
-    } catch (_: Throwable) {
-        null
-    }
+    private fun sfoCategory(sfo: File): String? = ParamSfo.string(sfo, "CATEGORY")
 
     /** [isPs3GameFolder] over a SAF tree. */
     private fun isPs3GameDocument(directory: DocumentFile): Boolean {
@@ -663,5 +635,45 @@ class GameLibraryRepository(private val context: Context) {
         const val PendingIcon = "__pending"
         const val MaxScanDepth = 12
         val probeExtensions = setOf("iso", "bin", "chd", "img", "mdf", "nrg", "dump")
+    }
+}
+
+/**
+ * The one PARAM.SFO field a caller asks for, by key.
+ *
+ * Grown out of the scanner's CATEGORY reader rather than added beside it: the package screen
+ * needs TITLE for the same files, and a second copy of this parsing would be a second place to
+ * get the 16-byte index-entry layout wrong.
+ *
+ * Every failure -- unreadable file, wrong magic, an offset that points past the end -- answers
+ * null. A truncated or hand-edited SFO must never take a caller down with it: the scanner uses
+ * the answer to decide whether to LIST a game, and the package screen to decide what to CALL
+ * one, and both have a sane fallback while an exception has none.
+ */
+internal object ParamSfo {
+    fun string(sfo: File, key: String): String? =
+        runCatching { string(sfo.readBytes(), key) }.getOrNull()
+
+    fun string(bytes: ByteArray, key: String): String? {
+        val buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        // "\0PSF", then key-table start, data-table start, entry count.
+        if (bytes.size < 20 || buffer.getInt(0) != 0x46535000) return null
+        val keyTable = buffer.getInt(8)
+        val dataTable = buffer.getInt(12)
+        for (index in 0 until buffer.getInt(16)) {
+            val entry = 20 + index * 16
+            if (entry + 16 > bytes.size) break
+            val keyStart = keyTable + (buffer.getShort(entry).toInt() and 0xFFFF)
+            if (keyStart < 0 || keyStart >= bytes.size) break
+            var keyEnd = keyStart
+            while (keyEnd < bytes.size && bytes[keyEnd] != 0.toByte()) keyEnd++
+            if (String(bytes, keyStart, keyEnd - keyStart) != key) continue
+            val dataStart = dataTable + buffer.getInt(entry + 12)
+            val dataLength = buffer.getInt(entry + 4)
+            if (dataStart < 0 || dataLength < 0 || dataStart + dataLength > bytes.size) break
+            // Values are UTF-8 and padded with NULs to their declared maximum length.
+            return String(bytes, dataStart, dataLength, Charsets.UTF_8).trimEnd('\u0000', ' ')
+        }
+        return null
     }
 }
