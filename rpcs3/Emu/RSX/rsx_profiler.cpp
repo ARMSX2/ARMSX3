@@ -245,10 +245,18 @@ namespace rsx::prof
 
 		g_acc.frames++;
 
-		// Restart pass numbering so an ordinal means the same pass here as it does in the GPU
-		// timer, whose event index resets on the same boundary. Wraps to zero on the first
-		// pass; anything counted before one opens lands out of range and is discarded.
-		g_pass_ordinal = umax;
+		// Pass numbering is NOT restarted here.
+		//
+		// It used to be, on the claim that the GPU timer's event index resets on the same
+		// boundary. It does not. tick_frame runs from on_frame_end, BEFORE flip; the GPU timer
+		// rotates its slot at the top of flip and then drops every non-frame region recorded on
+		// the fresh slot -- which is flip's own overlay and calibration passes. Those passes
+		// still increment this counter, so the CPU ordinal ran ahead of the GPU ordinal by the
+		// number of present-path passes, and the two by-pass tables described different passes.
+		//
+		// A whole "anomaly" came out of that: a pass whose GPU cost was joined to another pass's
+		// workload read as 36x the per-draw cost of its neighbours. Reset at the flip point
+		// instead, where the GPU slot actually rotates. See VKPresent.cpp.
 
 		// Report on a frame boundary rather than a timer, so per-frame costs divide by a
 		// whole number of frames and a long stall lands in the window that contains it.

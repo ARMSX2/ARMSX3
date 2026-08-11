@@ -2,6 +2,7 @@ package com.armsx2.ui.packages
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -175,6 +176,106 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
     // licence, the obvious thing to do, could therefore only ever fail.
     //
     // Packages install FIRST: a licence unlocks content the package has to have written.
+    /**
+     * Install from a Storage Access Framework pick.
+     *
+     * The in-app browser walks java.io.File, which only reaches storage this process can open
+     * by path -- internal, and its own external dirs. A .pkg on a USB-OTG drive or on some SD
+     * cards is not reachable that way at all, so those users had to copy multi-gigabyte files
+     * to internal storage first. Reported as issue #16.
+     *
+     * Packages are handed over as the descriptor SAF already gave us: the native side takes a
+     * raw fd, so nothing is copied and a 4 GB package costs no extra space. Licences are 16
+     * bytes and their installer wants a real file, so those alone are staged into the cache.
+     */
+    fun installFromUris(uris: List<android.net.Uri>) {
+        if (uris.isEmpty()) return
+        busy = true
+        message = null
+        MainActivityRuntime.invoke {
+            var nativeFailure: String? = null
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val resolver = context.contentResolver
+
+                    fun displayName(uri: android.net.Uri): String =
+                        runCatching {
+                            resolver.query(uri, null, null, null, null)?.use { c ->
+                                val i = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                                if (i >= 0 && c.moveToFirst()) c.getString(i) else null
+                            }
+                        }.getOrNull() ?: uri.lastPathSegment.orEmpty()
+
+                    val named = uris.map { it to displayName(it) }
+                    val licenceUris = named.filter { (_, n) ->
+                        n.endsWith(".rap", true) || n.endsWith(".edat", true)
+                    }
+                    val packageUris = named.filterNot { (_, n) ->
+                        n.endsWith(".rap", true) || n.endsWith(".edat", true)
+                    }
+
+                    val label = if (uris.size == 1) named[0].second else "${uris.size} files"
+                    val id = ProgressRepository.create(context, "Installing $label")
+                    progressId = id
+                    val progressEntry = ProgressRepository.getItem(id)
+
+                    var result = true
+                    if (packageUris.isNotEmpty()) {
+                        val descriptors = packageUris.mapNotNull { (uri, _) ->
+                            runCatching { resolver.openFileDescriptor(uri, "r") }.getOrNull()
+                        }
+                        if (descriptors.size != packageUris.size) {
+                            descriptors.forEach { runCatching { it.close() } }
+                            return@runCatching false
+                        }
+                        try {
+                            result = if (descriptors.size == 1) {
+                                RPCSX.instance.install(descriptors[0].fd, id)
+                            } else {
+                                RPCSX.instance.installSplitPkg(descriptors.map { it.fd }.toIntArray(), id)
+                            }
+                        } finally {
+                            descriptors.forEach { runCatching { it.close() } }
+                        }
+                    }
+
+                    for ((uri, name) in licenceUris) {
+                        if (!result) break
+                        val staged = java.io.File(context.cacheDir, name)
+                        val copied = runCatching {
+                            resolver.openInputStream(uri)?.use { input ->
+                                staged.outputStream().use { out -> input.copyTo(out) }
+                            } != null
+                        }.getOrDefault(false)
+                        if (!copied) { result = false; break }
+                        result = if (name.endsWith(".rap", true)) {
+                            Licences.installRap(staged)
+                        } else {
+                            val d = ParcelFileDescriptor.open(staged, ParcelFileDescriptor.MODE_READ_ONLY)
+                            try { RPCSX.instance.installKey(d.fd, id, "") } finally { runCatching { d.close() } }
+                        }
+                        runCatching { staged.delete() }
+                    }
+
+                    progressEntry?.value?.takeIf { it.isFailed() }?.let {
+                        nativeFailure = it.message.value
+                    }
+                    result
+                }.getOrDefault(false)
+            }
+            busy = false
+            progressId = null
+            message = if (ok) {
+                GameLibraryRepository(context).invalidateCache()
+                installed = readInstalled()
+                licences = readLicences()
+                I18n.get("packages.install.done")
+            } else {
+                nativeFailure?.takeIf { it.isNotBlank() } ?: I18n.get("packages.install.failed")
+            }
+        }
+    }
+
     fun install(files: List<java.io.File>) {
         if (files.isEmpty()) return
         showBrowser = false
@@ -327,6 +428,10 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
         )
     }
 
+    val safPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris -> if (!uris.isNullOrEmpty()) installFromUris(uris) }
+
     if (showBrowser) {
         FileBrowserDialog(
             title = str("packages.select.title"),
@@ -397,6 +502,14 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                     } else {
                         Button(onClick = { showBrowser = true }) {
                             Text(str("packages.select.action"))
+                        }
+                        // Reaches storage the in-app browser cannot open by path: USB-OTG,
+                        // and SD cards on devices that only expose them through SAF.
+                        Button(
+                            onClick = { safPicker.launch(arrayOf("*/*")) },
+                            modifier = Modifier.padding(top = 8.dp),
+                        ) {
+                            Text(str("packages.select.external"))
                         }
                     }
 

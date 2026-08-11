@@ -332,6 +332,17 @@ void VKGSRender::queue_swap_request()
 	// reported nothing at all for the whole session while looking perfectly healthy.
 	vk::get_gpu_timer().begin(*m_current_command_buffer, vk::gpu_timer::region::frame);
 
+	// Restart CPU pass numbering HERE, where the GPU timer's slot actually rotates, so an
+	// ordinal names the same pass on both sides. It used to reset in tick_frame, which runs
+	// from on_frame_end -- before flip -- while flip's own overlay and calibration passes went
+	// on incrementing it and were dropped GPU-side. The CPU ordinal therefore ran ahead by the
+	// number of present-path passes and the two by-pass tables described different passes.
+	//
+	// This site rather than next_frame(): queue_swap_request has one call site, so the mid-frame
+	// flush_command_queue reopen cannot falsely restart numbering, and flip's passes land after
+	// the reset where they belong rather than taking ordinals 0..k-1.
+	rsx::prof::g_pass_ordinal = umax;
+
 	// Set up new pointers for the next frame
 	advance_queued_frames();
 }

@@ -394,6 +394,7 @@ val EN: Map<String, String> = mapOf(
     "packages.description" to "Install a .pkg game, update or DLC, or a .rap licence file. Some games need both: the .pkg holds the content and the .rap unlocks it. Installed titles are added to your library automatically, and updates and DLC need the base game installed first.",
     "packages.select.title" to "Select a .pkg or .rap file",
     "packages.select.action" to "Choose file",
+    "packages.select.external" to "Choose from USB or SD card",
     "packages.installing" to "Installing. Large packages can take a few minutes.",
     "packages.install.done" to "Installed. It will appear in your library on the next scan.",
     "packages.install.failed" to "Install failed. The file may be encrypted, incomplete or not a PS3 package.",
