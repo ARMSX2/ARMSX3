@@ -3477,7 +3477,18 @@ struct jit_core_allocator
 	//
 	// Rechecking at the point of use is what makes this adaptive. With headroom nothing is
 	// serialised and there is no cost; only under pressure does it become one at a time.
-	std::mutex low_memory_mutex;
+	// A claim, not a mutex.
+	//
+	// This is held across an LLVM compile, and a worker that hits LLVM's fatal handler leaves
+	// through pthread_exit -- which under bionic unwinds nothing, so an owned std::mutex stays
+	// locked by a thread that no longer exists and every other worker blocks on it for the rest
+	// of the session. That is the reported "PPU cache never finishes, it gets stuck at the end",
+	// and it gets more likely the longer a run goes, because memory only falls.
+	//
+	// Waiting on an atomic with a timeout costs a stranded claim a wait instead of the session.
+	// Same reasoning as the SPU compile claim, and the same failure this fork has already been
+	// bitten by twice.
+	atomic_t<u32> low_memory_claim{0};
 
 	// Enough left for the emulator plus a single worker. Below that, running two workers is
 	// how the process gets killed rather than how it finishes sooner.
@@ -5500,13 +5511,48 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						//
 						// Scoped to the compile and nothing else, so a worker waiting here
 						// is never holding an LLVM context while it waits.
-						std::unique_lock<std::mutex> serialise_compiles;
+						// Releases the claim on every path a live thread can leave by. A thread
+						// killed by LLVM's fatal handler leaves by none of them, which is why
+						// the waiters below are bounded rather than trusting this to run.
+						struct claim_guard_t
+						{
+							atomic_t<u32>* owner = nullptr;
+
+							~claim_guard_t()
+							{
+								if (owner)
+								{
+									owner->release(0);
+									owner->notify_one();
+								}
+							}
+						} serialise_compiles;
 
 						if (jit_core_allocator::memory_is_tight())
 						{
-							serialise_compiles = std::unique_lock{g_fxo->get<jit_core_allocator>().low_memory_mutex};
+							auto& claim = g_fxo->get<jit_core_allocator>().low_memory_claim;
 
-							// Holding the lock first is deliberate: whoever waits should be the
+							// Bounded at ~60s. A claim still held after that is one whose owner
+							// died without releasing it, and compiling anyway is better than a
+							// precompile that never finishes -- the memory back-pressure below
+							// is unchanged either way, so this only bounds the wait.
+							for (u32 i = 0; i < 600; i++)
+							{
+								if (claim.compare_and_swap_test(0, 1))
+								{
+									serialise_compiles.owner = &claim;
+									break;
+								}
+
+								if (Emu.IsStopped())
+								{
+									break;
+								}
+
+								claim.wait(1, atomic_wait_timeout{100'000'000});
+							}
+
+							// Holding the claim first is deliberate: whoever waits should be the
 							// only one running, otherwise the other worker keeps allocating and
 							// the wait watches memory it is not allowed to influence.
 							jit_core_allocator::wait_for_memory();
