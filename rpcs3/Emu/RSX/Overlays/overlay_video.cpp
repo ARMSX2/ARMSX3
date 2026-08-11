@@ -43,7 +43,25 @@ namespace rsx
 		{
 			if (video_path.empty()) return;
 
-			m_video_source = ensure(Emu.GetCallbacks().make_video_source());
+			// Same platform reality overlay_audio.cpp already accounts for: Android has no media
+			// backend, so make_video_source returns nullptr and ensure() aborted the process.
+			//
+			// This one is reached from the SAVE DATA LIST -- overlay_save_dialog.cpp builds a
+			// video_view for every entry, on all three paths -- so opening a load menu killed the
+			// emulator as soon as there was one save to draw. It presents as "the save menu never
+			// opens": reported against Ratchet & Clank: Tools of Destruction, Devil May Cry 4, and
+			// Web of Shadows, which stalls only AFTER its first save exists to be listed.
+			//
+			// The still image is what the entry actually needs; the animated ICON1.PAM is the part
+			// no backend can supply.
+			m_video_source = Emu.GetCallbacks().make_video_source();
+
+			if (!m_video_source)
+			{
+				rsx_log.notice("Overlay video unavailable: no video source on this platform");
+				return;
+			}
+
 			m_video_source->set_update_callback([this]()
 			{
 				if (m_video_active)

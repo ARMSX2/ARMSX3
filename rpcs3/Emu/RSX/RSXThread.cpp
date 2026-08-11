@@ -17,6 +17,7 @@
 
 #include "Emu/System.h"
 #include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/timers.hpp"
 #include "Emu/Cell/lv2/sys_event.h"
 #include "Emu/Cell/lv2/sys_time.h"
@@ -1380,6 +1381,26 @@ namespace rsx
 		}, idm::unlocked);
 
 		rsx_log.error("Guest PPU threads while no frame has completed:%s", out);
+
+		// The SPU half. A hang where every PPU is asleep and the SPUs are burning user time is
+		// the SPUs spinning in guest code, and nothing said WHICH code: /proc gives a tick count,
+		// a CPU profile gives a JIT address that resolves to nothing. The PC plus the block hash
+		// name the guest block, which is the only thing that identifies the loop.
+		std::string spus;
+
+		idm::select<named_thread<spu_thread>>([&spus](u32 /*id*/, spu_thread& spu)
+		{
+			const auto func = spu.current_func;
+
+			fmt::append(spus, "\n  SPU 0x%07x '%s': state=%s pc=0x%05x block=0x%016llx func='%s'",
+				spu.lv2_id, *spu.spu_tname.load(), spu.state.load(), spu.pc,
+				static_cast<u64>(spu.block_hash), func ? func : "");
+		}, idm::unlocked);
+
+		if (!spus.empty())
+		{
+			rsx_log.error("Guest SPU threads at the same moment:%s", spus);
+		}
 	}
 
 	void thread::do_local_task(FIFO::state state)
