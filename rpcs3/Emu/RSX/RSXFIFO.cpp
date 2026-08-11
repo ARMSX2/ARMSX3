@@ -46,13 +46,27 @@ namespace rsx
 				return;
 			}
 
-			m_ctrl->get.release(m_internal_get);
+			m_ctrl->get.release(m_published_get = m_internal_get);
 		}
 
 		void FIFO_control::sync_get_force() const
 		{
 			m_get_sync_counter = 0;
-			m_ctrl->get.release(m_internal_get);
+
+			// Publish real progress only. The drain paths call this every time they are entered,
+			// and while the ring is empty or blocked that is once per run loop iteration with GET
+			// unmoved: measured at ~91000 of 137000 iterations per frame in Spider-Man: Web of
+			// Shadows, every one of them a coherence miss on the line holding put.
+			//
+			// The cost lands on the guest rather than on us, which is why it reads as a freeze
+			// with sound: the PPU feeding the ring is the thread contending for that line, so it
+			// stops producing while threads that never touch it carry on.
+			if (m_published_get == m_internal_get)
+			{
+				return;
+			}
+
+			m_ctrl->get.release(m_published_get = m_internal_get);
 		}
 
 		void FIFO_control::restore_state(u32 cmd, u32 count)
@@ -266,7 +280,7 @@ namespace rsx
 			}
 
 			// Update ctrl registers
-			m_ctrl->get.release(m_internal_get = get);
+			m_ctrl->get.release(m_published_get = m_internal_get = get);
 			m_remaining_commands = 0;
 		}
 
@@ -471,7 +485,7 @@ namespace rsx
 
 			if (!count)
 			{
-				m_ctrl->get.release(m_internal_get += 4);
+				m_ctrl->get.release(m_published_get = (m_internal_get += 4));
 				data.reg = FIFO_NOP;
 				return;
 			}
