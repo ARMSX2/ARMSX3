@@ -2473,6 +2473,25 @@ void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* /*rip*/
 				break;
 		}
 
+		// Hand the thread back to the recompiler once it leaves the block that could not be
+		// compiled.
+		//
+		// The fallback flag is otherwise set once and never cleared, so a thread that meets a
+		// single bad block interprets everything it runs from then on. That is correct but very
+		// slow, and these are SPURS kernels doing real work: Sonic Unleashed reached its loading
+		// screen that way and then crawled through it.
+		//
+		// The set holds entry points, so this keeps interpreting while pc sits on the bad entry
+		// -- which is where a branch-to-self idle loop stays -- and releases the thread once
+		// execution moves on. Leaving is safe at any instruction boundary, since all SPU state
+		// lives in spu_thread, the same assumption the JIT dispatch makes. Re-entering the bad
+		// block simply sets the flag again.
+		if (spu.interp_fallback && !spu_block_compile_failed(spu.pc)) [[unlikely]]
+		{
+			spu.interp_fallback = false;
+			break;
+		}
+
 		const u32 op = *reinterpret_cast<const be_t<u32>*>(base + spu.pc);
 		if (table.decode(op)(spu, {op}))
 			spu.pc += 4;
