@@ -3,6 +3,7 @@
 
 #include "Utilities/mutex.h"
 #include "VKRenderPass.h"
+#include "VKHelpers.h"
 #include "vkutils/image.h"
 #include "vkutils/gpu_timer.h"
 
@@ -464,6 +465,26 @@ namespace vk
 
 	void end_renderpass(const vk::command_buffer& cmd)
 	{
+		// A query that began inside a render pass instance has to end inside that same instance.
+		// Ending the pass underneath an open one leaves it permanently unavailable: the driver
+		// never marks it ready, and on Turnip it takes the device with it, reported later
+		// against poke_query because that is the first call that waits on a result.
+		//
+		// Queries do begin inside render passes here. VKDraw only lifts them out when
+		// use_strict_query_scopes() is set, and that is wired to Strict Rendering Mode, a user
+		// performance setting rather than a driver quirk, so it is off for almost everyone.
+		//
+		// The check belongs here rather than at the call sites. There are twenty-one of them and
+		// only one, in VKDraw, ever paired itself with a cleanup; change_image_layout alone ends
+		// 41 passes a frame in Web of Shadows, and any of them can land while a query is open.
+		// Fixing two of the sites moved the device loss later instead of removing it.
+		if (cmd.flags & vk::command_buffer::cb_has_open_query)
+		{
+			// const_cast: ending the query is a recording operation on this very buffer, and
+			// every caller here holds it non-const. The signature is const by history.
+			do_query_cleanup(const_cast<vk::command_buffer&>(cmd));
+		}
+
 		vkCmdEndRenderPass(cmd);
 
 		// After the pass ends, so the tile store it triggers is charged to the region.
