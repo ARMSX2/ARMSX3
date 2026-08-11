@@ -12,6 +12,9 @@
 
 #include "util/asm.hpp"
 
+#include <chrono>
+#include <thread>
+
 #include <thread>
 
 using spu_rdata_t = std::byte[128];
@@ -748,10 +751,40 @@ namespace rsx
 				{
 					performance_counters.FIFO_idle_timestamp = get_system_time();
 					performance_counters.state = FIFO::state::empty;
+					m_fifo_empty_polls = 0;
 				}
 				else
 				{
+#ifdef __ANDROID__
+					// Yield first, then back off to a real sleep.
+					//
+					// sched_yield does not idle a core. With every core already busy it returns
+					// almost immediately and we take it again, so the RSX thread runs flat out
+					// producing nothing: a native profile of Web of Shadows put 66% of this
+					// thread's cycles in sched_yield and its kernel path, against 9% in
+					// run_FIFO. That reads as a busy RSX in the bucket profiler, because the
+					// yield happens inside the fifo_decode scope.
+					//
+					// It is not free even though the ring is empty. The RSX mask covers the
+					// whole fast cluster while the SPU mask is that cluster minus the prime
+					// core, so any of this that lands off the prime core is taken from the SPU
+					// threads, and those are the ones holding the frame up at 61% of all CPU.
+					//
+					// The spin stays long enough that a producer still filling the ring is met
+					// without a scheduler round trip; only a ring that has genuinely gone quiet
+					// reaches the sleep, and 50us is far below the frame times where this
+					// matters.
+					if (++m_fifo_empty_polls < 64)
+					{
+						std::this_thread::yield();
+					}
+					else
+					{
+						std::this_thread::sleep_for(std::chrono::microseconds(50));
+					}
+#else
 					std::this_thread::yield();
+#endif
 				}
 
 				return;

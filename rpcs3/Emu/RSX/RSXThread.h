@@ -205,6 +205,10 @@ namespace rsx
 		}
 		performance_counters;
 
+		// Consecutive polls of an empty ring, counted from the moment it goes idle. Drives the
+		// backoff in the FIFO_EMPTY path so a ring that has genuinely gone quiet stops spinning.
+		u32 m_fifo_empty_polls = 0;
+
 		enum class flip_request : u32
 		{
 			emu_requested = 1,
