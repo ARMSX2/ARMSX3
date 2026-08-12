@@ -108,6 +108,21 @@ namespace vk
 			aligned_new_size = size_limit;
 		}
 
+		// Say WHICH heap grew and by how much.
+		//
+		// A heap that runs away is the difference between a game that plays and one whose RSX
+		// thread is killed by the allocator, and until now nothing identified it: the failure is
+		// reported by the allocator as a size and a pool number, and pool 1 covers every
+		// data_heap there is. Ratchet & Clank dies asking for 144MB here, which is absurd for a
+		// streaming ring on a phone, but vertex, texture-upload and scratch rings each run away
+		// for entirely different reasons and the fix differs accordingly.
+		//
+		// Logged at notice: growth is rare and bounded by the pool limit, so this cannot flood,
+		// and a silent reallocation is exactly what made this take three attempts to narrow.
+		rsx_log.notice("[%s] Heap grew from %uM to %uM (requested %uK).",
+			m_name, static_cast<u32>(m_size / 0x100000),
+			static_cast<u32>(aligned_new_size / 0x100000), static_cast<u32>(size / 1024));
+
 		// Wait for DMA activity to end
 		g_fxo->get<rsx::dma_manager>().sync();
 

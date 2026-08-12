@@ -1643,26 +1643,20 @@ void VKGSRender::flush_command_queue(bool hard_sync, bool do_not_switch)
 		ensure(hard_sync);
 	}
 
-	// Deliberately NOT draining the present queue here.
+	// Retire completed frames here.
 	//
-	// The drain exists in case a queued frame still holds a ref to the command buffer just
-	// taken. It cannot: next() hands them out from a 512 entry ring, and the queued frame list
-	// is bounded at flip to m_max_async_frames - 1, so the buffer being reused is hundreds of
-	// frames retired. The guard is unreachable and the cost is not.
+	// This was removed because the drain poked the oldest queued frame's fence, and on Adreno
+	// vkGetFenceStatus blocks until signalled rather than answering, which cost 14.6ms a frame.
+	// poke() no longer asks that way -- it uses vkWaitForFences with a zero timeout, which is
+	// specified to return VK_TIMEOUT without waiting -- so the reason for removing this is gone
+	// while the speedup stays.
 	//
-	// check_present_status pokes the oldest queued frame's swap command buffer, and on Adreno
-	// vkGetFenceStatus blocks until signalled instead of returning VK_NOT_READY, so a poll that
-	// is written to be cheap becomes a full GPU sync. Called from here it ran 1.32 times a frame
-	// at about 11ms, which is the 14.6ms of Fence poll -- 31% of the frame in Web of Shadows,
-	// second only to the whole RSX decode loop.
-	//
-	// Same fault as the two sites removed with the earlier [wait][record] to [record][wait]
-	// change; this third one was missed because it sits inside flush_command_queue rather than
-	// on the present path. Ruled out first: the frame time is unchanged at quarter resolution,
-	// so it is not GPU work, and forcing the swapchain pre-transform to match the surface left
-	// it at 14.6ms, so it is not compositor rotation either.
-	//
-	// Frames are still retired: the flip path drains and bounds the queue.
+	// Leaving it out was not free. frame_context_cleanup is what returns a frame's ring memory,
+	// so with nothing retiring frames here the data heaps never reclaimed: Ratchet & Clank drove
+	// its index buffer from 16M to 256M in 290ms on requests of 2K to 5K, and the attrib buffer
+	// died growing to 192M. Kilobyte allocations cannot need a quarter gigabyte -- the ring was
+	// simply never wrapping.
+	check_present_status();
 
 	if (m_occlusion_query_active)
 	{
