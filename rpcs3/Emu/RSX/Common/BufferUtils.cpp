@@ -253,7 +253,6 @@ DECLARE(copy_data_swap_u32) = copy_data_swap_u32_naive<false>;
 DECLARE(copy_data_swap_u32_cmp) = copy_data_swap_u32_naive<true>;
 #endif
 
-
 namespace
 {
 	template <typename T>
@@ -366,6 +365,9 @@ namespace
 			else
 				r = upload_xi32(src.data(), dst.data(), count);
 #else
+			// No hand-written ARM64 path here on purpose: this loop has no conditional
+			// min/max, so clang auto-vectorizes it (unlike the restart variant below,
+			// which needs the explicit NEON port).
 			r = upload_untouched_naive(src.data(), dst.data(), count);
 #endif
 
@@ -412,8 +414,10 @@ namespace
 		//
 		// CONTRACT: src and dst must not overlap. The vector body reads a full lane
 		// group before writing it back, so a partial overlap diverges from the scalar
-		// loop's element-wise order. Both callers (VK/GL vertex upload) hand a guest
-		// memory span as src and a freshly mapped ring-buffer span as dst.
+		// loop's element-wise order. Both callers (VK/GL vertex upload) pass disjoint
+		// allocations: src is guest memory (or the immediate-mode push buffer), dst a
+		// freshly mapped ring-buffer span (or, when the driver quirk forces restart
+		// emulation, a fresh heap staging block).
 		static inline u64 upload_untouched_neon(const be_t<u16>* src, u16* dst, u32 count, u16 restart_index)
 		{
 			u32 i = 0;
@@ -983,4 +987,3 @@ std::tuple<u32, u32, u32> write_index_array_data_to_buffer(std::span<std::byte> 
 		fmt::throw_exception("Unreachable");
 	}
 }
-
