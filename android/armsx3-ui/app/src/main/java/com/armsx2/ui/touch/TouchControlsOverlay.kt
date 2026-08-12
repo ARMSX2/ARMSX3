@@ -1997,6 +1997,13 @@ private fun EditToolbar(modifier: Modifier = Modifier) {
             ToolbarChip(if (TouchControls.faceMultiTouch.value) str("touch.editor.multiTouchOn") else str("touch.editor.multiTouchOff")) {
                 TouchControls.setFaceMultiTouch(!TouchControls.faceMultiTouch.value)
             }
+            // Tap-to-reveal pause. The setting has existed since the pause button moved to the
+            // top-right, seeded from the old show/hide pref, but nothing ever wrote it: anyone
+            // whose button was visible had no way to hide it, and anyone migrated into hidden had
+            // no way back. Reported as the option being missing from the in-game menu.
+            ToolbarChip(if (TouchControls.pauseTapToReveal.value) str("touch.editor.pauseRevealOn") else str("touch.editor.pauseRevealOff")) {
+                TouchControls.setPauseTapToReveal(!TouchControls.pauseTapToReveal.value)
+            }
             // Touch Gliding: drag a finger to hold every button it crosses (NetherSX2-style).
             ToolbarChip(if (TouchControls.touchGliding.value) str("touch.editor.glidingOn") else str("touch.editor.glidingOff")) {
                 TouchControls.setTouchGliding(!TouchControls.touchGliding.value)

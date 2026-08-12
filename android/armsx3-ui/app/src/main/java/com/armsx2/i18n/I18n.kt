@@ -384,6 +384,8 @@ val EN: Map<String, String> = mapOf(
     "action.back" to "Back",
     "action.cancel" to "Cancel",
     "action.remove" to "Remove",
+    "touch.editor.pauseRevealOn" to "Pause: tap to reveal",
+    "touch.editor.pauseRevealOff" to "Pause: always visible",
     "packages.licence.remove" to "Remove",
     "packages.licence.remove.title" to "Remove this licence?",
     "packages.licence.remove.body" to "%s will be deleted. Content it unlocks will stop working until the licence is installed again.",
