@@ -171,7 +171,7 @@ bool serialize<ppu_thread::cr_bits>(utils::serial& ar, typename ppu_thread::cr_b
 extern void ppu_initialize();
 extern void ppu_finalize(const ppu_module<lv2_obj>& info, bool force_mem_release = false);
 extern bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only = false, u64 file_size = 0);
-static void ppu_initialize2(class jit_compiler& jit, const ppu_module<lv2_obj>& module_part, const std::string& cache_path, const std::string& obj_name);
+static bool ppu_initialize2(class jit_compiler& jit, const ppu_module<lv2_obj>& module_part, const std::string& cache_path, const std::string& obj_name);
 extern bool ppu_load_exec(const ppu_exec_object&, bool virtual_load, const std::string&, utils::serial* = nullptr);
 extern std::pair<shared_ptr<lv2_overlay>, CellError> ppu_load_overlay(const ppu_exec_object&, bool virtual_load, const std::string& path, s64 file_offset, utils::serial* = nullptr);
 extern void ppu_unload_prx(const lv2_prx&);
@@ -5503,6 +5503,8 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 
 					ppu_log.warning("LLVM: Compiling module %s%s", cache_path, obj_name);
 
+					bool compiled_this_module = false;
+
 					{
 #ifdef __ANDROID__
 						// Compile alone while memory is short. Checked per module rather
@@ -5561,10 +5563,20 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 
 						// Use another JIT instance
 						jit_compiler jit2({}, g_cfg.core.llvm_cpu.to_string(), 0x1);
-						ppu_initialize2(jit2, part, cache_path, obj_name);
+						compiled_this_module = ppu_initialize2(jit2, part, cache_path, obj_name);
 					}
 
-					ppu_log.success("LLVM: Compiled module %s", obj_name);
+					if (compiled_this_module)
+					{
+						ppu_log.success("LLVM: Compiled module %s", obj_name);
+					}
+					else
+					{
+						// Not fatal on purpose. The loop increment below still runs, so this module
+						// is accounted for in the progress total and the boot completes; its
+						// functions simply have no compiled code and fall back to the interpreter.
+						ppu_log.error("LLVM: Module %s did not compile; its functions will be interpreted", obj_name);
+					}
 				}
 
 				core_lock.unlock();
@@ -5815,7 +5827,10 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 #endif
 }
 
-static void ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module_part, const std::string& cache_path, const std::string& obj_name)
+// Returns false when this module produced no object file, for any reason. The caller must not
+// report it as compiled: the whole point is that a module can now fail without taking the
+// worker, and therefore the boot, with it.
+static bool ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module_part, const std::string& cache_path, const std::string& obj_name)
 {
 #ifdef LLVM_AVAILABLE
 	using namespace llvm;
@@ -5904,7 +5919,7 @@ static void ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module
 			if (Emu.IsStopped())
 			{
 				ppu_log.success("LLVM: Translation cancelled");
-				return;
+				return false;
 			}
 
 			if (mod_func.size)
@@ -5930,7 +5945,7 @@ static void ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module
 				else
 				{
 					Emu.Pause();
-					return;
+					return false;
 				}
 			}
 		}
@@ -5948,7 +5963,7 @@ static void ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module
 			else
 			{
 				Emu.Pause();
-				return;
+				return false;
 			}
 		}
 
@@ -5975,13 +5990,41 @@ static void ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module
 			out.flush();
 			ppu_log.error("LLVM: Verification failed for %s:\n%s", obj_name, result);
 			Emu.CallFromMainThread([]{ Emu.GracefulShutdown(false, true); });
-			return;
+			return false;
 		}
 
 		ppu_log.notice("LLVM: %zu functions generated (code_size=0x%x, num_func=%d, max_addr(-)min_addr=0x%x)", _module->getFunctionList().size(), guest_code_size, num_func, max_addr - min_addr);
 	}
 
 	// Load or compile module
+#ifdef ARCH_ARM64
+	// The recoverable variant, for the same reason the SPU recompiler uses it (see
+	// SPULLVMRecompiler.cpp, the ARCH_ARM64 branch): LLVM's AArch64 register allocator can fail
+	// outright on a module, and plain add() routes that through LLVM's fatal handler, which for a
+	// thread with no recovery context throws and kills the thread.
+	//
+	// Killing THIS thread is not a lost module, it is a lost boot. The compile loop increments
+	// g_progr_pdone in its loop INCREMENT, so a worker that dies mid-body never accounts for the
+	// module it was holding; g_progr_ptotal can then never reach zero and ppu_initialize's caller
+	// waits on it forever. Reported against Saint Seiya: The Sanctuary (BLES01421, issue #25) as
+	// "the PPU cache never finishes, it gets stuck at the end" -- it reached 133 of 134 and stopped,
+	// on 'Error while trying to spill X8 from class GPR64: Cannot scavenge register without an
+	// emergency spill slot!'. Interpreter worked because it never enters this path at all. The
+	// death also halved the remaining throughput, one worker of two being gone.
+	//
+	// jit2 is constructed per module at the call site, so a poisoned engine dies with it and cannot
+	// contaminate the next module.
+	std::string llvm_error;
+
+	if (!jit.try_add(std::move(_module), cache_path, llvm_error))
+	{
+		ppu_log.error("LLVM: Failed to compile module %s: %s", obj_name, llvm_error);
+		return false;
+	}
+#else
 	jit.add(std::move(_module), cache_path);
+#endif
 #endif // LLVM_AVAILABLE
+
+	return true;
 }

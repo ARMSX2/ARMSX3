@@ -18,6 +18,7 @@
 #include "Emu/RSX/Overlays/overlay_manager.h"
 #include "Emu/RSX/Overlays/overlay_save_dialog.h"
 #include "Emu/RSX/Overlays/overlay_trophy_notification.h"
+#include "Emu/RSX/Overlays/overlay_utils.h"
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/RSX/GL/GLGSRender.h"
 #include "Emu/RSX/VK/VKGSRender.h"
@@ -636,6 +637,15 @@ static FileType getFileType(const fs::file &file) {
 #define MAKE_STRING(id, x) [int(localized_string_id::id)] = {x, U##x}
 
 static std::pair<std::string, std::u32string> g_strings[] = {
+    MAKE_STRING(INVALID, "Invalid"),
+    MAKE_STRING(RSX_OVERLAYS_SPINNER_NO_TEXT, ""),
+    MAKE_STRING(RSX_OVERLAYS_TROPHY_BRONZE,
+                "You have earned a bronze trophy.\n%0"),
+    MAKE_STRING(RSX_OVERLAYS_TROPHY_SILVER,
+                "You have earned a silver trophy.\n%0"),
+    MAKE_STRING(RSX_OVERLAYS_TROPHY_GOLD, "You have earned a gold trophy.\n%0"),
+    MAKE_STRING(RSX_OVERLAYS_TROPHY_PLATINUM,
+                "You have earned a platinum trophy.\n%0"),
     MAKE_STRING(RSX_OVERLAYS_COMPILING_SHADERS, "Compiling shaders"),
     MAKE_STRING(RSX_OVERLAYS_COMPILING_PPU_MODULES, "Compiling PPU Modules"),
     MAKE_STRING(RSX_OVERLAYS_MSG_DIALOG_YES, "Yes"),
@@ -660,6 +670,149 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(RSX_OVERLAYS_LIST_SELECT, "Enter"),
     MAKE_STRING(RSX_OVERLAYS_LIST_CANCEL, "Back"),
     MAKE_STRING(RSX_OVERLAYS_LIST_DENY, "Deny"),
+    MAKE_STRING(RSX_OVERLAYS_PRESSURE_INTENSITY_TOGGLED_OFF,
+                "Pressure intensity mode of player %0 disabled"),
+    MAKE_STRING(RSX_OVERLAYS_PRESSURE_INTENSITY_TOGGLED_ON,
+                "Pressure intensity mode of player %0 enabled"),
+    MAKE_STRING(RSX_OVERLAYS_ANALOG_LIMITER_TOGGLED_OFF,
+                "Analog limiter of player %0 disabled"),
+    MAKE_STRING(RSX_OVERLAYS_ANALOG_LIMITER_TOGGLED_ON,
+                "Analog limiter of player %0 enabled"),
+    MAKE_STRING(RSX_OVERLAYS_MOUSE_AND_KEYBOARD_EMULATED,
+                "Mouse and keyboard are now used as emulated devices."),
+    MAKE_STRING(RSX_OVERLAYS_MOUSE_AND_KEYBOARD_PAD,
+                "Mouse and keyboard are now used as pad."),
+    MAKE_STRING(
+        CELL_GAME_ERROR_BROKEN_GAMEDATA,
+        "ERROR: Game data is corrupted. The application will continue."),
+    MAKE_STRING(
+        CELL_GAME_ERROR_BROKEN_HDDGAME,
+        "ERROR: HDD boot game is corrupted. The application will continue."),
+    MAKE_STRING(
+        CELL_GAME_ERROR_BROKEN_EXIT_GAMEDATA,
+        "ERROR: Game data is corrupted. The application will be terminated."),
+    MAKE_STRING(CELL_GAME_ERROR_BROKEN_EXIT_HDDGAME,
+                "ERROR: HDD boot game is corrupted. The application will be "
+                "terminated."),
+    MAKE_STRING(CELL_GAME_ERROR_NOSPACE,
+                "ERROR: Not enough available space. The application will "
+                "continue.\nSpace needed: %0 KB"),
+    MAKE_STRING(CELL_GAME_ERROR_NOSPACE_EXIT,
+                "ERROR: Not enough available space. The application will be "
+                "terminated.\nSpace needed: %0 KB"),
+    MAKE_STRING(CELL_GAME_ERROR_DIR_NAME, "Directory name: %0"),
+    MAKE_STRING(CELL_GAME_DATA_EXIT_BROKEN,
+                "There has been an error!\n\nPlease remove the game data for "
+                "this title."),
+    MAKE_STRING(
+        CELL_HDD_GAME_EXIT_BROKEN,
+        "There has been an error!\n\nPlease reinstall the HDD boot game."),
+    MAKE_STRING(
+        CELL_HDD_GAME_CHECK_NOSPACE,
+        "Not enough space to create HDD boot game.\nSpace Needed: %0 KB"),
+    MAKE_STRING(CELL_HDD_GAME_CHECK_BROKEN, "HDD boot game %0 is corrupt!"),
+    MAKE_STRING(CELL_HDD_GAME_CHECK_NODATA,
+                "HDD boot game %0 could not be found!"),
+    MAKE_STRING(CELL_HDD_GAME_CHECK_INVALID, "Error: %0"),
+    MAKE_STRING(CELL_GAMEDATA_CHECK_NOSPACE,
+                "Not enough space to create game data.\nSpace Needed: %0 KB"),
+    MAKE_STRING(CELL_GAMEDATA_CHECK_BROKEN, "The game data in %0 is corrupt!"),
+    MAKE_STRING(CELL_GAMEDATA_CHECK_NODATA,
+                "The game data in %0 could not be found!"),
+    MAKE_STRING(CELL_GAMEDATA_CHECK_INVALID, "Error: %0"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_DEFAULT, "An error has occurred.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010001,
+                "The resource is temporarily unavailable.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010002,
+                "Invalid argument or flag.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010003,
+                "The feature is not yet implemented.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010004,
+                "Memory allocation failed.\n(%0)"),
+    MAKE_STRING(
+        CELL_MSG_DIALOG_ERROR_80010005,
+        "The resource with the specified identifier does not exist.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010006,
+                "The file does not exist.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010007,
+                "The file is in an unrecognized format / The file is not a "
+                "valid ELF file.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010008,
+                "Resource deadlock is avoided.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010009,
+                "Operation not permitted.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001000A,
+                "The device or resource is busy.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001000B,
+                "The operation is timed out.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001000C,
+                "The operation is aborted.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001000D, "Invalid memory access.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001000F,
+                "State of the target thread is invalid.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010010, "Alignment is invalid.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010011,
+                "Shortage of the kernel resources.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010012,
+                "The file is a directory.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010013, "Operation cancelled.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010014, "Entry already exists.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010015,
+                "Port is already connected.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010016, "Port is not connected.\n(%0)"),
+    MAKE_STRING(
+        CELL_MSG_DIALOG_ERROR_80010017,
+        "Failure in authorizing SELF. Program authentication fail.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010018, "The file is not MSELF.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010019, "System version error.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001001A,
+                "Fatal system error occurred while authorizing SELF. SELF auth "
+                "failure.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001001B, "Math domain violation.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001001C, "Math range violation.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001001D,
+                "Illegal multi-byte sequence in input.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001001E, "File position error.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001001F,
+                "Syscall was interrupted.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010020, "File too large.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010021, "Too many links.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010022, "File table overflow.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010023,
+                "No space left on device.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010024, "Not a TTY.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010025, "Broken pipe.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010026, "Read-only filesystem.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010027, "Illegal seek.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010028, "Arg list too long.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010029, "Access violation.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001002A,
+                "Invalid file descriptor.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001002B,
+                "Filesystem mounting failed.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001002C, "Too many files open.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001002D, "No device.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001002E, "Not a directory.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001002F, "No such device or IO.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010030,
+                "Cross-device link error.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010031, "Bad Message.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010032, "In progress.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010033, "Message size error.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010034, "Name too long.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010035, "No lock.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010036, "Not empty.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010037, "Not supported.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010038,
+                "File-system specific error.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_80010039, "Overflow occurred.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001003A,
+                "Filesystem not mounted.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001003B, "Not SData.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001003C,
+                "Incorrect version in sys_load_param.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001003D, "Pointer is null.\n(%0)"),
+    MAKE_STRING(CELL_MSG_DIALOG_ERROR_8001003E, "Pointer is null.\n(%0)"),
     MAKE_STRING(CELL_OSK_DIALOG_TITLE, "On Screen Keyboard"),
     MAKE_STRING(
         CELL_OSK_DIALOG_BUSY,
@@ -667,14 +820,28 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(CELL_SAVEDATA_CB_BROKEN, "Error - Save data corrupted"),
     MAKE_STRING(CELL_SAVEDATA_CB_FAILURE, "Error - Failed to save or load"),
     MAKE_STRING(CELL_SAVEDATA_CB_NO_DATA, "Error - Save data cannot be found"),
+    MAKE_STRING(CELL_SAVEDATA_CB_NO_SPACE,
+                "Error - Insufficient free space\n\nSpace needed: %0 KB"),
     MAKE_STRING(CELL_SAVEDATA_NO_DATA, "There is no saved data."),
     MAKE_STRING(CELL_SAVEDATA_NEW_SAVED_DATA_TITLE, "New Saved Data"),
     MAKE_STRING(CELL_SAVEDATA_NEW_SAVED_DATA_SUB_TITLE,
                 "Select to create a new entry"),
     MAKE_STRING(CELL_SAVEDATA_SAVE_CONFIRMATION,
                 "Do you want to save this data?"),
+    MAKE_STRING(CELL_SAVEDATA_DELETE_CONFIRMATION,
+                "Do you really want to delete this data?\n\n%0"),
+    MAKE_STRING(CELL_SAVEDATA_DELETE_SUCCESS,
+                "Successfully removed data!\n\n%0"),
+    MAKE_STRING(CELL_SAVEDATA_DELETE, "Delete this data?\n\n%0"),
+    MAKE_STRING(CELL_SAVEDATA_LOAD, "Load this data?\n\n%0"),
+    MAKE_STRING(CELL_SAVEDATA_OVERWRITE,
+                "Do you want to overwrite the saved data?\n\n%0"),
     MAKE_STRING(CELL_SAVEDATA_AUTOSAVE, "Saving..."),
     MAKE_STRING(CELL_SAVEDATA_AUTOLOAD, "Loading..."),
+    MAKE_STRING(CELL_CROSS_CONTROLLER_MSG,
+                "Start [%0] on the PS Vita system.\nIf you have not installed "
+                "[%0], go to [Remote Play] on the PS Vita system and start "
+                "[Cross-Controller] from the LiveArea™ screen."),
     MAKE_STRING(
         CELL_CROSS_CONTROLLER_FW_MSG,
         "If your system software version on the PS Vita system is earlier than "
@@ -687,12 +854,22 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(CELL_NP_SENDMESSAGE_DIALOG_TITLE, "Select Message To Send"),
     MAKE_STRING(CELL_NP_SENDMESSAGE_DIALOG_TITLE_INVITE, "Send Invite"),
     MAKE_STRING(CELL_NP_SENDMESSAGE_DIALOG_TITLE_ADD_FRIEND, "Add Friend"),
+    MAKE_STRING(CELL_NP_SENDMESSAGE_DIALOG_CONFIRMATION,
+                "Send message to %0 ?\n\nSubject:"),
+    MAKE_STRING(CELL_NP_SENDMESSAGE_DIALOG_CONFIRMATION_INVITE,
+                "Send invite to %0 ?\n\nSubject:"),
+    MAKE_STRING(CELL_NP_SENDMESSAGE_DIALOG_CONFIRMATION_ADD_FRIEND,
+                "Send friend request to %0 ?\n\nSubject:"),
+    MAKE_STRING(CELL_NP_MESSAGE_INVITE_RECEIVED, "Received an invite from %0"),
+    MAKE_STRING(CELL_NP_MESSAGE_OTHER_RECEIVED, "Received a message from %0"),
     MAKE_STRING(RECORDING_ABORTED, "Recording aborted!"),
     MAKE_STRING(RPCN_NO_ERROR, "RPCN: No Error"),
     MAKE_STRING(RPCN_ERROR_INVALID_INPUT,
                 "RPCN: Invalid Input (Wrong Host/Port)"),
     MAKE_STRING(RPCN_ERROR_WOLFSSL, "RPCN Connection Error: WolfSSL Error"),
     MAKE_STRING(RPCN_ERROR_RESOLVE, "RPCN Connection Error: Resolve Error"),
+    MAKE_STRING(RPCN_ERROR_BINDING,
+                "RPCN Connection Error: Failed to bind to given binding IP"),
     MAKE_STRING(RPCN_ERROR_CONNECT, "RPCN Connection Error"),
     MAKE_STRING(RPCN_ERROR_LOGIN_ERROR,
                 "RPCN Login Error: Identification Error"),
@@ -706,11 +883,19 @@ static std::pair<std::string, std::u32string> g_strings[] = {
                 "RPCN Misc Error: Protocol Version Error (outdated RPCS3?)"),
     MAKE_STRING(RPCN_ERROR_UNKNOWN, "RPCN: Unknown Error"),
     MAKE_STRING(RPCN_SUCCESS_LOGGED_ON, "Successfully logged on RPCN!"),
+    MAKE_STRING(RPCN_FRIEND_REQUEST_RECEIVED,
+                "RPCN: Received friend request: %0"),
+    MAKE_STRING(RPCN_FRIEND_ADDED, "RPCN: Friend added: %0"),
+    MAKE_STRING(RPCN_FRIEND_LOST, "RPCN: Friend removed: %0"),
+    MAKE_STRING(RPCN_FRIEND_LOGGED_IN, "RPCN: %0 logged in"),
+    MAKE_STRING(RPCN_FRIEND_LOGGED_OUT, "RPCN: %0 logged out"),
     MAKE_STRING(HOME_MENU_TITLE, "Home Menu"),
     MAKE_STRING(HOME_MENU_EXIT_GAME, "Exit Game"),
+    MAKE_STRING(HOME_MENU_RESTART, "Restart Game"),
     MAKE_STRING(HOME_MENU_RESUME, "Resume Game"),
     MAKE_STRING(HOME_MENU_FRIENDS, "Friends"),
     MAKE_STRING(HOME_MENU_FRIENDS_REQUESTS, "Pending Friend Requests"),
+    MAKE_STRING(HOME_MENU_FRIENDS_GAME_INVITES, "Game Invitations"),
     MAKE_STRING(HOME_MENU_FRIENDS_BLOCKED, "Blocked Users"),
     MAKE_STRING(HOME_MENU_FRIENDS_STATUS_ONLINE, "Online"),
     MAKE_STRING(HOME_MENU_FRIENDS_STATUS_OFFLINE, "Offline"),
@@ -718,15 +903,26 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(HOME_MENU_FRIENDS_REQUEST_SENT, "You sent a friend request"),
     MAKE_STRING(HOME_MENU_FRIENDS_REQUEST_RECEIVED,
                 "Sent you a friend request"),
+    MAKE_STRING(HOME_MENU_FRIENDS_BLOCK_USER_MSG, "Block this user?\n\n%0"),
+    MAKE_STRING(HOME_MENU_FRIENDS_UNBLOCK_USER_MSG, "Unblock this user?\n\n%0"),
+    MAKE_STRING(HOME_MENU_FRIENDS_REMOVE_USER_MSG, "Remove this user?\n\n%0"),
+    MAKE_STRING(HOME_MENU_FRIENDS_ACCEPT_REQUEST_MSG, "Accept Request?\n\n%0"),
+    MAKE_STRING(HOME_MENU_FRIENDS_CANCEL_REQUEST_MSG, "Cancel Request?\n\n%0"),
+    MAKE_STRING(HOME_MENU_FRIENDS_REJECT_REQUEST_MSG, "Reject Request?\n\n%0"),
     MAKE_STRING(HOME_MENU_FRIENDS_REJECT_REQUEST, "Reject Request"),
+    MAKE_STRING(HOME_MENU_FRIENDS_ACCEPT_GAME_INVITE_MSG,
+                "Accept game invitation from %0?"),
+    MAKE_STRING(HOME_MENU_FRIENDS_REJECT_GAME_INVITE_MSG,
+                "Reject game invitation from %0?"),
+    MAKE_STRING(HOME_MENU_FRIENDS_REJECT_GAME_INVITE, "Reject Invitation"),
     MAKE_STRING(HOME_MENU_FRIENDS_NEXT_LIST, "Next list"),
-    MAKE_STRING(HOME_MENU_RESTART, "Restart Game"),
     MAKE_STRING(HOME_MENU_SETTINGS, "Settings"),
     MAKE_STRING(HOME_MENU_SETTINGS_SAVE, "Save custom configuration?"),
     MAKE_STRING(HOME_MENU_SETTINGS_SAVE_BUTTON, "Save"),
     MAKE_STRING(HOME_MENU_SETTINGS_DISCARD,
                 "Discard the current settings' changes?"),
     MAKE_STRING(HOME_MENU_SETTINGS_DISCARD_BUTTON, "Discard"),
+    MAKE_STRING(HOME_MENU_SETTINGS_RESET_BUTTON, "To default"),
     MAKE_STRING(HOME_MENU_SETTINGS_AUDIO, "Audio"),
     MAKE_STRING(HOME_MENU_SETTINGS_AUDIO_MASTER_VOLUME, "Master Volume"),
     MAKE_STRING(HOME_MENU_SETTINGS_AUDIO_BACKEND, "Audio Backend"),
@@ -738,14 +934,20 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(HOME_MENU_SETTINGS_AUDIO_TIME_STRETCHING_THRESHOLD,
                 "Time Stretching Threshold"),
     MAKE_STRING(HOME_MENU_SETTINGS_VIDEO, "Video"),
+    MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_VSYNC, "VSync"),
     MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_FRAME_LIMIT, "Frame Limit"),
     MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_ANISOTROPIC_OVERRIDE,
                 "Anisotropic Filter Override"),
     MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_OUTPUT_SCALING, "Output Scaling"),
     MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_RCAS_SHARPENING,
                 "FidelityFX CAS Sharpening Intensity"),
+    MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_RESOLUTION_SCALE_PERCENT,
+                "Resolution Scale"),
+    MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_RESOLUTION_SCALE_THRESHOLD,
+                "Resolution Scale Threshold"),
     MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_STRETCH_TO_DISPLAY,
                 "Stretch To Display Area"),
+    MAKE_STRING(HOME_MENU_SETTINGS_VIDEO_STEREO_MODE, "Stereo Mode"),
     MAKE_STRING(HOME_MENU_SETTINGS_INPUT, "Input"),
     MAKE_STRING(HOME_MENU_SETTINGS_INPUT_BACKGROUND_INPUT,
                 "Background Input Enabled"),
@@ -769,6 +971,8 @@ static std::pair<std::string, std::u32string> g_strings[] = {
                 "Accurate RSX reservation access"),
     MAKE_STRING(HOME_MENU_SETTINGS_ADVANCED_SLEEP_TIMERS_ACCURACY,
                 "Sleep Timers Accuracy"),
+    MAKE_STRING(HOME_MENU_SETTINGS_ADVANCED_RSX_MEMORY_TILING,
+                "Handle RSX Memory Tiling"),
     MAKE_STRING(HOME_MENU_SETTINGS_ADVANCED_MAX_SPURS_THREADS,
                 "Max SPURS Threads"),
     MAKE_STRING(HOME_MENU_SETTINGS_ADVANCED_DRIVER_WAKE_UP_DELAY,
@@ -793,6 +997,12 @@ static std::pair<std::string, std::u32string> g_strings[] = {
                 "Show Analog Limiter Toggle Hint"),
     MAKE_STRING(HOME_MENU_SETTINGS_OVERLAYS_SHOW_MOUSE_AND_KB_TOGGLE_HINT,
                 "Show Mouse And Keyboard Toggle Hint"),
+    MAKE_STRING(HOME_MENU_SETTINGS_OVERLAYS_SHOW_FATAL_ERROR_HINTS,
+                "Show Fatal Error Hints"),
+    MAKE_STRING(HOME_MENU_SETTINGS_OVERLAYS_RECORD_WITH_OVERLAYS,
+                "Record With Overlays"),
+    MAKE_STRING(HOME_MENU_SETTINGS_OVERLAYS_PLAY_MUSIC_DURING_BOOT,
+                "Play music during boot sequence."),
     MAKE_STRING(HOME_MENU_SETTINGS_PERFORMANCE_OVERLAY, "Performance Overlay"),
     MAKE_STRING(HOME_MENU_SETTINGS_PERFORMANCE_OVERLAY_ENABLE,
                 "Enable Performance Overlay"),
@@ -825,9 +1035,13 @@ static std::pair<std::string, std::u32string> g_strings[] = {
                 "Vertical Margin"),
     MAKE_STRING(HOME_MENU_SETTINGS_PERFORMANCE_OVERLAY_FONT_SIZE, "Font Size"),
     MAKE_STRING(HOME_MENU_SETTINGS_PERFORMANCE_OVERLAY_OPACITY, "Opacity"),
+    MAKE_STRING(HOME_MENU_SETTINGS_PERFORMANCE_OVERLAY_USE_WINDOW_SPACE,
+                "Use Window Space"),
     MAKE_STRING(HOME_MENU_SETTINGS_DEBUG, "Debug"),
     MAKE_STRING(HOME_MENU_SETTINGS_DEBUG_OVERLAY, "Debug Overlay"),
     MAKE_STRING(HOME_MENU_SETTINGS_DEBUG_INPUT_OVERLAY, "Input Debug Overlay"),
+    MAKE_STRING(HOME_MENU_SETTINGS_MOUSE_DEBUG_INPUT_OVERLAY,
+                "Mouse Debug Overlay"),
     MAKE_STRING(HOME_MENU_SETTINGS_DEBUG_DISABLE_VIDEO_OUTPUT,
                 "Disable Video Output"),
     MAKE_STRING(HOME_MENU_SETTINGS_DEBUG_TEXTURE_LOD_BIAS,
@@ -837,17 +1051,33 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(HOME_MENU_SAVESTATE_SAVE, "Save Emulation State"),
     MAKE_STRING(HOME_MENU_SAVESTATE_AND_EXIT, "Save Emulation State And Exit"),
     MAKE_STRING(HOME_MENU_RELOAD_SAVESTATE, "Reload Last Emulation State"),
+    MAKE_STRING(HOME_MENU_RELOAD_SECOND_SAVESTATE,
+                "Reload Second-To-Last Emulation State"),
+    MAKE_STRING(HOME_MENU_RELOAD_THIRD_SAVESTATE,
+                "Reload Third-To-Last Emulation State"),
+    MAKE_STRING(HOME_MENU_RELOAD_FOURTH_SAVESTATE,
+                "Reload Fourth-To-Last Emulation State"),
+    MAKE_STRING(HOME_MENU_TOGGLE_FULLSCREEN, "Toggle Fullscreen"),
     MAKE_STRING(HOME_MENU_RECORDING, "Start/Stop Recording"),
     MAKE_STRING(HOME_MENU_TROPHIES, "Trophies"),
+    MAKE_STRING(HOME_MENU_TROPHY_LIST_TITLE, "Trophy Progress: %0"),
+    MAKE_STRING(HOME_MENU_TROPHY_LOCKED_TITLE, "Locked trophy: %0"),
     MAKE_STRING(HOME_MENU_TROPHY_HIDDEN_TITLE, "Hidden trophy"),
     MAKE_STRING(HOME_MENU_TROPHY_HIDDEN_DESCRIPTION, "This trophy is hidden"),
+    MAKE_STRING(HOME_MENU_TROPHY_SHOW_HIDDEN_TROPHIES, "Show hidden trophies"),
+    MAKE_STRING(HOME_MENU_TROPHY_HIDE_HIDDEN_TROPHIES, "Hide hidden trophies"),
     MAKE_STRING(HOME_MENU_TROPHY_PLATINUM_RELEVANT, "Platinum relevant"),
     MAKE_STRING(HOME_MENU_TROPHY_GRADE_BRONZE, "Bronze"),
     MAKE_STRING(HOME_MENU_TROPHY_GRADE_SILVER, "Silver"),
     MAKE_STRING(HOME_MENU_TROPHY_GRADE_GOLD, "Gold"),
     MAKE_STRING(HOME_MENU_TROPHY_GRADE_PLATINUM, "Platinum"),
+    MAKE_STRING(HOME_MENU_TROPHY_SORT_GAME_DEFAULT, "Sort: Game Default"),
+    MAKE_STRING(HOME_MENU_TROPHY_SORT_NOT_EARNED, "Sort: Not Earned"),
+    MAKE_STRING(HOME_MENU_TROPHY_SORT_EARNED_DATE, "Sort: Earned Date"),
+    MAKE_STRING(HOME_MENU_TROPHY_SORT_GRADE, "Sort: Grade"),
     MAKE_STRING(AUDIO_MUTED, "Audio muted"),
     MAKE_STRING(AUDIO_UNMUTED, "Audio unmuted"),
+    MAKE_STRING(AUDIO_CHANGED, "Volume changed to %0"),
     MAKE_STRING(PROGRESS_DIALOG_PROGRESS, "Progress:"),
     MAKE_STRING(PROGRESS_DIALOG_PROGRESS_ANALYZING, "Progress: analyzing..."),
     MAKE_STRING(PROGRESS_DIALOG_REMAINING, "remaining"),
@@ -877,20 +1107,72 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(EMULATION_RESUMING, "Resuming...!"),
     MAKE_STRING(EMULATION_FROZEN,
                 "The PS3 application has likely crashed, you can close it."),
+    MAKE_STRING(SAVESTATE_FAILED_DUE_TO_VDEC,
+                "SaveState failed: VDEC-based video/cutscenes are in order, "
+                "wait for them to end or enable libvdec.sprx."),
     MAKE_STRING(
         SAVESTATE_FAILED_DUE_TO_SAVEDATA,
         "SaveState failed: Game saving is in progress, wait until finished."),
-    MAKE_STRING(SAVESTATE_FAILED_DUE_TO_VDEC,
-                "SaveState failed: VDEC-base video/cutscenes are in order, "
-                "wait for them to end or enable libvdec.sprx."),
-    MAKE_STRING(SAVESTATE_FAILED_DUE_TO_MISSING_SPU_SETTING,
-                "SaveState failed: Failed to lock SPU state, enabling "
-                "SPU-Compatible mode may fix it."),
     MAKE_STRING(SAVESTATE_FAILED_DUE_TO_SPU,
                 "SaveState failed: Failed to lock SPU state, using SPU ASMJIT "
                 "will fix it."),
-    MAKE_STRING(INVALID, "Invalid"),
+    MAKE_STRING(SAVESTATE_FAILED_DUE_TO_MISSING_SPU_SETTING,
+                "SaveState failed: Failed to lock SPU state, enabling "
+                "SPU-Compatible mode may fix it."),
 };
+
+#undef MAKE_STRING
+
+// One index per enum entry, so an id upstream adds is a hole in the middle of
+// the table rather than a shift, and both show up here instead of in a blank
+// dialog on a phone.
+static_assert(
+    std::size(g_strings) ==
+        std::size_t(
+            localized_string_id::SAVESTATE_FAILED_DUE_TO_MISSING_SPU_SETTING) +
+            1,
+    "localized_string_id grew: add the new string(s) to g_strings and move "
+    "this to the new last id");
+
+// The desktop frontend hands the string to QString::arg(), which replaces the
+// lowest numbered "%N" place marker wherever it appears. Every string the core
+// passes an argument to uses %0 and passes exactly one, so that reduces to
+// this. Dropping the argument is why the save-data prompt showed no entry
+// title, date or size, and why every cellMsgDialog error arrived without its
+// error code.
+template <typename T>
+static std::basic_string<T> substitute_arg(std::basic_string<T> text,
+                                           std::basic_string_view<T> arg) {
+  const T marker[] = {T('%'), T('0'), T(0)};
+
+  for (std::size_t pos = text.find(marker); pos != text.npos;
+       pos = text.find(marker, pos + arg.size())) {
+    text.replace(pos, 2, arg);
+  }
+
+  return text;
+}
+
+static const std::pair<std::string, std::u32string> *
+find_localized_string(localized_string_id id) {
+  const std::size_t index = std::size_t(id);
+
+  if (index >= std::size(g_strings)) {
+    rpcsx_android.error("No localized string for id %d", int(id));
+    return nullptr;
+  }
+
+  // RSX_OVERLAYS_SPINNER_NO_TEXT is deliberately empty; anything else empty is
+  // a hole.
+  if (g_strings[index].first.empty() &&
+      id != localized_string_id::RSX_OVERLAYS_SPINNER_NO_TEXT) {
+    rpcsx_android.error("Localized string %d is missing from g_strings",
+                        int(id));
+    return nullptr;
+  }
+
+  return &g_strings[index];
+}
 
 enum GameFlags {
   kGameFlagLocked = 1 << 0,
@@ -2080,18 +2362,23 @@ static void setupCallbacks() {
       .get_trophy_notification_dialog =
           [](auto...) { return std::make_unique<OverlayTrophyNotification>(); },
       .get_localized_string = [](localized_string_id id,
-                                 const char *) -> std::string {
-        if (std::size_t(id) < std::size(g_strings)) {
-          return g_strings[int(id)].first;
+                                 const char *args) -> std::string {
+        const auto *entry = find_localized_string(id);
+        if (!entry) {
+          return "";
         }
-        return "";
+        return substitute_arg<char>(entry->first, args ? args : "");
       },
       .get_localized_u32string = [](localized_string_id id,
-                                    const char *) -> std::u32string {
-        if (std::size_t(id) < std::size(g_strings)) {
-          return g_strings[int(id)].second;
+                                    const char *args) -> std::u32string {
+        const auto *entry = find_localized_string(id);
+        if (!entry) {
+          return U"";
         }
-        return U"";
+        // Trophy names reach this one, so the argument has to be decoded rather
+        // than widened byte by byte.
+        const std::u32string arg = utf8_to_u32string(args ? args : "");
+        return substitute_arg<char32_t>(entry->second, arg);
       },
       .get_localized_setting = [](auto...) { return ""; },
       .play_sound = [](auto...) {},
@@ -2651,6 +2938,13 @@ extern "C" void _rpcsx_kill() {
 }
 extern "C" void _rpcsx_resume() { Emu.Resume(); }
 
+// The counterpart to _rpcsx_resume, which had none. Rpcs3Bridge.pause() set a bool and returned,
+// on the belief that "RPCS3 has no explicit pause entry point" -- but Emu.Pause() is right here,
+// and _rpcsx_surfaceEvent has always called it on surface loss. That is why BACKGROUNDING the app
+// was the only thing that actually paused, while the in-game pause menu left the emulator running
+// underneath it, and why pause/resume were asymmetric: resume() reached the core, pause() did not.
+extern "C" void _rpcsx_pause() { Emu.Pause(); }
+
 extern "C" void _rpcsx_openHomeMenu() {
   if (auto padThread = pad::get_pad_thread(true)) {
     padThread->open_home_menu();
@@ -2658,6 +2952,29 @@ extern "C" void _rpcsx_openHomeMenu() {
 }
 
 extern "C" std::string _rpcsx_getTitleId() { return Emu.GetTitleID(); }
+
+// The RUNNING game's trophy set, e.g. "NPWR05636_00" -- or "" when no game is
+// running, or the game has not created a trophy context yet (many only do so once
+// you reach a menu), or it has no trophies at all.
+//
+// This is the SAME value RPCS3's own home menu reads to decide whether to offer its
+// Trophies item and which set to hand the overlay
+// (overlay_home_menu_main_menu.cpp); sceNpTrophyCreateContext writes it. The
+// frontend needs it because trophy folders under dev_hdd0/home/<user>/trophy are
+// named by NPWR comm id, NOT by title id, and there is no general way to derive one
+// from the other on disk: a disc game's TROPDIR lives inside the ISO, so a
+// title-id -> NPWR mapping only exists for installed titles.
+extern "C" std::string _rpcsx_getCurrentTrophyName() {
+  // try_get, not get: get<> CONSTRUCTS the object when it is absent, which would
+  // both allocate outside emulation and hand back an empty name that looks the same
+  // as "no trophies". try_get returns null until the fixed-object is initialised.
+  if (auto *current = g_fxo->try_get<current_trophy_name>()) {
+    std::lock_guard lock(current->mtx);
+    return current->name;
+  }
+
+  return {};
+}
 
 // ---------------------------------------------------------------------------
 // Save states
@@ -3078,6 +3395,27 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
     return "{}";
   }
 
+  // g_fxo has to be set up before anything mounts, and being STOPPED is exactly when it is not.
+  //
+  // vfs::mount() lazily constructs vfs_manager through manual_typemap::init<T>(), and init<T>()
+  // writes `*m_order++ = data`. clear() frees those arrays and sets m_order/m_info to nullptr, and
+  // g_fxo is cleared when a game stops -- so a scan that probes an ISO after any game has run this
+  // session wrote through a null pointer. RPCS3's signal handler caught it and turned it into a
+  // fatal exit: reported as "I scanned the library and the app crashed", and it is why the same
+  // scan is harmless on a fresh launch and lethal after playing something.
+  //
+  // The Emu.IsStopped() check above cannot catch this, because stopped IS the cleared state. The
+  // predicate that matters is is_init(), which is m_info != nullptr.
+  //
+  // Set up and hand it back exactly as found: reset() allocates the bookkeeping without
+  // constructing anything, the mount then constructs vfs_manager on demand, and clear() destroys
+  // it and frees the arrays again. Safe under g_emu_lifecycle_mutex, which no boot can cross.
+  const bool fxo_needs_setup = !g_fxo->is_init();
+
+  if (fxo_needs_setup) {
+    g_fxo->reset();
+  }
+
   // unload_iso() on every exit: leaving the device mounted would shadow the
   // next boot's disc with whichever image was scanned last.
   try {
@@ -3089,6 +3427,11 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
   }
 
   unload_iso();
+
+  if (fxo_needs_setup) {
+    g_fxo->clear();
+  }
+
   return result;
 }
 
