@@ -61,6 +61,7 @@ struct RPCSXApi {
   bool (*saveStateToSlot)(unsigned int slot);
   bool (*loadStateFromSlot)(unsigned int slot);
   bool (*hasStateInSlot)(unsigned int slot);
+  std::string (*patchEngineVersion)();
   int (*patchesImport)(std::string_view content);
   std::string (*patchesList)(std::string_view serial);
   std::string (*probeDiscInfo)(std::string_view isoPath, std::string_view iconOut);
@@ -141,6 +142,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.saveStateToSlot = reinterpret_cast<decltype(saveStateToSlot)>(dlsym(handle, "_rpcsx_saveStateToSlot"));
     result.loadStateFromSlot = reinterpret_cast<decltype(loadStateFromSlot)>(dlsym(handle, "_rpcsx_loadStateFromSlot"));
     result.hasStateInSlot = reinterpret_cast<decltype(hasStateInSlot)>(dlsym(handle, "_rpcsx_hasStateInSlot"));
+    result.patchEngineVersion = reinterpret_cast<decltype(patchEngineVersion)>(dlsym(handle, "_rpcsx_patchEngineVersion"));
     result.patchesImport = reinterpret_cast<decltype(patchesImport)>(dlsym(handle, "_rpcsx_patchesImport"));
     result.patchesList = reinterpret_cast<decltype(patchesList)>(dlsym(handle, "_rpcsx_patchesList"));
     result.probeDiscInfo = reinterpret_cast<decltype(probeDiscInfo)>(dlsym(handle, "_rpcsx_probeDiscInfo"));
@@ -662,6 +664,17 @@ Java_net_rpcsx_RPCSX_hasStateInSlot(JNIEnv *, jobject, jint slot) {
 // ---------------------------------------------------------------------------
 // Patches
 // ---------------------------------------------------------------------------
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_patchEngineVersion(JNIEnv *env, jobject) {
+  // Empty rather than a guessed version: the caller asks precisely because it
+  // must not name a schema version of its own.
+  if (rpcsxLib.patchEngineVersion == nullptr) {
+    return wrap(env, "");
+  }
+
+  return wrap(env, rpcsxLib.patchEngineVersion());
+}
 
 extern "C" JNIEXPORT jint JNICALL
 Java_net_rpcsx_RPCSX_patchesImport(JNIEnv *env, jobject, jstring jcontent) {

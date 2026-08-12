@@ -22,8 +22,14 @@ object Ps3PatchRepo {
      * RPCS3's official patch feed. `v` is the patch-engine version the server
      * uses to decide which schema to hand back, so it is not cosmetic -- an
      * older value returns patches this core cannot parse.
+     *
+     * The version comes from the core (patch_engine_version) rather than being
+     * written here. It was spelled out as 1.2, which is correct only until
+     * upstream bumps the constant: patch_engine::load rejects any file whose
+     * Version header does not match, so the two have to move together.
      */
-    private const val PATCH_URL = "https://rpcs3.net/compatibility?patch&api=v1&v=1.2"
+    private fun patchUrl(version: String) =
+        "https://rpcs3.net/compatibility?patch&api=v1&v=$version"
 
     data class Patch(
         val hash: String,
@@ -49,11 +55,15 @@ object Ps3PatchRepo {
         data object Network : Result
         data class Server(val code: Int) : Result
         data object Parse : Result
+        data object Checksum : Result
     }
 
     fun download(): Result {
+        val engineVersion = runCatching { RPCSX.instance.patchEngineVersion() }.getOrDefault("")
+        if (engineVersion.isBlank()) return Result.Parse
+
         val res = runCatching {
-            com.armsx3.HttpClient.doRequest(PATCH_URL, userAgent = "ARMSX3")
+            com.armsx3.HttpClient.doRequest(patchUrl(engineVersion), userAgent = "ARMSX3")
         }.getOrNull() ?: return Result.Network
 
         if (res.statusCode != 200 || res.data.isEmpty()) return Result.Network
@@ -62,18 +72,39 @@ object Ps3PatchRepo {
         //   { "return_code": 0, "version": "1.2", "sha256": "...", "patch": "<yaml>" }
         // Handing the envelope straight to the YAML parser fails on the first
         // line, which is exactly what it did.
-        val yaml = runCatching {
+        val envelope = runCatching {
             val obj = org.json.JSONObject(String(res.data, Charsets.UTF_8))
             val code = obj.optInt("return_code", -1)
             if (code != 0) return Result.Server(code)
-            obj.optString("patch")
-        }.getOrNull()
+            obj
+        }.getOrNull() ?: return Result.Parse
 
-        if (yaml.isNullOrBlank()) return Result.Parse
+        // The server picks the schema from the version we asked for, so a reply
+        // for a different one is a server-side surprise rather than something to
+        // hand to the parser: patch_engine::load would reject the whole file on
+        // its Version header anyway, several megabytes later.
+        if (envelope.optString("version") != engineVersion) return Result.Parse
+
+        val yaml = envelope.optString("patch")
+        if (yaml.isBlank()) return Result.Parse
+
+        // Desktop RPCS3 verifies this digest before it writes anything
+        // (patch_manager_dialog::handle_json), and the check was missing here.
+        // Patches are writes into the guest executable, and move_file/hide_file
+        // patches reach the emulator's own filesystem, so content that is not
+        // what the server hashed does not get imported.
+        val expected = envelope.optString("sha256")
+        if (!expected.equals(sha256(yaml), ignoreCase = true)) return Result.Checksum
 
         val n = runCatching { RPCSX.instance.patchesImport(yaml) }.getOrDefault(-1)
         return if (n >= 0) Result.Ok(n) else Result.Parse
     }
+
+    /** Lowercase hex SHA-256, the form rpcs3.net sends and desktop compares against. */
+    private fun sha256(text: String): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(text.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
 
     /**
      * Patches applicable to a serial. An empty serial lists everything, which is

@@ -108,6 +108,7 @@ fun Ps3PatchesTab(serial: String = "") {
                         is Ps3PatchRepo.Result.Server ->
                             str2("patches.ps3.serverError") + " (${r.code})"
                         Ps3PatchRepo.Result.Parse -> str2("patches.ps3.parseFailed")
+                        Ps3PatchRepo.Result.Checksum -> str2("patches.ps3.checksumFailed")
                     }
                 }
             },
@@ -175,6 +176,17 @@ fun Ps3PatchesTab(serial: String = "") {
             }
             return@Column
         }
+
+        // The core builds its patch map once, while the game loads, and writes
+        // the patches into the executable as each module is loaded. Toggling
+        // here only rewrites patch_config.yml, so a running game is unaffected
+        // and the toggle looks broken without saying this.
+        Text(
+            str("patches.ps3.restartNeeded"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 10.dp),
+        )
 
         @Composable
         fun patchRow(patch: Ps3PatchRepo.Patch) {
