@@ -98,8 +98,29 @@ namespace vk
 	bool data_heap::grow(usz size)
 	{
 		// Create new heap. All sizes are aligned up by 64M, upto 1GiB
-		const usz size_limit = (m_flags & heap_pool_fixed_size) ? initial_size : 1024 * 0x100000;
-		usz aligned_new_size = utils::align(m_size + size, 64 * 0x100000);
+		//
+		// Both numbers are desktop numbers, and the granularity is the one that hurts: growing in
+		// 64M steps means every growth demands a single contiguous block of that size or more.
+		// Ratchet & Clank dies here on an Adreno 740 -- 'Failed to allocate 131072K of video
+		// memory (pool=1, pool total=561M, heap cap=2048M)' -- which is this heap taking its
+		// second step, from 64M to 128M. The device is not full at 561M of a 2048M cap; it cannot
+		// place 128M in one piece. The RSX thread then ends, which is the freeze-with-audio users
+		// report, because a heap that cannot grow has nowhere to degrade to.
+		//
+		// 16M steps ask for a quarter as much contiguous memory at a time and let the heap settle
+		// nearer the size actually needed, instead of overshooting to the next 64M boundary. The
+		// ceiling comes down with it: a 1GiB upload ring on a phone would exhaust the device long
+		// before it was reached, so it is a limit that could only ever be hit by dying.
+#ifdef __ANDROID__
+		constexpr usz heap_growth_granularity = 16 * 0x100000;
+		constexpr usz heap_growth_ceiling = 256 * 0x100000;
+#else
+		constexpr usz heap_growth_granularity = 64 * 0x100000;
+		constexpr usz heap_growth_ceiling = 1024 * 0x100000;
+#endif
+
+		const usz size_limit = (m_flags & heap_pool_fixed_size) ? initial_size : heap_growth_ceiling;
+		usz aligned_new_size = utils::align(m_size + size, heap_growth_granularity);
 
 		if (aligned_new_size >= size_limit)
 		{
