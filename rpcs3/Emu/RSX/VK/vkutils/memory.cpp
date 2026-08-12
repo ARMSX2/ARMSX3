@@ -14,6 +14,11 @@ namespace
 
 namespace vk
 {
+	// Defined in VKHelpers.cpp. Declared here rather than including VKHelpers.h, which pulls the
+	// renderer into vkutils and inverts the dependency this directory is kept clean of.
+	bool is_last_ditch_eviction();
+	void set_last_ditch_eviction(bool state);
+
 	memory_type_info::memory_type_info(u32 index, u64 size)
 	{
 		push(index, size);
@@ -335,6 +340,49 @@ namespace vk
 		if (!request.throw_on_fail)
 		{
 			return VK_NULL_HANDLE;
+		}
+
+		// Last chance before killing the thread: evict as if this were fatal, because it is.
+		//
+		// The attempt above asks at 'severe' when the caller can throw, and severe is also as far
+		// as on_vram_exhausted will go while the RSX is uninterruptible -- it deliberately
+		// declines the hard sync there, since eviction would touch resources the driver may still
+		// be reading. That is the right call while there is still a way out. There is not one
+		// here: the next statement ends the RSX thread, which the user sees as the picture
+		// freezing while audio keeps playing, so a sync that might disturb in-flight resources is
+		// strictly the cheaper risk.
+		//
+		// Ratchet & Clank reaches this asking for a single 84MB block while holding 472MB of a
+		// 2048MB cap, so what fails is one large request rather than a full heap -- exactly the
+		// case where dropping everything unlocked can still find room.
+		//
+		// Guarded on recover_vmem_on_fail like the attempt above, so a caller that opted out of
+		// recovery is not handed it here by the back door.
+		const bool last_ditch_recovered = [&]()
+		{
+			if (!request.recover_vmem_on_fail || error_code != VK_ERROR_OUT_OF_DEVICE_MEMORY)
+			{
+				return false;
+			}
+
+			// Scoped, so the exemption cannot outlive this attempt and quietly authorise a hard
+			// sync somewhere it is not warranted.
+			vk::set_last_ditch_eviction(true);
+			const bool relieved = vmm_handle_memory_pressure(rsx::problem_severity::fatal);
+			vk::set_last_ditch_eviction(false);
+			return relieved;
+		}();
+
+		if (last_ditch_recovered)
+		{
+			const auto [status, type] = do_vma_alloc();
+			if (status == VK_SUCCESS)
+			{
+				rsx_log.error("Renderer ran out of video memory and recovered only by evicting everything it could. "
+					"A visual glitch here is expected, and is the alternative to the renderer dying.");
+				vmm_notify_memory_allocated(vma_alloc, type, request.size, request.pool);
+				return vma_alloc;
+			}
 		}
 
 		// Say what could not be allocated before dying.

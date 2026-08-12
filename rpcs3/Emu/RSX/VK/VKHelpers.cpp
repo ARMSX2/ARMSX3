@@ -318,6 +318,20 @@ namespace vk
 		clear_status_interrupt(runtime_state::uninterruptible);
 	}
 
+	// Thread-local: only the RSX thread allocates through this path, and the flag must not
+	// leak to any other thread that happens to hit memory pressure at the same moment.
+	static thread_local bool g_last_ditch_eviction = false;
+
+	bool is_last_ditch_eviction()
+	{
+		return g_last_ditch_eviction;
+	}
+
+	void set_last_ditch_eviction(bool state)
+	{
+		g_last_ditch_eviction = state;
+	}
+
 	bool is_uninterruptible()
 	{
 		return test_status_interrupt(runtime_state::uninterruptible);

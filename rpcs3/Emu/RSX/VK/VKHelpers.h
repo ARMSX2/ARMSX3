@@ -128,6 +128,12 @@ namespace vk
 	void leave_uninterruptible();
 	bool is_uninterruptible();
 
+	// Set only while the allocator is making its final attempt before ending the RSX thread.
+	// on_vram_exhausted normally refuses the hard sync while uninterruptible, which is correct
+	// while there is still a way out; this says there is not one, so the sync is the cheaper risk.
+	bool is_last_ditch_eviction();
+	void set_last_ditch_eviction(bool state);
+
 	void advance_completed_frame_counter();
 	void advance_frame_counter();
 	u64 get_current_frame_id();

@@ -1079,7 +1079,9 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 	// pushes a burst of surface and texture allocation through a point where the renderer is
 	// uninterruptible, and the assertion fired there: audio kept playing, no frame ever arrived,
 	// and it presented as a hang rather than a crash.
-	if (vk::is_uninterruptible())
+	// The allocator's final attempt is exempt: the alternative to syncing here is not a glitch,
+	// it is the RSX thread ending, which is the freeze-with-audio users report.
+	if (vk::is_uninterruptible() && !vk::is_last_ditch_eviction())
 	{
 		// Do the half of the work that does not need a hard sync, instead of refusing outright.
 		//
