@@ -16,6 +16,12 @@ intentional: the locale and update workflow can be prepared before translators
 start working. A missing translation must never be replaced by a machine
 translation without review.
 
+Locales whose JSON catalog is fully translated are marked with `"complete":
+true` in `translations/languages.json`. The synchronization check requires those
+catalogs to contain every canonical key from `I18n.kt`, rejects unknown keys,
+and validates formatting placeholders. Partial catalogs may omit keys and use
+the normal English fallback.
+
 ## Updating catalogs
 
 Run the synchronizer from the repository root:

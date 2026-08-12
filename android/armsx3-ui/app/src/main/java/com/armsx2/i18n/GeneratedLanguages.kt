@@ -33,7 +33,7 @@ internal val GENERATED_APP_LANGUAGES: List<AppLanguage> = listOf(
     AppLanguage("nl-NL", "Dutch (Netherlands)", "Nederlands"),
     AppLanguage("no-NO", "Norwegian (Norway)", "Norsk"),
     AppLanguage("pl-PL", "Polish (Poland)", "Polski"),
-    AppLanguage("pt-BR", "Portuguese (Brazil)", "Portuguese (Brazil)"),
+    AppLanguage("pt-BR", "Portuguese (Brazil)", "Português (Brasil)"),
     AppLanguage("pt-PT", "Portuguese (Portugal)", "Portuguese (Portugal)"),
     AppLanguage("qu-PE", "Quechua (Peru)", "Runa Simi"),
     AppLanguage("ro-RO", "Romanian (Romania)", "Română"),

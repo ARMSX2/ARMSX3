@@ -30,7 +30,7 @@
   {"code": "nl-NL", "english_name": "Dutch (Netherlands)", "native_name": "Nederlands"},
   {"code": "no-NO", "english_name": "Norwegian (Norway)", "native_name": "Norsk"},
   {"code": "pl-PL", "english_name": "Polish (Poland)", "native_name": "Polski"},
-  {"code": "pt-BR", "english_name": "Portuguese (Brazil)", "native_name": "Portuguese (Brazil)"},
+  {"code": "pt-BR", "english_name": "Portuguese (Brazil)", "native_name": "Português (Brasil)", "complete": true},
   {"code": "pt-PT", "english_name": "Portuguese (Portugal)", "native_name": "Portuguese (Portugal)"},
   {"code": "qu-PE", "english_name": "Quechua (Peru)", "native_name": "Runa Simi"},
   {"code": "ro-RO", "english_name": "Romanian (Romania)", "native_name": "Română"},

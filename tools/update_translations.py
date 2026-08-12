@@ -26,7 +26,18 @@ LANGUAGE_LIST = QT_OUTPUT / "languages.txt"
 LANGUAGE_MANIFEST = ROOT / "translations/languages.json"
 UI_I18N = ROOT / "android/armsx3-ui/app/src/main/assets/i18n"
 GENERATED_KOTLIN = ROOT / "android/armsx3-ui/app/src/main/java/com/armsx2/i18n/GeneratedLanguages.kt"
+UI_EN_SOURCE = ROOT / "android/armsx3-ui/app/src/main/java/com/armsx2/i18n/I18n.kt"
 PLACEHOLDER_RE = re.compile(r"%(?:\d+\$)?[-#+0,(]*\d*(?:\.\d+)?[sdf]")
+BARE_POSITIONAL_PLACEHOLDER_RE = re.compile(r"%[1-9](?![\d$sdf])")
+KOTLIN_MAP_RE = re.compile(
+    r"val\s+EN:\s*Map<String,\s*String>\s*=\s*mapOf\(\s*\n(?P<body>.*?)^\)",
+    re.MULTILINE | re.DOTALL,
+)
+KOTLIN_ENTRY_RE = re.compile(
+    r'^\s*(?P<key>"(?:\\.|[^"\\])*")\s+to\s+'
+    r'(?P<value>"(?:\\.|[^"\\])*")\s*,?\s*$',
+    re.MULTILINE,
+)
 
 
 def language_metadata() -> list[dict[str, object]]:
@@ -113,6 +124,31 @@ def placeholders(element: ET.Element) -> list[str]:
     return sorted(PLACEHOLDER_RE.findall("".join(element.itertext())))
 
 
+def text_placeholders(value: str) -> list[str]:
+    """Return Android/Compose formatting tokens used by a localized string."""
+    return sorted(PLACEHOLDER_RE.findall(value) + BARE_POSITIONAL_PLACEHOLDER_RE.findall(value))
+
+
+def canonical_ui_strings() -> dict[str, str]:
+    """Extract the canonical Compose localization map from I18n.kt."""
+    if not UI_EN_SOURCE.is_file():
+        raise RuntimeError(f"Canonical Android UI strings not found: {UI_EN_SOURCE}")
+    source = UI_EN_SOURCE.read_text(encoding="utf-8")
+    map_match = KOTLIN_MAP_RE.search(source)
+    if not map_match:
+        raise RuntimeError(f"Could not find the EN map in {UI_EN_SOURCE.relative_to(ROOT)}")
+
+    strings: dict[str, str] = {}
+    for match in KOTLIN_ENTRY_RE.finditer(map_match.group("body")):
+        key = json.loads(match.group("key"))
+        value = json.loads(match.group("value"))
+        # Kotlin's mapOf keeps the last value when a key appears more than once.
+        strings[key] = value
+    if not strings:
+        raise RuntimeError(f"No canonical Android UI strings found in {UI_EN_SOURCE.relative_to(ROOT)}")
+    return strings
+
+
 def synchronized_android_tree(source: Path, target: Path) -> tuple[ET.ElementTree, list[str]]:
     source_root = parse_xml(source).getroot()
     target_root = parse_xml(target).getroot() if target.is_file() else ET.Element("resources")
@@ -176,16 +212,20 @@ def update_android(check: bool) -> tuple[int, int]:
 
 
 def update_ui_json(check: bool) -> tuple[int, int]:
-    """Ensure every picker locale has a valid JSON catalog.
+    """Validate picker catalogs and enforce coverage for completed locales.
 
     Missing keys deliberately remain absent: I18n.kt falls back to its canonical
     English map, which makes an untranslated key distinguishable from a real
-    translation and avoids copying stale English into every catalog.
+    translation and avoids copying stale English into every catalog. Locales
+    marked ``complete`` in languages.json must mirror the full canonical key set.
     """
     changed = 0
     failures = 0
-    UI_I18N.mkdir(parents=True, exist_ok=True)
-    for language in languages():
+    canonical = canonical_ui_strings()
+    if not check:
+        UI_I18N.mkdir(parents=True, exist_ok=True)
+    for metadata in language_metadata():
+        language = str(metadata["code"])
         if language == "en":
             continue
         target = UI_I18N / f"{language}.json"
@@ -197,6 +237,32 @@ def update_ui_json(check: bool) -> tuple[int, int]:
             except (OSError, ValueError, json.JSONDecodeError) as error:
                 print(f"error: {target.relative_to(ROOT)}: {error}", file=sys.stderr)
                 failures += 1
+                continue
+
+            for key in sorted(canonical.keys() & data.keys()):
+                value = data[key]
+                if not isinstance(value, str):
+                    print(f"error: {target.relative_to(ROOT)}: {key} must be a string", file=sys.stderr)
+                    failures += 1
+                    continue
+                expected = text_placeholders(canonical[key])
+                actual = text_placeholders(value)
+                if actual != expected:
+                    print(
+                        f"error: {target.relative_to(ROOT)}: {key} has incompatible placeholders "
+                        f"{actual} (expected {expected})",
+                        file=sys.stderr,
+                    )
+                    failures += 1
+
+            if metadata.get("complete", False):
+                missing = sorted(canonical.keys() - data.keys())
+                unexpected = sorted(data.keys() - canonical.keys())
+                for key in missing:
+                    print(f"error: {target.relative_to(ROOT)}: missing canonical key {key}", file=sys.stderr)
+                for key in unexpected:
+                    print(f"error: {target.relative_to(ROOT)}: unknown key {key}", file=sys.stderr)
+                failures += len(missing) + len(unexpected)
             continue
         changed += 1
         if check:
