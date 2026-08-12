@@ -1,7 +1,11 @@
 #include <algorithm>
+#include <android/api-level.h>
 #include <android/dlext.h>
 #include <android/log.h>
+#include <cstdio>
+#include <cstring>
 #include <dlfcn.h>
+#include <elf.h>
 #include <jni.h>
 #include <optional>
 #include <string>
@@ -52,6 +56,7 @@ struct RPCSXApi {
   bool (*uninstallGame)(std::string_view path);
   std::string (*getVersion)();
   void *(*setCustomDriver)(void *driverHandle);
+  void (*reportDriverProblem)(std::string message);
   bool (*saveState)();
   bool (*loadState)(unsigned int index);
   bool (*hasState)(unsigned int index);
@@ -136,6 +141,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.uninstallGame = reinterpret_cast<decltype(uninstallGame)>(dlsym(handle, "_rpcsx_uninstallGame"));
     result.getVersion = reinterpret_cast<decltype(getVersion)>(dlsym(handle, "_rpcsx_getVersion"));
     result.setCustomDriver = reinterpret_cast<decltype(setCustomDriver)>(dlsym(handle, "_rpcsx_setCustomDriver"));
+    result.reportDriverProblem = reinterpret_cast<decltype(reportDriverProblem)>(dlsym(handle, "_rpcsx_reportDriverProblem"));
     result.saveState = reinterpret_cast<decltype(saveState)>(dlsym(handle, "_rpcsx_saveState"));
     result.loadState = reinterpret_cast<decltype(loadState)>(dlsym(handle, "_rpcsx_loadState"));
     result.hasState = reinterpret_cast<decltype(hasState)>(dlsym(handle, "_rpcsx_hasState"));
@@ -558,6 +564,145 @@ Java_net_rpcsx_RPCSX_getVersion(JNIEnv *env, jobject) {
   return wrap(env, rpcsxLib.getVersion());
 }
 
+#if defined(__aarch64__)
+// Why a driver will not load, when the answer is knowable before trying.
+//
+// A community driver built against a newer NDK imports symbols versioned against a libc
+// this device does not have, and the linker then refuses it. adrenotools reports that to
+// logcat and quietly substitutes the system driver, so from the app's side the load
+// "succeeded" and the user runs a driver they did not choose.
+//
+// The requirement is stated in the file: DT_VERNEED / .gnu.version_r lists the libc
+// versions it needs, e.g. LIBC_36 for API 36. Comparing that against the running API
+// turns "failed to load" into the actual reason, which is the difference between a
+// usable bug report and a shrug. Mr Purple T29 needs LIBC_36 (Android 16) and its own
+// meta.json claims minApi 30, so the metadata cannot be trusted for this -- only the
+// binary can.
+//
+// Returns an empty string when nothing conclusive was found. Advisory only: the load is
+// still attempted, so a wrong answer here costs a log line and never a working driver.
+static std::string driver_libc_requirement_blocker(const std::string &soPath) {
+  std::FILE *f = std::fopen(soPath.c_str(), "rb");
+  if (f == nullptr) {
+    return {};
+  }
+
+  std::vector<char> data;
+  std::fseek(f, 0, SEEK_END);
+  const long size = std::ftell(f);
+
+  // Header tables live near the start and end; the symbol names they point at can be
+  // anywhere, so read the whole file. These are ~15-20 MB and read once per driver
+  // switch, not per boot.
+  if (size <= 0 || size > (256 << 20)) {
+    std::fclose(f);
+    return {};
+  }
+
+  std::fseek(f, 0, SEEK_SET);
+  data.resize(static_cast<size_t>(size));
+  const size_t got = std::fread(data.data(), 1, data.size(), f);
+  std::fclose(f);
+
+  if (got != data.size() || data.size() < sizeof(Elf64_Ehdr)) {
+    return {};
+  }
+
+  const auto *ehdr = reinterpret_cast<const Elf64_Ehdr *>(data.data());
+
+  if (std::memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0 ||
+      ehdr->e_ident[EI_CLASS] != ELFCLASS64 || ehdr->e_shoff == 0 ||
+      ehdr->e_shentsize != sizeof(Elf64_Shdr)) {
+    return {};
+  }
+
+  // Section headers rather than PT_DYNAMIC: they carry file offsets directly, so no
+  // vaddr-to-offset mapping is needed. Shared objects keep them; if they are gone, this
+  // check simply declines to answer.
+  const auto section_at = [&](size_t i) -> const Elf64_Shdr * {
+    const size_t off = ehdr->e_shoff + i * sizeof(Elf64_Shdr);
+    if (off + sizeof(Elf64_Shdr) > data.size()) {
+      return nullptr;
+    }
+    return reinterpret_cast<const Elf64_Shdr *>(data.data() + off);
+  };
+
+  for (size_t i = 0; i < ehdr->e_shnum; i++) {
+    const Elf64_Shdr *sh = section_at(i);
+
+    if (sh == nullptr || sh->sh_type != SHT_GNU_verneed) {
+      continue;
+    }
+
+    const Elf64_Shdr *strtab = section_at(sh->sh_link);
+
+    if (strtab == nullptr || strtab->sh_offset >= data.size()) {
+      return {};
+    }
+
+    const char *strings = data.data() + strtab->sh_offset;
+    const size_t strings_max = data.size() - strtab->sh_offset;
+
+    size_t offset = sh->sh_offset;
+    int highest_libc = 0;
+
+    for (size_t entry = 0; entry < sh->sh_info; entry++) {
+      if (offset + sizeof(Elf64_Verneed) > data.size()) {
+        break;
+      }
+
+      const auto *vn = reinterpret_cast<const Elf64_Verneed *>(data.data() + offset);
+      size_t aux_offset = offset + vn->vn_aux;
+
+      for (size_t aux = 0; aux < vn->vn_cnt; aux++) {
+        if (aux_offset + sizeof(Elf64_Vernaux) > data.size()) {
+          break;
+        }
+
+        const auto *vna = reinterpret_cast<const Elf64_Vernaux *>(data.data() + aux_offset);
+
+        if (vna->vna_name < strings_max) {
+          const char *name = strings + vna->vna_name;
+          int level = 0;
+
+          // Only LIBC_<n> is a device-capability statement. Anything else (LIBC,
+          // LIBC_PRIVATE, other sonames) says nothing about the API level.
+          if (std::sscanf(name, "LIBC_%d", &level) == 1 && level > highest_libc) {
+            highest_libc = level;
+          }
+        }
+
+        if (vna->vna_next == 0) {
+          break;
+        }
+
+        aux_offset += vna->vna_next;
+      }
+
+      if (vn->vn_next == 0) {
+        break;
+      }
+
+      offset += vn->vn_next;
+    }
+
+    const int device_api = android_get_device_api_level();
+
+    if (highest_libc > 0 && device_api > 0 && highest_libc > device_api) {
+      char buf[256];
+      std::snprintf(buf, sizeof(buf),
+                    "it requires LIBC_%d (Android API %d) but this device provides API %d",
+                    highest_libc, highest_libc, device_api);
+      return buf;
+    }
+
+    return {};
+  }
+
+  return {};
+}
+#endif // __aarch64__
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
                                      jstring jlibraryName, jstring jhookDir) {
@@ -574,6 +719,26 @@ Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
       auto libraryName = unwrap(env, jlibraryName);
       __android_log_print(ANDROID_LOG_INFO, "RPCSX-UI", "Loading custom driver %s",
                           path.c_str());
+
+      // Said before the attempt, because adrenotools swallows the failure: it logs to
+      // logcat and hands back the system driver, so the caller cannot tell a real load
+      // from a substitution, and the reason never reaches the emulator log at all.
+      if (auto blocker = driver_libc_requirement_blocker(path + "/" + libraryName);
+          !blocker.empty()) {
+        const std::string report =
+            "Custom driver '" + libraryName + "' cannot load on this device: " + blocker +
+            ". It was built against a newer NDK than this Android version supports; the "
+            "driver's own metadata does not carry this. The system driver will be used "
+            "instead.";
+
+        __android_log_print(ANDROID_LOG_ERROR, "RPCSX-UI", "%s", report.c_str());
+
+        // Also to the emulator log, which is the file that gets attached to issues.
+        // logcat alone means the reason exists and no report ever contains it.
+        if (rpcsxLib.reportDriverProblem != nullptr) {
+          rpcsxLib.reportDriverProblem(report);
+        }
+      }
 
       ::dlerror();
       loader = adrenotools_open_libvulkan(

@@ -5,6 +5,9 @@
 #include "util/logs.hpp"
 #include "Emu/system_config.h"
 #include <vulkan/vulkan_core.h>
+#ifdef __ANDROID__
+#include "Emu/RSX/VK/vk_android_loader.h"
+#endif
 #ifdef __APPLE__
 #include <vulkan/vulkan_beta.h>
 #endif
@@ -245,6 +248,42 @@ namespace vk
 		get_physical_device_properties_1(allow_extensions);
 
 		rsx_log.always()("Found Vulkan-compatible GPU: '%s' running on driver %s", get_name(), get_driver_version());
+
+		// ARMSX3: say WHICH driver this is, not just its version.
+		//
+		// The version alone does not identify a driver, and on Android it is actively
+		// misleading: adrenotools' hook falls back to the system driver when its dlopen
+		// fails, so a session that silently ran the system driver looks here exactly like
+		// one that ran the custom driver it was asked for. Every report naming a custom
+		// driver is untrustworthy without this.
+		if (driver_properties.driverID)
+		{
+			rsx_log.always()("Vulkan driver identity: '%s' (driverID %u), info '%s', conformance %u.%u.%u.%u",
+				driver_properties.driverName,
+				static_cast<u32>(driver_properties.driverID),
+				driver_properties.driverInfo,
+				static_cast<u32>(driver_properties.conformanceVersion.major),
+				static_cast<u32>(driver_properties.conformanceVersion.minor),
+				static_cast<u32>(driver_properties.conformanceVersion.subminor),
+				static_cast<u32>(driver_properties.conformanceVersion.patch));
+		}
+		else
+		{
+			rsx_log.always()("Vulkan driver identity: VK_KHR_driver_properties unavailable, inferred from the GPU name only");
+		}
+
+#ifdef __ANDROID__
+		// A custom driver was asked for, and the driver that answered is Qualcomm's own.
+		// adrenotools installs Mesa/Turnip builds, so this combination means the load
+		// failed and the fallback took over. It reports that here because the only other
+		// trace is a logcat line from hook_impl, which never reaches a bug report.
+		if (vk::android::using_custom_driver() && get_driver_vendor() == driver_vendor::ADRENO)
+		{
+			rsx_log.error("A custom Vulkan driver was requested, but the driver in use is Qualcomm's own. "
+				"It most likely failed to load and fell back silently; `adb logcat | grep hook_impl` has the reason. "
+				"Treat this session as running the SYSTEM driver.");
+		}
+#endif
 
 		if (get_driver_vendor() == driver_vendor::RADV && get_name().find("LLVM 8.0.0") != umax)
 		{

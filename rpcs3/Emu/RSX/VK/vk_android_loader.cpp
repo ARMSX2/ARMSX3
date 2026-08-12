@@ -629,7 +629,12 @@ namespace vk::android
 		}
 
 		g_handle = handle;
-		vk_loader.success("Vulkan driver bound (%s)", g_custom ? "custom" : "system");
+
+		// "custom" describes the handle we were given, not necessarily the driver that
+		// answers through it: adrenotools falls back to the system driver inside that
+		// handle when its own dlopen fails, and says so only to logcat. The identity
+		// logged by physical_device::create is what actually answered.
+		vk_loader.success("Vulkan dispatch bound to the %s driver handle", g_custom ? "custom" : "system");
 		return previous;
 	}
 
