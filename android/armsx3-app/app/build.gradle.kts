@@ -87,42 +87,13 @@ android {
     }
 }
 
-// ARMSX3: fail the build if the bundled ANGLE libraries are not there.
-//
-// This check exists because of a specific, expensive bug in ARMSX2: the repo's
-// blanket `*.so` gitignore rule swallowed the ANGLE prebuilts, they never made it
-// into release staging, the APK shipped without them, and the core fell back to
-// the system GLES driver in complete silence. Users reported "ANGLE is broken"
-// and there was nothing in any log to contradict them.
-//
-// jniLibs/.gitignore now un-ignores the two files by name. This task is the
-// second lock: packaging an APK that claims to support ANGLE without shipping
-// ANGLE is a build error, not a runtime surprise. The core-side counterpart is
-// the loud error in gl::es::egl_initialize() when the override library is
-// selected but cannot be dlopen'd.
-val verifyAngleLibs by tasks.registering {
-    val angleLibs = listOf("libEGL_angle.so", "libGLESv2_angle.so")
-    val jniLibDir = file("src/main/jniLibs/arm64-v8a")
-
-    doLast {
-        val missing = angleLibs.filter { !File(jniLibDir, it).isFile }
-        if (missing.isNotEmpty()) {
-            throw GradleException(
-                "ANGLE libraries missing from ${'$'}jniLibDir: ${'$'}{missing.joinToString(", ")}.\n" +
-                "The OpenGL renderer's ANGLE option cannot work without them and would " +
-                "silently fall back to the system GLES driver.\n" +
-                "They are tracked in git - check them out, or remove the ANGLE option."
-            )
-        }
-
-        angleLibs.forEach {
-            logger.lifecycle("ANGLE: packaging ${'$'}it (${'$'}{File(jniLibDir, it).length()} bytes)")
-        }
-    }
-}
-
-tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
-    .configureEach { dependsOn(verifyAngleLibs) }
+// ARMSX3: the ANGLE prebuilts and the verifyAngleLibs task that guarded them used
+// to live here. They now live in android/armsx3-ui, which is the module that
+// actually ships (applicationId com.armsx3) and the module whose UI exposes the
+// OpenGL renderer's ANGLE option. This module builds nothing that ships, so the
+// guard here could never protect the APK it was written for -- and it never ran at
+// all: its message was written with `${'$'}`-style template escaping, and the `", "`
+// inside it closed the Kotlin string early, so this file did not compile.
 
 base.archivesName = "rpcsx"
 

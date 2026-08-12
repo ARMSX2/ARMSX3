@@ -29,8 +29,8 @@ android {
         applicationId = "com.armsx3"
         minSdk = 26
         targetSdk = 37
-        versionCode = 9
-        versionName = "0.5"
+        versionCode = 10
+        versionName = "0.6"
 
         // ARMSX2's UI reads these. STORAGE_ALL_FILES gates the all-files storage path in
         // onboarding; IN_APP_UPDATER gates the in-app GitHub-release updater.
@@ -109,6 +109,51 @@ android {
         }
     }
 }
+
+// ARMSX3: fail the build if the bundled ANGLE libraries are not there.
+//
+// This check exists because of a specific, expensive bug in ARMSX2: the repo's
+// blanket `*.so` gitignore rule swallowed the ANGLE prebuilts, they never made it
+// into release staging, the APK shipped without them, and the core fell back to
+// the system GLES driver in complete silence. Users reported "ANGLE is broken"
+// and there was nothing in any log to contradict them.
+//
+// jniLibs/.gitignore un-ignores the two files by name. This task is the second
+// lock: packaging an APK that claims to support ANGLE without shipping ANGLE is a
+// build error, not a runtime surprise. The core-side counterpart is the loud error
+// in gl::es::egl_initialize() when the override library is selected but cannot be
+// dlopen'd; the UI-side counterpart is the MISSING_LIBS line that
+// MainActivityRuntime.applyAngleEnv logs when the option is on and the .so is not
+// in nativeLibraryDir.
+//
+// The claim being guarded is live in THIS module: RendererBackendSection ->
+// AngleDriverSection writes Settings.useAngleOpenGL, and applyAngleEnv turns it
+// into ARMSX2_ANGLE_EGL_LIBRARY. (Both the libraries and this task used to sit in
+// the stale android/armsx3-app module, which builds nothing that ships -- so the
+// guard could not fire for the APK it was meant to protect.)
+val verifyAngleLibs by tasks.registering {
+    val angleLibs = listOf("libEGL_angle.so", "libGLESv2_angle.so")
+    val jniLibDir = file("src/main/jniLibs/arm64-v8a")
+
+    doLast {
+        val missing = angleLibs.filter { !jniLibDir.resolve(it).isFile }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "ANGLE libraries missing from $jniLibDir: ${missing.joinToString(", ")}.\n" +
+                "The OpenGL renderer's ANGLE option cannot work without them and would " +
+                "silently fall back to the system GLES driver.\n" +
+                "They are tracked in git - check them out, or remove the ANGLE option."
+            )
+        }
+
+        angleLibs.forEach {
+            logger.lifecycle("ANGLE: packaging $it (${jniLibDir.resolve(it).length()} bytes)")
+        }
+    }
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(verifyAngleLibs) }
 
 dependencies {
     // Discord Social SDK, staged locally rather than pulled from a repo: it is
