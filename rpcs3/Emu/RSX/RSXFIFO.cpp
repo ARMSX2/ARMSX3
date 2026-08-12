@@ -37,7 +37,36 @@ namespace rsx
 
 		void FIFO_control::sync_get() const
 		{
-			m_ctrl->get.release(m_internal_get);
+			// Every 8th packet. The guest reads GET to work out how much ring space is
+			// free, and it is far ahead of us here (FIFO stalls measure 0.1/frame), so a
+			// bounded lag is invisible to it. Anything that can idle or block publishes
+			// immediately via sync_get_force so a waiting producer is never held up.
+			if (++m_get_sync_counter & 7)
+			{
+				return;
+			}
+
+			m_ctrl->get.release(m_published_get = m_internal_get);
+		}
+
+		void FIFO_control::sync_get_force() const
+		{
+			m_get_sync_counter = 0;
+
+			// Publish real progress only. The drain paths call this every time they are entered,
+			// and while the ring is empty or blocked that is once per run loop iteration with GET
+			// unmoved: measured at ~91000 of 137000 iterations per frame in Spider-Man: Web of
+			// Shadows, every one of them a coherence miss on the line holding put.
+			//
+			// The cost lands on the guest rather than on us, which is why it reads as a freeze
+			// with sound: the PPU feeding the ring is the thread contending for that line, so it
+			// stops producing while threads that never touch it carry on.
+			if (m_published_get == m_internal_get)
+			{
+				return;
+			}
+
+			m_ctrl->get.release(m_published_get = m_internal_get);
 		}
 
 		void FIFO_control::restore_state(u32 cmd, u32 count)
@@ -58,7 +87,7 @@ namespace rsx
 			{
 				// NOTE: Only supposed to be invoked to wait for a single arg on command[0] (4 bytes)
 				// Wait for put to allow us to procceed execution
-				sync_get();
+				sync_get_force();
 				invalidate_cache();
 
 				while (read_put() == m_internal_get && !Emu.IsStopped())
@@ -141,6 +170,13 @@ namespace rsx
 					rsx::prof::g_fifo_refills++;
 					rsx::prof::g_fifo_refill_bytes += m_cache_size;
 				}
+
+				// Covers the reservation lock and the line fetch loop below. Refills run a few
+				// hundred times a frame rather than per command, so unlike a per-command scope
+				// this costs nothing measurable. Each one copies and then re-compares every
+				// 128-byte line, so it moves twice the bytes it fetches, against memory the
+				// guest PPU is actively writing.
+				RSX_PROF_SCOPE(fifo_refill);
 
 				rsx::reservation_lock<true, 1> rsx_lock(addr1, m_cache_size, true);
 				const auto src = vm::_ptr<spu_rdata_t>(addr1);
@@ -244,7 +280,7 @@ namespace rsx
 			}
 
 			// Update ctrl registers
-			m_ctrl->get.release(m_internal_get = get);
+			m_ctrl->get.release(m_published_get = m_internal_get = get);
 			m_remaining_commands = 0;
 		}
 
@@ -257,7 +293,7 @@ namespace rsx
 				return {};
 			}
 
-			if (g_cfg.core.rsx_fifo_accuracy)
+			if (m_accurate_fetch)
 			{
 				// Return a pointer to the cache storage with confined access
 				const u32 cache_offset_in_words = (m_internal_get - m_cache_addr) / 4;
@@ -365,6 +401,8 @@ namespace rsx
 
 		void FIFO_control::read(register_pair& data)
 		{
+			m_accurate_fetch = !!g_cfg.core.rsx_fifo_accuracy;
+
 			if (m_remaining_commands)
 			{
 				// Previous block aborted to wait for PUT pointer
@@ -391,7 +429,7 @@ namespace rsx
 				m_memwatch_cmp = 0;
 			}
 
-			if (!g_cfg.core.rsx_fifo_accuracy) [[ likely ]]
+			if (!m_accurate_fetch) [[ likely ]]
 			{
 				const u32 put = read_put();
 
@@ -447,7 +485,7 @@ namespace rsx
 
 			if (!count)
 			{
-				m_ctrl->get.release(m_internal_get += 4);
+				m_ctrl->get.release(m_published_get = (m_internal_get += 4));
 				data.reg = FIFO_NOP;
 				return;
 			}
@@ -684,10 +722,28 @@ namespace rsx
 					performance_counters.state = FIFO::state::nop;
 				}
 
+				// Going idle: publish GET now rather than carrying up to seven packets of
+				// lag into a period where the producer may be waiting on ring space.
+				fifo_ctrl->sync_get_force();
 				return;
 			}
 			case FIFO::FIFO_EMPTY:
 			{
+				// Publish GET before going idle.
+				//
+				// GET is published on a bounded lag -- every eighth packet -- to keep a
+				// cross-cluster coherence miss off the per-packet path. That is only safe while
+				// something is still coming to flush it. Draining the ring is precisely when
+				// nothing is: the guest reads GET to see how far we have consumed, and with up
+				// to seven packets of lag frozen into it and no further packets to publish, it
+				// waits forever for progress that was made and never announced.
+				//
+				// Presents as a boot that hangs with the RSX perfectly healthy and idle, every
+				// guest thread in a legitimate wait, and sys_timer_usleep climbing -- and only
+				// when the packet count is not a multiple of eight as the ring drains, which is
+				// why it is game- and timing-dependent rather than reliable.
+				fifo_ctrl->sync_get_force();
+
 				if (performance_counters.state == FIFO::state::running)
 				{
 					performance_counters.FIFO_idle_timestamp = get_system_time();
@@ -695,6 +751,32 @@ namespace rsx
 				}
 				else
 				{
+					// Yield, without backing off to a sleep.
+					//
+					// A 50us sleep was added here when the RSX thread was measured spending 66%
+					// of its cycles in sched_yield while the machine was starved for cores: the
+					// affinity mask confined six SPU threads to four cores, and the reservation
+					// path serialised everything behind a global lock, so a spinning RSX was
+					// taking a core from threads that needed it.
+					//
+					// Neither of those is true any more, and the trade inverted with them.
+					// Measured after both were fixed: 34% of eight cores busy, two to four
+					// threads runnable, five idle. Nothing is waiting for the core this would
+					// give back, and the RSX sits on the frame's dependency chain, so sleeping
+					// only delays the moment it notices the guest has produced work.
+					//
+					// Charged to idle, because that is what it is. This yield sits inside the
+					// fifo_decode scope, and fifo_decode is the enclosing scope of the whole run
+					// loop, so without this the time the RSX spends waiting on an empty ring is
+					// reported as decode work. That reads as a saturated RSX -- Idle 0.003 ms
+					// against FIFO decode 20.4 ms -- while a native profile of the same thread
+					// put 34% of its cycles in sched_yield and its kernel path. The bucket
+					// report and the profiler disagreed, and the bucket report was wrong.
+					//
+					// It has now caused two wrong conclusions in one session: once reading a
+					// starving RSX as CPU-bound decode, and once reading a thread stuck in an
+					// occlusion query wait as the same thing.
+					RSX_PROF_SCOPE(idle);
 					std::this_thread::yield();
 				}
 
@@ -702,7 +784,9 @@ namespace rsx
 			}
 			case FIFO::FIFO_BUSY:
 			{
-				// Do something else
+				// Do something else. Same reasoning as the empty case: this leaves the consume
+				// loop, so GET goes out rather than sitting behind the lag counter.
+				fifo_ctrl->sync_get_force();
 				return;
 			}
 			case FIFO::FIFO_ERROR:
@@ -912,13 +996,37 @@ namespace rsx
 
 			m_ctx->register_state->decode(reg, value);
 
-			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_method_counts[reg & (rsx::prof::method_slot_count - 1)]++;
+			if (rsx::prof::enabled()) [[unlikely]]
+			{
+				// The sequential counter is what the per-method figure should divide by.
+				// g_fifo_commands is incremented once per run_FIFO entry, which is a whole
+				// packet, so it prices packets.
+				rsx::prof::g_fifo_dispatches++;
+				rsx::prof::g_method_counts[reg & (rsx::prof::method_slot_count - 1)]++;
+			}
 
 			if (auto method = methods[reg])
 			{
+				// Splits the handler bodies out of fifo_decode, which is the enclosing scope of
+				// the whole loop and therefore holds both. Arkham City spends 38.5 ms a frame in
+				// there at 164 ns a dispatch against Sonic's 45 ns on the same machinery, so the
+				// difference is in what the handlers do, and nothing separates the two.
+				//
+				// This is the one per-dispatch scope in the profiler, and an earlier attempt at
+				// one measured mostly itself. It is affordable here only because it wraps a
+				// call: two counter reads against a handler body, not against a loop iteration.
+				// Still costs a few percent of the bucket it splits -- read the split, not the
+				// total.
+				// Bills the same interval to this method's slot as well, so the handlers can be
+				// ranked by cost rather than by how often they are called.
+				::rsx::prof::method_scope method_prof_scope{
+					static_cast<u32>(reg & (::rsx::prof::method_slot_count - 1)) };
+
 				method(m_ctx, reg, value);
 
-				if (state & cpu_flag::again)
+				// Relaxed: `again` is only set by this thread, by the handler just called.
+				// The seq_cst default is an ldar on ARM64 for no benefit here.
+				if (state.observe() & cpu_flag::again)
 				{
 					m_ctx->register_state->decode(reg, m_ctx->register_state->latch);
 					break;

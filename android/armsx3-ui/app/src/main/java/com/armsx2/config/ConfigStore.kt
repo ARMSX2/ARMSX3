@@ -66,9 +66,37 @@ object ConfigStore {
     private const val KEY_VBLANK_60 = "config.migrated.frameCap60"
     // Clears core overrides left behind by the profiling work.
     private const val KEY_DIAG_OVERRIDES_PURGED = "config.migrated.diagOverridesPurged"
+    // Bumped: the profiler was recorded again during the 0.5 debugging work, after the first
+    // purge had already marked itself done.
+    private const val KEY_DIAG_OVERRIDES_PURGED_2 = "config.migrated.diagOverridesPurged2"
+    // Core settings left pinned as raw overrides by the 0.5 debugging sessions.
+    private const val KEY_TUNING_OVERRIDES_PURGED = "config.migrated.tuningOverridesPurged"
+    // Per-title Accurate SPU Reservations values left behind by the same debugging.
+    private const val KEY_PERGAME_RSV_CLEARED = "config.migrated.perGameRsvCleared"
     private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
+    // The relaxed-ZCULL default was recorded as a raw core override as well, and the OFF
+    // migration above only ever corrected the curated field.
+    private const val KEY_RELAXED_ZCULL_OVERRIDE_PURGED = "config.migrated.relaxedZcullOverridePurged"
+    // Per-title core settings that differ from the safe global default, seeded once into the
+    // title's own override so the global stays conservative. Keyed by serial; other regions of
+    // the same game need their own entry.
+    private const val KEY_PER_GAME_SEED = "config.migrated.perGameSeedV1"
+    private val PER_GAME_SEED: Map<String, Map<String, Any>> = mapOf(
+        // Spider-Man: Web of Shadows. Its SPURS reservation traffic serialises behind the global
+        // exclusive vm::writer_lock taken by every reservation_op, which no amount of CPU can
+        // help: measured all six SPU threads and several PPUs yielding at the same rate, 18.8% of
+        // total CPU in sched_yield. Turning accurate reservations off routes SPURS through the
+        // lock-free path in SPUThread.cpp and dropped vm::writer_lock from 8.06% to 0.96%.
+        //
+        // Deliberately per-game and not a global default. It is off-spec, upstream defaults it
+        // on, and Sonic Unleashed fails EARLIER with it off, so it is not safe to apply blindly.
+        "BLUS30218" to mapOf("ps3AccurateSpuRsv" to false),    )
+    // The VRAM limit is a hard heap cap, not an eviction threshold; too low fails allocations.
+    private const val KEY_VRAM_LIMIT_1024 = "config.migrated.vramCap2048b"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
+    // ...and back off it: the mask it enables confines six SPU threads to four cores.
+    private const val KEY_AFFINITY_OS = "config.migrated.affinitySchedulerOff"
     private const val KEY_TIMESTRETCH_OFF = "config.migrated.audioTimeStretchOff"
     // Scaling Mode row changed meaning; a stored 0 used to resolve to Bilinear, now Nearest.
     private const val KEY_CAS_MODE_BILINEAR = "config.migrated.casModeBilinear"
@@ -151,6 +179,25 @@ object ConfigStore {
             MainActivityRuntime.prefs.edit { putBoolean(KEY_AFFINITY_ON, true) }
         }
 
+        // ...and undo it. The migration above turned the scheduler on so the big.LITTLE mask
+        // would apply, keeping SPU and RSX off the A510s. That is right for one thread per core
+        // and wrong at six: the mask hands the six SPU threads four cores between them, so each
+        // gets about two thirds of one, which is worse than a thread owning an A510 outright.
+        //
+        // Measured in game on a Snapdragon 8 Gen 2, from the masks the threads actually carry:
+        // Android grants the app cores 0-7, we confine SPU to 3-6, and the device sits at 60%
+        // with cores 0-2 idle while frames are slow. Web of Shadows is visibly better at OS.
+        //
+        // Same reason these devices are reported to do better under native Linux, which applies
+        // no such policy. The other modes stay selectable.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_AFFINITY_OS, false)) {
+            if (raw != null && parsed.affinityMode == 2) {
+                parsed = parsed.copy(affinityMode = 0)
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_AFFINITY_OS, true) }
+        }
+
         // Undo the relaxed-ZCULL default: it stopped Skate 3 rendering.
         if (!MainActivityRuntime.prefs.getBoolean(KEY_RELAXED_ZCULL_OFF, false)) {
             if (raw != null && parsed.ps3.relaxedZcull) {
@@ -158,6 +205,112 @@ object ConfigStore {
                 dirty = true
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_RELAXED_ZCULL_OFF, true) }
+        }
+
+        // Seed the per-title core settings once. Only fields the title does not already carry
+        // are written, so a deliberate change is never overwritten.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_PER_GAME_SEED, false)) {
+            runCatching {
+                for ((serial, fields) in PER_GAME_SEED) {
+                    val existing = loadOverrides(serial) ?: JSONObject()
+                    var changed = false
+                    for ((key, value) in fields) {
+                        if (!existing.has(key)) {
+                            existing.put(key, value)
+                            changed = true
+                        }
+                    }
+                    if (changed) saveOverrides(serial, existing)
+                }
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_PER_GAME_SEED, true) }
+        }
+
+        // Bring stored VRAM caps up to 3072.
+        //
+        // This value is VMA's pHeapSizeLimit, a hard ceiling rather than an eviction threshold, so
+        // a low value does not make the cache release earlier -- it makes allocation fail earlier.
+        // The God of War 3 demo was measured failing a routine 24MB request at 1024 while holding
+        // 1.6GB resident and 280MB in that pool, and failing at 2048 one screen later. A
+        // deliberate choice of some other value is left alone.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_VRAM_LIMIT_1024, false)) {
+            if (raw != null && (parsed.ps3.vramLimitMb == 1024 || parsed.ps3.vramLimitMb == 3072)) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(vramLimitMb = 2048))
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_VRAM_LIMIT_1024, true) }
+        }
+
+        // Clear the core settings left pinned while debugging 0.5.
+        //
+        // These were set to test things and never unset, and a raw override beats the UI silently:
+        // the settings screen read SPU Block Size = Safe while config.yml read Mega for hours.
+        // Mega is the one that mattered -- it produces very large compilation units, and those are
+        // what fail AArch64 register allocation with "Cannot scavenge register without an
+        // emergency spill slot", which is what put threads on the interpreter fallback in the
+        // first place. Every "cannot be compiled" in those sessions traces back to it.
+        //
+        // Cleared in every scope, since a title can pin a key the global also pins: Arkham City
+        // carried Accurate SPU Reservations true per-title against false globally, so clearing one
+        // did nothing. Whatever the settings screens show becomes what actually runs.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_TUNING_OVERRIDES_PURGED, false)) {
+            runCatching {
+                CoreSettingOverrides.forgetEverywhere(
+                    "Core@@SPU Block Size",
+                    "Core@@SPU Decoder",
+                    "Core@@Accurate SPU Reservations",
+                    "Core@@Accurate SPU DMA",
+                )
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_TUNING_OVERRIDES_PURGED, true) }
+        }
+
+        // Drop per-title Accurate SPU Reservations values, except the one title that needs it.
+        //
+        // Turning it off was tried per-title as well as globally while debugging 0.5, and off is
+        // off-spec: it forces the SPURS scheduler to HLE and bypasses the reservation lock, so a
+        // title left that way desyncs and its SPU threads end up executing whatever they land on.
+        // Batman: Arkham City carried it off this way and died with "Unknown STOP code: 0x0".
+        //
+        // Web of Shadows keeps it, since it is the title the setting was measured on and it is
+        // the one that gains from it.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_PERGAME_RSV_CLEARED, false)) {
+            runCatching {
+                for (key in MainActivityRuntime.prefs.all.keys.toList()) {
+                    if (!key.startsWith("config.game.")) continue
+                    if (key == keyForGame("BLUS30218")) continue
+
+                    val serial = key.removePrefix("config.game.")
+                    val stored = loadOverrides(serial) ?: continue
+                    if (!stored.has("ps3AccurateSpuRsv")) continue
+
+                    stored.remove("ps3AccurateSpuRsv")
+                    saveOverrides(serial, stored)
+                }
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_PERGAME_RSV_CLEARED, true) }
+        }
+
+        // ...and take the raw override with it. The ON migration recorded the same setting a
+        // second time as a core override, and the OFF migration above only corrected the
+        // curated field, so the two stores disagreed: relaxedZcull was false everywhere the UI
+        // could show it while the override still held "true".
+        //
+        // The override wins, because overrides re-push at the tail of applyTo, after the curated
+        // store has written the setting. So the toggle read OFF, config.yml read
+        // "Relaxed ZCULL Sync: true" every boot, and nothing in the UI could change that.
+        //
+        // Not cosmetic: relaxed sync is what lets queries be read while still pending, which is
+        // the "Dubious query data pushed to cond render" path, and it also selects emulated
+        // predication in the VK backend.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_RELAXED_ZCULL_OVERRIDE_PURGED, false)) {
+            runCatching {
+                CoreSettingOverrides.forget(
+                    SettingsScope.Global, null,
+                    "Video@@Relaxed ZCULL Sync",
+                )
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_RELAXED_ZCULL_OVERRIDE_PURGED, true) }
         }
 
 
@@ -251,6 +404,23 @@ object ConfigStore {
                 )
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_DIAG_OVERRIDES_PURGED, true) }
+        }
+
+        // Again, for the profiling done to fix Web of Shadows, Sonic Unleashed and God of War 3.
+        //
+        // The RSX profiler writes a bucket report every 300 frames and keeps per-scope timers on
+        // the RSX thread, so it is not something to leave switched on for a release. It was found
+        // still recorded as a raw core override -- config.yml read "RSX Profiler: true" while
+        // nothing in the UI said so, the same divergence as the relaxed-ZCULL one, because
+        // overrides re-push at the tail of applyTo.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_DIAG_OVERRIDES_PURGED_2, false)) {
+            runCatching {
+                CoreSettingOverrides.forget(
+                    SettingsScope.Global, null,
+                    "Video@@RSX Profiler", "Video@@Eager Surface Readback", "Video@@GPU Profiler",
+                )
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_DIAG_OVERRIDES_PURGED_2, true) }
         }
 
         // Move anyone still on the old Approximate xfloat default onto Accurate.
@@ -592,14 +762,8 @@ object ConfigStore {
             if (restored) return
         }
 
-        // (2) Best-effort seed from the folder's old native PCSX2-Android.ini (old-UI case).
-        val root = MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return
-        val ini = File(root, "PCSX2-Android.ini")
-        if (!ini.exists() || ini.length() == 0L) return
-        runCatching {
-            val map = parseIni(ini.readText())
-            if (map.isNotEmpty()) saveGlobal(Settings().readFromIni(map))
-        }
+        // The old native PCSX2-Android.ini seed is gone with the PS2 app: it is written by
+        // that emulator under its own package, so nothing under com.armsx3 can ever have one.
     }
 
     /**
@@ -610,17 +774,15 @@ object ConfigStore {
      *  - the in-folder mirror ([BACKUP_FILENAME]): [reconcileReusedFolder] re-seeds prefs from
      *    it precisely BECAUSE config.global is missing, which is exactly the state a reset
      *    creates — so the next launch would restore everything just wiped.
-     *  - `PCSX2-Android.ini`: the fallback seed for the same recovery path.
      *  - the `gamesettings` directory of per-game INIs. The core reads those directly and they
      *    SHADOW the global tier, so leaving them behind means per-game tweaks survive a reset
      *    and then look like settings that "do nothing".
      *
-     * Games, BIOS, saves, memory cards, save states, covers and texture packs are untouched.
+     * Games, firmware, save data, save states and covers are untouched.
      */
     fun purgeAllSettingsFiles() {
         runCatching { backupFile()?.delete() }
         val root = MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return
-        runCatching { File(root, "PCSX2-Android.ini").delete() }
         runCatching { File(root, "gamesettings").deleteRecursively() }
     }
 

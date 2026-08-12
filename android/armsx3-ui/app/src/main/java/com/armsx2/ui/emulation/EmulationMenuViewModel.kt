@@ -196,11 +196,11 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
      */
     fun openCoreSettings() = com.armsx2.ui.WindowImpl.openInGameScreen(com.armsx2.ui.InGameScreen.CoreSettings)
 
-    /** In-game access to the manager screens the library drawer exposes. */
-    fun openMemcard() = com.armsx2.ui.WindowImpl.openInGameScreen(com.armsx2.ui.InGameScreen.Memcard)
-
-    fun openPatches() = com.armsx2.ui.WindowImpl.openInGameScreen(com.armsx2.ui.InGameScreen.Patches)
-
+    /** In-game access to the manager screens the library drawer exposes.
+     *
+     *  Memory cards and the PNACH patch manager are gone: both are PS2 concepts with no PS3
+     *  counterpart -- save data lives on the HDD, and RPCS3 patches are hash-addressed entries
+     *  in patch.yml, which Ps3PatchesTab already drives. Neither had a caller left. */
     fun openControlsManager() = com.armsx2.ui.WindowImpl.openInGameScreen(com.armsx2.ui.InGameScreen.Controls)
 
     fun openTextures() = com.armsx2.ui.WindowImpl.openInGameScreen(com.armsx2.ui.InGameScreen.Textures)

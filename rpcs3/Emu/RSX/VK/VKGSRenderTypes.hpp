@@ -6,6 +6,7 @@
 #include "VKResourceManager.h"
 
 #include "Emu/RSX/Common/simple_array.hpp"
+#include "Emu/RSX/rsx_profiler.h"
 #include "Emu/RSX/rsx_utils.h"
 #include "Emu/RSX/rsx_cache.h"
 #include "Utilities/mutex.h"
@@ -90,7 +91,27 @@ namespace vk
 				return false;
 			}
 
-			if (vkGetFenceStatus(pool->get_owner(), m_submit_fence->handle) == VK_SUCCESS)
+			VkResult fence_status;
+			{
+				// Every caller of this wants "is it done, do not wait". vkGetFenceStatus is
+				// the obvious way to ask and the wrong one here: on Adreno it measured 19.7ms
+				// per call and returned VK_NOT_READY exactly zero times out of 300 frames,
+				// which is a wait wearing a query's name. One of those per frame is what kept
+				// the CPU and the GPU running in series.
+				//
+				// vkWaitForFences with a zero timeout is specified to return VK_TIMEOUT
+				// without waiting, and is the same question with an answer that arrives.
+				RSX_PROF_SCOPE(fence_poll);
+				fence_status = vkWaitForFences(pool->get_owner(), 1, &m_submit_fence->handle, VK_TRUE, 0);
+			}
+
+			if (rsx::prof::enabled()) [[unlikely]]
+			{
+				rsx::prof::g_fence_polls++;
+				if (fence_status != VK_SUCCESS) rsx::prof::g_fence_polls_not_ready++;
+			}
+
+			if (fence_status == VK_SUCCESS)
 			{
 				lock.upgrade();
 

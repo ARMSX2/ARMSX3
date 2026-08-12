@@ -86,7 +86,7 @@ namespace vk
 		reset();
 	}
 
-	void gpu_timer::begin(command_buffer& cmd, region r)
+	void gpu_timer::begin(const command_buffer& cmd, region r)
 	{
 		// Nothing recorded unless the profiler is armed.
 		//
@@ -120,6 +120,16 @@ namespace vk
 			return;
 		}
 
+		// Writing a timestamp into a range that has not been reset is invalid, and the reset
+		// only happens when the frame region opens. Anything reaching a fresh slot first --
+		// the passes flip() runs after next_frame() has already rotated the slot, for one --
+		// would be writing into stale queries. Drop those rather than corrupt the slot.
+		if (state.needs_reset && r != region::frame)
+		{
+			state.dropped[idx]++;
+			return;
+		}
+
 		m_open[idx].active = true;
 		m_open[idx].slot = m_write_slot;
 		m_open[idx].event = state.events[idx];
@@ -139,7 +149,7 @@ namespace vk
 		vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *m_pool, q);
 	}
 
-	void gpu_timer::end(command_buffer& cmd, region r)
+	void gpu_timer::end(const command_buffer& cmd, region r)
 	{
 		if (!m_pool)
 		{
@@ -175,12 +185,48 @@ namespace vk
 		state.in_flight = true;
 	}
 
+	std::string gpu_timer::debug_state() const
+	{
+		if (!m_pool)
+		{
+			return "pool not initialised";
+		}
+
+		std::string out = fmt::format("collected=%u flips=%u write_slot=%u dropped=%u",
+			m_frames, m_flips, m_write_slot, m_dropped);
+
+		for (u32 i = 0; i < region_count; i++)
+		{
+			if (!m_open[i].active) continue;
+			fmt::append(out, " | OPEN %s slot=%u", name_of(static_cast<region>(i)), m_open[i].slot);
+		}
+
+		for (u32 s = 0; s < ring_depth; s++)
+		{
+			const auto& st = m_slots[s];
+			if (!st.in_flight && !st.needs_reset) continue;
+
+			fmt::append(out, " | s%u%s%s ev=", s,
+				st.in_flight ? " inflight" : "",
+				st.needs_reset ? " needsreset" : "");
+
+			for (u32 i = 0; i < region_count; i++)
+			{
+				fmt::append(out, "%s%u", i ? "/" : "", st.events[i]);
+			}
+		}
+
+		return out;
+	}
+
 	void gpu_timer::next_frame()
 	{
 		if (!m_pool)
 		{
 			return;
 		}
+
+		m_flips++;
 
 		// Retiring the slot is driven from the frame boundary rather than from a region
 		// closing. The primary command buffer is submitted several times per frame, once
@@ -287,8 +333,16 @@ namespace vk
 						continue;
 					}
 
-					m_totals_ns[i] += static_cast<u64>(static_cast<double>(t1 - t0) * m_period_ns);
+					const u64 ns = static_cast<u64>(static_cast<double>(t1 - t0) * m_period_ns);
+
+					m_totals_ns[i] += ns;
 					m_events_seen[i]++;
+
+					if (r == region::draw)
+					{
+						m_draw_pass_ns[e] += ns;
+						m_draw_pass_samples[e]++;
+					}
 				}
 
 				m_dropped += state.dropped[i];
@@ -316,10 +370,43 @@ namespace vk
 		return out;
 	}
 
+	std::vector<gpu_timer::pass_cost> gpu_timer::draw_pass_costs() const
+	{
+		std::vector<pass_cost> out;
+
+		if (!m_frames)
+		{
+			return out;
+		}
+
+		for (u32 e = 0; e < max_events; e++)
+		{
+			if (!m_draw_pass_samples[e])
+			{
+				continue;
+			}
+
+			// Divided by frames, not by samples, so the entries sum to the draw region total
+			// and each one reads as its share of the frame rather than its cost when present.
+			out.push_back({
+				e,
+				static_cast<double>(m_draw_pass_ns[e]) / 1'000'000.0 / static_cast<double>(m_frames),
+				m_draw_pass_samples[e]
+			});
+		}
+
+		std::sort(out.begin(), out.end(),
+			[](const auto& a, const auto& b) { return a.ms_per_frame > b.ms_per_frame; });
+
+		return out;
+	}
+
 	void gpu_timer::reset()
 	{
 		m_totals_ns = {};
 		m_events_seen = {};
+		m_draw_pass_ns = {};
+		m_draw_pass_samples = {};
 		m_dropped = 0;
 		m_frames = 0;
 	}

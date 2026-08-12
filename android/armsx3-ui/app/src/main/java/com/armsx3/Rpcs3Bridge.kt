@@ -6,6 +6,7 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.Surface
+import net.rpcsx.BootResult
 import net.rpcsx.Digital1Flags
 import net.rpcsx.Digital2Flags
 import android.view.KeyEvent
@@ -123,7 +124,7 @@ object Rpcs3Bridge {
         // Discard database configs split by an older build, so a setting later found to
         // break a game is not left applying forever on machines that already downloaded.
         runCatching { com.armsx2.config.ConfigDatabase.purgeIfStale() }
-        RPCSX.instance.initialize(RPCSX.rootDirectory, "00000001")
+        RPCSX.instance.initialize(RPCSX.rootDirectory, "00000001", com.armsx2.DeviceTier.socIdentity())
         RPCSX.initialized = true
 
         // Two blocking service loops the core needs someone to run for it.
@@ -158,11 +159,22 @@ object Rpcs3Bridge {
      * booting a missing vsh.self otherwise fails deep in the loader with a much
      * less obvious message than "install firmware first".
      */
+    /**
+     * Why the last boot() attempt failed — a [BootResult] name, or a short reason for
+     * pre-boot failures. Null after a successful boot. MainActivityRuntime reads this to
+     * tell the user WHY a launch bounced back to the library, because boot()'s Boolean
+     * cannot: BootGame's return code names the exact cause (DecryptionError = missing
+     * licence, FirmwareMissing, ...) and it used to be discarded right here.
+     */
+    @Volatile
+    var lastBootError: String? = null
+
     @JvmStatic
     fun boot(path: String): Boolean {
         val target = if (path.isNotEmpty()) path else {
             val vsh = File(RPCSX.rootDirectory + "config/dev_flash/vsh/module/vsh.self")
             if (!vsh.isFile) {
+                lastBootError = "firmware not installed"
                 android.util.Log.e("ARMSX3", "XMB requested but ${'$'}{vsh.absolutePath} is missing - install firmware first")
                 return false
             }
@@ -177,9 +189,23 @@ object Rpcs3Bridge {
         // bundled revision matches.
         appContext?.let { com.armsx2.Ps3PatchRepo.ensureBundledPatches(it) }
 
-        if (RPCSX.boot(target).ordinal != 0) {
+        // Before the core can draw a native overlay. cellSaveData's list is one, and it draws
+        // its rows with save.png/new.png -- absent, the load menu a game opens never appeared.
+        // Same reasoning as the patches above for doing it here: the config directory exists by
+        // now, and it is a preference read once staged.
+        appContext?.let { com.armsx2.OverlayIcons.ensureBundled(it) }
+
+        val result = RPCSX.boot(target)
+        // AlreadyAdded is not a failure: it says the title was already in games.yml, which is
+        // the normal case for anything booted before. RPCS3's own front-end passes it through
+        // for that reason. Treating it as an error turned a re-boot into "Game failed to
+        // start: AlreadyAdded" and sent the user back to the library.
+        if (result != BootResult.NoErrors && result != BootResult.AlreadyAdded) {
+            lastBootError = result.name
+            android.util.Log.e("ARMSX3", "boot failed: ${result.name} path=$target")
             return false
         }
+        lastBootError = null
 
         // BLOCK until the emulator actually stops.
         //
@@ -536,6 +562,16 @@ object Rpcs3Bridge {
                 else -> return false
             }
 
+            // Named for the config node it writes, unlike the PS3/* pseudo-sections above.
+            // Without this case the key fell through to the else and was dropped, so the
+            // setting never reached the core: savestates failed to lock the SPUs and told
+            // the user to enable an option that had no effect however they set it.
+            "Savestate" -> when (key) {
+                "Compatible Savestate Mode" ->
+                    Rpcs3Settings.setCompatibleSavestateMode(asBool(value))
+                else -> return false
+            }
+
             else -> return false
         }
         return true
@@ -587,6 +623,44 @@ object Rpcs3Bridge {
         runCatching { RPCSX.instance.hasStateInSlot(slot) }.getOrDefault(false)
 
     /**
+     * The auto-save lives one slot above the ten the picker shows.
+     *
+     * Auto-save-on-exit, auto-load-on-boot and the interval auto-save were ARMSX2 shims that
+     * returned false and were never ported, so all three toggles persisted, read back, and
+     * did nothing -- the interval job woke on schedule for a function that always failed.
+     * Nothing bounds a slot number on either side of the JNI, so they reuse the numbered-slot
+     * path that works rather than growing a second mechanism, and the user's ten stay theirs.
+     */
+    private const val AUTOSAVE_SLOT = 10
+
+    @JvmStatic
+    fun hasAutosaveState(): Boolean = hasState(AUTOSAVE_SLOT)
+
+    @JvmStatic
+    fun saveAutosaveState(): Boolean = saveState(AUTOSAVE_SLOT)
+
+    @JvmStatic
+    fun loadAutosaveState(): Boolean = loadState(AUTOSAVE_SLOT)
+
+    /**
+     * Absolute path a slot's state file would occupy, whether or not one is there.
+     *
+     * gamePathForSlot answers with the TITLE ID -- the picker wants it as a subtitle -- so
+     * anything treating it as a path gets a relative name that resolves against the process
+     * working directory. Import did exactly that. This is the real location, built the way
+     * armsx3_slot_dir builds it natively.
+     */
+    @JvmStatic
+    fun slotFilePath(slot: Int): String? = runCatching {
+        val title = RPCSX.instance.getTitleId().takeIf { it.isNotEmpty() } ?: return null
+        val root = com.armsx2.runtime.MainActivityRuntime.systemDirPosix()
+            ?: com.armsx2.runtime.MainActivityRuntime.instance
+                ?.applicationContext?.getExternalFilesDir(null)?.absolutePath
+            ?: return null
+        java.io.File(root, "config/savestates/$title/armsx3_slots/slot$slot.SAVESTAT.zst").absolutePath
+    }.getOrNull()
+
+    /**
      * Occupancy for the slot picker, which treats a non-empty string as "this slot has
      * something in it" and shows the last path segment as the tile's subtitle.
      *
@@ -610,7 +684,15 @@ object Rpcs3Bridge {
     @JvmStatic
     fun thumbnailForSlot(slot: Int): ByteArray? = runCatching {
         val title = RPCSX.instance.getTitleId().takeIf { it.isNotEmpty() } ?: return null
-        val root = com.armsx2.runtime.MainActivityRuntime.systemDirPosix() ?: return null
+        // systemDirPosix() is null on the DEFAULT install, where no folder was ever picked,
+        // so this returned no thumbnail at all for most setups -- the tiles read as empty
+        // while the files sat on disk beside the states they belong to. Same fallback
+        // inputProfilesDir() uses, and getExternalFilesDir is where the native core roots
+        // fs::get_config_dir(), which is where it wrote these.
+        val root = com.armsx2.runtime.MainActivityRuntime.systemDirPosix()
+            ?: com.armsx2.runtime.MainActivityRuntime.instance
+                ?.applicationContext?.getExternalFilesDir(null)?.absolutePath
+            ?: return null
         val file = java.io.File(root, "config/savestates/$title/armsx3_slots/slot$slot.thumb")
         if (!file.isFile) return null
 

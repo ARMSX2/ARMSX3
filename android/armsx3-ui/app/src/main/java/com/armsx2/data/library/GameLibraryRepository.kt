@@ -18,7 +18,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.armsx2.DiscIcons
 import com.armsx3.NativeApp
+import net.rpcsx.GameFlag
 import net.rpcsx.RPCSX
+import net.rpcsx.GameRepository as NativeGames
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -96,6 +98,34 @@ class GameLibraryRepository(private val context: Context) {
         runCatching { it.listFiles()?.isNotEmpty() }.getOrNull() == true
     }
 
+    /**
+     * Absolute paths of installed titles the core cannot decrypt without a licence.
+     *
+     * Asked of the CORE rather than worked out here. The flag comes from actually attempting
+     * decrypt_self on the game's EBOOT (fetchGameInfo, rpcsx-android.cpp), which is the only
+     * honest answer to "does this need a .rap". Checking PARAM.SFO's CONTENT_ID against
+     * exdata instead -- the obvious pure-Kotlin shortcut -- would call every PSN title locked,
+     * including the many whose EBOOT needs no licence at all.
+     *
+     * Canonical paths on both sides: the core resolves the paths it reports, and
+     * /storage/emulated/0 and /data/media/0 are one directory under two names.
+     *
+     * Only the emulator's own storage is asked about, which is where PKG installs land.
+     */
+    private fun lockedGamePaths(): Set<String> = runCatching {
+        if (!RPCSX.initialized) return emptySet()
+        // The native repository is a scratch buffer here: nothing else in this app reads it,
+        // and collectGameInfo appends into it.
+        NativeGames.clear()
+        internalGameDirectories().forEach { dir ->
+            RPCSX.instance.collectGameInfo(dir.absolutePath, -1)
+        }
+        NativeGames.list()
+            .filter { it.hasFlag(GameFlag.Locked) }
+            .mapNotNull { game -> runCatching { File(game.info.path).canonicalPath }.getOrNull() }
+            .toSet()
+    }.getOrDefault(emptySet())
+
     private fun internalGameDirectories(): List<File> = listOf(
         File(RPCSX.rootDirectory, "config/dev_hdd0/game"),
         File(RPCSX.rootDirectory, "config/games"),
@@ -140,6 +170,7 @@ class GameLibraryRepository(private val context: Context) {
                             // old cache degrades to the previous behaviour until a rescan.
                             titleSort = item.optString("titleSort"),
                             titleEn = item.optString("titleEn"),
+                            locked = item.optBoolean("locked", false),
                         ),
                     )
                 }
@@ -184,10 +215,21 @@ class GameLibraryRepository(private val context: Context) {
         }
         internalGameDirectories().forEach { dir ->
             android.util.Log.i(ScanTag, "internal dir=${dir.absolutePath}")
-            scanRawDirectory(dir, collected, 0)
+            // dev_hdd0/game is the emulator's own install root and its shape is known: one
+            // directory per title, nothing else. It gets the strict scan. Everything else is
+            // a folder a user pointed us at, where games legitimately sit at any depth.
+            if (dir.name == "game") scanInstalledTitles(dir, collected)
+            else scanRawDirectory(dir, collected, 0)
         }
-        android.util.Log.i(ScanTag, "scan done: ${collected.size} game(s)")
-        collected.values.sortedBy { it.title.lowercase() }.also { saveCache(directories, it) }
+        val locked = lockedGamePaths()
+        android.util.Log.i(ScanTag, "scan done: ${collected.size} game(s), ${locked.size} locked")
+        collected.values
+            .map { game ->
+                val path = runCatching { game.uri.path?.let { File(it).canonicalPath } }.getOrNull()
+                if (path != null && path in locked) game.copy(locked = true) else game
+            }
+            .sortedBy { it.title.lowercase() }
+            .also { saveCache(directories, it) }
     }
 
     fun recentGames(allGames: List<GameInfo>): List<GameInfo> {
@@ -356,38 +398,10 @@ class GameLibraryRepository(private val context: Context) {
     /**
      * CATEGORY out of a PARAM.SFO, or null when it cannot be read.
      *
-     * Deliberately a reader for this one field rather than a general SFO parser: the scanner
-     * needs nothing else, and a malformed or truncated file must degrade to "list it" rather
-     * than hide a real game.
+     * A malformed or truncated file has to degrade to "list it" rather than hide a real game,
+     * which is what [ParamSfo] answering null for every failure buys here.
      */
-    private fun sfoCategory(sfo: File): String? = try {
-        val bytes = sfo.readBytes()
-        val buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-        // "\0PSF", then key-table start, data-table start, entry count.
-        if (bytes.size < 20 || buffer.getInt(0) != 0x46535000) {
-            null
-        } else {
-            val keyTable = buffer.getInt(8)
-            val dataTable = buffer.getInt(12)
-            var found: String? = null
-            for (index in 0 until buffer.getInt(16)) {
-                val entry = 20 + index * 16
-                if (entry + 16 > bytes.size) break
-                val keyStart = keyTable + (buffer.getShort(entry).toInt() and 0xFFFF)
-                var keyEnd = keyStart
-                while (keyEnd < bytes.size && bytes[keyEnd] != 0.toByte()) keyEnd++
-                if (keyEnd > bytes.size || String(bytes, keyStart, keyEnd - keyStart) != "CATEGORY") continue
-                val dataStart = dataTable + buffer.getInt(entry + 12)
-                val dataLength = buffer.getInt(entry + 4)
-                if (dataStart < 0 || dataLength < 0 || dataStart + dataLength > bytes.size) break
-                found = String(bytes, dataStart, dataLength).trimEnd('\u0000', ' ')
-                break
-            }
-            found
-        }
-    } catch (_: Throwable) {
-        null
-    }
+    private fun sfoCategory(sfo: File): String? = ParamSfo.string(sfo, "CATEGORY")
 
     /** [isPs3GameFolder] over a SAF tree. */
     private fun isPs3GameDocument(directory: DocumentFile): Boolean {
@@ -399,6 +413,37 @@ class GameLibraryRepository(private val context: Context) {
             if (inner.any { it.isFile && it.name.equals("PARAM.SFO", ignoreCase = true) }) return true
         }
         return find("PARAM.SFO")?.isFile == true && find("USRDIR")?.isDirectory == true
+    }
+
+    /**
+     * dev_hdd0/game, scanned as what it is: one directory per installed title.
+     *
+     * The recursive scan cannot be used here. It descends into anything that is not itself a
+     * game folder and then accepts any file whose extension is in [gameExtensions], and "img"
+     * is one of those. A title's own data is full of them, so once a package unpacked its
+     * contents over this directory rather than into a title folder of its own, GTA IV's
+     * archives arrived in the library as games: manhat01, props_ab, vehicles, script,
+     * weapons. Every one of them a .img sitting where the scanner was willing to look.
+     *
+     * The extractor no longer unpacks into this directory (see unpkg.cpp set_install_path),
+     * but nothing should be relying on that to keep the library clean, and existing installs
+     * still have the debris. A direct child here is a title or it is not listed.
+     */
+    private fun scanInstalledTitles(directory: File, output: MutableMap<String, GameInfo>) {
+        val children = runCatching { directory.listFiles() }.getOrNull() ?: return
+        children.forEach { file ->
+            if (!file.isDirectory) return@forEach
+            if (!runCatching { isPs3GameFolder(file) }.getOrDefault(false)) {
+                android.util.Log.i(ScanTag, "  skipping non-title '${file.name}' in dev_hdd0/game")
+                return@forEach
+            }
+            val uri = Uri.fromFile(file)
+            android.util.Log.i(ScanTag, "  installed title '${file.name}'")
+            output.putIfAbsent(
+                uri.toString(),
+                createGame(uri, file.name, "folder", null, probeDisc(file)),
+            )
+        }
     }
 
     private fun scanRawDirectory(
@@ -565,6 +610,7 @@ class GameLibraryRepository(private val context: Context) {
                 put("platform", game.platform.key)
                 put("titleSort", game.titleSort)
                 put("titleEn", game.titleEn)
+                put("locked", game.locked)
             })
         }
         MainActivityRuntime.prefs.edit {
@@ -581,12 +627,53 @@ class GameLibraryRepository(private val context: Context) {
     private companion object {
         /** v2: PS3 title ID + title + ICON0.PNG read from the disc's PARAM.SFO.
          *  v5: folder-format games (JB folder / installed game folder).
-         *  v6: PARAM.SFO CATEGORY read, to drop game-data installs. */
-        const val ScanSchemaVersion = 6
+         *  v6: PARAM.SFO CATEGORY read, to drop game-data installs.
+         *  v7: licence-locked state, asked of the core per installed title. */
+        const val ScanSchemaVersion = 7
         const val ScanTag = "ARMSX3-Scan"
         /** Staging name for an extracted icon, renamed once the title ID is known. */
         const val PendingIcon = "__pending"
         const val MaxScanDepth = 12
         val probeExtensions = setOf("iso", "bin", "chd", "img", "mdf", "nrg", "dump")
+    }
+}
+
+/**
+ * The one PARAM.SFO field a caller asks for, by key.
+ *
+ * Grown out of the scanner's CATEGORY reader rather than added beside it: the package screen
+ * needs TITLE for the same files, and a second copy of this parsing would be a second place to
+ * get the 16-byte index-entry layout wrong.
+ *
+ * Every failure -- unreadable file, wrong magic, an offset that points past the end -- answers
+ * null. A truncated or hand-edited SFO must never take a caller down with it: the scanner uses
+ * the answer to decide whether to LIST a game, and the package screen to decide what to CALL
+ * one, and both have a sane fallback while an exception has none.
+ */
+internal object ParamSfo {
+    fun string(sfo: File, key: String): String? =
+        runCatching { string(sfo.readBytes(), key) }.getOrNull()
+
+    fun string(bytes: ByteArray, key: String): String? {
+        val buffer = java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        // "\0PSF", then key-table start, data-table start, entry count.
+        if (bytes.size < 20 || buffer.getInt(0) != 0x46535000) return null
+        val keyTable = buffer.getInt(8)
+        val dataTable = buffer.getInt(12)
+        for (index in 0 until buffer.getInt(16)) {
+            val entry = 20 + index * 16
+            if (entry + 16 > bytes.size) break
+            val keyStart = keyTable + (buffer.getShort(entry).toInt() and 0xFFFF)
+            if (keyStart < 0 || keyStart >= bytes.size) break
+            var keyEnd = keyStart
+            while (keyEnd < bytes.size && bytes[keyEnd] != 0.toByte()) keyEnd++
+            if (String(bytes, keyStart, keyEnd - keyStart) != key) continue
+            val dataStart = dataTable + buffer.getInt(entry + 12)
+            val dataLength = buffer.getInt(entry + 4)
+            if (dataStart < 0 || dataLength < 0 || dataStart + dataLength > bytes.size) break
+            // Values are UTF-8 and padded with NULs to their declared maximum length.
+            return String(bytes, dataStart, dataLength, Charsets.UTF_8).trimEnd('\u0000', ' ')
+        }
+        return null
     }
 }

@@ -15,10 +15,8 @@ sealed interface AppRoute {
     data class BiosManager(val game: GameInfo? = null) : AppRoute
     data object PackageInstaller : AppRoute
     data object CoreSettings : AppRoute
-    data object MemoryCardManager : AppRoute
     data object SaveManager : AppRoute
     data object ControllerManager : AppRoute
-    data object PatchManager : AppRoute
     data object TextureManager : AppRoute
     data object Achievements : AppRoute
     data object Language : AppRoute

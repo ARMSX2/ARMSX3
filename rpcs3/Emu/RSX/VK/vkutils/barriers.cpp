@@ -20,6 +20,10 @@ namespace vk
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[10]++; vk::end_renderpass(cmd);
 		}
+		else if (rsx::prof::enabled() && vk::is_renderpass_open(cmd)) [[unlikely]]
+		{
+			rsx::prof::note_pass_barrier(false);
+		}
 
 		VkImageMemoryBarrier barrier = {};
 		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -93,6 +97,12 @@ namespace vk
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[13]++; vk::end_renderpass(cmd);
+		}
+		else if (rsx::prof::enabled() && vk::is_renderpass_open(cmd)) [[unlikely]]
+		{
+			// Kept the pass open, so the barrier lands inside it. On a tiler that is a resolve
+			// and a re-fetch of the tile, which is the cost this is here to find.
+			rsx::prof::note_pass_barrier(true);
 		}
 
 		VkAccessFlags src_access, dst_access;

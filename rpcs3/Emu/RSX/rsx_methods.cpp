@@ -1198,11 +1198,6 @@ namespace rsx
 		registers[NV406E_SEMAPHORE_OFFSET] = 0x10;
 	}
 
-	void rsx_state::decode(u32 reg, u32 value)
-	{
-		// Store new value and save previous
-		latch = std::exchange(registers[reg], value);
-	}
 
 	bool rsx_state::test(u32 reg, u32 value) const
 	{

@@ -190,7 +190,29 @@ namespace rsx
 
 			u32 get_pos() const { return m_internal_get; }
 			u32 last_cmd() const { return m_cmd; }
+			// Publishing GET is a release store into guest DMA memory, and `get` shares a
+			// 64-byte line with `put` which the guest PPU writes from another CPU cluster. At
+			// ~36700 packets/frame that is a cross-cluster coherence miss per packet. Bounded
+			// lag instead, with sync_get_force on every path that can idle or block.
 			void sync_get() const;
+			void sync_get_force() const;
+			mutable u32 m_get_sync_counter = 0;
+
+			// Last value actually stored into ctrl->get. GET is ours to write -- the guest only
+			// writes put -- so an unchanged value need not be republished.
+			//
+			// This matters because the force paths are re-entered continuously while GET stands
+			// still. An empty or blocked ring returns to the run loop immediately, so a producer
+			// that has gone quiet leaves us taking the cross-cluster miss above tens of thousands
+			// of times a frame against a line the guest PPU is trying to write. Announcing
+			// progress once is the whole requirement; announcing it repeatedly holds up the
+			// producer we are waiting for.
+			mutable u32 m_published_get = umax;
+
+			// Snapshot of g_cfg.core.rsx_fifo_accuracy, refreshed once per packet. Reading the
+			// config goes through a seq_cst atomic load, an ldar on ARM64 the compiler cannot
+			// hoist, and it was consulted once per FIFO argument.
+			bool m_accurate_fetch = false;
 			std::span<const u32> get_current_arg_ptr(u32 length_in_words) const;
 			u32 get_remaining_args_count() const { return m_remaining_commands; }
 			void restore_state(u32 cmd, u32 count);

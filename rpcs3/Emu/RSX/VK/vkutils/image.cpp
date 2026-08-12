@@ -6,6 +6,8 @@
 #include "sampler.h"
 
 #include "../VKResourceManager.h"
+#include "../VKRenderPass.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include <memory>
 
 namespace vk
@@ -302,6 +304,16 @@ namespace vk
 		}
 
 		ensure(m_layout_stack.empty());
+
+		// Most layout changes arrive through here rather than calling change_image_layout
+		// directly, so without this every teardown would be attributed to this one function.
+		// Recorded before the call, and only when a pass is actually open, so the count is
+		// teardowns caused rather than layout changes attempted.
+		if (rsx::prof::enabled() && vk::is_renderpass_open(cmd)) [[unlikely]]
+		{
+			rsx::prof::note_rp_teardown(__builtin_return_address(0), 1);
+		}
+
 		change_image_layout(cmd, this, new_layout);
 
 		current_queue_family = cmd.get_queue_family();

@@ -1563,6 +1563,34 @@ void spu_thread::cpu_task()
 				continue;
 			}
 
+			if (interp_fallback) [[unlikely]]
+			{
+				allow_interrupts_in_cpu_work = true;
+
+				// Check the fallback is actually executing, once.
+				//
+				// This loop re-enters unconditionally, so if g_interpreter returns without
+				// running an instruction the pc never moves and the thread spins here in C++ at
+				// a fixed pc while looking like it is running. Sonic Unleashed's
+				// RsdxPrimaryCellSpursKernel4 sits at pc=0x07350 with interp_fb=1 and is the only
+				// SPU in the process using this path, which is what this distinguishes: a guest
+				// spin loop that legitimately waits, versus a fallback that executes nothing.
+				// The legacy C++ interpreter, NOT spu_runtime::g_interpreter.
+				//
+				// g_interpreter is the LLVM-built interpreter when a recompiler is selected, and
+				// on ARM64 calling it here executes nothing: measured a million consecutive calls
+				// on Sonic Unleashed's stuck SPURS kernel without pc moving once. The thread then
+				// spins in this loop forever at a fixed pc with no flags set, which looks like a
+				// busy SPU and hangs the title with no diagnostic. Any block that fails to compile
+				// lands here, so this is not one game's problem.
+				//
+				// old_interpreter is what the static decoder ultimately runs, via tr_interpreter,
+				// and it is self-contained. It loops until the thread is interrupted, which is the
+				// intended semantic: the THREAD switches to the interpreter, as the log says.
+				spu_recompiler_base::old_interpreter(*this, _ptr<u8>(0), nullptr);
+				continue;
+			}
+
 			spu_runtime::g_gateway(*this, _ptr<u8>(0), nullptr);
 		}
 
@@ -4323,6 +4351,7 @@ bool spu_thread::process_mfc_cmd()
 								// Seemingly not
 								getllar_busy_waiting_switch = umax;
 								getllar_spin_count = 0;
+								getllar_outbuf_hits = 0;
 								return true;
 							}
 
@@ -4330,16 +4359,68 @@ bool spu_thread::process_mfc_cmd()
 							{
 								getllar_busy_waiting_switch = umax;
 								getllar_spin_count = 0;
+								getllar_outbuf_hits = 0;
 								return true;
 							}
 
 							// Check if LSA points to an OUT buffer on the stack from a caller - unlikely to be a loop
+							//
+							// Memoised, because deriving it is expensive out of all proportion to what it
+							// decides. dump_callstack_list walks the whole stack and calls is_exec_code on
+							// each candidate, which allocates a vector<bool> sized to pc/4 and scans for
+							// branch targets. A whole-process profile of Spider-Man: Web of Shadows, whose
+							// SPU code spins on GETLLAR with an LSA in the top 64K of local store, put
+							// dump_callstack_list at 19.6% of all CPU inclusive -- the largest single item
+							// after process_mfc_cmd itself, and far more than the RSX thread spent on the
+							// frame.
+							//
+							// Only the innermost frame is wanted here, and it is a function of pc, the
+							// stack pointer and the link register, so it is recomputed only when one of
+							// those moves. Keying on the values rather than on getllar_spin_count matters:
+							// that counter is reset from several other paths, so it is frequently zero and
+							// gating on it still recomputed constantly.
+							//
+							// A stale answer across an unrelated LS write is acceptable. This decides only
+							// whether the address looks like a caller's OUT buffer, and calls it "unlikely
+							// to be a loop".
 							if (last_getllar_lsa >= SPU_LS_SIZE - 0x10000 && last_getllar_lsa > last_getllar_gpr1)
 							{
-								auto cs = dump_callstack_list();
+								const u32 cs_sp = gpr[1]._u32[3];
+								const u32 cs_lr = gpr[0]._u32[3];
 
-								if (!cs.empty() && last_getllar_lsa > cs[0].second)
+								if (getllar_cs_pc != pc || getllar_cs_sp != cs_sp || getllar_cs_lr != cs_lr)
 								{
+									getllar_cs_pc = pc;
+									getllar_cs_sp = cs_sp;
+									getllar_cs_lr = cs_lr;
+
+									const auto cs = dump_callstack_list();
+									getllar_cs_first = cs.empty() ? umax : cs[0].second;
+								}
+
+								// Stop believing the verdict once it is contradicted by repetition.
+								//
+								// Saying "not a loop" here is not free. It resets the spin count and
+								// leaves the switch at umax, and the caller then skips both busy_wait
+								// and the sleep path and returns immediately, so the SPU re-executes
+								// GETLLAR at full rate with no backoff at all. The spin count never
+								// reaches 4, so the optimisation is never evaluated, and the 400ms
+								// "don't be stubborn" fallback that would force a sleep is never
+								// reached either. One SPU in that state holds a core flat out.
+								//
+								// Web of Shadows sits in exactly that case: its GETLLAR sites use an
+								// LSA in the top 64K of local store that looks like a caller's OUT
+								// buffer, and process_mfc_cmd measured 55% of all CPU across the
+								// process while the game ran at 10-15fps.
+								//
+								// Re-entering the same site with the same stack this many times is
+								// itself the evidence that it is a loop, whatever the LSA looks like,
+								// so hand it back to the normal spin detection and let that decide
+								// between busy-waiting and sleeping.
+								if (getllar_cs_first != umax && last_getllar_lsa > getllar_cs_first &&
+									getllar_outbuf_hits < 32)
+								{
+									getllar_outbuf_hits++;
 									getllar_busy_waiting_switch = umax;
 									getllar_spin_count = 0;
 									return true;

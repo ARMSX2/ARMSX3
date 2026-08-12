@@ -17,6 +17,7 @@
 
 #include "Emu/System.h"
 #include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/timers.hpp"
 #include "Emu/Cell/lv2/sys_event.h"
 #include "Emu/Cell/lv2/sys_time.h"
@@ -25,6 +26,8 @@
 #include "Overlays/overlay_perf_metrics.h"
 #include "Overlays/overlay_debug_overlay.h"
 #include "Overlays/overlay_manager.h"
+#include "Overlays/overlay_message.h"
+#include "Emu/system_progress.hpp"
 
 #include "Utilities/date_time.h"
 
@@ -777,6 +780,11 @@ namespace rsx
 
 	void thread::begin()
 	{
+		// Backend-independent draw prologue. The read_barrier below is a hard sync on the
+		// software conditional render path, so this is not always the trivial flag work it
+		// looks like, and unscoped it was billed to draw_setup along with everything else.
+		RSX_PROF_SCOPE(draw_prologue);
+
 		if (cond_render_ctrl.hw_cond_active)
 		{
 			if (!cond_render_ctrl.eval_pending())
@@ -824,6 +832,10 @@ namespace rsx
 
 	void thread::end()
 	{
+		// Backend-independent draw epilogue: clause cleanup, push buffer teardown and the
+		// ZCULL draw hook, all of which scale with draw count rather than with frame count.
+		RSX_PROF_SCOPE(draw_epilogue);
+
 		if (capture_current_frame)
 		{
 			capture::capture_draw_memory(this);
@@ -831,6 +843,24 @@ namespace rsx
 
 		in_begin_end = false;
 		m_frame_stats.draw_calls++;
+
+		// Counted here rather than at the backend call sites so every early return in
+		// VKGSRender::end is included; all of them route through this function.
+		if (rsx::prof::enabled()) [[unlikely]]
+		{
+			rsx::prof::g_draw_calls++;
+
+			if (rsx::prof::g_pass_ordinal < rsx::prof::pass_slot_count)
+			{
+				rsx::prof::g_pass_draws[rsx::prof::g_pass_ordinal]++;
+				rsx::prof::g_pass_vertices[rsx::prof::g_pass_ordinal] +=
+					method_registers.current_draw_clause.get_elements_count();
+				rsx::prof::g_pass_vp_words[rsx::prof::g_pass_ordinal] +=
+					::size32(current_vertex_program.data);
+				rsx::prof::g_pass_fp_words[rsx::prof::g_pass_ordinal] +=
+					current_fragment_program.ucode_length;
+			}
+		}
 
 		method_registers.current_draw_clause.post_execute_cleanup(m_ctx);
 
@@ -1035,10 +1065,26 @@ namespace rsx
 			u64 local_vblank_count = 0;
 
 			// TODO: exit condition
+			u64 last_heartbeat = 0;
+			u64 iterations = 0;
+
 			while (!is_stopped() && !unsent_gcm_events && thread_ctrl::state() != thread_state::aborting)
 			{
 				// Get current time
 				const u64 current = get_system_time();
+
+				// Heartbeat. This thread is the only source of the interrupt gcm waits on, so
+				// when it stops the guest hangs after gcm init with everything else looking
+				// idle -- and it said nothing either way. Distinguishes "still looping" from
+				// "blocked inside post_vblank_event" from "left the loop", which need
+				// different fixes and are indistinguishable from outside.
+				if (current - last_heartbeat >= 5'000'000)
+				{
+					last_heartbeat = current;
+					rsx_log.notice("VBlank: alive, iterations=%u, vblank_count=%u", iterations, local_vblank_count);
+				}
+
+				iterations++;
 
 				// Calculate the time at which we need to send a new VBLANK signal
 				const u64 post_event_time = start_time + (local_vblank_count + 1) * vblank_period / vblank_rate;
@@ -1097,6 +1143,13 @@ namespace rsx
 					start_time = get_system_time() - start_time;
 				}
 			}
+
+			// Which condition ended it. unsent_gcm_events is the savestate hand-off, so seeing
+			// it here outside a savestate means a live send failed and took the vblank source
+			// down with it -- permanently, since nothing restarts this thread.
+			rsx_log.error("VBlank: loop exited after %u iterations (stopped=%d, unsent_gcm_events=0x%x, aborting=%d)",
+				iterations, is_stopped() ? 1 : 0, unsent_gcm_events.load(),
+				thread_ctrl::state() == thread_state::aborting ? 1 : 0);
 		})));
 
 		struct join_vblank
@@ -1254,8 +1307,168 @@ namespace rsx
 		return t + timestamp_subvalue;
 	}
 
+	// Frame-stall notice. See check_frame_stall.
+	static atomic_t<u64> g_last_frame_time{0};
+	static atomic_t<bool> g_frame_stall_reported{false};
+
+	// Say when the picture has stopped, instead of leaving the last frame standing.
+	//
+	// A guest that stops progressing presents nothing further, so whatever was last drawn stays
+	// on screen indefinitely. When that frame happens to contain the boot progress bar, it reads
+	// as "stuck compiling at 1s remaining" -- and it looked exactly the same across five
+	// unrelated faults, sending every report of them to the wrong place. Nothing contradicts it
+	// either: the emulator has not crashed, so there is no error to be found.
+	//
+	// Only fires while nothing is legitimately in progress. A shader or PPU compile presents no
+	// frames for minutes at a time, and it holds a progress dialog that says as much, so an
+	// empty progress text is what separates "working, quietly" from "stopped".
+	static void check_frame_stall()
+	{
+		const u64 now = get_system_time();
+
+		// Something is reporting progress, or no frame has ever landed yet: not a stall.
+		if (g_progr_text || !g_last_frame_time)
+		{
+			g_last_frame_time = now;
+			g_frame_stall_reported = false;
+			return;
+		}
+
+		const u64 since = now - g_last_frame_time;
+
+		if (since < 30'000'000 || g_frame_stall_reported)
+		{
+			return;
+		}
+
+		g_frame_stall_reported = true;
+
+		rsx_log.error("No frame presented in %us with nothing in progress: the game has stopped.",
+			since / 1'000'000);
+
+		// Draw it, rather than logging into a file nobody has when they file the report. The
+		// native UI flip is what gets it on screen at all -- the guest is not flipping, which is
+		// the whole point.
+		rsx::overlays::queue_message(
+			std::string("Game has stopped responding - it is no longer drawing frames"),
+			10'000'000);
+
+		set_native_ui_flip();
+	}
+
+	// Say where every guest thread is parked once frames have stopped arriving.
+	//
+	// A hang with the RSX idle is a guest-side wait, and nothing named the thread or the place.
+	// The syscall stats report sys_timer_usleep without saying who called it, /proc shows a
+	// thread that never started as indistinguishable from one that is blocked, and the RSX
+	// profiler only covers this side of the boundary. Name, state, PC and the function each
+	// PPU is in separate all of those.
+	//
+	// idm::unlocked deliberately: this runs on the RSX thread, and taking the id lock here to
+	// diagnose a hang would add exactly the kind of dependency being diagnosed. A torn read of
+	// a diagnostic line costs nothing.
+	static void dump_guest_threads_stalled()
+	{
+		std::string out;
+
+		idm::select<named_thread<ppu_thread>>([&out](u32 id, ppu_thread& ppu)
+		{
+			const auto func = ppu.current_function ? ppu.current_function : ppu.last_function;
+
+			fmt::append(out, "\n  PPU 0x%07x '%s': state=%s cia=0x%08x %s func='%s'",
+				id, *ppu.ppu_tname.load(), ppu.state.load(), ppu.cia,
+				ppu.current_function ? "in" : "last", func ? func : "");
+		}, idm::unlocked);
+
+		rsx_log.error("Guest PPU threads while no frame has completed:%s", out);
+
+		// The SPU half. A hang where every PPU is asleep and the SPUs are burning user time is
+		// the SPUs spinning in guest code, and nothing said WHICH code: /proc gives a tick count,
+		// a CPU profile gives a JIT address that resolves to nothing. The PC plus the block hash
+		// name the guest block, which is the only thing that identifies the loop.
+		std::string spus;
+
+		idm::select<named_thread<spu_thread>>([&spus](u32 /*id*/, spu_thread& spu)
+		{
+			const auto func = spu.current_func;
+
+			// Event state as well as position, because position alone cannot tell a lost wakeup
+			// from an idle wait. Both look like a thread parked in 'MFC Events read'.
+			//
+			// events is what has fired, mask is what this SPU asked to be woken for, waiting is
+			// whether it is parked in the channel read. events & mask non-zero while waiting is
+			// set means the wakeup it needs has ALREADY happened and was not delivered, which is
+			// a lost notification and our bug. events & mask == 0 means it is genuinely idle and
+			// whoever should signal it never did, which is a bug on the other side.
+			//
+			// Sonic Unleashed deadlocks at the SEGA logo with all six SPURS kernels parked here,
+			// in a different arrangement on different boots, so it is a race in this handshake.
+			// The VM lock diagnostics stayed silent across every boot, which ruled out the
+			// reservation path and left this one.
+			const auto ev = spu.ch_events.load();
+
+			fmt::append(spus, "\n  SPU 0x%07x '%s': state=%s pc=0x%05x block=0x%016llx func='%s' events=0x%04x mask=0x%08x waiting=%u pending=0x%04x",
+				spu.lv2_id, *spu.spu_tname.load(), spu.state.load(), spu.pc,
+				static_cast<u64>(spu.block_hash), func ? func : "",
+				static_cast<u32>(ev.events), static_cast<u32>(ev.mask), static_cast<u32>(ev.waiting),
+				static_cast<u32>(ev.events) & static_cast<u32>(ev.mask));
+
+			// MFC state too, because an SPU can be stuck with no flag set at all.
+			//
+			// Sonic Unleashed hangs with RsdxPrimaryCellSpursKernel4 frozen at pc=0x07350 across
+			// every sample of a session, while its neighbours move through the kernel normally.
+			// state is 00, so it is not parked in a channel read -- it is spinning in guest code,
+			// which an SPU does while waiting for a transfer to land in local store. If a queued
+			// MFC command never retires, that spin never ends.
+			//
+			// mfc_size is the queue depth: non-zero and unchanging on the frozen thread means a
+			// transfer went in and never came out. tag_mask/stall are what it would be waiting on.
+			// interp_fallback distinguishes "the fallback never engaged" from "it engaged and the
+			// thread is stuck anyway". Sonic Unleashed marks block 0x07350 uncompilable and stays
+			// frozen on that pc; if this reads 1 there, the interpreter is looping too and the
+			// block is not miscompiled -- the SPU is genuinely waiting on something.
+			// intr/srr0 last, because they are what is left. Sonic Unleashed's stuck kernel holds
+			// an unmasked pending LR event, is not blocked on a channel or a transfer, and does
+			// not advance its pc even under the interpreter -- which is a branch-to-self idle
+			// loop. SPURS kernels leave that loop on an SPU interrupt, so either interrupts are
+			// disabled while an event is pending, or they are enabled and never delivered.
+			fmt::append(spus, " mfc_q=%u tag_mask=0x%08x stall_mask=0x%08x interp_fb=%u intr_en=%u srr0=0x%05x",
+				spu.mfc_size, spu.ch_tag_mask, spu.ch_stall_mask, spu.interp_fallback ? 1u : 0u,
+				spu.interrupts_enabled ? 1u : 0u, spu.srr0);
+
+			if (spu.mfc_size)
+			{
+				const auto& cmd = spu.mfc_queue[0];
+				fmt::append(spus, " head={cmd=0x%02x tag=%u lsa=0x%05x eal=0x%08x size=0x%x}",
+					+cmd.cmd, +cmd.tag, +cmd.lsa, +cmd.eal, +cmd.size);
+			}
+		}, idm::unlocked);
+
+		if (!spus.empty())
+		{
+			rsx_log.error("Guest SPU threads at the same moment:%s", spus);
+		}
+	}
+
 	void thread::do_local_task(FIFO::state state)
 	{
+		// Arm and poll from here as well as on_frame_end. Both of those run only once a frame
+		// has completed, so a boot that hangs before presenting left the profiler switched off
+		// and silent -- and that is the case where what the RSX thread is looping in is the
+		// whole question. Both calls return immediately once armed and are rate-limited.
+		prof::set_enabled(g_cfg.video.rsx_profiler.get());
+
+		// Always on, unlike the profiler-gated reports below: the whole point is that this
+		// reaches a user who has not enabled anything.
+		check_frame_stall();
+
+		// Both halves on the same condition. Every hang chased so far has been the guest
+		// waiting while the RSX idles, and only the RSX half was ever visible.
+		if (prof::poll_stall()) [[unlikely]]
+		{
+			dump_guest_threads_stalled();
+		}
+
 		m_eng_interrupt_mask.clear(rsx::backend_interrupt);
 
 		if (async_flip_requested & flip_request::emu_requested)
@@ -2122,6 +2335,11 @@ namespace rsx
 
 	void thread::analyse_current_rsx_pipeline()
 	{
+		// Vertex and fragment ucode analysis: a full program walk with recursive visitors
+		// and per-call allocations, run before load_program, so the pipeline scope never
+		// saw it and shader_translate had no site at all.
+		RSX_PROF_SCOPE(shader_translate);
+
 		m_program_cache_hint.invalidate(m_graphics_state.load());
 
 		constexpr u32 fs_export_config_mask = (RSX_SHADER_CONTROL_EMULATE_DEPTH_COMPARE | RSX_SHADER_CONTROL_MULTISAMPLED_ZBUFFER);
@@ -3240,6 +3458,9 @@ namespace rsx
 	{
 		// Cheap enough to re-read every frame, and being able to arm the profiler while a
 		// slowdown is already happening matters more here than saving a config lookup.
+		g_last_frame_time = get_system_time();
+		g_frame_stall_reported = false;
+
 		prof::set_enabled(g_cfg.video.rsx_profiler.get());
 		prof::tick_frame();
 

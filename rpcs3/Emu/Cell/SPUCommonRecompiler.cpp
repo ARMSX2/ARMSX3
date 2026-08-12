@@ -1,4 +1,7 @@
 #include "stdafx.h"
+
+#include <map>
+#include <tuple>
 #include "SPURecompiler.h"
 
 #include "Emu/System.h"
@@ -113,8 +116,82 @@ static spu_program analyse_spu_llvm_program(spu_recompiler_base& compiler, const
 	return compiler.analyse(ls.data(), program.entry_point);
 }
 
+static shared_mutex s_spu_failed_blocks_mutex;
+// Failed program ranges, keyed by lower_bound -> end address (exclusive).
+//
+// Ranges, not entry points. Marking only the entry made the interpreter release the thread after
+// one instruction, whereupon the recompiler tried the NEXT address, failed the same way, and
+// marked that too: 111 consecutive entries were recorded walking two blocks four bytes at a time,
+// each step paying a full failed LLVM compile.
+static std::map<u32, u32> s_spu_failed_blocks;
+
+static bool spu_interpreter_fallback_available()
+{
+	const auto interp = spu_runtime::g_interpreter;
+	return interp && interp != spu_runtime::g_gateway;
+}
+
+// Range containing addr, or {0,0}. Same lookup as spu_block_compile_failed, but returns the extent
+// so a caller can cache it and stop consulting this map.
+static std::pair<u32, u32> spu_block_failed_range(u32 addr)
+{
+	reader_lock lock(s_spu_failed_blocks_mutex);
+
+	auto it = s_spu_failed_blocks.upper_bound(addr);
+
+	if (it == s_spu_failed_blocks.begin())
+	{
+		return {};
+	}
+
+	--it;
+
+	if (addr >= it->first && addr < it->second)
+	{
+		return {it->first, it->second};
+	}
+
+	return {};
+}
+
+static bool spu_block_compile_failed(u32 addr)
+{
+	reader_lock lock(s_spu_failed_blocks_mutex);
+
+	// Any recorded range containing addr, so execution stays interpreted for the whole of a block
+	// that cannot be compiled rather than only at its entry.
+	auto it = s_spu_failed_blocks.upper_bound(addr);
+
+	if (it == s_spu_failed_blocks.begin())
+	{
+		return false;
+	}
+
+	--it;
+	return addr >= it->first && addr < it->second;
+}
+
+static void spu_mark_block_compile_failed(u32 entry_point, u32 lower_bound = 0, u32 size_bytes = 0)
+{
+	std::lock_guard lock(s_spu_failed_blocks_mutex);
+
+	// Fall back to the entry alone when the caller has no program to describe the extent.
+	const u32 begin = size_bytes ? lower_bound : entry_point;
+	const u32 end = size_bytes ? lower_bound + size_bytes : entry_point + 4;
+
+	if (s_spu_failed_blocks.insert_or_assign(begin, std::max(end, s_spu_failed_blocks.count(begin) ? s_spu_failed_blocks[begin] : end)).second)
+	{
+		spu_log.error("SPU block 0x%05x cannot be compiled on this backend, its thread switches to the interpreter", entry_point);
+	}
+}
+
 static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler_base>& compiler, const spu_program& program)
 {
+	if (spu_block_compile_failed(program.entry_point))
+	{
+		return nullptr;
+	}
+
 	spu_llvm_compile_context context;
 
 	{
@@ -126,47 +203,86 @@ static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler
 		}
 	}
 
-	if (context.llvm_error.find(s_spu_llvm_reg_scavenge_error) == std::string::npos)
+	if (context.llvm_error.empty())
 	{
-		if (!context.llvm_error.empty())
-		{
-			spu_log.error("LLVM failed to compile SPU block 0x%x: %s", program.entry_point, context.llvm_error);
-		}
-
 		return nullptr;
 	}
 
-	spu_log.warning("LLVM failed to compile SPU block 0x%x with TBL2/TBX2: %s. Retrying without TBL2/TBX2.", program.entry_point, context.llvm_error);
+	const bool scavenge_failure = context.llvm_error.find(s_spu_llvm_reg_scavenge_error) != std::string::npos;
 
-	// LLVM fatal recovery does not unwind MCJIT state. Abandon the failed
-	// compiler and retry from a fresh analysis/JIT instance.
+	if (scavenge_failure)
+	{
+		spu_log.warning("LLVM failed to compile SPU block 0x%x with TBL2/TBX2: %s. Retrying without TBL2/TBX2.", program.entry_point, context.llvm_error);
+	}
+	else
+	{
+		spu_log.error("LLVM failed to compile SPU block 0x%x: %s. Discarding the poisoned JIT instance.", program.entry_point, context.llvm_error);
+	}
+
 	static_cast<void>(compiler.release());
 	compiler = spu_recompiler_base::make_llvm_recompiler();
 	compiler->init();
+
+	if (!scavenge_failure)
+	{
+		spu_mark_block_compile_failed(program.entry_point, program.lower_bound, ::size32(program.data) * 4);
+		return nullptr;
+	}
 
 	const auto retry_program = analyse_spu_llvm_program(*compiler, program);
 
 	if (retry_program != program)
 	{
 		spu_log.error("[0x%05x] SPU analyser failed during TBL2/TBX2 retry, %u vs %u", retry_program.entry_point, retry_program.data.size(), program.data.size());
+		spu_mark_block_compile_failed(program.entry_point, program.lower_bound, ::size32(program.data) * 4);
 		return nullptr;
 	}
 
 	spu_llvm_compile_context retry_context;
-	spu_llvm_compile_scope scope(retry_context, false);
+	spu_function_t result = nullptr;
 
-	const auto result = compiler->compile(spu_program{retry_program});
+	{
+		spu_llvm_compile_scope scope(retry_context, false);
+
+		result = compiler->compile(spu_program{retry_program});
+	}
 
 	if (result)
 	{
 		spu_log.notice("SPU LLVM block 0x%x compiled successfully without TBL2/TBX2.", program.entry_point);
-	}
-	else if (!retry_context.llvm_error.empty())
-	{
-		spu_log.error("LLVM failed to compile SPU block 0x%x without TBL2/TBX2: %s", program.entry_point, retry_context.llvm_error);
+		return result;
 	}
 
-	return result;
+	if (!retry_context.llvm_error.empty())
+	{
+		spu_log.error("LLVM failed to compile SPU block 0x%x without TBL2/TBX2: %s. Discarding the poisoned JIT instance.", program.entry_point, retry_context.llvm_error);
+
+		static_cast<void>(compiler.release());
+		compiler = spu_recompiler_base::make_llvm_recompiler();
+		compiler->init();
+	}
+	else
+	{
+		// Compilation produced nothing and said nothing. Reached in practice, and it was the
+		// one path here that left the block unmarked.
+		spu_log.error("LLVM produced no code for SPU block 0x%x without TBL2/TBX2 and reported no error.", program.entry_point);
+	}
+
+	// Every path that gives up marks the block, so the thread falls back to the interpreter.
+	//
+	// Leaving it unmarked does not degrade to something slower, it hangs: the block has no code
+	// and nothing routes the thread anywhere else, so the SPU sits on that entry point forever.
+	//
+	// Sonic Unleashed deadlocks at the SEGA logo this way. Block 0x7350 fails register allocation
+	// on AArch64 -- "Cannot scavenge register without an emergency spill slot" -- the retry
+	// without TBL2/TBX2 then returned null with an empty error, fell through both branches above
+	// unmarked, and RsdxPrimaryCellSpursKernel4 was measured frozen at pc=0x07350 in every sample
+	// of a session while the other five kernels ran normally. Running the whole emulator on the
+	// SPU interpreter got past the logo, which is the same fallback this marking selects, for one
+	// block instead of all of them.
+	spu_mark_block_compile_failed(program.entry_point, program.lower_bound, ::size32(program.data) * 4);
+
+	return nullptr;
 }
 #endif
 
@@ -1972,6 +2088,12 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 		std::string fname;
 		fmt::append(fname, "__ub%u", m_flat_list.size());
 		jit_announce(wxptr, raw - wxptr, fname);
+
+#if defined(ARCH_ARM64)
+		// Flush the freshly written ubertrampoline BEFORE publishing it via the CAS
+		// below; other cores may branch into it immediately.
+		asmjit::VirtMem::flushInstructionCache(wxptr, raw - wxptr);
+#endif
 	}
 
 	if (auto _old = stuff_it->trampoline.compare_and_swap(nullptr, result))
@@ -2113,9 +2235,10 @@ spu_function_t spu_runtime::make_branch_patchpoint(u16 data) const
 	pthread_jit_write_protect_np(true);
 #endif
 
-	// Flush all cache lines after potentially writing executable code
-	asm("ISB");
-	asm("DSB ISH");
+	// ISB/DSB alone performs no D->I cache maintenance; the asmjit helper does the
+	// required DC CVAU + IC IVAU sequence (with trailing barriers) so other cores
+	// cannot fetch stale instructions for this freshly written patchpoint.
+	asmjit::VirtMem::flushInstructionCache(patch_fn, raw - patch_fn);
 
 	return reinterpret_cast<spu_function_t>(patch_fn);
 #else
@@ -2181,9 +2304,10 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 		pthread_jit_write_protect_np(true);
 #endif
 
-		// Flush all cache lines after potentially writing executable code
-		asm("ISB");
-		asm("DSB ISH");
+		// ISB/DSB alone performs no D->I cache maintenance and is mis-ordered for
+		// self-modifying code; the asmjit helper does DC CVAU + IC IVAU (with
+		// trailing barriers) for the rewritten 16-byte branch site.
+		asmjit::VirtMem::flushInstructionCache(rip, 16);
 #else
 #error "Unimplemented"
 #endif
@@ -2205,6 +2329,21 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 		return;
 	}
 
+#ifdef ARCH_ARM64
+	if (spu_interpreter_fallback_available() && spu_block_compile_failed(spu.pc))
+	{
+		// Deliberately not logged. The flag is cleared every time the thread leaves the block, so
+		// a "log once" guard on it fires on every re-entry instead, and execution crosses this
+		// boundary constantly: God of War 3 wrote thousands of lines a second ping-ponging
+		// between two addresses, which cost more than the interpretation. The block is already
+		// recorded once by spu_mark_block_compile_failed.
+		std::tie(spu.interp_fallback_begin, spu.interp_fallback_end) = spu_block_failed_range(spu.pc);
+		spu.interp_fallback = true;
+		spu_runtime::g_escape(&spu);
+		return;
+	}
+#endif
+
 #if defined(__APPLE__)
 	pthread_jit_write_protect_np(false);
 #endif
@@ -2217,6 +2356,19 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 
 	if (!func)
 	{
+#ifdef ARCH_ARM64
+		if (spu_interpreter_fallback_available())
+		{
+#if defined(__APPLE__)
+			pthread_jit_write_protect_np(true);
+#endif
+			std::tie(spu.interp_fallback_begin, spu.interp_fallback_end) = spu_block_failed_range(spu.pc);
+			spu.interp_fallback = true;
+			spu_runtime::g_escape(&spu);
+			return;
+		}
+#endif
+
 		spu_log.fatal("[0x%05x] Compilation failed.", spu.pc);
 		return;
 	}
@@ -2329,9 +2481,9 @@ void spu_recompiler_base::branch(spu_thread& spu, void*, u8* rip)
 	pthread_jit_write_protect_np(true);
 #endif
 
-	// Flush all cache lines after potentially writing executable code
-	asm("ISB");
-	asm("DSB ISH");
+	// See the matching site above: real icache maintenance for the rewritten
+	// 16-byte branch site.
+	asmjit::VirtMem::flushInstructionCache(rip, 16);
 #else
 #error "Unimplemented"
 #endif
@@ -2341,7 +2493,13 @@ void spu_recompiler_base::branch(spu_thread& spu, void*, u8* rip)
 
 void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* /*rip*/)
 {
-	if (g_cfg.core.spu_decoder != spu_decoder_type::_static)
+	// Also reachable with a recompiler selected, as the per-thread fallback for a block that
+	// cannot be compiled. See spu_thread::cpu_task.
+	//
+	// The loop below is self-contained -- it reads the opcode table, the thread and the local
+	// store, and nothing else -- so which decoder the user picked does not change whether it can
+	// run. The old check rejected exactly the case that needs it most.
+	if (g_cfg.core.spu_decoder != spu_decoder_type::_static && !spu.interp_fallback)
 	{
 		fmt::throw_exception("Invalid SPU decoder");
 	}
@@ -2358,6 +2516,25 @@ void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* /*rip*/
 		{
 			if (spu.check_state())
 				break;
+		}
+
+		// Hand the thread back to the recompiler once it leaves the block that could not be
+		// compiled.
+		//
+		// The fallback flag is otherwise set once and never cleared, so a thread that meets a
+		// single bad block interprets everything it runs from then on. That is correct but very
+		// slow, and these are SPURS kernels doing real work: Sonic Unleashed reached its loading
+		// screen that way and then crawled through it.
+		//
+		// The set holds entry points, so this keeps interpreting while pc sits on the bad entry
+		// -- which is where a branch-to-self idle loop stays -- and releases the thread once
+		// execution moves on. Leaving is safe at any instruction boundary, since all SPU state
+		// lives in spu_thread, the same assumption the JIT dispatch makes. Re-entering the bad
+		// block simply sets the flag again.
+		if (spu.interp_fallback && (spu.pc < spu.interp_fallback_begin || spu.pc >= spu.interp_fallback_end)) [[unlikely]]
+		{
+			spu.interp_fallback = false;
+			break;
 		}
 
 		const u32 op = *reinterpret_cast<const be_t<u32>*>(base + spu.pc);

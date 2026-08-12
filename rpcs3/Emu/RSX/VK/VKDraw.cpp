@@ -264,6 +264,11 @@ void VKGSRender::update_draw_state()
 
 void VKGSRender::load_texture_env()
 {
+	// Per-draw texture cache search, surface-cache expiry tests and sampler lookup.
+	// texcache_lookup's only other site is on_access_violation, which runs on guest
+	// threads, so none of this draw-path work was ever attributed.
+	RSX_PROF_SCOPE(texcache_lookup);
+
 	// Load textures
 	bool check_for_cyclic_refs = false;
 	auto check_surface_cache_sampler_valid = [&](auto descriptor, const auto& tex)
@@ -1047,6 +1052,8 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		}
 
 		// Begin query
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_pass_query();
+
 		m_occlusion_query_manager->begin_query(*m_current_command_buffer, occlusion_id);
 
 		auto& data = m_occlusion_map[m_active_query_info->driver_handle];
@@ -1129,16 +1136,19 @@ void VKGSRender::emit_geometry(u32 sub_index)
 	{
 		if (draw_call.is_trivial_instanced_draw)
 		{
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(draw_call.pass_count());
 			vkCmdDraw(*m_current_command_buffer, upload_info.vertex_draw_count, draw_call.pass_count(), 0, 0);
 		}
 		else if (draw_call.is_single_draw())
 		{
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(1);
 			vkCmdDraw(*m_current_command_buffer, upload_info.vertex_draw_count, 1, 0, 0);
 		}
 		else if (m_device->get_multidraw_support())
 		{
 			const auto subranges = draw_call.get_subranges();
 			auto ptr = utils::bless<const VkMultiDrawInfoEXT>(& subranges.front().first);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(::size32(subranges));
 			_vkCmdDrawMultiEXT(*m_current_command_buffer, ::size32(subranges), ptr, 1, 0, sizeof(rsx::draw_range_t));
 		}
 		else
@@ -1147,6 +1157,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 			const auto subranges = draw_call.get_subranges();
 			for (const auto &range : subranges)
 			{
+				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(1);
 				vkCmdDraw(*m_current_command_buffer, range.count, 1, vertex_offset, 0);
 				vertex_offset += range.count;
 			}
@@ -1161,10 +1172,12 @@ void VKGSRender::emit_geometry(u32 sub_index)
 
 		if (draw_call.is_trivial_instanced_draw)
 		{
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(draw_call.pass_count());
 			vkCmdDrawIndexed(*m_current_command_buffer, upload_info.vertex_draw_count, draw_call.pass_count(), 0, 0, 0);
 		}
 		else if (rsx::method_registers.current_draw_clause.is_single_draw())
 		{
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(1);
 			vkCmdDrawIndexed(*m_current_command_buffer, upload_info.vertex_draw_count, 1, 0, 0, 0);
 		}
 		else if (m_device->get_multidraw_support())
@@ -1189,6 +1202,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 				_ptr++;
 				vertex_offset += count;
 			}
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(subranges_count);
 			_vkCmdDrawMultiIndexedEXT(*m_current_command_buffer, subranges_count, base_ptr, 1, 0, sizeof(VkMultiDrawIndexedInfoEXT), nullptr);
 		}
 		else
@@ -1198,6 +1212,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 			for (const auto &range : subranges)
 			{
 				const auto count = get_index_count(draw_call.primitive, range.count);
+				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(1);
 				vkCmdDrawIndexed(*m_current_command_buffer, count, 1, vertex_offset, 0, 0);
 				vertex_offset += count;
 			}
@@ -1209,9 +1224,10 @@ void VKGSRender::emit_geometry(u32 sub_index)
 
 void VKGSRender::begin()
 {
-	// Everything a draw costs before geometry is emitted. The scopes it calls into
-	// (pipeline, descriptors, texcache_lookup, texture_upload) nest inside and are charged
-	// to themselves, so what remains here is genuinely per-draw setup and nothing else.
+	// Everything a draw costs before geometry is emitted. The scopes it calls into nest inside
+	// and are charged to themselves; draw_setup is only ever the remainder. Calling that
+	// remainder "setup" hid 23 ms/frame of barriers and epilogue work behind a plausible name,
+	// so every block with a body of its own now carries a scope and this keeps the leftovers.
 	RSX_PROF_SCOPE(draw_setup);
 
 	// Save shader state now before prefetch and loading happens
@@ -1238,6 +1254,12 @@ void VKGSRender::begin()
 
 void VKGSRender::end()
 {
+	// begin() carries a scope and end() did not, so every per-draw cost here fell through
+	// to fifo_decode -- which is the ENCLOSING scope of the whole RSX loop, not a decode
+	// measurement. That is why fifo_decode read as 100% of the RSX thread while the FIFO
+	// itself only accounts for a couple of milliseconds.
+	RSX_PROF_SCOPE(draw_setup);
+
 	if (skip_current_frame || !m_graphics_state.test(rsx::rtt_config_valid) || swapchain_unavailable || cond_render_ctrl.disable_rendering())
 	{
 		execute_nop_draw();
@@ -1250,13 +1272,37 @@ void VKGSRender::end()
 	// Check for frame resource status here because it is possible for an async flip to happen between begin/end
 	if (m_current_frame->flags & frame_context_state::dirty) [[unlikely]]
 	{
-		check_present_status();
+		RSX_PROF_SCOPE(present_check);
 
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_present_checks++;
+
+		// Deliberately not draining the present queue here.
+		//
+		// Draining means poking a fence, and on this driver a fence poke blocks until the
+		// fence signals -- vkGetFenceStatus and vkWaitForFences with a zero timeout both do,
+		// measured at 17-28 ms a call and never once returning not-ready. Doing that here put
+		// a full GPU sync in front of the first draw of every frame, so the CPU recorded only
+		// after the GPU had finished and frame time came to GPU plus CPU rather than the
+		// larger of the two: 42 ms of 27.7 GPU and 14.3 CPU, which is both of them in series.
+		//
+		// The pipeline is bounded at flip instead, which is the same wait moved to after this
+		// frame's recording rather than before it, so the recording happens while the GPU is
+		// still working.
 		if (m_current_frame->swap_command_buffer) [[unlikely]]
 		{
-			// Borrow time by using the auxilliary context
-			m_aux_frame_context.grab_resources(*m_current_frame);
-			m_current_frame = &m_aux_frame_context;
+			if (!m_aux_frame_context.swap_command_buffer)
+			{
+				// Borrow time by using the auxilliary context
+				m_aux_frame_context.grab_resources(*m_current_frame);
+				m_current_frame = &m_aux_frame_context;
+			}
+			else
+			{
+				// Rotated context and the one borrow slot are both still in flight. The
+				// throttle at flip is supposed to make this unreachable; if it ever is not,
+				// waiting is wrong but aborting is worse.
+				frame_context_cleanup(m_current_frame);
+			}
 		}
 
 		ensure(!m_current_frame->swap_command_buffer);
@@ -1286,32 +1332,38 @@ void VKGSRender::end()
 	m_frame_stats.setup_time += m_profiler.duration();
 
 	// Apply write memory barriers
-	if (auto ds = std::get<1>(m_rtts.m_bound_depth_stencil))
 	{
-		ds->write_barrier(*m_current_command_buffer);
+		// Each write_barrier can resolve, copy or tear down the render pass, which on a tiler
+		// is the most expensive thing available. Unscoped it read as flat per-draw setup cost.
+		RSX_PROF_SCOPE(wr_barrier);
 
-		if (m_graphics_state.test(rsx::zeta_address_cyclic_barrier) &&
-			ds->current_layout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+		if (auto ds = std::get<1>(m_rtts.m_bound_depth_stencil))
 		{
-			// We actually need to end the subpass as a minimum. Without this, early-Z optimiazations in following draws will clobber reads from previous draws and cause flickering.
-			// Since we're ending the subpass, might as well restore DCC/HiZ for extra performance
-			ds->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-			ds->reset_surface_counters();
+			ds->write_barrier(*m_current_command_buffer);
 
-			// Regenerate render pass key
-			invalidate_render_pass();
+			if (m_graphics_state.test(rsx::zeta_address_cyclic_barrier) &&
+				ds->current_layout != VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+			{
+				// We actually need to end the subpass as a minimum. Without this, early-Z optimiazations in following draws will clobber reads from previous draws and cause flickering.
+				// Since we're ending the subpass, might as well restore DCC/HiZ for extra performance
+				ds->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+				ds->reset_surface_counters();
+
+				// Regenerate render pass key
+				invalidate_render_pass();
+			}
 		}
-	}
 
-	for (auto &rtt : m_rtts.m_bound_render_targets)
-	{
-		if (auto surface = std::get<1>(rtt))
+		for (auto &rtt : m_rtts.m_bound_render_targets)
 		{
-			surface->write_barrier(*m_current_command_buffer);
+			if (auto surface = std::get<1>(rtt))
+			{
+				surface->write_barrier(*m_current_command_buffer);
+			}
 		}
-	}
 
-	m_graphics_state.clear(rsx::zeta_address_cyclic_barrier);
+		m_graphics_state.clear(rsx::zeta_address_cyclic_barrier);
+	}
 
 	m_frame_stats.setup_time += m_profiler.duration();
 
@@ -1348,7 +1400,11 @@ void VKGSRender::end()
 		}
 	}
 
-	m_texture_cache.release_uncached_temporary_subresources();
+	{
+		RSX_PROF_SCOPE(tex_release);
+		m_texture_cache.release_uncached_temporary_subresources();
+	}
+
 	m_frame_stats.textures_upload_time += m_profiler.duration();
 
 	u32 sub_index = 0;               // RSX subdraw ID
@@ -1379,7 +1435,12 @@ void VKGSRender::end()
 		m_current_command_buffer->flags &= ~(vk::command_buffer::cb_has_conditional_render);
 	}
 
-	m_rtts.on_write(m_framebuffer_layout.color_write_enabled, m_framebuffer_layout.zeta_write_enabled);
+	{
+		// Touches every bound surface and can queue cache invalidations, so it is per-draw
+		// work in the same class as the write barriers rather than bookkeeping.
+		RSX_PROF_SCOPE(rtt_write);
+		m_rtts.on_write(m_framebuffer_layout.color_write_enabled, m_framebuffer_layout.zeta_write_enabled);
+	}
 
 	rsx::thread::end();
 }

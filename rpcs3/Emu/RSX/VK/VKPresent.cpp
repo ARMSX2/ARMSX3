@@ -226,8 +226,9 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 
 void VKGSRender::advance_queued_frames()
 {
-	// Check all other frames for completion and clear resources
-	check_present_status();
+	// Reclaiming finished frames happens in the throttle below, not here. This call pokes the
+	// oldest frame's fence, and a poke blocks on this driver, so running it before the frame's
+	// own bookkeeping just moved the same GPU sync a few lines earlier.
 
 	// Run video memory balancer
 	m_device->rebalance_memory_type_usage();
@@ -244,6 +245,46 @@ void VKGSRender::advance_queued_frames()
 
 	m_vertex_cache->purge();
 	m_current_frame->tag_frame_end();
+
+	// Throttle here rather than by accident.
+	//
+	// The queue used to stay at one entry because the poll above blocked until the oldest
+	// frame had finished, so the pipeline was bounded by never actually having one. Now that
+	// the poll returns honestly, frames accumulate until the GPU retires them, and the
+	// rotation below would eventually hand out a context that is still in flight.
+	//
+	// Wait only when the pipeline is genuinely full, which is the one moment a wait is worth
+	// what it costs. It is charged to swap_wait, so what used to hide in a status query is
+	// now visible as the frame pacing it always was.
+	//
+	// One below the context count, not equal to it. The queue and the rotation below advance
+	// in the same order, so the frame this retires is the one the rotation is about to hand
+	// out. Allowing the full count would hand out a context that is still in flight and push
+	// every frame down the single aux context borrow path, which has room for one such frame
+	// and an ensure() waiting for the second.
+	// Pipelining costs memory: a second frame in flight means a second frame's resources are
+	// alive before anything retires them. That is worth it at rest and not worth a fatal
+	// VK_ERROR_OUT_OF_DEVICE_MEMORY, which on this GPU means system memory, shared with
+	// everything else on a handheld. Under pressure, fall back to the single frame this used
+	// to run with: slower, and slower is recoverable.
+	const u32 depth_limit = (vk::vmm_determine_memory_load_severity() > rsx::problem_severity::low)
+		? 2u
+		: std::max(m_max_async_frames, 2u);
+
+	const u32 max_frames_in_flight = depth_limit - 1u;
+
+	while (m_queued_frames.size() >= max_frames_in_flight)
+	{
+		auto frame = m_queued_frames.front();
+
+		if (!frame->swap_command_buffer)
+		{
+			m_queued_frames.pop_front();
+			continue;
+		}
+
+		frame_context_cleanup(frame);
+	}
 
 	m_queued_frames.push_back(m_current_frame);
 	ensure(m_queued_frames.size() <= m_max_async_frames);
@@ -281,6 +322,27 @@ void VKGSRender::queue_swap_request()
 	m_current_command_buffer->reset();
 	m_current_command_buffer->begin();
 
+	// Open the frame region here, on the path every frame actually takes.
+	//
+	// It was only opened at device init and in flush_command_queue, and this title triggers
+	// flush_command_queue about zero times a frame, so the region opened once at boot, closed
+	// on the first submit and never reopened. Everything downstream depends on it: the slot's
+	// query range is reset when this region opens, the ring only advances once a slot has a
+	// completed region in it, and collection refuses a slot that was never reset. So the timer
+	// reported nothing at all for the whole session while looking perfectly healthy.
+	vk::get_gpu_timer().begin(*m_current_command_buffer, vk::gpu_timer::region::frame);
+
+	// Restart CPU pass numbering HERE, where the GPU timer's slot actually rotates, so an
+	// ordinal names the same pass on both sides. It used to reset in tick_frame, which runs
+	// from on_frame_end -- before flip -- while flip's own overlay and calibration passes went
+	// on incrementing it and were dropped GPU-side. The CPU ordinal therefore ran ahead by the
+	// number of present-path passes and the two by-pass tables described different passes.
+	//
+	// This site rather than next_frame(): queue_swap_request has one call site, so the mid-frame
+	// flush_command_queue reopen cannot falsely restart numbering, and flip's passes land after
+	// the reset where they belong rather than taking ordinals 0..k-1.
+	rsx::prof::g_pass_ordinal = umax;
+
 	// Set up new pointers for the next frame
 	advance_queued_frames();
 }
@@ -289,15 +351,26 @@ void VKGSRender::frame_context_cleanup(vk::frame_context_t *ctx)
 {
 	ensure(ctx->swap_command_buffer);
 
+	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_frame_cleanups++;
+
 	// Perform hard swap here
-	if (ctx->swap_command_buffer->wait(FRAME_PRESENT_TIMEOUT) != VK_SUCCESS)
 	{
-		// Lost surface/device, release swapchain
-		swapchain_unavailable = true;
+		// Split from the reclaim below because the two mean opposite things: time here is the
+		// RSX thread blocked on the GPU, time below is the RSX thread doing CPU work. Both
+		// were unscoped and landed in whatever called this.
+		RSX_PROF_SCOPE(swap_wait);
+
+		if (ctx->swap_command_buffer->wait(FRAME_PRESENT_TIMEOUT) != VK_SUCCESS)
+		{
+			// Lost surface/device, release swapchain
+			swapchain_unavailable = true;
+		}
 	}
 
 	// Resource cleanup.
 	{
+		RSX_PROF_SCOPE(res_trim);
+
 		if (m_overlay_manager && m_overlay_manager->has_dirty())
 		{
 			auto ui_renderer = vk::get_overlay_pass<vk::ui_overlay_renderer>();
@@ -477,6 +550,14 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		timer.next_frame();
 		timer.collect();
 
+		// A collector that harvests nothing prints nothing, which reads exactly like a GPU
+		// doing nothing. Say so periodically instead, with enough state to tell which of the
+		// collection preconditions is the one not being met.
+		if (timer.collected_frames() < 300 && timer.flips() && (timer.flips() % 300) == 0)
+		{
+			rsx_log.warning("[gpu_timer] no report yet: %s", timer.debug_state());
+		}
+
 		if (timer.collected_frames() >= 300)
 		{
 			const auto ms = timer.per_frame_ms();
@@ -489,6 +570,21 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 				fmt::append(report, "\n\t%-14s %7.3f ms/frame  %5.1f events/frame",
 					vk::gpu_timer::name_of(static_cast<vk::gpu_timer::region>(i)), ms[i],
 					static_cast<double>(counts[i]) / static_cast<double>(timer.collected_frames()));
+			}
+
+			// Per-pass, so the draw total stops being a single number that only says "inside
+			// render passes". One pass carrying most of it is a target; thirty even ones mean
+			// the pass and draw count is the wall.
+			if (const auto passes = timer.draw_pass_costs(); !passes.empty())
+			{
+				std::string list;
+				for (u32 i = 0; i < passes.size() && i < 8; i++)
+				{
+					fmt::append(list, "\n\t  pass #%-3u %7.3f ms/frame  seen %llu",
+						passes[i].ordinal, passes[i].ms_per_frame, passes[i].samples);
+				}
+
+				fmt::append(report, "\n\tdraw by pass (%u distinct)%s", ::size32(passes), list);
 			}
 
 			if (const u64 dropped = timer.dropped_events())

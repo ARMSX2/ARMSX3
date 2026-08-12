@@ -1633,6 +1633,12 @@ public:
 
 	virtual spu_function_t compile(spu_program&& _func) override
 	{
+		if (m_jit.is_poisoned())
+		{
+			spu_log.error("Refusing to compile SPU block 0x%05x on a poisoned LLVM engine", _func.entry_point);
+			return nullptr;
+		}
+
 		if (_func.data.empty() && m_interp_magn)
 		{
 			return compile_interpreter();
@@ -1652,14 +1658,79 @@ public:
 
 		if (func.entry_point != start0)
 		{
-			// Wait for the duplicate
+			// Wait for the duplicate. The result may be published either by the LLVM
+			// owner of this item or by spu_fast from the asmjit path, so wait on
+			// `compiled` itself, and additionally observe the LLVM failure state so an
+			// owner that bails out cannot strand these waiters. The timeout bounds the
+			// window in which a failure transition could be missed between the state
+			// check and going to sleep (the two are separate atomics).
 			while (!add_loc->compiled)
 			{
-				add_loc->compiled.wait(nullptr);
+				if (add_loc->llvm_compile_state == 3)
+				{
+					return nullptr;
+				}
+
+				// The owner finished and published nothing. It is not coming back, so
+				// waiting on `compiled` here is waiting forever -- state 2 is set after
+				// the publication it promises, so seeing it with nothing published means
+				// there is nothing to wait for.
+				if (add_loc->llvm_compile_state == 2)
+				{
+					return nullptr;
+				}
+
+				add_loc->compiled.wait(nullptr, atomic_wait_timeout{10'000'000});
 			}
 
 			return add_loc->compiled;
 		}
+
+		// Claim LLVM compilation of this item (see llvm_compile_state in spu_item).
+		// Late arrivals wait for the owner instead of compiling the same program
+		// again: the duplicate compile raced `compiled` publication and trampoline
+		// rebuilds (wedging SPURS bring-up on cold boots), and made up the majority
+		// of cold compilation work.
+		if (add_loc->llvm_compile_state.compare_and_swap(0, 1) != 0)
+		{
+			// Bounded, like the duplicate wait above. An untimed wait on a claim is only
+			// as sound as every path the owner can leave by, and a waiter that misses the
+			// transition waits for the rest of the session -- SPURS brings all its kernels
+			// to the same block at once, so it is five threads, and the game sits polling
+			// for an SPU that will never answer.
+			while (add_loc->llvm_compile_state == 1)
+			{
+				add_loc->llvm_compile_state.wait(1, atomic_wait_timeout{10'000'000});
+			}
+
+			if (add_loc->llvm_compile_state == 2)
+			{
+				return add_loc->compiled;
+			}
+
+			// Owner failed (emulator stopping)
+			return nullptr;
+		}
+
+		// Ensure waiters are released on every exit path: any return that leaves the
+		// state at "compiling" is a failure and must not strand them.
+		struct claim_guard_t
+		{
+			spu_item* item;
+
+			~claim_guard_t()
+			{
+				if (item && item->llvm_compile_state == 1)
+				{
+					item->llvm_compile_state.release(3);
+					item->llvm_compile_state.notify_all();
+
+					// Also wake threads sleeping on `compiled` (the relocated-duplicate
+					// wait above); they re-check the failure state on wakeup.
+					item->compiled.notify_all();
+				}
+			}
+		} claim_guard{add_loc};
 
 		bool add_to_file = false;
 
@@ -3982,6 +4053,10 @@ public:
 
 		add_loc->compiled.notify_all();
 
+		// Function is published; mark compilation complete and release claim waiters.
+		add_loc->llvm_compile_state.release(2);
+		add_loc->llvm_compile_state.notify_all();
+
 		if (g_cfg.core.spu_debug)
 		{
 			out.flush();
@@ -4045,6 +4120,12 @@ public:
 	spu_function_t compile_interpreter()
 	{
 		using namespace llvm;
+
+		if (m_jit.is_poisoned())
+		{
+			spu_log.error("Refusing to compile the SPU interpreter on a poisoned LLVM engine");
+			return nullptr;
+		}
 
 		m_engine->clearAllGlobalMappings();
 

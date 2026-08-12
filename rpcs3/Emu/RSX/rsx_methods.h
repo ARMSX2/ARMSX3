@@ -173,7 +173,15 @@ namespace rsx
 
 		~rsx_state() = default;
 
-		void decode(u32 reg, u32 value);
+		// Inlined deliberately. run_FIFO calls this once per dispatched method and the body
+		// is a single exchange, but with the definition in rsx_methods.cpp and LTO disabled
+		// project-wide it compiled to a real cross-TU call, which also forced the caller to
+		// reload its context pointer afterwards because the call is opaque.
+		void decode(u32 reg, u32 value)
+		{
+			// Store new value and save previous
+			latch = std::exchange(registers[reg], value);
+		}
 
 		bool test(u32 reg, u32 value) const;
 

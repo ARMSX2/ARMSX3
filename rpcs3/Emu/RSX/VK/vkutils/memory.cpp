@@ -1,5 +1,6 @@
 #include "device.h"
 #include "memory.h"
+#include "Emu/system_config.h"
 
 namespace
 {
@@ -309,6 +310,22 @@ namespace vk
 		{
 			return VK_NULL_HANDLE;
 		}
+
+		// Say what could not be allocated before dying.
+		//
+		// "Out of video memory" on its own cannot distinguish a device that is genuinely full
+		// from a single absurd request, and those need opposite fixes. God of War 3's DEMO fails
+		// here while the full game, which is larger, boots fine -- so the totals are not the
+		// obvious explanation and the size of this one request matters.
+		// The cap, not just the request. vram_allocation_limit is applied as VMA's pHeapSizeLimit,
+		// so it is a hard ceiling and not a soft budget: once total allocations reach it VMA
+		// returns OUT_OF_DEVICE_MEMORY however much the device actually has free. A modest
+		// request failing while the process holds little is the signature of hitting that
+		// ceiling rather than the hardware.
+		rsx_log.error("Failed to allocate %lluK of video memory (pool=%d, pool total=%lluM, heap cap=%lluM).",
+			request.size / 1024, static_cast<int>(request.pool),
+			vmm_get_application_pool_usage(request.pool) / 0x100000,
+			static_cast<u64>(g_cfg.video.vk.vram_allocation_limit));
 
 		die_with_error(error_code);
 		fmt::throw_exception("Unreachable! Error_code=0x%x", static_cast<u32>(error_code));

@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "rsx_utils.h"
 #include "rsx_methods.h"
+#include "rsx_profiler.h"
 #include "Emu/Cell/Modules/cellVideoOut.h"
 
 #ifdef _MSC_VER
@@ -31,6 +32,11 @@ namespace rsx
 	void convert_scale_image(u8 *dst, AVPixelFormat dst_format, int dst_width, int dst_height, int dst_pitch,
 		const u8 *src, AVPixelFormat src_format, int src_width, int src_height, int src_pitch, int src_slice_h, bool bilinear)
 	{
+		// The software fallback for a 2D blit the GPU did not take. Scoped here rather than at
+		// the call sites because there are four of them in the blit engine alone, and only the
+		// RSX thread's time is ever reported, so calls from elsewhere cost nothing to include.
+		RSX_PROF_SCOPE(blit_scale);
+
 		std::unique_ptr<SwsContext, void(*)(SwsContext*)> sws(sws_getContext(src_width, src_height, src_format,
 			dst_width, dst_height, dst_format, bilinear ? SWS_FAST_BILINEAR : SWS_POINT, nullptr, nullptr, nullptr), sws_freeContext);
 

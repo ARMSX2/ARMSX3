@@ -72,7 +72,7 @@ enum class BootResult
 class RPCSX {
     external fun openLibrary(path: String): Boolean
     external fun getLibraryVersion(path: String): String?
-    external fun initialize(rootDir: String, user: String): Boolean
+    external fun initialize(rootDir: String, user: String, socInfo: String): Boolean
     external fun installFw(fd: Int, progressId: Long): Boolean
     external fun install(fd: Int, progressId: Long): Boolean
     /** Install several .pkg parts of one split package together, in order. */

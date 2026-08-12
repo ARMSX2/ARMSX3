@@ -25,9 +25,7 @@ import com.armsx2.ui.about.AboutScreen
 import com.armsx2.ui.friends.FriendsScreen
 import com.armsx2.ui.news.NewsScreen
 import com.armsx2.ui.home.HomeScreen
-import com.armsx2.ui.memorycards.MemoryCardScreen
 import com.armsx2.ui.language.LanguageScreen
-import com.armsx2.ui.patches.PatchManagerScreen
 import com.armsx2.ui.saves.SaveManagerScreen
 import com.armsx2.ui.textures.TextureManagerScreen
 import com.armsx2.ui.settingshub.SettingsScreen
@@ -104,10 +102,8 @@ fun AppNavigation() {
                         scope = com.armsx2.config.SettingsScope.Global,
                         serial = null,
                     )
-                AppRoute.MemoryCardManager -> MemoryCardScreen(onBack = UiNavigator::home)
                 AppRoute.SaveManager -> SaveManagerScreen(onBack = UiNavigator::home)
                 AppRoute.ControllerManager -> ControllerManagerScreen(onBack = UiNavigator::home)
-                AppRoute.PatchManager -> PatchManagerScreen(onBack = UiNavigator::home)
                 AppRoute.TextureManager -> TextureManagerScreen(onBack = UiNavigator::home)
                 AppRoute.Achievements -> AchievementsScreen(onBack = UiNavigator::home)
                 AppRoute.Language -> LanguageScreen(

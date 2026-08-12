@@ -55,8 +55,11 @@ namespace vk
 		bool usable() const { return m_pool != nullptr; }
 
 		// Bracket a region. Safe to call when uninitialised, in which case they do nothing.
-		void begin(command_buffer& cmd, region r);
-		void end(command_buffer& cmd, region r);
+		//
+		// By const reference because the render pass helpers hold one and only ever record
+		// commands into it, which the conversion operator already allows on a const buffer.
+		void begin(const command_buffer& cmd, region r);
+		void end(const command_buffer& cmd, region r);
 
 		// Call once per presented frame. Retires the current ring slot; see the definition
 		// for why this is not driven off the frame region closing.
@@ -72,6 +75,33 @@ namespace vk
 		void reset();
 
 		static const char* name_of(region r);
+
+		// Why nothing has been collected yet. A collector that silently returns nothing is
+		// indistinguishable from a GPU that is doing nothing, and the report only prints once
+		// 300 frames have been gathered, so a stuck collector prints nothing at all forever.
+		std::string debug_state() const;
+
+		u64 flips() const { return m_flips; }
+
+		/**
+		 * Per-pass cost for the draw region, keyed by the pass's ordinal within the frame.
+		 *
+		 * The sum says the GPU is inside render passes and nothing more. Whether that is one
+		 * expensive pass or thirty even ones decides what to do about it, and those want
+		 * opposite fixes: a single heavy pass is a target, an even spread means the draw count
+		 * itself is the wall.
+		 *
+		 * Ordinal rather than identity because the frame structure is stable, so pass N is the
+		 * same logical pass from frame to frame, which is what makes the number actionable.
+		 */
+		struct pass_cost
+		{
+			u32 ordinal = 0;
+			double ms_per_frame = 0.0;
+			u64 samples = 0;
+		};
+
+		std::vector<pass_cost> draw_pass_costs() const;
 
 	private:
 		// A frame issues many readbacks and blits, and the interesting number is what they
@@ -132,8 +162,13 @@ namespace vk
 
 		std::array<u64, region_count> m_totals_ns{};
 		std::array<u64, region_count> m_events_seen{};
+
+		// Draw region only, indexed by pass ordinal within the frame.
+		std::array<u64, max_events> m_draw_pass_ns{};
+		std::array<u64, max_events> m_draw_pass_samples{};
 		u64 m_dropped = 0;
 		u64 m_frames = 0;
+		u64 m_flips = 0;
 
 	public:
 		u64 dropped_events() const { return m_dropped; }
@@ -153,11 +188,11 @@ namespace vk
 	 */
 	class gpu_scope
 	{
-		command_buffer& m_cmd;
+		const command_buffer& m_cmd;
 		gpu_timer::region m_region;
 
 	public:
-		gpu_scope(command_buffer& cmd, gpu_timer::region r)
+		gpu_scope(const command_buffer& cmd, gpu_timer::region r)
 			: m_cmd(cmd), m_region(r)
 		{
 			get_gpu_timer().begin(m_cmd, m_region);

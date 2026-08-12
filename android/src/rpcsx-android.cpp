@@ -1,3 +1,4 @@
+#include <fstream>
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
 #include "Emu/Audio/Cubeb/CubebBackend.h"
@@ -113,6 +114,9 @@ static std::atomic<bool> g_paused_by_surface_loss;
 extern std::string g_android_executable_dir;
 extern std::string g_android_config_dir;
 extern std::string g_android_cache_dir;
+// Exact SoC identity as reported by Android (Build.SOC_MANUFACTURER/SOC_MODEL),
+// handed in through _rpcsx_setSocInfo. MIDRs cannot identify the SoC.
+static std::string g_android_soc_info;
 static std::mutex g_virtual_pad_mutex;
 // One per PS3 pad port. This was a single pad, which silently capped local
 // co-op at one player: every port above the first registered a Pad the app
@@ -850,6 +854,18 @@ class Progress {
   jmethodID onProgressEventMethodId;
 
 public:
+  // Every JNI object handed back to native code is a LOCAL reference, and local
+  // references are only reclaimed when the frame that made them returns to Java.
+  // The frames this runs on do not return: MainThreadProcessor::process and the
+  // compilation queue are infinite loops inside a single JNI call, so anything
+  // taken here is held for the life of the process.
+  //
+  // FindClass and NewStringUTF were both leaking, once per Progress and once per
+  // report(). The progress dialog server pushes several updates per tick and a
+  // firmware precompile emits thousands of ticks, so ART's local reference table
+  // (512 entries) filled and the runtime aborted with "local reference table
+  // overflow". Time-proportional, which is why it showed up on slow devices during
+  // long installs and not on fast ones.
   Progress(JNIEnv *env, jlong progressId) : env(env), progressId(progressId) {
     progressRepositoryClass =
         ensure(env->FindClass("net/rpcsx/ProgressRepository"));
@@ -857,10 +873,29 @@ public:
         progressRepositoryClass, "onProgressEvent", "(JJJLjava/lang/String;)Z");
   }
 
+  ~Progress() {
+    if (progressRepositoryClass != nullptr) {
+      env->DeleteLocalRef(progressRepositoryClass);
+    }
+  }
+
+  // Owns a local reference, so it cannot be copied: the second destructor would
+  // delete a reference the first already released.
+  Progress(const Progress &) = delete;
+  Progress &operator=(const Progress &) = delete;
+
   bool report(jlong value, jlong max, const std::string &message = {}) {
-    return env->CallStaticBooleanMethod(
+    jstring text = message.empty() ? nullptr : wrap(env, message);
+
+    const bool result = env->CallStaticBooleanMethod(
         progressRepositoryClass, onProgressEventMethodId, progressId, value,
-        max, message.empty() ? nullptr : wrap(env, message));
+        max, text);
+
+    if (text != nullptr) {
+      env->DeleteLocalRef(text);
+    }
+
+    return result;
   }
 
   void failure(const std::string &message = {}) { report(-1, 0, message); }
@@ -1732,14 +1767,79 @@ private:
   }
 } static g_compilationQueue;
 
+// Runs the callbacks Emu posts to the main thread.
+//
+// CallFromMainThread with no wake_up is a POST, not a call: upstream hands it to the GUI
+// thread and returns immediately. Running it inline instead executes it under whatever
+// locks the caller happens to hold, and lv2_obj::sleep_unlocked posts one while holding
+// lv2_obj::g_mutex -- the comment upstream put on that call site says to run it on the main
+// thread for exactly that reason. The callback is FinalizeRunRequest, the wake for a
+// restored savestate, so it took g_mutex against itself and every thread stopped there:
+// loading a state, and saving one (a save stops and restarts into the state), parked with
+// the SPUs spinning and the progress overlay frozen on the figure it last drew.
+//
+// Callers that pass wake_up are synchronising on completion (BlockingCallFromMainThread
+// waits on it), so those keep running inline exactly as before.
+static struct main_thread_dispatcher {
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::deque<std::function<void()>> queue;
+  std::thread worker;
+  bool started = false;
+
+  void post(std::function<void()> cb) {
+    std::unique_lock lock(mutex);
+
+    if (!started) {
+      started = true;
+      worker = std::thread([this] { run(); });
+      worker.detach();
+    }
+
+    queue.push_back(std::move(cb));
+    cv.notify_one();
+  }
+
+  void run() {
+    pthread_setname_np(pthread_self(), "Main Callbacks");
+
+    for (;;) {
+      std::function<void()> cb;
+
+      {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [this] { return !queue.empty(); });
+        cb = std::move(queue.front());
+        queue.pop_front();
+      }
+
+      // One callback throwing must not take the dispatcher with it: everything posted
+      // after it would be dropped, including the savestate wake.
+      try {
+        cb();
+      } catch (const std::exception &e) {
+        rpcsx_android.error("Main-thread callback threw: %s", e.what());
+      } catch (...) {
+        rpcsx_android.error("Main-thread callback threw an unknown exception");
+      }
+    }
+  }
+} g_mainThreadDispatcher;
+
 static void setupCallbacks() {
   Emu.SetCallbacks({
       .call_from_main_thread =
           [](std::function<void()> cb, atomic_t<u32> *wake_up) {
-            cb();
             if (wake_up) {
+              // The caller is waiting on this one; running it here is what it
+              // already did and is what BlockingCallFromMainThread expects.
+              cb();
               *wake_up = true;
+              wake_up->notify_one();
+              return;
             }
+
+            g_mainThreadDispatcher.post(std::move(cb));
           },
       .on_run = [](auto...) {},
       .on_pause = [](auto...) {},
@@ -2081,6 +2181,19 @@ extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,
   return true;
 }
 
+// Hand the core Android's exact SoC identity. Deliberately a separate export
+// rather than an extra _rpcsx_initialize parameter: the core is dlopen()ed and
+// can be updated independently of the JNI glue that calls it, so changing an
+// existing export's signature would make older glue call it with a garbage
+// argument. Glue that predates this export simply never calls it, and glue that
+// has it null-checks the symbol against older cores.
+//
+// Must be called before _rpcsx_initialize, which is where the startup messages
+// are assembled.
+extern "C" void _rpcsx_setSocInfo(std::string_view socInfo) {
+  g_android_soc_info = std::string(socInfo);
+}
+
 extern "C" bool _rpcsx_initialize(std::string_view rootDir,
                                   std::string_view user) {
   auto rootDirStr = fix_dir_path(std::string(rootDir));
@@ -2099,6 +2212,7 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
     std::error_code ec;
     // std::filesystem::remove_all(g_android_cache_dir, ec);
     std::filesystem::create_directories(g_android_cache_dir);
+
   }
 
   if (g_initialized) {
@@ -2140,8 +2254,49 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
                                         stats.avail_free / 4);
   }
 
+  // Mesa driver options, from <root>/driver_env.txt, one NAME=VALUE per line.
+  //
+  // This device needs Turnip -- the stock Adreno driver does not render the game at all -- and
+  // Turnip is steered by environment variables such as TU_DEBUG. The usual way to set one,
+  // the wrap.<package> property, is ignored on a user build: it can be set and read back while
+  // never reaching the process, so a flag that never applied looks exactly like a flag that
+  // made no difference.
+  //
+  // Here rather than earlier, because this is the first point the log file exists; anything
+  // written before it is opened is discarded, and the whole value of this is being able to see
+  // that the option was applied. Still long before any Vulkan instance, which is what matters:
+  // Mesa caches each option the first time it is read.
+  //
+  // A missing file does nothing, which is the normal case.
+  if (std::ifstream env_file(g_android_executable_dir + "driver_env.txt"); env_file.is_open()) {
+    std::string line;
+    while (std::getline(env_file, line)) {
+      if (const auto eq = line.find('=');
+          eq != std::string::npos && !line.empty() && line[0] != '#') {
+        auto name = line.substr(0, eq);
+        auto value = line.substr(eq + 1);
+
+        while (!value.empty() && (value.back() == '\r' || value.back() == ' ')) {
+          value.pop_back();
+        }
+
+        setenv(name.c_str(), value.c_str(), 1);
+
+        // Read it back rather than echoing what we meant to set. /proc/<pid>/environ is the
+        // snapshot taken at exec and never reflects a runtime setenv, and Mesa's own logging
+        // may go to stderr, which Android drops, so this is the only honest confirmation.
+        rpcsx_android.warning("driver_env: %s=%s", name, getenv(name.c_str()));
+      }
+    }
+  }
+
   logs::stored_message ver{rpcsx_android.always()};
   ver.text = fmt::format("RPCSX-ps3-android v%s", rpcs3::get_version().to_string());
+
+  // Write exact SoC identity (from Android, not inferred from MIDRs)
+  logs::stored_message soc{rpcsx_android.always()};
+  soc.text = fmt::format(
+      "SoC: %s", g_android_soc_info.empty() ? "unknown" : g_android_soc_info);
 
   // Write System information
   logs::stored_message sys{rpcsx_android.always()};
@@ -2155,8 +2310,8 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
   logs::stored_message time{rpcsx_android.always()};
   time.text = fmt::format("Current Time: %s", std::chrono::system_clock::now());
 
-  logs::set_init(
-      {std::move(ver), std::move(sys), std::move(os), std::move(time)});
+  logs::set_init({std::move(ver), std::move(soc), std::move(sys), std::move(os),
+                  std::move(time)});
 
   auto set_rlim = [](int resource, std::uint64_t limit) {
     rlimit64 rlim{};
@@ -3756,8 +3911,12 @@ extern "C" bool _rpcsx_installKey(JNIEnv *env, int fd, long progressId,
 extern "C" std::string _rpcsx_systemInfo() {
   std::string result;
 
-  fmt::append(result, "%s\n\nLLVM CPU: %s\n\n", utils::get_system_info(),
-              fallback_cpu_detection());
+  // LLVM CPU reports the same resolution path the JIT actually uses (configured
+  // CPU -> LLVM host detection -> project fallback), not just the fallback guess.
+  fmt::append(result, "SoC: %s\n\n%s\n\nLLVM CPU: %s\n\n",
+              g_android_soc_info.empty() ? "unknown" : g_android_soc_info,
+              utils::get_system_info(),
+              jit_compiler::cpu(g_cfg.core.llvm_cpu.to_string()));
 
   {
     vk::instance device_enum_context;

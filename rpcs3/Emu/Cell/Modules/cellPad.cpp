@@ -580,12 +580,25 @@ void pad_get_data(u32 port_no, CellPadData* data, bool get_periph_data = false)
 		}
 		else
 		{
-			constexpr u32 copy_size = (static_cast<u32>(CELL_PAD_LEN_CHANGE_DEFAULT) - static_cast<u32>(CELL_PAD_BTN_OFFSET_DIGITAL1)) * sizeof(u16);
+			// Fill the pressure area even though the setting is off, and leave len reporting the
+			// default length.
+			//
+			// A DualShock 3 sends pressure bytes in every packet; the setting governs how much of
+			// the buffer the game is told is valid, not whether the pad produced the values.
+			// Zeroing it here diverges from that, and a game that reads a pressure byte without
+			// having asked for press mode gets 0 rather than the press it would see on hardware.
+			//
+			// Spider-Man: Web of Shadows does exactly that for R2. It never calls
+			// cellPadInfoPressMode or cellPadSetPressMode -- confirmed by tracing both -- so the
+			// setting stays at 0, yet it reads the R2 pressure byte to decide whether the trigger
+			// is held. Every digital-only button worked while R2 did nothing, including from the
+			// touch overlay and after remapping, because the digital bit was always delivered
+			// correctly and was never what the game looked at.
+			//
+			// len is deliberately unchanged, so a game that honours it sees exactly what it did
+			// before.
+			constexpr u32 copy_size = (static_cast<u32>(CELL_PAD_LEN_CHANGE_PRESS_ON) - static_cast<u32>(CELL_PAD_BTN_OFFSET_DIGITAL1)) * sizeof(u16);
 			std::memcpy(&data->button[CELL_PAD_BTN_OFFSET_DIGITAL1], &output.button[CELL_PAD_BTN_OFFSET_DIGITAL1], copy_size);
-
-			// Clear area if setting is not used
-			constexpr u32 area_size = (CELL_PAD_LEN_CHANGE_PRESS_ON - CELL_PAD_LEN_CHANGE_DEFAULT) * sizeof(u16);
-			std::memset(&data->button[CELL_PAD_LEN_CHANGE_DEFAULT], 0, area_size);
 		}
 
 		if (data->len == CELL_PAD_LEN_CHANGE_SENSOR_ON)

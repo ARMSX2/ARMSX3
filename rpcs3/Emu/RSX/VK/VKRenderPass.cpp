@@ -3,7 +3,9 @@
 
 #include "Utilities/mutex.h"
 #include "VKRenderPass.h"
+#include "VKHelpers.h"
 #include "vkutils/image.h"
+#include "vkutils/gpu_timer.h"
 
 #include "Emu/RSX/Common/unordered_map.hpp"
 
@@ -428,7 +430,23 @@ namespace vk
 		if (rsx::prof::enabled()) [[unlikely]]
 		{
 			rsx::prof::g_render_passes++;
+			rsx::prof::g_pass_ordinal++;
+
+			if (rsx::prof::g_pass_ordinal < rsx::prof::pass_slot_count)
+			{
+				rsx::prof::g_pass_width[rsx::prof::g_pass_ordinal] = static_cast<u16>(framebuffer_region.width);
+				rsx::prof::g_pass_height[rsx::prof::g_pass_ordinal] = static_cast<u16>(framebuffer_region.height);
+			}
 		}
+
+		// The draw region was declared and never recorded anywhere, so the one figure that
+		// says how much of the GPU is actually drawing the game has been missing while
+		// everything else about the GPU was measured.
+		//
+		// Timed from outside the pass on both ends deliberately. On a tiler the load at the
+		// start and the store at the end are the expensive part, and a timestamp placed
+		// inside the pass would exclude exactly the cost worth knowing about.
+		vk::get_gpu_timer().begin(cmd, vk::gpu_timer::region::draw);
 
 		vkCmdBeginRenderPass(cmd, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
 		renderpass_info = { pass, target };
@@ -447,7 +465,31 @@ namespace vk
 
 	void end_renderpass(const vk::command_buffer& cmd)
 	{
+		// A query that began inside a render pass instance has to end inside that same instance.
+		// Ending the pass underneath an open one leaves it permanently unavailable: the driver
+		// never marks it ready, and on Turnip it takes the device with it, reported later
+		// against poke_query because that is the first call that waits on a result.
+		//
+		// Queries do begin inside render passes here. VKDraw only lifts them out when
+		// use_strict_query_scopes() is set, and that is wired to Strict Rendering Mode, a user
+		// performance setting rather than a driver quirk, so it is off for almost everyone.
+		//
+		// The check belongs here rather than at the call sites. There are twenty-one of them and
+		// only one, in VKDraw, ever paired itself with a cleanup; change_image_layout alone ends
+		// 41 passes a frame in Web of Shadows, and any of them can land while a query is open.
+		// Fixing two of the sites moved the device loss later instead of removing it.
+		if (cmd.flags & vk::command_buffer::cb_has_open_query)
+		{
+			// const_cast: ending the query is a recording operation on this very buffer, and
+			// every caller here holds it non-const. The signature is const by history.
+			do_query_cleanup(const_cast<vk::command_buffer&>(cmd));
+		}
+
 		vkCmdEndRenderPass(cmd);
+
+		// After the pass ends, so the tile store it triggers is charged to the region.
+		vk::get_gpu_timer().end(cmd, vk::gpu_timer::region::draw);
+
 		g_current_renderpass[cmd] = {};
 	}
 

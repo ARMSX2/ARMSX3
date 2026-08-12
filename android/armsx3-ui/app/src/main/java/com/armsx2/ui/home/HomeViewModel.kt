@@ -41,6 +41,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     var state = androidx.compose.runtime.mutableStateOf(HomeUiState())
         private set
 
+
     fun load(romDirectories: List<String>, nativeReady: Boolean) {
         directories = romDirectories
         if (!loaded) {
@@ -110,6 +111,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Re-read storage after a licence install.
+     *
+     * The folder set is unchanged, so nothing else would prompt a rescan — but the lock state
+     * the scan stamps onto each game has just changed, and it is cached with the library.
+     */
+    fun refreshAfterLicenceInstall() {
+        repository.invalidateCache()
+        refresh()
+    }
+
     fun setQuery(value: String) {
         state.value = buildState(state.value.copy(query = value, selectedIndex = 0))
     }
@@ -139,6 +151,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun selectedGame(): GameInfo? = state.value.visibleGames.getOrNull(state.value.selectedIndex)
 
     fun launch(game: GameInfo) {
+        // A licence-locked game cannot boot: BootGame fails with DecryptionError, the app hides
+        // the library, spins up a VM, tears it back down and returns here. Ask for the key up
+        // front rather than spending a whole boot to tell the user what the scan already knows.
+        //
+        // Not marked as played either — a launch that never happened does not belong in Recently
+        // Played, which is what returning BEFORE markPlayed achieves.
+        if (game.locked) {
+            com.armsx2.LicencePrompt.ask(game)
+            return
+        }
         repository.markPlayed(game)
         state.value = buildState(state.value)
         val launchPath = if (game.uri.scheme == "file") game.uri.path ?: game.uri.toString() else game.uri.toString()

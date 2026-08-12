@@ -10,8 +10,8 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 /**
- * One-file export/import of everything the user would lose by reinstalling: save states, memory
- * cards, artwork, per-game settings, controller profiles, patches, and every preference.
+ * One-file export/import of everything the user would lose by reinstalling: save data, trophies,
+ * licences, save states, controller profiles, patches, and every preference.
  *
  * Reinstalling currently wipes all of it. ROMs and BIOS survive because they live outside the app
  * (true-SAF), but app-private data does not — and SharedPreferences are wiped even when the data
@@ -23,24 +23,50 @@ import java.util.zip.ZipOutputStream
  * a device with a different data folder — restores into the right place either way.
  *
  * Deliberately does NOT include:
- *  - `textures/` and `videos/` — texture packs run to gigabytes and are re-downloadable; putting
- *    them in would make the archive impossible to hand around, which defeats the purpose.
+ *  - `config/dev_hdd0/game` — installed titles. A PKG reinstalls; a save does not, which is the
+ *    whole distinction this list is drawn on. Unbounded in size.
+ *  - `config/dev_flash`, `dev_flash2`, `dev_flash3` — firmware, reinstalled from the user's PUP
+ *    (193 MB on the device this was sized against).
+ *  - `config/dev_hdd1` — the scratch disk titles use for their own caches (106 MB), regenerated.
  *  - `bios/` — the user's own dumps; they keep those themselves and we should not copy them around.
- *  - `cache/`, `logs/`, `pgo/`, `resources/`, `shaders/` — all regenerated on demand. Shader caches
- *    in particular are large, GPU-specific, and actively harmful to restore onto another device.
+ *  - `cache/`, `config/config_db`, `logs/`, `pgo/`, `resources/`, `shaders/` — all regenerated on
+ *    demand. Shader caches in particular are large, GPU-specific, and actively harmful to restore
+ *    onto another device.
  */
 object BackupManager {
     private const val MANIFEST = "armsx2-backup.json"
     private const val PREFS_DIR = "prefs/"
     private const val FILES_DIR = "files/"
 
-    /** Data-root entries worth preserving. Anything absent is skipped silently. */
+    /**
+     * Data-root entries worth preserving. Anything absent is skipped silently.
+     *
+     * These are RPCS3's paths, not PCSX2's. The list arrived from ARMSX2 naming sstates,
+     * memcards, gamesettings, cheats and snaps -- none of which this emulator creates, so a
+     * backup collected a few kilobytes of controller profiles, reported success, and left the
+     * save data behind. Nothing warned, because "anything absent is skipped silently" is
+     * exactly right for an optional folder and exactly wrong for a list aimed at the wrong app.
+     *
+     * Nested paths are fine: entries resolve against the data root and are stored relative to
+     * it, so a subdirectory restores to the same place.
+     */
     private val INCLUDED = listOf(
-        "sstates", "memcards", "covers", "gamesettings", "inputprofiles",
-        "cheats", "patches", "snaps",
+        // The irreplaceable part: save data, trophies and licences. Everything else here can
+        // be rebuilt or re-downloaded; this cannot.
+        "config/dev_hdd0/home",
+        "config/savestates",
+        "config/input_configs",
+        "config/patches",
+        "inputprofiles",
+        "overlays",
     )
     private val INCLUDED_FILES = listOf(
-        "armsx2-settings.json", "PCSX2-Android.ini", "achievements.ini",
+        "armsx2-settings.json",
+        "games.json", "recent_games.json", "fw.json",
+        // RPCS3's own configuration. config.yml holds every emulator setting, and the per-game
+        // entries in games.yml are what map a title id back to its folder.
+        "config/config.yml", "config/games.yml", "config/patch_config.yml",
+        "config/rpcn.yml", "config/players_history.yml",
     )
 
     /** Named to avoid colliding with `kotlin.Result`, which is a default import. */
@@ -133,7 +159,7 @@ object BackupManager {
                     zip.closeEntry()
                 }
             }
-            if (files == 0) BackupResult(false, "not an ARMSX2 backup")
+            if (files == 0) BackupResult(false, "not a backup archive")
             else BackupResult(true, "$files files")
         }.getOrElse { BackupResult(false, it.message ?: "restore failed") }
     }

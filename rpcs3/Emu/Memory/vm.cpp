@@ -507,6 +507,37 @@ namespace vm
 			{
 				std::this_thread::yield();
 			}
+
+			// Name whoever is holding this up, once, if it stops looking like contention.
+			//
+			// This loop has no timeout and no progress guarantee: the exclusive form waits for
+			// every range lock bit in the set to clear, so one thread that stops releasing its
+			// bit hangs every other thread that takes a reservation, with no clue left behind.
+			// From outside it reads as a guest deadlock with everything in a legitimate wait,
+			// which is exactly how Sonic Unleashed presents at the SEGA logo: main_thread pinned
+			// in cellSpursRemoveWorkload, whose tail is a reservation_op, spinning here with
+			// cpu_flag::wait NOT set while one SPURS kernel sits on a single PC.
+			//
+			// Rate limited to one report per stuck acquisition. At 100 iterations of busy_wait
+			// plus yields this is several seconds in, far past any real contention.
+			if (i == 400'000)
+			{
+				const u64 held = get_range_lock_bits(true).load();
+				vm_log.error("vm::writer_lock stuck at addr=0x%x, size=0x%x: range lock bits still held = 0x%016x%s",
+					addr, size, held, range_lock ? "" : " (waiting for ALL bits, exclusive)");
+
+				for (u32 bit = 0; bit < 64; bit++)
+				{
+					if (~held & (u64{1} << bit))
+					{
+						continue;
+					}
+
+					const u64 entry = g_range_lock_set[bit].load();
+					vm_log.error("  range lock %u held: addr=0x%x size=0x%x flags=0x%x",
+						bit, static_cast<u32>(entry), static_cast<u32>(entry >> 32) & 0xffff, static_cast<u32>(entry >> 48));
+				}
+			}
 		}
 
 		if (range_lock)
@@ -583,8 +614,25 @@ namespace vm
 			{
 				if (auto ptr = +*lock)
 				{
-					while (!(ptr->state & cpu_flag::wait))
+					for (u64 spins = 0; !(ptr->state & cpu_flag::wait); spins++)
 					{
+						// Say who we are stuck behind, once.
+						//
+						// This waits for every registered PPU thread to reach cpu_flag::wait, with
+						// no timeout and nothing logged, so a thread that never gets there hangs the
+						// caller silently and the emulator looks like a clean guest deadlock: every
+						// thread in a legitimate wait, nothing obviously at fault.
+						//
+						// Sonic Unleashed stops at the SEGA logo in exactly that shape, with
+						// main_thread pinned in cellSpursRemoveWorkload carrying cpu_flag::memory
+						// but never cpu_flag::wait. The acquire loop above was instrumented first
+						// and reported nothing, which is what pointed here.
+						if (spins == 40'000'000)
+						{
+							vm_log.error("vm::writer_lock waiting for a PPU thread to reach cpu_flag::wait: id=0x%x '%s' state=0x%x, lock addr=0x%x size=0x%x",
+								ptr->id, ptr->get_name(), +ptr->state, addr, size);
+						}
+
 						utils::pause();
 					}
 				}

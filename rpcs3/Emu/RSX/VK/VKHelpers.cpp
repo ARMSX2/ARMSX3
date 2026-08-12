@@ -102,7 +102,27 @@ namespace vk
 		g_drv_sanitize_fp_values = false;
 		g_drv_disable_fence_reset = false;
 		g_drv_strict_query_scopes = !!g_cfg.video.strict_rendering_mode;
-		g_drv_emulate_cond_render = (g_cfg.video.relaxed_zcull_sync && !g_render_device->get_conditional_render_support());
+		// Emulated predication is for hardware that never had the extension. Where we turned it
+		// off ourselves as a driver workaround, it must stay off: the two are the same code
+		// path, and turning the extension off makes begin_conditional_rendering return before it
+		// builds m_cond_render_buffer, while the vertex shader keeps reading that buffer at
+		// offset 0. It finds a zeroed scratch buffer, predicates every draw away, and the game
+		// renders black with audio and overlays still running. The all-ones word that disables
+		// predication lives at offset 4 and is never reached, because the fallback leaves
+		// hw_cond_active set.
+		//
+		// Off means occlusion results stop culling draws, which is the trade the workaround
+		// already documents: more GPU work, and a session that survives.
+		// Straight off the GPU: the cached g_driver_vendor is not assigned until further down
+		// this function, so get_driver_vendor() would still hold the previous device's value.
+		const auto cond_render_vendor = g_render_device->gpu().get_driver_vendor();
+		const bool cond_render_blocked_by_driver =
+			cond_render_vendor == vk::driver_vendor::ADRENO ||
+			cond_render_vendor == vk::driver_vendor::TURNIP;
+
+		g_drv_emulate_cond_render = (g_cfg.video.relaxed_zcull_sync &&
+			!g_render_device->get_conditional_render_support() &&
+			!cond_render_blocked_by_driver);
 		g_num_processed_frames = 0;
 		g_num_total_frames = 0;
 		g_heap_compatible_buffer_types = 0;

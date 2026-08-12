@@ -150,6 +150,16 @@ fun SaveStatePickerScreen(mode: SaveMode, onBack: () -> Unit) {
                 fontSize = 12.sp,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             )
+            // Worth saying before the storage bill arrives rather than after: one state is
+            // tens of megabytes, it varies with the game, and there are ten slots for each.
+            if (!deleteMode) {
+                Text(
+                    str("savestate.sizeWarning"),
+                    color = Color(0xFF9AA0A6),
+                    fontSize = 12.sp,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
             failure?.let { key ->
                 Text(
                     str(key),

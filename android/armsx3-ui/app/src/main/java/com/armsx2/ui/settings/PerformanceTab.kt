@@ -319,6 +319,15 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 description = str("perf.accurateSpuDma.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(accurateSpuDma = it))) },
             )
+            SettingsDivider()
+            // Sits with the SPU rows because that is what it costs, not under a savestate
+            // heading where it would read as free.
+            ToggleRow(
+                label = str("perf.savestateCompatible.label"),
+                value = s.ps3.savestateCompatibleMode,
+                description = str("perf.savestateCompatible.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(savestateCompatibleMode = it))) },
+            )
         }
         SettingsDivider()
         // The PS2 speedhacks here (INTC/wait-loop detection, fast CDVD, instant

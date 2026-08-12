@@ -853,7 +853,34 @@ bool package_reader::set_install_path()
 	// TODO: Verify whether other content types require appending title ID
 	// Append title ID depending on content type
 	if (m_metadata.content_type != PKG_CONTENT_TYPE_THEME && m_metadata.content_type != PKG_CONTENT_TYPE_LICENSE)
-		dir += m_install_dir + '/';
+	{
+		// The install directory comes straight out of the package and was never checked.
+		//
+		// It has two sources and both can yield nothing. read_metadata() sizes it to 9 and
+		// reads the title ID over it without testing the result, so a short read leaves nine
+		// NUL bytes; and the DLC path takes c_str() + 8, which is empty whenever byte 8 is a
+		// NUL. Appending either one left the destination as dev_hdd0/game itself, so the
+		// package unpacked its own contents over the games root: users ended up with a
+		// library full of asset directories (manhat01, props_ab, script_network from GTA IV),
+		// storage consumed with nothing listed as installed, and folders that survived
+		// uninstalling the title because uninstall only removes dev_hdd0/game/<TITLEID>.
+		//
+		// c_str(), not the string itself, so the nine-NUL case reads as empty rather than as
+		// a nine character name. Separators and dot entries are refused too: this value is a
+		// single path component chosen by the package, and it should not be able to point
+		// anywhere else.
+		const std::string_view name = m_install_dir.c_str();
+
+		if (name.empty() || name == "." || name == ".." || name.find_first_of("/\\") != umax)
+		{
+			pkg_log.error("PKG has no usable install directory (content_type=0x%x, name='%s'). "
+				"Refusing to unpack into '%s'.", static_cast<u32>(m_metadata.content_type), name, dir);
+			return false;
+		}
+
+		dir += name;
+		dir += '/';
+	}
 
 	// If false, an existing directory is being overwritten: cannot cancel the operation
 	m_was_null = !fs::is_dir(dir);

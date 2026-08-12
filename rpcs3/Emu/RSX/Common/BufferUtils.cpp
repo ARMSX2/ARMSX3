@@ -101,6 +101,69 @@ namespace
 		}
 	}
 
+#if defined(ARCH_ARM64)
+	// Four u32 per iteration instead of one.
+	//
+	// The SIMD builds of these two are assembled by asmjit under ARCH_X64 only, so every
+	// ARM64 build fell through to the scalar loop above -- reached through a function
+	// pointer, which cannot be inlined, and LTO is disabled project-wide (see the note in
+	// the root CMakeLists), so nothing recovered it later either.
+	//
+	// It is on a hot path: transform constants, transform programs and vertex data all
+	// upload through here, and a profile of Sonic '06 on a Snapdragon 8 Gen 2 put 82.5% of
+	// the RSX thread in FIFO decode with thousands of these blocks per frame.
+	//
+	// vrev32q_u8 reverses the bytes within each 32-bit lane, which is exactly the swap the
+	// scalar path performs per element. The compare variant accumulates differences with
+	// or/xor and reduces once at the end, so it keeps the "did anything actually change"
+	// answer without branching per element.
+	template <bool Compare>
+	auto copy_data_swap_u32_neon(u32* dst, const u32* src, u32 count)
+	{
+		u32 result = 0;
+		u32 i = 0;
+
+		uint32x4_t diff = vdupq_n_u32(0);
+
+		for (; i + 4 <= count; i += 4)
+		{
+			const uint32x4_t data = vreinterpretq_u32_u8(
+				vrev32q_u8(vreinterpretq_u8_u32(vld1q_u32(src + i))));
+
+			if constexpr (Compare)
+			{
+				diff = vorrq_u32(diff, veorq_u32(data, vld1q_u32(dst + i)));
+			}
+
+			vst1q_u32(dst + i, data);
+		}
+
+		if constexpr (Compare)
+		{
+			result |= vmaxvq_u32(diff);
+		}
+
+		// Tail. Counts here are small and frequently not a multiple of four (a constant
+		// block is capped at 32 words but is routinely shorter), so this runs often.
+		for (; i < count; i++)
+		{
+			const u32 data = stx::se_storage<u32>::swap(src[i]);
+
+			if constexpr (Compare)
+			{
+				result |= data ^ dst[i];
+			}
+
+			dst[i] = data;
+		}
+
+		if constexpr (Compare)
+		{
+			return static_cast<bool>(result);
+		}
+	}
+#endif
+
 #if defined(ARCH_X64)
 	template <bool Compare>
 	void build_copy_data_swap_u32(asmjit::simd_builder& c, native_args& args)
@@ -182,6 +245,9 @@ namespace
 #if defined(ARCH_X64)
 DECLARE(copy_data_swap_u32) = build_function_asm<void(*)(u32*, const u32*, u32), asmjit::simd_builder>("copy_data_swap_u32", &build_copy_data_swap_u32<false>);
 DECLARE(copy_data_swap_u32_cmp) = build_function_asm<bool(*)(u32*, const u32*, u32), asmjit::simd_builder>("copy_data_swap_u32_cmp", &build_copy_data_swap_u32<true>);
+#elif defined(ARCH_ARM64)
+DECLARE(copy_data_swap_u32) = copy_data_swap_u32_neon<false>;
+DECLARE(copy_data_swap_u32_cmp) = copy_data_swap_u32_neon<true>;
 #else
 DECLARE(copy_data_swap_u32) = copy_data_swap_u32_naive<false>;
 DECLARE(copy_data_swap_u32_cmp) = copy_data_swap_u32_naive<true>;

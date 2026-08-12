@@ -17,7 +17,8 @@ namespace aarch64
         u32 part;
         const char* arch;
         const char* family;
-        const char* name;
+        const char* name;      // Human-readable display name
+        const char* llvm_name; // Canonical LLVM processor name (valid -mcpu), see 3rdparty/llvm TargetParser/Host.cpp
     };
 
     struct cpu_vendor_t
@@ -50,42 +51,50 @@ namespace aarch64
     static cpu_entry_t s_cpu_list[] =
     {
         // ARM
-        { 0x41, 0xd01, "armv8-a+crc+simd", "", "Cortex-A32" },
-        { 0x41, 0xd04, "armv8-a+crc+simd", "", "Cortex-A35" },
-        { 0x41, 0xd03, "armv8-a+crc+simd", "", "Cortex-A53" },
-        { 0x41, 0xd07, "armv8-a+crc+simd", "", "Cortex-A57" },
-        { 0x41, 0xd08, "armv8-a+crc+simd", "", "Cortex-A72" },
-        { 0x41, 0xd09, "armv8-a+crc+simd", "", "Cortex-A73" },
-        { 0x41, 0xd05, "armv8.2-a+fp16+dotprod", "", "Cortex-A55" },
-        { 0x41, 0xd0a, "armv8.2-a+fp16+dotprod", "", "Cortex-A75" },
-        { 0x41, 0xd0b, "armv8.2-a+fp16+dotprod", "", "Cortex-A76" },
-        { 0x41, 0xd0e, "armv8.2-a+fp16+dotprod", "", "Cortex-A76ae" },
-        { 0x41, 0xd0d, "armv8.2-a+fp16+dotprod", "", "Cortex-A77" },
-        { 0x41, 0xd41, "armv8.2-a+fp16+dotprod", "", "Cortex-A78" },
-        { 0x41, 0xd42, "armv8.2-a+fp16+dotprod", "", "Cortex-A78ae" },
-        { 0x41, 0xd4b, "armv8.2-a+fp16+dotprod", "", "Cortex-A78c" },
-        { 0x41, 0xd47, "armv9-a+fp16+bf16+i8mm", "", "Cortex-A710" },
-        { 0x41, 0xd44, "armv8.2-a+fp16+dotprod", "", "Cortex-X1" },
-        { 0x41, 0xd4c, "armv8.2-a+fp16+dotprod", "", "Cortex-X1c" },
-        { 0x41, 0xd0c, "armv8.2-a+fp16+dotprod", "", "Neoverse-N1" },
-        { 0x41, 0xd40, "armv8.4-a+fp16+bf16+i8mm", "", "Neoverse-V1" },
-        { 0x41, 0xd49, "armv8.5-a+fp16+bf16+i8mm", "", "Neoverse-N2" },
-        { 0x41, 0xd23, "armv8.1-m.main+pacbti+mve.fp+fp.dp", "", "Cortex-M85" },
-        { 0x41, 0xd13, "armv8-r+crc+simd", "", "Cortex-R52" },
-        { 0x41, 0xd16, "armv8-r+crc+simd", "", "Cortex-R52+" },
+        { 0x41, 0xd01, "armv8-a+crc+simd", "", "Cortex-A32", "cortex-a32" },
+        { 0x41, 0xd04, "armv8-a+crc+simd", "", "Cortex-A35", "cortex-a35" },
+        { 0x41, 0xd03, "armv8-a+crc+simd", "", "Cortex-A53", "cortex-a53" },
+        { 0x41, 0xd07, "armv8-a+crc+simd", "", "Cortex-A57", "cortex-a57" },
+        { 0x41, 0xd08, "armv8-a+crc+simd", "", "Cortex-A72", "cortex-a72" },
+        { 0x41, 0xd09, "armv8-a+crc+simd", "", "Cortex-A73", "cortex-a73" },
+        { 0x41, 0xd05, "armv8.2-a+fp16+dotprod", "", "Cortex-A55", "cortex-a55" },
+        { 0x41, 0xd0a, "armv8.2-a+fp16+dotprod", "", "Cortex-A75", "cortex-a75" },
+        { 0x41, 0xd0b, "armv8.2-a+fp16+dotprod", "", "Cortex-A76", "cortex-a76" },
+        { 0x41, 0xd0e, "armv8.2-a+fp16+dotprod", "", "Cortex-A76ae", "cortex-a76ae" },
+        { 0x41, 0xd0d, "armv8.2-a+fp16+dotprod", "", "Cortex-A77", "cortex-a77" },
+        { 0x41, 0xd41, "armv8.2-a+fp16+dotprod", "", "Cortex-A78", "cortex-a78" },
+        { 0x41, 0xd42, "armv8.2-a+fp16+dotprod", "", "Cortex-A78ae", "cortex-a78ae" },
+        { 0x41, 0xd4b, "armv8.2-a+fp16+dotprod", "", "Cortex-A78c", "cortex-a78c" },
+        { 0x41, 0xd46, "armv9-a+fp16+bf16+i8mm", "", "Cortex-A510", "cortex-a510" },
+        { 0x41, 0xd47, "armv9-a+fp16+bf16+i8mm", "", "Cortex-A710", "cortex-a710" },
+        { 0x41, 0xd4d, "armv9-a+fp16+bf16+i8mm", "", "Cortex-A715", "cortex-a715" },
+        { 0x41, 0xd4e, "armv9-a+fp16+bf16+i8mm", "", "Cortex-X3", "cortex-x3" },
+        { 0x41, 0xd80, "armv9.2-a+fp16+bf16+i8mm", "", "Cortex-A520", "cortex-a520" },
+        { 0x41, 0xd81, "armv9.2-a+fp16+bf16+i8mm", "", "Cortex-A720", "cortex-a720" },
+        { 0x41, 0xd82, "armv9.2-a+fp16+bf16+i8mm", "", "Cortex-X4", "cortex-x4" },
+        { 0x41, 0xd44, "armv8.2-a+fp16+dotprod", "", "Cortex-X1", "cortex-x1" },
+        { 0x41, 0xd4c, "armv8.2-a+fp16+dotprod", "", "Cortex-X1c", "cortex-x1c" },
+        { 0x41, 0xd0c, "armv8.2-a+fp16+dotprod", "", "Neoverse-N1", "neoverse-n1" },
+        { 0x41, 0xd40, "armv8.4-a+fp16+bf16+i8mm", "", "Neoverse-V1", "neoverse-v1" },
+        { 0x41, 0xd49, "armv8.5-a+fp16+bf16+i8mm", "", "Neoverse-N2", "neoverse-n2" },
+        { 0x41, 0xd23, "armv8.1-m.main+pacbti+mve.fp+fp.dp", "", "Cortex-M85", "cortex-m85" },
+        { 0x41, 0xd13, "armv8-r+crc+simd", "", "Cortex-R52", "cortex-r52" },
+        { 0x41, 0xd16, "armv8-r+crc+simd", "", "Cortex-R52+", "cortex-r52plus" },
 
         // APPLE
-        { 0x61, 0x22, "armv8.5-a", "M1", "Firestorm" },
-        { 0x61, 0x23, "armv8.5-a", "M1", "IceStorm" },
-        { 0x61, 0x28, "armv8.5-a", "M1 Max", "Firestorm" },
-        { 0x61, 0x29, "armv8.5-a", "M1 Max", "Icestorm" },
-        { 0x61, 0x24, "armv8.5-a", "M1 Pro", "Firestorm" },
-        { 0x61, 0x25, "armv8.5-a", "M1 Pro", "Icestorm" },
-        { 0x61, 0x32, "armv8.5-a", "M2", "Avalanche" },
-        { 0x61, 0x33, "armv8.5-a", "M2", "Blizzard" },
+        { 0x61, 0x22, "armv8.5-a", "M1", "Firestorm", "apple-m1" },
+        { 0x61, 0x23, "armv8.5-a", "M1", "IceStorm", "apple-m1" },
+        { 0x61, 0x28, "armv8.5-a", "M1 Max", "Firestorm", "apple-m1" },
+        { 0x61, 0x29, "armv8.5-a", "M1 Max", "Icestorm", "apple-m1" },
+        { 0x61, 0x24, "armv8.5-a", "M1 Pro", "Firestorm", "apple-m1" },
+        { 0x61, 0x25, "armv8.5-a", "M1 Pro", "Icestorm", "apple-m1" },
+        { 0x61, 0x32, "armv8.5-a", "M2", "Avalanche", "apple-m2" },
+        { 0x61, 0x33, "armv8.5-a", "M2", "Blizzard", "apple-m2" },
 
         // QUALCOMM
-        { 0x51, 0x01, "armv8.5-a", "Snapdragon", "X-Elite" },
+        // MIDR 0x51/0x001 only identifies an Oryon core; it appears in X Elite and
+        // 8 Elite/QCS9075-class SoCs alike, so the display name stays generic.
+        { 0x51, 0x01, "armv8.5-a", "Snapdragon", "Oryon", "oryon-1" },
     };
 
     static const cpu_vendor_t* find_cpu_vendor(u64 id)
@@ -173,7 +182,7 @@ namespace aarch64
             }
         }
 
-        return lowest_part_info ? lowest_part_info->name : "";
+        return lowest_part_info ? lowest_part_info->llvm_name : "";
     }
 
     std::string get_cpu_brand()

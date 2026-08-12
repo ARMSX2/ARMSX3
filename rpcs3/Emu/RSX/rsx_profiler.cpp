@@ -6,6 +6,7 @@
 #include <string>
 #include <algorithm>
 #include <utility>
+#include <dlfcn.h>
 #include "gcm_printing.h"
 
 LOG_CHANNEL(prof_log, "RSXPROF");
@@ -17,9 +18,36 @@ namespace rsx::prof
 	bucket g_current = bucket::unclassified;
 	u64 g_last_switch = 0;
 	const void* g_owner_thread = nullptr;
+
+	// Stall reporting state. See poll_stall.
+	u64 g_last_stall_check = 0;
+	u64 g_stall_frames = umax;
+	u64 g_stall_started = 0;
 	u64 g_fifo_refills = 0;
 	u64 g_fifo_commands = 0;
+	u64 g_fifo_dispatches = 0;
+	u64 g_draw_calls = 0;
+	u64 g_present_checks = 0;
+	u64 g_frame_cleanups = 0;
+	u64 g_fence_polls = 0;
+	u64 g_fence_polls_not_ready = 0;
+	u32 g_pass_ordinal = 0;
+	u64 g_pass_draws[pass_slot_count] = {};
+	u16 g_pass_width[pass_slot_count] = {};
+	u16 g_pass_height[pass_slot_count] = {};
+	u64 g_pass_vertices[pass_slot_count] = {};
+	u64 g_pass_barriers[pass_slot_count] = {};
+	u64 g_pass_cyclic[pass_slot_count] = {};
+	u64 g_pass_vp_words[pass_slot_count] = {};
+	u64 g_pass_fp_words[pass_slot_count] = {};
+	u64 g_pass_subdraws[pass_slot_count] = {};
+	u64 g_pass_queries[pass_slot_count] = {};
+	u64 g_xform_program_calls = 0;
+	u64 g_xform_program_words = 0;
+	u64 g_xform_const_calls = 0;
+	u64 g_xform_const_words = 0;
 	u32 g_method_counts[method_slot_count] = {};
+	u64 g_method_ticks[method_slot_count] = {};
 	u64 g_fifo_refill_bytes = 0;
 	u64 g_fifo_refill_stalls = 0;
 	u64 g_fifo_refill_stall_us = 0;
@@ -73,6 +101,36 @@ namespace rsx::prof
 		"Present:1102",
 	};
 
+	const void* g_rp_callers[2][rp_caller_slots] = {};
+	u64 g_rp_caller_counts[2][rp_caller_slots] = {};
+
+	void note_rp_teardown(const void* caller, u32 level)
+	{
+		// Linear scan of a tiny table. The set of distinct callers is small and stable, so
+		// this finds a hit in the first few slots; if it ever overflows, the surplus is
+		// charged to the last slot rather than silently dropped.
+		auto& addrs = g_rp_callers[level];
+		auto& counts = g_rp_caller_counts[level];
+
+		for (usz i = 0; i < rp_caller_slots; i++)
+		{
+			if (addrs[i] == caller)
+			{
+				counts[i]++;
+				return;
+			}
+
+			if (!addrs[i])
+			{
+				addrs[i] = caller;
+				counts[i] = 1;
+				return;
+			}
+		}
+
+		counts[rp_caller_slots - 1]++;
+	}
+
 	void bind_to_current_thread()
 	{
 		g_owner_thread = current_thread_token();
@@ -83,7 +141,24 @@ namespace rsx::prof
 		switch (b)
 		{
 		case bucket::fifo_decode: return "FIFO decode";
+		case bucket::fifo_refill: return "FIFO refill";
+		case bucket::method_call: return "Method handlers";
+		case bucket::rsx_barrier: return "RSX barrier";
+		case bucket::dma_copy: return "DMA copy";
+		case bucket::blit_scale: return "Blit SW scale";
+		case bucket::xform_program: return "Xform program";
+		case bucket::xform_const: return "Xform constant";
 		case bucket::draw_setup: return "Draw setup";
+		case bucket::draw_prologue: return "Draw prologue";
+		case bucket::draw_epilogue: return "Draw epilogue";
+		case bucket::wr_barrier: return "Write barrier";
+		case bucket::rtt_write: return "RTT on_write";
+		case bucket::tex_release: return "Temp tex release";
+		case bucket::present_check: return "Present check";
+		case bucket::swap_wait: return "Swap fence wait";
+		case bucket::res_trim: return "Resource trim";
+		case bucket::res_gc: return "Resource destroy";
+		case bucket::fence_poll: return "Fence poll";
 		case bucket::vertex: return "Vertex/index";
 		case bucket::shader_translate: return "Shader translate";
 		case bucket::shader_compile: return "Shader compile";
@@ -136,7 +211,52 @@ namespace rsx::prof
 			return;
 		}
 
+		// Re-bind if the RSX thread is not the one we armed against.
+		//
+		// Booting a second game without restarting the app builds a new RSX thread, and
+		// set_enabled -- the only thing that binds -- early-returns when the setting has not
+		// changed, so the profiler stayed bound to the previous game's thread. Every scope
+		// then failed its owner check, nothing ever switched buckets, and the whole window was
+		// charged to whichever bucket happened to be current. The result reads as "FIFO decode
+		// 100%", which is indistinguishable from a real finding and was briefly taken for one.
+		if (current_thread_token() != g_owner_thread) [[unlikely]]
+		{
+			bind_to_current_thread();
+
+			// The window so far belongs to a thread that is gone; keeping it would blend two
+			// games into one report.
+			g_acc = {};
+			g_acc.window_start = utils::get_tsc();
+			g_last_switch = g_acc.window_start;
+			g_current = bucket::fifo_decode;
+
+			for (auto& c : g_pass_draws) c = 0;
+			for (auto& c : g_pass_vertices) c = 0;
+			for (auto& c : g_pass_barriers) c = 0;
+			for (auto& c : g_pass_cyclic) c = 0;
+			for (auto& c : g_pass_vp_words) c = 0;
+			for (auto& c : g_pass_fp_words) c = 0;
+			for (auto& c : g_pass_subdraws) c = 0;
+			for (auto& c : g_pass_queries) c = 0;
+
+			prof_log.warning("RSX profiling re-bound to the current RSX thread");
+			return;
+		}
+
 		g_acc.frames++;
+
+		// Pass numbering is NOT restarted here.
+		//
+		// It used to be, on the claim that the GPU timer's event index resets on the same
+		// boundary. It does not. tick_frame runs from on_frame_end, BEFORE flip; the GPU timer
+		// rotates its slot at the top of flip and then drops every non-frame region recorded on
+		// the fresh slot -- which is flip's own overlay and calibration passes. Those passes
+		// still increment this counter, so the CPU ordinal ran ahead of the GPU ordinal by the
+		// number of present-path passes, and the two by-pass tables described different passes.
+		//
+		// A whole "anomaly" came out of that: a pass whose GPU cost was joined to another pass's
+		// workload read as 36x the per-draw cost of its neighbours. Reset at the flip point
+		// instead, where the GPU slot actually rotates. See VKPresent.cpp.
 
 		// Report on a frame boundary rather than a timer, so per-frame costs divide by a
 		// whole number of frames and a long stall lands in the window that contains it.
@@ -144,6 +264,65 @@ namespace rsx::prof
 		{
 			dump_and_reset();
 		}
+	}
+
+	// Say what the RSX thread is sitting in when frames have stopped arriving.
+	//
+	// tick_frame is the only thing that reports and set_enabled is the only thing that arms,
+	// and both are reached from on_frame_end -- so a hang that happens before a frame completes
+	// leaves the profiler switched off and silent however the setting is set. That is exactly
+	// the case worth instrumenting: a boot that never presents, where the compile has finished
+	// and the thread is looping somewhere without consuming. Called from do_local_task, which
+	// the FIFO loop reaches whether or not frames advance.
+	bool poll_stall()
+	{
+		if (!g_enabled.load(std::memory_order_relaxed)) [[likely]]
+		{
+			return false;
+		}
+
+		// Only the thread the buckets are armed against; anyone else's clock is meaningless.
+		if (current_thread_token() != g_owner_thread)
+		{
+			return false;
+		}
+
+		const u64 freq = utils::get_tsc_freq();
+
+		if (!freq)
+		{
+			return false;
+		}
+
+		const u64 now = utils::get_tsc();
+
+		if (now - g_last_stall_check < freq * 5)
+		{
+			return false;
+		}
+
+		g_last_stall_check = now;
+
+		if (g_acc.frames != g_stall_frames)
+		{
+			// Frames are still arriving, so tick_frame is doing the reporting.
+			g_stall_frames = g_acc.frames;
+			g_stall_started = now;
+			return false;
+		}
+
+		if (!g_stall_started)
+		{
+			g_stall_started = now;
+			return false;
+		}
+
+		prof_log.error("RSX has not finished a frame in %.1fs; current bucket '%s', in it for %.2fs",
+			static_cast<double>(now - g_stall_started) / static_cast<double>(freq),
+			name_of(g_current),
+			static_cast<double>(now - g_last_switch) / static_cast<double>(freq));
+
+		return true;
 	}
 
 	void dump_and_reset()
@@ -249,15 +428,172 @@ namespace rsx::prof
 				static_cast<double>(g_fifo_refill_bytes) / static_cast<double>(g_fifo_refills));
 		}
 
+		for (u32 level = 0; level < 2; level++)
+		{
+			std::pair<const void*, u64> top[6] = {};
+			for (usz i = 0; i < rp_caller_slots; i++)
+			{
+				if (!g_rp_caller_counts[level][i]) continue;
+				if (g_rp_caller_counts[level][i] <= top[5].second) continue;
+				top[5] = { g_rp_callers[level][i], g_rp_caller_counts[level][i] };
+				std::sort(std::begin(top), std::end(top),
+					[](const auto& a, const auto& b) { return a.second > b.second; });
+			}
+
+			if (!top[0].second)
+			{
+				continue;
+			}
+
+			std::string list;
+			for (const auto& [addr, count] : top)
+			{
+				if (!count) continue;
+
+				// dladdr resolves exported names directly; everything else only yields the
+				// module base, which is enough to hand the offset to llvm-symbolizer against
+				// the unstripped core.
+				Dl_info info{};
+				std::string where;
+
+				if (addr && dladdr(addr, &info) && info.dli_fbase)
+				{
+					const uptr off = reinterpret_cast<uptr>(addr) - reinterpret_cast<uptr>(info.dli_fbase);
+					where = info.dli_sname
+						? fmt::format("%s +0x%x", info.dli_sname, off)
+						: fmt::format("+0x%x", off);
+				}
+				else
+				{
+					where = fmt::format("%p", addr);
+				}
+
+				fmt::append(list, "\n\t  %-44s %6.1f/frame", where, static_cast<double>(count) / frames);
+			}
+
+			fmt::append(report, "\n\trp teardown by %s%s",
+				level == 0 ? "direct caller" : "change_layout caller", list);
+		}
+
+		{
+			// Draws per pass, by the same ordinal the GPU timer reports its per-pass cost
+			// against, so the two can be read side by side.
+			std::pair<u32, u64> top[6] = {};
+			for (u32 i = 0; i < pass_slot_count; i++)
+			{
+				if (!g_pass_draws[i]) continue;
+				if (g_pass_draws[i] <= top[5].second) continue;
+				top[5] = { i, g_pass_draws[i] };
+				std::sort(std::begin(top), std::end(top),
+					[](const auto& a, const auto& b) { return a.second > b.second; });
+			}
+
+			if (top[0].second)
+			{
+				std::string list;
+				for (const auto& [ordinal, count] : top)
+				{
+					if (!count) continue;
+
+					const double draws_per_frame = static_cast<double>(count) / frames;
+					const double verts_per_frame = static_cast<double>(g_pass_vertices[ordinal]) / frames;
+
+					fmt::append(list, "\n\t  pass #%-3u %5.0f draws  %8.0f verts  %5.0f v/draw  %ux%u  vp %.0f fp %.0f words/draw  SUBDRAWS %.1f/draw  QUERIES %.0f (%.2f/draw)",
+						ordinal, draws_per_frame, verts_per_frame,
+						count ? static_cast<double>(g_pass_vertices[ordinal]) / static_cast<double>(count) : 0.0,
+						g_pass_width[ordinal], g_pass_height[ordinal],
+						count ? static_cast<double>(g_pass_vp_words[ordinal]) / static_cast<double>(count) : 0.0,
+						count ? static_cast<double>(g_pass_fp_words[ordinal]) / static_cast<double>(count) : 0.0,
+						count ? static_cast<double>(g_pass_subdraws[ordinal]) / static_cast<double>(count) : 0.0,
+						static_cast<double>(g_pass_queries[ordinal]) / frames,
+						count ? static_cast<double>(g_pass_queries[ordinal]) / static_cast<double>(count) : 0.0);
+				}
+				fmt::append(report, "\n\tby pass%s", list);
+			}
+		}
+
+		if (g_xform_program_calls || g_xform_const_calls)
+		{
+			const auto ns_each = [&](bucket b, u64 calls)
+			{
+				return calls
+					? static_cast<double>(g_acc.ticks[static_cast<usz>(b)]) * to_ms * 1'000'000.0 / static_cast<double>(calls)
+					: 0.0;
+			};
+
+			fmt::append(report, "\n\txform program   %.0f calls/frame, %.1f words each, %.0f ns each",
+				static_cast<double>(g_xform_program_calls) / frames,
+				g_xform_program_calls ? static_cast<double>(g_xform_program_words) / static_cast<double>(g_xform_program_calls) : 0.0,
+				ns_each(bucket::xform_program, g_xform_program_calls));
+
+			fmt::append(report, "\n\txform constant  %.0f calls/frame, %.1f words each, %.0f ns each",
+				static_cast<double>(g_xform_const_calls) / frames,
+				g_xform_const_calls ? static_cast<double>(g_xform_const_words) / static_cast<double>(g_xform_const_calls) : 0.0,
+				ns_each(bucket::xform_const, g_xform_const_calls));
+		}
+
 		if (g_fifo_commands)
 		{
 			// The per-command figure is against fifo_decode specifically, since that is the
 			// bucket with no owner left in it.
 			const u64 decode_ticks = g_acc.ticks[static_cast<usz>(bucket::fifo_decode)];
 
-			fmt::append(report, "\n\tFIFO commands   %.0f/frame, %.0f ns each in FIFO decode",
+			// Labelled packets, because that is what it counts. fifo_decode is also a
+			// catch-all holding every method handler body, since no handler carries its
+			// own scope, so neither figure is dispatch overhead alone.
+			fmt::append(report, "\n\tFIFO packets    %.0f/frame, %.0f ns each in FIFO decode",
 				static_cast<double>(g_fifo_commands) / frames,
 				static_cast<double>(decode_ticks) * to_ms * 1'000'000.0 / static_cast<double>(g_fifo_commands));
+
+			if (g_fifo_dispatches)
+			{
+				fmt::append(report, "\n\tFIFO dispatches %.0f/frame, %.1f/packet, %.0f ns each",
+					static_cast<double>(g_fifo_dispatches) / frames,
+					static_cast<double>(g_fifo_dispatches) / static_cast<double>(g_fifo_commands),
+					static_cast<double>(decode_ticks) * to_ms * 1'000'000.0 / static_cast<double>(g_fifo_dispatches));
+			}
+		}
+
+		if (g_draw_calls)
+		{
+			// Every bucket named here is entered exactly once per draw, so dividing by the
+			// draw count turns "this bucket is big" into "each draw pays this much", which is
+			// the form that says whether to cut the per-draw cost or the number of draws.
+			const auto ns_per_draw = [&](bucket b)
+			{
+				return static_cast<double>(g_acc.ticks[static_cast<usz>(b)]) * to_ms * 1'000'000.0
+					/ static_cast<double>(g_draw_calls);
+			};
+
+			fmt::append(report, "\n\tdraws           %.0f/frame, %.0f ns each in draw setup",
+				static_cast<double>(g_draw_calls) / frames,
+				ns_per_draw(bucket::draw_setup));
+
+			fmt::append(report, "\n\tpresent checks  %.1f/frame, %.1f cleanups/frame, %.1f us each",
+				static_cast<double>(g_present_checks) / frames,
+				static_cast<double>(g_frame_cleanups) / frames,
+				g_present_checks
+					? static_cast<double>(g_acc.ticks[static_cast<usz>(bucket::present_check)]
+						+ g_acc.ticks[static_cast<usz>(bucket::swap_wait)]
+						+ g_acc.ticks[static_cast<usz>(bucket::res_trim)])
+						* to_ms * 1000.0 / static_cast<double>(g_present_checks)
+					: 0.0);
+
+			if (g_fence_polls)
+			{
+				fmt::append(report, "\n\tfence polls     %.1f/frame, %.0f ns each, %.1f%% not ready",
+					static_cast<double>(g_fence_polls) / frames,
+					static_cast<double>(g_acc.ticks[static_cast<usz>(bucket::fence_poll)])
+						* to_ms * 1'000'000.0 / static_cast<double>(g_fence_polls),
+					static_cast<double>(g_fence_polls_not_ready) * 100.0 / static_cast<double>(g_fence_polls));
+			}
+
+			fmt::append(report, "\n\tper draw        prologue %.0f, epilogue %.0f, wr barrier %.0f, on_write %.0f, tex release %.0f ns",
+				ns_per_draw(bucket::draw_prologue),
+				ns_per_draw(bucket::draw_epilogue),
+				ns_per_draw(bucket::wr_barrier),
+				ns_per_draw(bucket::rtt_write),
+				ns_per_draw(bucket::tex_release));
 		}
 
 		{
@@ -280,20 +616,73 @@ namespace rsx::prof
 				{
 					if (!count) continue;
 					std::string scratch;
-					const auto name = rsx::get_method_name(slot << 2, scratch).second;
+					// The name table is keyed by register index, which is what a slot already is.
+					// Passing slot << 2 matched whichever unrelated method happened to have that
+					// value as its enum, so a hot slot could be reported under another method's
+					// name -- NV406E_SEMAPHORE_ACQUIRE came out as NV4097_SET_CONTEXT_DMA_VERTEX_B.
+					// The hex fallback below is still the byte offset, which is what a reader wants.
+					const auto name = rsx::get_method_name(slot, scratch).second;
 					fmt::append(list, "\n\t  %-46s %8.0f/frame  %4.1f%%",
 						name.empty() ? fmt::format("0x%05x", slot << 2) : std::string(name),
 						static_cast<double>(count) / frames,
-						static_cast<double>(count) * 100.0 / static_cast<double>(g_fifo_commands));
+						static_cast<double>(count) * 100.0 / static_cast<double>(g_fifo_dispatches ? g_fifo_dispatches : g_fifo_commands));
 				}
 				fmt::append(report, "\n\ttop methods%s", list);
+			}
+		}
+
+		{
+			// By cost, not by volume. The two disagree: the busiest method may be a register
+			// write and a rare one may be doing all the work, and only this ranking can say.
+			std::pair<u32, u64> top[8] = {};
+			for (u32 i = 0; i < method_slot_count; i++)
+			{
+				if (!g_method_ticks[i]) continue;
+				if (g_method_ticks[i] <= top[7].second) continue;
+				top[7] = { i, g_method_ticks[i] };
+				std::sort(std::begin(top), std::end(top),
+					[](const auto& a, const auto& b) { return a.second > b.second; });
+			}
+
+			if (top[0].second)
+			{
+				std::string list;
+				for (const auto& [slot, ticks] : top)
+				{
+					if (!ticks) continue;
+					std::string scratch;
+					// The name table is keyed by register index, which is what a slot already is.
+					// Passing slot << 2 matched whichever unrelated method happened to have that
+					// value as its enum, so a hot slot could be reported under another method's
+					// name -- NV406E_SEMAPHORE_ACQUIRE came out as NV4097_SET_CONTEXT_DMA_VERTEX_B.
+					// The hex fallback below is still the byte offset, which is what a reader wants.
+					const auto name = rsx::get_method_name(slot, scratch).second;
+					fmt::append(list, "\n\t  %-46s %7.3f ms/frame  %6.0f ns each",
+						name.empty() ? fmt::format("0x%05x", slot << 2) : std::string(name),
+						static_cast<double>(ticks) * to_ms / frames,
+						g_method_counts[slot]
+							? static_cast<double>(ticks) * to_ms * 1'000'000.0 / static_cast<double>(g_method_counts[slot])
+							: 0.0);
+				}
+				fmt::append(report, "\n\tcostliest methods%s", list);
 			}
 		}
 
 		prof_log.success("%s", report);
 
 		g_fifo_commands = 0;
+		g_fifo_dispatches = 0;
+		g_draw_calls = 0;
+		g_present_checks = 0;
+		g_frame_cleanups = 0;
+		g_fence_polls = 0;
+		g_fence_polls_not_ready = 0;
+		g_xform_program_calls = 0;
+		g_xform_program_words = 0;
+		g_xform_const_calls = 0;
+		g_xform_const_words = 0;
 		std::fill(std::begin(g_method_counts), std::end(g_method_counts), 0u);
+		std::fill(std::begin(g_method_ticks), std::end(g_method_ticks), 0ull);
 		g_fifo_refills = 0;
 		g_fifo_refill_bytes = 0;
 		g_fifo_refill_stalls = 0;
@@ -303,6 +692,16 @@ namespace rsx::prof
 		g_mprotect_bytes = 0;
 		g_access_violations = 0;
 		for (auto& c : g_rp_sites) c = 0;
+		for (auto& c : g_pass_draws) c = 0;
+		for (auto& c : g_pass_vertices) c = 0;
+		for (auto& c : g_pass_barriers) c = 0;
+		for (auto& c : g_pass_cyclic) c = 0;
+		for (auto& c : g_pass_vp_words) c = 0;
+		for (auto& c : g_pass_fp_words) c = 0;
+		for (auto& c : g_pass_subdraws) c = 0;
+		for (auto& c : g_pass_queries) c = 0;
+		for (auto& level : g_rp_caller_counts) for (auto& c : level) c = 0;
+		for (auto& level : g_rp_callers) for (auto& a : level) a = nullptr;
 		for (auto& c : g_flush_sites) c = 0;
 
 		g_acc = {};

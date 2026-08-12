@@ -71,6 +71,28 @@ object CoreSettingOverrides {
         MainActivityRuntime.prefs.edit { remove(keyFor(scope, serial)) }
 
     /** Drop recorded edits by path. For nodes a build no longer has, or no longer wants set. */
+    /**
+     * Drop [paths] from the global store and from every per-title store.
+     *
+     * Raw overrides re-push after the curated settings, so a stale one silently beats the UI: the
+     * settings screen can read Safe while config.yml reads Mega, and nothing on screen explains
+     * it. Clearing one scope is not enough either, because a title can carry its own entry for a
+     * key the global also holds -- Batman: Arkham City had Accurate SPU Reservations forced true
+     * per-title while the global forced it false.
+     */
+    fun forgetEverywhere(vararg paths: String) {
+        forget(SettingsScope.Global, null, *paths)
+
+        for (key in MainActivityRuntime.prefs.all.keys) {
+            if (!key.startsWith("config.coreOverrides.game.")) continue
+
+            val current = read(key)
+            if (paths.none { it in current }) continue
+
+            write(key, current.filterKeys { it !in paths })
+        }
+    }
+
     fun forget(scope: SettingsScope, serial: String?, vararg paths: String) {
         val key = keyFor(scope, serial)
         val current = read(key)

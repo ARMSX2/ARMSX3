@@ -1066,7 +1066,42 @@ void VKGSRender::on_semaphore_acquire_wait()
 
 bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 {
-	ensure(!vk::is_uninterruptible() && rsx::get_current_renderer()->is_current_thread());
+	ensure(rsx::get_current_renderer()->is_current_thread());
+
+	// Decline rather than abort when the renderer cannot be interrupted.
+	//
+	// Eviction here would touch resources the driver may still be reading, so it genuinely cannot
+	// run in this state -- but that is a reason to say no, not to kill the thread. Callers already
+	// expect a refusal: the OOM path in VKDraw treats false as "use placeholder textures, can
+	// cause graphics glitches but shouldn't crash otherwise".
+	//
+	// Asserting instead cost God of War 3 the RSX thread outright. Skipping the intro screens
+	// pushes a burst of surface and texture allocation through a point where the renderer is
+	// uninterruptible, and the assertion fired there: audio kept playing, no frame ever arrived,
+	// and it presented as a hang rather than a crash.
+	if (vk::is_uninterruptible())
+	{
+		// Do the half of the work that does not need a hard sync, instead of refusing outright.
+		//
+		// Only the fatal branch below needs the queue idle -- that is what the flush there is for,
+		// and it is why this used to assert here. Everything else is reachable: the texture cache
+		// purges its unreleased pool, and at severe it also drops unlocked sections. RPCS3 already
+		// runs exactly that with no flush whenever pressure is non-fatal, so doing it here is the
+		// existing contract rather than a new risk.
+		//
+		// Refusing outright is not free. The allocator's own recovery path is
+		// "if OUT_OF_DEVICE_MEMORY and vmm_handle_memory_pressure(...) then retry the allocation",
+		// so returning false skips the retry and the allocation dies. God of War 3 reached that
+		// with 0 reclaim attempts and 0 recoveries logged: it never got the chance to free
+		// anything. Clamped below fatal so the flush-dependent path stays unreachable.
+		const auto safe_severity = std::min(severity, rsx::problem_severity::severe);
+		const bool relieved = m_texture_cache.handle_memory_pressure(safe_severity);
+
+		rsx_log.warning("Video memory pressure while uninterruptible: %s without a hard sync.",
+			relieved ? "released some resources" : "found nothing to release");
+
+		return relieved;
+	}
 
 	bool texture_cache_relieved = false;
 	if (severity >= rsx::problem_severity::fatal)
@@ -1606,8 +1641,26 @@ void VKGSRender::flush_command_queue(bool hard_sync, bool do_not_switch)
 		ensure(hard_sync);
 	}
 
-	// Just in case a queued frame holds a ref to this cb, drain the present queue
-	check_present_status();
+	// Deliberately NOT draining the present queue here.
+	//
+	// The drain exists in case a queued frame still holds a ref to the command buffer just
+	// taken. It cannot: next() hands them out from a 512 entry ring, and the queued frame list
+	// is bounded at flip to m_max_async_frames - 1, so the buffer being reused is hundreds of
+	// frames retired. The guard is unreachable and the cost is not.
+	//
+	// check_present_status pokes the oldest queued frame's swap command buffer, and on Adreno
+	// vkGetFenceStatus blocks until signalled instead of returning VK_NOT_READY, so a poll that
+	// is written to be cheap becomes a full GPU sync. Called from here it ran 1.32 times a frame
+	// at about 11ms, which is the 14.6ms of Fence poll -- 31% of the frame in Web of Shadows,
+	// second only to the whole RSX decode loop.
+	//
+	// Same fault as the two sites removed with the earlier [wait][record] to [record][wait]
+	// change; this third one was missed because it sits inside flush_command_queue rather than
+	// on the present path. Ruled out first: the frame time is unchanged at quarter resolution,
+	// so it is not GPU work, and forcing the swapchain pre-transform to match the surface left
+	// it at 14.6ms, so it is not compositor rotation either.
+	//
+	// Frames are still retired: the flip path drains and bounds the queue.
 
 	if (m_occlusion_query_active)
 	{

@@ -99,6 +99,17 @@ data class Ps3Settings(
     val spuCache: Boolean = true,
     val llvmPrecompile: Boolean = true,
     val accurateSpuDma: Boolean = false,
+    /** Locks every SPU thread into a state a savestate can be serialised from.
+     *
+     *  Savestates cannot be taken without it: the save has to stop each SPU somewhere it can
+     *  be written out, and with this off that fails on any title with SPU work running.
+     *
+     *  On by default, unlike upstream, so the feature works for someone who never opens
+     *  settings -- a save that fails with "missing SPU setting" reads as broken, not as a
+     *  setting waiting to be found. The costs are real and are stated on the switch: it slows
+     *  the SPUs while it is on, and a PS3 state runs 500MB to 3GB. Turning it off restores
+     *  upstream behaviour and gives the SPU performance back. */
+    val savestateCompatibleMode: Boolean = true,
     val clocksScale: Int = 100,
     val resolutionScale: Int = 100,
     /** 0 = Disabled. Off by default: mobile drivers routinely lack the MSAA
@@ -135,6 +146,29 @@ data class Ps3Settings(
     val forceCpuBlit: Boolean = false,
     val shaderCompThreads: Int = 0,
     val textureLodBias: Int = 0,
+    /**
+     * VRAM allocation limit in MB. 1024.
+     *
+     * NOT a soft budget. It is applied as VMA's pHeapSizeLimit, so it is a hard ceiling: once
+     * total allocations reach it VMA returns OUT_OF_DEVICE_MEMORY however much memory the device
+     * actually has free. Lowering it does not make the cache evict earlier, it makes allocation
+     * fail earlier.
+     *
+     * Measured on the God of War 3 demo at 1024: a routine 24MB request failed while the process
+     * held only 1.6GB resident and 280MB in that pool -- an artificial ceiling, not the hardware.
+     * At 2048 it failed too, one screen later.
+     *
+     * Back to 2048, the value shipped before 0.5. 3072 was set to get the God of War 3 demo past
+     * an allocation failure, but that failure was measured BEFORE the uninterruptible reclaim
+     * fix landed, and raising the ceiling has its own cost: the texture cache budgets itself up
+     * to 2560MB on Android, so a higher cap lets the total grow with it. Batman: Arkham City was
+     * measured at 5596MB resident with a 6246MB peak on a 7.2GB device and stalled after a while
+     * -- no allocation failure, but far enough into memory pressure that the present pipeline
+     * collapses to a single frame in flight.
+     *
+     * The cap and the texture cache budget are not coordinated, which is the underlying problem;
+     * 2048 keeps their sum where it was when this game worked.
+     */
     val vramLimitMb: Int = 2048,
     val asyncTexStream: Boolean = false,
     val audioFormat: Int = 0,
@@ -565,13 +599,28 @@ data class Settings(
     /**
      * Thread Scheduler Mode: 0 = OS, 1 = RPCS3, 2 = RPCS3 Alternative.
      *
-     * 2 by default. Anything other than OS makes cpu_thread apply an affinity
-     * mask, which now means something on Android: the mask logic understands
-     * big.LITTLE and keeps SPU/RSX on the fast cluster instead of letting the
-     * scheduler drop them on A510s that run at ~27% of prime-core capacity.
-     * Left at OS this is a no-op and six SPU threads get scattered.
+     * 0 by default. This was 2, to keep SPU and RSX off the A510s, which run at
+     * roughly 27% of prime-core capacity. The reasoning holds for one thread per
+     * core and breaks down at six.
+     *
+     * Measured on a Snapdragon 8 Gen 2, in game, reading the masks the threads
+     * actually carry:
+     *
+     *     app cpuset (top-app)  0-7      Android grants every core
+     *     SPU[0..5]             3-6      six threads, four cores
+     *     rsx::thread           3-7
+     *
+     * Six SPU threads sharing four cores get about two thirds of a core each,
+     * which is worse than one thread owning an A510 outright, and it caps the
+     * whole emulator: the device sat at 60% with cores 0-2 idle while frames
+     * were slow. Spider-Man: Web of Shadows is visibly better at OS.
+     *
+     * The mask is ours, not Android's, which is also why these devices are
+     * reported to run better under native Linux, where no such policy applies.
+     *
+     * The other modes remain selectable for anyone whose device disagrees.
      */
-    val affinityMode: Int = 2,
+    val affinityMode: Int = 0,
     /** EmuCore/GS FramerateNTSC — the emulated PS2 vsync rate for NTSC games
      *  (PCSX2 default 59.94). Lowering it slows the game's target rate; raising it
      *  speeds it up. Mirrors NetherSX2's "Framerate For NTSC". */
@@ -949,8 +998,21 @@ data class Settings(
         put("PS3/Core", "SPU Cache", "bool", ps3.spuCache.toString())
         put("PS3/Core", "LLVM Precompilation", "bool", ps3.llvmPrecompile.toString())
         put("PS3/Core", "Accurate SPU DMA", "bool", ps3.accurateSpuDma.toString())
+        put("Savestate", "Compatible Savestate Mode", "bool", ps3.savestateCompatibleMode.toString())
         put("PS3/Core", "Clocks scale", "int", ps3.clocksScale.toString())
-        put("PS3/Video", "Resolution Scale", "int", ps3.resolutionScale.toString())
+        // From upscaleFloat, which is the control that exists.
+        //
+        // ps3.resolutionScale has no writer anywhere in the UI, so it sits at its default of
+        // 100 forever and this line used to push that default onto the same native node the
+        // upscale multiplier writes, Video@@Resolution Scale. applyTo runs after the launch
+        // path, so picking a scale and then booting a game silently rendered at native while
+        // the UI kept showing the chosen value. Changing it in game worked only because
+        // nothing calls applyTo again afterwards.
+        //
+        // Same conversion and clamp as Rpcs3Settings.setUpscaleMultiplier, so the two writers
+        // cannot disagree about what a given multiplier means.
+        put("PS3/Video", "Resolution Scale", "int",
+            (upscaleFloat * 100f).toInt().coerceIn(25, 800).toString())
         // Stretch is the only fit mode the CORE participates in; the rest are
         // surface layout. Keeping them in sync stops "Stretch" looking inert.
         put("PS3/Video", "Stretch To Display Area", "bool", (displayFitMode == 1).toString())
@@ -1236,19 +1298,26 @@ data class Settings(
         // above it would already be 60; setting it explicitly means the cap does not depend
         // on the vblank path holding, which it did not. Enum node, so the value is quoted.
         runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Frame limit", "\"60\"") }
-        // Held at the upstream default, which is off.
+        // Left at upstream's 100: busy-wait on a reservation rather than sleeping.
         //
-        // Savestates cannot work without it: saving has to lock every SPU thread into a state
-        // it can be serialised from, and with this off that lock fails on any title with SPU
-        // work running. It was turned on for exactly that reason and then turned back off,
-        // because a PS3 savestate runs 500MB to 3GB and the feature was dropped rather than
-        // ship something that fills a phone in a handful of saves.
+        // This was dropped to 20 while the emulator was starved for cores, on the reasoning that
+        // a spinning SPU steals a core from threads doing real work. That reasoning was sound
+        // for the machine as it was and is wrong for the machine as it is now. Two things
+        // changed underneath it: the affinity mask stopped confining six SPU threads to four
+        // cores, and turning off the global lock contention in the reservation path freed the
+        // rest. Measured after both, in game: 34% of eight cores busy, two to four threads
+        // runnable, five cores idle.
         //
-        // Written explicitly rather than left alone: it was pushed as true for a while, so
-        // installs from that window have true persisted in config.yml and would keep paying
-        // for it. It costs SPU performance, which is the whole reason upstream defaults it
-        // off, and nothing here uses what it buys.
-        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Savestate@@Compatible Savestate Mode", "false") }
+        // Nothing is saturated at that point, so the frame is waiting on a dependency chain
+        // rather than on throughput, and sleeping to save a core that nobody wants only adds
+        // wake-up latency to the chain that is actually holding the frame.
+        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Core@@SPU GETLLAR Busy Waiting Percentage", "100") }
+        // Compatible Savestate Mode is no longer forced off here; applyTo writes it from
+        // ps3.savestateCompatibleMode above, so the two costs it carries -- SPU performance
+        // and a 500MB to 3GB state file -- are the user's to accept rather than a decision
+        // taken for them. Defaulted on so the feature works without hunting for a switch,
+        // and written every boot either way, so a user who turns it off has that respected
+        // rather than re-enabled on the next launch.
 
         // Settings a specific title needs in order to run at all, then the user's own core
         // edits on top. Order matters: game defaults are a floor, an explicit user choice
@@ -1913,6 +1982,7 @@ data class Settings(
         put("ps3SpuCache", ps3.spuCache)
         put("ps3LlvmPrecompile", ps3.llvmPrecompile)
         put("ps3AccurateSpuDma", ps3.accurateSpuDma)
+        put("ps3SavestateCompatibleMode", ps3.savestateCompatibleMode)
         put("ps3ClocksScale", ps3.clocksScale)
         put("ps3ResolutionScale", ps3.resolutionScale)
         put("ps3MsaaMode", ps3.msaaMode)
@@ -2247,6 +2317,7 @@ data class Settings(
                     spuCache = json.optBoolean("ps3SpuCache", def.ps3.spuCache),
                     llvmPrecompile = json.optBoolean("ps3LlvmPrecompile", def.ps3.llvmPrecompile),
                     accurateSpuDma = json.optBoolean("ps3AccurateSpuDma", def.ps3.accurateSpuDma),
+                    savestateCompatibleMode = json.optBoolean("ps3SavestateCompatibleMode", def.ps3.savestateCompatibleMode),
                     clocksScale = json.optInt("ps3ClocksScale", def.ps3.clocksScale),
                     resolutionScale = json.optInt("ps3ResolutionScale", def.ps3.resolutionScale),
                     msaaMode = json.optInt("ps3MsaaMode", def.ps3.msaaMode),
@@ -2561,6 +2632,7 @@ data class Settings(
             if (current.ps3.spuCache != base.ps3.spuCache) j.put("ps3SpuCache", current.ps3.spuCache)
             if (current.ps3.llvmPrecompile != base.ps3.llvmPrecompile) j.put("ps3LlvmPrecompile", current.ps3.llvmPrecompile)
             if (current.ps3.accurateSpuDma != base.ps3.accurateSpuDma) j.put("ps3AccurateSpuDma", current.ps3.accurateSpuDma)
+            if (current.ps3.savestateCompatibleMode != base.ps3.savestateCompatibleMode) j.put("ps3SavestateCompatibleMode", current.ps3.savestateCompatibleMode)
             if (current.ps3.clocksScale != base.ps3.clocksScale) j.put("ps3ClocksScale", current.ps3.clocksScale)
             if (current.ps3.resolutionScale != base.ps3.resolutionScale) j.put("ps3ResolutionScale", current.ps3.resolutionScale)
             if (current.ps3.msaaMode != base.ps3.msaaMode) j.put("ps3MsaaMode", current.ps3.msaaMode)
@@ -2856,6 +2928,7 @@ data class Settings(
                     spuCache = if (overrides.has("ps3SpuCache")) overrides.getBoolean("ps3SpuCache") else base.ps3.spuCache,
                     llvmPrecompile = if (overrides.has("ps3LlvmPrecompile")) overrides.getBoolean("ps3LlvmPrecompile") else base.ps3.llvmPrecompile,
                     accurateSpuDma = if (overrides.has("ps3AccurateSpuDma")) overrides.getBoolean("ps3AccurateSpuDma") else base.ps3.accurateSpuDma,
+                    savestateCompatibleMode = if (overrides.has("ps3SavestateCompatibleMode")) overrides.getBoolean("ps3SavestateCompatibleMode") else base.ps3.savestateCompatibleMode,
                     clocksScale = if (overrides.has("ps3ClocksScale")) overrides.getInt("ps3ClocksScale") else base.ps3.clocksScale,
                     resolutionScale = if (overrides.has("ps3ResolutionScale")) overrides.getInt("ps3ResolutionScale") else base.ps3.resolutionScale,
                     msaaMode = if (overrides.has("ps3MsaaMode")) overrides.getInt("ps3MsaaMode") else base.ps3.msaaMode,

@@ -4,6 +4,7 @@
 
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/RSX/Common/BufferUtils.h"
+#include "Emu/RSX/rsx_profiler.h"
 
 #define RSX(ctx) ctx->rsxthr
 #define REGS(ctx) (&rsx::method_registers)
@@ -53,6 +54,11 @@ namespace rsx
 
 		void set_transform_constant::impl(context* ctx, u32 reg, [[maybe_unused]] u32 arg)
 		{
+			// The other batching handler, and 13% of dispatches across its load/write pair.
+			RSX_PROF_SCOPE(xform_const);
+
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_const_calls++;
+
 			const u32 index = reg - NV4097_SET_TRANSFORM_CONSTANT;
 			const u32 constant_id = index / 4;
 			const u8 subreg = index % 4;
@@ -64,7 +70,12 @@ namespace rsx
 			const u32 method_range = 32 - index;
 
 			// Get limit imposed by FIFO PUT (if put is behind get it will result in a number ignored by min)
-			const u32 fifo_read_limit = static_cast<u32>(((RSX(ctx)->ctrl->put & ~3ull) - (RSX(ctx)->fifo_ctrl->get_pos())) / 4);
+			// observe(), not the default load: atomic_t reads are seq_cst here, which is an
+			// ldar on ARM64, and `put` shares a cache line with `get` that the guest PPU writes
+			// from another cluster. This is one of the two hottest handlers in the FIFO, so the
+			// barrier was paid thousands of times a frame on a contended line. A stale value is
+			// harmless: it only ever shrinks the batch, and the remainder is picked up next time.
+			const u32 fifo_read_limit = static_cast<u32>(((RSX(ctx)->ctrl->put.observe() & ~3ull) - (RSX(ctx)->fifo_ctrl->get_pos())) / 4);
 
 			const u32 count = std::min<u32>({ fifo_args_cnt, fifo_read_limit, method_range });
 
@@ -127,11 +138,21 @@ namespace rsx
 				}
 			}
 
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_const_words += rcount;
+
 			RSX(ctx)->fifo_ctrl->skip_methods(rcount - 1);
 		}
 
 		void set_transform_program::impl(context* ctx, u32 reg, u32 /*arg*/)
 		{
+			// Biggest single entry in the method histogram at 16% of all dispatches, and one
+			// of only two handlers that batches, so the histogram counts the methods it
+			// consumes rather than the times it ran. Scoped per call, which is the number the
+			// cost per batch actually divides by.
+			RSX_PROF_SCOPE(xform_program);
+
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_program_calls++;
+
 			const u32 index = reg - NV4097_SET_TRANSFORM_PROGRAM;
 
 			// FIFO args count including this one
@@ -141,7 +162,12 @@ namespace rsx
 			const u32 method_range = 32 - index;
 
 			// Get limit imposed by FIFO PUT (if put is behind get it will result in a number ignored by min)
-			const u32 fifo_read_limit = static_cast<u32>(((RSX(ctx)->ctrl->put & ~3ull) - (RSX(ctx)->fifo_ctrl->get_pos())) / 4);
+			// observe(), not the default load: atomic_t reads are seq_cst here, which is an
+			// ldar on ARM64, and `put` shares a cache line with `get` that the guest PPU writes
+			// from another cluster. This is one of the two hottest handlers in the FIFO, so the
+			// barrier was paid thousands of times a frame on a contended line. A stale value is
+			// harmless: it only ever shrinks the batch, and the remainder is picked up next time.
+			const u32 fifo_read_limit = static_cast<u32>(((RSX(ctx)->ctrl->put.observe() & ~3ull) - (RSX(ctx)->fifo_ctrl->get_pos())) / 4);
 
 			const u32 count = std::min<u32>({ fifo_args_cnt, fifo_read_limit, method_range });
 
@@ -183,8 +209,15 @@ namespace rsx
 				const usz first_index_off = 0;
 				const usz second_index_off = (((rcount / 4) - 1) / 2) * 4;
 
-				const u64 src_op1_2 = read_from_ptr<be_t<u64>>(fifo_span, first_index_off);
-				const u64 src_op2_2 = read_from_ptr<be_t<u64>>(fifo_span, second_index_off);
+				// Rotated by 32: the destination holds each word already byte-swapped
+				// individually (copy_data_swap_u32), but be_t<u64> swaps all eight bytes,
+				// which additionally EXCHANGES the two words. Without the rotate this
+				// compares (w0,w1) against (w1,w0) and can only match when w0 == w1, so the
+				// redundant-upload check never fired: every upload set the ucode dirty,
+				// forcing a vertex program re-analysis, a program cache hint drop and a full
+				// transform constant re-upload on every draw.
+				const u64 src_op1_2 = std::rotl<u64>(read_from_ptr<be_t<u64>>(fifo_span, first_index_off), 32);
+				const u64 src_op2_2 = std::rotl<u64>(read_from_ptr<be_t<u64>>(fifo_span, second_index_off), 32);
 
 				// Fast comparison
 				if (src_op1_2 != read_from_ptr_unsafe<u64>(out_ptr, first_index_off) || src_op2_2 != read_from_ptr_unsafe<u64>(out_ptr, second_index_off))
@@ -201,6 +234,8 @@ namespace rsx
 			{
 				to_set_dirty = rsx::pipeline_state::vertex_program_ucode_dirty;
 			}
+
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_program_words += rcount;
 
 			RSX(ctx)->m_graphics_state |= to_set_dirty;
 			REGS(ctx)->transform_program_load_set(load_pos + ((rcount + index % 4) / 4));

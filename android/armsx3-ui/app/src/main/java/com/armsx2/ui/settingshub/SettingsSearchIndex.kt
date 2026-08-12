@@ -53,6 +53,7 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("perf.llvmPrecompile.label", true, SettingsCategory.Performance),
     SettingsSearchEntry("perf.spuLoopDetection.label", true, SettingsCategory.Performance),
     SettingsSearchEntry("perf.accurateSpuDma.label", true, SettingsCategory.Performance),
+    SettingsSearchEntry("perf.savestateCompatible.label", true, SettingsCategory.Performance),
     SettingsSearchEntry("perf.spuTuning.title", true, SettingsCategory.Performance),
     SettingsSearchEntry("adv.accurateSpuRsv.label", true, SettingsCategory.Performance),
     SettingsSearchEntry("adv.accurateCacheLine.label", true, SettingsCategory.Performance),

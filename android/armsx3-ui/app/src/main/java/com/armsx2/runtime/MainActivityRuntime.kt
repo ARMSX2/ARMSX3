@@ -667,7 +667,32 @@ open class MainActivityRuntime : ComponentActivity() {
                     // The hold itself waits for the VM to come up. BIOS boots skip it.
                     if (bootCfg.autoProgressiveScan)
                         startAutoProgressiveScanHold()
-                    NativeApp.runVMThread(m_szGamefile)
+                    val booted = NativeApp.runVMThread(m_szGamefile)
+                    // A failed boot used to be indistinguishable from an instant game exit:
+                    // runVMThread's result was dropped, so the app bounced back to the
+                    // library with no message and no log. Surface the BootResult the bridge
+                    // now keeps — DecryptionError in particular means "no licence for this
+                    // PKG game", which the user can actually fix.
+                    if (!booted) {
+                        val reason = com.armsx3.Rpcs3Bridge.lastBootError ?: "unknown"
+                        println("@@ANDROID_BOOT_FAILED@@ reason=$reason path=${m_szGamefile.take(240)}")
+                        // The library normally intercepts a locked game before it ever boots
+                        // (HomeViewModel.launch), so reaching here means the lock state was
+                        // stale — a licence deleted outside the app, say. Point at the per-game
+                        // action that fixes it, which a rescan will also surface as a badge.
+                        val hint = if (reason == "DecryptionError")
+                            " — it needs a .rap licence. Long-press the game and choose Install licence."
+                        else ""
+                        instance?.let { act ->
+                            act.runOnUiThread {
+                                android.widget.Toast.makeText(
+                                    act,
+                                    "Game failed to start: $reason$hint",
+                                    android.widget.Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        }
+                    }
                 } finally {
                     // runVMThread blocks until the VM exits (Stopping/Shutdown
                     // observed). Drop back to STOPPED only after native has
@@ -773,6 +798,7 @@ open class MainActivityRuntime : ComponentActivity() {
             }
             upscale.value = resolved.upscaleFloat
             renderer.value = resolved.renderer
+
             NativeApp.renderUpscalemultiplier(upscale.value)
             // Pin custom Vulkan driver (if any) BEFORE the renderer write —
             // the renderer JNI may trigger MTGS::ApplySettings which can
@@ -858,6 +884,19 @@ open class MainActivityRuntime : ComponentActivity() {
         fun launchGame(uri: String, info: GameInfo? = null, external: Boolean = false) {
             if (uri.isBlank()) {
                 println("@@ANDROID_LAUNCH_REJECT@@ reason=blank_uri title=${info?.title ?: ""}")
+                return
+            }
+            // A licence-locked title cannot boot — BootGame fails with DecryptionError — so ask
+            // for the key instead of spending a whole VM start-up to say so. The library catches
+            // this a level earlier (HomeViewModel.launch, before markPlayed); this is what covers
+            // the paths that bypass the ViewModel, the settings screen's Play action above all.
+            //
+            // Only titles carrying a scanned GameInfo are caught: externalGameInfo() builds a
+            // fresh one for intents and shortcuts, where locked defaults to false, and those
+            // still fall through to the boot-failure toast.
+            if (info?.locked == true) {
+                println("@@ANDROID_LAUNCH_REJECT@@ reason=locked title=${info.title}")
+                com.armsx2.LicencePrompt.ask(info)
                 return
             }
             // Remember the game for a post-exit re-launch from the Save Manager (#374).
@@ -1833,7 +1872,10 @@ open class MainActivityRuntime : ComponentActivity() {
             // own DS3/DS4/DualSense HID handlers plus the virtual pad, so SDL's
             // Java glue would only bind to native symbols that do not exist.
 
-            println("PCSX2_INIT")
+            // Goes into the session log users attach to bug reports, so it says which
+            // emulator they are running. Nothing parses it -- it was ARMSX2's marker and
+            // read as a PS2 emulator on every PS3 report.
+            println("ARMSX3_INIT")
 
             // Debug-build auto-boot to BIOS. Lets us drop straight into the
             // BIOS shell on app launch for perfape baseline captures —
