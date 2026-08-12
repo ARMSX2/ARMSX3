@@ -67,7 +67,7 @@ public final class NativeApp {
         return Rpcs3Bridge.hasActiveVm();
     }
 
-    /** [MAPPED] */
+    /** [MAPPED] -> _rpcsx_pause */
     public static void pause() { Rpcs3Bridge.pause(); }
 
     /** [MAPPED] -> _rpcsx_resume */

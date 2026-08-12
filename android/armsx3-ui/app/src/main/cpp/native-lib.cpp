@@ -35,8 +35,10 @@ struct RPCSXApi {
   int (*getState)();
   void (*kill)();
   void (*resume)();
+  void (*pause)();
   void (*openHomeMenu)();
   std::string (*getTitleId)();
+  std::string (*getCurrentTrophyName)();
   bool (*surfaceEvent)(JNIEnv *env, jobject surface, jint event);
   void (*surfaceSizeChanged)(int width, int height);
   bool (*usbDeviceEvent)(int fd, int vendorId, int productId, int event);
@@ -122,8 +124,10 @@ struct RPCSXLibrary : RPCSXApi {
     result.getState = reinterpret_cast<decltype(getState)>(dlsym(handle, "_rpcsx_getState"));
     result.kill = reinterpret_cast<decltype(kill)>(dlsym(handle, "_rpcsx_kill"));
     result.resume = reinterpret_cast<decltype(resume)>(dlsym(handle, "_rpcsx_resume"));
+    result.pause = reinterpret_cast<decltype(pause)>(dlsym(handle, "_rpcsx_pause"));
     result.openHomeMenu = reinterpret_cast<decltype(openHomeMenu)>(dlsym(handle, "_rpcsx_openHomeMenu"));
     result.getTitleId = reinterpret_cast<decltype(getTitleId)>(dlsym(handle, "_rpcsx_getTitleId"));
+    result.getCurrentTrophyName = reinterpret_cast<decltype(getCurrentTrophyName)>(dlsym(handle, "_rpcsx_getCurrentTrophyName"));
     result.surfaceEvent = reinterpret_cast<decltype(surfaceEvent)>(dlsym(handle, "_rpcsx_surfaceEvent"));
     result.surfaceSizeChanged = reinterpret_cast<decltype(surfaceSizeChanged)>(dlsym(handle, "_rpcsx_surfaceSizeChanged"));
     result.usbDeviceEvent = reinterpret_cast<decltype(usbDeviceEvent)>(dlsym(handle, "_rpcsx_usbDeviceEvent"));
@@ -355,6 +359,18 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_resume(JNIEnv *env,
   return rpcsxLib.resume();
 }
 
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_pause(JNIEnv *env,
+                                                             jobject) {
+  // Same null guard as resume: the core is dlopen()ed separately and may not be
+  // up yet. A missing symbol also means an older core, so an app built against
+  // this cannot assume the export is there.
+  if (rpcsxLib.pause == nullptr) {
+      return;
+  }
+
+  return rpcsxLib.pause();
+}
+
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_openHomeMenu(JNIEnv *env,
                                                                     jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
@@ -377,6 +393,21 @@ Java_net_rpcsx_RPCSX_getTitleId(JNIEnv *env, jobject) {
   }
 
   return wrap(env, rpcsxLib.getTitleId());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_getCurrentTrophyName(JNIEnv *env, jobject) {
+  // The core is dlopen()ed separately and may not be up yet -- during
+  // onboarding, or if it failed to load. Calling through a null pointer
+  // is an instant SIGSEGV, so fail the call instead.
+  //
+  // Also null on an OLDER core that predates this export, since it is resolved
+  // by dlsym: the frontend must treat null as "unknown", not as "no trophies".
+  if (rpcsxLib.getCurrentTrophyName == nullptr) {
+      return nullptr;
+  }
+
+  return wrap(env, rpcsxLib.getCurrentTrophyName());
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_surfaceEvent(
@@ -784,10 +815,27 @@ Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
       }
   }
 
-  auto prevLoader = rpcsxLib.setCustomDriver(loader);
-  if (prevLoader != nullptr) {
-    ::dlclose(prevLoader);
-  }
+  // Deliberately NOT dlclose()ing the previous handle.
+  //
+  // A Vulkan driver cannot be unloaded while anything resolved out of it is still reachable, and
+  // from here there is no way to know that. VMA caches vkGetPhysicalDeviceMemoryProperties2 in the
+  // allocator at creation time, so the address lives inside the driver library for as long as the
+  // renderer does.
+  //
+  // Restart is the one flow where a start races a teardown that has not finished:
+  // applyRendererPrefs() re-applies the driver on EVERY start, so it dlopen'd a new handle and
+  // closed the old one while the previous VKGSRender was still unwinding. Its destructor then
+  // freed its data heaps, VMA went to refresh its budget, and called through a pointer into a
+  // library that was no longer mapped -- "Segfault executing location <addr> at <addr>", inside
+  // VmaAllocator_T::UpdateVulkanBudget. The give-away was the fault address landing on the same
+  // offset every time with a different base: a live function in an unmapped library, not a
+  // corrupted pointer. That is the "Restart crashes the app" report, and the same for
+  // apply-and-restart after picking a driver.
+  //
+  // Leaking one handle per driver SWITCH is the cheap side of this trade: it is bounded by how
+  // many times a user changes driver in a session, the mapping is shared, and dlclose on an ICD
+  // is not something the loader promises to honour anyway.
+  rpcsxLib.setCustomDriver(loader);
 
   return true;
 #else

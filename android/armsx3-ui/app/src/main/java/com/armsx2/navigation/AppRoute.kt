@@ -19,6 +19,9 @@ sealed interface AppRoute {
     data object ControllerManager : AppRoute
     data object TextureManager : AppRoute
     data object Achievements : AppRoute
+    // PS3 trophies, read from the emulator's own dev_hdd0 trophy folders. Distinct from
+    // Achievements above, which is the (hidden) RetroAchievements screen.
+    data object Trophies : AppRoute
     data object Language : AppRoute
     data object News : AppRoute
     data object Friends : AppRoute

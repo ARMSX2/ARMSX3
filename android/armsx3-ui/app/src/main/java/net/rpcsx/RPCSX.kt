@@ -109,10 +109,18 @@ class RPCSX {
     external fun getState() : Int
     external fun kill()
     external fun resume()
+    external fun pause()
     external fun openHomeMenu()
     external fun loginUser(userId: String)
     external fun getUser(): String
     external fun getTitleId(): String
+    /** The running game's trophy folder name (NPWR comm id, e.g. "NPWR05636_00").
+     *
+     *  Empty when no game is running, when the game has not called
+     *  sceNpTrophyCreateContext yet (many only do on reaching a menu), or when it has
+     *  no trophies. Returns null on a core too old to export it, so callers must treat
+     *  the result as nullable despite the declared type. */
+    external fun getCurrentTrophyName(): String
     external fun supportsCustomDriverLoading(): Boolean
     external fun saveState(): Boolean
     external fun loadState(index: Int): Boolean

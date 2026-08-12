@@ -185,6 +185,20 @@ private fun readInstalled(): List<InstalledTitle> =
  * the id sits between the first dash and the underscore. Used only to put a recognisable name
  * beside a licence; a file that has been renamed simply gets no name, which is what it had.
  */
+/**
+ * What to call a group of licences: the installed game's real name where we have it, otherwise the
+ * bare title id, otherwise "unattributed".
+ *
+ * The name is only used when it differs from the id -- readInstalled falls back to the folder name
+ * (which IS the id) for a title whose PARAM.SFO could not be read, and showing "NPEB00856" as
+ * though it were a game name would just be the id twice.
+ */
+private fun groupLabelFor(titleId: String?, installed: List<InstalledTitle>): String {
+    if (titleId == null) return I18n.get("packages.licences.unattributed")
+    val named = installed.firstOrNull { it.id == titleId }?.name?.takeIf { it != titleId }
+    return named ?: titleId
+}
+
 private fun licenceTitleId(file: java.io.File): String? =
     file.nameWithoutExtension
         .substringAfter('-', "")
@@ -845,11 +859,62 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
                 )
-                licences.forEach { file ->
-                    // A licence's name is its content id and nothing else, so a row of them is
-                    // sixteen indistinguishable hex-and-dash strings. The title id inside the
-                    // content id is the same id the install folder is named for, so when the
-                    // game this licence unlocks is installed, the row can say which game it is.
+                // Grouped by game, one collapsed row per title, because a library's worth of .rap
+                // files is otherwise a flat wall of indistinguishable content ids -- the same
+                // reason the cheats browser groups its PNACH files per game rather than listing
+                // every patch at once. Requested for that parity.
+                //
+                // Keyed on the title id already carried inside the content id, which is the id the
+                // install folder is named for, so a group can be labelled with the real game name
+                // whenever the game it unlocks is installed. Licences whose name carries no id
+                // cannot be attributed and get their own group at the end rather than being hidden.
+                val licenceGroups = licences.groupBy { licenceTitleId(it) }
+                val orderedGroups = licenceGroups.entries
+                    .sortedWith(compareBy({ it.key == null }, { groupLabelFor(it.key, installed) }))
+
+                orderedGroups.forEach { (titleId, groupFiles) ->
+                    val label = groupLabelFor(titleId, installed)
+                    // Collapsed by default: the point of the grouping is that the screen opens
+                    // short. A single-licence group is expanded, since hiding one row behind a
+                    // disclosure costs a tap and saves nothing.
+                    var expanded by remember(titleId) { mutableStateOf(groupFiles.size == 1) }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .clickable { expanded = !expanded }
+                                .padding(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Text(
+                                    I18n.get("packages.licences.count")
+                                        .replace("%d", groupFiles.size.toString()),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Text(
+                                if (expanded) "▴" else "▾",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    if (!expanded) return@forEach
+
+                    groupFiles.forEach { file ->
                     val owner = licenceTitleId(file)
                         ?.let { id -> installed.firstOrNull { it.id == id } }
                         ?.takeIf { it.name != it.id }
@@ -886,6 +951,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                                 Text(str("packages.licence.remove"))
                             }
                         }
+                    }
                     }
                 }
             }

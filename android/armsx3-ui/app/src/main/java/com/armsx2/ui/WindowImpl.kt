@@ -28,7 +28,9 @@ import kotlinx.coroutines.flow.first
 
 /** A full manager screen shown as an overlay over the paused game (in-game menu). */
 enum class InGameScreen {
-    Settings, CoreSettings, Achievements, Controls, Skins, Textures, SaveState, LoadState
+    Settings, CoreSettings, Achievements, Controls, Skins, Textures, SaveState, LoadState,
+    // PS3 trophies for the RUNNING title (the library's Trophies screen, scoped).
+    Trophies,
 }
 
 object WindowImpl {
@@ -192,6 +194,17 @@ object WindowImpl {
                         )
                         InGameScreen.LoadState -> com.armsx2.ui.saves.SaveStatePickerScreen(
                             mode = com.armsx2.ui.saves.SaveMode.Load, onBack = dismiss,
+                        )
+                        // The library's Trophies screen, scoped to the running title. Same
+                        // screen, not a second implementation. Keyed to the same ViewModel the
+                        // pause menu's Trophies pane uses, so the set it already scanned is
+                        // reused instead of being read off disk again.
+                        InGameScreen.Trophies -> com.armsx2.ui.trophies.TrophiesScreen(
+                            onBack = dismiss,
+                            currentGameOnly = true,
+                            viewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+                                key = com.armsx2.ui.emulation.InGameTrophiesVmKey,
+                            ),
                         )
                     }
                 }

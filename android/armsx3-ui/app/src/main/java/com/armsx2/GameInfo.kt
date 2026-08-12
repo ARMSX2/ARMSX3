@@ -330,7 +330,10 @@ data class GameInfo(
      * 404, and always match the disc. There is no PS3 equivalent of xlenore's
      * ps2-covers to point at anyway.
      */
-    val discIconFile: java.io.File? get() = serial?.let { DiscIcons.fileFor(it) }?.takeIf { it.isFile }
+    // Length rather than isFile, for the same reason as DiscIcons.has: an empty file passes
+    // isFile, hands Coil something undecodable, and costs the card its placeholder-vs-cover
+    // decision. Nothing is a better answer than zero bytes.
+    val discIconFile: java.io.File? get() = serial?.let { DiscIcons.fileFor(it) }?.takeIf { it.length() > 0L }
 
     private fun coverUrlFor(s: String): String {
         // PS3 art comes from aldostools/Resources, which is flat: COV/<TITLE_ID>.JPG

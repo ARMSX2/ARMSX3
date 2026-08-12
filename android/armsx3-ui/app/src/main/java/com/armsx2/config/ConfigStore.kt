@@ -53,6 +53,8 @@ object ConfigStore {
     // One-time flip of existing all-on OSD saves to the new default-off.
     private const val KEY_OSD_OFF_MIGRATED = "config.migrated.osdDefaultOff"
     private const val KEY_OSD_SCALE_MIGRATED = "config.migrated.osdScale65"
+    /** One-time removal of the Frame limit core override that made the FPS cap inert. */
+    private const val KEY_FRAME_LIMIT_UNPINNED = "config.migrated.frameLimitUnpinned"
     // One-time reconcile for the fresh-install + reused-data-folder case (people who
     // can't update in place and re-point setup at their old folder). See reconcileReusedFolder.
     private const val KEY_FOLDER_RECONCILE = "config.migrated.folderReconcile"
@@ -373,14 +375,30 @@ object ConfigStore {
             runCatching {
                 CoreSettingOverrides.record(SettingsScope.Global, null, "Video@@Vblank Rate", "60")
             }
-            // Frame limit as well as Vblank Rate. Vblank alone did not hold: the override is
-            // stored and the two beside it apply, yet the live value came back as 120. Frame
-            // limit is the dedicated cap and does not depend on the vblank path at all, so
-            // whichever of the two takes, the result is 60.
-            runCatching {
-                CoreSettingOverrides.record(SettingsScope.Global, null, "Video@@Frame limit", "60")
-            }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_VBLANK_60, true) }
+        }
+
+        // The migration above used to pin Video@@Frame limit to 60 as well, as a second way to
+        // reach a 60Hz cap in case the Vblank Rate override did not hold.
+        //
+        // Frame limit is not a spare knob: it is the node the Display FPS Cap row writes. Pinned as
+        // a core override it replayed AFTER every settings push, so the cap silently did nothing for
+        // every value that uses the enum -- 30, 50, 60, 120 -- while 20 and 45 appeared to work
+        // because those are not presets and go to the free-form Second Frame Limit instead.
+        // Measured: the UI wrote '30', settingsSet accepted it, and the core still reported
+        // frame_limit=_60 on every flip.
+        //
+        // Nothing is lost by dropping it. Frame limit Auto resolves to the vblank rate
+        // (RSXThread.cpp, the _auto case), and the Vblank Rate override above is already 60, so the
+        // 60Hz default this was protecting still holds.
+        //
+        // forgetEverywhere, not a scoped forget: overrides live in two stores across two scopes, and
+        // an install that ran the old migration has the Global one recorded already. Anyone who
+        // deliberately set a Frame limit in All Core Settings loses that override here, which is the
+        // right trade against a cap control that cannot work.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_FRAME_LIMIT_UNPINNED, false)) {
+            runCatching { CoreSettingOverrides.forgetEverywhere("Video@@Frame limit") }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_FRAME_LIMIT_UNPINNED, true) }
         }
 
         // Diagnostic settings that got recorded as core overrides during the profiling work

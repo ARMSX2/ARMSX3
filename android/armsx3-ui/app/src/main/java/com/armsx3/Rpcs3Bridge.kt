@@ -265,9 +265,13 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun pause() {
-        // RPCS3 has no explicit pause entry point; the home menu overlay owns
-        // pause/resume. Track intent so vmSetPaused round-trips.
+        // This used to set `paused` and stop there, on the belief that RPCS3 has no explicit pause
+        // entry point. It does -- Emu.Pause() -- and the core has always called it on surface loss,
+        // which is why BACKGROUNDING the app was the only thing that actually paused while the
+        // in-game pause menu left the game running underneath it. resume() reached the core and
+        // pause() did not, so the pair was asymmetric and "Pause" was decorative.
         paused = true
+        RPCSX.instance.pause()
     }
 
     @JvmStatic
@@ -288,7 +292,36 @@ object Rpcs3Bridge {
         stopRequested = true
         runCatching { RPCSX.instance.kill() }
         resetPadState()
+
+        // Then WAIT for the core to actually be stopped, because kill() does not guarantee it.
+        //
+        // Restart is where that mattered: stop() ran this, it returned with the emulator still
+        // reporting a live VM (logged as "shutdown_return active=true runLoop=true state=RUNNING"),
+        // the run loop's finally then started the replacement VM -- and the teardown this kill()
+        // had set in motion finished afterwards and took the NEW VM down with it. The log showed
+        // two BootGame calls and then "Unloading ISO / Quit with main_window::closeEvent", after
+        // which the restart flag was already spent, so the app fell through to the return-to-library
+        // branch. That is the "Restart kicks you back to the library" report.
+        //
+        // Bounded, and deliberately so: a core that never returns to Stopped is a real state (see
+        // the second loop in boot() for the same hazard), and a stop that gives up after a few
+        // seconds is far better than one that hangs the app forever.
+        var waited = 0L
+        while (RPCSX.getState() != EmulatorState.Stopped && waited < SHUTDOWN_SETTLE_TIMEOUT_MS) {
+            Thread.sleep(POLL_INTERVAL_MS)
+            waited += POLL_INTERVAL_MS
+        }
+
+        if (RPCSX.getState() != EmulatorState.Stopped) {
+            android.util.Log.w(
+                "ARMSX3-VM",
+                "shutdown: core still ${RPCSX.getState()} after ${waited}ms; proceeding anyway",
+            )
+        }
     }
+
+    /** How long shutdown() waits for the core to report Stopped before giving up. */
+    private const val SHUTDOWN_SETTLE_TIMEOUT_MS = 8_000L
 
     @Volatile
     private var paused = false
@@ -374,10 +407,9 @@ object Rpcs3Bridge {
                     Rpcs3Settings.setStretchToDisplay(value == "Stretch")
                     Rpcs3Settings.setAspectRatio(value != "4:3")
                 }
-                "FrameLimitEnable" ->
-                    // "Auto" is RPCS3's per-title native pacing -- the right
-                    // meaning of "limit on" for a console that isn't fixed at 60.
-                    Rpcs3Settings.setFrameLimitMode(if (asBool(value)) "Auto" else "Off")
+                // Defers to the explicit FPS cap rather than forcing "Auto" over it; see
+                // Rpcs3Settings.setFrameLimitEnabled for why that mattered.
+                "FrameLimitEnable" -> Rpcs3Settings.setFrameLimitEnabled(asBool(value))
                 "VsyncEnable" -> Rpcs3Settings.setVsync(asBool(value))
                 // PCSX2's "skip duplicate frames" means "do not present a frame identical to
                 // the last one". It is harmless there and on by default, which is why Settings

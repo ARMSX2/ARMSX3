@@ -91,7 +91,10 @@ object Rpcs3Settings {
      * frame_limit_type is an ENUM of preset rates, not a free integer:
      * Off | 30 | 50 | 60 | 120 | Display | Auto | PS3 Native | Infinite
      */
-    fun setFrameLimitMode(mode: String) = setEnum("$VIDEO@@Frame limit", mode)
+    fun setFrameLimitMode(mode: String): Boolean {
+        val ok = setEnum("$VIDEO@@Frame limit", mode)
+        return ok
+    }
 
     /**
      * ARMSX2's Display FPS Cap slider is free-form (0..60, any value), which the
@@ -103,6 +106,10 @@ object Rpcs3Settings {
      * the lower of the pair wins and the slider appears to stick.
      */
     fun setFrameLimit(fps: Int) {
+        // Remembered so the PCSX2 FrameLimitEnable key can restore the rate the user actually
+        // picked instead of overwriting it -- see setFrameLimitEnabled.
+        lastExplicitFpsCap = fps
+
         val preset = when (fps) {
             30, 50, 60, 120 -> fps.toString()
             else -> null
@@ -116,6 +123,40 @@ object Rpcs3Settings {
         } else {
             setFrameLimitMode("Off")
             setSecondFrameLimit(fps.toFloat())
+        }
+    }
+
+    /** The last rate the explicit FPS-cap control asked for. 0 = no cap set. */
+    @Volatile
+    private var lastExplicitFpsCap: Int = 0
+
+    /**
+     * PCSX2's "limiter on/off" toggle, which shares one RPCS3 node with the explicit FPS cap.
+     *
+     * It used to write "Auto" whenever it was on. Both are pushed on every apply and this one goes
+     * LAST, so a user who picked 30 or 60 got "Auto" a moment later and the cap never took effect
+     * -- reported as "FPS cap (30/60) doesn't seem to apply". Exactly the collision the
+     * SkipDuplicateFrames and IntegerScaling comments below describe, in the node above them.
+     *
+     * Dropping the key was not an option: unlike those two it has a visible row behind it, so it
+     * would have gone inert. Instead it defers to the explicit cap, which makes the result
+     * independent of the order the two are emitted in -- the property the other fixes rely on
+     * applyToInner's ordering for.
+     */
+    fun setFrameLimitEnabled(enabled: Boolean) {
+
+        if (!enabled) {
+            setFrameLimitMode("Off")
+            setSecondFrameLimit(0f)
+            return
+        }
+
+        val cap = lastExplicitFpsCap
+        if (cap > 0) {
+            setFrameLimit(cap)
+        } else {
+            // No explicit rate to honour, so "limit on" means the console's own pacing.
+            setFrameLimitMode("Auto")
         }
     }
 

@@ -28,6 +28,7 @@ import com.armsx2.ui.home.HomeScreen
 import com.armsx2.ui.language.LanguageScreen
 import com.armsx2.ui.saves.SaveManagerScreen
 import com.armsx2.ui.textures.TextureManagerScreen
+import com.armsx2.ui.trophies.TrophiesScreen
 import com.armsx2.ui.settingshub.SettingsScreen
 
 @Composable
@@ -106,6 +107,7 @@ fun AppNavigation() {
                 AppRoute.ControllerManager -> ControllerManagerScreen(onBack = UiNavigator::home)
                 AppRoute.TextureManager -> TextureManagerScreen(onBack = UiNavigator::home)
                 AppRoute.Achievements -> AchievementsScreen(onBack = UiNavigator::home)
+                AppRoute.Trophies -> TrophiesScreen(onBack = UiNavigator::home)
                 AppRoute.Language -> LanguageScreen(
                     onBack = { UiNavigator.navigate(AppRoute.Settings(SettingsCategory.General)) },
                 )

@@ -191,9 +191,36 @@ class GameLibraryRepository(private val context: Context) {
         // Everything the probe produces is already durable: the serial and title are in the
         // library cache, and the icon is on disk under disc-icons. So a disc we have seen
         // before never needs mounting again.
+        //
+        // That last clause is only true if the extraction actually succeeded once. The serial
+        // and title are durable by construction -- this loop is reading them -- but the icon
+        // is a separate file that may never have been written: probeDiscInfo answers "{}"
+        // whenever a game is loaded, and the serial then comes from the FILENAME instead,
+        // which for dev_hdd0/game/<title id> is indistinguishable from one the SFO gave us.
+        // Seeding on the serial alone made that miss permanent, because every later rescan
+        // skipped the one thing that would repair it. Reported as a PKG-installed title
+        // showing a text placeholder for good, with its ICON0.PNG sitting unread in the game
+        // folder and its path already recorded in games.json.
+        //
+        // So gate the skip on the icon as well, for the games that have one. Re-probing costs
+        // one mount, once, and only for a game actually missing it; a game whose icon is on
+        // disk still never mounts again, which is what the reasoning above is protecting.
         loadCached().games.forEach { game ->
             val serial = game.serial?.takeIf { it.isNotBlank() } ?: return@forEach
             val path = runCatching { game.uri.path }.getOrNull() ?: return@forEach
+            // Folders only, and that is not a convenience: re-probing an ISO means load_iso ->
+            // vfs::mount, which is the process-wide mount this whole seeding exists to avoid, and
+            // it has crashed the app for real -- twice in one day, faulting in
+            // manual_typemap::init<vfs_manager> from this very thread while a boot was starting.
+            // A directory is read straight off disk by read_sfo_game_info with no mount at all,
+            // so it carries none of that risk. The game this was reported for was a PKG install
+            // (folder form) whose ICON0.PNG was sitting there unread, which is exactly the case
+            // that stays covered.
+            val isFolder = game.extension.equals("folder", ignoreCase = true)
+            if (isFolder && !DiscIcons.has(serial)) {
+                android.util.Log.i(ScanTag, "re-probing folder '$serial': no usable disc icon on disk")
+                return@forEach
+            }
             discInfoCache.putIfAbsent(path, DiscInfo(serial, game.title))
         }
 
@@ -582,8 +609,22 @@ class GameLibraryRepository(private val context: Context) {
             // title ID until it has already parsed the SFO.
             if (o.optBoolean("icon")) {
                 val staged = DiscIcons.fileFor(PendingIcon)
-                if (staged.isFile) {
-                    staged.renameTo(DiscIcons.fileFor(id))
+                val target = DiscIcons.fileFor(id)
+                // renameTo answers false instead of throwing when the target already exists,
+                // and the answer was discarded: a re-extraction for a title that already had
+                // an icon silently kept the old file and left the staging one behind. Clear
+                // the target first, and say so if it still fails -- a stale or empty icon must
+                // not outlive the probe that was meant to replace it, because every reader
+                // downstream treats "a file is there" as "the cover is good".
+                if (staged.length() > 0L) {
+                    target.delete()
+                    if (!staged.renameTo(target)) {
+                        android.util.Log.w(ScanTag, "  could not place disc icon for $id")
+                        staged.delete()
+                    }
+                } else {
+                    android.util.Log.w(ScanTag, "  probe claimed an icon for $id, staged 0 bytes")
+                    staged.delete()
                 }
             }
             DiscInfo(id, o.optString("title"))

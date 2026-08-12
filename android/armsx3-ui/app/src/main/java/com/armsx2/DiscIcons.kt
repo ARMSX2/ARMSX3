@@ -24,8 +24,17 @@ object DiscIcons {
 
     fun fileFor(titleId: String): File = File(dir(), "$titleId.png")
 
-    /** True when this game's icon has already been extracted. */
-    fun has(titleId: String): Boolean = fileFor(titleId).isFile
+    /**
+     * True when this game's icon has already been extracted.
+     *
+     * Length, not isFile: an empty file is indistinguishable from a real one to isFile, and
+     * it is a shape this can actually end up in -- the extraction writes to a staging name
+     * and renames, and neither the write nor the rename is checked. An empty icon then reads
+     * as "already extracted" forever, and the card falls through to the text placeholder
+     * because there is nothing for Coil to decode. Requiring bytes makes that self-repairing:
+     * the next scan re-probes and overwrites it.
+     */
+    fun has(titleId: String): Boolean = fileFor(titleId).length() > 0L
 
     fun clear() {
         runCatching { dir().listFiles()?.forEach { it.delete() } }

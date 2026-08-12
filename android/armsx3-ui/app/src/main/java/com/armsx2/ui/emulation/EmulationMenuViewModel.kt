@@ -19,6 +19,9 @@ enum class EmulationMenuTab(val titleKey: String) {
     Controls("tab.controls"),
     Options("action.settings"),
     Achievements("ra.title"),
+    // ARMSX3's answer to the (hidden) Achievements tab: the RUNNING game's real PS3
+    // trophies, read from RPCS3's own dev_hdd0 trophy data.
+    Trophies("trophies.title"),
     // No Friends tab. It lived at the end of a rail that scrolls, so reaching it meant knowing it
     // was there and then hunting for it — it is a header button with its own overlay instead.
     ;
@@ -168,6 +171,9 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
             EmulationMenuTab.Achievements -> when (state.value.selectedAction) {
                 0 -> requestToggleHardcore()
                 1 -> openAchievements()
+            }
+            EmulationMenuTab.Trophies -> when (state.value.selectedAction) {
+                0 -> openTrophies()
             }
         }
     }
@@ -360,6 +366,9 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
     /** Open the full RetroAchievements screen (list + options) over the paused game. */
     fun openAchievements() = com.armsx2.ui.WindowImpl.openInGameScreen(com.armsx2.ui.InGameScreen.Achievements)
 
+    /** Open the full trophy list over the paused game, scoped to the running title. */
+    fun openTrophies() = com.armsx2.ui.WindowImpl.openInGameScreen(com.armsx2.ui.InGameScreen.Trophies)
+
     fun updateSettings(transform: (Settings) -> Settings) {
         // ★ Transform the LIVE shared settings, not this screen's snapshot. state.value.settings is
         // only refreshed in load(), so every write here shipped the whole Settings object as it
@@ -381,6 +390,9 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
         EmulationMenuTab.Controls -> 2
         EmulationMenuTab.Options -> 5
         EmulationMenuTab.Achievements -> 2
+        // Just the "view trophies" gateway. The rows below it are read-only, and the
+        // show-hidden toggle lives on the full screen the gateway opens.
+        EmulationMenuTab.Trophies -> 1
     }
 
     private fun Int.floorMod(modulus: Int): Int = ((this % modulus) + modulus) % modulus

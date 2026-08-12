@@ -199,7 +199,12 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // below, which only points the emulator at your BIOS file.
         DrawerItem("bios.boot.title", "▶️", onAction = { MainActivityRuntime.startBios(); onDismiss() }),
         // ARMSX3: RetroAchievements removed - RA has no PS3 support at all, so
-        // the screen could only ever be empty.
+        // the screen could only ever be empty. PS3 TROPHIES take its slot: RPCS3
+        // tracks the real ones the games unlock, and its own list is reachable only
+        // from inside a running game (the home menu's Trophies item, which shows
+        // that game's set alone). This is the across-titles browser, which was
+        // Qt-only upstream and so had no Android entry point at all.
+        DrawerItem("trophies.title", "🏆", AppRoute.Trophies),
         DrawerItem("action.settings", "⚙️", AppRoute.Settings()),
         // Everything the core exposes, generated from its config tree rather than
         // hand-written. The curated tabs above stay small on purpose; this is the
@@ -369,6 +374,7 @@ private fun sameDestination(current: AppRoute, target: AppRoute): Boolean = when
     AppRoute.ControllerManager -> current is AppRoute.ControllerManager
     AppRoute.TextureManager -> current is AppRoute.TextureManager
     AppRoute.Achievements -> current is AppRoute.Achievements
+    AppRoute.Trophies -> current is AppRoute.Trophies
     AppRoute.Language -> current is AppRoute.Language
     AppRoute.News -> current is AppRoute.News
     AppRoute.Friends -> current is AppRoute.Friends

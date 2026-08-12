@@ -112,6 +112,7 @@ import com.armsx2.GameInfo
 import com.armsx2.i18n.str
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.common.ArmsBackdrop
+import com.armsx2.ui.common.CoverFallbackChain
 import com.armsx2.ui.common.ArmsTopBar
 import com.armsx2.ui.common.EmptyState
 import com.armsx2.ui.common.FileBrowserDialog
@@ -1298,20 +1299,19 @@ private fun GameCover(
                 error = {
                     // A regional cover that isn't in the art repo would otherwise blank a cover the
                     // user already had — reported as "some games lose their covers when switching
-                    // regions". Retry with this disc's own serial before giving up.
-                    val discUrl = custom?.let { null } ?: game.discCoverUrl
-                    if (discUrl != null && discUrl != model) {
-                        SubcomposeAsyncImage(
-                            model = discUrl,
-                            contentDescription = game.displayTitle(EnglishTitles.enabled.value),
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = contentScale,
-                            loading = { CoverPlaceholder(game.displayTitle(EnglishTitles.enabled.value), game.serial, showText = placeholderText) },
-                            error = { CoverPlaceholder(game.displayTitle(EnglishTitles.enabled.value), game.serial, showText = placeholderText) },
-                        )
-                    } else {
-                        CoverPlaceholder(game.displayTitle(EnglishTitles.enabled.value), game.serial, showText = placeholderText)
-                    }
+                    // regions". Retry with this disc's own serial, then with the game's own
+                    // ICON0.PNG: this chain used to stop at the URL, which is why a European PSN
+                    // title showed a text placeholder here while the in-game menu showed its
+                    // artwork, the art repo's COV set being keyed by USA title IDs.
+                    CoverFallbackChain(
+                        models = if (custom != null) emptyList() else listOfNotNull(
+                            game.discCoverUrl?.takeIf { it != model },
+                            game.discIconFile,
+                        ),
+                        contentDescription = game.displayTitle(EnglishTitles.enabled.value),
+                        contentScale = contentScale,
+                        placeholder = { CoverPlaceholder(game.displayTitle(EnglishTitles.enabled.value), game.serial, showText = placeholderText) },
+                    )
                 },
             )
         }

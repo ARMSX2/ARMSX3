@@ -25,6 +25,42 @@ import coil.request.ImageRequest
 import com.armsx2.CustomCovers
 import com.armsx2.GameInfo
 
+/**
+ * Try each cover source in turn, falling through to [placeholder] when none load.
+ *
+ * There were two hand-rolled copies of this, one here and one in the library grid, and they
+ * disagreed: this one ended its chain at the extracted ICON0.PNG, the grid's ended one step
+ * earlier at the remote cover. So the in-game menu showed a PS3 game's own artwork while the
+ * library showed a text placeholder for the same game -- reported for a European PSN title,
+ * because the art repo's COV set is keyed by USA title IDs and has no entry for it.
+ *
+ * Both were also only ONE retry deep, which hid the divergence: the retry slot was spent on
+ * the regional cover, and whether the local icon ever got a turn depended on whether that URL
+ * happened to differ from the first one. A chain has no such limit, and one chain cannot
+ * disagree with itself.
+ */
+@Composable
+fun CoverFallbackChain(
+    models: List<Any>,
+    contentDescription: String,
+    contentScale: ContentScale,
+    placeholder: @Composable () -> Unit,
+) {
+    val head = models.firstOrNull()
+    if (head == null) {
+        placeholder()
+        return
+    }
+    SubcomposeAsyncImage(
+        model = head,
+        contentDescription = contentDescription,
+        modifier = Modifier.fillMaxSize(),
+        contentScale = contentScale,
+        loading = { placeholder() },
+        error = { CoverFallbackChain(models.drop(1), contentDescription, contentScale, placeholder) },
+    )
+}
+
 @Composable
 fun GameCoverArt(game: GameInfo, modifier: Modifier = Modifier) {
     val context = LocalContext.current
@@ -43,26 +79,18 @@ fun GameCoverArt(game: GameInfo, modifier: Modifier = Modifier) {
         error = {
             // Cover Region can point at a release the art repo has no cover for; falling straight
             // to the placeholder would BLANK a cover the user already had (reported for the in-game
-            // menu, which uses this component). Retry with this disc's own serial first.
-            // aldostools does not have art for every title. Rather than drop
-            // straight to a text placeholder, fall back to the ICON0.PNG we
-            // extracted from the disc itself -- wrong shape, but it is the real
-            // game's art and beats nothing.
-            val discUrl: Any? = if (customCover == null) {
-                game.discCoverUrl?.takeIf { it != game.coverUrl } ?: game.discIconFile
-            } else null
-            if (discUrl != null) {
-                SubcomposeAsyncImage(
-                    model = discUrl,
-                    contentDescription = game.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                    loading = { GameCoverPlaceholder(game.title, game.serial) },
-                    error = { GameCoverPlaceholder(game.title, game.serial) },
-                )
-            } else {
-                GameCoverPlaceholder(game.title, game.serial)
-            }
+            // menu, which uses this component). Retry with this disc's own serial first, then with
+            // the ICON0.PNG extracted from the disc itself -- wrong shape, but it is the real
+            // game's art and beats nothing, and aldostools does not have art for every title.
+            CoverFallbackChain(
+                models = if (customCover != null) emptyList() else listOfNotNull(
+                    game.discCoverUrl?.takeIf { it != game.coverUrl },
+                    game.discIconFile,
+                ),
+                contentDescription = game.title,
+                contentScale = ContentScale.Crop,
+                placeholder = { GameCoverPlaceholder(game.title, game.serial) },
+            )
         },
     )
 }

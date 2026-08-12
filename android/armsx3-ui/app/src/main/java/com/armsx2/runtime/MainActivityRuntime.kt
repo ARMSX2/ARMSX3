@@ -710,7 +710,21 @@ open class MainActivityRuntime : ComponentActivity() {
                         }
                     }
                     if (restartNow) {
-                        start()
+                        // Queued on vmStopControl rather than called here, because "the run loop has
+                        // exited" is NOT "the stop has finished". stop() enqueues NativeApp.shutdown()
+                        // on that same single-thread executor, and shutdown() sets stopRequested and
+                        // calls kill(). This finally block runs as soon as boot() returns -- which
+                        // stopRequested is exactly what causes -- so calling start() straight from
+                        // here raced ahead of the shutdown that released it, and the kill then landed
+                        // on the VM that had just started, killing it too. Traced on a Restart press:
+                        // START_VM 6ms after the stop began, then a SECOND START_VM 15s later once
+                        // the freshly-killed VM unwound, which is the "Restart kicks you back to the
+                        // library" report.
+                        //
+                        // vmStopControl is single-threaded, so this cannot begin until the pending
+                        // shutdown has returned. execute() and not submit().get(): waiting here would
+                        // block the run-loop thread that kill() may itself be waiting on.
+                        vmStopControl.execute { start() }
                     } else {
                         WindowImpl.toolbarVisible.value = true
                         WindowImpl.showLibrary.value = false
@@ -1039,7 +1053,8 @@ open class MainActivityRuntime : ComponentActivity() {
                         }
                     }
                     if (restartNow) {
-                        start()
+                        // Same ordering as the game path above: queued behind any pending shutdown.
+                        vmStopControl.execute { start() }
                     } else {
                         // BIOS exit had no cleanup at all — it relied entirely on stop()'s racy
                         // branch, so quitting the BIOS also left the launcher stuck in its rotation.

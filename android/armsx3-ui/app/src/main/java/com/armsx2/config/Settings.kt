@@ -1294,10 +1294,18 @@ data class Settings(
         // A deliberate change in All Core Settings still wins, because CoreSettingOverrides
         // replays immediately below this.
         runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Vblank Rate", "60") }
-        // And the cap itself. Frame limit Auto resolves to the vblank rate, so with the line
-        // above it would already be 60; setting it explicitly means the cap does not depend
-        // on the vblank path holding, which it did not. Enum node, so the value is quoted.
-        runCatching { net.rpcsx.RPCSX.instance.settingsSet("Video@@Frame limit", "\"60\"") }
+        // Frame limit is deliberately NOT forced here any more.
+        //
+        // It used to be written to "60" on every push as a belt-and-braces way to reach a 60Hz cap
+        // alongside the Vblank Rate above. But this is the same node the Display FPS Cap row writes,
+        // and this push runs after it, so choosing 30 wrote the enum and then this overwrote it --
+        // the cap did nothing for every preset value while 20 and 45 worked, because those take the
+        // free-form Second Frame Limit path instead. The core reported frame_limit=_60 on every flip
+        // no matter what the UI had just been told.
+        //
+        // The 60Hz intent survives without it: Frame limit Auto resolves to the vblank rate, which
+        // the line above pins to 60. ConfigStore also clears the stale core override that pinned
+        // this node, since that replayed even later than this did.
         // Left at upstream's 100: busy-wait on a reservation rather than sleeping.
         //
         // This was dropped to 20 while the emulator was starved for cores, on the reasoning that
