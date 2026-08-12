@@ -3,6 +3,7 @@
 #include <android/dlext.h>
 #include <android/log.h>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <elf.h>
@@ -577,9 +578,61 @@ Java_net_rpcsx_RPCSX_getVersion(JNIEnv *env, jobject) {
 // meta.json claims minApi 30, so the metadata cannot be trusted for this -- only the
 // binary can.
 //
-// Returns an empty string when nothing conclusive was found. Advisory only: the load is
-// still attempted, so a wrong answer here costs a log line and never a working driver.
-static std::string driver_libc_requirement_blocker(const std::string &soPath) {
+// Advisory only: the load is still attempted, so a wrong answer here costs a log line
+// and never a working driver.
+struct libc_requirement_report {
+  std::string blocker;      // definite: a requirement this device cannot meet
+  std::string unrecognized; // a LIBC_* name neither naming scheme explains
+};
+
+// The API level a libc version name implies. Bionic has named these two ways: dessert
+// letters LIBC_N .. LIBC_V for Android 7 .. 15 (API 24 .. 35), then the API number
+// itself, LIBC_36 and up, once Android 16 dropped dessert names. The letter set is
+// closed -- the scheme switched rather than grew -- so the table below is history, not
+// maintenance; new releases keep landing in the numeric branch. Each letter's level is
+// where it first appears in the NDK r29 sysroot libc.so stubs (llvm-readelf -V over
+// usr/lib/aarch64-linux-android/<api>/libc.so, API 21 through 35).
+//
+// Returns 0 for names that carry no API statement (LIBC itself, LIBC_DEPRECATED,
+// LIBC_PRIVATE, LIBC_PLATFORM, other sonames' versions), and -1 for a LIBC_* name
+// following neither scheme. That last case must stay separate from 0: "could not read
+// the requirement" and "no unmet requirement" are different answers.
+static int libc_version_api_level(const char *name) {
+  if (std::strncmp(name, "LIBC_", 5) != 0) {
+    return 0;
+  }
+
+  const char *suffix = name + 5;
+
+  if (std::strcmp(suffix, "DEPRECATED") == 0 || std::strcmp(suffix, "PRIVATE") == 0 ||
+      std::strcmp(suffix, "PLATFORM") == 0) {
+    return 0;
+  }
+
+  if (*suffix >= '0' && *suffix <= '9') {
+    char *end = nullptr;
+    const long level = std::strtol(suffix, &end, 10);
+    return (*end == '\0' && level > 0 && level < 10000) ? static_cast<int>(level) : -1;
+  }
+
+  if (suffix[0] != '\0' && suffix[1] == '\0') {
+    switch (suffix[0]) {
+    case 'N': return 24;
+    case 'O': return 26;
+    case 'P': return 28;
+    case 'Q': return 29;
+    case 'R': return 30;
+    case 'S': return 31;
+    case 'T': return 33;
+    case 'U': return 34;
+    case 'V': return 35;
+    }
+  }
+
+  return -1;
+}
+
+static libc_requirement_report driver_libc_requirement_check(const std::string &soPath) {
   std::FILE *f = std::fopen(soPath.c_str(), "rb");
   if (f == nullptr) {
     return {};
@@ -642,7 +695,9 @@ static std::string driver_libc_requirement_blocker(const std::string &soPath) {
     const size_t strings_max = data.size() - strtab->sh_offset;
 
     size_t offset = sh->sh_offset;
-    int highest_libc = 0;
+    int highest_api = 0;
+    const char *highest_name = nullptr;
+    const char *unrecognized = nullptr;
 
     for (size_t entry = 0; entry < sh->sh_info; entry++) {
       if (offset + sizeof(Elf64_Verneed) > data.size()) {
@@ -661,12 +716,15 @@ static std::string driver_libc_requirement_blocker(const std::string &soPath) {
 
         if (vna->vna_name < strings_max) {
           const char *name = strings + vna->vna_name;
-          int level = 0;
+          const int level = libc_version_api_level(name);
 
-          // Only LIBC_<n> is a device-capability statement. Anything else (LIBC,
-          // LIBC_PRIVATE, other sonames) says nothing about the API level.
-          if (std::sscanf(name, "LIBC_%d", &level) == 1 && level > highest_libc) {
-            highest_libc = level;
+          if (level < 0) {
+            if (unrecognized == nullptr) {
+              unrecognized = name;
+            }
+          } else if (level > highest_api) {
+            highest_api = level;
+            highest_name = name;
           }
         }
 
@@ -685,16 +743,21 @@ static std::string driver_libc_requirement_blocker(const std::string &soPath) {
     }
 
     const int device_api = android_get_device_api_level();
+    libc_requirement_report report;
 
-    if (highest_libc > 0 && device_api > 0 && highest_libc > device_api) {
-      char buf[256];
-      std::snprintf(buf, sizeof(buf),
-                    "it requires LIBC_%d (Android API %d) but this device provides API %d",
-                    highest_libc, highest_libc, device_api);
-      return buf;
+    if (unrecognized != nullptr) {
+      report.unrecognized = unrecognized;
     }
 
-    return {};
+    if (highest_api > 0 && device_api > 0 && highest_api > device_api) {
+      char buf[256];
+      std::snprintf(buf, sizeof(buf),
+                    "it requires libc version %s (Android API %d) but this device provides API %d",
+                    highest_name, highest_api, device_api);
+      report.blocker = buf;
+    }
+
+    return report;
   }
 
   return {};
@@ -721,10 +784,12 @@ Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
       // Said before the attempt, because adrenotools swallows the failure: it logs to
       // logcat and hands back the system driver, so the caller cannot tell a real load
       // from a substitution, and the reason never reaches the emulator log at all.
-      if (auto blocker = driver_libc_requirement_blocker(path + "/" + libraryName);
-          !blocker.empty()) {
+      const auto check = driver_libc_requirement_check(path + "/" + libraryName);
+
+      if (!check.blocker.empty()) {
         const std::string report =
-            "Custom driver '" + libraryName + "' cannot load on this device: " + blocker +
+            "Custom driver '" + libraryName + "' cannot load on this device: " +
+            check.blocker +
             ". It was built against a newer NDK than this Android version supports; the "
             "driver's own metadata does not carry this. The system driver will be used "
             "instead.";
@@ -736,6 +801,16 @@ Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
         if (rpcsxLib.reportDriverProblem != nullptr) {
           rpcsxLib.reportDriverProblem(report);
         }
+      } else if (!check.unrecognized.empty()) {
+        // Not the same state as "no unmet requirement": the check could not read this
+        // name, so compatibility is unverified, not confirmed. Warning level and logcat
+        // only -- nothing is known to be wrong, so a driver that loads fine must leave
+        // the emulator log exactly as a clean load would.
+        __android_log_print(ANDROID_LOG_WARN, "RPCSX-UI",
+                            "Custom driver '%s' states libc version requirement '%s', "
+                            "which this check does not recognize; compatibility was not "
+                            "verified before loading",
+                            libraryName.c_str(), check.unrecognized.c_str());
       }
 
       ::dlerror();
