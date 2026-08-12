@@ -130,6 +130,7 @@ namespace vk
 		optional_features_support.conditional_rendering    = device_extensions.is_supported(VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
 
 		optional_features_support.external_memory_host     = device_extensions.is_supported(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+		optional_features_support.memory_budget            = device_extensions.is_supported(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 		optional_features_support.synchronization_2        = device_extensions.is_supported(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
 		optional_features_support.unrestricted_depth_range = device_extensions.is_supported(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
 #ifdef __APPLE__
@@ -731,6 +732,17 @@ namespace vk
 		if (pgpu->optional_features_support.external_memory_host)
 		{
 			requested_extensions.push_back(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+		}
+
+		// Without this, VMA has no idea how much memory the driver will actually
+		// part with, and falls back to reporting the heap size -- or, where we set
+		// one, our own configured cap. Every eviction decision is made from that
+		// number, so on a device whose real ceiling is far below the cap the load
+		// reads low right up until an allocation fails outright. See the note on
+		// VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT in memory.cpp.
+		if (pgpu->optional_features_support.memory_budget)
+		{
+			requested_extensions.push_back(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 		}
 
 		if (pgpu->optional_features_support.shader_stencil_export)

@@ -197,6 +197,32 @@ namespace vk
 			allocatorInfo.pHeapSizeLimit = heap_limits.data();
 		}
 
+		// Ask the driver what it will actually give us, instead of assuming the heap
+		// (or our own cap) is available.
+		//
+		// get_memory_usage returns usage/budget, and every eviction decision upstream
+		// is a threshold on it: 75% picks safer allocation flags, 90% is severe, 95%
+		// is treated as fatal. Without this extension VMA has no budget to report, so
+		// it uses the heap size -- and where pHeapSizeLimit is set, that limit. On a
+		// phone the limit is a number we chose, not one the hardware promised, so the
+		// load reads far below the real ceiling and NONE of those thresholds are ever
+		// crossed. Observed on an Adreno 740: Ratchet & Clank died on a 32MB
+		// allocation at 516MB used against a 2048MB cap -- 25% load, severity "low",
+		// no eviction had run in the three minutes before it, and the first refusal
+		// from the driver killed the RSX thread outright.
+		//
+		// VMA takes the smaller of this budget and pHeapSizeLimit, so the cap still
+		// caps; it just stops being mistaken for headroom that exists.
+		if (dev.get_memory_budget_support())
+		{
+			allocatorInfo.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
+		}
+		else
+		{
+			rsx_log.warning("VK_EXT_memory_budget is unavailable. Video memory pressure will be "
+				"judged against the heap size rather than what the driver will actually part with.");
+		}
+
 #ifdef __ANDROID__
 		// Android builds with VK_NO_PROTOTYPES so the driver behind every vkFoo
 		// can be swapped (adrenotools). That also switches VMA from its static

@@ -104,6 +104,7 @@ namespace vk
 			bool debug_utils = false;
 			bool external_memory_host = false;
 			bool framebuffer_loops = false;
+			bool memory_budget = false;
 			bool shader_stencil_export = false;
 			bool surface_capabilities_2 = false;
 			bool synchronization_2 = false;
@@ -219,6 +220,7 @@ namespace vk
 		bool get_conditional_render_support() const { return pgpu->optional_features_support.conditional_rendering; }
 		bool get_unrestricted_depth_range_support() const { return pgpu->optional_features_support.unrestricted_depth_range; }
 		bool get_external_memory_host_support() const { return pgpu->optional_features_support.external_memory_host; }
+		bool get_memory_budget_support() const { return pgpu->optional_features_support.memory_budget; }
 		bool get_surface_capabilities_2_support() const { return pgpu->optional_features_support.surface_capabilities_2; }
 		bool get_debug_utils_support() const { return g_cfg.video.renderdoc_compatiblity && pgpu->optional_features_support.debug_utils; }
 		bool get_framebuffer_loops_support() const { return pgpu->optional_features_support.framebuffer_loops; }

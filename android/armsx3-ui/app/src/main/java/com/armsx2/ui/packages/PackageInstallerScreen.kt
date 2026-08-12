@@ -404,6 +404,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
     var installed by remember { mutableStateOf(readInstalled()) }
     var licences by remember { mutableStateOf(readLicences()) }
     var confirmRemove by remember { mutableStateOf<InstalledTitle?>(null) }
+    var confirmRemoveLicence by remember { mutableStateOf<java.io.File?>(null) }
 
     // getItem returns MutableState<ProgressEntry>; reading .value here and .longValue
     // below is what subscribes this composable to the native progress callbacks.
@@ -632,6 +633,33 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
         }
     }
 
+    // Same treatment as a title: deleting the licence is not undoable, and the content it
+    // unlocks stops working without it, so it is confirmed rather than done on tap.
+    confirmRemoveLicence?.let { target ->
+        AlertDialog(
+            onDismissRequest = { confirmRemoveLicence = null },
+            title = { Text(str("packages.licence.remove.title")) },
+            text = { Text(I18n.get("packages.licence.remove.body").replace("%s", target.name)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    val file = target
+                    confirmRemoveLicence = null
+                    MainActivityRuntime.invoke {
+                        val ok = withContext(Dispatchers.IO) {
+                            runCatching { file.delete() }.getOrDefault(false)
+                        }
+                        licences = readLicences()
+                        message = if (ok) I18n.get("packages.licence.removed")
+                        else I18n.get("packages.licence.remove.failed")
+                    }
+                }) { Text(str("action.remove")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmRemoveLicence = null }) { Text(str("action.cancel")) }
+            },
+        )
+    }
+
     // Deleting a game folder is not undoable, so it is confirmed rather than done on tap.
     confirmRemove?.let { target ->
         // Uninstall only ever removed dev_hdd0/game/<TITLEID>, so the title's compiled-code and
@@ -830,21 +858,33 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        Column(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                        Row(
+                            modifier = Modifier.fillMaxWidth()
+                                .padding(start = 14.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            owner?.let {
+                            Column(modifier = Modifier.weight(1f)) {
+                                owner?.let {
+                                    Text(
+                                        it.name,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
                                 Text(
-                                    it.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface,
+                                    file.name,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
                             }
-                            Text(
-                                file.name,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            // Installing a licence was one-way: the row existed only to prove the
+                            // install had happened, with no way to undo it. A wrong or duplicate
+                            // .rap could only be cleared by finding exdata in a file manager,
+                            // which on a scoped-storage device is not something most people can
+                            // do at all.
+                            TextButton(onClick = { confirmRemoveLicence = file }) {
+                                Text(str("packages.licence.remove"))
+                            }
                         }
                     }
                 }
