@@ -655,6 +655,17 @@ private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuVie
         // "tap to reveal", NOT show/hide: on = the glyph stays hidden until you tap its top-right
         // corner, which surfaces it. Either way that corner always opens this menu, so unlike the
         // old on/off toggle there's no setting here that can lock you out of it.
+        //
+        // The comment above outlived its control: the row was lost somewhere in the port and the
+        // setting was left with no writer at all, so the glyph could not be hidden or brought back
+        // by anyone. Reported as the option missing from this menu, which is exactly what it was.
+        MenuSwitchRow(
+            str("overlay.pauseTapReveal.label"),
+            com.armsx2.ui.touch.TouchControls.pauseTapToReveal.value,
+            description = str("overlay.pauseTapReveal.desc"),
+        ) { v ->
+            com.armsx2.ui.touch.TouchControls.setPauseTapToReveal(v)
+        }
     // Removed: PS2 per-primitive filtering; use Anisotropic Filtering.
         Spacer(Modifier.height(6.dp))
         // OSD mode selector — one control (Full / Minimal / Custom / Off) in place of the old
