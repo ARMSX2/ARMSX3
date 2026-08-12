@@ -123,6 +123,63 @@ static std::mutex g_virtual_pad_mutex;
 // could never address, so its input was assembled and then dropped.
 static std::array<std::shared_ptr<Pad>, CELL_PAD_MAX_PORT_NUM> g_virtual_pads;
 
+// Analog pressure for the twelve pressure-capable buttons, per port, 1..255.
+//
+// 0 means "nothing analog is driving this one, use the digital value". That is a
+// safe sentinel rather than a lost level: a button that is not pressed already
+// reports 0 below, so a pressed button whose pressure is 0 cannot occur, and the
+// zero-initialised array is exactly the pre-existing all-digital behaviour.
+//
+// Kept beside the pad rather than pushed through _rpcsx_overlayPadData because
+// that export's signature is frozen: the core is dlopen()ed and can be updated
+// independently of the JNI glue, so widening an existing export would make older
+// glue call it with a garbage argument. Glue that predates _rpcsx_overlayPadPressure
+// simply never calls it and every button keeps its old digital behaviour.
+//
+// Indexed by press offset minus CELL_PAD_BTN_OFFSET_PRESS_RIGHT, so the array
+// order is the one pad_types.h already defines (offsets 8..19, contiguous).
+inline constexpr int PRESSURE_COUNT =
+    CELL_PAD_BTN_OFFSET_PRESS_R2 - CELL_PAD_BTN_OFFSET_PRESS_RIGHT + 1;
+static std::array<std::array<std::atomic<int>, PRESSURE_COUNT>,
+                  CELL_PAD_MAX_PORT_NUM>
+    g_virtual_pad_pressure;
+
+// Digital button -> its press-value slot. The pairing is cellPad's own, from the
+// switch that copies m_value into output.button[CELL_PAD_BTN_OFFSET_PRESS_*].
+// Returns -1 for buttons the PS3 pad reports with no pressure (Select, Start,
+// L3, R3 and the PS button).
+static int pressure_index_for(u32 offset, u32 outKeyCode) {
+  const auto slot = [](int press_offset) {
+    return press_offset - CELL_PAD_BTN_OFFSET_PRESS_RIGHT;
+  };
+
+  if (offset == CELL_PAD_BTN_OFFSET_DIGITAL1) {
+    switch (outKeyCode) {
+    case CELL_PAD_CTRL_RIGHT: return slot(CELL_PAD_BTN_OFFSET_PRESS_RIGHT);
+    case CELL_PAD_CTRL_LEFT:  return slot(CELL_PAD_BTN_OFFSET_PRESS_LEFT);
+    case CELL_PAD_CTRL_UP:    return slot(CELL_PAD_BTN_OFFSET_PRESS_UP);
+    case CELL_PAD_CTRL_DOWN:  return slot(CELL_PAD_BTN_OFFSET_PRESS_DOWN);
+    default: return -1;
+    }
+  }
+
+  if (offset == CELL_PAD_BTN_OFFSET_DIGITAL2) {
+    switch (outKeyCode) {
+    case CELL_PAD_CTRL_TRIANGLE: return slot(CELL_PAD_BTN_OFFSET_PRESS_TRIANGLE);
+    case CELL_PAD_CTRL_CIRCLE:   return slot(CELL_PAD_BTN_OFFSET_PRESS_CIRCLE);
+    case CELL_PAD_CTRL_CROSS:    return slot(CELL_PAD_BTN_OFFSET_PRESS_CROSS);
+    case CELL_PAD_CTRL_SQUARE:   return slot(CELL_PAD_BTN_OFFSET_PRESS_SQUARE);
+    case CELL_PAD_CTRL_L1:       return slot(CELL_PAD_BTN_OFFSET_PRESS_L1);
+    case CELL_PAD_CTRL_R1:       return slot(CELL_PAD_BTN_OFFSET_PRESS_R1);
+    case CELL_PAD_CTRL_L2:       return slot(CELL_PAD_BTN_OFFSET_PRESS_L2);
+    case CELL_PAD_CTRL_R2:       return slot(CELL_PAD_BTN_OFFSET_PRESS_R2);
+    default: return -1;
+    }
+  }
+
+  return -1;
+}
+
 std::string g_input_config_override;
 cfg_input_configurations g_cfg_input_configs;
 
@@ -2157,6 +2214,8 @@ extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,
     return false;
   }
 
+  const auto &pressure = g_virtual_pad_pressure[port];
+
   for (auto &btn : pad->m_buttons) {
     if (btn.m_offset == CELL_PAD_BTN_OFFSET_DIGITAL1) {
       btn.m_pressed = (digital1 & btn.m_outKeyCode) != 0;
@@ -2171,13 +2230,50 @@ extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,
       btn.m_pressed = (digital2 & btn.m_outKeyCode) != 0;
     }
 
-    btn.m_value = btn.m_pressed ? 255 : 0;
+    // A pressed button was worth exactly 255, which is what cellPad copies into
+    // the press byte a game reads for analog buttons -- so every pressure-capable
+    // button on this port was fully digital no matter what the hardware sent. A
+    // physical L2/R2 went 0 to 100 with no half-press (reported on Iron Man's
+    // hover tutorial, which cannot be passed without one), and the touch overlay's
+    // pressure modifier set a value that was discarded here.
+    const int idx = pressure_index_for(btn.m_offset, btn.m_outKeyCode);
+    const int analog = idx < 0 ? 0 : pressure[idx].load(std::memory_order_relaxed);
+
+    // 0 means no analog source is driving this button -- every button on a pad
+    // without analog buttons -- so the digital answer stays the default.
+    btn.m_value = !btn.m_pressed ? 0 : (analog <= 0 ? 255 : analog);
   }
 
   pad->m_sticks[0].m_value = leftStickX;
   pad->m_sticks[1].m_value = leftStickY;
   pad->m_sticks[2].m_value = rightStickX;
   pad->m_sticks[3].m_value = rightStickY;
+  return true;
+}
+
+// Analog pressure for this port's pressure-capable buttons. `values` is in press
+// offset order (CELL_PAD_BTN_OFFSET_PRESS_RIGHT..PRESS_R2), each 1..255, or 0 to
+// leave that button digital.
+//
+// Separate from _rpcsx_overlayPadData so the pressure survives a snapshot push
+// that does not carry it: the caller sets pressure when a trigger moves and pushes
+// the whole pad on every input event, and the two orders must both work.
+extern "C" bool _rpcsx_overlayPadPressure(int port, const int *values,
+                                          int count) {
+  if (port < 0 || static_cast<usz>(port) >= g_virtual_pad_pressure.size() ||
+      values == nullptr) {
+    return false;
+  }
+
+  // Tolerate a shorter or longer array than this core knows about, so glue and
+  // core can be updated independently without one truncating the other's pad.
+  const int n = std::min(count, PRESSURE_COUNT);
+
+  for (int i = 0; i < n; i++) {
+    g_virtual_pad_pressure[port][i].store(std::clamp(values[i], 0, 255),
+                                          std::memory_order_relaxed);
+  }
+
   return true;
 }
 

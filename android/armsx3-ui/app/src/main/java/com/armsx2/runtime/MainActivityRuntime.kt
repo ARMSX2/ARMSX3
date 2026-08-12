@@ -4703,7 +4703,12 @@ open class MainActivityRuntime : ComponentActivity() {
             // the target stick's own (resting) ANALOG writer in the same event.
             accumAnalog(target, out)
         } else {
-            NativeApp.setPadButtonForPort(port, target, (out * 32767).toInt(), out > 0f)
+            // coerceAtLeast(1) because range 0 is the input layer's "full press"
+            // convention: the lightest real squeeze floors to 0 here, which would
+            // otherwise be delivered as a FULL press -- the exact opposite of the
+            // half-press these games want.
+            val range = if (out > 0f) (out * 32767).toInt().coerceAtLeast(1) else 0
+            NativeApp.setPadButtonForPort(port, target, range, out > 0f)
         }
     }
 

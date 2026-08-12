@@ -770,6 +770,14 @@ object Rpcs3Bridge {
         /** [lsUp, lsRight, lsDown, lsLeft, rsUp, rsRight, rsDown, rsLeft], 0f..1f. */
         val dir = FloatArray(8)
 
+        /** Analog pressure per pressure-capable button, in CELL_PAD press-offset
+         *  order, 1..255, or 0 for "leave this one digital". See [PRESSURE_SLOT]. */
+        val pressure = IntArray(PRESSURE_SLOTS)
+
+        /** Last array actually pushed, so an all-digital pad does not send one
+         *  JNI call per input event for values that never change. */
+        val pressureSent = IntArray(PRESSURE_SLOTS)
+
         /** Opposing directions cancel; 128 is centre, matching CELL_PAD. */
         private fun axis(pos: Int, neg: Int) =
             (128f + (dir[pos] - dir[neg]) * 127f).toInt().coerceIn(0, 255)
@@ -783,6 +791,10 @@ object Rpcs3Bridge {
             digital1 = 0
             digital2 = 0
             dir.fill(0f)
+            pressure.fill(0)
+            // NOT pressureSent: it tracks what the core currently holds, and the
+            // core is not reset here. Clearing it would skip the push that tells
+            // the core to drop a pressure left applied from before the reset.
         }
     }
 
@@ -874,6 +886,20 @@ object Rpcs3Bridge {
             }
         } else {
             applyButton(pad, index, pressed)
+
+            // `range` was dropped here for every non-stick button, so a physical
+            // trigger and the touch overlay's pressure modifier both arrived with
+            // a magnitude that nothing ever read: the button was pressed or it was
+            // not. Same "range 0 means a full press" convention as the stick rows
+            // above, so a plain digital press still reads as 255.
+            val pslot = PRESSURE_SLOT[index] ?: -1
+            if (pslot >= 0) {
+                pad.pressure[pslot] = when {
+                    !pressed -> 0
+                    range <= 0 -> 255
+                    else -> ((range / 32767f) * 255f).toInt().coerceIn(1, 255)
+                }
+            }
         }
         push(port)
     }
@@ -897,12 +923,42 @@ object Rpcs3Bridge {
     private fun push(port: Int) {
         val pad = pads.getOrNull(port) ?: return
         runCatching {
+            // Pressure first: overlayPadData is what writes each button's value, so
+            // it has to see the current pressure to apply it in the same push.
+            if (!pad.pressure.contentEquals(pad.pressureSent)) {
+                if (RPCSX.instance.overlayPadPressure(port, pad.pressure)) {
+                    pad.pressure.copyInto(pad.pressureSent)
+                }
+            }
             RPCSX.instance.overlayPadData(
                 port, pad.digital1, pad.digital2,
                 pad.leftX(), pad.leftY(), pad.rightX(), pad.rightY(),
             )
         }
     }
+
+    /**
+     * Android keycode -> its slot in [PadState.pressure], which is CELL_PAD press
+     * offset order (PRESS_RIGHT..PRESS_R2, contiguous in pad_types.h). Only the
+     * twelve buttons a PS3 pad reports pressure for; Select, Start, L3 and R3 have
+     * no press byte and are absent on purpose.
+     */
+    private val PRESSURE_SLOT: Map<Int, Int> = mapOf(
+        KeyEvent.KEYCODE_DPAD_RIGHT to 0,
+        KeyEvent.KEYCODE_DPAD_LEFT to 1,
+        KeyEvent.KEYCODE_DPAD_UP to 2,
+        KeyEvent.KEYCODE_DPAD_DOWN to 3,
+        KeyEvent.KEYCODE_BUTTON_Y to 4,   // triangle
+        KeyEvent.KEYCODE_BUTTON_B to 5,   // circle
+        KeyEvent.KEYCODE_BUTTON_A to 6,   // cross
+        KeyEvent.KEYCODE_BUTTON_X to 7,   // square
+        KeyEvent.KEYCODE_BUTTON_L1 to 8,
+        KeyEvent.KEYCODE_BUTTON_R1 to 9,
+        KeyEvent.KEYCODE_BUTTON_L2 to 10,
+        KeyEvent.KEYCODE_BUTTON_R2 to 11,
+    )
+
+    private const val PRESSURE_SLOTS = 12
 
     private fun resetPadState() {
         pads.forEach { it.reset() }

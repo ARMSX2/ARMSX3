@@ -23,6 +23,7 @@
 struct RPCSXApi {
   bool (*overlayPadData)(int port, int digital1, int digital2, int leftStickX,
                          int leftStickY, int rightStickX, int rightStickY);
+  bool (*overlayPadPressure)(int port, const int *values, int count);
   bool (*initialize)(std::string_view rootDir, std::string_view user);
   void (*setSocInfo)(std::string_view socInfo);
   bool (*processCompilationQueue)(JNIEnv *env);
@@ -110,6 +111,7 @@ struct RPCSXLibrary : RPCSXApi {
 
     // clang-format off
     result.overlayPadData = reinterpret_cast<decltype(overlayPadData)>(dlsym(handle, "_rpcsx_overlayPadData"));
+    result.overlayPadPressure = reinterpret_cast<decltype(overlayPadPressure)>(dlsym(handle, "_rpcsx_overlayPadPressure"));
     result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_rpcsx_initialize"));
     result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_rpcsx_setSocInfo"));
     result.processCompilationQueue = reinterpret_cast<decltype(processCompilationQueue)>(dlsym(handle, "_rpcsx_processCompilationQueue"));
@@ -207,6 +209,35 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_overlayPadData(
 
   return rpcsxLib.overlayPadData(port, digital1, digital2, leftStickX,
                                  leftStickY, rightStickX, rightStickY);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_overlayPadPressure(
+    JNIEnv *env, jobject, jint port, jintArray values) {
+  // Absent on a core older than this export: the pad still works, every button
+  // is just digital, which is the behaviour that shipped before it existed.
+  if (rpcsxLib.overlayPadPressure == nullptr || values == nullptr) {
+    return false;
+  }
+
+  const jsize count = env->GetArrayLength(values);
+  if (count <= 0) {
+    return false;
+  }
+
+  // Critical rather than a copy: this runs on every input event that moves a
+  // trigger, and the callee only reads the values before returning.
+  auto *elems = static_cast<jint *>(env->GetPrimitiveArrayCritical(values, nullptr));
+  if (elems == nullptr) {
+    return false;
+  }
+
+  static_assert(sizeof(jint) == sizeof(int),
+                "jint and int must match for the pressure array to be passed through");
+  const bool ok = rpcsxLib.overlayPadPressure(
+      port, reinterpret_cast<const int *>(elems), static_cast<int>(count));
+
+  env->ReleasePrimitiveArrayCritical(values, elems, JNI_ABORT);
+  return ok;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_initialize(
