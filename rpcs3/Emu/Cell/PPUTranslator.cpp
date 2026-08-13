@@ -4760,13 +4760,18 @@ void PPUTranslator::FRSP(ppu_opcode_t op)
 void PPUTranslator::FCTIW(ppu_opcode_t op)
 {
 	const auto b = GetFpr(op.frb);
-	const auto xormask = m_ir->CreateSExt(m_ir->CreateFCmpOGE(b, ConstantFP::get(GetType<f64>(), std::exp2l(31.))), GetType<s32>());
 
-	// fix result saturation (0x80000000 -> 0x7fffffff)
 #if defined(ARCH_X64)
+	// fix result saturation (0x80000000 -> 0x7fffffff)
+	// x86 returns the "integer indefinite" value 0x80000000 for anything it cannot represent,
+	// positive overflow included, so the result has to be flipped back for that case.
+	const auto xormask = m_ir->CreateSExt(m_ir->CreateFCmpOGE(b, ConstantFP::get(GetType<f64>(), std::exp2l(31.))), GetType<s32>());
 	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s32>(), "llvm.x86.sse2.cvtsd2si", m_ir->CreateInsertElement(GetUndef<f64[2]>(), b, u64{0}))));
 #elif defined(ARCH_ARM64)
-	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s32>(), "llvm.aarch64.neon.fcvtns.i32.f64", b)));
+	// No correction here. FCVTNS already saturates positive overflow to 0x7fffffff, which is what
+	// PowerPC produces; applying the x86 fixup on top would XOR that back into 0x80000000 and turn
+	// a saturated-high value into a saturated-low one.
+	SetFpr(op.frd, Call(GetType<s32>(), "llvm.aarch64.neon.fcvtns.i32.f64", b));
 #endif
 
 	//SetFPSCR_FR(Call(GetType<bool>(), m_pure_attr, "__fctiw_get_fr", b));
@@ -4780,13 +4785,14 @@ void PPUTranslator::FCTIW(ppu_opcode_t op)
 void PPUTranslator::FCTIWZ(ppu_opcode_t op)
 {
 	const auto b = GetFpr(op.frb);
-	const auto xormask = m_ir->CreateSExt(m_ir->CreateFCmpOGE(b, ConstantFP::get(GetType<f64>(), std::exp2l(31.))), GetType<s32>());
 
-	// fix result saturation (0x80000000 -> 0x7fffffff)
 #if defined(ARCH_X64)
+	// fix result saturation (0x80000000 -> 0x7fffffff); see FCTIW for why this is x86-only.
+	const auto xormask = m_ir->CreateSExt(m_ir->CreateFCmpOGE(b, ConstantFP::get(GetType<f64>(), std::exp2l(31.))), GetType<s32>());
 	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s32>(), "llvm.x86.sse2.cvttsd2si", m_ir->CreateInsertElement(GetUndef<f64[2]>(), b, u64{0}))));
 #elif defined(ARCH_ARM64)
-	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s32>(), "llvm.aarch64.neon.fcvtzs.i32.f64", b)));
+	// FCVTZS saturates to 0x7fffffff on its own.
+	SetFpr(op.frd, Call(GetType<s32>(), "llvm.aarch64.neon.fcvtzs.i32.f64", b));
 #endif
 }
 
@@ -5062,13 +5068,14 @@ void PPUTranslator::FABS(ppu_opcode_t op)
 void PPUTranslator::FCTID(ppu_opcode_t op)
 {
 	const auto b = GetFpr(op.frb);
-	const auto xormask = m_ir->CreateSExt(m_ir->CreateFCmpOGE(b, ConstantFP::get(GetType<f64>(), std::exp2l(63.))), GetType<s64>());
 
-	// fix result saturation (0x8000000000000000 -> 0x7fffffffffffffff)
 #if defined(ARCH_X64)
+	// fix result saturation (0x8000000000000000 -> 0x7fffffffffffffff); see FCTIW, x86-only.
+	const auto xormask = m_ir->CreateSExt(m_ir->CreateFCmpOGE(b, ConstantFP::get(GetType<f64>(), std::exp2l(63.))), GetType<s64>());
 	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s64>(), "llvm.x86.sse2.cvtsd2si64", m_ir->CreateInsertElement(GetUndef<f64[2]>(), b, u64{0}))));
 #elif defined(ARCH_ARM64)
-	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s64>(), "llvm.aarch64.neon.fcvtns.i64.f64", b)));
+	// FCVTNS saturates to 0x7fffffffffffffff on its own.
+	SetFpr(op.frd, Call(GetType<s64>(), "llvm.aarch64.neon.fcvtns.i64.f64", b));
 #endif
 
 
@@ -5083,13 +5090,14 @@ void PPUTranslator::FCTID(ppu_opcode_t op)
 void PPUTranslator::FCTIDZ(ppu_opcode_t op)
 {
 	const auto b = GetFpr(op.frb);
-	const auto xormask = m_ir->CreateSExt(m_ir->CreateFCmpOGE(b, ConstantFP::get(GetType<f64>(), std::exp2l(63.))), GetType<s64>());
 
-	// fix result saturation (0x8000000000000000 -> 0x7fffffffffffffff)
 #if defined(ARCH_X64)
+	// fix result saturation (0x8000000000000000 -> 0x7fffffffffffffff); see FCTIW, x86-only.
+	const auto xormask = m_ir->CreateSExt(m_ir->CreateFCmpOGE(b, ConstantFP::get(GetType<f64>(), std::exp2l(63.))), GetType<s64>());
 	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s64>(), "llvm.x86.sse2.cvttsd2si64", m_ir->CreateInsertElement(GetUndef<f64[2]>(), b, u64{0}))));
 #elif defined(ARCH_ARM64)
-	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s64>(), "llvm.aarch64.neon.fcvtzs.i64.f64", b)));
+	// FCVTZS saturates to 0x7fffffffffffffff on its own.
+	SetFpr(op.frd, Call(GetType<s64>(), "llvm.aarch64.neon.fcvtzs.i64.f64", b));
 #endif
 }
 

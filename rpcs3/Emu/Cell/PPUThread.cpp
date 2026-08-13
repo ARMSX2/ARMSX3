@@ -5339,6 +5339,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				accurate_nj_mode,
 				contains_symbol_resolver,
 				daz_and_ftz,
+				arm64_codegen_v2,
 
 				__bitset_enum_max
 			};
@@ -5348,6 +5349,18 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			settings += ppu_settings::_reserved_for_backwards_compatibility;
 #if !defined(_WIN32) && !defined(__APPLE__)
 			settings += ppu_settings::platform_bit;
+#endif
+#if defined(ARCH_ARM64)
+			// Cache identity for ARM64 PPU codegen. The cache key is otherwise only the
+			// executable's SHA-1 plus these settings, with nothing naming the build, so a codegen
+			// change silently reuses objects compiled by the previous version. That is not
+			// hypothetical: the FCTIW/FCTID saturation fix appeared to do nothing because the game
+			// reloaded its old objects and never recompiled.
+			//
+			// Add a new value (arm64_codegen_v3, ...) and set that instead whenever ARM64 PPU
+			// codegen changes. Never re-toggle an old one -- that would collide with hashes already
+			// on disk from an earlier build.
+			settings += ppu_settings::arm64_codegen_v2;
 #endif
 			if (g_cfg.core.use_accurate_dfma)
 				settings += ppu_settings::accurate_dfma;
@@ -5648,7 +5661,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 		jit_mod.symbol_resolvers.resize(jits.size());
 	}
 
-	bool failed_to_load = false;
+	usz failed_module_count = 0;
 	{
 		if (!is_being_used_in_emulation || (cpu ? cpu->state.all_of(cpu_flag::exit) : Emu.IsStopped()))
 		{
@@ -5676,21 +5689,29 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				break;
 			}
 
-			if (!failed_to_load && !jits[mod_index / c_moudles_per_jit]->add(cache_path + obj_name))
+			// One module failing no longer abandons the rest.
+			//
+			// This flag used to be sticky and also gated the add() above, so the FIRST object that
+			// would not load stopped every later module from even being attempted. With the
+			// compile side now surviving a module LLVM cannot codegen, that turned one bad module
+			// into a nearly-uncompiled game: Saint Seiya's failure sits at index 6 of 134, so 128
+			// modules were skipped and the title ran slower with the recompiler than with the
+			// interpreter (6fps vs 23fps reported on issue #25) -- the per-function fallback costs
+			// more than interpreting outright.
+			//
+			// Skipping only the module that failed is safe for the same reason excluded_funcs is:
+			// a guest function with no compiled code keeps its dispatcher entry and is interpreted.
+			// So the cost of a bad module is its own functions, not the whole executable.
+			if (!jits[mod_index / c_moudles_per_jit]->add(cache_path + obj_name))
 			{
-				ppu_log.error("LLVM: Failed to load module %s", obj_name);
-				failed_to_load = true;
+				ppu_log.error("LLVM: Failed to load module %s; its functions will be interpreted", obj_name);
+				failed_module_count++;
 			}
 
 			if (mod_index % increment_link_count_at == (link_workload.size() - 1) % increment_link_count_at)
 			{
 				// Incremenet 'pdone' Nth times where N is link workload size ceil-divided by increment_link_count_at
 				g_progr_pdone++;
-			}
-
-			if (failed_to_load)
-			{
-				continue;
 			}
 
 			if (!is_compiled)
@@ -5700,7 +5721,23 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 		}
 	}
 
-	if (failed_to_load || !is_being_used_in_emulation || (cpu ? cpu->state.all_of(cpu_flag::exit) : Emu.IsStopped()))
+	// Deliberately NOT bailing on a load failure any more.
+	//
+	// Everything below is what makes the modules that DID load usable: jit->fin() finalises them
+	// and the symbol resolvers are what wire the guest function table to the compiled code.
+	// Returning here left all of them loaded but unfinalised, so ONE module that could not be read
+	// cost the entire executable its recompiled code, not just its own functions. That is why
+	// Saint Seiya measured slower on the recompiler than on the interpreter.
+	//
+	// A module that failed is already absent from its jit, and its functions keep the dispatcher
+	// entry that interprets them, so finalising the rest is both correct and the whole point.
+	if (failed_module_count)
+	{
+		ppu_log.error("LLVM: %u of %u modules could not be loaded; those functions will be "
+			"interpreted, the rest are compiled as usual", failed_module_count, link_workload.size());
+	}
+
+	if (!is_being_used_in_emulation || (cpu ? cpu->state.all_of(cpu_flag::exit) : Emu.IsStopped()))
 	{
 		return compiled_new;
 	}
