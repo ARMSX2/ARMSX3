@@ -52,7 +52,6 @@ namespace rsx::prof
 	u64 g_fifo_refill_stalls = 0;
 	u64 g_fifo_refill_stall_us = 0;
 	u64 g_render_passes = 0;
-	u64 g_rp_reopened = 0;
 	u64 g_mprotect_calls = 0;
 	u64 g_mprotect_bytes = 0;
 	u64 g_access_violations = 0;
@@ -76,18 +75,6 @@ namespace rsx::prof
 		"TexCache:1227",
 		"ImgHelper:43",
 		"GSR:2811",
-		// Draw:1093 split by what actually mismatched. It is the only teardown site that can
-		// fire for two unrelated reasons, and they have opposite prognoses: a framebuffer
-		// switch is the game changing render target and is irreducible, while a render pass
-		// handle mismatch on the same framebuffer can only come from the attachment layouts,
-		// which are part of the render pass key and are what surface parking controls.
-		// Without the split, parking moving work between the two is indistinguishable from
-		// parking creating work.
-		//
-		// Bracketed because these two are a breakdown of Draw:1093 and not sites of their own.
-		// They sum to it, so the frame's teardown total is still the unbracketed names alone.
-		"(Draw:1093 key)",
-		"(Draw:1093 fbo)",
 	};
 	u64 g_flush_sites[flush_site_count] = {};
 	const char* g_flush_site_names[flush_site_count] = {
@@ -114,8 +101,8 @@ namespace rsx::prof
 		"Present:1102",
 	};
 
-	const void* g_rp_callers[rp_caller_levels][rp_caller_slots] = {};
-	u64 g_rp_caller_counts[rp_caller_levels][rp_caller_slots] = {};
+	const void* g_rp_callers[2][rp_caller_slots] = {};
+	u64 g_rp_caller_counts[2][rp_caller_slots] = {};
 
 	void note_rp_teardown(const void* caller, u32 level)
 	{
@@ -415,14 +402,8 @@ namespace rsx::prof
 				static_cast<double>(g_mprotect_bytes) / 1048576.0 / frames,
 				static_cast<double>(g_access_violations) / frames);
 
-			// Redundant means the identical (pass, framebuffer) came straight back after the
-			// teardown, so the tile store and reload bought nothing. Passes minus redundant is
-			// the floor: no amount of barrier suppression can go below it, because the rest are
-			// framebuffer switches the game asked for.
-			fmt::append(report, "\n\trender passes   %.1f/frame, %.1f redundant (floor %.1f)",
-				static_cast<double>(g_render_passes) / frames,
-				static_cast<double>(g_rp_reopened) / frames,
-				static_cast<double>(g_render_passes - std::min(g_rp_reopened, g_render_passes)) / frames);
+			fmt::append(report, "\n\trender passes   %.1f/frame",
+				static_cast<double>(g_render_passes) / frames);
 
 			{
 				std::string sites;
@@ -447,7 +428,7 @@ namespace rsx::prof
 				static_cast<double>(g_fifo_refill_bytes) / static_cast<double>(g_fifo_refills));
 		}
 
-		for (u32 level = 0; level < rp_caller_levels; level++)
+		for (u32 level = 0; level < 2; level++)
 		{
 			std::pair<const void*, u64> top[6] = {};
 			for (usz i = 0; i < rp_caller_slots; i++)
@@ -490,17 +471,8 @@ namespace rsx::prof
 				fmt::append(list, "\n\t  %-44s %6.1f/frame", where, static_cast<double>(count) / frames);
 			}
 
-			// Level 2 is the one to act on: same addresses as level 0, filtered to the teardowns
-			// that were actually wasted. A caller that is large in level 0 and small here was
-			// tearing down a pass that was ending anyway.
-			static const char* const level_names[rp_caller_levels] =
-			{
-				"direct caller",
-				"change_layout caller",
-				"REDUNDANT teardown caller"
-			};
-
-			fmt::append(report, "\n\trp teardown by %s%s", level_names[level], list);
+			fmt::append(report, "\n\trp teardown by %s%s",
+				level == 0 ? "direct caller" : "change_layout caller", list);
 		}
 
 		{
@@ -716,7 +688,6 @@ namespace rsx::prof
 		g_fifo_refill_stalls = 0;
 		g_fifo_refill_stall_us = 0;
 		g_render_passes = 0;
-		g_rp_reopened = 0;
 		g_mprotect_calls = 0;
 		g_mprotect_bytes = 0;
 		g_access_violations = 0;

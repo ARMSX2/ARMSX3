@@ -61,7 +61,6 @@ namespace vk
 		owner = &dev;
 		query_type = type;
 		query_slot_status.resize(num_entries, {});
-		tile_based_renderer = vk::is_tile_based_renderer(vk::get_driver_vendor());
 
 		for (unsigned i = 0; i < num_entries; ++i)
 		{
@@ -143,16 +142,6 @@ namespace vk
 	{
 		control_flags = control_;
 		result_flags = result_;
-
-		if (tile_based_renderer)
-		{
-			// PARTIAL_BIT exists so the poll loop can finish early the moment any sample is known
-			// to have passed. That can only happen on an immediate-mode renderer, where fragments
-			// rasterize as they arrive. A TBDR has nothing to report until the tiling pass ends, so
-			// the flag can never pay off here and only asks the driver for extra work.
-			// Ported from rfandango/rpcsx (a560768ce).
-			result_flags &= ~VK_QUERY_RESULT_PARTIAL_BIT;
-		}
 	}
 
 	void query_pool_manager::begin_query(vk::command_buffer& cmd, u32 index)
@@ -244,58 +233,34 @@ namespace vk
 					}
 				}
 
+#ifdef __ANDROID__
 				// Spin briefly, then hand the core back.
 				//
 				// A pure pause() spin is reasonable on a desktop, where the result lands in
-				// microseconds and there are cores to spare. On a tiled renderer the result is
-				// not available until the tile pass resolves, so the wait is far longer, and a
-				// handheld runs eleven hot emulator threads across five usable cores. Burning
-				// one of them on a spin costs an SPU thread that had real work to do.
+				// microseconds and there are cores to spare. On a tiled mobile GPU the
+				// result is not available until the tile pass resolves, so the wait is far
+				// longer, and this device runs eleven hot emulator threads across five
+				// usable cores. Burning one of them on a spin costs an SPU thread that had
+				// real work to do.
 				//
-				// The short spin first keeps the fast case fast, since a result that is nearly
-				// ready still returns without a scheduler round trip.
-				//
-				// Gated on the driver vendor rather than __ANDROID__: an immediate-mode mobile
-				// GPU wants the desktop path, and a tiler on any other platform wants this one.
-				if (tile_based_renderer && spins >= 64)
-				{
-					std::this_thread::yield();
-				}
-				else
+				// The short spin first keeps the fast case fast, since a result that is
+				// nearly ready still returns without a scheduler round trip.
+				if (spins < 64)
 				{
 					utils::pause();
 				}
-
+				else
+				{
+					std::this_thread::yield();
+				}
+#else
+				utils::pause();
+#endif
 				poke_query(query_info, index, result_flags);
 			}
 		}
 
 		return query_info.data;
-	}
-
-	// Shared by both readback paths. vkCmdCopyQueryPoolResults MUST be recorded outside a render
-	// pass instance; inside one it is undefined behaviour, and a tiler does not tolerate what an
-	// IMR desktop GPU does. See the detailed history on get_query_result_indirect below.
-	void query_pool_manager::end_renderpass_for_readback(vk::command_buffer& cmd)
-	{
-		if (!vk::is_renderpass_open(cmd))
-		{
-			return;
-		}
-
-		// A query that began inside a render pass instance has to end inside that same instance.
-		// Ending the pass underneath an open one leaves it permanently unavailable: the driver
-		// never marks it ready, get_query_result spins on poke_query forever, and the RSX thread
-		// stops with audio and vblank still alive -- a hang, not a crash. The submit-time ensure()
-		// does not catch it either, because end_occlusion_query closes the query a moment later so
-		// the flag reads clear while the result never arrives.
-		if (cmd.flags & vk::command_buffer::cb_has_open_query)
-		{
-			vk::do_query_cleanup(cmd);
-		}
-
-		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[2]++;
-		vk::end_renderpass(cmd);
 	}
 
 	void query_pool_manager::get_query_result_indirect(vk::command_buffer& cmd, u32 index, u32 count, VkBuffer dst, VkDeviceSize dst_offset)
@@ -316,60 +281,31 @@ namespace vk
 		//
 		// The upstream comment feared the flush cost. It is paid only when a pass is actually
 		// open, on a path that already stalls for a GPU result.
-		end_renderpass_for_readback(cmd);
-
-		vkCmdCopyQueryPoolResults(cmd, *query_slot_status[index].pool, index, count, dst, dst_offset, 4, VK_QUERY_RESULT_WAIT_BIT);
-	}
-
-	// Batched readback. Copies each result in `indices` order to `dst`, one 4-byte word per
-	// entry at its position in the list, coalescing contiguous index runs into single copies.
-	//
-	// Pool-aware on purpose: a numerically contiguous run can still span a pool reallocation,
-	// and copying across that boundary would read from the wrong VkQueryPool. Ported from
-	// ouroboros420/rpcsx (7ed3365bc), reusing our renderpass handling rather than theirs --
-	// theirs omits the open-query cleanup above.
-	void query_pool_manager::copy_query_results(vk::command_buffer& cmd, const std::vector<u32>& indices, VkBuffer dst)
-	{
-		if (indices.empty())
+		if (vk::is_renderpass_open(cmd))
 		{
-			return;
-		}
-
-		end_renderpass_for_readback(cmd);
-
-		const usz n = indices.size();
-
-		for (usz i = 0; i < n;)
-		{
-			const u32 base = indices[i];
-			const auto* pool = query_slot_status[base].pool;
-
-			usz j = i + 1;
-			while (j < n && indices[j] == indices[j - 1] + 1 && query_slot_status[indices[j]].pool == pool)
+			// A query that began inside a render pass instance has to end inside that same
+			// instance. Ending the pass underneath an open one leaves it permanently
+			// unavailable: the driver never marks it ready, so get_query_result spins on
+			// poke_query forever and the RSX thread stops with everything else still alive.
+			//
+			// Nothing catches it either. The submit-time ensure() in commands.cpp only checks
+			// that the query was closed, and end_occlusion_query does close it a moment later,
+			// so the flag is clear and the assert passes while the result never arrives. That
+			// cost Web of Shadows a hang here after the device loss below was fixed.
+			//
+			// Closing it first keeps begin and end within one pass, which is the ordering the
+			// spec asks for. The query is cut short, as it is anywhere do_query_cleanup is
+			// used, and a truncated occlusion result beats a stalled thread.
+			if (cmd.flags & vk::command_buffer::cb_has_open_query)
 			{
-				j++;
+				vk::do_query_cleanup(cmd);
 			}
 
-			const u32 count = static_cast<u32>(j - i);
-
-			// The run is contiguous in both hardware index and list position, so query[base + k]
-			// lands at destination word (i + k).
-			vkCmdCopyQueryPoolResults(cmd, *query_slot_status[base].pool, base, count, dst,
-				static_cast<VkDeviceSize>(i) * 4, 4, VK_QUERY_RESULT_WAIT_BIT);
-
-			i = j;
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[2]++;
+			vk::end_renderpass(cmd);
 		}
-	}
 
-	// Seed a slot from a value already read back on the host, so the next get_query_result
-	// returns it without issuing another blocking read. Mirrors poke_query's VK_SUCCESS path.
-	// Only valid for a value that was waited on (the copy above uses WAIT_BIT).
-	void query_pool_manager::prime_query_result(u32 index, u32 value)
-	{
-		auto& query = query_slot_status[index];
-		query.ready = true;
-		query.data = value;
-		query.any_passed = (value != 0);
+		vkCmdCopyQueryPoolResults(cmd, *query_slot_status[index].pool, index, count, dst, dst_offset, 4, VK_QUERY_RESULT_WAIT_BIT);
 	}
 
 	void query_pool_manager::free_query(vk::command_buffer&/*cmd*/, u32 index)

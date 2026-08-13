@@ -172,18 +172,6 @@ namespace vk
 		VkQueue m_present_queue = VK_NULL_HANDLE;
 		VkQueue m_transfer_queue = VK_NULL_HANDLE;
 
-		// Driver pipeline cache (SPIR-V -> ISA). RPCS3's own shader_cache only avoids
-		// re-GENERATING SPIR-V; without this the driver still re-runs its backend compile
-		// for every pipeline on every cold boot. VK_NULL_HANDLE on any failure, which is
-		// exactly what the create calls passed before, so every path stays safe.
-		VkPipelineCache m_pipeline_cache = VK_NULL_HANDLE;
-		// Last serialized size, so an unchanged cache skips the file write entirely.
-		mutable usz m_pipeline_cache_saved_size = 0;
-
-		std::string get_pipeline_cache_path() const;
-		void load_pipeline_cache();
-		void save_and_destroy_pipeline_cache();
-
 		u32 m_graphics_queue_family = 0;
 		u32 m_present_queue_family = 0;
 		u32 m_transfer_queue_family = 0;
@@ -252,13 +240,6 @@ namespace vk
 		u32 get_transfer_queue_family() const { return m_transfer_queue_family; }
 
 		mem_allocator_base* get_allocator() const { return m_allocator.get(); }
-
-		// May legitimately be VK_NULL_HANDLE (unavailable or failed), which is the value
-		// the create calls used before this existed, so it is always safe to pass on.
-		VkPipelineCache get_pipeline_cache() const { return m_pipeline_cache; }
-
-		// Serialize without destroying, for the periodic mid-session save.
-		void save_pipeline_cache() const;
 
 		operator VkDevice() const { return dev; }
 	};

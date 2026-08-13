@@ -483,13 +483,6 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	if (!m_swapchain->init(m_swapchain_dims.width, m_swapchain_dims.height))
 	{
 		swapchain_unavailable = true;
-#ifdef ANDROID
-		// The VkSurfaceKHR is bound to the ANativeWindow captured at create time, so a surface
-		// lost during boot-time init stays lost however often we re-query it. Flag it so the first
-		// reinitialize_swapchain() takes the recreate branch with the new window instead of
-		// soft-looping forever against a dead surface.
-		m_surface_lost = true;
-#endif
 	}
 	else
 	{
@@ -522,37 +515,9 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 		m_occlusion_query_manager->set_control_flags(VK_QUERY_CONTROL_PRECISE_BIT, 0);
 	}
 
-	// The vertex cache can only retain an entry while the ring memory naming it survives, so
-	// retention engages only once the ring holds the in-flight headroom plus another frame of
-	// geometry -- four frames at the current headroom. Arkham City peaks near 31MB of geometry a
-	// frame, needing ~124MB, so the 64MB default leaves retention permanently disengaged in
-	// exactly the heavy scenes that stand to gain from it. The heap is growable, but it grows on
-	// allocation pressure and wrapping relieves that pressure, so it never reaches a size that
-	// would let entries live: the initial size is the only lever. Scale it against the memory
-	// budget rather than taking a fixed 192MB, because that is a fifth of the floor budget we
-	// hand a 4GB phone.
-	u32 attrib_ring_size_m = VK_ATTRIB_RING_BUFFER_SIZE_M;
-
-#ifdef __ANDROID__
-	{
-		// Flat, deliberately. This was first scaled off get_budgetable_device_memory, which was
-		// wrong twice over: that figure is a texture-cache quota the ring does not draw from, and
-		// it is derived from free memory *after* the emulator has taken its RAM, so it floors at
-		// 1024M on an 8GB device and every tier collapsed back to 64M.
-		//
-		// 192M covers a peak frame up to 48M against the 4x rule; measured peaks here run 11-32M.
-		// 128M would only just clear the observed 31.8M peak and would flap on anything heavier.
-		attrib_ring_size_m = 192u;
-
-		// Named because the retention log reports the ring size it had to work with, and a reader
-		// otherwise cannot tell a ring that was sized down from one that was never sized up.
-		rsx_log.notice("Attribute ring sized to %uM.", attrib_ring_size_m);
-	}
-#endif
-
 	// VRAM allocation
 	// This first set is bound persistently, so grow notifications are enabled.
-	m_attrib_ring_info.create(VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT, attrib_ring_size_m * 0x100000, vk::heap_pool_default, "attrib buffer", 0x400000, VK_TRUE);
+	m_attrib_ring_info.create(VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT, VK_ATTRIB_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_default, "attrib buffer", 0x400000, VK_TRUE);
 	m_fragment_env_ring_info.create(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_UBO_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_low_latency, "fragment env buffer", 0x10000, VK_TRUE);
 	m_vertex_env_ring_info.create(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_UBO_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_default, "vertex env buffer", 0x10000, VK_TRUE);
 	m_fragment_texture_params_ring_info.create(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, VK_UBO_RING_BUFFER_SIZE_M * 0x100000, vk::heap_pool_low_latency, "fragment texture params buffer", 0x10000, VK_TRUE);
@@ -606,9 +571,7 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	m_fragment_constants_buffer_info = { *m_fragment_constants_ring_info.heap, 0, VK_WHOLE_SIZE };
 
 	const auto& limits = m_device->gpu().get_limits();
-	// Clamped to the device limit, not the ring size: views window across the ring (see
-	// upload_vertex_data), so a ring larger than one view is fine and is the normal case now.
-	m_texbuffer_view_size = std::min(limits.maxTexelBufferElements, attrib_ring_size_m * 0x100000u);
+	m_texbuffer_view_size = std::min(limits.maxTexelBufferElements, VK_ATTRIB_RING_BUFFER_SIZE_M * 0x100000u);
 
 	// Initialize bulk allocators
 	m_vertex_env_allocator = std::make_unique<rsx::data_heap::bulk_allocator<256, 96>>(
@@ -2926,85 +2889,6 @@ bool VKGSRender::check_occlusion_query_status(rsx::reports::occlusion_query_info
 	return m_occlusion_query_manager->check_query_status(oldest);
 }
 
-// Collapse the drain's N blocking per-query reads into one GPU copy plus a single fence wait,
-// then prime the per-query cache so the reads that follow cost nothing. On a tiler each
-// individual read is a full round trip, so N of them back to back is most of the ZCULL cost.
-// Best-effort: on any bail the caller's per-query path still runs unchanged.
-// Ported from ouroboros420/rpcsx (7ed3365bc).
-void VKGSRender::prefetch_occlusion_query_results(const std::vector<rsx::reports::occlusion_query_info*>& queries)
-{
-	if (queries.size() < 2)
-	{
-		// Not worth a batch round trip; the per-query loop handles it with no extra hard sync.
-		return;
-	}
-
-	std::vector<u32> indices;
-	indices.reserve(queries.size() * 4);
-
-	bool needs_hard_sync = false;
-
-	for (auto* query : queries)
-	{
-		if (!query) continue;
-
-		auto& data = m_occlusion_map[query->driver_handle];
-		if (data.indices.empty()) continue;
-
-		// A query begun in the current command buffer has not been ENDED yet, so copying it
-		// would need a hard sync -- exactly what the per-query path deliberately avoids. Skip
-		// the whole batch rather than force one.
-		if (data.is_current(m_current_command_buffer))
-		{
-			needs_hard_sync = true;
-			break;
-		}
-
-		for (const auto id : data.indices)
-		{
-			indices.push_back(id);
-		}
-	}
-
-	if (needs_hard_sync || indices.size() < 2)
-	{
-		return;
-	}
-
-	// Sorted so the pool-aware coalescing in copy_query_results actually finds runs.
-	std::sort(indices.begin(), indices.end());
-	indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
-
-	const u64 required = indices.size() * 4ull;
-
-	if (!m_occlusion_readback_buffer || m_occlusion_readback_buffer->size() < required)
-	{
-		const u64 alloc_size = std::max<u64>(required, 4096);
-		m_occlusion_readback_buffer = std::make_unique<vk::buffer>(*m_device,
-			alloc_size,
-			m_device->get_memory_mapping().host_visible_coherent, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
-			VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0,
-			VMM_ALLOCATION_POOL_SYSTEM);
-	}
-
-	m_occlusion_query_manager->copy_query_results(*m_current_command_buffer, indices, m_occlusion_readback_buffer->value);
-
-	// One fence wait drains the whole batch. flush_command_queue(true) submits and waits, which
-	// is the single round trip this exists to pay instead of N.
-	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[11]++;
-	flush_command_queue(true);
-
-	if (auto* mapped = static_cast<u32*>(m_occlusion_readback_buffer->map(0, required)))
-	{
-		for (usz i = 0; i < indices.size(); ++i)
-		{
-			m_occlusion_query_manager->prime_query_result(indices[i], mapped[i]);
-		}
-
-		m_occlusion_readback_buffer->unmap();
-	}
-}
-
 void VKGSRender::get_occlusion_query_result(rsx::reports::occlusion_query_info* query)
 {
 	auto &data = m_occlusion_map[query->driver_handle];
@@ -3029,82 +2913,9 @@ void VKGSRender::get_occlusion_query_result(rsx::reports::occlusion_query_info* 
 
 		data.sync();
 
-		// On a tile-based renderer the result is usually a whole tiling pass away, so this wait
-		// is long -- and it must stay interruptible. get_query_result() blocks without ever
-		// checking external_interrupt_lock, and a PPU thread that faults on RSX-guarded memory
-		// during that window spins in on_access_violation() waiting for an ack this thread can no
-		// longer give: PPU pinned in sched_yield, RSX parked in the query wait, presenting as a
-		// freeze. Wait here instead, servicing external interrupts the way the FIFO
-		// semaphore_acquire loop does, and only call get_query_result() once the value is ready.
-		// Ported from rfandango/rpcsx (a560768ce).
-		static const bool needs_interruptible_wait = vk::is_tile_based_renderer(vk::get_driver_vendor());
-
-		bool aborted = false;
-
 		// Gather data
 		for (const auto occlusion_id : data.indices)
 		{
-			if (needs_interruptible_wait)
-			{
-				u32 wait_iterations = 0;
-				bool rescued = false;
-
-				while (!m_occlusion_query_manager->check_query_status(occlusion_id))
-				{
-					// Rescue path. A query begun in the current command buffer is not even ENDED
-					// until close_and_submit_command_buffer(), so if the is_current() bookkeeping
-					// above mis-reported, the value can never arrive without a flush. Rather than
-					// pay a hard sync on every ZCULL read, give it a generous window then force the
-					// flush once. If the query still never readies after this fires, the GPU is not
-					// retiring work at all -- a driver hang, not a bookkeeping bug -- and this
-					// warning is the breadcrumb that tells the two apart.
-					if (!rescued && ++wait_iterations >= 4096)
-					{
-						rescued = true;
-						rsx_log.warning("ZCULL result did not arrive; forcing command flush (query=%d)", occlusion_id);
-
-						std::lock_guard lock(m_flush_queue_mutex);
-						if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[11]++; flush_command_queue();
-
-						if (m_flush_requests.pending())
-						{
-							m_flush_requests.clear_pending_flag();
-						}
-
-						continue;
-					}
-
-					// Not optional: a PPU thread that faults on RSX-guarded memory posts a flush
-					// request in on_access_violation() and spins in producer_wait() until this
-					// thread consumes it. Servicing only external_interrupt_lock is not enough --
-					// that was a measured deadlock. The FIFO semaphore_acquire wait survives the
-					// same situation precisely because cpu_wait() makes this call.
-					on_semaphore_acquire_wait();
-
-					if (external_interrupt_lock)
-					{
-						wait_pause();
-					}
-					else if (state & cpu_flag::exit)
-					{
-						// The result may never arrive during shutdown, so do not read it.
-						aborted = true;
-						break;
-					}
-					else
-					{
-						// Park at near-zero power; the architected event stream bounds the poll
-						// period to tens of microseconds.
-						utils::wait_for_event();
-					}
-				}
-
-				if (aborted)
-				{
-					break;
-				}
-			}
-
 			query->result += m_occlusion_query_manager->get_query_result(occlusion_id);
 			if (query->result && !g_cfg.video.precise_zpass_count)
 			{
