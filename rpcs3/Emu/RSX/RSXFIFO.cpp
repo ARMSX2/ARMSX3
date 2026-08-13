@@ -744,10 +744,15 @@ namespace rsx
 				// why it is game- and timing-dependent rather than reliable.
 				fifo_ctrl->sync_get_force();
 
+				// Spin budget for the idle wait below. Reset whenever a fresh idle period starts, so
+				// each drain gets its own short hot window before parking.
+				static thread_local u32 s_fifo_idle_spins = 0;
+
 				if (performance_counters.state == FIFO::state::running)
 				{
 					performance_counters.FIFO_idle_timestamp = get_system_time();
 					performance_counters.state = FIFO::state::empty;
+					s_fifo_idle_spins = 0;
 				}
 				else
 				{
@@ -776,8 +781,36 @@ namespace rsx
 					// It has now caused two wrong conclusions in one session: once reading a
 					// starving RSX as CPU-bound decode, and once reading a thread stuck in an
 					// occlusion query wait as the same thing.
+					// UPDATE: the yield is now itself the problem, and it is measured. A native
+					// profile of Arkham City gameplay put ~11% of TOTAL process CPU in sched_yield
+					// reached from here -- 93% of the RSX thread's kernel time, and its single largest
+					// cost. sched_yield is close to the worst available wait on this device: it is a
+					// syscall, it forces a scheduler pass, and with ~14 hot threads over 8 cores it is
+					// usually rescheduled immediately -- so it burns a core one of the five SPU threads
+					// actually wants, while doing nothing to notice the guest sooner.
+					//
+					// A short hot spin first, so a PUT that lands within microseconds is still caught
+					// without paying any wake latency; only sustained idle parks. WFE costs no syscall
+					// and the architected event stream bounds the park to tens of microseconds, so the
+					// RSX still sits on the frame's dependency chain rather than sleeping through work.
+					//
+					// The pre-spin is not optional: ouroboros420/rpcsx parked bare here (e31ef44ef) and
+					// had to walk it back (832c23078) when the wake latency cost frametime smoothness.
 					RSX_PROF_SCOPE(idle);
+
+#if defined(ARCH_ARM64)
+					if (s_fifo_idle_spins < 8)
+					{
+						s_fifo_idle_spins++;
+						utils::pause();
+					}
+					else
+					{
+						utils::wait_for_event();
+					}
+#else
 					std::this_thread::yield();
+#endif
 				}
 
 				return;

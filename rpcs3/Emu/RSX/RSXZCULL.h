@@ -87,8 +87,19 @@ namespace rsx
 
 		enum constants
 		{
+#ifdef __ANDROID__
+			// Mobile-tiler tuning. The GPU finishes occlusion queries in microseconds but is
+			// otherwise idle (we are sync-bound, not GPU-bound), so the desktop cadence leaves
+			// completed results unharvested for up to 300us and the guest's Reports-area read
+			// then force-drains them one at a time -- the per-frame ZCULL hitch under Accurate
+			// ZCULL stats. Harvest 4x more often so ready results are picked up without blocking
+			// before the guest asks for them.
+			max_zcull_delay_us    = 100,   // Delay before a report update operation is forced to retire
+			min_zcull_tick_us     = 25,    // Default tick duration. To avoid hardware spam, we schedule peeks in multiples of this.
+#else
 			max_zcull_delay_us    = 300,   // Delay before a report update operation is forced to retire
 			min_zcull_tick_us     = 100,   // Default tick duration. To avoid hardware spam, we schedule peeks in multiples of this.
+#endif
 			occlusion_query_count = 2048,  // Number of occlusion query slots available. Real hardware actually has far fewer units before choking
 			max_safe_queue_depth  = 1792,  // Number of in-flight queries before we start forcefully flushing data from the GPU device.
 			max_stat_registers    = 8192   // Size of the statistics cache
@@ -203,6 +214,11 @@ namespace rsx
 			virtual void end_occlusion_query(occlusion_query_info* /*query*/) {}
 			virtual bool check_occlusion_query_status(occlusion_query_info* /*query*/) { return true; }
 			virtual void get_occlusion_query_result(occlusion_query_info* query) { query->result = -1; }
+
+			// Optional batch hint: the backend may fetch every result this drain is about to read in
+			// one round trip and prime its per-query cache, so the reads below are then free. Purely
+			// an optimization -- the default does nothing and the per-query path still works.
+			virtual void prefetch_occlusion_query_results(const std::vector<occlusion_query_info*>&) {}
 			virtual void discard_occlusion_query(occlusion_query_info* /*query*/) {}
 		};
 

@@ -5,6 +5,7 @@
 
 #include "VKFormats.h"
 #include "VKHelpers.h"
+#include "VKRenderPass.h"
 #include "vkutils/barriers.h"
 #include "vkutils/buffer_object.h"
 #include "vkutils/device.h"
@@ -72,6 +73,35 @@ namespace vk
 		// Cyclic reference hazard tracking
 		image_reference_sync_barrier m_cyclic_ref_tracker;
 
+		// Flip index this surface stops being left in the feedback-loop layout at. 0 = not parked.
+		//
+		// Deliberately NOT part of m_cyclic_ref_tracker, and deliberately not cleared by
+		// reset_surface_counters. The tracker answers "is a loop in progress right now", which is
+		// a within-draw question, and every bind resets it. What parking needs is "was this
+		// surface in a loop recently", which has to outlive the bind that resets the tracker or
+		// it can never hold for more than one bind. See the comment on texture_barrier.
+		u64 m_feedback_park_deadline = 0;
+
+		// Same idea, for the far more common case: a render target sampled while it is NOT bound.
+		// Flip index the sample park expires at; 0 = not parked.
+		u64 m_sample_park_deadline = 0;
+
+		// last_use_tag as of the last read barrier issued for this surface while parked. The
+		// surface is safe to sample with no barrier at all exactly while this still matches
+		// last_use_tag, because that tag advances on every write (surface_store::on_write and
+		// on_write_fast at end of draw, on_write_copy after a blit).
+		//
+		// This is the piece the layout used to carry implicitly. Without parking, "already in
+		// SHADER_READ_ONLY_OPTIMAL" meant "already synchronized for reading", so the second and
+		// later draws sampling the same texture fell through validate_image_layout_for_read_access
+		// with no barrier. Leave the surface in GENERAL and that signal is gone: every sampling
+		// draw would look identical to the first and issue its own barrier, which for a shadow
+		// map sampled by hundreds of draws would turn one teardown into hundreds. The tag makes
+		// the same statement explicitly and does not depend on the layout.
+		//
+		// 0 = never synchronized, always barrier.
+		u64 m_sample_park_sync_tag = 0;
+
 		// Memory spilling support
 		std::unique_ptr<vk::buffer> m_spilled_mem;
 
@@ -122,6 +152,44 @@ namespace vk
 		void memory_barrier(vk::command_buffer& cmd, rsx::surface_access access);
 		void read_barrier(vk::command_buffer& cmd) { memory_barrier(cmd, rsx::surface_access::shader_read); }
 		void write_barrier(vk::command_buffer& cmd) { memory_barrier(cmd, rsx::surface_access::shader_write); }
+
+		// Layout a surface is parked in while it is written and sampled by the same draw.
+		// See vk::s_feedback_park_frames in VKRenderPass.h for the window and the A/B knob.
+		static VkImageLayout get_feedback_loop_layout(const vk::command_buffer& cmd);
+		// True when this bind may leave the surface in the feedback-loop layout instead of
+		// dragging it back to the attachment-optimal one.
+		bool try_park_in_feedback_loop(const vk::command_buffer& cmd);
+		// Arms the park window. Called from the barrier sites that establish a feedback loop.
+		void arm_feedback_park();
+
+		// Layout a surface is parked in while it is sampled without being bound.
+		//
+		// Plain GENERAL, never ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT, and that is a deliberate
+		// narrowing rather than an oversight. The feedback-loop layout is only meaningful for an
+		// image that is simultaneously an attachment and a sampled texture, and using it legally
+		// requires the pipelines and framebuffer to be created with the matching
+		// VK_PIPELINE_CREATE_COLOR_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT /
+		// VK_IMAGE_VIEW_CREATE_..._EXT flags, which nothing in this backend sets. The existing
+		// feedback park already sits on that exposure; there is no reason to enlarge it for a
+		// case that is not a feedback loop at all. GENERAL is unconditionally legal both as an
+		// attachment layout and as a sampled layout, and the render pass key encoder accepts it
+		// (VKRenderPass.cpp set_layout), which is everything this needs.
+		static constexpr VkImageLayout get_sample_park_layout() { return VK_IMAGE_LAYOUT_GENERAL; }
+
+		// True when a non-cyclic sample of this surface should leave it in GENERAL rather than
+		// dragging it to SHADER_READ_ONLY_OPTIMAL. Arms the park window as a side effect.
+		// Takes no command buffer: unlike the feedback layout, the sample park layout is a
+		// constant and needs no device query.
+		bool try_arm_sample_park();
+		// True when this bind may leave a sample-parked surface where it is.
+		bool try_park_for_sampling();
+		// True when a parked surface has been written since its last read barrier and therefore
+		// needs another one. False means the sample can be issued with no barrier at all.
+		bool sample_park_needs_read_barrier() const;
+		// Records that a read barrier covering the current contents has just been issued.
+		void on_sample_park_synced();
+		// Drops the park. Any path that moves the layout out from under it lands here.
+		void clear_sample_park();
 	};
 
 	static inline vk::render_target* as_rtt(vk::image* t)
@@ -439,13 +507,72 @@ namespace vk
 			// Special case barrier
 			surface->memory_barrier(cmd, rsx::surface_access::gpu_reference);
 
-			if (surface->aspect() == VK_IMAGE_ASPECT_COLOR_BIT)
+			// A surface in a feedback loop is dragged back and forth for no reason. The loop
+			// parks it in GENERAL (or ATTACHMENT_FEEDBACK_LOOP_OPTIMAL), this snapped it back to
+			// COLOR_/DEPTH_STENCIL_ATTACHMENT_OPTIMAL on the next bind, and the next draw's
+			// texture barrier moved it straight back. Both halves of that round trip are layout
+			// changes, and a layout change cannot happen inside a render pass, so each one ends
+			// the pass and forces a tile store plus a full reload.
+			//
+			// It shows up three times in the same profile of Arkham City, which draws 93 to 113
+			// render passes a frame for 6 logical ones:
+			//   - change_image_layout from bind_surface_address<depth> ends 34.6 passes a frame,
+			//     and <color> another 11.0. This is that snap-back.
+			//   - the return trip in texture_barrier is a second layout change. Android asks it
+			//     to keep the pass open, which was recorded as an in-pass layout change and is
+			//     undefined; with the surface already parked the barrier no longer moves the
+			//     layout and becomes legal.
+			//   - the layout is part of the render pass key, so every flip also invalidates the
+			//     cached render pass and costs a restart at the draw site (24.3 a frame).
+			//
+			// Both parking layouts are legal for an attachment as well as for sampling, and
+			// VKRenderPass.cpp's key encoder already accepts both, so the surface can simply be
+			// left where it is. This is not suppressing a required pass break: there is no
+			// transition left to require one.
+			//
+			// The park has to outlive reset_surface_counters() below, which is why it is a
+			// separate window on the surface rather than a read of m_cyclic_ref_tracker. Keyed
+			// off the tracker it survived exactly one bind, which bought nothing: the round trip
+			// moved from this site to the barrier site and the frame's pass count did not move.
+			//
+			// Note what this site is and is not. Declining the change_layout here is what leaves
+			// the previous draw's render pass open into the rest of prepare_rtts, so a teardown
+			// that used to be charged to this site is now charged to whichever site first finds
+			// a mismatch - usually the draw call. That relocation is not a cost; the win is only
+			// real where the surface is still parked on the next bind and there is no round trip
+			// to pay for at all, which is what the frames-not-binds window is for.
+			//
+			// Android only. This is where the tile traffic was measured, and a desktop GPU pays
+			// for GENERAL attachments (lost depth/colour compression) without the tile store to
+			// win back.
+			//
+			// Two independent parks meet here, and the second is the one this iteration adds.
+			// The feedback park covers a surface written and sampled by the same draw, which is
+			// rare; the sample park covers a surface sampled while unbound and then rendered to
+			// again, which is the ordinary render-to-texture cycle and is where the volume is.
+			// Either one may hold, and both leave the surface in a layout that is legal as an
+			// attachment and encodable in the render pass key.
+			//
+			// Order matters only for the side effects: try_park_in_feedback_loop clears its own
+			// deadline when the layout has moved, so it must still run even when the sample park
+			// would answer first. || would short-circuit it, so both are evaluated.
+			bool keep_current_layout = false;
+#ifdef __ANDROID__
+			const bool feedback_parked = surface->try_park_in_feedback_loop(cmd);
+			const bool sample_parked = surface->try_park_for_sampling();
+			keep_current_layout = feedback_parked || sample_parked;
+#endif
+
+			if (!keep_current_layout)
 			{
-				surface->change_layout(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-			}
-			else
-			{
-				surface->change_layout(cmd, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+				if (surface->aspect() == VK_IMAGE_ASPECT_COLOR_BIT)
+				{
+					surface->change_layout(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+				}
+				else
+				{
+					surface->change_layout(cmd, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+				}
 			}
 
 			surface->reset_surface_counters();

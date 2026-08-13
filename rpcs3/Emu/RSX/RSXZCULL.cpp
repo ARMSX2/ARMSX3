@@ -445,6 +445,33 @@ namespace rsx
 			u32 processed = 0;
 			const bool has_unclaimed = (m_pending_writes.back().sink == 0);
 
+			// Batch-prefetch every GPU occlusion result this drain is about to read, in one round
+			// trip. The VK backend collapses N blocking reads into a single copy + fence and primes
+			// its per-query cache; other backends no-op and the loop below reads per-query as before.
+			// The filter is implemented && num_draws, a superset of what the loop actually reads --
+			// the dynamic have_result early-out only skips some, costing at most a wasted copy.
+			{
+				std::vector<occlusion_query_info*> prefetch_set;
+				prefetch_set.reserve(m_pending_writes.size());
+
+				for (auto& writer : m_pending_writes)
+				{
+					if (!writer.sink)
+						break;
+
+					auto query = writer.query;
+					if (!query || !query->num_draws)
+						continue;
+
+					if (writer.type == CELL_GCM_ZPASS_PIXEL_CNT || writer.type == CELL_GCM_ZCULL_STATS3)
+						prefetch_set.push_back(query);
+				}
+
+				if (prefetch_set.size() > 1)
+					prefetch_occlusion_query_results(prefetch_set);
+			}
+
+
 			// Write all claimed reports unconditionally
 			for (auto& writer : m_pending_writes)
 			{
@@ -579,6 +606,33 @@ namespace rsx
 			}
 
 			u32 processed = 0;
+
+			// Batch-prefetch every GPU occlusion result this drain is about to read, in one round
+			// trip. The VK backend collapses N blocking reads into a single copy + fence and primes
+			// its per-query cache; other backends no-op and the loop below reads per-query as before.
+			// The filter is implemented && num_draws, a superset of what the loop actually reads --
+			// the dynamic have_result early-out only skips some, costing at most a wasted copy.
+			{
+				std::vector<occlusion_query_info*> prefetch_set;
+				prefetch_set.reserve(m_pending_writes.size());
+
+				for (auto& writer : m_pending_writes)
+				{
+					if (!writer.sink)
+						break;
+
+					auto query = writer.query;
+					if (!query || !query->num_draws)
+						continue;
+
+					if (writer.type == CELL_GCM_ZPASS_PIXEL_CNT || writer.type == CELL_GCM_ZCULL_STATS3)
+						prefetch_set.push_back(query);
+				}
+
+				if (prefetch_set.size() > 1)
+					prefetch_occlusion_query_results(prefetch_set);
+			}
+
 			for (auto& writer : m_pending_writes)
 			{
 				if (!writer.sink)
