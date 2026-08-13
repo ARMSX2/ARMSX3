@@ -121,6 +121,15 @@ class RPCSX {
      *  no trophies. Returns null on a core too old to export it, so callers must treat
      *  the result as nullable despite the declared type. */
     external fun getCurrentTrophyName(): String
+    /** Pin the Adreno GPU to max clocks (no DVFS ramp) or release it. No-ops on non-Adreno.
+     *  Costs heat and battery, so it is opt-in. Safe before the core is loaded -- adrenotools
+     *  is linked into the JNI library, not the core. */
+    external fun setGpuTurbo(on: Boolean)
+    /** ADPF telemetry: flip-to-flip period, CPU work in that window, and the presenting
+     *  thread's OS tid. All return 0 when not yet measured -- treat 0 as "skip". */
+    external fun getFramePeriodNs(): Long
+    external fun getFrameWorkNs(): Long
+    external fun getRsxThreadTid(): Int
     external fun supportsCustomDriverLoading(): Boolean
     external fun saveState(): Boolean
     external fun loadState(index: Int): Boolean

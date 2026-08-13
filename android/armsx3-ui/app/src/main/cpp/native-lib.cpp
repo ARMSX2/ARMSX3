@@ -38,6 +38,9 @@ struct RPCSXApi {
   void (*pause)();
   void (*openHomeMenu)();
   std::string (*getTitleId)();
+  unsigned long long (*getFramePeriodNs)();
+  unsigned long long (*getFrameWorkNs)();
+  int (*getRsxThreadTid)();
   std::string (*getCurrentTrophyName)();
   bool (*surfaceEvent)(JNIEnv *env, jobject surface, jint event);
   void (*surfaceSizeChanged)(int width, int height);
@@ -127,6 +130,9 @@ struct RPCSXLibrary : RPCSXApi {
     result.pause = reinterpret_cast<decltype(pause)>(dlsym(handle, "_rpcsx_pause"));
     result.openHomeMenu = reinterpret_cast<decltype(openHomeMenu)>(dlsym(handle, "_rpcsx_openHomeMenu"));
     result.getTitleId = reinterpret_cast<decltype(getTitleId)>(dlsym(handle, "_rpcsx_getTitleId"));
+    result.getFramePeriodNs = reinterpret_cast<decltype(getFramePeriodNs)>(dlsym(handle, "_rpcsx_getFramePeriodNs"));
+    result.getFrameWorkNs = reinterpret_cast<decltype(getFrameWorkNs)>(dlsym(handle, "_rpcsx_getFrameWorkNs"));
+    result.getRsxThreadTid = reinterpret_cast<decltype(getRsxThreadTid)>(dlsym(handle, "_rpcsx_getRsxThreadTid"));
     result.getCurrentTrophyName = reinterpret_cast<decltype(getCurrentTrophyName)>(dlsym(handle, "_rpcsx_getCurrentTrophyName"));
     result.surfaceEvent = reinterpret_cast<decltype(surfaceEvent)>(dlsym(handle, "_rpcsx_surfaceEvent"));
     result.surfaceSizeChanged = reinterpret_cast<decltype(surfaceSizeChanged)>(dlsym(handle, "_rpcsx_surfaceSizeChanged"));
@@ -614,6 +620,26 @@ Java_net_rpcsx_RPCSX_supportsCustomDriverLoading(JNIEnv *env,
   return access("/dev/kgsl-3d0", F_OK) == 0;
 }
 
+// Force the Adreno GPU to its maximum clocks, or release it back to normal scaling.
+//
+// Adreno's DVFS ramps clocks up only after it has already seen load, so a scene that suddenly
+// becomes GPU-bound stutters through the ramp every time it happens. Pinning the clocks removes
+// that at the cost of heat and battery, which is why it is opt-in rather than a default.
+//
+// Nothing here talks to the emulator core: adrenotools is linked into this JNI library, and
+// adrenotools_set_turbo opens /dev/kgsl-3d0 itself and silently does nothing on non-Adreno
+// hardware or if the open fails. So it is safe to call unconditionally, including before the core
+// is loaded. Ported from the RPCSX Android fork, which ships it default-off; kept default-off here
+// for the same reason.
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_setGpuTurbo(JNIEnv *, jobject, jboolean on) {
+#if defined(__aarch64__)
+  adrenotools_set_turbo(on == JNI_TRUE);
+#else
+  (void) on;
+#endif
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_net_rpcsx_RPCSX_getVersion(JNIEnv *env, jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
@@ -958,4 +984,30 @@ Java_net_rpcsx_RPCSX_patchSetEnabled(JNIEnv *env, jobject, jstring jhash,
   return rpcsxLib.patchSetEnabled(unwrap(env, jhash), unwrap(env, jdescription),
                                   unwrap(env, jserial),
                                   unwrap(env, jappVersion), enabled);
+}
+
+// ADPF telemetry. All three return 0 when unmeasured or on a core too old to export them,
+// and the Kotlin side treats 0 as "skip this update" rather than feeding the OS a bogus hint.
+extern "C" JNIEXPORT jlong JNICALL
+Java_net_rpcsx_RPCSX_getFramePeriodNs(JNIEnv *, jobject) {
+  if (rpcsxLib.getFramePeriodNs == nullptr) {
+    return 0;
+  }
+  return static_cast<jlong>(rpcsxLib.getFramePeriodNs());
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_net_rpcsx_RPCSX_getFrameWorkNs(JNIEnv *, jobject) {
+  if (rpcsxLib.getFrameWorkNs == nullptr) {
+    return 0;
+  }
+  return static_cast<jlong>(rpcsxLib.getFrameWorkNs());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_getRsxThreadTid(JNIEnv *, jobject) {
+  if (rpcsxLib.getRsxThreadTid == nullptr) {
+    return 0;
+  }
+  return static_cast<jint>(rpcsxLib.getRsxThreadTid());
 }

@@ -242,6 +242,29 @@ object Rpcs3Settings {
 
     fun setTimeStretching(enabled: Boolean) = setBool("$AUDIO@@Enable Time Stretching", enabled)
 
+    /**
+     * Which cubeb backend delivers the audio, or auto.
+     *
+     * Android builds aaudio, opensl and audiotrack, and cubeb's auto order takes AAudio first on
+     * anything modern -- so OpenSL has never run for a user. AAudio's low-latency path takes the
+     * smallest buffers the device will grant, which underruns first when the emulator cannot hold
+     * full speed; OpenSL is higher latency and much harder to starve. Exposed because the devices
+     * reporting audio stutter are ones we cannot reproduce on, so it has to be A/B-able in the
+     * field rather than guessed at here.
+     *
+     * A backend that is unavailable falls back to auto in the core, so a bad pick cannot leave
+     * someone with no sound.
+     */
+    fun setCubebBackend(index: Int) = setString(
+        "$AUDIO@@Cubeb Backend",
+        when (index) {
+            1 -> "aaudio"
+            2 -> "opensl"
+            3 -> "audiotrack"
+            else -> "" // auto
+        },
+    )
+
     // ---- Core / CPU -----------------------------------------------------
 
     /**
@@ -310,6 +333,8 @@ object Rpcs3Settings {
     // ---- Misc -----------------------------------------------------------
 
     fun setShowTrophyPopups(enabled: Boolean) = setBool("$MISC@@Show trophy popups", enabled)
+
+    fun setSilenceAllLogs(enabled: Boolean) = setBool("$MISC@@Silence All Logs", enabled)
 
     fun setPauseOnHomeMenu(enabled: Boolean) =
         setBool("$MISC@@Pause Emulation During Home Menu", enabled)
@@ -415,7 +440,10 @@ object Rpcs3Settings {
 
     private val XFLOAT = arrayOf("Accurate", "Approximate", "Relaxed", "Inaccurate")
     private val SLEEP_TIMERS = arrayOf("As Host", "Usleep Only", "All Timers")
-    private val AUDIO_RENDERERS = arrayOf("Null", "XAudio2", "Cubeb", "FAudio")
+    // Index -> core enum NAME (the core parses by name, not ordinal, so this array is the
+    // contract). Oboe appends rather than inserting: the first four indices are baked into
+    // saved settings.
+    private val AUDIO_RENDERERS = arrayOf("Null", "XAudio2", "Cubeb", "FAudio", "Oboe")
 
     /** PS3 output resolution. Ordinals must match video_resolution exactly. */
     val RESOLUTIONS = arrayOf(

@@ -662,4 +662,17 @@ namespace rpcs3::utils
 		sys_log.error("Failed to compare the %s numbers for title ID %s: '%s'-'%s'", is_fw ? "firmware version" : "version", serial, v0, v1);
 		return false;
 	}
+
+	// ADPF feed. Relaxed atomics: these are advisory hints sampled once per frame by another
+	// thread, so a torn read costs at most one stale hint update.
+	static atomic_t<u64> g_frame_period_ns{0};
+	static atomic_t<u64> g_frame_work_ns{0};
+	static atomic_t<s32> g_rsx_thread_tid{0};
+
+	void report_frame_period_ns(u64 ns) { g_frame_period_ns.store(ns); }
+	u64 get_frame_period_ns() { return g_frame_period_ns.load(); }
+	void report_frame_work_ns(u64 ns) { g_frame_work_ns.store(ns); }
+	u64 get_frame_work_ns() { return g_frame_work_ns.load(); }
+	void set_rsx_thread_tid(s32 tid) { g_rsx_thread_tid.store(tid); }
+	s32 get_rsx_thread_tid() { return g_rsx_thread_tid.load(); }
 }

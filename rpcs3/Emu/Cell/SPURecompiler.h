@@ -126,6 +126,12 @@ class spu_runtime
 	// Debug module output location
 	std::string m_cache_path;
 
+	// Directory backing the persistent SPU LLVM object cache. Empty when disabled.
+	// The directory NAME is the entire safety mechanism: llvm::ObjectCache matches purely
+	// on module name (the per-block program hash) and validates nothing else, so every input
+	// that can change emitted code must be folded into this path. See the spu_runtime ctor.
+	std::string m_obj_cache_path;
+
 public:
 	// Trampoline to spu_recompiler_base::dispatch
 	static const spu_function_t tr_dispatch;
@@ -149,6 +155,13 @@ public:
 	const std::string& get_cache_path() const
 	{
 		return m_cache_path;
+	}
+
+	// Empty when the persistent object cache is off; callers must fall back to an
+	// uncached jit add() in that case.
+	const std::string& get_obj_cache_path() const
+	{
+		return m_obj_cache_path;
 	}
 
 	// Rebuild ubertrampoline for given identifier (first instruction)

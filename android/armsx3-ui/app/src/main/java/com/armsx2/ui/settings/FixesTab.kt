@@ -91,6 +91,15 @@ fun FixesTab(state: MutableState<Settings>) {
                 s.ps3.spuVerification,
                 description = str("adv.spuVerification.description"),
             ) { apply(s.copy(ps3 = s.ps3.copy(spuVerification = it))) }
+            SettingsDivider()
+            // Distinct from the toggle above: that one chooses whether to verify at all, this one
+            // chooses how. The field was already serialised and written to the config tree but had
+            // no control, so the only way to reach it was a raw core override.
+            ToggleRow(
+                str("adv.preciseSpuVerification.label"),
+                s.ps3.preciseSpuVerification,
+                description = str("adv.preciseSpuVerification.description"),
+            ) { apply(s.copy(ps3 = s.ps3.copy(preciseSpuVerification = it))) }
         }
 
         CollapsibleSection(str("adv.section.fpu")) {

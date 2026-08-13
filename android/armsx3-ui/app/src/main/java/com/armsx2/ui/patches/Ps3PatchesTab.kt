@@ -1,5 +1,7 @@
 package com.armsx2.ui.patches
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -25,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.armsx2.Ps3PatchRepo
@@ -79,6 +82,30 @@ fun Ps3PatchesTab(serial: String = "") {
         }
     }
 
+    val context = LocalContext.current
+    // No MIME filter: patch.yml is served as text/plain, application/octet-stream or
+    // nothing at all depending on where it came from, and filtering hides the file
+    // the user is looking straight at.
+    val patchPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        message = null
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { Ps3PatchRepo.importLocal(context, uri) }
+            busy = false
+            message = when (r) {
+                is Ps3PatchRepo.Result.Ok -> {
+                    reload()
+                    "${r.count} " + str2("patches.ps3.imported")
+                }
+                Ps3PatchRepo.Result.Parse -> str2("patches.ps3.parseFailed")
+                else -> str2("patches.ps3.importFailed")
+            }
+        }
+    }
+
     LaunchedEffect(serial) { reload() }
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -117,6 +144,17 @@ fun Ps3PatchesTab(serial: String = "") {
                 .controllerFocusable("patches.download", RoundedCornerShape(13.dp)),
         ) {
             Text(str("patches.ps3.download"))
+        }
+
+        // Local import sits next to the download because the two produce the same
+        // result -- patchesImport merges either source into patches/patch.yml.
+        OutlinedButton(
+            onClick = { if (!busy) patchPicker.launch(arrayOf("*/*")) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .controllerFocusable("patches.import", RoundedCornerShape(13.dp)),
+        ) {
+            Text(str("patches.ps3.importFile"))
         }
 
         if (busy) {

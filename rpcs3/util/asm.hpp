@@ -186,6 +186,25 @@ namespace utils
 #endif
 	}
 
+	// Park the core until an event arrives, with no syscall.
+	//
+	// On arm64 WFE drops the core into a low-power state. Linux enables the architected
+	// event stream, so a wakeup arrives on a fixed short period (tens of microseconds), and
+	// timer interrupts wake it regardless -- it cannot stall indefinitely. SEVL sets the local
+	// event first so the first WFE consumes it and the second genuinely parks, rather than
+	// returning immediately on a stale event.
+	//
+	// For polling loops whose exit condition is produced by another agent (GPU, kernel) on a
+	// timescale of tens of microseconds or more. Everywhere else, pause() is still the tool.
+	inline void wait_for_event()
+	{
+#if defined(ARCH_ARM64)
+		__asm__ volatile("sevl\n\twfe\n\twfe" ::: "memory");
+#else
+		pause();
+#endif
+	}
+
 	// The hardware clock on many arm timers run south of 100mhz
 	// and the busy waits in RPCS3 were written assuming an x86 machine
 	// with hardware timers that run around 3GHz.

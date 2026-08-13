@@ -1,3 +1,4 @@
+#include <cerrno>
 #include "File.h"
 #include "mutex.h"
 #include "StrFmt.h"
@@ -684,8 +685,20 @@ namespace fs
 			u64 result = 0;
 
 			// Loop because (huge?) read can be processed partially
-			while (auto r = ::read(m_fd, buffer, count))
+			for (;;)
 			{
+				const auto r = ::read(m_fd, buffer, count);
+
+				// EINTR is benign -- a signal landed mid-syscall -- and must be retried, not treated
+				// as failure. Android app storage is FUSE-backed, where this genuinely happens, and
+				// the ensure() below turns it into a process abort. Ported in spirit from
+				// ouroboros420/rpcsx (92144f094).
+				if (r < 0 && errno == EINTR)
+				{
+					continue;
+				}
+
+				if (!r) break; // EOF
 				ensure(r > 0); // "file::read"
 				count -= r;
 				result += r;
@@ -702,8 +715,17 @@ namespace fs
 			u64 result = 0;
 
 			// For safety; see read()
-			while (auto r = ::pread(m_fd, buffer, count, offset))
+			for (;;)
 			{
+				const auto r = ::pread(m_fd, buffer, count, offset);
+
+				// See read(): retry EINTR rather than aborting.
+				if (r < 0 && errno == EINTR)
+				{
+					continue;
+				}
+
+				if (!r) break; // EOF
 				ensure(r > 0); // "file::read_at"
 				count -= r;
 				offset += r;
@@ -721,8 +743,17 @@ namespace fs
 			u64 result = 0;
 
 			// For safety; see read()
-			while (auto r = ::write(m_fd, buffer, count))
+			for (;;)
 			{
+				const auto r = ::write(m_fd, buffer, count);
+
+				// See read(): retry EINTR rather than aborting.
+				if (r < 0 && errno == EINTR)
+				{
+					continue;
+				}
+
+				if (!r) break;
 				ensure(r > 0); // "file::write"
 				count -= r;
 				result += r;

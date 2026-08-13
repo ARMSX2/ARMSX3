@@ -813,6 +813,15 @@ open class MainActivityRuntime : ComponentActivity() {
             upscale.value = resolved.upscaleFloat
             renderer.value = resolved.renderer
 
+            // GPU turbo, resolved per game like the driver below it. Applied here rather than
+            // through the config tree because it is not an emulator setting at all -- it is a KGSL
+            // ioctl straight to the Adreno kernel driver, so nothing in g_cfg would carry it.
+            //
+            // Safe unconditionally: adrenotools no-ops on non-Adreno hardware and if /dev/kgsl-3d0
+            // cannot be opened. Re-applied on every start so turning it off actually releases the
+            // clocks on the next boot rather than persisting until reboot.
+            runCatching { net.rpcsx.RPCSX.instance.setGpuTurbo(resolved.ps3.gpuTurbo) }
+
             NativeApp.renderUpscalemultiplier(upscale.value)
             // Pin custom Vulkan driver (if any) BEFORE the renderer write —
             // the renderer JNI may trigger MTGS::ApplySettings which can
@@ -1772,12 +1781,38 @@ open class MainActivityRuntime : ComponentActivity() {
         // reinstalling clean (#376/#385). The cache is pure derived data (rebuilt on demand),
         // never user content, so wiping it is always safe. Skipped on first install (no prior
         // version recorded) — there is nothing stale to clear.
+        // ONLY the GPU caches, never the compiled guest modules.
+        //
+        // This came from ARMSX2, where <dataRoot>/cache held the GS shader/pipeline cache and
+        // nothing else, so deleting the lot was free. In ARMSX3 that same directory is RPCS3's
+        // whole cache root: <dataRoot>/cache/cache/<TITLEID>/ppu-<hash>-EBOOT.BIN/ holds every
+        // compiled PPU module, and deleting it threw away work measured in tens of minutes per
+        // game -- an hour for the XMB's 390 firmware modules. Every update, on purpose, by code
+        // that believed it was clearing shaders. That is the "why do I have to recompile my games
+        // after every update" report, and it is the single worst thing about updating.
+        //
+        // The original worry stands and is preserved: a pipeline cache baked against a different
+        // core build can render corrupt (#376/#385). But that argument is about GPU pipeline blobs,
+        // not guest code. PPU objects already carry their own compatibility key in the filename --
+        // format version, module hash, the settings that affect codegen, and the CPU target -- so a
+        // build that changes any of that simply does not match them, and one that does not change
+        // it has no reason to discard them.
         runCatching {
             val prevVc = prefs.getInt("lastRunVersionCode", 0)
             val curVc = BuildConfig.VERSION_CODE
             if (prevVc != 0 && prevVc != curVc) {
-                File(assetCopyRoot(applicationContext), "cache").deleteRecursively()
-                android.util.Log.i("ARMSX2", "Update $prevVc -> $curVc: cleared GS shader/pipeline cache")
+                val root = File(assetCopyRoot(applicationContext), "cache")
+                var cleared = 0
+                // Depth-first over the cache root, removing only directories named shaders_cache
+                // (RPCS3 puts one beside each title's compiled modules). walkBottomUp so a match is
+                // deleted whole without the walk then descending into a directory that is gone.
+                root.walkBottomUp()
+                    .filter { it.isDirectory && it.name == "shaders_cache" }
+                    .forEach { if (it.deleteRecursively()) cleared++ }
+                android.util.Log.i(
+                    "ARMSX2",
+                    "Update $prevVc -> $curVc: cleared $cleared shader cache(s); compiled modules kept",
+                )
             }
             if (prevVc != curVc) prefs.edit { putInt("lastRunVersionCode", curVc) }
         }

@@ -2,6 +2,7 @@
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
 #include "Emu/Audio/Cubeb/CubebBackend.h"
+#include "Emu/Audio/Oboe/OboeBackend.h"
 #include "Emu/Audio/Null/NullAudioBackend.h"
 #include "Emu/Cell/PPUAnalyser.h"
 #include "Emu/Cell/SPURecompiler.h"
@@ -224,6 +225,11 @@ static void pgo_flush()
 }
 #endif
 
+// Severity threshold for the logcat mirror. Defaults to warning: notice/trace still reach
+// RPCSX.log, they just stop costing a logd round trip each. Lower it at runtime when
+// actively debugging on a device.
+static std::atomic<int> g_logcat_min_level{static_cast<int>(logs::level::warning)};
+
 struct LogListener : logs::listener {
   LogListener() { logs::listener::add(this); }
 
@@ -257,10 +263,28 @@ struct LogListener : logs::listener {
       break;
     }
 
-    // text is a string_view now (upstream changed the listener signature) and
-    // string_view is not guaranteed null-terminated, so it cannot be handed
-    // straight to a C API.
-    __android_log_write(prio, "ARMSX3", std::string(text).c_str());
+    // Mirroring EVERY message to logcat is not free: each one is a heap allocation plus a
+    // SYNCHRONOUS IPC round trip to logd. A game that logs thousands of lines a second
+    // (LittleBigPlanet 2 does) then spends real frame time inside logd -- measured on device
+    // at 5-7 fps, which is why "silence all logs" appears to be a performance setting.
+    //
+    // It should not have to be. The FILE log is the artifact that gets attached to a bug
+    // report; logcat is a live-debugging convenience for whoever is holding the device. So
+    // mirror only what that person needs -- warnings and worse -- and let the rest go to the
+    // file alone, which is buffered and cheap. Nothing is lost from RPCSX.log.
+    //
+    // Severity is INVERTED in logs::level (always=0 .. trace=7), so '>' drops the noisy end.
+    if (static_cast<int>(static_cast<logs::level>(msg)) >
+        g_logcat_min_level.load(std::memory_order_relaxed)) {
+      return;
+    }
+
+    // text is a string_view (upstream changed the listener signature) and string_view is not
+    // guaranteed null-terminated, so it cannot go straight to a C API. Reuse a per-thread
+    // buffer rather than allocating a fresh std::string for every line.
+    thread_local std::string line;
+    line.assign(text);
+    __android_log_write(prio, "ARMSX3", line.c_str());
   }
 } static g_androidLogListener;
 
@@ -2336,6 +2360,10 @@ static void setupCallbacks() {
               result = std::make_shared<NullAudioBackend>();
               break;
 
+            case audio_renderer::oboe:
+              result = std::make_shared<OboeBackend>();
+              break;
+
             case audio_renderer::cubeb:
             default:
               result = std::make_shared<CubebBackend>();
@@ -2952,6 +2980,12 @@ extern "C" void _rpcsx_openHomeMenu() {
 }
 
 extern "C" std::string _rpcsx_getTitleId() { return Emu.GetTitleID(); }
+
+// ADPF: what the last frame actually cost, and which OS thread presents it. The app feeds
+// these to PerformanceHintManager. Zero means 'not measured yet' -- the caller must skip.
+extern "C" u64 _rpcsx_getFramePeriodNs() { return rpcs3::utils::get_frame_period_ns(); }
+extern "C" u64 _rpcsx_getFrameWorkNs() { return rpcs3::utils::get_frame_work_ns(); }
+extern "C" s32 _rpcsx_getRsxThreadTid() { return rpcs3::utils::get_rsx_thread_tid(); }
 
 // The RUNNING game's trophy set, e.g. "NPWR05636_00" -- or "" when no game is
 // running, or the game has not created a trophy context yet (many only do so once
@@ -3607,15 +3641,31 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
     //
     // _rpcsx_openHomeMenu already uses the relaxed form; this call site was
     // missed.
-    if (auto padThread = pad::get_pad_thread(true)) {
-      padThread->open_home_menu();
-    }
+    // surfaceDestroyed runs on the Android UI thread, and both open_home_menu() and
+    // Emu.Pause() can block for many seconds during a first-boot bulk PPU precompile (the
+    // guest main thread is parked waiting on modules). That froze the UI into an ANR and a
+    // force-close whenever someone backgrounded a still-compiling first boot. The native
+    // window is already released above -- the only thing the SurfaceHolder contract
+    // actually requires -- so hand the rest to a detached worker and return now.
+    // Ported from ouroboros420/rpcsx (31d1425bc).
+    std::thread([] {
+      if (auto padThread = pad::get_pad_thread(true)) {
+        padThread->open_home_menu();
+      }
 
-    // Remember whether this pause is ours. The app pauses for its own reasons too (the
-    // in-game overlay), and resuming on the next surface would then undo a pause the user
-    // asked for, behind an overlay still showing the game as paused.
-    g_paused_by_surface_loss = !Emu.IsPaused();
-    Emu.Pause();
+      // Only pause if the surface is still gone. A quick destroy->recreate (a rotation, a
+      // transient focus loss) fires the gained event and resumes; that resume has to win
+      // the race against this deferred pause, not lose to it.
+      if (g_native_window.load() != nullptr) {
+        return;
+      }
+
+      // Remember whether this pause is ours. The app pauses for its own reasons too (the
+      // in-game overlay), and resuming on the next surface would then undo a pause the user
+      // asked for, behind an overlay still showing the game as paused.
+      g_paused_by_surface_loss = !Emu.IsPaused();
+      Emu.Pause();
+    }).detach();
 
 #ifdef ARMSX3_PGO_GENERATE
     // Backgrounding is the reliable flush point; see pgo_flush.

@@ -3,6 +3,7 @@
 #include "Emu/system_config.h"
 #include "Emu/Cell/PPUModule.h"
 #include "Emu/Cell/lv2/sys_process.h"
+#include "Emu/Cell/timers.hpp"
 #include "Emu/Io/pad_types.h"
 #include "Emu/RSX/Overlays/overlay_debug_overlay.h"
 #include "Input/pad_thread.h"
@@ -601,6 +602,47 @@ void pad_get_data(u32 port_no, CellPadData* data, bool get_periph_data = false)
 			std::memcpy(&data->button[CELL_PAD_BTN_OFFSET_DIGITAL1], &output.button[CELL_PAD_BTN_OFFSET_DIGITAL1], copy_size);
 		}
 
+		// ARMSX3 input diagnostics for issue #37 (holding a button does not trigger the
+		// hold action: RaC Tools of Destruction hold-triangle weapon menu, LEGO Batman 2
+		// hold-square batarang). Mirrors how the Web of Shadows R2 bug was found: the
+		// digital bit was always correct and was never what the game read.
+		//
+		// OFF by default: raise the cellPad log channel to Trace to enable.
+		//
+		// Reports what the game is HANDED -- reported len, the press-mode setting, the
+		// digital words, and the four face-button press bytes -- so a hold can be compared
+		// against what the pad actually produced. Throttled to one line a second, and only
+		// while at least one face button is held, so it cannot flood a play session.
+		{
+			static atomic_t<u64> s_last_report{0};
+
+			const u16 d1 = data->button[CELL_PAD_BTN_OFFSET_DIGITAL1];
+			const u16 d2 = data->button[CELL_PAD_BTN_OFFSET_DIGITAL2];
+			const bool face_held = (d2 & (CELL_PAD_CTRL_TRIANGLE | CELL_PAD_CTRL_CIRCLE |
+				CELL_PAD_CTRL_CROSS | CELL_PAD_CTRL_SQUARE)) != 0;
+
+			if (face_held && cellPad.trace)
+			{
+				const u64 now = get_system_time();
+
+				if (const u64 prev = s_last_report.load(); now - prev > 1'000'000 &&
+					s_last_report.compare_and_swap_test(prev, now))
+				{
+					cellPad.trace("[input37] port=%d len=%d press_on=%d d1=0x%04x d2=0x%04x "
+						"press{tri=%d cir=%d cro=%d squ=%d L1=%d R1=%d L2=%d R2=%d}",
+						port_no, data->len, !!(setting & CELL_PAD_SETTING_PRESS_ON), d1, d2,
+						data->button[CELL_PAD_BTN_OFFSET_PRESS_TRIANGLE],
+						data->button[CELL_PAD_BTN_OFFSET_PRESS_CIRCLE],
+						data->button[CELL_PAD_BTN_OFFSET_PRESS_CROSS],
+						data->button[CELL_PAD_BTN_OFFSET_PRESS_SQUARE],
+						data->button[CELL_PAD_BTN_OFFSET_PRESS_L1],
+						data->button[CELL_PAD_BTN_OFFSET_PRESS_R1],
+						data->button[CELL_PAD_BTN_OFFSET_PRESS_L2],
+						data->button[CELL_PAD_BTN_OFFSET_PRESS_R2]);
+				}
+			}
+		}
+
 		if (data->len == CELL_PAD_LEN_CHANGE_SENSOR_ON)
 		{
 			constexpr u32 copy_size = (static_cast<u32>(CELL_PAD_LEN_CHANGE_SENSOR_ON) - static_cast<u32>(CELL_PAD_BTN_OFFSET_SENSOR_X)) * sizeof(u16);
@@ -1081,6 +1123,10 @@ error_code cellPadSetPortSetting(u32 port_no, u32 port_setting)
 
 error_code cellPadInfoPressMode(u32 port_no)
 {
+	// Whether a game asks about press mode at all is the single most useful fact when a
+	// hold-to-act button does nothing -- Spider-Man: Web of Shadows never called either
+	// press-mode function yet read the R2 press byte. Raise the cellPad channel to Trace
+	// to see it.
 	cellPad.trace("cellPadInfoPressMode(port_no=%d)", port_no);
 
 	std::lock_guard lock(pad::g_pad_mutex);

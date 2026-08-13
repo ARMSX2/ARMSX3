@@ -2746,6 +2746,20 @@ const bool s_terminate_handler_set = []() -> bool
 {
 	std::set_terminate([]()
 	{
+		// Re-entrancy guard. Under memory exhaustion the terminate path itself allocates
+		// (report_fatal_error formats a message -> operator new; with -fno-exceptions a failed
+		// allocation calls std::terminate again), which recurses forever and buries the real
+		// crash under a stack of aborts. If terminate re-enters, hard-stop without allocating
+		// so there is exactly one clean tombstone.
+		// Ported from ouroboros420/rpcsx (281654906).
+		static atomic_t<int> s_terminating{0};
+
+		if (s_terminating.exchange(1) != 0)
+		{
+			::signal(SIGABRT, SIG_DFL);
+			std::abort();
+		}
+
 		if (IsDebuggerPresent())
 		{
 			logs::listener::sync_all();

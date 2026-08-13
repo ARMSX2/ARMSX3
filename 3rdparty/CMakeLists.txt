@@ -141,6 +141,12 @@ else()
 	add_subdirectory(cubeb EXCLUDE_FROM_ALL)
 endif()
 
+# Oboe (Android only)
+if(ANDROID)
+	message(STATUS "Using static oboe from 3rdparty")
+	add_subdirectory(oboe EXCLUDE_FROM_ALL)
+endif()
+
 # SoundTouch
 add_subdirectory(SoundTouch EXCLUDE_FROM_ALL)
 

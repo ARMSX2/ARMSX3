@@ -53,6 +53,11 @@ fun RendererBackendSection(state: MutableState<Settings>) {
         }
     }
 
+    // GPU Turbo used to live here, on the reasoning that it belongs with the driver. It does
+    // technically -- it is a KGSL ioctl, not an emulator setting -- but the driver picker sits
+    // inside "Display & Resolution", so the net effect was a power/thermal lever filed under
+    // display options where nobody could find it. It is on the Performance tab now.
+
     SettingsDivider()
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp),

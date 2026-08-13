@@ -88,4 +88,17 @@ namespace rpcs3::utils
 	std::string get_game_content_path(game_content_type type);
 
 	bool version_is_bigger(std::string_view v0, std::string_view v1, std::string_view serial, bool is_fw);
+
+	// ADPF feed. The RSX thread publishes what the last frame actually cost and which OS
+	// thread is presenting; the Android app consumes these to drive PerformanceHintManager.
+	// Advisory only -- nothing in the core reads them back, so they cannot change emulation.
+	//
+	// The frame PERIOD matters as much as the work: without it the hint judges a 30fps game
+	// against a 60fps target and over-boosts the scheduler, which costs heat for nothing.
+	void report_frame_period_ns(u64 ns);
+	u64 get_frame_period_ns();
+	void report_frame_work_ns(u64 ns);
+	u64 get_frame_work_ns();
+	void set_rsx_thread_tid(s32 tid);
+	s32 get_rsx_thread_tid();
 }

@@ -74,6 +74,19 @@ void spu_llvm_set_compile_context(spu_llvm_compile_context* context) noexcept
 }
 #endif
 
+// The ARM64-only i8mm (smmla/ummla) and dotprod (sdot/udot) byte-gather used by GBB/GBH.
+// Disabled: it is the one live ARM64-only SPU codegen path that the working Android
+// reference fork does not have, and it matches the SPU regfile-corruption / STOP 0x0
+// signature behind several games failing to boot. This is a SUSPICION, not a proven
+// diagnosis -- upstream ouroboros420/rpcsx (4d5a30618) disabled it on the same grounds.
+// The scalar fallback below is what stock RPCS3 uses and the cost is negligible, since
+// GBB/GBH are rare bit-gather ops. Set to 1 to restore the vector path.
+#if defined(ARCH_ARM64)
+#define ARMSX3_SPU_ARM64_BYTE_GATHER 0
+#else
+#define ARMSX3_SPU_ARM64_BYTE_GATHER 0
+#endif
+
 class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 {
 	// JIT Instance
@@ -1922,7 +1935,10 @@ public:
 			{
 #ifdef ARCH_ARM64
 				// Loop if there is at least 288 bytes of data to checksum on ARM.
-				// Each ARM checksum block consumes 6 NEON vectors: 2 direct adds and 2 UABD accumulates.
+				// Each ARM checksum block consumes 6 NEON vectors: 2 direct adds and 2 paired adds.
+				// (It was 2 UABD accumulates until those were found to collide -- |a-b| is not
+				// injective, so adding the same constant to both words left the sum unchanged and
+				// similar job binaries hashed alike. See update_checksum.)
 				constexpr u32 checksum_block_size = 96;
 #else
 				// Loop if there is atleast (16 * stride) bytes of data to checksum to save some instruction cache
@@ -4009,6 +4025,13 @@ public:
 					// Testing only
 					m_jit.add(std::move(_module), m_spurt->get_cache_path() + "llvm/");
 				}
+				else if (const std::string& obj_cache = m_spurt->get_obj_cache_path(); !obj_cache.empty())
+				{
+					// Persistent object cache: writes the compiled block into the config-keyed dir
+					// so the next launch loads it instead of re-JITting. Safety rests on that dir
+					// name -- see the spu_runtime ctor.
+					m_jit.add(std::move(_module), obj_cache);
+				}
 				else
 				{
 					m_jit.add(std::move(_module));
@@ -4021,6 +4044,10 @@ public:
 			{
 				// Testing only
 				m_jit.add(std::move(_module), m_spurt->get_cache_path() + "llvm/");
+			}
+			else if (const std::string& obj_cache = m_spurt->get_obj_cache_path(); !obj_cache.empty())
+			{
+				m_jit.add(std::move(_module), obj_cache);
 			}
 			else
 			{
@@ -4037,7 +4064,9 @@ public:
 		// Install unconditionally, possibly replacing existing one from spu_fast
 		add_loc->compiled = fn;
 
-		// Rebuild trampoline if necessary
+		// Rebuild trampoline if necessary. `compiled` is already published above and has to be:
+		// rebuild_ubertrampoline reads it back out of the item list to build the dispatch table,
+		// so it cannot be deferred until after this call.
 		if (!m_spurt->rebuild_ubertrampoline(func.data[0]))
 		{
 			if (auto& cache = g_fxo->get<spu_cache>())
@@ -4047,6 +4076,17 @@ public:
 					cache.add(func);
 				}
 			}
+
+			// Publish state 2 anyway, and do it before returning so the claim guard does not
+			// see state 1 and mark this item failed. Only the trampoline rebuild failed; the
+			// function itself compiled and is live in `compiled`. Reporting failure here would
+			// hand waiters a null for a function that exists, and state 3 is permanent -- the
+			// claim CAS(0 -> 1) can never succeed again, so the item would be stuck holding a
+			// valid pointer that nothing is allowed to use or replace. The trampoline is rebuilt
+			// again by the next block registered at this address.
+			add_loc->llvm_compile_state.release(2);
+			add_loc->llvm_compile_state.notify_all();
+			add_loc->compiled.notify_all();
 
 			return nullptr;
 		}
@@ -4487,6 +4527,10 @@ public:
 			// Testing only
 			m_jit.add(std::move(_module), m_spurt->get_cache_path() + "llvm/");
 		}
+		else if (const std::string& obj_cache = m_spurt->get_obj_cache_path(); !obj_cache.empty())
+		{
+			m_jit.add(std::move(_module), obj_cache);
+		}
 		else
 		{
 			m_jit.add(std::move(_module));
@@ -4762,7 +4806,23 @@ public:
 				const auto timebase_offs = m_ir->CreateLoad(get_type<u64>(), m_ir->CreateIntToPtr(m_ir->getInt64(reinterpret_cast<u64>(&g_timebase_offs)), get_type<u64*>()));
 				const auto timestamp = m_ir->CreateLoad(get_type<u64>(), spu_ptr(&spu_thread::ch_dec_start_timestamp));
 				const auto dec_value = m_ir->CreateLoad(get_type<u32>(), spu_ptr(&spu_thread::ch_dec_value));
-				const auto tsc = m_ir->CreateCall(get_intrinsic(llvm::Intrinsic::readcyclecounter));
+				// Upstream 61a260482 widened this path to ARM64 using llvm.readcyclecounter, but on
+				// AArch64 that lowers to MRS PMCCNTR_EL0 -- the performance counter, which userspace
+				// cannot read on Android and which runs at the DVFS-varying core clock. The maths
+				// below divides by utils::get_tsc_freq(), which on ARM64 is cntfrq_el0, the frequency
+				// of CNTVCT, and the C++ side of the decrementer reads cntvct_el0 too. Reading a
+				// different counter than the divisor describes gives a meaningless delta, so emit the
+				// same register the rest of the emulator uses. No isb: utils::get_tsc() does not use
+				// one either, and matching it keeps the JIT and C++ paths consistent.
+				// Ported from rfandango/rpcsx (daf4a080a).
+				const auto tsc = m_ir->CreateCall(
+#if defined(ARCH_ARM64)
+					llvm::InlineAsm::get(llvm::FunctionType::get(get_type<u64>(), false),
+						"mrs $0, cntvct_el0", "=r", /*hasSideEffects=*/true)
+#else
+					get_intrinsic(llvm::Intrinsic::readcyclecounter)
+#endif
+				);
 				const auto tscx = m_ir->CreateMul(m_ir->CreateUDiv(tsc, m_ir->getInt64(utils::get_tsc_freq())), m_ir->getInt64(80000000));
 				const auto tscm = m_ir->CreateUDiv(m_ir->CreateMul(m_ir->CreateURem(tsc, m_ir->getInt64(utils::get_tsc_freq())), m_ir->getInt64(80000000)), m_ir->getInt64(utils::get_tsc_freq()));
 				const auto tsctb = m_ir->CreateSub(m_ir->CreateAdd(tscx, tscm), timebase_offs);
@@ -5583,7 +5643,23 @@ public:
 			if (utils::get_tsc_freq() && !(g_cfg.core.spu_loop_detection) && (g_cfg.core.clocks_scale == 100))
 			{
 				const auto timebase_offs = m_ir->CreateLoad(get_type<u64>(), m_ir->CreateIntToPtr(m_ir->getInt64(reinterpret_cast<u64>(&g_timebase_offs)), get_type<u64*>()));
-				const auto tsc = m_ir->CreateCall(get_intrinsic(llvm::Intrinsic::readcyclecounter));
+				// Upstream 61a260482 widened this path to ARM64 using llvm.readcyclecounter, but on
+				// AArch64 that lowers to MRS PMCCNTR_EL0 -- the performance counter, which userspace
+				// cannot read on Android and which runs at the DVFS-varying core clock. The maths
+				// below divides by utils::get_tsc_freq(), which on ARM64 is cntfrq_el0, the frequency
+				// of CNTVCT, and the C++ side of the decrementer reads cntvct_el0 too. Reading a
+				// different counter than the divisor describes gives a meaningless delta, so emit the
+				// same register the rest of the emulator uses. No isb: utils::get_tsc() does not use
+				// one either, and matching it keeps the JIT and C++ paths consistent.
+				// Ported from rfandango/rpcsx (daf4a080a).
+				const auto tsc = m_ir->CreateCall(
+#if defined(ARCH_ARM64)
+					llvm::InlineAsm::get(llvm::FunctionType::get(get_type<u64>(), false),
+						"mrs $0, cntvct_el0", "=r", /*hasSideEffects=*/true)
+#else
+					get_intrinsic(llvm::Intrinsic::readcyclecounter)
+#endif
+				);
 				const auto tscx = m_ir->CreateMul(m_ir->CreateUDiv(tsc, m_ir->getInt64(utils::get_tsc_freq())), m_ir->getInt64(80000000));
 				const auto tscm = m_ir->CreateUDiv(m_ir->CreateMul(m_ir->CreateURem(tsc, m_ir->getInt64(utils::get_tsc_freq())), m_ir->getInt64(80000000)), m_ir->getInt64(utils::get_tsc_freq()));
 				const auto tsctb = m_ir->CreateSub(m_ir->CreateAdd(tscx, tscm), timebase_offs);
@@ -6005,7 +6081,7 @@ public:
 
 		const auto a = get_vr<s16[8]>(op.ra);
 
-#ifdef ARCH_ARM64
+#if ARMSX3_SPU_ARM64_BYTE_GATHER
 		if (m_use_i8mm)
 		{
 			if (match_vr<s16[8], s32[4], s64[2]>(op.ra, [&](auto c, auto MP)
@@ -6098,7 +6174,7 @@ public:
 	{
 		const auto a = get_vr<u8[16]>(op.ra);
 
-#ifdef ARCH_ARM64
+#if ARMSX3_SPU_ARM64_BYTE_GATHER
 		if (m_use_i8mm)
 		{
 			if (match_vr<s8[16], s16[8], s32[4], s64[2]>(op.ra, [&](auto c, auto MP)

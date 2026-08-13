@@ -54,11 +54,19 @@ namespace vk
 			m_debugger = nullptr;
 		}
 
+#if defined(ANDROID)
+		// Destroy EVERY surface made on this instance, not just the most recent. Reaping them
+		// via vkDestroyInstance leaves the ANativeWindow "in use" and the next session fails
+		// with VK_ERROR_NATIVE_WINDOW_IN_USE_KHR. Every swapchain built on them is gone by now.
+		destroy_WSI_surfaces(m_instance);
+		m_surface = VK_NULL_HANDLE;
+#else
 		if (m_surface)
 		{
 			vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
 			m_surface = VK_NULL_HANDLE;
 		}
+#endif
 
 		vkDestroyInstance(m_instance, nullptr);
 		m_instance = VK_NULL_HANDLE;
@@ -256,13 +264,26 @@ namespace vk
 		instance_info.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 #endif
 
-		if (VkResult result = vkCreateInstance(&instance_info, nullptr, &m_instance); result != VK_SUCCESS)
-		{
-			if (result == VK_ERROR_LAYER_NOT_PRESENT)
-			{
-				rsx_log.fatal("Could not initialize layer VK_LAYER_KHRONOS_validation");
-			}
+		VkResult result = vkCreateInstance(&instance_info, nullptr, &m_instance);
 
+		if (result == VK_ERROR_LAYER_NOT_PRESENT && !layers.empty())
+		{
+			// The only layer we ever request here is VK_LAYER_KHRONOS_validation, enabled by the
+			// "Debug output" video setting. It ships with the Vulkan SDK and is absent on virtually
+			// every release Android device, so its absence must not take rendering down with it.
+			// Drop the optional layers and retry: toggling Debug Output on such a device then simply
+			// runs without GPU validation instead of failing with "No Vulkan device was created".
+			rsx_log.warning("Vulkan validation layer unavailable on this device; continuing without it.");
+
+			layers.clear();
+			instance_info.enabledLayerCount = 0;
+			instance_info.ppEnabledLayerNames = nullptr;
+
+			result = vkCreateInstance(&instance_info, nullptr, &m_instance);
+		}
+
+		if (result != VK_SUCCESS)
+		{
 			return false;
 		}
 
@@ -312,11 +333,16 @@ namespace vk
 
 	VkSurfaceKHR instance::recreate_surface(display_handle_t window_handle)
 	{
+#if !defined(ANDROID)
+		// Desktop: release the previous surface before making a new one. On Android the
+		// lifetime is tracked globally (swapchain_android.hpp) and released at teardown or at
+		// swapchain reinit, so this instance never re-owns a surface to destroy here.
 		if (m_surface != VK_NULL_HANDLE)
 		{
 			vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
 			m_surface = VK_NULL_HANDLE;
 		}
+#endif
 
 		WSI_config surface_config
 		{

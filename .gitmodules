@@ -112,3 +112,6 @@
 	path = 3rdparty/protobuf/protobuf
 	url = ../../protocolbuffers/protobuf.git
 	ignore = dirty
+[submodule "3rdparty/oboe/oboe"]
+	path = 3rdparty/oboe/oboe
+	url = https://github.com/google/oboe.git

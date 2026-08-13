@@ -877,6 +877,14 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
         MenuSwitchRow(str("renderer.readColorBuffers.label"), settings.ps3.readColorBuffers) { v ->
             viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(readColorBuffers = v)) }
         }
+        Spacer(Modifier.height(6.dp))
+        // GPU Turbo in-game: the whole point is A/B-ing it against a scene that is actually
+        // stuttering, which is impossible if you have to quit to Settings to flip it. Applied
+        // live, not just at the next renderer start.
+        MenuSwitchRow(str("renderer.gpuTurbo.label"), settings.ps3.gpuTurbo) { v ->
+            viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(gpuTurbo = v)) }
+            runCatching { net.rpcsx.RPCSX.instance.setGpuTurbo(v) }
+        }
     // Overlay artwork, switchable from in-game — trying bezels means seeing them ON the game, and
     // having to leave for All Settings each time made that unusable. Import still lives in the
     // settings tab (it opens a file picker); this is the picker for what is already imported.

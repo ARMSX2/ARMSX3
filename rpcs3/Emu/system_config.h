@@ -278,6 +278,16 @@ struct cfg_root : cfg::node
 		cfg::_int <4, 250> desired_buffer_duration{ this, "Desired Audio Buffer Duration", 34, true };
 		cfg::_bool enable_time_stretching{ this, "Enable Time Stretching", false, true };
 		cfg::_bool disable_sampling_skip{ this, "Disable Sampling Skip", false, true };
+		// Which backend cubeb should use, or empty for its own auto-selection.
+		//
+		// Android compiles aaudio, opensl and audiotrack, and cubeb's auto order picks AAudio
+		// first on anything modern -- so OpenSL has never actually run for a user. AAudio's
+		// low-latency path uses the smallest buffers the device will grant, which is the first
+		// thing to underrun when the emulator cannot hold full speed; OpenSL is slower but far
+		// more forgiving. Low-end Mali devices report audio stutter that nobody on faster
+		// hardware sees, and this is the one knob that changes the whole delivery path rather
+		// than tuning around it. Valid: "" (auto), "aaudio", "opensl", "audiotrack".
+		cfg::string cubeb_backend{ this, "Cubeb Backend", "" };
 		cfg::_int<0, 100> time_stretching_threshold{ this, "Time Stretching Threshold", 75, true };
 		cfg::_enum<microphone_handler> microphone_type{ this, "Microphone Type", microphone_handler::null };
 		cfg::string microphone_devices{ this, "Microphone Devices", "@@@@@@@@@@@@" };

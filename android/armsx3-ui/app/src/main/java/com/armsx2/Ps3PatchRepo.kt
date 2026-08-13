@@ -100,6 +100,28 @@ object Ps3PatchRepo {
         return if (n >= 0) Result.Ok(n) else Result.Parse
     }
 
+    /**
+     * Import a patch.yml the user picked themselves.
+     *
+     * No checksum here, unlike [download]: there is no publisher digest to compare a
+     * local file against, and the user choosing the file IS the trust decision. The
+     * core still parses it, so a malformed file is rejected rather than half-applied.
+     *
+     * Merges into patches/patch.yml like every other import, so a hand-added patch
+     * sits alongside the downloaded database instead of replacing it.
+     */
+    fun importLocal(context: Context, uri: android.net.Uri): Result {
+        val yaml = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                stream.bufferedReader().readText()
+            }
+        }.getOrNull()
+
+        if (yaml.isNullOrBlank()) return Result.Network
+        val n = runCatching { RPCSX.instance.patchesImport(yaml) }.getOrDefault(-1)
+        return if (n >= 0) Result.Ok(n) else Result.Parse
+    }
+
     /** Lowercase hex SHA-256, the form rpcs3.net sends and desktop compares against. */
     private fun sha256(text: String): String =
         java.security.MessageDigest.getInstance("SHA-256")

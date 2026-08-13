@@ -569,6 +569,7 @@ object Rpcs3Bridge {
                 "Enable Buffering" -> Rpcs3Settings.setAudioBuffering(asBool(value))
                 "Desired Audio Buffer Duration" -> Rpcs3Settings.setAudioBufferDuration(asInt(value))
                 "Renderer" -> Rpcs3Settings.setAudioRenderer(asInt(value))
+                "Cubeb Backend" -> Rpcs3Settings.setCubebBackend(asInt(value))
                 else -> return false
             }
 
@@ -584,6 +585,11 @@ object Rpcs3Bridge {
                 "Body Background (hex)" -> Rpcs3Settings.setOverlayBodyBackground(value)
                 "Title Color (hex)" -> Rpcs3Settings.setOverlayTitleColor(value)
                 "Title Background (hex)" -> Rpcs3Settings.setOverlayTitleBackground(value)
+                else -> return false
+            }
+
+            "PS3/Misc" -> when (key) {
+                "Silence All Logs" -> Rpcs3Settings.setSilenceAllLogs(asBool(value))
                 else -> return false
             }
 
@@ -1001,7 +1007,12 @@ object Rpcs3Bridge {
     // ---------------------------------------------------------------
 
     @JvmStatic
-    fun setAdpfEnabled(enabled: Boolean) { Unsupported.note("setAdpfEnabled") }
+    /** Drive PerformanceHintManager from the core's own frame timing. Was a no-op stub
+     *  inherited from the ARMSX2 UI port, so the settings toggle did nothing. */
+    fun setAdpfEnabled(enabled: Boolean) {
+        val ctx = com.armsx2.runtime.MainActivityRuntime.instance?.applicationContext ?: return
+        AdpfHinter.setEnabled(ctx, enabled)
+    }
     @JvmStatic
     fun setAffinityMode(mode: Int) { Unsupported.note("setAffinityMode") }
 

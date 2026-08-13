@@ -1510,6 +1510,106 @@ spu_runtime::spu_runtime()
 		fs::write_file(m_cache_path + "spu.log", fs::rewrite);
 		fs::write_file(m_cache_path + "spu-ir.log", fs::rewrite);
 	}
+
+#ifdef __ANDROID__
+	// Persistent SPU object cache. ARM64 has no spu_fast first tier, so without this every
+	// launch re-JITs thousands of blocks -- the long boot recompile and the synchronous-compile
+	// hitching. The plumbing already exists (jit_compiler::add(module, path) installs an
+	// llvm::ObjectCache); until now the SPU only used it under spu_debug, marked "testing only".
+	//
+	// SAFETY: llvm::ObjectCache matches on module name ONLY -- here the per-block program hash
+	// -- and validates no IR, CPU or settings. So correctness rests ENTIRELY on this directory
+	// name. Every input that can change emitted code is folded into the hash below. Adding a
+	// codegen-affecting setting without adding it here serves stale machine code; a mismatch on
+	// the HW feature bits is worse still (a -sha3 core loading a +sha3 object executes an
+	// illegal instruction). Bump SPU_OBJ_CACHE_VERSION whenever SPU codegen itself changes,
+	// including compile-time switches such as ARMSX3_SPU_ARM64_BYTE_GATHER.
+	// Ported from ouroboros420/rpcsx (8430a6558), key re-derived against our config surface.
+	{
+		constexpr u32 SPU_OBJ_CACHE_VERSION = 1;
+		constexpr usz SPU_OBJ_CACHE_MAX_FILES = 12000;
+
+		sha1_context ctx;
+		u8 key[20];
+		sha1_starts(&ctx);
+
+		const auto fold = [&](const auto& v)
+		{
+			sha1_update(&ctx, reinterpret_cast<const u8*>(&v), sizeof(v));
+		};
+
+		const u32 version = SPU_OBJ_CACHE_VERSION;
+		fold(version);
+
+		// Settings that change the emitted IR.
+		const u32 xfloat = static_cast<u32>(g_cfg.core.spu_xfloat_accuracy.get());
+		const u32 block_size = static_cast<u32>(g_cfg.core.spu_block_size.get());
+		const u32 clocks_scale = static_cast<u32>(g_cfg.core.clocks_scale.get()); // gates the RdDec fast path
+		fold(xfloat);
+		fold(block_size);
+		fold(clocks_scale);
+
+		const u32 flags =
+			(static_cast<u32>(g_cfg.core.use_accurate_dfma.get())         << 0) |
+			(static_cast<u32>(g_cfg.core.spu_accurate_reservations.get()) << 1) |
+			(static_cast<u32>(g_cfg.core.spu_accurate_dma.get())          << 2) |
+			(static_cast<u32>(g_cfg.core.spu_prof.get())                  << 3) |
+			(static_cast<u32>(g_cfg.core.spu_verification.get())          << 4) |
+			(static_cast<u32>(g_cfg.core.precise_spu_verification.get())  << 5) |
+			(static_cast<u32>(g_cfg.core.spu_loop_detection.get())        << 6) |
+			(static_cast<u32>(g_cfg.core.mfc_debug.get())                 << 7) |
+			(static_cast<u32>(g_cfg.core.rsx_accurate_res_access.get())   << 8) |
+			(static_cast<u32>(g_cfg.savestate.compatible_mode.get())      << 9);
+		fold(flags);
+
+		// Device-variable inputs. The HW bits reach the JIT through setMAttrs, and sha3 in
+		// particular auto-selects eor3/xar from plain XOR/rotate IR with no intrinsic gate, so
+		// it changes object bytes. tsc_freq is baked in as the decrementer divisor.
+		const u32 hw =
+			(static_cast<u32>(utils::has_i8mm())    << 0) |
+			(static_cast<u32>(utils::has_dotprod()) << 1) |
+			(static_cast<u32>(utils::has_sha3())    << 2);
+		const u64 tsc_freq = utils::get_tsc_freq();
+		fold(hw);
+		fold(tsc_freq);
+
+		const std::string cpu = jit_compiler::cpu(g_cfg.core.llvm_cpu.to_string());
+		sha1_update(&ctx, reinterpret_cast<const u8*>(cpu.data()), cpu.size());
+
+		sha1_finish(&ctx, key);
+
+		m_obj_cache_path = m_cache_path + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
+
+		if (!fs::create_path(m_obj_cache_path))
+		{
+			m_obj_cache_path.clear();
+		}
+		else
+		{
+			// Bounded storage. Counted once here, single-threaded, before any compile worker
+			// starts writing; the writers share no index and never evict, so a mid-session
+			// count would race. Over the cap the whole keyed dir is dropped and rebuilt rather
+			// than evicting piecemeal -- there is no recency information to evict on.
+			usz file_count = 0;
+
+			for (auto&& entry : fs::dir(m_obj_cache_path))
+			{
+				if (!entry.is_directory)
+				{
+					file_count++;
+				}
+			}
+
+			if (file_count > SPU_OBJ_CACHE_MAX_FILES)
+			{
+				spu_log.notice("SPU object cache over %u files, rebuilding.", SPU_OBJ_CACHE_MAX_FILES);
+				fs::remove_all(m_obj_cache_path, false);
+			}
+
+			spu_log.notice("SPU object cache: %s (%u files)", m_obj_cache_path, file_count);
+		}
+	}
+#endif
 }
 
 spu_item* spu_runtime::add_empty(spu_program&& data)

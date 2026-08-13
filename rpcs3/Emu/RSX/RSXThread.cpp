@@ -15,7 +15,12 @@
 #include "gcm_printing.h"
 #include "RSXDisAsm.h"
 
+#ifdef __ANDROID__
+#include <unistd.h> // ::gettid() for the ADPF feed
+#endif
+
 #include "Emu/System.h"
+#include "Emu/system_utils.hpp"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/timers.hpp"
@@ -2777,6 +2782,55 @@ namespace rsx
 	void thread::flip(const display_flip_info_t& info)
 	{
 		m_eng_interrupt_mask.clear(rsx::display_interrupt);
+
+#ifdef __ANDROID__
+		// ADPF feed: publish this frame's real CPU cost and the presenting thread's OS tid so
+		// the app can drive PerformanceHintManager. Measured at a fixed point each iteration, so
+		// the previous iteration's frame-limiter sleep lands in the idle delta and is excluded.
+		// Advisory only: these go to atomics nothing in the core reads back.
+		// Ported from ouroboros420/rpcsx (3d4ba6060).
+		{
+			static thread_local u64 s_last_now = 0;
+			static thread_local u64 s_last_idle = 0;
+			static thread_local s32 s_tid = 0;
+
+			if (s_tid == 0)
+			{
+				s_tid = static_cast<s32>(::gettid());
+			}
+
+			// Republished every flip so a recreated RSX thread overwrites a stale tid, rather
+			// than leaving the app's hint session pointed at a dead thread after a restart.
+			rpcs3::utils::set_rsx_thread_tid(s_tid);
+
+			const u64 now_us = get_system_time();
+			const u64 idle_us = performance_counters.idle_time.load();
+
+			if (s_last_now != 0 && now_us > s_last_now)
+			{
+				const u64 wall = now_us - s_last_now;
+
+				// The flip-to-flip deadline. Without it the hint judges a 30fps game against a
+				// 60fps target and over-boosts, which is pure heat.
+				rpcs3::utils::report_frame_period_ns(wall * 1000);
+
+				// idle_time is reset periodically by get_load(), so a delta that went backwards is
+				// a reset, not a real frame. Idle can also exceed the wall window (it accrues from
+				// FIFO/semaphore paths). Reporting work == wall in either case would feed a bogus
+				// fully-busy sample and over-boost; skipping leaves the last good one in place.
+				if (idle_us >= s_last_idle)
+				{
+					if (const u64 idle_delta = idle_us - s_last_idle; idle_delta < wall)
+					{
+						rpcs3::utils::report_frame_work_ns((wall - idle_delta) * 1000);
+					}
+				}
+			}
+
+			s_last_now = now_us;
+			s_last_idle = idle_us;
+		}
+#endif
 
 		if (async_flip_requested & flip_request::any)
 		{

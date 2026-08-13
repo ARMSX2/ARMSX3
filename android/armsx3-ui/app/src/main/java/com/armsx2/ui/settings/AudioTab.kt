@@ -71,12 +71,14 @@ fun AudioTab(state: MutableState<Settings>) {
         // Audio backend. Only Cubeb and Null are real on Android -- XAudio2 is
         // Windows-only and FAudio is not built here -- so offering the other two
         // would just be a way to silently kill audio.
+        // Indices here are positions in Rpcs3Settings.AUDIO_RENDERERS: Cubeb=2, Oboe=4, Null=0.
+        val rendererIndices = listOf(2, 4, 0)
         SegmentedRow(
             label = str("audio.renderer.label"),
-            options = listOf("Cubeb", str("common.off")),
-            selectedIndex = if (s.ps3.audioRenderer == 0) 1 else 0,
+            options = listOf("Cubeb", "Oboe", str("common.off")),
+            selectedIndex = rendererIndices.indexOf(s.ps3.audioRenderer).coerceAtLeast(0),
             description = str("audio.renderer.description"),
-            onChange = { apply(s.copy(ps3 = s.ps3.copy(audioRenderer = if (it == 0) 2 else 0))) },
+            onChange = { apply(s.copy(ps3 = s.ps3.copy(audioRenderer = rendererIndices[it]))) },
         )
         SettingsDivider()
         SegmentedGridRow(
@@ -100,8 +102,25 @@ fun AudioTab(state: MutableState<Settings>) {
             onChange = { apply(s.copy(ps3 = s.ps3.copy(audioChannels = intArrayOf(0, 1, 2, 6, 7)[it]))) },
         )
         SettingsDivider()
+        // The replacement for PCSX2's OpenSL ES toggle, which was removed from here on the
+        // reasoning that "RPCS3 picks its backend via Audio Renderer". That is not the same knob:
+        // Audio Renderer chooses Cubeb or Null, while THIS chooses which backend cubeb then talks
+        // to. Android builds all three, and cubeb's auto order takes AAudio on anything modern, so
+        // OpenSL had quietly become unreachable rather than superseded.
+        //
+        // It matters because AAudio's low-latency path takes the smallest buffers the device will
+        // grant, and those are the first thing to underrun once the emulator drops below full
+        // speed -- the audio stutter reported on low-end Mali devices, which faster hardware never
+        // shows. OpenSL trades latency for buffers that are much harder to starve.
+        SegmentedGridRow(
+            label = str("audio.cubebBackend.label"),
+            options = listOf(str("common.auto"), "AAudio", "OpenSL", "AudioTrack"),
+            selectedIndex = s.ps3.audioCubebBackend.coerceIn(0, 3),
+            columns = 4,
+            description = str("audio.cubebBackend.description"),
+            onChange = { apply(s.copy(ps3 = s.ps3.copy(audioCubebBackend = it))) },
+        )
         // Removed: SPU2 is the PS2's sound chip; its NEON reverb path does not exist here.
-        // Removed: PCSX2's OpenSL ES toggle. RPCS3 picks its backend via Audio Renderer (Cubeb on Android).
         // Removed: PCSX2 SPU2 lightweight mixing mode. No RPCS3 counterpart.
     }
 }

@@ -467,11 +467,25 @@ namespace rsx
 		template <typename storage_type>
 		class default_vertex_cache
 		{
+		protected:
+			// Stamped onto every entry made by store_range. The unit is up to the backend; the VK
+			// backend uses the running byte count of its attribute ring, so an epoch names the exact
+			// point in the ring's allocation history that an entry's memory was handed out at.
+			// Backends that cannot prove an entry outlives the frame leave this at zero and keep
+			// calling purge(), which is what every caller did before evict_before() existed.
+			u64 m_epoch = 0;
+
 		public:
 			virtual ~default_vertex_cache() = default;
 			virtual const storage_type* find_vertex_range(u32 /*local_addr*/, u32 /*data_length*/) { return nullptr; }
 			virtual void store_range(u32 /*local_addr*/, u32 /*data_length*/, u32 /*offset_in_heap*/) {}
 			virtual void purge() {}
+
+			void set_epoch(u64 epoch) { m_epoch = epoch; }
+
+			// Drop entries stamped older than the given epoch, keeping the rest. Only safe to call
+			// with an epoch the caller can prove still maps to intact, unrecycled heap memory.
+			virtual void evict_before(u64 /*epoch*/) {}
 		};
 
 		struct uploaded_range
@@ -480,6 +494,7 @@ namespace rsx
 			u32 offset_in_heap;
 			u32 data_length;
 			u64 fingerprint;
+			u64 epoch;
 		};
 
 		// A weak vertex cache with no data checks or memory range locks
@@ -492,6 +507,11 @@ namespace rsx
 
 		private:
 			rsx::unordered_map<uptr, storage_type> vertex_ranges;
+
+			// Scratch for evict_before. Held across calls so the eviction pass does not allocate
+			// once a frame. Erasing while iterating a dense map moves elements under the iterator,
+			// so the keys are collected first and erased after.
+			std::vector<uptr> evict_list;
 
 			FORCE_INLINE u64 hash(u32 local_addr, u32 data_length) const
 			{
@@ -533,6 +553,8 @@ namespace rsx
 					v.fingerprint = *utils::bless<u64>(sudo_ptr);
 				}
 
+				v.epoch = m_epoch;
+
 				const auto key = hash(local_addr, data_length);
 				vertex_ranges[key] = v;
 			}
@@ -540,6 +562,29 @@ namespace rsx
 			void purge() override
 			{
 				vertex_ranges.clear();
+			}
+
+			void evict_before(u64 epoch) override
+			{
+				if (vertex_ranges.empty())
+				{
+					return;
+				}
+
+				evict_list.clear();
+
+				for (const auto& [key, range] : vertex_ranges)
+				{
+					if (range.epoch < epoch)
+					{
+						evict_list.push_back(key);
+					}
+				}
+
+				for (const auto& key : evict_list)
+				{
+					vertex_ranges.erase(key);
+				}
 			}
 		};
 	}

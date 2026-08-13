@@ -55,6 +55,9 @@ enum class audio_renderer
 	xaudio,
 #endif
 	cubeb,
+#ifdef __ANDROID__
+	oboe,
+#endif
 #ifdef HAVE_FAUDIO
 	faudio,
 #endif

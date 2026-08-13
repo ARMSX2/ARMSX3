@@ -70,6 +70,8 @@ private:
 	output_scaling_mode m_output_scaling{output_scaling_mode::bilinear};
 
 	std::unique_ptr<vk::buffer> m_cond_render_buffer;
+	// Host-visible scratch for the batched ZCULL readback. Allocated on first use.
+	std::unique_ptr<vk::buffer> m_occlusion_readback_buffer;
 	u64 m_cond_render_sync_tag = 0;
 
 	shared_mutex m_sampler_mutex;
@@ -102,6 +104,8 @@ private:
 	bool m_surface_lost = false;
 	vk::instance m_instance;
 	vk::render_device *m_device;
+	// Timestamp of the last periodic pipeline-cache serialize (see flip()).
+	u64 m_last_pipeline_cache_save_time = 0;
 
 	//Vulkan internals
 	std::unique_ptr<vk::query_pool_manager> m_occlusion_query_manager;
@@ -143,6 +147,23 @@ private:
 	vk::data_heap m_vertex_instructions_buffer;               // Interpreter VP block
 
 	rsx::simple_array<vk::data_heap*> m_flushable_data_heaps; // List of heaps that can be 'dirty' and need manual flush
+
+#ifdef __ANDROID__
+	// Cross-frame vertex cache retention. m_attrib_ring_info is a ring, so a cached
+	// offset_in_heap stays meaningful only until the ring laps back over it; the cache used to be
+	// purged every frame because nothing tracked that. See vertex_cache_on_frame_end().
+	u64 m_vtx_heap_cursor = 0;         // Monotonic byte count ever handed out by m_attrib_ring_info
+	usz m_vtx_heap_put = 0;            // Ring PUT at the last cursor sample
+	u64 m_vtx_retain_floor = 0;        // Entries stamped below this cursor value are evicted
+	u64 m_vtx_frame_base = 0;          // Cursor as of the start of the current frame
+	u64 m_vtx_frame_peak = 0;          // Largest single-frame consumption in the recent window
+	u32 m_vtx_peak_ttl = 0;            // Frames left before the peak is allowed to decay
+	u64 m_vtx_reserve_bytes = 0;       // Ring bytes withheld from the allocator (0 = retention off)
+	u64 m_vtx_frame_marks[8]{};        // Cursor at the end of each of the last 8 frames
+	u32 m_vtx_frame_index = 0;
+	bool m_vtx_retention_locked_out = false;
+	VkBuffer m_vtx_heap_handle = VK_NULL_HANDLE; // Detects a grow(), which discards the whole heap
+#endif
 
 	VkDescriptorBufferInfoEx m_vertex_env_buffer_info {};
 	VkDescriptorBufferInfoEx m_fragment_env_buffer_info {};
@@ -247,6 +268,12 @@ private:
 	vk::vertex_upload_info upload_vertex_data();
 	rsx::simple_array<u8> m_scratch_mem;
 
+#ifdef __ANDROID__
+	void vertex_cache_sample_heap();   // Advance the ring cursor, and detect a heap reallocation
+	void vertex_cache_on_heap_reset(); // Drop everything; the heap the offsets named is gone
+	void vertex_cache_on_frame_end();  // Size the reservation and evict what it cannot cover
+#endif
+
 	bool load_program();
 	void load_program_env();
 	void update_vertex_env(u32 id, const vk::vertex_upload_info& vertex_info);
@@ -271,6 +298,7 @@ public:
 	void end_occlusion_query(rsx::reports::occlusion_query_info* query) override;
 	bool check_occlusion_query_status(rsx::reports::occlusion_query_info* query) override;
 	void get_occlusion_query_result(rsx::reports::occlusion_query_info* query) override;
+	void prefetch_occlusion_query_results(const std::vector<rsx::reports::occlusion_query_info*>& queries) override;
 	void discard_occlusion_query(rsx::reports::occlusion_query_info* query) override;
 
 	// External callback in case we need to suddenly submit a commandlist unexpectedly, e.g in a violation handler

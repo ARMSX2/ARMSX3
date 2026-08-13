@@ -618,6 +618,22 @@ std::string jit_compiler::cpu(std::string_view _cpu)
 			m_cpu = fallback_cpu_detection();
 		}
 
+#ifdef ARCH_ARM64
+		// Detection reads the MIDR of whichever core happens to be running, so on big.LITTLE it
+		// can name a small in-order core. JIT'd code runs on every core, so scheduling for the
+		// smallest one is the wrong default -- fall back to the same wide out-of-order baseline
+		// used when detection fails outright. Only the schedule/cost model is affected: the
+		// instruction set still comes from setMAttrs (HWCAP-gated), so this can never emit an
+		// illegal instruction. Ported from ouroboros420/rpcsx (cc3a18e29), widened to the
+		// A5xx little cores that modern SoCs actually ship.
+		if (m_cpu == "cortex-a34" || m_cpu == "cortex-a35" || m_cpu == "cortex-a53" ||
+			m_cpu == "cortex-a55" || m_cpu == "cortex-a510" || m_cpu == "cortex-a520")
+		{
+			jit_log.notice("CPU detection named a little core ('%s'); using cortex-a78 as the schedule baseline.", m_cpu);
+			m_cpu = "cortex-a78";
+		}
+#endif
+
 		if (m_cpu == "sandybridge" ||
 			m_cpu == "ivybridge" ||
 			m_cpu == "haswell" ||
@@ -752,6 +768,29 @@ jit_compiler::jit_compiler(const std::unordered_map<std::string, u64>& _link, st
 			}
 
 			fmt::throw_exception("LLVM Emergency Exit Invoked: '%s'", out);
+		}, nullptr);
+
+		// A separate handler from the fatal one -- LLVM installs and dispatches the two
+		// independently. Without this, an allocation failure inside LLVM (SmallVector growth
+		// while codegenning the enormous PPU symbol-resolver module, say) writes "LLVM ERROR:
+		// out of memory" to fd 2 -- which goes nowhere in an Android app -- and calls abort():
+		// a signal-6 death with nothing whatsoever in the log. Route it through the same
+		// recoverable path as the fatal handler, so a guarded compile survives and anything
+		// else at least says why it died. Allocating inside a bad-alloc handler is
+		// best-effort, but the failures here are huge single allocations, so a short log
+		// string still succeeds. Ported from ouroboros420/rpcsx (39a6a4c36).
+		llvm::remove_bad_alloc_error_handler();
+		llvm::install_bad_alloc_error_handler([](void*, const char* msg, bool)
+		{
+			const std::string_view out = msg ? msg : "";
+
+			if (g_llvm_fatal_message)
+			{
+				*g_llvm_fatal_message = out;
+				thread_ctrl::silent_exit();
+			}
+
+			fmt::throw_exception("LLVM Out Of Memory: '%s'", out);
 		}, nullptr);
 
 		return true;

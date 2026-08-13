@@ -5906,7 +5906,13 @@ s64 spu_thread::get_ch_value(u32 ch)
 				{
 					if (u32 work_count = g_spu_work_count)
 					{
-						const u32 true_free = utils::sub_saturate<u32>(utils::get_thread_count(), 10);
+						// The fixed headroom of 10 assumes a many-core desktop. On an 8-thread phone
+						// sub_saturate(8, 10) is 0, so this throttle fires on EVERY background SPU
+						// compile and sleeps productive reservation waiters through scene warm-up.
+						// Keep the desktop behaviour above 10 threads, give low-core devices a sane
+						// non-zero floor. Ported from ouroboros420/rpcsx (d8a19e2c8).
+						const u32 hw_threads = utils::get_thread_count();
+						const u32 true_free = hw_threads > 10 ? (hw_threads - 10) : (hw_threads / 2);
 
 						if (work_count > true_free)
 						{

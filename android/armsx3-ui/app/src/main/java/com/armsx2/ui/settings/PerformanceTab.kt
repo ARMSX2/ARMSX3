@@ -192,6 +192,40 @@ fun PerformanceTab(state: MutableState<Settings>) {
             )
         }
         SettingsDivider()
+        // ---- GPU Turbo (Adreno) -------------------------------------------------
+        // A KGSL ioctl that pins the GPU to maximum clocks instead of letting DVFS ramp. Lives
+        // here rather than with the driver picker because what it actually trades is heat and
+        // battery for frametime stability -- that is a performance decision, not a display one.
+        SegmentedRow(
+            label = str("renderer.gpuTurbo.label"),
+            options = listOf(str("common.off"), str("common.on")),
+            selectedIndex = if (s.ps3.gpuTurbo) 1 else 0,
+            description = str("renderer.gpuTurbo.description"),
+            onChange = {
+                val on = it == 1
+                apply(s.copy(ps3 = s.ps3.copy(gpuTurbo = on)))
+                // Apply live as well as at the next renderer start, so it is testable without
+                // rebooting the game.
+                runCatching { net.rpcsx.RPCSX.instance.setGpuTurbo(on) }
+            },
+        )
+        SettingsDivider()
+        // ---- Silence all logs ---------------------------------------------------
+        // A genuine performance lever, not a debug knob: a few games log thousands of lines a
+        // second and every one costs a write. Measured at 5-7 FPS on LittleBigPlanet 2, which
+        // can be the difference between unplayable and playable.
+        //
+        // Default OFF, deliberately. A bug report without a log is usually unfixable, and the
+        // description says so in as many words -- the setting is here for people who already
+        // know the trade and want the frames.
+        SegmentedRow(
+            label = str("perf.silenceLogs.label"),
+            options = listOf(str("common.off"), str("common.on")),
+            selectedIndex = if (s.ps3.silenceAllLogs) 1 else 0,
+            description = str("perf.silenceLogs.description"),
+            onChange = { apply(s.copy(ps3 = s.ps3.copy(silenceAllLogs = it == 1))) },
+        )
+        SettingsDivider()
         // Affinity Control Mode — opt-in CPU pinning for the EE/VU/GS threads. Android normally
         // leaves them unpinned on purpose (EAS puts the busiest thread on the prime core, and
         // pinning VU to a mid-tier big core measured ~1.4x slower), so this is EXPERIMENTAL and

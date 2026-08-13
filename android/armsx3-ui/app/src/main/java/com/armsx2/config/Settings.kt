@@ -176,6 +176,16 @@ data class Ps3Settings(
     val audioTimeStretch: Boolean = false,
     val audioBuffering: Boolean = true,
     val audioBufferMs: Int = 34,
+    /** cubeb backend: 0 auto, 1 aaudio, 2 opensl, 3 audiotrack. Auto reaches AAudio on
+     *  anything modern; opensl trades latency for far fewer underruns on weak devices. */
+    val audioCubebBackend: Int = 0,
+    /** Pin Adreno to max clocks: removes DVFS ramp-up stutter in GPU-bound scenes, costs heat
+     *  and battery. Off by default, matching the RPCSX fork this came from. */
+    val gpuTurbo: Boolean = false,
+    /** Stops the core writing any log after startup. A real performance lever on games that
+     *  log heavily, but it also destroys the only artifact a bug report can carry, so it is
+     *  off by default and the UI says so plainly. */
+    val silenceAllLogs: Boolean = false,
     val netEnabled: Boolean = false,
     val psnStatus: Boolean = false,
     val upnpEnabled: Boolean = false,
@@ -1017,6 +1027,7 @@ data class Settings(
         // surface layout. Keeping them in sync stops "Stretch" looking inert.
         put("PS3/Video", "Stretch To Display Area", "bool", (displayFitMode == 1).toString())
         put("PS3/Video", "Display Aspect Override", "int", ps3.displayAspect.coerceIn(0, 4000).toString())
+        put("PS3/Misc", "Silence All Logs", "bool", ps3.silenceAllLogs.toString())
         put("PS3/Overlay", "Enabled", "bool", ps3.overlayEnabled.toString())
         put("PS3/Overlay", "Detail level", "enum", ps3.overlayDetail.toString())
         put("PS3/Overlay", "Enable Framerate Graph", "bool", ps3.overlayFramerateGraph.toString())
@@ -1049,6 +1060,7 @@ data class Settings(
         put("PS3/Audio", "Enable Time Stretching", "bool", ps3.audioTimeStretch.toString())
         put("PS3/Audio", "Enable Buffering", "bool", ps3.audioBuffering.toString())
         put("PS3/Audio", "Desired Audio Buffer Duration", "int", ps3.audioBufferMs.toString())
+        put("PS3/Audio", "Cubeb Backend", "int", ps3.audioCubebBackend.toString())
         put("PS3/Net", "Internet enabled", "enum", ps3.netEnabled.toString())
         put("PS3/Net", "PSN status", "enum", ps3.psnStatus.toString())
         put("PS3/Net", "UPNP Enabled", "bool", ps3.upnpEnabled.toString())
@@ -1994,8 +2006,11 @@ data class Settings(
         put("ps3ClocksScale", ps3.clocksScale)
         put("ps3ResolutionScale", ps3.resolutionScale)
         put("ps3MsaaMode", ps3.msaaMode)
+        put("ps3AudioCubebBackend", ps3.audioCubebBackend)
         put("ps3ShaderMode", ps3.shaderMode)
         put("ps3WriteColorBuffers", ps3.writeColorBuffers)
+        put("ps3GpuTurbo", ps3.gpuTurbo)
+        put("ps3SilenceAllLogs", ps3.silenceAllLogs)
         put("ps3WriteDepthBuffer", ps3.writeDepthBuffer)
         put("ps3ReadColorBuffers", ps3.readColorBuffers)
         put("ps3ReadDepthBuffer", ps3.readDepthBuffer)
@@ -2329,8 +2344,11 @@ data class Settings(
                     clocksScale = json.optInt("ps3ClocksScale", def.ps3.clocksScale),
                     resolutionScale = json.optInt("ps3ResolutionScale", def.ps3.resolutionScale),
                     msaaMode = json.optInt("ps3MsaaMode", def.ps3.msaaMode),
+                    audioCubebBackend = json.optInt("ps3AudioCubebBackend", def.ps3.audioCubebBackend),
                     shaderMode = json.optInt("ps3ShaderMode", def.ps3.shaderMode),
                     writeColorBuffers = json.optBoolean("ps3WriteColorBuffers", def.ps3.writeColorBuffers),
+                    gpuTurbo = json.optBoolean("ps3GpuTurbo", def.ps3.gpuTurbo),
+                    silenceAllLogs = json.optBoolean("ps3SilenceAllLogs", def.ps3.silenceAllLogs),
                     writeDepthBuffer = json.optBoolean("ps3WriteDepthBuffer", def.ps3.writeDepthBuffer),
                     readColorBuffers = json.optBoolean("ps3ReadColorBuffers", def.ps3.readColorBuffers),
                     readDepthBuffer = json.optBoolean("ps3ReadDepthBuffer", def.ps3.readDepthBuffer),
@@ -2644,8 +2662,11 @@ data class Settings(
             if (current.ps3.clocksScale != base.ps3.clocksScale) j.put("ps3ClocksScale", current.ps3.clocksScale)
             if (current.ps3.resolutionScale != base.ps3.resolutionScale) j.put("ps3ResolutionScale", current.ps3.resolutionScale)
             if (current.ps3.msaaMode != base.ps3.msaaMode) j.put("ps3MsaaMode", current.ps3.msaaMode)
+            if (current.ps3.audioCubebBackend != base.ps3.audioCubebBackend) j.put("ps3AudioCubebBackend", current.ps3.audioCubebBackend)
             if (current.ps3.shaderMode != base.ps3.shaderMode) j.put("ps3ShaderMode", current.ps3.shaderMode)
             if (current.ps3.writeColorBuffers != base.ps3.writeColorBuffers) j.put("ps3WriteColorBuffers", current.ps3.writeColorBuffers)
+            if (current.ps3.gpuTurbo != base.ps3.gpuTurbo) j.put("ps3GpuTurbo", current.ps3.gpuTurbo)
+            if (current.ps3.silenceAllLogs != base.ps3.silenceAllLogs) j.put("ps3SilenceAllLogs", current.ps3.silenceAllLogs)
             if (current.ps3.writeDepthBuffer != base.ps3.writeDepthBuffer) j.put("ps3WriteDepthBuffer", current.ps3.writeDepthBuffer)
             if (current.ps3.readColorBuffers != base.ps3.readColorBuffers) j.put("ps3ReadColorBuffers", current.ps3.readColorBuffers)
             if (current.ps3.readDepthBuffer != base.ps3.readDepthBuffer) j.put("ps3ReadDepthBuffer", current.ps3.readDepthBuffer)
@@ -2940,8 +2961,11 @@ data class Settings(
                     clocksScale = if (overrides.has("ps3ClocksScale")) overrides.getInt("ps3ClocksScale") else base.ps3.clocksScale,
                     resolutionScale = if (overrides.has("ps3ResolutionScale")) overrides.getInt("ps3ResolutionScale") else base.ps3.resolutionScale,
                     msaaMode = if (overrides.has("ps3MsaaMode")) overrides.getInt("ps3MsaaMode") else base.ps3.msaaMode,
+                    audioCubebBackend = if (overrides.has("ps3AudioCubebBackend")) overrides.getInt("ps3AudioCubebBackend") else base.ps3.audioCubebBackend,
                     shaderMode = if (overrides.has("ps3ShaderMode")) overrides.getInt("ps3ShaderMode") else base.ps3.shaderMode,
                     writeColorBuffers = if (overrides.has("ps3WriteColorBuffers")) overrides.getBoolean("ps3WriteColorBuffers") else base.ps3.writeColorBuffers,
+                    gpuTurbo = if (overrides.has("ps3GpuTurbo")) overrides.getBoolean("ps3GpuTurbo") else base.ps3.gpuTurbo,
+                    silenceAllLogs = if (overrides.has("ps3SilenceAllLogs")) overrides.getBoolean("ps3SilenceAllLogs") else base.ps3.silenceAllLogs,
                     writeDepthBuffer = if (overrides.has("ps3WriteDepthBuffer")) overrides.getBoolean("ps3WriteDepthBuffer") else base.ps3.writeDepthBuffer,
                     readColorBuffers = if (overrides.has("ps3ReadColorBuffers")) overrides.getBoolean("ps3ReadColorBuffers") else base.ps3.readColorBuffers,
                     readDepthBuffer = if (overrides.has("ps3ReadDepthBuffer")) overrides.getBoolean("ps3ReadDepthBuffer") else base.ps3.readDepthBuffer,

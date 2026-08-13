@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include "util/logs.hpp"
 #include "Emu/Audio/audio_device_enumerator.h"
+#include "Emu/system_config.h"
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -24,10 +25,30 @@ CubebBackend::CubebBackend()
 #endif
 
 	cubeb *ctx{};
-	if (int err = cubeb_init(&ctx, "RPCS3", nullptr))
+
+	// nullptr lets cubeb choose; a name pins it. See the config node for why that matters on
+	// Android -- the auto order reaches AAudio first and OpenSL is otherwise unreachable.
+	const std::string backend_name = g_cfg.audio.cubeb_backend.to_string();
+	const char* const requested_backend = backend_name.empty() ? nullptr : backend_name.c_str();
+
+	if (int err = cubeb_init(&ctx, "RPCS3", requested_backend))
 	{
-		Cubeb.error("cubeb_init() failed: %i", err);
-		return;
+		Cubeb.error("cubeb_init() failed: %i (backend=%s)", err,
+			requested_backend ? requested_backend : "auto");
+
+		// A pinned backend that is not built or not available on this device must not leave the
+		// user with no audio at all -- fall back to auto rather than failing the whole renderer.
+		if (!requested_backend || cubeb_init(&ctx, "RPCS3", nullptr))
+		{
+			return;
+		}
+
+		Cubeb.warning("cubeb_init(): '%s' unavailable, fell back to auto-selection", backend_name);
+	}
+
+	if (const char* chosen = cubeb_get_backend_id(ctx))
+	{
+		Cubeb.notice("cubeb backend: %s", chosen);
 	}
 
 	if (int err = cubeb_register_device_collection_changed(ctx, CUBEB_DEVICE_TYPE_OUTPUT, device_collection_changed_cb, this))
@@ -114,9 +135,20 @@ bool CubebBackend::Open(std::string_view dev_id, AudioFreq freq, AudioSampleSize
 
 	if (!device.valid)
 	{
-		if (use_default_device) Cubeb.error("Opening default device failed");
-		else Cubeb.error("Device with id=%s not found", dev_id);
-		return false;
+		if (!use_default_device)
+		{
+			Cubeb.error("Device with id=%s not found", dev_id);
+			return false;
+		}
+
+		// Not every backend can enumerate devices. Android's AAudio backend returns
+		// CUBEB_ERROR_NOT_SUPPORTED from cubeb_enumerate_devices(), so GetDevice() can never
+		// resolve a default and audio would be switched off entirely -- silent output rather
+		// than a fallback. A null handle already means "backend default" to cubeb_stream_init,
+		// and everything below tolerates it (the stream prefs check guards on device.handle,
+		// and ch_cnt == 0 falls back to stereo), so fall through instead of failing.
+		// Upstream did the same until e5537c1cb made this path a hard failure.
+		Cubeb.warning("Cannot detect a default device; using the backend default. Channel count detection unavailable.");
 	}
 
 	if (device.ch_cnt == 0)

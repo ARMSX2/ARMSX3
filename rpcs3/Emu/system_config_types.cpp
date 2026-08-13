@@ -130,6 +130,9 @@ void fmt_class_string<audio_renderer>::format(std::string& out, u64 arg)
 		case audio_renderer::xaudio: return "XAudio2";
 #endif
 		case audio_renderer::cubeb: return "Cubeb";
+#ifdef __ANDROID__
+		case audio_renderer::oboe: return "Oboe";
+#endif
 #ifdef HAVE_FAUDIO
 		case audio_renderer::faudio: return "FAudio";
 #endif
