@@ -364,6 +364,22 @@ object ControllerMappings {
     private const val KEY_STICK_ANTIDZ = "pad.stick.antiDeadzone"
     const val STICK_ANTIDZ_MAX = 0.60f
     private val prefStickAntiDz = PerStickPref(KEY_STICK_ANTIDZ, 0.0f, 0f, STICK_ANTIDZ_MAX)
+
+    // Square gate: send the full per-axis range on diagonals instead of capping them to the
+    // unit circle. A DualShock 3 is circular-gated, so a full diagonal is ~0.707 per axis, and
+    // emitting that is technically faithful -- but it lands inside the internal deadzone of games
+    // that test each axis separately, and their camera then crawls diagonally while the cardinals
+    // are fine. Oblivion is the case that found this.
+    //
+    // DEFAULT ON. Faithfulness to a circular gate is not worth a control scheme that feels broken,
+    // and a modern pad's own gate is closer to square anyway. Off restores the hardware curve for
+    // anyone who wants it. Per stick.
+    private const val KEY_STICK_SQUARE = "pad.stick.square"
+    fun stickSquareGate(left: Boolean): Boolean =
+        MainActivityRuntime.prefs.getBoolean(KEY_STICK_SQUARE + if (left) ".l" else ".r", true)
+    fun setStickSquareGate(left: Boolean, v: Boolean) =
+        MainActivityRuntime.prefs.edit { putBoolean(KEY_STICK_SQUARE + if (left) ".l" else ".r", v) }
+
     fun stickAntiDeadzone(left: Boolean): Float = prefStickAntiDz.get(left)
     fun setStickAntiDeadzone(left: Boolean, v: Float) = prefStickAntiDz.set(left, v)
 

@@ -63,6 +63,8 @@ object ConfigStore {
     private const val KEY_SPU_DECODER_RESTORE = "config.migrated.spuDecoderRestoreLlvm"
     private const val KEY_XFLOAT_BACK_TO_APPROX = "config.migrated.xfloatBackToApprox"
     private const val KEY_PRECISE_SPU_OFF = "config.migrated.preciseSpuVerifyOff"
+    // Oboe became the Android default in 0.7.2; move anyone still on the old Cubeb default.
+    private const val KEY_AUDIO_OBOE = "config.migrated.audioOboeDefault"
     private const val KEY_ATOMIC_DMA_OFF = "config.migrated.atomicDmaStoresOff"
     // Bumped: the first pass recorded only Vblank Rate, which did not hold on its own.
     private const val KEY_VBLANK_60 = "config.migrated.frameCap60"
@@ -315,6 +317,16 @@ object ConfigStore {
             MainActivityRuntime.prefs.edit { putBoolean(KEY_RELAXED_ZCULL_OVERRIDE_PURGED, true) }
         }
 
+
+        // Oboe is the Android default now. Only move people sitting on the previous default
+        // (Cubeb, index 2) -- anyone who deliberately picked Null or another backend keeps it.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_AUDIO_OBOE, false)) {
+            if (raw != null && parsed.ps3.audioRenderer == 2) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(audioRenderer = 4))
+                dirty = true
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_AUDIO_OBOE, true) }
+        }
 
         // The ARM64 block checksum is fixed, so the full-compare workaround can go.
         if (!MainActivityRuntime.prefs.getBoolean(KEY_PRECISE_SPU_OFF, false)) {

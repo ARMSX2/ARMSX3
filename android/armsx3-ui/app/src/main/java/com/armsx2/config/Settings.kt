@@ -198,6 +198,12 @@ data class Ps3Settings(
      * preciseSpuVerification). Accurate is a rarely-exercised path and costs
      * speed, so there is no reason to sit on it.
      */
+    /**
+     * Which face button confirms in PS3 system dialogs. 0 = circle, 1 = cross, matching
+     * enter_button_assign. Japanese-region games and hardware confirm with circle; the rest of
+     * the world uses cross, which is why RPCS3 exposes it rather than deriving it from region.
+     */
+    val enterButtonAssign: Int = 1,
     val spuXFloat: Int = 1,
     val accurateSpuRsv: Boolean = true,
     /**
@@ -249,7 +255,8 @@ data class Ps3Settings(
     val debugConsoleMode: Boolean = false,
     val resolution: Int = 2,
     val anisoFilter: Int = 0,
-    val audioRenderer: Int = 2,
+    /** Index into Rpcs3Settings.AUDIO_RENDERERS. 4 = Oboe, the Android default (see node_audio). */
+    val audioRenderer: Int = 4,
     /**
      * Output aspect override in permille (1778 = 16:9, 1333 = 4:3), 0 = follow the game.
      *
@@ -1064,6 +1071,7 @@ data class Settings(
         put("PS3/Net", "Internet enabled", "enum", ps3.netEnabled.toString())
         put("PS3/Net", "PSN status", "enum", ps3.psnStatus.toString())
         put("PS3/Net", "UPNP Enabled", "bool", ps3.upnpEnabled.toString())
+        put("PS3/System", "Enter button assignment", "enum", ps3.enterButtonAssign.toString())
         put("PS3/Core", "SPU XFloat Accuracy", "enum", ps3.spuXFloat.toString())
         put("PS3/Core", "Accurate SPU Reservations", "bool", ps3.accurateSpuRsv.toString())
         put("PS3/Core", "Accurate Cache Line Stores", "bool", ps3.accurateCacheLine.toString())
@@ -2032,6 +2040,7 @@ data class Settings(
         put("ps3NetEnabled", ps3.netEnabled)
         put("ps3PsnStatus", ps3.psnStatus)
         put("ps3UpnpEnabled", ps3.upnpEnabled)
+        put("ps3EnterButtonAssign", ps3.enterButtonAssign)
         put("ps3SpuXFloat", ps3.spuXFloat)
         put("ps3AccurateSpuRsv", ps3.accurateSpuRsv)
         put("ps3AccurateCacheLine", ps3.accurateCacheLine)
@@ -2370,6 +2379,7 @@ data class Settings(
                     netEnabled = json.optBoolean("ps3NetEnabled", def.ps3.netEnabled),
                     psnStatus = json.optBoolean("ps3PsnStatus", def.ps3.psnStatus),
                     upnpEnabled = json.optBoolean("ps3UpnpEnabled", def.ps3.upnpEnabled),
+                    enterButtonAssign = json.optInt("ps3EnterButtonAssign", def.ps3.enterButtonAssign),
                     spuXFloat = json.optInt("ps3SpuXFloat", def.ps3.spuXFloat),
                     accurateSpuRsv = json.optBoolean("ps3AccurateSpuRsv", def.ps3.accurateSpuRsv),
                     accurateCacheLine = json.optBoolean("ps3AccurateCacheLine", def.ps3.accurateCacheLine),
@@ -2688,6 +2698,7 @@ data class Settings(
             if (current.ps3.netEnabled != base.ps3.netEnabled) j.put("ps3NetEnabled", current.ps3.netEnabled)
             if (current.ps3.psnStatus != base.ps3.psnStatus) j.put("ps3PsnStatus", current.ps3.psnStatus)
             if (current.ps3.upnpEnabled != base.ps3.upnpEnabled) j.put("ps3UpnpEnabled", current.ps3.upnpEnabled)
+            if (current.ps3.enterButtonAssign != base.ps3.enterButtonAssign) j.put("ps3EnterButtonAssign", current.ps3.enterButtonAssign)
             if (current.ps3.spuXFloat != base.ps3.spuXFloat) j.put("ps3SpuXFloat", current.ps3.spuXFloat)
             if (current.ps3.accurateSpuRsv != base.ps3.accurateSpuRsv) j.put("ps3AccurateSpuRsv", current.ps3.accurateSpuRsv)
             if (current.ps3.accurateCacheLine != base.ps3.accurateCacheLine) j.put("ps3AccurateCacheLine", current.ps3.accurateCacheLine)
@@ -2987,6 +2998,7 @@ data class Settings(
                     netEnabled = if (overrides.has("ps3NetEnabled")) overrides.getBoolean("ps3NetEnabled") else base.ps3.netEnabled,
                     psnStatus = if (overrides.has("ps3PsnStatus")) overrides.getBoolean("ps3PsnStatus") else base.ps3.psnStatus,
                     upnpEnabled = if (overrides.has("ps3UpnpEnabled")) overrides.getBoolean("ps3UpnpEnabled") else base.ps3.upnpEnabled,
+                    enterButtonAssign = if (overrides.has("ps3EnterButtonAssign")) overrides.getInt("ps3EnterButtonAssign") else base.ps3.enterButtonAssign,
                     spuXFloat = if (overrides.has("ps3SpuXFloat")) overrides.getInt("ps3SpuXFloat") else base.ps3.spuXFloat,
                     accurateSpuRsv = if (overrides.has("ps3AccurateSpuRsv")) overrides.getBoolean("ps3AccurateSpuRsv") else base.ps3.accurateSpuRsv,
                     accurateCacheLine = if (overrides.has("ps3AccurateCacheLine")) overrides.getBoolean("ps3AccurateCacheLine") else base.ps3.accurateCacheLine,

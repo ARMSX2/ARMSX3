@@ -56,7 +56,7 @@ import kotlinx.coroutines.withContext
 import com.armsx3.NativeApp
 
 @Composable
-fun PadTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
+fun PadTab(state: MutableState<Settings>) {
     val scroll = settingsScrollState()
     ControllerAutoScroll(scroll)
     val capture = remember { mutableStateOf<ControllerMappings.Action?>(null) }
@@ -448,6 +448,24 @@ fun PadTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
         // (com.armsx2.ui.settings.GyroSection). Here it follows the Pad tab's Global/Game
         // scope (editSerial) and shares the tab's refreshToken so it re-reads live.
         GyroSection(editSerial = editSerial, externalRefresh = refreshToken)
+        // Which face button the PS3 itself treats as "confirm" in system dialogs. This is a
+        // console setting (cellSysutil ID_ENTER_BUTTON_ASSIGN), not a pad remap: it changes what
+        // the GAME asks for, so it has to live in the config rather than in the bind table.
+        // Japanese titles generally expect circle and can read as inverted without it.
+        CollapsibleSection(str("pad.section.enterButton"), initiallyExpanded = false) {
+            SegmentedRow(
+                label = str("pad.enterButton.label"),
+                options = listOf(str("pad.enterButton.circle"), str("pad.enterButton.cross")),
+                selectedIndex = state.value.ps3.enterButtonAssign.coerceIn(0, 1),
+                description = str("pad.enterButton.description"),
+                onChange = { idx ->
+                    com.armsx2.ui.InGameOverlay.saveSettings(
+                        state.value.copy(ps3 = state.value.ps3.copy(enterButtonAssign = idx)),
+                    )
+                },
+            )
+        }
+
         CollapsibleSection(str("pad.section.buttonMapping"), initiallyExpanded = false) {
             ControllerMappings.actions.forEach { action ->
                 val physical = ControllerMappings.physicalForScope(action, editPlayer.intValue, editSerial)
@@ -899,6 +917,12 @@ private fun StickFeelSliders(left: Boolean, title: String, refreshToken: Mutable
             valueFormatter = { "${it * 5}%" },
             onChange = { ControllerMappings.setStickSensitivity(left, it / 20f); refreshToken.value++ },
         )
+
+        ToggleRow(
+            str("pad.stickFeel.squareGate.label"),
+            ControllerMappings.stickSquareGate(left),
+            description = str("pad.stickFeel.squareGate.description"),
+        ) { ControllerMappings.setStickSquareGate(left, it); refreshToken.value++ }
         SettingsDivider()
         IntSliderRow(
             label = str("pad.stickFeel.acceleration.label"),

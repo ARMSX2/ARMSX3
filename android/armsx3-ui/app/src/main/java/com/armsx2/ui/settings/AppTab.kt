@@ -792,6 +792,7 @@ fun AppTab() {
         )
 
         ClearCacheRow()
+        ResetAllSettingsRow()
     }
 }
 
@@ -833,6 +834,77 @@ private fun ClearCacheRow() {
                 )
             }
         }
+    }
+}
+
+/** Put every global setting back to its default in one go.
+ *
+ *  The per-tab Reset in the top bar only covers the page you are looking at, which is right for
+ *  undoing one experiment but tedious when a config has drifted across half a dozen tabs. This is
+ *  the "start clean" button. Per-game overrides are deliberately left alone: they belong to
+ *  individual games, are invisible from here, and wiping them from a global page would be a
+ *  surprise. Controller binds live in ControllerMappings and keep their own reset. */
+@Composable
+private fun ResetAllSettingsRow() {
+    var confirming by remember { mutableStateOf(false) }
+
+    Surface(
+        onClick = { confirming = true },
+        modifier = Modifier.fillMaxWidth()
+            .controllerFocusable("app.resetAll", RoundedCornerShape(20.dp), onConfirm = { confirming = true }),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.46f)),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                modifier = Modifier.size(46.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Text("↺", fontSize = 21.sp)
+                }
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(str("app.resetAll"), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    str("app.resetAll.desc"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+
+    if (confirming) {
+        com.armsx2.ui.common.ConfirmOverlay(
+            title = str("app.resetAll"),
+            message = str("app.resetAll.confirm"),
+            confirmLabel = str("action.reset"),
+            destructive = true,
+            idPrefix = "settings-reset-all",
+            onConfirm = {
+                val defaults = com.armsx2.config.Settings()
+                com.armsx2.ui.InGameOverlay.settingsState.value = defaults
+                com.armsx2.config.ConfigStore.saveGlobal(defaults)
+
+                // Push straight to the core when a game is live, the same way the per-tab reset
+                // does. Without this the UI shows defaults while the running VM keeps the old
+                // values until the next boot.
+                if (MainActivityRuntime.nativeReady.value &&
+                    MainActivityRuntime.eState.value != com.armsx2.EmuState.STOPPED) {
+                    runCatching { defaults.applyTo() }
+                }
+
+                confirming = false
+            },
+            onDismiss = { confirming = false },
+        )
     }
 }
 

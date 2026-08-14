@@ -264,7 +264,15 @@ struct cfg_root : cfg::node
 	{
 		node_audio(cfg::node* _this) : cfg::node(_this, "Audio") {}
 
+#ifdef __ANDROID__
+		// Oboe by default here. Cubeb reaches AAudio too, but Oboe is what carries the per-device
+		// quirks database, the automatic AAudio -> OpenSL ES fallback on parts where AAudio
+		// misbehaves, and error-callback stream recovery when the route changes or the device
+		// disconnects -- all of which are the normal case on a handheld, not the exception.
+		cfg::_enum<audio_renderer> renderer{ this, "Renderer", audio_renderer::oboe, true };
+#else
 		cfg::_enum<audio_renderer> renderer{ this, "Renderer", audio_renderer::cubeb, true };
+#endif
 		cfg::_enum<audio_provider> provider{ this, "Audio Provider", audio_provider::cell_audio, false };
 		cfg::_enum<audio_avport> rsxaudio_port{ this, "RSXAudio Avport", audio_avport::hdmi_0, true };
 		cfg::_bool dump_to_file{ this, "Dump to file", false, true };
