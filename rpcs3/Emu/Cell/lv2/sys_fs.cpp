@@ -2174,6 +2174,19 @@ error_code sys_fs_unlink(ppu_thread& ppu, vm::cptr<char> path)
 		{
 			return {mp == &g_mp_sys_dev_hdd1 ? sys_fs.warning : sys_fs.error, CELL_ENOENT, path};
 		}
+		case fs::error::readonly:
+		{
+			// A virtual device that cannot be modified. On Android that is the mounted ISO behind
+			// /app_home, whose device_base mutators report readonly by design -- so any game that
+			// writes, renames or deletes inside its own USRDIR lands here. Oblivion deletes
+			// /app_home/warnings.txt at startup, which a real console would simply allow.
+			//
+			// This used to fall through to the throw below, which killed the PPU thread inside the
+			// syscall: the game froze with the CPU idle and nothing in the log but a stalled RSX.
+			// Report it and let the guest decide what to do, which is what hardware would do for a
+			// write to read-only media.
+			return { CELL_EROFS, path };
+		}
 		default:
 		{
 			if (has_non_directory_components(local_path, ends_with_delim_dot_or_dotdot(vpath)))
@@ -2425,7 +2438,9 @@ error_code sys_fs_fcntl(ppu_thread& ppu, u32 fd, u32 op, vm::ptr<void> _arg, u32
 		// Load mountpoint (doesn't support multiple // at the start)
 		std::string_view vpath{arg->name.get_ptr(), arg->name_size};
 
-		sys_fs.notice("sys_fs_fcntl(0xc0000006): %s", vpath);
+		// Trace for the same reason as sys_fs_utime: this rides along with the utime polling
+		// loop and made up the last third of that flood.
+		sys_fs.trace("sys_fs_fcntl(0xc0000006): %s", vpath);
 
 		// Check only mountpoint
 		vpath = vpath.substr(0, vpath.find_first_of('\0'));
@@ -3087,6 +3102,19 @@ error_code sys_fs_truncate(ppu_thread& ppu, vm::cptr<char> path, u64 size)
 		{
 			return {mp == &g_mp_sys_dev_hdd1 ? sys_fs.warning : sys_fs.error, CELL_ENOENT, path};
 		}
+		case fs::error::readonly:
+		{
+			// A virtual device that cannot be modified. On Android that is the mounted ISO behind
+			// /app_home, whose device_base mutators report readonly by design -- so any game that
+			// writes, renames or deletes inside its own USRDIR lands here. Oblivion deletes
+			// /app_home/warnings.txt at startup, which a real console would simply allow.
+			//
+			// This used to fall through to the throw below, which killed the PPU thread inside the
+			// syscall: the game froze with the CPU idle and nothing in the log but a stalled RSX.
+			// Report it and let the guest decide what to do, which is what hardware would do for a
+			// write to read-only media.
+			return { CELL_EROFS, path };
+		}
 		default:
 		{
 			if (has_non_directory_components(local_path, ends_with_delim_dot_or_dotdot(vpath)))
@@ -3311,8 +3339,13 @@ error_code sys_fs_utime(ppu_thread& ppu, vm::cptr<char> path, vm::cptr<CellFsUti
 {
 	lv2_obj::sleep(ppu);
 
-	sys_fs.warning("sys_fs_utime(path=%s, timep=*0x%x)", path, timep);
-	sys_fs.warning("** actime=%u, modtime=%u", timep->actime, timep->modtime);
+	// Trace, not warning. Setting a file's timestamps is routine and uninteresting, but games
+	// that poll it do so in tight loops: Oblivion's FileCaching thread hit this 7274 times in ten
+	// seconds on one .BSA, and at two warning lines a call that alone stalled the emulator for
+	// over twenty seconds. Logging is not free on Android. Raise the sys_fs channel to Trace to
+	// get these back.
+	sys_fs.trace("sys_fs_utime(path=%s, timep=*0x%x)", path, timep);
+	sys_fs.trace("** actime=%u, modtime=%u", timep->actime, timep->modtime);
 
 	const auto [path_error, vpath] = translate_to_str(path);
 
@@ -3353,6 +3386,19 @@ error_code sys_fs_utime(ppu_thread& ppu, vm::cptr<char> path, vm::cptr<CellFsUti
 		case fs::error::noent:
 		{
 			return {mp == &g_mp_sys_dev_hdd1 ? sys_fs.warning : sys_fs.error, CELL_ENOENT, path};
+		}
+		case fs::error::readonly:
+		{
+			// A virtual device that cannot be modified. On Android that is the mounted ISO behind
+			// /app_home, whose device_base mutators report readonly by design -- so any game that
+			// writes, renames or deletes inside its own USRDIR lands here. Oblivion deletes
+			// /app_home/warnings.txt at startup, which a real console would simply allow.
+			//
+			// This used to fall through to the throw below, which killed the PPU thread inside the
+			// syscall: the game froze with the CPU idle and nothing in the log but a stalled RSX.
+			// Report it and let the guest decide what to do, which is what hardware would do for a
+			// write to read-only media.
+			return { CELL_EROFS, path };
 		}
 		default:
 		{

@@ -1194,7 +1194,22 @@ namespace vm
 
 		if (!utils::memory_lock(g_sudo_addr + addr, size))
 		{
-			vm_log.error("Failed to lock sudo memory (addr=0x%x, size=0x%x). Consider increasing your system limits.", addr, size);
+			// Report this once per session, not once per call.
+			//
+			// Android does not grant RLIMIT_MEMLOCK to ordinary apps, so this fails for every
+			// mapping and cannot be "fixed" by the user the message tells to raise their limits.
+			// Games that map and unmap shared memory in a loop then drown the log in it --
+			// Oblivion's BSTaskManagerThread produced 6470 of these in ten seconds, and writing
+			// them is expensive enough on Android to stall the emulator outright.
+			//
+			// The first one still says what happened; the rest are the same fact repeated.
+			static atomic_t<bool> s_reported{false};
+
+			if (!s_reported.exchange(true))
+			{
+				vm_log.error("Failed to lock sudo memory (addr=0x%x, size=0x%x). Consider increasing your system limits."
+					" Further failures will not be reported.", addr, size);
+			}
 		}
 	}
 
