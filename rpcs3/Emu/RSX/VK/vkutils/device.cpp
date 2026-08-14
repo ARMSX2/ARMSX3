@@ -4,10 +4,6 @@
 #include "instance.h"
 #include "util/logs.hpp"
 #include "Emu/system_config.h"
-#include "Emu/system_utils.hpp"
-#include "Utilities/File.h"
-
-#include <cstring>
 #include <vulkan/vulkan_core.h>
 #ifdef __ANDROID__
 #include "Emu/RSX/VK/vk_android_loader.h"
@@ -318,7 +314,22 @@ namespace vk
 			shader_types_support.allow_float16 = (driver_properties.driverID == VK_DRIVER_ID_AMD_PROPRIETARY_KHR);
 		}
 
-		if (is_MOBILE(get_driver_vendor()) && shader_types_support.allow_float16)
+		// Qualcomm's compiler stopped rejecting native float16 at some point, and the blanket
+		// disable below now costs more than it saves: emulating fp16 with fp32 does NOT "render
+		// correctly" as claimed -- Oblivion's water simply does not draw on Vulkan, while the GL
+		// backend (which has no such workaround) draws it. Verified fixed by allowing fp16 on
+		// driver 512.676.53.
+		//
+		// Gated on the version rather than removed. The original failure is a bad one to
+		// reintroduce -- every pipeline rejected, so the game is black while audio and the
+		// compile overlay keep working, which reads as a renderer bug rather than a shader one --
+		// and older Adreno drivers may still be affected. Only Adreno is opened up: no other
+		// mobile vendor has been tested either way, so they keep the safe path.
+		constexpr u32 s_adreno_fp16_min_driver = (512u << 22) | (676u << 12) | 53u; // 512.676.53
+		const bool adreno_fp16_ok = is_ADRENO(get_driver_vendor()) &&
+			props.driverVersion >= s_adreno_fp16_min_driver;
+
+		if (!adreno_fp16_ok && is_MOBILE(get_driver_vendor()) && shader_types_support.allow_float16)
 		{
 			// Adreno advertises shaderFloat16, but its shader compiler rejects the
 			// SPIR-V RPCS3 generates with native float16_t in it -- every game
@@ -1059,9 +1070,6 @@ namespace vk
 		memory_map = vk::get_memory_mapping(pdev);
 		m_formats_support = vk::get_optimal_tiling_supported_formats(pdev);
 
-		// Needs a live 'dev'. Never fatal: on failure the handle stays VK_NULL_HANDLE.
-		load_pipeline_cache();
-
 		if (g_cfg.video.disable_vulkan_mem_allocator)
 		{
 			m_allocator = std::make_unique<vk::mem_allocator_vk>(*this, pdev);
@@ -1072,198 +1080,8 @@ namespace vk
 		}
 
 		// Useful for debugging different VRAM configurations
-		u64 vram_allocation_limit = g_cfg.video.vk.vram_allocation_limit * 0x100000ull;
-
-#ifdef __ANDROID__
-		// The 65536 MB default is desktop-oriented and meaningless here, where the Vulkan
-		// "device local" heap is shared system RAM and the driver over-reports it badly (~15 GB
-		// on an 8 GB device). Note this is a GPU-driver figure: it is NOT sysconf, and the
-		// often-repeated "zRAM inflates it" explanation is wrong -- zRAM is compressed swap and
-		// never counts toward totalram. Left at the default the texture and surface caches never
-		// evict,
-		// and the Low Memory Killer takes the process with no fatal logged: the session just
-		// disappears. Derive the budget from honest physical RAM instead of the heap figure.
-		// An explicit user value is always honoured.
-		// Ported in spirit from ouroboros420/rpcsx (a3156fcb3), reading MemTotal directly
-		// rather than depending on their app-pushed budget.
-		if (g_cfg.video.vk.vram_allocation_limit == 65536)
-		{
-			u64 phys_ram_bytes = 0;
-
-			if (fs::file meminfo{"/proc/meminfo"})
-			{
-				const std::string text = meminfo.to_string();
-				if (const usz pos = text.find("MemTotal:"); pos != umax)
-				{
-					// "MemTotal:  8123456 kB"
-					if (const u64 kb = std::strtoull(text.c_str() + pos + 9, nullptr, 10); kb > 0)
-					{
-						phys_ram_bytes = kb * 1024ull;
-					}
-				}
-			}
-
-			// Half of physical RAM. The emulator's own working set (PPU/SPU caches, guest
-			// memory, JIT) is the other consumer and is not counted in this budget, so a
-			// larger fraction just moves the kill later rather than preventing it.
-			vram_allocation_limit = phys_ram_bytes
-				? phys_ram_bytes / 2
-				: std::min<u64>(memory_map.device_local_total_bytes / 2, 2048ull * 0x100000ull);
-
-			rsx_log.notice("Android: VRAM cache budget = %llu MB (physical RAM %llu MB, driver reports a %llu MB device-local heap); override with 'VRAM allocation limit (MB)'.",
-				vram_allocation_limit / 0x100000, phys_ram_bytes / 0x100000, memory_map.device_local_total_bytes / 0x100000);
-		}
-#endif
-
+		const u64 vram_allocation_limit = g_cfg.video.vk.vram_allocation_limit * 0x100000ull;
 		memory_map.device_local_total_bytes = std::min(memory_map.device_local_total_bytes, vram_allocation_limit);
-	}
-
-	// Prepended to the serialized blob so foreign / stale / corrupt data is rejected here
-	// rather than handed to the driver. Ported from ouroboros420/rpcsx (7392cca10f).
-	namespace
-	{
-		struct pipeline_cache_disk_header
-		{
-			u32 length;   // sizeof(header), guards against layout drift
-			u32 version;
-			u32 vendorID;
-			u32 deviceID;
-			u8 uuid[VK_UUID_SIZE];
-		};
-
-		constexpr u32 k_pipeline_cache_disk_version = 1;
-	}
-
-	std::string render_device::get_pipeline_cache_path() const
-	{
-		// Deliberately the no-arg (shared) cache dir, not get_cache_dir_by_serial: the driver's
-		// compiled form of a pipeline is keyed on the driver, not on the game, so one blob
-		// warms every title. Also callable at device-create time, with no Emu state up yet.
-		return rpcs3::utils::get_cache_dir() + "vk_pipeline_cache.bin";
-	}
-
-	void render_device::load_pipeline_cache()
-	{
-		m_pipeline_cache = VK_NULL_HANDLE;
-		m_pipeline_cache_saved_size = 0;
-
-		std::vector<u8> initial_data;
-
-		if (fs::file f{ get_pipeline_cache_path(), fs::read })
-		{
-			const u64 file_size = f.size();
-
-			// Upper bound is a sanity guard, not a policy: a blob this large means the file
-			// is not ours, and reading it into memory would be the actual damage.
-			if (file_size > sizeof(pipeline_cache_disk_header) && file_size < (256ull << 20))
-			{
-				std::vector<u8> blob(file_size);
-				if (f.read(blob.data(), file_size) == file_size)
-				{
-					pipeline_cache_disk_header hdr{};
-					std::memcpy(&hdr, blob.data(), sizeof(hdr));
-
-					const auto& props = pgpu->props;
-					const bool header_ok =
-						hdr.length == sizeof(pipeline_cache_disk_header) &&
-						hdr.version == k_pipeline_cache_disk_version &&
-						hdr.vendorID == props.vendorID &&
-						hdr.deviceID == props.deviceID &&
-						std::memcmp(hdr.uuid, props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
-
-					if (header_ok)
-					{
-						initial_data.assign(blob.begin() + sizeof(pipeline_cache_disk_header), blob.end());
-					}
-					else
-					{
-						rsx_log.notice("vk: on-disk pipeline cache rejected (driver or device changed); rebuilding.");
-					}
-				}
-			}
-		}
-
-		VkPipelineCacheCreateInfo create_info{};
-		create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-		create_info.initialDataSize = initial_data.size();
-		create_info.pInitialData = initial_data.empty() ? nullptr : initial_data.data();
-
-		VkPipelineCache cache = VK_NULL_HANDLE;
-		const VkResult res = vkCreatePipelineCache(dev, &create_info, nullptr, &cache);
-
-		if (res == VK_SUCCESS && cache != VK_NULL_HANDLE)
-		{
-			m_pipeline_cache = cache;
-			rsx_log.notice("vk: driver pipeline cache active (seeded with %zu bytes).", initial_data.size());
-		}
-		else
-		{
-			rsx_log.warning("vk: vkCreatePipelineCache failed (0x%x); continuing without a driver pipeline cache.", static_cast<u32>(res));
-		}
-	}
-
-	void render_device::save_pipeline_cache() const
-	{
-		if (m_pipeline_cache == VK_NULL_HANDLE)
-		{
-			return;
-		}
-
-		// Legal mid-session: the cache is created with flags=0, so the driver internally
-		// synchronizes vkGetPipelineCacheData against concurrent pipeline creation. The only
-		// callers are flip() and destroy(), which cannot overlap, so no lock of our own.
-		usz data_size = 0;
-		if (vkGetPipelineCacheData(dev, m_pipeline_cache, &data_size, nullptr) != VK_SUCCESS || !data_size)
-		{
-			return;
-		}
-
-		// Steady state costs one size query: nothing new compiled, nothing to rewrite.
-		if (data_size == m_pipeline_cache_saved_size)
-		{
-			return;
-		}
-
-		std::vector<u8> blob(data_size);
-		if (vkGetPipelineCacheData(dev, m_pipeline_cache, &data_size, blob.data()) != VK_SUCCESS)
-		{
-			return;
-		}
-
-		blob.resize(data_size); // the driver may hand back fewer bytes than it quoted
-
-		pipeline_cache_disk_header hdr{};
-		hdr.length = sizeof(pipeline_cache_disk_header);
-		hdr.version = k_pipeline_cache_disk_version;
-		hdr.vendorID = pgpu->props.vendorID;
-		hdr.deviceID = pgpu->props.deviceID;
-		std::memcpy(hdr.uuid, pgpu->props.pipelineCacheUUID, VK_UUID_SIZE);
-
-		fs::create_path(rpcs3::utils::get_cache_dir());
-
-		// Atomic temp+rename. Being killed mid-write must not leave a truncated blob, or every
-		// later boot reads it, fails the header check and rebuilds from cold forever.
-		fs::pending_file out(get_pipeline_cache_path());
-		if (out.file &&
-			out.file.write(&hdr, sizeof(hdr)) == sizeof(hdr) &&
-			(blob.empty() || out.file.write(blob.data(), blob.size()) == blob.size()) &&
-			out.commit())
-		{
-			m_pipeline_cache_saved_size = data_size;
-		}
-	}
-
-	void render_device::save_and_destroy_pipeline_cache()
-	{
-		if (m_pipeline_cache == VK_NULL_HANDLE)
-		{
-			return;
-		}
-
-		save_pipeline_cache();
-
-		vkDestroyPipelineCache(dev, m_pipeline_cache, nullptr);
-		m_pipeline_cache = VK_NULL_HANDLE;
 	}
 
 	void render_device::destroy()
@@ -1280,10 +1098,6 @@ namespace vk
 				m_allocator->destroy();
 				m_allocator.reset();
 			}
-
-			// Before vkDestroyDevice, and after the pipe compiler workers have been joined,
-			// so nothing can be creating pipelines against the cache while we serialize it.
-			save_and_destroy_pipeline_cache();
 
 			vkDestroyDevice(dev, nullptr);
 			dev = nullptr;
