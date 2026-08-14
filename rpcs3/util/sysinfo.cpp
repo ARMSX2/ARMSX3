@@ -404,9 +404,11 @@ bool utils::has_wfe_event_stream()
 		// next unrelated interrupt.
 		return (getauxval(AT_HWCAP) & HWCAP_EVTSTRM) != 0;
 #else
-		// Unknown platforms: report false so callers stay on wait shapes that
-		// do not depend on the event stream.
-		return false;
+		// Non-Linux ARM64 (Apple, Windows-on-ARM): no HWCAP equivalent exists.
+		// Report true so callers keep the same wait shapes they used before this
+		// probe existed; a platform where the stream-paced wait misbehaves needs
+		// a measured probe here, not a capability bit.
+		return true;
 #endif
 	}();
 	return g_value;
@@ -597,6 +599,10 @@ std::string utils::get_system_info()
 	{
 		result += " | Neon";
 	}
+
+	// Surfaced so every log records whether monitor-less WFE waits have a
+	// bounded wake on this kernel (drives the RSX wait-shape selection).
+	fmt::append(result, " | EVTSTRM-%s", has_wfe_event_stream() ? "on" : "off");
 #else
 
 	if (has_avx())

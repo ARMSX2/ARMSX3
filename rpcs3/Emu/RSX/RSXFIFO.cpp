@@ -7,6 +7,7 @@
 #include "Core/RSXReservationLock.hpp"
 #include "Emu/Memory/vm_reservation.h"
 #include "Emu/Cell/lv2/sys_rsx.h"
+#include "util/sysinfo.hpp"
 #include "NV47/HW/context.h"
 #include "rsx_profiler.h"
 
@@ -804,9 +805,17 @@ namespace rsx
 						s_fifo_idle_spins++;
 						utils::pause();
 					}
-					else
+					else if (utils::has_wfe_event_stream())
 					{
 						utils::wait_for_event();
+					}
+					else
+					{
+						// Without the event stream a monitor-less WFE has no bounded
+						// wake, so a park here could sleep through the guest's PUT
+						// advance until an unrelated interrupt. Yield instead - the
+						// pre-WFE behavior of this path.
+						std::this_thread::yield();
 					}
 #else
 					std::this_thread::yield();

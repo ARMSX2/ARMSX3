@@ -189,8 +189,9 @@ namespace utils
 	// Park the core until an event arrives, with no syscall.
 	//
 	// On arm64 WFE drops the core into a low-power state. When the kernel enables the
-	// architected event stream a wakeup arrives on a fixed short period (tens of
-	// microseconds), and timer interrupts wake it regardless -- it cannot stall
+	// architected event stream a wakeup arrives on a fixed short period (kernel- and
+	// timer-frequency dependent: measured ~30-60 us on one device, kernel defaults
+	// target ~100 us), and timer interrupts wake it regardless -- it cannot stall
 	// indefinitely. The event stream is a kernel property, not a guarantee: check
 	// utils::has_wfe_event_stream() (HWCAP_EVTSTRM) before making this wait
 	// load-bearing; without the stream the park lasts until the next unrelated
