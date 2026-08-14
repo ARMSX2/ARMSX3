@@ -392,6 +392,26 @@ bool utils::has_neon()
 	return g_value;
 }
 
+bool utils::has_wfe_event_stream()
+{
+	static const bool g_value = []() -> bool
+	{
+#if defined(__linux__)
+		// HWCAP_EVTSTRM: the kernel has enabled the architected timer event
+		// stream (CNTKCTL_EL1.EVNTEN), which is what bounds a bare WFE's wake
+		// latency. Waits that rely on WFE without an armed exclusive monitor
+		// must check this; with the stream off, such a WFE parks until the
+		// next unrelated interrupt.
+		return (getauxval(AT_HWCAP) & HWCAP_EVTSTRM) != 0;
+#else
+		// Unknown platforms: report false so callers stay on wait shapes that
+		// do not depend on the event stream.
+		return false;
+#endif
+	}();
+	return g_value;
+}
+
 bool utils::has_sha3()
 {
 	static const bool g_value = []() -> bool

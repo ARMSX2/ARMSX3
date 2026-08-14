@@ -4,6 +4,7 @@
 
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/RSX/rsx_profiler.h"
+#include "util/sysinfo.hpp"
 
 #include "context_accessors.define.h"
 
@@ -50,10 +51,24 @@ namespace rsx
 
 			u64 start = get_system_time();
 			u64 last_check_val = start;
-			u64 spin_budget = 0;
 
-			while (sema != arg)
+#if defined(ARCH_ARM64)
+			u64 spin_budget = 0;
+			// Without the kernel's architected timer event stream a monitor-less
+			// WFE has no bounded wake, so the event-stream fallback below must
+			// stay disabled and the wait keeps the armed-spin shape.
+			const bool has_event_stream = utils::has_wfe_event_stream();
+#endif
+
+			while (true)
 			{
+				const RsxSemaphore observed = sema;
+
+				if (observed == arg)
+				{
+					break;
+				}
+
 				if (RSX(ctx)->test_stopped())
 				{
 					RSX(ctx)->state += cpu_flag::again;
@@ -76,8 +91,11 @@ namespace rsx
 
 					if ((current - start) > tdr)
 					{
-						// If longer than driver timeout force exit
-						rsx_log.error("nv406e::semaphore_acquire has timed out. semaphore_address=0x%X", addr);
+						// If longer than driver timeout force exit. The awaited and
+						// last-observed values are logged so a timeout caused by a
+						// transient value (stored, then overwritten before the waiter
+						// observed it) is distinguishable from a never-signaled one.
+						rsx_log.error("nv406e::semaphore_acquire has timed out. semaphore_address=0x%X, awaited=0x%X, observed=0x%X", addr, arg, static_cast<u32>(observed));
 						break;
 					}
 				}
@@ -100,18 +118,22 @@ namespace rsx
 				// second instead of waiting. Give the armed form a short window first - on
 				// cores where it parks it keeps its instant wake-on-write, and where it
 				// does not it acts as a brief spin that still catches short waits - then
-				// fall back to the event-stream wait, which parks on both classes and
-				// bounds wake latency at the event-stream period.
-				if (++spin_budget > 500)
+				// interleave the event-stream park, which is what actually paces the loop
+				// on a core whose armed WFE spins. The armed one-shot still runs on every
+				// iteration (it costs ~nothing where it is broken), so on cores where it
+				// parks, wake-on-write is kept even after the budget is spent.
+				if (has_event_stream && ++spin_budget > 500)
 				{
 					utils::wait_for_event();
 				}
-				else
 #endif
-				{
-					// Wait until the value changes or until 100us pass.
-					utils::spin_on_cacheline_once(atomic_sema, sema, 100);
-				}
+				// On x86 this waits on the address (umwait/mwaitx), bounded by the
+				// timeout. On ARM the timeout is ignored: the wait ends on a write
+				// to the armed cache line or an event-stream tick on cores where
+				// the armed WFE parks, and returns immediately on cores where it
+				// does not (measured on Oryon), where wait_for_event() above
+				// provides the pacing instead.
+				utils::spin_on_cacheline_once(atomic_sema, observed, 100);
 			}
 
 			RSX(ctx)->fifo_wake_delay();

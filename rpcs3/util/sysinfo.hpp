@@ -57,6 +57,10 @@ namespace utils
 #ifdef ARCH_ARM64
 	bool has_neon();
 
+	// True when the kernel advertises the architected timer event stream
+	// (HWCAP_EVTSTRM) — the wake-latency bound for monitor-less WFE waits.
+	bool has_wfe_event_stream();
+
 	bool has_sha3();
 
 	bool has_dotprod();

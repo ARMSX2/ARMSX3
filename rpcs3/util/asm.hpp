@@ -188,14 +188,19 @@ namespace utils
 
 	// Park the core until an event arrives, with no syscall.
 	//
-	// On arm64 WFE drops the core into a low-power state. Linux enables the architected
-	// event stream, so a wakeup arrives on a fixed short period (tens of microseconds), and
-	// timer interrupts wake it regardless -- it cannot stall indefinitely. SEVL sets the local
-	// event first so the first WFE consumes it and the second genuinely parks, rather than
-	// returning immediately on a stale event.
+	// On arm64 WFE drops the core into a low-power state. When the kernel enables the
+	// architected event stream a wakeup arrives on a fixed short period (tens of
+	// microseconds), and timer interrupts wake it regardless -- it cannot stall
+	// indefinitely. The event stream is a kernel property, not a guarantee: check
+	// utils::has_wfe_event_stream() (HWCAP_EVTSTRM) before making this wait
+	// load-bearing; without the stream the park lasts until the next unrelated
+	// interrupt. SEVL sets the local event first so the first WFE consumes it and the
+	// second genuinely parks, rather than returning immediately on a stale event.
 	//
-	// For polling loops whose exit condition is produced by another agent (GPU, kernel) on a
-	// timescale of tens of microseconds or more. Everywhere else, pause() is still the tool.
+	// For polling loops whose exit condition is produced by another agent (another
+	// thread, GPU, kernel) on a timescale of tens of microseconds or more, including
+	// as the sustained-idle fallback behind a short hot spin (see RSXFIFO idle and
+	// nv406e::semaphore_acquire). Everywhere else, pause() is still the tool.
 	inline void wait_for_event()
 	{
 #if defined(ARCH_ARM64)
@@ -283,7 +288,12 @@ namespace utils
 		const void* addr = &var.raw();
 
 #if defined(ARCH_ARM64)
-		// WFE will wake from the periodic event stream, so the explicit timeout is ignored on ARM.
+		// The explicit timeout is ignored on ARM. On cores where the armed WFE below
+		// parks, the periodic event stream bounds the wait; but this is core-class
+		// dependent -- on Oryon (Snapdragon 8 Elite class) WFE returns immediately
+		// while the exclusive monitor is armed, making this a plain spin there. A
+		// caller that needs a guaranteed pacing bound must provide it itself (see
+		// nv406e::semaphore_acquire for the fallback pattern).
 		(void)timeout_us;
 
 		using wait_type = std::remove_cvref_t<decltype(var.raw())>;
