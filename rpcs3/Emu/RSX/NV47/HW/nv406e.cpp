@@ -50,6 +50,7 @@ namespace rsx
 
 			u64 start = get_system_time();
 			u64 last_check_val = start;
+			u64 spin_budget = 0;
 
 			while (sema != arg)
 			{
@@ -92,8 +93,25 @@ namespace rsx
 
 				RSX_PROF_SCOPE(idle);
 
-				// Wait until the value changes or until 100us pass.
-				utils::spin_on_cacheline_once(atomic_sema, sema, 100);
+#if defined(ARCH_ARM64)
+				// The armed one-shot wait below does not park on every core: on Oryon
+				// (Snapdragon 8 Elite class) WFE returns immediately while the exclusive
+				// monitor is armed, so this loop ran at tens of millions of iterations per
+				// second instead of waiting. Give the armed form a short window first - on
+				// cores where it parks it keeps its instant wake-on-write, and where it
+				// does not it acts as a brief spin that still catches short waits - then
+				// fall back to the event-stream wait, which parks on both classes and
+				// bounds wake latency at the event-stream period.
+				if (++spin_budget > 500)
+				{
+					utils::wait_for_event();
+				}
+				else
+#endif
+				{
+					// Wait until the value changes or until 100us pass.
+					utils::spin_on_cacheline_once(atomic_sema, sema, 100);
+				}
 			}
 
 			RSX(ctx)->fifo_wake_delay();
