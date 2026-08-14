@@ -1,6 +1,5 @@
 #include "vkutils/data_heap.h"
 #include "VKRenderTargets.h"
-#include "VKRenderPass.h"
 #include "VKResourceManager.h"
 #include "Emu/RSX/rsx_methods.h"
 #include "Emu/RSX/RSXThread.h"
@@ -652,14 +651,6 @@ namespace vk
 
 	void render_target::unspill(vk::command_buffer& cmd)
 	{
-		// The image below is a different VkImage with different contents, so any park describing
-		// the old one is meaningless. Both readers already re-check current_layout and unspill
-		// leaves it in an attachment or transfer layout rather than GENERAL, so this is belt and
-		// braces - but the read-synchronization tag is keyed on last_use_tag, which the recreate
-		// does not touch, and that is a hazard rather than a missed optimization if it ever
-		// lines up.
-		clear_sample_park();
-
 		// Recreate the image
 		const auto pdev = vk::get_current_renderer();
 		create_impl(*pdev, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, pdev->get_memory_mapping().device_local, VMM_ALLOCATION_POOL_SURFACE_CACHE);
@@ -856,182 +847,12 @@ namespace vk
 		return (scaled_w == width()) && (scaled_h == height());
 	}
 
-	VkImageLayout render_target::get_feedback_loop_layout(const vk::command_buffer& cmd)
-	{
-		// The layout a surface is parked in while it is both written and sampled by the same
-		// draw. Both of these are legal attachment layouts as well as legal sampling layouts,
-		// which is the property try_park_in_feedback_loop relies on: an attachment left here is
-		// still a valid attachment, and the render pass key encoder accepts both.
-		return cmd.get_command_pool().get_owner().get_framebuffer_loops_support()
-			? VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT
-			: VK_IMAGE_LAYOUT_GENERAL;
-	}
-
-	// The sample park.
-	//
-	// Iterations 1-3 attacked the feedback loop, which turned out to be a rounding error: the
-	// measured split of Draw:1093 came back 100% framebuffer mismatch and 0% render pass key, so
-	// layout churn was contributing nothing there. What did not move across any of the three was
-	// ImgHelper:43, which is change_image_layout ending the open pass, and the largest single
-	// contributor to it is the ordinary render-to-texture cycle:
-	//
-	//   validate_image_layout_for_read_access drags an unbound RTT from
-	//   COLOR_/DEPTH_STENCIL_ATTACHMENT_OPTIMAL to SHADER_READ_ONLY_OPTIMAL so it can be sampled,
-	//   and prepare_surface_for_drawing drags it straight back the next time the game renders to
-	//   it. Two layout changes, therefore two teardowns, per sample-then-rebind cycle.
-	//
-	// Only the first is a floor. The read genuinely needs a write -> read barrier and a barrier
-	// cannot be recorded inside a pass unless the image is an attachment of it, which a sampled
-	// unbound RTT is not. The return trip is pure overhead: GENERAL is a legal sampling layout
-	// AND a legal attachment layout, the descriptor path takes imageLayout from
-	// image->current_layout at bind time (vkutils/ex.cpp), and the render pass key encoder
-	// already accepts GENERAL. So the surface can simply be left where it is.
-	//
-	// What this does NOT do is make the first half free, and the honest read of the win is
-	// "half of the sample/rebind pairs, if and only if those teardowns were not going to happen
-	// anyway". That last clause is why g_rp_reopened exists: see rsx_profiler.h.
-	bool render_target::try_arm_sample_park()
-	{
-		if constexpr (s_sample_park_frames == 0)
-		{
-			return false;
-		}
-
-		// A bound attachment must never be parked from here. Its layout is baked into
-		// m_current_renderpass_key, which prepare_rtts computed at the end of the bind and which
-		// nothing recomputes between there and the draw. Moving a bound surface to GENERAL would
-		// leave the pass declaring initialLayout = ATTACHMENT_OPTIMAL for an image that is not in
-		// it, which is undefined contents rather than a validation error.
-		//
-		// Today the same mistake is caught loudly - renderpass_key_blob::set_layout throws on
-		// SHADER_READ_ONLY_OPTIMAL - and GENERAL would encode silently, so this check is what
-		// replaces the throw. The sampled-while-bound case is a feedback loop and belongs to
-		// texture_barrier regardless.
-		if (is_bound)
-		{
-			return false;
-		}
-
-		// MSAA surfaces sample through a resolve target and carry a second image whose contents
-		// are produced by resolve/unresolve passes that move layouts on their own schedule.
-		// Not worth the reasoning for the volume involved.
-		if (samples() > 1)
-		{
-			return false;
-		}
-
-		const auto renderer = rsx::get_current_renderer();
-		if (!renderer)
-		{
-			return false;
-		}
-
-		m_sample_park_deadline = renderer->int_flip_index + s_sample_park_frames + 1;
-		return true;
-	}
-
-	bool render_target::try_park_for_sampling()
-	{
-		if (!m_sample_park_deadline)
-		{
-			return false;
-		}
-
-		// Same honesty check the feedback park makes: parking never suppresses a transition, it
-		// only declines to start one. If anything has moved the layout since - a blit, a spill,
-		// an unspill that rebuilt the image as UNDEFINED, the zeta fall-out valve - the park is
-		// over and the normal path runs.
-		if (current_layout != get_sample_park_layout())
-		{
-			clear_sample_park();
-			return false;
-		}
-
-		const auto renderer = rsx::get_current_renderer();
-		if (renderer && renderer->int_flip_index >= m_sample_park_deadline)
-		{
-			// Expired. Let the surface go back to the attachment-optimal layout and get its
-			// compression back. On Adreno that is UBWC on a full-size render target, which is
-			// not something to hold hostage to a surface that has stopped being sampled.
-			clear_sample_park();
-			return false;
-		}
-
-		return true;
-	}
-
-	bool render_target::sample_park_needs_read_barrier() const
-	{
-		// last_use_tag advances on every write: on_write / on_write_fast at the end of each draw
-		// that had this surface bound with writes enabled, on_write after a clear or a memory
-		// initialize, on_write_copy after a blit. Equal tags therefore mean "nothing has written
-		// this since the barrier that made the previous read safe".
-		return !m_sample_park_sync_tag || m_sample_park_sync_tag != last_use_tag;
-	}
-
-	void render_target::on_sample_park_synced()
-	{
-		m_sample_park_sync_tag = last_use_tag;
-	}
-
-	void render_target::clear_sample_park()
-	{
-		m_sample_park_deadline = 0;
-		m_sample_park_sync_tag = 0;
-	}
-
-	void render_target::arm_feedback_park()
-	{
-		if constexpr (s_feedback_park_frames == 0)
-		{
-			return;
-		}
-
-		const auto renderer = rsx::get_current_renderer();
-		if (!renderer)
-		{
-			return;
-		}
-
-		// Deadline is exclusive, so the arming frame itself is always covered even when the
-		// window is one flip. int_flip_index only moves on the RSX thread, which is also the
-		// only thread that reaches this, so no synchronization is needed on it.
-		m_feedback_park_deadline = renderer->int_flip_index + s_feedback_park_frames + 1;
-	}
-
-	bool render_target::try_park_in_feedback_loop(const vk::command_buffer& cmd)
-	{
-		// The layout test is what keeps this honest: parking never suppresses a transition, it
-		// only declines to start one. A surface that is not already sitting in the loop layout
-		// takes the normal path, so nothing here can produce a barrier with old != new, and
-		// nothing here can leave an attachment in a layout the render pass key does not encode.
-		if (!m_feedback_park_deadline || current_layout != get_feedback_loop_layout(cmd))
-		{
-			// Either never armed, or something outside parking has already moved the layout -
-			// a non-cyclic sample dragging it to SHADER_READ_ONLY_OPTIMAL, the zeta fall-out
-			// valve in VKDraw restoring HiZ, a blit, a spill. The park is over either way, and
-			// leaving the deadline set would let a later unrelated visit to the loop layout
-			// re-park a surface that never asked for it.
-			m_feedback_park_deadline = 0;
-			return false;
-		}
-
-		const auto renderer = rsx::get_current_renderer();
-		if (renderer && renderer->int_flip_index >= m_feedback_park_deadline)
-		{
-			// Expired. Fall through to the normal path, which puts the surface back in the
-			// attachment-optimal layout and hands its compression back.
-			m_feedback_park_deadline = 0;
-			return false;
-		}
-
-		return true;
-	}
-
 	void render_target::texture_barrier(vk::command_buffer& cmd)
 	{
 		const auto is_framebuffer_read_only = is_depth_surface() && !rsx::method_registers.depth_write_enabled();
-		const auto optimal_layout = get_feedback_loop_layout(cmd);
+		const auto supports_fbo_loops = cmd.get_command_pool().get_owner().get_framebuffer_loops_support();
+		const auto optimal_layout = supports_fbo_loops ? VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT
+			: VK_IMAGE_LAYOUT_GENERAL;
 
 		if (m_cyclic_ref_tracker.can_skip() && current_layout == optimal_layout && is_framebuffer_read_only)
 		{
@@ -1058,35 +879,6 @@ namespace vk
 		vk::insert_texture_barrier(cmd, this, optimal_layout, preserve_renderpass);
 		m_cyclic_ref_tracker.on_insert_texture_barrier();
 
-		// Open (or re-open) the park window. This is the only writer.
-		//
-		// The first attempt keyed parking off m_cyclic_ref_tracker.is_enabled() and it could not
-		// hold for more than a single bind, because the tracker is a within-loop signal that
-		// three separate paths clear before the next bind ever runs:
-		//   - prepare_surface_for_drawing calls reset_surface_counters() at every bind;
-		//   - post_texture_barrier() resets it, and that is the *normal* end of an episode - the
-		//     first draw after the loop with the surface still bound trips
-		//     requires_post_loop_barrier() and resets before the next bind is reached;
-		//   - memory_barrier() resets it when the layout moved elsewhere.
-		// So the predicate was true only on a bind directly preceded by a feedback draw, and the
-		// surface was dragged out of the loop layout on the very next bind and back in on the one
-		// after. Measured on Arkham City: the transitions moved from the bind site to the barrier
-		// site and the pass count did not change.
-		//
-		// A window rather than a flag because the useful question is "has this surface been in a
-		// loop recently", and an episode that recurs within a few binds should not pay to leave
-		// and re-enter the layout in between. It decays so a surface that has genuinely stopped
-		// looping goes back to the attachment-optimal layout and gets its compression back; the
-		// depth case is the one that matters, HiZ is not free to give up indefinitely.
-		//
-		// The second attempt made that window four binds and that was still the wrong unit: see
-		// s_feedback_park_frames. It is counted in flips now, so an episode that recurs every
-		// frame - which is what a render graph does - keeps the surface parked continuously
-		// instead of dropping it between episodes.
-#ifdef __ANDROID__
-		arm_feedback_park();
-#endif
-
 		if (is_framebuffer_read_only)
 		{
 			m_cyclic_ref_tracker.allow_skip();
@@ -1108,47 +900,23 @@ namespace vk
 		VkPipelineStageFlags src_stage, dst_stage;
 		VkAccessFlags src_access, dst_access;
 
-		// This barrier does not move the layout - it is the read-completes-before-write half of a
-		// feedback loop on a surface that is still the bound attachment. Both of the conditions
-		// that let a barrier stay inside the pass therefore hold, and it was still ending the
-		// pass on every fall-out purely because it never asked not to. The render pass now
-		// declares the read -> write direction of the self-dependency, so it can ask.
-		//
-		// The vertex stage has to come off the source scope when the barrier lands inside the
-		// pass: VK_DEPENDENCY_BY_REGION_BIT admits framebuffer-space stages only, and a vertex
-		// shader sampling a live attachment is not a tile-local dependency. That is the same
-		// trade texture_barrier already makes on this path, and it is sound for what this
-		// synchronizes - the fall-out is a fragment-shader read of the attachment the next draw
-		// writes. Outside the pass the wider scope is kept.
-#ifdef __ANDROID__
-		const bool preserve_renderpass = vk::renderpass_covers_image(cmd, value);
-#else
-		constexpr bool preserve_renderpass = false;
-#endif
-
 		if (!is_depth_surface()) [[likely]]
 		{
-			src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+			src_stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 			dst_stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 			src_access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 			dst_access = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 		}
 		else
 		{
-			src_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+			src_stage = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
 			dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
 			src_access = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 			dst_access = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 		}
 
-		if (!preserve_renderpass)
-		{
-			src_stage |= VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
-		}
-
 		vk::insert_image_memory_barrier(cmd, value, current_layout, current_layout,
-			src_stage, dst_stage, src_access, dst_access, { aspect(), 0, 1, 0, 1 },
-			preserve_renderpass);
+			src_stage, dst_stage, src_access, dst_access, { aspect(), 0, 1, 0, 1 });
 
 		m_cyclic_ref_tracker.reset();
 	}
@@ -1157,18 +925,6 @@ namespace vk
 	{
 		frame_tag = 0;
 		m_cyclic_ref_tracker.reset();
-
-		// Belt and braces for the sample park's read-synchronization tag. This is called from
-		// prepare_surface_for_drawing and from the zeta fall-out valve, both of which mean "this
-		// surface is or was just an attachment", so the next sample must re-establish a
-		// write -> read barrier. last_use_tag alone would already say so for anything that
-		// reaches on_write; this covers the paths that write pixels through some route that does
-		// not. Costs at most one extra barrier on a surface that was bound and never written.
-		//
-		// Deliberately does NOT clear m_sample_park_deadline. The park has to outlive the bind
-		// that resets the counters or it can never hold for more than one bind - the same
-		// mistake the first feedback park made.
-		m_sample_park_sync_tag = 0;
 	}
 
 	image_view* render_target::get_view(const rsx::texture_channel_remap_t& remap, VkImageAspectFlags mask)

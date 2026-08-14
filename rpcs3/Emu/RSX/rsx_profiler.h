@@ -460,19 +460,6 @@ namespace rsx::prof
 	// its per-frame event cap was blown out by roughly 1800 per frame, so count them plainly.
 	extern u64 g_render_passes;
 
-	// Of those, how many reopened the identical (pass, framebuffer) that had just been closed.
-	//
-	// A site counter can only say where a teardown was charged, never whether it was needed. If
-	// the next draw switches framebuffer, the pass was ending regardless, and removing the
-	// barrier that got there first only moves the charge to the draw site - measured in
-	// iteration 3, where ImgHelper:43 fell and (Draw:1093 fbo) rose by the same amount for no
-	// change in frame time.
-	//
-	// This counts only the teardowns that were genuinely wasted: tile stored, barrier recorded,
-	// same tile reloaded. It is therefore the ceiling on what any amount of barrier suppression
-	// can win, and (render passes - redundant) is the floor no such work can go below.
-	extern u64 g_rp_reopened;
-
 	// Page protection traffic. Every change is an mprotect, which on ARM forces TLB
 	// maintenance, and every fault on a protected page is a SIGSEGV round trip through the
 	// handler before it. The RSX thread was measured at about 34% kernel time reached
@@ -495,23 +482,16 @@ namespace rsx::prof
 	 * 75 sites by hand is not worth it and would still miss the next one; recording the return
 	 * address costs one instruction on a path taken about twenty times a frame.
 	 *
-	 * Three levels, because most callers do not call it directly: image::change_layout funnels
+	 * Two levels, because most callers do not call it directly: image::change_layout funnels
 	 * them, so a single level would report that function for nearly everything. The first table
 	 * is whoever called change_image_layout, the second is whoever called change_layout.
-	 *
-	 * The third is different in kind: it is charged at begin_renderpass, not at the teardown, and
-	 * only for teardowns that turned out to be redundant (see g_rp_reopened). Same addresses,
-	 * filtered down to the ones that actually cost something. Read level 2 against level 0: a
-	 * site that is large in level 0 and absent from level 2 is a site whose pass was ending
-	 * anyway, and removing its barrier will not move the frame.
 	 *
 	 * Addresses are reported raw plus an offset from the module base, which llvm-symbolizer
 	 * turns into names against the unstripped build-android copy.
 	 */
 	inline constexpr usz rp_caller_slots = 24;
-	inline constexpr u32 rp_caller_levels = 3;
-	extern const void* g_rp_callers[rp_caller_levels][rp_caller_slots];
-	extern u64 g_rp_caller_counts[rp_caller_levels][rp_caller_slots];
+	extern const void* g_rp_callers[2][rp_caller_slots];
+	extern u64 g_rp_caller_counts[2][rp_caller_slots];
 
 	void note_rp_teardown(const void* caller, u32 level);
 

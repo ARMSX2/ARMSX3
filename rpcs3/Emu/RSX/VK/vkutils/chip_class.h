@@ -73,32 +73,6 @@ namespace vk
 
 	driver_vendor get_driver_vendor();
 
-	// True for tile-based deferred renderers.
-	//
-	// This matters for anything that reads back GPU-produced results mid-frame. A TBDR defers
-	// rasterization to an end-of-renderpass tiling pass, so a result that trickles in
-	// progressively on an immediate-mode GPU arrives here in one lump at the very end. Code
-	// that polls for early partial results cannot succeed early on these parts -- it only
-	// spins. See vk::query_pool_manager::get_query_result().
-	constexpr bool is_tile_based_renderer(driver_vendor vendor)
-	{
-		switch (vendor)
-		{
-		case driver_vendor::TURNIP:
-		case driver_vendor::ADRENO:
-		case driver_vendor::ARM_MALI:
-		case driver_vendor::PANVK:
-		case driver_vendor::V3DV:
-		case driver_vendor::BROADCOM:
-		case driver_vendor::POWERVR:
-		case driver_vendor::MVK:
-		case driver_vendor::HONEYKRISP:
-			return true;
-		default:
-			return false;
-		}
-	}
-
 	struct chip_family_table
 	{
 		chip_class default_ = chip_class::unknown;

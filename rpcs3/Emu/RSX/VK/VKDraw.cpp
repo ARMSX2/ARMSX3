@@ -46,32 +46,6 @@ namespace vk
 		}
 	}
 
-	// The render target this sampled image is, if it is one and if the sample park applies to it.
-	// Null on every other target, on every non-RTT, and whenever the tunable is off, so all the
-	// gating lives in one place and the switch below reads as a plain "park or do what we did".
-	static vk::render_target* sample_park_candidate(vk::image* raw, const rsx::sampled_image_descriptor_base* sampler_state)
-	{
-#ifdef __ANDROID__
-		if constexpr (vk::s_sample_park_frames == 0)
-		{
-			return nullptr;
-		}
-
-		if (sampler_state->upload_context != rsx::texture_upload_context::framebuffer_storage)
-		{
-			return nullptr;
-		}
-
-		// dynamic_cast rather than vk::as_rtt: as_rtt asserts, and a framebuffer_storage
-		// descriptor can still hand over a temporary subresource that is a plain viewable_image.
-		return dynamic_cast<vk::render_target*>(raw);
-#else
-		static_cast<void>(raw);
-		static_cast<void>(sampler_state);
-		return nullptr;
-#endif
-	}
-
 	void validate_image_layout_for_read_access(
 		vk::command_buffer& cmd,
 		vk::image_view* view,
@@ -100,33 +74,6 @@ namespace vk
 				break;
 			}
 
-			// A sample-parked surface arrives here on every sample after the first, because it
-			// was left in GENERAL instead of being moved to SHADER_READ_ONLY_OPTIMAL.
-			//
-			// It still needs a write -> read barrier whenever it has been written since the last
-			// one, and that barrier still has to end the open pass: an unbound RTT is not an
-			// attachment of the pass in flight, so VUID-vkCmdPipelineBarrier-image-04073 rules
-			// out keeping it. What it must NOT do is move the layout, or the surface un-parks and
-			// pays the return trip after all.
-			//
-			// The "has been written since" test is the load-bearing part. Without parking the
-			// layout itself answered it - already in SHADER_READ_ONLY_OPTIMAL meant already
-			// synchronized, so the second through five-hundredth draw sampling a shadow map fell
-			// through the default case and issued nothing. Leaving the surface in GENERAL erases
-			// that signal, and issuing a barrier per sampling draw instead of per write would be
-			// a catastrophic regression rather than a win. render_target carries the answer
-			// explicitly now; see sample_park_needs_read_barrier.
-			if (auto parked = sample_park_candidate(raw, sampler_state);
-				parked && raw->current_layout == vk::render_target::get_sample_park_layout())
-			{
-				if (!parked->sample_park_needs_read_barrier())
-				{
-					// Already synchronized for reading, and already in a layout that is legal to
-					// sample from. Nothing at all to record.
-					break;
-				}
-			}
-
 			// This was used in a cyclic ref before, but is missing a barrier
 			// No need for a full stall, use a custom barrier instead
 			VkPipelineStageFlags src_stage;
@@ -146,74 +93,22 @@ namespace vk
 				dst_stage |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
 			}
 
-			{
-				// Stay in the park layout if this surface is parked, otherwise the historical
-				// move to SHADER_READ_ONLY_OPTIMAL. Note this keeps oldLayout == newLayout in
-				// the parked case, which is the only form a barrier is allowed to take inside a
-				// render pass - not that it can stay inside one here, but it means the barrier
-				// carries no transition cost of its own either.
-				auto parked = sample_park_candidate(raw, sampler_state);
-				const bool stay_parked = parked && parked->try_arm_sample_park() &&
-					raw->current_layout == vk::render_target::get_sample_park_layout();
+			vk::insert_image_memory_barrier(
+				cmd,
+				raw->value,
+				raw->current_layout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+				src_stage, dst_stage,
+				src_access, dst_access,
+				{ raw->aspect(), 0, 1, 0, 1 });
 
-				const VkImageLayout target_layout = stay_parked
-					? vk::render_target::get_sample_park_layout()
-					: VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-				vk::insert_image_memory_barrier(
-					cmd,
-					raw->value,
-					raw->current_layout, target_layout,
-					src_stage, dst_stage,
-					src_access, dst_access,
-					{ raw->aspect(), 0, 1, 0, 1 });
-
-				raw->current_layout = target_layout;
-
-				if (stay_parked)
-				{
-					parked->on_sample_park_synced();
-				}
-				else if (parked)
-				{
-					parked->clear_sample_park();
-				}
-			}
+			raw->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 			break;
 		case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
 		case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
 			ensure(sampler_state->upload_context == rsx::texture_upload_context::framebuffer_storage);
 			if (!sampler_state->is_cyclic_reference) [[ likely ]]
 			{
-				// Standard pre-read barrier, and the first half of the sample/rebind cycle.
-				//
-				// This transition is the floor. The surface was just rendered to, so the read
-				// needs a write -> read barrier, and a barrier cannot stay inside a pass for an
-				// image the pass does not have attached. What the park changes is the
-				// destination: GENERAL is legal to sample from and legal to attach, so the next
-				// bind has nothing to undo, whereas SHADER_READ_ONLY_OPTIMAL is not a legal
-				// attachment layout and forces a second teardown to leave it.
-				//
-				// The transition itself is issued through the same change_layout as before, so
-				// the access/stage scopes image_helpers derives for it are unchanged apart from
-				// the destination, and it is still charged to ImgHelper:43.
-				if (auto parked = sample_park_candidate(raw, sampler_state))
-				{
-					if (parked->try_arm_sample_park())
-					{
-						raw->change_layout(cmd, vk::render_target::get_sample_park_layout());
-						parked->on_sample_park_synced();
-						break;
-					}
-
-					// Declined - bound, multisampled, or no renderer. Drop any window left over
-					// from an earlier park so the deadline can never outlive the layout it
-					// describes. Both readers already re-check current_layout, so this is
-					// tidiness rather than a fix, but it keeps the state machine to one rule:
-					// a live deadline always means the surface is in the park layout.
-					parked->clear_sample_park();
-				}
-
+				// Standard pre-read barrier.
 				raw->change_layout(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 				break;
 			}
@@ -235,11 +130,6 @@ void VKGSRender::begin_render_pass()
 		get_render_pass(),
 		m_draw_fbo->value,
 		{ positionu{0u, 0u}, sizeu{m_draw_fbo->width(), m_draw_fbo->height()} });
-
-	// Publish what this pass actually has attached, so a barrier that wants to stay inside it can
-	// check VUID-vkCmdPipelineBarrier-image-04073 rather than trust the caller. m_fbo_images is
-	// the exact list the framebuffer was built from a few lines up the call chain in prepare_rtts.
-	vk::set_renderpass_attachments(*m_current_command_buffer, m_fbo_images);
 }
 
 void VKGSRender::close_render_pass()
@@ -1208,24 +1098,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		if (pass)
 		{
 			// Subpass mismatch, end it before proceeding
-			if (rsx::prof::enabled()) [[unlikely]]
-			{
-				rsx::prof::g_rp_sites[1]++;
-
-				// Which of the two mismatches fired. The framebuffer changing is the game
-				// switching render target and nothing here can avoid it; the render pass handle
-				// changing under an unchanged framebuffer can only be the attachment layouts,
-				// since format and sample count cannot move without the framebuffer moving too.
-				//
-				// This site only became loud once parking stopped the bind-time layout change
-				// from ending the pass earlier in the draw, which left the previous draw's pass
-				// open to be torn down here instead. Whether that is the same teardown relocated
-				// or an extra one caused by layout churn is exactly what these two counters
-				// separate, and it decides whether parking longer is worth anything.
-				rsx::prof::g_rp_sites[(m_draw_fbo->value != fbo) ? 19 : 18]++;
-			}
-
-			vk::end_renderpass(cmd);
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[1]++; vk::end_renderpass(cmd);
 		}
 
 		// Starting a new renderpass should clobber dynamic state

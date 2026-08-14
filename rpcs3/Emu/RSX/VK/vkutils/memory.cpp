@@ -588,35 +588,8 @@ namespace vk
 
 	memory_block::~memory_block()
 	{
-		// DIAGNOSTIC (restart crash): m_mem_allocator is BORROWED -- cached from
-		// get_current_mem_allocator() at construction and freed through here, with nothing tying
-		// its lifetime to the allocator's. Pressing Restart faults inside
-		// VmaAllocator_T::UpdateVulkanBudget reached from this free(), jumping through a garbage
-		// function pointer, which is what reading a dead VmaAllocator_T looks like.
-		//
-		// Everything that would explain it by ordering has been checked and does not: the heaps are
-		// freed at VKGSRender.cpp:879 while the device is not destroyed until :926, there is exactly
-		// one swapchain->destroy() caller, and data_heap_manager::reset() clears its set. So compare
-		// the allocator this block was built against with the one that is current now: if they
-		// differ, the block outlived its allocator and this names it.
 		if (m_mem_allocator && m_mem_handle)
 		{
-			// Not get_current_mem_allocator(): that dereferences g_render_device unconditionally,
-			// and a teardown where the device pointer is already gone is precisely the state being
-			// investigated -- the diagnostic must not be the thing that crashes.
-			const auto current = g_render_device ? g_render_device->get_allocator() : nullptr;
-
-			if (current != m_mem_allocator)
-			{
-				rsx_log.error("[memblock] allocator changed under a live block: built=%p now=%p size=%llu -- skipping free",
-					static_cast<const void*>(m_mem_allocator), static_cast<const void*>(current), m_size);
-
-				// Freeing through the stale pointer is the crash. The device that owned this memory
-				// is going away regardless, and vkDestroyDevice releases its allocations, so
-				// declining to free here loses nothing that is not already lost.
-				return;
-			}
-
 			m_mem_allocator->free(m_mem_handle);
 		}
 	}

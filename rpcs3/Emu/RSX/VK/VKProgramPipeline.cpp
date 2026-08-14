@@ -269,17 +269,13 @@ namespace vk
 			{
 				VkGraphicsPipelineCreateInfo create_info = *p_graphics_info;
 				create_info.layout = m_pipeline_layout;
-				// Shared driver cache, so the SPIR-V -> ISA compile is not redone every cold boot.
-				// Null when unavailable, which is exactly what was passed here before.
-				const VkPipelineCache pipe_cache = g_render_device ? g_render_device->get_pipeline_cache() : VK_NULL_HANDLE;
-				CHECK_RESULT(vkCreateGraphicsPipelines(m_device, pipe_cache, 1, &create_info, nullptr, &m_pipeline));
+				CHECK_RESULT(vkCreateGraphicsPipelines(m_device, nullptr, 1, &create_info, nullptr, &m_pipeline));
 			}
 			else
 			{
 				VkComputePipelineCreateInfo create_info = *p_compute_info;
 				create_info.layout = m_pipeline_layout;
-				const VkPipelineCache pipe_cache = g_render_device ? g_render_device->get_pipeline_cache() : VK_NULL_HANDLE;
-				CHECK_RESULT(vkCreateComputePipelines(m_device, pipe_cache, 1, &create_info, nullptr, &m_pipeline));
+				CHECK_RESULT(vkCreateComputePipelines(m_device, nullptr, 1, &create_info, nullptr, &m_pipeline));
 			}
 
 			m_linked = true;

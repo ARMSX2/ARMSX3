@@ -1,6 +1,4 @@
 #pragma once
-
-#include <vector>
 #include "VulkanAPI.h"
 #include <deque>
 
@@ -48,13 +46,7 @@ namespace vk
 		vk::render_device* owner = nullptr;
 		std::vector<query_slot_info> query_slot_status;
 
-		// A tile-based renderer cannot produce a query result before its tiling pass resolves.
-		// Decided once, at construction. More precise than an __ANDROID__ check, which would
-		// misclassify an immediate-mode mobile part and miss a tiler on any other platform.
-		bool tile_based_renderer = false;
-
 		bool poke_query(query_slot_info& query, u32 index, VkQueryResultFlags flags);
-		void end_renderpass_for_readback(vk::command_buffer& cmd);
 		void allocate_new_pool(vk::command_buffer& cmd);
 		void reallocate_pool(vk::command_buffer& cmd);
 		void run_pool_cleanup();
@@ -71,13 +63,6 @@ namespace vk
 		bool check_query_status(u32 index);
 		u32  get_query_result(u32 index);
 		void get_query_result_indirect(vk::command_buffer& cmd, u32 index, u32 count, VkBuffer dst, VkDeviceSize dst_offset);
-
-		// Batched readback: copy every result in `indices` to `dst` (4-byte word per entry, at its
-		// position in the list), coalescing contiguous same-pool runs into single copies.
-		void copy_query_results(vk::command_buffer& cmd, const std::vector<u32>& indices, VkBuffer dst);
-
-		// Seed a slot from a host-read value so the next get_query_result needs no GPU round trip.
-		void prime_query_result(u32 index, u32 value);
 
 		u32 allocate_query(vk::command_buffer& cmd);
 		void free_query(vk::command_buffer&/*cmd*/, u32 index);

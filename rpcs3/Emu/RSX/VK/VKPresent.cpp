@@ -1,6 +1,5 @@
 #include "stdafx.h"
 #include "VKGSRender.h"
-#include "Emu/Cell/timers.hpp"
 #include "vkutils/buffer_object.h"
 #include "vkutils/memory.h"
 #include "Emu/RSX/Overlays/overlay_manager.h"
@@ -244,26 +243,8 @@ void VKGSRender::advance_queued_frames()
 
 	vk::remove_unused_framebuffers();
 
-	// Vertex cache retention was removed in 0.7.1: reusing entries across frames handed
-	// draws stale geometry and was the cause of the flashing in Sonic Unleashed and others.
-	// Back to purging every frame, as 0.6 did.
 	m_vertex_cache->purge();
-
 	m_current_frame->tag_frame_end();
-
-#ifdef __ANDROID__
-	// tag_frame_end() records PUT-1 for every managed heap, which is what frame_context_cleanup
-	// later publishes as that heap's GET once this frame retires - i.e. "the GPU is done with
-	// everything before here, reuse it". For the attribute ring that is exactly the statement that
-	// makes a retained entry unsafe, so publish the retention floor instead. It is always at or
-	// behind the value this would otherwise carry, so the allocator ends up strictly more
-	// conservative than before and in-flight frames stay protected as they already were.
-	if (m_vtx_reserve_bytes && m_attrib_ring_info.size())
-	{
-		m_current_frame->heap_snapshot[&m_attrib_ring_info] =
-			static_cast<s64>(m_vtx_retain_floor % m_attrib_ring_info.size());
-	}
-#endif
 
 	// Throttle here rather than by accident.
 	//
@@ -1237,21 +1218,6 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			severity > rsx::problem_severity::low && m_rtts.handle_memory_pressure(*m_current_command_buffer, severity))
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[20]++; flush_command_queue(true);
-		}
-	}
-
-	// Crash-resilient pipeline-cache persistence. The blob is otherwise only written on
-	// clean teardown, so a crash or an Android LMK kill mid-session loses the entire
-	// warmup -- and a cold-boot compile-burst crash then keeps every later boot cold too.
-	// save_pipeline_cache() skips the write when the cache size has not moved, so steady
-	// state costs one size query per interval.
-	if (const u64 now = get_system_time(); now >= m_last_pipeline_cache_save_time + 120'000'000)
-	{
-		m_last_pipeline_cache_save_time = now;
-
-		if (m_device)
-		{
-			m_device->save_pipeline_cache();
 		}
 	}
 }

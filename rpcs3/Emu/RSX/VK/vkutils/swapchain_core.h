@@ -206,17 +206,6 @@ namespace vk
 
 		bool m_wm_reports_flag = false;
 
-#ifdef ANDROID
-		// Frame-pacing hint state. The raw present interval is far too noisy to hand to
-		// the compositor directly, so it is quantized to a real cadence and debounced.
-		u64 m_last_present_time = 0;
-		float m_pending_frame_rate_hint = 0.f;
-		float m_last_frame_rate_hint = 0.f;
-		u32 m_frame_rate_hint_stable_count = 0;
-
-		void push_frame_rate_hint();
-#endif
-
 	protected:
 		void init_swapchain_images(render_device& dev, u32 preferred_count = 0) override;
 
@@ -225,12 +214,8 @@ namespace vk
 
 		~swapchain_WSI() override = default;
 
-		void create(display_handle_t& handle) override
-		{
-			// Keep the native window: present-time hints (ANativeWindow_setFrameRate on
-			// Android) need it, and discarding it here is why they were inert.
-			window_handle = handle;
-		}
+		void create(display_handle_t&) override
+		{}
 
 		void destroy(bool = true) override;
 

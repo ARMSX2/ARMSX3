@@ -117,7 +117,6 @@ extern "C"
 	extern PFN_vkDestroyInstance vkDestroyInstance;
 	extern PFN_vkDestroyPipeline vkDestroyPipeline;
 	extern PFN_vkDestroyPipelineCache vkDestroyPipelineCache;
-	extern PFN_vkGetPipelineCacheData vkGetPipelineCacheData;
 	extern PFN_vkDestroyPipelineLayout vkDestroyPipelineLayout;
 	extern PFN_vkDestroyQueryPool vkDestroyQueryPool;
 	extern PFN_vkDestroyRenderPass vkDestroyRenderPass;
