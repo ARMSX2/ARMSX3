@@ -1080,6 +1080,309 @@ void Emulator::SetContinuousMode(bool continuous_mode)
 	}
 }
 
+namespace
+{
+	// UE3 HD-cache install completer.
+	//
+	// Some Unreal Engine 3 PS3 titles (verified: Leisure Suit Larry: Box Office
+	// Bust, BLUS30331) copy their disc asset tree into an on-HDD cache during a
+	// short boot window and abandon the copy partway through when emulated I/O is
+	// slower than a real console, then crash on the missing packages at "New
+	// Game". This finishes that copy once, at boot, before the guest runs.
+	//
+	// It is driven entirely by the disc's own manifest (USRDIR/<proj>/PS3TOC.txt)
+	// and the guest's own sidecar convention (a 0-byte "<file>__time" whose mtime
+	// equals the disc source's mtime). It writes ONLY under
+	// /dev_hdd0/game/<ID>/USRDIR/UnrealEngine3. Titles without the PS3TOC marker
+	// are inert. On any copy/stat/space failure it returns install_failed so the
+	// caller aborts the boot rather than hand the guest a half-finished install.
+
+	bool ue3_reserved_stem(std::string stem)
+	{
+		for (char& c : stem) c = (c >= 'a' && c <= 'z') ? char(c - 32) : c;
+		static constexpr std::string_view names[] =
+		{
+			"CON","PRN","AUX","NUL",
+			"COM1","COM2","COM3","COM4","COM5","COM6","COM7","COM8","COM9",
+			"LPT1","LPT2","LPT3","LPT4","LPT5","LPT6","LPT7","LPT8","LPT9",
+		};
+		for (std::string_view n : names) if (stem == n) return true;
+		return false;
+	}
+
+	// Strip the single leading "..\" and confine the remainder: reject any
+	// traversal ("."/".."), empty component, drive/ADS colon, UNC/leading
+	// separator, or reserved device name. Textual only (the dest does not exist
+	// yet, so path canonicalization cannot confine here). Returns true + the
+	// normalized forward-slash remainder on accept.
+	bool ue3_confine(const std::string& path, std::string& out_rest)
+	{
+		if (path.size() < 3 || path[0] != '.' || path[1] != '.' || path[2] != '\\')
+			return false;
+
+		std::string rest = path.substr(3);
+		for (char& c : rest) if (c == '\\') c = '/';
+
+		if (rest.empty() || rest.front() == '/')
+			return false;
+
+		size_t start = 0;
+		while (true)
+		{
+			const size_t slash = rest.find('/', start);
+			const std::string comp = rest.substr(start, slash == std::string::npos ? std::string::npos : slash - start);
+
+			if (comp.empty() || comp == "." || comp == "..")
+				return false;
+			if (comp.find(':') != std::string::npos)
+				return false;
+			if (ue3_reserved_stem(comp.substr(0, comp.find('.'))))
+				return false;
+
+			if (slash == std::string::npos)
+				break;
+			start = slash + 1;
+		}
+
+		out_rest = std::move(rest);
+		return true;
+	}
+
+	// Tokenize "<size> 0 0 <path...> <trail>": >= 5 space-separated tokens, a
+	// numeric first token, path = tokens[3 .. n-2] rejoined with spaces (asset
+	// names may contain spaces). Blank/short/non-numeric lines return false and
+	// are skipped, matching the offline resolver's validated behavior.
+	bool ue3_parse_line(std::string ln, std::string& out_path)
+	{
+		if (!ln.empty() && ln.back() == '\r') ln.pop_back();
+		if (ln.find_first_not_of(" \t") == std::string::npos)
+			return false;
+
+		std::vector<std::string> toks;
+		for (size_t p = 0; p <= ln.size();)
+		{
+			const size_t sp = ln.find(' ', p);
+			toks.push_back(ln.substr(p, sp == std::string::npos ? std::string::npos : sp - p));
+			if (sp == std::string::npos) break;
+			p = sp + 1;
+		}
+
+		if (toks.size() < 5)
+			return false;
+		for (char c : toks[0]) if (c < '0' || c > '9') return false;
+		if (toks[0].empty())
+			return false;
+
+		out_path.clear();
+		for (size_t i = 3; i + 1 < toks.size(); ++i)
+		{
+			if (i > 3) out_path += ' ';
+			out_path += toks[i];
+		}
+		return !out_path.empty();
+	}
+
+	game_boot_result complete_ue3_hd_cache(const std::string& title_id)
+	{
+		// TITLE-ID GATE. Only act for titles whose HD-cache convention has been
+		// verified on a real disc. PS3TOC.txt is a generic UE3 artifact, so keying
+		// activation on the marker alone would (a) fire on other UE3 discs and risk
+		// breaking a game that already runs, and (b) build the write root from an
+		// unvalidated PARAM.SFO TITLE_ID (set at System.cpp:1879 with no format
+		// check) — a crafted `..` TITLE_ID could then collapse identically on both
+		// sides of the confinement guard below and defeat it. An exact-literal match
+		// closes both. Extend this list only after verifying a title's convention
+		// (single marker + <file>__time sidecar stamped to the disc source mtime +
+		// UnrealEngine3 dest root) on a real disc image.
+		bool verified = false;
+		for (std::string_view t : { std::string_view("BLUS30331") })
+			if (title_id == t) { verified = true; break; }
+		if (!verified)
+			return game_boot_result::no_errors; // not a verified UE3 HD-cache title: inert
+
+		const std::string usr_host = vfs::get("/dev_bdvd/PS3_GAME/USRDIR");
+
+		// GATE: exactly one USRDIR/<proj>/PS3TOC.txt marks a UE3 HD cache.
+		std::string proj;
+		int markers = 0;
+		for (auto&& e : fs::dir(usr_host))
+		{
+			if (!e.is_directory || e.name == "." || e.name == "..")
+				continue;
+			if (fs::is_file(usr_host + "/" + e.name + "/PS3TOC.txt"))
+			{
+				markers++;
+				proj = e.name;
+			}
+		}
+		if (markers == 0)
+			return game_boot_result::no_errors; // no cache marker on the disc: inert
+		if (markers > 1)
+		{
+			// A verified title with more than one project TOC is a shape we have not
+			// validated; stay inert rather than guess which one to complete.
+			sys_log.warning("UE3-completer: %d PS3TOC markers for '%s'; unhandled shape, staying inert", markers, title_id);
+			return game_boot_result::no_errors;
+		}
+
+		fs::file toc(usr_host + "/" + proj + "/PS3TOC.txt");
+		if (!toc)
+			return game_boot_result::no_errors; // marker vanished: inert
+
+		std::string data(toc.size(), '\0');
+		if (toc.read(data.data(), data.size()) != data.size())
+		{
+			// The marker is present, so this is positively the verified UE3 title; a
+			// short read means we cannot know the work set. Fail closed rather than
+			// let the guest boot against a possibly half-finished install.
+			sys_log.error("UE3-completer: short read of PS3TOC.txt for '%s'", title_id);
+			return game_boot_result::install_failed;
+		}
+		toc.close();
+
+		const std::string game_root = "/dev_hdd0/game/" + title_id + "/USRDIR/UnrealEngine3";
+
+		struct work_item { std::string src_host, dest_host; u64 size; s64 mtime; };
+		std::vector<work_item> work;
+		u64 total_bytes = 0;
+		size_t sources = 0; // entries with a real disc source (for the vacuity log)
+
+		for (size_t pos = 0; pos <= data.size();)
+		{
+			const size_t nl = data.find('\n', pos);
+			std::string line = data.substr(pos, nl == std::string::npos ? std::string::npos : nl - pos);
+			pos = (nl == std::string::npos) ? data.size() + 1 : nl + 1;
+
+			std::string toc_path, rest;
+			if (!ue3_parse_line(std::move(line), toc_path))
+				continue;
+			if (!ue3_confine(toc_path, rest))
+				continue;
+
+			const std::string src_host = vfs::get("/dev_bdvd/PS3_GAME/USRDIR/" + rest);
+			fs::stat_t sst{};
+			if (!fs::get_stat(src_host, sst) || sst.is_directory)
+				continue; // no disc source: skip. src is always an iso_device path
+				          // whose get_stat is an in-memory metadata lookup fixed at
+				          // mount, so a false here is genuinely-absent (e.g. the
+				          // shared Engine/ tree), not a transient I/O error.
+			sources++;
+
+			const std::string dest_host = vfs::get(game_root + "/" + rest);
+			ensure(dest_host.starts_with(vfs::get(game_root) + "/"));
+
+			// Completeness mirrors the guest: dest AND its "<file>__time" sidecar
+			// exist, the dest is the full source size, AND the sidecar's mtime equals
+			// the disc source mtime. The size check guards against a guest-abandoned
+			// truncated payload that already carries a correctly-stamped sidecar.
+			fs::stat_t dst{}, scst{};
+			const bool have_file = fs::get_stat(dest_host, dst) && !dst.is_directory;
+			const bool have_side = fs::get_stat(dest_host + "__time", scst) && !scst.is_directory;
+			if (have_file && have_side && dst.size == sst.size && scst.mtime == sst.mtime)
+				continue;
+
+			work.push_back({src_host, dest_host, sst.size, sst.mtime});
+			total_bytes += sst.size;
+		}
+
+		if (work.empty())
+		{
+			// Distinguishes the genuine idempotent path (sources present, all
+			// complete) from a silent no-op where the TOC parsed to nothing (format
+			// drift) — and doubles as the vacuity proof that the fast path fired.
+			sys_log.notice("UE3-completer: nothing to do for '%s' (%u source entries, all complete)", title_id, sources);
+			return game_boot_result::no_errors;
+		}
+
+		// PRE-FLIGHT: free space on hdd0 (the UnrealEngine3 dir may not exist yet).
+		fs::device_stat ds{};
+		if (fs::statfs(vfs::get("/dev_hdd0"), ds))
+		{
+			const u64 margin = 64ull << 20;
+			if (ds.avail_free < total_bytes + margin)
+			{
+				sys_log.error("UE3-completer: not enough space for %s: need %u B + margin, %u B free", proj, total_bytes, ds.avail_free);
+				return game_boot_result::install_failed;
+			}
+		}
+		else
+		{
+			// Pre-flight unavailable. The per-write install_failed in the copy loop
+			// is the backstop against a full disk, so proceed rather than refuse a
+			// boot on a statfs that some FUSE-backed paths fail spuriously; but say so.
+			sys_log.warning("UE3-completer: statfs(/dev_hdd0) failed; skipping space pre-flight for '%s'", title_id);
+		}
+
+		sys_log.notice("UE3-completer: completing %u file(s), %u MiB, for '%s'", work.size(), total_bytes >> 20, proj);
+
+		std::vector<u8> buf(4ull << 20);
+		for (const work_item& w : work)
+		{
+			if (Emu.IsStopped())
+			{
+				sys_log.warning("UE3-completer: stop requested, aborting install");
+				return game_boot_result::install_failed;
+			}
+
+			if (!fs::create_path(fs::get_parent_dir(w.dest_host)))
+			{
+				sys_log.error("UE3-completer: mkdir failed for %s", w.dest_host);
+				return game_boot_result::install_failed;
+			}
+
+			// Atomic copy: write a guest-invisible ＄-temp, then rename.
+			fs::file src(w.src_host);
+			fs::pending_file pf(w.dest_host);
+			if (!src || !pf.file)
+			{
+				sys_log.error("UE3-completer: open failed for %s", w.dest_host);
+				return game_boot_result::install_failed;
+			}
+
+			u64 remaining = w.size;
+			while (remaining)
+			{
+				if (Emu.IsStopped())
+				{
+					sys_log.warning("UE3-completer: stop requested mid-copy, aborting");
+					return game_boot_result::install_failed;
+				}
+				const u64 chunk = std::min<u64>(buf.size(), remaining);
+				if (src.read(buf.data(), chunk) != chunk || pf.file.write(buf.data(), chunk) != chunk)
+				{
+					sys_log.error("UE3-completer: copy I/O failed for %s", w.dest_host);
+					return game_boot_result::install_failed;
+				}
+				remaining -= chunk;
+			}
+
+			if (!pf.commit())
+			{
+				sys_log.error("UE3-completer: commit failed for %s", w.dest_host);
+				return game_boot_result::install_failed;
+			}
+
+			// 0-byte sidecar stamped to the disc source mtime (epoch seconds).
+			{
+				fs::pending_file side(w.dest_host + "__time");
+				if (!side.file || !side.commit())
+				{
+					sys_log.error("UE3-completer: sidecar create failed for %s", w.dest_host);
+					return game_boot_result::install_failed;
+				}
+			}
+			if (!fs::utime(w.dest_host + "__time", w.mtime, w.mtime))
+			{
+				sys_log.error("UE3-completer: sidecar stamp failed for %s", w.dest_host);
+				return game_boot_result::install_failed;
+			}
+		}
+
+		sys_log.success("UE3-completer: completed %u file(s) for '%s'", work.size(), proj);
+		return game_boot_result::no_errors;
+	}
+}
+
 game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch, usz recursion_count)
 {
 	if (recursion_count == 0 && m_restrict_emu_state_change)
@@ -2709,6 +3012,19 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 
 				return game_boot_result::firmware_missing;
 			}
+		}
+
+		// Finish any abandoned UE3 HD-cache install before the guest runs. Inert
+		// for non-UE3 titles; fail-closed (aborts the boot) on a copy failure.
+		if (const game_boot_result ue3 = complete_ue3_hd_cache(GetTitleID()); ue3 != game_boot_result::no_errors)
+		{
+			// Tear the initialized-and-paused emulation down before bailing, exactly
+			// like every other post-`ready` error exit in Load (2887/2940/2957). A
+			// bare return would leave m_state == ready: restore_on_no_boot's
+			// ensure(IsStopped()) would then fire, and a later Play would run the
+			// guest against the half-finished install this path exists to prevent.
+			Kill(false);
+			return ue3;
 		}
 
 		const bool autostart = m_ar || (std::exchange(m_force_boot, false) || g_cfg.misc.autostart);
