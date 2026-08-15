@@ -1085,10 +1085,11 @@ namespace
 	// UE3 HD-cache install completer.
 	//
 	// Some Unreal Engine 3 PS3 titles (verified: Leisure Suit Larry: Box Office
-	// Bust, BLUS30331) copy their disc asset tree into an on-HDD cache during a
-	// short boot window and abandon the copy partway through when emulated I/O is
-	// slower than a real console, then crash on the missing packages at "New
-	// Game". This finishes that copy once, at boot, before the guest runs.
+	// Bust, BLUS30331 US / BLES00553 EU) copy their disc asset tree into an
+	// on-HDD cache during a short boot window and abandon the copy partway
+	// through when emulated I/O is slower than a real console, then crash on
+	// the missing packages at "New Game". This finishes that copy once, at
+	// boot, before the guest runs.
 	//
 	// It is driven entirely by the disc's own manifest (USRDIR/<proj>/PS3TOC.txt)
 	// and the guest's own sidecar convention (a 0-byte "<file>__time" whose mtime
@@ -1195,7 +1196,7 @@ namespace
 		// (single marker + <file>__time sidecar stamped to the disc source mtime +
 		// UnrealEngine3 dest root) on a real disc image.
 		bool verified = false;
-		for (std::string_view t : { std::string_view("BLUS30331") })
+		for (std::string_view t : { std::string_view("BLUS30331"), std::string_view("BLES00553") })
 			if (title_id == t) { verified = true; break; }
 		if (!verified)
 			return game_boot_result::no_errors; // not a verified UE3 HD-cache title: inert
