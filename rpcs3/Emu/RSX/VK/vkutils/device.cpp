@@ -96,6 +96,43 @@ namespace vk
 			features2.pNext      = &multidraw_info;
 		}
 
+		// Presence of the extension string is not enough on its own -- the feature bit is what
+		// says the vkCmdSet* entry points actually do anything, and a driver may advertise the
+		// extension for the sake of a dependency and report the bit false.
+		VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extended_dynamic_state_info{};
+
+		if (device_extensions.is_supported(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME))
+		{
+			extended_dynamic_state_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT;
+			extended_dynamic_state_info.pNext = features2.pNext;
+			features2.pNext                   = &extended_dynamic_state_info;
+		}
+
+#ifdef __ANDROID__
+		// What the Lossless Scaling shaders require, asked for directly.
+		//
+		// Adopted from Eden's implementation (CamilleLaVey, eden PR #4263), which gates on these
+		// two rather than on a GPU family. That is the better test: "Adreno 7xx or newer" is a
+		// proxy and it is wrong in both directions -- it excludes capable non-Adreno parts and
+		// admits an Adreno 7xx whose driver does not implement the memory model.
+		//
+		// vulkanMemoryModel is core in 1.2 and nullDescriptor comes from robustness2, so both are
+		// queried through their own structs rather than assumed from the API version.
+		VkPhysicalDeviceVulkan12Features vk12_info{};
+		vk12_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+		vk12_info.pNext = features2.pNext;
+		features2.pNext = &vk12_info;
+
+		VkPhysicalDeviceRobustness2FeaturesEXT robustness2_info{};
+
+		if (device_extensions.is_supported(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME))
+		{
+			robustness2_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT;
+			robustness2_info.pNext = features2.pNext;
+			features2.pNext        = &robustness2_info;
+		}
+#endif
+
 		vkGetPhysicalDeviceFeatures2(dev, &features2);
 
 		shader_types_support.allow_float64 = !!features2.features.shaderFloat64;
@@ -112,6 +149,7 @@ namespace vk
 		optional_features_support.barycentric_coords  = !!shader_barycentric_info.fragmentShaderBarycentric;
 		optional_features_support.framebuffer_loops   = !!fbo_loops_info.attachmentFeedbackLoopLayout;
 		optional_features_support.extended_device_fault = !!device_fault_info.deviceFault;
+		optional_features_support.extended_dynamic_state = !!extended_dynamic_state_info.extendedDynamicState;
 
 		features = features2.features;
 
@@ -133,6 +171,19 @@ namespace vk
 		optional_features_support.memory_budget            = device_extensions.is_supported(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 		optional_features_support.synchronization_2        = device_extensions.is_supported(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
 		optional_features_support.unrestricted_depth_range = device_extensions.is_supported(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
+#ifdef __ANDROID__
+		optional_features_support.external_memory_ahb      = device_extensions.is_supported(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
+		optional_features_support.vulkan_memory_model      = !!vk12_info.vulkanMemoryModel;
+		optional_features_support.null_descriptor          = !!robustness2_info.nullDescriptor;
+
+		// Reported unconditionally because it decides whether frame generation can exist at all
+		// on this device, and the answer is otherwise invisible until something fails much later.
+		rsx_log.notice("Vulkan: frame generation requirements -- AHardwareBuffer external memory: %s,"
+			" vulkanMemoryModel: %s, nullDescriptor: %s",
+			optional_features_support.external_memory_ahb ? "yes" : "NO",
+			optional_features_support.vulkan_memory_model ? "yes" : "NO",
+			optional_features_support.null_descriptor ? "yes" : "NO");
+#endif
 #ifdef __APPLE__
 		optional_features_support.portability              = device_extensions.is_supported(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
 #endif
@@ -744,6 +795,20 @@ namespace vk
 			requested_extensions.push_back(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
 		}
 
+#ifdef __ANDROID__
+		// Frame generation only. Requested when present because the cost of carrying it is a
+		// string in a list, and the cost of NOT having it is that frame generation cannot share
+		// images at all -- there is no second way to hand a VkImage to a different VkDevice.
+		//
+		// Its dependencies (external_memory, dedicated_allocation, sampler_ycbcr_conversion,
+		// queue_family_foreign) are all core in Vulkan 1.1+, which is the floor here, so only the
+		// extension itself needs naming.
+		if (pgpu->optional_features_support.external_memory_ahb)
+		{
+			requested_extensions.push_back(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
+		}
+#endif
+
 		if (pgpu->optional_features_support.external_memory_host)
 		{
 			requested_extensions.push_back(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
@@ -783,6 +848,11 @@ namespace vk
 		if (pgpu->optional_features_support.extended_device_fault)
 		{
 			requested_extensions.push_back(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+		}
+
+		if (pgpu->optional_features_support.extended_dynamic_state)
+		{
+			requested_extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
 		}
 		
 #ifdef __APPLE__
@@ -1034,6 +1104,19 @@ namespace vk
 			conditional_rendering_info.pNext = const_cast<void*>(device.pNext);
 			conditional_rendering_info.conditionalRendering = VK_TRUE;
 			device.pNext = &conditional_rendering_info;
+		}
+
+		// Enabling the extension is not enough -- a driver is entitled to ignore the vkCmdSet*
+		// calls unless the feature bit is asked for at device creation, and the failure mode is
+		// silent: the pipeline's stale static topology/cull/depth are used and geometry renders
+		// with the wrong facing.
+		VkPhysicalDeviceExtendedDynamicStateFeaturesEXT extended_dynamic_state_info{};
+		if (pgpu->optional_features_support.extended_dynamic_state)
+		{
+			extended_dynamic_state_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT;
+			extended_dynamic_state_info.pNext = const_cast<void*>(device.pNext);
+			extended_dynamic_state_info.extendedDynamicState = VK_TRUE;
+			device.pNext = &extended_dynamic_state_info;
 		}
 
 		VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR shader_barycentric_info{};

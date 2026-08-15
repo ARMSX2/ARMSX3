@@ -103,12 +103,26 @@ namespace vk
 			bool conditional_rendering = false;
 			bool debug_utils = false;
 			bool external_memory_host = false;
+			bool extended_dynamic_state = false;
 			bool framebuffer_loops = false;
 			bool memory_budget = false;
 			bool shader_stencil_export = false;
 			bool surface_capabilities_2 = false;
 			bool synchronization_2 = false;
 			bool unrestricted_depth_range = false;
+
+			// VK_ANDROID_external_memory_android_hardware_buffer.
+			//
+			// Gates frame generation. framegen runs on its OWN VkDevice, so images cannot be
+			// shared as VkImage -- they have to go across as AHardwareBuffer, and importing one
+			// needs this. framegen's other sharing path uses vkGetMemoryFdKHR(OPAQUE_FD), which
+			// both Adreno and Mali refuse for AHB-backed memory, so there is no fallback.
+			bool external_memory_ahb = false;
+
+			// What the Lossless Scaling shaders themselves need, independent of how the images
+			// are shared. Eden gates on exactly these two; see the note in device.cpp.
+			bool vulkan_memory_model = false;
+			bool null_descriptor = false;
 			bool extended_device_fault = false;
 			bool texture_compression_bc = false;
 			bool portability = false;
@@ -218,7 +232,19 @@ namespace vk
 		bool get_anisotropic_filtering_support() const { return pgpu->features.samplerAnisotropy != VK_FALSE; }
 		bool get_wide_lines_support() const { return pgpu->features.wideLines != VK_FALSE; }
 		bool get_conditional_render_support() const { return pgpu->optional_features_support.conditional_rendering; }
+
+		// Topology, cull mode, front face and the depth test are set per draw instead of being
+		// baked into a pipeline object. That is what keeps the permutation count down on mobile,
+		// where every extra pipeline is a compile stall the first time it is seen and another
+		// entry in a cache that already takes minutes to warm. Everything keyed on this must have
+		// a static fallback: the extension is core in 1.3 but plenty of shipped Android 11/13
+		// drivers predate it.
+		bool get_extended_dynamic_state_support() const { return pgpu->optional_features_support.extended_dynamic_state; }
+
 		bool get_unrestricted_depth_range_support() const { return pgpu->optional_features_support.unrestricted_depth_range; }
+		bool get_external_memory_ahb_support() const { return pgpu->optional_features_support.external_memory_ahb; }
+		bool get_vulkan_memory_model_support() const { return pgpu->optional_features_support.vulkan_memory_model; }
+		bool get_null_descriptor_support() const { return pgpu->optional_features_support.null_descriptor; }
 		bool get_external_memory_host_support() const { return pgpu->optional_features_support.external_memory_host; }
 		bool get_memory_budget_support() const { return pgpu->optional_features_support.memory_budget; }
 		bool get_surface_capabilities_2_support() const { return pgpu->optional_features_support.surface_capabilities_2; }

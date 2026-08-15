@@ -50,6 +50,18 @@ namespace vk
 		}
 	};
 
+	// Topology to build the pipeline object with. Identity unless VK_EXT_extended_dynamic_state
+	// is live, in which case only the topology CLASS survives -- see the note on the definition
+	// for why the class cannot be collapsed too, and why primitive restart picks the member.
+	VkPrimitiveTopology get_pipeline_topology(VkPrimitiveTopology topology, VkBool32 primitive_restart);
+
+	// Strip the states the draw path now sets per draw out of the pipeline identity. Must be the
+	// LAST thing done to a props before it is used as a cache key or handed to the compiler:
+	// leaving the real values in is what would make the whole exercise cost calls and save
+	// nothing. No-op without the extension, which is what keeps the fallback byte-identical to
+	// the old behaviour.
+	void normalize_dynamic_pipeline_state(pipeline_props& props);
+
 	class pipe_compiler
 	{
 	public:

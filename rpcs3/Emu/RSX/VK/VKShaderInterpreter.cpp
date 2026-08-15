@@ -751,6 +751,15 @@ namespace vk
 		base_props.state.set_depth_mask(true);
 		pipe_properties.push_back(base_props);
 
+		// These are guesses at what the runtime will ask for, so they have to be spelled the same
+		// way the runtime spells it. Without this the seeds keep their cull mode and depth test
+		// and get() looks up a normalized key that matches none of them -- the precompile still
+		// runs, it just warms pipelines nothing goes on to use.
+		for (auto& props : pipe_properties)
+		{
+			vk::normalize_dynamic_pipeline_state(props);
+		}
+
 		const auto variants = program_common::interpreter::get_interpreter_variants();
 		const u32 limit1 = ::size32(variants.base_pipelines) * ::size32(pipe_properties);
 		const u32 limit2 = ::size32(variants.pipelines) * ::size32(pipe_properties);

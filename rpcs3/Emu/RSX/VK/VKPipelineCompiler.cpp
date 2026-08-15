@@ -13,6 +13,66 @@ namespace vk
 	int g_num_pipe_compilers = 0;
 	atomic_t<int> g_compiler_index{};
 
+	static bool extended_dynamic_state_active()
+	{
+		// Called from the shader cache loader and the interpreter preloader as well as the draw
+		// path, and the first of those can run before a device exists.
+		return g_render_device && g_render_device->get_extended_dynamic_state_support();
+	}
+
+	VkPrimitiveTopology get_pipeline_topology(VkPrimitiveTopology topology, VkBool32 primitive_restart)
+	{
+		if (!extended_dynamic_state_active())
+		{
+			return topology;
+		}
+
+		// vkCmdSetPrimitiveTopology can only move within the topology CLASS the pipeline object
+		// was created with. Crossing classes needs dynamicPrimitiveTopologyUnrestricted, which
+		// comes from extended_dynamic_state3 and is not something mobile drivers report, so the
+		// class has to stay part of the pipeline identity. What collapses is the member inside
+		// it: list, strip and fan share one triangle pipeline instead of three.
+		//
+		// Which member stands for the class is not a free choice. Primitive restart is illegal on
+		// a *_LIST topology unless primitiveTopologyListRestart is enabled, which it is not here,
+		// so a restarting draw has to be represented by the strip form or pipelines that build
+		// today would start failing validation.
+		switch (topology)
+		{
+		case VK_PRIMITIVE_TOPOLOGY_LINE_LIST:
+		case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
+			return primitive_restart ? VK_PRIMITIVE_TOPOLOGY_LINE_STRIP : VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+		case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST:
+		case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP:
+		case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:
+			return primitive_restart ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+		default:
+			// Points have a class of one, and adjacency/patch topologies never come out of the
+			// RSX decoder. Anything unexpected keeps its exact value rather than being guessed at.
+			return topology;
+		}
+	}
+
+	void normalize_dynamic_pipeline_state(pipeline_props& props)
+	{
+		if (!extended_dynamic_state_active())
+		{
+			return;
+		}
+
+		props.state.ia.topology = get_pipeline_topology(props.state.ia.topology, props.state.ia.primitiveRestartEnable);
+
+		// The replacements are exactly what graphics_pipeline_state's constructor leaves behind,
+		// so two props that differ only in these fields memcmp equal without operator== having to
+		// learn about the extension -- and without the disk cache's raw struct changing shape.
+		props.state.rs.cullMode  = VK_CULL_MODE_NONE;
+		props.state.rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+
+		props.state.ds.depthTestEnable  = VK_FALSE;
+		props.state.ds.depthWriteEnable = VK_FALSE;
+		props.state.ds.depthCompareOp   = VK_COMPARE_OP_NEVER;
+	}
+
 	pipe_compiler::pipe_compiler()
 	{
 		// TODO: Initialize workqueue
@@ -104,6 +164,21 @@ namespace vk
 		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_STENCIL_WRITE_MASK);
 		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_STENCIL_REFERENCE);
 		dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_DEPTH_BIAS);
+
+		// Must agree exactly with normalize_dynamic_pipeline_state(): a state declared here but
+		// still present in the key costs a vkCmdSet* for no reduction, and a state erased from
+		// the key but NOT declared here renders with whatever value the pipeline happened to be
+		// built with -- wrong culling and wrong depth compare on geometry that now shares an
+		// object with unrelated draws.
+		if (extended_dynamic_state_active())
+		{
+			dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_PRIMITIVE_TOPOLOGY_EXT);
+			dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_CULL_MODE_EXT);
+			dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_FRONT_FACE_EXT);
+			dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE_EXT);
+			dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE_EXT);
+			dynamic_state_descriptors.push_back(VK_DYNAMIC_STATE_DEPTH_COMPARE_OP_EXT);
+		}
 
 		auto pdss = &create_info.state.ds;
 		VkPipelineDepthStencilStateCreateInfo ds2;

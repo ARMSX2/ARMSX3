@@ -13,6 +13,11 @@
 
 namespace vk
 {
+	// Defined in VKGSRender.cpp, where they feed the pipeline object. The draw path needs them
+	// too now that the same values are issued per draw.
+	VkFrontFace get_front_face(rsx::front_face ffv);
+	VkCullModeFlags get_cull_face(rsx::cull_face cfv);
+
 	VkImageViewType get_view_type(rsx::texture_dimension_extended type)
 	{
 		switch (type)
@@ -156,6 +161,42 @@ void VKGSRender::invalidate_render_pass()
 		m_current_renderpass_key = key;
 		m_cached_renderpass = VK_NULL_HANDLE;
 	}
+}
+
+void VKGSRender::set_extended_dynamic_state()
+{
+	// Deliberately NOT folded into update_draw_state(). That runs once per draw clause and only
+	// when the render pass is (re)started, which was safe while these values were part of the
+	// pipeline object -- a change to any of them produced a different pipeline. Now it does not,
+	// so consecutive draws share one object and the state has to be re-issued for each of them.
+	//
+	// It is also why this cannot be skipped when the pipeline handle is unchanged: overlays,
+	// blits and the present path bind pipelines that declare these states statically, and doing
+	// so discards the dynamic values. The redundant-bind cache in command_buffer::bind_pipeline
+	// then means the game's own bind is elided on the way back and never restores them.
+	_vkCmdSetPrimitiveTopologyEXT(*m_current_command_buffer, m_current_primitive_topology);
+
+	_vkCmdSetCullModeEXT(*m_current_command_buffer,
+		rsx::method_registers.cull_face_enabled()
+			? vk::get_cull_face(rsx::method_registers.cull_face_mode())
+			: VK_CULL_MODE_NONE);
+
+	_vkCmdSetFrontFaceEXT(*m_current_command_buffer,
+		vk::get_front_face(rsx::method_registers.front_face_mode()));
+
+	// Depth write and compare op are meaningless with the test off, and decode_rsx_state left
+	// both at zero in that case rather than at whatever the RSX registers happened to hold.
+	// Reproduce that exactly: a driver that reads the compare op regardless of the test must see
+	// the value it saw before this change.
+	const bool depth_test_enabled = rsx::method_registers.depth_test_enabled();
+
+	_vkCmdSetDepthTestEnableEXT(*m_current_command_buffer, depth_test_enabled ? VK_TRUE : VK_FALSE);
+
+	_vkCmdSetDepthWriteEnableEXT(*m_current_command_buffer,
+		(depth_test_enabled && rsx::method_registers.depth_write_enabled()) ? VK_TRUE : VK_FALSE);
+
+	_vkCmdSetDepthCompareOpEXT(*m_current_command_buffer,
+		depth_test_enabled ? vk::get_compare_func(rsx::method_registers.depth_func()) : VK_COMPARE_OP_NEVER);
 }
 
 void VKGSRender::update_draw_state()
@@ -1110,6 +1151,11 @@ void VKGSRender::emit_geometry(u32 sub_index)
 	// Bind both pipe and descriptors in one go
 	// FIXME: We only need to rebind the pipeline when reload state is set. Flags?
 	m_program->bind(*m_current_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS);
+
+	if (m_device->get_extended_dynamic_state_support())
+	{
+		set_extended_dynamic_state();
+	}
 
 	if (reload_state)
 	{
