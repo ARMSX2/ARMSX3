@@ -22,6 +22,7 @@
 #include "Emu/System.h"
 #include "Emu/system_utils.hpp"
 #include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/PPUDisAsm.h"
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/timers.hpp"
 #include "Emu/Cell/lv2/sys_event.h"
@@ -1386,6 +1387,106 @@ namespace rsx
 		}, idm::unlocked);
 
 		rsx_log.error("Guest PPU threads while no frame has completed:%s", out);
+
+		// Once per session, follow the summary with everything each PPU can say about itself:
+		// registers, the guest call stack, and -- when "PPU Calling History" is enabled -- the
+		// last guest calls and HLE/LV2 calls it made.
+		//
+		// The summary above repeats every few seconds deliberately, because a cia that does not
+		// move between samples is itself the finding. This part must NOT repeat: it runs to
+		// hundreds of lines per thread, and log volume alone is enough to stall the emulator on
+		// Android, which is a failure mode we have already shipped once.
+		//
+		// The case it exists for is a thread reported as 'state=00[]' with a static cia and a
+		// core pegged at 100%: that is a guest busy-loop, and the one-line summary cannot say
+		// what the loop is waiting on. The call stack names the caller chain that entered it,
+		// and the registers hold whatever it keeps re-testing -- which together identify the
+		// loop in the executable. Reported against Saint Seiya: The Sanctuary (BLES01421,
+		// issue #25), which parks its main thread at cia=0x000bc7d0 forever, right after
+		// _sys_lwmutex_create and before it creates a single thread or submits a single frame.
+		//
+		// Wait for PPU/SPU compilation to finish before spending the one shot.
+		//
+		// No frame is presented while modules are compiling either, so the very first stall of
+		// every session is the compile itself -- six minutes of it on a cold cache. Dumping there
+		// burns the one-shot on a thread that has not run a single guest instruction: every GPR
+		// reads zero and the call stack is empty, which is exactly what happened the first time
+		// this shipped. Neither "has a frame ever been presented" nor a plain time threshold
+		// separates the two cases, because the hang being chased also never presents a frame and
+		// also lasts forever. Outstanding progress work does.
+		//
+		// dump_callstack_list validates the stack pointer and every frame with vm::check_addr and
+		// gives up rather than walking garbage, so this is safe against a thread that is running
+		// and modifying its own stack underneath us. Torn values are acceptable here for the same
+		// reason the summary takes them: an approximate answer now beats an exact one never.
+		static atomic_t<bool> s_dumped_detail{false};
+
+		const bool compiling = g_progr_ptotal.load() != g_progr_pdone.load();
+
+		if (!compiling && !s_dumped_detail.exchange(true))
+		{
+			std::string detail;
+
+			// The guest instructions around the stuck cia -- the loop itself.
+			//
+			// Registers and a call stack say where the thread is and what it holds, but not what
+			// the code DOES, and from the outside a two-instruction compare-and-branch-to-self is
+			// indistinguishable from a long computation that simply has not finished. Printing the
+			// window settles it, and cpu_disasm_mode::dump emits address, opcode bytes and mnemonic
+			// per line, so the branch target is readable straight out of the log and can be matched
+			// against the guest binary without the debugger UI, which Android does not build.
+			//
+			// A fixed window rather than the whole function because function bounds are not known
+			// on this side, and every address is checked first: cia is read from a thread that is
+			// still running and can be stale or outright garbage, and faulting inside the diagnostic
+			// that explains a hang would be the worst possible trade.
+			PPUDisAsm dis_asm(cpu_disasm_mode::dump, vm::g_sudo_addr);
+
+			idm::select<named_thread<ppu_thread>>([&detail, &dis_asm](u32 id, ppu_thread& ppu)
+			{
+				fmt::append(detail, "\n=== PPU 0x%07x '%s' ===\n", id, *ppu.ppu_tname.load());
+				ppu.dump_all(detail);
+
+				const u32 pc = ppu.cia;
+				const u32 from = pc >= 0x20 ? pc - 0x20 : 0;
+
+				// A wide window for a thread that is spinning, a narrow one for a thread that is
+				// merely parked in a syscall.
+				//
+				// Under the recompiler cia is only written at block boundaries, so on a spinning
+				// thread it names the ENTRY of the function that never returned, not the loop
+				// inside it -- and a handful of instructions from the entry is just the prologue.
+				// Reading the whole body is the point: the question being answered is which PPU
+				// instructions the function uses, because the ARM64 backend only diverges from the
+				// portable path on a few of them (VCFUX, VMAXFP, VMINFP, VPERM) and seeing one of
+				// those in a function that hangs is what turns a guess into a candidate.
+				//
+				// Threads blocked in sys_* are not the suspects and there can be a dozen of them,
+				// so they keep the short window. Their cia is in liblv2 anyway.
+				const bool spinning = ppu.state.none_of(cpu_flag::wait);
+				const u32 span = spinning ? 0x600 : 0x40;
+
+				fmt::append(detail, "\nCode around cia=0x%08x (%s):\n", pc,
+					spinning ? "spinning, wide window" : "waiting, short window");
+
+				for (u32 addr = from; addr <= from + span; addr += 4)
+				{
+					if (!vm::check_addr(addr))
+					{
+						continue;
+					}
+
+					dis_asm.disasm(addr);
+
+					// Mark the instruction the thread is actually parked on, so the loop can be
+					// read off without counting lines.
+					detail += (addr == pc ? "  >>" : "    ");
+					detail += dis_asm.last_opcode;
+				}
+			}, idm::unlocked);
+
+			rsx_log.error("Stalled guest thread detail (reported once per session):%s", detail);
+		}
 
 		// The SPU half. A hang where every PPU is asleep and the SPUs are burning user time is
 		// the SPUs spinning in guest code, and nothing said WHICH code: /proc gives a tick count,

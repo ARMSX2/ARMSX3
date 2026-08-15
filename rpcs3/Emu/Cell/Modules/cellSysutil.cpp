@@ -406,7 +406,14 @@ error_code _cellSysutilGetSystemParamInt()
 
 error_code cellSysutilGetSystemParamInt(CellSysutilParamId id, vm::ptr<s32> value)
 {
-	cellSysutil.warning("cellSysutilGetSystemParamInt(id=0x%x(%s), value=*0x%x)", id, id, value);
+	// trace, not warning: games poll this per frame.
+	//
+	// Eternal Sonata (BLJS10017) asks for ID_ENTER_BUTTON_ASSIGN twice every 33ms and never
+	// stops, so at warning level it writes ~60 lines a second for the whole session. Log volume
+	// alone is expensive enough on Android to stall the emulator, which is a failure mode this
+	// port has already shipped once and spent a night mistaking for a hang. Nothing is wrong
+	// when a game reads a system parameter, so there is nothing here to warn about.
+	cellSysutil.trace("cellSysutilGetSystemParamInt(id=0x%x(%s), value=*0x%x)", id, id, value);
 
 	if (!value)
 	{
