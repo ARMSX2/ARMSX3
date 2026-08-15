@@ -196,7 +196,23 @@ namespace vk
 		}
 #endif
 		VkSurfaceCapabilitiesKHR surface_descriptors = {};
-		CHECK_RESULT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.gpu(), m_surface, &surface_descriptors));
+		if (const VkResult res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.gpu(), m_surface, &surface_descriptors);
+			res != VK_SUCCESS)
+		{
+			// Reported through the same flag as the present-mode queries; the caller recreates the
+			// surface before retrying. currentExtent is left zeroed, which init() already reads as
+			// "no usable window" and refuses to build a swapchain from.
+			if (res == VK_ERROR_SURFACE_LOST_KHR)
+			{
+				m_surface_is_lost = true;
+				rsx_log.warning("Swapchain: surface was lost while querying capabilities; it will be recreated.");
+				surface_descriptors = {};
+			}
+			else
+			{
+				vk::die_with_error(res);
+			}
+		}
 		return { surface_descriptors, false };
 	}
 
@@ -207,6 +223,8 @@ namespace vk
 			rsx_log.error("Cannot create WSI swapchain without a present queue");
 			return false;
 		}
+
+		m_surface_is_lost = false;
 
 		VkSwapchainKHR old_swapchain = m_vk_swapchain;
 		vk::physical_device& gpu = const_cast<vk::physical_device&>(dev.gpu());
@@ -235,10 +253,39 @@ namespace vk
 		}
 
 		u32 nb_available_modes = 0;
-		CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, nullptr));
+
+		if (const VkResult res = vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, nullptr);
+			res != VK_SUCCESS)
+		{
+			// A lost surface is recoverable and, on Android, routine: the ANativeWindow is destroyed
+			// every time the app leaves the foreground. The acquire and present paths have always
+			// treated it that way; this one called die_with_error and took the process down, which
+			// then tore the RSX thread apart mid-operation and turned a recoverable event into a
+			// heap corruption in ~ZCULL_control.
+			if (res == VK_ERROR_SURFACE_LOST_KHR)
+			{
+				m_surface_is_lost = true;
+				rsx_log.warning("Swapchain: surface was lost while querying present modes; it will be recreated.");
+				return false;
+			}
+
+			vk::die_with_error(res);
+		}
 
 		std::vector<VkPresentModeKHR> present_modes(nb_available_modes);
-		CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, present_modes.data()));
+
+		if (const VkResult res = vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, present_modes.data());
+			res != VK_SUCCESS)
+		{
+			if (res == VK_ERROR_SURFACE_LOST_KHR)
+			{
+				m_surface_is_lost = true;
+				rsx_log.warning("Swapchain: surface was lost while reading present modes; it will be recreated.");
+				return false;
+			}
+
+			vk::die_with_error(res);
+		}
 
 		VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
 		std::vector<VkPresentModeKHR> preferred_modes;

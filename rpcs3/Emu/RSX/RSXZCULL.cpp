@@ -22,15 +22,39 @@ namespace rsx
 
 		ZCULL_control::~ZCULL_control()
 		{
+			// NOTE ON m_pages_mutex: this destructor is the only place that takes it. Every actual
+			// mutator of m_locked_pages -- disable_optimizations, on_access_violation, the page
+			// lock/unlock paths -- is marked "externally synchronized" and never locks anything,
+			// because the RSX thread is meant to be their only writer. So the lock here buys
+			// nothing against a writer still running, and holding it must not be mistaken for
+			// safety: if the RSX thread is still touching this map, the map is already being torn
+			// apart underneath us and clearing it frees garbage. That is the crash seen on device
+			// as scudo reportInvalidChunkState inside this destructor, reached after a fatal
+			// VK_ERROR_SURFACE_LOST killed the RSX thread mid-operation while the Main Callbacks
+			// thread went on to destroy its objects. The real fix was to stop that error being
+			// fatal (see swapchain_WSI::init); this function cannot undo a corrupted container.
 			std::scoped_lock lock(m_pages_mutex);
 
 			for (auto& block : m_locked_pages)
 			{
 				for (auto& p : block)
 				{
-					if (p.second.prot != utils::protection::rw)
+					auto& page = p.second;
+
+					if (page.prot != utils::protection::rw)
 					{
 						utils::memory_protect(vm::base(p.first), utils::get_page_size(), utils::protection::rw);
+						page.prot = utils::protection::rw;
+					}
+
+					// Drain the refs the way unlock_pages does. Without this the pages are freed
+					// still holding references and m_critical_reports_in_flight is left permanently
+					// unbalanced -- harmless at process exit, wrong on any teardown that is followed
+					// by another boot in the same process, which is every restart on Android.
+					while (page.has_refs())
+					{
+						m_critical_reports_in_flight++;
+						page.release();
 					}
 				}
 
