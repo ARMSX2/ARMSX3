@@ -692,6 +692,25 @@ void fmt_class_string<stereo_render_mode_options>::format(std::string& out, u64 
 }
 
 template <>
+void fmt_class_string<frame_generation_mode>::format(std::string& out, u64 arg)
+{
+	format_enum(out, arg, [](frame_generation_mode value)
+	{
+		switch (value)
+		{
+		case frame_generation_mode::off: return "Off";
+		case frame_generation_mode::x2: return "x2";
+		case frame_generation_mode::x3: return "x3";
+		case frame_generation_mode::x4: return "x4";
+		}
+
+		// A missing case serialises as `unknown`, and cfg::_enum then refuses the value on load --
+		// the setting silently reverts to Off with nothing explaining why.
+		return unknown;
+	});
+}
+
+template <>
 void fmt_class_string<output_scaling_mode>::format(std::string& out, u64 arg)
 {
 	format_enum(out, arg, [](output_scaling_mode value)

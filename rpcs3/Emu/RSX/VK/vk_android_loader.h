@@ -81,6 +81,7 @@ extern "C"
 	extern PFN_vkCmdSetViewport vkCmdSetViewport;
 	extern PFN_vkCmdUpdateBuffer vkCmdUpdateBuffer;
 	extern PFN_vkCmdWaitEvents vkCmdWaitEvents;
+	extern PFN_vkCmdWriteTimestamp vkCmdWriteTimestamp;
 	extern PFN_vkCreateAndroidSurfaceKHR vkCreateAndroidSurfaceKHR;
 	extern PFN_vkCreateBuffer vkCreateBuffer;
 	extern PFN_vkCreateBufferView vkCreateBufferView;
@@ -132,6 +133,7 @@ extern "C"
 	extern PFN_vkFlushMappedMemoryRanges vkFlushMappedMemoryRanges;
 	extern PFN_vkFreeCommandBuffers vkFreeCommandBuffers;
 	extern PFN_vkFreeMemory vkFreeMemory;
+	extern PFN_vkGetAndroidHardwareBufferPropertiesANDROID vkGetAndroidHardwareBufferPropertiesANDROID;
 	extern PFN_vkGetBufferMemoryRequirements vkGetBufferMemoryRequirements;
 	extern PFN_vkGetBufferMemoryRequirements2 vkGetBufferMemoryRequirements2;
 	extern PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr;
@@ -155,7 +157,6 @@ extern "C"
 	extern PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR;
 	extern PFN_vkGetPhysicalDeviceSurfaceSupportKHR vkGetPhysicalDeviceSurfaceSupportKHR;
 	extern PFN_vkGetQueryPoolResults vkGetQueryPoolResults;
-	extern PFN_vkCmdWriteTimestamp vkCmdWriteTimestamp;
 	extern PFN_vkInvalidateMappedMemoryRanges vkInvalidateMappedMemoryRanges;
 	extern PFN_vkMapMemory vkMapMemory;
 	extern PFN_vkQueueSubmit vkQueueSubmit;

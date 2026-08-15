@@ -345,6 +345,21 @@ enum class gpu_preset_level
 	_auto
 };
 
+// How many frames Lossless Scaling generates between each pair of real ones.
+//
+// Multipliers, not counts: "x2" inserts one generated frame, "x3" two, "x4" three. Named the way
+// the feature is described everywhere else so the setting reads the same as the docs.
+//
+// Android only -- frame generation shares images as AHardwareBuffer, which is the only route
+// framegen's separate VkDevice can accept.
+enum class frame_generation_mode
+{
+	off = 0,
+	x2,
+	x3,
+	x4,
+};
+
 enum class output_scaling_mode
 {
 	nearest,

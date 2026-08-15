@@ -122,6 +122,13 @@ private:
 
 	sizeu m_swapchain_dims{};
 	bool swapchain_unavailable = false;
+	u64 m_display_epoch = 0;   // GSFrameBase::display_epoch the swapchain was built against
+
+	// Consecutive VK_SUBOPTIMAL_KHR presents, and the size we were at when we last acted on them.
+	// See the present path: Android needs this signal, but cannot be allowed to rebuild on it
+	// every frame.
+	u32 m_suboptimal_present_count = 0;
+	u32 m_suboptimal_handled_at = 0;
 	bool should_reinitialize_swapchain = false;
 
 	u64 m_last_heap_sync_time = 0;
@@ -179,6 +186,23 @@ private:
 	vk::frame_context_t* m_current_frame = nullptr;
 	std::deque<vk::frame_context_t*> m_queued_frames;
 
+	// Frame generation interpolates between the two most recent frames that have actually reached
+	// the GPU, so the generated image belongs BEFORE the newer of that pair -- which means that real
+	// frame has to be held back one present. Null when nothing is being held, which is every frame
+	// with frame generation off.
+	vk::frame_context_t* m_deferred_present_frame = nullptr;
+
+	// Whether that holding-back is engaged. It costs one more swapchain image in flight than normal
+	// presentation does, so a shallow swapchain keeps the old serialised path instead of starving
+	// the generated frames of an image to be presented from.
+	bool m_framegen_pipelined = false;
+
+	// The command buffers the previous frame's generated images were blitted with. framegen writes
+	// the same output images every generation, so those blits have to have retired before the next
+	// generation starts overwriting them.
+	vk::command_buffer_chunk* m_framegen_blit_cb[3] = {};
+	u32 m_framegen_blit_cb_count = 0;
+
 	VkViewport m_viewport {};
 	VkRect2D m_scissor {};
 
@@ -195,6 +219,12 @@ private:
 	rsx::invalidation_cause m_offloader_fault_cause;
 
 	vk::draw_call_t m_current_draw {};
+
+	// The topology the draw actually wants, which stops being readable from m_pipeline_properties
+	// once VK_EXT_extended_dynamic_state reduces that to a topology class. Written by
+	// load_program(), which always runs before the subdraws of the clause it decoded.
+	VkPrimitiveTopology m_current_primitive_topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
 	u64 m_current_renderpass_key = 0;
 	VkRenderPass m_cached_renderpass = VK_NULL_HANDLE;
 	std::vector<vk::image*> m_fbo_images;
@@ -232,6 +262,7 @@ private:
 	void frame_context_cleanup(vk::frame_context_t *ctx);
 	void advance_queued_frames();
 	void present(vk::frame_context_t *ctx);
+	vk::command_buffer_chunk* present_generated_frame(VkImage src);
 	bool reinitialize_swapchain();
 
 	vk::viewable_image* get_present_source(vk::present_surface_info* info, const rsx::avconf& avconfig);
@@ -242,6 +273,7 @@ private:
 	void invalidate_render_pass();
 
 	void update_draw_state();
+	void set_extended_dynamic_state();
 	void check_present_status();
 
 	vk::vertex_upload_info upload_vertex_data();

@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Emu/RSX/VK/VKFrameGen.h"
 #include "overlay_manager.h"
 #include "overlay_perf_metrics.h"
 #include "Emu/RSX/RSXThread.h"
@@ -622,6 +623,21 @@ namespace rsx
 					    m_fps, m_frametime, std::string(title1_high.size(), ' '), m_ppu_usage, m_ppus, m_spu_usage, m_spus, m_rsx_usage, m_cpu_usage, m_total_threads, std::string(title2.size(), ' '), m_rsx_load);
 					break;
 				}
+				}
+
+				// Frame generation, when it is running.
+				//
+				// Added after the switch so it appears at every detail level without touching four
+				// format strings and their positional arguments. It has to be shown next to FPS to mean
+				// anything: FPS is the rate the GAME renders at, which frame generation deliberately does
+				// not change, and this is the rate reaching the display. The gap between them is the
+				// entire feature, and without this there is no way to tell it is working.
+				//
+				// Absent entirely when frame generation is off, so the overlay is unchanged for anyone
+				// not using it.
+				if (const std::string lsfg = vk::frame_gen::status_text(); !lsfg.empty())
+				{
+					fmt::append(perf_text, "%s%s", perf_text.empty() ? "" : "\n", lsfg);
 				}
 
 				m_body.set_text(perf_text);
