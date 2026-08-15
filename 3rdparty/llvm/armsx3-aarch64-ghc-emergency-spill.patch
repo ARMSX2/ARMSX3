@@ -1,0 +1,46 @@
+diff --git a/llvm/lib/Target/AArch64/AArch64FrameLowering.cpp b/llvm/lib/Target/AArch64/AArch64FrameLowering.cpp
+index d89a972f5d..f64e551a51 100644
+--- a/llvm/lib/Target/AArch64/AArch64FrameLowering.cpp
++++ b/llvm/lib/Target/AArch64/AArch64FrameLowering.cpp
+@@ -2504,8 +2504,40 @@ void AArch64FrameLowering::determineCalleeSaves(MachineFunction &MF,
+                                                 RegScavenger *RS) const {
+   // All calls are tail calls in GHC calling conv, and functions have no
+   // prologue/epilogue.
+-  if (MF.getFunction().getCallingConv() == CallingConv::GHC)
++  if (MF.getFunction().getCallingConv() == CallingConv::GHC) {
++    // ...but they can still need an emergency spill slot.
++    //
++    // Returning here skips every path below that reserves one, so a GHC function never gets
++    // a scavenging frame index on AArch64. That is safe only while the premise holds. It
++    // stops holding as soon as the allocator spills: the function then has real stack
++    // objects, eliminateFrameIndex may need a scratch register to materialise an offset,
++    // and GHC has reserved nearly every GPR, so there is no free register to take and no
++    // slot to spill one into. The scavenger then aborts the whole module with
++    // "Cannot scavenge register without an emergency spill slot".
++    //
++    // Reproduced with RPCS3's PPU recompiler, which emits ghccc for every guest function.
++    // A single function of Saint Seiya: The Sanctuary (BLES01421) fails this way, and losing
++    // it costs the entire module, whose functions then fall back to an interpreter loop. The
++    // failure needs ghccc AND a scheduling model that pushes pressure over the line (it
++    // reproduces on cortex-x1/x2/x3 and cortex-a55, not on cortex-a76/a78/generic) AND -O2;
++    // remove any one and the same function compiles.
++    //
++    // Gated on the function actually having a frame, so a GHC function with no stack objects
++    // still gets no prologue and nothing changes for it. The cost where it does apply is one
++    // 8-byte slot.
++    MachineFrameInfo &GHCMFI = MF.getFrameInfo();
++
++    if (RS && GHCMFI.estimateStackSize(MF) > 0) {
++      const TargetRegisterInfo *TRI = MF.getSubtarget().getRegisterInfo();
++      const TargetRegisterClass &RC = AArch64::GPR64RegClass;
++      int FI = GHCMFI.CreateSpillStackObject(TRI->getSpillSize(RC), TRI->getSpillAlign(RC));
++      RS->addScavengingFrameIndex(FI);
++      LLVM_DEBUG(dbgs() << "GHC function with a frame, allocated fi#" << FI
++                        << " as the emergency spill slot.\n");
++    }
++
+     return;
++  }
+ 
+   const AArch64Subtarget &Subtarget = MF.getSubtarget<AArch64Subtarget>();
+ 

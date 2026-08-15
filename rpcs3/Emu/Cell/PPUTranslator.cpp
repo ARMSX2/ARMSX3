@@ -24,6 +24,20 @@
 
 using namespace llvm;
 
+// Emit the slower, allocator-friendly form of VMADDFP for this translation.
+//
+// Set by ppu_initialize2 around a RETRY, after LLVM has already failed to compile the module
+// once. Thread-local because PPU modules compile on several workers at the same time and only
+// the worker holding the failed module may change its codegen.
+//
+// The mechanism it works around: llvm.fma on <4 x float> raises register pressure enough that
+// AArch64's scavenger gives up with "Cannot scavenge register without an emergency spill slot",
+// and LLVM then abandons the entire module. Its functions fall back to ppu_recompiler_fallback,
+// which interprets ONE instruction per iteration with a dispatcher read and a compare each time
+// -- far slower than the plain interpreter. Reported against Saint Seiya: The Sanctuary
+// (BLES01421, issue #25) as a black screen, and before that as 7fps.
+thread_local bool g_ppu_avoid_strict_fma = false;
+
 const ppu_decoder<PPUTranslator> s_ppu_decoder;
 extern const ppu_decoder<ppu_itype> g_ppu_itype;
 extern const ppu_decoder<ppu_iname> g_ppu_iname;
@@ -1325,7 +1339,51 @@ void PPUTranslator::VMADDFP(ppu_opcode_t op)
 		}
 	}
 
-	if (m_use_fma)
+	// EXPERIMENT (Saint Seiya: The Sanctuary, BLES01421, issue #25).
+	//
+	// Bisecting the instruction set identified VMADDFP as the instruction that stops this title
+	// booting under the recompiler: interpreting every function that contains one, and nothing
+	// else, takes it from a black screen to in-game. Excluding the 16 scalar float ops instead --
+	// 23421 functions, far more code -- does not help, so this is specific to VMADDFP and not an
+	// artifact of interpreting a lot.
+	//
+	// What is NOT the cause, checked and eliminated: the arithmetic itself is identical, because
+	// the interpreter's gv_fmafs is vfmaq_f32 on ARM64 and the recompiler emits llvm.fma; the NaN
+	// and denormal fixups are the same functions in the same order; and the interpreter's input
+	// denormal flush is compiled out entirely unless PPU Accurate Non-Java Mode is on, which it
+	// is not here.
+	//
+	// The cause is register allocation, not arithmetic.
+	//
+	// m_use_fma is hardcoded true on ARM64, so fmuladd() below asks for llvm.fma -- a HARD
+	// requirement to fuse, which the backend may not decompose. Satisfying that in the function
+	// this game calls exhausts AArch64's register scavenger, and LLVM aborts the whole module
+	// with "Cannot scavenge register without an emergency spill slot". The module's functions
+	// then fall back to the interpreter and the title never gets past its first frame.
+	//
+	// Measured: with llvm.fma the run reports 1 failed module and 1 scavenge error and hangs;
+	// without it, 0 and 0, and the game boots. That error was present in every Saint Seiya log
+	// from the start and was mistaken for an unrelated symptom for most of the investigation.
+	//
+	// llvm.fmuladd was tried and does NOT help: it asks for the same operation while letting the
+	// backend choose, but AArch64 still selects FMLA, the pressure is identical, and the same
+	// module fails with the same error and the same content hash. Do not re-try it.
+	//
+	// The f64 path below does compile. It is NOT taken unconditionally, though, because paying
+	// four widenings, an f64 multiply-add and a narrowing on every VMADDFP in every game -- 8024
+	// functions in this title alone -- to work around one function LLVM cannot allocate is a bad
+	// trade, and slowing the recompiler down was the opposite of the point.
+	//
+	// So the fallback is per-module and driven by failure: ppu_initialize2 sets this flag and
+	// recompiles ONLY a module that LLVM has already refused, and only that module pays. Every
+	// other module keeps the single fused FMLA.
+#if defined(ARCH_ARM64)
+	const bool use_fused = !g_ppu_avoid_strict_fma;
+#else
+	const bool use_fused = m_use_fma;
+#endif
+
+	if (use_fused)
 	{
 		set_vr(op.vd, vec_handle_result(fmuladd(a, c, b)));
 		return;

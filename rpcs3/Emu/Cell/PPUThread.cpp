@@ -177,6 +177,9 @@ extern std::pair<shared_ptr<lv2_overlay>, CellError> ppu_load_overlay(const ppu_
 extern void ppu_unload_prx(const lv2_prx&);
 extern shared_ptr<lv2_prx> ppu_load_prx(const ppu_prx_object&, bool virtual_load, const std::string&, s64 file_offset, utils::serial* = nullptr);
 extern void ppu_execute_syscall(ppu_thread& ppu, u64 code);
+
+// Defined in PPUTranslator.cpp: emit the allocator-friendly form of VMADDFP for this translation.
+extern thread_local bool g_ppu_avoid_strict_fma;
 static void ppu_break(ppu_thread&, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*);
 
 extern void do_cell_atomic_128_store(u32 addr, const void* to_write);
@@ -5340,6 +5343,11 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				contains_symbol_resolver,
 				daz_and_ftz,
 				arm64_codegen_v2,
+				arm64_codegen_v3,
+				arm64_codegen_v4,
+				arm64_codegen_v5,
+				arm64_codegen_v6,
+				arm64_codegen_v7,
 
 				__bitset_enum_max
 			};
@@ -5360,7 +5368,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			// Add a new value (arm64_codegen_v3, ...) and set that instead whenever ARM64 PPU
 			// codegen changes. Never re-toggle an old one -- that would collide with hashes already
 			// on disk from an earlier build.
-			settings += ppu_settings::arm64_codegen_v2;
+			settings += ppu_settings::arm64_codegen_v7;
 #endif
 			if (g_cfg.core.use_accurate_dfma)
 				settings += ppu_settings::accurate_dfma;
@@ -5577,6 +5585,50 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						// Use another JIT instance
 						jit_compiler jit2({}, g_cfg.core.llvm_cpu.to_string(), 0x1);
 						compiled_this_module = ppu_initialize2(jit2, part, cache_path, obj_name);
+
+#if defined(ARCH_ARM64)
+						// One retry with allocator-friendly codegen before giving the module up.
+						//
+						// Should now be unreachable: the cause was an LLVM bug, fixed in our
+						// vendored tree (AArch64FrameLowering::determineCalleeSaves returned
+						// early for CallingConv::GHC and so never reserved an emergency spill
+						// slot). Kept anyway, because it costs nothing unless a module actually
+						// fails and it is the difference between one slower module and a title
+						// that will not boot. If it ever fires again, the LLVM patch has been
+						// lost in a submodule bump.
+						//
+						// LLVM refuses some modules on AArch64 with "Cannot scavenge register
+						// without an emergency spill slot", triggered by the register pressure of
+						// llvm.fma on <4 x float> in VMADDFP. Losing the module is expensive out of
+						// all proportion to its size: its functions run through
+						// ppu_recompiler_fallback, which interprets a single instruction per
+						// iteration with a dispatcher read and a compare each time, so one lost
+						// module can take a title from full speed to unplayable. Saint Seiya: The
+						// Sanctuary (BLES01421, issue #25) black-screens on it, and was reported at
+						// 7fps before that.
+						//
+						// Retrying only here is what keeps the cost off everyone else: every module
+						// that compiled normally keeps its single fused FMLA, and only a module LLVM
+						// has ALREADY rejected pays for the double-precision form. A fresh jit is
+						// mandatory -- the previous instance is poisoned by the failed add and its
+						// engine cannot be reused.
+						if (!compiled_this_module && !Emu.IsStopped())
+						{
+							ppu_log.warning("LLVM: Retrying module %s with allocator-friendly codegen", obj_name);
+
+							g_ppu_avoid_strict_fma = true;
+
+							jit_compiler jit3({}, g_cfg.core.llvm_cpu.to_string(), 0x1);
+							compiled_this_module = ppu_initialize2(jit3, part, cache_path, obj_name);
+
+							g_ppu_avoid_strict_fma = false;
+
+							if (compiled_this_module)
+							{
+								ppu_log.success("LLVM: Module %s compiled on retry", obj_name);
+							}
+						}
+#endif
 					}
 
 					if (compiled_this_module)
@@ -6018,7 +6070,9 @@ static bool ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module
 		if (g_cfg.core.llvm_logs)
 		{
 			out << *_module; // print IR
+
 			fs::write_file(cache_path + obj_name + ".log", fs::rewrite, out.str());
+
 			result.clear();
 		}
 
