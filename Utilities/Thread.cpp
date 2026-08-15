@@ -2191,7 +2191,32 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 			if (g_tls_access_violation_recovered != addr)
 			{
 				vm_log.notice("\n%s", dump_useful_thread_info());
-				vm_log.always()("[%s] Access violation %s location 0x%x (%s)", cpu->get_name(), is_writing ? "writing" : "reading", addr, (is_writing && vm::check_addr(addr)) ? "read-only memory" : "unmapped memory");
+
+				// Name a guest halt for what it is.
+				//
+				// The SPU recompilers implement the HALT family (HGT/HEQ/HLGT and friends) by
+				// storing to 0xffdead00 on purpose, so the fault handler catches it -- see
+				// make_halt in SPULLVMRecompiler.cpp and its ASMJIT counterpart. Reported as a
+				// bare access violation it reads like an emulator crash at a nonsense address,
+				// and it is neither: those instructions are assertions the GAME compiled into
+				// its own SPU code, so reaching one means the program checked its state, found
+				// it wrong, and stopped itself. The interesting question is what fed it bad
+				// data, which is a completely different investigation from a stray pointer.
+				//
+				// The interpreter already says "Halt" here; only the recompiled path was
+				// silent about it. Hit on Eternal Sonata (BLJS10017), whose TCX_CellSpursKernel0
+				// halts and takes the game's forward progress with it.
+				if (addr >= 0xffdead00 && addr < 0xffdeae00)
+				{
+					vm_log.always()("[%s] SPU halted itself: the guest executed a HALT instruction"
+						" (trap store to 0x%x). This is the game's own assertion firing, not a bad"
+						" pointer -- something upstream handed it state it rejected.",
+						cpu->get_name(), addr);
+				}
+				else
+				{
+					vm_log.always()("[%s] Access violation %s location 0x%x (%s)", cpu->get_name(), is_writing ? "writing" : "reading", addr, (is_writing && vm::check_addr(addr)) ? "read-only memory" : "unmapped memory");
+				}
 			}
 
 			// TODO:
@@ -2544,12 +2569,37 @@ static void signal_handler(int /*sig*/, siginfo_t* info, void* uct) noexcept
 	const bool is_executing = err & 0x10;
 	const bool is_writing = err & 0x2;
 #elif defined(ARCH_ARM64)
-	const bool is_executing = uptr(info->si_addr) == uptr(RIP(context));
+	// Guess, replaced below by the hardware's own answer wherever that is available.
+	//
+	// This comparison is a heuristic and it decides something load-bearing: is_executing gates
+	// EVERY recovery path in this handler, so getting it wrong does not merely mislabel a log
+	// line, it skips handle_access_violation entirely and kills the thread. A data access whose
+	// faulting address happens to coincide with the PC is classified as an instruction fetch and
+	// takes that path, and the guest addresses most likely to collide are exactly the ones our
+	// own mappings sit at.
+	bool is_executing = uptr(info->si_addr) == uptr(RIP(context));
 
 #if defined(__linux__) || defined(__APPLE__)
 	// Current CPU state decoder is reverse-engineered from the linux kernel and may not work on other platforms.
 	const auto decoded_reason = aarch64::decode_fault_reason(context);
 	const bool is_writing = (decoded_reason == aarch64::fault_reason::data_write);
+
+	// ESR_EL1 says what the fault actually was, so prefer it over the address comparison.
+	//
+	// Only when the decode produced something meaningful: it returns 'undefined' when the signal
+	// frame carries no ESR record, and on that path the guess is still the best available answer.
+	// data_read/data_write are positive evidence that this is NOT an instruction fetch, which is
+	// the direction that matters -- it is what lets a genuine access violation reach the recovery
+	// path instead of terminating the thread.
+	if (decoded_reason == aarch64::fault_reason::data_read ||
+		decoded_reason == aarch64::fault_reason::data_write)
+	{
+		is_executing = false;
+	}
+	else if (decoded_reason == aarch64::fault_reason::instruction_execute)
+	{
+		is_executing = true;
+	}
 
 	if (decoded_reason != aarch64::fault_reason::data_write &&
 		decoded_reason != aarch64::fault_reason::data_read)

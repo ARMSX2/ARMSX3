@@ -91,10 +91,11 @@ constexpr const char s_spu_llvm_reg_scavenge_error[] = "Cannot scavenge register
 class spu_llvm_compile_scope
 {
 public:
-	spu_llvm_compile_scope(spu_llvm_compile_context& context, bool use_tbl2) noexcept
+	spu_llvm_compile_scope(spu_llvm_compile_context& context, bool use_tbl2, bool use_fma = true) noexcept
 	{
 		context = {};
 		context.use_tbl2 = use_tbl2;
+		context.use_fma = use_fma;
 		spu_llvm_set_compile_context(&context);
 	}
 
@@ -266,6 +267,57 @@ static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler
 		// Compilation produced nothing and said nothing. Reached in practice, and it was the
 		// one path here that left the block unmarked.
 		spu_log.error("LLVM produced no code for SPU block 0x%x without TBL2/TBX2 and reported no error.", program.entry_point);
+	}
+
+	// Second retry: drop strict FMA as well.
+	//
+	// Dropping TBL2/TBX2 relieves pressure in the permute path, which is not where every block
+	// spends its registers. spu_fma emits llvm.fma on f32[4] whenever m_use_fma is set -- and it
+	// is hardcoded set on ARM64 -- and llvm.fma is a HARD requirement to fuse, so the allocator
+	// cannot decompose it to get out of trouble. That exact instruction shape is what cost the PPU
+	// side a whole module: PPUTranslator's VMADDFP failed identically until it was allowed to fall
+	// back to the f64 form, at which point the module compiled and Saint Seiya (BLES01421) booted
+	// at full speed.
+	//
+	// Worth trying before giving the block up because the alternative is permanent: a marked block
+	// runs on the SPU interpreter for the rest of the session, every time it is entered, and these
+	// are SPURS kernels doing real work. Sonic Unleashed's block 0x7350 fails here with the same
+	// scavenger error and has been interpreted ever since; the TBL2/TBX2 retry did not save it.
+	//
+	// Only the block that already failed twice pays the f64 cost; everything else keeps its FMLA.
+	{
+		const auto fma_program = analyse_spu_llvm_program(*compiler, program);
+
+		if (fma_program == program)
+		{
+			spu_llvm_compile_context fma_context;
+			spu_function_t fma_result = nullptr;
+
+			{
+				spu_llvm_compile_scope scope(fma_context, false, false);
+
+				fma_result = compiler->compile(spu_program{fma_program});
+			}
+
+			if (fma_result)
+			{
+				spu_log.success("SPU LLVM block 0x%x compiled successfully without TBL2/TBX2 or strict FMA.", program.entry_point);
+				return fma_result;
+			}
+
+			if (!fma_context.llvm_error.empty())
+			{
+				spu_log.error("LLVM failed to compile SPU block 0x%x without strict FMA: %s. Discarding the poisoned JIT instance.", program.entry_point, fma_context.llvm_error);
+
+				static_cast<void>(compiler.release());
+				compiler = spu_recompiler_base::make_llvm_recompiler();
+				compiler->init();
+			}
+		}
+		else
+		{
+			spu_log.error("[0x%05x] SPU analyser failed during strict-FMA retry, %u vs %u", fma_program.entry_point, fma_program.data.size(), program.data.size());
+		}
 	}
 
 	// Every path that gives up marks the block, so the thread falls back to the interpreter.
@@ -1435,13 +1487,26 @@ void spu_cache::initialize(bool build_existing_cache)
 		return;
 	}
 
+	// Running out of JIT memory part-way is not a reason to throw the cache away.
+	//
+	// This used to return here, which skipped the global cache instance below and left
+	// g_fxo's spu_cache empty for the whole session. Nothing said so, and the consequence is
+	// invisible and permanent: every SPU function compiled after this point is compiled again
+	// from scratch on the next boot, so a title that exhausts JIT memory once pays the full
+	// precompilation cost every single launch and can exhaust it again the same way. Reported
+	// against God of War III, which trips this during boot and then carries on running -- the
+	// message says "fatal" and execution continues, which sent the reporter looking for a crash
+	// that never happened.
+	//
+	// The programs that DID build are valid and worth keeping; the rest are compiled on demand,
+	// which is the normal path for anything precompilation did not reach anyway. So report what
+	// was actually lost and fall through.
 	if (fail_flag)
 	{
-		spu_log.fatal("SPU Runtime: Cache building failed (out of memory).");
-		return;
+		spu_log.error("SPU Runtime: ran out of JIT memory after building %u programs."
+			" The rest are compiled on demand; cached programs are kept.", built_total);
 	}
-
-	if ((g_cfg.core.spu_decoder == spu_decoder_type::asmjit || g_cfg.core.spu_decoder == spu_decoder_type::llvm) && !func_list.empty())
+	else if ((g_cfg.core.spu_decoder == spu_decoder_type::asmjit || g_cfg.core.spu_decoder == spu_decoder_type::llvm) && !func_list.empty())
 	{
 		spu_log.success("SPU Runtime: Built %u functions.", func_list.size());
 	}
@@ -9176,6 +9241,26 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 	if (result.data.empty())
 	{
 		// Blocks starting from 0x0 or invalid instruction won't be compiled, may need special interpreter fallback
+#ifdef ARCH_ARM64
+		// Take the fallback the comment above asks for.
+		//
+		// An empty program tells the caller "nothing to compile", but nothing records that this
+		// address is hopeless, so the thread comes straight back and analyses it again. It never
+		// progresses and it never stops. Eternal Sonata (BLJS10017) pins two SPU threads this way
+		// at 0x5370 and 0xe1d8 the moment a battle ends, and the retry loop alone writes 300+ log
+		// lines a second -- on Android that is enough to stall the emulator by itself, so the game
+		// reads as frozen on the battle results screen rather than as anything SPU-related.
+		//
+		// Marking the block is what the compile-failure path already does, and it routes the
+		// thread to the SPU interpreter. Only the entry point is known here -- there is no program
+		// to describe the extent -- so the helper's entry+4 fallback applies and the interpreter
+		// releases the thread as soon as execution leaves that instruction. That is enough: the
+		// point is to break the loop, not to interpret the whole function.
+		//
+		// ARM64-only because the fallback machinery is: on x86 every block compiles, so there is
+		// nothing to fall back to and nothing to mark.
+		spu_mark_block_compile_failed(entry_point);
+#endif
 	}
 
 	if (!m_patterns.empty() && g_cfg.core.spu_debug)

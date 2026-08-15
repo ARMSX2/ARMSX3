@@ -1771,6 +1771,11 @@ public:
 #ifdef ARCH_ARM64
 		m_use_tbl2 = !g_spu_llvm_compile_context || g_spu_llvm_compile_context->use_tbl2;
 
+		// Same seam as m_use_tbl2, for the same reason: a retry after the register scavenger has
+		// already refused this block needs a way to ask for less pressure. Clearing this routes
+		// spu_fma's f32 llvm.fma to the f64 path already sitting beneath it.
+		m_use_fma = !g_spu_llvm_compile_context || g_spu_llvm_compile_context->use_fma;
+
 		if (g_spu_llvm_compile_context)
 		{
 			g_spu_llvm_compile_context->llvm_error.clear();

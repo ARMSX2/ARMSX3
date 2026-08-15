@@ -7058,7 +7058,26 @@ void spu_thread::halt()
 		spu_runtime::g_escape(this);
 	}
 
-	spu_log.fatal("Halt");
+	// Once per pc, for the same reason as UNK above: a halted SPURS kernel is re-entered and
+	// re-halts forever, and the two together wrote 600MB in a minute on Eternal Sonata.
+	{
+		static shared_mutex s_mutex;
+		static std::set<u32> s_seen;
+
+		bool first = false;
+
+		{
+			std::lock_guard lock(s_mutex);
+			first = s_seen.insert(pc).second;
+		}
+
+		if (first)
+		{
+			spu_log.fatal("Halt at 0x%05x -- the guest executed a HALT instruction, which is its"
+				" own assertion firing. Further halts here will not be reported.", pc);
+		}
+	}
+
 	spu_runtime::g_escape(this);
 }
 

@@ -70,6 +70,16 @@ struct spu_program
 struct spu_llvm_compile_context
 {
 	bool use_tbl2 = true;
+
+	// Allow llvm.fma (strictly fused) rather than the double-precision form.
+	//
+	// Cleared for a retry after AArch64's register scavenger has already refused the block.
+	// llvm.fma on <4 x float> is a hard requirement to fuse and raises register pressure enough
+	// to trip "Cannot scavenge register without an emergency spill slot"; the f64 path costs more
+	// arithmetic but allocates. Proven on the PPU side, where the same instruction shape in
+	// VMADDFP cost Saint Seiya (BLES01421) its whole module.
+	bool use_fma = true;
+
 	std::string llvm_error;
 };
 

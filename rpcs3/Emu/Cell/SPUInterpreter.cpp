@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "SPUInterpreter.h"
 
+#include <set>
+
 #include "Utilities/JIT.h"
 #include "SPUThread.h"
 #include "Emu/Cell/SPUAnalyser.h"
@@ -125,9 +127,32 @@ namespace asmjit
 }
 
 template <spu_exec_bit... Flags>
-bool UNK(spu_thread&, spu_opcode_t op)
+bool UNK(spu_thread& spu, spu_opcode_t op)
 {
-	spu_log.fatal("Unknown/Illegal instruction (0x%08x)", op.opcode);
+	// Once per opcode value, not once per execution.
+	//
+	// Returning false does not stop the thread, so a kernel that has jumped into data sits on the
+	// same bad word and re-reports it as fast as the interpreter can run. Measured at 600MB of
+	// log in about a minute on Eternal Sonata (BLJS10017), where an SPURS kernel ends up executing
+	// the ASCII text "RSST" (0x52535354) -- and log volume alone is enough to stall the emulator
+	// on Android, so the flood becomes a second, louder symptom on top of the real one.
+	//
+	// Keyed on the opcode so a genuinely new illegal instruction is still reported, and the pc is
+	// included because "which text is it running" is the useful half of the message.
+	static shared_mutex s_mutex;
+	static std::set<u32> s_seen;
+
+	{
+		std::lock_guard lock(s_mutex);
+
+		if (!s_seen.insert(op.opcode).second)
+		{
+			return false;
+		}
+	}
+
+	spu_log.fatal("Unknown/Illegal instruction (0x%08x) at 0x%05x -- further occurrences of this"
+		" opcode will not be reported", op.opcode, spu.pc);
 	return false;
 }
 
