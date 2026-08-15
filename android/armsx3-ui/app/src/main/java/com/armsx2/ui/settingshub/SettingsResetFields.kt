@@ -48,6 +48,7 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
         "osdShowTextureReplacements", "portraitRenderTop", "precacheTextureReplacements",
         "ps3AnisoFilter", "ps3AsyncTexStream", "ps3DisableZcull", "ps3DisplayAspect",
         "ps3MsaaMode", "ps3MultithreadedRsx", "ps3ReadColorBuffers", "ps3ReadDepthBuffer",
+        "ps3FrameGeneration",
         "ps3RelaxedZcull", "ps3Resolution", "ps3ShaderMode", "ps3StrictRendering",
         "ps3VramLimitMb", "ps3WriteColorBuffers", "ps3WriteDepthBuffer", "renderer",
         "shadeBoost", "shadeBoostBrightness", "shadeBoostContrast", "shadeBoostGamma",

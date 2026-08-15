@@ -126,6 +126,14 @@ data class Ps3Settings(
      * wait for their real shader instead of running through the interpreter.
      */
     val shaderMode: Int = 1,
+    /** Lossless Scaling frame generation: 0 Off, 1 x2, 2 x3, 3 x4. Off unless the user has
+     *  supplied shaders from their own copy -- nothing is bundled. */
+    val frameGeneration: Int = 0,
+    // Default ON: 3.1p is the cheaper of the two shader families framegen ships, and on a mobile
+    // GPU the full-quality path costs more than the frames it buys.
+    val frameGenPerformance: Boolean = true,
+    // Optical-flow resolution as a percentage of full; lower is cheaper and blurrier in motion.
+    val frameGenFlowScale: Int = 100,
     val writeColorBuffers: Boolean = false,
     val writeDepthBuffer: Boolean = false,
     val readColorBuffers: Boolean = false,
@@ -278,10 +286,17 @@ data class Ps3Settings(
     val overlayPosition: Int = 0,
     // RPCS3 stores these as "#RRGGBBAA" strings. Kept as packed ARGB ints here so
     // the existing colour picker can drive them, and converted on the way out.
-    val overlayBodyColor: Int = 0xFFE138FF.toInt(),
-    val overlayBodyBg: Int = 0x002339FF,
-    val overlayTitleColor: Int = 0xF26C24FF.toInt(),
-    val overlayTitleBg: Int = 0x00000000,
+    // ARGB, because that is what Android colour ints are and what argbToRgba() converts FROM.
+    //
+    // These used to hold RPCS3's RGBA hex values verbatim (0xFFE138FF and friends), which are the
+    // right colours in the wrong order: argbToRgba then read the leading FF as alpha and rotated
+    // every channel one byte left, turning the default orange #FFE138FF into #E138FFFF. That is
+    // the pink the overlay has always drawn in, and it made the colour pickers look broken --
+    // every value the user chose was rotated the same way, so nothing ever matched.
+    val overlayBodyColor: Int = 0xFFFFE138.toInt(),   // core #FFE138FF
+    val overlayBodyBg: Int = 0xFF002339.toInt(),      // core #002339FF
+    val overlayTitleColor: Int = 0xFFF26C24.toInt(),  // core #F26C24FF
+    val overlayTitleBg: Int = 0x00000000,             // core #00000000, fully transparent
 )
 
 data class Settings(
@@ -1048,6 +1063,9 @@ data class Settings(
         put("PS3/Overlay", "Title Background (hex)", "string", argbToRgba(ps3.overlayTitleBg))
         put("PS3/Video", "MSAA", "enum", ps3.msaaMode.toString())
         put("PS3/Video", "Shader Mode", "enum", ps3.shaderMode.toString())
+        put("PS3/Video", "Frame Generation", "enum", ps3.frameGeneration.toString())
+        put("PS3/Video", "Frame Generation Performance Mode", "bool", ps3.frameGenPerformance.toString())
+        put("PS3/Video", "Frame Generation Flow Scale", "int", ps3.frameGenFlowScale.toString())
         put("PS3/Video", "Write Color Buffers", "bool", ps3.writeColorBuffers.toString())
         put("PS3/Video", "Write Depth Buffer", "bool", ps3.writeDepthBuffer.toString())
         put("PS3/Video", "Read Color Buffers", "bool", ps3.readColorBuffers.toString())
@@ -2016,6 +2034,9 @@ data class Settings(
         put("ps3MsaaMode", ps3.msaaMode)
         put("ps3AudioCubebBackend", ps3.audioCubebBackend)
         put("ps3ShaderMode", ps3.shaderMode)
+        put("ps3FrameGeneration", ps3.frameGeneration)
+        put("ps3FrameGenPerformance", ps3.frameGenPerformance)
+        put("ps3FrameGenFlowScale", ps3.frameGenFlowScale)
         put("ps3WriteColorBuffers", ps3.writeColorBuffers)
         put("ps3GpuTurbo", ps3.gpuTurbo)
         put("ps3SilenceAllLogs", ps3.silenceAllLogs)
@@ -2355,6 +2376,9 @@ data class Settings(
                     msaaMode = json.optInt("ps3MsaaMode", def.ps3.msaaMode),
                     audioCubebBackend = json.optInt("ps3AudioCubebBackend", def.ps3.audioCubebBackend),
                     shaderMode = json.optInt("ps3ShaderMode", def.ps3.shaderMode),
+                    frameGeneration = json.optInt("ps3FrameGeneration", def.ps3.frameGeneration),
+                    frameGenPerformance = json.optBoolean("ps3FrameGenPerformance", def.ps3.frameGenPerformance),
+                    frameGenFlowScale = json.optInt("ps3FrameGenFlowScale", def.ps3.frameGenFlowScale),
                     writeColorBuffers = json.optBoolean("ps3WriteColorBuffers", def.ps3.writeColorBuffers),
                     gpuTurbo = json.optBoolean("ps3GpuTurbo", def.ps3.gpuTurbo),
                     silenceAllLogs = json.optBoolean("ps3SilenceAllLogs", def.ps3.silenceAllLogs),
@@ -2674,6 +2698,9 @@ data class Settings(
             if (current.ps3.msaaMode != base.ps3.msaaMode) j.put("ps3MsaaMode", current.ps3.msaaMode)
             if (current.ps3.audioCubebBackend != base.ps3.audioCubebBackend) j.put("ps3AudioCubebBackend", current.ps3.audioCubebBackend)
             if (current.ps3.shaderMode != base.ps3.shaderMode) j.put("ps3ShaderMode", current.ps3.shaderMode)
+            if (current.ps3.frameGeneration != base.ps3.frameGeneration) j.put("ps3FrameGeneration", current.ps3.frameGeneration)
+            if (current.ps3.frameGenPerformance != base.ps3.frameGenPerformance) j.put("ps3FrameGenPerformance", current.ps3.frameGenPerformance)
+            if (current.ps3.frameGenFlowScale != base.ps3.frameGenFlowScale) j.put("ps3FrameGenFlowScale", current.ps3.frameGenFlowScale)
             if (current.ps3.writeColorBuffers != base.ps3.writeColorBuffers) j.put("ps3WriteColorBuffers", current.ps3.writeColorBuffers)
             if (current.ps3.gpuTurbo != base.ps3.gpuTurbo) j.put("ps3GpuTurbo", current.ps3.gpuTurbo)
             if (current.ps3.silenceAllLogs != base.ps3.silenceAllLogs) j.put("ps3SilenceAllLogs", current.ps3.silenceAllLogs)
@@ -2974,6 +3001,9 @@ data class Settings(
                     msaaMode = if (overrides.has("ps3MsaaMode")) overrides.getInt("ps3MsaaMode") else base.ps3.msaaMode,
                     audioCubebBackend = if (overrides.has("ps3AudioCubebBackend")) overrides.getInt("ps3AudioCubebBackend") else base.ps3.audioCubebBackend,
                     shaderMode = if (overrides.has("ps3ShaderMode")) overrides.getInt("ps3ShaderMode") else base.ps3.shaderMode,
+                    frameGeneration = if (overrides.has("ps3FrameGeneration")) overrides.getInt("ps3FrameGeneration") else base.ps3.frameGeneration,
+                    frameGenPerformance = if (overrides.has("ps3FrameGenPerformance")) overrides.getBoolean("ps3FrameGenPerformance") else base.ps3.frameGenPerformance,
+                    frameGenFlowScale = if (overrides.has("ps3FrameGenFlowScale")) overrides.getInt("ps3FrameGenFlowScale") else base.ps3.frameGenFlowScale,
                     writeColorBuffers = if (overrides.has("ps3WriteColorBuffers")) overrides.getBoolean("ps3WriteColorBuffers") else base.ps3.writeColorBuffers,
                     gpuTurbo = if (overrides.has("ps3GpuTurbo")) overrides.getBoolean("ps3GpuTurbo") else base.ps3.gpuTurbo,
                     silenceAllLogs = if (overrides.has("ps3SilenceAllLogs")) overrides.getBoolean("ps3SilenceAllLogs") else base.ps3.silenceAllLogs,

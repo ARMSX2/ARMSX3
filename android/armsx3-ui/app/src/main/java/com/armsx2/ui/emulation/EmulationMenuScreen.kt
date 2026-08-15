@@ -710,15 +710,41 @@ private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuVie
         // than carrying its own copy. Safe to add here: this card's rows are plain switches with
         // their own callbacks — SessionPane's selectedAction indexes the action GRID above, not
         // these, so inserting a row can't shift the controller dispatch.
-        val osdColorIndex = com.armsx2.ui.settings.OSD_COLORS
-            .indexOf(state.settings.osdColor).coerceAtLeast(0)
+        //
+        // Writes RPCS3's overlay body colour. It used to write `osdColor`, i.e. PCSX2's
+        // EmuCore/GS/OsdColor plus a stubbed NativeApp.osdSetColor(), so cycling this row in a
+        // game changed nothing whatsoever — the most visible place for a control that did not work.
+        val osdColorIndex = com.armsx2.ui.settings.osdPresetIndex(state.settings.ps3.overlayBodyColor)
         MenuCycleRow(
             title = str("overlay.osdColor.label"),
-            valueLabel = str(com.armsx2.ui.settings.OSD_COLOR_LABEL_KEYS[osdColorIndex]),
+            // A colour set with the RGBA sliders is on no preset; say so rather than naming
+            // whichever preset happens to sit at index 0.
+            valueLabel = if (osdColorIndex >= 0)
+                str(com.armsx2.ui.settings.OSD_COLOR_LABEL_KEYS[osdColorIndex])
+            else str("overlay.osdColor.custom"),
         ) { step ->
             val size = com.armsx2.ui.settings.OSD_COLORS.size
             val next = ((osdColorIndex + step) % size + size) % size
-            viewModel.updateSettings { it.copy(osdColor = com.armsx2.ui.settings.OSD_COLORS[next]) }
+            viewModel.updateSettings {
+                it.copy(ps3 = it.ps3.copy(overlayBodyColor = com.armsx2.ui.settings.OSD_COLORS[next]))
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        // Where the overlay sits. Only the All Settings tab had this, which made it unreachable
+        // at the one moment it matters -- when the stats are sitting on top of something in the
+        // game you are trying to look at.
+        val osdPositionLabels = listOf(
+            "overlay.position.topLeft", "overlay.position.topRight",
+            "overlay.position.bottomLeft", "overlay.position.bottomRight",
+        )
+        val osdPositionIndex = state.settings.ps3.overlayPosition.coerceIn(0, 3)
+        MenuCycleRow(
+            title = str("overlay.position.label"),
+            valueLabel = str(osdPositionLabels[osdPositionIndex]),
+        ) { step ->
+            val size = osdPositionLabels.size
+            val next = ((osdPositionIndex + step) % size + size) % size
+            viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(overlayPosition = next)) }
         }
     }
     SectionCard(str("savestate.title.loadManage")) {
@@ -1012,6 +1038,20 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
     // Removed: PS2 wait-loop detection.
     // The PS3's processors, not the PS2's. EE/IOP/VU0/VU1/Fastmem are PCSX2
     // recompiler toggles for silicon that does not exist here.
+    // Frame generation first: it is the one setting here that changes the framerate rather than
+    // how fast the emulator runs, so it is what someone opening this menu mid-game is looking for.
+    SectionCard(str("perf.framegen.title")) {
+        HorizontalOptions(
+            title = str("perf.framegen.label"),
+            options = listOf(
+                str("perf.framegen.off"), str("perf.framegen.x2"),
+                str("perf.framegen.x3"), str("perf.framegen.x4"),
+            ).mapIndexed { index, label -> index to label },
+            selected = settings.ps3.frameGeneration,
+            onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGeneration = v)) } },
+        )
+    }
+    Spacer(Modifier.height(10.dp))
     SectionCard(str("perf.ps3cpu.title")) {
         HorizontalOptions(
             title = str("perf.ppuDecoder.label"),

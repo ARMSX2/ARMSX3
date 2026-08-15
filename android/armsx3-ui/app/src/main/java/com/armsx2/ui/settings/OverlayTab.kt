@@ -35,15 +35,18 @@ import androidx.core.content.edit
  *  Internal, not private: the in-game quick menu cycles the same palette, and two copies would
  *  drift the moment one gains a colour. */
 internal val OSD_COLORS = listOf(
-    0x000000, // default (white — 0 means "unset" to the renderer)
-    0x66FF66, // green
-    0x66E0FF, // cyan
-    0xFFE066, // yellow
-    0xFFA64D, // orange
-    0xFF6666, // red
-    0xFF7AC8, // pink
-    0xC08CFF, // purple
+    0xFFFFFFFF.toInt(), // white
+    0xFF66FF66.toInt(), // green
+    0xFF66E0FF.toInt(), // cyan
+    0xFFFFE066.toInt(), // yellow
+    0xFFFFA64D.toInt(), // orange
+    0xFFFF6666.toInt(), // red
+    0xFFFF7AC8.toInt(), // pink
+    0xFFC08CFF.toInt(), // purple
 )
+
+/** Which preset [argb] is, or -1 for a colour picked with the RGBA sliders instead. */
+internal fun osdPresetIndex(argb: Int): Int = OSD_COLORS.indexOf(argb)
 
 /** i18n keys for [OSD_COLORS], same order. */
 internal val OSD_COLOR_LABEL_KEYS = listOf(
@@ -99,14 +102,21 @@ fun OverlayTab(state: MutableState<Settings>) {
 
         // OSD text colour. A preset row rather than an RGB picker: SegmentedRow is already
         // controller-navigable (Left/Right/Confirm), whereas a colour wheel would demand
-        // pointer input and strand pad-only devices. 0 = leave it white, so nobody's OSD
-        // changes appearance until they choose to.
+        // pointer input and strand pad-only devices. The RGBA sliders further down set the
+        // same value for anyone who wants a colour that is not on this list.
+        //
+        // This used to write `osdColor`, which is PCSX2's EmuCore/GS/OsdColor plus a
+        // NativeApp.osdSetColor() that is an Unsupported.note() stub in this app -- so it did
+        // nothing at all here, on either the settings tab or the in-game menu, and the OSD
+        // stayed whatever RPCS3's default was. It writes RPCS3's own overlay body colour now.
         SegmentedRow(
             label = str("overlay.osdColor.label"),
             options = OSD_COLOR_LABEL_KEYS.map { str(it) },
-            selectedIndex = OSD_COLORS.indexOf(s.osdColor).coerceAtLeast(0),
+            // No match means the RGBA sliders were used; -1 leaves every segment unselected
+            // rather than lying about which preset is active.
+            selectedIndex = osdPresetIndex(s.ps3.overlayBodyColor),
             description = str("overlay.osdColor.description"),
-            onChange = { apply(s.copy(osdColor = OSD_COLORS[it])) },
+            onChange = { apply(s.copy(ps3 = s.ps3.copy(overlayBodyColor = OSD_COLORS[it]))) },
         )
         SettingsDivider()
 
