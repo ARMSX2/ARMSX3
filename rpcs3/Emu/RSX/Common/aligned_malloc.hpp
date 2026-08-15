@@ -22,6 +22,16 @@ namespace rsx
 #elif defined(__APPLE__)
 			constexpr size_t NativeAlign = std::max(Align, sizeof(void*));
 			return std::aligned_alloc(NativeAlign, align_up<NativeAlign>(size));
+#elif defined(__ANDROID__) && __ANDROID_API__ < 28
+			// aligned_alloc only exists from API 28. posix_memalign is the older spelling and its
+			// result is freed with plain free(), so the rest of this header is unaffected.
+			constexpr size_t NativeAlign = std::max(Align, sizeof(void*));
+			void* aligned_ptr = nullptr;
+			if (posix_memalign(&aligned_ptr, NativeAlign, align_up<NativeAlign>(size)) != 0)
+			{
+				return nullptr;
+			}
+			return aligned_ptr;
 #else
 			return std::aligned_alloc(Align, align_up<Align>(size));
 #endif
@@ -43,6 +53,13 @@ namespace rsx
 #if defined(__APPLE__)
 			constexpr size_t NativeAlign = std::max(Align, sizeof(void*));
 			void* ret = std::aligned_alloc(NativeAlign, align_up<NativeAlign>(new_size));
+#elif defined(__ANDROID__) && __ANDROID_API__ < 28
+			constexpr size_t NativeAlign = std::max(Align, sizeof(void*));
+			void* ret = nullptr;
+			if (posix_memalign(&ret, NativeAlign, align_up<NativeAlign>(new_size)) != 0)
+			{
+				return nullptr;
+			}
 #else
 			void* ret = std::aligned_alloc(Align, align_up<Align>(new_size));
 #endif

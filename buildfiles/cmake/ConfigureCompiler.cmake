@@ -22,7 +22,18 @@ else()
 	if (APPLE)
 		check_cxx_compiler_flag("-march=armv8.4-a" COMPILER_ARM)
 	else()
-		check_cxx_compiler_flag("-march=armv8.1-a" COMPILER_ARM)
+		# Per-variant, set by android/build-variants.sh. Default is the standard/new target;
+		# the legacy variant passes armv8-a so it still runs on Cortex-A53/A73-class cores.
+		# (clang spells the 8.0 baseline "armv8-a" and rejects "armv8.0-a" outright.)
+		#
+		# armv8.0, NOT armv8.1: ARMv8.1 mandates LSE atomics and the mobile core line skipped that
+		# revision entirely -- A53/A72/A73 are 8.0 and A55/A75 onwards are 8.2. An armv8.1 build
+		# therefore faults on exactly the old devices a fallback exists for, while running only on
+		# parts that already handle 8.2. It is 8.0 or it is pointless.
+		if (NOT DEFINED ARMSX3_ARM_MARCH)
+			set(ARMSX3_ARM_MARCH "armv8.2-a+dotprod+fp16")
+		endif()
+		check_cxx_compiler_flag("-march=${ARMSX3_ARM_MARCH}" COMPILER_ARM)
 	endif()
 
 	add_compile_options(-Wall)
@@ -37,7 +48,15 @@ else()
 		if (APPLE)
 			add_compile_options(-march=armv8.4-a)
 		else()
-			add_compile_options(-march=armv8.1-a)
+			# Default armv8.2-a+dotprod+fp16. dotprod is only mandatory from 8.4 and FP16
+			# arithmetic is optional in 8.2, so "armv8.2-a" alone guarantees neither and both
+			# are named. LSE atomics come from the 8.1 baseline and are already implied.
+			#
+			# This is a hard floor, not a preference: the instructions can appear anywhere in
+			# the C++, and a device without them faults rather than falling back. Cortex-A55/A75
+			# and later, i.e. Snapdragon 845 (2018) onward. The legacy variant overrides this
+			# with armv8.1-a to stay below that line.
+			add_compile_options(-march=${ARMSX3_ARM_MARCH})
 		endif()
 	elseif(COMPILER_X86)
 		# Some compilers will set both X86 and ARM, so check explicitly for ARM first
