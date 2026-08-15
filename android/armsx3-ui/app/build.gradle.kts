@@ -27,10 +27,13 @@ android {
 
     defaultConfig {
         applicationId = "com.armsx3"
-        minSdk = 26
+        // Set per variant by android/build-variants.sh: 33 for the A13 build (NDK 28), 35 for
+        // the A15 build (NDK 29). The core is compiled against the matching API, so these must
+        // agree -- an APK that installs below its core's target is a dlopen failure at boot.
+        minSdk = (project.findProperty("armsx3.minSdk") as String?)?.toInt() ?: 33
         targetSdk = 37
-        versionCode = 13
-        versionName = "0.7.2"
+        versionCode = 14
+        versionName = "0.8"
 
         // ARMSX2's UI reads these. STORAGE_ALL_FILES gates the all-files storage path in
         // onboarding; IN_APP_UPDATER gates the in-app GitHub-release updater.
