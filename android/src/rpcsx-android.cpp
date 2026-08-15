@@ -2,6 +2,7 @@
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
 #include "Emu/Audio/Cubeb/CubebBackend.h"
+#include "Emu/RSX/VK/VKFrameGen.h"
 #include "Emu/Audio/Oboe/OboeBackend.h"
 #include "Emu/Audio/Null/NullAudioBackend.h"
 #include "Emu/Cell/PPUAnalyser.h"
@@ -113,6 +114,12 @@ static std::atomic<u64> g_native_window_size;
 // Set when losing the surface is what paused the emulator, so getting it back resumes only
 // the pause we caused.
 static std::atomic<bool> g_paused_by_surface_loss;
+
+// Bumped every time g_native_window starts pointing somewhere else. See
+// GSFrameBase::display_epoch: a new Surface with the same dimensions as the old one is otherwise
+// undetectable by the renderer, and boot-then-immediately-open-a-game is exactly when the
+// emulation SurfaceView is replaced under a swapchain that has already been built.
+static std::atomic<u64> g_native_window_epoch;
 extern std::string g_android_executable_dir;
 extern std::string g_android_config_dir;
 extern std::string g_android_cache_dir;
@@ -387,12 +394,26 @@ struct GraphicsFrame : GSFrameBase {
 
   ANativeWindow *getNativeWindow() const {
     ANativeWindow *result;
+
+    // Waiting here is normal for a moment at boot -- the RSX thread usually starts before the
+    // SurfaceView has been laid out. Waiting here FOREVER is not, and used to be completely
+    // silent: surfaceChanged is a one-shot, so a single missed delivery parked this loop for the
+    // rest of the session. The symptom was a black game area at 0% CPU with the log stopping dead
+    // just after Vulkan device creation and nothing at all to say why. Say so instead.
+    u32 waited_ms = 0;
+
     while ((result = g_native_window.load()) == nullptr) [[unlikely]] {
       if (Emu.IsStopped()) {
         return activeNativeWindow;
       }
 
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      waited_ms += 100;
+
+      if (waited_ms % 3000 == 0) {
+        rpcsx_android.error("Still waiting for a Surface after %u ms -- the renderer cannot start "
+                            "until surfaceChanged reaches native.", waited_ms);
+      }
     }
 
     if (result != activeNativeWindow) [[unlikely]] {
@@ -528,6 +549,8 @@ struct GraphicsFrame : GSFrameBase {
   }
 
   display_handle_t handle() const override { return getNativeWindow(); }
+
+  u64 display_epoch() const override { return g_native_window_epoch.load(); }
 
   bool can_consume_frame() const override { return false; }
 
@@ -3631,6 +3654,7 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
     auto prevWindow = g_native_window.exchange(nullptr);
     if (prevWindow != nullptr) {
       ANativeWindow_release(prevWindow);
+      g_native_window_epoch.fetch_add(1);
     }
 
     // get_pad_thread() defaults to relaxed=false, which is
@@ -3689,6 +3713,15 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
 
     if (prevWindow != nullptr) {
       ANativeWindow_release(prevWindow);
+    }
+
+    // Only when it really is a different window. Rotation keeps the same one (the activity
+    // handles orientation itself), and bumping on every surfaceChanged would rebuild the
+    // swapchain for nothing on every rotation.
+    if (prevWindow != newWindow) {
+      g_native_window_epoch.fetch_add(1);
+      rpcsx_android.notice("native window replaced (%p -> %p), swapchain will be rebuilt",
+                           prevWindow, newWindow);
     }
 
     if (event == 0 && g_paused_by_surface_loss && Emu.IsPaused()) {
@@ -4665,6 +4698,26 @@ extern "C" void _rpcsx_settingsEndBatch() {
   if (g_settings_batch_dirty.exchange(false)) {
     Emulator::SaveSettings(g_cfg.to_string(), "");
   }
+}
+
+// Import the Lossless Scaling shaders from a file the user chose.
+//
+// The path is a real filesystem path, not a content:// URI -- the Kotlin side copies the picked
+// file into app storage first, because the extraction walks the PE with ordinary file IO.
+//
+// Returns the number of shaders extracted, negative on failure. The message is left where
+// frameGenShaderError can retrieve it, so the settings screen can say what actually went wrong
+// rather than "import failed".
+extern "C" int _rpcsx_frameGenImportShaders(std::string_view path) {
+  return vk::frame_gen::import_shaders(std::string(path));
+}
+
+extern "C" int _rpcsx_frameGenShaderCount() {
+  return vk::frame_gen::shader_count();
+}
+
+extern "C" const char *_rpcsx_frameGenShaderError() {
+  return vk::frame_gen::last_error();
 }
 
 extern "C" bool _rpcsx_settingsSet(std::string_view path,

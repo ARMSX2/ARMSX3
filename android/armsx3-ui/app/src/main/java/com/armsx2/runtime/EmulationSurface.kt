@@ -57,6 +57,41 @@ class EmulationSurface(context: Context) :
         super.onAttachedToWindow()
         hostWindow()?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         displayManager.registerDisplayListener(this, null)
+        redeliverSurface()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility == VISIBLE) redeliverSurface()
+    }
+
+    /**
+     * Hand the current Surface to native again, if we already have a usable one.
+     *
+     * surfaceChanged is a ONE-SHOT: Android delivers it when the surface is created or resized and
+     * never repeats it. The native renderer blocks in getNativeWindow() until that single delivery
+     * arrives — a 100 ms sleep loop with no timeout — so if it is ever missed, the RSX thread parks
+     * forever and the game area stays black at 0% CPU with the boot log stopping dead just after
+     * Vulkan device creation. That is the "launch a game the instant the app opens and get a black
+     * screen" report: the SurfaceView and its compositor layer exist, the touch controls draw over
+     * it, and nothing is wrong except that native was never told. Rotating the device "fixed" it
+     * only because a configuration change forces a fresh surfaceChanged.
+     *
+     * Re-delivering is safe and idempotent: the native side compares the incoming ANativeWindow
+     * against the one it holds and treats an identical pointer as a no-op, so calling this on every
+     * attach and every window-visibility change costs nothing when the surface already arrived.
+     */
+    fun redeliverSurface() {
+        // post() rather than inline: onAttachedToWindow runs before layout, so width/height are
+        // still 0 here, and a 0x0 report is exactly what the native side is told to ignore.
+        post {
+            val current = holder.surface
+
+            if (current != null && current.isValid && width > 0 && height > 0) {
+                pushDisplayCutoutInset(width, height)
+                NativeApp.onNativeSurfaceChanged(current, width, height)
+            }
+        }
     }
 
     override fun onDetachedFromWindow() {
