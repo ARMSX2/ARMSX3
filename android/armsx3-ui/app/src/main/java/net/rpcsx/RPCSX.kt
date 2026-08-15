@@ -71,6 +71,12 @@ enum class BootResult
 
 class RPCSX {
     external fun openLibrary(path: String): Boolean
+
+    /** Extract the Lossless Scaling shaders from a real filesystem path. Returns how many were
+     *  found, or a negative value; frameGenShaderError() then explains why. */
+    external fun frameGenImportShaders(path: String): Int
+    external fun frameGenShaderCount(): Int
+    external fun frameGenShaderError(): String
     external fun getLibraryVersion(path: String): String?
     external fun initialize(rootDir: String, user: String, socInfo: String): Boolean
     external fun installFw(fd: Int, progressId: Long): Boolean

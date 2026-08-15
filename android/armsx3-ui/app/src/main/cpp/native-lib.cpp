@@ -56,6 +56,9 @@ struct RPCSXApi {
   std::string (*getUser)();
   std::string (*settingsGet)(std::string_view path);
   bool (*settingsSet)(std::string_view path, std::string_view valueString);
+  int (*frameGenImportShaders)(std::string_view path);
+  int (*frameGenShaderCount)();
+  const char *(*frameGenShaderError)();
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
   bool (*installSplitPkg)(JNIEnv *env, const int *fds, int count, long progressId);
@@ -147,6 +150,12 @@ struct RPCSXLibrary : RPCSXApi {
     result.getUser = reinterpret_cast<decltype(getUser)>(dlsym(handle, "_rpcsx_getUser"));
     result.settingsGet = reinterpret_cast<decltype(settingsGet)>(dlsym(handle, "_rpcsx_settingsGet"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
+    // Resolved without ensure(): a core built before frame generation existed simply has no such
+    // symbol, and refusing to load it over a missing optional feature would be worse than the
+    // feature being absent. The Kotlin side treats a null here as "unsupported".
+    result.frameGenImportShaders = reinterpret_cast<decltype(frameGenImportShaders)>(dlsym(handle, "_rpcsx_frameGenImportShaders"));
+    result.frameGenShaderCount = reinterpret_cast<decltype(frameGenShaderCount)>(dlsym(handle, "_rpcsx_frameGenShaderCount"));
+    result.frameGenShaderError = reinterpret_cast<decltype(frameGenShaderError)>(dlsym(handle, "_rpcsx_frameGenShaderError"));
     result.settingsBeginBatch = reinterpret_cast<decltype(settingsBeginBatch)>(dlsym(handle, "_rpcsx_settingsBeginBatch"));
     result.settingsEndBatch = reinterpret_cast<decltype(settingsEndBatch)>(dlsym(handle, "_rpcsx_settingsEndBatch"));
     result.installSplitPkg = reinterpret_cast<decltype(installSplitPkg)>(dlsym(handle, "_rpcsx_installSplitPkg"));
@@ -1010,4 +1019,24 @@ Java_net_rpcsx_RPCSX_getRsxThreadTid(JNIEnv *, jobject) {
     return 0;
   }
   return static_cast<jint>(rpcsxLib.getRsxThreadTid());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_frameGenImportShaders(JNIEnv *env, jobject, jstring path) {
+  if (!rpcsxLib.frameGenImportShaders) {
+    return -1;
+  }
+
+  return rpcsxLib.frameGenImportShaders(unwrap(env, path));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_frameGenShaderCount(JNIEnv *, jobject) {
+  return rpcsxLib.frameGenShaderCount ? rpcsxLib.frameGenShaderCount() : 0;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_frameGenShaderError(JNIEnv *env, jobject) {
+  const char *msg = rpcsxLib.frameGenShaderError ? rpcsxLib.frameGenShaderError() : "";
+  return env->NewStringUTF(msg ? msg : "");
 }

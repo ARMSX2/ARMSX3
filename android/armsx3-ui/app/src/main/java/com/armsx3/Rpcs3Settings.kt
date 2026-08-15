@@ -403,6 +403,19 @@ object Rpcs3Settings {
     fun setShaderMode(index: Int) =
         setEnum("$VIDEO@@Shader Mode", SHADER_MODES.getOrElse(index) { SHADER_MODES[2] })
 
+    /** Frame Generation. Names, not indices -- cfg::_enum matches on the string the core's
+     *  fmt_class_string produces, and these have to stay in step with frame_generation_mode. */
+    private val FRAME_GENERATION = arrayOf("Off", "x2", "x3", "x4")
+
+    fun setFrameGenPerformance(on: Boolean) =
+        setBool("$VIDEO@@Frame Generation Performance Mode", on)
+
+    fun setFrameGenFlowScale(percent: Int) =
+        setInt("$VIDEO@@Frame Generation Flow Scale", percent.coerceIn(25, 100))
+
+    fun setFrameGeneration(index: Int) =
+        setEnum("$VIDEO@@Frame Generation", FRAME_GENERATION.getOrElse(index) { FRAME_GENERATION[0] })
+
     fun setWriteDepthBuffer(v: Boolean) = setBool("$VIDEO@@Write Depth Buffer", v)
     fun setReadColorBuffers(v: Boolean) = setBool("$VIDEO@@Read Color Buffers", v)
     fun setReadDepthBuffer(v: Boolean) = setBool("$VIDEO@@Read Depth Buffer", v)
