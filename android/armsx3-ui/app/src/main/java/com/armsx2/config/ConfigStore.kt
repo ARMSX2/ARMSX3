@@ -109,7 +109,20 @@ object ConfigStore {
     private const val BACKUP_FILENAME = "armsx2-settings.json"
     private fun keyForGame(serial: String) = "config.game.$serial"
 
+    // Memoized result of loadGlobal(). The function below is a JSON parse plus every
+    // migration block in this file -- 24,555 dex instructions by ART's count, over its
+    // JIT ceiling, so it runs interpreted every single call. That would be fine if it
+    // were called rarely, but EmulationSurface's frame-rate monitor re-resolves the
+    // config every 5 seconds of gameplay (measured: one ART bailout log line per 5.00s
+    // for entire sessions), all to read one boolean. The migrations are one-shot by
+    // their own prefs flags, so caching the parsed result is behavior-identical; the
+    // cache is refreshed by saveGlobal (the only writer of KEY_GLOBAL after boot) and
+    // dropped by reconcileReusedFolder, whose restore writes the pref directly.
+    @Volatile
+    private var cachedGlobal: Settings? = null
+
     fun loadGlobal(): Settings {
+        cachedGlobal?.let { return it }
         val raw = MainActivityRuntime.prefs.getString(KEY_GLOBAL, null)
         var parsed = if (raw != null) {
             try { Settings.fromJson(JSONObject(raw)) } catch (_: Exception) { Settings() }
@@ -567,6 +580,7 @@ object ConfigStore {
         }
 
         if (dirty) saveGlobal(parsed)
+        cachedGlobal = parsed
         return parsed
     }
 
@@ -586,6 +600,7 @@ object ConfigStore {
 
     fun saveGlobal(s: Settings) {
         MainActivityRuntime.prefs.edit { putString(KEY_GLOBAL, s.toJson().toString()) }
+        cachedGlobal = s
         writeBackupMirror()
     }
 
@@ -769,6 +784,10 @@ object ConfigStore {
         MainActivityRuntime.prefs.edit { putBoolean(KEY_FOLDER_RECONCILE, true) }
         // Hard guard: an existing new-UI user (has config.global) is off-limits.
         if (MainActivityRuntime.prefs.getString(KEY_GLOBAL, null) != null) return
+
+        // The restore below writes KEY_GLOBAL behind loadGlobal's back; drop any
+        // default Settings() a pre-restore call may have pinned in the cache.
+        cachedGlobal = null
 
         // (1) Lossless restore from the in-folder mirror (written by a prior new-UI install).
         val mirror = backupFile()
