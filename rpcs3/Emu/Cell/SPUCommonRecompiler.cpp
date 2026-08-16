@@ -21,6 +21,7 @@
 
 #include "SPUThread.h"
 #include "SPUAnalyser.h"
+#include "SPUFailedBlocks.h"
 #include "SPUInterpreter.h"
 #include "SPUDisAsm.h"
 #include <algorithm>
@@ -124,35 +125,30 @@ static shared_mutex s_spu_failed_blocks_mutex;
 // one instruction, whereupon the recompiler tried the NEXT address, failed the same way, and
 // marked that too: 111 consecutive entries were recorded walking two blocks four bytes at a time,
 // each step paying a full failed LLVM compile.
-static std::map<u32, u32> s_spu_failed_blocks;
+//
+// Cleared per emulation session by the spu_runtime constructor. The keys are local-store offsets,
+// which every SPU thread, every image and every title in the process share, so a set that outlived
+// the session would let one title's compile failures route an unrelated title's code at the same
+// offset to the interpreter.
+static spu_failed_block_set s_spu_failed_blocks;
 
-static bool spu_interpreter_fallback_available()
+static void spu_reset_failed_blocks()
 {
-	const auto interp = spu_runtime::g_interpreter;
-	return interp && interp != spu_runtime::g_gateway;
+	std::lock_guard lock(s_spu_failed_blocks_mutex);
+	s_spu_failed_blocks.clear();
 }
 
-// Range containing addr, or {0,0}. Same lookup as spu_block_compile_failed, but returns the extent
-// so a caller can cache it and stop consulting this map.
-static std::pair<u32, u32> spu_block_failed_range(u32 addr)
+// The fallback is spu_recompiler_base::old_interpreter, which reads the opcode table, the thread
+// and the local store and nothing else -- see spu_thread::cpu_task. It is always linked, so on the
+// backends that can reach a failed block there is always something to fall back to.
+//
+// This previously tested spu_runtime::g_interpreter, which is the LLVM-built interpreter used when
+// the user selects a recompiler. That is a different object with a different failure mode: when it
+// fails to build, the check disabled a fallback that was in fact available, and dispatch dropped
+// into the "Compilation failed" path instead.
+static bool spu_interpreter_fallback_available()
 {
-	reader_lock lock(s_spu_failed_blocks_mutex);
-
-	auto it = s_spu_failed_blocks.upper_bound(addr);
-
-	if (it == s_spu_failed_blocks.begin())
-	{
-		return {};
-	}
-
-	--it;
-
-	if (addr >= it->first && addr < it->second)
-	{
-		return {it->first, it->second};
-	}
-
-	return {};
+	return true;
 }
 
 static bool spu_block_compile_failed(u32 addr)
@@ -161,15 +157,7 @@ static bool spu_block_compile_failed(u32 addr)
 
 	// Any recorded range containing addr, so execution stays interpreted for the whole of a block
 	// that cannot be compiled rather than only at its entry.
-	auto it = s_spu_failed_blocks.upper_bound(addr);
-
-	if (it == s_spu_failed_blocks.begin())
-	{
-		return false;
-	}
-
-	--it;
-	return addr >= it->first && addr < it->second;
+	return s_spu_failed_blocks.contains(addr);
 }
 
 static void spu_mark_block_compile_failed(u32 entry_point, u32 lower_bound = 0, u32 size_bytes = 0)
@@ -180,10 +168,93 @@ static void spu_mark_block_compile_failed(u32 entry_point, u32 lower_bound = 0, 
 	const u32 begin = size_bytes ? lower_bound : entry_point;
 	const u32 end = size_bytes ? lower_bound + size_bytes : entry_point + 4;
 
-	if (s_spu_failed_blocks.insert_or_assign(begin, std::max(end, s_spu_failed_blocks.count(begin) ? s_spu_failed_blocks[begin] : end)).second)
+	if (s_spu_failed_blocks.mark(begin, end))
 	{
 		spu_log.error("SPU block 0x%05x cannot be compiled on this backend, its thread switches to the interpreter", entry_point);
 	}
+}
+
+// A range that is guaranteed to contain pc and to be non-empty.
+//
+// old_interpreter releases the thread when (pc < begin || pc >= end), which is unconditionally true
+// for begin == end, so arming the fallback with an empty range makes the interpreter return without
+// executing an instruction while dispatch re-enters at an unchanged pc. Not every path into the
+// fallback has marked the block first: a compile can return null having produced no diagnostic, in
+// which case nothing was recorded and the lookup finds nothing.
+static std::pair<u32, u32> spu_arm_interp_fallback(u32 pc, u32 lower_bound, u32 size_bytes)
+{
+	// One critical section, not a lookup followed by a separate mark: with the two split, a
+	// concurrent clear landing in the gap would take the answer back to empty and hand the caller
+	// the range it must not have. Holding the writer lock throughout makes the guarantee
+	// structural rather than a property of who happens to call the reset today.
+	std::lock_guard lock(s_spu_failed_blocks_mutex);
+
+	if (const auto range = s_spu_failed_blocks.range_of(pc); range.second > range.first)
+	{
+		return range;
+	}
+
+	// Deliberately silent, and deliberately not routed through spu_mark_block_compile_failed.
+	//
+	// Reaching here means a compile returned null having reported nothing, which is not evidence
+	// that the backend cannot compile this block: an engine poisoned by an earlier fatal error, an
+	// analyser that produced no program for a wild branch into data, and a lost race for the
+	// compile claim all land here too. Recording the entry is still required, because the
+	// interpreter's release test needs a non-empty range -- but claiming a backend limitation in
+	// the log would send the next investigation at the wrong subsystem, and doing it once per four
+	// bytes of a walked region is the log flood this mechanism already had once.
+	//
+	// Record the analysed extent when the caller has one. Recording only [pc, pc + 4) instead
+	// makes the interpreter release the thread after a single instruction, whereupon dispatch
+	// re-enters four bytes later, finds that address unmarked, and pays another full analyse and
+	// another full failed compile -- the 4-bytes-at-a-time walk this file already documents at
+	// the top of the failed-block set.
+	if (size_bytes && pc >= lower_bound && pc - lower_bound < size_bytes)
+	{
+		s_spu_failed_blocks.mark(lower_bound, lower_bound + size_bytes);
+	}
+	else
+	{
+		s_spu_failed_blocks.mark(pc, pc + 4);
+	}
+
+	return s_spu_failed_blocks.range_of(pc);
+}
+
+// Run the uncompilable block here, inside the gateway invocation dispatch was called from.
+//
+// The interpreter used to be started from spu_thread::cpu_task, after dispatch had escaped. That
+// executed guest code outside any gateway call, while spu_runtime::g_escape resumes through the
+// gateway epilogue whose address and stack pointer the gateway prologue stored in hv_ctx. Those
+// describe a gateway call that has already returned, so an escape taken from inside the
+// interpreter -- a guest HALT, an MFC interrupt, cpu_work -- restored a stack pointer into a dead
+// frame. Running the interpreter from here keeps that frame live for as long as anything inside it
+// can escape.
+static void spu_run_interp_fallback(spu_thread& spu, u32 lower_bound = 0, u32 size_bytes = 0)
+{
+	std::tie(spu.interp_fallback_begin, spu.interp_fallback_end) =
+		spu_arm_interp_fallback(spu.pc, lower_bound, size_bytes);
+
+	// The release test below is (pc < begin || pc >= end); an empty range makes it true on the
+	// first iteration and the interpreter returns having executed nothing.
+	ensure(spu.interp_fallback_end > spu.interp_fallback_begin);
+
+	spu.interp_fallback = true;
+
+	// Matches the interpreter-only path in spu_thread::cpu_task, which enables interrupt servicing
+	// for as long as it is interpreting.
+	//
+	// Cleared by cpu_task before the next gateway entry, NOT restored around this call. A guest
+	// HALT, an MFC interrupt or cpu_work can escape from inside old_interpreter, and an escape is
+	// a far jump to the gateway epilogue that discards every frame in between without running one
+	// destructor or one further statement -- so anything written after this call is skipped on
+	// exactly the paths the flag is set for. cpu_task's loop is where control lands afterwards,
+	// and it runs on both the normal and the escaping path.
+	spu.allow_interrupts_in_cpu_work = true;
+
+	spu_recompiler_base::old_interpreter(spu, spu._ptr<u8>(0), nullptr);
+
+	spu_runtime::g_escape(&spu);
 }
 
 static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler_base>& compiler, const spu_program& program)
@@ -1557,6 +1628,21 @@ bool spu_program::operator<(const spu_program& rhs) const noexcept
 
 spu_runtime::spu_runtime()
 {
+	// Drop the previous session's failed-block set.
+	//
+	// It is keyed on local-store offsets, which are per-thread 18-bit addresses that every SPU
+	// thread, every image and every title in the process reuse. Left in place, a block that failed
+	// to compile while one title ran would route a different title's unrelated code at the same
+	// offset to the interpreter for the rest of the process's life. This object is created per
+	// emulation session, so its constructor is where a session-scoped set is emptied. Above the
+	// early return below, which is taken when there is no cache path.
+	//
+	// Guarded because the set and its accessors only exist on ARM64: it is the backend that can
+	// fail to compile a block, so no other target has anything to reset.
+#ifdef ARCH_ARM64
+	spu_reset_failed_blocks();
+#endif
+
 	// Clear LLVM output
 	m_cache_path = rpcs3::cache::get_ppu_cache();
 
@@ -2502,9 +2588,7 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 		// boundary constantly: God of War 3 wrote thousands of lines a second ping-ponging
 		// between two addresses, which cost more than the interpretation. The block is already
 		// recorded once by spu_mark_block_compile_failed.
-		std::tie(spu.interp_fallback_begin, spu.interp_fallback_end) = spu_block_failed_range(spu.pc);
-		spu.interp_fallback = true;
-		spu_runtime::g_escape(&spu);
+		spu_run_interp_fallback(spu);
 		return;
 	}
 #endif
@@ -2527,9 +2611,9 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 #if defined(__APPLE__)
 			pthread_jit_write_protect_np(true);
 #endif
-			std::tie(spu.interp_fallback_begin, spu.interp_fallback_end) = spu_block_failed_range(spu.pc);
-			spu.interp_fallback = true;
-			spu_runtime::g_escape(&spu);
+			// The analysed extent is in scope here, so a block that reached the fallback without
+			// being recorded is still recorded whole rather than four bytes at a time.
+			spu_run_interp_fallback(spu, program.lower_bound, ::size32(program.data) * 4);
 			return;
 		}
 #endif
@@ -2691,11 +2775,14 @@ void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* /*rip*/
 		// slow, and these are SPURS kernels doing real work: Sonic Unleashed reached its loading
 		// screen that way and then crawled through it.
 		//
-		// The set holds entry points, so this keeps interpreting while pc sits on the bad entry
-		// -- which is where a branch-to-self idle loop stays -- and releases the thread once
-		// execution moves on. Leaving is safe at any instruction boundary, since all SPU state
-		// lives in spu_thread, the same assumption the JIT dispatch makes. Re-entering the bad
-		// block simply sets the flag again.
+		// The set holds ranges, so this keeps interpreting for the whole of the block that could
+		// not be compiled -- including a branch-to-self idle loop inside it -- and releases the
+		// thread once execution leaves that range. Leaving is safe at any instruction boundary,
+		// since all SPU state lives in spu_thread, the same assumption the JIT dispatch makes.
+		// Re-entering the bad block simply sets the flag again.
+		//
+		// The range is guaranteed non-empty by spu_arm_interp_fallback: begin == end would make
+		// this test true on the first iteration and return without executing an instruction.
 		if (spu.interp_fallback && (spu.pc < spu.interp_fallback_begin || spu.pc >= spu.interp_fallback_end)) [[unlikely]]
 		{
 			spu.interp_fallback = false;
