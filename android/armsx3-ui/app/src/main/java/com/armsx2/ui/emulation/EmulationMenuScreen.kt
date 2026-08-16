@@ -539,7 +539,7 @@ private fun MenuHeader(
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    game?.title ?: "PlayStation 2",
+                    game?.title ?: "PlayStation 3",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
