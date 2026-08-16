@@ -1101,7 +1101,14 @@ namespace vk::frame_gen
 			// moment they can take effect: the shader family and the flow scale are baked into
 			// framegen's device and pipelines at initialize, so changing either mid-session does
 			// nothing until frame generation is turned off and on again.
-			const f32 flow_scale = g_cfg.video.frame_generation_flow_scale / 100.f;
+			// 100 / value, NOT value / 100. framegen treats this parameter as a DIVISOR --
+			// flowExtent = inputExtent / flowScale (framegen/v3.1_src/shaders/mipmaps.cpp) --
+			// and upstream's own layer passes 1.0f/conf.flowScale for exactly that reason.
+			// Dividing by 100 inverted the slider: "Motion detail 25%" asked for a flow pyramid
+			// FOUR times larger per axis, sixteen times the pixels, which is the opposite of
+			// what the setting says and gets slower the further it is turned down. Only the
+			// default of 100 happened to be correct, because 1.0 is its own reciprocal.
+			const f32 flow_scale = 100.f / std::max<u32>(g_cfg.video.frame_generation_flow_scale, 1u);
 			const bool performance = g_cfg.video.frame_generation_performance.get();
 
 			if (!initialize(device_id, false, flow_scale, want, performance, &shader_from_library, nullptr))
