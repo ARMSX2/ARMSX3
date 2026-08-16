@@ -1563,33 +1563,29 @@ void spu_thread::cpu_task()
 				continue;
 			}
 
-			if (interp_fallback) [[unlikely]]
-			{
-				allow_interrupts_in_cpu_work = true;
-
-				// Check the fallback is actually executing, once.
-				//
-				// This loop re-enters unconditionally, so if g_interpreter returns without
-				// running an instruction the pc never moves and the thread spins here in C++ at
-				// a fixed pc while looking like it is running. Sonic Unleashed's
-				// RsdxPrimaryCellSpursKernel4 sits at pc=0x07350 with interp_fb=1 and is the only
-				// SPU in the process using this path, which is what this distinguishes: a guest
-				// spin loop that legitimately waits, versus a fallback that executes nothing.
-				// The legacy C++ interpreter, NOT spu_runtime::g_interpreter.
-				//
-				// g_interpreter is the LLVM-built interpreter when a recompiler is selected, and
-				// on ARM64 calling it here executes nothing: measured a million consecutive calls
-				// on Sonic Unleashed's stuck SPURS kernel without pc moving once. The thread then
-				// spins in this loop forever at a fixed pc with no flags set, which looks like a
-				// busy SPU and hangs the title with no diagnostic. Any block that fails to compile
-				// lands here, so this is not one game's problem.
-				//
-				// old_interpreter is what the static decoder ultimately runs, via tr_interpreter,
-				// and it is self-contained. It loops until the thread is interrupted, which is the
-				// intended semantic: the THREAD switches to the interpreter, as the log says.
-				spu_recompiler_base::old_interpreter(*this, _ptr<u8>(0), nullptr);
-				continue;
-			}
+			// A block that cannot be compiled is interpreted by spu_run_interp_fallback, which
+			// runs inside the gateway call below rather than out here.
+			//
+			// It used to run here, after dispatch had escaped. The interpreter is self-contained
+			// and that part worked, but guest code then executed outside any gateway invocation
+			// while spu_runtime::g_escape resumes through the gateway epilogue recorded in
+			// hv_ctx -- belonging to a call that had already returned. A guest HALT, an MFC
+			// interrupt or cpu_work escaping from inside the interpreter restored a stack pointer
+			// into a dead frame.
+			//
+			// Note the fallback is NOT spu_runtime::g_interpreter: that is the LLVM-built
+			// interpreter used when a recompiler is selected, and on ARM64 calling it for this
+			// purpose executes nothing -- measured a million consecutive calls on Sonic
+			// Unleashed's stuck SPURS kernel without pc moving once.
+			//
+			// Both flags are cleared here rather than by the code that sets them. An escape taken
+			// from inside the fallback interpreter jumps to the gateway epilogue and abandons the
+			// frames that would have cleared them, so a thread that met one uncompilable block
+			// would otherwise run every later JIT block with interrupt servicing enabled and
+			// report itself as interpreting for the rest of its life. This is the one point every
+			// escape returns through.
+			interp_fallback = false;
+			allow_interrupts_in_cpu_work = false;
 
 			spu_runtime::g_gateway(*this, _ptr<u8>(0), nullptr);
 		}
