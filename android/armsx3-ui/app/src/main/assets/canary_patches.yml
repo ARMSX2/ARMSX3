@@ -50,3 +50,44 @@ PPU-4b46d0161ca657ab16b0a779d9062810ea5ea2dd:
       - [ jumpf, 0x00000000, "RPCS3_HLE_LIBRARY:WaitForSPUsToEmptySNRs" ] # Args: (SPU ID, 3)
       - [ be32, 0x00000000, 0x38800000 ] # li r4, 0
       - [ be32, 0x00000000, 0x44000002 ] # sc
+
+# Tom Clancy's H.A.W.X. 2 (BLES00928) -- boot hang at the first intro video.
+#
+# The SPU dies with "Access violation reading location 0x20" in CellSpursKernel0 and
+# is parked forever (dbg_pause, which nothing in the Android build can clear), so the
+# emulator looks healthy at a locked 30 fps while the guest is dead. Upstream RPCS3
+# lists the title as Loadable with no fix but "delete data/movies".
+#
+# The title looks up a section named '.reload' in this SPU module. The module is
+# stripped -- e_shnum = 0 -- so the lookup can never succeed, on hardware either, and
+# the game is built to cope: the failure path writes 0 to the work descriptor's +0x10
+# field, and this very module tests that field to skip the overlay load:
+#
+#   03224  lqr r8,0x1b810     ; r8 = desc[+0x10]
+#   0322c  brz r8,0x32cc      ; == 0 -> skip
+#
+# A bump allocator on the PPU side then runs over the field unconditionally --
+# (0 - 0x10) & ~0xF = 0xfffffff0 -- destroying the sentinel. The guard no longer
+# fires, so the SPU issues GET lsa=0 ea=0 size=0x4000, a transfer that would have
+# overwritten the running SPURS kernel had it succeeded.
+#
+# This makes the overlay routine at LS 0x3208 return immediately, which is what the
+# surviving guard would have caused anyway. Safe because the section it needs cannot
+# exist in a stripped module. Suppressing the DMA instead does NOT work: the guest
+# loop waits on data that never arrives and runs away.
+#
+# Ps3PatchRepo.BUNDLED must list this, or it is imported but never enabled.
+
+SPU-42bae8e5d6a9304068ba1c6bbfdc18d656e287a1:
+  Bink overlay skip:
+    Games:
+      "Tom Clancy's H.A.W.X. 2":
+        BLES00928:
+          - "All"
+    Author: Zulux91
+    Patch Version: 1.0
+    Notes: Fixes the boot hang at the first intro video.
+    Patch:
+      # LS 0x3208 is the first instruction of the overlay routine (il r5,0).
+      # Offsets are LS addresses: apply_modification subtracts p_vaddr (0x3000).
+      - [ be32, 0x3208, 0x35000000 ] # bi lr -- return immediately

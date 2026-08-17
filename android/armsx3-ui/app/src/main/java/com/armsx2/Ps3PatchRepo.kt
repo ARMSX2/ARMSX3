@@ -188,6 +188,14 @@ object Ps3PatchRepo {
             serial = "BLUS30008",
             appVersion = "01.01",
         ),
+        // Tom Clancy's H.A.W.X. 2, BLES00928 -- without this the game hangs forever at
+        // the first intro video with a dead SPU. See canary_patches.yml.
+        Bundled(
+            hash = "SPU-42bae8e5d6a9304068ba1c6bbfdc18d656e287a1",
+            name = "Bink overlay skip",
+            serial = "BLES00928",
+            appVersion = "All",
+        ),
     )
 
     private const val BUNDLED_ASSET = "canary_patches.yml"
@@ -197,7 +205,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 1
+    private const val BUNDLED_REVISION = 2
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
