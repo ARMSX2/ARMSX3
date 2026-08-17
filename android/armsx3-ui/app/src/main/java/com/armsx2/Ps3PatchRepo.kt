@@ -171,12 +171,18 @@ object Ps3PatchRepo {
      *
      * appVersion is carried for symmetry with [Patch]; the native side matches on
      * serial and ignores it.
+     *
+     * sinceRevision is the [BUNDLED_REVISION] this entry first shipped in. It is what
+     * keeps a bump from touching the patches that were already here: an install whose
+     * stored revision is at or above it has been offered this patch once already, and
+     * whatever the user did with the toggle afterwards is their answer.
      */
     private data class Bundled(
         val hash: String,
         val name: String,
         val serial: String,
         val appVersion: String,
+        val sinceRevision: Int,
     )
 
     private val BUNDLED = listOf(
@@ -187,6 +193,16 @@ object Ps3PatchRepo {
             name = "Graphics Fix",
             serial = "BLUS30008",
             appVersion = "01.01",
+            sinceRevision = 1,
+        ),
+        // Tom Clancy's H.A.W.X. 2, BLES00928 -- without this the game hangs forever at
+        // the first intro video with a dead SPU. See canary_patches.yml.
+        Bundled(
+            hash = "SPU-42bae8e5d6a9304068ba1c6bbfdc18d656e287a1",
+            name = "Bink overlay skip",
+            serial = "BLES00928",
+            appVersion = "All",
+            sinceRevision = 2,
         ),
     )
 
@@ -197,7 +213,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 1
+    private const val BUNDLED_REVISION = 2
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
@@ -210,9 +226,10 @@ object Ps3PatchRepo {
      * tick a box before Sonic '06 renders has already concluded the emulator is
      * broken.
      *
-     * Guarded by a stored revision rather than run every boot, so turning one OFF
-     * sticks. Re-enabling on every launch would make the toggle look broken, which
-     * is the same class of bug as not having the patch at all.
+     * Only patches newer than the stored revision are touched, so turning one OFF
+     * sticks -- including across a later bump made for some other game. Re-enabling
+     * on every launch, or on every bump, would make the toggle look broken, which is
+     * the same class of bug as not having the patch at all.
      *
      * Safe to call on every boot: it is a preference read once the revision matches,
      * and the import itself merges rather than replaces, so a downloaded database
@@ -220,7 +237,21 @@ object Ps3PatchRepo {
      */
     fun ensureBundledPatches(context: Context) {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (prefs.getInt(KEY_BUNDLED_REVISION, 0) >= BUNDLED_REVISION) return
+        val storedRevision = prefs.getInt(KEY_BUNDLED_REVISION, 0)
+        if (storedRevision >= BUNDLED_REVISION) return
+
+        // Anything at or below the stored revision has had its one chance to be turned
+        // on. Re-enabling it here would silently undo a user's OFF, and patch_config.yml
+        // stores "disabled" as an absent entry, so there is nothing to read back that
+        // would tell us the difference between "opted out" and "never seen".
+        val pending = BUNDLED.filter { it.sinceRevision > storedRevision }
+
+        if (pending.isEmpty()) {
+            // Nothing new to enable, so skip the import entirely rather than rewriting
+            // patches/patch.yml for no reason.
+            prefs.edit().putInt(KEY_BUNDLED_REVISION, BUNDLED_REVISION).apply()
+            return
+        }
 
         val yaml = runCatching {
             context.assets.open(BUNDLED_ASSET).bufferedReader().use { it.readText() }
@@ -241,8 +272,10 @@ object Ps3PatchRepo {
 
         // Only mark the revision done if every patch actually turned on. A failure
         // here means the hash or name drifted from the YAML, and retrying next boot
-        // is better than silently shipping a game that does not render.
-        val allEnabled = BUNDLED.all { b ->
+        // is better than silently shipping a game that does not render. The retry
+        // covers only `pending`, so a patch that is stuck failing cannot drag the
+        // already-settled ones back on every boot with it.
+        val allEnabled = pending.all { b ->
             val ok = runCatching {
                 RPCSX.instance.patchSetEnabled(b.hash, b.name, b.serial, b.appVersion, true)
             }.getOrDefault(false)
@@ -254,7 +287,7 @@ object Ps3PatchRepo {
 
         if (allEnabled) {
             prefs.edit().putInt(KEY_BUNDLED_REVISION, BUNDLED_REVISION).apply()
-            android.util.Log.i("ARMSX3", "canary patches: imported $imported, enabled ${BUNDLED.size}")
+            android.util.Log.i("ARMSX3", "canary patches: imported $imported, enabled ${pending.size}")
         }
     }
 }

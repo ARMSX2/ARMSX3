@@ -1803,13 +1803,6 @@ static void append_patches(patch_engine::patch_map& existing_patches, const patc
 
 bool patch_engine::save_patches(const patch_map& patches, const std::string& path, std::stringstream* log_messages)
 {
-	fs::file file(path, fs::rewrite);
-	if (!file)
-	{
-		append_log_message(log_messages, fmt::format("Failed to open patch file %s (%s)", path, fs::g_tls_error), &patch_log.fatal);
-		return false;
-	}
-
 	YAML::Emitter out;
 	out << YAML::BeginMap;
 	out << patch_key::version << patch_engine_version;
@@ -1904,7 +1897,24 @@ bool patch_engine::save_patches(const patch_map& patches, const std::string& pat
 				out << YAML::Flow;
 				out << YAML::BeginSeq;
 				out << fmt::format("%s", data.type);
-				out << fmt::format("0x%.8x", data.offset);
+
+				// move_file and hide_file carry a VFS path in the address element instead of a
+				// number. load() keeps that text in original_offset and skips the u32 validation for
+				// them, so formatting it numerically here would write out 0x00000000 and the loader
+				// would accept it back as a patch that silently never matches anything.
+				//
+				// The numeric branch deliberately uses offset rather than original_offset: an
+				// address modifier is folded into offset at load time, and the flat form emitted
+				// here has nowhere to put it.
+				if (patch_type_uses_hex_offset(data.type))
+				{
+					out << fmt::format("0x%.8x", data.offset);
+				}
+				else
+				{
+					out << data.original_offset;
+				}
+
 				out << data.original_value;
 				out << YAML::EndSeq;
 			}
@@ -1918,7 +1928,17 @@ bool patch_engine::save_patches(const patch_map& patches, const std::string& pat
 
 	out << YAML::EndMap;
 
-	file.write(out.c_str(), out.size());
+	// Write through a temporary and rename on success, as save_config already does. A truncating
+	// in-place write that fails part way (out of space, process killed) leaves a half-written file,
+	// and load() rejects the whole file on a parse error -- so a failure here costs the user every
+	// patch they had, with no way to rebuild it from inside the app.
+	fs::pending_file file(path);
+
+	if (!file.file || file.file.write(out.c_str(), out.size()) < out.size() || !file.commit())
+	{
+		append_log_message(log_messages, fmt::format("Failed to write patch file %s (%s)", path, fs::g_tls_error), &patch_log.fatal);
+		return false;
+	}
 
 	return true;
 }
