@@ -469,6 +469,21 @@ object CustomCovers {
         (target.isFile && target.length() > 0L).also { if (it) version.value++ }
     }.getOrDefault(false)
 
+    /**
+     * Follow a game's custom cover across an identity correction.
+     *
+     * The file is named after the serial, so a game whose id is corrected stops matching its
+     * own cover -- and because [remove] resolves through the same name, the orphan cannot be
+     * deleted from the app either. Skips when a cover already exists under the new id, so a
+     * deliberate choice is never overwritten by a stale one.
+     */
+    fun renameSerial(context: Context, old: String, new: String): Boolean = runCatching {
+        val from = File(dir(context), sanitize(old) + ".png")
+        val to = File(dir(context), sanitize(new) + ".png")
+        if (!from.isFile || to.exists()) return@runCatching false
+        from.renameTo(to).also { if (it) version.value++ }
+    }.getOrDefault(false)
+
     fun remove(context: Context, game: GameInfo): Boolean {
         val f = fileFor(context, game) ?: return false
         return f.delete().also { if (it) version.value++ }
