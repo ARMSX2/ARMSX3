@@ -339,7 +339,10 @@ error_code sys_net_bnet_accept(ppu_thread& ppu, s32 s, vm::ptr<sys_net_sockaddr>
 {
 	ppu.state += cpu_flag::wait;
 
-	sys_net.warning("sys_net_bnet_accept(s=%d, addr=*0x%x, paddrlen=*0x%x)", s, addr, paddrlen);
+	// trace, not warning: a non-blocking accept() on an idle listening socket is a normal polling
+	// pattern, not a warning. H.A.W.X. 2's cNetNode thread calls it ~200x/s for the whole session,
+	// which was 31% of the log on its own.
+	sys_net.trace("sys_net_bnet_accept(s=%d, addr=*0x%x, paddrlen=*0x%x)", s, addr, paddrlen);
 
 	if (addr.operator bool() != paddrlen.operator bool() || (paddrlen && *paddrlen < addr.size()))
 	{
