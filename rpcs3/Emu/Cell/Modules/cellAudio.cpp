@@ -915,7 +915,7 @@ void cell_audio_thread::operator()()
 				{
 					// There's no audio in the buffers, simply advance time and hope the game recovers
 					cellAudio.trace("advancing time: untouched=%u/%u (expected=%u), enqueued_buffers=%llu", untouched, active_ports, untouched_expected, enqueued_buffers);
-					untouched_expected = untouched;
+					untouched_expected = std::min(std::max(untouched, untouched_expected), active_ports);
 					advance(timestamp);
 					continue;
 				}
@@ -931,7 +931,7 @@ void cell_audio_thread::operator()()
 				// There's no audio in the buffers, simply advance time
 				cellAudio.trace("enqueuing silence: untouched=%u/%u (expected=%u), enqueued_buffers=%llu", untouched, active_ports, untouched_expected, enqueued_buffers);
 				ringbuffer->enqueue_silence();
-				untouched_expected = untouched;
+				untouched_expected = std::min(std::max(untouched, untouched_expected), active_ports);
 				advance(timestamp);
 				continue;
 			}
@@ -946,8 +946,19 @@ void cell_audio_thread::operator()()
 
 			//cellAudio.error("active=%u, untouched=%u, in_progress=%d, incomplete=%d, enqueued_buffers=%u", active_ports, untouched, in_progress, incomplete, enqueued_buffers);
 
-			// Store number of untouched buffers for future reference
-			untouched_expected = untouched;
+			// Store number of untouched buffers for future reference.
+			//
+			// High-water mark rather than the instantaneous count, clamped to the number of
+			// active ports so that a port going away lowers it again.
+			//
+			// A game can leave a port started and write nothing but zeros into it. Those
+			// writes still overwrite the -0.0f tags with +0.0f, which flips the sign bit and
+			// makes count_port_buffer_tags() report the buffer as touched on the periods the
+			// write happens to land in. Storing the instantaneous count then drops this to 0
+			// on exactly those periods, and on the next period the very same silent port
+			// looks like a newly untouched buffer -- so the loop waits out the whole
+			// untouched timeout for it, over and over, for as long as the port exists.
+			untouched_expected = std::min(std::max(untouched, untouched_expected), active_ports);
 
 			// Log if we enqueued untouched/incomplete buffers
 			if (untouched > 0 || incomplete > 0)
