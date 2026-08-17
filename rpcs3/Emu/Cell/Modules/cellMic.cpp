@@ -876,7 +876,11 @@ error_code cellMicEnd()
 
 error_code cellMicOpenEx(s32 dev_num, s32 rawSampleRate, s32 rawChannel, s32 DSPSampleRate, s32 bufferSizeMS, u8 signalType)
 {
-	cellMic.notice("cellMicOpenEx(dev_num=%d, rawSampleRate=%d, rawChannel=%d, DSPSampleRate=%d, bufferSizeMS=%d, signalType=0x%x)",
+	// trace, not notice: titles poll this. H.A.W.X. 2 calls it ~100x/s from its HandsetEncodeThread
+	// for the whole session, and at notice level that alone was 16% of the log. cellMicOpen and
+	// cellMicOpenRaw, which are thin wrappers around this, were already trace -- so the wrappers
+	// were quieter than the function they call.
+	cellMic.trace("cellMicOpenEx(dev_num=%d, rawSampleRate=%d, rawChannel=%d, DSPSampleRate=%d, bufferSizeMS=%d, signalType=0x%x)",
 		dev_num, rawSampleRate, rawChannel, DSPSampleRate, bufferSizeMS, signalType);
 
 	auto& mic_thr = g_fxo->get<mic_thread>();
