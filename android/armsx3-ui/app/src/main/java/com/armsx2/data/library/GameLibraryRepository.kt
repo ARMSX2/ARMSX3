@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.armsx2.CustomCovers
 import com.armsx2.DiscIcons
 import com.armsx3.NativeApp
 import net.rpcsx.GameFlag
@@ -507,6 +508,73 @@ class GameLibraryRepository(private val context: Context) {
         }
     }
 
+    /**
+     * Drop the separator, but only from something that actually looks like a title ID.
+     *
+     * The check is not about which console the game is for -- this emulator runs PS3 titles
+     * and nothing else. It is about not manufacturing an identity out of a guess.
+     * FilenameParser takes the first four-letters + five-digits token it finds ANYWHERE in
+     * the name and reconstructs it in the PS2 dump shape it was written for, so what arrives
+     * here may be a real id (BLUS-30917), a token out of a release tag, or an id belonging to
+     * a different game entirely.
+     *
+     * Left hyphenated, a bad guess matches nothing: no cover, no disc icon, no config, and
+     * the card shows a placeholder. That is a visible failure and it is the safe one.
+     * Stripped, the same guess becomes a WELL-FORMED title id and quietly resolves whatever
+     * is filed under it -- another game's cover and curated name, and its config_db entry,
+     * which the core applies at boot. So normalise only what carries a real PS3 prefix:
+     * B for disc releases (BLUS/BLES/BCUS...), N for PSN (NPUB/NPEB...).
+     *
+     * Deliberately NOT gated on [GamePlatform]: that enum comes from the same probe that
+     * produced the serial, so in the one case this function exists for -- the probe failed
+     * and the name came off the filename -- it carries no information at all.
+     */
+    private fun normalizeSerial(raw: String): String {
+        val stripped = raw.replace("-", "")
+        return if (ps3SerialRegex.matches(stripped)) stripped else raw
+    }
+
+    /**
+     * Carry a game's per-serial data across an identity correction.
+     *
+     * The serial is not just the cover key: it keys config.game.<serial>, per-game core
+     * overrides, touch layouts and profiles, pad bindings, play time, the pinned name and
+     * the custom cover file. Renaming the game without moving those silently resets every
+     * one of them, and nothing prunes the old keys afterwards, so they become unreachable
+     * rather than merely unused.
+     *
+     * A same-named key already under the new id is overwritten. It can only have come from
+     * an earlier scan that probed the disc successfully, before this entry regressed to a
+     * filename-derived id; the hyphenated one is what the game has actually been running
+     * with since, so it is the live value and the older one is stale.
+     */
+    private fun migrateSerialKeys(old: String, new: String) {
+        runCatching {
+            val prefs = MainActivityRuntime.prefs
+            val snapshot = prefs.all
+            val moved = snapshot.keys.filter { it.contains(old) }
+            if (moved.isNotEmpty()) {
+                prefs.edit().apply {
+                    moved.forEach { key ->
+                        when (val value = snapshot[key]) {
+                            is String -> putString(key.replace(old, new), value)
+                            is Int -> putInt(key.replace(old, new), value)
+                            is Long -> putLong(key.replace(old, new), value)
+                            is Boolean -> putBoolean(key.replace(old, new), value)
+                            is Float -> putFloat(key.replace(old, new), value)
+                            is Set<*> -> @Suppress("UNCHECKED_CAST")
+                                putStringSet(key.replace(old, new), value as Set<String>)
+                            else -> return@forEach
+                        }
+                        remove(key)
+                    }
+                }.apply()
+            }
+            CustomCovers.renameSerial(context, old, new)
+            android.util.Log.i(ScanTag, "serial '$old' -> '$new' (${moved.size} pref key(s) moved)")
+        }
+    }
+
     private fun createGame(
         uri: Uri,
         name: String,
@@ -516,9 +584,22 @@ class GameLibraryRepository(private val context: Context) {
     ): GameInfo {
         val (probeSerial, probePlatform) = parseProbe(rawProbe)
         val (fileTitle, fileSerial) = FilenameParser.parse(name)
+        val platform = if (disc != null) GamePlatform.PS3 else probePlatform ?: GamePlatform.PS3
         // The disc's own PARAM.SFO wins: it is the authoritative title ID, where
         // a filename-derived one is a guess off a dump's naming convention.
-        val serial = disc?.titleId ?: probeSerial ?: fileSerial
+        //
+        // Normalise the result: FilenameParser reconstructs every serial in the PS2 dump
+        // shape (SLUS-20312) because that is the convention its regex was written for, so a
+        // PS3 game whose serial came off the filename is recorded as BLUS-30917 and matches
+        // nothing -- not the cover repo (keyed by the exact PARAM.SFO id), not disc-icons,
+        // not config.game.<serial>. Doing it here rather than in FilenameParser is what
+        // repairs the entries already cached: they are re-seeded into discInfoCache on every
+        // scan and arrive back here as disc.titleId, which has top priority.
+        val rawSerial = disc?.titleId ?: probeSerial ?: fileSerial
+        val serial = rawSerial?.let(::normalizeSerial)
+        if (rawSerial != null && serial != null && rawSerial != serial) {
+            migrateSerialKeys(rawSerial, serial)
+        }
         val compatibility = serial
             ?.let { runCatching { NativeApp.getCompatibilityForSerial(it) }.getOrDefault(0) }
             ?.minus(1)
@@ -537,7 +618,7 @@ class GameLibraryRepository(private val context: Context) {
             serial = serial,
             compatibility = compatibility,
             extension = extension.uppercase(),
-            platform = if (disc != null) GamePlatform.PS3 else probePlatform ?: GamePlatform.PS3,
+            platform = platform,
             // Only meaningful alongside a DB title; a filename-derived one has no sort key
             // and is not a translation of anything.
             titleSort = db?.sort.orEmpty(),
@@ -669,8 +750,16 @@ class GameLibraryRepository(private val context: Context) {
         /** v2: PS3 title ID + title + ICON0.PNG read from the disc's PARAM.SFO.
          *  v5: folder-format games (JB folder / installed game folder).
          *  v6: PARAM.SFO CATEGORY read, to drop game-data installs.
-         *  v7: licence-locked state, asked of the core per installed title. */
-        const val ScanSchemaVersion = 7
+         *  v7: licence-locked state, asked of the core per installed title.
+         *  v8: PS3 serials normalised (BLUS-30917 -> BLUS30917). The scanner does not
+         *      extract a NEW field here, it changes the VALUE of one it already stored, which
+         *      has the same staleness signature: without a bump an existing install keeps
+         *      serving the cached hyphenated ids and never rescans, so the repair never
+         *      reaches the libraries that need it. */
+        /** PS3 disc ids are B***, PSN ids N***, both four letters and five digits. */
+        val ps3SerialRegex = Regex("^[BN][A-Z]{3}[0-9]{5}$")
+
+        const val ScanSchemaVersion = 8
         const val ScanTag = "ARMSX3-Scan"
         /** Staging name for an extracted icon, renamed once the title ID is known. */
         const val PendingIcon = "__pending"
