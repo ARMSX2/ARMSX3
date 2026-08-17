@@ -444,6 +444,15 @@ std::tuple<u32, u32, u32, u32> cell_audio_thread::count_port_buffer_tags()
 	for (audio_port& port : ports)
 	{
 		if (port.state != audio_port_state::started) continue;
+
+		// A port opened with CELL_AUDIO_PORTATTR_OUT_SECONDARY goes to a secondary output we do not
+		// implement (see the todo in cellAudioPortOpen), so its contents are discarded either way.
+		// Counting it here let it stall the whole mixer: H.A.W.X. 2 opens such a port, never writes
+		// it, and the period then waits on it every time -- measured untouched=1 in essentially
+		// every period, which drove the ringbuffer dry and collapsed the time-stretch frequency
+		// ratio to ~0.4, i.e. audible slow-down and crackling across the whole title.
+		if (port.attr & CELL_AUDIO_PORTATTR_OUT_SECONDARY) continue;
+
 		active++;
 
 		auto port_buf = port.get_vm_ptr();
@@ -904,6 +913,7 @@ void cell_audio_thread::operator()()
 
 			// Wait until buffers have been touched
 			//cellAudio.error("active=%u, in_progress=%u, untouched=%u, incomplete=%u", active_ports, in_progress, untouched, incomplete);
+
 			if (untouched > untouched_expected)
 			{
 				// Games may sometimes "skip" audio periods entirely if they're falling behind (a sort of "frameskip" for audio)
