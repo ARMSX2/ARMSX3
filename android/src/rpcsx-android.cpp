@@ -2465,7 +2465,19 @@ static void setupCallbacks() {
 
 static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {
   u32 pclass_profile = 0;
-  pad->Init(CELL_PAD_STATUS_CONNECTED,
+
+  // Only player 1 starts CONNECTED. Ports 2-7 exist but report nothing plugged in until a device
+  // actually drives them (see the hot-plug in _rpcsx_overlayPadData).
+  //
+  // Claiming all seven ports for the virtual handler is what lets a second controller work at all,
+  // but "the port exists" and "a controller is plugged into it" are different things, and Init
+  // conflated them: every port came up CONNECTED, so games saw SEVEN pads permanently attached.
+  // Reported on LittleBigPlanet 2, which reacts to the connected count -- it behaved as though
+  // 4+ controllers were present at all times.
+  const u32 initial_status =
+      pad->m_player_id == 0 ? CELL_PAD_STATUS_CONNECTED : 0;
+
+  pad->Init(initial_status,
             CELL_PAD_CAPABILITY_PS3_CONFORMITY |
                 CELL_PAD_CAPABILITY_PRESS_MODE |
                 CELL_PAD_CAPABILITY_HP_ANALOG_STICK |
@@ -2549,6 +2561,12 @@ extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,
 
   if (pad == nullptr) {
     return false;
+  }
+
+  // Hot-plug: this port is being driven, so report it connected from now on. Ports 2-7 start
+  // disconnected precisely so a game is not told about controllers nobody has.
+  if (!(pad->m_port_status & CELL_PAD_STATUS_CONNECTED)) {
+    pad->m_port_status |= CELL_PAD_STATUS_CONNECTED | CELL_PAD_STATUS_ASSIGN_CHANGES;
   }
 
   const auto &pressure = g_virtual_pad_pressure[port];
