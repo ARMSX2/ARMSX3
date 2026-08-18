@@ -931,6 +931,90 @@ object Rpcs3Bridge {
         else -> -1
     }
 
+    // ---- Digital transition pacing -----------------------------------------------------------
+    //
+    // The guest polls cellPad at ITS rate -- 33ms at 30fps -- and a press plus its release are two
+    // separate snapshot pushes with nothing between them. A press shorter than one poll interval
+    // therefore lands entirely between polls and the game never sees it. Steady presses always
+    // span a poll, which is why a button works everywhere except during a rapid mash, and why a
+    // held button (crouch) keeps working while everything tapped alongside it does not.
+    //
+    // GestureLayer already knew this and works around it locally with a 40ms hold in pulse();
+    // ordinary touch taps and physical controller presses had no equivalent. Reported on Iron
+    // Man's quick-time event, where circle has to be pressed repeatedly and does not register.
+    //
+    // Simply DELAYING a too-short release is not enough, and would look identical to the bug: in a
+    // mash, press N's deferred release collides with press N+1 and the game sees one long press
+    // instead of several, while a QTE is counting presses. So each transition is given its own
+    // slot instead -- press visible for MIN_MS, then release visible for MIN_MS, then the next
+    // press -- which is what makes a mash arrive as distinct presses rather than a hold.
+    //
+    // 40ms matches the gesture path and clears one 60Hz sample; it caps sustained mashing at
+    // ~12 presses/second, comfortably above human rate (~6-8).
+    private const val TRANSITION_MIN_MS = 40L
+
+    // Queue depth guard: if the guest stops consuming (paused, load screen) a held-down mash must
+    // not accumulate unboundedly. Beyond this, the oldest pending transitions are what matter
+    // least, so new ones are dropped rather than growing the backlog.
+    private const val TRANSITION_MAX_PENDING = 8
+
+    private val transitionScheduler by lazy {
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "armsx3-pad-pacing").apply { isDaemon = true }
+        }
+    }
+
+    // Per (port, button) next instant a transition may become visible, and how many are queued.
+    private val nextTransitionAt = HashMap<Long, Long>()
+    private val pendingTransitions = HashMap<Long, Int>()
+
+    /**
+     * Apply a digital press/release, pacing it so the guest cannot miss it.
+     *
+     * Returns true when the caller should apply and push immediately; false when this transition
+     * has been scheduled instead and the caller must do nothing.
+     */
+    private fun paceDigital(port: Int, index: Int, pressed: Boolean): Boolean {
+        val key = (port.toLong() shl 32) or (index.toLong() and 0xffffffffL)
+        val now = android.os.SystemClock.uptimeMillis()
+
+        synchronized(nextTransitionAt) {
+            val ready = nextTransitionAt[key] ?: 0L
+
+            if (now >= ready) {
+                // Nothing queued ahead of this one: let it through now and reserve its slot.
+                nextTransitionAt[key] = now + TRANSITION_MIN_MS
+                return true
+            }
+
+            val queued = pendingTransitions[key] ?: 0
+
+            if (queued >= TRANSITION_MAX_PENDING) {
+                return false
+            }
+
+            pendingTransitions[key] = queued + 1
+            nextTransitionAt[key] = ready + TRANSITION_MIN_MS
+
+            transitionScheduler.schedule({
+                synchronized(nextTransitionAt) {
+                    pendingTransitions[key] = (pendingTransitions[key] ?: 1) - 1
+                }
+
+                runCatching {
+                    val pad = pads.getOrNull(port)
+
+                    if (pad != null) {
+                        applyButton(pad, index, pressed)
+                        push(port)
+                    }
+                }
+            }, ready - now, java.util.concurrent.TimeUnit.MILLISECONDS)
+
+            return false
+        }
+    }
+
     @JvmStatic
     fun setPadButton(port: Int, index: Int, range: Int, pressed: Boolean) {
         val pad = pads.getOrNull(port) ?: return
@@ -945,6 +1029,11 @@ object Rpcs3Bridge {
                 else -> (range / 32767f).coerceIn(0f, 1f)
             }
         } else {
+            // Paced: a press too short to span a guest poll would otherwise be dropped entirely.
+            if (!paceDigital(port, index, pressed)) {
+                return
+            }
+
             applyButton(pad, index, pressed)
 
             // `range` was dropped here for every non-stick button, so a physical
