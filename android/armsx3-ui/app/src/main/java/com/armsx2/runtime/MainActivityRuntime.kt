@@ -4132,6 +4132,9 @@ open class MainActivityRuntime : ComponentActivity() {
      *  button and hold-button-then-push-direction both bind combos, and a push
      *  released with nothing else still binds the plain single direction. */
     private val captureHeldSynth = HashSet<Int>()
+    /** Trigger pull that counts as a press while binding. Half, so resting drift cannot bind. */
+    private val CAPTURE_TRIGGER_ON = 0.5f
+
     private fun handleCaptureMotion(ev: MotionEvent): Boolean {
         // Desired engaged-direction set for this event: at most one per HAT axis
         // pair and one per stick (dominant direction), so sweeping through a
@@ -4146,6 +4149,23 @@ open class MainActivityRuntime : ComponentActivity() {
         // here is why its directions could never be bound.
         val (capRightX, capRightY) = rightStickAxes(ev.deviceId)
         captureStickCode(ev, capRightX, capRightY, false).takeIf { it != 0 }?.let { want.add(it) }
+        // Analog triggers. On a pad that reports L2/R2 as AXES rather than buttons they arrive
+        // here and never as a key, so the binder -- which lives in Compose's onPreviewKeyEvent --
+        // could not see them and L2/R2 simply would not bind. Everything else on the same pad
+        // binds, which is what makes it look player-specific rather than trigger-specific: it
+        // depends on the controller model, so a second pad of a different make fails where the
+        // first one worked. Reported on Player 2.
+        //
+        // Same axis pairs the gameplay path uses (sendTrigger), including the per-device third
+        // axis some pads put the right trigger on, so a trigger that works in game can be bound.
+        // Threshold is a deliberate half-pull: resting drift on a worn trigger must not self-bind.
+        val capLt = maxOf(ev.getAxisValue(MotionEvent.AXIS_LTRIGGER), ev.getAxisValue(MotionEvent.AXIS_BRAKE))
+        var capRt = maxOf(ev.getAxisValue(MotionEvent.AXIS_RTRIGGER), ev.getAxisValue(MotionEvent.AXIS_GAS))
+        rightTriggerExtraAxis(ev.deviceId).takeIf { it != 0 }?.let { extra ->
+            capRt = maxOf(capRt, ev.getAxisValue(extra))
+        }
+        if (capLt >= CAPTURE_TRIGGER_ON) want.add(KeyEvent.KEYCODE_BUTTON_L2)
+        if (capRt >= CAPTURE_TRIGGER_ON) want.add(KeyEvent.KEYCODE_BUTTON_R2)
         captureHatX = dx
         captureHatY = dy
         val now = SystemClock.uptimeMillis()
