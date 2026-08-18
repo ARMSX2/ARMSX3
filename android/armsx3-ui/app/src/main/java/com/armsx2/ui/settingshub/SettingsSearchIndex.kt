@@ -146,6 +146,7 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("net.internet.label", true, SettingsCategory.Network),
     SettingsSearchEntry("net.psn.label", true, SettingsCategory.Network),
     SettingsSearchEntry("net.upnp.label", true, SettingsCategory.Network),
+    SettingsSearchEntry("network.emulateUsbKeyboard", true, SettingsCategory.Network),
     SettingsSearchEntry("overlay.osdSize.label", true, SettingsCategory.OnScreen),
     SettingsSearchEntry("overlay.osdColor.label", true, SettingsCategory.OnScreen),
     SettingsSearchEntry("overlay.uiSize.label", true, SettingsCategory.OnScreen),

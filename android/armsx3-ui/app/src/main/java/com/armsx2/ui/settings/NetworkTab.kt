@@ -76,6 +76,16 @@ fun NetworkTab(state: MutableState<Settings>) {
                 s.ps3.upnpEnabled,
                 description = str("net.upnp.description"),
         ) { apply(s.copy(ps3 = s.ps3.copy(upnpEnabled = it))) }
+        SettingsDivider()
+        // Emulate USB Keyboard. Previously reachable ONLY from the in-game pause menu, which made
+        // the "On-Screen Keyboard (toggle)" hotkey's own message a dead end: it says to turn this
+        // on in Network settings, and there was nothing here to turn on. Same field, so the two
+        // rows stay in sync.
+        ToggleRow(
+                str("network.emulateUsbKeyboard"),
+                s.usbKeyboard,
+                description = str("net.usbKeyboard.description"),
+        ) { apply(s.copy(usbKeyboard = it)) }
     }
 }
 
