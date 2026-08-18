@@ -1502,6 +1502,12 @@ data class TouchLayout(val buttons: List<TouchButtonCfg>) {
                 TouchButtonCfg(TouchButtonId.SAVE_STATE, 0.30f, 0.54f, 44f, enabled = false),
                 TouchButtonCfg(TouchButtonId.LOAD_STATE, 0.38f, 0.54f, 44f, enabled = false),
                 TouchButtonCfg(TouchButtonId.SCREENSHOT, 0.46f, 0.54f, 44f, enabled = false),
+                // On-screen keyboard toggle -- OPT-IN, same row. Being listed here is what makes it
+                // reachable at all: the editor offers what the layout CONTAINS, not what the enum
+                // declares, so adding the TouchButtonId alone left it invisible. Existing layouts
+                // pick it up because fromJson splices in any default button they lack, and
+                // defaultPortrait splices from this same table.
+                TouchButtonCfg(TouchButtonId.KEYBOARD, 0.54f, 0.54f, 44f, enabled = false),
                 // Extra analog button, parked directly above the D-PAD (0.10, 0.55) — not above the
                 // left stick, which is where it first went. The button is for sprint/jump held while
                 // you keep moving, so it belongs above whichever control the thumb is already on,
