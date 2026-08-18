@@ -1574,7 +1574,22 @@ template <spu_exec_bit... Flags>
 bool CFLTS(spu_thread& spu, spu_opcode_t op)
 {
 	const auto scaled = _mm_mul_ps(spu.gpr[op.ra], g_spu_imm.scale[173 - op.i8]);
+#if defined(ARCH_ARM64)
+	// x86's cvttps2dq returns the "integer indefinite" 0x80000000 for ANYTHING it cannot
+	// represent, positive overflow included, so the XOR below flips that back to 0x7fffffff.
+	// On ARM64 _mm_cvttps_epi32 is sse2neon's vcvtq_s32_f32, i.e. FCVTZS, which already
+	// saturates to 0x7fffffff -- applying the correction INVERTS a correct result. NaN also
+	// differs: FCVTZS gives 0 where cvttps2dq gives 0x80000000. Same bug as the recompiler's
+	// CFLTS handler; this copy is reachable through spu_run_interp_fallback, so a forced-interp
+	// range is not a clean control until it is fixed too.
+	const auto sat_hi = _mm_castps_si128(_mm_cmpge_ps(scaled, _mm_set1_ps(0x80000000)));
+	const auto is_nan = _mm_castps_si128(_mm_cmpunord_ps(scaled, scaled));
+	const auto conv = _mm_cvttps_epi32(scaled);
+	spu.gpr[op.rt] = _mm_or_si128(_mm_and_si128(is_nan, _mm_set1_epi32(smin)),
+		_mm_andnot_si128(is_nan, _mm_or_si128(_mm_and_si128(sat_hi, _mm_set1_epi32(smax)), _mm_andnot_si128(sat_hi, conv))));
+#else
 	spu.gpr[op.rt] = _mm_xor_si128(_mm_cvttps_epi32(scaled), _mm_castps_si128(_mm_cmpge_ps(scaled, _mm_set1_ps(0x80000000))));
+#endif
 	return true;
 }
 
@@ -1582,8 +1597,26 @@ template <spu_exec_bit... Flags>
 bool CFLTU(spu_thread& spu, spu_opcode_t op)
 {
 	const auto scaled1 = _mm_max_ps(_mm_mul_ps(spu.gpr[op.ra], g_spu_imm.scale[173 - op.i8]), _mm_set1_ps(0.0f));
+#if defined(ARCH_ARM64)
+	// The x86 form below RELIES on cvttps2dq returning 0x80000000 for scaled1 >= 2^31 and then
+	// ORs the remainder back in to rebuild the u32: 0x80000000 | v. ARM64's FCVTZS returns
+	// 0x7fffffff instead, and 0x7fffffff | v == 0x7fffffff for every v < 2^31, so the whole
+	// upper half of the range collapses to a single value (3e9 came back as 0x7fffffff rather
+	// than 0xb2d05e00). Convert the biased value and re-apply the bias explicitly instead.
+	const auto hi_half = _mm_castps_si128(_mm_cmpge_ps(scaled1, _mm_set1_ps(0x80000000)));
+	const auto biased = _mm_cvttps_epi32(_mm_sub_ps(scaled1, _mm_set1_ps(0x80000000)));
+	const auto lo = _mm_cvttps_epi32(scaled1);
+	const auto both = _mm_or_si128(_mm_and_si128(hi_half, _mm_or_si128(biased, _mm_set1_epi32(smin))),
+		_mm_andnot_si128(hi_half, lo));
+	// Saturate the top, and clear NaN/negative to 0 (max_ps against 0.0 already handled negatives
+	// on x86; NaN survives it on ARM64 because sse2neon's vmaxq_f32 propagates NaN).
+	const auto sat = _mm_castps_si128(_mm_cmpge_ps(scaled1, _mm_set1_ps(0x100000000)));
+	const auto nan1 = _mm_castps_si128(_mm_cmpunord_ps(scaled1, scaled1));
+	spu.gpr[op.rt] = _mm_andnot_si128(nan1, _mm_or_si128(sat, both));
+#else
 	const auto scaled2 = _mm_and_ps(_mm_sub_ps(scaled1, _mm_set1_ps(0x80000000)), _mm_cmpge_ps(scaled1, _mm_set1_ps(0x80000000)));
 	spu.gpr[op.rt] = _mm_or_si128(_mm_or_si128(_mm_cvttps_epi32(scaled1), _mm_cvttps_epi32(scaled2)), _mm_castps_si128(_mm_cmpge_ps(scaled1, _mm_set1_ps(0x100000000))));
+#endif
 	return true;
 }
 
