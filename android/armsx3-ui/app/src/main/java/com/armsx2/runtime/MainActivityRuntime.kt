@@ -2716,6 +2716,48 @@ open class MainActivityRuntime : ComponentActivity() {
                 KeyEvent.ACTION_UP -> heldKeys.remove(kc)
             }
         }
+
+        // Route a real keyboard to the guest's emulated keyboard.
+        //
+        // cellKb reported no keyboard at all before this: the only handler upstream ships derives
+        // from QObject and filters QKeyEvent, and the Android build excludes the whole Qt input
+        // layer, so games needing one were unreachable -- NFS Most Wanted's beta debug menu, and
+        // native keyboard support in games like Counter-Strike.
+        //
+        // KEYBOARD_TYPE_ALPHABETIC is the part that matters. Gamepads also report SOURCE_KEYBOARD
+        // for their buttons, so testing the source alone would send every controller press to the
+        // guest keyboard as well as the pad. Only a device that actually has alphabetic keys
+        // qualifies.
+        //
+        // Consumed only when the native side reports the key landed, which it does not when the
+        // Keyboard setting is Null, no game is running, or the core predates the export. That
+        // keeps a physical keyboard usable for UI navigation everywhere else.
+        if (event.keyCode != KeyEvent.KEYCODE_UNKNOWN &&
+            (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) &&
+            eState.value == EmuState.RUNNING &&
+            WindowImpl.inGameScreen.value == null &&
+            !WindowImpl.overlayVisible.value
+        ) {
+            val dev = runCatching { InputDevice.getDevice(event.deviceId) }.getOrNull()
+
+            if (dev != null &&
+                dev.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC &&
+                !event.isFromSource(InputDevice.SOURCE_GAMEPAD) &&
+                !event.isFromSource(InputDevice.SOURCE_JOYSTICK)
+            ) {
+                val landed = runCatching {
+                    net.rpcsx.RPCSX.instance.keyboardKey(
+                        event.keyCode,
+                        event.action == KeyEvent.ACTION_DOWN,
+                        event.unicodeChar,
+                    )
+                }.getOrDefault(false)
+
+                if (landed) {
+                    return true
+                }
+            }
+        }
         // Track the active gamepad so PS2 rumble routes to its vibrator.
         if (event.isFromSource(InputDevice.SOURCE_GAMEPAD) ||
             event.isFromSource(InputDevice.SOURCE_JOYSTICK)) {
