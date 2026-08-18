@@ -73,9 +73,14 @@ object SaveDataImporter {
         onProgress: (Progress) -> Unit = {},
         isCancelled: () -> Boolean = { false },
     ): Outcome = runImport(onProgress) { staging ->
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            stageArchive(input, staging, onProgress, isCancelled)
-        } ?: Outcome(false, error = "Could not open the selected file")
+        // Opened separately rather than with `?.use { } ?: openFailed`. These stages answer null
+        // to mean "no problem, carry on", so folding them together made the SUCCESS path -- a null
+        // from stageArchive -- select the elvis branch and report every single archive import as
+        // "could not open the selected file", while the staged files were discarded unread.
+        val input = runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
+            ?: return@runImport Outcome(false, error = "Could not open the selected file")
+
+        input.use { stageArchive(it, staging, onProgress, isCancelled) }
     }
 
     /**
@@ -208,13 +213,16 @@ object SaveDataImporter {
      * saying so: this is the value that decides where the copy lands.
      */
     private fun sanitizedDirName(raw: String?): String? {
-        val name = raw?.trim()?.trimEnd(' ')?.trim().orEmpty()
+        val name = raw?.trim().orEmpty()
         if (name.isEmpty() || name == "." || name == "..") return null
         if (name.length > 64) return null
-        if (name.any { it == '/' || it == '\\' || it == ' ' }) return null
-        // Matches the character set the core accepts for a dirName, and keeps a leading dot from
-        // producing a hidden directory the user cannot see in any browser.
-        if (!name.all { it.isLetterOrDigit() || it == '-' || it == '_' }) return null
+        if (name.any { it == '/' || it == '\\' || it < ' ' }) return null
+        // Deliberately NOT narrowed to a character set. This name comes from the game's own
+        // SAVEDATA_DIRECTORY, and rejecting one for holding a character we did not anticipate
+        // would refuse a good save with "no save data found" -- the silent-looking failure this
+        // whole class exists to avoid. Only separators and control characters can redirect a
+        // write, and a leading dot would make a directory no file browser shows.
+        if (name.startsWith('.')) return null
         return name
     }
 
@@ -304,13 +312,16 @@ object SaveDataImporter {
     private fun safeRelativePath(name: String): String? {
         val norm = name.replace('\\', '/')
         val parts = norm.split('/')
-            .map { it.trim().trimEnd(' ') }
+            .map { it.trim() }
             .filter { it.isNotEmpty() && it != "." }
         if (parts.any { it == ".." }) return null
         if (parts.isEmpty()) return ""
         // Drop leading wrappers so a "Download/BLUS30760SAVE/PARAM.SFO" still stages usefully;
         // discover() walks anyway, so this only keeps the tree shallow.
-        val kept = parts.takeLast(3).map { it.filterNot { c -> c == ' ' } }
+        // Control characters only. Stripping spaces here silently renamed the user's folders,
+        // and a wrapper like "All Pro Football 2K8 roster/" is a completely ordinary thing for
+        // a file manager to produce.
+        val kept = parts.takeLast(3).map { part -> part.filterNot { c -> c < ' ' } }
         if (kept.any { it.isEmpty() }) return null
         return kept.joinToString("/")
     }
@@ -335,7 +346,7 @@ object SaveDataImporter {
                 val rawName = child.name ?: continue
                 // The picker gives us display names, which are not path components; a name with a
                 // separator in it is malformed and is dropped rather than joined.
-                if (rawName.any { it == '/' || it == '\\' || it == ' ' }) continue
+                if (rawName.any { it == '/' || it == '\\' || it < ' ' }) continue
                 if (rawName == "." || rawName == "..") continue
                 if (isJunk(rawName)) continue
 
@@ -372,7 +383,7 @@ object SaveDataImporter {
         // The picked folder may itself be the save, so its own name has to survive into staging or
         // the dirName fallback would see the scratch directory instead.
         val rootName = root.name?.takeIf { n ->
-            n.none { it == '/' || it == '\\' || it == ' ' } && n != "." && n != ".."
+            n.none { it == '/' || it == '\\' || it < ' ' } && n != "." && n != ".."
         }
         val base = if (rootName != null) File(staging, rootName).also { it.mkdirs() } else staging
 
