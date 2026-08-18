@@ -2350,6 +2350,15 @@ error_code sys_spu_thread_group_connect_event_all_threads(ppu_thread& ppu, u32 i
 
 	*spup = port;
 
+	// The port that was actually handed out, not just the request.
+	//
+	// The call above logs `req` (a 48-bit mask of acceptable ports) but never the answer, so which
+	// queue owns which port can only be inferred from the order of the calls -- and that inference
+	// is load-bearing when a thread waits forever on a queue: the whole question becomes whether
+	// anything ever signalled THAT port. Borderlands 2 waits on a queue this returned, and working
+	// out its port by counting connects is exactly the kind of guess worth removing.
+	sys_spu.warning("sys_spu_thread_group_connect_event_all_threads(id=0x%x, eq=0x%x): assigned spup=%u", id, eq, port);
+
 	return CELL_OK;
 }
 

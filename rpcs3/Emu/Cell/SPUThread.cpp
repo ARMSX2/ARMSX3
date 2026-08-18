@@ -1550,14 +1550,21 @@ void spu_thread::cpu_task()
 	{
 		while (true)
 		{
+			dbg_loops++;
+			dbg_where = spu_at_loop_top;
+
 			if (state) [[unlikely]]
 			{
+				dbg_where = spu_at_check_state;
+
 				if (check_state())
 					break;
 			}
 
 			if (_ref<u32>(pc) == 0x0u)
 			{
+				dbg_where = spu_at_stop_signal;
+
 				if (spu_thread::stop_and_signal(0x0))
 					pc += 4;
 				continue;
@@ -1587,7 +1594,9 @@ void spu_thread::cpu_task()
 			interp_fallback = false;
 			allow_interrupts_in_cpu_work = false;
 
+			dbg_where = spu_at_gateway_enter;
 			spu_runtime::g_gateway(*this, _ptr<u8>(0), nullptr);
+			dbg_where = spu_at_gateway_exit;
 		}
 
 		if (unsavable && is_stopped(state - cpu_flag::stop))
@@ -3412,6 +3421,8 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 	perf_meter<"PUTLLC-"_u64> perf0;
 	perf_meter<"PUTLLC+"_u64> perf1 = perf0;
 
+	putllc_calls++;
+
 	// Store conditionally
 	const u32 addr = args.eal & -128;
 
@@ -3531,6 +3542,7 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 		{
 			if (raddr != spurs_addr || pc != 0x11e4)
 			{
+				putllc_notify++;
 				vm::reservation_notifier_notify(addr, rtime);
 			}
 			else
@@ -3542,7 +3554,17 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 
 				if (switched_from_running_to_idle)
 				{
+					putllc_notify++;
 					vm::reservation_notifier_notify(addr, rtime);
+				}
+				else
+				{
+					// Deliberately not waking anyone. This is a hardcoded-PC heuristic for the
+					// SPURS kernel and it is the one place a successful conditional store can
+					// leave waiters asleep on purpose, so count it: if Borderlands 2's kernel
+					// stores here without ever tripping running->idle, its four waiters never
+					// get woken and that is the hang.
+					putllc_suppressed++;
 				}
 			}
 
@@ -3554,6 +3576,8 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 	}
 	else
 	{
+		putllc_fails++;
+
 		if (raddr)
 		{
 			// Last check for event before we clear the reservation
@@ -5728,6 +5752,13 @@ s64 spu_thread::get_ch_value(u32 ch)
 				val = static_cast<u8>(std::min<u32>(val + 1, u8{umax}));
 			}
 
+			// NOTE: this threshold is 12, which no phone reaches -- an 8 Gen 2 reports 8 threads
+			// where a desktop reports 16 -- so one thread is elected to poll reservations on
+			// desktop and none ever is here. Tried lowering it to 4 to see if that was the
+			// Borderlands 2 hang: it is not. Same stall, and the SPU threads are already burning
+			// 200-283 jiffies per 8s each in the reservation wait, so they were never asleep and
+			// there was nothing for a dedicated poller to rescue. Left at upstream's value rather
+			// than paying a permanent busy-waiter for no behaviour change.
 			if (!s_is_reservation_data_checking_thread && utils::get_thread_count() >= 12)// && std::find(raddr_busy_wait_addr.begin(), raddr_busy_wait_addr.end(), raddr) != raddr_busy_wait_addr.end())
 			{
 				if (s_is_reservation_data_checking_thread.compare_and_swap_test(0, 1))
@@ -5836,6 +5867,13 @@ s64 spu_thread::get_ch_value(u32 ch)
 				// Don't be stubborn, force operating sleep if too much time has passed
 				const u64 time_since = get_system_time() - eventstat_evaluate_time;
 
+				// NOTE: the 9-thread split gives a phone 3ms of patience where a desktop gets
+				// 50ms. Tried giving the 8-thread case the desktop window to see whether the
+				// short fuse was what turned a contended wait into the thrash Borderlands 2
+				// shows (~1.43M voluntary context switches per SPURS kernel, ~12k sleep/wake
+				// cycles a second each). It is not: same hang, and the frozen kernel is frozen
+				// for another reason entirely. Left at upstream's value rather than making every
+				// 8-thread device busy-wait 16x longer for nothing.
 				if (!is_reservation_data_checking_thread && time_since >= (utils::get_thread_count() >= 9 ? 50'000 : 3000))
 				{
 					spu_log.trace("SPU RdEventStat wait for 0x%x failed", raddr);
@@ -6146,6 +6184,33 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 		lv2_obj::notify_all_t notify;
 
 		const u32 code = value >> 24;
+
+		// DIAGNOSTIC (Borderlands 2 hang): does an SPU ever try to signal the PPU at all?
+		//
+		// main_thread waits forever in sys_event_queue_receive on a queue it attached to this
+		// group with sys_spu_thread_group_connect_event_all_threads, and the whole question is
+		// whether the SPURS kernels ever reach the point of signalling it. Every SPU->PPU
+		// notification -- send_event, throw_event, event_flag_set_bit and its impatient variant --
+		// passes through this one channel write, so this single point covers all of them, before
+		// any branch, so a wrong guess about WHICH call it uses cannot hide the answer.
+		//
+		// Reported once per (port, kind) pair, 256 lines at absolute worst: this is a channel
+		// write on a hot path, and unbounded logging here would stall the emulator by itself --
+		// which has already happened once in this port and cost hours.
+		{
+			static atomic_t<u32> s_signal_seen[64]{};
+
+			const u32 port = code & 63;
+			const u32 kind = code >> 6; // 0 send_event, 1 throw_event, 2 set_bit, 3 impatient
+			const u32 bit = 1u << kind;
+
+			if ((s_signal_seen[port].fetch_or(bit) & bit) == 0)
+			{
+				spu_log.warning("SPU->PPU signal: kind=%u port=%u value=0x%x thread='%s' (first for this pair)",
+					kind, port, value, *spu_tname.load());
+			}
+		}
+
 		{
 			if (code < 64)
 			{

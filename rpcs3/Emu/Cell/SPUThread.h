@@ -802,6 +802,32 @@ public:
 	u64 block_recover = 0;
 	u64 block_failure = 0;
 
+	// Reservation-loop diagnostics for the Borderlands 2 hang. block_counter says an SPU is
+	// executing nothing, but not what it is doing instead, and a livelocked PUTLLC retry looks
+	// identical from outside to a thread that is simply idle. Plain counters, read only by the
+	// stall dump on another thread -- a torn read costs nothing there.
+	u64 putllc_calls = 0;
+	u64 putllc_fails = 0;
+	u64 putllc_notify = 0;
+	u64 putllc_suppressed = 0; // SPURS heuristic decided the waiters did not need waking
+
+	// Where the host thread last was in cpu_task. Borderlands 2 leaves one SPURS kernel with
+	// every counter frozen -- no blocks, no conditional stores -- while it is still marked
+	// runnable, in userspace, and burning CPU. block_counter is bumped from inside the JIT'd
+	// code, so a frozen one cannot distinguish "the gateway never came back" from "the loop is
+	// spinning without ever reaching guest code", and those are different bugs.
+	enum : u32
+	{
+		spu_at_loop_top = 1,
+		spu_at_check_state = 2,
+		spu_at_stop_signal = 3,
+		spu_at_gateway_enter = 4,
+		spu_at_gateway_exit = 5,
+	};
+
+	u32 dbg_where = 0;
+	u64 dbg_loops = 0;
+
 	rpcs3::hypervisor_context_t hv_ctx; // NOTE: The offset within the class must be within the first 1MiB
 
 	u64 ftx = 0; // Failed transactions

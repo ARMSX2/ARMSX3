@@ -23,6 +23,7 @@
 #include "Emu/system_utils.hpp"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/PPUDisAsm.h"
+#include "Emu/Cell/SPUDisAsm.h"
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/timers.hpp"
 #include "Emu/Cell/lv2/sys_event.h"
@@ -1328,6 +1329,34 @@ namespace rsx
 	// Only fires while nothing is legitimately in progress. A shader or PPU compile presents no
 	// frames for minutes at a time, and it holds a progress dialog that says as much, so an
 	// empty progress text is what separates "working, quietly" from "stopped".
+	// What the RSX thread is doing while it fails to present.
+	//
+	// The profiler can say the thread is in 'Local task' and that it has been in it for 0.00s,
+	// which together mean it is not stuck in there at all -- do_local_task has no loop and
+	// returns immediately. The FIFO loop is calling it over and over, and Borderlands 2 has the
+	// RSX thread at ~113% of a core doing that while no frame lands for 45s+. Which FIFO state
+	// it is called with separates the cases and is recorded nowhere else: 'empty' means the
+	// guest is not submitting (a guest-side stall the RSX only reflects), 'spinning' means the
+	// puller is jumping to itself waiting on a semaphore, 'lock_wait' means it is parked on a
+	// lock acquire. Counters only, dumped from the existing 5s stall report -- logging per call
+	// would be thousands of lines a second, which on Android is itself a stall.
+	static constexpr u32 s_ltask_states = 6;
+	static constexpr u32 s_ltask_branches = 4;
+
+	static u64 g_ltask_state_calls[s_ltask_states]{};
+	static u64 g_ltask_state_prev[s_ltask_states]{};
+	static u64 g_ltask_branch[s_ltask_branches]{};
+	static u64 g_ltask_branch_prev[s_ltask_branches]{};
+	static u64 g_ltask_last_report = 0;
+
+	enum ltask_branch : u32
+	{
+		ltask_emu_flip = 0,
+		ltask_invalidate = 1,
+		ltask_dma_control = 2,
+		ltask_pipe_flush = 3,
+	};
+
 	static void check_frame_stall()
 	{
 		const u64 now = get_system_time();
@@ -1507,10 +1536,11 @@ namespace rsx
 			// a lost notification and our bug. events & mask == 0 means it is genuinely idle and
 			// whoever should signal it never did, which is a bug on the other side.
 			//
-			// Sonic Unleashed deadlocks at the SEGA logo with all six SPURS kernels parked here,
-			// in a different arrangement on different boots, so it is a race in this handshake.
-			// The VM lock diagnostics stayed silent across every boot, which ruled out the
-			// reservation path and left this one.
+			// Sonic Unleashed used to deadlock at the SEGA logo with all six SPURS kernels parked
+			// here, in a different arrangement on different boots, so it is a race in this
+			// handshake. That title has run correctly for several releases now; Borderlands 2
+			// reaches the same state after its logo, with one kernel still running and the rest
+			// parked, and which kernel keeps running changes between boots.
 			const auto ev = spu.ch_events.load();
 
 			fmt::append(spus, "\n  SPU 0x%07x '%s': state=%s pc=0x%05x block=0x%016llx func='%s' events=0x%04x mask=0x%08x waiting=%u pending=0x%04x",
@@ -1542,11 +1572,91 @@ namespace rsx
 				spu.mfc_size, spu.ch_tag_mask, spu.ch_stall_mask, spu.interp_fallback ? 1u : 0u,
 				spu.interrupts_enabled ? 1u : 0u, spu.srr0);
 
+			// Conditional-store activity. block_counter already says whether an SPU is executing
+			// guest code, but a thread livelocked retrying PUTLLC and a thread that is genuinely
+			// idle both report zero blocks per second and are otherwise indistinguishable here.
+			// 'suppressed' is the SPURS heuristic in do_putllc choosing not to wake the waiters:
+			// a store that succeeds and notifies nobody is the one way this hang can be nobody's
+			// fault locally and still never end.
+			static constexpr const char* where_names[]{ "?", "loop_top", "check_state", "stop_signal", "gateway_enter", "gateway_exit" };
+			const u32 where = spu.dbg_where < std::size(where_names) ? spu.dbg_where : 0u;
+
+			// raddr is the 128-byte line this SPU currently holds a reservation on, and spurs_addr
+			// is the control block the kernel schedules through. Borderlands 2 hangs with every
+			// PhysWISE kernel alive in guest code and ~39% of their conditional stores failing,
+			// which is contention rather than a stall -- but contention on WHAT is the thing none
+			// of the counters can say. If they are all hammering one line, that line is the bug's
+			// address; if they are spread out, this is not the contention story it looks like.
+			fmt::append(spus, " putllc={calls=%u fails=%u notify=%u suppressed=%u} blocks=%u loops=%u where=%s raddr=0x%x spurs=0x%x rtime=%u",
+				spu.putllc_calls, spu.putllc_fails, spu.putllc_notify, spu.putllc_suppressed,
+				spu.block_counter, spu.dbg_loops, where_names[where],
+				spu.raddr, spu.spurs_addr, spu.rtime);
+
 			if (spu.mfc_size)
 			{
 				const auto& cmd = spu.mfc_queue[0];
 				fmt::append(spus, " head={cmd=0x%02x tag=%u lsa=0x%05x eal=0x%08x size=0x%x}",
 					+cmd.cmd, +cmd.tag, +cmd.lsa, +cmd.eal, +cmd.size);
+			}
+
+			// The loop itself, for an SPU that is RUNNING rather than parked.
+			//
+			// The state line above says where it is and what it holds; it cannot say what the code
+			// does, and that is the remaining question whenever every other guest thread is
+			// legitimately asleep. If pending == 0 on the sleepers (see above) then the fault is on
+			// the signalling side, which is whichever SPU is still running -- so print what that one
+			// is executing, and nothing for the parked ones, whose pc is just the kernel's idle
+			// loop and is identical on all of them.
+			//
+			// Borderlands 2 hangs after its logo with exactly one SPURS kernel at pc=0x25da8 and
+			// the rest at 0x011a8, and WHICH kernel spins changes between boots. Local store is a
+			// flat 256KiB buffer, so the window only needs bounding against SPU_LS_SIZE -- there is
+			// no address to validate the way the PPU side has to.
+			if (spu.state.load().none_of(cpu_flag::wait) && spu.ls)
+			{
+				// Registers first: the loop is a comparison, and which values it compares is the
+				// half the disassembly cannot supply.
+				spu.dump_all(spus);
+
+				// ONE window per process, because this dump repeats for as long as the stall
+				// lasts and the window is a whole SPU function. Unguarded it cost ~2400 lines
+				// every few seconds: measured 538 lines/sec over 31 dumps, ~74k of the 114k
+				// lines in a single Borderlands 2 capture, with a 690 MiB log left behind by the
+				// run before it. Log volume that heavy is itself a stall on Android, so this was
+				// slowing down the very hang it was meant to describe -- and it buried the state
+				// lines that actually answered the question. The code only needs printing once;
+				// the state line above still prints on every dump and is what shows change.
+				static atomic_t<bool> s_window_done{false};
+
+				if (s_window_done.exchange(true))
+				{
+					return;
+				}
+
+				const u32 pc = spu.pc;
+				const u32 from = pc >= 0x40 ? pc - 0x40 : 0;
+
+				// Big enough for a whole SPU function, which took two captures to establish.
+				//
+				// The recompiler only writes pc at block boundaries, so a thread that never leaves
+				// its block reports the block's ENTRY, not the loop. 0x120 bytes got a prologue --
+				// twenty-odd stqd of callee-saved registers. 0x600 got 385 instructions with no
+				// back-edge and no channel op in them, which reads like "not looping here" and is
+				// simply the window ending first: the log says this block is 2401 instructions
+				// ("Building function 0x25da8... (size 2401)"), i.e. 0x2584 bytes. Anything shorter
+				// than the function cannot answer "where does it loop", so the window covers one.
+				const u32 to = std::min<u32>(from + 0x2600, SPU_LS_SIZE - 4);
+
+				SPUDisAsm dis_asm(cpu_disasm_mode::dump, spu.ls);
+
+				fmt::append(spus, "\n    running -- code from pc=0x%05x (block entry; loop is inside):\n", pc);
+
+				for (u32 addr = from; addr <= to; addr += 4)
+				{
+					dis_asm.disasm(addr);
+					spus += (addr == pc ? "  >>" : "    ");
+					spus += dis_asm.last_opcode;
+				}
 			}
 		}, idm::unlocked);
 
@@ -1558,6 +1668,11 @@ namespace rsx
 
 	void thread::do_local_task(FIFO::state state)
 	{
+		if (const u32 state_idx = static_cast<u32>(state); state_idx < s_ltask_states)
+		{
+			g_ltask_state_calls[state_idx]++;
+		}
+
 		// Arm and poll from here as well as on_frame_end. Both of those run only once a frame
 		// has completed, so a boot that hangs before presenting left the profiler switched off
 		// and silent -- and that is the case where what the RSX thread is looping in is the
@@ -1573,12 +1688,70 @@ namespace rsx
 		if (prof::poll_stall()) [[unlikely]]
 		{
 			dump_guest_threads_stalled();
+
+			const u64 report_now = get_system_time();
+			const u64 span = g_ltask_last_report ? report_now - g_ltask_last_report : 0;
+			g_ltask_last_report = report_now;
+
+			static constexpr const char* state_names[s_ltask_states]{ "running", "empty", "spinning", "nop", "lock_wait", "paused" };
+			static constexpr const char* branch_names[s_ltask_branches]{ "emu_flip", "invalidate", "dma_ctrl", "pipe_sync" };
+
+			std::string act;
+
+			for (u32 i = 0; i < s_ltask_states; i++)
+			{
+				const u64 delta = g_ltask_state_calls[i] - g_ltask_state_prev[i];
+				g_ltask_state_prev[i] = g_ltask_state_calls[i];
+
+				if (delta)
+				{
+					fmt::append(act, " %s=%u", state_names[i], delta);
+				}
+			}
+
+			for (u32 i = 0; i < s_ltask_branches; i++)
+			{
+				const u64 delta = g_ltask_branch[i] - g_ltask_branch_prev[i];
+				g_ltask_branch_prev[i] = g_ltask_branch[i];
+
+				if (delta)
+				{
+					fmt::append(act, " %s=%u", branch_names[i], delta);
+				}
+			}
+
+			// get/put straight out of the guest DMA control block rather than our mirror of it.
+			// get == put with state 'empty' is the guest not submitting; get != put while no
+			// frame lands is the RSX failing to drain what it already has, and those want
+			// opposite fixes.
+			u32 fifo_get = 0, fifo_put = 0, fifo_ref = 0;
+
+			if (dma_address && vm::check_addr(dma_address))
+			{
+				const auto ctrl = vm::_ptr<RsxDmaControl>(dma_address);
+				fifo_put = ctrl->put;
+				fifo_get = ctrl->get;
+				fifo_ref = ctrl->ref;
+			}
+
+			rsx_log.error("RSX local task over %.1fs:%s | fifo get=0x%x put=0x%x ref=0x%x internal_get=0x%x last_cmd=0x%08x args_left=%u | dma_ctrl_pending=%u pipe_flush_pending=%u in_begin_end=%u",
+				span / 1'000'000.,
+				act.empty() ? " (no calls)" : act.c_str(),
+				fifo_get, fifo_put, fifo_ref,
+				fifo_ctrl ? fifo_ctrl->get_pos() : 0u,
+				fifo_ctrl ? fifo_ctrl->last_cmd() : 0u,
+				fifo_ctrl ? fifo_ctrl->get_remaining_args_count() : 0u,
+				(m_eng_interrupt_mask & rsx::dma_control_interrupt) ? 1 : 0,
+				(m_eng_interrupt_mask & rsx::pipe_flush_interrupt) ? 1 : 0,
+				in_begin_end ? 1 : 0);
 		}
 
 		m_eng_interrupt_mask.clear(rsx::backend_interrupt);
 
 		if (async_flip_requested & flip_request::emu_requested)
 		{
+			g_ltask_branch[ltask_emu_flip]++;
+
 			// NOTE: This has to be executed immediately
 			// Delaying this operation can cause desync due to the delay in firing the flip event
 			handle_emu_flip(async_flip_buffer);
@@ -1592,12 +1765,15 @@ namespace rsx
 
 				if (m_invalidated_memory_range.valid())
 				{
+					g_ltask_branch[ltask_invalidate]++;
 					handle_invalidated_memory_range();
 				}
 			}
 
 			if (m_eng_interrupt_mask & rsx::dma_control_interrupt && !is_stopped())
 			{
+				g_ltask_branch[ltask_dma_control]++;
+
 				if (const u64 get_put = new_get_put.exchange(u64{umax});
 					get_put != umax)
 				{
@@ -1615,6 +1791,7 @@ namespace rsx
 
 		if (m_eng_interrupt_mask & rsx::pipe_flush_interrupt)
 		{
+			g_ltask_branch[ltask_pipe_flush]++;
 			sync();
 		}
 
