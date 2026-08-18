@@ -146,6 +146,27 @@ static void spu_reset_failed_blocks()
 // the user selects a recompiler. That is a different object with a different failure mode: when it
 // fails to build, the check disabled a fallback that was in fact available, and dispatch dropped
 // into the "Compilation failed" path instead.
+// Size of the shared stack scratchpad the ARM64 SPU gateway reserves for generated code.
+//
+// Compiled SPU functions build no frames of their own on ARM64 -- GHC_frame_preservation_pass runs
+// with use_stack_frames = false -- so every one of them spills into this single reservation. It
+// therefore has to cover the WORST function the recompiler will ever emit, not a typical one.
+//
+// 8192 did not. Borderlands 2's 2401-instruction SPURS function at LS 0x25da8 wants ~21 KB and
+// wrote past it: the fault landed at sp+21760, exactly the top of the thread's stack mapping, on
+// the PROT_NONE guard page above it. That is unrecoverable for a second reason -- a guard page is
+// not emulator memory, so is_emulator_fault() declines it, the handler forwards to libsigchain, and
+// ART's FaultManager reads the guest registers as an ArtMethod* and kills the process with no
+// tombstone.
+//
+// STILL A FIXED BOUND. A function larger than BL2's could overflow 256 KB the same way; the
+// scaling fix is use_stack_frames = true, whose cost the pass comments call out and which is not
+// measured. Address space only until touched.
+//
+// x86 reserves 0xc8 in the same place because LLVM emits ordinary per-function frames there, so
+// this arrangement -- and this failure -- are ARM64-only.
+static constexpr u32 SPU_GW_SCRATCH_SIZE = 262144;
+
 static bool spu_interpreter_fallback_available()
 {
 	return true;
@@ -753,7 +774,7 @@ DECLARE(spu_runtime::g_gateway) = build_function_asm<spu_function_t>("spu_gatewa
 	c.mov(a64::x22, args[3]);
 
 	// Inject stack frame for scratchpad. Alternatively use per-function frames but that adds some overhead
-	c.sub(a64::sp, a64::sp, Imm(8192));
+	c.sub(a64::sp, a64::sp, Imm(SPU_GW_SCRATCH_SIZE));
 
 	c.mov(a64::x0, Imm(reinterpret_cast<u64>(spu_runtime::tr_all)));
 	c.blr(a64::x0);
@@ -762,7 +783,7 @@ DECLARE(spu_runtime::g_gateway) = build_function_asm<spu_function_t>("spu_gatewa
 	c.bind(epilogue_addr);
 
 	// Cleanup scratchpad (not needed, we'll reload sp shortly)
-	// c.add(a64::sp, a64::sp, Imm(8192));
+	// c.add(a64::sp, a64::sp, Imm(SPU_GW_SCRATCH_SIZE));
 
 	// Restore thread context
 	c.mov(a64::x14, Imm(hv_regs_base));
@@ -849,14 +870,14 @@ DECLARE(spu_runtime::g_tail_escape) = build_function_asm<void(*)(spu_thread*, sp
 	c.str(args[0], arm::Mem(a64::sp));
 
 	// Allocate scratchpad. Not needed if using per-function frames, or if we just don't care about returning to C++ (jump to gw exit instead)
-	c.sub(a64::sp, a64::sp, Imm(8192));
+	c.sub(a64::sp, a64::sp, Imm(SPU_GW_SCRATCH_SIZE));
 
 	// Make the far jump
 	c.mov(a64::x15, args[1]);
 	c.blr(a64::x15);
 
 	// Clear scratch allocation
-	c.add(a64::sp, a64::sp, Imm(8192));
+	c.add(a64::sp, a64::sp, Imm(SPU_GW_SCRATCH_SIZE));
 
 	// Restore context. Escape point expects the current thread pointer at x19
 	c.ldr(a64::x19, arm::Mem(a64::sp));

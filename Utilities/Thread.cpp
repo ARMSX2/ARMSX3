@@ -3179,7 +3179,24 @@ void thread_base::start()
 	ensure(pthread_create(&thread_id, &attrs, entry_point, this) == 0);
 #else
 	pthread_t thread_id{};
+
+#ifdef __ANDROID__
+	// Give Android threads the stack desktop Linux already gives them.
+	//
+	// bionic's default is 1 MB; glibc's is 8 MB. Passing null attributes here meant every emulator
+	// thread on Android ran on an eighth of the stack the same code gets everywhere else, and
+	// nothing said so -- an SPU thread's stack mapping measured 0xfc000.
+	//
+	// Address space only; stack pages are committed on first use.
+	pthread_attr_t attrs;
+	pthread_attr_init(&attrs);
+	pthread_attr_setstacksize(&attrs, 0x800000);
+	const int rc = pthread_create(&thread_id, &attrs, entry_point, this);
+	pthread_attr_destroy(&attrs);
+	ensure(rc == 0);
+#else
 	ensure(pthread_create(&thread_id, nullptr, entry_point, this) == 0);
+#endif
 #endif
 
 #ifndef _WIN32
