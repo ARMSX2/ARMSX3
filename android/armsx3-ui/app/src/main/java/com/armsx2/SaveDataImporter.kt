@@ -1,0 +1,445 @@
+package com.armsx2
+
+import android.content.Context
+import android.net.Uri
+import android.util.Log
+import androidx.documentfile.provider.DocumentFile
+import com.armsx2.data.library.ParamSfo
+import net.rpcsx.RPCSX
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+
+/**
+ * Imports PS3 save data into `config/dev_hdd0/home/<user>/savedata/` from a SAF-picked folder or
+ * archive.
+ *
+ * This exists because of a platform rule, not a bug of ours. Android 11 blocks third-party file
+ * managers from writing into `Android/data/<pkg>/`, so a user who downloads a roster or a save
+ * cannot put it where the emulator reads from: ZArchiver reports `EACCES (Permission denied)` and
+ * there is no way round it from outside the app. Reported against All Pro Football 2K8 on an Ayn
+ * Thor Pro. We are the only process that can still write there, so the copy has to happen in here.
+ *
+ * The destination folder name comes from the save's own PARAM.SFO, not from what the user's folder
+ * or archive happened to be called. That is the whole reliability argument for this class. Games
+ * enumerate saves by matching `dirNamePrefix` against the directory name (cellSaveData.cpp:543), so
+ * a save placed under the wrong name is not an error the user ever sees -- the game simply reports
+ * no save data and offers to start fresh, which looks like the import silently did nothing. The
+ * core writes SAVEDATA_DIRECTORY into every PARAM.SFO it saves (cellSaveData.cpp:1695) and reads it
+ * back to populate dirName (cellSaveData.cpp:248), so the correct name travels inside the save.
+ *
+ * Follows [TexturePackInstaller] for staging and commit: everything lands in a scratch directory on
+ * the same filesystem, is validated there, and only then is renamed into place. Nothing half-formed
+ * is ever visible under `savedata/`, and a failure part-way cannot destroy a save the user already
+ * had. The pieces here that are not savedata-specific -- [stageArchive], [stageTree], [commit] --
+ * are what the frame-generation plugin installer needs too (pick a file, verify it, atomically
+ * place it somewhere the app owns); they are written to be lifted rather than reimplemented.
+ */
+object SaveDataImporter {
+    private const val TAG = "SaveDataImporter"
+
+    /** Guards against a decompression bomb: real save data is kilobytes to a few megabytes. */
+    private const val MAX_ENTRY_BYTES = 256L * 1024 * 1024
+    private const val MAX_TOTAL_BYTES = 1024L * 1024 * 1024
+    private const val MAX_ENTRIES = 20_000
+
+    sealed interface Progress {
+        data object Scanning : Progress
+        data class Copying(val done: Int, val total: Int) : Progress
+        data object Installing : Progress
+    }
+
+    /** One save found in the source, named as it will actually be written. */
+    data class Imported(val dirName: String, val title: String?, val replaced: Boolean)
+
+    data class Outcome(
+        val ok: Boolean,
+        val saves: List<Imported> = emptyList(),
+        val error: String? = null,
+    )
+
+    // ---- entry points ---------------------------------------------------------------------
+
+    /**
+     * Imports from a `.zip` picked with `ActivityResultContracts.OpenDocument`.
+     *
+     * Blocking; call from a background dispatcher.
+     */
+    fun importArchive(
+        context: Context,
+        uri: Uri,
+        onProgress: (Progress) -> Unit = {},
+        isCancelled: () -> Boolean = { false },
+    ): Outcome = runImport(onProgress) { staging ->
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            stageArchive(input, staging, onProgress, isCancelled)
+        } ?: Outcome(false, error = "Could not open the selected file")
+    }
+
+    /**
+     * Imports from a folder picked with `ActivityResultContracts.OpenDocumentTree`.
+     *
+     * Accepts either the save folder itself or a parent holding several, since a user who
+     * downloaded a pack of rosters has no reason to know which of those they picked.
+     */
+    fun importFolder(
+        context: Context,
+        treeUri: Uri,
+        onProgress: (Progress) -> Unit = {},
+        isCancelled: () -> Boolean = { false },
+    ): Outcome = runImport(onProgress) { staging ->
+        val root = DocumentFile.fromTreeUri(context, treeUri)
+            ?: return@runImport Outcome(false, error = "Could not open the selected folder")
+        stageTree(context, root, staging, onProgress, isCancelled)
+    }
+
+    // ---- shared driver --------------------------------------------------------------------
+
+    /**
+     * Stages, validates, then commits. [stage] does only the copy; it must not touch the live
+     * savedata directory, which is what makes a cancelled or failed import a no-op.
+     */
+    private fun runImport(
+        onProgress: (Progress) -> Unit,
+        stage: (File) -> Outcome?,
+    ): Outcome {
+        val savedataRoot = savedataRoot() ?: return Outcome(
+            false,
+            error = "No user profile yet — boot a game once, then import.",
+        )
+
+        // A sibling of the destination, so the commit below is a rename and not a copy across
+        // filesystems. Leading dot keeps it out of the way of anything that lists savedata/.
+        val staging = File(savedataRoot, ".import-tmp")
+        staging.deleteRecursively()
+        if (!staging.mkdirs()) {
+            return Outcome(false, error = "Could not create a staging folder")
+        }
+
+        try {
+            onProgress(Progress.Scanning)
+            stage(staging)?.let { return it }
+
+            val found = discover(staging)
+            if (found.isEmpty()) {
+                return Outcome(
+                    false,
+                    error = "No save data found. A save is a folder containing PARAM.SFO.",
+                )
+            }
+
+            onProgress(Progress.Installing)
+            val imported = mutableListOf<Imported>()
+            for ((staged, dirName) in found) {
+                val dest = File(savedataRoot, dirName)
+                val replaced = dest.exists()
+                if (!commit(staged, dest)) {
+                    return Outcome(
+                        false,
+                        imported,
+                        "Could not write $dirName into the savedata folder",
+                    )
+                }
+                imported += Imported(
+                    dirName = dirName,
+                    title = ParamSfo.string(File(dest, "PARAM.SFO"), "TITLE"),
+                    replaced = replaced,
+                )
+            }
+            return Outcome(true, imported)
+        } catch (e: Exception) {
+            Log.w(TAG, "import failed: ${e.message}")
+            return Outcome(false, error = e.message ?: "Import failed")
+        } finally {
+            staging.deleteRecursively()
+        }
+    }
+
+    // ---- discovery and naming --------------------------------------------------------------
+
+    /**
+     * Finds every staged directory holding a PARAM.SFO, paired with the name it must be written
+     * under. That is the same test the core uses to decide a directory is a save at all: it loads
+     * `<entry>/PARAM.SFO` per directory when enumerating (cellSaveData.cpp:240).
+     *
+     * Searched recursively because the source shape is not ours to dictate -- a user may hand us
+     * the save, its parent, or an archive that wraps both in a download folder.
+     */
+    private fun discover(staging: File): List<Pair<File, String>> {
+        val out = mutableListOf<Pair<File, String>>()
+        fun walk(dir: File, depth: Int) {
+            if (depth > 6) return
+            if (File(dir, "PARAM.SFO").isFile) {
+                resolveDirName(dir)?.let { out += dir to it }
+                // A save has no nested saves; stopping also stops a PARAM.SFO in a subfolder from
+                // being imported as a second, bogus save.
+                return
+            }
+            dir.listFiles().orEmpty().filter { it.isDirectory }.forEach { walk(it, depth + 1) }
+        }
+        walk(staging, 0)
+        return out
+    }
+
+    /**
+     * The directory name to write this save under: PARAM.SFO's SAVEDATA_DIRECTORY when it has one,
+     * else the folder's own name.
+     *
+     * Preferring the SFO is what makes a renamed download still work. Names look like
+     * `<SERIAL><TAG>` (`BLUS30760SM2011_SAVE`), which is not something a user can be expected to
+     * reconstruct after their file manager or a zip tool has flattened or renamed a folder.
+     *
+     * The fallback is not a formality: a save copied by hand out of another emulator may have had
+     * its SFO rewritten. Both paths go through [sanitizedDirName] because a value read out of a
+     * file is untrusted input no matter which file it came from.
+     */
+    private fun resolveDirName(dir: File): String? {
+        val fromSfo = ParamSfo.string(File(dir, "PARAM.SFO"), "SAVEDATA_DIRECTORY")
+        return sanitizedDirName(fromSfo) ?: sanitizedDirName(dir.name)
+    }
+
+    /**
+     * A directory name safe to join onto the savedata root.
+     *
+     * Rejects rather than repairs. A name carrying a separator or a `..` is not a name we can
+     * correct into the user's intent, and quietly writing it somewhere else would be worse than
+     * saying so: this is the value that decides where the copy lands.
+     */
+    private fun sanitizedDirName(raw: String?): String? {
+        val name = raw?.trim()?.trimEnd(' ')?.trim().orEmpty()
+        if (name.isEmpty() || name == "." || name == "..") return null
+        if (name.length > 64) return null
+        if (name.any { it == '/' || it == '\\' || it == ' ' }) return null
+        // Matches the character set the core accepts for a dirName, and keeps a leading dot from
+        // producing a hidden directory the user cannot see in any browser.
+        if (!name.all { it.isLetterOrDigit() || it == '-' || it == '_' }) return null
+        return name
+    }
+
+    // ---- staging: archive ------------------------------------------------------------------
+
+    /**
+     * Extracts [input] into [staging].
+     *
+     * Entry paths are rebuilt from sanitized components rather than used as given. A crafted
+     * `../../lib/foo.so` would otherwise be written wherever the app can reach, and the app can
+     * reach its own native library directory -- so this is a code-execution path, not a tidiness
+     * one. Any entry containing a `..` component fails the whole archive: an archive carrying one
+     * is not an archive to half-extract and then trust.
+     */
+    private fun stageArchive(
+        input: InputStream,
+        staging: File,
+        onProgress: (Progress) -> Unit,
+        isCancelled: () -> Boolean,
+    ): Outcome? {
+        val stagingCanonical = staging.canonicalPath + File.separator
+        var entries = 0
+        var totalBytes = 0L
+        var written = 0
+
+        ZipInputStream(input.buffered()).use { zip ->
+            while (true) {
+                if (isCancelled()) return Outcome(false, error = null)
+                val entry: ZipEntry = zip.nextEntry ?: break
+                try {
+                    if (++entries > MAX_ENTRIES) {
+                        return Outcome(false, error = "Archive has too many files")
+                    }
+                    if (entry.isDirectory) continue
+
+                    val rel = safeRelativePath(entry.name)
+                        ?: return Outcome(false, error = "Archive contains an unsafe path")
+                    if (rel.isEmpty() || isJunk(entry.name)) continue
+
+                    val out = File(staging, rel)
+                    // Belt and braces. safeRelativePath already dropped every `..`, so reaching
+                    // this is a bug in it rather than a crafted archive -- but the cost of the
+                    // check is nothing and the cost of being wrong is arbitrary file write.
+                    if (!out.canonicalPath.startsWith(stagingCanonical)) {
+                        Log.w(TAG, "zip-slip entry rejected: ${entry.name}")
+                        return Outcome(false, error = "Archive contains an unsafe path")
+                    }
+                    out.parentFile?.mkdirs()
+
+                    var entryBytes = 0L
+                    FileOutputStream(out).use { fos ->
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            if (isCancelled()) return Outcome(false, error = null)
+                            val n = zip.read(buf)
+                            if (n < 0) break
+                            entryBytes += n
+                            totalBytes += n
+                            // Sizes are checked while writing, not from the entry header: the
+                            // header is attacker-controlled and can simply lie.
+                            if (entryBytes > MAX_ENTRY_BYTES || totalBytes > MAX_TOTAL_BYTES) {
+                                return Outcome(false, error = "Archive is unexpectedly large")
+                            }
+                            fos.write(buf, 0, n)
+                        }
+                    }
+                    written++
+                    if (written % 16 == 0) onProgress(Progress.Copying(written, 0))
+                } finally {
+                    zip.closeEntry()
+                }
+            }
+        }
+
+        if (written == 0) return Outcome(false, error = "Archive was empty")
+        return null
+    }
+
+    /**
+     * Rebuilds an entry path from its own components, keeping only the basename of each.
+     *
+     * Every component is reduced to its last path-ish token and anything left that is `.` or `..`
+     * is dropped, so no combination of separators, doubled slashes or backslashes can climb out of
+     * the staging directory. Depth is capped because the structure a save needs is at most a
+     * folder and its files.
+     */
+    private fun safeRelativePath(name: String): String? {
+        val norm = name.replace('\\', '/')
+        val parts = norm.split('/')
+            .map { it.trim().trimEnd(' ') }
+            .filter { it.isNotEmpty() && it != "." }
+        if (parts.any { it == ".." }) return null
+        if (parts.isEmpty()) return ""
+        // Drop leading wrappers so a "Download/BLUS30760SAVE/PARAM.SFO" still stages usefully;
+        // discover() walks anyway, so this only keeps the tree shallow.
+        val kept = parts.takeLast(3).map { it.filterNot { c -> c == ' ' } }
+        if (kept.any { it.isEmpty() }) return null
+        return kept.joinToString("/")
+    }
+
+    // ---- staging: folder -------------------------------------------------------------------
+
+    /** Copies a picked SAF tree into [staging], mirroring its structure. */
+    private fun stageTree(
+        context: Context,
+        root: DocumentFile,
+        staging: File,
+        onProgress: (Progress) -> Unit,
+        isCancelled: () -> Boolean,
+    ): Outcome? {
+        var copied = 0
+        var totalBytes = 0L
+
+        fun walk(node: DocumentFile, dest: File, depth: Int): Outcome? {
+            if (depth > 6) return null
+            for (child in node.listFiles()) {
+                if (isCancelled()) return Outcome(false, error = null)
+                val rawName = child.name ?: continue
+                // The picker gives us display names, which are not path components; a name with a
+                // separator in it is malformed and is dropped rather than joined.
+                if (rawName.any { it == '/' || it == '\\' || it == ' ' }) continue
+                if (rawName == "." || rawName == "..") continue
+                if (isJunk(rawName)) continue
+
+                if (child.isDirectory) {
+                    val sub = File(dest, rawName)
+                    if (!sub.exists() && !sub.mkdirs()) continue
+                    walk(child, sub, depth + 1)?.let { return it }
+                    continue
+                }
+
+                val out = File(dest, rawName)
+                out.parentFile?.mkdirs()
+                context.contentResolver.openInputStream(child.uri)?.use { input ->
+                    FileOutputStream(out).use { fos ->
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            totalBytes += n
+                            if (totalBytes > MAX_TOTAL_BYTES) return@use
+                            fos.write(buf, 0, n)
+                        }
+                    }
+                }
+                if (totalBytes > MAX_TOTAL_BYTES) {
+                    return Outcome(false, error = "Folder is unexpectedly large")
+                }
+                copied++
+                if (copied % 16 == 0) onProgress(Progress.Copying(copied, 0))
+            }
+            return null
+        }
+
+        // The picked folder may itself be the save, so its own name has to survive into staging or
+        // the dirName fallback would see the scratch directory instead.
+        val rootName = root.name?.takeIf { n ->
+            n.none { it == '/' || it == '\\' || it == ' ' } && n != "." && n != ".."
+        }
+        val base = if (rootName != null) File(staging, rootName).also { it.mkdirs() } else staging
+
+        walk(root, base, 0)?.let { return it }
+        if (copied == 0) return Outcome(false, error = "Folder contained no files")
+        return null
+    }
+
+    // ---- commit ----------------------------------------------------------------------------
+
+    /**
+     * Moves [staged] to [target], keeping any existing save until the new one is in place.
+     *
+     * Overwriting matters more here than for a texture pack: the thing being replaced is the
+     * user's own progress, and a rename that fails half way must leave what they had rather than
+     * nothing at all.
+     */
+    private fun commit(staged: File, target: File): Boolean {
+        val backup = File(target.parentFile, "${target.name}.old-import")
+        backup.deleteRecursively()
+        target.parentFile?.mkdirs()
+
+        val hadPrevious = target.exists()
+        if (hadPrevious && !target.renameTo(backup)) {
+            Log.w(TAG, "could not move existing ${target.name} aside")
+            return false
+        }
+        if (!staged.renameTo(target)) {
+            if (hadPrevious) backup.renameTo(target)
+            Log.w(TAG, "could not move staged ${target.name} into place")
+            return false
+        }
+        backup.deleteRecursively()
+        return true
+    }
+
+    // ---- paths -----------------------------------------------------------------------------
+
+    /**
+     * `config/dev_hdd0/home/<user>/savedata`, created if the user directory already exists.
+     *
+     * Prefers the logged-in user and falls back to whichever home directory is actually there,
+     * matching how the trophy browser resolves the same ambiguity: getUser() reaches through JNI
+     * into the core and answers null before a game has been opened, and refusing to import until
+     * then would be a confusing rule to explain. Answers null only when there is no user directory
+     * at all, which is a genuinely fresh install.
+     */
+    private fun savedataRoot(): File? {
+        val home = File(RPCSX.getHdd0Dir(), "home")
+        val preferred = runCatching { RPCSX.instance.getUser() }.getOrNull()
+            ?.takeIf { it.isNotBlank() }
+
+        val user = preferred
+            ?.let { File(home, it) }
+            ?.takeIf { it.isDirectory }
+            ?: home.listFiles().orEmpty()
+                .filter { it.isDirectory && it.name.length == 8 && it.name.all(Char::isDigit) }
+                .minByOrNull { it.name }
+            ?: return null
+
+        return File(user, "savedata").also { it.mkdirs() }.takeIf { it.isDirectory }
+    }
+
+    private fun isJunk(name: String): Boolean {
+        val lower = name.lowercase()
+        return lower.startsWith("__macosx/") || lower.contains("/__macosx/") ||
+            lower == "__macosx" || lower.endsWith("/.ds_store") || lower == ".ds_store" ||
+            lower.endsWith("thumbs.db")
+    }
+}

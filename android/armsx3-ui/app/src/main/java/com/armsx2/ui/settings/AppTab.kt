@@ -972,6 +972,62 @@ private fun BackupRestoreRows() {
     BackupActionRow("💾", "app.backup.export", "app.backup.export.desc", status, busy, doExport)
     BackupActionRow("📥", "app.backup.import", "app.backup.import.desc", "", busy, doImport)
 
+    // Save-data import. Sits here rather than in a library screen because it is the same act as
+    // Restore -- bringing files the app cannot otherwise receive into its own data folder.
+    //
+    // It exists because of a platform rule: Android 11 stopped third-party file managers from
+    // writing into Android/data, so dropping a downloaded roster into savedata/ now fails with
+    // EACCES no matter which file manager is used. We are the only process that can still write
+    // there. Reported against All Pro Football 2K8.
+    //
+    // Two rows because the two pickers are different intents and a user has whichever they have:
+    // an archive straight from a download, or an already-unzipped folder.
+    val onImported = { r: com.armsx2.SaveDataImporter.Outcome ->
+        busy = false
+        val names = r.saves.joinToString(", ") { s -> s.title?.takeIf { it.isNotBlank() } ?: s.dirName }
+        status = when {
+            r.ok && r.saves.any { it.replaced } -> I18n.get("app.savedata.replaced").replace("%s", names)
+            r.ok -> I18n.get("app.savedata.done").replace("%s", names)
+            // A cancelled picker reports no error; saying "failed" at someone who backed out
+            // themselves is noise.
+            r.error == null -> ""
+            else -> I18n.get("app.savedata.failed").replace("%s", r.error)
+        }
+        if (status.isNotEmpty()) Toast.makeText(context, status, Toast.LENGTH_LONG).show()
+    }
+    val saveArchivePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        status = I18n.get("app.savedata.working")
+        scope.launch(Dispatchers.IO) {
+            val r = com.armsx2.SaveDataImporter.importArchive(context, uri)
+            withContext(Dispatchers.Main) { onImported(r) }
+        }
+    }
+    val saveFolderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        status = I18n.get("app.savedata.working")
+        scope.launch(Dispatchers.IO) {
+            val r = com.armsx2.SaveDataImporter.importFolder(context, uri)
+            withContext(Dispatchers.Main) { onImported(r) }
+        }
+    }
+    val doSaveImport = {
+        if (!busy) saveArchivePicker.launch(arrayOf("application/zip", "application/octet-stream"))
+    }
+    val doSaveFolderImport = { if (!busy) saveFolderPicker.launch(null) }
+
+    BackupActionRow("🎮", "app.savedata.import", "app.savedata.import.desc", "", busy, doSaveImport)
+    BackupActionRow(
+        "📂", "app.savedata.importFolder", "app.savedata.importFolder.desc", "", busy,
+        doSaveFolderImport,
+    )
+
     // Factory reset. Sits with Backup/Restore because Export is the thing to do first — the
     // prompt says so. Routed through GlobalConfirm rather than a local overlay: this row is
     // inside a scrolling tab, so a scrim drawn here would clip to the row's bounds.
