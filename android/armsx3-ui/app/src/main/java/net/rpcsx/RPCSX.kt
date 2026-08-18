@@ -107,18 +107,6 @@ class RPCSX {
     external fun processCompilationQueue(): Boolean
     external fun startMainThreadProcessor(): Boolean
     external fun overlayPadData(port: Int, digital1: Int, digital2: Int, leftStickX: Int, leftStickY: Int, rightStickX: Int, rightStickY: Int): Boolean
-
-    /**
-     * Deliver one key to the guest keyboard.
-     *
-     * keyCode is an Android KeyEvent keycode -- the native handler registers those directly, so
-     * nothing needs translating on the way through. unicode is the character the key produces, or
-     * 0 for keys that produce none (modifiers, arrows, function keys).
-     *
-     * Returns false when there is no active keyboard: the Keyboard setting is Null, no game is
-     * running, or the core predates this export.
-     */
-    external fun keyboardKey(keyCode: Int, pressed: Boolean, unicode: Int): Boolean
     /** Analog pressure per pressure-capable button, in CELL_PAD press-offset order
      *  (RIGHT, LEFT, UP, DOWN, TRIANGLE, CIRCLE, CROSS, SQUARE, L1, R1, L2, R2),
      *  each 1..255, or 0 to leave that button digital. */

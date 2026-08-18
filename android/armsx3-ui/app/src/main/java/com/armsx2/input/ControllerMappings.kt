@@ -887,12 +887,6 @@ object ControllerMappings {
         // "only while aiming" binding (gyro live only while the button is held, so the
         // phone can sit still the rest of the time). Both drive
         // MainActivityRuntime.gyroActive and are session-only, never persisted.
-        // Raises and dismisses the ANDROID system keyboard over the running game, for titles
-        // that want real keyboard input -- online text chat, Counter-Strike, NFS Most Wanted's
-        // beta debug menu. The system IME is used rather than a drawn key grid so layouts,
-        // languages, prediction and emoji all come for free. Keys reach the guest through
-        // android_keyboard_handler; see MainActivityRuntime.toggleGuestKeyboard.
-        KEYBOARD_TOGGLE("pad.keyboardtoggle.keycode", "Toggle Keyboard"),
         GYRO_TOGGLE("pad.gyrotoggle.keycode", "Gyro On/Off (toggle)"),
         GYRO_HOLD("pad.gyrohold.keycode", "Gyro (hold to aim)"),
         // Raises/drops the Android IME over the running game and routes what it types to the

@@ -24,7 +24,6 @@ struct RPCSXApi {
   bool (*overlayPadData)(int port, int digital1, int digital2, int leftStickX,
                          int leftStickY, int rightStickX, int rightStickY);
   bool (*overlayPadPressure)(int port, const int *values, int count);
-  bool (*keyboardKey)(int keyCode, bool pressed, int unicode);
   bool (*initialize)(std::string_view rootDir, std::string_view user);
   void (*setSocInfo)(std::string_view socInfo);
   bool (*processCompilationQueue)(JNIEnv *env);
@@ -122,7 +121,6 @@ struct RPCSXLibrary : RPCSXApi {
 
     // clang-format off
     result.overlayPadData = reinterpret_cast<decltype(overlayPadData)>(dlsym(handle, "_rpcsx_overlayPadData"));
-    result.keyboardKey = reinterpret_cast<decltype(keyboardKey)>(dlsym(handle, "_rpcsx_keyboardKey"));
     result.overlayPadPressure = reinterpret_cast<decltype(overlayPadPressure)>(dlsym(handle, "_rpcsx_overlayPadPressure"));
     result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_rpcsx_initialize"));
     result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_rpcsx_setSocInfo"));
@@ -234,17 +232,6 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_overlayPadData(
 
   return rpcsxLib.overlayPadData(port, digital1, digital2, leftStickX,
                                  leftStickY, rightStickX, rightStickY);
-}
-
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_keyboardKey(
-    JNIEnv *, jobject, jint keyCode, jboolean pressed, jint unicode) {
-  // Absent on a core older than this export, and null before the core is dlopen()ed. Report
-  // failure rather than faulting, so the on-screen keyboard can show itself as inert.
-  if (rpcsxLib.keyboardKey == nullptr) {
-    return false;
-  }
-
-  return rpcsxLib.keyboardKey(keyCode, pressed == JNI_TRUE, unicode);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_overlayPadPressure(

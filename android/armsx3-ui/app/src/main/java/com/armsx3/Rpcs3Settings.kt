@@ -108,15 +108,6 @@ object Rpcs3Settings {
     fun setKeyboardType(index: Int) = setIndexedEnum("$SYSTEM@@Keyboard Type", KEYBOARD_TYPES, index, 0)
     fun setDateFormat(index: Int) = setIndexedEnum("$SYSTEM@@Date Format", DATE_FORMATS, index, 1)
     fun setTimeFormat(index: Int) = setIndexedEnum("$SYSTEM@@Time Format", TIME_FORMATS, index, 1)
-    /**
-     * keyboard_handler: exactly "Null" | "Basic".
-     *
-     * Basic makes cellKb report a keyboard attached, which is what lets games with keyboard
-     * support see input at all -- online text chat, Counter-Strike, NFS Most Wanted's debug menu.
-     * Off by default because a game that sees a keyboard can behave differently.
-     */
-    fun setEmulatedKeyboard(on: Boolean) = setEnum("$IO@@Keyboard", if (on) "Basic" else "Null")
-
     fun setEnterButtonAssign(index: Int) =
         setIndexedEnum("$SYSTEM@@Enter button assignment", ENTER_BUTTONS, index, 1)
 

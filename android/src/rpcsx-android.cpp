@@ -11,7 +11,6 @@
 #include "Emu/IdManager.h"
 #include "Emu/Io/KeyboardHandler.h"
 #include "Emu/Io/Null/NullKeyboardHandler.h"
-#include "android_keyboard_handler.h"
 #include "Emu/Io/Null/NullMouseHandler.h"
 #include "Emu/Io/Null/NullPadHandler.h"
 #include "Emu/Io/Null/null_camera_handler.h"
@@ -2277,18 +2276,8 @@ static void setupCallbacks() {
       .handle_taskbar_progress = [](auto...) {},
       .init_kb_handler =
           [](auto...) {
-            // Honour the Keyboard setting instead of always reporting none.
-            //
-            // This was hardcoded to NullKeyboardHandler, so cellKb told every game there was no
-            // keyboard attached. Games that need one were simply unreachable: NFS Most Wanted's
-            // beta debug menu, and native keyboard support in games like Counter-Strike.
-            if (g_cfg.io.keyboard == keyboard_handler::basic) {
-              ensure(g_fxo->init<KeyboardHandlerBase, android_keyboard_handler>(
-                  Emu.DeserialManager()));
-            } else {
-              ensure(g_fxo->init<KeyboardHandlerBase, NullKeyboardHandler>(
-                  Emu.DeserialManager()));
-            }
+            ensure(g_fxo->init<KeyboardHandlerBase, NullKeyboardHandler>(
+                Emu.DeserialManager()));
           },
       .init_mouse_handler =
           [](auto...) {
@@ -2541,38 +2530,6 @@ static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {
     g_virtual_pads[pad->m_player_id] = pad;
   }
   return true;
-}
-
-// Deliver one key from the Android UI to the guest keyboard.
-//
-// keyCode is an Android KeyEvent keycode, which is what android_keyboard_handler registers, so no
-// translation happens here. unicode is the character the key produces (0 when it produces none);
-// the guest needs it for text fields, and cellKb reports it alongside the keycode.
-//
-// Returns false when no keyboard is active -- either the Keyboard setting is Null, or no game is
-// running -- so the caller can leave the on-screen keyboard visibly inert rather than pretending
-// the key landed.
-extern "C" bool _rpcsx_keyboardKey(int keyCode, bool pressed, int unicode) {
-  if (keyCode < 0) {
-    return false;
-  }
-
-  auto *handler = g_fxo->try_get<KeyboardHandlerBase>();
-
-  if (handler == nullptr) {
-    return false;
-  }
-
-  std::u32string text;
-
-  if (unicode > 0) {
-    text.push_back(static_cast<char32_t>(unicode));
-  }
-
-  // native_code is the platform scancode on desktop; the guest only reads it for raw-mode
-  // keyboards, and Android gives us the keycode rather than a scancode, so pass it through.
-  return handler->HandleKey(static_cast<u32>(keyCode), static_cast<u32>(keyCode), pressed,
-                            /*is_auto_repeat=*/false, text);
 }
 
 extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,

@@ -466,25 +466,6 @@ fun PadTab(state: MutableState<Settings>) {
             )
         }
 
-        CollapsibleSection(str("pad.section.keyboard"), initiallyExpanded = false) {
-            // Emulated keyboard (keyboard_handler). Off by default, matching the core: a game that
-            // sees a keyboard attached can behave differently, so this is opt-in.
-            //
-            // With it on, a physical USB/BT keyboard reaches the guest directly, and the
-            // "Toggle Keyboard" hotkey raises the Android keyboard over the running game.
-            SegmentedRow(
-                label = str("pad.emulatedKeyboard.label"),
-                options = listOf(str("common.off"), str("common.on")),
-                selectedIndex = if (state.value.ps3.emulatedKeyboard) 1 else 0,
-                description = str("pad.emulatedKeyboard.description"),
-                onChange = { idx ->
-                    com.armsx2.ui.InGameOverlay.saveSettings(
-                        state.value.copy(ps3 = state.value.ps3.copy(emulatedKeyboard = idx == 1)),
-                    )
-                },
-            )
-        }
-
         CollapsibleSection(str("pad.section.buttonMapping"), initiallyExpanded = false) {
             ControllerMappings.actions.forEach { action ->
                 val physical = ControllerMappings.physicalForScope(action, editPlayer.intValue, editSerial)
