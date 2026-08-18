@@ -77,6 +77,13 @@ object ConfigStore {
     private const val KEY_TUNING_OVERRIDES_PURGED = "config.migrated.tuningOverridesPurged"
     // Per-title Accurate SPU Reservations values left behind by the same debugging.
     private const val KEY_PERGAME_RSV_CLEARED = "config.migrated.perGameRsvCleared"
+    // The GLOBAL Accurate SPU Reservations value left off by the same debugging. The per-title
+    // clear above never touched it, so installs carried an off-spec global for releases.
+    private const val KEY_GLOBAL_RSV_ON = "config.migrated.globalSpuRsvOn"
+    // "Save LLVM logs", left on while chasing the Saint Seiya register scavenger. Bumped: the
+    // first pass only un-pinned the override, which does nothing for a key no code writes -- the
+    // value already in config.yml is reloaded and saved again on every boot.
+    private const val KEY_LLVM_LOGS_OFF_2 = "config.migrated.llvmLogsOff2"
     private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
     // The relaxed-ZCULL default was recorded as a raw core override as well, and the OFF
@@ -380,6 +387,55 @@ object ConfigStore {
                 dirty = true
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_ATOMIC_DMA_OFF, true) }
+        }
+
+        // Put the GLOBAL Accurate SPU Reservations back on, which is upstream's default and this
+        // app's default too.
+        //
+        // Off is not a slower-but-correct trade, it is off-spec: it forces the SPURS scheduler to
+        // HLE and bypasses the reservation lock, so SPU threads desync and end up executing
+        // whatever they land on. See KEY_PERGAME_RSV_CLEARED below, which cleared the PER-TITLE
+        // values this same debugging left behind -- but never the global, so an install kept
+        // running off-spec no matter what any title said.
+        //
+        // Found via Borderlands 2 hanging after its logo with one SPURS SPU and the RSX pinned
+        // while every PPU sat in a legitimate wait. The same desync is the likeliest source of the
+        // wild guest register values that were crashing the process before that.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_GLOBAL_RSV_ON, false)) {
+            if (raw != null && !parsed.ps3.accurateSpuRsv) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(accurateSpuRsv = true))
+                dirty = true
+            }
+
+            // Both stores, because either alone is not enough: a raw core override is re-pushed
+            // after the settings themselves, so one left recorded would put false straight back
+            // over the line above. KEY_TUNING_OVERRIDES_PURGED cleared these once already, but it
+            // marks itself done, so anything recorded afterwards survived it.
+            //
+            // Global scope ONLY, deliberately. This is correcting the baseline everyone inherited,
+            // not overruling a per-title decision -- Web of Shadows (BLUS30218) is kept off on
+            // purpose, and forgetEverywhere() would take that with it.
+            runCatching {
+                CoreSettingOverrides.forget(SettingsScope.Global, null, "Core@@Accurate SPU Reservations")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_GLOBAL_RSV_ON, true) }
+        }
+
+        // Drop "Save LLVM logs", left pinned as a raw override while chasing the Saint Seiya
+        // register-scavenger failure.
+        //
+        // Upstream defaults it off and this app has no field or UI for it, so nothing would ever
+        // turn it back off again -- it writes the IR for every compiled module to disk on every
+        // boot, which costs compile time and a lot of storage for output nobody is reading.
+        // Recorded as false rather than merely un-pinned, and that distinction is the whole fix:
+        // forgetting an override only stops us re-pushing a value, and nothing in this app writes
+        // this key at all, so whatever is already in config.yml is simply reloaded and saved again
+        // forever. It has to be actively written off, the way the Vblank migration writes 60.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_LLVM_LOGS_OFF_2, false)) {
+            runCatching {
+                CoreSettingOverrides.record(SettingsScope.Global, null, "Core@@Save LLVM logs", "false")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_LLVM_LOGS_OFF_2, true) }
         }
 
         // Put Vblank Rate back to 60, which is both upstream's default and what a PS3

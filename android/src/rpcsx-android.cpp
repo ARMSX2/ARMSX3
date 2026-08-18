@@ -2469,8 +2469,7 @@ static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {
             CELL_PAD_CAPABILITY_PS3_CONFORMITY |
                 CELL_PAD_CAPABILITY_PRESS_MODE |
                 CELL_PAD_CAPABILITY_HP_ANALOG_STICK |
-                CELL_PAD_CAPABILITY_ACTUATOR //| CELL_PAD_CAPABILITY_SENSOR_MODE
-            ,
+                CELL_PAD_CAPABILITY_ACTUATOR | CELL_PAD_CAPABILITY_SENSOR_MODE,
             CELL_PAD_DEV_TYPE_STANDARD, CELL_PAD_PCLASS_TYPE_STANDARD,
             pclass_profile, 0, 0, 50);
 
@@ -3731,6 +3730,64 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
   }
 
   return true;
+}
+
+// SIXAXIS motion, straight from the phone's sensors.
+//
+// The pad has always carried m_sensors, but they were left at the DEFAULT_MOTION_*
+// neutrals and the SENSOR_MODE capability bit was commented out, so a game that asked
+// whether this pad could report motion was told no. Games that read the sticks were
+// unaffected, which is why the gyro appeared to work in some titles and not at all in
+// the ones that actually use SIXAXIS -- Ratchet & Clank ToD's flight sections among them.
+//
+// Values are the PS3's own 10-bit range, 0..1023 with 512 at rest; the caller does the
+// scaling because it is the side that knows the device orientation.
+extern "C" void _rpcsx_setPadSensor(int port, int x, int y, int z, int g) {
+  std::lock_guard lock(g_virtual_pad_mutex);
+
+  if (port < 0 || static_cast<usz>(port) >= g_virtual_pads.size()) {
+    return;
+  }
+
+  const auto &pad = g_virtual_pads[port];
+
+  if (!pad) {
+    return;
+  }
+
+  const auto clamp10 = [](int v) {
+    return static_cast<u16>(std::clamp(v, 0, 1023));
+  };
+
+  pad->m_sensors[0].m_value = clamp10(x);
+  pad->m_sensors[1].m_value = clamp10(y);
+  pad->m_sensors[2].m_value = clamp10(z);
+  pad->m_sensors[3].m_value = clamp10(g);
+}
+
+// What the game is currently asking the rumble motors to do, packed as
+// (large << 8) | small, both 0..255.
+//
+// Polled rather than pushed: the guest writes these through cellPadSetActDirect
+// whenever it likes, and there is no notification to hook. The caller reads it on a
+// timer and drives the phone's vibrator. Returns 0 when nothing is running, so a
+// caller that keeps polling after the game stops simply sees silence.
+extern "C" int _rpcsx_getPadRumble(int port) {
+  std::lock_guard lock(g_virtual_pad_mutex);
+
+  if (port < 0 || static_cast<usz>(port) >= g_virtual_pads.size()) {
+    return 0;
+  }
+
+  const auto &pad = g_virtual_pads[port];
+
+  if (!pad || pad->m_vibrate_motors.size() < 2) {
+    return 0;
+  }
+
+  const int large = pad->m_vibrate_motors[0].value;
+  const int small = pad->m_vibrate_motors[1].value;
+  return (large << 8) | small;
 }
 
 extern "C" bool _rpcsx_usbDeviceEvent(int fd, int vendorId, int productId,

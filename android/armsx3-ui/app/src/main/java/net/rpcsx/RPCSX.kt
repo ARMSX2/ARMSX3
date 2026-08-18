@@ -97,6 +97,12 @@ class RPCSX {
      * changed shape.
      */
     external fun surfaceSizeChanged(width: Int, height: Int)
+
+    /** SIXAXIS motion. Values are the PS3's own 0..1023 range with 512 at rest. */
+    external fun setPadSensor(port: Int, x: Int, y: Int, z: Int, g: Int)
+
+    /** What the game is asking the rumble motors to do: (large shl 8) or small, each 0..255. */
+    external fun getPadRumble(port: Int): Int
     external fun usbDeviceEvent(fd: Int, vendorId: Int, productId: Int, event: Int): Boolean
     external fun processCompilationQueue(): Boolean
     external fun startMainThreadProcessor(): Boolean

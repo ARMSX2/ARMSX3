@@ -455,8 +455,9 @@ fun PerformanceTab(state: MutableState<Settings>) {
  * Root of RPCS3's compiled-code cache: `<files>/cache/cache/`.
  *
  * Holds `ppu-<hash>-<name>` directories for firmware modules at the top level, plus
- * `<TITLEID>/ppu-<hash>-EBOOT.BIN` per game. The SPU cache is a `spu-*.dat` file INSIDE
- * those directories, which is why clearing PPU necessarily clears SPU with it.
+ * `<TITLEID>/ppu-<hash>-EBOOT.BIN` per game. The SPU caches live INSIDE those directories -- a
+ * `spu-*.dat` file and a `spuobj-v<n>-<key>/` directory of compiled objects -- which is why
+ * clearing PPU necessarily clears SPU with it.
  */
 private fun recompilerCacheRoot(context: Context): File =
     File(MainActivityRuntime.assetCopyRoot(context), "cache/cache")
@@ -493,16 +494,36 @@ private fun clearRecompilerCache(root: File, spuOnly: Boolean): Pair<Int, Long> 
     var bytes = 0L
 
     if (spuOnly) {
-        root.walkTopDown()
-            .filter { it.isFile && it.name.startsWith("spu-") && it.extension == "dat" }
+        // Two things live here, not one. `spu-*.dat` is the original SPU cache; the persistent SPU
+        // LLVM object cache sits beside it in `spuobj-v<n>-<key>/` directories and is by far the
+        // larger of the two. Clearing only the .dat files handed the recompiler straight back the
+        // objects the user pressed this button to be rid of -- which is exactly what someone
+        // clearing an SPU cache to escape stale compiled code needs not to happen.
+        val objDirs = root.walkTopDown()
+            .filter { it.isDirectory && it.name.startsWith("spuobj-") }
             .toList() // materialise before deleting, so the walk is not mutated under itself
-            .forEach { file ->
-                val size = file.length()
-                if (runCatching { file.delete() }.getOrDefault(false)) {
-                    count++
-                    bytes += size
-                }
+        val datFiles = root.walkTopDown()
+            .filter { it.isFile && it.name.startsWith("spu-") && it.extension == "dat" }
+            .toList()
+
+        objDirs.forEach { dir ->
+            val size = dir.sizeRecursive()
+            if (runCatching { dir.deleteRecursively() }.getOrDefault(false)) {
+                count++
+                bytes += size
             }
+        }
+
+        datFiles.forEach { file ->
+            // exists() because a .dat inside one of the directories above is already gone.
+            if (!file.exists()) return@forEach
+            val size = file.length()
+            if (runCatching { file.delete() }.getOrDefault(false)) {
+                count++
+                bytes += size
+            }
+        }
+
         return count to bytes
     }
 

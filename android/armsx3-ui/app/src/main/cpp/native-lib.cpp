@@ -44,6 +44,8 @@ struct RPCSXApi {
   std::string (*getCurrentTrophyName)();
   bool (*surfaceEvent)(JNIEnv *env, jobject surface, jint event);
   void (*surfaceSizeChanged)(int width, int height);
+  void (*setPadSensor)(int port, int x, int y, int z, int g);
+  int (*getPadRumble)(int port);
   bool (*usbDeviceEvent)(int fd, int vendorId, int productId, int event);
   bool (*installFw)(JNIEnv *env, int fd, long progressId);
   bool (*isInstallableFile)(jint fd);
@@ -139,6 +141,8 @@ struct RPCSXLibrary : RPCSXApi {
     result.getCurrentTrophyName = reinterpret_cast<decltype(getCurrentTrophyName)>(dlsym(handle, "_rpcsx_getCurrentTrophyName"));
     result.surfaceEvent = reinterpret_cast<decltype(surfaceEvent)>(dlsym(handle, "_rpcsx_surfaceEvent"));
     result.surfaceSizeChanged = reinterpret_cast<decltype(surfaceSizeChanged)>(dlsym(handle, "_rpcsx_surfaceSizeChanged"));
+    result.setPadSensor = reinterpret_cast<decltype(setPadSensor)>(dlsym(handle, "_rpcsx_setPadSensor"));
+    result.getPadRumble = reinterpret_cast<decltype(getPadRumble)>(dlsym(handle, "_rpcsx_getPadRumble"));
     result.usbDeviceEvent = reinterpret_cast<decltype(usbDeviceEvent)>(dlsym(handle, "_rpcsx_usbDeviceEvent"));
     result.installFw = reinterpret_cast<decltype(installFw)>(dlsym(handle, "_rpcsx_installFw"));
     result.isInstallableFile = reinterpret_cast<decltype(isInstallableFile)>(dlsym(handle, "_rpcsx_isInstallableFile"));
@@ -435,6 +439,24 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_surfaceEvent(
   }
 
   return rpcsxLib.surfaceEvent(env, surface, event);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setPadSensor(
+    JNIEnv *, jobject, jint port, jint x, jint y, jint z, jint g) {
+  if (rpcsxLib.setPadSensor == nullptr) {
+      return;
+  }
+
+  rpcsxLib.setPadSensor(port, x, y, z, g);
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_getPadRumble(
+    JNIEnv *, jobject, jint port) {
+  if (rpcsxLib.getPadRumble == nullptr) {
+      return 0;
+  }
+
+  return rpcsxLib.getPadRumble(port);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_surfaceSizeChanged(

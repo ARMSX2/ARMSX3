@@ -433,10 +433,16 @@ public final class NativeApp {
 
     /** [TODO] */
     public static void resetKeyStatus() { Unsupported.note("resetKeyStatus"); }
-    public static void setPadVibration(boolean on) { Unsupported.note("setPadVibration"); }
+    public static void setPadVibration(boolean on) { Rpcs3Bridge.setPadVibration(on); }
+    /** Unused here: the core is polled instead, since cellPad gives no rumble notification. */
     public static void onPadRumble(int pad, int large, int small) { Unsupported.note("onPadRumble"); }
-    public static void testRumble(int port) { Unsupported.note("testRumble"); }
-    public static String rumbleStatusForPort(int port) { return ""; }
+    public static void testRumble(int port) { Rpcs3Bridge.testRumble(port); }
+    public static String rumbleStatusForPort(int port) { return Rpcs3Bridge.rumbleStatusForPort(port); }
+    public static void startRumblePump() { Rpcs3Bridge.startRumblePump(); }
+    public static void stopRumblePump() { Rpcs3Bridge.stopRumblePump(); }
+    public static void setPadMotion(int port, float ax, float ay, float az, float gyro) {
+        Rpcs3Bridge.setPadMotion(port, ax, ay, az, gyro);
+    }
     public static void enablePad2() { Unsupported.note("enablePad2"); }
 
 

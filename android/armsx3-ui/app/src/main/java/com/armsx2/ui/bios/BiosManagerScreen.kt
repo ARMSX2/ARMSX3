@@ -67,30 +67,49 @@ fun BiosManagerScreen(onBack: () -> Unit, game: com.armsx2.GameInfo? = null) {
     // a successful install.
     LaunchedEffect(Unit) { runCatching { FirmwareRepository.load() } }
 
+    // Install takes a URI, not a File.
+    //
+    // The core is handed a file descriptor either way, and openAssetFileDescriptor resolves a
+    // content:// URI exactly as happily as a file://. Routing both paths through one function is
+    // what lets the SAF picker below share it -- the in-app browser cannot reach a MicroSD on
+    // Android 11 and later, because storageRoots() enumerates /storage by POSIX and a removable
+    // volume is not listable that way. Reported on an Odin 3 Max: the picker showed internal
+    // storage only. The package installer already had this second route; firmware never did.
+    val installFirmware: (android.net.Uri) -> Unit = { uri ->
+        busy = true
+        message = null
+        MainActivityRuntime.invoke {
+            val ok = withContext(Dispatchers.IO) {
+                runCatching {
+                    val id = ProgressRepository.create(context, "Installing firmware")
+                    context.contentResolver
+                        .openAssetFileDescriptor(uri, "r")
+                        .use { afd ->
+                            val fd = afd?.parcelFileDescriptor?.fd
+                                ?: return@runCatching false
+                            RPCSX.instance.installFw(fd, id)
+                        }
+                }.getOrDefault(false)
+            }
+            busy = false
+            if (!ok) message = I18n.get("bios.firmware.failed")
+        }
+    }
+
+    // */* rather than a PUP MIME type: Android has no type for a PS3 firmware update, and every
+    // provider reports something different for it -- octet-stream, nothing at all, or the type of
+    // whatever extension it guesses. A filtered picker would grey the file out on some devices.
+    val safPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri -> uri?.let(installFirmware) }
+
     if (showBrowser) {
         FileBrowserDialog(
             title = str("setup.bios.selectTitle"),
             extensions = setOf("pup"),
             onPick = { file ->
                 showBrowser = false
-                busy = true
-                message = null
-                MainActivityRuntime.invoke {
-                    val ok = withContext(Dispatchers.IO) {
-                        runCatching {
-                            val id = ProgressRepository.create(context, "Installing firmware")
-                            context.contentResolver
-                                .openAssetFileDescriptor(android.net.Uri.fromFile(file), "r")
-                                .use { afd ->
-                                    val fd = afd?.parcelFileDescriptor?.fd
-                                        ?: return@runCatching false
-                                    RPCSX.instance.installFw(fd, id)
-                                }
-                        }.getOrDefault(false)
-                    }
-                    busy = false
-                    if (!ok) message = I18n.get("bios.firmware.failed")
-                }
+                installFirmware(android.net.Uri.fromFile(file))
             },
             onDismiss = { showBrowser = false },
         )
@@ -183,6 +202,24 @@ fun BiosManagerScreen(onBack: () -> Unit, game: com.armsx2.GameInfo? = null) {
                     if (status == FirmwareStatus.None) str("setup.bios.selectTitle")
                     else str("bios.firmware.reinstall"),
                 )
+            }
+
+            // Reaches storage the in-app browser cannot open by path: USB-OTG, and MicroSD on
+            // devices that only expose it through SAF. Always offered, not just when canBrowse()
+            // fails -- a device can have all-files access AND still hide its card from a POSIX
+            // walk of /storage, which is exactly the case that was reported.
+            OutlinedButton(
+                onClick = { safPicker.launch(arrayOf("*/*")) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp)
+                    .controllerFocusable(
+                        "firmware.install.external",
+                        RoundedCornerShape(13.dp),
+                        onConfirm = { safPicker.launch(arrayOf("*/*")) },
+                    ),
+            ) {
+                Text(str("packages.select.external"))
             }
         }
 

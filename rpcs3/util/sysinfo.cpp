@@ -763,6 +763,37 @@ std::pair<u64, u64> utils::get_memory_usage()
 #endif
 }
 
+u64 utils::get_process_memory_usage()
+{
+#ifdef _WIN32
+	::PROCESS_MEMORY_COUNTERS pmc{};
+
+	if (::GetProcessMemoryInfo(::GetCurrentProcess(), &pmc, sizeof(pmc)))
+	{
+		return pmc.WorkingSetSize;
+	}
+
+	return 0;
+#elif defined(__linux__)
+	// statm, not status: the second field is the resident page count and needs no parsing beyond
+	// two integers, where VmRSS in /proc/self/status means scanning a few dozen lines of text
+	// for something read once a second.
+	std::ifstream statm("/proc/self/statm");
+
+	u64 total_pages = 0;
+	u64 resident_pages = 0;
+
+	if (statm >> total_pages >> resident_pages)
+	{
+		return resident_pages * static_cast<u64>(::sysconf(_SC_PAGESIZE));
+	}
+
+	return 0;
+#else
+	return 0;
+#endif
+}
+
 utils::OS_version utils::get_OS_version()
 {
 	OS_version res {};

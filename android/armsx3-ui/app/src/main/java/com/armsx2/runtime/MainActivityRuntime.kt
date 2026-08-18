@@ -4896,7 +4896,13 @@ open class MainActivityRuntime : ComponentActivity() {
         // worked (.iso/.bin/.chd) can never be made worse by this.
         val uri = resolveCueToTrack(raw) ?: raw
         currentGame.value = null
-        pendingExternalLaunch.value = uri.toString()
+        // A file:// URI has to be reduced to its path before the core sees it. Handed the string
+        // form, the core takes "file:///sdcard/x/y.elf" as a filesystem path: it mounts /app_home
+        // at "/file:/sdcard/x/" and then reports "Failed to open executable". content:// is passed
+        // through untouched, since the core opens those by fd. This is the same conversion
+        // launchCurrentGameFromSaveSlot already does, and it was simply missing on the external
+        // path -- so anything launching us with file:// (a file manager, a front-end, adb) failed.
+        pendingExternalLaunch.value = if (uri.scheme == "file") (uri.path ?: uri.toString()) else uri.toString()
         launchPendingExternalGameIfReady()
     }
 
