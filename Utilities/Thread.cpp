@@ -2,6 +2,7 @@
 #include "Emu/System.h"
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/PPUDisAsm.h"
 #include "Emu/Cell/lv2/sys_mmapper.h"
 #include "Emu/Cell/lv2/sys_event.h"
 #include "Emu/Cell/lv2/sys_process.h"
@@ -62,6 +63,12 @@ DYNAMIC_IMPORT_RENAME("Kernel32.dll", SetThreadDescriptionImport, "SetThreadDesc
 #include <sys/syscall.h>
 #include <sys/timerfd.h>
 #include <unistd.h>
+#endif
+#ifdef __ANDROID__
+// For the allocation-free breadcrumb the fault handler writes before it risks anything else, and
+// for reaching libsigchain's registration entry point without linking against the ART apex.
+#include <android/log.h>
+#include <dlfcn.h>
 #endif
 
 #if defined(__APPLE__) || defined(__DragonFly__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
@@ -2216,6 +2223,63 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 				else
 				{
 					vm_log.always()("[%s] Access violation %s location 0x%x (%s)", cpu->get_name(), is_writing ? "writing" : "reading", addr, (is_writing && vm::check_addr(addr)) ? "read-only memory" : "unmapped memory");
+
+					// The guest code at the fault AND at its callers.
+					//
+					// Registers and a call stack come free from dump_useful_thread_info() above,
+					// and for a bad pointer they are only half the answer: they say WHAT the
+					// address was, never what computed it. When the faulting function turns out to
+					// be something generic -- Borderlands 2 faults inside a memcpy, handed
+					// dest=0x93aef33d and length=0xc3aaf87d, both garbage -- the routine itself is
+					// blameless and the whole question is which caller filled those arguments.
+					//
+					// So: a window at cia, then one at each of the first few return addresses. Only
+					// a few, because a PPU call stack here runs fourteen frames deep and the answer
+					// is almost always in the immediate caller.
+					//
+					// Every address is checked before it is read: cia and the stack are taken from
+					// a thread that just faulted, so both can be garbage, and faulting inside the
+					// diagnostic that explains a fault would be the worst possible trade.
+					if (cpu->get_class() == thread_class::ppu)
+					{
+						PPUDisAsm dis_asm(cpu_disasm_mode::dump, vm::g_sudo_addr);
+						std::string code;
+
+						const auto window = [&](const char* what, u32 pc, u32 back, u32 span)
+						{
+							fmt::append(code, "\n%s 0x%08x:\n", what, pc);
+
+							for (u32 at = pc >= back ? pc - back : 0; at <= pc + span; at += 4)
+							{
+								if (!vm::check_addr(at))
+								{
+									continue;
+								}
+
+								dis_asm.disasm(at);
+								code += (at == pc ? "  >>" : "    ");
+								code += dis_asm.last_opcode;
+							}
+						};
+
+						window("Code at the faulting pc", static_cast<ppu_thread*>(cpu)->cia, 0x40, 0x40);
+
+						u32 shown = 0;
+
+						for (auto&& [ret, sp] : cpu->dump_callstack_list())
+						{
+							if (shown++ >= 3)
+							{
+								break;
+							}
+
+							// Back further than forward: the call is BEHIND the return address,
+							// and what fills the arguments sits behind that.
+							window("Code at caller", ret, 0x60, 0x10);
+						}
+
+						vm_log.always()("Guest code around the fault:%s", code);
+					}
 				}
 			}
 
@@ -2549,9 +2613,164 @@ const bool s_exception_handler_set = []() -> bool
 
 #else
 
-static void signal_handler(int /*sig*/, siginfo_t* info, void* uct) noexcept
+#ifdef __ANDROID__
+// The handlers that were installed before ours -- libsigchain's, which fronts ART and debuggerd.
+// Kept so that faults which are not the emulator's can be forwarded to them.
+static struct ::sigaction s_prev_fault_action[NSIG]{};
+
+// True when this fault is one the emulator's own memory model is responsible for.
+//
+// The ranges are exactly the ones the handler can act on: guest memory (try_get_addr spans 8GiB
+// from g_base_addr, so the sudo mirror is included), the executable map, and the segment map.
+// Everything else is somebody else's fault, in both senses.
+static bool is_emulator_fault(void* addr)
+{
+	const u64 exec64 = (reinterpret_cast<u64>(addr) - reinterpret_cast<u64>(vm::g_exec_addr)) / 2;
+	const u64 seg_off = (reinterpret_cast<u64>(addr) - reinterpret_cast<u64>(vm::g_exec_addr)) - vm::g_exec_addr_seg_offset;
+
+	return vm::try_get_addr(addr).second || exec64 < 0x100000000ull || seg_off < 0x80000000ull;
+}
+
+// Bionic's own sigaction, reached past libsigchain's interposition.
+//
+// libsigchain exports sigaction() and is loaded with global visibility, so an ordinary call
+// registers us INSIDE ART's chain -- behind its FaultManager, which is the entire problem. Looking
+// the symbol up in libc's own handle gets the real one, letting us install at the kernel level and
+// genuinely go first. RTLD_NOLOAD because libc is obviously already here; this must never load
+// anything. Returns null if bionic ever stops exporting it, and the caller then keeps the ordinary
+// registration rather than starting with no handler at all.
+using armsx3_sigaction_fn = int (*)(int, const struct ::sigaction*, struct ::sigaction*);
+
+static armsx3_sigaction_fn real_sigaction()
+{
+	void* const libc = ::dlopen("libc.so", RTLD_NOLOAD | RTLD_LOCAL);
+
+	return libc ? reinterpret_cast<armsx3_sigaction_fn>(::dlsym(libc, "sigaction")) : nullptr;
+}
+
+// Installs a fault handler, remembering what it replaced.
+static int install_fault_handler(int sig, const struct ::sigaction& sa)
+{
+	return ::sigaction(sig, &sa, sig > 0 && sig < NSIG ? &s_prev_fault_action[sig] : nullptr);
+}
+#else
+static int install_fault_handler(int sig, const struct ::sigaction& sa)
+{
+	return ::sigaction(sig, &sa, nullptr);
+}
+#endif
+
+// Installs a fault handler ahead of the Android runtime, not inside its chain.
+//
+// Two registrations were a mistake worth recording. Registering through the interposed sigaction()
+// AS WELL as at kernel level puts this handler in libsigchain's chain, so forwarding a fault that
+// is not ours goes to libsigchain, which walks its chain straight back to here, which forwards
+// again -- recursing until the alternate stack is gone. The process died of that with no
+// breadcrumb, no tombstone and no ART frames: quieter than the bug it was meant to fix.
+//
+// So: capture the handler the kernel currently calls (libsigchain's, which fronts ART), then
+// replace it, and never register through the interposed entry point for this signal. The chain we
+// forward into then does not contain us.
+static bool install_fault_handler_first(int sig, const struct ::sigaction& sa)
+{
+#ifdef __ANDROID__
+	if (const armsx3_sigaction_fn real_sa = real_sigaction())
+	{
+		if (real_sa(sig, nullptr, &s_prev_fault_action[sig]) != -1 && real_sa(sig, &sa, nullptr) != -1)
+		{
+			char line[96];
+
+			if (::snprintf(line, sizeof(line), "sigchain: installed ahead of the runtime for signal %d", sig) > 0)
+			{
+				__android_log_write(ANDROID_LOG_INFO, "ARMSX3", line);
+			}
+
+			return true;
+		}
+	}
+
+	__android_log_write(ANDROID_LOG_WARN, "ARMSX3", "sigchain: could not get ahead of the runtime; it will see faults first");
+#endif
+
+	// No bionic entry point, or it refused: fall back to the ordinary registration. The runtime
+	// then sees faults first, which is how this behaved before, crash included.
+	return install_fault_handler(sig, sa) != -1;
+}
+
+
+// What a SIGBUS was actually about. si_code is the only thing that tells an unbacked page apart
+// from a misaligned operand, and those point at completely different bugs.
+static const char* bus_error_kind(int code) noexcept
+{
+	switch (code)
+	{
+	case BUS_ADRALN: return "misaligned operand";
+	case BUS_ADRERR: return "mapped page has no backing";
+	case BUS_OBJERR: return "hardware error on the mapped object";
+	default: return "unrecognised si_code";
+	}
+}
+
+static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 {
 	ucontext_t* context = static_cast<ucontext_t*>(uct);
+
+#ifdef __ANDROID__
+	// Not our fault: hand it to whoever we displaced.
+	//
+	// We install ahead of libsigchain deliberately (see the registration site), which means ART's
+	// FaultManager no longer sees the emulator's own faults -- it was reading guest registers as
+	// ArtMethod* and dying. But ART still needs its own faults: implicit null checks in JIT'd Java
+	// code arrive as SIGSEGV and are how a NullPointerException gets thrown. This forward is what
+	// keeps that working, and keeps ordinary tombstones for crashes that are genuinely elsewhere.
+	if (!is_emulator_fault(info->si_addr))
+	{
+		// Forward once and once only. If whatever we forward to comes back here -- which it did
+		// while this handler was also registered inside libsigchain's chain -- looping would burn
+		// the alternate stack and kill the process silently. Second time through, stand down: put
+		// the default action back and return, so the instruction faults again and the platform
+		// produces an honest tombstone instead of a recursion.
+		static thread_local bool s_forwarding = false;
+
+		if (s_forwarding)
+		{
+			struct ::sigaction dfl{};
+			dfl.sa_handler = SIG_DFL;
+			sigemptyset(&dfl.sa_mask);
+			::sigaction(sig, &dfl, nullptr);
+			return;
+		}
+
+		const struct ::sigaction& prev = s_prev_fault_action[sig];
+		s_forwarding = true;
+
+		if ((prev.sa_flags & SA_SIGINFO) && prev.sa_sigaction)
+		{
+			prev.sa_sigaction(sig, info, uct);
+			s_forwarding = false;
+			return;
+		}
+
+		if (prev.sa_handler && prev.sa_handler != SIG_DFL && prev.sa_handler != SIG_IGN)
+		{
+			prev.sa_handler(sig);
+			s_forwarding = false;
+			return;
+		}
+
+		s_forwarding = false;
+	}
+#endif
+
+
+	// SIGBUS arrives here too now (see the sigaction block below), and never takes a recovery
+	// path. The recovery below is for pages this process protected itself, and a write to an
+	// mprotect'd page raises SIGSEGV/SEGV_ACCERR, never SIGBUS. A bus error means the page behind
+	// an otherwise valid address could not be produced at all -- unbacked, past the backing size,
+	// or an operand the instruction cannot address at that alignment. Nothing here changes any of
+	// those, so handling one and returning would re-execute the same instruction and fault again
+	// immediately: a livelock in place of a crash report.
+	const bool is_bus_error = sig == SIGBUS;
 
 #if defined(ARCH_X64)
 #ifdef __APPLE__
@@ -2635,7 +2854,10 @@ static void signal_handler(int /*sig*/, siginfo_t* info, void* uct) noexcept
 	const u64 seg_off = (reinterpret_cast<u64>(info->si_addr) - reinterpret_cast<u64>(vm::g_exec_addr)) - vm::g_exec_addr_seg_offset;
 	const auto cause = is_executing ? "executing" : is_writing ? "writing" : "reading";
 
-	if (auto [addr, ok] = vm::try_get_addr(info->si_addr); ok && !is_executing)
+	// Gated on more than "not an instruction fetch" now: see is_bus_error above.
+	const bool try_recovery = !is_executing && !is_bus_error;
+
+	if (auto [addr, ok] = vm::try_get_addr(info->si_addr); ok && try_recovery)
 	{
 		// Try to process access violation
 		if (thread_ctrl::get_current() && handle_access_violation(addr, is_writing, false, context))
@@ -2644,14 +2866,14 @@ static void signal_handler(int /*sig*/, siginfo_t* info, void* uct) noexcept
 		}
 	}
 
-	if (exec64 < 0x100000000ull && !is_executing)
+	if (exec64 < 0x100000000ull && try_recovery)
 	{
 		if (thread_ctrl::get_current() && handle_access_violation(static_cast<u32>(exec64), is_writing, true, context))
 		{
 			return;
 		}
 	}
-	else if (seg_off < 0x80000000ull && !is_executing)
+	else if (seg_off < 0x80000000ull && try_recovery)
 	{
 		if (thread_ctrl::get_current() && handle_access_violation(static_cast<u32>(seg_off * 2), is_writing, true, context))
 		{
@@ -2659,7 +2881,92 @@ static void signal_handler(int /*sig*/, siginfo_t* info, void* uct) noexcept
 		}
 	}
 
-	std::string msg = fmt::format("Segfault %s location %p at %p.\n", cause, info->si_addr, RIP(context));
+#ifdef __ANDROID__
+	// Raw state, before anything that can fault.
+	//
+	// Placed here deliberately: every recovery path above has already declined, so this only runs
+	// for faults that are actually fatal -- the write-protection faults the RSX relies on come
+	// through here hundreds of times a second and must not be logged at all.
+	//
+	// Everything below this point formats strings, allocates, takes the logger's locks and walks
+	// thread and guest state, and on a process sick enough to be here any of those can fault
+	// again. A second fault while this signal is blocked is force-delivered with the default
+	// action, killing the process instantly with the fatal message still sitting unflushed in the
+	// async log -- Borderlands 2 died that way three times, handler reached, nothing written.
+	//
+	// So: fixed stack buffers and liblog writes. No allocation, no locks, no ordering with the
+	// async log. Registers and the faulting instruction are what a wild address needs anyway --
+	// they say which operand went bad, which the formatted report never does.
+	{
+		char line[256];
+		const u64 pc = RIP(context);
+
+		if (::snprintf(line, sizeof(line), "fatal signal %d (si_code %d) at %p, pc 0x%llx, tid %d",
+			sig, info->si_code, info->si_addr, static_cast<unsigned long long>(pc),
+			static_cast<int>(::syscall(__NR_gettid))) > 0)
+		{
+			__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", line);
+		}
+
+#if defined(ARCH_ARM64)
+		// Only when the fault was a data access: an instruction-fetch fault means pc itself is
+		// what could not be read, so reading it here would fault a second time.
+		if (!is_executing && ::snprintf(line, sizeof(line), "  insn 0x%08x", *reinterpret_cast<const u32*>(pc)) > 0)
+		{
+			__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", line);
+		}
+
+		for (int i = 0; i < 31; i += 4)
+		{
+			char* p = line;
+			int rem = static_cast<int>(sizeof(line));
+
+			for (int j = i; j < i + 4 && j < 31; ++j)
+			{
+				const int w = ::snprintf(p, rem, "  x%d=0x%llx", j, static_cast<unsigned long long>(GPR(context, j)));
+
+				if (w <= 0 || w >= rem)
+				{
+					break;
+				}
+
+				p += w;
+				rem -= w;
+			}
+
+			__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", line);
+		}
+#endif
+	}
+
+	// A fault outside guest memory is handed straight back to the platform's crash handler.
+	//
+	// Installing this handler displaced debuggerd's, which is why none of these crashes ever
+	// produced a tombstone: emergency_exit() takes the process down itself, throwing away the one
+	// artifact carrying a symbolised backtrace of every thread. For a guest access violation that
+	// is the right trade -- the emulator reports those far better than a tombstone would. For a
+	// fault at an address that is not guest memory, the backtrace IS the diagnosis: it names
+	// whoever handed out the corrupt pointer, which nothing here can work out by itself.
+	//
+	// Before the formatting below, not after, and this is the whole point: the report allocates,
+	// and on a process whose heap is already corrupt the allocation faults again. That second
+	// fault killed the process every time, so a chain placed after the report never ran.
+	//
+	// Restoring the previous handler and returning rather than re-raising: the faulting
+	// instruction executes again and faults again, so debuggerd sees the original pc, address and
+	// registers instead of this handler's frame. Ours is no longer installed, so there is no loop.
+	if (!vm::try_get_addr(info->si_addr).second && s_prev_fault_action[sig].sa_sigaction)
+	{
+		::sigaction(sig, &s_prev_fault_action[sig], nullptr);
+		return;
+	}
+#endif
+
+	// Named for what it was: a bus error reported as "Segfault" sends whoever reads the log
+	// looking for a bad pointer, when the address is usually fine and the mapping behind it is not.
+	std::string msg = sig == SIGBUS
+		? fmt::format("Bus error (%s) %s location %p at %p.\n", bus_error_kind(info->si_code), cause, info->si_addr, RIP(context))
+		: fmt::format("Segfault %s location %p at %p.\n", cause, info->si_addr, RIP(context));
 
 	if (vm::try_get_addr(info->si_addr).second)
 	{
@@ -2700,6 +3007,13 @@ static void signal_handler(int /*sig*/, siginfo_t* info, void* uct) noexcept
 #endif
 
 	sys_log.fatal("\n%s", msg);
+
+	// Flushed here rather than only after the dump. dump_useful_thread_info() walks thread state
+	// and guest memory, so it is the single most likely thing in this handler to fault again, and
+	// a fault there loses the fatal message with it -- it is still sitting in the async log's
+	// buffer at this point. The message is the part worth keeping; the dump is a bonus.
+	logs::listener::sync_all();
+
 	sys_log.notice("\n%s", dump_useful_thread_info());
 	logs::listener::sync_all();
 
@@ -2758,14 +3072,24 @@ const bool s_exception_handler_set = []() -> bool
 	sigemptyset(&sa.sa_mask);
 	sa.sa_sigaction = signal_handler;
 
-	if (::sigaction(SIGSEGV, &sa, NULL) == -1)
+	if (!install_fault_handler_first(SIGSEGV, sa))
 	{
 		std::fprintf(stderr, "sigaction(SIGSEGV) failed (%d).\n", errno);
 		std::abort();
 	}
 
-#ifdef __APPLE__
-	if (::sigaction(SIGBUS, &sa, NULL) == -1)
+#if defined(__APPLE__) || defined(__ANDROID__)
+	// Android too, and not for tidiness: with no handler, SIGBUS takes the default action and
+	// the process dies having written nothing at all -- no line from this handler, no tombstone,
+	// and an RPCSX.log that simply stops mid-sentence. The only record of Borderlands 2 dying
+	// this way was one Zygote line, "exited due to signal 7 (Bus error)".
+	//
+	// It is a fault class this emulator can genuinely hit. Guest memory is a MAP_SHARED mapping
+	// of a memfd, and a shared file mapping raises SIGBUS rather than SIGSEGV whenever the page
+	// behind an otherwise valid address cannot be produced -- past the backing size, or with
+	// nothing left to back it. None of that is recoverable here, but all of it is diagnosable,
+	// and none of it was.
+	if (!install_fault_handler_first(SIGBUS, sa))
 	{
 		std::fprintf(stderr, "sigaction(SIGBUS) failed (%d).\n", errno);
 		std::abort();
@@ -2773,7 +3097,7 @@ const bool s_exception_handler_set = []() -> bool
 #endif
 
 	sa.sa_sigaction = sigill_handler;
-	if (::sigaction(SIGILL, &sa, NULL) == -1)
+	if (install_fault_handler(SIGILL, sa) == -1)
 	{
 		std::fprintf(stderr, "sigaction(SIGILL) failed (%d).\n", errno);
 		std::abort();
