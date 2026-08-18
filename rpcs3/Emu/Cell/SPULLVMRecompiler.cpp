@@ -87,6 +87,10 @@ void spu_llvm_set_compile_context(spu_llvm_compile_context* context) noexcept
 #define ARMSX3_SPU_ARM64_BYTE_GATHER 0
 #endif
 
+// Defined in SPUCommonRecompiler.cpp; ranges forced to the interpreter.
+#include "Emu/Cell/SPUDisAsm.h"
+
+
 class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 {
 	// JIT Instance
@@ -1787,7 +1791,6 @@ public:
 #endif
 
 		spu_log.notice("Building function 0x%x... (size %u, %s)", func.entry_point, func.data.size(), m_hash);
-
 		m_pos = func.lower_bound;
 		m_base = func.entry_point;
 		m_size = ::size32(func.data) * 4;
@@ -7638,7 +7641,7 @@ public:
 		const auto known_idx = get_known_bits(c);
 		const bool perm_only = known_idx.Zero[7];
 		const bool perm_or_zero_only = known_idx.Zero[6];
-		const bool idx_selects_single = known_idx.extractBits(1, 4).isConstant();
+		[[maybe_unused]] const bool idx_selects_single = known_idx.extractBits(1, 4).isConstant();
 
 		const auto a = get_vr<u8[16]>(op.ra);
 		const auto b = get_vr<u8[16]>(op.rb);
@@ -7654,7 +7657,7 @@ public:
 		const bool b_is_splat = b_is_const && b_data == v128::from8p(b_data._u8[0]);
 
 
-		auto get_swap_from_const = [this](v128 data, bool is_splat) {
+		[[maybe_unused]] auto get_swap_from_const = [this](v128 data, bool is_splat) {
 			// Splats are their own byteswap
 			if (!is_splat)
 				std::reverse(std::begin(data._bytes), std::end(data._bytes));
@@ -7662,15 +7665,27 @@ public:
 			return make_const_vector(data, get_type<u8[16]>());
 		};
 
-		if (a_is_const)
-			a_swap.value = get_swap_from_const(a_data, a_is_splat);
+		// ARM64: fold the byteswap only for SPLAT constants, as before upstream a7fc31f32
+		// ("[SPU LLVM] Additional SHUFB splat/special-index fast paths").
+		//
+		// That commit widened this to ANY constant and byte-reverses non-splat ones in
+		// get_swap_from_const. Borderlands 2's SPURS function at LS 0x25da8 is 1446 shufb whose
+		// data operand is usually a non-splat constant -- 0xbf800000 built by ilhu/iohl, or a mask
+		// straight out of cbd/cwd -- i.e. exactly the case the widening newly captured, and that
+		// function hangs the game when compiled and boots it when interpreted.
+		//
+		// Confirmed two independent ways: reverting this one condition, and separately disabling
+		// the whole ARM64 shufb block so it uses the generic path. Both give zero SPU stalls with
+		// the function compiled. Kept narrow so ARM64 keeps its tbl/tbx fast paths.
+		if (a_is_splat)
+			a_swap.value = a.value;
 
-		if (b_is_const)
-			b_swap.value = get_swap_from_const(b_data, b_is_splat);
+		if (b_is_splat)
+			b_swap.value = b.value;
 
 		// Shuffle index reversal is equivalent to a byteswap
 		value_t<u8[16]> av, bv, cv;
-		if ((a_was_swapped || a_is_const) && (b_was_swapped || b_is_const))
+		if ((a_was_swapped || a_is_splat) && (b_was_swapped || b_is_splat))
 		{
 			av = eval(a_swap);
 			bv = eval(b_swap);
@@ -7684,7 +7699,14 @@ public:
 		}
 
 		// When single source, either indicated by KnownBits or both are the same
-		const std::optional<value_t<u8[16]>> single_src = (idx_selects_single || (op.ra == op.rb && !m_interp_magn))
+		// Also pre-a7fc31f32: drop the KnownBits idx_selects_single trigger.
+		//
+		// Reverting the byteswap-const widening ALONE is not enough -- tested, and Borderlands 2
+		// hangs again at LS 0x25da8 with seven stall dumps. Both of that commit's semantic changes
+		// have to go. idx_selects_single treats a mask whose bit 4 is known-constant across all
+		// lanes as single-source; combined with the ARM64 tbl/tbx paths below that is where the
+		// remaining miscompile lives.
+		const std::optional<value_t<u8[16]>> single_src = ((op.ra == op.rb && !m_interp_magn))
 			? std::make_optional(known_idx.One[4] ? bv : av)
 			: std::nullopt;
 
@@ -9252,8 +9274,17 @@ public:
 			r.value = m_ir->CreateFPToSI(a.value, get_type<s32[4]>());
 #if defined(ARCH_ARM64)
 			// Saturate instead of correcting afterwards; see the approximate path below for why the
-			// x86 XOR is wrong here. xfloat has no NaN, so the high side is the only case to patch.
-			set_vr(op.rt, select(fcmp_ord(a >= fsplat<f64[4]>(std::exp2(31.f))), splat<s32[4]>(0x7fffffff), r));
+			// x86 XOR is wrong here.
+			//
+			// Unlike the f32 path, BOTH ends need patching. That path is a single saturating
+			// fcvtzs.4s, but there is no v4f64->v4i32 instruction, so this one lowers to
+			//   fcvtzs.2d v1, v1 / fcvtzs.2d v0, v0 / uzp1.4s v0, v0, v1
+			// -- saturation happens at INT64 range and uzp1 then keeps the low 32 bits. Negative
+			// overflow therefore does not produce 0x80000000, it produces the low word of the i64:
+			// -3e9 came back as +1295786496, a saturated-low value reappearing as a large positive
+			// integer, which is the same failure shape as the FCTIW inversion.
+			set_vr(op.rt, select(fcmp_ord(a >= fsplat<f64[4]>(std::exp2(31.f))), splat<s32[4]>(0x7fffffff),
+				select(fcmp_ord(a < fsplat<f64[4]>(-std::exp2(31.f))), splat<s32[4]>(0x80000000), r)));
 #else
 			set_vr(op.rt, r ^ sext<s32[4]>(fcmp_ord(a >= fsplat<f64[4]>(std::exp2(31.f)))));
 #endif
