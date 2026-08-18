@@ -709,6 +709,7 @@ val EN: Map<String, String> = mapOf(
     "memcard.slot1" to "Slot 1",
     "memcard.status.coreStarting" to "Core settings are still starting up.",
     "network.address" to "Address",
+    "touch.stateAction.keyboard" to "KBD",
     "network.emulateUsbKeyboard" to "Emulate USB Keyboard",
     "net.usbKeyboard.description" to "Report a USB keyboard to the game. Needed by titles that require one \u2014 EverQuest Online Adventures, Konami-keyboard games \u2014 and for typing in online chat. A physical or Bluetooth keyboard works once this is on, and the \"On-Screen Keyboard (toggle)\" hotkey raises the Android keyboard over the game without pausing.",
     "network.ethernetDevice" to "Ethernet Device",

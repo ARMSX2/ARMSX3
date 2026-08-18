@@ -2796,6 +2796,23 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
 
   g_cfg_input.player1.handler.set(pad_handler::virtual_pad);
   g_cfg_input.player1.device.from_string("Virtual");
+
+  // Ports 2-7 as well, here at startup.
+  //
+  // The same loop already existed, but only inside _rpcsx_usbDeviceEvent -- so it ran only when a
+  // USB device was plugged or unplugged. A second controller on a phone is normally BLUETOOTH,
+  // which never produces that event, so ports 2-7 stayed Null forever and a second pad simply did
+  // not exist in the core. Per-player button mapping looked fine because the UI stores those
+  // bindings regardless; there was just no pad for them to drive. Reported against Tekken 6.
+  //
+  // The app is the input source for every port either way: it reads Android input events itself
+  // and pushes whole-pad snapshots through _rpcsx_overlayPadData, so no core-side HID handler is
+  // wanted here.
+  for (usz i = 1; i < g_cfg_input.player.size(); i++) {
+    g_cfg_input.player[i]->handler.set(pad_handler::virtual_pad);
+    g_cfg_input.player[i]->device.from_string("Virtual");
+  }
+
   g_cfg_input.save("", g_cfg_input_configs.default_config);
 
   // LLVM JIT target.

@@ -1325,7 +1325,14 @@ enum class TouchButtonId(val label: String, val keycode: Int, val kind: Kind) {
     // additionally hit-tests this widget's own circle so a thumb that glides up off
     // the stick latches it without lifting; see StickWidget. Its keycode is chosen in
     // Pad settings (analogExtraKeycode), so the enum entry carries none.
-    ANALOG_EXTRA("Extra", 0, Kind.ANALOGEXTRA);
+    ANALOG_EXTRA("Extra", 0, Kind.ANALOGEXTRA),
+
+    // On-screen keyboard toggle. Emits no PS3 keycode; tapping raises or drops the Android
+    // keyboard via MainActivityRuntime.toggleSoftKeyboard(), the same action as the
+    // "On-Screen Keyboard (toggle)" hotkey -- so a device with no spare pad button, or no
+    // controller at all, can still reach it. Requires Emulate USB Keyboard (Network settings);
+    // the action says so itself when it is off. Opt-in: absent from the default layout.
+    KEYBOARD("KBD", 0, Kind.STATEACTION);
 
     enum class Kind { FACE, SHOULDER, MENU, DPAD, STICK, PAUSE, PRESSURE, FASTFORWARD, MACRO, STATEACTION, ANALOGEXTRA }
 }

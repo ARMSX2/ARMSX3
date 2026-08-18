@@ -569,6 +569,7 @@ private fun drawableFor(id: TouchButtonId, pressed: Boolean): Int = when (id) {
     TouchButtonId.PAUSE, TouchButtonId.PRESSURE, TouchButtonId.FAST_FORWARD,
     TouchButtonId.MACRO1, TouchButtonId.MACRO2, TouchButtonId.MACRO3, TouchButtonId.MACRO4,
     TouchButtonId.SAVE_STATE, TouchButtonId.LOAD_STATE, TouchButtonId.SCREENSHOT,
+    TouchButtonId.KEYBOARD,
     TouchButtonId.ANALOG_EXTRA -> R.drawable.pad_cross
 }
 
@@ -1037,6 +1038,7 @@ private fun StateActionWidget(cfg: TouchButtonCfg, edit: Boolean) {
     val label = when (cfg.id) {
         TouchButtonId.SAVE_STATE -> str("touch.stateAction.save")
         TouchButtonId.LOAD_STATE -> str("touch.stateAction.load")
+        TouchButtonId.KEYBOARD -> str("touch.stateAction.keyboard")
         else -> str("touch.stateAction.screenshot")
     }
     if (edit) {
@@ -1062,6 +1064,7 @@ private fun StateActionWidget(cfg: TouchButtonCfg, edit: Boolean) {
                             when (cfg.id) {
                                 TouchButtonId.SAVE_STATE -> MainActivityRuntime.instance?.saveState()
                                 TouchButtonId.LOAD_STATE -> MainActivityRuntime.instance?.loadState()
+                                TouchButtonId.KEYBOARD -> MainActivityRuntime.toggleSoftKeyboard()
                                 else -> MainActivityRuntime.instance?.applicationContext?.let {
                                     com.armsx2.Screenshots.capture(it)
                                 }
