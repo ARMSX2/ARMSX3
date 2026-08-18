@@ -612,6 +612,11 @@ object Rpcs3Bridge {
             //
             // Values cross as indices and Rpcs3Settings turns them into the core's enum NAMES;
             // see the tables there for why an index cannot be mapped arithmetically.
+            "PS3/Input" -> when (key) {
+                "Keyboard" -> Rpcs3Settings.setEmulatedKeyboard(asBool(value))
+                else -> return false
+            }
+
             "PS3/System" -> when (key) {
                 "Language" -> Rpcs3Settings.setConsoleLanguage(asInt(value))
                 "License Area" -> Rpcs3Settings.setConsoleRegion(asInt(value))

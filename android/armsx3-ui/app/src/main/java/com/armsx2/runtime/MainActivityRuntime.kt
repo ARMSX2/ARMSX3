@@ -3235,6 +3235,10 @@ open class MainActivityRuntime : ComponentActivity() {
                     if (down && event.repeatCount == 0) hotkeyToast(InGameOverlay.cycleOsd())
                     return true
                 }
+                ControllerMappings.SysHotkey.KEYBOARD_TOGGLE -> {
+                    if (down && event.repeatCount == 0) toggleGuestKeyboard()
+                    return true
+                }
                 ControllerMappings.SysHotkey.GYRO_TOGGLE -> {
                     if (down && event.repeatCount == 0) toggleGyro()
                     return true
@@ -3403,6 +3407,134 @@ open class MainActivityRuntime : ComponentActivity() {
      *  hotkey and the on-screen fast-forward touch button (FastForwardWidget). Restores
      *  the user's base limiter mode when turning off so it stays in sync with the
      *  frame-limit toggle. */
+    // ---- Guest keyboard (Android IME over the running game) --------------------------------
+    //
+    // The system IME is deliberately used instead of a drawn key grid: layouts, languages,
+    // prediction and emoji all come for free, and it is the keyboard users already know. Keys
+    // reach the guest through android_keyboard_handler, which registers Android keycodes directly.
+    //
+    // The IME will only open for a focused view that accepts input, so a zero-size EditText is
+    // parked in the content view and focused on demand. Its InputConnection is where the work
+    // happens, because an IME reports typing in two different ways and only one of them is a key
+    // event:
+    //   * sendKeyEvent  -- backspace, enter, arrows: forward the keycode as-is
+    //   * commitText    -- ordinary typed characters, no key event at all, so one has to be
+    //                     synthesised per character
+    // KeyCharacterMap.getEvents does that synthesis properly, including the shift presses needed
+    // for capitals and symbols, rather than guessing a keycode per char.
+    private var guestKeyboardView: android.widget.EditText? = null
+
+    private fun guestKeyboardTarget(): android.widget.EditText {
+        guestKeyboardView?.let { return it }
+
+        val view = object : android.widget.EditText(this) {
+            override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo): android.view.inputmethod.InputConnection {
+                outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT
+                outAttrs.imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN or
+                    android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+
+                return object : android.view.inputmethod.BaseInputConnection(this, false) {
+                    override fun sendKeyEvent(event: KeyEvent): Boolean {
+                        sendToGuest(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.unicodeChar)
+                        return true
+                    }
+
+                    override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                        val chars = text?.toString() ?: return true
+                        val map = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
+                        val events = map.getEvents(chars.toCharArray())
+
+                        if (events == null) {
+                            // No keycode produces this character on the virtual layout (emoji, CJK
+                            // from an IME candidate list). Still deliver the text: the guest reads
+                            // the unicode field, and CELL_KEYC_NO_EVENT is the right keycode for
+                            // "a character arrived with no key behind it".
+                            for (ch in chars) {
+                                sendToGuest(KeyEvent.KEYCODE_UNKNOWN, true, ch.code)
+                                sendToGuest(KeyEvent.KEYCODE_UNKNOWN, false, ch.code)
+                            }
+
+                            return true
+                        }
+
+                        for (ev in events) {
+                            sendToGuest(ev.keyCode, ev.action == KeyEvent.ACTION_DOWN, ev.unicodeChar)
+                        }
+
+                        return true
+                    }
+
+                    override fun deleteSurroundingText(before: Int, after: Int): Boolean {
+                        // Some IMEs delete by range rather than by sending backspace.
+                        repeat(before.coerceAtLeast(0)) {
+                            sendToGuest(KeyEvent.KEYCODE_DEL, true, 0)
+                            sendToGuest(KeyEvent.KEYCODE_DEL, false, 0)
+                        }
+
+                        return true
+                    }
+                }
+            }
+        }
+
+        view.isFocusable = true
+        view.isFocusableInTouchMode = true
+        // Zero-size and transparent: it exists to own IME focus, never to be seen or to steal a
+        // touch from the game or the on-screen pad.
+        view.layoutParams = android.view.ViewGroup.LayoutParams(0, 0)
+        view.setBackgroundColor(0)
+        view.alpha = 0f
+
+        runCatching {
+            (findViewById<android.view.ViewGroup>(android.R.id.content)).addView(view)
+        }
+
+        guestKeyboardView = view
+        return view
+    }
+
+    private fun sendToGuest(keyCode: Int, pressed: Boolean, unicode: Int) {
+        runCatching { net.rpcsx.RPCSX.instance.keyboardKey(keyCode, pressed, unicode) }
+    }
+
+    /**
+     * Raise or dismiss the Android keyboard over the running game (KEYBOARD_TOGGLE hotkey).
+     *
+     * Reports through a toast when the guest has no keyboard to receive the keys, which is the
+     * common case: the core's Keyboard setting defaults to Null, and silently showing an IME that
+     * goes nowhere is worse than saying so.
+     */
+    fun toggleGuestKeyboard() {
+        val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE)
+            as? android.view.inputmethod.InputMethodManager ?: return
+
+        if (guestKeyboardShown) {
+            guestKeyboardShown = false
+            runCatching { imm.hideSoftInputFromWindow(guestKeyboardTarget().windowToken, 0) }
+            guestKeyboardView?.clearFocus()
+            hotkeyToast("Keyboard hidden")
+            return
+        }
+
+        // Probe before showing: keyboardKey returns false when no keyboard is active, so a
+        // harmless no-op key tells us whether anything would receive input at all.
+        val reachable = runCatching {
+            net.rpcsx.RPCSX.instance.keyboardKey(KeyEvent.KEYCODE_UNKNOWN, false, 0)
+        }.getOrDefault(false)
+
+        val view = guestKeyboardTarget()
+        view.requestFocus()
+        guestKeyboardShown = true
+        runCatching { imm.showSoftInput(view, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT) }
+
+        hotkeyToast(
+            if (reachable) "Keyboard shown"
+            else "Keyboard shown (set Keyboard to Basic for the game to see it)",
+        )
+    }
+
+    private var guestKeyboardShown = false
+
     /** Flip the runtime gyro enable (issue #337). Shared by the GYRO_TOGGLE hotkey and the
      *  edge-triggered (stick/combo) path. Only silences the sensor for this session — the
      *  user's Gyro Mode setting is untouched, so re-enabling restores their configured mode. */
@@ -4582,6 +4714,7 @@ open class MainActivityRuntime : ComponentActivity() {
                 runCatching { NativeApp.speedhackLimitermode(if (on) ffLimiterMode() else baseLimiterMode()) }
                 hotkeyToast(if (on) "Fast Forward ON" else "Fast Forward OFF")
             }
+            ControllerMappings.SysHotkey.KEYBOARD_TOGGLE -> toggleGuestKeyboard()
             ControllerMappings.SysHotkey.GYRO_TOGGLE -> toggleGyro()
             // GYRO_HOLD needs key up/down edges, which this edge-triggered path (stick
             // directions / combos) doesn't provide — behave as a toggle here rather than

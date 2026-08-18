@@ -193,6 +193,9 @@ data class Ps3Settings(
     /** Stops the core writing any log after startup. A real performance lever on games that
      *  log heavily, but it also destroys the only artifact a bug report can carry, so it is
      *  off by default and the UI says so plainly. */
+    // Emulated keyboard. Off by default, matching the core's keyboard_handler::null: a game that
+    // sees a keyboard attached can behave differently, so this is opt-in rather than assumed.
+    val emulatedKeyboard: Boolean = false,
     val silenceAllLogs: Boolean = false,
     val netEnabled: Boolean = false,
     val psnStatus: Boolean = false,
@@ -1065,6 +1068,7 @@ data class Settings(
         // surface layout. Keeping them in sync stops "Stretch" looking inert.
         put("PS3/Video", "Stretch To Display Area", "bool", (displayFitMode == 1).toString())
         put("PS3/Video", "Display Aspect Override", "int", ps3.displayAspect.coerceIn(0, 4000).toString())
+        put("PS3/Input", "Keyboard", "bool", ps3.emulatedKeyboard.toString())
         put("PS3/Misc", "Silence All Logs", "bool", ps3.silenceAllLogs.toString())
         put("PS3/Overlay", "Enabled", "bool", ps3.overlayEnabled.toString())
         put("PS3/Overlay", "Detail level", "enum", ps3.overlayDetail.toString())
@@ -2060,6 +2064,7 @@ data class Settings(
         put("ps3FrameGenFlowScale", ps3.frameGenFlowScale)
         put("ps3WriteColorBuffers", ps3.writeColorBuffers)
         put("ps3GpuTurbo", ps3.gpuTurbo)
+        put("ps3EmulatedKeyboard", ps3.emulatedKeyboard)
         put("ps3SilenceAllLogs", ps3.silenceAllLogs)
         put("ps3WriteDepthBuffer", ps3.writeDepthBuffer)
         put("ps3ReadColorBuffers", ps3.readColorBuffers)
@@ -2407,6 +2412,7 @@ data class Settings(
                     frameGenFlowScale = json.optInt("ps3FrameGenFlowScale", def.ps3.frameGenFlowScale),
                     writeColorBuffers = json.optBoolean("ps3WriteColorBuffers", def.ps3.writeColorBuffers),
                     gpuTurbo = json.optBoolean("ps3GpuTurbo", def.ps3.gpuTurbo),
+                    emulatedKeyboard = json.optBoolean("ps3EmulatedKeyboard", def.ps3.emulatedKeyboard),
                     silenceAllLogs = json.optBoolean("ps3SilenceAllLogs", def.ps3.silenceAllLogs),
                     writeDepthBuffer = json.optBoolean("ps3WriteDepthBuffer", def.ps3.writeDepthBuffer),
                     readColorBuffers = json.optBoolean("ps3ReadColorBuffers", def.ps3.readColorBuffers),
@@ -2734,6 +2740,7 @@ data class Settings(
             if (current.ps3.frameGenFlowScale != base.ps3.frameGenFlowScale) j.put("ps3FrameGenFlowScale", current.ps3.frameGenFlowScale)
             if (current.ps3.writeColorBuffers != base.ps3.writeColorBuffers) j.put("ps3WriteColorBuffers", current.ps3.writeColorBuffers)
             if (current.ps3.gpuTurbo != base.ps3.gpuTurbo) j.put("ps3GpuTurbo", current.ps3.gpuTurbo)
+            if (current.ps3.emulatedKeyboard != base.ps3.emulatedKeyboard) j.put("ps3EmulatedKeyboard", current.ps3.emulatedKeyboard)
             if (current.ps3.silenceAllLogs != base.ps3.silenceAllLogs) j.put("ps3SilenceAllLogs", current.ps3.silenceAllLogs)
             if (current.ps3.writeDepthBuffer != base.ps3.writeDepthBuffer) j.put("ps3WriteDepthBuffer", current.ps3.writeDepthBuffer)
             if (current.ps3.readColorBuffers != base.ps3.readColorBuffers) j.put("ps3ReadColorBuffers", current.ps3.readColorBuffers)
@@ -3042,6 +3049,7 @@ data class Settings(
                     frameGenFlowScale = if (overrides.has("ps3FrameGenFlowScale")) overrides.getInt("ps3FrameGenFlowScale") else base.ps3.frameGenFlowScale,
                     writeColorBuffers = if (overrides.has("ps3WriteColorBuffers")) overrides.getBoolean("ps3WriteColorBuffers") else base.ps3.writeColorBuffers,
                     gpuTurbo = if (overrides.has("ps3GpuTurbo")) overrides.getBoolean("ps3GpuTurbo") else base.ps3.gpuTurbo,
+                    emulatedKeyboard = if (overrides.has("ps3EmulatedKeyboard")) overrides.getBoolean("ps3EmulatedKeyboard") else base.ps3.emulatedKeyboard,
                     silenceAllLogs = if (overrides.has("ps3SilenceAllLogs")) overrides.getBoolean("ps3SilenceAllLogs") else base.ps3.silenceAllLogs,
                     writeDepthBuffer = if (overrides.has("ps3WriteDepthBuffer")) overrides.getBoolean("ps3WriteDepthBuffer") else base.ps3.writeDepthBuffer,
                     readColorBuffers = if (overrides.has("ps3ReadColorBuffers")) overrides.getBoolean("ps3ReadColorBuffers") else base.ps3.readColorBuffers,

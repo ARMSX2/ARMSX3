@@ -42,6 +42,7 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("perf.sustainedPerformance.label", true, SettingsCategory.Performance),
     SettingsSearchEntry("perf.adpf.label", true, SettingsCategory.Performance),
     SettingsSearchEntry("perf.scheduler.label", true, SettingsCategory.Performance),
+    SettingsSearchEntry("pad.emulatedKeyboard.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("perf.ppuDecoder.label", true, SettingsCategory.Performance),
     SettingsSearchEntry("perf.spuDecoder.label", true, SettingsCategory.Performance),
     SettingsSearchEntry("perf.spuBlockSize.label", true, SettingsCategory.Performance),
