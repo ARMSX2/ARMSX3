@@ -51,6 +51,65 @@ object Rpcs3Settings {
     private const val IO = "Input/Output"
     private const val SAVESTATE = "Savestate"
     private const val MISC = "Miscellaneous"
+    private const val SYSTEM = "System"
+
+    // ---- Console (System) -----------------------------------------------
+    //
+    // What the emulated console reports to games: cellSysutil reads these, so they change the
+    // language a game picks, which region it thinks it is in, and how it formats dates.
+    //
+    // Every one is a cfg::_enum, which serialises by NAME, so these tables must match the core's
+    // own formatters exactly -- cellSysutil.cpp, KeyboardHandler.cpp, system_config_types.cpp.
+    // Two traps live here, hence tables rather than arithmetic on the index:
+    //
+    //   - Order is by NUMERIC enum value, not by the order the formatter prints. The formatter
+    //     lists English (UK) before Portuguese (Brazil); the values are 17 for Brazil and 18 for
+    //     the UK, so following the formatter would silently swap two languages.
+    //   - License Area is NOT contiguous: J..C are 0-5 and OTHER is 100. Anything mapping an
+    //     index onto a value would land on 6 and be rejected or clamped.
+    //
+    // The index is a position in these lists and nothing else; the core only ever sees the name.
+
+    private val CONSOLE_LANGUAGES = listOf(
+        "Japanese", "English (US)", "French", "Spanish", "German", "Italian", "Dutch",
+        "Portuguese (Portugal)", "Russian", "Korean", "Chinese (Traditional)",
+        "Chinese (Simplified)", "Finnish", "Swedish", "Danish", "Norwegian", "Polish",
+        "Portuguese (Brazil)", "English (UK)", "Turkish",
+    )
+
+    private val CONSOLE_REGIONS = listOf("SCEJ", "SCEA", "SCEE", "SCEH", "SCEK", "SCH", "Other")
+
+    private val KEYBOARD_TYPES = listOf(
+        "English keyboard (US standard)", "Japanese keyboard", "Japanese keyboard (Kana state)",
+        "German keyboard", "Spanish keyboard", "French keyboard", "Italian keyboard",
+        "Dutch keyboard", "Portuguese keyboard (Portugal)", "Russian keyboard",
+        "English keyboard (UK standard)", "Korean keyboard", "Norwegian keyboard",
+        "Finnish keyboard", "Danish keyboard", "Swedish keyboard",
+        "Chinese keyboard (Traditional)", "Chinese keyboard (Simplified)",
+        "French keyboard (Switzerland)", "German keyboard (Switzerland)",
+        "French keyboard (Canada)", "French keyboard (Belgium)", "Polish keyboard",
+        "Portuguese keyboard (Brazil)", "Turkish keyboard",
+    )
+
+    private val DATE_FORMATS = listOf("yyyymmdd", "ddmmyyyy", "mmddyyyy")
+    private val TIME_FORMATS = listOf("clock12", "clock24")
+    private val ENTER_BUTTONS = listOf("Enter with circle", "Enter with cross")
+
+    /** Names, in the order the pickers show them, so the UI never repeats these tables. */
+    fun consoleLanguageNames(): List<String> = CONSOLE_LANGUAGES
+    fun consoleRegionNames(): List<String> = CONSOLE_REGIONS
+    fun keyboardTypeNames(): List<String> = KEYBOARD_TYPES
+
+    private fun setIndexedEnum(path: String, names: List<String>, index: Int, fallback: Int) =
+        setEnum(path, names.getOrElse(index) { names[fallback] })
+
+    fun setConsoleLanguage(index: Int) = setIndexedEnum("$SYSTEM@@Language", CONSOLE_LANGUAGES, index, 1)
+    fun setConsoleRegion(index: Int) = setIndexedEnum("$SYSTEM@@License Area", CONSOLE_REGIONS, index, 1)
+    fun setKeyboardType(index: Int) = setIndexedEnum("$SYSTEM@@Keyboard Type", KEYBOARD_TYPES, index, 0)
+    fun setDateFormat(index: Int) = setIndexedEnum("$SYSTEM@@Date Format", DATE_FORMATS, index, 1)
+    fun setTimeFormat(index: Int) = setIndexedEnum("$SYSTEM@@Time Format", TIME_FORMATS, index, 1)
+    fun setEnterButtonAssign(index: Int) =
+        setIndexedEnum("$SYSTEM@@Enter button assignment", ENTER_BUTTONS, index, 1)
 
     // ---- Renderer -------------------------------------------------------
 

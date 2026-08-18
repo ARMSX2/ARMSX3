@@ -212,6 +212,22 @@ data class Ps3Settings(
      * the world uses cross, which is why RPCS3 exposes it rather than deriving it from region.
      */
     val enterButtonAssign: Int = 1,
+    /**
+     * The rest of the console's identity, as cellSysutil reports it to games: language, region,
+     * keyboard layout and clock formats.
+     *
+     * All five are an INDEX into the tables in Rpcs3Settings, not the core's enum value, and the
+     * bridge turns them into the enum NAME the config expects. Defaults match upstream --
+     * English (US), SCEA, US keyboard, ddmmyyyy, clock24 -- so an existing install is unchanged.
+     *
+     * A game reads these: the language decides which text a multi-language disc shows, and the
+     * region is what makes a title behave as its NTSC or PAL self.
+     */
+    val consoleLanguage: Int = 1,
+    val consoleRegion: Int = 1,
+    val keyboardType: Int = 0,
+    val dateFormat: Int = 1,
+    val timeFormat: Int = 1,
     val spuXFloat: Int = 1,
     val accurateSpuRsv: Boolean = true,
     /**
@@ -1090,6 +1106,11 @@ data class Settings(
         put("PS3/Net", "PSN status", "enum", ps3.psnStatus.toString())
         put("PS3/Net", "UPNP Enabled", "bool", ps3.upnpEnabled.toString())
         put("PS3/System", "Enter button assignment", "enum", ps3.enterButtonAssign.toString())
+        put("PS3/System", "Language", "enum", ps3.consoleLanguage.toString())
+        put("PS3/System", "License Area", "enum", ps3.consoleRegion.toString())
+        put("PS3/System", "Keyboard Type", "enum", ps3.keyboardType.toString())
+        put("PS3/System", "Date Format", "enum", ps3.dateFormat.toString())
+        put("PS3/System", "Time Format", "enum", ps3.timeFormat.toString())
         put("PS3/Core", "SPU XFloat Accuracy", "enum", ps3.spuXFloat.toString())
         put("PS3/Core", "Accurate SPU Reservations", "bool", ps3.accurateSpuRsv.toString())
         put("PS3/Core", "Accurate Cache Line Stores", "bool", ps3.accurateCacheLine.toString())
@@ -2062,6 +2083,11 @@ data class Settings(
         put("ps3PsnStatus", ps3.psnStatus)
         put("ps3UpnpEnabled", ps3.upnpEnabled)
         put("ps3EnterButtonAssign", ps3.enterButtonAssign)
+        put("ps3ConsoleLanguage", ps3.consoleLanguage)
+        put("ps3ConsoleRegion", ps3.consoleRegion)
+        put("ps3KeyboardType", ps3.keyboardType)
+        put("ps3DateFormat", ps3.dateFormat)
+        put("ps3TimeFormat", ps3.timeFormat)
         put("ps3SpuXFloat", ps3.spuXFloat)
         put("ps3AccurateSpuRsv", ps3.accurateSpuRsv)
         put("ps3AccurateCacheLine", ps3.accurateCacheLine)
@@ -2404,6 +2430,11 @@ data class Settings(
                     psnStatus = json.optBoolean("ps3PsnStatus", def.ps3.psnStatus),
                     upnpEnabled = json.optBoolean("ps3UpnpEnabled", def.ps3.upnpEnabled),
                     enterButtonAssign = json.optInt("ps3EnterButtonAssign", def.ps3.enterButtonAssign),
+                    consoleLanguage = json.optInt("ps3ConsoleLanguage", def.ps3.consoleLanguage),
+                    consoleRegion = json.optInt("ps3ConsoleRegion", def.ps3.consoleRegion),
+                    keyboardType = json.optInt("ps3KeyboardType", def.ps3.keyboardType),
+                    dateFormat = json.optInt("ps3DateFormat", def.ps3.dateFormat),
+                    timeFormat = json.optInt("ps3TimeFormat", def.ps3.timeFormat),
                     spuXFloat = json.optInt("ps3SpuXFloat", def.ps3.spuXFloat),
                     accurateSpuRsv = json.optBoolean("ps3AccurateSpuRsv", def.ps3.accurateSpuRsv),
                     accurateCacheLine = json.optBoolean("ps3AccurateCacheLine", def.ps3.accurateCacheLine),
@@ -2726,6 +2757,11 @@ data class Settings(
             if (current.ps3.psnStatus != base.ps3.psnStatus) j.put("ps3PsnStatus", current.ps3.psnStatus)
             if (current.ps3.upnpEnabled != base.ps3.upnpEnabled) j.put("ps3UpnpEnabled", current.ps3.upnpEnabled)
             if (current.ps3.enterButtonAssign != base.ps3.enterButtonAssign) j.put("ps3EnterButtonAssign", current.ps3.enterButtonAssign)
+            if (current.ps3.consoleLanguage != base.ps3.consoleLanguage) j.put("ps3ConsoleLanguage", current.ps3.consoleLanguage)
+            if (current.ps3.consoleRegion != base.ps3.consoleRegion) j.put("ps3ConsoleRegion", current.ps3.consoleRegion)
+            if (current.ps3.keyboardType != base.ps3.keyboardType) j.put("ps3KeyboardType", current.ps3.keyboardType)
+            if (current.ps3.dateFormat != base.ps3.dateFormat) j.put("ps3DateFormat", current.ps3.dateFormat)
+            if (current.ps3.timeFormat != base.ps3.timeFormat) j.put("ps3TimeFormat", current.ps3.timeFormat)
             if (current.ps3.spuXFloat != base.ps3.spuXFloat) j.put("ps3SpuXFloat", current.ps3.spuXFloat)
             if (current.ps3.accurateSpuRsv != base.ps3.accurateSpuRsv) j.put("ps3AccurateSpuRsv", current.ps3.accurateSpuRsv)
             if (current.ps3.accurateCacheLine != base.ps3.accurateCacheLine) j.put("ps3AccurateCacheLine", current.ps3.accurateCacheLine)
@@ -3029,6 +3065,11 @@ data class Settings(
                     psnStatus = if (overrides.has("ps3PsnStatus")) overrides.getBoolean("ps3PsnStatus") else base.ps3.psnStatus,
                     upnpEnabled = if (overrides.has("ps3UpnpEnabled")) overrides.getBoolean("ps3UpnpEnabled") else base.ps3.upnpEnabled,
                     enterButtonAssign = if (overrides.has("ps3EnterButtonAssign")) overrides.getInt("ps3EnterButtonAssign") else base.ps3.enterButtonAssign,
+                    consoleLanguage = if (overrides.has("ps3ConsoleLanguage")) overrides.getInt("ps3ConsoleLanguage") else base.ps3.consoleLanguage,
+                    consoleRegion = if (overrides.has("ps3ConsoleRegion")) overrides.getInt("ps3ConsoleRegion") else base.ps3.consoleRegion,
+                    keyboardType = if (overrides.has("ps3KeyboardType")) overrides.getInt("ps3KeyboardType") else base.ps3.keyboardType,
+                    dateFormat = if (overrides.has("ps3DateFormat")) overrides.getInt("ps3DateFormat") else base.ps3.dateFormat,
+                    timeFormat = if (overrides.has("ps3TimeFormat")) overrides.getInt("ps3TimeFormat") else base.ps3.timeFormat,
                     spuXFloat = if (overrides.has("ps3SpuXFloat")) overrides.getInt("ps3SpuXFloat") else base.ps3.spuXFloat,
                     accurateSpuRsv = if (overrides.has("ps3AccurateSpuRsv")) overrides.getBoolean("ps3AccurateSpuRsv") else base.ps3.accurateSpuRsv,
                     accurateCacheLine = if (overrides.has("ps3AccurateCacheLine")) overrides.getBoolean("ps3AccurateCacheLine") else base.ps3.accurateCacheLine,

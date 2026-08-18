@@ -603,6 +603,25 @@ object Rpcs3Bridge {
                 else -> return false
             }
 
+            // The console's own identity, as cellSysutil reports it to games.
+            //
+            // This whole section was missing, which made "Enter button assignment" inert: it had
+            // a field, a UI row and an applyTo write, and then fell through to Unsupported.note()
+            // and never reached the core. Everything Settings.applyTo emits has to appear here or
+            // it is silently dropped -- there is no build error for a forgotten key.
+            //
+            // Values cross as indices and Rpcs3Settings turns them into the core's enum NAMES;
+            // see the tables there for why an index cannot be mapped arithmetically.
+            "PS3/System" -> when (key) {
+                "Language" -> Rpcs3Settings.setConsoleLanguage(asInt(value))
+                "License Area" -> Rpcs3Settings.setConsoleRegion(asInt(value))
+                "Keyboard Type" -> Rpcs3Settings.setKeyboardType(asInt(value))
+                "Date Format" -> Rpcs3Settings.setDateFormat(asInt(value))
+                "Time Format" -> Rpcs3Settings.setTimeFormat(asInt(value))
+                "Enter button assignment" -> Rpcs3Settings.setEnterButtonAssign(asInt(value))
+                else -> return false
+            }
+
             // Named for the config node it writes, unlike the PS3/* pseudo-sections above.
             // Without this case the key fell through to the else and was dropped, so the
             // setting never reached the core: savestates failed to lock the SPUs and told
@@ -1049,6 +1068,125 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun playSound(path: String) { Unsupported.note("playSound") }
+
+    // ---- Rumble -------------------------------------------------------
+    //
+    // The pad already advertises CELL_PAD_CAPABILITY_ACTUATOR, so games have always
+    // believed rumble existed here and asked for it; nothing was listening. cellPad
+    // gives no notification when the guest writes the motors, so this polls what the
+    // core currently wants and drives the phone's vibrator to match.
+
+    private var rumbleThread: Thread? = null
+    @Volatile private var rumbleRunning = false
+    @Volatile private var rumbleEnabled = true
+
+    private fun vibrator(): Vibrator? {
+        val ctx = appContext ?: return null
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+        }
+    }
+
+    @JvmStatic
+    fun setPadVibration(on: Boolean) {
+        rumbleEnabled = on
+        if (!on) vibrator()?.cancel()
+    }
+
+    /** Start following the core's motor state. Idempotent. */
+    @JvmStatic
+    fun startRumblePump() {
+        if (rumbleRunning) return
+        val vib = vibrator() ?: return
+        if (!vib.hasVibrator()) return
+
+        rumbleRunning = true
+        rumbleThread = Thread {
+            var lastAmplitude = 0
+            while (rumbleRunning) {
+                val packed = runCatching { RPCSX.instance.getPadRumble(0) }.getOrDefault(0)
+                val large = (packed shr 8) and 0xFF
+                val small = packed and 0xFF
+
+                // One vibrator, two motors: take the stronger. The small motor is the
+                // high-frequency one and reads as weaker for the same value, so it is
+                // scaled down rather than competing with the large one on equal terms.
+                val want = if (!rumbleEnabled) 0 else maxOf(large, small * 2 / 3)
+
+                if (want != lastAmplitude) {
+                    runCatching {
+                        if (want <= 0) {
+                            vib.cancel()
+                        } else {
+                            // Repeating one-shot rather than a fixed duration: the guest
+                            // decides when rumble stops, and a timed effect would either cut
+                            // a long rumble short or outlive a brief one.
+                            vib.vibrate(
+                                VibrationEffect.createWaveform(
+                                    longArrayOf(0, 60), intArrayOf(0, want.coerceIn(1, 255)), 0
+                                )
+                            )
+                        }
+                    }
+                    lastAmplitude = want
+                }
+
+                try { Thread.sleep(30) } catch (_: InterruptedException) { break }
+            }
+            runCatching { vib.cancel() }
+        }.apply { isDaemon = true; name = "rumble-pump"; start() }
+    }
+
+    @JvmStatic
+    fun stopRumblePump() {
+        rumbleRunning = false
+        rumbleThread?.interrupt()
+        rumbleThread = null
+        runCatching { vibrator()?.cancel() }
+    }
+
+    /** Settings' test button: a short burst so the user can tell the motor works. */
+    @JvmStatic
+    fun testRumble(port: Int) {
+        val vib = vibrator() ?: return
+        runCatching {
+            vib.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE))
+        }
+    }
+
+    /** Text for the test toast. Returned "" before, which is why the popup had none. */
+    @JvmStatic
+    fun rumbleStatusForPort(port: Int): String {
+        val vib = vibrator()
+        return when {
+            vib == null || !vib.hasVibrator() -> "This device has no vibration motor"
+            !rumbleEnabled -> "Vibration is switched off in settings"
+            else -> "Vibration test sent to player ${port + 1}"
+        }
+    }
+
+    // ---- SIXAXIS motion ------------------------------------------------
+
+    /**
+     * Feed the phone's orientation to the pad's motion sensors.
+     *
+     * [ax]/[ay]/[az] are gravity-relative acceleration in g, [gyro] a yaw rate in
+     * rad/s. The PS3 reports each axis 0..1023 with 512 at rest and roughly 113 units
+     * per g, which is what a DualShock 3 produces lying flat.
+     */
+    @JvmStatic
+    fun setPadMotion(port: Int, ax: Float, ay: Float, az: Float, gyro: Float) {
+        val center = 512
+        val perG = 113f
+        fun axis(v: Float) = (center + (v * perG)).toInt().coerceIn(0, 1023)
+        // Gyro is a rate, not a position: scale so a brisk turn approaches the rails
+        // without a gentle one being lost in the noise.
+        val g = (center + (gyro * 120f)).toInt().coerceIn(0, 1023)
+        runCatching { RPCSX.instance.setPadSensor(port, axis(ax), axis(ay), axis(az), g) }
+    }
 
     @JvmStatic
     fun touchHaptic() {
