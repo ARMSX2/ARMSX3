@@ -828,6 +828,12 @@ public:
 	u32 dbg_where = 0;
 	u64 dbg_loops = 0;
 
+	// SPU -> PPU notifications issued through SPU_WrOutIntrMbox. There is a once-per-(port,kind)
+	// log at that site, but "it signalled at some point" and "it is still signalling now" are
+	// different facts and only the second one distinguishes a worker that has stopped notifying
+	// from one whose notifications are not being delivered.
+	u64 events_sent = 0;
+
 	rpcs3::hypervisor_context_t hv_ctx; // NOTE: The offset within the class must be within the first 1MiB
 
 	u64 ftx = 0; // Failed transactions

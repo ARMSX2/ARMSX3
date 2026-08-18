@@ -27,6 +27,7 @@
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/timers.hpp"
 #include "Emu/Cell/lv2/sys_event.h"
+#include "Emu/Cell/lv2/sys_spu.h"
 #include "Emu/Cell/lv2/sys_time.h"
 #include "Emu/Cell/Modules/cellGcmSys.h"
 #include "util/serialization_ext.hpp"
@@ -1413,6 +1414,20 @@ namespace rsx
 			fmt::append(out, "\n  PPU 0x%07x '%s': state=%s cia=0x%08x %s func='%s'",
 				id, *ppu.ppu_tname.load(), ppu.state.load(), ppu.cia,
 				ppu.current_function ? "in" : "last", func ? func : "");
+
+			// Who called the wait, not just where it is parked.
+			//
+			// Borderlands 2's main_thread blocks in sys_event_queue_receive at cia=0x01b85e5c,
+			// and an instrumented x86 build blocks at the SAME libsre address -- but on a
+			// different queue: x86 gets 0x8d00c200 (CompPatch group, spup 17, which the SPUs
+			// signal constantly) and ARM gets 0x8d021700 (PhysWISE group, spup 20, which nothing
+			// ever signals). Same code, different queue handle, so the handle was chosen further
+			// up. cia cannot say by whom; the call stack can, and it names the cellSpurs* entry
+			// point that picked the instance.
+			if (const std::string trace = ppu.dump_callstack(); !trace.empty())
+			{
+				fmt::append(out, "%s", trace);
+			}
 		}, idm::unlocked);
 
 		rsx_log.error("Guest PPU threads while no frame has completed:%s", out);
@@ -1512,6 +1527,49 @@ namespace rsx
 					detail += (addr == pc ? "  >>" : "    ");
 					detail += dis_asm.last_opcode;
 				}
+
+				// The callers, which is where a control-flow divergence actually lives.
+				//
+				// cia only says where a thread is parked, and for anything blocked in an lv2 wait
+				// that is an address inside liblv2 or libsre -- the same address on every host, so
+				// it can never show a divergence. Borderlands 2 proves the point: ARM and an
+				// instrumented x86 build both park main_thread at 0x01b85e5c in libsre, both reach
+				// it through the cellSpursEventFlagWait import thunk at 0x011e785c, and both share
+				// an identical outer stack down to 0x001f59a4 -- then ARM calls straight into the
+				// wait via 0x000c6958 while x86 descends six further frames via 0x000c4b8c. The
+				// branch that picks between those two paths is the bug, and it is only visible by
+				// disassembling around the RETURN ADDRESSES, not around cia.
+				//
+				// Four frames: enough to cross the import thunk and reach guest code on either
+				// path, short enough that a dozen parked threads do not bury the log.
+				const auto frames = ppu.dump_callstack_list();
+
+				for (u32 i = 0; i < 4 && i < frames.size(); i++)
+				{
+					const u32 ret = frames[i].first;
+
+					if (!ret || !vm::check_addr(ret))
+					{
+						continue;
+					}
+
+					// The call is the instruction BEFORE the return address, so start behind it.
+					const u32 caller_from = ret >= 0x18 ? ret - 0x18 : 0;
+
+					fmt::append(detail, "\nCaller frame %u, code around return 0x%08x:\n", i, ret);
+
+					for (u32 addr = caller_from; addr <= ret + 0x8; addr += 4)
+					{
+						if (!vm::check_addr(addr))
+						{
+							continue;
+						}
+
+						dis_asm.disasm(addr);
+						detail += (addr == ret ? "  >>" : "    ");
+						detail += dis_asm.last_opcode;
+					}
+				}
 			}, idm::unlocked);
 
 			rsx_log.error("Stalled guest thread detail (reported once per session):%s", detail);
@@ -1592,6 +1650,60 @@ namespace rsx
 				spu.block_counter, spu.dbg_loops, where_names[where],
 				spu.raddr, spu.spurs_addr, spu.rtime);
 
+			fmt::append(spus, " events_sent=%u", spu.events_sent);
+
+			// What the polling worker is actually looking at, once per process.
+			//
+			// Everything measured so far says this SPU is not miscomputing -- spu_alu is
+			// byte-exact and spu_fpu matches x86 on every line -- and that the event it should
+			// send is never sent rather than lost, since no queue holds a pending event with a
+			// waiter attached. So it is spinning on data it does not like, and these are the
+			// three views of that data:
+			//
+			//   rdata  the 128-byte snapshot GETLLAR took, which is what the guest compares
+			//   live   the same line in main memory right now
+			//   ls     local store 0x100..0x180, the SPURS control mirror -- RPCS3's own
+			//          do_putllc heuristic reads the idle bitmap at 0x100 + 0x73, so this is
+			//          the region it treats as the kernel's control area
+			//
+			// rdata differing from live while the guest keeps re-reserving means it is polling a
+			// stale view; identical means the data is fine and the loop's exit condition is not
+			// about this line at all. Once per process: three 128-byte blocks per SPU is a lot of
+			// hex, and a per-dump version of this is exactly the mistake the code window made.
+			static atomic_t<bool> s_ls_dumped{false};
+
+			if (spu.raddr && !s_ls_dumped && !s_ls_dumped.exchange(true))
+			{
+				const auto hex128 = [](const void* src)
+				{
+					const auto p = static_cast<const u8*>(src);
+					std::string out;
+
+					for (u32 i = 0; i < 128; i += 16)
+					{
+						fmt::append(out, "\n      +0x%02x  %02x %02x %02x %02x %02x %02x %02x %02x  %02x %02x %02x %02x %02x %02x %02x %02x",
+							i, p[i + 0], p[i + 1], p[i + 2], p[i + 3], p[i + 4], p[i + 5], p[i + 6], p[i + 7],
+							p[i + 8], p[i + 9], p[i + 10], p[i + 11], p[i + 12], p[i + 13], p[i + 14], p[i + 15]);
+					}
+
+					return out;
+				};
+
+				fmt::append(spus, "\n    reservation snapshot (rdata) for raddr=0x%x:%s", spu.raddr, hex128(spu.rdata));
+
+				if (vm::check_addr(spu.raddr, vm::page_readable, 128))
+				{
+					fmt::append(spus, "\n    live main memory at 0x%x:%s", spu.raddr, hex128(vm::base(spu.raddr)));
+					fmt::append(spus, "\n    -> snapshot %s live memory",
+						std::memcmp(spu.rdata, vm::base(spu.raddr), 128) == 0 ? "MATCHES" : "DIFFERS FROM");
+				}
+
+				if (spu.ls)
+				{
+					fmt::append(spus, "\n    local store 0x100 (SPURS control mirror):%s", hex128(spu.ls + 0x100));
+				}
+			}
+
 			if (spu.mfc_size)
 			{
 				const auto& cmd = spu.mfc_queue[0];
@@ -1663,6 +1775,71 @@ namespace rsx
 		if (!spus.empty())
 		{
 			rsx_log.error("Guest SPU threads at the same moment:%s", spus);
+		}
+
+		// The groups the threads above belong to.
+		//
+		// Borderlands 2 does not fail at a boundary: the game runs thousands of
+		// start/join cycles on a group and loses one of them. The syscall histogram showed one
+		// PPU thread stopped at 2532 start/join pairs while its siblings passed 8000 and an x86
+		// host passed 7426, so the interesting number is which cycle this is and what the group
+		// believes about it. stop_count is that cycle counter, and 'running' is the count the
+		// join is waiting on -- if it stays above zero while every thread is spinning in the
+		// SPURS scheduler then the group never delivered the exit request, and if it reaches
+		// zero while a join still waits then the accounting is ours to fix. Neither is visible
+		// from the thread states alone.
+		std::string groups;
+
+		idm::select<lv2_spu_group>([&groups](u32 id, lv2_spu_group& group)
+		{
+			fmt::append(groups, "\n  group 0x%07x '%s': state=%s running=%u/%u stop_count=%u join_state=0x%x exit_status=0x%x",
+				id, group.name, group.run_state.load(), group.running.load(), group.max_num,
+				group.stop_count.load(), group.join_state.load(), group.exit_status.load());
+		}, idm::unlocked);
+
+		if (!groups.empty())
+		{
+			rsx_log.error("Guest SPU thread groups:%s", groups);
+		}
+
+		// The queues those threads are blocked on -- the half never looked at.
+		//
+		// Every dump so far has said which threads are asleep and which SPU is spinning, and none
+		// has said whether the thing they are waiting for was ever posted. Borderlands 2 leaves
+		// main_thread in sys_event_queue_receive on 0x8d021700 while one SPURS worker polls for
+		// work at ~720k block-entries a second, and the two possibilities need opposite fixes:
+		//
+		//   pending > 0 with a waiter attached -> the event WAS delivered and the wakeup was
+		//     lost, which is ours, in lv2.
+		//   pending == 0 with a waiter attached -> nothing was ever posted, so the worker is not
+		//     signalling and the fault is upstream of the queue.
+		//
+		// Read without taking the queue mutex, deliberately: this runs on the RSX thread during a
+		// hang, and blocking on a lock held by a thread being diagnosed is how a diagnostic turns
+		// into a second deadlock. A torn size costs nothing here.
+		std::string queues;
+
+		idm::select<lv2_obj, lv2_event_queue>([&queues](u32 id, lv2_event_queue& eq)
+		{
+			const usz pending = eq.events.size();
+			const auto ppu_waiter = eq.pq;
+			const auto spu_waiter = eq.sq;
+
+			// Only the interesting ones: something queued, or somebody asleep on it.
+			if (!pending && !ppu_waiter && !spu_waiter)
+			{
+				return;
+			}
+
+			fmt::append(queues, "\n  queue 0x%07x: type=%u size=%u pending=%u ppu_waiter=0x%x spu_waiter=0x%x",
+				id, eq.type, eq.size, static_cast<u32>(pending),
+				ppu_waiter ? ppu_waiter->id : 0u,
+				spu_waiter ? spu_waiter->id : 0u);
+		});
+
+		if (!queues.empty())
+		{
+			rsx_log.error("Guest event queues with a waiter or a pending event:%s", queues);
 		}
 	}
 
