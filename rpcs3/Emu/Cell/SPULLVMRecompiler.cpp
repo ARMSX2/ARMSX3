@@ -1771,9 +1771,13 @@ public:
 #ifdef ARCH_ARM64
 		m_use_tbl2 = !g_spu_llvm_compile_context || g_spu_llvm_compile_context->use_tbl2;
 
-		// Same seam as m_use_tbl2, for the same reason: a retry after the register scavenger has
-		// already refused this block needs a way to ask for less pressure. Clearing this routes
-		// spu_fma's f32 llvm.fma to the f64 path already sitting beneath it.
+		// NOTE: clearing m_use_fma here does NOT unfuse multiply-add on ARM64, and was tried.
+		// The flag only picks llvm.fma vs llvm.fmuladd, and AArch64 reports a fast FMA, so the
+		// backend contracts llvm.fmuladd into FMLA regardless. Verified: ps3autotests cpu/spu_fpu
+		// produced a byte-identical file with the flag both ways (cache confirmed rebuilt via the
+		// codegen build stamp), so this only costs the f64 widening in fma32x4 for no behaviour
+		// change. x86 gets the unfused two-rounding form because it lacks the FMA target feature
+		// entirely, not because of this flag. Forcing separate fmul+fadd would take explicit IR.
 		m_use_fma = !g_spu_llvm_compile_context || g_spu_llvm_compile_context->use_fma;
 
 		if (g_spu_llvm_compile_context)
@@ -8579,6 +8583,34 @@ public:
 		return eval(fpcast<f32[4]>(xr));
 	}
 
+	// -c for the addend of an FMS, with the sign of a NaN pattern left alone on ARM64.
+	//
+	// FMS is a * b - c, and both hosts express it as fma(a, b, -c). x86 folds that into vfmsub,
+	// which never materialises -c, so when c is a NaN it is c's own bits that propagate. AArch64
+	// cannot fold it -- FMLS computes Zd - Zn*Zm, the wrong shape -- so it emits the FNEG and
+	// propagates the negated NaN instead. Both are legal IEEE NaN propagation, and the value only
+	// differs in the sign bit, but the SPU has no NaN in extended range: 0x7fffffff is an ordinary
+	// large number there, so the two hosts disagree about the sign of a huge result rather than
+	// about which NaN to return. ps3autotests cpu/spu_fpu measured 484 such lines, all with
+	// c = 0x7fffffff, ARM returning 0xffffffff against x86's 0x7fffffff.
+	//
+	// That is the same shape of defect as the FCTIW saturation inversion, which flipped a
+	// saturated-high coordinate to saturated-low and spawned Armored Core's mech under the floor,
+	// so it is worth two instructions to not have it. Not guarded by ARCH_ARM64: x86 folds the
+	// select away with the negate, and keeping one definition means the two cannot drift.
+	value_t<f32[4]> negate_addend(value_t<f32[4]> c)
+	{
+		const auto c_known = get_known_fp_class<4>(c, llvm::FPClassTest::fcNan);
+
+		// Nothing to preserve if it can never be a NaN, which is the common case.
+		if (c_known.isKnownNeverNaN())
+		{
+			return eval(-c);
+		}
+
+		return eval(select(fcmp_uno(c != c), c, -c));
+	}
+
 	template <typename T, typename U, typename V>
 	static llvm_calli<f32[4], T, U, V> fnms(T&& a, U&& b, V&& c)
 	{
@@ -8959,6 +8991,16 @@ public:
 			if (g_cfg.core.spu_xfloat_accuracy == xfloat_accuracy::approximate)
 			{
 #ifdef ARCH_ARM64
+				// NOTE: this branch is dead on every Snapdragon tested -- an 8 Gen 2 is ARMv9 but
+				// exposes no sve at all in HWCAP, so m_use_sve2_128 is false. It was tried as the
+				// explanation for the 484 fms lines where ARM disagrees with x86 (c = [18] =
+				// 0x7fffffff, ARM 0xffffffff vs x86 0x7fffffff): rewriting it as fmla against a
+				// materialised -c changed the output by exactly nothing, cache confirmed rebuilt.
+				// Check HWCAP before attributing anything here. The real split is that x86 folds
+				// fma(a, b, fneg(c)) into vfmsub and propagates c's own NaN, while AArch64's FMLS
+				// computes Zd - Zn*Zm and cannot take that shape, so it materialises the FNEG and
+				// propagates the negated NaN. Both are legal, and both differ from hardware
+				// (0x7ff80000) because 0x7fffffff is only a NaN in f32, not on a real SPU.
 				if (m_use_sve2_128)
 				{
 					const auto ca = eval(clamp_smax(a));
@@ -8974,7 +9016,7 @@ public:
 				const auto a_clamp = clamp_smax(a, a_known);
 				const auto b_clamp = clamp_smax(b, b_known);
 
-				return fma32x4(a_clamp, b_clamp, eval(-c), a_known, b_known);
+				return fma32x4(a_clamp, b_clamp, negate_addend(c), a_known, b_known);
 			}
 			else
 			{
@@ -8985,7 +9027,7 @@ public:
 				}
 #endif
 
-				return fma32x4(a, b, eval(-c));
+				return fma32x4(a, b, negate_addend(c));
 			}
 		});
 
@@ -9208,7 +9250,13 @@ public:
 			}
 
 			r.value = m_ir->CreateFPToSI(a.value, get_type<s32[4]>());
+#if defined(ARCH_ARM64)
+			// Saturate instead of correcting afterwards; see the approximate path below for why the
+			// x86 XOR is wrong here. xfloat has no NaN, so the high side is the only case to patch.
+			set_vr(op.rt, select(fcmp_ord(a >= fsplat<f64[4]>(std::exp2(31.f))), splat<s32[4]>(0x7fffffff), r));
+#else
 			set_vr(op.rt, r ^ sext<s32[4]>(fcmp_ord(a >= fsplat<f64[4]>(std::exp2(31.f)))));
+#endif
 		}
 		else
 		{
@@ -9223,7 +9271,26 @@ public:
 
 			value_t<s32[4]> r;
 			r.value = m_ir->CreateFPToSI(a.value, get_type<s32[4]>());
+
+			// The XOR below is an x86 correction, not a portable one. cvttps2dq returns the
+			// "integer indefinite" value 0x80000000 for every input it cannot represent, positive
+			// overflow included, so flipping all the bits when the input is >= 2^31 turns that into
+			// the 0x7fffffff CFLTS wants. AArch64's FCVTZS already saturates the right way, so the
+			// same XOR turns a correct saturated-high result back into saturated-low. Measured with
+			// ps3autotests cpu/spu_fpu against real hardware output: 48 words came back 0x80000000
+			// where x86 and the console both give 0x7fffffff.
+			//
+			// NaN is the second half of it. FCVTZS converts NaN to 0, which the XOR then turns into
+			// 0xffffffff (16 more words), while cvttps2dq's 0x80000000 lands on 0x7fffffff. An SPU
+			// has no NaN in extended range -- the pattern is just a large number -- so saturating by
+			// sign is also the behaviour the hardware shows. Select up front rather than correct
+			// after, which covers both cases and leaves FCVTZS's own low-side saturation alone.
+#if defined(ARCH_ARM64)
+			const auto sat_hi = bitcast<s32[4]>(a) > splat<s32[4]>(((31 + 127) << 23) - 1);
+			set_vr(op.rt, select(sat_hi, splat<s32[4]>(0x7fffffff), select(fcmp_uno(a != a), splat<s32[4]>(0x80000000), r)));
+#else
 			set_vr(op.rt, r ^ sext<s32[4]>(bitcast<s32[4]>(a) > splat<s32[4]>(((31 + 127) << 23) - 1)));
+#endif
 		}
 	}
 
@@ -10460,6 +10527,17 @@ const spu_decoder<spu_llvm_recompiler> s_spu_llvm_decoder;
 decltype(&spu_llvm_recompiler::UNK) spu_llvm_recompiler::decode(u32 op)
 {
 	return s_spu_llvm_decoder.decode(op);
+}
+
+// Build stamp for the SPU object cache key, defined HERE because this is the file that generates
+// the code. The key already folded a stamp, but that one lived in SPUCommonRecompiler.cpp and so
+// only moved when THAT translation unit recompiled -- which an edit to the code generator does
+// not do. A change to fma32x4 was therefore cached straight over: the objects on disk stayed as
+// the previous build emitted them, a verification run reported byte-identical results, and the
+// fix looked disproven when it had simply never executed.
+const char* spu_llvm_codegen_build_stamp()
+{
+	return __DATE__ " " __TIME__;
 }
 
 #else

@@ -1677,7 +1677,7 @@ spu_runtime::spu_runtime()
 	// including compile-time switches such as ARMSX3_SPU_ARM64_BYTE_GATHER.
 	// Ported from ouroboros420/rpcsx (8430a6558), key re-derived against our config surface.
 	{
-		constexpr u32 SPU_OBJ_CACHE_VERSION = 1;
+		constexpr u32 SPU_OBJ_CACHE_VERSION = 2;
 		constexpr usz SPU_OBJ_CACHE_MAX_FILES = 12000;
 
 		sha1_context ctx;
@@ -1691,6 +1691,34 @@ spu_runtime::spu_runtime()
 
 		const u32 version = SPU_OBJ_CACHE_VERSION;
 		fold(version);
+
+		// Build stamp, so a remembered version bump is not the only thing between a new binary and
+		// the objects an old one emitted.
+		//
+		// The note above asks whoever changes SPU codegen to bump the constant by hand, and the
+		// cost of forgetting is not a cache miss: it is executing stale machine code against a
+		// changed spu_thread. Its host base pointers (memory_base_addr and friends) sit directly in
+		// front of gpr[], so a register store at a stale offset lands on one of them and the next
+		// guest access dereferences SPU register data as a host pointer.
+		//
+		// This stamp changes whenever this file is recompiled, which any edit to SPUThread.h or
+		// SPURecompiler.h forces, so two builds at the same commit cannot share objects either --
+		// which a git-version stamp would happily let them do.
+		static constexpr std::string_view s_build_stamp = __DATE__ " " __TIME__;
+		sha1_update(&ctx, reinterpret_cast<const u8*>(s_build_stamp.data()), s_build_stamp.size());
+
+		// ...and the CODE GENERATOR's own stamp, which is the one that actually matters.
+		//
+		// The stamp above only moves when this file recompiles, and editing the recompiler does
+		// not do that -- they are separate translation units. So a change to fma32x4 was cached
+		// straight over: a verification run loaded the previous build's objects, produced
+		// byte-identical results, and made a fix look disproven when it had never run. Folding a
+		// stamp from SPULLVMRecompiler.cpp closes that, since any edit to the emitter moves it.
+#ifdef LLVM_AVAILABLE
+		extern const char* spu_llvm_codegen_build_stamp();
+		const std::string_view codegen_stamp = spu_llvm_codegen_build_stamp();
+		sha1_update(&ctx, reinterpret_cast<const u8*>(codegen_stamp.data()), codegen_stamp.size());
+#endif
 
 		// Settings that change the emitted IR.
 		const u32 xfloat = static_cast<u32>(g_cfg.core.spu_xfloat_accuracy.get());
@@ -1730,6 +1758,28 @@ spu_runtime::spu_runtime()
 		sha1_finish(&ctx, key);
 
 		m_obj_cache_path = m_cache_path + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
+
+		// Drop keyed directories left by other builds.
+		//
+		// Folding the build stamp means every update lands on a fresh directory, so without this
+		// the superseded ones would stay forever, and an SPU object cache runs to hundreds of
+		// megabytes per title. Only siblings this code named are touched. Names are collected
+		// before anything is removed: fs::dir is a live handle on the directory being modified.
+		std::vector<std::string> stale_caches;
+
+		for (auto&& entry : fs::dir(m_cache_path))
+		{
+			if (entry.is_directory && entry.name.starts_with("spuobj-") && m_cache_path + entry.name + "/" != m_obj_cache_path)
+			{
+				stale_caches.push_back(entry.name);
+			}
+		}
+
+		for (const std::string& name : stale_caches)
+		{
+			spu_log.notice("Removing SPU object cache from another build: %s", name);
+			fs::remove_all(m_cache_path + name + "/");
+		}
 
 		if (!fs::create_path(m_obj_cache_path))
 		{
