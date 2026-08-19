@@ -24,6 +24,23 @@ object GameDefaults {
         // the node by hand.
         "BCUS98233" to mapOf("Core@@Stub PPU Traps" to "1"),
         "BCES01175" to mapOf("Core@@Stub PPU Traps" to "1"),
+
+        // Yakuza: Dead Souls. Runs at 1fps with FIFO reordering on -- not slowly, but in
+        // one-second steps: the RSX blocks on nv406e::semaphore_acquire until the wait times
+        // out, draws, and does it again. 145 timeouts in one session, all on semaphore
+        // 0x50300FE0, while the GPU itself was doing 3.06 ms of work per frame. The acquire
+        // consistently outruns the release that should satisfy it -- awaited 0x68 against a
+        // last_observed of 0x60 -- from the very first frame onward.
+        //
+        // Turning the flattener off clears it completely and the game boots and plays.
+        //
+        // Cause not established. The obvious candidate does not hold: flattening_helper only
+        // drops registers marked always_ignore, and that set is four INVALIDATE methods with
+        // no semaphore among them -- a semaphore release hits the default branch and flushes
+        // the batch, which is the safe path. So this is an empirical per-title workaround
+        // rather than a fix, and the real mechanism is still open.
+        "BLUS30826" to mapOf("Video@@Disable FIFO Reordering" to "true"),
+        "NPUB31509" to mapOf("Video@@Disable FIFO Reordering" to "true"),
     )
 
     /**
@@ -45,6 +62,8 @@ object GameDefaults {
     private val STOCK: Map<String, String> = mapOf(
         // system_config.h: cfg::_int<-64, 64> stub_ppu_traps{ this, "Stub PPU Traps", 0, true }
         "Core@@Stub PPU Traps" to "0",
+        // system_config.h: cfg::_bool disable_FIFO_reordering{ this, "Disable FIFO Reordering", false }
+        "Video@@Disable FIFO Reordering" to "false",
     )
 
     fun forSerial(serial: String?): Map<String, String> =
