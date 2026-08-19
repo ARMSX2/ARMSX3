@@ -7,6 +7,13 @@
 #define DBGHELP_TRANSLATE_TCHAR
 #include <DbgHelp.h>
 #include <codecvt>
+#elif defined(ANDROID)
+// bionic has no backtrace()/backtrace_symbols(), which is why both were compiled out here and
+// every native crash on this port had to be read out of a tombstone or symbolized by hand.
+// _Unwind_Backtrace is always present, and dladdr gives the library-relative offset that
+// llvm-symbolizer wants.
+#include <unwind.h>
+#include <dlfcn.h>
 #else
 #include <execinfo.h>
 #endif
@@ -141,21 +148,102 @@ namespace utils
 
 		return result;
 	}
-#else
+#elif defined(ANDROID)
+	namespace
+	{
+		struct unwind_state
+		{
+			void** current;
+			void** end;
+		};
+
+		_Unwind_Reason_Code unwind_collect(_Unwind_Context* ctx, void* arg)
+		{
+			auto* state = static_cast<unwind_state*>(arg);
+
+			// A frame with no PC is the end of what the unwinder can see; keep the frames
+			// gathered so far rather than discarding a partial stack, which is still the
+			// answer most of the time.
+			const auto pc = _Unwind_GetIP(ctx);
+
+			if (!pc)
+			{
+				return _URC_END_OF_STACK;
+			}
+
+			if (state->current == state->end)
+			{
+				return _URC_END_OF_STACK;
+			}
+
+			*state->current++ = reinterpret_cast<void*>(pc);
+			return _URC_NO_REASON;
+		}
+	}
+
 	std::vector<void*> get_backtrace(int max_depth)
 	{
 		std::vector<void*> result(max_depth);
-#ifndef ANDROID
-		int depth = backtrace(result.data(), max_depth);
-		result.resize(depth);
-#endif
+		unwind_state state{ result.data(), result.data() + max_depth };
+		_Unwind_Backtrace(&unwind_collect, &state);
+		result.resize(state.current - result.data());
 		return result;
 	}
 
 	std::vector<std::string> get_backtrace_symbols(const std::vector<void*>& stack)
 	{
 		std::vector<std::string> result;
-#ifndef ANDROID
+		result.reserve(stack.size());
+
+		for (void* const pointer : stack)
+		{
+			Dl_info info{};
+
+			if (!dladdr(pointer, &info) || !info.dli_fname)
+			{
+				result.push_back(fmt::format("0x%p", pointer));
+				continue;
+			}
+
+			// Library-relative, because that is what symbolizes. The shipped .so is stripped
+			// and loaded at a random base, so an absolute PC is useless on its own; this
+			// offset is what llvm-symbolizer takes against the unstripped build output.
+			const auto base = reinterpret_cast<uptr>(info.dli_fbase);
+			const auto off = reinterpret_cast<uptr>(pointer) - base;
+
+			// Basename only: the full path is the app's private data dir and the same for
+			// every frame.
+			std::string_view lib = info.dli_fname;
+
+			if (const auto slash = lib.find_last_of('/'); slash != umax)
+			{
+				lib.remove_prefix(slash + 1);
+			}
+
+			if (info.dli_sname)
+			{
+				result.push_back(fmt::format("%s+0x%x (%s)", lib, off, info.dli_sname));
+			}
+			else
+			{
+				result.push_back(fmt::format("%s+0x%x", lib, off));
+			}
+		}
+
+		return result;
+	}
+#else
+	std::vector<void*> get_backtrace(int max_depth)
+	{
+		std::vector<void*> result(max_depth);
+		int depth = backtrace(result.data(), max_depth);
+		result.resize(depth);
+		return result;
+	}
+
+	std::vector<std::string> get_backtrace_symbols(const std::vector<void*>& stack)
+	{
+		std::vector<std::string> result;
 		result.reserve(stack.size());
 
 		const auto symbols = backtrace_symbols(stack.data(), static_cast<int>(stack.size()));
@@ -165,7 +253,6 @@ namespace utils
 		}
 
 		free(symbols);
-#endif
 		return result;
 	}
 #endif

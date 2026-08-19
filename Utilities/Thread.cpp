@@ -24,6 +24,11 @@
 #include <stacktrace>
 #endif
 
+// Not only under _WIN32 below: the access-violation handler prints a host backtrace on every
+// platform, and on Android that is the only stack anyone gets -- the handler freezes the
+// emulator rather than aborting, so no tombstone is ever written.
+#include "stack_trace.h"
+
 #ifdef _WIN32
 #include <Windows.h>
 #include <Psapi.h>
@@ -2317,6 +2322,29 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 	{
 		vm_log.notice("\n%s", dump_useful_thread_info());
 		vm_log.fatal("Access violation %s location 0x%x (%s)", is_writing ? "writing" : (is_exec ? "executing" : "reading"), addr, (is_writing && vm::check_addr(addr)) ? "read-only memory" : "unmapped memory");
+
+		// The host stack, which is the half that was missing.
+		//
+		// dump_useful_thread_info prints GUEST state, and for a fault taken on an emulator
+		// thread rather than inside guest code that says where the emulator was in the game,
+		// not which of our functions dereferenced null. Nor is there a tombstone to fall back
+		// on: this path freezes the emulator instead of aborting, so the process survives and
+		// Android never writes one.
+		//
+		// Yakuza Dead Souls reads location 0xc on the RSX thread with the FIFO empty and
+		// parked at a self-jump -- so the fault is in whatever runs while no commands are
+		// pending, and there are several candidates. Naming the frame settles it.
+		if (const auto stack = utils::get_backtrace_symbols(utils::get_backtrace(32)); !stack.empty())
+		{
+			std::string out;
+
+			for (usz i = 0; i < stack.size(); i++)
+			{
+				fmt::append(out, "\n  #%02u %s", i, stack[i]);
+			}
+
+			vm_log.fatal("Host backtrace:%s", out);
+		}
 	}
 
 	while (Emu.IsPausedOrReady())

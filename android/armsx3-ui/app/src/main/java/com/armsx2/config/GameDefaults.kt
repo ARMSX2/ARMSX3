@@ -39,8 +39,30 @@ object GameDefaults {
         // no semaphore among them -- a semaphore release hits the default branch and flushes
         // the batch, which is the safe path. So this is an empirical per-title workaround
         // rather than a fix, and the real mechanism is still open.
-        "BLUS30826" to mapOf("Video@@Disable FIFO Reordering" to "true"),
-        "NPUB31509" to mapOf("Video@@Disable FIFO Reordering" to "true"),
+        //
+        // The other two are for a SECOND failure, further in: the FIFO desyncs and reads a RET
+        // with an empty call stack -- 19 of them in one session, last cmd 0x20000 every time --
+        // recover_fifo() resets it each time, and eventually gives up and kills the RSX thread
+        // outright ("Dead FIFO commands queue state"). The game then sits at 0 fps with audio
+        // still playing perfectly, because everything except the renderer is still alive. The
+        // stray semaphore acquires that time out alongside it are downstream of the same thing:
+        // a desynced FIFO never runs the release that would satisfy them.
+        //
+        // These two are what the fatal message itself recommends, and they work. Which of the
+        // two is doing the work is not established -- both were changed at once and the game
+        // has not been A/B'd since -- so both are kept. Ordered & Atomic is the likelier of the
+        // pair given the symptom, and both cost performance, which is why they are scoped to
+        // this title rather than turned on globally.
+        "BLUS30826" to mapOf(
+            "Video@@Disable FIFO Reordering" to "true",
+            "Core@@RSX FIFO Fetch Accuracy" to "\"Ordered & Atomic\"",
+            "Video@@Driver Wake-Up Delay" to "20",
+        ),
+        "NPUB31509" to mapOf(
+            "Video@@Disable FIFO Reordering" to "true",
+            "Core@@RSX FIFO Fetch Accuracy" to "\"Ordered & Atomic\"",
+            "Video@@Driver Wake-Up Delay" to "20",
+        ),
     )
 
     /**
@@ -64,6 +86,10 @@ object GameDefaults {
         "Core@@Stub PPU Traps" to "0",
         // system_config.h: cfg::_bool disable_FIFO_reordering{ this, "Disable FIFO Reordering", false }
         "Video@@Disable FIFO Reordering" to "false",
+        // system_config.h: fifo_setting rsx_fifo_accuracy{ this, "RSX FIFO Fetch Accuracy", rsx_fifo_mode::atomic }
+        "Core@@RSX FIFO Fetch Accuracy" to "\"Atomic\"",
+        // system_config.h: cfg::uint<0, 16667> driver_wakeup_delay{ this, "Driver Wake-Up Delay", 0, true }
+        "Video@@Driver Wake-Up Delay" to "0",
     )
 
     fun forSerial(serial: String?): Map<String, String> =
