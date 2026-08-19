@@ -4145,7 +4145,31 @@ static bool installPkg(JNIEnv *env, std::vector<fs::file> &&files,
     std::uint64_t totalProgress = 0;
     for (auto &reader : readers) {
       if (result.error != package_install_result::error_type::no_error) {
-        progress.failure("Installation failed");
+        // Say WHICH failure. app_version is not a crash and not a bad file: it is the
+        // installer correctly refusing a game update when the base game is not installed
+        // yet, or when the update does not match the version that is. Desktop RPCS3 puts
+        // that in a dialog; here every cause collapsed into "Installation failed", so a
+        // legitimate refusal was indistinguishable from a broken package -- which is how
+        // a Tekken Tag 2 update ended up being reported as an emulator bug.
+        if (result.error == package_install_result::error_type::app_version) {
+          std::string msg = "Update cannot be installed: ";
+
+          if (result.version.expected.empty()) {
+            msg += "the base game is not installed yet. Install the game first, then the "
+                   "update.";
+          } else {
+            msg += "this update needs game version " + result.version.expected +
+                   ", but version " +
+                   (result.version.installed.empty() ? std::string("none")
+                                                     : result.version.installed) +
+                   " is installed.";
+          }
+
+          progress.failure(msg);
+        } else {
+          progress.failure("Installation failed");
+        }
+
         for (package_reader &reader : readers) {
           reader.abort_extract();
         }

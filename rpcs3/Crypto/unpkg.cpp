@@ -902,6 +902,32 @@ bool package_reader::fill_data(std::map<std::string, install_entry*>& all_instal
 		return false;
 	}
 
+	// Refuse an install that cannot fit, before writing a single byte.
+	//
+	// Nothing on this path checked. A full device produced one of two outcomes, neither of
+	// them a "disk full" message: a hard abort out of ensure(r > 0) in fs::file::write, or --
+	// if the backend returned a short write instead of failing -- a truncated file that was
+	// logged as "Created file", counted as fully written, and reported as a successful
+	// install, surfacing later as a corrupt game nobody can explain.
+	//
+	// data_size is the PKG's own total for its contents, so unlike the game-data check this
+	// one is exact rather than a floor. The 64MiB margin covers the directory entries and
+	// filesystem overhead the figure does not include.
+	if (fs::device_stat dev{}; fs::statfs(m_install_path, dev))
+	{
+		const u64 needed = m_header.data_size + (64 * 1024 * 1024);
+
+		if (dev.avail_free < needed)
+		{
+			pkg_log.error("Not enough space to install: need %u MiB, %u MiB free on the target device",
+				needed / (1024 * 1024), dev.avail_free / (1024 * 1024));
+			return false;
+		}
+
+		pkg_log.notice("Installing %u MiB, %u MiB free",
+			m_header.data_size / (1024 * 1024), dev.avail_free / (1024 * 1024));
+	}
+
 	m_install_entries.clear();
 	m_bootable_file_path.clear();
 	m_entry_indexer = 0;
@@ -1278,8 +1304,27 @@ void package_reader::extract_worker()
 
 				while (usz read_size = final_data.read(buffer.data(), buffer.size() - BUF_PADDING))
 				{
-					out.write(buffer.data(), read_size);
-					m_written_bytes += read_size;
+					// Check what actually landed.
+					//
+					// This return value was discarded, and extract_success was declared true and
+					// never assigned again -- so the failure branch below was unreachable, every
+					// file logged "Created file" whatever happened, and m_written_bytes counted
+					// bytes INTENDED rather than written, which is why the progress bar reaches
+					// 100% on a failed install.
+					//
+					// A short write is what a full device produces if the backend returns one
+					// instead of raising, and it leaves a truncated file that installs
+					// "successfully" and surfaces much later as a corrupt game.
+					const usz wrote = out.write(buffer.data(), read_size);
+					m_written_bytes += wrote;
+
+					if (wrote != read_size)
+					{
+						pkg_log.error("Short write extracting %s: wrote %u of %u bytes (%s)",
+							path, wrote, read_size, fs::g_tls_error);
+						extract_success = false;
+						break;
+					}
 				}
 
 				final_data.close();
