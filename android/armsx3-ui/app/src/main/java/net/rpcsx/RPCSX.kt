@@ -122,6 +122,29 @@ class RPCSX {
     external fun systemInfo(): String
     external fun settingsGet(path: String): String
     external fun settingsSet(path: String, value: String): Boolean
+    // ---- RPCN ----
+    //
+    // All of these block on the network. Call them off the main thread.
+    //
+    // Each returns a human-readable failure, or an empty string on success -- the core owns
+    // the message so the two error enums (ErrorType and rpcn_state) do not have to be
+    // mirrored here and kept in step across a dlopen boundary that is allowed to skew.
+
+    /** JSON: {host, npid, hasPassword, hasToken, hosts:[{desc,host}]}. Empty if unsupported. */
+    external fun rpcnGetConfig(): String
+
+    /** Empty strings mean "leave unchanged", so a host can be saved without resending a
+     *  password the UI never displayed. */
+    external fun rpcnSetConfig(host: String, npid: String, password: String, token: String)
+
+    external fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String
+    external fun rpcnResendToken(npid: String, password: String): String
+    external fun rpcnSendResetToken(npid: String, email: String): String
+    external fun rpcnResetPassword(npid: String, token: String, password: String): String
+
+    /** Connect and authenticate with the saved account. */
+    external fun rpcnTestLogin(): String
+
     /** Coalesce the config file writes of every settingsSet until [settingsEndBatch]. */
     external fun settingsBeginBatch()
     external fun settingsEndBatch()

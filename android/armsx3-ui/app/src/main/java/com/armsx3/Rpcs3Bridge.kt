@@ -598,7 +598,7 @@ object Rpcs3Bridge {
 
             "PS3/Net" -> when (key) {
                 "Internet enabled" -> Rpcs3Settings.setInternetEnabled(asBool(value))
-                "PSN status" -> Rpcs3Settings.setPsnStatus(asBool(value))
+                "PSN status" -> Rpcs3Settings.setPsnStatus(asInt(value))
                 "UPNP Enabled" -> Rpcs3Settings.setUpnp(asBool(value))
                 else -> return false
             }
@@ -1028,6 +1028,46 @@ object Rpcs3Bridge {
     fun setKeyboardEnabled(enabled: Boolean) {
         Rpcs3Settings.setKeyboardHandler(enabled)
     }
+
+    // ---- RPCN ----
+    //
+    // Thin pass-throughs; every one blocks on the network and the callers run them off the
+    // main thread. A failure comes back as a sentence from the core rather than a code, so
+    // the two error enums are not duplicated here.
+
+    @JvmStatic
+    fun rpcnGetConfig(): String =
+        runCatching { RPCSX.instance.rpcnGetConfig() }.getOrDefault("")
+
+    @JvmStatic
+    fun rpcnSetConfig(host: String, npid: String, password: String, token: String) {
+        runCatching { RPCSX.instance.rpcnSetConfig(host, npid, password, token) }
+    }
+
+    @JvmStatic
+    fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String =
+        runCatching { RPCSX.instance.rpcnCreateAccount(npid, password, onlineName, email) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnResendToken(npid: String, password: String): String =
+        runCatching { RPCSX.instance.rpcnResendToken(npid, password) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnSendResetToken(npid: String, email: String): String =
+        runCatching { RPCSX.instance.rpcnSendResetToken(npid, email) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnResetPassword(npid: String, token: String, password: String): String =
+        runCatching { RPCSX.instance.rpcnResetPassword(npid, token, password) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnTestLogin(): String =
+        runCatching { RPCSX.instance.rpcnTestLogin() }
+            .getOrElse { "Could not reach the emulator core." }
 
     /** One key transition for cellKb. See RPCSX.keyboardKey. */
     @JvmStatic

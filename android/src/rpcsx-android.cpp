@@ -29,6 +29,8 @@
 #include "Utilities/bin_patch.h"
 #include "Emu/localized_string_id.h"
 #include "Emu/system_config.h"
+#include "Emu/NP/rpcn_client.h"
+#include "Emu/NP/rpcn_config.h"
 #include "Emu/system_config_types.h"
 #include "Emu/system_progress.hpp"
 #include "Emu/system_utils.hpp"
@@ -2659,6 +2661,218 @@ extern "C" bool _rpcsx_keyboardKey(int androidKeyCode, int unicode, bool pressed
                                    bool repeat) {
   return handle_android_key(androidKeyCode, static_cast<char32_t>(unicode),
                             pressed, repeat);
+}
+
+// ---------------------------------------------------------------------------
+// RPCN
+//
+// The core has had a complete RPCN client all along -- rpcn_client, rpcn_config and the
+// localized login/creation error strings are all compiled into this library. What it never
+// had on Android was a way in: "PSN status" was surfaced as a BOOLEAN that could only pick
+// Disconnected or Simulated, so np_psn_status::psn_rpcn had no writer anywhere in the app,
+// and there was no screen to enter an NPID, a password or a server. Online was not broken
+// here, it was unreachable.
+//
+// These are separate exports rather than extra parameters on an existing one for the reason
+// given above _rpcsx_setSocInfo: the core is dlopen()ed and updated independently of the JNI
+// glue, so widening a shipped export makes older glue call it with garbage.
+//
+// Every one of these blocks on the network. They are called from a background thread on the
+// Kotlin side; nothing here may run on the UI thread.
+
+// The config, as JSON, so one call carries the whole account rather than five.
+extern "C" const char *_rpcsx_rpcnGetConfig() {
+  static thread_local std::string result;
+
+  g_cfg_rpcn.load();
+
+  std::string hosts;
+  for (const auto &[desc, addr] : g_cfg_rpcn.get_hosts()) {
+    if (!hosts.empty()) hosts += ",";
+    fmt::append(hosts, R"({"desc":"%s","host":"%s"})", desc, addr);
+  }
+
+  // The password is stored hashed by cfg_rpcn, so what comes back is not the user's
+  // plaintext; it is only ever echoed back into set_password, never displayed.
+  result = fmt::format(
+      R"({"host":"%s","npid":"%s","hasPassword":%s,"hasToken":%s,"hosts":[%s]})",
+      g_cfg_rpcn.get_host(), g_cfg_rpcn.get_npid(),
+      g_cfg_rpcn.get_password().empty() ? "false" : "true",
+      g_cfg_rpcn.get_token().empty() ? "false" : "true", hosts);
+
+  return result.c_str();
+}
+
+// Save whatever is non-empty. Empty means "leave alone", so the UI can save a host without
+// resending a password it never displayed.
+extern "C" void _rpcsx_rpcnSetConfig(std::string_view host, std::string_view npid,
+                                     std::string_view password, std::string_view token) {
+  g_cfg_rpcn.load();
+
+  if (!host.empty()) g_cfg_rpcn.set_host(host);
+  if (!npid.empty()) g_cfg_rpcn.set_npid(npid);
+  if (!password.empty()) g_cfg_rpcn.set_password(password);
+  if (!token.empty()) g_cfg_rpcn.set_token(token);
+
+  g_cfg_rpcn.save();
+}
+
+// Everything below reports failure as a human sentence, empty meaning success.
+//
+// Returning ErrorType/rpcn_state integers would mean a second copy of both enums on the
+// Kotlin side, kept in step by hand across a dlopen boundary that is explicitly allowed to
+// version-skew. The strings are the contract instead.
+static thread_local std::string s_rpcn_result;
+
+static const char *rpcn_ok() {
+  s_rpcn_result.clear();
+  return s_rpcn_result.c_str();
+}
+
+static const char *rpcn_fail(std::string message) {
+  s_rpcn_result = std::move(message);
+  rpcsx_android.error("RPCN: %s", s_rpcn_result);
+  return s_rpcn_result.c_str();
+}
+
+static std::string rpcn_describe(rpcn::ErrorType error) {
+  switch (error) {
+  case rpcn::ErrorType::NoError: return {};
+  case rpcn::ErrorType::CreationExistingUsername:
+    return "An account with that username already exists.";
+  case rpcn::ErrorType::CreationExistingEmail:
+    return "An account with that email address already exists.";
+  case rpcn::ErrorType::CreationBannedEmailProvider:
+    return "That email provider is not accepted by the server.";
+  case rpcn::ErrorType::CreationError:
+    return "The server refused to create the account.";
+  case rpcn::ErrorType::InvalidInput:
+    return "The server rejected those details. Usernames are 3-16 characters, "
+           "letters, numbers, - and _ only.";
+  case rpcn::ErrorType::TooSoon:
+    return "Too soon since the last attempt. Wait a few minutes and try again.";
+  case rpcn::ErrorType::LoginInvalidUsername: return "Unknown username.";
+  case rpcn::ErrorType::LoginInvalidPassword: return "Wrong password.";
+  case rpcn::ErrorType::LoginInvalidToken:
+    return "That token is not valid. Check the email, or send a new token.";
+  case rpcn::ErrorType::LoginAlreadyLoggedIn:
+    return "That account is already logged in somewhere else.";
+  case rpcn::ErrorType::LoginError: return "The server refused the login.";
+  default: return fmt::format("Server error %d.", static_cast<int>(error));
+  }
+}
+
+// Connect first; a connection failure has to read differently from an operation failure,
+// because one is the user's network and the other is their input.
+static const char *rpcn_with_connection(
+    const std::function<rpcn::ErrorType(rpcn::rpcn_client &)> &op) {
+  const auto rpcn = rpcn::rpcn_client::get_instance(0);
+
+  if (!rpcn) {
+    return rpcn_fail("Could not create the RPCN client.");
+  }
+
+  if (const auto state = rpcn->wait_for_connection();
+      state != rpcn::rpcn_state::failure_no_failure) {
+    return rpcn_fail(fmt::format("Could not reach the RPCN server: %s",
+                                 rpcn::rpcn_state_to_string(state)));
+  }
+
+  if (auto message = rpcn_describe(op(*rpcn)); !message.empty()) {
+    return rpcn_fail(std::move(message));
+  }
+
+  return rpcn_ok();
+}
+
+extern "C" const char *_rpcsx_rpcnCreateAccount(std::string_view npid,
+                                                std::string_view password,
+                                                std::string_view onlineName,
+                                                std::string_view email) {
+  // Same default avatar the desktop dialog sends; the server requires the field.
+  static constexpr std::string_view avatar =
+      "https://rpcs3.net/cdn/netplay/DefaultAvatar.png";
+
+  const std::string s_npid{npid}, s_pass{password}, s_name{onlineName}, s_email{email};
+
+  return rpcn_with_connection([&](rpcn::rpcn_client &client) {
+    const auto err = client.create_user(s_npid, s_pass, s_name, avatar, s_email);
+
+    if (err == rpcn::ErrorType::NoError) {
+      // Save on success, as the desktop dialog does: the token that arrives by email is
+      // redeemed against these, and retyping them is a needless way to get it wrong.
+      g_cfg_rpcn.load();
+      g_cfg_rpcn.set_npid(s_npid);
+      g_cfg_rpcn.set_password(s_pass);
+      g_cfg_rpcn.save();
+    }
+
+    return err;
+  });
+}
+
+extern "C" const char *_rpcsx_rpcnResendToken(std::string_view npid,
+                                              std::string_view password) {
+  const std::string s_npid{npid}, s_pass{password};
+
+  return rpcn_with_connection([&](rpcn::rpcn_client &client) {
+    return client.resend_token(s_npid, s_pass);
+  });
+}
+
+extern "C" const char *_rpcsx_rpcnSendResetToken(std::string_view npid,
+                                                 std::string_view email) {
+  const std::string s_npid{npid}, s_email{email};
+
+  return rpcn_with_connection([&](rpcn::rpcn_client &client) {
+    return client.send_reset_token(s_npid, s_email);
+  });
+}
+
+extern "C" const char *_rpcsx_rpcnResetPassword(std::string_view npid,
+                                                std::string_view token,
+                                                std::string_view password) {
+  const std::string s_npid{npid}, s_token{token}, s_pass{password};
+
+  return rpcn_with_connection([&](rpcn::rpcn_client &client) {
+    const auto err = client.reset_password(s_npid, s_token, s_pass);
+
+    if (err == rpcn::ErrorType::NoError) {
+      g_cfg_rpcn.load();
+      g_cfg_rpcn.set_password(s_pass);
+      g_cfg_rpcn.save();
+    }
+
+    return err;
+  });
+}
+
+// Connect and authenticate with the saved account, so "is my account set up" can be
+// answered here instead of by booting a game and guessing.
+//
+// check_config = true makes get_instance validate the saved credentials before trying,
+// and wait_for_authentified is the public path -- login() itself is private.
+extern "C" const char *_rpcsx_rpcnTestLogin() {
+  g_cfg_rpcn.load();
+
+  if (g_cfg_rpcn.get_npid().empty() || g_cfg_rpcn.get_password().empty()) {
+    return rpcn_fail("No account set up yet. Create one, or enter an existing username "
+                     "and password.");
+  }
+
+  const auto rpcn = rpcn::rpcn_client::get_instance(0, true);
+
+  if (!rpcn) {
+    return rpcn_fail("Could not create the RPCN client.");
+  }
+
+  if (const auto state = rpcn->wait_for_authentified();
+      state != rpcn::rpcn_state::failure_no_failure) {
+    return rpcn_fail(fmt::format("Sign-in failed: %s",
+                                 rpcn::rpcn_state_to_string(state)));
+  }
+
+  return rpcn_ok();
 }
 
 // Hand the core Android's exact SoC identity. Deliberately a separate export

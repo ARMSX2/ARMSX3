@@ -62,6 +62,16 @@ struct RPCSXApi {
   int (*frameGenImportShaders)(std::string_view path);
   int (*frameGenShaderCount)();
   const char *(*frameGenShaderError)();
+  const char *(*rpcnGetConfig)();
+  void (*rpcnSetConfig)(std::string_view host, std::string_view npid,
+                        std::string_view password, std::string_view token);
+  const char *(*rpcnCreateAccount)(std::string_view npid, std::string_view password,
+                                   std::string_view onlineName, std::string_view email);
+  const char *(*rpcnResendToken)(std::string_view npid, std::string_view password);
+  const char *(*rpcnSendResetToken)(std::string_view npid, std::string_view email);
+  const char *(*rpcnResetPassword)(std::string_view npid, std::string_view token,
+                                   std::string_view password);
+  const char *(*rpcnTestLogin)();
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
   bool (*installSplitPkg)(JNIEnv *env, const int *fds, int count, long progressId);
@@ -155,6 +165,15 @@ struct RPCSXLibrary : RPCSXApi {
     result.loginUser = reinterpret_cast<decltype(loginUser)>(dlsym(handle, "_rpcsx_loginUser"));
     result.getUser = reinterpret_cast<decltype(getUser)>(dlsym(handle, "_rpcsx_getUser"));
     result.settingsGet = reinterpret_cast<decltype(settingsGet)>(dlsym(handle, "_rpcsx_settingsGet"));
+    // Optional like the frame-gen group above: a core predating RPCN support simply has no
+    // such symbols, and the Kotlin side treats a null as "this build cannot do RPCN".
+    result.rpcnGetConfig = reinterpret_cast<decltype(rpcnGetConfig)>(dlsym(handle, "_rpcsx_rpcnGetConfig"));
+    result.rpcnSetConfig = reinterpret_cast<decltype(rpcnSetConfig)>(dlsym(handle, "_rpcsx_rpcnSetConfig"));
+    result.rpcnCreateAccount = reinterpret_cast<decltype(rpcnCreateAccount)>(dlsym(handle, "_rpcsx_rpcnCreateAccount"));
+    result.rpcnResendToken = reinterpret_cast<decltype(rpcnResendToken)>(dlsym(handle, "_rpcsx_rpcnResendToken"));
+    result.rpcnSendResetToken = reinterpret_cast<decltype(rpcnSendResetToken)>(dlsym(handle, "_rpcsx_rpcnSendResetToken"));
+    result.rpcnResetPassword = reinterpret_cast<decltype(rpcnResetPassword)>(dlsym(handle, "_rpcsx_rpcnResetPassword"));
+    result.rpcnTestLogin = reinterpret_cast<decltype(rpcnTestLogin)>(dlsym(handle, "_rpcsx_rpcnTestLogin"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
     // symbol, and refusing to load it over a missing optional feature would be worse than the
@@ -1076,5 +1095,120 @@ Java_net_rpcsx_RPCSX_frameGenShaderCount(JNIEnv *, jobject) {
 extern "C" JNIEXPORT jstring JNICALL
 Java_net_rpcsx_RPCSX_frameGenShaderError(JNIEnv *env, jobject) {
   const char *msg = rpcsxLib.frameGenShaderError ? rpcsxLib.frameGenShaderError() : "";
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+// ---- RPCN ----
+//
+// Every one of these blocks on the network; the Kotlin side calls them off the UI thread.
+// A null pointer means the core predates RPCN support, which is reported as a message
+// rather than a crash so an old core degrades to "unavailable" instead of taking the app
+// down.
+
+static jstring rpcn_unavailable(JNIEnv *env) {
+  return env->NewStringUTF("This build of the emulator core has no RPCN support.");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnGetConfig(JNIEnv *env, jobject) {
+  if (!rpcsxLib.rpcnGetConfig) return env->NewStringUTF("");
+  const char *json = rpcsxLib.rpcnGetConfig();
+  return env->NewStringUTF(json ? json : "");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_rpcnSetConfig(JNIEnv *env, jobject, jstring host, jstring npid,
+                                   jstring password, jstring token) {
+  if (!rpcsxLib.rpcnSetConfig) return;
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string h = str(host), n = str(npid), p = str(password), t = str(token);
+  rpcsxLib.rpcnSetConfig(h, n, p, t);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnCreateAccount(JNIEnv *env, jobject, jstring npid,
+                                       jstring password, jstring onlineName,
+                                       jstring email) {
+  if (!rpcsxLib.rpcnCreateAccount) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string n = str(npid), p = str(password), o = str(onlineName), e = str(email);
+  const char *msg = rpcsxLib.rpcnCreateAccount(n, p, o, e);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnResendToken(JNIEnv *env, jobject, jstring npid,
+                                     jstring password) {
+  if (!rpcsxLib.rpcnResendToken) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string n = str(npid), p = str(password);
+  const char *msg = rpcsxLib.rpcnResendToken(n, p);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnSendResetToken(JNIEnv *env, jobject, jstring npid,
+                                        jstring email) {
+  if (!rpcsxLib.rpcnSendResetToken) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string n = str(npid), e = str(email);
+  const char *msg = rpcsxLib.rpcnSendResetToken(n, e);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnResetPassword(JNIEnv *env, jobject, jstring npid, jstring token,
+                                       jstring password) {
+  if (!rpcsxLib.rpcnResetPassword) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string n = str(npid), t = str(token), p = str(password);
+  const char *msg = rpcsxLib.rpcnResetPassword(n, t, p);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnTestLogin(JNIEnv *env, jobject) {
+  if (!rpcsxLib.rpcnTestLogin) return rpcn_unavailable(env);
+  const char *msg = rpcsxLib.rpcnTestLogin();
   return env->NewStringUTF(msg ? msg : "");
 }

@@ -65,11 +65,27 @@ fun NetworkTab(state: MutableState<Settings>) {
                 description = str("net.internet.description"),
         ) { apply(s.copy(ps3 = s.ps3.copy(netEnabled = it))) }
         SettingsDivider()
-        ToggleRow(
-                str("net.psn.label"),
-                s.ps3.psnStatus,
+        // Three states, not two. This was a toggle that could only reach Disconnected and
+        // Simulated, so RPCN -- the one that actually connects, and whose client has been
+        // compiled into the core all along -- had no way of being selected.
+        SegmentedGridRow(
+                label = str("net.psn.label"),
+                options = listOf(
+                        str("net.psn.off"),
+                        str("net.psn.simulated"),
+                        str("net.psn.rpcn"),
+                ),
+                selectedIndex = s.ps3.psnStatus.coerceIn(0, 2),
+                columns = 3,
                 description = str("net.psn.description"),
-        ) { apply(s.copy(ps3 = s.ps3.copy(psnStatus = it))) }
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(psnStatus = it))) },
+        )
+        // The account lives behind RPCN, so only offer it once RPCN is the choice --
+        // otherwise it invites people to set up an account the emulator will not use.
+        if (s.ps3.psnStatus == 2) {
+            SettingsDivider()
+            RpcnAccountSection()
+        }
         SettingsDivider()
         ToggleRow(
                 str("net.upnp.label"),

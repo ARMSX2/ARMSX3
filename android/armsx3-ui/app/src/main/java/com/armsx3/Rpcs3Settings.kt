@@ -509,8 +509,15 @@ object Rpcs3Settings {
         setEnum("Net@@Internet enabled", if (enabled) "Connected" else "Disconnected")
 
     /** np_psn_status: "Disconnected" | "Simulated" | "RPCN". Simulated is offline-safe. */
-    fun setPsnStatus(enabled: Boolean) =
-        setEnum("Net@@PSN status", if (enabled) "Simulated" else "Disconnected")
+    /** np_psn_status: 0 Disconnected, 1 Simulated, 2 RPCN.
+     *
+     *  This took a Boolean and could only ever write the first two, so "RPCN" -- the state
+     *  that actually connects, and whose client is fully compiled into the core -- had no
+     *  writer anywhere in the app. */
+    private val PSN_STATES = arrayOf("Disconnected", "Simulated", "RPCN")
+
+    fun setPsnStatus(state: Int) =
+        setEnum("Net@@PSN status", PSN_STATES.getOrElse(state) { PSN_STATES[0] })
 
     fun setUpnp(enabled: Boolean) = setBool("Net@@UPNP Enabled", enabled)
 

@@ -195,7 +195,12 @@ data class Ps3Settings(
      *  off by default and the UI says so plainly. */
     val silenceAllLogs: Boolean = false,
     val netEnabled: Boolean = false,
-    val psnStatus: Boolean = false,
+    /** Net/PSN status: 0 = Disconnected, 1 = Simulated, 2 = RPCN.
+     *
+     *  Was a Boolean, which could only ever pick Disconnected or Simulated -- so
+     *  np_psn_status::psn_rpcn had no writer anywhere in the app and RPCN, which is fully
+     *  compiled into the core, was unreachable. */
+    val psnStatus: Int = 0,
     val upnpEnabled: Boolean = false,
     /**
      * 0 = Accurate, 1 = Approximate, 2 = Relaxed, 3 = Inaccurate.
@@ -2429,7 +2434,12 @@ data class Settings(
                     audioBuffering = json.optBoolean("ps3AudioBuffering", def.ps3.audioBuffering),
                     audioBufferMs = json.optInt("ps3AudioBufferMs", def.ps3.audioBufferMs),
                     netEnabled = json.optBoolean("ps3NetEnabled", def.ps3.netEnabled),
-                    psnStatus = json.optBoolean("ps3PsnStatus", def.ps3.psnStatus),
+                    // optInt with a Boolean fallback for installs written before this was a
+                    // tri-state: a stored `true` reads back as 1 (Simulated), which is what it
+                    // meant.
+                    psnStatus = if (json.opt("ps3PsnStatus") is Boolean)
+                        (if (json.optBoolean("ps3PsnStatus")) 1 else 0)
+                    else json.optInt("ps3PsnStatus", def.ps3.psnStatus),
                     upnpEnabled = json.optBoolean("ps3UpnpEnabled", def.ps3.upnpEnabled),
                     enterButtonAssign = json.optInt("ps3EnterButtonAssign", def.ps3.enterButtonAssign),
                     consoleLanguage = json.optInt("ps3ConsoleLanguage", def.ps3.consoleLanguage),
@@ -3064,7 +3074,11 @@ data class Settings(
                     audioBuffering = if (overrides.has("ps3AudioBuffering")) overrides.getBoolean("ps3AudioBuffering") else base.ps3.audioBuffering,
                     audioBufferMs = if (overrides.has("ps3AudioBufferMs")) overrides.getInt("ps3AudioBufferMs") else base.ps3.audioBufferMs,
                     netEnabled = if (overrides.has("ps3NetEnabled")) overrides.getBoolean("ps3NetEnabled") else base.ps3.netEnabled,
-                    psnStatus = if (overrides.has("ps3PsnStatus")) overrides.getBoolean("ps3PsnStatus") else base.ps3.psnStatus,
+                    psnStatus = if (overrides.has("ps3PsnStatus"))
+                        (if (overrides.opt("ps3PsnStatus") is Boolean)
+                            (if (overrides.getBoolean("ps3PsnStatus")) 1 else 0)
+                        else overrides.getInt("ps3PsnStatus"))
+                    else base.ps3.psnStatus,
                     upnpEnabled = if (overrides.has("ps3UpnpEnabled")) overrides.getBoolean("ps3UpnpEnabled") else base.ps3.upnpEnabled,
                     enterButtonAssign = if (overrides.has("ps3EnterButtonAssign")) overrides.getInt("ps3EnterButtonAssign") else base.ps3.enterButtonAssign,
                     consoleLanguage = if (overrides.has("ps3ConsoleLanguage")) overrides.getInt("ps3ConsoleLanguage") else base.ps3.consoleLanguage,
