@@ -19,6 +19,7 @@
 #include <unistd.h> // ::gettid() for the ADPF feed
 #endif
 
+#include "Emu/Memory/vm_reservation.h"
 #include "Emu/System.h"
 #include "Emu/system_utils.hpp"
 #include "Emu/Cell/PPUThread.h"
@@ -1510,6 +1511,54 @@ namespace rsx
 				const bool spinning = ppu.state.none_of(cpu_flag::wait);
 				const u32 span = spinning ? 0x600 : 0x40;
 
+				// What the registers POINT AT, for a thread spinning in guest code.
+				//
+				// dump_all prints 8 bytes behind each GPR, which is enough to recognise a
+				// pointer and not enough to read the structure it points to. Assassin's Creed
+				// needs byte 0x74 of the SPURS job chain -- the workloadId the guest tests
+				// before deciding a chain is usable -- and that is 0x74 bytes past a value
+				// sitting in r5. Every fact this hunt has turned on so far came from a struct
+				// field just out of reach of the 8-byte preview.
+				//
+				// Spinning threads only, deduplicated, capped: a dozen parked threads each
+				// dragging 0x80 bytes per register would bury the dump that explains the hang.
+				if (spinning)
+				{
+					std::vector<u32> seen;
+
+					for (u32 i = 3; i < 32 && seen.size() < 6; i++)
+					{
+						const u32 ptr = static_cast<u32>(ppu.gpr[i]);
+
+						// Aligned, mapped, and not already printed. The alignment test is what
+						// keeps counters and small integers out of it.
+						if (!ptr || (ptr & 0xf) || !vm::check_addr(ptr, vm::page_readable, 0x80))
+						{
+							continue;
+						}
+
+						if (std::find(seen.begin(), seen.end(), ptr) != seen.end())
+						{
+							continue;
+						}
+
+						seen.push_back(ptr);
+
+						fmt::append(detail, "\n[r%u] 0x%08x:", i, ptr);
+
+						for (u32 off = 0; off < 0x80; off += 16)
+						{
+							fmt::append(detail, "\n  +0x%02x ", off);
+							for (u32 b = 0; b < 16; b++)
+							{
+								fmt::append(detail, "%02x ", vm::read8(ptr + off + b));
+							}
+						}
+					}
+
+					detail += "\n";
+				}
+
 				fmt::append(detail, "\nCode around cia=0x%08x (%s):\n", pc,
 					spinning ? "spinning, wide window" : "waiting, short window");
 
@@ -1581,7 +1630,10 @@ namespace rsx
 		// name the guest block, which is the only thing that identifies the loop.
 		std::string spus;
 
-		idm::select<named_thread<spu_thread>>([&spus](u32 /*id*/, spu_thread& spu)
+		// One detailed kernel dump per report, not per SPU -- see the note at the use site.
+		bool spu_detail_done = false;
+
+		idm::select<named_thread<spu_thread>>([&spus, &spu_detail_done](u32 /*id*/, spu_thread& spu)
 		{
 			const auto func = spu.current_func;
 
@@ -1651,6 +1703,69 @@ namespace rsx
 				spu.raddr, spu.spurs_addr, spu.rtime);
 
 			fmt::append(spus, " events_sent=%u", spu.events_sent);
+
+			// Is the line this SPU is parked on being written at all?
+			//
+			// The wait loop wakes on either of two things: the reservation counter moving, or
+			// the 128 bytes themselves changing under an unchanged counter. So an SPU that
+			// stays asleep is not evidence of a lost notification -- it is evidence that
+			// NOTHING TOUCHED THE LINE. Assassin's Creed parks all six SPURS kernels on the
+			// control block forever while the PPU spins adding urgent commands to the job
+			// chain, which lives ~4KB away on a different line, so nothing the PPU does there
+			// can wake them. Printing the counter and the first bytes each time this dump runs
+			// turns "asleep" into "asleep and the line is provably static", which is a
+			// different bug with a different fix.
+			if (spu.raddr && vm::check_addr(spu.raddr))
+			{
+				const u64 res_now = vm::reservation_acquire(spu.raddr);
+				fmt::append(spus, " res_now=%u res_moved=%u", res_now, res_now != spu.rtime ? 1 : 0);
+
+				fmt::append(spus, " line=");
+				for (u32 i = 0; i < 16; i++)
+				{
+					fmt::append(spus, "%02x", vm::read8(spu.raddr + i));
+				}
+			}
+
+			// What the kernel actually looked at before deciding to sleep.
+			//
+			// Everything above says the SPU is parked and that the line it waits on is static.
+			// Neither says WHY it chose to wait, and that decision is guest code: the SPURS
+			// kernel reads the control block into local store, tests it, and either takes work
+			// or arms an LR wait. The registers hold the values it tested and the local store
+			// around pc holds the test itself, which is the same pairing the PPU half of this
+			// dump has always printed and the SPU half never did.
+			//
+			// One SPU only. All six kernels park at the same pc running the same code, so six
+			// copies is six times the log for no extra fact. Picked by raddr == spurs_addr,
+			// which is what identifies a SPURS kernel waiting on its own control block.
+			if (!spu_detail_done && spu.raddr && spu.raddr == spu.spurs_addr)
+			{
+				spu_detail_done = true;
+
+				fmt::append(spus, "\n    --- kernel detail (one SPU; the others are identical) ---");
+
+				for (u32 i = 0; i < 16; i++)
+				{
+					const auto& r = spu.gpr[i];
+					fmt::append(spus, "\n    r%-3u = %08x %08x %08x %08x", i,
+						r._u32[3], r._u32[2], r._u32[1], r._u32[0]);
+				}
+
+				// Local store around pc. Narrow: this is a decision, not a function body, and
+				// the branch that armed the wait is within a few instructions of the channel read.
+				SPUDisAsm spu_dis(cpu_disasm_mode::dump, spu.ls);
+				const u32 from = spu.pc >= 0x40 ? spu.pc - 0x40 : 0;
+
+				fmt::append(spus, "\n    Local store around pc=0x%05x:\n", spu.pc);
+
+				for (u32 addr = from; addr <= from + 0x90 && addr < SPU_LS_SIZE; addr += 4)
+				{
+					spu_dis.disasm(addr);
+					spus += (addr == spu.pc ? "    >>" : "      ");
+					spus += spu_dis.last_opcode;
+				}
+			}
 
 			// What the polling worker is actually looking at, once per process.
 			//

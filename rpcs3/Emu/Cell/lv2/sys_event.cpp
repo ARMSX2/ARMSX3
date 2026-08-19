@@ -470,6 +470,10 @@ error_code sys_event_queue_receive(ppu_thread& ppu, u32 equeue_id, vm::ptr<sys_e
 
 	ppu.gpr[3] = CELL_OK;
 
+	// See the EVENTSPIN note in sys_event_port_send.
+	bool dbg_took_event = false;
+	u32 dbg_depth = 0;
+
 	const auto queue = idm::get<lv2_obj, lv2_event_queue>(equeue_id, [&, notify = lv2_obj::notify_all_t()](lv2_event_queue& queue) -> CellError
 	{
 		if (queue.type != SYS_PPU_QUEUE)
@@ -489,6 +493,8 @@ error_code sys_event_queue_receive(ppu_thread& ppu, u32 equeue_id, vm::ptr<sys_e
 			timeout = 1;
 		}
 
+		dbg_depth = static_cast<u32>(queue.events.size());
+
 		if (queue.events.empty())
 		{
 			queue.sleep(ppu, timeout);
@@ -498,8 +504,22 @@ error_code sys_event_queue_receive(ppu_thread& ppu, u32 equeue_id, vm::ptr<sys_e
 
 		std::tie(ppu.gpr[4], ppu.gpr[5], ppu.gpr[6], ppu.gpr[7]) = queue.events.front();
 		queue.events.pop_front();
+		dbg_took_event = true;
 		return {};
 	});
+
+	{
+		// The other half of the ping-pong. Which path this takes is the whole question: an
+		// immediate return every time means the queue is never empty, so the two threads are
+		// feeding each other and neither is waiting for anything.
+		static atomic_t<u64> s_recvs{0};
+
+		if ((++s_recvs & 0xfffff) == 0)
+		{
+			sys_event.error("EVENTSPIN recv #%u: equeue=0x%x timeout=0x%llx took_event=%d depth=%u",
+				s_recvs.load(), equeue_id, timeout, dbg_took_event ? 1 : 0, dbg_depth);
+		}
+	}
 
 	if (!queue)
 	{
@@ -775,6 +795,21 @@ error_code sys_event_port_send(u32 eport_id, u64 data1, u64 data2, u64 data3)
 
 	bool notified_thread = false;
 
+	// Diagnostic: name the participants in a pathological event ping-pong.
+	//
+	// Assassin's Creed reaches its main loop after gcm init and then issues
+	// sys_event_port_send and sys_event_queue_receive at ~2.2 million calls a second,
+	// forever, at an identical rate on the PPU interpreter and the LLVM recompiler.
+	// The syscall usage counter says how many. It cannot say which port, which queue
+	// or which thread, and that is what separates "the receiver never blocks" from
+	// "the sender never makes progress".
+	//
+	// Sampled, not per-call: at this rate a line per call is gigabytes a second. One
+	// line per million sends is ~2/second while a game is spinning and effectively
+	// never while it is healthy, and the log channel already prefixes the thread name
+	// and guest PC, so the sample alone identifies the loop.
+	u32 dbg_queue_id = 0;
+
 	const auto port = idm::check<lv2_obj, lv2_event_port>(eport_id, [&, notify = lv2_obj::notify_all_t()](lv2_event_port& port) -> CellError
 	{
 		if (ppu && ppu->loaded_from_savestate)
@@ -788,11 +823,23 @@ error_code sys_event_port_send(u32 eport_id, u64 data1, u64 data2, u64 data3)
 		{
 			const u64 source = port.name ? port.name : (u64{process_getpid() + 0u} << 32) | u64{eport_id};
 
+			dbg_queue_id = port.queue->id;
+
 			return port.queue->send(source, data1, data2, data3, &notified_thread, ppu && port.queue->type == SYS_PPU_QUEUE ? &port : nullptr);
 		}
 
 		return CELL_ENOTCONN;
 	});
+
+	{
+		static atomic_t<u64> s_sends{0};
+
+		if ((++s_sends & 0xfffff) == 0)
+		{
+			sys_event.error("EVENTSPIN send #%u: eport=0x%x queue=0x%x data=(0x%llx, 0x%llx, 0x%llx) notified=%d",
+				s_sends.load(), eport_id, dbg_queue_id, data1, data2, data3, notified_thread ? 1 : 0);
+		}
+	}
 
 	if (!port)
 	{
