@@ -3141,6 +3141,19 @@ static T ppu_load_acquire_reservation(ppu_thread& ppu, u32 addr)
 	{
 		// Reload "cached" reservation of previous succeeded conditional store
 		// This seems like a hardware feature according to cellSpursAddUrgentCommand function
+		//
+		// Deliberately keeps ppu.rtime as-is, which only works because the successful store
+		// below advances it to the value it left in the line's counter. Upstream carries this
+		// branch empty AND without that advance, so rtime stays one increment behind and every
+		// conditional store after the first on the same line fails by exactly 128 -- forever,
+		// because the guest's loop restarts on failure.
+		//
+		// Assassin's Creed is the case: libsre's cellSpursAddUrgentCommand walks four
+		// urgent-command slots inside one reservation loop, stores slot 0 unchanged to release
+		// it, then can never claim slot 1. Measured at 490 million STCXFAIL[rtime moved] on
+		// 0x102ed6b8, res-rtime==128 on every single one, data unchanged. 047f71b43 added a
+		// "-= 128" here to pair with the advance; the two cancel, which is presumably why the
+		// pair was dropped rather than corrected.
 	}
 	else
 	{
@@ -3179,6 +3192,29 @@ extern u64 ppu_ldarx(ppu_thread& ppu, u32 addr)
 }
 
 template <typename T>
+// A store-conditional that never succeeds is indistinguishable from one that is merely
+// contended: both show up as a PPU thread spinning, and neither the guest nor any counter
+// says which. Assassin's Creed sits forever in libsre's urgentCmds scan re-issuing a
+// stdcx. to a 128-byte line no other thread touches -- the SPUs are asleep on a different
+// line with their putllc counters frozen -- so "contention" cannot be the explanation and
+// the failing branch is the whole question.
+//
+// Sampled every 2^20 failures per reason. This function is on the hot path of every
+// atomic the guest performs, so the cost has to be an atomic increment and a mask test;
+// a healthy title never reaches the sample count on a single reason.
+#define STCXFAIL_LOG(reason_id, reason_text)                                                    \
+	do {                                                                                        \
+		static atomic_t<u64> s_fails[4]{};                                                      \
+		if ((++s_fails[(reason_id)] & 0xfffff) == 0)                                            \
+		{                                                                                       \
+			ppu_log.error("STCXFAIL[%s] #%u: addr=0x%08x raddr=0x%08x rtime=%u res=%u "          \
+				"old=0x%016llx cur=0x%016llx full_rdata=%u",                                    \
+				(reason_text), s_fails[(reason_id)].load(), addr, ppu.raddr, rtime,             \
+				static_cast<u64>(res & -128), static_cast<u64>(old_data),                       \
+				static_cast<u64>(data.load()), ppu.use_full_rdata ? 1u : 0u);                   \
+		}                                                                                       \
+	} while (0)
+
 static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 {
 	perf_meter<"STCX"_u32> perf0;
@@ -3226,6 +3262,7 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 
 			ppu.raddr = 0;
 			ppu.res_cached = 0;
+			STCXFAIL_LOG(1, "addr/raddr mismatch");
 			return false;
 		}
 	}
@@ -3234,6 +3271,7 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 	{
 		ppu.raddr = 0;
 		ppu.res_cached = 0;
+		STCXFAIL_LOG(old_data != data ? 2 : 3, old_data != data ? "data changed" : "rtime moved");
 		return false;
 	}
 
@@ -3424,6 +3462,11 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 
 		ppu.last_faddr = 0;
 		ppu.res_cached = ppu.raddr;
+
+		// The other half of upstream 047f71b43; see the note in ppu_load_acquire_reservation.
+		// Every success path above leaves the line's counter at rtime + 128, so this is what
+		// keeps a cached re-reservation of the same line validating against the right value.
+		ppu.rtime += 128;
 		ppu.raddr = 0;
 		return true;
 	}
