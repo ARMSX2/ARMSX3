@@ -1277,6 +1277,37 @@ error_code cellGameCreateGameData(vm::ptr<CellGameSetInitParams> init, vm::ptr<c
 	std::string tmp_contentInfo = "/dev_hdd0/game/" + dirname;
 	std::string tmp_usrdir = "/dev_hdd0/game/" + dirname + "/USRDIR";
 
+	// Refuse an install onto a full device, and say so.
+	//
+	// Nothing downstream checks. The game creates the directory, starts copying, and the
+	// writes fail one by one with nobody looking at the return value -- so the install bar
+	// stops partway and sits there. On Android that is indistinguishable from the emulator
+	// hanging, which is exactly how it was found: Yakuza Dead Souls stalled at 78% on a
+	// device with 809MB free and produced not one line of log about it.
+	//
+	// CELL_GAME_ERROR_NOSPACE is the error the real system returns for this and games
+	// already handle it -- they put up their own "not enough space" dialog -- so this turns
+	// a silent stall into the message the title was written to show.
+	//
+	// The floor is deliberately small. How much a game will write is not known here (the
+	// size it declares is advisory and many pass CELL_GAME_SIZEKB_NOTCALC), so this cannot
+	// predict a failure; it only catches the case where there was never a chance. An install
+	// that would have fit is not affected.
+	if (fs::device_stat dev{}; fs::statfs(vfs::get("/dev_hdd0/game"), dev))
+	{
+		constexpr u64 min_free_bytes = 256 * 1024 * 1024;
+
+		cellGame.notice("cellGameCreateGameData(): %.2f GiB free on the game device",
+			dev.avail_free / (1024. * 1024. * 1024.));
+
+		if (dev.avail_free < min_free_bytes)
+		{
+			cellGame.error("cellGameCreateGameData(): refusing to install, only %u MiB free (need at least %u MiB)",
+				dev.avail_free / (1024 * 1024), min_free_bytes / (1024 * 1024));
+			return CELL_GAME_ERROR_NOSPACE;
+		}
+	}
+
 	if (!fs::create_dir(vfs::get(tmp_contentInfo)))
 	{
 		cellGame.error("cellGameCreateGameData(): failed to create directory '%s' (%s)", tmp_contentInfo, fs::g_tls_error);
