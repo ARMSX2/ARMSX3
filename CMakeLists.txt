@@ -12,6 +12,29 @@ project(rpcs3 LANGUAGES C CXX)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Keep the builder's absolute paths out of the shipped binary.
+#
+# __FILE__ expands to whatever path the compiler was handed, and RPCS3 prints source locations in
+# ensure() failures, fmt::throw_exception and assertions -- so every one of those lines carried the
+# full build directory into EVERY USER'S LOG. On a developer's machine that is a home directory:
+# the shipped core contained 2500 copies of one username. Someone else's crash report is not the
+# place to publish where we build.
+#
+# -ffile-prefix-map rewrites the prefix at compile time, covering both __FILE__ (macro-prefix-map)
+# and debug info (debug-prefix-map). Paths become relative-looking (./rpcs3/Emu/...), which is what
+# a log wants to show anyway. Costs nothing at runtime.
+#
+# Applied here, before any add_subdirectory, so third-party targets built in-tree are covered too --
+# they embed the same root.
+if(NOT MSVC)
+    include(CheckCXXCompilerFlag)
+    check_cxx_compiler_flag("-ffile-prefix-map=${CMAKE_SOURCE_DIR}=." COMPILER_HAS_FILE_PREFIX_MAP)
+
+    if(COMPILER_HAS_FILE_PREFIX_MAP)
+        add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.>")
+    endif()
+endif()
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13)
         message(FATAL_ERROR "RPCS3 requires at least gcc-13.")
