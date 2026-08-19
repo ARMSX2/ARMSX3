@@ -1015,6 +1015,27 @@ object Rpcs3Bridge {
         }
     }
 
+    /**
+     * Attach or detach the emulated PS3 keyboard.
+     *
+     * RPCS3 decides this once, in Emulator::Load, from Input/Output@@Keyboard --
+     * there is no live attach the way a USB device has one. So this writes the
+     * setting and the next boot picks it up; a running game keeps whatever it
+     * started with. Flipping it mid-game and expecting cellKb to notice is the one
+     * thing this cannot do.
+     */
+    @JvmStatic
+    fun setKeyboardEnabled(enabled: Boolean) {
+        Rpcs3Settings.setKeyboardHandler(enabled)
+    }
+
+    /** One key transition for cellKb. See RPCSX.keyboardKey. */
+    @JvmStatic
+    fun keyboardKey(androidKeyCode: Int, unicode: Int, pressed: Boolean): Boolean =
+        runCatching {
+            RPCSX.instance.keyboardKey(androidKeyCode, unicode, pressed, false)
+        }.getOrDefault(false)
+
     @JvmStatic
     fun setPadButton(port: Int, index: Int, range: Int, pressed: Boolean) {
         val pad = pads.getOrNull(port) ?: return

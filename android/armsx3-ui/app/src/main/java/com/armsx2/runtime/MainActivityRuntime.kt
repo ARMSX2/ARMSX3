@@ -3346,7 +3346,7 @@ open class MainActivityRuntime : ComponentActivity() {
             else -> return false // MULTIPLE etc. — ignore
         }
         return runCatching {
-            NativeApp.usbKeyboardKey(0, kc, pressed)
+            NativeApp.usbKeyboardKey(0, kc, event.unicodeChar, pressed)
         }.getOrDefault(false)
     }
 

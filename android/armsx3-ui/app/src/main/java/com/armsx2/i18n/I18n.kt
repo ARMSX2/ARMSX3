@@ -719,7 +719,7 @@ val EN: Map<String, String> = mapOf(
     "network.address" to "Address",
     "touch.stateAction.keyboard" to "KBD",
     "network.emulateUsbKeyboard" to "Emulate USB Keyboard",
-    "net.usbKeyboard.description" to "Report a USB keyboard to the game. Needed by titles that require one \u2014 EverQuest Online Adventures, Konami-keyboard games \u2014 and for typing in online chat. A physical or Bluetooth keyboard works once this is on, and the \"On-Screen Keyboard (toggle)\" hotkey raises the Android keyboard over the game without pausing.",
+    "net.usbKeyboard.description" to "Report a keyboard to the game. Needed by titles that require one \u2014 EverQuest Online Adventures, Konami-keyboard games \u2014 and for typing in online chat. A physical or Bluetooth keyboard works once this is on, and the \"On-Screen Keyboard (toggle)\" hotkey raises the Android keyboard over the game without pausing. Takes effect the next time you start a game.",
     "network.ethernetDevice" to "Ethernet Device",
     "network.hddImage.dialogHint" to "File name (kept in the data folder) or a full path to an existing image.",
     "network.hddImage.fieldLabel" to "HDD image",

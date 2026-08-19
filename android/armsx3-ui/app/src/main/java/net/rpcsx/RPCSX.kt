@@ -111,6 +111,13 @@ class RPCSX {
      *  (RIGHT, LEFT, UP, DOWN, TRIANGLE, CIRCLE, CROSS, SQUARE, L1, R1, L2, R2),
      *  each 1..255, or 0 to leave that button digital. */
     external fun overlayPadPressure(port: Int, values: IntArray): Boolean
+    /** One key transition for the emulated PS3 keyboard (cellKb).
+     *
+     *  [androidKeyCode] is an android.view.KeyEvent keycode and [unicode] is what
+     *  KeyEvent.getUnicodeChar() returned for it, or 0. Returns false when nothing
+     *  consumed the key — no game running, the keyboard handler off, or a key the
+     *  PS3 keyboard has no equivalent of. */
+    external fun keyboardKey(androidKeyCode: Int, unicode: Int, pressed: Boolean, repeat: Boolean): Boolean
     external fun collectGameInfo(rootDir: String, progressId: Long): Boolean
     external fun systemInfo(): String
     external fun settingsGet(path: String): String

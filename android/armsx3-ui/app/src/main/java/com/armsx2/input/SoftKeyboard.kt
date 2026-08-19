@@ -96,22 +96,27 @@ object SoftKeyboard {
      */
     private const val KEY_STEP_MS = 24L
 
-    private val pending = java.util.concurrent.LinkedBlockingQueue<Pair<Int, Boolean>>()
+    /** keyCode, the character it produced (0 if none), pressed. */
+    private data class KeyStep(val keyCode: Int, val unicode: Int, val pressed: Boolean)
+
+    private val pending = java.util.concurrent.LinkedBlockingQueue<KeyStep>()
 
     /** Drains [pending] on its own thread: the UI thread must not sleep between key states. */
     private val worker: Thread by lazy {
         Thread({
             while (true) {
-                val (keyCode, pressed) = pending.take()
-                runCatching { NativeApp.usbKeyboardKey(0, keyCode, pressed) }
+                val step = pending.take()
+                runCatching {
+                    NativeApp.usbKeyboardKey(0, step.keyCode, step.unicode, step.pressed)
+                }
                 runCatching { Thread.sleep(KEY_STEP_MS) }
             }
         }, "usb-kbd-ime").apply { isDaemon = true; start() }
     }
 
-    private fun enqueue(keyCode: Int, pressed: Boolean) {
+    private fun enqueue(keyCode: Int, unicode: Int, pressed: Boolean) {
         worker // start on first use
-        pending.put(keyCode to pressed)
+        pending.put(KeyStep(keyCode, unicode, pressed))
     }
 
     /** Send one character as the key-down/key-up pair(s) a real keyboard would produce. */
@@ -129,12 +134,12 @@ object SoftKeyboard {
             KeyEvent.ACTION_UP -> false
             else -> return
         }
-        enqueue(event.keyCode, pressed)
+        enqueue(event.keyCode, event.unicodeChar, pressed)
     }
 
     internal fun tap(keyCode: Int) {
-        enqueue(keyCode, true)
-        enqueue(keyCode, false)
+        enqueue(keyCode, 0, true)
+        enqueue(keyCode, 0, false)
     }
 }
 

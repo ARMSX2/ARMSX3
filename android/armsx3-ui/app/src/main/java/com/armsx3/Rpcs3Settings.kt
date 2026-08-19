@@ -106,6 +106,12 @@ object Rpcs3Settings {
     fun setConsoleLanguage(index: Int) = setIndexedEnum("$SYSTEM@@Language", CONSOLE_LANGUAGES, index, 1)
     fun setConsoleRegion(index: Int) = setIndexedEnum("$SYSTEM@@License Area", CONSOLE_REGIONS, index, 1)
     fun setKeyboardType(index: Int) = setIndexedEnum("$SYSTEM@@Keyboard Type", KEYBOARD_TYPES, index, 0)
+
+    /** Which keyboard handler cellKb is served by. "Basic" is the Android handler
+     *  (virtual_keyboard_handler); "Null" reports no keyboard attached, which is the
+     *  default and what every build before this one always used. Read once, during
+     *  Emulator::Load. */
+    fun setKeyboardHandler(enabled: Boolean) = setEnum("$IO@@Keyboard", if (enabled) "Basic" else "Null")
     fun setDateFormat(index: Int) = setIndexedEnum("$SYSTEM@@Date Format", DATE_FORMATS, index, 1)
     fun setTimeFormat(index: Int) = setIndexedEnum("$SYSTEM@@Time Format", TIME_FORMATS, index, 1)
     fun setEnterButtonAssign(index: Int) =

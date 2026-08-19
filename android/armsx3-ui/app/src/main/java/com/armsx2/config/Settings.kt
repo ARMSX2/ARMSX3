@@ -736,12 +736,18 @@ data class Settings(
     val memoryCardSlot2Enabled: Boolean = true,
     val memoryCardSlot2Filename: String = "mcd002.ps2",
 
-    // ---- USB ----
-    /** USB1/Type = hidkbd — attach an emulated USB HID keyboard on USB port 1.
-     *  Needed by games that require a real USB keyboard (EverQuest Online
-     *  Adventures, Konami-keyboard titles). A physical/Bluetooth keyboard's key
-     *  events are forwarded to it (see MainActivityRuntime.dispatchKeyEvent → NativeApp.usbKeyboardKey).
-     *  Default off. */
+    // ---- Keyboard ----
+    /** Input/Output/Keyboard = Basic — serve cellKb from the Android keyboard handler.
+     *  Needed by games that want a keyboard (EverQuest Online Adventures, in-game
+     *  text chat, the debug menus some titles put behind one). Keys come from a
+     *  physical/Bluetooth keyboard (MainActivityRuntime.forwardKeyToUsbKeyboard) or
+     *  from the Android IME the On-Screen Keyboard hotkey raises (SoftKeyboard), and
+     *  reach the core through NativeApp.usbKeyboardKey.
+     *
+     *  The name is ARMSX2's. RPCS3 has no emulated USB HID keyboard device; it has a
+     *  keyboard handler, which is what this drives.
+     *
+     *  Read once, in Emulator::Load, so it takes effect on the next boot. Default off. */
     val usbKeyboard: Boolean = false,
 
     // ---- EmuCore/CPU/Recompiler — recompiler enables ----
@@ -1275,12 +1281,10 @@ data class Settings(
         put("MemoryCards", "Slot1_Filename", "string", memoryCardSlot1Filename.ifEmpty { "mcd001.ps2" })
         put("MemoryCards", "Slot2_Enable", "bool", memoryCardSlot2Enabled.toString())
         put("MemoryCards", "Slot2_Filename", "string", memoryCardSlot2Filename.ifEmpty { "mcd002.ps2" })
-        // USB keyboard (#254). Persist [USB1] Type so USBOptions::LoadSave attaches
-        // the emulated HID keyboard on the next boot (or ApplySettings). The live
-        // attach/detach on a running VM is done via NativeApp.usbSetKeyboardEnabled
-        // below (CheckForConfigChanges recreates the device), since a plain
-        // setSetting write doesn't reattach USB devices on its own.
-        put("USB1", "Type", "string", if (usbKeyboard) "hidkbd" else "None")
+        // Keyboard: NOT written here. [USB1] Type = hidkbd is a PCSX2 key -- there is
+        // no such USB device in RPCS3, so that write only ever reached
+        // Unsupported.note("USB1/Type"). The PS3 equivalent is the keyboard handler,
+        // pushed by NativeApp.usbSetKeyboardEnabled below.
         // Recompiler enables. Picked up by VMManager::ApplySettings →
         // SysCpuProviderPack rebind. Toggling these on a running VM swaps
         // the dispatch pointer; existing JIT block caches are flushed by
@@ -1336,10 +1340,8 @@ data class Settings(
         NativeApp.osdShowVersion(osdShowVersion)
         NativeApp.osdShowSettings(osdShowSettings)
         NativeApp.osdShowInputs(osdShowInputs)
-        // USB keyboard (#254): live attach/detach on the running VM. A plain
-        // setSetting("USB1","Type",...) write is persisted but doesn't reattach
-        // USB devices, so drive the device (re)creation explicitly. No-op before
-        // the VM exists — the persisted Type above handles the cold boot.
+        // Keyboard handler (#254). Installed by Emulator::Load, so this is a persist,
+        // not a live attach: a game already running keeps whatever it booted with.
         NativeApp.usbSetKeyboardEnabled(0, usbKeyboard)
         // Vblank at the PS3's own rate, pushed on every apply rather than left to a
         // migration.

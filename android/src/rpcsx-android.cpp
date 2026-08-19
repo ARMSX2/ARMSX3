@@ -38,6 +38,7 @@
 #include "Input/dualsense_pad_handler.h"
 #include "Input/hid_pad_handler.h"
 #include "Input/pad_thread.h"
+#include "Input/virtual_keyboard_handler.h"
 #include "Input/virtual_pad_handler.h"
 #include "Loader/ISO.h"
 #include "Loader/PSF.h"
@@ -2276,8 +2277,20 @@ static void setupCallbacks() {
       .handle_taskbar_progress = [](auto...) {},
       .init_kb_handler =
           [](auto...) {
-            ensure(g_fxo->init<KeyboardHandlerBase, NullKeyboardHandler>(
-                Emu.DeserialManager()));
+            // Was hardcoded to the null handler, so cellKb reported no keyboard
+            // attached no matter what the UI said. Games that want a keyboard --
+            // EverQuest Online Adventures, in-game text chat, the debug menus some
+            // titles put behind one -- saw nothing at all.
+            switch (g_cfg.io.keyboard.get()) {
+            case keyboard_handler::null:
+              ensure(g_fxo->init<KeyboardHandlerBase, NullKeyboardHandler>(
+                  Emu.DeserialManager()));
+              break;
+            case keyboard_handler::basic:
+              ensure(g_fxo->init<KeyboardHandlerBase, virtual_keyboard_handler>(
+                  Emu.DeserialManager()));
+              break;
+            }
           },
       .init_mouse_handler =
           [](auto...) {
@@ -2630,6 +2643,22 @@ extern "C" bool _rpcsx_overlayPadPressure(int port, const int *values,
   }
 
   return true;
+}
+
+// One key transition from the UI, for the emulated PS3 keyboard.
+//
+// androidKeyCode is an android.view.KeyEvent keycode; unicode is what
+// KeyEvent.getUnicodeChar() produced for it (0 when the key has no character, and
+// the overlay consumer is the only thing that reads it -- cellKb derives its own
+// character from the raw code plus the live modifier state).
+//
+// Returns false when nothing consumed the key: no game running, the keyboard
+// handler set to Null, or a key the PS3 keyboard has no equivalent of. The caller
+// uses that to decide whether to let the key fall through to the front end.
+extern "C" bool _rpcsx_keyboardKey(int androidKeyCode, int unicode, bool pressed,
+                                   bool repeat) {
+  return handle_android_key(androidKeyCode, static_cast<char32_t>(unicode),
+                            pressed, repeat);
 }
 
 // Hand the core Android's exact SoC identity. Deliberately a separate export

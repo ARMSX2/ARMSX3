@@ -472,8 +472,29 @@ public final class NativeApp {
     public static void usbLightgunButton(int p, int b, boolean pressed) { Unsupported.note("usbLightgunButton"); }
     public static void usbSetDeviceType(int port, String type) { Unsupported.note("usbSetDeviceType"); }
     public static void usbSetDeviceSubtype(int port, int subtype) { Unsupported.note("usbSetDeviceSubtype"); }
-    public static void usbSetKeyboardEnabled(int port, boolean e) { Unsupported.note("usbSetKeyboardEnabled"); }
-    public static boolean usbKeyboardKey(int p, int k, boolean pressed) { Unsupported.note("usbKeyboardKey"); return false; }
+    /** [MAPPED] Attach or detach the emulated PS3 keyboard (cellKb).
+     *
+     *  There is no PS3 equivalent of PCSX2's USB HID keyboard device, so the ARMSX2
+     *  name is kept but the thing it drives is RPCS3's keyboard handler: Basic
+     *  installs the Android handler, Null reports nothing attached. Takes effect on
+     *  the next boot, since the handler is created during Emulator::Load.
+     *
+     *  port is ignored: RPCS3 has one keyboard handler, not one per USB port. */
+    public static void usbSetKeyboardEnabled(int port, boolean e) {
+        Rpcs3Bridge.setKeyboardEnabled(e);
+    }
+
+    /** [MAPPED] -> _rpcsx_keyboardKey. port is ignored (single handler). */
+    public static boolean usbKeyboardKey(int p, int k, boolean pressed) {
+        return Rpcs3Bridge.keyboardKey(k, 0, pressed);
+    }
+
+    /** [MAPPED] As above, plus the character the key produced (KeyEvent.getUnicodeChar()).
+     *  cellKb derives its own character from the raw code and the live modifier state, so
+     *  this only matters to the emulator's own overlays. */
+    public static boolean usbKeyboardKey(int p, int k, int unicode, boolean pressed) {
+        return Rpcs3Bridge.keyboardKey(k, unicode, pressed);
+    }
     public static String usbDeviceTypes() { return ""; }
 
     // ===== PS2-only subsystems: these screens must be REMOVED, not stubbed =====
