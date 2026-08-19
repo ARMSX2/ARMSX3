@@ -968,6 +968,16 @@ object Rpcs3Bridge {
     private val nextTransitionAt = HashMap<Long, Long>()
     private val pendingTransitions = HashMap<Long, Int>()
 
+    // The last state each button was asked for, so a REPEAT can be told from an EDGE.
+    //
+    // Analog triggers write through here on every motion event -- dozens a second while held,
+    // every one of them "pressed" -- and pacing a repeat is meaningless: there is no
+    // transition to hold open. Worse, the repeats consumed the queue, so the release that
+    // followed was the entry that hit the cap and got dropped, leaving the button stuck down
+    // until the next press. That is the "R2 double-presses, or sticks until I press it again"
+    // report, and it is why only triggers showed it.
+    private val lastRequested = HashMap<Long, Boolean>()
+
     /**
      * Apply a digital press/release, pacing it so the guest cannot miss it.
      *
@@ -979,6 +989,16 @@ object Rpcs3Bridge {
         val now = android.os.SystemClock.uptimeMillis()
 
         synchronized(nextTransitionAt) {
+            // Not an edge: the button is already being asked for the state it is in. Let it
+            // straight through without touching the pacing budget, so an analog trigger's
+            // stream of same-state updates keeps its pressure current and cannot starve the
+            // release that follows it.
+            if (lastRequested[key] == pressed) {
+                return true
+            }
+
+            lastRequested[key] = pressed
+
             val ready = nextTransitionAt[key] ?: 0L
 
             if (now >= ready) {
@@ -990,6 +1010,15 @@ object Rpcs3Bridge {
             val queued = pendingTransitions[key] ?: 0
 
             if (queued >= TRANSITION_MAX_PENDING) {
+                // Never drop a release. Losing a press costs one input; losing a release
+                // leaves the pad holding a button the user let go of, and nothing clears it
+                // until they press it again. Apply it now and reset the budget -- a release
+                // arriving late is worth less than a button that stays down.
+                if (!pressed) {
+                    nextTransitionAt[key] = now + TRANSITION_MIN_MS
+                    return true
+                }
+
                 return false
             }
 
