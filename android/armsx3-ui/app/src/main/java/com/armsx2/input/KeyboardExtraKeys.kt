@@ -62,7 +62,11 @@ private val BASE_KEYS = listOf(
     ExtraKey("↑", KeyEvent.KEYCODE_DPAD_UP),
     ExtraKey("↓", KeyEvent.KEYCODE_DPAD_DOWN),
     ExtraKey("→", KeyEvent.KEYCODE_DPAD_RIGHT),
-    ExtraKey("⏎", KeyEvent.KEYCODE_ENTER),
+    // Space and Enter are on the IME too, but the IME is not always the thing that comes up --
+    // and Space in particular is the key that opens the debug menu this was first used for, so
+    // it should not depend on another keyboard appearing.
+    ExtraKey("Space", KeyEvent.KEYCODE_SPACE, wide = true),
+    ExtraKey("Enter", KeyEvent.KEYCODE_ENTER, wide = true),
 )
 
 // KEYCODE_F1..F12 are contiguous, the same way the handler's qt mapping assumes.
@@ -94,7 +98,7 @@ fun BoxScope.KeyboardExtraKeys() {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             for (key in if (showFn) FN_KEYS else BASE_KEYS) {
-                KeyCap(key.label) { SoftKeyboard.tap(key.code) }
+                KeyCap(key.label, wide = key.wide) { SoftKeyboard.tap(key.code) }
             }
 
             KeyCap(if (showFn) "abc" else "Fn", accent = true) { showFn = !showFn }
@@ -103,10 +107,10 @@ fun BoxScope.KeyboardExtraKeys() {
 }
 
 @Composable
-private fun KeyCap(label: String, accent: Boolean = false, onTap: () -> Unit) {
+private fun KeyCap(label: String, accent: Boolean = false, wide: Boolean = false, onTap: () -> Unit) {
     Box(
         modifier = Modifier
-            .sizeIn(minWidth = 44.dp)
+            .sizeIn(minWidth = if (wide) 92.dp else 44.dp)
             .heightIn(min = 40.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(

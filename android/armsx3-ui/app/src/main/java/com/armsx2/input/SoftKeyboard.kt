@@ -54,7 +54,27 @@ object SoftKeyboard {
         activity.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         view.isFocusableInTouchMode = true
         view.requestFocus()
+
+        // Two ways of asking, because one of them does not work here.
+        //
+        // SHOW_IMPLICIT is a hint, and the system is free to decline it -- which it does for a
+        // fullscreen immersive window like the game surface. The result was the extra-keys bar
+        // appearing (it follows [visible]) with no keyboard under it, because visible was set
+        // whether or not anything came up.
+        //
+        // WindowInsetsControllerCompat drives the IME through the insets animation instead,
+        // which is the supported path once setDecorFitsSystemWindows(false) is in effect --
+        // and it is, set in MainActivityRuntime. Keep showSoftInput as well: it is what works
+        // on older/odd IMEs, and asking twice is harmless.
         imm(activity)?.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+
+        activity.window?.let { win ->
+            runCatching {
+                androidx.core.view.WindowInsetsControllerCompat(win, view)
+                    .show(androidx.core.view.WindowInsetsCompat.Type.ime())
+            }
+        }
+
         visible.value = true
     }
 
@@ -66,6 +86,15 @@ object SoftKeyboard {
         val view = sink
         if (view != null) {
             imm(activity)?.hideSoftInputFromWindow(view.windowToken, 0)
+
+            // Mirror of show(): whichever route raised it is the one that can lower it.
+            activity.window?.let { win ->
+                runCatching {
+                    androidx.core.view.WindowInsetsControllerCompat(win, view)
+                        .hide(androidx.core.view.WindowInsetsCompat.Type.ime())
+                }
+            }
+
             view.clearFocus()
         }
         visible.value = false

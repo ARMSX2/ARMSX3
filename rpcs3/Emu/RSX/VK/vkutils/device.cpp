@@ -376,9 +376,22 @@ namespace vk
 		// compile overlay keep working, which reads as a renderer bug rather than a shader one --
 		// and older Adreno drivers may still be affected. Only Adreno is opened up: no other
 		// mobile vendor has been tested either way, so they keep the safe path.
+		//
+		// The version threshold is QUALCOMM'S numbering and means nothing anywhere else.
+		// is_ADRENO() is true for Turnip as well, and Turnip reports Mesa's scheme -- 25.99.99
+		// on an 8 Gen 2 -- which packs to a far smaller integer than 512.676.53 and can never
+		// pass it. Every Turnip user has therefore been running fp16 emulated in fp32 no matter
+		// how new their driver is, which is the configuration these handhelds actually ship in.
+		//
+		// Turnip should not have been gated at all: the failure being worked around is
+		// Qualcomm's shader compiler rejecting the SPIR-V generated with float16_t in it, and
+		// Mesa's compiler is a different compiler. Keep the version check for the proprietary
+		// driver, where it was measured, and let Turnip through on its own account.
 		constexpr u32 s_adreno_fp16_min_driver = (512u << 22) | (676u << 12) | 53u; // 512.676.53
-		const bool adreno_fp16_ok = is_ADRENO(get_driver_vendor()) &&
-			props.driverVersion >= s_adreno_fp16_min_driver;
+		const auto fp16_vendor = get_driver_vendor();
+		const bool adreno_fp16_ok =
+			fp16_vendor == driver_vendor::TURNIP ||
+			(fp16_vendor == driver_vendor::ADRENO && props.driverVersion >= s_adreno_fp16_min_driver);
 
 		if (!adreno_fp16_ok && is_MOBILE(get_driver_vendor()) && shader_types_support.allow_float16)
 		{
