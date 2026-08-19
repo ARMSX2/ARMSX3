@@ -202,6 +202,22 @@ data class Ps3Settings(
      *  compiled into the core, was unreachable. */
     val psnStatus: Int = 0,
     val upnpEnabled: Boolean = false,
+    /** The IPv4 address games are told the console has. "0.0.0.0" means "work it out". */
+    val ipAddress: String = "0.0.0.0",
+    /** Which local interface the emulated network stack binds to. "0.0.0.0" = any. */
+    val bindAddress: String = "0.0.0.0",
+    /** DNS server for the emulated stack. This is the one that matters for private/fan
+     *  game servers: RPCN replaces Sony's PSN, but a publisher's own backend was never PSN,
+     *  so reaching a revival of one means resolving its hostnames somewhere else. */
+    val dnsAddress: String = "8.8.8.8",
+    /** Per-hostname redirects, "host=1.2.3.4" joined by "&&" -- finer than dnsAddress
+     *  because it moves one hostname instead of every lookup. Parsed by np::dnshook. */
+    val ipSwapList: String = "",
+    /** Derive the console's MAC from its PSID rather than using a fixed one. */
+    val deriveMacFromPsid: Boolean = false,
+    /** Two-letter country code reported to PSN/RPCN. */
+    val psnCountry: String = "us",
+    val clansEnabled: Boolean = false,
     /**
      * 0 = Accurate, 1 = Approximate, 2 = Relaxed, 3 = Inaccurate.
      *
@@ -1116,6 +1132,13 @@ data class Settings(
         put("PS3/Net", "Internet enabled", "enum", ps3.netEnabled.toString())
         put("PS3/Net", "PSN status", "enum", ps3.psnStatus.toString())
         put("PS3/Net", "UPNP Enabled", "bool", ps3.upnpEnabled.toString())
+        put("PS3/Net", "IP address", "string", ps3.ipAddress)
+        put("PS3/Net", "Bind address", "string", ps3.bindAddress)
+        put("PS3/Net", "DNS address", "string", ps3.dnsAddress)
+        put("PS3/Net", "IP swap list", "string", ps3.ipSwapList)
+        put("PS3/Net", "Derive MAC from PSID", "bool", ps3.deriveMacFromPsid.toString())
+        put("PS3/Net", "PSN Country", "string", ps3.psnCountry)
+        put("PS3/Net", "Clans Enabled", "bool", ps3.clansEnabled.toString())
         put("PS3/System", "Enter button assignment", "enum", ps3.enterButtonAssign.toString())
         put("PS3/System", "Language", "enum", ps3.consoleLanguage.toString())
         put("PS3/System", "License Area", "enum", ps3.consoleRegion.toString())
@@ -2089,6 +2112,13 @@ data class Settings(
         put("ps3NetEnabled", ps3.netEnabled)
         put("ps3PsnStatus", ps3.psnStatus)
         put("ps3UpnpEnabled", ps3.upnpEnabled)
+        put("ps3IpAddress", ps3.ipAddress)
+        put("ps3BindAddress", ps3.bindAddress)
+        put("ps3DnsAddress", ps3.dnsAddress)
+        put("ps3IpSwapList", ps3.ipSwapList)
+        put("ps3DeriveMacFromPsid", ps3.deriveMacFromPsid)
+        put("ps3PsnCountry", ps3.psnCountry)
+        put("ps3ClansEnabled", ps3.clansEnabled)
         put("ps3EnterButtonAssign", ps3.enterButtonAssign)
         put("ps3ConsoleLanguage", ps3.consoleLanguage)
         put("ps3ConsoleRegion", ps3.consoleRegion)
@@ -2441,6 +2471,13 @@ data class Settings(
                         (if (json.optBoolean("ps3PsnStatus")) 1 else 0)
                     else json.optInt("ps3PsnStatus", def.ps3.psnStatus),
                     upnpEnabled = json.optBoolean("ps3UpnpEnabled", def.ps3.upnpEnabled),
+                    ipAddress = json.optString("ps3IpAddress", def.ps3.ipAddress),
+                    bindAddress = json.optString("ps3BindAddress", def.ps3.bindAddress),
+                    dnsAddress = json.optString("ps3DnsAddress", def.ps3.dnsAddress),
+                    ipSwapList = json.optString("ps3IpSwapList", def.ps3.ipSwapList),
+                    deriveMacFromPsid = json.optBoolean("ps3DeriveMacFromPsid", def.ps3.deriveMacFromPsid),
+                    psnCountry = json.optString("ps3PsnCountry", def.ps3.psnCountry),
+                    clansEnabled = json.optBoolean("ps3ClansEnabled", def.ps3.clansEnabled),
                     enterButtonAssign = json.optInt("ps3EnterButtonAssign", def.ps3.enterButtonAssign),
                     consoleLanguage = json.optInt("ps3ConsoleLanguage", def.ps3.consoleLanguage),
                     consoleRegion = json.optInt("ps3ConsoleRegion", def.ps3.consoleRegion),
@@ -2768,6 +2805,13 @@ data class Settings(
             if (current.ps3.netEnabled != base.ps3.netEnabled) j.put("ps3NetEnabled", current.ps3.netEnabled)
             if (current.ps3.psnStatus != base.ps3.psnStatus) j.put("ps3PsnStatus", current.ps3.psnStatus)
             if (current.ps3.upnpEnabled != base.ps3.upnpEnabled) j.put("ps3UpnpEnabled", current.ps3.upnpEnabled)
+            if (current.ps3.ipAddress != base.ps3.ipAddress) j.put("ps3IpAddress", current.ps3.ipAddress)
+            if (current.ps3.bindAddress != base.ps3.bindAddress) j.put("ps3BindAddress", current.ps3.bindAddress)
+            if (current.ps3.dnsAddress != base.ps3.dnsAddress) j.put("ps3DnsAddress", current.ps3.dnsAddress)
+            if (current.ps3.ipSwapList != base.ps3.ipSwapList) j.put("ps3IpSwapList", current.ps3.ipSwapList)
+            if (current.ps3.deriveMacFromPsid != base.ps3.deriveMacFromPsid) j.put("ps3DeriveMacFromPsid", current.ps3.deriveMacFromPsid)
+            if (current.ps3.psnCountry != base.ps3.psnCountry) j.put("ps3PsnCountry", current.ps3.psnCountry)
+            if (current.ps3.clansEnabled != base.ps3.clansEnabled) j.put("ps3ClansEnabled", current.ps3.clansEnabled)
             if (current.ps3.enterButtonAssign != base.ps3.enterButtonAssign) j.put("ps3EnterButtonAssign", current.ps3.enterButtonAssign)
             if (current.ps3.consoleLanguage != base.ps3.consoleLanguage) j.put("ps3ConsoleLanguage", current.ps3.consoleLanguage)
             if (current.ps3.consoleRegion != base.ps3.consoleRegion) j.put("ps3ConsoleRegion", current.ps3.consoleRegion)
@@ -3080,6 +3124,13 @@ data class Settings(
                         else overrides.getInt("ps3PsnStatus"))
                     else base.ps3.psnStatus,
                     upnpEnabled = if (overrides.has("ps3UpnpEnabled")) overrides.getBoolean("ps3UpnpEnabled") else base.ps3.upnpEnabled,
+                    ipAddress = if (overrides.has("ps3IpAddress")) overrides.getString("ps3IpAddress") else base.ps3.ipAddress,
+                    bindAddress = if (overrides.has("ps3BindAddress")) overrides.getString("ps3BindAddress") else base.ps3.bindAddress,
+                    dnsAddress = if (overrides.has("ps3DnsAddress")) overrides.getString("ps3DnsAddress") else base.ps3.dnsAddress,
+                    ipSwapList = if (overrides.has("ps3IpSwapList")) overrides.getString("ps3IpSwapList") else base.ps3.ipSwapList,
+                    deriveMacFromPsid = if (overrides.has("ps3DeriveMacFromPsid")) overrides.getBoolean("ps3DeriveMacFromPsid") else base.ps3.deriveMacFromPsid,
+                    psnCountry = if (overrides.has("ps3PsnCountry")) overrides.getString("ps3PsnCountry") else base.ps3.psnCountry,
+                    clansEnabled = if (overrides.has("ps3ClansEnabled")) overrides.getBoolean("ps3ClansEnabled") else base.ps3.clansEnabled,
                     enterButtonAssign = if (overrides.has("ps3EnterButtonAssign")) overrides.getInt("ps3EnterButtonAssign") else base.ps3.enterButtonAssign,
                     consoleLanguage = if (overrides.has("ps3ConsoleLanguage")) overrides.getInt("ps3ConsoleLanguage") else base.ps3.consoleLanguage,
                     consoleRegion = if (overrides.has("ps3ConsoleRegion")) overrides.getInt("ps3ConsoleRegion") else base.ps3.consoleRegion,

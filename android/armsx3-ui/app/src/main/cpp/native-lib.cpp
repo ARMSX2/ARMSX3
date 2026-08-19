@@ -72,6 +72,10 @@ struct RPCSXApi {
   const char *(*rpcnResetPassword)(std::string_view npid, std::string_view token,
                                    std::string_view password);
   const char *(*rpcnTestLogin)();
+  const char *(*rpcnAddHost)(std::string_view desc, std::string_view host);
+  const char *(*rpcnDelHost)(std::string_view desc, std::string_view host);
+  void (*rpcnResetHosts)();
+  void (*rpcnSetIpv6)(bool enabled);
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
   bool (*installSplitPkg)(JNIEnv *env, const int *fds, int count, long progressId);
@@ -174,6 +178,10 @@ struct RPCSXLibrary : RPCSXApi {
     result.rpcnSendResetToken = reinterpret_cast<decltype(rpcnSendResetToken)>(dlsym(handle, "_rpcsx_rpcnSendResetToken"));
     result.rpcnResetPassword = reinterpret_cast<decltype(rpcnResetPassword)>(dlsym(handle, "_rpcsx_rpcnResetPassword"));
     result.rpcnTestLogin = reinterpret_cast<decltype(rpcnTestLogin)>(dlsym(handle, "_rpcsx_rpcnTestLogin"));
+    result.rpcnAddHost = reinterpret_cast<decltype(rpcnAddHost)>(dlsym(handle, "_rpcsx_rpcnAddHost"));
+    result.rpcnDelHost = reinterpret_cast<decltype(rpcnDelHost)>(dlsym(handle, "_rpcsx_rpcnDelHost"));
+    result.rpcnResetHosts = reinterpret_cast<decltype(rpcnResetHosts)>(dlsym(handle, "_rpcsx_rpcnResetHosts"));
+    result.rpcnSetIpv6 = reinterpret_cast<decltype(rpcnSetIpv6)>(dlsym(handle, "_rpcsx_rpcnSetIpv6"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
     // symbol, and refusing to load it over a missing optional feature would be worse than the
@@ -1114,6 +1122,50 @@ Java_net_rpcsx_RPCSX_rpcnGetConfig(JNIEnv *env, jobject) {
   if (!rpcsxLib.rpcnGetConfig) return env->NewStringUTF("");
   const char *json = rpcsxLib.rpcnGetConfig();
   return env->NewStringUTF(json ? json : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnAddHost(JNIEnv *env, jobject, jstring desc, jstring host) {
+  if (!rpcsxLib.rpcnAddHost) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string d = str(desc), h = str(host);
+  const char *msg = rpcsxLib.rpcnAddHost(d, h);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnDelHost(JNIEnv *env, jobject, jstring desc, jstring host) {
+  if (!rpcsxLib.rpcnDelHost) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string d = str(desc), h = str(host);
+  const char *msg = rpcsxLib.rpcnDelHost(d, h);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_rpcnResetHosts(JNIEnv *, jobject) {
+  if (rpcsxLib.rpcnResetHosts) rpcsxLib.rpcnResetHosts();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_rpcnSetIpv6(JNIEnv *, jobject, jboolean enabled) {
+  if (rpcsxLib.rpcnSetIpv6) rpcsxLib.rpcnSetIpv6(enabled == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL

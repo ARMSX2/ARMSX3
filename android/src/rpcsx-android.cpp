@@ -2681,6 +2681,29 @@ extern "C" bool _rpcsx_keyboardKey(int androidKeyCode, int unicode, bool pressed
 // Kotlin side; nothing here may run on the UI thread.
 
 // The config, as JSON, so one call carries the whole account rather than five.
+// Server descriptions are free text the user typed, so they can contain the two characters
+// that would otherwise end the field and hand the parser garbage.
+static std::string json_escape(std::string_view in) {
+  std::string out;
+  out.reserve(in.size());
+
+  for (const char c : in) {
+    switch (c) {
+    case '"': out += "\\\""; break;
+    case '\\': out += "\\\\"; break;
+    case '\n': out += "\\n"; break;
+    case '\r': out += "\\r"; break;
+    case '\t': out += "\\t"; break;
+    default:
+      // Anything below 0x20 is illegal unescaped in JSON; nothing here needs it.
+      if (static_cast<unsigned char>(c) >= 0x20) out += c;
+      break;
+    }
+  }
+
+  return out;
+}
+
 extern "C" const char *_rpcsx_rpcnGetConfig() {
   static thread_local std::string result;
 
@@ -2689,16 +2712,19 @@ extern "C" const char *_rpcsx_rpcnGetConfig() {
   std::string hosts;
   for (const auto &[desc, addr] : g_cfg_rpcn.get_hosts()) {
     if (!hosts.empty()) hosts += ",";
-    fmt::append(hosts, R"({"desc":"%s","host":"%s"})", desc, addr);
+    fmt::append(hosts, R"({"desc":"%s","host":"%s"})", json_escape(desc),
+                json_escape(addr));
   }
 
-  // The password is stored hashed by cfg_rpcn, so what comes back is not the user's
-  // plaintext; it is only ever echoed back into set_password, never displayed.
+  // hasPassword, not the password: cfg_rpcn stores it in PLAINTEXT in rpcn.yml
+  // (set_password is a straight from_string), so there is nothing safe to hand back and
+  // no reason to -- the UI only ever needs to know whether one is set.
   result = fmt::format(
-      R"({"host":"%s","npid":"%s","hasPassword":%s,"hasToken":%s,"hosts":[%s]})",
-      g_cfg_rpcn.get_host(), g_cfg_rpcn.get_npid(),
+      R"({"host":"%s","npid":"%s","hasPassword":%s,"hasToken":%s,"ipv6":%s,"hosts":[%s]})",
+      json_escape(g_cfg_rpcn.get_host()), json_escape(g_cfg_rpcn.get_npid()),
       g_cfg_rpcn.get_password().empty() ? "false" : "true",
-      g_cfg_rpcn.get_token().empty() ? "false" : "true", hosts);
+      g_cfg_rpcn.get_token().empty() ? "false" : "true",
+      g_cfg_rpcn.get_ipv6_support() ? "true" : "false", hosts);
 
   return result.c_str();
 }
@@ -2760,6 +2786,65 @@ static std::string rpcn_describe(rpcn::ErrorType error) {
   case rpcn::ErrorType::LoginError: return "The server refused the login.";
   default: return fmt::format("Server error %d.", static_cast<int>(error));
   }
+}
+
+// ---- Saved servers -------------------------------------------------------------------
+//
+// The list already exists in the core (cfg_rpcn "Hosts", "desc|host" entries joined by
+// "|||") and get_hosts() restores the default whenever the list ends up empty, so this is
+// a view onto it rather than a second store. add_host/del_host do NOT save, so every one
+// of these has to.
+
+extern "C" const char *_rpcsx_rpcnAddHost(std::string_view desc, std::string_view host) {
+  g_cfg_rpcn.load();
+
+  const std::string s_desc{desc}, s_host{host};
+
+  if (s_desc.empty() || s_host.empty()) {
+    return rpcn_fail("A saved server needs both a name and an address.");
+  }
+
+  if (!g_cfg_rpcn.add_host(s_desc, s_host)) {
+    return rpcn_fail("That server is already saved.");
+  }
+
+  g_cfg_rpcn.save();
+  return rpcn_ok();
+}
+
+extern "C" const char *_rpcsx_rpcnDelHost(std::string_view desc, std::string_view host) {
+  g_cfg_rpcn.load();
+
+  const std::string s_desc{desc}, s_host{host};
+
+  // del_host returns true without removing anything for the official server, which is
+  // deliberate upstream -- it is what stops the list being emptied of the one address that
+  // is known to work. Report that rather than claiming a delete that did not happen.
+  if (s_desc == "Official RPCN Server" && s_host == "np.rpcs3.net") {
+    return rpcn_fail("The official server cannot be removed.");
+  }
+
+  if (!g_cfg_rpcn.del_host(s_desc, s_host)) {
+    return rpcn_fail("That server is not in the list.");
+  }
+
+  g_cfg_rpcn.save();
+  return rpcn_ok();
+}
+
+// Back to the shipped list and the official address, for when a custom server has been
+// typed over the top of it and the working one is no longer to hand.
+extern "C" void _rpcsx_rpcnResetHosts() {
+  g_cfg_rpcn.load();
+  g_cfg_rpcn.hosts.from_default();
+  g_cfg_rpcn.set_host("np.rpcs3.net");
+  g_cfg_rpcn.save();
+}
+
+extern "C" void _rpcsx_rpcnSetIpv6(bool enabled) {
+  g_cfg_rpcn.load();
+  g_cfg_rpcn.set_ipv6_support(enabled);
+  g_cfg_rpcn.save();
 }
 
 // Connect first; a connection failure has to read differently from an operation failure,

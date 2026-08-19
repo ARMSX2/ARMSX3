@@ -1,12 +1,16 @@
 package com.armsx2.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -16,6 +20,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -58,6 +63,13 @@ fun RpcnAccountSection() {
     var busy by remember { mutableStateOf(false) }
     var creating by remember { mutableStateOf(false) }
 
+    // The saved-server list is the core's own cfg_rpcn "Hosts" entry, read back rather than
+    // mirrored, so add/remove/reset and whatever the core did to it always agree.
+    var hosts by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var ipv6 by remember { mutableStateOf(false) }
+    var naming by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+
     // str() is @Composable, so it cannot be called from run() or from an onClick lambda.
     // Resolve every message the callbacks need up here, where it is legal, and let them
     // close over plain strings.
@@ -68,10 +80,13 @@ fun RpcnAccountSection() {
     val msgCreateHint = str("rpcn.create.hint")
     val msgTokenSent = str("rpcn.token.sent")
     val msgResetSent = str("rpcn.reset.sent")
+    val msgHostAdded = str("rpcn.hosts.added")
+    val msgHostRemoved = str("rpcn.hosts.removed")
+    val msgHostsReset = str("rpcn.hosts.resetDone")
+    val msgHostSelected = str("rpcn.hosts.selected")
 
-    // Seed from whatever the core already has, so an existing account shows up rather than
-    // looking unset.
-    LaunchedEffect(Unit) {
+    /** Re-read everything the core holds. Called on entry and after anything that writes. */
+    suspend fun reload() {
         val json = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetConfig() }
 
         if (json.isNotBlank()) {
@@ -80,11 +95,26 @@ fun RpcnAccountSection() {
                 host = o.optString("host", "np.rpcs3.net")
                 npid = o.optString("npid", "")
                 hasPassword = o.optBoolean("hasPassword", false)
+                ipv6 = o.optBoolean("ipv6", false)
+
+                val arr = o.optJSONArray("hosts")
+                val list = mutableListOf<Pair<String, String>>()
+                for (i in 0 until (arr?.length() ?: 0)) {
+                    val e = arr!!.optJSONObject(i) ?: continue
+                    val desc = e.optString("desc", "")
+                    val addr = e.optString("host", "")
+                    if (desc.isNotBlank() && addr.isNotBlank()) list.add(desc to addr)
+                }
+                hosts = list
             }
         }
 
         if (host.isBlank()) host = "np.rpcs3.net"
     }
+
+    // Seed from whatever the core already has, so an existing account shows up rather than
+    // looking unset.
+    LaunchedEffect(Unit) { reload() }
 
     /** Run one blocking RPCN call, funnelling its message into [status]. */
     fun run(okMessage: String, block: () -> String) {
@@ -100,8 +130,7 @@ fun RpcnAccountSection() {
             if (message.isBlank()) {
                 // Re-read rather than assume: the core saves credentials itself on a
                 // successful create or reset, and this is what proves it.
-                val json = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetConfig() }
-                runCatching { hasPassword = JSONObject(json).optBoolean("hasPassword", false) }
+                reload()
             }
         }
     }
@@ -127,6 +156,113 @@ fun RpcnAccountSection() {
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
         )
+        // Saved servers. Tapping one selects it; the official entry is protected against
+        // deletion in the core, which is what guarantees there is always a way back.
+        Text(
+            str("rpcn.hosts.title"),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+        Text(
+            str("rpcn.hosts.description"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 2.dp),
+        )
+
+        hosts.forEach { (desc, addr) ->
+            val selected = addr.equals(host.trim(), ignoreCase = true)
+            val official = desc == "Official RPCN Server" && addr == "np.rpcs3.net"
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = !busy) {
+                        host = addr
+                        Rpcs3Bridge.rpcnSetConfig(addr, "", "", "")
+                        status = msgHostSelected
+                    }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (selected) "\u25cf  $desc" else "\u25cb  $desc",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (selected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    "  $addr",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.weight(1f))
+                if (!official) {
+                    TextButton(enabled = !busy, onClick = {
+                        scope.launch {
+                            val message = withContext(Dispatchers.IO) {
+                                Rpcs3Bridge.rpcnDelHost(desc, addr)
+                            }
+                            status = message.ifBlank { msgHostRemoved }
+                            reload()
+                        }
+                    }) { Text(str("rpcn.hosts.remove")) }
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            TextButton(enabled = !busy, onClick = {
+                newName = ""
+                naming = true
+            }) { Text(str("rpcn.hosts.add")) }
+
+            TextButton(enabled = !busy, onClick = {
+                scope.launch {
+                    withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnResetHosts() }
+                    status = msgHostsReset
+                    reload()
+                }
+            }) { Text(str("rpcn.hosts.reset")) }
+        }
+
+        if (naming) {
+            AlertDialog(
+                onDismissRequest = { naming = false },
+                title = { Text(str("rpcn.hosts.add")) },
+                text = {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text(str("rpcn.hosts.name")) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val name = newName.trim()
+                        val addr = host.trim()
+                        naming = false
+                        scope.launch {
+                            val message = withContext(Dispatchers.IO) {
+                                Rpcs3Bridge.rpcnAddHost(name, addr)
+                            }
+                            status = message.ifBlank { msgHostAdded }
+                            reload()
+                        }
+                    }) { Text(str("rpcn.save")) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { naming = false }) { Text(str("action.cancel")) }
+                },
+            )
+        }
+
         OutlinedTextField(
             value = npid,
             onValueChange = { npid = it },
@@ -189,10 +325,7 @@ fun RpcnAccountSection() {
                 Rpcs3Bridge.rpcnSetConfig(host.trim(), npid.trim(), password, token.trim())
                 password = ""
                 status = msgSaved
-                scope.launch {
-                    val json = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetConfig() }
-                    runCatching { hasPassword = JSONObject(json).optBoolean("hasPassword", false) }
-                }
+                scope.launch { reload() }
             }) { Text(str("rpcn.save")) }
 
             TextButton(enabled = !busy, onClick = {
@@ -239,6 +372,34 @@ fun RpcnAccountSection() {
                     }
                 }
             }) { Text(str("rpcn.reset")) }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    str("rpcn.ipv6.label"),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    str("rpcn.ipv6.description"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = ipv6,
+                enabled = !busy,
+                onCheckedChange = {
+                    ipv6 = it
+                    scope.launch {
+                        withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnSetIpv6(it) }
+                    }
+                },
+            )
         }
 
         if (status.isNotBlank()) {

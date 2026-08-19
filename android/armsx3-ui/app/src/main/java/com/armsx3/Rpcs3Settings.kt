@@ -521,6 +521,22 @@ object Rpcs3Settings {
 
     fun setUpnp(enabled: Boolean) = setBool("Net@@UPNP Enabled", enabled)
 
+    // The rest of the core's Net node. These had no writer at all, so the only way to set
+    // a DNS server -- the thing a private/fan game server needs, RPCN being Sony's side
+    // only -- was a raw core override.
+    fun setIpAddress(value: String) = setString("Net@@IP address", value)
+    fun setBindAddress(value: String) = setString("Net@@Bind address", value)
+    fun setDnsAddress(value: String) = setString("Net@@DNS address", value)
+
+    /** "host=1.2.3.4" entries joined by "&&"; np::dnshook drops any entry it cannot parse. */
+    fun setIpSwapList(value: String) = setString("Net@@IP swap list", value)
+
+    fun setDeriveMacFromPsid(enabled: Boolean) =
+        setBool("Net@@Derive MAC from PSID", enabled)
+
+    fun setPsnCountry(code: String) = setString("Net@@PSN Country", code)
+    fun setClansEnabled(enabled: Boolean) = setBool("Net@@Clans Enabled", enabled)
+
     // ---- PS3 advanced (core accuracy) ----------------------------------
 
     private val XFLOAT = arrayOf("Accurate", "Approximate", "Relaxed", "Inaccurate")

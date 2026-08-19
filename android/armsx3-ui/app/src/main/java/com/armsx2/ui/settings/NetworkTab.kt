@@ -93,6 +93,60 @@ fun NetworkTab(state: MutableState<Settings>) {
                 description = str("net.upnp.description"),
         ) { apply(s.copy(ps3 = s.ps3.copy(upnpEnabled = it))) }
         SettingsDivider()
+        // DNS and the redirect list come first because they are the two that answer "how do
+        // I reach a custom game server" -- RPCN covers Sony's side only, and a publisher's
+        // own backend was never part of it.
+        EditableTextRow(
+                controllerId = "net.dns",
+                label = str("net.dns.label"),
+                value = s.ps3.dnsAddress,
+                description = str("net.dns.description"),
+                placeholder = "8.8.8.8",
+        ) { apply(s.copy(ps3 = s.ps3.copy(dnsAddress = it.ifBlank { "8.8.8.8" }))) }
+        SettingsDivider()
+        EditableTextRow(
+                controllerId = "net.swap",
+                label = str("net.swap.label"),
+                value = s.ps3.ipSwapList,
+                description = str("net.swap.description"),
+        ) { apply(s.copy(ps3 = s.ps3.copy(ipSwapList = it))) }
+        SettingsDivider()
+        EditableTextRow(
+                controllerId = "net.ip",
+                label = str("net.ip.label"),
+                value = s.ps3.ipAddress,
+                description = str("net.ip.description"),
+                placeholder = "0.0.0.0",
+        ) { apply(s.copy(ps3 = s.ps3.copy(ipAddress = it.ifBlank { "0.0.0.0" }))) }
+        SettingsDivider()
+        EditableTextRow(
+                controllerId = "net.bind",
+                label = str("net.bind.label"),
+                value = s.ps3.bindAddress,
+                description = str("net.bind.description"),
+                placeholder = "0.0.0.0",
+        ) { apply(s.copy(ps3 = s.ps3.copy(bindAddress = it.ifBlank { "0.0.0.0" }))) }
+        SettingsDivider()
+        EditableTextRow(
+                controllerId = "net.country",
+                label = str("net.country.label"),
+                value = s.ps3.psnCountry,
+                description = str("net.country.description"),
+                placeholder = "us",
+        ) { apply(s.copy(ps3 = s.ps3.copy(psnCountry = it.ifBlank { "us" }.lowercase().take(2)))) }
+        SettingsDivider()
+        ToggleRow(
+                str("net.mac.label"),
+                s.ps3.deriveMacFromPsid,
+                description = str("net.mac.description"),
+        ) { apply(s.copy(ps3 = s.ps3.copy(deriveMacFromPsid = it))) }
+        SettingsDivider()
+        ToggleRow(
+                str("net.clans.label"),
+                s.ps3.clansEnabled,
+                description = str("net.clans.description"),
+        ) { apply(s.copy(ps3 = s.ps3.copy(clansEnabled = it))) }
+        SettingsDivider()
         // Emulate USB Keyboard. Previously reachable ONLY from the in-game pause menu, which made
         // the "On-Screen Keyboard (toggle)" hotkey's own message a dead end: it says to turn this
         // on in Network settings, and there was nothing here to turn on. Same field, so the two
@@ -310,20 +364,40 @@ private fun LocalLinkRow(
 }
 
 @Composable
-private fun EditableTextRow(label: String, value: String, onChange: (String) -> Unit) {
+private fun EditableTextRow(
+    controllerId: String,
+    label: String,
+    value: String,
+    description: String,
+    /** Shown greyed when the value is empty; also what the editor starts from. */
+    placeholder: String = "",
+    // Last, so callers can pass it as a trailing lambda like every other row here.
+    onChange: (String) -> Unit,
+) {
     var editing by remember(label) { mutableStateOf(false) }
-    var draft by remember(label, value) { mutableStateOf(value.ifEmpty { "0.0.0.0" }) }
+    var draft by remember(label, value) { mutableStateOf(value.ifEmpty { placeholder }) }
+    val open = { draft = value.ifEmpty { placeholder }; editing = true }
+
     if (editing) {
         AlertDialog(
             onDismissRequest = { editing = false },
             title = { Text(label) },
             text = {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    singleLine = true,
-                    label = { Text(str("network.address")) },
-                )
+                Column {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        singleLine = true,
+                        label = { Text(str("net.address")) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        description,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -336,24 +410,38 @@ private fun EditableTextRow(label: String, value: String, onChange: (String) -> 
             },
         )
     }
-    Row(
+    Column(
         Modifier
             .fillMaxWidth()
-            .height(64.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(rowAura())
-            .clickable { editing = true }
-            .padding(horizontal = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .clickable(onClick = open)
+            // Without this the row is invisible to a controller: only the shared
+            // ToggleRow/SegmentedRow widgets self-register with the pad-nav registry.
+            .controllerFocusable(controllerId, onConfirm = open)
+            .padding(horizontal = 6.dp, vertical = 8.dp),
     ) {
-        Text(label, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.weight(1f))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                label,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.weight(1f))
+            Text(
+                value.ifEmpty { placeholder.ifEmpty { "\u2014" } },
+                color = Color(0xFFCCCCCC),
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         Text(
-            value.ifEmpty { "0.0.0.0" },
-            color = Color(0xFFCCCCCC),
-            fontSize = 14.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            description,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 12.sp,
+            modifier = Modifier.padding(top = 3.dp),
         )
     }
 }

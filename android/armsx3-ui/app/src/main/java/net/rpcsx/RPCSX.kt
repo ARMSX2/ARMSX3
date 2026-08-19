@@ -145,6 +145,17 @@ class RPCSX {
     /** Connect and authenticate with the saved account. */
     external fun rpcnTestLogin(): String
 
+    // Saved servers. The list lives in the core's own cfg_rpcn "Hosts" entry, so these are
+    // a view onto it, not a second store -- and the official server is protected from
+    // deletion there, not here.
+    external fun rpcnAddHost(desc: String, host: String): String
+    external fun rpcnDelHost(desc: String, host: String): String
+
+    /** Restore the shipped server list and select the official address. */
+    external fun rpcnResetHosts()
+
+    external fun rpcnSetIpv6(enabled: Boolean)
+
     /** Coalesce the config file writes of every settingsSet until [settingsEndBatch]. */
     external fun settingsBeginBatch()
     external fun settingsEndBatch()

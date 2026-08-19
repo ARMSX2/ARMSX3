@@ -600,6 +600,13 @@ object Rpcs3Bridge {
                 "Internet enabled" -> Rpcs3Settings.setInternetEnabled(asBool(value))
                 "PSN status" -> Rpcs3Settings.setPsnStatus(asInt(value))
                 "UPNP Enabled" -> Rpcs3Settings.setUpnp(asBool(value))
+                "IP address" -> Rpcs3Settings.setIpAddress(value)
+                "Bind address" -> Rpcs3Settings.setBindAddress(value)
+                "DNS address" -> Rpcs3Settings.setDnsAddress(value)
+                "IP swap list" -> Rpcs3Settings.setIpSwapList(value)
+                "Derive MAC from PSID" -> Rpcs3Settings.setDeriveMacFromPsid(asBool(value))
+                "PSN Country" -> Rpcs3Settings.setPsnCountry(value)
+                "Clans Enabled" -> Rpcs3Settings.setClansEnabled(asBool(value))
                 else -> return false
             }
 
@@ -1097,6 +1104,26 @@ object Rpcs3Bridge {
     fun rpcnTestLogin(): String =
         runCatching { RPCSX.instance.rpcnTestLogin() }
             .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnAddHost(desc: String, host: String): String =
+        runCatching { RPCSX.instance.rpcnAddHost(desc, host) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnDelHost(desc: String, host: String): String =
+        runCatching { RPCSX.instance.rpcnDelHost(desc, host) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnResetHosts() {
+        runCatching { RPCSX.instance.rpcnResetHosts() }
+    }
+
+    @JvmStatic
+    fun rpcnSetIpv6(enabled: Boolean) {
+        runCatching { RPCSX.instance.rpcnSetIpv6(enabled) }
+    }
 
     /** One key transition for cellKb. See RPCSX.keyboardKey. */
     @JvmStatic
