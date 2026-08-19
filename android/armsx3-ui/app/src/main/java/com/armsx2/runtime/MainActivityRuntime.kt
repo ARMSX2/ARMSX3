@@ -3290,6 +3290,35 @@ open class MainActivityRuntime : ComponentActivity() {
         val physicalCode = event.keyCode
         if (physicalCode == KeyEvent.KEYCODE_UNKNOWN) return false
 
+        // A trigger that reports BOTH ways gets written by both paths, and they fight.
+        //
+        // Retroid pads have an L2/R2 mode called "both": the trigger sends KEYCODE_BUTTON_L2/R2
+        // AND an analog axis. sendTrigger already writes the button from the axis, so letting
+        // the key through as well gives one physical squeeze two independent writers on the
+        // same pad button -- which lands as a delayed or doubled press, and made long jumps in
+        // the Ratchet games (hold R2) unreliable.
+        //
+        // sendTrigger has the opposite guard already: a pad with no trigger axis at all leaves
+        // "the key path in sole charge". This is that guard's mirror, and the two together mean
+        // exactly one writer owns a trigger on every pad -- axis where there is an axis, key
+        // where there is not.
+        //
+        // Deliberately keyed on the PHYSICAL code before remapping: what decides ownership is
+        // how the hardware reports the trigger, not what the user bound it to.
+        if (physicalCode == KeyEvent.KEYCODE_BUTTON_L2 || physicalCode == KeyEvent.KEYCODE_BUTTON_R2)
+        {
+            val isLeft = physicalCode == KeyEvent.KEYCODE_BUTTON_L2
+            val axisA = if (isLeft) MotionEvent.AXIS_LTRIGGER else MotionEvent.AXIS_RTRIGGER
+            val axisB = if (isLeft) MotionEvent.AXIS_BRAKE else MotionEvent.AXIS_GAS
+            val axisC = if (isLeft) -1 else rightTriggerExtraAxis(event.deviceId)
+
+            if (deviceHasAxis(event.deviceId, axisA) || deviceHasAxis(event.deviceId, axisB) ||
+                deviceHasAxis(event.deviceId, axisC))
+            {
+                return true
+            }
+        }
+
         // Local co-op routing and macro precedence exactly match the old Compose
         // onKeyEvent path; only the dispatch layer has changed.
         val port = com.armsx2.input.PadRouter.portForDevice(event.deviceId)
