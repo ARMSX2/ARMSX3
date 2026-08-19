@@ -69,6 +69,11 @@ namespace rpcn
 		QuickMatchGUI,
 		SearchJoinRoomGUI,
 		GetRoomMemberDataExternalList,
+		// Appended by upstream cb175278b along with protocol 31. We do not send either --
+		// trophy sync is not implemented here -- but the ordinals have to match the server's
+		// or every command after this point would be misnumbered.
+		UnlockTrophy,
+		SyncTrophies,
 	};
 
 	enum class NotificationType : u16

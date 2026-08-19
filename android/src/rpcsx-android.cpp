@@ -2850,8 +2850,8 @@ extern "C" const char *_rpcsx_rpcnResetPassword(std::string_view npid,
 // Connect and authenticate with the saved account, so "is my account set up" can be
 // answered here instead of by booting a game and guessing.
 //
-// check_config = true makes get_instance validate the saved credentials before trying,
-// and wait_for_authentified is the public path -- login() itself is private.
+// wait_for_authentified is the public path -- login() itself is private -- but it is only
+// half of it, and the half that hangs on its own. See below.
 extern "C" const char *_rpcsx_rpcnTestLogin() {
   g_cfg_rpcn.load();
 
@@ -2860,10 +2860,25 @@ extern "C" const char *_rpcsx_rpcnTestLogin() {
                      "and password.");
   }
 
-  const auto rpcn = rpcn::rpcn_client::get_instance(0, true);
+  // get_instance's check_config flag does NOT return an error -- it calls
+  // fmt::throw_exception, which on a non-guest thread is a fatal abort. Passing it from a
+  // settings button meant tapping "Test sign-in" with PSN status not yet set to RPCN killed
+  // the process. Desktop passes the default (false) for exactly this reason.
+  const auto rpcn = rpcn::rpcn_client::get_instance(0);
 
   if (!rpcn) {
     return rpcn_fail("Could not create the RPCN client.");
+  }
+
+  // Connect FIRST. rpcn_thread's state machine only acts on want_conn while disconnected:
+  // wait_for_authentified sets want_auth alone, so on a fresh client the thread wakes, sees
+  // no connection request, breaks back to its semaphore and never releases sem_authentified.
+  // The call then blocks forever with nothing in the log after "Loading RPCN config" --
+  // which is exactly what it did. np_handler does these two in this order for this reason.
+  if (const auto state = rpcn->wait_for_connection();
+      state != rpcn::rpcn_state::failure_no_failure) {
+    return rpcn_fail(fmt::format("Could not reach the RPCN server: %s",
+                                 rpcn::rpcn_state_to_string(state)));
   }
 
   if (const auto state = rpcn->wait_for_authentified();

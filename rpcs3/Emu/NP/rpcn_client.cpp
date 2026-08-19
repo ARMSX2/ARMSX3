@@ -257,7 +257,15 @@ namespace rpcn
 		rpcn_log.notice("online: %s, pr_com_id: %s, pr_title: %s, pr_status: %s, pr_comment: %s, pr_data: %s", online ? "true" : "false", pr_com_id.data, pr_title, pr_status, pr_comment, fmt::buf_to_hexstring(pr_data.data(), pr_data.size()));
 	}
 
-	constexpr u32 RPCN_PROTOCOL_VERSION = 30;
+	// 31 since upstream cb175278b (2026-08-18), which added trophy sync. np.rpcs3.net
+	// enforces it: a client on 30 completes the TLS handshake, is told the server speaks 31
+	// and is disconnected -- "Protocol Version Error (outdated RPCS3?)".
+	//
+	// The two commands that version added are appended to the end of CommandType, so every
+	// existing command keeps its ordinal and the wire format for everything this client
+	// actually sends is unchanged. Trophy sync itself is not implemented here; not sending a
+	// command is always safe.
+	constexpr u32 RPCN_PROTOCOL_VERSION = 31;
 	constexpr usz RPCN_HEADER_SIZE = 15;
 
 	const char* error_to_explanation(rpcn::ErrorType error)

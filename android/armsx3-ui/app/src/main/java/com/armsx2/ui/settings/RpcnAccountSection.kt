@@ -139,9 +139,12 @@ fun RpcnAccountSection() {
             value = password,
             onValueChange = { password = it },
             label = {
-                // Say when one is already stored, because the field is deliberately blank:
-                // cfg_rpcn keeps a hash, so there is no plaintext to show and an empty box
-                // would otherwise read as "no password set".
+                // Say when one is already stored, because the field is deliberately blank
+                // and an empty box would otherwise read as "no password set".
+                //
+                // Not shown even though it could be: cfg_rpcn stores the password in
+                // PLAINTEXT in rpcn.yml (set_password does a straight from_string), so
+                // rendering it would put it on screen as well as on disk for no gain.
                 Text(if (hasPassword) str("rpcn.password.stored") else str("rpcn.password"))
             },
             singleLine = true,
