@@ -406,6 +406,11 @@ val EN: Map<String, String> = mapOf(
     "core.settings.unavailable" to "The emulator core is not loaded, so its settings cannot be read.",
     "core.settings.scope.game" to "Changes are remembered for this game only",
     "core.settings.scope.global" to "Changes are remembered for every game",
+    "core.settings.overrideCount" to "Settings remembered here",
+    "core.settings.overridden" to "Remembered here",
+    "core.settings.clearOne" to "Forget",
+    "core.settings.reset" to "Forget all",
+    "core.settings.resetConfirm" to "Tap again to forget all",
     // PS3 trophies (TrophiesScreen). Numbered placeholders (%1/%2/%3) rather than %d, because
     // several of these take more than one number and a translator has to be able to reorder them.
     "trophies.title" to "Trophies",

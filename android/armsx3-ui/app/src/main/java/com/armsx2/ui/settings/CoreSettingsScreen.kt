@@ -2,6 +2,7 @@ package com.armsx2.ui.settings
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -20,12 +21,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.armsx2.config.ConfigStore
 import com.armsx2.config.CoreSettingOverrides
 import com.armsx2.config.SettingsScope
+import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.ui.common.ArmsBackdrop
@@ -119,6 +123,18 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
     // Bumped after every write so the tree is re-read and dependent nodes (a value the core
     // clamped, say) show what the core actually stored rather than what we sent.
     var revision by remember { mutableStateOf(0) }
+    // What this scope currently remembers. Read alongside the tree so a row can say whether
+    // its value is a recorded override rather than whatever the curated settings last wrote.
+    //
+    // Until this existed there was no way to see, let alone undo, a recorded path: the store
+    // re-pushes at the tail of applyTo, so an override silently beats every curated screen
+    // forever, and the only evidence is a config.yml that disagrees with the UI. Two separate
+    // one-shot migrations had already been written to purge leftovers by name; both had run
+    // and RSX Profiler was still recorded on a test device.
+    var overrides by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // Reset is two taps rather than an AlertDialog: dialogs swallow gamepad keys here, and
+    // this screen is reachable from the in-game menu with only a controller in hand.
+    var confirmingReset by remember { mutableStateOf(false) }
 
     LaunchedEffect(revision) {
         val loaded = withContext(Dispatchers.IO) {
@@ -134,14 +150,52 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
             error = if (it.isEmpty()) I18n.get("core.settings.unavailable") else null
         }
         loaded.onFailure { error = I18n.get("core.settings.unavailable") }
+        overrides = runCatching { CoreSettingOverrides.load(scope, serial) }.getOrDefault(emptyMap())
+    }
+
+    // settingsSet takes JSON: bools and numbers bare, enums and strings quoted.
+    fun encode(type: String, raw: String): String = when (type) {
+        "bool", "int", "uint", "float" -> raw
+        else -> JSONObject.quote(raw)
+    }
+
+    /**
+     * Re-push the curated settings after dropping a record.
+     *
+     * Forgetting an override only stops it being replayed; the value it already wrote is still
+     * live in the core. For a node one of the normal screens also writes, this puts that screen's
+     * value back immediately. For a node nothing curated owns, the caller restores the core's own
+     * default first -- otherwise "reset" would leave the value exactly where the override put it
+     * and look like it did nothing.
+     */
+    fun reapplyCurated() {
+        runCatching {
+            ConfigStore.resolveForGame(MainActivityRuntime.currentGame.value?.settingsKey).applyTo()
+        }
+    }
+
+    fun clearOne(setting: CoreSetting) {
+        runCatching { CoreSettingOverrides.forget(scope, serial, setting.path) }
+        runCatching { RPCSX.instance.settingsSet(setting.path, encode(setting.type, setting.default)) }
+        reapplyCurated()
+        revision++
+    }
+
+    fun clearAll() {
+        val cleared = overrides.keys.toSet()
+        runCatching { CoreSettingOverrides.clear(scope, serial) }
+        // Defaults first, curated second: applyTo below rewrites every node it owns, so the
+        // only ones this actually decides are the nodes no curated screen touches.
+        all.asSequence().filter { it.path in cleared }.forEach {
+            runCatching { RPCSX.instance.settingsSet(it.path, encode(it.type, it.default)) }
+        }
+        reapplyCurated()
+        confirmingReset = false
+        revision++
     }
 
     fun write(setting: CoreSetting, raw: String) {
-        // settingsSet takes JSON: bools and numbers bare, enums and strings quoted.
-        val encoded = when (setting.type) {
-            "bool", "int", "uint", "float" -> raw
-            else -> JSONObject.quote(raw)
-        }
+        val encoded = encode(setting.type, raw)
         runCatching { RPCSX.instance.settingsSet(setting.path, encoded) }
         // Remember it, or applyTo will write the curated store back over this node the next
         // time any setting changes or the next time a game boots. Into this screen's tier:
@@ -183,6 +237,27 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
             )
+            if (overrides.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${str("core.settings.overrideCount")}: ${overrides.size}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    TextButton(onClick = { if (confirmingReset) clearAll() else confirmingReset = true }) {
+                        Text(
+                            if (confirmingReset) str("core.settings.resetConfirm")
+                            else str("core.settings.reset"),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+
             OutlinedTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -216,11 +291,35 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Column(Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
-                            Text(
-                                setting.section,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    setting.section,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                // Marked per row, not just counted in the header: the point of
+                                // the count is to notice, the point of this is to know WHICH
+                                // node is ignoring the normal settings screens.
+                                if (setting.path in overrides) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            str("core.settings.overridden"),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                        TextButton(onClick = { clearOne(setting) }) {
+                                            Text(
+                                                str("core.settings.clearOne"),
+                                                style = MaterialTheme.typography.labelSmall,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                             CoreSettingRow(setting) { write(setting, it) }
                         }
                     }

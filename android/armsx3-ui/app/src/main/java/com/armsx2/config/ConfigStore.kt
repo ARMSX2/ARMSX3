@@ -73,6 +73,7 @@ object ConfigStore {
     // Bumped: the profiler was recorded again during the 0.5 debugging work, after the first
     // purge had already marked itself done.
     private const val KEY_DIAG_OVERRIDES_PURGED_2 = "config.migrated.diagOverridesPurged2"
+    private const val KEY_SHADOWING_OVERRIDES_PURGED = "config.migrated.shadowingOverridesPurged"
     // Core settings left pinned as raw overrides by the 0.5 debugging sessions.
     private const val KEY_TUNING_OVERRIDES_PURGED = "config.migrated.tuningOverridesPurged"
     // Per-title Accurate SPU Reservations values left behind by the same debugging.
@@ -520,6 +521,61 @@ object ConfigStore {
                 )
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_DIAG_OVERRIDES_PURGED_2, true) }
+        }
+
+        // Drop raw overrides on nodes a curated settings screen also writes.
+        //
+        // These two cannot coexist. Overrides replay at the tail of applyTo, after the curated
+        // store has written the same node, so the recorded value wins every time and the normal
+        // screen becomes decorative: it shows the choice, saves the choice, and the choice is
+        // overwritten a moment later with nothing on screen to say so. A test device carried
+        // Core@@PPU Decoder = "Recompiler (LLVM)" this way, which silently defeated every
+        // attempt to boot a game on the interpreter -- including one run specifically to find
+        // out whether a hang was a codegen bug.
+        //
+        // Named rather than derived: the curated set is spread across applyToInner and the
+        // Rpcs3Bridge routing table, and a wrong automatic answer here would delete real user
+        // edits. Every path in the first group is reachable from Settings, so nothing is lost --
+        // the value still applies, it just comes from the screen that shows it.
+        //
+        // Video@@Accurate ZCULL stats is deliberately NOT purged: it has no curated writer and
+        // no debugging history, so a recorded value there is most likely a deliberate per-game
+        // performance choice. It is visible and clearable in All Core Settings now instead.
+        //
+        // The two migrations above purged diagnostics by name and both had already run on the
+        // device that still had RSX Profiler recorded, which is why All Core Settings now shows
+        // and clears overrides directly instead of waiting for the next migration.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_SHADOWING_OVERRIDES_PURGED, false)) {
+            runCatching {
+                CoreSettingOverrides.forgetEverywhere(
+                    "Core@@PPU Decoder",
+                    "Core@@SPU Decoder",
+                    "Core@@SPU XFloat Accuracy",
+                    "Core@@Max SPURS Threads",
+                    "Core@@Precise SPU Verification",
+                    "Core@@PPU Vector NaN Handling",
+                    "Video@@Shader Mode",
+                    "Video@@Multithreaded RSX",
+                )
+
+                // These three have no curated writer, so forgetting alone would leave the
+                // recorded value sitting in config.yml with nothing to overwrite it -- the
+                // record would be gone and the effect would remain, which is worse than
+                // leaving it. Write the core's own default off instead, the way the Vblank
+                // migration writes 60 rather than deleting.
+                //
+                // All three are instrumentation or debug levers, off by default upstream:
+                // the RSX profiler keeps per-scope timers on the RSX thread and reports every
+                // 300 frames, PPU calling history records every call, and the GETLLAR spin
+                // optimization being disabled changes how an SPU waiting on a reservation
+                // behaves -- which is not something to ship switched off by accident.
+                CoreSettingOverrides.record(SettingsScope.Global, null, "Video@@RSX Profiler", "false")
+                CoreSettingOverrides.record(SettingsScope.Global, null, "Core@@PPU Calling History", "false")
+                CoreSettingOverrides.record(
+                    SettingsScope.Global, null, "Core@@Disable SPU GETLLAR Spin Optimization", "false",
+                )
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_SHADOWING_OVERRIDES_PURGED, true) }
         }
 
         // Move anyone still on the old Approximate xfloat default onto Accurate.
