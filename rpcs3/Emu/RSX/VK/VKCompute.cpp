@@ -1,4 +1,5 @@
 #include "VKCompute.h"
+#include <cstdlib>
 #include "Emu/RSX/rsx_profiler.h"
 #include "VKHelpers.h"
 #include "VKRenderPass.h"
@@ -96,6 +97,28 @@ namespace vk
 
 			const auto& gpu = vk::g_render_device->gpu();
 			max_invocations_x = gpu.get_limits().maxComputeWorkGroupCount[0];
+
+			// Every group size above is a per-vendor guess, and the mobile one has never been
+			// measured on a phone. This override exists so the candidates can be compared on a
+			// single build -- set ARMSX3_CS_GROUP_SIZE in driver_env.txt -- rather than
+			// shipping another guess. Powers of two only, and never past what the device
+			// accepts: an over-large local_size_x fails shader compilation, not validation.
+			if (const char* const env = std::getenv("ARMSX3_CS_GROUP_SIZE"))
+			{
+				const auto& limits = gpu.get_limits();
+				const u32 ceiling = std::min(limits.maxComputeWorkGroupSize[0], limits.maxComputeWorkGroupInvocations);
+				const u64 requested = std::strtoull(env, nullptr, 10);
+
+				if (requested >= 1 && requested <= ceiling && (requested & (requested - 1)) == 0)
+				{
+					rsx_log.warning("cs: work group size overridden %u -> %u by ARMSX3_CS_GROUP_SIZE.", optimal_group_size, static_cast<u32>(requested));
+					optimal_group_size = static_cast<u32>(requested);
+				}
+				else
+				{
+					rsx_log.error("cs: ARMSX3_CS_GROUP_SIZE='%s' ignored; expected a power of two in [1, %u].", env, ceiling);
+				}
+			}
 
 			initialized = true;
 		}
