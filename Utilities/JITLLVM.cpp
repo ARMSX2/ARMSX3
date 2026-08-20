@@ -332,7 +332,15 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 		{
 			const u64 pagea = utils::align(oldp, page_quarter);
 			const u64 psize = utils::align(std::min(newp, c_page_size) - pagea, page_quarter);
-			utils::memory_commit(reinterpret_cast<u8*>(block) + (pagea % c_max_size), psize, prot);
+
+			// try_ rather than memory_commit: a commit failure here is the device being out of
+			// memory, and the caller has a real fallback -- the module does not compile and its
+			// functions are interpreted. The fatal version reported it as "LLVM crash recovery
+			// invoked", which reads like a codegen bug and sent this diagnosis the wrong way.
+			if (!utils::try_memory_commit(reinterpret_cast<u8*>(block) + (pagea % c_max_size), psize, prot))
+			{
+				fmt::throw_exception("Out of memory (commit failed: size=0x%x, align=0x%x)", size, align);
+			}
 
 			// Advance
 			oldp = pagea + psize;
@@ -343,7 +351,11 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 			// Allocate pages on demand
 			const u64 pagea = utils::align(oldp, c_page_size);
 			const u64 psize = utils::align(newp - pagea, c_page_size);
-			utils::memory_commit(reinterpret_cast<u8*>(block) + (pagea % c_max_size), psize, prot);
+
+			if (!utils::try_memory_commit(reinterpret_cast<u8*>(block) + (pagea % c_max_size), psize, prot))
+			{
+				fmt::throw_exception("Out of memory (commit failed: size=0x%x, align=0x%x)", size, align);
+			}
 		}
 
 		return reinterpret_cast<u8*>(block) + (olda % c_max_size);

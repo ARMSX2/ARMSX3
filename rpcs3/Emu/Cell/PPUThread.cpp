@@ -11,6 +11,7 @@
 #include "Emu/Memory/vm_reservation.h"
 #include "Emu/Memory/vm_locking.h"
 #include "Emu/RSX/Core/RSXReservationLock.hpp"
+#include "Emu/RSX/Overlays/overlay_message.h"
 #include "Emu/VFS.h"
 #include "Emu/system_progress.hpp"
 #include "Emu/system_utils.hpp"
@@ -180,6 +181,11 @@ extern void ppu_execute_syscall(ppu_thread& ppu, u64 code);
 
 // Defined in PPUTranslator.cpp: emit the allocator-friendly form of VMADDFP for this translation.
 extern thread_local bool g_ppu_avoid_strict_fma;
+
+// Set by a compile worker when LLVM could not get memory, read once after the workers join so
+// the user is told rather than left watching a progress bar that quietly produced an
+// uncompiled game. Not thread_local: any worker may be the one that hits it.
+static atomic_t<bool> g_ppu_compile_oom{false};
 static void ppu_break(ppu_thread&, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*);
 
 extern void do_cell_atomic_128_store(u32 addr, const void* to_write);
@@ -5713,6 +5719,21 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 		
 		thread_ctrl::set_name(old_name);
 		g_watchdog_hold_ctr--;
+
+		// One message for the whole run, not one per module: when memory runs out every
+		// remaining module fails the same way, and 200 identical popups would be worse than
+		// silence. Modules that did compile are already written to the cache, so starting the
+		// game again resumes from there rather than beginning afresh -- which is the only
+		// action that actually helps, and so is the only one suggested.
+		if (g_ppu_compile_oom.exchange(false))
+		{
+			// std::string, not a literal: message_item is only instantiated for std::string
+			// and localized_string_id, so a const char* fails to link.
+			rsx::overlays::queue_message(
+				std::string("Ran out of memory while compiling. Some functions will run slowly.\n"
+					"Close the game and start it again to compile the rest -- progress is kept."),
+				10'000'000);
+		}
 	}
 
 	// Initialize compiler instance
@@ -5860,7 +5881,23 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 					index++;
 
 					ensure(!sim);
-					sim = ensure(reinterpret_cast<void(*)(u8*, u64)>(jits[index]->get("__resolve_symbols")));
+					sim = reinterpret_cast<void(*)(u8*, u64)>(jits[index]->get("__resolve_symbols"));
+
+					if (!sim)
+					{
+						// NOT fatal, for the same reason a module that fails to load is not: a
+						// guest function with no compiled code keeps its dispatcher entry and is
+						// interpreted. __resolve_symbols lives in the compiled output, so when
+						// every module in a group fails -- Arkham City ran the JIT worker out of
+						// memory and lost 240 of 410 -- the resolver is simply absent.
+						//
+						// ensure() here turned that into a dead main_thread, which threw away the
+						// 170 modules that HAD compiled and surfaced as a boot that never
+						// finishes. Losing one group's speed beats losing the boot.
+						ppu_log.error("LLVM: Symbol resolver #%u is missing; the functions in that "
+							"group will be interpreted", index);
+						continue;
+					}
 
 					ppu_log.notice("Resolved symbol resolver function #%u", index);
 				}
@@ -5879,7 +5916,14 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			{
 				index++;
 
-				ensure(sim);
+				if (!sim)
+				{
+					// Absent resolver, already reported above. Calling it would be the crash the
+					// ensure() was guarding against; skipping it is what makes the group
+					// interpret instead.
+					continue;
+				}
+
 				sim(vm::g_exec_addr, info.segs[0].addr);
 
 				ppu_log.notice("Executed symbol resolver #%u", index);
@@ -6128,6 +6172,15 @@ static bool ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module
 	if (!jit.try_add(std::move(_module), cache_path, llvm_error))
 	{
 		ppu_log.error("LLVM: Failed to compile module %s: %s", obj_name, llvm_error);
+
+		// Out of memory is the one compile failure the user can do something about, and the one
+		// that arrives in bulk -- every remaining module fails the same way once the device is
+		// short. Flag it for a single message after the workers join.
+		if (llvm_error.find("Out of memory") != umax)
+		{
+			g_ppu_compile_oom = true;
+		}
+
 		return false;
 	}
 #else
