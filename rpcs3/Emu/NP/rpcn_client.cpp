@@ -614,6 +614,23 @@ namespace rpcn
 					{
 					}
 				}
+				else
+				{
+					// Connected and authentified, but no game is running.
+					//
+					// Every other exit from this loop breaks out to the outer sem_rpcn.acquire(),
+					// and the only blocking wait lives inside the branch above -- so this case
+					// fell through to `while (true)` with nothing to wait on and span a full core
+					// for as long as the user stayed signed in at the menu. Breaking out instead
+					// would park until something released the semaphore, which nothing does on
+					// game start, so wait here and re-check.
+					//
+					// Only reachable once RPCN is actually authentified, which is why it went
+					// unnoticed upstream.
+					if (!sem_rpcn.try_acquire_for(500ms))
+					{
+					}
+				}
 			}
 		}
 	}
