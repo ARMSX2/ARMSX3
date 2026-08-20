@@ -69,6 +69,29 @@ fi
 # compressed per-class archive, and packageBundle demands a plain mapping.txt. ARMSX2 ships
 # its Play build with minify off too, so this is the existing precedent rather than a new
 # compromise.
+# Stage the LEGACY core, and do not trust whatever happens to be in jniLibs.
+#
+# build-variants.sh writes each variant's core to the same path in turn, so the file left there
+# is simply whichever variant ran last. A bundle built on top of that would ship an armv8.2 core
+# with minSdk 30 -- installable on devices that cannot execute it, and failing at dlopen with
+# nothing to explain why. Play serves one bundle to every device, so the ISA floor has to be the
+# lowest one ARMSX3 supports.
+CORE_SRC="$(cd "$HERE/.." && pwd)/build-legacy/android/libarmsx3-core.so"
+JNI="$UI/app/src/main/jniLibs/arm64-v8a"
+
+if [ ! -f "$CORE_SRC" ]; then
+	echo "FAIL: legacy core not built. Run: ninja -C build-legacy android/libarmsx3-core.so" >&2
+	exit 1
+fi
+
+NDK_DIR="$(ls -d "$ANDROID_HOME/ndk/"*/ 2>/dev/null | sort -V | tail -1)"
+STRIP="${NDK_DIR}toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip"
+[ -x "$STRIP" ] || { echo "FAIL: llvm-strip not found under $ANDROID_HOME/ndk" >&2; exit 1; }
+
+echo "==> Staging the legacy core"
+mkdir -p "$JNI"
+"$STRIP" --strip-unneeded -o "$JNI/libarmsx3-core.so" "$CORE_SRC"
+
 echo "==> Building Play bundle (minSdk $MIN_SDK, minify off)"
 ( cd "$UI" && ./gradlew --quiet :app:bundlePlayRelease "-Parmsx3.minSdk=$MIN_SDK" -Parmsx3.noMinify )
 
