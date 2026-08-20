@@ -376,6 +376,8 @@ namespace gl::es
 	void glTextureParameteriv(GLuint texture, GLenum pname, const GLint* params);
 
 	void glNamedFramebufferTexture(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level);
+	void glNamedFramebufferTextureLayer(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level, GLint layer);
+	void glNamedFramebufferTextureLayerEXT(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level, GLint layer);
 	GLenum glCheckNamedFramebufferStatus(GLuint framebuffer, GLenum target);
 	void glNamedFramebufferDrawBuffers(GLuint framebuffer, GLsizei n, const GLenum* bufs);
 	void glNamedFramebufferReadBuffer(GLuint framebuffer, GLenum src);

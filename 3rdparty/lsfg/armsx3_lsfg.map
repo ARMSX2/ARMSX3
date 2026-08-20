@@ -19,6 +19,7 @@
 		armsx3_lsfg_initialize;
 		armsx3_lsfg_create_context_ahb;
 		armsx3_lsfg_present;
+		armsx3_lsfg_present_fenced;
 		armsx3_lsfg_destroy_context;
 		armsx3_lsfg_wait_idle;
 		armsx3_lsfg_finalize;

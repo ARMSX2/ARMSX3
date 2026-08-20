@@ -29,7 +29,7 @@ extern "C" {
 // Bump when anything below changes shape. The loader refuses a library whose version it does not
 // recognise, so a stale libarmsx3_lsfg.so on a user's device fails loudly at load instead of
 // quietly passing mismatched structs.
-#define ARMSX3_LSFG_ABI_VERSION 2u
+#define ARMSX3_LSFG_ABI_VERSION 3u
 
 // Mark the exported surface explicitly.
 //
@@ -102,6 +102,29 @@ ARMSX3_LSFG_API int32_t armsx3_lsfg_create_context_ahb(void* in0, void* in1, voi
 // VkSemaphore handle would be meaningless to it. in_sem is waited on before generation starts;
 // each out_sems[i] is signalled when output image i is ready. Pass -1 for an unused slot.
 ARMSX3_LSFG_API int armsx3_lsfg_present(int32_t ctx, int in_sem, const int* out_sems, uint32_t out_count);
+
+// Generate frames for one presented pair, and hand back a fence for the result.
+//
+// Identical to armsx3_lsfg_present in every respect except that *out_fence_fd receives a sync file
+// descriptor that becomes readable once the generation this call submitted has finished. The
+// caller owns that fd and must close(2) it.
+//
+// This is the answer to armsx3_lsfg_wait_idle() below being the only completion signal on offer.
+// framegen renders on its OWN VkDevice, so the caller cannot wait on its queues; before this
+// entry point existed the only way to know the generated images were ready -- and, more
+// importantly, that framegen had finished READING the caller's input images -- was a
+// vkDeviceWaitIdle on framegen's device, once per presented frame. A sync fd can be waited on
+// with poll(2) instead, which parks a thread rather than draining a GPU.
+//
+// *out_fence_fd is set to -1 whenever a descriptor is not available: an older library, a driver
+// without VK_KHR_external_fence_fd, or work that had already completed by the time it was asked
+// for. -1 is not an error and the return code is still ARMSX3_LSFG_OK -- the caller must fall
+// back to armsx3_lsfg_wait_idle(), which is always correct.
+//
+// Added in ABI 3. Resolve it with dlsym rather than assuming it: this is the one entry point a
+// caller can do without.
+ARMSX3_LSFG_API int armsx3_lsfg_present_fenced(int32_t ctx, int in_sem, const int* out_sems,
+	uint32_t out_count, int* out_fence_fd);
 
 ARMSX3_LSFG_API int armsx3_lsfg_destroy_context(int32_t ctx);
 
