@@ -780,10 +780,19 @@ namespace vk::frame_gen
 			//
 			// release_shared_images() takes the context with it, in that order, for the reason
 			// spelled out at its definition.
-			if (g_shared_w || g_shared_h)
+			if (g_shared_w || g_shared_h || initialized())
 			{
 				framegen_log.notice("Frame generation switched off; releasing its resources");
 				release_shared_images();
+
+				// And the device. Releasing the images and the context was measured and was NOT
+				// enough -- perf still did not come back, because framegen keeps its OWN VkDevice
+				// alive for the process. A second logical device on the same GPU holds queues,
+				// allocators and driver-side state, and on a tiler that is not free.
+				//
+				// Safe to do here: initialize() is lazy, called from generate() behind an
+				// !initialized() check, so switching frame generation back on rebuilds it.
+				shutdown();
 			}
 
 			return false;
