@@ -203,6 +203,16 @@ private:
 	vk::command_buffer_chunk* m_framegen_blit_cb[3] = {};
 	u32 m_framegen_blit_cb_count = 0;
 
+	// Acquire semaphores for generated-frame presents. A ring rather than one, because a binary
+	// semaphore may not be waited again until it has been signalled again, and up to three
+	// generated frames are acquired per flip. Eight gives more than two flips of slack, so a slot
+	// is never revisited before the submit that waits it has retired.
+	static constexpr u32 c_framegen_acquire_sem_count = 8;
+	VkSemaphore m_framegen_acquire_sem[c_framegen_acquire_sem_count] = {};
+	u32 m_framegen_acquire_sem_index = 0;
+
+	void destroy_framegen_acquire_semaphores();
+
 	VkViewport m_viewport {};
 	VkRect2D m_scissor {};
 

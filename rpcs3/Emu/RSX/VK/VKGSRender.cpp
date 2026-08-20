@@ -8,6 +8,7 @@
 #include "VKCommonPipelineLayout.h"
 #include "VKCompute.h"
 #include "VKGSRender.h"
+#include "VKFrameGen.h"
 #include "Emu/RSX/rsx_profiler.h"
 #include "vkutils/gpu_timer.h"
 #include "VKHelpers.h"
@@ -856,6 +857,20 @@ VKGSRender::~VKGSRender()
 
 	//Wait for device to finish up with resources
 	vkDeviceWaitIdle(*m_device);
+
+	// Frame generation holds images created on THIS device, and it is a set of file-scope globals
+	// that outlives the renderer. Nothing used to release them, so stopping a game and booting
+	// another at the same resolution skipped the rebuild -- capture_presented_frame only rebuilds
+	// when the dimensions change -- and recorded images belonging to a destroyed device into a
+	// live command buffer.
+	//
+	// Here specifically, and not from the present path: an earlier attempt tore this down inside
+	// the capture hook, which runs while the frame's primary command buffer is still being built,
+	// and it destroyed rendering outright. This is a device-idle point the renderer owns, after
+	// the wait above and before the swapchain goes, which is where the teardown always belonged.
+	vk::frame_gen::release_shared_images();
+	vk::frame_gen::shutdown();
+	destroy_framegen_acquire_semaphores();
 
 	// Globals. TODO: Refactor lifetime management
 	if (auto async_scheduler = g_fxo->try_get<vk::AsyncTaskScheduler>())

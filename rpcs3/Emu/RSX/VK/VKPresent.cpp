@@ -215,6 +215,20 @@ bool VKGSRender::reinitialize_swapchain()
 // Best-effort throughout. A generated frame is an extra, so every failure path here simply
 // returns and lets the real frame present normally -- dropping an interpolated frame is invisible,
 // while stalling or presenting a torn one is not.
+void VKGSRender::destroy_framegen_acquire_semaphores()
+{
+	for (auto& sem : m_framegen_acquire_sem)
+	{
+		if (sem != VK_NULL_HANDLE)
+		{
+			vkDestroySemaphore(*m_device, sem, nullptr);
+			sem = VK_NULL_HANDLE;
+		}
+	}
+
+	m_framegen_acquire_sem_index = 0;
+}
+
 vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 {
 	if (src == VK_NULL_HANDLE || swapchain_unavailable || m_swapchain->is_headless())
@@ -234,8 +248,33 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	// until the acquirable pool was empty, at which point the real frame's acquire in flip() blocks
 	// its full 100ms timeout every frame -- a hard lock at ten fps that only a swapchain rebuild
 	// clears, which is why it survived turning frame generation back off.
+	// Acquire with a semaphore, and make the blit wait on it.
+	//
+	// This passed VK_NULL_HANDLE for both the semaphore and the fence, which the specification
+	// forbids outright (VUID-vkAcquireNextImageKHR-semaphore-01780) and which left nothing making
+	// the blit wait for the presentation engine to be finished with the image. The UNDEFINED old
+	// layout on the barrier below is not that guarantee either -- it discards the contents, it
+	// does not order anything -- so the blit could overwrite an image still being scanned out.
+	VkSemaphore& acquire_sem = m_framegen_acquire_sem[m_framegen_acquire_sem_index];
+
+	if (acquire_sem == VK_NULL_HANDLE)
+	{
+		VkSemaphoreCreateInfo semaphore_info = {};
+		semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+		if (vkCreateSemaphore(*m_device, &semaphore_info, nullptr, &acquire_sem) != VK_SUCCESS)
+		{
+			// Without one there is no correct way to do this, and presenting a torn generated
+			// frame is worse than presenting none.
+			return nullptr;
+		}
+	}
+
+	m_framegen_acquire_sem_index =
+		(m_framegen_acquire_sem_index + 1u) % c_framegen_acquire_sem_count;
+
 	const VkResult acquire_result =
-		m_swapchain->acquire_next_swapchain_image(VK_NULL_HANDLE, 0ull, &image);
+		m_swapchain->acquire_next_swapchain_image(acquire_sem, 0ull, &image);
 
 	if ((acquire_result != VK_SUCCESS && acquire_result != VK_SUBOPTIMAL_KHR) || image == umax)
 	{
@@ -318,6 +357,7 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	// of this swapchain image.
 	vk::queue_submit_t submit_info{};
 	submit_info.queue = m_device->get_graphics_queue();
+	submit_info.wait_on(acquire_sem, VK_PIPELINE_STAGE_TRANSFER_BIT);
 
 	// flush, because the present below runs on this thread while a deferred submit would not have
 	// happened yet under multithreaded RSX -- presenting a swapchain image before the blit that
