@@ -6,8 +6,6 @@
 #include "util/types.hpp"
 #include "Crypto/aes.h"
 
-#include <span>
-
 bool is_iso_file(const std::string& path, u64* size = nullptr, bool* is_raw_device = nullptr);
 
 void load_iso(const std::string& path);
@@ -78,7 +76,7 @@ public:
 	iso_encryption_type get_enc_type() const { return m_enc_type; }
 
 	bool init(const std::string& path, iso_archive* archive = nullptr);
-	bool decrypt(u64 offset, const std::span<u8> buffer, const std::string& name);
+	bool decrypt(u64 offset, void* buffer, u64 size, const std::string& name);
 };
 
 struct iso_extent_info
@@ -166,8 +164,6 @@ public:
 class iso_archive
 {
 private:
-	void invalidate();
-
 	std::string m_path;
 	iso_fs_node m_root {};
 	std::shared_ptr<iso_file_decryption> m_dec;
@@ -179,7 +175,11 @@ public:
 	const iso_fs_node& root() const { return m_root; }
 
 	iso_fs_node* retrieve(const std::string& path);
+	// Kept from upstream d6d5c6082 while the rest of that ISO series is reverted: System.cpp
+	// calls it, and it is the one piece of the refactor that is not implicated in the region
+	// read failing.
 	bool is_valid() const;
+
 	bool exists(const std::string& path);
 	bool is_file(const std::string& path);
 
