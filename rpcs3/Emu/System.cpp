@@ -760,7 +760,19 @@ void Emulator::Init()
 				// Finalize interrupted saving
 				if (!fs::rename(pending, save_path + desired, false))
 				{
-					sys_log.fatal("Failed to fix save data: %s (%s)", pending, fs::g_tls_error);
+					// Not fatal, and saying so was actively misleading: the loop continues, the
+					// emulator starts, and only this one save is left half-finished. Reported as a
+					// crash on Android because a fatal line in logcat reads like one.
+					//
+					// It is also permanent when it happens here rather than transient. Android
+					// storage can refuse a directory rename outright -- errno 1, EPERM -- and
+					// nothing about starting the emulator again changes that, so this fires on
+					// every launch and looks like a fault that is getting worse. The message says
+					// what to do instead of repeating an alarm.
+					sys_log.error("Could not finish an interrupted save: %s (%s). The game will "
+						"start; that one save is left as it was. If this repeats every launch, "
+						"delete the .working_ and .backup_ folders for it under "
+						"dev_hdd0/home/%s/savedata/.", pending, fs::g_tls_error, m_usr);
 					continue;
 				}
 
@@ -770,7 +782,11 @@ void Emulator::Init()
 			// Remove pending backup data
 			if (!fs::remove_all(save_path + entry.name))
 			{
-				sys_log.fatal("Failed to remove save data backup: %s%s (%s)", save_path, entry.name, fs::g_tls_error);
+				// Same reasoning as above: a backup that cannot be deleted costs disk space and
+				// nothing else, and the emulator carries on regardless.
+				sys_log.error("Could not remove a leftover save backup: %s%s (%s). Harmless, but "
+					"it will be reported again on every launch until the folder is deleted.",
+					save_path, entry.name, fs::g_tls_error);
 			}
 			else
 			{
