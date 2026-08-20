@@ -14,6 +14,12 @@
 #include <map>
 #include <mutex>
 #include <android/hardware_buffer.h>
+// The completion signal framegen hands back is a sync file descriptor, not a VkFence we could
+// wait on -- it renders on its own device. poll(2) waits on it, close(2) releases it, and errno
+// is read to tell a signal-interrupted poll apart from a real failure.
+#include <poll.h>
+#include <unistd.h>
+#include <cerrno>
 #endif
 
 LOG_CHANNEL(framegen_log, "FRAMEGEN");
@@ -31,6 +37,9 @@ namespace vk::frame_gen
 			int (*initialize)(uint64_t, int, float, uint64_t, int, armsx3_lsfg_shader_loader, void*) = nullptr;
 			int32_t (*create_context_ahb)(void*, void*, void* const*, uint32_t, uint32_t, uint32_t, int32_t) = nullptr;
 			int (*present)(int32_t, int, const int*, uint32_t) = nullptr;
+			// ABI 3 and later only, and the one entry point that is allowed to stay null: without
+			// it the present path keeps the device-wide wait it has always used.
+			int (*present_fenced)(int32_t, int, const int*, uint32_t, int*) = nullptr;
 			int (*destroy_context)(int32_t) = nullptr;
 			void (*wait_idle)() = nullptr;
 			void (*finalize)() = nullptr;
@@ -253,6 +262,23 @@ namespace vk::frame_gen
 			{
 				g_api.failure = "frame generation library is missing entry points";
 				return;
+			}
+
+			// Resolved on its own, with dlsym rather than resolve(), because a null result here is
+			// not a failure: this entry point arrived in ABI 3 and the library is perfectly usable
+			// without it -- the present path simply keeps its vkDeviceWaitIdle. resolve() would log
+			// an error and, worse, fold into the `all` chain above and refuse the whole library.
+			//
+			// The version gate above already turns away anything that is not exactly this build's
+			// ABI, so in practice this is only null for a library that reports 3 and then does not
+			// export the symbol. Cheap enough to check rather than assume.
+			g_api.present_fenced = reinterpret_cast<decltype(g_api.present_fenced)>(
+				dlsym(g_api.handle, "armsx3_lsfg_present_fenced"));
+
+			if (!g_api.present_fenced)
+			{
+				framegen_log.notice("Frame generation library has no fenced present; every generated "
+					"frame will cost a device wait");
 			}
 
 			g_api.ok = true;
@@ -1014,6 +1040,74 @@ namespace vk::frame_gen
 
 			g_context_outputs = 0;
 		}
+
+		// How long to wait on framegen's completion fence before giving up on it.
+		//
+		// Generation is a handful of compute dispatches over framebuffer-sized images; anything
+		// past this is not slow, it is wrong -- a lost device, or a descriptor that will never
+		// signal. The bound is what keeps a failure here a stall rather than a hang, and a frozen
+		// emulator is a far worse outcome than a frame of judder.
+		constexpr int k_fence_timeout_ms = 250;
+
+		// Wait until the generation started by the present above has finished.
+		//
+		// Our device wrote the input images framegen reads, and there is no semaphore shared
+		// between the two devices, so something has to stand in for one. A sync fd is that
+		// something: poll(2) parks this thread until the fence framegen submitted signals, and
+		// framegen's queues keep running -- where the device wait below drains them entirely.
+		//
+		// Every path that does not end in a signalled descriptor falls back to that device wait,
+		// because it is always correct. The cost of being wrong here is not a slow frame, it is
+		// reading an image that is still being written.
+		void wait_for_generation(int fence_fd)
+		{
+			if (fence_fd < 0)
+			{
+				// No descriptor to wait on: a library with no fenced present, a driver without
+				// VK_KHR_external_fence_fd, or work that had already finished by the time framegen
+				// asked for the fd -- which the specification allows to come back as -1. All three
+				// want exactly what this line used to do unconditionally.
+				g_api.wait_idle();
+				return;
+			}
+
+			pollfd waiter{};
+			waiter.fd = fence_fd;
+			waiter.events = POLLIN;
+
+			int rc = 0;
+
+			do
+			{
+				rc = ::poll(&waiter, 1, k_fence_timeout_ms);
+			}
+			while (rc < 0 && errno == EINTR);
+
+			// A sync fd becomes readable when the fence it carries signals. Anything else -- a
+			// timeout (0), an error (< 0), or POLLERR/POLLNVAL on a descriptor that went away --
+			// leaves us not knowing whether framegen has finished reading the inputs the next
+			// capture is about to overwrite, so take the wait that is always right.
+			if (rc <= 0 || !(waiter.revents & POLLIN))
+			{
+				// Once, and only once. This runs on the present path: a line per frame would not
+				// be a diagnostic, it would be a second performance problem stacked on the first.
+				static bool s_warned = false;
+
+				if (!s_warned)
+				{
+					s_warned = true;
+					framegen_log.warning("Frame generation fence did not signal within %dms (poll %d, revents 0x%x); "
+						"falling back to a device wait. Reported once per session.",
+						k_fence_timeout_ms, rc, static_cast<u32>(waiter.revents));
+				}
+
+				g_api.wait_idle();
+			}
+
+			// Ours to close either way -- framegen handed over ownership with the descriptor, and
+			// leaking one per frame would run the process out of file descriptors in minutes.
+			::close(fence_fd);
+		}
 	}
 
 	u32 generated_frame_count()
@@ -1178,25 +1272,41 @@ namespace vk::frame_gen
 		}
 
 		// Our device wrote the inputs; framegen's device is about to read them, and there is no
-		// semaphore shared between the two. A device-level wait is the only barrier available.
+		// semaphore shared between the two. Something has to stand in for one.
 		//
-		// It cannot be pipelined away, and that is a property of the library rather than of this
-		// code: presentContext() submits on framegen's own device and the only completion signal it
-		// exposes is armsx3_lsfg_wait_idle(), a vkDeviceWaitIdle. Upstream's semaphore path takes
-		// sync FDs and imports them as OPAQUE_FD (framegen/src/core/semaphore.cpp), which Turnip and
-		// Mesa do not support on Android -- which is why every semaphore handed over below is -1.
-		// So what this costs is bounded by moving the wait, not by removing it: it now runs before
-		// this frame's command buffer is submitted, on inputs that are a frame old, rather than
-		// after a full frame-completion wait.
+		// Upstream's semaphore path takes sync FDs and imports them as OPAQUE_FD
+		// (framegen/src/core/semaphore.cpp), which framegen's Android device deliberately does not
+		// enable -- vkImportSemaphoreFdKHR resolves to null inside it -- which is why every
+		// semaphore handed over below is -1. That left armsx3_lsfg_wait_idle(), a vkDeviceWaitIdle
+		// on framegen's whole device, as the only completion signal the library exposed, and it was
+		// paid once per presented frame.
+		//
+		// The fenced present replaces it with the fence framegen already submits alongside the
+		// generation work, exported as a sync fd: the same barrier, waited on with poll(2), with
+		// framegen's queues left running instead of drained. The plain present stays as the
+		// fallback for a library that does not export the new entry point, and
+		// wait_for_generation() falls back to the same device wait whenever no descriptor arrives
+		// or the poll does not complete -- neither may ever become a hang.
+		//
+		// The placement is unchanged and still matters: this runs before this frame's command
+		// buffer is submitted, on inputs that are a frame old, rather than after a full
+		// frame-completion wait.
 		int out_sems[3] = {-1, -1, -1};
+		int fence_fd = -1;
 
-		if (g_api.present(g_context, -1, out_sems, g_context_outputs) != ARMSX3_LSFG_OK)
+		const int rc = g_api.present_fenced
+			? g_api.present_fenced(g_context, -1, out_sems, g_context_outputs, &fence_fd)
+			: g_api.present(g_context, -1, out_sems, g_context_outputs);
+
+		if (rc != ARMSX3_LSFG_OK)
 		{
+			// fence_fd is still -1 on every failing path out of the shim, so there is nothing
+			// stranded here to close.
 			disable(g_api.last_error());
 			return 0;
 		}
 
-		g_api.wait_idle();
+		wait_for_generation(fence_fd);
 
 		// Report the real vs generated rate once a second.
 		//
