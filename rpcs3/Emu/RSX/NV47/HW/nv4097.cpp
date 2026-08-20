@@ -70,11 +70,11 @@ namespace rsx
 			const u32 method_range = 32 - index;
 
 			// Get limit imposed by FIFO PUT (if put is behind get it will result in a number ignored by min)
-			// observe(), not the default load: atomic_t reads are seq_cst here, which is an
-			// ldar on ARM64, and `put` shares a cache line with `get` that the guest PPU writes
-			// from another cluster. This is one of the two hottest handlers in the FIFO, so the
-			// barrier was paid thousands of times a frame on a contended line. A stale value is
-			// harmless: it only ever shrinks the batch, and the remainder is picked up next time.
+			// observe(), not the default load: atomic_t reads are seq_cst, which is an ldar on
+			// ARM64, and `put` shares a cache line with `get` that the guest PPU writes from
+			// another cluster. These are the two hottest FIFO handlers, so the barrier was paid
+			// thousands of times a frame on a contended line. A stale value only shrinks the
+			// batch; the remainder is picked up next time.
 			const u32 fifo_read_limit = static_cast<u32>(((RSX(ctx)->ctrl->put.observe() & ~3ull) - (RSX(ctx)->fifo_ctrl->get_pos())) / 4);
 
 			const u32 count = std::min<u32>({ fifo_args_cnt, fifo_read_limit, method_range });
@@ -138,6 +138,8 @@ namespace rsx
 				}
 			}
 
+			// Words, not calls: the profiler reports average batch size as words/calls, so a
+			// missing increment here reads as 0 rather than as absent.
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_const_words += rcount;
 
 			RSX(ctx)->fifo_ctrl->skip_methods(rcount - 1);
@@ -145,10 +147,9 @@ namespace rsx
 
 		void set_transform_program::impl(context* ctx, u32 reg, u32 /*arg*/)
 		{
-			// Biggest single entry in the method histogram at 16% of all dispatches, and one
-			// of only two handlers that batches, so the histogram counts the methods it
-			// consumes rather than the times it ran. Scoped per call, which is the number the
-			// cost per batch actually divides by.
+			// Biggest single entry in the method histogram at 16% of all dispatches, and one of
+			// only two handlers that batches, so the histogram counts the methods it consumes
+			// rather than the times it ran. Scoped per call, which is what the cost divides by.
 			RSX_PROF_SCOPE(xform_program);
 
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_program_calls++;
@@ -162,11 +163,6 @@ namespace rsx
 			const u32 method_range = 32 - index;
 
 			// Get limit imposed by FIFO PUT (if put is behind get it will result in a number ignored by min)
-			// observe(), not the default load: atomic_t reads are seq_cst here, which is an
-			// ldar on ARM64, and `put` shares a cache line with `get` that the guest PPU writes
-			// from another cluster. This is one of the two hottest handlers in the FIFO, so the
-			// barrier was paid thousands of times a frame on a contended line. A stale value is
-			// harmless: it only ever shrinks the batch, and the remainder is picked up next time.
 			const u32 fifo_read_limit = static_cast<u32>(((RSX(ctx)->ctrl->put.observe() & ~3ull) - (RSX(ctx)->fifo_ctrl->get_pos())) / 4);
 
 			const u32 count = std::min<u32>({ fifo_args_cnt, fifo_read_limit, method_range });
@@ -209,15 +205,8 @@ namespace rsx
 				const usz first_index_off = 0;
 				const usz second_index_off = (((rcount / 4) - 1) / 2) * 4;
 
-				// Rotated by 32: the destination holds each word already byte-swapped
-				// individually (copy_data_swap_u32), but be_t<u64> swaps all eight bytes,
-				// which additionally EXCHANGES the two words. Without the rotate this
-				// compares (w0,w1) against (w1,w0) and can only match when w0 == w1, so the
-				// redundant-upload check never fired: every upload set the ucode dirty,
-				// forcing a vertex program re-analysis, a program cache hint drop and a full
-				// transform constant re-upload on every draw.
-				const u64 src_op1_2 = std::rotl<u64>(read_from_ptr<be_t<u64>>(fifo_span, first_index_off), 32);
-				const u64 src_op2_2 = std::rotl<u64>(read_from_ptr<be_t<u64>>(fifo_span, second_index_off), 32);
+				const u64 src_op1_2 = read_from_ptr<be_t<u64>>(fifo_span, first_index_off);
+				const u64 src_op2_2 = read_from_ptr<be_t<u64>>(fifo_span, second_index_off);
 
 				// Fast comparison
 				if (src_op1_2 != read_from_ptr_unsafe<u64>(out_ptr, first_index_off) || src_op2_2 != read_from_ptr_unsafe<u64>(out_ptr, second_index_off))
@@ -234,8 +223,6 @@ namespace rsx
 			{
 				to_set_dirty = rsx::pipeline_state::vertex_program_ucode_dirty;
 			}
-
-			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_program_words += rcount;
 
 			RSX(ctx)->m_graphics_state |= to_set_dirty;
 			REGS(ctx)->transform_program_load_set(load_pos + ((rcount + index % 4) / 4));
@@ -285,12 +272,26 @@ namespace rsx
 			const auto current = REGS(ctx)->decode<NV4097_SET_SURFACE_FORMAT>(arg);
 			const auto previous = REGS(ctx)->decode<NV4097_SET_SURFACE_FORMAT>(REGS(ctx)->latch);
 
-			if (current.is_integer_color_format() != previous.is_integer_color_format()) // Different ROP emulation
+			// Check for different ROP emulation
+			if (current.is_integer_color_format() != previous.is_integer_color_format())
 			{
 				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::fragment_program_state_dirty;
 			}
 
-			if (*current.antialias() != *previous.antialias()) // Antialias control has changed, update ROP parameters
+			// If swizzle remap changed, we have to flag both the shader and the ROP parameters
+			if (current.is_remapped_format() != previous.is_remapped_format())
+			{
+				RSX(ctx)->m_graphics_state |=
+					rsx::pipeline_state::fragment_program_state_dirty |
+					rsx::pipeline_state::fragment_state_dirty;
+			}
+			// If we're still remapping outputs but the format changed, reload ROP params
+			else if ((current.is_remapped_format() && *current.color_fmt() != *previous.color_fmt()))
+			{
+				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::fragment_state_dirty;
+			}
+			// If antialias control has changed, also update ROP parameters
+			else if (*current.antialias() != *previous.antialias())
 			{
 				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::fragment_state_dirty;
 			}
