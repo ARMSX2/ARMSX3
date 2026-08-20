@@ -184,22 +184,6 @@ extern "C" int32_t armsx3_lsfg_create_context_ahb(void* in0, void* in1, void* co
 
 extern "C" int armsx3_lsfg_present(int32_t ctx, int in_sem, const int* out_sems, uint32_t out_count)
 {
-	// Forwarded rather than duplicated. Asking for no fence descriptor is exactly what this
-	// always did, and keeping one body means the two entry points cannot drift.
-	return armsx3_lsfg_present_fenced(ctx, in_sem, out_sems, out_count, nullptr);
-}
-
-extern "C" int armsx3_lsfg_present_fenced(int32_t ctx, int in_sem, const int* out_sems,
-	uint32_t out_count, int* out_fence_fd)
-{
-	if (out_fence_fd)
-	{
-		// Written before anything that can fail. Every path out of here leaves the caller with a
-		// value it can act on, so it can never read an uninitialised int and close a descriptor
-		// belonging to something else -- which on Android is somebody's socket or an open asset.
-		*out_fence_fd = -1;
-	}
-
 	if (!g_initialized)
 	{
 		set_error("not initialized");
@@ -214,17 +198,13 @@ extern "C" int armsx3_lsfg_present_fenced(int32_t ctx, int in_sem, const int* ou
 		outs.push_back(out_sems ? out_sems[i] : -1);
 	}
 
-	// framegen writes the descriptor itself and leaves it at -1 when it cannot produce one, so a
-	// null out_fence_fd degrades to the plain present without a second code path here.
 	if (g_performance)
 	{
-		ARMSX3_LSFG_GUARD(LSFG_3_1P::presentContextFenced(ctx, in_sem, outs, out_fence_fd),
-			ARMSX3_LSFG_ERR_VULKAN)
+		ARMSX3_LSFG_GUARD(LSFG_3_1P::presentContext(ctx, in_sem, outs), ARMSX3_LSFG_ERR_VULKAN)
 	}
 	else
 	{
-		ARMSX3_LSFG_GUARD(LSFG_3_1::presentContextFenced(ctx, in_sem, outs, out_fence_fd),
-			ARMSX3_LSFG_ERR_VULKAN)
+		ARMSX3_LSFG_GUARD(LSFG_3_1::presentContext(ctx, in_sem, outs), ARMSX3_LSFG_ERR_VULKAN)
 	}
 
 	return ARMSX3_LSFG_OK;
