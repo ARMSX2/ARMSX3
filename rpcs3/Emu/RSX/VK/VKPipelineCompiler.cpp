@@ -90,6 +90,19 @@ namespace vk
 
 	void pipe_compiler::operator()()
 	{
+		// Keep shader compilation off the cores the frame depends on.
+		//
+		// These workers never set an affinity at all, so on a big.LITTLE phone the scheduler was
+		// free to put a compile burst on the prime core -- the same core RSX needs, and the same
+		// cluster the SPUs were deliberately fenced into. That is what a shader "dip" is: not the
+		// renderer waiting on a pipeline (async modes never stall for one), but the compile work
+		// competing for the cores the emulator is already short of.
+		//
+		// thread_class::general is the existing policy for exactly this, and it already returns
+		// the little cluster on big.LITTLE and every core on a uniform machine, so this changes
+		// nothing on desktop.
+		thread_ctrl::set_thread_affinity_mask(thread_ctrl::get_affinity_mask(thread_class::general));
+
 		while (thread_ctrl::state() != thread_state::aborting)
 		{
 			for (auto&& job : m_work_queue.pop_all())
@@ -331,7 +344,25 @@ namespace vk
 			// shader bursts queued longer than necessary.
 			const auto hw_threads = utils::get_thread_count();
 
-			if (hw_threads >= 24)
+			// Size to the cores these workers are actually allowed on, not to the machine.
+			//
+			// They are pinned to thread_class::general (see pipe_compiler::operator()), which on
+			// big.LITTLE is the little cluster. Counting the whole SoC then picked a number for
+			// cores the workers will never run on: an 8-thread phone landed on 2 workers by the
+			// table below, while its 3 little cores sat idle through every shader burst. Sizing
+			// to the cluster raises throughput without taking anything back from emulation,
+			// because the cores it adds are the ones nothing else wanted.
+			const u64 helper_mask = thread_ctrl::get_affinity_mask(thread_class::general);
+			const int helper_cores = helper_mask ? std::popcount(helper_mask) : 0;
+
+			if (helper_cores > 0 && static_cast<u32>(helper_cores) < hw_threads)
+			{
+				num_worker_threads = helper_cores;
+
+				rsx_log.notice("Async pipeline compiler using %d worker(s) on the %d core(s) it is "
+					"pinned to, of %u host thread(s).", num_worker_threads, helper_cores, hw_threads);
+			}
+			else if (hw_threads >= 24)
 			{
 				num_worker_threads = 12;
 			}
