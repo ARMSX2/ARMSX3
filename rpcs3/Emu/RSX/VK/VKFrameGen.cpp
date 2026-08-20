@@ -767,7 +767,32 @@ namespace vk::frame_gen
 			}
 		}
 
-		if (g_cfg.video.frame_generation == frame_generation_mode::off || !src || !width || !height)
+		if (g_cfg.video.frame_generation == frame_generation_mode::off)
+		{
+			// Turning it off has to give the memory back.
+			//
+			// Everything frame generation needs is allocated on this path and nowhere else: two
+			// shared input images, up to three generated outputs, and a context on framegen's OWN
+			// Vulkan device holding imported AHardwareBuffers for all of them. The early return
+			// used to skip the teardown, so "off" kept every byte -- which is why switching it off
+			// did not give the frame rate back. The cost that remains is the resources, not the
+			// work, and only a restart cleared it.
+			//
+			// release_shared_images() takes the context with it, in that order, for the reason
+			// spelled out at its definition.
+			if (g_shared_w || g_shared_h)
+			{
+				framegen_log.notice("Frame generation switched off; releasing its resources");
+				release_shared_images();
+			}
+
+			return false;
+		}
+
+		// Deliberately NOT a teardown trigger. A frame with no source image is a transient state
+		// on the present path, not the user turning the feature off, and freeing on it would
+		// destroy and rebuild the whole context repeatedly.
+		if (!src || !width || !height)
 		{
 			return false;
 		}
