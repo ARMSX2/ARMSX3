@@ -767,42 +767,20 @@ namespace vk::frame_gen
 			}
 		}
 
-		if (g_cfg.video.frame_generation == frame_generation_mode::off)
+		if (g_cfg.video.frame_generation == frame_generation_mode::off || !src || !width || !height)
 		{
-			// Turning it off has to give the memory back.
+			// REVERTED 2026-08-19. Tearing framegen's resources down here -- release_shared_images()
+			// and shutdown() -- broke rendering outright: Arkham City lost its character models first,
+			// then almost everything. Adding a vkDeviceWaitIdle on our device before the release was
+			// not enough, so the in-flight capture blit was not the whole story and the damage reaches
+			// further than the shared images.
 			//
-			// Everything frame generation needs is allocated on this path and nowhere else: two
-			// shared input images, up to three generated outputs, and a context on framegen's OWN
-			// Vulkan device holding imported AHardwareBuffers for all of them. The early return
-			// used to skip the teardown, so "off" kept every byte -- which is why switching it off
-			// did not give the frame rate back. The cost that remains is the resources, not the
-			// work, and only a restart cleared it.
-			//
-			// release_shared_images() takes the context with it, in that order, for the reason
-			// spelled out at its definition.
-			if (g_shared_w || g_shared_h || initialized())
-			{
-				framegen_log.notice("Frame generation switched off; releasing its resources");
-				release_shared_images();
-
-				// And the device. Releasing the images and the context was measured and was NOT
-				// enough -- perf still did not come back, because framegen keeps its OWN VkDevice
-				// alive for the process. A second logical device on the same GPU holds queues,
-				// allocators and driver-side state, and on a tiler that is not free.
-				//
-				// Safe to do here: initialize() is lazy, called from generate() behind an
-				// !initialized() check, so switching frame generation back on rebuilds it.
-				shutdown();
-			}
-
-			return false;
-		}
-
-		// Deliberately NOT a teardown trigger. A frame with no source image is a transient state
-		// on the present path, not the user turning the feature off, and freeing on it would
-		// destroy and rebuild the whole context repeatedly.
-		if (!src || !width || !height)
-		{
+			// The underlying complaint is real and still open: switching frame generation off does not
+			// give its memory back, so the frame rate does not recover until the game is restarted.
+			// But a renderer that draws nothing is worse than one that holds memory it is no longer
+			// using, so this goes back to leaking until the teardown can be done somewhere the present
+			// path is not mid-flight -- most likely at a device-idle point owned by the renderer,
+			// not from inside the capture hook.
 			return false;
 		}
 
