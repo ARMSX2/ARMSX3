@@ -1466,7 +1466,7 @@ void spu_cache::initialize(bool build_existing_cache)
 				{
 					if (ls[start_new / 4] && g_spu_itype.decode(ls[start_new / 4]) != spu_itype::UNK)
 					{
-						spu_log.notice("Precompiling fallthrough to 0x%05x", start_new);
+						spu_log.trace("Precompiling fallthrough to 0x%05x", start_new);
 						func2 = compiler->analyse(ls.data(), start_new, &targets);
 						block_addr = start_new;
 						continue;
@@ -1530,7 +1530,7 @@ void spu_cache::initialize(bool build_existing_cache)
 				}
 
 
-				spu_log.notice("Precompiling filler space at 0x%05x (next=0x%05x)", new_entry, next_func);
+				spu_log.trace("Precompiling filler space at 0x%05x (next=0x%05x)", new_entry, next_func);
 				func2 = compiler->analyse(ls.data(), new_entry, &targets);
 				block_addr = new_entry;
 			}
@@ -2139,7 +2139,12 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 			if (w.level >= w.beg->first.size() || w.level >= it->first.size())
 			{
 				// If functions cannot be compared, assume smallest function
-				spu_log.error("Trampoline simplified at ??? (level=%u)", w.level);
+				// Routine control-flow simplification, not a failure -- it was at error level
+				// and fired ~1500 times in a 15 minute session. Every diagnostic in this
+				// recompiler is per-block or per-instruction, which upstream can afford and a
+				// phone writing to /sdcard cannot: the burst lands exactly while a game is
+				// already stalling to compile. Still reachable by raising the SPU channel.
+				spu_log.trace("Trampoline simplified at ??? (level=%u)", w.level);
 #if defined(ARCH_X64)
 				make_jump(0xe9, w.beg->second); // jmp rel32
 #elif defined(ARCH_ARM64)
@@ -2178,7 +2183,7 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 
 			if (it == m_flat_list.end())
 			{
-				spu_log.error("Trampoline simplified (II) at ??? (level=%u)", w.level);
+				spu_log.trace("Trampoline simplified (II) at ??? (level=%u)", w.level);
 #if defined(ARCH_X64)
 				make_jump(0xe9, w.beg->second); // jmp rel32
 #elif defined(ARCH_ARM64)
@@ -6069,7 +6074,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				getllar_starts[previous.lsa_pc] = true;
 				g_fxo->get<putllc16_statistics_t>().breaking_reason[cause]++;
 
-				if (!spu_log.notice)
+				if (!spu_log.trace)
 				{
 					return;
 				}
@@ -6109,7 +6114,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				}
 
 				fmt::append(tracing, " of %d failures", fail_count);
-				spu_log.notice("%s\n%s", break_error, tracing);
+				spu_log.trace("%s\n%s", break_error, tracing);
 			}
 		};
 
@@ -6126,7 +6131,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 
 				g_fxo->get<rchcnt_statistics_t>().breaking_reason[cause]++;
 
-				if (!spu_log.notice)
+				if (!spu_log.trace)
 				{
 					return;
 				}
@@ -6166,7 +6171,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				}
 
 				fmt::append(tracing, " of %d failures", fail_count);
-				spu_log.notice("%s\n%s", break_error, tracing);
+				spu_log.trace("%s\n%s", break_error, tracing);
 			}
 		};
 
@@ -6176,7 +6181,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			{
 				g_fxo->get<reduced_statistics_t>().breaking_reason[cause]++;
 
-				if (!spu_log.notice)
+				if (!spu_log.trace)
 				{
 					return;
 				}
@@ -6221,12 +6226,12 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				}
 
 				fmt::append(tracing, " of %d failures", fail_count);
-				spu_log.notice("%s\n%s", break_error, tracing);
+				spu_log.trace("%s\n%s", break_error, tracing);
 
 				std::string block_dump;
 				this->dump(result, block_dump, previous.loop_pc, previous.loop_end + 1);
 	
-				spu_log.notice("SPU Block Dump:\n%s", block_dump);
+				spu_log.trace("SPU Block Dump:\n%s", block_dump);
 			}
 		};
 
@@ -6437,7 +6442,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 						{
 							if (!std::exchange(logged_block[target_pc / 4], true))
 							{
-								spu_log.notice("SPU block is a loop at [0x%05x -> 0x%05x]", state_it->pc, target_pc);
+								spu_log.trace("SPU block is a loop at [0x%05x -> 0x%05x]", state_it->pc, target_pc);
 							}
 
 							state_it->parent_target_index++;
@@ -7959,7 +7964,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 							if (getllar_starts.emplace(atomic16->lsa_pc, false).second)
 							{
 								g_fxo->get<putllc16_statistics_t>().all++;
-								spu_log.notice("[0x%05x] GETLLAR pattern entry point", pos);
+								spu_log.trace("[0x%05x] GETLLAR pattern entry point", pos);
 							}
 						}
 
@@ -9287,7 +9292,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			add_pattern(inst_attr::putllc16, pattern.put_pc - result.entry_point, value.data);
 		}
 
-		spu_log.success("PUTLLC16 Pattern Detected! (mem_count=%d, put_pc=0x%x, pc_rel=%d, offset=0x%x, const=%u, two_regs=%d, reg=%u, runtime=%d, 0x%x-%s, pattern-hash=%s) (putllc0=%d, putllc16+0=%d, all=%d)"
+		spu_log.trace("PUTLLC16 Pattern Detected! (mem_count=%d, put_pc=0x%x, pc_rel=%d, offset=0x%x, const=%u, two_regs=%d, reg=%u, runtime=%d, 0x%x-%s, pattern-hash=%s) (putllc0=%d, putllc16+0=%d, all=%d)"
 			, pattern.mem_count, pattern.put_pc, value.type == v_relative, value.off18, value.type == v_const, value.type == v_reg2, value.reg, value.runtime16_select, entry_point, func_hash, pattern_hash, +stats.nowrite, ++stats.single, +stats.all);
 	}
 
@@ -9393,7 +9398,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 
 	if (likely_putllc_loop && !had_putllc_evaluation)
 	{
-		spu_log.notice("Likely missed PUTLLC16 patterns. (entry=0x%x)", entry_point);
+		spu_log.trace("Likely missed PUTLLC16 patterns. (entry=0x%x)", entry_point);
 	}
 
 	if (result.data.empty())

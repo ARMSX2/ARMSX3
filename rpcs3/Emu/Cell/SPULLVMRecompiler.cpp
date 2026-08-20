@@ -4155,7 +4155,7 @@ public:
 				cache.add(func);
 			}
 
-			spu_log.success("New SPU block compiled successfully (size=%u)", func_size);
+			spu_log.trace("New SPU block compiled successfully (size=%u)", func_size);
 		}
 
 		return fn;
@@ -5292,7 +5292,7 @@ public:
 				}
 			}
 
-			spu_log.warning("[0x%x] MFC_EAH: $%u is not a zero constant", m_pos, +op.rt);
+			spu_log.trace("[0x%x] MFC_EAH: $%u is not a zero constant", m_pos, +op.rt);
 			//m_ir->CreateStore(val.value, spu_ptr(&spu_thread::ch_mfc_cmd, &spu_mfc_cmd::eah));
 			return;
 		}
@@ -5650,7 +5650,7 @@ public:
 			}
 
 			// Fallback to unoptimized WRCH implementation (TODO)
-			spu_log.warning("[0x%x] MFC_Cmd: $%u is not a constant", m_pos, +op.rt);
+			spu_log.trace("[0x%x] MFC_Cmd: $%u is not a constant", m_pos, +op.rt);
 			break;
 		}
 		case MFC_WrListStallAck:
