@@ -34,40 +34,59 @@ AAB="$UI/app/build/outputs/bundle/playRelease/app-play-release.aab"
 
 echo "==> Verifying the bundle"
 
-# The manifest inside an AAB is binary XML, so grep it as binary rather than as text.
-# LC_ALL=C and -a matter: without them a NUL byte makes grep call the file binary and stay quiet,
-# which reads exactly like a pass.
+# An AAB is a ZIP and its entries are COMPRESSED, so grepping the archive itself finds
+# nothing and reports a clean bundle no matter what is in it. That is not a theoretical
+# risk: the first version of this script did exactly that and passed every check while
+# also failing to find the applicationId it was supposed to find, which is what gave it
+# away. Extract first, then inspect the manifest and the file list.
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+unzip -q -o "$AAB" -d "$WORK"
+
+MANIFEST="$WORK/base/manifest/AndroidManifest.xml"
+[ -f "$MANIFEST" ] || { echo "FAIL: no manifest in the bundle" >&2; exit 1; }
+
 fail=0
 
-check_absent() {
+# The manifest is protobuf-encoded, so permission names appear as plain strings inside it
+# but the file contains NUL bytes -- LC_ALL=C and -a keep grep from calling it binary and
+# silently saying nothing, which reads exactly like a pass.
+check_absent_manifest() {
 	local needle="$1" why="$2"
-	if LC_ALL=C grep -aqF "$needle" "$AAB"; then
-		echo "FAIL: '$needle' is present in the bundle -- $why" >&2
+	if LC_ALL=C grep -aqF "$needle" "$MANIFEST"; then
+		echo "FAIL: '$needle' is declared in the bundle -- $why" >&2
 		fail=1
 	else
-		echo "  ok: $needle absent"
+		echo "  ok: $needle absent from the manifest"
 	fi
 }
 
-check_absent "REQUEST_INSTALL_PACKAGES" "Play forbids self-updating apps"
-check_absent "MANAGE_EXTERNAL_STORAGE"  "all-files access needs a declared exemption"
-check_absent "RECORD_AUDIO"             "would add Microphone to the listing"
-check_absent "libarmsx3_lsfg.so"        "frame generation is not shipped through Play"
-check_absent "updateprovider"           "the updater's FileProvider must not ship"
+check_absent_manifest "REQUEST_INSTALL_PACKAGES" "Play forbids self-updating apps"
+check_absent_manifest "MANAGE_EXTERNAL_STORAGE"  "all-files access needs a declared exemption"
+check_absent_manifest "RECORD_AUDIO"             "would add Microphone to the listing"
+check_absent_manifest "updateprovider"           "the updater FileProvider must not ship"
 
-# And the things that MUST be there.
-if ! LC_ALL=C grep -aqF "com.armsx3.play" "$AAB"; then
-	echo "FAIL: applicationId com.armsx3.play not found -- wrong flavor built?" >&2
+# Native libraries are entries in the archive, so check the listing rather than the bytes.
+if unzip -l "$AAB" | grep -q "libarmsx3_lsfg.so"; then
+	echo "FAIL: libarmsx3_lsfg.so is in the bundle -- frame generation is not shipped through Play" >&2
 	fail=1
 else
-	echo "  ok: applicationId is com.armsx3.play"
+	echo "  ok: libarmsx3_lsfg.so absent"
 fi
 
-if ! unzip -l "$AAB" | grep -q "libarmsx3-core.so"; then
+# And the things that MUST be there.
+if LC_ALL=C grep -aqF "com.armsx3.play" "$MANIFEST"; then
+	echo "  ok: applicationId is com.armsx3.play"
+else
+	echo "FAIL: applicationId com.armsx3.play not in the manifest -- wrong flavor built?" >&2
+	fail=1
+fi
+
+if unzip -l "$AAB" | grep -q "libarmsx3-core.so"; then
+	echo "  ok: core library present"
+else
 	echo "FAIL: libarmsx3-core.so missing from the bundle" >&2
 	fail=1
-else
-	echo "  ok: core library present"
 fi
 
 [ "$fail" -eq 0 ] || { echo "==> REFUSING to ship this bundle" >&2; exit 1; }
