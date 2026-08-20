@@ -182,6 +182,20 @@ namespace vk
 		std::unique_ptr<mem_allocator_base> m_allocator;
 		VkDevice dev = VK_NULL_HANDLE;
 
+		// Driver-side pipeline cache, seeded from disk at device creation and written
+		// back at teardown. Every vkCreate*Pipelines call is handed this, which lets the
+		// driver skip compilation work it has already done -- including work done in a
+		// PREVIOUS run, which is the whole point on mobile where a cold pipeline compile
+		// is a visible stall. Orthogonal to RSX's own shader cache: that one remembers
+		// WHICH pipelines a title needs, this one makes each one cheap to create.
+		VkPipelineCache m_pipeline_cache = VK_NULL_HANDLE;
+		mutable usz m_pipeline_cache_saved_size = 0;
+
+		std::string get_pipeline_cache_path() const;
+		void load_pipeline_cache();
+		void save_pipeline_cache() const;
+		void save_and_destroy_pipeline_cache();
+
 		VkQueue m_graphics_queue = VK_NULL_HANDLE;
 		VkQueue m_present_queue = VK_NULL_HANDLE;
 		VkQueue m_transfer_queue = VK_NULL_HANDLE;
@@ -209,6 +223,12 @@ namespace vk
 		const physical_device& gpu() const { return *pgpu; }
 		const memory_type_mapping& get_memory_mapping() const { return memory_map; }
 		const gpu_formats_support& get_formats_support() const { return m_formats_support; }
+
+		// May be VK_NULL_HANDLE, which is a legal argument to vkCreate*Pipelines and simply
+		// means "no cache". Safe to pass from several pipeline compiler threads at once:
+		// the spec only requires external synchronisation on a cache created with
+		// VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT_EXT, which this is not.
+		VkPipelineCache get_pipeline_cache() const { return m_pipeline_cache; }
 		const gpu_shader_types_support& get_shader_types_support() const { return pgpu->shader_types_support; }
 		const custom_border_color_features& get_custom_border_color_support() const { return pgpu->custom_border_color_support; }
 		bool get_unsized_array_support() const { return pgpu->unsized_array_support; }

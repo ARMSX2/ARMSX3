@@ -135,6 +135,7 @@ extern "C"
 	PFN_vkGetPhysicalDeviceSurfaceFormatsKHR vkGetPhysicalDeviceSurfaceFormatsKHR = nullptr;
 	PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR = nullptr;
 	PFN_vkGetPhysicalDeviceSurfaceSupportKHR vkGetPhysicalDeviceSurfaceSupportKHR = nullptr;
+	PFN_vkGetPipelineCacheData vkGetPipelineCacheData = nullptr;
 	PFN_vkGetQueryPoolResults vkGetQueryPoolResults = nullptr;
 	PFN_vkInvalidateMappedMemoryRanges vkInvalidateMappedMemoryRanges = nullptr;
 	PFN_vkMapMemory vkMapMemory = nullptr;
@@ -416,6 +417,8 @@ namespace vk::android
 			if (!vkGetPhysicalDeviceSurfacePresentModesKHR) vkGetPhysicalDeviceSurfacePresentModesKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfacePresentModesKHR>(dlsym(handle, "vkGetPhysicalDeviceSurfacePresentModesKHR"));
 			vkGetPhysicalDeviceSurfaceSupportKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(vkGetInstanceProcAddr(nullptr, "vkGetPhysicalDeviceSurfaceSupportKHR"));
 			if (!vkGetPhysicalDeviceSurfaceSupportKHR) vkGetPhysicalDeviceSurfaceSupportKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(dlsym(handle, "vkGetPhysicalDeviceSurfaceSupportKHR"));
+			vkGetPipelineCacheData = reinterpret_cast<PFN_vkGetPipelineCacheData>(vkGetInstanceProcAddr(nullptr, "vkGetPipelineCacheData"));
+			if (!vkGetPipelineCacheData) vkGetPipelineCacheData = reinterpret_cast<PFN_vkGetPipelineCacheData>(dlsym(handle, "vkGetPipelineCacheData"));
 			vkGetQueryPoolResults = reinterpret_cast<PFN_vkGetQueryPoolResults>(vkGetInstanceProcAddr(nullptr, "vkGetQueryPoolResults"));
 			if (!vkGetQueryPoolResults) vkGetQueryPoolResults = reinterpret_cast<PFN_vkGetQueryPoolResults>(dlsym(handle, "vkGetQueryPoolResults"));
 			vkInvalidateMappedMemoryRanges = reinterpret_cast<PFN_vkInvalidateMappedMemoryRanges>(vkGetInstanceProcAddr(nullptr, "vkInvalidateMappedMemoryRanges"));
@@ -573,6 +576,7 @@ namespace vk::android
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceFormatsKHR")) vkGetPhysicalDeviceSurfaceFormatsKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceFormatsKHR>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfacePresentModesKHR")) vkGetPhysicalDeviceSurfacePresentModesKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfacePresentModesKHR>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceSupportKHR")) vkGetPhysicalDeviceSurfaceSupportKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(p);
+		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPipelineCacheData")) vkGetPipelineCacheData = reinterpret_cast<PFN_vkGetPipelineCacheData>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetQueryPoolResults")) vkGetQueryPoolResults = reinterpret_cast<PFN_vkGetQueryPoolResults>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkInvalidateMappedMemoryRanges")) vkInvalidateMappedMemoryRanges = reinterpret_cast<PFN_vkInvalidateMappedMemoryRanges>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkMapMemory")) vkMapMemory = reinterpret_cast<PFN_vkMapMemory>(p);

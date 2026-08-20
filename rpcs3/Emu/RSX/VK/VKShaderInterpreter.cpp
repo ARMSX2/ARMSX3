@@ -463,8 +463,10 @@ namespace vk
 	{
 		m_device = dev;
 
-		VkPipelineCacheCreateInfo drv_cache_info{ VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
-		vkCreatePipelineCache(m_device, &drv_cache_info, nullptr, &m_driver_pipeline_cache);
+		// Share the device's persistent cache rather than opening a private one. The
+		// interpreter's programs are the expensive ubershaders, and a private cache threw
+		// that work away at every shutdown. Borrowed, not owned -- see destroy().
+		m_driver_pipeline_cache = dev.get_pipeline_cache();
 	}
 
 	void shader_interpreter::destroy()
@@ -474,11 +476,8 @@ namespace vk
 		m_vs_shader_cache.clear();
 		m_fs_shader_cache.clear();
 
-		if (m_driver_pipeline_cache)
-		{
-			vkDestroyPipelineCache(m_device, m_driver_pipeline_cache, nullptr);
-			m_driver_pipeline_cache = VK_NULL_HANDLE;
-		}
+		// Owned by the render_device, which saves and destroys it. Just drop the borrow.
+		m_driver_pipeline_cache = VK_NULL_HANDLE;
 	}
 
 	std::shared_ptr<glsl::program> shader_interpreter::link(const vk::pipeline_props& properties, u64 compiler_opt, bool async, async_build_fn_callback async_callback)

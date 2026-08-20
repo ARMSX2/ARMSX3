@@ -1,5 +1,6 @@
 #include "device.h"
 #include <algorithm>
+#include "Utilities/File.h"
 #include "util/sysinfo.hpp"
 #include "instance.h"
 #include "util/logs.hpp"
@@ -1178,6 +1179,184 @@ namespace vk
 		// Useful for debugging different VRAM configurations
 		const u64 vram_allocation_limit = g_cfg.video.vk.vram_allocation_limit * 0x100000ull;
 		memory_map.device_local_total_bytes = std::min(memory_map.device_local_total_bytes, vram_allocation_limit);
+
+		load_pipeline_cache();
+	}
+
+	namespace
+	{
+		struct pipeline_cache_disk_header
+		{
+			u32 length;   // sizeof(header); guards against layout drift
+			u32 version;
+			u32 vendorID;
+			u32 deviceID;
+			u8 uuid[VK_UUID_SIZE];
+		};
+
+		constexpr u32 k_pipeline_cache_disk_version = 1;
+
+		// A blob larger than this is refused on load and dropped on save. The cache is
+		// shared by every title, so without a bound it only ever grows. Dropping it
+		// costs one cold run and is self-healing; letting it stop updating silently is
+		// the worse failure.
+		constexpr u64 k_pipeline_cache_size_limit = 128ull << 20;
+	}
+
+	std::string render_device::get_pipeline_cache_path() const
+	{
+		const std::string& cache_dir = fs::get_cache_dir();
+		return cache_dir.empty() ? std::string{} : cache_dir + "vk_pipeline_cache.bin";
+	}
+
+	void render_device::load_pipeline_cache()
+	{
+		m_pipeline_cache = VK_NULL_HANDLE;
+		m_pipeline_cache_saved_size = 0;
+
+		std::vector<u8> initial_data;
+		const std::string path = get_pipeline_cache_path();
+
+		if (!path.empty())
+		{
+			if (fs::file f{path, fs::read})
+			{
+				const u64 file_size = f.size();
+
+				if (file_size > sizeof(pipeline_cache_disk_header) && file_size <= k_pipeline_cache_size_limit)
+				{
+					std::vector<u8> blob(file_size);
+
+					if (f.read(blob.data(), file_size) == file_size)
+					{
+						pipeline_cache_disk_header hdr{};
+						std::memcpy(&hdr, blob.data(), sizeof(hdr));
+
+						const auto& props = pgpu->props;
+
+						// pipelineCacheUUID is required to change whenever the driver can no
+						// longer consume its own old blobs, so this also covers a driver
+						// update or an adrenotools driver swap without any version of ours.
+						const bool header_ok =
+							hdr.length == sizeof(pipeline_cache_disk_header) &&
+							hdr.version == k_pipeline_cache_disk_version &&
+							hdr.vendorID == props.vendorID &&
+							hdr.deviceID == props.deviceID &&
+							std::memcmp(hdr.uuid, props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+
+						if (header_ok)
+						{
+							initial_data.assign(blob.begin() + sizeof(pipeline_cache_disk_header), blob.end());
+						}
+						else
+						{
+							rsx_log.notice("vk: on-disk pipeline cache rejected (driver or device changed); rebuilding.");
+						}
+					}
+				}
+				else if (file_size > k_pipeline_cache_size_limit)
+				{
+					rsx_log.notice("vk: on-disk pipeline cache is oversized (%llu bytes); rebuilding.", file_size);
+				}
+			}
+		}
+
+		VkPipelineCacheCreateInfo create_info{};
+		create_info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+		create_info.initialDataSize = initial_data.size();
+		create_info.pInitialData = initial_data.empty() ? nullptr : initial_data.data();
+
+		VkPipelineCache cache = VK_NULL_HANDLE;
+		const VkResult res = vkCreatePipelineCache(dev, &create_info, nullptr, &cache);
+
+		if (res == VK_SUCCESS && cache != VK_NULL_HANDLE)
+		{
+			m_pipeline_cache = cache;
+			m_pipeline_cache_saved_size = initial_data.size();
+			rsx_log.notice("vk: driver pipeline cache active (seeded with %zu bytes).", initial_data.size());
+		}
+		else
+		{
+			// Not fatal. Pipeline creation takes VK_NULL_HANDLE perfectly happily.
+			rsx_log.warning("vk: vkCreatePipelineCache failed (0x%x); continuing without a driver pipeline cache.", static_cast<u32>(res));
+		}
+	}
+
+	void render_device::save_pipeline_cache() const
+	{
+		if (m_pipeline_cache == VK_NULL_HANDLE)
+		{
+			return;
+		}
+
+		const std::string path = get_pipeline_cache_path();
+
+		if (path.empty())
+		{
+			return;
+		}
+
+		usz data_size = 0;
+
+		if (vkGetPipelineCacheData(dev, m_pipeline_cache, &data_size, nullptr) != VK_SUCCESS || !data_size)
+		{
+			return;
+		}
+
+		// Nothing new was compiled since the last write.
+		if (data_size == m_pipeline_cache_saved_size)
+		{
+			return;
+		}
+
+		if (data_size > k_pipeline_cache_size_limit)
+		{
+			rsx_log.notice("vk: pipeline cache grew past %llu bytes; dropping it rather than letting it grow unbounded.", k_pipeline_cache_size_limit);
+			fs::remove_file(path);
+			return;
+		}
+
+		std::vector<u8> blob(data_size);
+
+		if (vkGetPipelineCacheData(dev, m_pipeline_cache, &data_size, blob.data()) != VK_SUCCESS)
+		{
+			return;
+		}
+
+		blob.resize(data_size);
+
+		pipeline_cache_disk_header hdr{};
+		hdr.length = sizeof(pipeline_cache_disk_header);
+		hdr.version = k_pipeline_cache_disk_version;
+		hdr.vendorID = pgpu->props.vendorID;
+		hdr.deviceID = pgpu->props.deviceID;
+		std::memcpy(hdr.uuid, pgpu->props.pipelineCacheUUID, VK_UUID_SIZE);
+
+		fs::create_path(fs::get_cache_dir());
+
+		if (fs::file out{path, fs::rewrite})
+		{
+			if (out.write(&hdr, sizeof(hdr)) == sizeof(hdr) &&
+				(blob.empty() || out.write(blob.data(), blob.size()) == blob.size()))
+			{
+				m_pipeline_cache_saved_size = data_size;
+				rsx_log.notice("vk: wrote %zu bytes of driver pipeline cache.", data_size);
+			}
+		}
+	}
+
+	void render_device::save_and_destroy_pipeline_cache()
+	{
+		if (m_pipeline_cache == VK_NULL_HANDLE)
+		{
+			return;
+		}
+
+		save_pipeline_cache();
+
+		vkDestroyPipelineCache(dev, m_pipeline_cache, nullptr);
+		m_pipeline_cache = VK_NULL_HANDLE;
+		m_pipeline_cache_saved_size = 0;
 	}
 
 	void render_device::destroy()
@@ -1189,6 +1368,9 @@ namespace vk
 
 		if (dev && pgpu)
 		{
+			// Must happen while the device is still alive -- it reads back through it.
+			save_and_destroy_pipeline_cache();
+
 			if (m_allocator)
 			{
 				m_allocator->destroy();
