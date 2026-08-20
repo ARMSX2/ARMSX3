@@ -266,12 +266,47 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	region.srcOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
 	region.dstOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
 
-	// The generated image was written by framegen's device and waited on with its device idle, so
-	// it is complete by the time we get here; no cross-device semaphore exists to use instead. The
-	// opposite direction -- framegen overwriting this image while this blit is still reading it --
-	// is guarded by the caller, which waits for this command buffer before the next generation.
+	// Take ownership of the generated image before reading it, and say what layout it is really in.
+	//
+	// This blit used to name TRANSFER_SRC_OPTIMAL for an image that was never in that layout and
+	// was never acquired from the device that wrote it. framegen releases its outputs with
+	// newLayout = VK_IMAGE_LAYOUT_GENERAL and dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL
+	// (framegen/v3.1_src/context.cpp), so reading it as TRANSFER_SRC with no acquire is a layout
+	// mismatch and a missing ownership transfer at once -- undefined by the specification, and on
+	// a tiler it reads whatever survived in cache rather than what framegen wrote. That is the
+	// corrupted output seen whenever frame generation is switched on.
+	//
+	// Timing is already handled: generate() does not return until framegen's submission has
+	// completed, so this is about visibility and ownership, not about waiting.
+	VkImageMemoryBarrier acquire_src = {};
+	acquire_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	acquire_src.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+	acquire_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	acquire_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+	acquire_src.dstQueueFamilyIndex = m_device->get_graphics_queue_family();
+	acquire_src.image = src;
+	acquire_src.subresourceRange = range;
+	acquire_src.srcAccessMask = 0;
+	acquire_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+	vkCmdPipelineBarrier(*cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+		0, 0, nullptr, 0, nullptr, 1, &acquire_src);
+
 	vkCmdBlitImage(*cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
+
+	// Hand it back the way framegen expects to find it, or the next generation acquires an image
+	// whose layout and owner no longer match what its own release barrier assumed.
+	VkImageMemoryBarrier release_src = acquire_src;
+	release_src.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+	release_src.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+	release_src.srcQueueFamilyIndex = m_device->get_graphics_queue_family();
+	release_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+	release_src.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+	release_src.dstAccessMask = 0;
+
+	vkCmdPipelineBarrier(*cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+		0, 0, nullptr, 0, nullptr, 1, &release_src);
 
 	vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 		VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, range);
