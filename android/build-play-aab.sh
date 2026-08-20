@@ -110,7 +110,22 @@ check_absent_manifest "RECORD_AUDIO"             "would add Microphone to the li
 check_absent_manifest "updateprovider"           "the updater FileProvider must not ship"
 
 # Native libraries are entries in the archive, so check the listing rather than the bytes.
-if unzip -l "$AAB" | grep -q "libarmsx3_lsfg.so"; then
+#
+# Captured ONCE into a variable rather than piped into each grep. Under `set -o pipefail`,
+# `unzip -l | grep -q x` fails whenever x IS found: grep exits at the first match, closes the
+# pipe, unzip takes SIGPIPE, and the pipeline reports failure. That inverted every positive
+# check -- it reported the core library missing from a bundle that plainly contained it, while
+# the absence checks passed for the wrong reason, because grep read to the end and found
+# nothing.
+LISTING="$(unzip -l "$AAB")"
+
+# Matched with `case`, not with a pipe into grep. Under `set -o pipefail` any `... | grep -q x`
+# FAILS when x is found: grep exits at the first match, closes the pipe, and whatever is feeding
+# it takes SIGPIPE. That inverted every positive check -- the core library was reported missing
+# from a bundle that plainly contained it, while the absence checks passed for the wrong reason,
+# because grep read to the end and found nothing. Piping printf instead of unzip moved the
+# broken pipe rather than removing it; case has no subprocess to signal.
+if [[ "$LISTING" == *libarmsx3_lsfg.so* ]]; then
 	echo "FAIL: libarmsx3_lsfg.so is in the bundle -- frame generation is not shipped through Play" >&2
 	fail=1
 else
@@ -125,7 +140,7 @@ else
 	fail=1
 fi
 
-if unzip -l "$AAB" | grep -q "libarmsx3-core.so"; then
+if [[ "$LISTING" == *libarmsx3-core.so* ]]; then
 	echo "  ok: core library present"
 else
 	echo "FAIL: libarmsx3-core.so missing from the bundle" >&2
