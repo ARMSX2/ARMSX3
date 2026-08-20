@@ -56,21 +56,31 @@ namespace vk
 				optimal_kernel_size = 1;
 				optimal_group_size = 128;
 				break;
+			case vk::driver_vendor::ADRENO:
+			case vk::driver_vendor::TURNIP:
+				// Qualcomm runs 64-wide waves, and a workgroup narrower than the wave does
+				// not pack together with its neighbours -- it takes a whole wave and masks
+				// the surplus lanes off. So 32 does not mean "smaller groups" here, it means
+				// half of every wave sits idle on every dispatch. Widening costs nothing to
+				// weigh against that: these kernels carry no shared memory and no barriers,
+				// so group size is a scheduling hint and nothing else. ARMSX3_CS_GROUP_SIZE
+				// overrides it if some part turns out to disagree.
+				unroll_loops = true;
+				optimal_kernel_size = 1;
+				optimal_group_size = 64;
+				break;
 			case vk::driver_vendor::LAVAPIPE:
 			case vk::driver_vendor::V3DV:
 			case vk::driver_vendor::PANVK:
 			case vk::driver_vendor::ARM_MALI:
-			case vk::driver_vendor::ADRENO:
-			case vk::driver_vendor::TURNIP:
 			case vk::driver_vendor::POWERVR:
 			case vk::driver_vendor::XCLIPSE:
 			case vk::driver_vendor::BROADCOM:
 			case vk::driver_vendor::VERISILICON:
-				// Mobile tilers. Falls through to 32 with everything else.
-				// Adreno and Mali both have a 64-wide wave, so 32 likely leaves
-				// half of each wave idle -- but that is reasoning, not a
-				// measurement, and guessing wrong here costs performance
-				// silently. Left at 32 until benched on device.
+				// The rest of mobile, which does NOT inherit the Adreno reasoning above.
+				// Mali warps are 16 lanes on Valhall and 4-8 on Bifrost, so 32 already spans
+				// several of them and there is no half-empty wave to reclaim; Xclipse is
+				// RDNA-derived and prefers wave32 for compute. Falls through to 32.
 			case vk::driver_vendor::DOZEN:
 				// Actual optimal size depends on the D3D device. Use 32 since it should work well on both AMD and NVIDIA
 			case vk::driver_vendor::NVIDIA:
