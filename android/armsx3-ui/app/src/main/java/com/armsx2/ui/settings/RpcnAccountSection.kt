@@ -85,6 +85,10 @@ fun RpcnAccountSection() {
     val msgCreateHint = str("rpcn.create.hint")
     val msgTokenSent = str("rpcn.token.sent")
     val msgResetSent = str("rpcn.reset.sent")
+    val msgNeedUsername = str("rpcn.need.username")
+    val msgNeedPassword = str("rpcn.need.password")
+    val msgNeedNewPassword = str("rpcn.need.newPassword")
+    val msgNeedEmail = str("rpcn.need.email")
     val msgHostAdded = str("rpcn.hosts.added")
     val msgHostRemoved = str("rpcn.hosts.removed")
     val msgHostsReset = str("rpcn.hosts.resetDone")
@@ -329,7 +333,12 @@ fun RpcnAccountSection() {
             modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
         )
 
-        if (creating) {
+        // Always shown, not only while creating an account.
+        //
+        // Password reset sends this address to the server, and hiding the box outside creation
+        // mode meant Reset password posted an EMPTY email. The server rejects that whole query
+        // as Malformed, which reached the user as the meaningless "Server error 1".
+        run {
             OutlinedTextField(
                 value = email,
                 onValueChange = { email = it },
@@ -385,6 +394,12 @@ fun RpcnAccountSection() {
                 if (!creating) {
                     creating = true
                     status = msgCreateHint
+                } else if (npid.isBlank()) {
+                    status = msgNeedUsername
+                } else if (password.isBlank()) {
+                    status = msgNeedPassword
+                } else if (email.isBlank()) {
+                    status = msgNeedEmail
                 } else {
                     Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
                     run(msgCreated) {
@@ -395,20 +410,39 @@ fun RpcnAccountSection() {
                 }
             }) { Text(if (creating) str("rpcn.create.go") else str("rpcn.create")) }
 
+            // Checked here rather than sent and rejected. A required field left empty makes the
+            // whole query Malformed, and the server's answer to that is an error number with no
+            // way for the user to know which box to fill in. Note the password box is CLEARED by
+            // Save, so "I typed it a moment ago" is not the same as "it is in the field now".
             TextButton(enabled = !busy, onClick = {
-                Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
-                run(msgTokenSent) {
-                    Rpcs3Bridge.rpcnResendToken(npid.trim(), password)
+                when {
+                    npid.isBlank() -> status = msgNeedUsername
+                    password.isBlank() -> status = msgNeedPassword
+                    else -> {
+                        Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
+                        run(msgTokenSent) {
+                            Rpcs3Bridge.rpcnResendToken(npid.trim(), password)
+                        }
+                    }
                 }
             }) { Text(str("rpcn.token.resend")) }
 
             TextButton(enabled = !busy, onClick = {
-                Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
-                run(msgResetSent) {
-                    if (token.isBlank()) {
-                        Rpcs3Bridge.rpcnSendResetToken(npid.trim(), email.trim())
-                    } else {
-                        Rpcs3Bridge.rpcnResetPassword(npid.trim(), token.trim(), password)
+                when {
+                    npid.isBlank() -> status = msgNeedUsername
+                    // No token yet: ask the server to email one, which needs the address.
+                    token.isBlank() && email.isBlank() -> status = msgNeedEmail
+                    // Token in hand: this is the actual reset, so a new password is required.
+                    token.isNotBlank() && password.isBlank() -> status = msgNeedNewPassword
+                    else -> {
+                        Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
+                        run(msgResetSent) {
+                            if (token.isBlank()) {
+                                Rpcs3Bridge.rpcnSendResetToken(npid.trim(), email.trim())
+                            } else {
+                                Rpcs3Bridge.rpcnResetPassword(npid.trim(), token.trim(), password)
+                            }
+                        }
                     }
                 }
             }) { Text(str("rpcn.reset")) }

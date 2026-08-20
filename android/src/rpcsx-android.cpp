@@ -2784,7 +2784,17 @@ static std::string rpcn_describe(rpcn::ErrorType error) {
   case rpcn::ErrorType::LoginAlreadyLoggedIn:
     return "That account is already logged in somewhere else.";
   case rpcn::ErrorType::LoginError: return "The server refused the login.";
-  default: return fmt::format("Server error %d.", static_cast<int>(error));
+
+  // These three were reaching users as "Server error 1" and the like, which says nothing about
+  // what to do. Malformed in particular is OUR fault, not the server's: it means a required
+  // field was sent empty, which is exactly what Reset password did when the email box was
+  // hidden outside account creation.
+  case rpcn::ErrorType::Malformed:
+    return "The request was incomplete -- a required field was empty. This is a bug; please "
+           "report which button you pressed.";
+  case rpcn::ErrorType::Invalid:
+    return "The server rejected that request as out of order. Try Test sign-in first.";
+  default: return fmt::format("Unexpected server error %d.", static_cast<int>(error));
   }
 }
 
