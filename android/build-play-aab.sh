@@ -26,11 +26,25 @@ UI="$HERE/armsx3-ui"
 
 MIN_SDK="${PLAY_MIN_SDK:-30}"
 
+# Gradle needs a JDK and the shell this is run from may not have one on PATH. Android Studio
+# ships one; fall back to it rather than failing several steps later with "Unable to locate a
+# Java Runtime", which does not point at the cause.
+if [ -z "${JAVA_HOME:-}" ]; then
+	for candidate in \
+		"/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
+		"$(/usr/libexec/java_home 2>/dev/null || true)"
+	do
+		[ -x "$candidate/bin/java" ] && { export JAVA_HOME="$candidate"; break; }
+	done
+fi
+[ -n "${JAVA_HOME:-}" ] || { echo "FAIL: no JDK found; set JAVA_HOME" >&2; exit 1; }
+export PATH="$JAVA_HOME/bin:$PATH"
+
 # Refuse to build at all without an upload key. A debug-signed bundle is rejected by Play, and
 # finding that out at upload time after a fifteen-minute build is a poor way to learn it.
-if [ ! -f "$UI/keystore.properties" ]; then
+if [ ! -f "$UI/keystore.properties" ] || grep -q "REPLACE_ME\|REPLACE_WITH_ABSOLUTE_PATH" "$UI/keystore.properties"; then
 	cat >&2 <<'MSG'
-FAIL: no upload key configured.
+FAIL: upload key not configured (file missing, or placeholders not filled in).
 
 Create android/armsx3-ui/keystore.properties with:
 
