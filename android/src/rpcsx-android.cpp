@@ -3364,15 +3364,29 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
   // Kill() is idempotent and returns quickly when already stopped. The bound is generous
   // because a real teardown joins the RSX and SPU threads and flushes caches; past it we
   // boot anyway and let BootGame report a normal error rather than hanging the UI.
-  if (!Emu.IsStopped()) {
+  // IsStopped(true), not IsStopped().
+  //
+  // The default overload is `m_state <= system_state::stopping`, so it answers TRUE while the
+  // previous VM is still stopping -- and loading. This whole block was therefore skipped exactly
+  // when it was needed: Kill() signals the threads and hands the actual joining to a detached
+  // "Emulation Join Thread", the state reaches stopping immediately, and the guard read that as
+  // stopped. Observed on device as a boot starting three seconds into a teardown that never
+  // finished, with the join thread still waiting on an SPU interrupt thread seventeen seconds
+  // later, seven SPUs parked in EXIT|w|G-PAUSE, and the app frozen on the last frame of the
+  // previous game. There was no "previous VM still running" line in the log, because the check
+  // passed.
+  //
+  // The `true` overload requires system_state::stopped, which is only reached once that join
+  // thread has run to completion.
+  if (!Emu.IsStopped(true)) {
     rpcsx_android.notice("boot: previous VM still running, stopping it first");
     Emu.Kill();
 
-    for (int waited = 0; !Emu.IsStopped() && waited < 10000; waited += 20) {
+    for (int waited = 0; !Emu.IsStopped(true) && waited < 10000; waited += 20) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
-    if (!Emu.IsStopped()) {
+    if (!Emu.IsStopped(true)) {
       rpcsx_android.error("boot: previous VM did not stop in time, booting anyway");
     }
   }
