@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
@@ -111,17 +113,61 @@ android {
         }
     }
 
+    // Reads android/armsx3-ui/keystore.properties when it exists:
+    //
+    //     storeFile=/absolute/path/to/upload.jks
+    //     storePassword=...
+    //     keyAlias=upload
+    //     keyPassword=...
+    //
+    // Absent, only the debug key exists and release builds stay sideload-only. The file is
+    // gitignored and nothing here echoes its contents.
+    signingConfigs {
+        val props = rootProject.file("keystore.properties")
+
+        if (props.exists()) {
+            val k = Properties().apply { props.inputStream().use { load(it) } }
+
+            create("upload") {
+                storeFile = file(k.getProperty("storeFile"))
+                storePassword = k.getProperty("storePassword")
+                keyAlias = k.getProperty("keyAlias")
+                keyPassword = k.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // Off for the Play bundle, on for GitHub APKs.
+            //
+            // Not a preference: AGP 9.2.1's R8 writes its mapping as mapping.prt, a compressed
+            // per-class archive, while packageBundle still demands a plain mapping.txt, so an
+            // AAB cannot be built with R8 enabled at all. Set by build-play-aab.sh.
+            //
+            // The cost is small and there is precedent: ARMSX2 ships its Play build with minify
+            // off entirely, and here a 94 MB native core dominates a 76 MB APK, so shrinking the
+            // Kotlin saves comparatively little.
+            //
+            // A gradle property rather than the variant API, matching how armsx3.minSdk is
+            // already threaded through by build-variants.sh.
+            val noMinify = project.hasProperty("armsx3.noMinify")
+            isMinifyEnabled = !noMinify
+            isShrinkResources = !noMinify
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Debug-signed so alpha release builds are sideloadable without the
-            // upload key. Swap this for the real config before any public build.
-            signingConfig = signingConfigs.getByName("debug")
+            // The upload key when one is configured, the debug key otherwise.
+            //
+            // GitHub APKs are deliberately debug-signed so an alpha stays sideloadable without
+            // the upload key present. Play rejects a debug-signed bundle outright, so
+            // build-play-aab.sh refuses to run without keystore.properties.
+            //
+            // The file is gitignored (*.jks, keystore.properties) and read at build time, so no
+            // credential is ever in the repo or on a command line.
+            signingConfig = signingConfigs.findByName("upload")
+                ?: signingConfigs.getByName("debug")
         }
     }
 

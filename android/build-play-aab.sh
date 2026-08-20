@@ -26,8 +26,37 @@ UI="$HERE/armsx3-ui"
 
 MIN_SDK="${PLAY_MIN_SDK:-30}"
 
-echo "==> Building Play bundle (minSdk $MIN_SDK)"
-( cd "$UI" && ./gradlew --quiet :app:bundlePlayRelease "-Parmsx3.minSdk=$MIN_SDK" )
+# Refuse to build at all without an upload key. A debug-signed bundle is rejected by Play, and
+# finding that out at upload time after a fifteen-minute build is a poor way to learn it.
+if [ ! -f "$UI/keystore.properties" ]; then
+	cat >&2 <<'MSG'
+FAIL: no upload key configured.
+
+Create android/armsx3-ui/keystore.properties with:
+
+    storeFile=/absolute/path/to/upload.jks
+    storePassword=...
+    keyAlias=upload
+    keyPassword=...
+
+and generate the key itself with:
+
+    keytool -genkeypair -v -keystore upload.jks -alias upload \
+        -keyalg RSA -keysize 4096 -validity 10000
+
+Keep upload.jks and its passwords safe and backed up: Play ties the listing to this key
+and losing it means losing the ability to update the app. Both the keystore and the
+properties file are gitignored.
+MSG
+	exit 1
+fi
+
+# armsx3.noMinify because AGP 9.2.1 cannot bundle with R8 on: R8 writes mapping.prt, a
+# compressed per-class archive, and packageBundle demands a plain mapping.txt. ARMSX2 ships
+# its Play build with minify off too, so this is the existing precedent rather than a new
+# compromise.
+echo "==> Building Play bundle (minSdk $MIN_SDK, minify off)"
+( cd "$UI" && ./gradlew --quiet :app:bundlePlayRelease "-Parmsx3.minSdk=$MIN_SDK" -Parmsx3.noMinify )
 
 AAB="$UI/app/build/outputs/bundle/playRelease/app-play-release.aab"
 [ -f "$AAB" ] || { echo "FAIL: no bundle produced at $AAB" >&2; exit 1; }
