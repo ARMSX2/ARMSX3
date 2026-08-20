@@ -286,6 +286,10 @@ namespace rpcn
 		rpcn_client(rpcn_client& other)    = delete;
 		void operator=(const rpcn_client&) = delete;
 		static std::shared_ptr<rpcn_client> get_instance(u32 binding_address, bool check_config = false);
+		// Whatever client already exists, or nullptr. Unlike get_instance this never creates
+		// one, so a caller that only wants to report state does not spawn three threads and
+		// immediately tear them down again.
+		static std::shared_ptr<rpcn_client> peek_instance();
 		rpcn_state wait_for_connection();
 		rpcn_state wait_for_authentified();
 		bool terminate_connection();

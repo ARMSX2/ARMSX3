@@ -156,6 +156,12 @@ class RPCSX {
 
     external fun rpcnSetIpv6(enabled: Boolean)
 
+    /** JSON: {configured, npid, connected, authentified, onlineName}. Empty if unsupported.
+     *
+     *  RPCN keeps no persistent session -- every connection re-authenticates from the saved
+     *  credentials -- so `configured` is what survives a restart, not `authentified`. */
+    external fun rpcnStatus(): String
+
     /** Coalesce the config file writes of every settingsSet until [settingsEndBatch]. */
     external fun settingsBeginBatch()
     external fun settingsEndBatch()

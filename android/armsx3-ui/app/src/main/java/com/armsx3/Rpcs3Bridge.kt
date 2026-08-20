@@ -1125,6 +1125,10 @@ object Rpcs3Bridge {
         runCatching { RPCSX.instance.rpcnSetIpv6(enabled) }
     }
 
+    @JvmStatic
+    fun rpcnStatus(): String =
+        runCatching { RPCSX.instance.rpcnStatus() }.getOrDefault("")
+
     /** One key transition for cellKb. See RPCSX.keyboardKey. */
     @JvmStatic
     fun keyboardKey(androidKeyCode: Int, unicode: Int, pressed: Boolean): Boolean =

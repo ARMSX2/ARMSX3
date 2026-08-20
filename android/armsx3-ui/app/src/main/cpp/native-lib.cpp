@@ -76,6 +76,7 @@ struct RPCSXApi {
   const char *(*rpcnDelHost)(std::string_view desc, std::string_view host);
   void (*rpcnResetHosts)();
   void (*rpcnSetIpv6)(bool enabled);
+  const char *(*rpcnStatus)();
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
   bool (*installSplitPkg)(JNIEnv *env, const int *fds, int count, long progressId);
@@ -182,6 +183,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.rpcnDelHost = reinterpret_cast<decltype(rpcnDelHost)>(dlsym(handle, "_rpcsx_rpcnDelHost"));
     result.rpcnResetHosts = reinterpret_cast<decltype(rpcnResetHosts)>(dlsym(handle, "_rpcsx_rpcnResetHosts"));
     result.rpcnSetIpv6 = reinterpret_cast<decltype(rpcnSetIpv6)>(dlsym(handle, "_rpcsx_rpcnSetIpv6"));
+    result.rpcnStatus = reinterpret_cast<decltype(rpcnStatus)>(dlsym(handle, "_rpcsx_rpcnStatus"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
     // symbol, and refusing to load it over a missing optional feature would be worse than the
@@ -1121,6 +1123,13 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_net_rpcsx_RPCSX_rpcnGetConfig(JNIEnv *env, jobject) {
   if (!rpcsxLib.rpcnGetConfig) return env->NewStringUTF("");
   const char *json = rpcsxLib.rpcnGetConfig();
+  return env->NewStringUTF(json ? json : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnStatus(JNIEnv *env, jobject) {
+  if (!rpcsxLib.rpcnStatus) return env->NewStringUTF("");
+  const char *json = rpcsxLib.rpcnStatus();
   return env->NewStringUTF(json ? json : "");
 }
 

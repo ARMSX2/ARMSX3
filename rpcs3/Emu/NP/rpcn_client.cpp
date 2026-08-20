@@ -381,6 +381,12 @@ namespace rpcn
 		return sptr;
 	}
 
+	std::shared_ptr<rpcn_client> rpcn_client::peek_instance()
+	{
+		std::lock_guard lock(inst_mutex);
+		return instance.lock();
+	}
+
 	// inform rpcn that the server infos have been updated and signal rpcn_thread to try again
 	void rpcn_client::server_infos_updated()
 	{

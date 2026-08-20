@@ -2788,6 +2788,40 @@ static std::string rpcn_describe(rpcn::ErrorType error) {
   }
 }
 
+// What the account screen shows on entry, so "did it remember me?" has an answer without
+// pressing anything.
+//
+// RPCN has no persistent session: every connection re-authenticates from the saved
+// credentials, and the client is destroyed as soon as the last shared_ptr to it goes. So
+// "logged in" is not a thing that survives a restart -- the ACCOUNT is what persists, and
+// that is what this reports. Live connection state is included when a client happens to
+// exist (a game is online), via peek_instance so that asking does not create one.
+extern "C" const char *_rpcsx_rpcnStatus() {
+  static thread_local std::string result;
+
+  g_cfg_rpcn.load();
+
+  const std::string npid = g_cfg_rpcn.get_npid();
+  const bool configured = !npid.empty() && !g_cfg_rpcn.get_password().empty();
+
+  bool connected = false, authentified = false;
+  std::string online_name;
+
+  if (const auto rpcn = rpcn::rpcn_client::peek_instance()) {
+    connected = rpcn->is_connected();
+    authentified = rpcn->is_authentified();
+    if (authentified) online_name = rpcn->get_online_name();
+  }
+
+  result = fmt::format(
+      R"({"configured":%s,"npid":"%s","connected":%s,"authentified":%s,"onlineName":"%s"})",
+      configured ? "true" : "false", json_escape(npid),
+      connected ? "true" : "false", authentified ? "true" : "false",
+      json_escape(online_name));
+
+  return result.c_str();
+}
+
 // ---- Saved servers -------------------------------------------------------------------
 //
 // The list already exists in the core (cfg_rpcn "Hosts", "desc|host" entries joined by

@@ -70,6 +70,11 @@ fun RpcnAccountSection() {
     var naming by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
 
+    // Saved-account state, read from the core on entry. RPCN keeps no persistent session, so
+    // this is what actually survives a restart -- see the note on rpcnStatus.
+    var configured by remember { mutableStateOf(false) }
+    var signedInAs by remember { mutableStateOf("") }
+
     // str() is @Composable, so it cannot be called from run() or from an onClick lambda.
     // Resolve every message the callbacks need up here, where it is legal, and let them
     // close over plain strings.
@@ -110,6 +115,17 @@ fun RpcnAccountSection() {
         }
 
         if (host.isBlank()) host = "np.rpcs3.net"
+
+        val statusJson = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnStatus() }
+        if (statusJson.isNotBlank()) {
+            runCatching {
+                val o = JSONObject(statusJson)
+                configured = o.optBoolean("configured", false)
+                // Only when a game is actually online; otherwise there is no live client.
+                signedInAs = if (o.optBoolean("authentified", false))
+                    o.optString("onlineName", "") else ""
+            }
+        }
     }
 
     // Seed from whatever the core already has, so an existing account shows up rather than
@@ -147,6 +163,30 @@ fun RpcnAccountSection() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
         )
+
+        // Answers "did it remember me?" on entry, without having to press anything. The
+        // account is saved; the connection is not, and the wording keeps those apart.
+        if (signedInAs.isNotBlank()) {
+            Text(
+                str("rpcn.account.connected") + " " + signedInAs,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 6.dp),
+            )
+        } else if (configured) {
+            Column(Modifier.padding(bottom = 6.dp)) {
+                Text(
+                    str("rpcn.account.saved") + " " + npid,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    str("rpcn.account.saved.note"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
 
         OutlinedTextField(
             value = host,
