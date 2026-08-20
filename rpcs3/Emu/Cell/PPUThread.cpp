@@ -2339,8 +2339,14 @@ void ppu_thread::cpu_on_stop()
 		ppu_log.notice("thread context: %s", ret);
 	}
 
-	if (is_stopped())
+	// Report once. Nothing guarantees this hook runs a single time, and a PPU thread that
+	// re-enters the stop path without exiting reports on every pass -- measured at ~100,000
+	// lines per second from one thread, which saturates the log writer and stalls the whole
+	// emulator during shutdown on Android, where the log goes to external storage.
+	if (is_stopped() && !perf_stats_reported)
 	{
+		perf_stats_reported = true;
+
 		if (last_succ == 0 && last_fail == 0 && exec_bytes == 0)
 		{
 			perf_log.notice("PPU thread perf stats are not available.");
