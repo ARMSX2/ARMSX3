@@ -1185,6 +1185,10 @@ namespace vk
 
 	namespace
 	{
+		// On-disk format and invalidation key from sashkinbro's EmuCoreC (47220b153): the
+		// length/version/vendorID/deviceID/pipelineCacheUUID header is his design, used as-is.
+		// His copy was never handed to vkCreate*Pipelines, so it cached nothing; the wiring in
+		// VKProgramPipeline and the sharing with the shader interpreter are ours.
 		struct pipeline_cache_disk_header
 		{
 			u32 length;   // sizeof(header); guards against layout drift

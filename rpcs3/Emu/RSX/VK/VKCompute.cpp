@@ -58,6 +58,10 @@ namespace vk
 				break;
 			case vk::driver_vendor::ADRENO:
 			case vk::driver_vendor::TURNIP:
+				// Splitting Adreno out from the rest of mobile is sashkinbro's (EmuCoreC
+				// b9f0f3631). The comment this replaces held everything at 32 on the belief
+				// that Mali was also 64-wide, which is wrong -- his split was the better call.
+				//
 				// Qualcomm runs 64-wide waves, and a workgroup narrower than the wave does
 				// not pack together with its neighbours -- it takes a whole wave and masks
 				// the surplus lanes off. So 32 does not mean "smaller groups" here, it means
