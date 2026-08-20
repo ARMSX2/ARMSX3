@@ -226,10 +226,27 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 
 	// Zero timeout: if no swapchain image is free the display is already keeping up, and waiting
 	// for one would make frame generation cost latency instead of adding smoothness.
-	if (m_swapchain->acquire_next_swapchain_image(VK_NULL_HANDLE, 0ull, &image) != VK_SUCCESS ||
-		image == umax)
+	//
+	// VK_SUBOPTIMAL_KHR has to be accepted, not treated as a failure. It is a SUCCESS code and the
+	// image IS acquired -- bailing on it returned without presenting, so the image was never handed
+	// back, and this driver reports SUBOPTIMAL as a standing condition rather than a one-off (see
+	// the same handling in present() below). That leaked one swapchain image per generated frame
+	// until the acquirable pool was empty, at which point the real frame's acquire in flip() blocks
+	// its full 100ms timeout every frame -- a hard lock at ten fps that only a swapchain rebuild
+	// clears, which is why it survived turning frame generation back off.
+	const VkResult acquire_result =
+		m_swapchain->acquire_next_swapchain_image(VK_NULL_HANDLE, 0ull, &image);
+
+	if ((acquire_result != VK_SUCCESS && acquire_result != VK_SUBOPTIMAL_KHR) || image == umax)
 	{
 		return nullptr;
+	}
+
+	if (acquire_result == VK_SUBOPTIMAL_KHR)
+	{
+		// Worth acting on, but not from here: the rebuild happens on the real frame's path where
+		// there is somewhere to recover to.
+		should_reinitialize_swapchain = true;
 	}
 
 	auto* cmd = m_primary_cb_list.next();
@@ -266,9 +283,36 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	// of this swapchain image.
 	vk::queue_submit_t submit_info{};
 	submit_info.queue = m_device->get_graphics_queue();
-	cmd->submit(submit_info);
 
-	m_swapchain->present(VK_NULL_HANDLE, image);
+	// flush, because the present below runs on this thread while a deferred submit would not have
+	// happened yet under multithreaded RSX -- presenting a swapchain image before the blit that
+	// fills it. VKGSRender::present avoids this the same way, with a flush of its own.
+	cmd->submit(submit_info, VK_TRUE);
+
+	// The result is not noise. On OUT_OF_DATE or SURFACE_LOST the image is NOT presented and is
+	// leaked exactly as an unaccepted SUBOPTIMAL above leaks one, and none of the recovery flags
+	// that present() sets would ever be raised, because generated frames never go through it.
+	switch (const VkResult present_result = m_swapchain->present(VK_NULL_HANDLE, image))
+	{
+	case VK_SUCCESS:
+		break;
+	case VK_SUBOPTIMAL_KHR:
+		should_reinitialize_swapchain = true;
+		break;
+	case VK_ERROR_OUT_OF_DATE_KHR:
+		swapchain_unavailable = true;
+		break;
+	case VK_ERROR_SURFACE_LOST_KHR:
+		m_surface_lost = true;
+		swapchain_unavailable = true;
+		break;
+	default:
+		rsx_log.error("Generated-frame present returned %lld; treating the swapchain as lost.",
+			static_cast<s64>(present_result));
+		swapchain_unavailable = true;
+		break;
+	}
+
 	return cmd;
 }
 
