@@ -282,6 +282,15 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 	if (ctx->present_image == umax || !ctx->swap_command_buffer)
 	{
 		rsx_log.error("Present requested for a frame context that was already retired; dropping it.");
+
+		// Reset it on the way out, exactly as the normal exit below does.
+		//
+		// Leaving a stale index here is not harmless: the slot rotates back around and trips
+		// ensure(m_current_frame->present_image == umax) in flip(), and reinitialize_swapchain
+		// selects contexts by present_image != umax and then calls frame_context_cleanup, whose
+		// first line asserts the command buffer this context no longer has. A dropped present
+		// should cost one frame on screen, not a fatal two frames later.
+		ctx->present_image = -1;
 		return;
 	}
 
@@ -668,6 +677,25 @@ void VKGSRender::queue_swap_request()
 void VKGSRender::frame_context_cleanup(vk::frame_context_t *ctx)
 {
 	ensure(ctx->swap_command_buffer);
+
+	// Pay any present this context still owes, before anything recycles it.
+	//
+	// Frame generation's pipelined path holds one frame back by a present, and this function is
+	// how EVERY reclaim path destroys a context -- there are six call sites. The guard written for
+	// this originally sat in advance_queued_frames and covered exactly one of them.
+	// check_present_status() is the other function that walks m_queued_frames, it had no check at
+	// all, and flush_command_queue calls it unconditionally on its way out -- so any of the twenty
+	// or so flushes in a frame could retire the held-back frame, and flush_command_queue(true)
+	// drains the queue outright and did so every time. That is the "already retired" report.
+	//
+	// Doing it here rather than at each call site is the point: a seventh reclaim path added later
+	// cannot miss it. It has to run before swap_command_buffer is nulled below, because present()
+	// flushes it, and the pointer is cleared first so a present that re-enters cannot loop.
+	if (ctx == m_deferred_present_frame)
+	{
+		m_deferred_present_frame = nullptr;
+		present(ctx);
+	}
 
 	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_frame_cleanups++;
 
