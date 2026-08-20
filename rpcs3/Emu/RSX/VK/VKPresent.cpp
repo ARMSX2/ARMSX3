@@ -488,7 +488,7 @@ void VKGSRender::queue_swap_request()
 	// g_shared_out[2] when dropping x4 to x2, and the recorded-vs-committed capture split.
 	//
 	// Flip this to true to resume that work; the serialised path below is what shipped working.
-	constexpr bool k_framegen_pipelining_enabled = true;
+	constexpr bool k_framegen_pipelining_enabled = false;
 
 	const bool pipelined = k_framegen_pipelining_enabled && framegen_frames != 0 &&
 		!m_swapchain->is_headless() && m_swapchain->get_swap_image_count() >= 4;
