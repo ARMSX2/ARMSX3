@@ -114,6 +114,12 @@ bool VKGSRender::reinitialize_swapchain()
 	// Drain all the queues
 	vkDeviceWaitIdle(*m_device);
 
+	// Clean the FBO caches
+	for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
+	{
+		vk::remove_framebuffers_with_image(m_swapchain->get_image(i));
+	}
+
 	// Reset frame context storage
 	for (auto& ctx : m_frame_context_storage)
 	{
@@ -215,20 +221,6 @@ bool VKGSRender::reinitialize_swapchain()
 // Best-effort throughout. A generated frame is an extra, so every failure path here simply
 // returns and lets the real frame present normally -- dropping an interpolated frame is invisible,
 // while stalling or presenting a torn one is not.
-void VKGSRender::destroy_framegen_acquire_semaphores()
-{
-	for (auto& sem : m_framegen_acquire_sem)
-	{
-		if (sem != VK_NULL_HANDLE)
-		{
-			vkDestroySemaphore(*m_device, sem, nullptr);
-			sem = VK_NULL_HANDLE;
-		}
-	}
-
-	m_framegen_acquire_sem_index = 0;
-}
-
 vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 {
 	if (src == VK_NULL_HANDLE || swapchain_unavailable || m_swapchain->is_headless())
@@ -240,52 +232,10 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 
 	// Zero timeout: if no swapchain image is free the display is already keeping up, and waiting
 	// for one would make frame generation cost latency instead of adding smoothness.
-	//
-	// VK_SUBOPTIMAL_KHR has to be accepted, not treated as a failure. It is a SUCCESS code and the
-	// image IS acquired -- bailing on it returned without presenting, so the image was never handed
-	// back, and this driver reports SUBOPTIMAL as a standing condition rather than a one-off (see
-	// the same handling in present() below). That leaked one swapchain image per generated frame
-	// until the acquirable pool was empty, at which point the real frame's acquire in flip() blocks
-	// its full 100ms timeout every frame -- a hard lock at ten fps that only a swapchain rebuild
-	// clears, which is why it survived turning frame generation back off.
-	// Acquire with a semaphore, and make the blit wait on it.
-	//
-	// This passed VK_NULL_HANDLE for both the semaphore and the fence, which the specification
-	// forbids outright (VUID-vkAcquireNextImageKHR-semaphore-01780) and which left nothing making
-	// the blit wait for the presentation engine to be finished with the image. The UNDEFINED old
-	// layout on the barrier below is not that guarantee either -- it discards the contents, it
-	// does not order anything -- so the blit could overwrite an image still being scanned out.
-	VkSemaphore& acquire_sem = m_framegen_acquire_sem[m_framegen_acquire_sem_index];
-
-	if (acquire_sem == VK_NULL_HANDLE)
-	{
-		VkSemaphoreCreateInfo semaphore_info = {};
-		semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-
-		if (vkCreateSemaphore(*m_device, &semaphore_info, nullptr, &acquire_sem) != VK_SUCCESS)
-		{
-			// Without one there is no correct way to do this, and presenting a torn generated
-			// frame is worse than presenting none.
-			return nullptr;
-		}
-	}
-
-	m_framegen_acquire_sem_index =
-		(m_framegen_acquire_sem_index + 1u) % c_framegen_acquire_sem_count;
-
-	const VkResult acquire_result =
-		m_swapchain->acquire_next_swapchain_image(acquire_sem, 0ull, &image);
-
-	if ((acquire_result != VK_SUCCESS && acquire_result != VK_SUBOPTIMAL_KHR) || image == umax)
+	if (m_swapchain->acquire_next_swapchain_image(VK_NULL_HANDLE, 0ull, &image) != VK_SUCCESS ||
+		image == umax)
 	{
 		return nullptr;
-	}
-
-	if (acquire_result == VK_SUBOPTIMAL_KHR)
-	{
-		// Worth acting on, but not from here: the rebuild happens on the real frame's path where
-		// there is somewhere to recover to.
-		should_reinitialize_swapchain = true;
 	}
 
 	auto* cmd = m_primary_cb_list.next();
@@ -305,47 +255,12 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	region.srcOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
 	region.dstOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
 
-	// Take ownership of the generated image before reading it, and say what layout it is really in.
-	//
-	// This blit used to name TRANSFER_SRC_OPTIMAL for an image that was never in that layout and
-	// was never acquired from the device that wrote it. framegen releases its outputs with
-	// newLayout = VK_IMAGE_LAYOUT_GENERAL and dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL
-	// (framegen/v3.1_src/context.cpp), so reading it as TRANSFER_SRC with no acquire is a layout
-	// mismatch and a missing ownership transfer at once -- undefined by the specification, and on
-	// a tiler it reads whatever survived in cache rather than what framegen wrote. That is the
-	// corrupted output seen whenever frame generation is switched on.
-	//
-	// Timing is already handled: generate() does not return until framegen's submission has
-	// completed, so this is about visibility and ownership, not about waiting.
-	VkImageMemoryBarrier acquire_src = {};
-	acquire_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-	acquire_src.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-	acquire_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-	acquire_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
-	acquire_src.dstQueueFamilyIndex = m_device->get_graphics_queue_family();
-	acquire_src.image = src;
-	acquire_src.subresourceRange = range;
-	acquire_src.srcAccessMask = 0;
-	acquire_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-	vkCmdPipelineBarrier(*cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-		0, 0, nullptr, 0, nullptr, 1, &acquire_src);
-
+	// The generated image was written by framegen's device and waited on with its device idle, so
+	// it is complete by the time we get here; no cross-device semaphore exists to use instead. The
+	// opposite direction -- framegen overwriting this image while this blit is still reading it --
+	// is guarded by the caller, which waits for this command buffer before the next generation.
 	vkCmdBlitImage(*cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 		target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
-
-	// Hand it back the way framegen expects to find it, or the next generation acquires an image
-	// whose layout and owner no longer match what its own release barrier assumed.
-	VkImageMemoryBarrier release_src = acquire_src;
-	release_src.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-	release_src.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-	release_src.srcQueueFamilyIndex = m_device->get_graphics_queue_family();
-	release_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
-	release_src.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-	release_src.dstAccessMask = 0;
-
-	vkCmdPipelineBarrier(*cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-		0, 0, nullptr, 0, nullptr, 1, &release_src);
 
 	vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 		VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, range);
@@ -357,37 +272,9 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	// of this swapchain image.
 	vk::queue_submit_t submit_info{};
 	submit_info.queue = m_device->get_graphics_queue();
-	submit_info.wait_on(acquire_sem, VK_PIPELINE_STAGE_TRANSFER_BIT);
+	cmd->submit(submit_info);
 
-	// flush, because the present below runs on this thread while a deferred submit would not have
-	// happened yet under multithreaded RSX -- presenting a swapchain image before the blit that
-	// fills it. VKGSRender::present avoids this the same way, with a flush of its own.
-	cmd->submit(submit_info, VK_TRUE);
-
-	// The result is not noise. On OUT_OF_DATE or SURFACE_LOST the image is NOT presented and is
-	// leaked exactly as an unaccepted SUBOPTIMAL above leaks one, and none of the recovery flags
-	// that present() sets would ever be raised, because generated frames never go through it.
-	switch (const VkResult present_result = m_swapchain->present(VK_NULL_HANDLE, image))
-	{
-	case VK_SUCCESS:
-		break;
-	case VK_SUBOPTIMAL_KHR:
-		should_reinitialize_swapchain = true;
-		break;
-	case VK_ERROR_OUT_OF_DATE_KHR:
-		swapchain_unavailable = true;
-		break;
-	case VK_ERROR_SURFACE_LOST_KHR:
-		m_surface_lost = true;
-		swapchain_unavailable = true;
-		break;
-	default:
-		rsx_log.error("Generated-frame present returned %lld; treating the swapchain as lost.",
-			static_cast<s64>(present_result));
-		swapchain_unavailable = true;
-		break;
-	}
-
+	m_swapchain->present(VK_NULL_HANDLE, image);
 	return cmd;
 }
 
@@ -401,15 +288,6 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 	if (ctx->present_image == umax || !ctx->swap_command_buffer)
 	{
 		rsx_log.error("Present requested for a frame context that was already retired; dropping it.");
-
-		// Reset it on the way out, exactly as the normal exit below does.
-		//
-		// Leaving a stale index here is not harmless: the slot rotates back around and trips
-		// ensure(m_current_frame->present_image == umax) in flip(), and reinitialize_swapchain
-		// selects contexts by present_image != umax and then calls frame_context_cleanup, whose
-		// first line asserts the command buffer this context no longer has. A dropped present
-		// should cost one frame on screen, not a fatal two frames later.
-		ctx->present_image = -1;
 		return;
 	}
 
@@ -797,25 +675,6 @@ void VKGSRender::frame_context_cleanup(vk::frame_context_t *ctx)
 {
 	ensure(ctx->swap_command_buffer);
 
-	// Pay any present this context still owes, before anything recycles it.
-	//
-	// Frame generation's pipelined path holds one frame back by a present, and this function is
-	// how EVERY reclaim path destroys a context -- there are six call sites. The guard written for
-	// this originally sat in advance_queued_frames and covered exactly one of them.
-	// check_present_status() is the other function that walks m_queued_frames, it had no check at
-	// all, and flush_command_queue calls it unconditionally on its way out -- so any of the twenty
-	// or so flushes in a frame could retire the held-back frame, and flush_command_queue(true)
-	// drains the queue outright and did so every time. That is the "already retired" report.
-	//
-	// Doing it here rather than at each call site is the point: a seventh reclaim path added later
-	// cannot miss it. It has to run before swap_command_buffer is nulled below, because present()
-	// flushes it, and the pointer is cleared first so a present that re-enters cannot loop.
-	if (ctx == m_deferred_present_frame)
-	{
-		m_deferred_present_frame = nullptr;
-		present(ctx);
-	}
-
 	if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_frame_cleanups++;
 
 	// Perform hard swap here
@@ -989,11 +848,11 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 
 			if (vk::formats_are_bitcast_compatible(dst_img.get(), image_to_flip))
 			{
-				vk::copy_image(*m_current_command_buffer, image_to_flip, dst_img.get(), src_rect, dst_rect, 1);
+				vk::copy_image(*m_current_command_buffer, image_to_flip, dst_img.get(), src_rect, dst_rect);
 			}
 			else
 			{
-				vk::copy_image_typeless(*m_current_command_buffer, image_to_flip, dst_img.get(), src_rect, dst_rect, 1);
+				vk::copy_image_typeless(*m_current_command_buffer, image_to_flip, dst_img.get(), src_rect, dst_rect);
 			}
 
 			image_to_flip = dst_img.get();
@@ -1399,24 +1258,32 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			single_target_pass = vk::get_renderpass(*m_device, key);
 			ensure(single_target_pass != VK_NULL_HANDLE);
 
-			if (!m_overlay_recording_img ||
-				m_overlay_recording_img->type() != image_to_flip->type() ||
-				m_overlay_recording_img->format() != image_to_flip->format() ||
-				m_overlay_recording_img->width() != image_to_flip->width() ||
-				m_overlay_recording_img->height() != image_to_flip->height() ||
-				m_overlay_recording_img->layers() != image_to_flip->layers())
+			if (m_overlay_recording_img)
+			{
+				// Validate
+				if (m_overlay_recording_img->format() != image_to_flip->format() ||
+					m_overlay_recording_img->width() != image_to_flip->width() ||
+					m_overlay_recording_img->height() != image_to_flip->height())
+				{
+					// Dispose correctly
+					vk::remove_framebuffers_with_image(m_overlay_recording_img.get());
+					vk::get_resource_manager()->dispose(m_overlay_recording_img);
+				}
+			}
+
+			if (!m_overlay_recording_img)
 			{
 				m_overlay_recording_img = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-					image_to_flip->type(), image_to_flip->format(), image_to_flip->width(), image_to_flip->height(), 1, 1, image_to_flip->layers(), VK_SAMPLE_COUNT_1_BIT,
+					VK_IMAGE_TYPE_2D, image_to_flip->format(), image_to_flip->width(), image_to_flip->height(), 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
 					VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-					0, VMM_ALLOCATION_POOL_UNDEFINED);
+					0, VMM_ALLOCATION_POOL_SYSTEM);
 			}
 
 			m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 			image_to_flip->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
 			const areai rect = areai(0, 0, buffer_width, buffer_height);
-			vk::copy_image(*m_current_command_buffer, image_to_flip, m_overlay_recording_img.get(), rect, rect, 1);
+			vk::copy_image(*m_current_command_buffer, image_to_flip, m_overlay_recording_img.get(), rect, rect);
 
 			image_to_flip->pop_layout(*m_current_command_buffer);
 			m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);

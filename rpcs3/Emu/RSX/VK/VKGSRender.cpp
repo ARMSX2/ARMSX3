@@ -8,7 +8,6 @@
 #include "VKCommonPipelineLayout.h"
 #include "VKCompute.h"
 #include "VKGSRender.h"
-#include "VKFrameGen.h"
 #include "Emu/RSX/rsx_profiler.h"
 #include "vkutils/gpu_timer.h"
 #include "VKHelpers.h"
@@ -419,6 +418,7 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 {
 	// Initialize dependencies
 	g_fxo->need<rsx::dma_manager>();
+	g_fxo->need<vk::driver_manager_thread>();
 
 	if (!m_instance.create("RPCS3"))
 	{
@@ -858,20 +858,6 @@ VKGSRender::~VKGSRender()
 	//Wait for device to finish up with resources
 	vkDeviceWaitIdle(*m_device);
 
-	// Frame generation holds images created on THIS device, and it is a set of file-scope globals
-	// that outlives the renderer. Nothing used to release them, so stopping a game and booting
-	// another at the same resolution skipped the rebuild -- capture_presented_frame only rebuilds
-	// when the dimensions change -- and recorded images belonging to a destroyed device into a
-	// live command buffer.
-	//
-	// Here specifically, and not from the present path: an earlier attempt tore this down inside
-	// the capture hook, which runs while the frame's primary command buffer is still being built,
-	// and it destroyed rendering outright. This is a device-idle point the renderer owns, after
-	// the wait above and before the swapchain goes, which is where the teardown always belonged.
-	vk::frame_gen::release_shared_images();
-	vk::frame_gen::shutdown();
-	destroy_framegen_acquire_semaphores();
-
 	// Globals. TODO: Refactor lifetime management
 	if (auto async_scheduler = g_fxo->try_get<vk::AsyncTaskScheduler>())
 	{
@@ -1139,6 +1125,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 		// Hard sync before trying to evict anything. This guarantees no UAF crashes in the driver.
 		// As a bonus, we also get a free gc pass
 		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[1]++; flush_command_queue(true, true);
+		g_fxo->get<vk::driver_manager_thread>().drain();
 
 		if (m_texture_cache.is_overallocated())
 		{
@@ -2830,12 +2817,6 @@ void VKGSRender::renderctl(u32 request_code, void* args)
 		const auto packet = reinterpret_cast<vk::queue_submit_t*>(args);
 		vk::queue_submit(packet);
 		free(packet);
-		break;
-	}
-	case vk::rctrl_run_gc:
-	{
-		auto eid = reinterpret_cast<u64>(args);
-		vk::on_event_completed(eid, true);
 		break;
 	}
 	default:
