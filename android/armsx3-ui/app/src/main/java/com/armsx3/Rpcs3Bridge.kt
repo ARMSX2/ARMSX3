@@ -245,8 +245,20 @@ object Rpcs3Bridge {
         // Stopped. This loop then spun forever, runVMThread never returned, and
         // MainActivityRuntime went on believing state=RUNNING, so Close and
         // Restart both became silent no-ops with no way out but force-stop.
-        while (!stopRequested && RPCSX.getState() != EmulatorState.Stopped) {
-            Thread.sleep(POLL_INTERVAL_MS)
+        // The pump is what makes rumble happen at all: the core has no way to notify the JNI
+        // layer that the guest wrote the motors, so something has to poll getPadRumble. It was
+        // written and never started, which is why vibration did nothing in any game.
+        startRumblePump()
+
+        try {
+            while (!stopRequested && RPCSX.getState() != EmulatorState.Stopped) {
+                Thread.sleep(POLL_INTERVAL_MS)
+            }
+        } finally {
+            // finally, not after the loop: the abnormal-teardown path above leaves via
+            // stopRequested, and a pump left running would keep the motor buzzing on whatever
+            // value the dead guest last wrote.
+            stopRumblePump()
         }
 
         return true
@@ -1288,7 +1300,12 @@ object Rpcs3Bridge {
 
     private var rumbleThread: Thread? = null
     @Volatile private var rumbleRunning = false
-    @Volatile private var rumbleEnabled = true
+
+    // NativeApp.sRumbleEnabled is the flag, not a copy of it. There used to be a private
+    // `rumbleEnabled` here as well: the settings toggle wrote sRumbleEnabled, which nothing
+    // read, and the pump read the private copy, which only setPadVibration wrote and nothing
+    // called. Two stores, neither connected to the other.
+    private val rumbleEnabled: Boolean get() = NativeApp.sRumbleEnabled
 
     private fun vibrator(): Vibrator? {
         val ctx = appContext ?: return null
@@ -1302,7 +1319,7 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun setPadVibration(on: Boolean) {
-        rumbleEnabled = on
+        NativeApp.sRumbleEnabled = on
         if (!on) vibrator()?.cancel()
     }
 
