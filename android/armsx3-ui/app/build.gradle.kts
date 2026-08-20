@@ -34,8 +34,8 @@ android {
         // agree -- an APK that installs below its core's target is a dlopen failure at boot.
         minSdk = (project.findProperty("armsx3.minSdk") as String?)?.toInt() ?: 33
         targetSdk = 37
-        versionCode = 18
-        versionName = "0.9.3"
+        versionCode = 19
+        versionName = "0.9.3.1"
 
         // ARMSX2's UI reads these. STORAGE_ALL_FILES gates the all-files storage path in
         // onboarding; IN_APP_UPDATER gates the in-app GitHub-release updater.
@@ -166,8 +166,20 @@ android {
             //
             // The file is gitignored (*.jks, keystore.properties) and read at build time, so no
             // credential is ever in the repo or on a command line.
-            signingConfig = signingConfigs.findByName("upload")
-                ?: signingConfigs.getByName("debug")
+            // The upload key ONLY when explicitly asked for, which build-play-aab.sh does.
+            //
+            // Opt-in rather than "use it if it exists": once the keystore was created, every
+            // release build silently started using it, and a differently-signed APK cannot be
+            // installed over an existing one. That turns a sideload build into something testers
+            // cannot install, and the error Android shows says nothing about signatures. It was
+            // being worked around by hiding keystore.properties by hand before each build, which
+            // is exactly the kind of step that gets forgotten once.
+            signingConfig = if (project.hasProperty("armsx3.uploadSigning")) {
+                signingConfigs.findByName("upload")
+                    ?: throw GradleException("armsx3.uploadSigning set but keystore.properties is missing")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

@@ -96,7 +96,7 @@ mkdir -p "$JNI"
 "$STRIP" --strip-unneeded -o "$JNI/libarmsx3-core.so" "$CORE_SRC"
 
 echo "==> Building Play bundle (minSdk $MIN_SDK, minify off)"
-( cd "$UI" && ./gradlew --quiet :app:bundlePlayRelease "-Parmsx3.minSdk=$MIN_SDK" -Parmsx3.noMinify )
+( cd "$UI" && ./gradlew --quiet :app:bundlePlayRelease "-Parmsx3.minSdk=$MIN_SDK" -Parmsx3.noMinify -Parmsx3.uploadSigning )
 
 AAB="$UI/app/build/outputs/bundle/playRelease/app-play-release.aab"
 [ -f "$AAB" ] || { echo "FAIL: no bundle produced at $AAB" >&2; exit 1; }
