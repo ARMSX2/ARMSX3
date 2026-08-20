@@ -5729,10 +5729,29 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 		{
 			// std::string, not a literal: message_item is only instantiated for std::string
 			// and localized_string_id, so a const char* fails to link.
+			//
+			// Queued before the throw below, and it survives it: the overlay is drawn by the RSX
+			// thread, which is not the thread this kills.
 			rsx::overlays::queue_message(
-				std::string("Ran out of memory while compiling. Some functions will run slowly.\n"
-					"Close the game and start it again to compile the rest -- progress is kept."),
-				10'000'000);
+				std::string("Ran out of memory while compiling.\n"
+					"Close the game and start it again -- what already compiled is kept, so each "
+					"attempt gets further."),
+				30'000'000);
+
+			// Stop rather than limp.
+			//
+			// Everything that failed here would fall back to ppu_recompiler_fallback, which is
+			// correct -- the dispatcher entry interprets, nothing runs garbage -- but it is
+			// per-instruction dispatch, and it is slower than the interpreter outright. Saint
+			// Seiya measured 6fps against 23 with most of its modules missing. A game at that
+			// speed looks broken, and it gets reported as broken, when the real answer is one
+			// restart away.
+			//
+			// So this is a deliberate choice of an honest stop over a degraded run. It kills this
+			// thread the way running out of memory always did; what is different is that the
+			// reason is now on screen instead of being left to guess at.
+			fmt::throw_exception("Out of memory while compiling PPU modules -- restart the game to "
+				"continue compiling. Modules that already compiled are cached.");
 		}
 	}
 
