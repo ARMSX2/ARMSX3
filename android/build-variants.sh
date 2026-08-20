@@ -188,6 +188,10 @@ build_variant() {
 	echo "==> $name: $out"
 }
 
+# Stamp the version before anything builds, or every APK reports whichever commit cmake
+# last configured against rather than the one being built.
+bash "$ROOT/android/stamp-git-version.sh"
+
 for v in $VARIANTS; do
 	build_variant "$v"
 done

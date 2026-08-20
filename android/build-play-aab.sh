@@ -88,6 +88,9 @@ NDK_DIR="$(ls -d "$ANDROID_HOME/ndk/"*/ 2>/dev/null | sort -V | tail -1)"
 STRIP="${NDK_DIR}toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-strip"
 [ -x "$STRIP" ] || { echo "FAIL: llvm-strip not found under $ANDROID_HOME/ndk" >&2; exit 1; }
 
+# Same reason as build-variants.sh: cmake only regenerates this at configure time.
+bash "$HERE/stamp-git-version.sh"
+
 echo "==> Staging the legacy core"
 mkdir -p "$JNI"
 "$STRIP" --strip-unneeded -o "$JNI/libarmsx3-core.so" "$CORE_SRC"
