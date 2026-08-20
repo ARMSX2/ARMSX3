@@ -407,6 +407,10 @@ fun PerformanceTab(state: MutableState<Settings>) {
         // Frame generation. Its own section rather than folded into the GPU one because it is
         // not a rendering option -- it inserts frames that the game never drew, and the choice
         // to do that is a different kind of decision from how the real ones are drawn.
+        // Absent from the play build, where libarmsx3_lsfg.so is not in the bundle. The core
+        // reports frame generation unavailable without it and every control here would be inert,
+        // so showing them would only offer something that cannot work.
+        if (com.armsx2.BuildConfig.FRAME_GENERATION)
         CollapsibleSection(str("perf.framegen.title")) {
             SegmentedGridRow(
                 label = str("perf.framegen.label"),

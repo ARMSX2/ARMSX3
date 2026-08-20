@@ -1040,18 +1040,21 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
     // recompiler toggles for silicon that does not exist here.
     // Frame generation first: it is the one setting here that changes the framerate rather than
     // how fast the emulator runs, so it is what someone opening this menu mid-game is looking for.
-    SectionCard(str("perf.framegen.title")) {
-        HorizontalOptions(
-            title = str("perf.framegen.label"),
-            options = listOf(
-                str("perf.framegen.off"), str("perf.framegen.x2"),
-                str("perf.framegen.x3"), str("perf.framegen.x4"),
-            ).mapIndexed { index, label -> index to label },
-            selected = settings.ps3.frameGeneration,
-            onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGeneration = v)) } },
-        )
+    // Not in the play build: libarmsx3_lsfg.so is not bundled there, so this would be inert.
+    if (com.armsx2.BuildConfig.FRAME_GENERATION) {
+        SectionCard(str("perf.framegen.title")) {
+            HorizontalOptions(
+                title = str("perf.framegen.label"),
+                options = listOf(
+                    str("perf.framegen.off"), str("perf.framegen.x2"),
+                    str("perf.framegen.x3"), str("perf.framegen.x4"),
+                ).mapIndexed { index, label -> index to label },
+                selected = settings.ps3.frameGeneration,
+                onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGeneration = v)) } },
+            )
+        }
+        Spacer(Modifier.height(10.dp))
     }
-    Spacer(Modifier.height(10.dp))
     SectionCard(str("perf.ps3cpu.title")) {
         HorizontalOptions(
             title = str("perf.ppuDecoder.label"),

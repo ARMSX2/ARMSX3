@@ -38,13 +38,15 @@ android {
         // ARMSX2's UI reads these. STORAGE_ALL_FILES gates the all-files storage path in
         // onboarding; IN_APP_UPDATER gates the in-app GitHub-release updater.
         //
-        // On because ARMSX3 ships as a sideloaded APK from its own GitHub releases, which is
-        // exactly the case an in-app updater is for. It must go back off, and the code and the
-        // REQUEST_INSTALL_PACKAGES permission must move into a github-only flavor, before any
-        // Play build exists: Play forbids self-updating apps, and it is the PERMISSION in the
-        // bundle that gets rejected, which this runtime flag does nothing about.
+        // These are the github values; the play flavor overrides all three below.
+        //
+        // The warning that used to live here was right and is now acted on: a runtime boolean
+        // does nothing about the PERMISSION in the bundle, which is what Play rejects. The
+        // permissions have moved into the github flavor's manifest, so the play bundle does not
+        // declare them at all.
         buildConfigField("boolean", "STORAGE_ALL_FILES", "true")
         buildConfigField("boolean", "IN_APP_UPDATER", "true")
+        buildConfigField("boolean", "FRAME_GENERATION", "true")
 
         ndk {
             // The core is arm64-only.
@@ -65,6 +67,40 @@ android {
                 // already proven to work.
                 arguments += listOf("-DANDROID_STL=c++_static")
             }
+        }
+    }
+
+    // Two distributions, and they are not interchangeable.
+    //
+    // github is the sideloaded build: it updates itself from GitHub releases, can be pointed at
+    // an arbitrary data folder, and ships frame generation.
+    //
+    // play is what Google Play will accept. Self-updating is forbidden outright, all-files
+    // storage is a policy review it does not need, and frame generation is left out. The
+    // applicationId differs so the two install side by side instead of over each other.
+    flavorDimensions += "distribution"
+
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+        }
+
+        create("play") {
+            dimension = "distribution"
+            applicationId = "com.armsx3.play"
+
+            buildConfigField("boolean", "STORAGE_ALL_FILES", "false")
+            buildConfigField("boolean", "IN_APP_UPDATER", "false")
+            buildConfigField("boolean", "FRAME_GENERATION", "false")
+
+            // Frame generation is excluded by SOURCE SET, not by a packaging filter: a
+            // packaging block inside a flavor is not honoured and silently applied to both,
+            // which dropped the library from the github build too. libarmsx3_lsfg.so lives in
+            // src/github/jniLibs, so only that flavor bundles it.
+            //
+            // Excluding the file is the whole exclusion. The shim is dlopen'd by name, and the
+            // core already reports frame generation unavailable when the library is absent,
+            // which is the same path a device that cannot run it takes.
         }
     }
 

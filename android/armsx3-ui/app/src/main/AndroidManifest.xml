@@ -23,16 +23,10 @@
          Sideload/GitHub builds only. The Play flavour must NOT ship this (the
          policy needs a declared exemption); that is what the STORAGE_ALL_FILES
          buildConfig flag gates in code. -->
-    <!-- In-app updater: install the downloaded APK. SIDELOAD ONLY.
-         A self-updating app is a hard Play-policy violation, and it is this permission in the
-         bundle that gets rejected, not the runtime flag. ARMSX2 keeps it out of its Play build
-         with a github-only flavor and a build script that fails closed if it ever appears;
-         ARMSX3 has no Play build, so it lives here. Adding a Play target means moving this and
-         the provider below into a github flavor FIRST. -->
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
-
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
+    <!-- REQUEST_INSTALL_PACKAGES, MANAGE_EXTERNAL_STORAGE and the updater's FileProvider are
+         declared by the GITHUB flavor only, in src/github/AndroidManifest.xml. Play rejects the
+         permission present in the bundle, not the code path behind a runtime flag, so none of
+         them may sit here where both flavors inherit them. -->
 
     <!-- Optional motion controls (Pad settings). Not required, so the Play install
          isn't gated for devices without a gyroscope. -->
@@ -204,18 +198,6 @@
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:excludeFromRecents="true"
             android:exported="false" />
-    
-        <!-- Hands the downloaded update APK to the system package installer. Paired with
-             REQUEST_INSTALL_PACKAGES above; see the note there before shipping to Play. -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.updateprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/update_paths" />
-        </provider>
 
 </application>
 

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Everything Google Play will not accept, declared by the github flavor alone so the play
+    bundle cannot inherit it by accident.
+
+    REQUEST_INSTALL_PACKAGES and the FileProvider are what the in-app updater needs: it downloads
+    a GitHub release APK and hands it to the system package installer. Play forbids apps that
+    update themselves outside the store, and it is the DECLARED PERMISSION that gets rejected, so
+    gating the code behind a runtime flag was never enough on its own.
+
+    MANAGE_EXTERNAL_STORAGE backs the all-files onboarding path, which lets the data folder live
+    anywhere on the device. The play build uses the app-specific directories instead (internal or
+    SD card), which are raw-writable under scoped storage with no permission at all.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+    <application>
+        <!-- Hands the downloaded update APK to the system package installer. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.updateprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_paths" />
+        </provider>
+    </application>
+</manifest>

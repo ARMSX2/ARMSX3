@@ -67,6 +67,10 @@ export ANDROID_HOME JAVA_HOME
 CMAKE_BIN="$ANDROID_HOME/cmake/$CMAKE_VERSION/bin"
 UI="$ROOT/android/armsx3-ui"
 JNI_LIBS="$UI/app/src/main/jniLibs/arm64-v8a"
+# Frame generation ships in the github flavor only, so its library lives in that source set.
+# The play bundle must not contain it: excluding the file IS the exclusion, because the core
+# dlopen's it by name and reports the feature unavailable when it is absent.
+JNI_LIBS_GITHUB="$UI/app/src/github/jniLibs/arm64-v8a"
 
 # variant : ndk : api : march : apk name suffix
 #
@@ -155,14 +159,15 @@ build_variant() {
 	local lsfg_so="$build_dir/3rdparty/lsfg/libarmsx3_lsfg.so"
 
 	if [[ -f "$lsfg_so" ]]; then
-		"$strip" --strip-unneeded -o "$JNI_LIBS/libarmsx3_lsfg.so" "$lsfg_so"
+		mkdir -p "$JNI_LIBS_GITHUB"
+		"$strip" --strip-unneeded -o "$JNI_LIBS_GITHUB/libarmsx3_lsfg.so" "$lsfg_so"
 
 		# The isolation is the whole design, so verify it every build rather than trusting it.
 		# Only the shim's own entry points may be dynamic: a single leaked vk* symbol means the
 		# dynamic linker can bind the renderer's Vulkan calls to framegen's copies.
 		local leaked
 		leaked=$("$ANDROID_HOME/ndk/$ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-nm" \
-			-D --defined-only "$JNI_LIBS/libarmsx3_lsfg.so" 2>/dev/null | grep -cE "vk[A-Z]|LSFG" || true)
+			-D --defined-only "$JNI_LIBS_GITHUB/libarmsx3_lsfg.so" 2>/dev/null | grep -cE "vk[A-Z]|LSFG" || true)
 
 		if [[ "$leaked" != "0" ]]; then
 			echo "$name: libarmsx3_lsfg.so exports $leaked Vulkan/LSFG symbols -- isolation broken," \
@@ -171,13 +176,15 @@ build_variant() {
 		fi
 	else
 		echo "$name: libarmsx3_lsfg.so was not built, frame generation will be absent from this APK" >&2
-		rm -f "$JNI_LIBS/libarmsx3_lsfg.so"
+		rm -f "$JNI_LIBS_GITHUB/libarmsx3_lsfg.so"
 	fi
 
-	( cd "$UI" && ./gradlew --quiet :app:assembleRelease "-Parmsx3.minSdk=$api" )
+	# assembleGithubRelease, not assembleRelease: the flavor split means there is no
+	# flavorless release variant any more. The play bundle is built by build-play-aab.sh.
+	( cd "$UI" && ./gradlew --quiet :app:assembleGithubRelease "-Parmsx3.minSdk=$api" )
 
 	local out="$OUT_DIR/ARMSX3-$(version_name)-$suffix.apk"
-	cp "$UI/app/build/outputs/apk/release/app-release.apk" "$out"
+	cp "$UI/app/build/outputs/apk/github/release/app-github-release.apk" "$out"
 	echo "==> $name: $out"
 }
 
