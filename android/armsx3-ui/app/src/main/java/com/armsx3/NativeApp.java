@@ -139,6 +139,9 @@ public final class NativeApp {
 
     /** [MAPPED] Whether a slot holds a state. Ask this rather than probing a path. */
     public static boolean hasStateInSlot(int slot) { return Rpcs3Bridge.hasState(slot); }
+
+    /** [MAPPED] Delete a slot's state and thumbnail. The core resolves the real filename. */
+    public static boolean deleteStateFromSlot(int slot) { return Rpcs3Bridge.deleteState(slot); }
     public static String getAutosaveGamePath() { Unsupported.note("getAutosaveGamePath"); return ""; }
     public static byte[] getAutosaveImage() { Unsupported.note("getAutosaveImage"); return null; }
 

@@ -772,6 +772,17 @@ object Rpcs3Bridge {
         runCatching { RPCSX.instance.hasStateInSlot(slot) }.getOrDefault(false)
 
     /**
+     * Delete a slot's state and its thumbnail.
+     *
+     * The core resolves the filename itself: the extension depends on which build wrote the
+     * state (.zst today, .gz and bare historically), and the picker used to build a path by
+     * hand -- from getGamePathSlot, which answers occupancy rather than a path, so the delete
+     * always failed (issue #80).
+     */
+    fun deleteState(slot: Int): Boolean =
+        runCatching { RPCSX.instance.deleteStateFromSlot(slot) }.getOrDefault(false)
+
+    /**
      * The auto-save lives one slot above the ten the picker shows.
      *
      * Auto-save-on-exit, auto-load-on-boot and the interval auto-save were ARMSX2 shims that

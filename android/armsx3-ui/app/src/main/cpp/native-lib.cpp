@@ -93,6 +93,7 @@ struct RPCSXApi {
   bool (*saveStateToSlot)(unsigned int slot);
   bool (*loadStateFromSlot)(unsigned int slot);
   bool (*hasStateInSlot)(unsigned int slot);
+  bool (*deleteStateFromSlot)(unsigned int slot);
   std::string (*patchEngineVersion)();
   int (*patchesImport)(std::string_view content);
   std::string (*patchesList)(std::string_view serial);
@@ -204,6 +205,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.saveStateToSlot = reinterpret_cast<decltype(saveStateToSlot)>(dlsym(handle, "_rpcsx_saveStateToSlot"));
     result.loadStateFromSlot = reinterpret_cast<decltype(loadStateFromSlot)>(dlsym(handle, "_rpcsx_loadStateFromSlot"));
     result.hasStateInSlot = reinterpret_cast<decltype(hasStateInSlot)>(dlsym(handle, "_rpcsx_hasStateInSlot"));
+    result.deleteStateFromSlot = reinterpret_cast<decltype(deleteStateFromSlot)>(dlsym(handle, "_rpcsx_deleteStateFromSlot"));
     result.patchEngineVersion = reinterpret_cast<decltype(patchEngineVersion)>(dlsym(handle, "_rpcsx_patchEngineVersion"));
     result.patchesImport = reinterpret_cast<decltype(patchesImport)>(dlsym(handle, "_rpcsx_patchesImport"));
     result.patchesList = reinterpret_cast<decltype(patchesList)>(dlsym(handle, "_rpcsx_patchesList"));
@@ -1005,6 +1007,15 @@ Java_net_rpcsx_RPCSX_hasStateInSlot(JNIEnv *, jobject, jint slot) {
   }
 
   return rpcsxLib.hasStateInSlot(static_cast<unsigned int>(slot));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_deleteStateFromSlot(JNIEnv *, jobject, jint slot) {
+  if (rpcsxLib.deleteStateFromSlot == nullptr || slot < 0) {
+    return false;
+  }
+
+  return rpcsxLib.deleteStateFromSlot(static_cast<unsigned int>(slot));
 }
 
 // ---------------------------------------------------------------------------

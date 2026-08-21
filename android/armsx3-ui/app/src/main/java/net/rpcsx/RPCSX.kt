@@ -199,6 +199,7 @@ class RPCSX {
     external fun saveStateToSlot(slot: Int): Boolean
     external fun loadStateFromSlot(slot: Int): Boolean
     external fun hasStateInSlot(slot: Int): Boolean
+    external fun deleteStateFromSlot(slot: Int): Boolean
     external fun patchEngineVersion(): String
     external fun patchesImport(content: String): Int
     external fun patchesList(serial: String): String

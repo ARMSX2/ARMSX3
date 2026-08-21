@@ -3709,6 +3709,45 @@ extern "C" bool _rpcsx_hasStateInSlot(unsigned int slot) {
   return !armsx3_slot_find(Emu.GetTitleID(), slot).empty();
 }
 
+// Delete a slot, both the state and its thumbnail.
+//
+// There was no delete entry point at all, so the picker deleted the string it got back from
+// getGamePathSlot -- which answers OCCUPANCY, and whose own declaration says "Not
+// getGamePathSlot, which answers a title id". java.io.File("SHVH06660").delete() removes
+// nothing and returns false, which is issue #80: a state that could not be deleted, every time,
+// with the UI correctly reporting that it had failed.
+//
+// Resolved through armsx3_slot_find rather than a built path, for the reason that function
+// exists: the extension depends on which build wrote the state (.zst today, .gz and bare
+// historically) and guessing it is how this went wrong in the first place.
+extern "C" bool _rpcsx_deleteStateFromSlot(unsigned int slot) {
+  const std::string title = Emu.GetTitleID();
+  const std::string path = armsx3_slot_find(title, slot);
+
+  if (path.empty()) {
+    rpcsx_android.error("deleteState: slot %u holds nothing", slot);
+    return false;
+  }
+
+  if (!fs::remove_file(path)) {
+    rpcsx_android.error("deleteState: slot %u, could not remove '%s' (%s)", slot,
+                        path, fs::g_tls_error);
+    return false;
+  }
+
+  // Best effort: a slot with no thumbnail is normal, and a state that is gone while its
+  // thumbnail lingers would still show the slot as occupied in some views.
+  const std::string thumb =
+      armsx3_slot_dir(title) + "slot" + std::to_string(slot) + ".thumb";
+
+  if (fs::is_file(thumb)) {
+    fs::remove_file(thumb);
+  }
+
+  rpcsx_android.notice("deleteState: slot %u removed '%s'", slot, path);
+  return true;
+}
+
 // ---------------------------------------------------------------------------
 // Patches / graphics mods
 //

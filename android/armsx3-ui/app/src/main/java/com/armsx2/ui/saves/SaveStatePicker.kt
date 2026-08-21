@@ -266,8 +266,14 @@ fun SaveStatePickerScreen(mode: SaveMode, onBack: () -> Unit) {
     }
 
     // Delete confirmation for a long-pressed slot. ConfirmOverlay (not a Dialog) so the pad can
-    // reach it; the file is removed directly because there is no delete JNI — the slot path from
-    // getGamePathSlot is the same file the manager deletes.
+    // reach it.
+    //
+    // This used to delete java.io.File(getGamePathSlot(slot)) directly, on the belief that it
+    // answered a path. It answers OCCUPANCY -- its own declaration says "Not getGamePathSlot,
+    // which answers a title id" -- so the delete was File("SHVH06660").delete(), which removes
+    // nothing and returns false. Every delete failed and the UI correctly said so (issue #80).
+    // The core resolves the real filename now, including which extension the state was written
+    // with, and removes the thumbnail alongside it.
     deleteSlot?.let { slot ->
         com.armsx2.ui.common.ConfirmOverlay(
             title = str("savestate.delete.title"),
@@ -279,10 +285,7 @@ fun SaveStatePickerScreen(mode: SaveMode, onBack: () -> Unit) {
             onConfirm = {
                 deleteSlot = null
                 scope.launch(Dispatchers.IO) {
-                    val ok = runCatching {
-                        val path = NativeApp.getGamePathSlot(slot)
-                        !path.isNullOrBlank() && java.io.File(path).delete()
-                    }.getOrDefault(false)
+                    val ok = runCatching { NativeApp.deleteStateFromSlot(slot) }.getOrDefault(false)
                     withContext(Dispatchers.Main) {
                         if (ok) {
                             failure = null
