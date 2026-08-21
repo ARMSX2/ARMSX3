@@ -124,6 +124,8 @@ object Rpcs3Bridge {
         // Discard database configs split by an older build, so a setting later found to
         // break a game is not left applying forever on machines that already downloaded.
         runCatching { com.armsx2.config.ConfigDatabase.purgeIfStale() }
+        // Applies whether or not the database was ever downloaded.
+        runCatching { com.armsx2.config.ConfigDatabase.ensureLocalOverrides() }
         RPCSX.instance.initialize(RPCSX.rootDirectory, "00000001", com.armsx2.DeviceTier.socIdentity())
         RPCSX.initialized = true
 
