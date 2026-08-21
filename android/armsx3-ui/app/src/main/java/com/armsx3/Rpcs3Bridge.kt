@@ -35,6 +35,66 @@ object Rpcs3Bridge {
 
     private var appContext: Context? = null
 
+    /**
+     * Set when the CPU cannot run this build, so the UI can say so rather than looking broken.
+     * Null on every device that is fine.
+     */
+    @JvmStatic
+    @Volatile
+    var unsupportedCpuMessage: String? = null
+        private set
+
+    /**
+     * Why this CPU cannot run ARMSX3, or null if it can.
+     *
+     * The core is built for armv8.1-a and that is a floor, not a preference: util/simd.hpp emits
+     * SQRDMLAH and util/asm.hpp contains inline LSE atomics, both ARMv8.1. On ARMv8.0 silicon --
+     * Cortex-A53/A57/A73, so Exynos 9610, Snapdragon 660 and similar -- those are illegal
+     * opcodes. The failure is a SIGILL inside a static constructor while the linker is still
+     * running libarmsx3-core.so's initialisers, which means it happens before any of our code can
+     * report anything, and the crash names a log-channel registration rather than a CPU problem.
+     * Reported as issue #15, where it looked like a firmware installer bug because the core is
+     * dlopen'd lazily and installing firmware was the first thing that needed it.
+     *
+     * Fails OPEN. An unreadable or unfamiliar /proc/cpuinfo returns null, because refusing to
+     * start a device that would have worked is worse than the crash this avoids.
+     */
+    private fun unsupportedCpuReason(): String? {
+        val perCore = runCatching {
+            File("/proc/cpuinfo").readLines()
+                .filter { it.trimStart().startsWith("Features") }
+                .map { it.substringAfter(':').trim().split(' ').filter { f -> f.isNotEmpty() }.toSet() }
+        }.getOrNull().orEmpty()
+
+        if (perCore.isEmpty()) return null
+
+        // Checked across every core listed, not just the first: emulator threads are scheduled on
+        // all of them, so one core lacking the extension is enough to fault.
+        val missing = buildList {
+            if (perCore.any { "atomics" !in it }) add("LSE atomics")
+            if (perCore.any { "asimdrdm" !in it }) add("RDMA")
+        }
+
+        if (missing.isEmpty()) return null
+
+        val names = missing.joinToString(separator = " and ")
+        return "This device's CPU is ARMv8.0 and ARMSX3 requires ARMv8.1 " +
+            "(missing " + names + "). No ARMSX3 build can run on it."
+    }
+
+    /** Toast on the main looper -- Toast.makeText throws on a thread with no Looper. */
+    private fun reportFatal(context: Context, message: String) {
+        runCatching {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                runCatching {
+                    android.widget.Toast.makeText(
+                        context.applicationContext, message, android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
+    }
+
     // ---------------------------------------------------------------
     // Lifecycle
     // ---------------------------------------------------------------
@@ -51,6 +111,14 @@ object Rpcs3Bridge {
         if (RPCSX.activeLibrary.value == null) {
             val libDir = context.applicationInfo.nativeLibraryDir
             RPCSX.nativeLibDirectory = libDir
+            // Before the dlopen, which is where an unsupported CPU dies with no explanation.
+            unsupportedCpuReason()?.let { reason ->
+                unsupportedCpuMessage = reason
+                android.util.Log.e("ARMSX3", reason)
+                reportFatal(context, reason)
+                return
+            }
+
             val core = File(libDir, "libarmsx3-core.so")
             if (!core.exists()) {
                 android.util.Log.e("ARMSX3", "core missing at ${'$'}{core.absolutePath}")
