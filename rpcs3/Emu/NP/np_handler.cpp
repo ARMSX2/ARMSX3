@@ -697,6 +697,34 @@ namespace np
 		}
 #endif
 
+#ifdef __ANDROID__
+		// Android has not let an app read a MAC address since Android 6 and enforces it hard
+		// from 10: SIOCGIFHWADDR above returns EPERM and /sys/class/net/*/address is
+		// unreadable. So that branch cannot succeed here, discover_ether_address() always
+		// failed, and np_handler answered "Failed to discover ethernet or ip address!" -- which
+		// leaves the network stack unidentified and blocks RPCN and any game that asks it who
+		// it is. Reported as issue #79, where the network settings looked correct and nothing
+		// in them could have helped.
+		//
+		// Derive one, exactly as the derive_mac_from_psid path at the top of this function
+		// does. Nothing validates this against real hardware: it identifies the console to the
+		// network stack and to peers, and a locally administered address is the right thing to
+		// present when the platform will not hand over the real one. Console PSID defaults to a
+		// per-install random value, so two users do not collide.
+		//
+		// Tried after the ioctl rather than instead of it, so a device or ROM that does answer
+		// still gets its own address.
+		{
+			const u128 psid = g_cfg.sys.console_psid;
+			memcpy(ether_address.data(), &psid, 6);
+			ether_address[0] &= 0xFE; // Not a multicast address
+			ether_address[0] |= 0x02; // Locally administered
+
+			nph_log.notice("Derived the Ethernet address from Console PSID: the platform does not expose one.");
+			return true;
+		}
+#endif
+
 		return false;
 	}
 
