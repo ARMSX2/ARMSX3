@@ -205,8 +205,19 @@ namespace rsx
 				const usz first_index_off = 0;
 				const usz second_index_off = (((rcount / 4) - 1) / 2) * 4;
 
-				const u64 src_op1_2 = read_from_ptr<be_t<u64>>(fifo_span, first_index_off);
-				const u64 src_op2_2 = read_from_ptr<be_t<u64>>(fifo_span, second_index_off);
+				// Rotated by 32: the destination holds each word already byte-swapped
+				// individually (copy_data_swap_u32), but be_t<u64> swaps all eight bytes,
+				// which additionally EXCHANGES the two words. Without the rotate this
+				// compares (w0,w1) against (w1,w0) and can only match when w0 == w1, so the
+				// redundant-upload check never fired: every upload set the ucode dirty,
+				// forcing a vertex program re-analysis, a program cache hint drop and a full
+				// transform constant re-upload on every draw.
+				//
+				// Lost once already, in the ROP output remap merge: this hunk sits inside the
+				// same handler upstream rewrote, and re-applying the profiler scopes around it
+				// did not put it back. Restored in b9689d07f's follow-up.
+				const u64 src_op1_2 = std::rotl<u64>(read_from_ptr<be_t<u64>>(fifo_span, first_index_off), 32);
+				const u64 src_op2_2 = std::rotl<u64>(read_from_ptr<be_t<u64>>(fifo_span, second_index_off), 32);
 
 				// Fast comparison
 				if (src_op1_2 != read_from_ptr_unsafe<u64>(out_ptr, first_index_off) || src_op2_2 != read_from_ptr_unsafe<u64>(out_ptr, second_index_off))
@@ -223,6 +234,11 @@ namespace rsx
 			{
 				to_set_dirty = rsx::pipeline_state::vertex_program_ucode_dirty;
 			}
+
+			// Pairs with g_xform_program_calls: the profiler reports words/calls, so without
+			// this the average batch size prints 0 rather than printing nothing. Also lost in
+			// the ROP remap merge, alongside the rotl above.
+			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_program_words += rcount;
 
 			RSX(ctx)->m_graphics_state |= to_set_dirty;
 			REGS(ctx)->transform_program_load_set(load_pos + ((rcount + index % 4) / 4));
