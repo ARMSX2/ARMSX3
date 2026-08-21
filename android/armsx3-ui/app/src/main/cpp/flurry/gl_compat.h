@@ -46,6 +46,9 @@ extern "C" {
 #ifndef GL_LINEAR_MIPMAP_NEAREST
 #define GL_LINEAR_MIPMAP_NEAREST 0x2701
 #endif
+#ifndef GL_TEXTURE_2D_ENABLE_COMPAT
+#define GL_TEXTURE_2D_ENABLE_COMPAT 0x0DE1
+#endif
 
 /* Lifetime. fx_init needs a current context; fx_lost forgets GL names without touching them,
  * for when the context has already gone away underneath us. */

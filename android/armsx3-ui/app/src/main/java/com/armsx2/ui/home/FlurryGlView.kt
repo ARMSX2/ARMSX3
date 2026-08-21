@@ -31,9 +31,16 @@ class FlurryGlView(context: Context, private val preset: Int) :
 
     init {
         surfaceTextureListener = this
-        // Same reasoning as XmbGlView: if nothing ever renders, show what is behind rather than
-        // a black rectangle.
-        isOpaque = false
+
+        // Opaque, unlike XmbGlView.
+        //
+        // That view can afford isOpaque = false because, as its own comment says, it "draws an
+        // opaque gradient every frame, fully covering that layer". Flurry does the opposite: it
+        // never draws anything opaque, it fades the screen toward black at a few percent per
+        // frame, which is what produces the trails. So the surface's alpha channel stays low,
+        // and a non-opaque TextureView with low alpha composites whatever is behind it -- which
+        // showed as full-screen static over the top of the smoke.
+        isOpaque = true
     }
 
     override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
@@ -52,6 +59,19 @@ class FlurryGlView(context: Context, private val preset: Int) :
     }
 
     override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+
+    /**
+     * Stop rendering without waiting for the surface callback.
+     *
+     * Toggling the setting recomposes the AndroidView, and the replacement view's thread can be
+     * started before the old one's surface is destroyed -- two particle simulations at once,
+     * which was visible as UI lag. AndroidView's onRelease calls this so teardown is tied to the
+     * composable leaving rather than to a callback that arrives whenever it arrives.
+     */
+    fun stop() {
+        thread?.finish()
+        thread = null
+    }
 
     private class RenderThread(
         private val surfaceTexture: SurfaceTexture,
@@ -110,15 +130,33 @@ class FlurryGlView(context: Context, private val preset: Int) :
         }
 
         private fun initEgl(): Boolean {
+            // Not exposed by EGL14.
+            val EGL_SWAP_BEHAVIOR_PRESERVED_BIT = 0x0400
+
             eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
             if (eglDisplay == EGL14.EGL_NO_DISPLAY) return false
 
             val ver = IntArray(2)
             if (!EGL14.eglInitialize(eglDisplay, ver, 0, ver, 1)) return false
 
-            val attribs = intArrayOf(
+            // Flurry draws its trails by fading the PREVIOUS frame rather than clearing, so it
+            // needs the back buffer to still hold what it drew last time. EGL defaults
+            // EGL_SWAP_BEHAVIOR to EGL_BUFFER_DESTROYED, which leaves the buffer undefined after
+            // every swap -- so each frame started from uninitialised GPU memory and the fade had
+            // nothing coherent to work on. That undefined memory is what showed up on screen as
+            // TV static. Measured: one fade darkened the buffer 3.17%, but sixty consecutive
+            // fades only managed 6.5% total, because the result never survived the swap.
+            //
+            // Preservation has to be asked for in the CONFIG as well as on the surface, and not
+            // every driver offers it, so fall back to a plain window config if it is refused.
+            fun attribs(preserved: Boolean) = intArrayOf(
                 EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+                EGL14.EGL_SURFACE_TYPE,
+                if (preserved) EGL14.EGL_WINDOW_BIT or EGL_SWAP_BEHAVIOR_PRESERVED_BIT
+                else EGL14.EGL_WINDOW_BIT,
                 EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8,
+                // A real alpha channel, which the renderer clears to 1 and then masks off, so
+                // the compositor always sees a fully opaque surface.
                 EGL14.EGL_ALPHA_SIZE, 8,
                 // No depth buffer: Flurry is 2D additive smoke, and asking for one on a tiler
                 // costs bandwidth for something never read.
@@ -128,7 +166,13 @@ class FlurryGlView(context: Context, private val preset: Int) :
 
             val cfg = arrayOfNulls<EGLConfig>(1)
             val num = IntArray(1)
-            if (!EGL14.eglChooseConfig(eglDisplay, attribs, 0, cfg, 0, 1, num, 0) || num[0] == 0) return false
+            var preserved = EGL14.eglChooseConfig(eglDisplay, attribs(true), 0, cfg, 0, 1, num, 0) &&
+                num[0] > 0
+            if (!preserved &&
+                (!EGL14.eglChooseConfig(eglDisplay, attribs(false), 0, cfg, 0, 1, num, 0) || num[0] == 0)
+            ) {
+                return false
+            }
 
             val ctxAttr = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE)
             eglContext = EGL14.eglCreateContext(eglDisplay, cfg[0], EGL14.EGL_NO_CONTEXT, ctxAttr, 0)
@@ -139,7 +183,24 @@ class FlurryGlView(context: Context, private val preset: Int) :
             )
             if (eglSurface == EGL14.EGL_NO_SURFACE) return false
 
-            return EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)
+            if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) return false
+
+            // Asking for the config is not enough; the surface has to be told as well. Query it
+            // back rather than trusting the request -- a driver may quietly refuse.
+            if (preserved) {
+                EGL14.eglSurfaceAttrib(
+                    eglDisplay, eglSurface, EGL14.EGL_SWAP_BEHAVIOR, EGL14.EGL_BUFFER_PRESERVED,
+                )
+                val got = IntArray(1)
+                preserved = EGL14.eglQuerySurface(
+                    eglDisplay, eglSurface, EGL14.EGL_SWAP_BEHAVIOR, got, 0,
+                ) && got[0] == EGL14.EGL_BUFFER_PRESERVED
+            }
+            android.util.Log.e(
+                "Flurry",
+                "swap behavior = " + (if (preserved) "PRESERVED" else "DESTROYED (trails will not accumulate)"),
+            )
+            return true
         }
 
         private fun teardown() {

@@ -48,6 +48,8 @@ static const char sccsid[] = "@(#)flurry.c	4.07 97/11/24 xlockmore";
 
 #include <string.h>
 #include <unistd.h>
+#include <android/log.h>
+#include <stdio.h>
 
 #include "flurry.h"
 
@@ -368,6 +370,7 @@ global_info_t *flurry_port_new(int preset)
 
     global->first = 1;
     global->oldFrameTime = -1;
+    global->port_clear_frames = 8;
     return global;
 }
 
@@ -409,6 +412,7 @@ global_info_t *flurry_port_new_custom(int streams, int colour, float thickness,
 
     global->first = 1;
     global->oldFrameTime = -1;
+    global->port_clear_frames = 8;
     return global;
 }
 
@@ -430,6 +434,7 @@ int flurry_port_draw(global_info_t *global)
 
     if (!global) return 0;
 
+
     newFrameTime = currentTime();
 
     if (global->oldFrameTime == -1) {
@@ -450,6 +455,7 @@ int flurry_port_draw(global_info_t *global)
     global->oldFrameTime = newFrameTime;
     if (alpha > 0.2) alpha = 0.2;
 
+
     if (global->first) {
         global->texid = MakeTexture();
         global->first = 0;
@@ -458,10 +464,27 @@ int flurry_port_draw(global_info_t *global)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
+    /* The buffer starts undefined, so paint it black before the fade has anything coherent to
+     * work on. A few frames covers whatever buffers the driver rotates through; after that the
+     * fade below keeps the screen dark, and clearing would wipe the trails that are the effect.
+     *
+     * Alpha is set once here and then masked off for good. Flurry fades with GL_SRC_ALPHA/
+     * GL_ONE_MINUS_SRC_ALPHA, which writes destination alpha as well as colour and drags it
+     * toward the fade's own value -- harmless for a screensaver that owns the display, wrong for
+     * a surface the window compositor blends. RGB is untouched, so the trails are unaffected. */
+    if (global->port_clear_frames > 0) {
+        global->port_clear_frames--;
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    }
+
     glColor4f(0.0, 0.0, 0.0, alpha);
     glRectd(0, 0, global->sys_glWidth, global->sys_glHeight);
 
     brite = pow(deltaFrameTime, 0.75) * 10;
+
     for (flurry = global->flurry; flurry; flurry = flurry->next) {
         GLRenderScene(global, flurry, brite * flurry->briteFactor);
     }

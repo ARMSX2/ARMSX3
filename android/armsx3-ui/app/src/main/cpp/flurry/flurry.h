@@ -264,6 +264,13 @@ struct _global_info_t {
   /* system values */
         int optMode;
 
+        /* Port-only. Flurry never clears: it fades the screen by a few percent each frame, which
+         * is how the trails exist. That assumes it owns a buffer that started black. Here it gets
+         * a rotating set of swapchain buffers full of uninitialised GPU memory, and an 8% fade
+         * cannot win against that -- it shows as static the smoke sits behind. Clear each buffer
+         * once, then hand over to the fade. */
+        int port_clear_frames;
+
 	float sys_glWidth;
 	float sys_glHeight;
 

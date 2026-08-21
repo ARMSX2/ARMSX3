@@ -217,14 +217,22 @@ GLuint MakeTexture(void)
 
     /* Set the filtering. */
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_NEAREST);
+    /* GL_LINEAR, not LINEAR_MIPMAP_NEAREST.
+     *
+     * A mipmapped min filter makes the texture INCOMPLETE unless the whole chain exists, and an
+     * incomplete texture samples as opaque black -- which, through this shader's c *= texture,
+     * multiplies the entire particle to nothing. glGenerateMipmap is also not guaranteed for
+     * GL_LUMINANCE_ALPHA, which is filterable but not colour-renderable, so the chain may never
+     * have been built. The sprite is a 256x256 blob drawn at roughly its own size; the mip chain
+     * was never doing much for it. */
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 
     /* gluBuild2DMipmaps upstream. There is no GLU on Android, and GLES2 builds the chain
      * itself -- the internal format has to be spelled out rather than given as a component
      * count, which is what the 2 meant in GL 1.x. */
     glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, 256, 256, 0,
                  GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, bigTextureArray);
-    glGenerateMipmap(GL_TEXTURE_2D);
+    /* No glGenerateMipmap: see the min filter above. */
     glTexEnvf(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
     return theTexture;
 }

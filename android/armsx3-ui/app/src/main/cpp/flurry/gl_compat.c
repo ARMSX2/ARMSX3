@@ -1,5 +1,36 @@
 #include "gl_compat.h"
 
+/*
+ * Undo the redirection for this file.
+ *
+ * gl_compat.h rewrites glEnable/glDisable/glDrawArrays and friends into the fx_* entry points
+ * so the Flurry sources need no edits -- but this file IMPLEMENTS those entry points, and it
+ * has to be able to call the real GL underneath them. Without these undefs, fx_enable's own
+ * glEnable(cap) expands to fx_enable(cap) and recurses forever. At -O2 that is a tail call and
+ * becomes an infinite LOOP rather than a stack overflow, so it does not crash: the thread just
+ * spins at 100% and nothing after it ever runs. The first glDisable in GLSetupRC was enough to
+ * hang the whole renderer with no error anywhere.
+ */
+#undef glEnable
+#undef glDisable
+#undef glDrawArrays
+#undef glVertexPointer
+#undef glColorPointer
+#undef glTexCoordPointer
+#undef glEnableClientState
+#undef glDisableClientState
+#undef glColor4f
+#undef glColor3f
+#undef glRectd
+#undef glMatrixMode
+#undef glLoadIdentity
+#undef glOrtho
+#undef glAlphaFunc
+#undef glShadeModel
+#undef glTexEnvf
+#undef glDrawBuffer
+#undef glFinish
+
 #include <android/log.h>
 #include <stdlib.h>
 #include <string.h>
@@ -191,13 +222,16 @@ void fx_enable(GLenum cap)
 {
     /* GLES2 has no alpha test or lighting; passing either would set GL_INVALID_ENUM and the
      * error would then be blamed on whatever ran next. */
-    if (cap == GL_ALPHA_TEST || cap == GL_LIGHTING) return;
+    /* GL_TEXTURE_2D as a capability is gone in GLES2 -- whether a sampler is used is decided by
+     * the shader. Passing it sets GL_INVALID_ENUM, and the sticky error then gets blamed on
+     * whatever ran next. */
+    if (cap == GL_ALPHA_TEST || cap == GL_LIGHTING || cap == GL_TEXTURE_2D_ENABLE_COMPAT) return;
     glEnable(cap);
 }
 
 void fx_disable(GLenum cap)
 {
-    if (cap == GL_ALPHA_TEST || cap == GL_LIGHTING) return;
+    if (cap == GL_ALPHA_TEST || cap == GL_LIGHTING || cap == GL_TEXTURE_2D_ENABLE_COMPAT) return;
     glDisable(cap);
 }
 
@@ -252,6 +286,7 @@ void fx_rect(float x0, float y0, float x1, float y1)
 
 void fx_draw_arrays(GLenum mode, GLint first, GLsizei count)
 {
+
     if (!fx.ready || count <= 0) return;
 
     glUseProgram(fx.program);

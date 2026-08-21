@@ -198,6 +198,7 @@ fun HomeScreen(
                                 }
                             },
                             modifier = Modifier.fillMaxSize(),
+                            onRelease = { it.stop() },
                         )
                     }
                 } else if (LibraryBackground.animated2D.value) {
