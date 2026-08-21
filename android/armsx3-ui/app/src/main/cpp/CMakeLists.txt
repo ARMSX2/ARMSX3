@@ -24,6 +24,36 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 )
 
 # ---------------------------------------------------------------------------
+# Flurry -> libflurry.so
+#
+# Calum Robinson's Flurry screensaver (2002), offered as a live library background. Its own
+# target rather than folded into the glue for two reasons: it is BSD-3-clause next to GPL code
+# and the boundary should be visible, and it is plain C from 2002 that wants none of the C++20
+# and adrenotools the glue is built with.
+#
+# gl_compat.c answers the GL 1.x calls the sources make -- client-side vertex arrays, a
+# fixed-function ortho and GL_QUADS -- with a GLES2 shader, so the renderer itself stays
+# unmodified. See its header for what is and is not emulated.
+# ---------------------------------------------------------------------------
+add_library(flurry SHARED
+    flurry/flurry_jni.c
+    flurry/gl_compat.c
+    flurry/flurry.c
+    flurry/flurry-smoke.c
+    flurry/flurry-spark.c
+    flurry/flurry-star.c
+    flurry/flurry-texture.c
+)
+
+target_include_directories(flurry PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/flurry)
+set_target_properties(flurry PROPERTIES C_STANDARD 99)
+
+# -ffast-math: a particle simulation judged by eye, running thousands of sqrt per frame.
+# Upstream shipped hand-written frsqrte paths for exactly this reason.
+target_compile_options(flurry PRIVATE -O2 -ffast-math -Wall -Wno-unused-parameter)
+target_link_libraries(flurry log GLESv2 m)
+
+# ---------------------------------------------------------------------------
 # Discord Social SDK bridge -> libarmsx2_discord.so
 #
 # Separate target, and the manifest runs it in its own process. That is a

@@ -779,6 +779,7 @@ object Rpcs3Bridge {
      * hand -- from getGamePathSlot, which answers occupancy rather than a path, so the delete
      * always failed (issue #80).
      */
+    @JvmStatic
     fun deleteState(slot: Int): Boolean =
         runCatching { RPCSX.instance.deleteStateFromSlot(slot) }.getOrDefault(false)
 
