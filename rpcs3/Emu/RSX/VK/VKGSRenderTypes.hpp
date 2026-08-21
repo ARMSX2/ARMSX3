@@ -77,8 +77,48 @@ namespace vk
 			vk::command_buffer::reset();
 		}
 
-		bool poke()
+		// How to ask "is this submission done", selectable at runtime via driver_env.txt.
+		//
+		//   wait0  (default) vkWaitForFences with a zero timeout, today's behaviour
+		//   status           vkGetFenceStatus, what this used before
+		//   defer            speculative callers do not ask the driver at all
+		//
+		// A toggle rather than a change because this has already been "fixed" once on one
+		// device: vkGetFenceStatus measured 19.7ms per call and never once returned
+		// VK_NOT_READY, and the zero-timeout wait that replaced it is measurably better but has
+		// the same signature -- 1.9ms per call at 0.0% not ready on Adreno 740, roughly 5ms a
+		// frame in Minecraft. The driver appears to treat a zero timeout as "wait" either way,
+		// which is a driver behaviour and not something to assume holds everywhere.
+		//
+		// The profiler already reports "fence polls N/frame, T ns each, P% not ready", so each
+		// mode can be judged directly on whatever device is testing.
+		static int fence_poll_mode()
 		{
+			static const int mode = []
+			{
+				const char* const env = std::getenv("ARMSX3_FENCE_POLL");
+				if (!env) return 0;
+				if (std::string_view(env) == "status") return 1;
+				if (std::string_view(env) == "defer") return 2;
+				return 0;
+			}();
+
+			return mode;
+		}
+
+		// allow_block=false marks a caller that only wants to reclaim early and is happy to be
+		// told "not yet": check_present_status returns immediately on a false, and poke_all
+		// ignores the result entirely. The mandatory callers -- next() and reset() -- keep the
+		// default, so the ring can never be starved by this.
+		bool poke(bool allow_block = true)
+		{
+			if (!allow_block && fence_poll_mode() == 2 && is_pending)
+			{
+				// Not asked, so not known. The work is reclaimed by a later frame, or by the
+				// blocking path in next()/reset() if the ring gets that far.
+				return false;
+			}
+
 			reader_lock lock(guard_mutex);
 
 			if (!is_pending)
@@ -102,7 +142,9 @@ namespace vk
 				// vkWaitForFences with a zero timeout is specified to return VK_TIMEOUT
 				// without waiting, and is the same question with an answer that arrives.
 				RSX_PROF_SCOPE(fence_poll);
-				fence_status = vkWaitForFences(pool->get_owner(), 1, &m_submit_fence->handle, VK_TRUE, 0);
+				fence_status = fence_poll_mode() == 1
+					? vkGetFenceStatus(pool->get_owner(), m_submit_fence->handle)
+					: vkWaitForFences(pool->get_owner(), 1, &m_submit_fence->handle, VK_TRUE, 0);
 			}
 
 			if (rsx::prof::enabled()) [[unlikely]]
@@ -335,7 +377,7 @@ namespace vk
 		{
 			for (auto& cb : m_cb_list)
 			{
-				cb.poke();
+				cb.poke(false);
 			}
 		}
 
