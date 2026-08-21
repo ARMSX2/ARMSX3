@@ -61,12 +61,23 @@ static bool is_iso_file(iso_file& file, u64* size = nullptr)
 		return false;
 	}
 
-	char magic[5];
+	// Zero-initialised, and a short read is NOT treated as "not an ISO".
+	//
+	// Upstream's 8a6c96745 added a `!= 5` early return here, which this reverts to the 0.8
+	// behaviour. The check is sound on a desktop filesystem, but on Android the disc is read
+	// through SAF/content URIs, and this predicate decides how the game gets mounted --
+	// System.cpp:1572/1589/1764/1878 and rpcsx-android.cpp:3935 all branch on it. A single
+	// short read there does not fail the boot outright; it silently routes the title down a
+	// different mount path, which is what a game reaching its first loading screen and never
+	// leaving it looks like.
+	//
+	// The zero-init is kept from the upstream version rather than restoring 0.8 exactly: the
+	// original compared `magic` without checking the read at all, so a failed read compared
+	// uninitialised stack. Zeroing gives the old "don't reject on a short read" behaviour
+	// without the undefined behaviour -- a genuinely non-ISO file still fails the CD001 test.
+	char magic[5]{};
 
-	if (file.read_at(32768ULL + 1, magic, 5) != 5)
-	{
-		return false;
-	}
+	file.read_at(32768ULL + 1, magic, 5);
 
 	const bool ret = magic[0] == 'C' && magic[1] == 'D' && magic[2] == '0' && magic[3] == '0' && magic[4] == '1';
 
