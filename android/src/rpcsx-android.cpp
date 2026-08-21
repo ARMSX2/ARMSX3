@@ -2,6 +2,7 @@
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
 #include "Emu/Audio/Cubeb/CubebBackend.h"
+#include "Emu/Cell/Modules/cellAudio.h"
 #include "Emu/RSX/VK/VKFrameGen.h"
 #include "Emu/Audio/Oboe/OboeBackend.h"
 #include "Emu/Audio/Null/NullAudioBackend.h"
@@ -5318,6 +5319,19 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
   } else if (path.starts_with("Video@@Debug overlay") ||
              path.starts_with("Miscellaneous@@Debug overlay")) {
     rsx::overlays::reset_debug_overlay();
+  } else if (path.starts_with("Audio@@")) {
+    // Same shape of gap as the overlays above, in the audio config.
+    //
+    // audio::configure_audio() is the only thing that turns a changed audio node into a rebuilt
+    // backend, and its only caller is main_application.cpp -- Qt, which this build excludes. So
+    // writing Audio Renderer here changed the YAML and nothing else: the running backend stayed
+    // whatever it was until the next boot. Anyone told to "try a different audio backend" was
+    // running a null experiment unless they happened to fully relaunch the game, which is how
+    // issue #73 collected three backends' worth of identical results.
+    //
+    // It re-reads the config and only acts when something it cares about actually differs, so
+    // the ~200 settings applyTo pushes at boot do not each rebuild the stream.
+    audio::configure_audio();
   }
   return true;
 }
