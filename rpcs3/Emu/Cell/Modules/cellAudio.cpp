@@ -711,6 +711,44 @@ void cell_audio_thread::operator()()
 
 	u32 untouched_expected = 0;
 
+	// Consecutive periods the instantaneous count has sat below the baseline.
+	u32 untouched_below_streak = 0;
+
+	// Raise the baseline at once, lower it only once the lower count has held.
+	//
+	// A plain high-water mark (what this was) never comes back down inside a stable port
+	// configuration: the fast path below runs whenever untouched == active_ports, which pins the
+	// baseline at its maximum on the first fully silent period a title has. After that
+	// `untouched > untouched_expected` can never be true again and the loop stops waiting for
+	// late ports for the rest of the session.
+	//
+	// Storing the instantaneous count instead -- which is what upstream does -- is not the
+	// answer either: a port a game leaves started while writing only zeros still flips the -0.0f
+	// tags, so it reads as touched on the few periods a write lands in and untouched on the
+	// rest. Following that dip drops the baseline, the next period looks newly untouched, and
+	// the loop waits out the full timeout every flicker. Measured on H.A.W.X. 2 as an audio
+	// clock at 55% of real time with the ring buffer permanently empty.
+	//
+	// Hysteresis covers both, because the two cases differ in duration and not in shape: the
+	// flicker is one period wide, while a game that genuinely starts filling its ports stays
+	// filled. Eight periods is far longer than any flicker and still a small fraction of the
+	// untouched timeouts this feeds.
+	constexpr u32 untouched_lower_after = 8;
+
+	auto note_untouched = [&](u32 count, u32 ports)
+	{
+		// A port going away lowers it immediately -- there is nothing left to wait for.
+		untouched_expected = std::min(untouched_expected, ports);
+
+		const u32 capped = std::min(count, ports);
+
+		if (capped >= untouched_expected || ++untouched_below_streak >= untouched_lower_after)
+		{
+			untouched_expected = capped;
+			untouched_below_streak = 0;
+		}
+	};
+
 	u32 loop_count = 0;
 
 	// Main cellAudio loop
@@ -771,6 +809,7 @@ void cell_audio_thread::operator()()
 				finish_port_volume_stepping();
 				m_average_playtime = static_cast<f32>(ringbuffer->get_enqueued_playtime());
 				untouched_expected = 0;
+				untouched_below_streak = 0;
 			}
 
 			m_audio_should_restart = false;
@@ -898,6 +937,7 @@ void cell_audio_thread::operator()()
 				cellAudio.trace("enqueuing silence: no active ports, enqueued_buffers=%llu", enqueued_buffers);
 				ringbuffer->enqueue_silence();
 				untouched_expected = 0;
+				untouched_below_streak = 0;
 				advance(timestamp);
 				continue;
 			}
@@ -915,7 +955,7 @@ void cell_audio_thread::operator()()
 				{
 					// There's no audio in the buffers, simply advance time and hope the game recovers
 					cellAudio.trace("advancing time: untouched=%u/%u (expected=%u), enqueued_buffers=%llu", untouched, active_ports, untouched_expected, enqueued_buffers);
-					untouched_expected = std::min(std::max(untouched, untouched_expected), active_ports);
+					note_untouched(untouched, active_ports);
 					advance(timestamp);
 					continue;
 				}
@@ -931,7 +971,7 @@ void cell_audio_thread::operator()()
 				// There's no audio in the buffers, simply advance time
 				cellAudio.trace("enqueuing silence: untouched=%u/%u (expected=%u), enqueued_buffers=%llu", untouched, active_ports, untouched_expected, enqueued_buffers);
 				ringbuffer->enqueue_silence();
-				untouched_expected = std::min(std::max(untouched, untouched_expected), active_ports);
+				note_untouched(untouched, active_ports);
 				advance(timestamp);
 				continue;
 			}
@@ -958,7 +998,7 @@ void cell_audio_thread::operator()()
 			// on exactly those periods, and on the next period the very same silent port
 			// looks like a newly untouched buffer -- so the loop waits out the whole
 			// untouched timeout for it, over and over, for as long as the port exists.
-			untouched_expected = std::min(std::max(untouched, untouched_expected), active_ports);
+			note_untouched(untouched, active_ports);
 
 			// Log if we enqueued untouched/incomplete buffers
 			if (untouched > 0 || incomplete > 0)
