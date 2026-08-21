@@ -179,7 +179,19 @@ object Rpcs3Settings {
             30, 50, 60, 120 -> fps.toString()
             else -> null
         }
-        if (fps <= 0) {
+        if (fps < 0) {
+            // PS3 Native: pace flips on the emulated vblank instead of capping by wall clock.
+            //
+            // This is the only Frame limit mode that honours cellGcmSetFlipMode(VSYNC) -- see
+            // handle_emu_flip, where every other mode falls through and flips immediately. A game
+            // that paces itself to 30fps by flipping on alternate vblanks therefore free-runs to
+            // the 60 cap under Auto, which is what issue #77 reported for Tales of Symphonia.
+            //
+            // Not the default: with no vsync request from the game this mode applies no limit at
+            // all, so titles that do not ask for vsync would run unbounded.
+            setFrameLimitMode("PS3 Native")
+            setSecondFrameLimit(0f)
+        } else if (fps == 0) {
             setFrameLimitMode("Off")
             setSecondFrameLimit(0f)
         } else if (preset != null) {
@@ -217,7 +229,10 @@ object Rpcs3Settings {
         }
 
         val cap = lastExplicitFpsCap
-        if (cap > 0) {
+        if (cap != 0) {
+            // Not `> 0`: the explicit control also uses -1 for PS3 Native, and this method runs
+            // LAST, so treating that as "no explicit rate" wrote Auto straight back over it -- the
+            // same collision this comment describes, one value along.
             setFrameLimit(cap)
         } else {
             // No explicit rate to honour, so "limit on" means the console's own pacing.

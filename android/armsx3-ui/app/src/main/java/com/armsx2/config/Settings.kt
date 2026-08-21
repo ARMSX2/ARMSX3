@@ -1217,7 +1217,7 @@ data class Settings(
         // Max presented-FPS cap — independent of the Speed Limit % above. Caps
         // the display rate by dropping presents on the GS thread (emulation keeps
         // full speed, NominalScalar untouched); 0 = off. See GSRenderer::VSync.
-        if (emitSink == null) NativeApp.setFpsCap(fpsLimit.coerceIn(0, 1000))
+        if (emitSink == null) NativeApp.setFpsCap(fpsLimit.coerceIn(-1, 1000)) // -1 = PS3 native pacing
         // Manual frameskip (0..5) — present 1 of every (N+1) frames. Held as a
         // GS-thread global, applied live; no persisted EmuCore key needed.
         if (emitSink == null) NativeApp.setFrameSkip(frameSkip.coerceIn(0, 5))

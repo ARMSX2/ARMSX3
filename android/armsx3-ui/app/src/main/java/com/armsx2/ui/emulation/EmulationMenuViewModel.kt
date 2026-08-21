@@ -273,7 +273,7 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
 
     fun setSpeed(it: Int) = updateSettings { settings -> settings.copy(nominalSpeedPercent = it.coerceIn(50, 200)) }
 
-    fun setFpsLimit(value: Int) = updateSettings { it.copy(fpsLimit = value.coerceIn(0, 240)) }
+    fun setFpsLimit(value: Int) = updateSettings { it.copy(fpsLimit = value.coerceIn(-1, 240)) } // -1 = PS3 native pacing
 
     fun setFrameSkip(value: Int) = updateSettings { it.copy(frameSkip = value.coerceIn(0, 5)) }
 

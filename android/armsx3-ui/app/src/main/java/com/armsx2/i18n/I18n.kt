@@ -944,6 +944,7 @@ val EN: Map<String, String> = mapOf(
     "patches.dialog.patchesAndCheats" to "Patches & cheats",
     "patches.hardcoreNoticeCheatsDisabled" to "Cheats are disabled while RetroAchievements Hardcore mode is active. Patches still apply.",
     "perf.displayFpsCap.label" to "Display FPS Cap",
+    "perf.displayFpsCap.ps3" to "PS3",
     "perf.displayResolution.description" to "Reduces the display resolution to significantly decrease device heat and battery drain. Screen = full quality (off). 1080p = High Quality, 720p = Balanced, 540p = Battery Saver / Max Performance. Separate from the internal rendering resolution — menus stay sharp either way.",
     "perf.displayResolution.label" to "Display Resolution (HW scaler)",
     "perf.displayResolution.screen" to "Screen",

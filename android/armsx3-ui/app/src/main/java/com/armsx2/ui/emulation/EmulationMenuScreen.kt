@@ -1010,8 +1010,15 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
         // Limit above that loses the min() at RSXThread.cpp:3676 and the rate stays 60. Offering
         // them just invited "the cap does nothing" reports for the two values where that is true
         // by construction. (Measured: second=90.00 -> limit=60.00.)
-        options = listOf(0, 20, 30, 45, 60).map {
-            it to if (it == 0) str("setup.toggle.off") else "$it FPS"
+        // -1 is not a rate: it selects Frame limit "PS3 Native", the only mode that honours the
+        // game's own cellGcmSetFlipMode(VSYNC) request. A title that paces itself to 30fps needs
+        // it; under any other mode it flips every vblank and runs at 60 (issue #77).
+        options = listOf(0, -1, 20, 30, 45, 60).map {
+            it to when (it) {
+                0 -> str("setup.toggle.off")
+                -1 -> str("perf.displayFpsCap.ps3")
+                else -> "$it FPS"
+            }
         },
         selected = settings.fpsLimit,
         onSelect = viewModel::setFpsLimit,
