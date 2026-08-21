@@ -3377,6 +3377,27 @@ void Emulator::Resume()
 		return;
 	}
 
+	// Not while a savestate is being written.
+	//
+	// Saving arms after_kill_callback with Emu.Restart and then kills the VM, and the restart
+	// runs BootGame, whose restore_on_no_boot does ensure(IsStopped()) -- which accepts only
+	// stopped, loading or stopping. A Resume landing anywhere in that window puts the state at
+	// running and turns the assert into a process abort.
+	//
+	// Seen on device as issue #81: "Emulation has been resumed!" logged 31 microseconds before
+	// "{Savestate Prepare Thread} Verification failed (object: 0x0)". Android makes the window
+	// much easier to hit than desktop, because CallFromMainThread runs its callback INLINE on
+	// the calling thread rather than deferring it, so the whole kill-and-restart chain executes
+	// on the savestate thread while the UI thread is free to resume underneath it.
+	//
+	// m_emu_state_close_pending is the emulator's own marker for that window and is cleared on
+	// every failure path, so this cannot latch a game into being unresumable.
+	if (m_emu_state_close_pending)
+	{
+		sys_log.notice("Resume request ignored: a savestate or close is in flight.");
+		return;
+	}
+
 	// Print and reset debug data collected
 	if (g_cfg.core.ppu_decoder == ppu_decoder_type::_static && g_cfg.core.ppu_debug)
 	{
