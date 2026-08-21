@@ -3413,6 +3413,26 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
     }
   }
 
+  // Say so, loudly, when the core is configured in a way known to hang.
+  //
+  // These are reachable only through raw core overrides -- there is no UI for them -- so they
+  // are set deliberately, usually chasing performance, and then forgotten. Nothing reported
+  // them, which meant a log from an affected user looked identical to a log from a healthy one
+  // and the setting had to be spotted by eye in the config dump.
+  //
+  // PPU Threads is the one that actually bites: the PS3 has two PPU hardware threads and
+  // upstream's own config comment says "must be 2". With 1, SPURS does not get the concurrent
+  // PPU progress it expects, and its task modules fail validation -- the SPU executes its own
+  // HALT and the graphics pipeline stops. It presents as an intermittent freeze after 10-30
+  // minutes, on hardware where the same build with the default is fine.
+  if (const u32 ppu_threads = g_cfg.core.ppu_threads; ppu_threads != 2) {
+    rpcsx_android.error(
+        "boot: PPU Threads is %u, not 2. The PS3 has two PPU hardware threads and this must be "
+        "2; other values are known to hang SPURS titles intermittently. Clear this raw core "
+        "override before reporting a freeze.",
+        ppu_threads);
+  }
+
   return static_cast<int>(Emu.BootGame(path, "", false, cfg_mode::custom));
 }
 
