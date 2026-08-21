@@ -187,19 +187,26 @@ fun HomeScreen(
                 if (LibraryBackground.flurry.value) {
                     // Flurry, in the same shell as the XMB wave: if GL cannot come up we get the
                     // 2D backdrop rather than a hole, exactly as XmbGlView does below.
-                    var flurryGl by remember { mutableStateOf<Boolean?>(null) }
-                    if (flurryGl == false) {
-                        LibraryWaveBackground(Modifier.fillMaxSize())
-                    } else {
-                        AndroidView(
-                            factory = {
-                                FlurryGlView(it, LibraryBackground.flurryPreset.value).apply {
-                                    onGlStatus = { ok -> flurryGl = ok }
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize(),
-                            onRelease = { it.stop() },
-                        )
+                    // Keyed on the selection: an AndroidView factory runs once, so without this
+                    // switching saver or preset would leave the old one running.
+                    val kind = LibraryBackground.saverKind.value
+                    val preset = if (kind == 0) LibraryBackground.flurryPreset.value
+                                 else LibraryBackground.rssPreset.value
+                    androidx.compose.runtime.key(kind, preset) {
+                        var saverGl by remember { mutableStateOf<Boolean?>(null) }
+                        if (saverGl == false) {
+                            LibraryWaveBackground(Modifier.fillMaxSize())
+                        } else {
+                            AndroidView(
+                                factory = {
+                                    SaverGlView(it, LibraryBackground.currentSpec()).apply {
+                                        onGlStatus = { ok -> saverGl = ok }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxSize(),
+                                onRelease = { it.stop() },
+                            )
+                        }
                     }
                 } else if (LibraryBackground.animated2D.value) {
                     // User opted into the lightweight 2D animated wave everywhere (#Luminz) — the same

@@ -308,7 +308,7 @@ open class MainActivityRuntime : ComponentActivity() {
 
         /**
          * Probe the resolved POSIX path for emucore-compatible write
-         * access. Creates a `.armsx2-write-probe` file, deletes it,
+         * access. Creates a `.armsx3-write-probe` file, deletes it,
          * returns true on success.
          *
          * Catches the scoped-storage trap: Android lets the SAF tree-URI
@@ -322,7 +322,7 @@ open class MainActivityRuntime : ComponentActivity() {
                 val dir = File(posixPath)
                 if (!dir.exists() && !dir.mkdirs()) return false
                 if (!dir.isDirectory) return false
-                val probe = File(dir, ".armsx2-write-probe")
+                val probe = File(dir, ".armsx3-write-probe")
                 val ok = probe.createNewFile()
                 if (ok) probe.delete()
                 ok

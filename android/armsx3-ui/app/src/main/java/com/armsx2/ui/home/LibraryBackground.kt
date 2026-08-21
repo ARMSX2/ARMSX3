@@ -19,6 +19,8 @@ object LibraryBackground {
     private const val PREF_ANIM = "library.background.animated2d"
     private const val PREF_FLURRY = "library.background.flurry"
     private const val PREF_FLURRY_PRESET = "library.background.flurry.preset"
+    private const val PREF_SAVER_KIND = "library_saver_kind"
+    private const val PREF_RSS_PRESET = "library_rss_preset"
     val uri = mutableStateOf<String?>(null)
 
     /**
@@ -44,6 +46,20 @@ object LibraryBackground {
     /** Preset for the above. 99 = pick one at random each time the library opens. */
     val flurryPreset = mutableStateOf(99)
 
+    /**
+     * Which saver [flurry] runs: 0 = Flurry, then the Really Slick savers in the order of the
+     * table in savers_jni.cpp -- 1 = Flux, 2 = Plasma, 3 = SolarWinds, 4 = Hyperspace, 5 = Lattice, 6 = Skyrocket.
+     *
+     * Flurry is Calum Robinson's (BSD-3-clause); the rest are Terry Welsh's Really Slick
+     * Screensavers (GPL-2.0-or-later). They share the toggle above because only one background
+     * can run at a time, and a single "animated background: on" reads better than one switch
+     * per saver.
+     */
+    val saverKind = mutableStateOf(0)
+
+    /** Preset for whichever Really Slick saver is selected, 1..6. 99 = pick one each time. */
+    val rssPreset = mutableStateOf(99)
+
     private var loaded = false
 
     fun ensureLoaded() {
@@ -53,6 +69,8 @@ object LibraryBackground {
         animated2D.value = runCatching { MainActivityRuntime.prefs.getBoolean(PREF_ANIM, false) }.getOrDefault(false)
         flurry.value = runCatching { MainActivityRuntime.prefs.getBoolean(PREF_FLURRY, false) }.getOrDefault(false)
         flurryPreset.value = runCatching { MainActivityRuntime.prefs.getInt(PREF_FLURRY_PRESET, 99) }.getOrDefault(99)
+        saverKind.value = runCatching { MainActivityRuntime.prefs.getInt(PREF_SAVER_KIND, 0) }.getOrDefault(0)
+        rssPreset.value = runCatching { MainActivityRuntime.prefs.getInt(PREF_RSS_PRESET, 99) }.getOrDefault(99)
     }
 
     fun setAnimated2D(on: Boolean) {
@@ -68,6 +86,29 @@ object LibraryBackground {
     fun setFlurryPreset(preset: Int) {
         flurryPreset.value = preset
         runCatching { MainActivityRuntime.prefs.edit().putInt(PREF_FLURRY_PRESET, preset).apply() }
+    }
+
+    fun setSaverKind(kind: Int) {
+        saverKind.value = kind
+        runCatching { MainActivityRuntime.prefs.edit().putInt(PREF_SAVER_KIND, kind).apply() }
+    }
+
+    fun setRssPreset(preset: Int) {
+        rssPreset.value = preset
+        runCatching { MainActivityRuntime.prefs.edit().putInt(PREF_RSS_PRESET, preset).apply() }
+    }
+
+    /**
+     * What the library should actually run right now, with 99 ("random") resolved to a concrete
+     * preset. Called once when the view is created, so random means once per library open
+     * rather than once per frame.
+     */
+    fun currentSpec(): SaverSpec = when (val kind = saverKind.value) {
+        in 1..6 -> SaverSpec.Rss(
+            effect = kind - 1,  // indexes the table in savers_jni.cpp
+            preset = rssPreset.value.let { if (it in 1..6) it else (1..6).random() },
+        )
+        else -> SaverSpec.Flurry(flurryPreset.value)
     }
 
     fun set(context: Context, value: Uri) {

@@ -114,7 +114,12 @@ object ConfigStore {
     private const val KEY_CAS_MODE_BILINEAR = "config.migrated.casModeBilinear"
     // Mirror of the settings, written INTO the data folder so a later fresh install that
     // reuses the same folder can restore them (SharedPreferences don't survive uninstall).
-    private const val BACKUP_FILENAME = "armsx2-settings.json"
+    private const val BACKUP_FILENAME = "armsx3-settings.json"
+
+    // What the mirror was called when this app was still branded ARMSX2 (issue #82). Anyone
+    // upgrading has one of these in their data folder and nothing else, so it stays readable
+    // forever -- it is the only copy of their settings after a reinstall.
+    private const val LEGACY_BACKUP_FILENAME = "armsx2-settings.json"
     private fun keyForGame(serial: String) = "config.game.$serial"
 
     // Memoized result of loadGlobal(). The function below is a JSON parse plus every
@@ -868,6 +873,14 @@ object ConfigStore {
         return File(root, BACKUP_FILENAME)
     }
 
+    /** The mirror to READ: the current name, or the ARMSX2-era one if that is all there is. */
+    private fun backupFileForRead(): File? {
+        val current = backupFile() ?: return null
+        if (current.exists()) return current
+        val legacy = File(current.parentFile, LEGACY_BACKUP_FILENAME)
+        return if (legacy.exists()) legacy else current
+    }
+
     /** Write the in-folder settings mirror (global + every per-game blob). Cheap; called
      *  on each save. Silently no-ops until the data root is known. */
     private fun writeBackupMirror() {
@@ -902,7 +915,8 @@ object ConfigStore {
         cachedGlobal = null
 
         // (1) Lossless restore from the in-folder mirror (written by a prior new-UI install).
-        val mirror = backupFile()
+        // Reads the ARMSX2-era name too: for anyone upgrading it is the only copy there is.
+        val mirror = backupFileForRead()
         if (mirror != null && mirror.exists() && mirror.length() > 0L) {
             val restored = runCatching {
                 val root = JSONObject(mirror.readText())
@@ -942,7 +956,12 @@ object ConfigStore {
      * Games, firmware, save data, save states and covers are untouched.
      */
     fun purgeAllSettingsFiles() {
+        // Both names -- leaving the old one behind would silently re-seed the settings this
+        // just deleted, the next time reconcileReusedFolder runs.
         runCatching { backupFile()?.delete() }
+        runCatching {
+            backupFile()?.parentFile?.let { File(it, LEGACY_BACKUP_FILENAME).delete() }
+        }
         val root = MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return
         runCatching { File(root, "gamesettings").deleteRecursively() }
     }

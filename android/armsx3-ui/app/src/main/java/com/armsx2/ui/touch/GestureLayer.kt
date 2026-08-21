@@ -67,7 +67,7 @@ fun GestureLayer(widthPx: Float, heightPx: Float) {
                     // see the input-timing note in MainActivityRuntime. 40ms comfortably clears one
                     // 60Hz sample without feeling sticky.
                     MainActivityRuntime.instance?.let {
-                        kotlin.concurrent.thread(name = "armsx2-gesture-pulse") {
+                        kotlin.concurrent.thread(name = "armsx3-gesture-pulse") {
                             runCatching {
                                 com.armsx3.NativeApp.setPadButton(code, 0, true)
                                 Thread.sleep(40)

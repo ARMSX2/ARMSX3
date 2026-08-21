@@ -75,7 +75,7 @@ object CoverRegionIndex {
         Thread {
             runCatching { build(context) }
             building = false
-        }.apply { isDaemon = true; name = "armsx2-cover-region" }.start()
+        }.apply { isDaemon = true; name = "armsx3-cover-region" }.start()
     }
 
     private fun build(context: Context) {

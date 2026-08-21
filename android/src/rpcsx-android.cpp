@@ -4540,8 +4540,21 @@ static bool installPkg(JNIEnv *env, std::vector<fs::file> &&files,
   }};
 
   package_install_result result = {};
-  named_thread worker("PKG Installer", [&readers, &result, &bootable_paths] {
+
+  // Publishes `result`, which is NOT safe to read without it.
+  //
+  // package_install_result is an enum followed by three std::strings, and the worker assigns
+  // the whole struct at once. Struct assignment writes members in order, so `error` lands
+  // BEFORE the strings -- which meant the poll below could see a failure and then read
+  // version.expected while it was still being constructed, i.e. a std::string mid-assignment.
+  // That is a torn pointer, and reading it is a segfault, not a wrong message. The window is
+  // structural rather than theoretical: the failure branch reads exactly the members written
+  // last. Acquire/release makes the strings visible before `finished` ever reads true.
+  std::atomic<bool> finished{false};
+
+  named_thread worker("PKG Installer", [&readers, &result, &bootable_paths, &finished] {
     result = package_reader::extract_data(readers, bootable_paths);
+    finished.store(true, std::memory_order_release);
     return result.error == package_install_result::error_type::no_error;
   });
 
@@ -4554,9 +4567,13 @@ static bool installPkg(JNIEnv *env, std::vector<fs::file> &&files,
   const jlong maxProgress = 10000;
 
   while (true) {
+    // Read once per pass: everything below depends on extraction having finished, and on
+    // `result` being fully published when it has.
+    const bool done = finished.load(std::memory_order_acquire);
+
     std::uint64_t totalProgress = 0;
     for (auto &reader : readers) {
-      if (result.error != package_install_result::error_type::no_error) {
+      if (done && result.error != package_install_result::error_type::no_error) {
         // Say WHICH failure. app_version is not a crash and not a bad file: it is the
         // installer correctly refusing a game update when the base game is not installed
         // yet, or when the update does not match the version that is. Desktop RPCS3 puts
@@ -4591,7 +4608,9 @@ static bool installPkg(JNIEnv *env, std::vector<fs::file> &&files,
       totalProgress += reader.get_progress(maxProgress);
     }
 
-    if (totalProgress == maxProgress * readers.size()) {
+    // Finishing is what the worker says, not what the progress counters add up to. A reader
+    // that stops short would otherwise spin here forever.
+    if (done || totalProgress == maxProgress * readers.size()) {
       break;
     }
 
