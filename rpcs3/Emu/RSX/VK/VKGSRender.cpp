@@ -1256,9 +1256,7 @@ void VKGSRender::check_present_status()
 	while (!m_queued_frames.empty())
 	{
 		auto ctx = m_queued_frames.front();
-		// Speculative: this walks the queue looking for frames that have already finished and
-		// gives up on the first that has not, so it must not be the thing that waits for one.
-		if (!ctx->swap_command_buffer->poke(false))
+		if (!ctx->swap_command_buffer->poke())
 		{
 			return;
 		}
