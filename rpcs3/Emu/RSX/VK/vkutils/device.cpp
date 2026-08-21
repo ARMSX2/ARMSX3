@@ -1,4 +1,5 @@
 #include "device.h"
+#include <cstdlib>
 #include <algorithm>
 #include "Utilities/File.h"
 #include "util/sysinfo.hpp"
@@ -1217,6 +1218,21 @@ namespace vk
 	{
 		m_pipeline_cache = VK_NULL_HANDLE;
 		m_pipeline_cache_saved_size = 0;
+
+		// ARMSX3_PIPELINE_CACHE=0 turns this off, via driver_env.txt, so a suspected regression
+		// can be A/B'd on one build instead of bisecting releases.
+		//
+		// The reason it is worth being able to switch off: the cache is shared by every thread
+		// that creates a pipeline, and there are up to eight of them during a shader cache load
+		// plus the async compiler workers during play. The spec permits concurrent use, but a
+		// driver still has to serialise its own inserts, and before this existed those threads
+		// shared no structure at all. If a build regresses on pipeline-heavy titles this is the
+		// first thing to eliminate.
+		if (const char* const env = std::getenv("ARMSX3_PIPELINE_CACHE"); env && env[0] == '0')
+		{
+			rsx_log.warning("vk: driver pipeline cache disabled by ARMSX3_PIPELINE_CACHE=0.");
+			return;
+		}
 
 		std::vector<u8> initial_data;
 		const std::string path = get_pipeline_cache_path();
