@@ -318,6 +318,14 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 
 	cmd->submit(submit_info);
 
+	// Flush before presenting, as the real present path does at its own present.
+	//
+	// submit() goes through queue_submit, which DEFERS to the offloader thread when multithreaded
+	// RSX is on. Presenting immediately then waits on a semaphore whose signal operation has not
+	// been submitted yet -- forbidden, and it hangs the present without ever returning the
+	// acquired image.
+	cmd->flush();
+
 	m_swapchain->present(present_sem, image);
 	return cmd;
 }
