@@ -624,7 +624,60 @@ void VKGSRender::queue_swap_request()
 		// begin before the frame it reads has finished -- the guarantee the wait was buying is
 		// now free.
 		retire_generated_blits();
-		generated = vk::frame_gen::generate(*m_device);
+		// Acquire the generated frames' images FIRST, then interpolate straight into them in one
+		// command buffer and one submit -- the shape the ARMSX2 driver uses.
+		//
+		// The old path submitted framegen's work and then a separate command buffer and submit
+		// per generated frame. Measured: the passes cost 4.1 ms of GPU time while adding 12 ms to
+		// the frame, so most of what frame generation cost was per-submit overhead rather than
+		// interpolation.
+		vk::frame_gen::generated_target targets[4] = {};
+		u32 target_indices[4] = {};
+		u32 acquired = 0;
+
+		for (u32 i = 0; i < framegen_frames && i < std::size(targets); ++i)
+		{
+			if (m_framegen_acquire_sems.size() <= i)
+			{
+				VkSemaphoreCreateInfo sem_info = {};
+				sem_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+				VkSemaphore a = VK_NULL_HANDLE, pr = VK_NULL_HANDLE;
+
+				if (vkCreateSemaphore(*m_device, &sem_info, nullptr, &a) != VK_SUCCESS ||
+					vkCreateSemaphore(*m_device, &sem_info, nullptr, &pr) != VK_SUCCESS)
+				{
+					break;
+				}
+
+				m_framegen_acquire_sems.push_back(a);
+				m_framegen_present_sems.push_back(pr);
+			}
+
+			u32 image = umax;
+
+			// Zero timeout: if nothing is free the display is keeping up, and waiting for one
+			// would cost latency rather than adding smoothness.
+			if (m_swapchain->acquire_next_swapchain_image(m_framegen_acquire_sems[i], 0ull, &image) != VK_SUCCESS ||
+				image == umax)
+			{
+				break;
+			}
+
+			targets[acquired] = { m_swapchain->get_image(image), m_framegen_acquire_sems[i],
+				m_framegen_present_sems[i] };
+			target_indices[acquired] = image;
+			acquired++;
+		}
+
+		generated = vk::frame_gen::generate_into_targets(*m_device, targets, acquired);
+
+		// Present them here, in order: they sit between the previous real frame and this one, so
+		// they go out before it.
+		for (u32 i = 0; i < generated; ++i)
+		{
+			m_swapchain->present(targets[i].present, target_indices[i]);
+		}
 	}
 
 	// Present the generated frames before the real one.
@@ -654,7 +707,9 @@ void VKGSRender::queue_swap_request()
 
 	s_fg_asked += generated;
 
-	for (u32 i = 0; i < generated; ++i)
+	// Generated frames are presented above, straight out of the single submit. This loop is kept
+	// for the pipelined path, which is disabled, and must not present them a second time.
+	for (u32 i = 0; i < 0u; ++i)
 	{
 		auto* cb = present_generated_frame(vk::frame_gen::generated_image(i));
 

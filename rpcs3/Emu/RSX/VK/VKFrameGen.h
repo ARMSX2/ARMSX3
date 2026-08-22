@@ -178,6 +178,26 @@ namespace vk::frame_gen
 	// Handle of generated image i, for blitting into a swapchain image.
 	VkImage generated_image(u32 index);
 
+	/// A swapchain image acquired for a generated frame, with the semaphores that order it.
+	///
+	/// ARMSX2 records the interpolation AND the copies into the acquired images in ONE command
+	/// buffer and issues ONE submit; this is the shape that makes that possible here. The
+	/// measurement that justified it: the passes cost 4.1 ms of GPU time and were adding 12 ms to
+	/// the frame, so roughly 8 ms per frame was submission overhead from doing a command buffer
+	/// and a submit per generated frame.
+	struct generated_target
+	{
+		VkImage image = VK_NULL_HANDLE;
+		VkSemaphore acquire = VK_NULL_HANDLE;
+		VkSemaphore present = VK_NULL_HANDLE;
+	};
+
+	/// Interpolate and write straight into [targets], in one command buffer and one submit.
+	///
+	/// Waits on every target's acquire semaphore and signals its present semaphore, so the caller
+	/// only has to issue the presents. Returns how many targets were actually written.
+	u32 generate_into_targets(const vk::render_device& dev, const generated_target* targets, u32 count);
+
 	// Frames per second actually reaching the display, or 0 when frame generation is not running.
 	//
 	// Exists because the FPS counter cannot answer "is this working": it reports the rate the GAME

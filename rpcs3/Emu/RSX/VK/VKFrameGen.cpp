@@ -744,6 +744,11 @@ namespace vk::frame_gen
 			VkCommandBuffer cmd[SLOTS] = {};
 			VkFence fence[SLOTS] = {};
 			bool slot_submitted[SLOTS] = {};
+
+			// Timestamps around the passes. This is the number every performance theory tonight
+			// was a substitute for: what the interpolation actually costs the GPU per frame.
+			VkQueryPool query_pool = VK_NULL_HANDLE;
+			f32 timestamp_period = 0.f;
 			u64 frame_index = 0;
 			VkQueue queue = VK_NULL_HANDLE;
 
@@ -1083,6 +1088,12 @@ namespace vk::frame_gen
 				}
 			}
 
+			if (g_native.query_pool != VK_NULL_HANDLE && vk::g_render_device)
+			{
+				vkDestroyQueryPool(*vk::g_render_device, g_native.query_pool, nullptr);
+				g_native.query_pool = VK_NULL_HANDLE;
+			}
+
 			if (g_native.vma != VK_NULL_HANDLE)
 			{
 				vmaDestroyAllocator(g_native.vma);
@@ -1185,6 +1196,23 @@ namespace vk::frame_gen
 			// orders them and no CPU wait is needed between the two.
 			g_native.queue = dev.get_graphics_queue();
 
+			{
+				VkQueryPoolCreateInfo qci = {};
+				qci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+				qci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+				qci.queryCount = native_stack::SLOTS * 2;
+
+				VkPhysicalDeviceProperties props{};
+				vkGetPhysicalDeviceProperties(dev.gpu(), &props);
+				g_native.timestamp_period = props.limits.timestampPeriod;
+
+				if (g_native.timestamp_period <= 0.f ||
+					vkCreateQueryPool(dev, &qci, nullptr, &g_native.query_pool) != VK_SUCCESS)
+				{
+					g_native.query_pool = VK_NULL_HANDLE;
+				}
+			}
+
 			g_native.allocator = std::make_unique<Vulkan::MemoryAllocator>(g_native.vma);
 			g_native.device = std::make_unique<Vulkan::Device>(&dev);
 
@@ -1199,6 +1227,215 @@ namespace vk::frame_gen
 			g_native.framegen = std::make_unique<Vulkan::FrameGen>(*g_native.allocator, &dev);
 			return true;
 		}
+	}
+
+	u32 generate_into_targets(const vk::render_device& dev, const generated_target* targets, u32 count)
+	{
+		// One command buffer, one submit -- Process, every GenerateInto, and every copy into the
+		// acquired swapchain images, exactly as the ARMSX2 driver does it. The previous shape
+		// submitted framegen's work and then a separate command buffer per generated frame; the
+		// passes measured 4.1 ms of GPU time while adding 12 ms to the frame, and that gap was
+		// the per-submit overhead.
+		if (!g_native.valid() || !g_source_image || !targets || !count)
+		{
+			return 0;
+		}
+
+		if (!g_plan_ready.exchange(false))
+		{
+			return 0;
+		}
+
+		const u32 slot = g_native.slot();
+
+		if (g_native.slot_submitted[slot])
+		{
+			if (vkWaitForFences(dev, 1, &g_native.fence[slot], VK_TRUE, 1'000'000'000ull) != VK_SUCCESS)
+			{
+				disable("frame generation timed out");
+				return 0;
+			}
+
+			g_native.slot_submitted[slot] = false;
+
+			if (g_native.query_pool != VK_NULL_HANDLE)
+			{
+				u64 stamps[2] = {};
+
+				if (vkGetQueryPoolResults(dev, g_native.query_pool, slot * 2, 2, sizeof(stamps),
+						stamps, sizeof(u64), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS &&
+					stamps[1] > stamps[0])
+				{
+					static u64 s_window = 0;
+					static f64 s_sum = 0.0, s_peak = 0.0;
+					static u32 s_count = 0;
+
+					const f64 ms = (stamps[1] - stamps[0]) * g_native.timestamp_period / 1'000'000.0;
+					s_sum += ms;
+					s_peak = std::max(s_peak, ms);
+					s_count++;
+
+					if (const u64 now = get_system_time(); now - s_window > 1'000'000)
+					{
+						if (s_window && s_count)
+						{
+							framegen_log.notice("GPU cost: avg %.2f ms/frame, peak %.2f ms, over %u frames",
+								s_sum / s_count, s_peak, s_count);
+						}
+
+						s_window = now;
+						s_sum = s_peak = 0.0;
+						s_count = 0;
+					}
+				}
+			}
+		}
+
+		vkResetCommandBuffer(g_native.cmd[slot], 0);
+
+		VkCommandBufferBeginInfo begin = {};
+		begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+		if (vkBeginCommandBuffer(g_native.cmd[slot], &begin) != VK_SUCCESS)
+		{
+			disable("could not begin the frame generation command buffer");
+			return 0;
+		}
+
+		if (g_native.query_pool != VK_NULL_HANDLE)
+		{
+			vkCmdResetQueryPool(g_native.cmd[slot], g_native.query_pool, slot * 2, 2);
+			vkCmdWriteTimestamp(g_native.cmd[slot], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+				g_native.query_pool, slot * 2);
+		}
+
+		const Vulkan::vk::CommandBuffer cmdbuf{g_native.cmd[slot]};
+		const VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+		auto barrier = [&](VkImage image, VkImageLayout from, VkImageLayout to,
+			VkAccessFlags src_access, VkAccessFlags dst_access,
+			VkPipelineStageFlags src_stage, VkPipelineStageFlags dst_stage)
+		{
+			VkImageMemoryBarrier b = {};
+			b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+			b.oldLayout = from;
+			b.newLayout = to;
+			b.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			b.image = image;
+			b.subresourceRange = range;
+			b.srcAccessMask = src_access;
+			b.dstAccessMask = dst_access;
+			vkCmdPipelineBarrier(g_native.cmd[slot], src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &b);
+		};
+
+		barrier(g_source_image, g_source_layout, VK_IMAGE_LAYOUT_GENERAL,
+			VK_ACCESS_MEMORY_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT,
+			VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+
+		const VkExtent2D extent{g_shared_w, g_shared_h};
+
+		g_native.framegen->Process(*g_native.device, cmdbuf, g_source_image,
+			g_shared_out[0].view(), extent, VK_FORMAT_R8G8B8A8_UNORM, extent);
+
+		const size_t wanted = g_native.framegen->WantedGenerations(g_context_outputs);
+		const size_t available = g_native.framegen->GeneratedFrameCount();
+		const u32 generations = static_cast<u32>(std::min({wanted, available,
+			static_cast<size_t>(g_context_outputs), static_cast<size_t>(count)}));
+
+		g_planned_generations = generations;
+
+		for (u32 i = 0; i < generations; ++i)
+		{
+			g_native.framegen->GenerateInto(*g_native.device, cmdbuf, g_shared_out[i].handle(),
+				g_shared_out[i].view(), i);
+
+			// Straight into the acquired swapchain image, in this same buffer.
+			barrier(g_shared_out[i].handle(), VK_IMAGE_LAYOUT_GENERAL,
+				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_SHADER_WRITE_BIT,
+				VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+				VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+			barrier(targets[i].image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+				VK_PIPELINE_STAGE_TRANSFER_BIT);
+
+			VkImageCopy region = {};
+			region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+			region.dstSubresource = region.srcSubresource;
+			region.extent = { g_shared_w, g_shared_h, 1 };
+
+			vkCmdCopyImage(g_native.cmd[slot], g_shared_out[i].handle(),
+				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, targets[i].image,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+			barrier(targets[i].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT,
+				VK_ACCESS_MEMORY_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+				VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+		}
+
+		barrier(g_source_image, VK_IMAGE_LAYOUT_GENERAL, g_source_layout,
+			VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+
+		if (g_native.query_pool != VK_NULL_HANDLE)
+		{
+			vkCmdWriteTimestamp(g_native.cmd[slot], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+				g_native.query_pool, slot * 2 + 1);
+		}
+
+		if (vkEndCommandBuffer(g_native.cmd[slot]) != VK_SUCCESS)
+		{
+			disable("could not end the frame generation command buffer");
+			return 0;
+		}
+
+		// ONE submit: waits on every acquire, signals every present.
+		VkSemaphore waits[8] = {};
+		VkPipelineStageFlags wait_stages[8] = {};
+		VkSemaphore signals[8] = {};
+		u32 wait_count = 0, signal_count = 0;
+
+		for (u32 i = 0; i < generations && wait_count < 8; ++i)
+		{
+			if (targets[i].acquire != VK_NULL_HANDLE)
+			{
+				waits[wait_count] = targets[i].acquire;
+				wait_stages[wait_count++] = VK_PIPELINE_STAGE_TRANSFER_BIT;
+			}
+
+			if (targets[i].present != VK_NULL_HANDLE && signal_count < 8)
+			{
+				signals[signal_count++] = targets[i].present;
+			}
+		}
+
+		VkSubmitInfo submit = {};
+		submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		submit.commandBufferCount = 1;
+		submit.pCommandBuffers = &g_native.cmd[slot];
+		submit.waitSemaphoreCount = wait_count;
+		submit.pWaitSemaphores = waits;
+		submit.pWaitDstStageMask = wait_stages;
+		submit.signalSemaphoreCount = signal_count;
+		submit.pSignalSemaphores = signals;
+
+		vkResetFences(dev, 1, &g_native.fence[slot]);
+
+		if (vkQueueSubmit(g_native.queue, 1, &submit, g_native.fence[slot]) != VK_SUCCESS)
+		{
+			disable("frame generation submit failed");
+			return 0;
+		}
+
+		g_native.slot_submitted[slot] = true;
+		g_native.frame_index++;
+
+		return generations;
 	}
 
 	u32 generate(const vk::render_device& dev)
@@ -1233,6 +1470,41 @@ namespace vk::frame_gen
 			}
 
 			g_native.slot_submitted[slot] = false;
+
+			// Read this slot's timestamps now that its fence has signalled.
+			if (g_native.query_pool != VK_NULL_HANDLE)
+			{
+				u64 stamps[2] = {};
+
+				if (vkGetQueryPoolResults(dev, g_native.query_pool, slot * 2, 2, sizeof(stamps),
+						stamps, sizeof(u64), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS &&
+					stamps[1] > stamps[0])
+				{
+					static u64 s_window = 0;
+					static f64 s_sum = 0.0;
+					static f64 s_peak = 0.0;
+					static u32 s_count = 0;
+
+					const f64 ms = (stamps[1] - stamps[0]) * g_native.timestamp_period / 1'000'000.0;
+					s_sum += ms;
+					s_peak = std::max(s_peak, ms);
+					s_count++;
+
+					if (const u64 now = get_system_time(); now - s_window > 1'000'000)
+					{
+						if (s_window && s_count)
+						{
+							framegen_log.notice("GPU cost: avg %.2f ms/frame, peak %.2f ms, over %u frames",
+								s_sum / s_count, s_peak, s_count);
+						}
+
+						s_window = now;
+						s_sum = 0.0;
+						s_peak = 0.0;
+						s_count = 0;
+					}
+				}
+			}
 		}
 
 		vkResetCommandBuffer(g_native.cmd[slot], 0);
@@ -1245,6 +1517,13 @@ namespace vk::frame_gen
 		{
 			disable("could not begin the frame generation command buffer");
 			return 0;
+		}
+
+		if (g_native.query_pool != VK_NULL_HANDLE)
+		{
+			vkCmdResetQueryPool(g_native.cmd[slot], g_native.query_pool, slot * 2, 2);
+			vkCmdWriteTimestamp(g_native.cmd[slot], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+				g_native.query_pool, slot * 2);
 		}
 
 		const Vulkan::vk::CommandBuffer cmdbuf{g_native.cmd[slot]};
@@ -1295,6 +1574,12 @@ namespace vk::frame_gen
 		{
 			g_native.framegen->GenerateInto(*g_native.device, cmdbuf, g_shared_out[i].handle(),
 				g_shared_out[i].view(), i);
+		}
+
+		if (g_native.query_pool != VK_NULL_HANDLE)
+		{
+			vkCmdWriteTimestamp(g_native.cmd[slot], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+				g_native.query_pool, slot * 2 + 1);
 		}
 
 		if (vkEndCommandBuffer(g_native.cmd[slot]) != VK_SUCCESS)
