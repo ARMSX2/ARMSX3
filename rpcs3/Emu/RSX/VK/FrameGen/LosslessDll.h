@@ -68,7 +68,10 @@ constexpr u32 NATIVE_FP32_OFFSET = 98;
 
 [[nodiscard]] LosslessStatus GetInstalledLosslessStatus();
 
-[[nodiscard]] LosslessStatus BuildShaderCache();
+/// [allow_fp16]/[prefer_fp16] MUST match what LsfgShaders asks for: the cache header stores them
+/// and rejects an entry whose flags differ, so a mismatch means the cache written at import can
+/// never satisfy the read that follows it.
+[[nodiscard]] LosslessStatus BuildShaderCache(bool allow_fp16, bool prefer_fp16);
 
 [[nodiscard]] LosslessStatus LoadShaderModules(ShaderModules& out_modules,
                                               bool allow_fp16 = false,

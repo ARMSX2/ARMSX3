@@ -257,6 +257,11 @@ namespace Vulkan
 		[[nodiscard]] bool IsVulkanMemoryModelSupported() const { return m_vulkan_memory_model; }
 		[[nodiscard]] bool HasNullDescriptor() const { return m_null_descriptor; }
 
+		/// Whether the fp16 shader family may be used. Eden gates on this; ARMSX2 hardcodes it
+		/// false because PCSX2 never enables shaderFloat16 at device creation. RPCS3 does enable
+		/// it where the driver is trusted, so the cheaper variant is available here.
+		[[nodiscard]] bool IsFloat16Supported() const { return m_float16; }
+
 		[[nodiscard]] const ::vk::render_device* Raw() const { return m_device; }
 
 	private:
@@ -264,6 +269,7 @@ namespace Vulkan
 		vk::LogicalDevice m_logical;
 		bool m_vulkan_memory_model = false;
 		bool m_null_descriptor = false;
+		bool m_float16 = false;
 	};
 
 	/// Adapter over PCSX2's VMA allocator.

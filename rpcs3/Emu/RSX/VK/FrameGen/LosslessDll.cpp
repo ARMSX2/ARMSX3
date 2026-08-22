@@ -698,25 +698,16 @@ LosslessStatus LoadShaderModules(ShaderModules& out_modules, bool allow_fp16, bo
     return LosslessStatus::Ok;
 }
 
-LosslessStatus BuildShaderCache() {
+LosslessStatus BuildShaderCache(bool allow_fp16, bool prefer_fp16) {
     ShaderModules modules;
 
-    // The SAME flags LsfgShaders reads with.
-    //
-    // This built with allow_fp16 = true while the only consumer asks for (false, false), and the
-    // cache header stores those flags and is rejected when they differ -- so the cache written
-    // here could never satisfy the read that follows it. On a desktop that is invisible: the DLL
-    // is still there, LoadShaderModules falls through to re-parsing the executable, and the
-    // cache is merely dead weight rewritten every launch. On Android the source is a copy in app
-    // cache that the system may clear, so there is nothing to fall through TO, and frame
-    // generation reports "no shaders" against a cache file sitting right next to it.
-    //
-    // Kept as a named pair rather than literals so the next person changing one changes both.
-    constexpr bool allow_fp16 = false;
-    constexpr bool prefer_fp16 = false;
-
+    // The caller passes the SAME flags LsfgShaders reads with. This used to hardcode
+    // allow_fp16 = true against a consumer asking for false, so the cache it wrote was rejected
+    // on every read -- invisible on a desktop, where the source is still there to re-parse, and
+    // fatal here, where it is a copy in app cache the system may have cleared.
     return LoadShaderModules(modules, allow_fp16, prefer_fp16);
 }
+
 
 // PORT: Eden's RemoveInstalledLosslessDll() also deleted the DLL itself. That is safe there
 // because Eden owns the file — it lives in an app-managed folder. Here the path is whatever

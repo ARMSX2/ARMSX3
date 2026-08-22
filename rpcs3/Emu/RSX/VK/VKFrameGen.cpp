@@ -408,7 +408,17 @@ namespace vk::frame_gen
 		// and keeping it means the cache can be rebuilt later without asking the user again.
 		g_cfg.video.frame_generation_dll_path.from_string(dll_path);
 
-		const VideoCore::FrameGen::LosslessStatus rc = VideoCore::FrameGen::BuildShaderCache();
+		// Built with the flags the passes will read with, taken from the device that will run
+		// them. Without a live device -- importing from the settings screen before a game has
+		// started -- fp16 is assumed, because RPCS3 only reports it where it also enabled it and
+		// clears it on the Adreno drivers that cannot compile it, so it is the common case. A
+		// device that disagrees rebuilds the cache on first use.
+		const bool allow_fp16 = vk::g_render_device
+			? vk::g_render_device->get_shader_types_support().allow_float16
+			: true;
+
+		const VideoCore::FrameGen::LosslessStatus rc =
+			VideoCore::FrameGen::BuildShaderCache(allow_fp16, allow_fp16);
 
 		if (rc != VideoCore::FrameGen::LosslessStatus::Ok)
 		{

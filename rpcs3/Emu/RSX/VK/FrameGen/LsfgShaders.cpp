@@ -24,15 +24,17 @@ LsfgShaders::LsfgShaders(const Device& device) {
         return;
     }
 
-    // PORT: Eden reads device.IsFloat16Supported() and the frame_gen_fp16 user setting here.
-    // Neither exists for us: the compat shim's Device answers three queries and float16 is not
-    // one of them, and PCSX2 has no fp16 toggle in GSConfig. More to the point, PCSX2's Vulkan
-    // backend never asks for VK_KHR_shader_float16_int8 when it creates the logical device, so a
-    // shader module declaring the Float16 capability would be invalid usage on it regardless of
-    // what the physical device reports. Loading the fp32 variant is therefore the only correct
-    // choice here; restore Eden's two lines if PCSX2 ever enables the feature.
-    const bool allow_fp16 = false;
-    const bool prefer_fp16 = false;
+    // PORT: Eden gates on device.IsFloat16Supported(); ARMSX2 hardcodes both false because
+    // PCSX2 never asks for shaderFloat16 when it creates its logical device, so a module
+    // declaring the Float16 capability would be invalid usage there. RPCS3 DOES enable it where
+    // the driver is trusted -- and it clears its own flag on the Adreno drivers whose compiler
+    // rejects native float16, so asking the device is safe.
+    //
+    // This matters more than it looks: copying ARMSX2's hardcode ran the fp32 family on hardware
+    // that supports fp16, which on Adreno is roughly half the compute throughput. Measured on an
+    // Adreno 740, frame generation took the real frame rate from ~60 to ~25.
+    const bool allow_fp16 = device.IsFloat16Supported();
+    const bool prefer_fp16 = allow_fp16;
 
     VideoCore::FrameGen::ShaderModules code;
     if (VideoCore::FrameGen::LoadShaderModules(code, allow_fp16, prefer_fp16) !=

@@ -278,6 +278,11 @@ namespace Vulkan
 		// cannot disagree here. A part reporting neither simply does not get frame generation.
 		m_vulkan_memory_model = dev->get_vulkan_memory_model_support();
 		m_null_descriptor = dev->get_null_descriptor_support();
+
+		// RPCS3's own flag, which already accounts for the Adreno drivers whose compiler rejects
+		// native float16 -- it clears the bit AND then does not enable shaderFloat16 at device
+		// creation, so this cannot claim a capability the device does not have.
+		m_float16 = dev->get_shader_types_support().allow_float16;
 	}
 
 	// --- MemoryAllocator -------------------------------------------------------------------
