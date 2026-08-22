@@ -668,6 +668,19 @@ namespace vk::frame_gen
 		// What the pacer asked for this frame, decided at Process time so its clock stays regular.
 		u32 g_planned_generations = 0;
 
+		// Consumed by generate(), so one plan produces one set of generated frames.
+		//
+		// NOT g_recorded_capture: commit_capture() exchanges that one to false, and it runs
+		// before generate() on the pipelined path -- so generate() saw a flag that had already
+		// been eaten and returned 0 every frame, which reads as frame generation stuck on
+		// "starting" with no error anywhere.
+		std::atomic<bool> g_plan_ready{false};
+
+		// The frame Process() reads, remembered at present time and used from framegen's own
+		// command buffer afterwards -- the same image ARMSX2 hands its passes.
+		VkImage g_source_image = VK_NULL_HANDLE;
+		VkImageLayout g_source_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+
 		// Last computed display rate, for the on-screen overlay. Written once a second by
 		// generate() and read by the RSX thread; a torn read of a float used for display
 		// costs nothing worth a lock.
@@ -912,46 +925,18 @@ namespace vk::frame_gen
 			return false;
 		}
 
-		// Process the REAL presented image, in the frame's OWN command buffer.
+		// Nothing is recorded into the frame's command buffer here.
 		//
-		// This used to blit the frame into a capture image and hand that to Process later, from a
-		// separate submission. Process copies the source into its chain itself
-		// (FrameGen.cpp, CopyPresentedFrame), so that made two full-frame copies per frame where
-		// ARMSX2 makes one -- and the capture only existed because generation happened after the
-		// swapchain image was gone. Doing it here, where the frame is finished and the image is
-		// still ours, removes both the copy and the reason for it.
+		// Process() WAS recorded here, to avoid the capture copy. That removed the copy and put
+		// the interpolation's GPU cost inside the frame's own submission instead -- which the
+		// present path waits on -- so it came straight off the real frame rate: 60fps content
+		// measured 24-28 with generation on. ARMSX2 runs Process in framegen's OWN command
+		// buffer, after the frame, against the same image, which costs neither the copy nor the
+		// frame. This does that: remember the image, do the work in generate().
+		g_source_image = src;
+		g_source_layout = src_layout;
+
 		const u64 started = get_system_time();
-
-		VkImageMemoryBarrier to_read = {};
-		to_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		to_read.oldLayout = src_layout;
-		to_read.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-		to_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		to_read.image = src;
-		to_read.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-		to_read.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-		to_read.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-			0, 0, nullptr, 0, nullptr, 1, &to_read);
-
-		const Vulkan::vk::CommandBuffer cmdbuf{static_cast<VkCommandBuffer>(cmd)};
-		const VkExtent2D extent{width, height};
-
-		g_native.framegen->Process(*g_native.device, cmdbuf, src, g_shared_out[0].view(),
-			extent, VK_FORMAT_R8G8B8A8_UNORM, extent);
-
-		VkImageMemoryBarrier from_read = to_read;
-		from_read.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-		from_read.newLayout = src_layout;
-		from_read.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-		from_read.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-			0, 0, nullptr, 0, nullptr, 1, &from_read);
 
 		// The pacer plans HERE, once per frame, unconditionally.
 		//
@@ -964,6 +949,7 @@ namespace vk::frame_gen
 			g_native.framegen->GeneratedFrameCount()));
 
 		g_recorded_capture.store(true);
+		g_plan_ready.store(true);
 		g_capture_ns += (get_system_time() - started) * 1000;
 		g_capture_count++;
 
@@ -1180,12 +1166,12 @@ namespace vk::frame_gen
 		// Only the generation half now. Process() already ran, in the frame's own command buffer,
 		// against the real presented image -- see capture_presented_frame. The pacer decided how
 		// many frames to make at the same time, on its own regular clock.
-		if (!g_planned_generations || !g_native.valid())
+		if (!g_planned_generations || !g_native.valid() || !g_source_image)
 		{
 			return 0;
 		}
 
-		if (!g_recorded_capture.exchange(false))
+		if (!g_plan_ready.exchange(false))
 		{
 			return 0;
 		}
@@ -1225,6 +1211,39 @@ namespace vk::frame_gen
 		}
 
 		const Vulkan::vk::CommandBuffer cmdbuf{g_native.cmd};
+
+		// Process the real presented image HERE, in framegen's own command buffer, exactly as
+		// the ARMSX2 driver does -- transition it to a readable layout, let Process copy it into
+		// its chain itself, and put it back. No capture copy, and none of this on the frame.
+		VkImageMemoryBarrier to_read = {};
+		to_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		to_read.oldLayout = g_source_layout;
+		to_read.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+		to_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_read.image = g_source_image;
+		to_read.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		to_read.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+		to_read.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+
+		vkCmdPipelineBarrier(g_native.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			0, 0, nullptr, 0, nullptr, 1, &to_read);
+
+		const VkExtent2D extent{g_shared_w, g_shared_h};
+
+		g_native.framegen->Process(*g_native.device, cmdbuf, g_source_image,
+			g_shared_out[0].view(), extent, VK_FORMAT_R8G8B8A8_UNORM, extent);
+
+		VkImageMemoryBarrier from_read = to_read;
+		from_read.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+		from_read.newLayout = g_source_layout;
+		from_read.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+		from_read.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+
+		vkCmdPipelineBarrier(g_native.cmd,
+			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &from_read);
 
 		for (u32 i = 0; i < generations; ++i)
 		{
