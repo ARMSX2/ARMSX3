@@ -1239,8 +1239,22 @@ namespace vk::frame_gen
 		{
 			// This slot's own fence, which is SLOTS frames old -- so in the normal case it is
 			// already signalled and this costs nothing.
-			if (vkWaitForFences(dev, 1, &g_native.fence[slot], VK_TRUE, 1'000'000'000ull) != VK_SUCCESS)
+			// Report the RESULT, not just "timed out".
+			//
+			// 60 of these arrived in 3 seconds against a 1-second timeout, which means the wait
+			// is failing immediately rather than expiring -- VK_ERROR_DEVICE_LOST is the obvious
+			// candidate and means something else entirely from a slow frame. Calling every
+			// non-success a timeout hid that.
+			const VkResult wait_result = vkWaitForFences(dev, 1, &g_native.fence[slot], VK_TRUE, 1'000'000'000ull);
+
+			if (wait_result != VK_SUCCESS)
 			{
+				if (g_native.timeouts == 0)
+				{
+					framegen_log.error("Fence wait returned %d (VK_TIMEOUT is 2, VK_ERROR_DEVICE_LOST is -4)",
+						static_cast<int>(wait_result));
+				}
+
 				// A timeout SKIPS this frame; it does not end frame generation. disable() is
 				// permanent for the session, so one stall during a load spike left the feature
 				// reading "failed" until the game was restarted with nothing actually wrong.
