@@ -637,7 +637,6 @@ namespace vk::frame_gen
 		// context, and a second context is not an answer either because a context carries three
 		// frames of pyramid history across presents, so rotating between contexts would feed each
 		// one a history with gaps in it.
-		shared_image g_shared_in[2];
 
 		// A capture becomes readable by framegen when it is SUBMITTED, not when it is recorded.
 		//
@@ -665,6 +664,9 @@ namespace vk::frame_gen
 		// Real frames committed since the last resize, saturating at 2. Interpolation needs a
 		// pair, so the first frame after a resize has nothing to pair with.
 		u32 g_captures = 0;
+
+		// What the pacer asked for this frame, decided at Process time so its clock stays regular.
+		u32 g_planned_generations = 0;
 
 		// Last computed display rate, for the on-screen overlay. Written once a second by
 		// generate() and read by the RSX thread; a torn read of a float used for display
@@ -724,8 +726,6 @@ namespace vk::frame_gen
 	{
 		release_generation_context();
 
-		g_shared_in[0].destroy();
-		g_shared_in[1].destroy();
 		g_shared_w = g_shared_h = 0;
 		g_shared_slot = 0;
 		g_committed_slot = 0;
@@ -755,186 +755,6 @@ namespace vk::frame_gen
 		g_fresh_capture.store(true);
 	}
 
-	bool capture_presented_frame(const vk::command_buffer& cmd, const vk::render_device& dev,
-		VkImage src, VkImageLayout src_layout, u32 width, u32 height)
-	{
-		// Unconditional probe, once a second.
-		//
-		// Deliberately before every early-out. Twice now the feature has produced no output and
-		// the cause was guessed rather than measured -- first the hook sat in a present branch the
-		// default path never takes, then it was unclear whether the setting reached the core at
-		// all. This answers both in one line: if it never prints, presentation is not calling us;
-		// if it prints with mode=0, the UI value is not arriving.
-		{
-			static u64 s_probe = 0;
-
-			if (const u64 now = get_system_time(); now - s_probe > 1'000'000)
-			{
-				s_probe = now;
-				framegen_log.notice("present hook reached: mode=%d src=%s %ux%u",
-					static_cast<int>(g_cfg.video.frame_generation.get()),
-					src ? "yes" : "null", width, height);
-			}
-		}
-
-		if (g_cfg.video.frame_generation == frame_generation_mode::off || !src || !width || !height)
-		{
-			// REVERTED 2026-08-19. Tearing framegen's resources down here -- release_shared_images()
-			// and shutdown() -- broke rendering outright: Arkham City lost its character models first,
-			// then almost everything. Adding a vkDeviceWaitIdle on our device before the release was
-			// not enough, so the in-flight capture blit was not the whole story and the damage reaches
-			// further than the shared images.
-			//
-			// The underlying complaint is real and still open: switching frame generation off does not
-			// give its memory back, so the frame rate does not recover until the game is restarted.
-			// But a renderer that draws nothing is worse than one that holds memory it is no longer
-			// using, so this goes back to leaking until the teardown can be done somewhere the present
-			// path is not mid-flight -- most likely at a device-idle point owned by the renderer,
-			// not from inside the capture hook.
-			return false;
-		}
-
-		// Every requirement, checked once and reported once.
-		//
-		// AHardwareBuffer is what OUR design needs to hand images to framegen's separate device.
-		// vulkanMemoryModel and nullDescriptor are what the Lossless Scaling SHADERS need and
-		// would still be required by a single-device implementation -- they are a property of the
-		// shaders, not of how the images get there.
-		//
-		// Reported once rather than per frame: this runs on the present path, and a device that
-		// fails the check fails it every single frame.
-		static bool s_reported = false;
-
-		const bool ahb = dev.get_external_memory_ahb_support();
-		const bool memory_model = dev.get_vulkan_memory_model_support();
-		const bool null_descriptor = dev.get_null_descriptor_support();
-
-		if (!ahb || !memory_model || !null_descriptor)
-		{
-			if (!s_reported)
-			{
-				s_reported = true;
-				framegen_log.error("Frame generation is not supported here -- AHardwareBuffer: %s,"
-					" vulkanMemoryModel: %s, nullDescriptor: %s",
-					ahb ? "yes" : "NO", memory_model ? "yes" : "NO", null_descriptor ? "yes" : "NO");
-			}
-
-			return false;
-		}
-
-		// Rebuild on resize. Cheap to test and the alternative is copying into an image of the
-		// wrong size, which vkCmdCopyImage will happily do and produce garbage from.
-		if (g_shared_w != width || g_shared_h != height)
-		{
-			release_shared_images();
-
-			if (!g_shared_in[0].create(dev, width, height, VK_FORMAT_R8G8B8A8_UNORM) ||
-				!g_shared_in[1].create(dev, width, height, VK_FORMAT_R8G8B8A8_UNORM))
-			{
-				release_shared_images();
-				framegen_log.error("Could not create shared images at %ux%u, frame generation is off", width, height);
-				return false;
-			}
-
-			g_shared_w = width;
-			g_shared_h = height;
-			g_captures = 0;
-			framegen_log.success("Shared images ready at %ux%u", width, height);
-		}
-
-		shared_image& dst = g_shared_in[g_shared_slot];
-		g_recorded_slot = g_shared_slot;
-		g_shared_slot ^= 1u;
-
-		const u64 started = get_system_time();
-
-		// The imported image starts UNDEFINED and has to reach TRANSFER_DST before the copy. It is
-		// not a vk::image, so the renderer's layout tracking does not apply -- the layout is
-		// carried on the shared_image itself.
-		VkImageMemoryBarrier to_dst = {};
-		to_dst.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		to_dst.oldLayout = dst.layout;
-		to_dst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-		to_dst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		to_dst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		to_dst.image = dst.handle();
-		to_dst.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-		to_dst.srcAccessMask = 0;
-		to_dst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-			0, 0, nullptr, 0, nullptr, 1, &to_dst);
-
-		// Move the source into TRANSFER_SRC by hand and put it back.
-		//
-		// The source is the SWAPCHAIN image, not a vk::image, so there is no push_layout/pop_layout
-		// and no renderer-side layout tracking to update -- the caller states the layout it is in
-		// and gets it back in exactly that layout.
-		VkImageMemoryBarrier to_src = {};
-		to_src.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-		to_src.oldLayout = src_layout;
-		to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-		to_src.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		to_src.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		to_src.image = src;
-		to_src.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-		to_src.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-		to_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-
-		vkCmdPipelineBarrier(cmd,
-			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-			VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &to_src);
-
-		// Same size on both sides now that the source is the swapchain image, but still a blit:
-		// the shared image is fixed at the swapchain dimensions and a mismatch would be a validation
-		// error rather than a scaled copy.
-		VkImageBlit region = {};
-		region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-		region.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-		region.srcOffsets[1] = { static_cast<s32>(width), static_cast<s32>(height), 1 };
-		region.dstOffsets[1] = { static_cast<s32>(width), static_cast<s32>(height), 1 };
-
-		vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-			dst.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
-
-		VkImageMemoryBarrier from_src = to_src;
-		from_src.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-		from_src.newLayout = src_layout;
-		from_src.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-		from_src.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
-
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
-			0, 0, nullptr, 0, nullptr, 1, &from_src);
-
-		dst.layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-
-		// Recorded, not committed. The caller promotes this with commit_capture() once the command
-		// buffer carrying it has been submitted; see the two flags above.
-		g_recorded_capture.store(true);
-
-		// CPU-side timing only: this records how long building the commands takes, not how long
-		// the GPU spends on the blit. The GPU cost shows up in the existing per-region GPU timer
-		// as part of the frame, which is the number that actually matters against the ~19ms of
-		// idle GPU we measured. Reported together so the two can be compared.
-		g_capture_ns += (get_system_time() - started) * 1000;
-		g_capture_count++;
-
-		if (const u64 now = get_system_time(); now - g_last_report > 1'000'000)
-		{
-			if (g_capture_count)
-			{
-				framegen_log.notice("Frame capture: %.3f ms/frame CPU over %u frames (%ux%u)",
-					(g_capture_ns / 1'000'000.0) / g_capture_count, g_capture_count, width, height);
-			}
-
-			g_capture_ns = 0;
-			g_capture_count = 0;
-			g_last_report = now;
-		}
-
-		return true;
-	}
 #else
 	bool capture_presented_frame(const vk::command_buffer&, const vk::render_device&, VkImage, VkImageLayout, u32, u32)
 	{
@@ -1024,6 +844,144 @@ namespace vk::frame_gen
 
 			g_context_outputs = 0;
 		}
+
+	}
+
+	bool capture_presented_frame(const vk::command_buffer& cmd, const vk::render_device& dev,
+		VkImage src, VkImageLayout src_layout, u32 width, u32 height)
+	{
+		if (g_cfg.video.frame_generation == frame_generation_mode::off || !src || !width || !height)
+		{
+			return false;
+		}
+
+		if (g_disabled)
+		{
+			return false;
+		}
+
+		static bool s_reported = false;
+		const bool memory_model = dev.get_vulkan_memory_model_support();
+		const bool null_descriptor = dev.get_null_descriptor_support();
+
+		if (!memory_model || !null_descriptor)
+		{
+			if (!s_reported)
+			{
+				s_reported = true;
+				framegen_log.error("Frame generation is not supported here -- vulkanMemoryModel: %s,"
+					" nullDescriptor: %s", memory_model ? "yes" : "NO", null_descriptor ? "yes" : "NO");
+			}
+
+			return false;
+		}
+
+		const u32 want = wanted_generated_frames();
+
+		if (!want || shader_count() <= 0)
+		{
+			return false;
+		}
+
+		// Output images, sized to the frame. These are what the passes write and what the present
+		// path blits from; there is no longer an input copy beside them.
+		if (g_shared_w != width || g_shared_h != height || !g_shared_out[0].valid())
+		{
+			release_generation_context();
+
+			for (u32 i = 0; i < want; ++i)
+			{
+				if (!g_shared_out[i].create(dev, width, height, VK_FORMAT_R8G8B8A8_UNORM))
+				{
+					release_generation_context();
+					disable("could not allocate the generated frame images");
+					return false;
+				}
+			}
+
+			g_shared_w = width;
+			g_shared_h = height;
+			g_context_outputs = want;
+			framegen_log.success("Frame generation images ready at %ux%u, %u generated frame(s)",
+				width, height, want);
+		}
+
+		if (!g_native.valid() && !build_native_stack(dev, want))
+		{
+			disable("could not build the frame generation passes");
+			return false;
+		}
+
+		// Process the REAL presented image, in the frame's OWN command buffer.
+		//
+		// This used to blit the frame into a capture image and hand that to Process later, from a
+		// separate submission. Process copies the source into its chain itself
+		// (FrameGen.cpp, CopyPresentedFrame), so that made two full-frame copies per frame where
+		// ARMSX2 makes one -- and the capture only existed because generation happened after the
+		// swapchain image was gone. Doing it here, where the frame is finished and the image is
+		// still ours, removes both the copy and the reason for it.
+		const u64 started = get_system_time();
+
+		VkImageMemoryBarrier to_read = {};
+		to_read.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		to_read.oldLayout = src_layout;
+		to_read.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+		to_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		to_read.image = src;
+		to_read.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		to_read.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		to_read.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			0, 0, nullptr, 0, nullptr, 1, &to_read);
+
+		const Vulkan::vk::CommandBuffer cmdbuf{static_cast<VkCommandBuffer>(cmd)};
+		const VkExtent2D extent{width, height};
+
+		g_native.framegen->Process(*g_native.device, cmdbuf, src, g_shared_out[0].view(),
+			extent, VK_FORMAT_R8G8B8A8_UNORM, extent);
+
+		VkImageMemoryBarrier from_read = to_read;
+		from_read.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+		from_read.newLayout = src_layout;
+		from_read.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+		from_read.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
+
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
+			0, 0, nullptr, 0, nullptr, 1, &from_read);
+
+		// The pacer plans HERE, once per frame, unconditionally.
+		//
+		// Plan() derives the base frame rate from the interval between its own calls, so it has to
+		// be called on a regular clock or it plans against a rate the game never had. It used to
+		// sit inside generate(), behind three early returns and a conditional call site, which is
+		// judder by construction rather than by tuning.
+		g_planned_generations = static_cast<u32>(std::min<size_t>(
+			g_native.framegen->WantedGenerations(g_context_outputs),
+			g_native.framegen->GeneratedFrameCount()));
+
+		g_recorded_capture.store(true);
+		g_capture_ns += (get_system_time() - started) * 1000;
+		g_capture_count++;
+
+		if (const u64 now = get_system_time(); now - g_last_report > 1'000'000)
+		{
+			if (g_capture_count)
+			{
+				framegen_log.notice("Frame process: %.3f ms/frame CPU over %u frames (%ux%u), %u generated",
+					(g_capture_ns / 1'000'000.0) / g_capture_count, g_capture_count, width, height,
+					g_planned_generations);
+			}
+
+			g_capture_ns = 0;
+			g_capture_count = 0;
+			g_last_report = now;
+		}
+
+		return true;
 	}
 
 	u32 generated_frame_count()
@@ -1219,104 +1177,30 @@ namespace vk::frame_gen
 
 	u32 generate(const vk::render_device& dev)
 	{
-		const u32 want = generated_frame_count();
-
-		if (!want || g_shared_w == 0)
+		// Only the generation half now. Process() already ran, in the frame's own command buffer,
+		// against the real presented image -- see capture_presented_frame. The pacer decided how
+		// many frames to make at the same time, on its own regular clock.
+		if (!g_planned_generations || !g_native.valid())
 		{
 			return 0;
 		}
 
-		// Two real frames are needed before anything can be interpolated between them.
-		if (g_captures < 2)
+		if (!g_recorded_capture.exchange(false))
 		{
 			return 0;
 		}
 
-		// ...and a new one this frame, or there is nothing new to interpolate towards.
-		if (!g_fresh_capture.exchange(false))
+		const u32 generations = std::min(g_planned_generations, g_context_outputs);
+
+		if (!generations)
 		{
 			return 0;
 		}
 
-		// No initialize() here any more. That built the dlopen'd library's context on its own
-		// VkDevice; build_native_stack() below builds the passes instead, and leaving the old
-		// call in meant a failure inside a path nothing uses could still disable the feature.
-
-		if (g_context < 0 || g_context_outputs != want)
-		{
-			// Through the same teardown the resize path uses, so a setting change from x4 down to x2
-			// frees the outputs the smaller context no longer names instead of stranding them.
-			release_generation_context();
-
-			for (u32 i = 0; i < want; ++i)
-			{
-				if (!g_shared_out[i].create(dev, g_shared_w, g_shared_h, VK_FORMAT_R8G8B8A8_UNORM))
-				{
-					disable("could not allocate shared output images");
-					return 0;
-				}
-			}
-
-			// Build the passes on OUR device.
-			//
-			// The old library took two AHardwareBuffers in and wrote its outputs into more of
-			// them, because it ran on a second VkDevice. These passes read and write the very
-			// images the renderer already blitted into, so there is nothing to hand over --
-			// which images are read is decided at Process() time, below, not baked into a
-			// context here.
-			if (!build_native_stack(dev, want))
-			{
-				disable("could not build the frame generation passes");
-				return 0;
-			}
-
-			g_context = 0;
-
-			g_context_outputs = want;
-			framegen_log.success("Frame generation context ready: %ux%u, %u generated frame(s)",
-				g_shared_w, g_shared_h, want);
-		}
-
-		// Our device wrote the inputs; framegen's device is about to read them, and there is no
-		// semaphore shared between the two. A device-level wait is the only barrier available.
-		//
-		// It cannot be pipelined away, and that is a property of the library rather than of this
-		// code: presentContext() submits on framegen's own device and the only completion signal it
-		// exposes is armsx3_lsfg_wait_idle(), a vkDeviceWaitIdle. Upstream's semaphore path takes
-		// sync FDs and imports them as OPAQUE_FD (framegen/src/core/semaphore.cpp), which Turnip and
-		// Mesa do not support on Android -- which is why every semaphore handed over below is -1.
-		// So what this costs is bounded by moving the wait, not by removing it: it now runs before
-		// this frame's command buffer is submitted, on inputs that are a frame old, rather than
-		// after a full frame-completion wait.
-		// Record and run the passes on our own device.
-		//
-		// Sequenced as the ARMSX2 driver does it: the capture is complete (its blit was submitted
-		// before commit_capture), so Process() takes the captured frame and GenerateInto() writes
-		// each interpolated frame into an output image. Both go into framegen's OWN command
-		// buffer and are submitted as one batch -- the renderer's buffer is already closed by
-		// this point in the present path.
-		//
-		// The fence wait preserves the old contract: generate() returns only once the images are
-		// ready, because the present path blits them immediately afterwards. On one device and
-		// one queue a semaphore would do this without stalling the thread, and that is the
-		// obvious next step -- but this path has broken before, so correctness first.
-		if (!g_native.valid())
-		{
-			disable("frame generation passes are not built");
-			return 0;
-		}
-
-		// Wait for the PREVIOUS submission, not this one.
-		//
-		// The command buffer cannot be reset while it is still executing, so something has to
-		// wait -- but waiting at the END, after submitting, put the whole interpolation on the
-		// critical path: the thread sat idle until the GPU finished, every frame. Waiting at the
-		// START instead only blocks if the previous frame's passes have not finished by the time
-		// the next frame is ready, which is the difference between "generation costs a frame of
-		// latency" and "generation costs its full GPU time on the CPU clock".
-		//
-		// The blits that read these images are submitted to the SAME queue afterwards, so they
-		// are already ordered behind the passes without anyone waiting.
+		// Wait for the PREVIOUS submission, not this one: the command buffer cannot be reset
+		// while it is executing, but waiting after submitting would put the whole interpolation
+		// on the critical path. The blits that read these images go to the SAME queue afterwards,
+		// so they are ordered behind the passes without anyone waiting.
 		if (g_native.submitted)
 		{
 			if (vkWaitForFences(dev, 1, &g_native.fence, VK_TRUE, 1'000'000'000ull) != VK_SUCCESS)
@@ -1341,16 +1225,6 @@ namespace vk::frame_gen
 		}
 
 		const Vulkan::vk::CommandBuffer cmdbuf{g_native.cmd};
-		const u32 newest = g_committed_slot;
-		shared_image& latest = g_shared_in[newest];
-		const VkExtent2D extent{g_shared_w, g_shared_h};
-
-		g_native.framegen->Process(*g_native.device, cmdbuf, latest.handle(), latest.view(),
-			extent, VK_FORMAT_R8G8B8A8_UNORM, extent);
-
-		const size_t wanted = g_native.framegen->WantedGenerations(g_context_outputs);
-		const size_t available = g_native.framegen->GeneratedFrameCount();
-		const u32 generations = static_cast<u32>(std::min<size_t>(wanted, available));
 
 		for (u32 i = 0; i < generations; ++i)
 		{
@@ -1379,36 +1253,19 @@ namespace vk::frame_gen
 
 		g_native.submitted = true;
 
-		if (!generations)
-		{
-			return 0;
-		}
-
-		g_context_outputs = generations;
-
-		// Report the real vs generated rate once a second.
-		//
-		// Without this there is no way to tell the feature is doing anything: the FPS counter
-		// reports the rate the GAME renders at, which frame generation deliberately does not
-		// change. What changes is how many frames reach the display, and that is only visible if
-		// something counts it.
 		{
 			static u64 s_window = 0;
 			static u32 s_real = 0;
 			static u32 s_generated = 0;
 
 			s_real++;
-			s_generated += g_context_outputs;
+			s_generated += generations;
 
 			if (const u64 now = get_system_time(); now - s_window > 1'000'000)
 			{
 				if (s_window)
 				{
-					const f64 secs = (now - s_window) / 1'000'000.0;
-					g_display_fps.store(static_cast<f32>((s_real + s_generated) / secs));
-
-					framegen_log.success("Frame generation: %.1f real + %.1f generated = %.1f fps to the display",
-						s_real / secs, s_generated / secs, (s_real + s_generated) / secs);
+					g_display_fps.store(static_cast<f32>(s_real + s_generated));
 				}
 
 				s_window = now;
@@ -1417,7 +1274,7 @@ namespace vk::frame_gen
 			}
 		}
 
-		return g_context_outputs;
+		return generations;
 	}
 #else
 	u32 generated_frame_count() { return 0; }
