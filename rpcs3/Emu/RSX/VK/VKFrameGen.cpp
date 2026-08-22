@@ -13,7 +13,10 @@
 #include <dlfcn.h>
 #include <map>
 #include <mutex>
-#include <android/hardware_buffer.h>
+#include "FrameGen/FrameGen.h"
+#include "FrameGen/LsfgVkCompat.h"
+#include "FrameGen/LosslessDll.h"
+#include <vk_mem_alloc.h>
 #endif
 
 LOG_CHANNEL(framegen_log, "FRAMEGEN");
@@ -58,7 +61,12 @@ namespace vk::frame_gen
 		// Holding them here rather than adding a "put this shader back" entry point to the shim
 		// keeps the C ABI as it is, and this is where they have to be serialised from anyway.
 		std::map<std::string, std::vector<u8>> g_shaders;
-		bool g_shaders_loaded = false;   // the cache file has been looked for (found or not)
+		bool g_shaders_loaded = false;
+
+		// The reason the last import failed, phrased for the user rather than the log. This used
+		// to come from the dlopen'd library's last_error(); the ported extractor has no such
+		// channel, so it is kept here.
+		std::string g_import_error;   // the cache file has been looked for (found or not)
 
 		// Every shader name the shim extracts, in its order.
 		//
@@ -371,6 +379,13 @@ namespace vk::frame_gen
 
 	const char* last_error()
 	{
+		// The import error first: it is the one a user can act on, and the library's own channel
+		// only ever described failures inside the path that no longer runs.
+		if (!g_import_error.empty())
+		{
+			return g_import_error.c_str();
+		}
+
 		return g_api.ok && g_api.last_error ? g_api.last_error() : "";
 	}
 
@@ -381,49 +396,50 @@ namespace vk::frame_gen
 			return -1;
 		}
 
-		if (!g_api.import_shaders)
+		// Drives the ported extractor, not the old library.
+		//
+		// This used to call into libarmsx3_lsfg.so, which kept its own copy of the shaders. The
+		// passes read LosslessDll's cache instead, so importing through the library would have
+		// looked like it worked -- a count comes back, the settings screen says so -- and then
+		// frame generation would have refused to start because the cache the passes actually
+		// read was still empty.
+		//
+		// The path is stored first: BuildShaderCache reads it back through GetLosslessDllPath,
+		// and keeping it means the cache can be rebuilt later without asking the user again.
+		g_cfg.video.frame_generation_dll_path.from_string(dll_path);
+
+		const VideoCore::FrameGen::LosslessStatus rc = VideoCore::FrameGen::BuildShaderCache();
+
+		if (rc != VideoCore::FrameGen::LosslessStatus::Ok)
 		{
-			framegen_log.error("This build's frame generation library cannot extract shaders");
-			return -1;
-		}
+			// Meant for the user, not the log: they chose this file and can act on the answer.
+			const char* why = "could not be read";
 
-		const int rc = g_api.import_shaders(dll_path.c_str());
-
-		if (rc <= 0)
-		{
-			framegen_log.error("Shader import failed: %s", g_api.last_error());
-			return rc;
-		}
-
-		// Copy them across the boundary and write them out, so this is the LAST time the user has
-		// to find their Lossless.dll. Enumerating by name because the C ABI has no other way to
-		// walk the set; names it does not have are simply absent.
-		g_shaders.clear();
-		g_shaders_loaded = true;
-
-		for (const char* name : k_shader_names)
-		{
-			const uint8_t* data = nullptr;
-			uint32_t size = 0;
-
-			if (g_api.get_shader && g_api.get_shader(name, &data, &size) == ARMSX3_LSFG_OK && data && size)
+			switch (rc)
 			{
-				g_shaders[name].assign(data, data + size);
+			case VideoCore::FrameGen::LosslessStatus::NotInstalled:
+				why = "was not found"; break;
+			case VideoCore::FrameGen::LosslessStatus::NotPortableExecutable:
+				why = "is not a Lossless Scaling executable"; break;
+			case VideoCore::FrameGen::LosslessStatus::MissingShaders:
+				why = "does not contain the interpolation shaders"; break;
+			case VideoCore::FrameGen::LosslessStatus::TranslationFailed:
+				why = "has shaders this device cannot use"; break;
+			case VideoCore::FrameGen::LosslessStatus::CacheUnusable:
+				why = "was read, but its shaders could not be cached"; break;
+			default:
+				break;
 			}
-		}
 
-		if (g_shaders.empty())
-		{
-			// The library says it extracted some but none came back by name -- a shim/core name
-			// table mismatch. Worth saying plainly rather than failing later inside framegen.
-			framegen_log.error("Imported %d shaders but none could be read back by name", rc);
+			g_import_error = fmt::format("Lossless Scaling %s", why);
+			framegen_log.error("Shader import failed: %s", g_import_error);
 			return -1;
 		}
 
-		save_shader_cache();
-
-		framegen_log.success("Imported %u Lossless Scaling shaders", g_shaders.size());
-		return ::narrow<int>(g_shaders.size());
+		g_shaders_loaded = true;
+		g_import_error.clear();
+		framegen_log.success("Interpolation shaders imported from %s", dll_path);
+		return 1;
 	}
 
 	int shader_count()
@@ -470,149 +486,106 @@ namespace vk::frame_gen
 	{
 		destroy();
 
-		if (!dev.get_external_memory_ahb_support())
+		// A PLAIN device-local image now, not AHardwareBuffer-backed.
+		//
+		// The AHardwareBuffer existed only because frame generation used to run on its own
+		// VkDevice behind a dlopen'd library, and an AHB was the one currency both devices
+		// understood. The passes run on OUR device now, so a VkImage is directly meaningful to
+		// them and the allocate/import/import-again round-trip is gone -- along with the
+		// requirement for external-memory AHB support, which was the narrowest gate on the
+		// feature.
+		//
+		// STORAGE is here because the interpolation passes write through an image view rather
+		// than blitting; SAMPLED because they also read the captured frames.
+		VkImageCreateInfo ci = {};
+		ci.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		ci.imageType = VK_IMAGE_TYPE_2D;
+		ci.format = format;
+		ci.extent = { width, height, 1 };
+		ci.mipLevels = 1;
+		ci.arrayLayers = 1;
+		ci.samples = VK_SAMPLE_COUNT_1_BIT;
+		ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+		ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+			VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+		ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+		if (vkCreateImage(dev, &ci, nullptr, &m_image) != VK_SUCCESS)
 		{
-			framegen_log.error("Cannot share images: this device has no AHardwareBuffer external memory");
+			framegen_log.error("vkCreateImage failed for %ux%u", width, height);
+			m_image = VK_NULL_HANDLE;
 			return false;
 		}
 
-		// GPU_SAMPLED_IMAGE | GPU_COLOR_OUTPUT so both sides can read and write it. Without
-		// COLOR_OUTPUT the allocation succeeds and the later vkCreateImage fails on usage flags,
-		// which reads as an unrelated format problem.
-		AHardwareBuffer_Desc desc = {};
-		desc.width = width;
-		desc.height = height;
-		desc.layers = 1;
-		desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
-		desc.usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT;
+		VkMemoryRequirements req = {};
+		vkGetImageMemoryRequirements(dev, m_image, &req);
 
-		AHardwareBuffer* ahb = nullptr;
+		VkPhysicalDeviceMemoryProperties mem_props = {};
+		vkGetPhysicalDeviceMemoryProperties(dev.gpu(), &mem_props);
 
-		if (AHardwareBuffer_allocate(&desc, &ahb) != 0 || !ahb)
+		u32 type_index = UINT32_MAX;
+
+		for (u32 i = 0; i < mem_props.memoryTypeCount; i++)
 		{
-			framegen_log.error("AHardwareBuffer_allocate failed for %ux%u", width, height);
-			return false;
-		}
-
-		// Ask the driver what this buffer needs before creating anything. The memory type index
-		// and the allocation size both come from here -- they cannot be derived from the image.
-		VkAndroidHardwareBufferPropertiesANDROID props = { .sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID };
-
-		if (vkGetAndroidHardwareBufferPropertiesANDROID(dev, ahb, &props) != VK_SUCCESS)
-		{
-			framegen_log.error("vkGetAndroidHardwareBufferPropertiesANDROID failed");
-			AHardwareBuffer_release(ahb);
-			return false;
-		}
-
-		const VkExternalMemoryImageCreateInfo ext_info =
-		{
-			.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
-			.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID
-		};
-
-		const VkImageCreateInfo image_info =
-		{
-			.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
-			.pNext = &ext_info,
-			.imageType = VK_IMAGE_TYPE_2D,
-			.format = format,
-			.extent = { width, height, 1 },
-			.mipLevels = 1,
-			.arrayLayers = 1,
-			.samples = VK_SAMPLE_COUNT_1_BIT,
-			// OPTIMAL, not LINEAR: the driver decides the layout for an imported buffer and
-			// LINEAR would refuse on most Android GPUs.
-			.tiling = VK_IMAGE_TILING_OPTIMAL,
-			.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-			         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-			.sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-			.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED
-		};
-
-		VkImage image = VK_NULL_HANDLE;
-
-		if (vkCreateImage(dev, &image_info, nullptr, &image) != VK_SUCCESS)
-		{
-			framegen_log.error("vkCreateImage failed for a shared %ux%u image", width, height);
-			AHardwareBuffer_release(ahb);
-			return false;
-		}
-
-		// Dedicated allocation is REQUIRED for imported AHardwareBuffer memory, not merely
-		// advisable: the spec forbids suballocating it, and drivers enforce that.
-		const VkMemoryDedicatedAllocateInfo dedicated =
-		{
-			.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
-			.image = image
-		};
-
-		const VkImportAndroidHardwareBufferInfoANDROID import =
-		{
-			.sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID,
-			.pNext = &dedicated,
-			.buffer = ahb
-		};
-
-		u32 type_index = umax;
-
-		for (u32 i = 0; i < 32; ++i)
-		{
-			if (props.memoryTypeBits & (1u << i))
+			if ((req.memoryTypeBits & (1u << i)) &&
+				(mem_props.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
 			{
 				type_index = i;
 				break;
 			}
 		}
 
-		if (type_index == umax)
+		if (type_index == UINT32_MAX)
 		{
-			framegen_log.error("No memory type accepts this AHardwareBuffer");
-			vkDestroyImage(dev, image, nullptr);
-			AHardwareBuffer_release(ahb);
+			framegen_log.error("No device-local memory type for the capture image");
+			destroy();
 			return false;
 		}
 
-		const VkMemoryAllocateInfo alloc =
-		{
-			.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-			.pNext = &import,
-			.allocationSize = props.allocationSize,
-			.memoryTypeIndex = type_index
-		};
+		VkMemoryAllocateInfo ai = {};
+		ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		ai.allocationSize = req.size;
+		ai.memoryTypeIndex = type_index;
 
-		VkDeviceMemory memory = VK_NULL_HANDLE;
-
-		if (vkAllocateMemory(dev, &alloc, nullptr, &memory) != VK_SUCCESS)
+		if (vkAllocateMemory(dev, &ai, nullptr, &m_memory) != VK_SUCCESS ||
+			vkBindImageMemory(dev, m_image, m_memory, 0) != VK_SUCCESS)
 		{
-			framegen_log.error("Failed to import AHardwareBuffer memory (%llu bytes)", props.allocationSize);
-			vkDestroyImage(dev, image, nullptr);
-			AHardwareBuffer_release(ahb);
+			framegen_log.error("Could not back the capture image at %ux%u", width, height);
+			destroy();
 			return false;
 		}
 
-		if (vkBindImageMemory(dev, image, memory, 0) != VK_SUCCESS)
+		VkImageViewCreateInfo vi = {};
+		vi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		vi.image = m_image;
+		vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		vi.format = format;
+		vi.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+		if (vkCreateImageView(dev, &vi, nullptr, &m_view) != VK_SUCCESS)
 		{
-			framegen_log.error("vkBindImageMemory failed for a shared image");
-			vkFreeMemory(dev, memory, nullptr);
-			vkDestroyImage(dev, image, nullptr);
-			AHardwareBuffer_release(ahb);
+			framegen_log.error("vkCreateImageView failed for the capture image");
+			destroy();
 			return false;
 		}
 
-		m_ahb = ahb;
-		m_image = image;
-		m_memory = memory;
-		m_device = dev;
 		m_width = width;
 		m_height = height;
-		m_format = format;
+		m_device = dev;
+		m_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 		layout = VK_IMAGE_LAYOUT_UNDEFINED;
 		return true;
 	}
 
 	void shared_image::destroy()
 	{
+		if (m_view != VK_NULL_HANDLE)
+		{
+			vkDestroyImageView(m_device, m_view, nullptr);
+			m_view = VK_NULL_HANDLE;
+		}
+
 		if (m_image != VK_NULL_HANDLE)
 		{
 			vkDestroyImage(m_device, m_image, nullptr);
@@ -625,17 +598,10 @@ namespace vk::frame_gen
 			m_memory = VK_NULL_HANDLE;
 		}
 
-		if (m_ahb)
-		{
-			// Released last: the image and its memory refer to this buffer, and freeing it first
-			// leaves them pointing at storage the allocator may already have reused.
-			AHardwareBuffer_release(static_cast<AHardwareBuffer*>(m_ahb));
-			m_ahb = nullptr;
-		}
-
 		m_device = VK_NULL_HANDLE;
 		m_width = m_height = 0;
 		m_format = VK_FORMAT_UNDEFINED;
+		m_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 		layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	}
 #else
@@ -708,6 +674,33 @@ namespace vk::frame_gen
 		// the resize path does this, which is why it went unnoticed: it needs a resolution change
 		// with frame generation already running.
 		void release_generation_context();
+
+		// The native pass stack. This replaces the dlopen'd library and its second VkDevice:
+		// everything below lives on OUR device, so the images the passes read and write are the
+		// same objects the renderer blits into.
+		struct native_stack
+		{
+			VmaAllocator vma = VK_NULL_HANDLE;
+			std::unique_ptr<Vulkan::MemoryAllocator> allocator;
+			std::unique_ptr<Vulkan::Device> device;
+			std::unique_ptr<Vulkan::FrameGen> framegen;
+
+			// Frame generation records into its OWN command buffer, exactly as the ARMSX2
+			// driver does, rather than borrowing the renderer's: the passes have to run after
+			// the captured frame is complete and before the generated images are blitted, and
+			// that is a submission of its own.
+			VkCommandPool pool = VK_NULL_HANDLE;
+			VkCommandBuffer cmd = VK_NULL_HANDLE;
+			VkFence fence = VK_NULL_HANDLE;
+			VkQueue queue = VK_NULL_HANDLE;
+
+			bool valid() const { return framegen != nullptr; }
+		};
+
+		native_stack g_native;
+
+		bool build_native_stack(const vk::render_device& dev, u32 want);
+		void destroy_native_stack();
 	}
 
 	void release_shared_images()
@@ -1069,6 +1062,116 @@ namespace vk::frame_gen
 		return "LSFG: starting";
 	}
 
+	namespace
+	{
+		void destroy_native_stack()
+		{
+			if (g_native.framegen)
+			{
+				g_native.framegen.reset();
+			}
+
+			g_native.device.reset();
+			g_native.allocator.reset();
+
+			if (g_native.fence != VK_NULL_HANDLE && vk::g_render_device)
+			{
+				vkDestroyFence(*vk::g_render_device, g_native.fence, nullptr);
+				g_native.fence = VK_NULL_HANDLE;
+			}
+
+			if (g_native.pool != VK_NULL_HANDLE && vk::g_render_device)
+			{
+				// Frees g_native.cmd with it.
+				vkDestroyCommandPool(*vk::g_render_device, g_native.pool, nullptr);
+				g_native.pool = VK_NULL_HANDLE;
+				g_native.cmd = VK_NULL_HANDLE;
+			}
+
+			if (g_native.vma != VK_NULL_HANDLE)
+			{
+				vmaDestroyAllocator(g_native.vma);
+				g_native.vma = VK_NULL_HANDLE;
+			}
+
+			g_native.queue = VK_NULL_HANDLE;
+		}
+
+		bool build_native_stack(const vk::render_device& dev, u32 want)
+		{
+			(void) want;
+			destroy_native_stack();
+
+			// Its OWN VmaAllocator, on the same VkDevice.
+			//
+			// RPCS3 keeps its allocator private and can be built on either VMA or plain Vulkan
+			// allocations, so there is no handle to borrow. VMA supports several allocators per
+			// device and frame generation allocates a handful of images, so giving it one of its
+			// own is cheaper than widening the renderer's abstraction to expose something that
+			// might not exist.
+			VmaAllocatorCreateInfo aci = {};
+			aci.physicalDevice = dev.gpu();
+			aci.device = dev;
+			VmaVulkanFunctions fns = {};
+			fns.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
+			fns.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+			aci.pVulkanFunctions = &fns;
+
+			if (vmaCreateAllocator(&aci, &g_native.vma) != VK_SUCCESS)
+			{
+				framegen_log.error("Could not create the frame generation allocator");
+				return false;
+			}
+
+			const u32 family = dev.get_graphics_queue_family();
+
+			VkCommandPoolCreateInfo pci = {};
+			pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+			pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+			pci.queueFamilyIndex = family;
+
+			if (vkCreateCommandPool(dev, &pci, nullptr, &g_native.pool) != VK_SUCCESS)
+			{
+				framegen_log.error("Could not create the frame generation command pool");
+				destroy_native_stack();
+				return false;
+			}
+
+			VkCommandBufferAllocateInfo cbi = {};
+			cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+			cbi.commandPool = g_native.pool;
+			cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+			cbi.commandBufferCount = 1;
+
+			VkFenceCreateInfo fci = {};
+			fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+			if (vkAllocateCommandBuffers(dev, &cbi, &g_native.cmd) != VK_SUCCESS ||
+				vkCreateFence(dev, &fci, nullptr, &g_native.fence) != VK_SUCCESS)
+			{
+				framegen_log.error("Could not create the frame generation command buffer");
+				destroy_native_stack();
+				return false;
+			}
+
+			vkGetDeviceQueue(dev, family, 0, &g_native.queue);
+
+			g_native.allocator = std::make_unique<Vulkan::MemoryAllocator>(g_native.vma);
+			g_native.device = std::make_unique<Vulkan::Device>(&dev);
+
+			if (!g_native.device->IsVulkanMemoryModelSupported() || !g_native.device->HasNullDescriptor())
+			{
+				framegen_log.error("Frame generation needs vulkanMemoryModel and nullDescriptor;"
+					" this device enabled neither");
+				destroy_native_stack();
+				return false;
+			}
+
+			g_native.framegen = std::make_unique<Vulkan::FrameGen>(*g_native.allocator, &dev);
+			return true;
+		}
+	}
+
 	u32 generate(const vk::render_device& dev)
 	{
 		const u32 want = generated_frame_count();
@@ -1146,31 +1249,20 @@ namespace vk::frame_gen
 				}
 			}
 
-			void* outs[3] = {};
-
-			for (u32 i = 0; i < want; ++i)
-			{
-				outs[i] = g_shared_out[i].hardware_buffer();
-			}
-
-			// Inputs in capture order: g_committed_slot holds the newest capture that has actually
-			// reached the GPU, so the older frame is the other one. Passing them the wrong way round
-			// interpolates backwards, which looks like juddering rather than an error.
+			// Build the passes on OUR device.
 			//
-			// The committed slot, not g_shared_slot ^ 1: the capture for the frame being presented
-			// right now has already been recorded and has already advanced g_shared_slot, but it has
-			// not been submitted, so its image still holds the frame before last.
-			const u32 newest = g_committed_slot;
-
-			g_context = g_api.create_context_ahb(
-				g_shared_in[newest ^ 1u].hardware_buffer(), g_shared_in[newest].hardware_buffer(),
-				outs, want, g_shared_w, g_shared_h, VK_FORMAT_R8G8B8A8_UNORM);
-
-			if (g_context < 0)
+			// The old library took two AHardwareBuffers in and wrote its outputs into more of
+			// them, because it ran on a second VkDevice. These passes read and write the very
+			// images the renderer already blitted into, so there is nothing to hand over --
+			// which images are read is decided at Process() time, below, not baked into a
+			// context here.
+			if (!build_native_stack(dev, want))
 			{
-				disable(g_api.last_error());
+				disable("could not build the frame generation passes");
 				return 0;
 			}
+
+			g_context = 0;
 
 			g_context_outputs = want;
 			framegen_log.success("Frame generation context ready: %ux%u, %u generated frame(s)",
@@ -1188,15 +1280,85 @@ namespace vk::frame_gen
 		// So what this costs is bounded by moving the wait, not by removing it: it now runs before
 		// this frame's command buffer is submitted, on inputs that are a frame old, rather than
 		// after a full frame-completion wait.
-		int out_sems[3] = {-1, -1, -1};
-
-		if (g_api.present(g_context, -1, out_sems, g_context_outputs) != ARMSX3_LSFG_OK)
+		// Record and run the passes on our own device.
+		//
+		// Sequenced as the ARMSX2 driver does it: the capture is complete (its blit was submitted
+		// before commit_capture), so Process() takes the captured frame and GenerateInto() writes
+		// each interpolated frame into an output image. Both go into framegen's OWN command
+		// buffer and are submitted as one batch -- the renderer's buffer is already closed by
+		// this point in the present path.
+		//
+		// The fence wait preserves the old contract: generate() returns only once the images are
+		// ready, because the present path blits them immediately afterwards. On one device and
+		// one queue a semaphore would do this without stalling the thread, and that is the
+		// obvious next step -- but this path has broken before, so correctness first.
+		if (!g_native.valid())
 		{
-			disable(g_api.last_error());
+			disable("frame generation passes are not built");
 			return 0;
 		}
 
-		g_api.wait_idle();
+		vkResetCommandBuffer(g_native.cmd, 0);
+
+		VkCommandBufferBeginInfo begin = {};
+		begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+		if (vkBeginCommandBuffer(g_native.cmd, &begin) != VK_SUCCESS)
+		{
+			disable("could not begin the frame generation command buffer");
+			return 0;
+		}
+
+		const Vulkan::vk::CommandBuffer cmdbuf{g_native.cmd};
+		const u32 newest = g_committed_slot;
+		shared_image& latest = g_shared_in[newest];
+		const VkExtent2D extent{g_shared_w, g_shared_h};
+
+		g_native.framegen->Process(*g_native.device, cmdbuf, latest.handle(), latest.view(),
+			extent, VK_FORMAT_R8G8B8A8_UNORM, extent);
+
+		const size_t wanted = g_native.framegen->WantedGenerations(g_context_outputs);
+		const size_t available = g_native.framegen->GeneratedFrameCount();
+		const u32 generations = static_cast<u32>(std::min<size_t>(wanted, available));
+
+		for (u32 i = 0; i < generations; ++i)
+		{
+			g_native.framegen->GenerateInto(*g_native.device, cmdbuf, g_shared_out[i].handle(),
+				g_shared_out[i].view(), i);
+		}
+
+		if (vkEndCommandBuffer(g_native.cmd) != VK_SUCCESS)
+		{
+			disable("could not end the frame generation command buffer");
+			return 0;
+		}
+
+		VkSubmitInfo submit = {};
+		submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		submit.commandBufferCount = 1;
+		submit.pCommandBuffers = &g_native.cmd;
+
+		vkResetFences(dev, 1, &g_native.fence);
+
+		if (vkQueueSubmit(g_native.queue, 1, &submit, g_native.fence) != VK_SUCCESS)
+		{
+			disable("frame generation submit failed");
+			return 0;
+		}
+
+		if (vkWaitForFences(dev, 1, &g_native.fence, VK_TRUE, 1'000'000'000ull) != VK_SUCCESS)
+		{
+			disable("frame generation timed out");
+			return 0;
+		}
+
+		if (!generations)
+		{
+			return 0;
+		}
+
+		g_context_outputs = generations;
 
 		// Report the real vs generated rate once a second.
 		//

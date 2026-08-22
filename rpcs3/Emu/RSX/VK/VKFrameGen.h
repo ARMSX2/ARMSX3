@@ -74,10 +74,9 @@ namespace vk::frame_gen
 
 	// An image both devices can see.
 	//
-	// framegen has its own VkDevice, so a VkImage of ours is meaningless to it and a VkImage of
-	// its own is meaningless to us. The only currency both understand is an AHardwareBuffer: we
-	// allocate one, import it as a VkImage on OUR device so the renderer can blit into or out of
-	// it, and hand the raw AHardwareBuffer* to framegen, which imports it on ITS device.
+	// A plain device-local image. The passes run on our own device now, so there is no second
+	// device to share with and no AHardwareBuffer round-trip -- the renderer blits the presented
+	// frame in, and the interpolation passes read and write it directly.
 	//
 	// This is also why frame generation cannot be free. The presented frame is not in one of
 	// these -- it is in a swapchain image -- so every frame has to be copied in, and every
@@ -102,7 +101,9 @@ namespace vk::frame_gen
 		VkImage handle() const { return m_image; }
 
 		// For framegen, which takes it as an opaque void*.
-		void* hardware_buffer() const { return m_ahb; }
+		/// The passes write through a view rather than blitting, so they need this as well as
+		/// the image.
+		VkImageView view() const { return m_view; }
 
 		u32 width() const { return m_width; }
 		u32 height() const { return m_height; }
@@ -113,13 +114,14 @@ namespace vk::frame_gen
 		VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
 
 	private:
-		void* m_ahb = nullptr;
 		VkImage m_image = VK_NULL_HANDLE;
+		VkImageView m_view = VK_NULL_HANDLE;
 		VkDeviceMemory m_memory = VK_NULL_HANDLE;
 		VkDevice m_device = VK_NULL_HANDLE;
 		u32 m_width = 0;
 		u32 m_height = 0;
 		VkFormat m_format = VK_FORMAT_UNDEFINED;
+		VkImageLayout m_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 	};
 
 	// Copy the frame about to be presented into a shared image.
