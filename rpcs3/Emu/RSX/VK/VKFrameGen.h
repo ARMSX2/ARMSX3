@@ -160,6 +160,11 @@ namespace vk::frame_gen
 	// Release the shared images. Safe to call when none exist.
 	void release_shared_images();
 
+	/// Destroy every Vulkan object frame generation owns. MUST be called while the device is
+	/// still alive -- these are all its children, and they also gate whether the next boot
+	/// rebuilds rather than reusing handles from a destroyed device.
+	void release_device_resources();
+
 	// How many frames the current setting asks us to generate between each real pair.
 	// Zero when frame generation is off, unsupported, or has no shaders.
 	u32 generated_frame_count();

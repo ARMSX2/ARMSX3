@@ -831,6 +831,7 @@ namespace vk::frame_gen
 	}
 
 	void release_shared_images() {}
+	void release_device_resources() {}
 	void commit_capture() {}
 #endif
 
@@ -914,6 +915,46 @@ namespace vk::frame_gen
 			g_context_outputs = 0;
 		}
 
+	}
+
+	void release_device_resources()
+	{
+		// Everything here is a child of the VkDevice and MUST die before it does.
+		//
+		// Nothing called this. shutdown() only finalised the old dlopen'd library, so at
+		// emulation stop the fences, command pool, command buffers, allocator, queue and the
+		// whole pass chain stayed live against a destroyed device -- and worse, on the NEXT boot
+		// in the same process g_native.valid() was still true, so the stack was not rebuilt:
+		// generate() then waited on a fence from the dead device and submitted to its queue.
+		//
+		// That is the boot -> stop -> boot path, and it is deterministic. It is the most likely
+		// explanation for frame generation working in one game and failing immediately in the
+		// next one launched without restarting the app.
+		destroy_native_stack();
+
+		for (auto& out : g_shared_out)
+		{
+			out.destroy();
+		}
+
+
+		g_context = -1;
+		g_context_outputs = 0;
+		g_shared_w = 0;
+		g_shared_h = 0;
+		g_captures = 0;
+		g_planned_generations = 0;
+		g_source_image = VK_NULL_HANDLE;
+		g_source_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+		g_plan_ready.store(false);
+		g_recorded_capture.store(false);
+		g_fresh_capture.store(false);
+		g_display_fps.store(0.f);
+
+		// A new device may not support what the last one did.
+		g_disabled = false;
+
+		framegen_log.notice("Frame generation device resources released");
 	}
 
 	bool capture_presented_frame(const vk::command_buffer& cmd, const vk::render_device& dev,

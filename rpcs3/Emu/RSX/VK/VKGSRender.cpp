@@ -8,6 +8,7 @@
 #include "VKCommonPipelineLayout.h"
 #include "VKCompute.h"
 #include "VKGSRender.h"
+#include "VKFrameGen.h"
 #include "Emu/RSX/rsx_profiler.h"
 #include "vkutils/gpu_timer.h"
 #include "VKHelpers.h"
@@ -857,6 +858,11 @@ VKGSRender::~VKGSRender()
 
 	//Wait for device to finish up with resources
 	vkDeviceWaitIdle(*m_device);
+
+	// Frame generation owns fences, a command pool, an allocator and images, all children of this
+	// device. Released here, while it is still alive: without this they outlived it, and the next
+	// boot in the same process reused the stale handles because the stack still looked valid.
+	vk::frame_gen::release_device_resources();
 
 	// Globals. TODO: Refactor lifetime management
 	if (auto async_scheduler = g_fxo->try_get<vk::AsyncTaskScheduler>())
