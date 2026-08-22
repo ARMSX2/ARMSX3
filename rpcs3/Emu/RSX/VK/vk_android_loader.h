@@ -162,6 +162,7 @@ extern "C"
 	extern PFN_vkMapMemory vkMapMemory;
 	extern PFN_vkQueueSubmit vkQueueSubmit;
 	extern PFN_vkResetCommandBuffer vkResetCommandBuffer;
+	extern PFN_vkFreeDescriptorSets vkFreeDescriptorSets;
 	extern PFN_vkResetDescriptorPool vkResetDescriptorPool;
 	extern PFN_vkResetEvent vkResetEvent;
 	extern PFN_vkResetFences vkResetFences;

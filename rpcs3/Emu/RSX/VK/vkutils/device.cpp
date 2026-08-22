@@ -810,6 +810,14 @@ namespace vk
 			requested_extensions.push_back(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
 		}
 
+		// nullDescriptor lives in robustness2, so the extension has to be REQUESTED here and not
+		// merely found supported when the physical device was probed. Frame generation's shaders
+		// need it; nothing else in the renderer does.
+		if (pgpu->optional_features_support.null_descriptor)
+		{
+			requested_extensions.push_back(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
+		}
+
 #ifdef __ANDROID__
 		// Frame generation only. Requested when present because the cost of carrying it is a
 		// string in a list, and the cost of NOT having it is that frame generation cannot share
@@ -1014,8 +1022,32 @@ namespace vk
 		VkPhysicalDeviceVulkan12Features vulkan12_features{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
 		vulkan12_features.runtimeDescriptorArray = VK_TRUE;
 		vulkan12_features.uniformBufferStandardLayout = VK_TRUE;
+
+		// Frame generation's shaders declare the Vulkan memory model and rely on null
+		// descriptors. Both were already PROBED above (optional_features_support) but never
+		// enabled, and a shader that declares the memory model on a device where it was not
+		// enabled is invalid usage, not a soft fallback -- desktop drivers tend to shrug it off
+		// while Adreno takes the device down mid-frame, so it would have looked like it worked
+		// until it did not. Enabled only where the device reported them, so a part without
+		// either simply does not get frame generation.
+		if (pgpu->optional_features_support.vulkan_memory_model)
+		{
+			vulkan12_features.vulkanMemoryModel = VK_TRUE;
+		}
+
 		vulkan12_features.pNext = const_cast<void*>(device.pNext);
 		device.pNext = &vulkan12_features;
+
+		VkPhysicalDeviceRobustness2FeaturesEXT robustness2_features{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT };
+
+		if (pgpu->optional_features_support.null_descriptor)
+		{
+			// ONLY nullDescriptor. robustBufferAccess2/robustImageAccess2 are the expensive half
+			// of this extension and nothing here wants them.
+			robustness2_features.nullDescriptor = VK_TRUE;
+			robustness2_features.pNext = const_cast<void*>(device.pNext);
+			device.pNext = &robustness2_features;
+		}
 
 		if (pgpu->descriptor_indexing_support)
 		{

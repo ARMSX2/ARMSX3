@@ -141,6 +141,8 @@ extern "C"
 	PFN_vkMapMemory vkMapMemory = nullptr;
 	PFN_vkQueueSubmit vkQueueSubmit = nullptr;
 	PFN_vkResetCommandBuffer vkResetCommandBuffer = nullptr;
+	// Needed by frame generation, which frees its descriptor sets individually.
+	PFN_vkFreeDescriptorSets vkFreeDescriptorSets = nullptr;
 	PFN_vkResetDescriptorPool vkResetDescriptorPool = nullptr;
 	PFN_vkResetEvent vkResetEvent = nullptr;
 	PFN_vkResetFences vkResetFences = nullptr;
@@ -429,6 +431,8 @@ namespace vk::android
 			if (!vkQueueSubmit) vkQueueSubmit = reinterpret_cast<PFN_vkQueueSubmit>(dlsym(handle, "vkQueueSubmit"));
 			vkResetCommandBuffer = reinterpret_cast<PFN_vkResetCommandBuffer>(vkGetInstanceProcAddr(nullptr, "vkResetCommandBuffer"));
 			if (!vkResetCommandBuffer) vkResetCommandBuffer = reinterpret_cast<PFN_vkResetCommandBuffer>(dlsym(handle, "vkResetCommandBuffer"));
+			vkFreeDescriptorSets = reinterpret_cast<PFN_vkFreeDescriptorSets>(vkGetInstanceProcAddr(nullptr, "vkFreeDescriptorSets"));
+			if (!vkFreeDescriptorSets) vkFreeDescriptorSets = reinterpret_cast<PFN_vkFreeDescriptorSets>(dlsym(handle, "vkFreeDescriptorSets"));
 			vkResetDescriptorPool = reinterpret_cast<PFN_vkResetDescriptorPool>(vkGetInstanceProcAddr(nullptr, "vkResetDescriptorPool"));
 			if (!vkResetDescriptorPool) vkResetDescriptorPool = reinterpret_cast<PFN_vkResetDescriptorPool>(dlsym(handle, "vkResetDescriptorPool"));
 			vkResetEvent = reinterpret_cast<PFN_vkResetEvent>(vkGetInstanceProcAddr(nullptr, "vkResetEvent"));
@@ -582,6 +586,7 @@ namespace vk::android
 		if (auto p = vkGetInstanceProcAddr(instance, "vkMapMemory")) vkMapMemory = reinterpret_cast<PFN_vkMapMemory>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkQueueSubmit")) vkQueueSubmit = reinterpret_cast<PFN_vkQueueSubmit>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkResetCommandBuffer")) vkResetCommandBuffer = reinterpret_cast<PFN_vkResetCommandBuffer>(p);
+		if (auto p = vkGetInstanceProcAddr(instance, "vkFreeDescriptorSets")) vkFreeDescriptorSets = reinterpret_cast<PFN_vkFreeDescriptorSets>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkResetDescriptorPool")) vkResetDescriptorPool = reinterpret_cast<PFN_vkResetDescriptorPool>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkResetEvent")) vkResetEvent = reinterpret_cast<PFN_vkResetEvent>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkResetFences")) vkResetFences = reinterpret_cast<PFN_vkResetFences>(p);

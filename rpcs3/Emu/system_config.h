@@ -207,6 +207,17 @@ struct cfg_root : cfg::node
 		// to 100 reads the right way round -- bigger is better quality -- and the conversion to
 		// framegen's fraction happens at the one call site.
 		cfg::uint<25, 100> frame_generation_flow_scale{ this, "Frame Generation Flow Scale", 100, true };
+
+		// Adaptive pacing: the refresh rate to aim for, in Hz, or 0 to use the fixed multiplier
+		// above. With a target set, framegen generates as many frames as it needs to hold that
+		// rate as the game's own frame rate moves, instead of always multiplying by the same
+		// number -- which is what makes the output steady when the game's is not.
+		cfg::uint<0, 480> frame_generation_target_rate{ this, "Frame Generation Target Rate", 0, true };
+
+		// Where the user's own Lossless Scaling install lives. Nothing ships the shaders -- they
+		// are THS's property -- so the interpolation shaders are read out of a legitimately
+		// purchased copy. Kept here so the shader cache can be rebuilt without asking again.
+		cfg::string frame_generation_dll_path{ this, "Frame Generation Lossless Path", "", true };
 #endif
 #ifdef __ANDROID__
 		// ARMSX3: absolute path to a RetroArch .slangp preset, used when

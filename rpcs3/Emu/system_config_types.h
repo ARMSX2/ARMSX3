@@ -350,8 +350,9 @@ enum class gpu_preset_level
 // Multipliers, not counts: "x2" inserts one generated frame, "x3" two, "x4" three. Named the way
 // the feature is described everywhere else so the setting reads the same as the docs.
 //
-// Android only -- frame generation shares images as AHardwareBuffer, which is the only route
-// framegen's separate VkDevice can accept.
+// Android only. The passes run on OUR device, in our own present path -- there is no second
+// VkDevice and no AHardwareBuffer round-trip, which is what the earlier dlopen-based
+// implementation needed and what made it expensive.
 enum class frame_generation_mode
 {
 	off = 0,
