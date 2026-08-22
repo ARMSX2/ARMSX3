@@ -707,6 +707,10 @@ namespace vk::frame_gen
 			VkFence fence = VK_NULL_HANDLE;
 			VkQueue queue = VK_NULL_HANDLE;
 
+			// Whether the fence has a submission to wait on. Waiting on a never-submitted fence
+			// blocks for the full timeout, once, on the first generated frame.
+			bool submitted = false;
+
 			bool valid() const { return framegen != nullptr; }
 		};
 
@@ -1108,6 +1112,10 @@ namespace vk::frame_gen
 			}
 
 			g_native.queue = VK_NULL_HANDLE;
+
+			// Or the rebuilt stack waits on a fence belonging to a submission that no longer
+			// exists -- which blocks for the full timeout and then disables the feature.
+			g_native.submitted = false;
 		}
 
 		bool build_native_stack(const vk::render_device& dev, u32 want)
@@ -1187,7 +1195,11 @@ namespace vk::frame_gen
 				return false;
 			}
 
-			vkGetDeviceQueue(dev, family, 0, &g_native.queue);
+			// The renderer's own graphics queue, not a fresh vkGetDeviceQueue. Same handle in
+			// practice, but taking it from the device makes the important property explicit:
+			// frame generation and the present blits share ONE queue, so submission order alone
+			// orders them and no CPU wait is needed between the two.
+			g_native.queue = dev.get_graphics_queue();
 
 			g_native.allocator = std::make_unique<Vulkan::MemoryAllocator>(g_native.vma);
 			g_native.device = std::make_unique<Vulkan::Device>(&dev);
@@ -1294,6 +1306,28 @@ namespace vk::frame_gen
 			return 0;
 		}
 
+		// Wait for the PREVIOUS submission, not this one.
+		//
+		// The command buffer cannot be reset while it is still executing, so something has to
+		// wait -- but waiting at the END, after submitting, put the whole interpolation on the
+		// critical path: the thread sat idle until the GPU finished, every frame. Waiting at the
+		// START instead only blocks if the previous frame's passes have not finished by the time
+		// the next frame is ready, which is the difference between "generation costs a frame of
+		// latency" and "generation costs its full GPU time on the CPU clock".
+		//
+		// The blits that read these images are submitted to the SAME queue afterwards, so they
+		// are already ordered behind the passes without anyone waiting.
+		if (g_native.submitted)
+		{
+			if (vkWaitForFences(dev, 1, &g_native.fence, VK_TRUE, 1'000'000'000ull) != VK_SUCCESS)
+			{
+				disable("frame generation timed out");
+				return 0;
+			}
+
+			g_native.submitted = false;
+		}
+
 		vkResetCommandBuffer(g_native.cmd, 0);
 
 		VkCommandBufferBeginInfo begin = {};
@@ -1343,11 +1377,7 @@ namespace vk::frame_gen
 			return 0;
 		}
 
-		if (vkWaitForFences(dev, 1, &g_native.fence, VK_TRUE, 1'000'000'000ull) != VK_SUCCESS)
-		{
-			disable("frame generation timed out");
-			return 0;
-		}
+		g_native.submitted = true;
 
 		if (!generations)
 		{

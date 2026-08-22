@@ -1070,18 +1070,40 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
                 selected = settings.ps3.frameGenTargetRate,
                 onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenTargetRate = v)) } },
             )
-            HorizontalOptions(
-                title = str("perf.framegen.flowScale.label"),
-                options = listOf(50 to "50%", 75 to "75%", 100 to "100%"),
-                selected = settings.ps3.frameGenFlowScale,
-                onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenFlowScale = v)) } },
-            )
-            HorizontalOptions(
-                title = str("perf.framegen.performance.label"),
-                options = listOf(1 to str("common.on"), 0 to str("common.off")),
-                selected = if (settings.ps3.frameGenPerformance) 1 else 0,
-                onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenPerformance = v == 1)) } },
-            )
+            // Motion detail is continuous, so it gets a slider rather than three stops -- the
+            // useful values are wherever the picture stops improving on a given game, not a set
+            // someone picked in advance. 25 is the floor the core clamps to.
+            Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        str("perf.framegen.flowScale.label"),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "${settings.ps3.frameGenFlowScale}%",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Slider(
+                    value = settings.ps3.frameGenFlowScale.coerceIn(25, 100).toFloat(),
+                    onValueChange = { v ->
+                        viewModel.updateSettings {
+                            it.copy(ps3 = it.ps3.copy(frameGenFlowScale = Math.round(v).coerceIn(25, 100)))
+                        }
+                    },
+                    valueRange = 25f..100f,
+                )
+            }
+            MenuSwitchRow(
+                str("perf.framegen.performance.label"),
+                settings.ps3.frameGenPerformance,
+            ) { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenPerformance = v)) } }
         }
         Spacer(Modifier.height(10.dp))
     }

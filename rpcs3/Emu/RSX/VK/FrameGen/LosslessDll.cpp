@@ -443,8 +443,20 @@ void AppendRaw(std::vector<u8>& out, const void* data, size_t size) {
         return false;
     }
     if (header.magic != CACHE_MAGIC || header.version != CACHE_VERSION ||
-        header.source_size != source_size || header.source_mtime != source_mtime ||
         header.flags != flags) {
+        return false;
+    }
+
+    // 0 means "do not check", as it already does for source_hash below and ~0u does for variant.
+    // The caller passes it when the source file is gone -- see LoadShaderModules -- which on
+    // Android is the normal state some time after an import, because the picked DLL is read from
+    // app cache and Android clears that. These were compared unconditionally, so a cache written
+    // minutes earlier was rejected against a file that no longer existed.
+    if (source_size != 0 && header.source_size != source_size) {
+        return false;
+    }
+
+    if (source_mtime != 0 && header.source_mtime != source_mtime) {
         return false;
     }
     if (source_hash != 0 && header.source_hash != source_hash) {
@@ -611,6 +623,25 @@ LosslessStatus LoadShaderModules(ShaderModules& out_modules, bool allow_fp16, bo
         return LosslessStatus::Ok;
     }
 
+    // PORT: accept the cache when the SOURCE IS GONE.
+    //
+    // Above, the cache is only consulted if the DLL can still be stat'd, because the entry is
+    // validated against its size and mtime. That is right on a desktop, where a Lossless Scaling
+    // install stays put. On Android the user picks the file through the system picker and it is
+    // copied into app cache to be read -- and Android clears app cache whenever it likes. The
+    // shaders are extracted once and the source is not needed again, so tying them to a file
+    // that is expected to vanish means frame generation reports "no shaders" some time after a
+    // perfectly good import, with a valid cache sitting right there.
+    //
+    // Passing 0 for both size and mtime tells ReadShaderCache not to check them. It is a weaker
+    // guarantee -- a REPLACED Lossless Scaling would not be noticed -- and that is the trade:
+    // re-importing is an explicit action, and the alternative is losing the cache to a routine
+    // cache sweep.
+    if (stat_size == 0 && ReadShaderCache(cache_path, /*source_size=*/0, /*source_hash=*/0,
+                                          /*source_mtime=*/0, /*variant=*/~0u, flags, out_modules)) {
+        return LosslessStatus::Ok;
+    }
+
     std::vector<u8> image;
     const LosslessStatus read_status = ReadImageFile(dll_path, image);
     if (read_status != LosslessStatus::Ok) {
@@ -669,7 +700,22 @@ LosslessStatus LoadShaderModules(ShaderModules& out_modules, bool allow_fp16, bo
 
 LosslessStatus BuildShaderCache() {
     ShaderModules modules;
-    return LoadShaderModules(modules, true);
+
+    // The SAME flags LsfgShaders reads with.
+    //
+    // This built with allow_fp16 = true while the only consumer asks for (false, false), and the
+    // cache header stores those flags and is rejected when they differ -- so the cache written
+    // here could never satisfy the read that follows it. On a desktop that is invisible: the DLL
+    // is still there, LoadShaderModules falls through to re-parsing the executable, and the
+    // cache is merely dead weight rewritten every launch. On Android the source is a copy in app
+    // cache that the system may clear, so there is nothing to fall through TO, and frame
+    // generation reports "no shaders" against a cache file sitting right next to it.
+    //
+    // Kept as a named pair rather than literals so the next person changing one changes both.
+    constexpr bool allow_fp16 = false;
+    constexpr bool prefer_fp16 = false;
+
+    return LoadShaderModules(modules, allow_fp16, prefer_fp16);
 }
 
 // PORT: Eden's RemoveInstalledLosslessDll() also deleted the DLL itself. That is safe there
