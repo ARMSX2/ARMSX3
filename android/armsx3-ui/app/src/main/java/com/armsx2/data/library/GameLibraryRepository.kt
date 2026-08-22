@@ -236,7 +236,27 @@ class GameLibraryRepository(private val context: Context) {
                 shieldFromMediaScanner(rawRoot)
                 scanRawDirectory(rawRoot, collected, 0)
             } else {
+                // SAF fallback. Games found this way are LISTED but the core cannot boot them:
+                // it opens games with ordinary file IO and a document tree has no path to open.
+                // Without All files access every folder outside the emulator's own directory
+                // lands here, which reads as "the game is there but hangs on its loading
+                // screen" rather than as a permissions problem. Say which it is.
                 val tree = DocumentFile.fromTreeUri(context, uri)
+                if (!canUseRawStorage()) {
+                    android.util.Log.w(
+                        ScanTag,
+                        "  $rawUri is being scanned over SAF because All files access is not " +
+                            "granted. Games found here will appear in the library but cannot be " +
+                            "read by the emulator -- grant the permission, or move them into " +
+                            "the games directory inside the emulator folder."
+                    )
+                } else {
+                    android.util.Log.w(
+                        ScanTag,
+                        "  $rawUri has no filesystem path (posix=$posix); falling back to SAF. " +
+                            "Games found here cannot be read by the emulator."
+                    )
+                }
                 android.util.Log.i(ScanTag, "  SAF fallback: tree=${tree?.uri} canRead=${tree?.canRead()} children=${runCatching { tree?.listFiles()?.size }.getOrNull()}")
                 tree?.let { scanDocumentTree(it, collected, 0) }
             }

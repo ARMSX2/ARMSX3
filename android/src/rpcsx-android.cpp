@@ -3433,6 +3433,45 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
         ppu_threads);
   }
 
+  // Prove the content is actually READABLE before handing it to the core.
+  //
+  // A game the app can see but cannot read is the failure mode that costs the most time,
+  // because nothing about it looks like a permissions problem. Without All files access the
+  // library scanner falls back to SAF document trees, and a title found that way has no
+  // filesystem path the core can open -- but it still appears in the library, still launches,
+  // and then stalls on its first loading screen when the reads it needs never arrive. The same
+  // shape appears when the grant is revoked after a folder was added, or when a disc sits on
+  // storage the app was never given.
+  //
+  // Two offsets, because size alone proves nothing: a directory entry can be listed with its
+  // real size and still refuse to deliver bytes. The second read is at the ISO descriptor, the
+  // first place any disc is read for real.
+  if (fs::is_file(path)) {
+    fs::file probe(path);
+    char byte = 0;
+
+    if (!probe) {
+      rpcsx_android.error(
+          "boot: '%s' cannot be opened for reading. If it lives outside the emulator folder, "
+          "grant All files access, or move it into the games directory.",
+          path);
+      return static_cast<int>(game_boot_result::invalid_file_or_folder);
+    }
+
+    const bool head_ok = probe.read_at(0, &byte, 1) == 1;
+    const u64 sz = probe.size();
+    const bool body_ok = sz <= 32769 || probe.read_at(32769, &byte, 1) == 1;
+
+    if (!head_ok || !body_ok) {
+      rpcsx_android.error(
+          "boot: '%s' opened but reads returned nothing (size=%d, head=%d, body=%d). The file is "
+          "visible but its contents are not reachable -- typically storage the app was not "
+          "granted. Grant All files access, or move the game into the games directory.",
+          path, static_cast<int>(sz), head_ok ? 1 : 0, body_ok ? 1 : 0);
+      return static_cast<int>(game_boot_result::invalid_file_or_folder);
+    }
+  }
+
   return static_cast<int>(Emu.BootGame(path, "", false, cfg_mode::custom));
 }
 
