@@ -1633,7 +1633,15 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	if (image_to_flip)
 	{
 		vk::frame_gen::capture_presented_frame(*m_current_command_buffer, *m_device,
-			target_image, target_layout, m_swapchain_dims.width, m_swapchain_dims.height,
+			// present_layout, NOT target_layout.
+			//
+			// generate() records into its own command buffer, submitted AFTER this frame's --
+			// and the transition just below moves the image to present_layout before then. Handing
+			// it target_layout meant its barrier declared an oldLayout the image was no longer in,
+			// and restored that same wrong layout afterwards, so the frame was presented outside
+			// PRESENT_SRC_KHR. Both are spec violations, and on a driver that really re-tiles
+			// between the two they corrupt the presented image.
+			target_image, present_layout, m_swapchain_dims.width, m_swapchain_dims.height,
 			buffer_width, buffer_height);
 	}
 
