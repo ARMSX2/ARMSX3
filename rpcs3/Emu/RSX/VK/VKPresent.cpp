@@ -295,7 +295,9 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	// opposite direction -- framegen overwriting this image while this blit is still reading it --
 	// is guarded by the caller, which waits for this command buffer before the next generation.
 	vkCmdBlitImage(*cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-		target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_LINEAR);
+		// NEAREST: source and destination are the same size, so linear filtering buys nothing and
+		// costs a filtered sampling pass instead of the fast copy path.
+		target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_NEAREST);
 
 	vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 		VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, range);

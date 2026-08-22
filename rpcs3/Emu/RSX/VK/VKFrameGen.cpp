@@ -66,7 +66,20 @@ namespace vk::frame_gen
 		// The reason the last import failed, phrased for the user rather than the log. This used
 		// to come from the dlopen'd library's last_error(); the ported extractor has no such
 		// channel, so it is kept here.
-		std::string g_import_error;   // the cache file has been looked for (found or not)
+		std::string g_import_error;
+
+		// Memoised answer for shader_count().
+		//
+		// That call reads the ENTIRE SPIR-V cache off disk and rebuilds every module, and it runs
+		// twice per frame on the RSX thread -- capture_presented_frame() and
+		// generated_frame_count() both ask. At ~322KB that is roughly 644KB of file IO and
+		// hundreds of allocations per frame, on the thread that drives the whole present path.
+		// It is CPU cost, which is why halving the GPU shader cost changed nothing.
+		//
+		// The verdict can only change when shaders are imported, which is exactly when this is
+		// cleared. ARMSX2 memoises the same check for the same reason (GSLsfg.cpp:53-58).
+		std::atomic<bool> g_shader_probe_done{false};
+		std::atomic<int> g_shader_probe_result{0};   // the cache file has been looked for (found or not)
 
 		// Every shader name the shim extracts, in its order.
 		//
@@ -446,6 +459,7 @@ namespace vk::frame_gen
 
 		g_shaders_loaded = true;
 		g_import_error.clear();
+		g_shader_probe_done.store(false, std::memory_order_release);
 		framegen_log.success("Interpolation shaders imported from %s", dll_path);
 		return 1;
 	}
@@ -455,6 +469,11 @@ namespace vk::frame_gen
 		if (!available())
 		{
 			return 0;
+		}
+
+		if (g_shader_probe_done.load(std::memory_order_acquire))
+		{
+			return g_shader_probe_result.load(std::memory_order_relaxed);
 		}
 
 		// Asks whether the CACHE is usable, not whether Lossless.dll is still sitting there.
@@ -479,10 +498,14 @@ namespace vk::frame_gen
 		if (VideoCore::FrameGen::LoadShaderModules(probe, fp16, fp16) !=
 			VideoCore::FrameGen::LosslessStatus::Ok || probe.empty())
 		{
+			g_shader_probe_result.store(0, std::memory_order_relaxed);
+			g_shader_probe_done.store(true, std::memory_order_release);
 			return 0;
 		}
 
-		return ::narrow<int>(probe.size());
+		g_shader_probe_result.store(::narrow<int>(probe.size()), std::memory_order_relaxed);
+		g_shader_probe_done.store(true, std::memory_order_release);
+		return g_shader_probe_result.load(std::memory_order_relaxed);
 	}
 #else
 	// Frame generation is Android-only: framegen's other path shares images by file descriptor,
@@ -1352,8 +1375,41 @@ namespace vk::frame_gen
 
 		for (u32 i = 0; i < generations; ++i)
 		{
+			// INTO GENERAL: GenerateInto writes through a storage image view, and a storage write
+			// outside VK_IMAGE_LAYOUT_GENERAL is undefined. These are created UNDEFINED and are
+			// left in TRANSFER_SRC by the blit that reads them, so without this the pass writes
+			// into a layout it is not allowed to.
+			VkImageMemoryBarrier to_general = {};
+			to_general.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+			to_general.oldLayout = g_shared_out[i].layout;
+			to_general.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+			to_general.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			to_general.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+			to_general.image = g_shared_out[i].handle();
+			to_general.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+			to_general.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+			to_general.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+
+			vkCmdPipelineBarrier(g_native.cmd[slot], VK_PIPELINE_STAGE_TRANSFER_BIT,
+				VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &to_general);
+
 			g_native.framegen->GenerateInto(*g_native.device, cmdbuf, g_shared_out[i].handle(),
 				g_shared_out[i].view(), i);
+
+			// And OUT to TRANSFER_SRC, which is the layout present_generated_frame's blit
+			// declares. It read them as TRANSFER_SRC while the pass had left them in GENERAL:
+			// a layout mismatch, and on Adreno a mismatched layout on a UBWC image forces a
+			// conservative full-surface decompress.
+			VkImageMemoryBarrier to_src = to_general;
+			to_src.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+			to_src.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+			to_src.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+			to_src.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+			vkCmdPipelineBarrier(g_native.cmd[slot], VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+				VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &to_src);
+
+			g_shared_out[i].layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 		}
 
 		if (vkEndCommandBuffer(g_native.cmd[slot]) != VK_SUCCESS)
