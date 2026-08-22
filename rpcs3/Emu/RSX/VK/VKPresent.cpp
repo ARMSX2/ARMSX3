@@ -228,11 +228,46 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 		return nullptr;
 	}
 
+	// One acquire/present semaphore pair per swapchain image, rotated.
+	if (m_framegen_acquire_sems.size() < m_swapchain->get_swap_image_count())
+	{
+		VkSemaphoreCreateInfo sem_info = {};
+		sem_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+		while (m_framegen_acquire_sems.size() < m_swapchain->get_swap_image_count())
+		{
+			VkSemaphore acquire = VK_NULL_HANDLE;
+			VkSemaphore present = VK_NULL_HANDLE;
+
+			if (vkCreateSemaphore(*m_device, &sem_info, nullptr, &acquire) != VK_SUCCESS ||
+				vkCreateSemaphore(*m_device, &sem_info, nullptr, &present) != VK_SUCCESS)
+			{
+				rsx_log.error("Could not create frame generation present semaphores.");
+				return nullptr;
+			}
+
+			m_framegen_acquire_sems.push_back(acquire);
+			m_framegen_present_sems.push_back(present);
+		}
+	}
+
+	const u32 sem_slot = m_framegen_sem_index++ % ::size32(m_framegen_acquire_sems);
+	const VkSemaphore acquire_sem = m_framegen_acquire_sems[sem_slot];
+	const VkSemaphore present_sem = m_framegen_present_sems[sem_slot];
+
 	u32 image = umax;
 
-	// Zero timeout: if no swapchain image is free the display is already keeping up, and waiting
-	// for one would make frame generation cost latency instead of adding smoothness.
-	if (m_swapchain->acquire_next_swapchain_image(VK_NULL_HANDLE, 0ull, &image) != VK_SUCCESS ||
+	// Acquire WITH a semaphore, and make the blit below wait on it.
+	//
+	// This passed VK_NULL_HANDLE and then blitted into the image immediately: nothing established
+	// that the presentation engine had finished with it, which is a use-before-ready and undefined.
+	// On Adreno it shows as smearing during motion that no interpolation setting changes, because
+	// the interpolation was never at fault. ARMSX2 acquires with a fence and blocks on it before
+	// submitting; waiting on the GPU is the same guarantee without the CPU stall.
+	//
+	// Zero timeout still: if no image is free the display is keeping up, and waiting for one would
+	// make frame generation cost latency instead of adding smoothness.
+	if (m_swapchain->acquire_next_swapchain_image(acquire_sem, 0ull, &image) != VK_SUCCESS ||
 		image == umax)
 	{
 		return nullptr;
@@ -272,9 +307,16 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	// of this swapchain image.
 	vk::queue_submit_t submit_info{};
 	submit_info.queue = m_device->get_graphics_queue();
+
+	// Wait for the acquire, signal the present. Without the wait the blit races the display;
+	// without the signal the present races the blit.
+	submit_info.wait_semaphores[submit_info.wait_semaphores_count] = acquire_sem;
+	submit_info.wait_stages[submit_info.wait_semaphores_count++] = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	submit_info.signal_semaphores[submit_info.signal_semaphores_count++] = present_sem;
+
 	cmd->submit(submit_info);
 
-	m_swapchain->present(VK_NULL_HANDLE, image);
+	m_swapchain->present(present_sem, image);
 	return cmd;
 }
 
@@ -567,23 +609,20 @@ void VKGSRender::queue_swap_request()
 
 	if (framegen_frames && !m_framegen_pipelined)
 	{
-		// Serialised fallback, for a swapchain with no room to hold a frame back.
+		// The CPU wait that used to be here is GONE, and this is the single biggest thing frame
+		// generation was paying.
 		//
-		// framegen reads the captured frame on ITS OWN device, so the only thing that can guarantee
-		// our capture blit has actually landed is waiting for the submission that contains it --
-		// this frame's, which was submitted moments ago, so this is a full frame of GPU work on the
-		// critical path. That is the cost the pipelined path above exists to avoid.
+		// It waited on this frame's own submission -- a full frame of GPU work, on the critical
+		// path, every frame -- because frame generation read the captured image on a SECOND
+		// VkDevice with no semaphore joining the two, so nothing else could prove the capture
+		// had landed. Measured on an Adreno 740 it took 60fps content to 25, and because the
+		// cost was a stall rather than arithmetic, halving the shader cost with fp16 moved it
+		// not at all.
 		//
-		// Without the wait the read races the write. It went unnoticed while the capture sat early
-		// in the command buffer, with the whole output pipeline behind it as accidental slack;
-		// moving the capture to the end of the frame closed that gap and the game image started
-		// flickering between real and half-written interpolations. The overlay did not, because it
-		// is drawn last and was therefore the one part reliably present in the copy.
-		if (m_current_frame->swap_command_buffer)
-		{
-			m_current_frame->swap_command_buffer->wait(FRAME_PRESENT_TIMEOUT);
-		}
-
+		// The passes run on OUR device and OUR graphics queue now, and generate() submits to
+		// that same queue. Vulkan orders submissions on a queue, so the interpolation cannot
+		// begin before the frame it reads has finished -- the guarantee the wait was buying is
+		// now free.
 		retire_generated_blits();
 		generated = vk::frame_gen::generate(*m_device);
 	}
@@ -604,9 +643,22 @@ void VKGSRender::queue_swap_request()
 	// Everything is gated on generate() having succeeded, and any failure inside it disables the
 	// feature for the session rather than retrying per frame. If nothing was generated this is a
 	// single integer test and presentation is untouched.
+	// Counts what actually reaches the screen. Every theory about this judder so far has been
+	// wrong and not one of them was measured: asked = what the pacer planned, shown = what
+	// present_generated_frame accepted, dropped = the acquire found nothing free. The gap spread
+	// separates "not enough frames" from "the right number at the wrong times".
+	static u64 s_fg_window = 0;
+	static u32 s_fg_asked = 0, s_fg_shown = 0, s_fg_dropped = 0;
+	static u64 s_fg_last = 0, s_fg_min = ~0ull, s_fg_max = 0, s_fg_sum = 0;
+	static u32 s_fg_gaps = 0;
+
+	s_fg_asked += generated;
+
 	for (u32 i = 0; i < generated; ++i)
 	{
 		auto* cb = present_generated_frame(vk::frame_gen::generated_image(i));
+
+		if (cb) { s_fg_shown++; } else { s_fg_dropped++; }
 
 		// Null when the acquire found no free swapchain image, which is a dropped generated frame
 		// and nothing more. Only a blit that actually happened has to be waited for.
@@ -615,6 +667,38 @@ void VKGSRender::queue_swap_request()
 			m_framegen_blit_cb[m_framegen_blit_cb_count++] = cb;
 		}
 	}
+
+	if (framegen_frames)
+	{
+		const u64 now = get_system_time();
+
+		if (s_fg_last)
+		{
+			const u64 gap = now - s_fg_last;
+			s_fg_min = std::min(s_fg_min, gap);
+			s_fg_max = std::max(s_fg_max, gap);
+			s_fg_sum += gap;
+			s_fg_gaps++;
+		}
+
+		s_fg_last = now;
+
+		if (now - s_fg_window > 1'000'000)
+		{
+			if (s_fg_window && s_fg_gaps)
+			{
+				rsx_log.notice("FRAMEGEN present: asked=%u shown=%u dropped=%u | real-frame gap us:"
+					" min=%u avg=%u max=%u",
+					s_fg_asked, s_fg_shown, s_fg_dropped, static_cast<u32>(s_fg_min),
+					static_cast<u32>(s_fg_sum / s_fg_gaps), static_cast<u32>(s_fg_max));
+			}
+
+			s_fg_window = now;
+			s_fg_asked = s_fg_shown = s_fg_dropped = 0;
+			s_fg_min = ~0ull; s_fg_max = 0; s_fg_sum = 0; s_fg_gaps = 0;
+		}
+	}
+
 
 	if (m_framegen_pipelined)
 	{

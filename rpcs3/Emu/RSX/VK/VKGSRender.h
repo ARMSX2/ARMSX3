@@ -197,6 +197,18 @@ private:
 	// the generated frames of an image to be presented from.
 	bool m_framegen_pipelined = false;
 
+	// Acquire/present semaphores for GENERATED frames.
+	//
+	// The real frame has had a pair of these all along (frame_context_t's
+	// acquire_signal_semaphore / present_wait_semaphore). Generated frames had none: they were
+	// acquired with VK_NULL_HANDLE and written immediately, which is a use of a swapchain image
+	// before the presentation engine has finished with it -- undefined, and on Adreno it shows as
+	// smearing during motion that no interpolation setting can change, because the interpolation
+	// was never the thing at fault.
+	std::vector<VkSemaphore> m_framegen_acquire_sems;
+	std::vector<VkSemaphore> m_framegen_present_sems;
+	u32 m_framegen_sem_index = 0;
+
 	// The command buffers the previous frame's generated images were blitted with. framegen writes
 	// the same output images every generation, so those blits have to have retired before the next
 	// generation starts overwriting them.

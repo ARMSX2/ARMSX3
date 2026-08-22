@@ -1068,7 +1068,10 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
                 title = str("perf.framegen.targetRate.label"),
                 options = listOf(0 to str("perf.framegen.off"), 60 to "60 Hz", 90 to "90 Hz", 120 to "120 Hz"),
                 selected = settings.ps3.frameGenTargetRate,
-                onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenTargetRate = v)) } },
+                onSelect = { v ->
+                    android.util.Log.i("FRAMEGEN", "pause menu: target rate chip -> $v")
+                    viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenTargetRate = v)) }
+                },
             )
             // Motion detail is continuous, so it gets a slider rather than three stops -- the
             // useful values are wherever the picture stops improving on a given game, not a set

@@ -68,6 +68,14 @@ constexpr u32 NATIVE_FP32_OFFSET = 98;
 
 [[nodiscard]] LosslessStatus GetInstalledLosslessStatus();
 
+/// Whether the fp16 family may be used, asked of the live render device.
+///
+/// THREE callers need the same answer -- the cache writer, LsfgShaders, and the availability
+/// probe -- and the cache header stores the flags and rejects an entry whose flags differ. Any
+/// two of them disagreeing means a cache that can never be read: it wrote fp16 and was probed
+/// with fp32, which reads to a user as "no shaders" immediately after a successful import.
+[[nodiscard]] bool Float16Allowed();
+
 /// [allow_fp16]/[prefer_fp16] MUST match what LsfgShaders asks for: the cache header stores them
 /// and rejects an entry whose flags differ, so a mismatch means the cache written at import can
 /// never satisfy the read that follows it.

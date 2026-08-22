@@ -39,6 +39,14 @@ namespace vk::lsfg
 	/// Hz to hold, or 0 to use multiplier() unchanged. Non-zero selects adaptive pacing.
 	inline u32 target_rate()
 	{
+		// 0 keeps the fixed multiplier.
+		//
+		// Forcing a 60Hz target here as a test made things WORSE, and the reason is worth
+		// keeping: at ~36 real fps a 60Hz target wants 0.67 extra frames per frame, and since
+		// only whole frames can be made the pacer produced 1, 0, 0, 0, 0. Sporadic generation is
+		// less even than none, so the displayed rate barely moved and the judder got worse. A
+		// target only helps when it is reachable in whole frames from the rate the game is
+		// actually managing -- 120 against 36 wants two, 60 against 36 wants two thirds of one.
 		return g_cfg.video.frame_generation_target_rate.get();
 	}
 

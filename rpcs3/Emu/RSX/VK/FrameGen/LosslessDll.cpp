@@ -31,6 +31,7 @@
 #include "util/types.hpp"
 
 #include "LosslessDll.h"
+#include "../vkutils/device.h"
 #include "LsfgTranslate.h"
 
 namespace VideoCore::FrameGen {
@@ -696,6 +697,17 @@ LosslessStatus LoadShaderModules(ShaderModules& out_modules, bool allow_fp16, bo
     }
 
     return LosslessStatus::Ok;
+}
+
+bool Float16Allowed() {
+    // RPCS3 reports this only where it also ENABLED shaderFloat16 at device creation, and clears
+    // it on the Adreno drivers whose compiler rejects native float16, so it is safe to trust.
+    // Without a live device -- importing from the settings screen before a game starts -- assume
+    // it is available: it is the common case, and a device that disagrees rebuilds the cache on
+    // first use.
+    return ::vk::g_render_device
+        ? ::vk::g_render_device->get_shader_types_support().allow_float16
+        : true;
 }
 
 LosslessStatus BuildShaderCache(bool allow_fp16, bool prefer_fp16) {

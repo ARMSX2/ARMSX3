@@ -33,7 +33,7 @@ LsfgShaders::LsfgShaders(const Device& device) {
     // This matters more than it looks: copying ARMSX2's hardcode ran the fp32 family on hardware
     // that supports fp16, which on Adreno is roughly half the compute throughput. Measured on an
     // Adreno 740, frame generation took the real frame rate from ~60 to ~25.
-    const bool allow_fp16 = device.IsFloat16Supported();
+    const bool allow_fp16 = VideoCore::FrameGen::Float16Allowed();
     const bool prefer_fp16 = allow_fp16;
 
     VideoCore::FrameGen::ShaderModules code;

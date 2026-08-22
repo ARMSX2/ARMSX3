@@ -413,9 +413,7 @@ namespace vk::frame_gen
 		// started -- fp16 is assumed, because RPCS3 only reports it where it also enabled it and
 		// clears it on the Adreno drivers that cannot compile it, so it is the common case. A
 		// device that disagrees rebuilds the cache on first use.
-		const bool allow_fp16 = vk::g_render_device
-			? vk::g_render_device->get_shader_types_support().allow_float16
-			: true;
+		const bool allow_fp16 = VideoCore::FrameGen::Float16Allowed();
 
 		const VideoCore::FrameGen::LosslessStatus rc =
 			VideoCore::FrameGen::BuildShaderCache(allow_fp16, allow_fp16);
@@ -473,7 +471,12 @@ namespace vk::frame_gen
 		// question is whether the cache loads.
 		VideoCore::FrameGen::ShaderModules probe;
 
-		if (VideoCore::FrameGen::LoadShaderModules(probe, false, false) !=
+		// The SAME variant the passes load, or the cache is rejected on its flags and a freshly
+		// imported one reads as "no shaders". Three callers ask this question -- the cache
+		// writer, LsfgShaders, and this probe -- and any two disagreeing breaks the cache.
+		const bool fp16 = VideoCore::FrameGen::Float16Allowed();
+
+		if (VideoCore::FrameGen::LoadShaderModules(probe, fp16, fp16) !=
 			VideoCore::FrameGen::LosslessStatus::Ok || probe.empty())
 		{
 			return 0;

@@ -290,6 +290,26 @@ namespace vk
 		VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
 		std::vector<VkPresentModeKHR> preferred_modes;
 
+		// Frame generation needs FIFO, whatever vsync is set to.
+		//
+		// Interpolated frames are presented BETWEEN the real ones, so each has to survive to a
+		// vblank of its own to be seen at all. IMMEDIATE tears through them and MAILBOX keeps
+		// only the newest image per vblank -- so the interpolated frame is replaced by the real
+		// one that follows it microseconds later and never reaches the screen. What is left is
+		// the real frames alone, at an interval now disturbed by the generation work: judder
+		// that gets worse the faster the picture changes, which is exactly how it presents when
+		// the camera moves.
+		//
+		// ARMSX2 forces FIFO for the same reason at the same point (VKSwapChain::SelectPresentMode).
+		if (g_cfg.video.frame_generation != frame_generation_mode::off &&
+			g_cfg.video.vsync != vsync_mode::full)
+		{
+			rsx_log.warning("Frame generation is enabled; using FIFO presentation so interpolated "
+				"frames are displayed rather than discarded.");
+
+			preferred_modes = { VK_PRESENT_MODE_FIFO_KHR };
+		}
+		else
 		switch (g_cfg.video.vsync)
 		{
 		case vsync_mode::off:
@@ -326,11 +346,26 @@ namespace vk
 		rsx_log.notice("Swapchain: present mode %d in use.", static_cast<int>(swapchain_present_mode));
 
 		u32 nb_swap_images = surface_descriptors.minImageCount + 1;
+
+		// Frame generation presents TWO images per rendered frame, so it needs a deeper chain.
+		//
+		// With the usual three, the acquire for the interpolated frame finds nothing free and
+		// present_generated_frame returns null -- the frame is computed in full and then dropped.
+		// That presents as frame generation doing nothing except adding judder: the displayed
+		// rate stays exactly what it was without it, because only the real frames ever reach the
+		// screen, at intervals now disturbed by the work done for the ones that did not.
+		//
+		// ARMSX2 gates its own pipelined path on the chain having at least four images for the
+		// same reason.
+		const u32 extra_for_framegen =
+			g_cfg.video.frame_generation != frame_generation_mode::off ? 2u : 0u;
+
 		if (surface_descriptors.maxImageCount > 0)
 		{
 			//Try to negotiate for a triple buffer setup
 			//In cases where the front-buffer isnt available for present, its better to have a spare surface
-			nb_swap_images = std::max(surface_descriptors.minImageCount + 2u, 3u);
+			nb_swap_images = std::max(surface_descriptors.minImageCount + 2u + extra_for_framegen,
+				3u + extra_for_framegen);
 
 			if (nb_swap_images > surface_descriptors.maxImageCount)
 			{
@@ -338,6 +373,10 @@ namespace vk
 				nb_swap_images = surface_descriptors.maxImageCount;
 			}
 		}
+
+		rsx_log.notice("Swapchain: requesting %u images (surface allows %u..%u)%s.", nb_swap_images,
+			surface_descriptors.minImageCount, surface_descriptors.maxImageCount,
+			extra_for_framegen ? ", deeper for frame generation" : "");
 
 		VkSurfaceTransformFlagBitsKHR pre_transform = surface_descriptors.currentTransform;
 		if (surface_descriptors.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)

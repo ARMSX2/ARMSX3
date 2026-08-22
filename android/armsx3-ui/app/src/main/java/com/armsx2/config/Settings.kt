@@ -1112,6 +1112,9 @@ data class Settings(
         put("PS3/Video", "Frame Generation Performance Mode", "bool", ps3.frameGenPerformance.toString())
         put("PS3/Video", "Frame Generation Flow Scale", "int", ps3.frameGenFlowScale.toString())
         put("PS3/Video", "Frame Generation Target Rate", "int", ps3.frameGenTargetRate.toString())
+        // Temporary: the value reaches the core as 0 whatever the UI is set to, and all six
+        // plumbing sites read correctly. This says what the object being applied actually holds.
+        android.util.Log.i("FRAMEGEN", "applyTo: targetRate=${ps3.frameGenTargetRate} mult=${ps3.frameGeneration}")
         put("PS3/Video", "Write Color Buffers", "bool", ps3.writeColorBuffers.toString())
         put("PS3/Video", "Write Depth Buffer", "bool", ps3.writeDepthBuffer.toString())
         put("PS3/Video", "Read Color Buffers", "bool", ps3.readColorBuffers.toString())
