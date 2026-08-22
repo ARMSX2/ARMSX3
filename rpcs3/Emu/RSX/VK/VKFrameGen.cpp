@@ -1245,7 +1245,25 @@ namespace vk::frame_gen
 			// is failing immediately rather than expiring -- VK_ERROR_DEVICE_LOST is the obvious
 			// candidate and means something else entirely from a slow frame. Calling every
 			// non-success a timeout hid that.
-			const VkResult wait_result = vkWaitForFences(dev, 1, &g_native.fence[slot], VK_TRUE, 1'000'000'000ull);
+			// Do NOT block for a second on per-frame work.
+			//
+			// This waited up to 1s for the previous slot's interpolation. When it actually waited,
+			// the frame interval it produced went straight into the pacer -- whose clock is
+			// sampled after this point -- and any interval over 100ms trips MINIMUM_BASE_RATE and
+			// stops generation for a full second (FrameGenPacer.cpp:29/40/97). So a stall here
+			// caused the pacer to stand down, which is a feedback loop of our own making: it
+			// measures the rate we slowed.
+			//
+			// A zero timeout asks "is the previous frame's work done?" and skips this frame if
+			// not. Skipping costs one generated frame; stalling costs a second of them.
+			const VkResult wait_result = vkWaitForFences(dev, 1, &g_native.fence[slot], VK_TRUE, 0ull);
+
+			if (wait_result == VK_TIMEOUT)
+			{
+				// Still in flight. Nothing is wrong -- come back next frame.
+				return 0;
+			}
+
 
 			if (wait_result != VK_SUCCESS)
 			{
