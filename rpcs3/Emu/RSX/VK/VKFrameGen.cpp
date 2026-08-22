@@ -717,14 +717,24 @@ namespace vk::frame_gen
 			// driver does, rather than borrowing the renderer's: the passes have to run after
 			// the captured frame is complete and before the generated images are blitted, and
 			// that is a submission of its own.
+			// One command buffer and fence PER SLOT, rotated per frame.
+			//
+			// A single pair meant every frame waited for the immediately previous interpolation
+			// to finish before it could reset the buffer -- the GPU pipeline drained once per
+			// frame and the CPU could never get ahead. ARMSX2 keeps one slot per swapchain image,
+			// which is the depth at which the presentation engine may already be holding work,
+			// and waits on a fence that is that many frames old and therefore almost always
+			// already signalled.
+			static constexpr u32 SLOTS = 3;
+
 			VkCommandPool pool = VK_NULL_HANDLE;
-			VkCommandBuffer cmd = VK_NULL_HANDLE;
-			VkFence fence = VK_NULL_HANDLE;
+			VkCommandBuffer cmd[SLOTS] = {};
+			VkFence fence[SLOTS] = {};
+			bool slot_submitted[SLOTS] = {};
+			u64 frame_index = 0;
 			VkQueue queue = VK_NULL_HANDLE;
 
-			// Whether the fence has a submission to wait on. Waiting on a never-submitted fence
-			// blocks for the full timeout, once, on the first generated frame.
-			bool submitted = false;
+			u32 slot() const { return static_cast<u32>(frame_index % SLOTS); }
 
 			bool valid() const { return framegen != nullptr; }
 		};
@@ -938,15 +948,15 @@ namespace vk::frame_gen
 
 		const u64 started = get_system_time();
 
-		// The pacer plans HERE, once per frame, unconditionally.
+		// The pacer is NOT planned here any more.
 		//
-		// Plan() derives the base frame rate from the interval between its own calls, so it has to
-		// be called on a regular clock or it plans against a rate the game never had. It used to
-		// sit inside generate(), behind three early returns and a conditional call site, which is
-		// judder by construction rather than by tuning.
-		g_planned_generations = static_cast<u32>(std::min<size_t>(
-			g_native.framegen->WantedGenerations(g_context_outputs),
-			g_native.framegen->GeneratedFrameCount()));
+		// It was, to keep its clock regular. But the plan is derived from GeneratedFrameCount(),
+		// which Process() sets -- and Process now runs in generate(). Planning before it meant
+		// the count was always zero on the first frame, generate() was gated on the plan, and so
+		// Process never ran to produce a count: frame generation sat on "starting" forever.
+		//
+		// ARMSX2 plans immediately AFTER Process, in the same place, once per frame. generate()
+		// is reached every frame while the feature is on, so the clock stays just as regular.
 
 		g_recorded_capture.store(true);
 		g_plan_ready.store(true);
@@ -1035,18 +1045,29 @@ namespace vk::frame_gen
 			g_native.device.reset();
 			g_native.allocator.reset();
 
-			if (g_native.fence != VK_NULL_HANDLE && vk::g_render_device)
+			for (u32 i = 0; i < native_stack::SLOTS; ++i)
 			{
-				vkDestroyFence(*vk::g_render_device, g_native.fence, nullptr);
-				g_native.fence = VK_NULL_HANDLE;
+				if (g_native.fence[i] != VK_NULL_HANDLE && vk::g_render_device)
+				{
+					vkDestroyFence(*vk::g_render_device, g_native.fence[i], nullptr);
+					g_native.fence[i] = VK_NULL_HANDLE;
+				}
+
+				g_native.slot_submitted[i] = false;
 			}
+
+			g_native.frame_index = 0;
 
 			if (g_native.pool != VK_NULL_HANDLE && vk::g_render_device)
 			{
 				// Frees g_native.cmd with it.
 				vkDestroyCommandPool(*vk::g_render_device, g_native.pool, nullptr);
 				g_native.pool = VK_NULL_HANDLE;
-				g_native.cmd = VK_NULL_HANDLE;
+
+				for (auto& c : g_native.cmd)
+				{
+					c = VK_NULL_HANDLE;
+				}
 			}
 
 			if (g_native.vma != VK_NULL_HANDLE)
@@ -1057,9 +1078,6 @@ namespace vk::frame_gen
 
 			g_native.queue = VK_NULL_HANDLE;
 
-			// Or the rebuilt stack waits on a fence belonging to a submission that no longer
-			// exists -- which blocks for the full timeout and then disables the feature.
-			g_native.submitted = false;
 		}
 
 		bool build_native_stack(const vk::render_device& dev, u32 want)
@@ -1126,17 +1144,26 @@ namespace vk::frame_gen
 			cbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 			cbi.commandPool = g_native.pool;
 			cbi.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-			cbi.commandBufferCount = 1;
+			cbi.commandBufferCount = native_stack::SLOTS;
 
 			VkFenceCreateInfo fci = {};
 			fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 
-			if (vkAllocateCommandBuffers(dev, &cbi, &g_native.cmd) != VK_SUCCESS ||
-				vkCreateFence(dev, &fci, nullptr, &g_native.fence) != VK_SUCCESS)
+			if (vkAllocateCommandBuffers(dev, &cbi, g_native.cmd) != VK_SUCCESS)
 			{
-				framegen_log.error("Could not create the frame generation command buffer");
+				framegen_log.error("Could not create the frame generation command buffers");
 				destroy_native_stack();
 				return false;
+			}
+
+			for (u32 i = 0; i < native_stack::SLOTS; ++i)
+			{
+				if (vkCreateFence(dev, &fci, nullptr, &g_native.fence[i]) != VK_SUCCESS)
+				{
+					framegen_log.error("Could not create the frame generation fences");
+					destroy_native_stack();
+					return false;
+				}
 			}
 
 			// The renderer's own graphics queue, not a fresh vkGetDeviceQueue. Same handle in
@@ -1163,10 +1190,10 @@ namespace vk::frame_gen
 
 	u32 generate(const vk::render_device& dev)
 	{
-		// Only the generation half now. Process() already ran, in the frame's own command buffer,
-		// against the real presented image -- see capture_presented_frame. The pacer decided how
-		// many frames to make at the same time, on its own regular clock.
-		if (!g_planned_generations || !g_native.valid() || !g_source_image)
+		// The whole of frame generation, in one command buffer of its own: Process the frame the
+		// present path just handed us, ask the pacer how many to make from it, make them, submit.
+		// This is the shape the ARMSX2 driver uses. The capture side only remembers the image.
+		if (!g_native.valid() || !g_source_image)
 		{
 			return 0;
 		}
@@ -1176,41 +1203,38 @@ namespace vk::frame_gen
 			return 0;
 		}
 
-		const u32 generations = std::min(g_planned_generations, g_context_outputs);
-
-		if (!generations)
-		{
-			return 0;
-		}
-
 		// Wait for the PREVIOUS submission, not this one: the command buffer cannot be reset
 		// while it is executing, but waiting after submitting would put the whole interpolation
 		// on the critical path. The blits that read these images go to the SAME queue afterwards,
 		// so they are ordered behind the passes without anyone waiting.
-		if (g_native.submitted)
+		const u32 slot = g_native.slot();
+
+		if (g_native.slot_submitted[slot])
 		{
-			if (vkWaitForFences(dev, 1, &g_native.fence, VK_TRUE, 1'000'000'000ull) != VK_SUCCESS)
+			// This slot's own fence, which is SLOTS frames old -- so in the normal case it is
+			// already signalled and this costs nothing.
+			if (vkWaitForFences(dev, 1, &g_native.fence[slot], VK_TRUE, 1'000'000'000ull) != VK_SUCCESS)
 			{
 				disable("frame generation timed out");
 				return 0;
 			}
 
-			g_native.submitted = false;
+			g_native.slot_submitted[slot] = false;
 		}
 
-		vkResetCommandBuffer(g_native.cmd, 0);
+		vkResetCommandBuffer(g_native.cmd[slot], 0);
 
 		VkCommandBufferBeginInfo begin = {};
 		begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 		begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
-		if (vkBeginCommandBuffer(g_native.cmd, &begin) != VK_SUCCESS)
+		if (vkBeginCommandBuffer(g_native.cmd[slot], &begin) != VK_SUCCESS)
 		{
 			disable("could not begin the frame generation command buffer");
 			return 0;
 		}
 
-		const Vulkan::vk::CommandBuffer cmdbuf{g_native.cmd};
+		const Vulkan::vk::CommandBuffer cmdbuf{g_native.cmd[slot]};
 
 		// Process the real presented image HERE, in framegen's own command buffer, exactly as
 		// the ARMSX2 driver does -- transition it to a readable layout, let Process copy it into
@@ -1226,7 +1250,7 @@ namespace vk::frame_gen
 		to_read.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
 		to_read.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
 
-		vkCmdPipelineBarrier(g_native.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		vkCmdPipelineBarrier(g_native.cmd[slot], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
 			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 			0, 0, nullptr, 0, nullptr, 1, &to_read);
 
@@ -1241,9 +1265,18 @@ namespace vk::frame_gen
 		from_read.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
 		from_read.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
 
-		vkCmdPipelineBarrier(g_native.cmd,
+		vkCmdPipelineBarrier(g_native.cmd[slot],
 			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 			VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &from_read);
+
+		// Plan straight after Process, as the ARMSX2 driver does: Process is what updates the
+		// pacer's view of the frame, and GeneratedFrameCount() only answers once it has warmed up.
+		const size_t wanted = g_native.framegen->WantedGenerations(g_context_outputs);
+		const size_t available = g_native.framegen->GeneratedFrameCount();
+		const u32 generations = static_cast<u32>(std::min({wanted, available,
+			static_cast<size_t>(g_context_outputs)}));
+
+		g_planned_generations = generations;
 
 		for (u32 i = 0; i < generations; ++i)
 		{
@@ -1251,7 +1284,7 @@ namespace vk::frame_gen
 				g_shared_out[i].view(), i);
 		}
 
-		if (vkEndCommandBuffer(g_native.cmd) != VK_SUCCESS)
+		if (vkEndCommandBuffer(g_native.cmd[slot]) != VK_SUCCESS)
 		{
 			disable("could not end the frame generation command buffer");
 			return 0;
@@ -1260,17 +1293,18 @@ namespace vk::frame_gen
 		VkSubmitInfo submit = {};
 		submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 		submit.commandBufferCount = 1;
-		submit.pCommandBuffers = &g_native.cmd;
+		submit.pCommandBuffers = &g_native.cmd[slot];
 
-		vkResetFences(dev, 1, &g_native.fence);
+		vkResetFences(dev, 1, &g_native.fence[slot]);
 
-		if (vkQueueSubmit(g_native.queue, 1, &submit, g_native.fence) != VK_SUCCESS)
+		if (vkQueueSubmit(g_native.queue, 1, &submit, g_native.fence[slot]) != VK_SUCCESS)
 		{
 			disable("frame generation submit failed");
 			return 0;
 		}
 
-		g_native.submitted = true;
+		g_native.slot_submitted[slot] = true;
+		g_native.frame_index++;
 
 		{
 			static u64 s_window = 0;
