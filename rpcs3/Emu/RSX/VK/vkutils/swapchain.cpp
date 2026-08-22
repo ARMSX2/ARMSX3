@@ -410,6 +410,26 @@ namespace vk
 		swap_info.imageColorSpace = m_color_space;
 
 		swap_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+		// Frame generation READS the presented image: FrameGen::Process copies it into the
+		// interpolation chain as TRANSFER_SRC_OPTIMAL. Both that layout and vkCmdCopyImage
+		// require the image to have been created with TRANSFER_SRC, and nothing else in the
+		// renderer ever reads a WSI image, so this was never needed before and was never asked
+		// for -- the copy was reading an image the driver had not prepared for reading.
+		//
+		// Requested only where the surface offers it, since TRANSFER_SRC is not guaranteed on
+		// Android surfaces. Where it is missing, frame generation captures nothing valid, which
+		// is a better failure than an invalid one.
+		if (g_cfg.video.frame_generation != frame_generation_mode::off &&
+			(surface_descriptors.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))
+		{
+			swap_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+		}
+		else if (g_cfg.video.frame_generation != frame_generation_mode::off)
+		{
+			rsx_log.warning("Swapchain: surface does not support TRANSFER_SRC; frame generation"
+				" cannot read presented frames on this surface.");
+		}
 		swap_info.preTransform = pre_transform;
 		swap_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 		swap_info.imageArrayLayers = 1;

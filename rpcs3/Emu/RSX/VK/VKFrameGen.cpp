@@ -1382,10 +1382,19 @@ namespace vk::frame_gen
 		to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		to_read.image = g_source_image;
 		to_read.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-		to_read.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+		// The frame's WRITES are what has to become visible here, not a read.
+		//
+		// This used TOP_OF_PIPE with MEMORY_READ, and TOP_OF_PIPE in srcStageMask specifies no
+		// stage at all -- an empty first scope, so no availability operation happened for the
+		// colour-attachment and transfer writes the frame made into this image in the previous
+		// submission. Submission order on a queue is not a memory dependency. The interpolation
+		// could therefore read a partially-flushed frame, which looks like smearing and does not
+		// respond to any interpolation setting.
+		to_read.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT;
 		to_read.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
 
-		vkCmdPipelineBarrier(g_native.cmd[slot], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+		vkCmdPipelineBarrier(g_native.cmd[slot],
+			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
 			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
 			0, 0, nullptr, 0, nullptr, 1, &to_read);
 
@@ -1398,12 +1407,14 @@ namespace vk::frame_gen
 		VkImageMemoryBarrier from_read = to_read;
 		from_read.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
 		from_read.newLayout = g_source_layout;
+		// BOTTOM_OF_PIPE in dstStageMask is likewise an empty second scope. The presentation
+		// engine is the consumer, so the release has to be visible to it.
 		from_read.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
 		from_read.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
 
 		vkCmdPipelineBarrier(g_native.cmd[slot],
 			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-			VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &from_read);
+			VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &from_read);
 
 		// Plan straight after Process, as the ARMSX2 driver does: Process is what updates the
 		// pacer's view of the frame, and GeneratedFrameCount() only answers once it has warmed up.
