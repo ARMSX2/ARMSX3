@@ -621,6 +621,7 @@ object Rpcs3Bridge {
                 "Frame Generation" -> Rpcs3Settings.setFrameGeneration(asInt(value))
                 "Frame Generation Performance Mode" -> Rpcs3Settings.setFrameGenPerformance(asBool(value))
                 "Frame Generation Flow Scale" -> Rpcs3Settings.setFrameGenFlowScale(asInt(value))
+                "Frame Generation Target Rate" -> Rpcs3Settings.setFrameGenTargetRate(asInt(value))
                 "Write Color Buffers" -> Rpcs3Settings.setWriteColorBuffers(asBool(value))
                 "Write Depth Buffer" -> Rpcs3Settings.setWriteDepthBuffer(asBool(value))
                 "Read Color Buffers" -> Rpcs3Settings.setReadColorBuffers(asBool(value))

@@ -493,6 +493,10 @@ object Rpcs3Settings {
     fun setFrameGenFlowScale(percent: Int) =
         setInt("$VIDEO@@Frame Generation Flow Scale", percent.coerceIn(25, 100))
 
+    /** Hz to hold, or 0 for the fixed multiplier. Bounds match what the core accepts. */
+    fun setFrameGenTargetRate(hz: Int) =
+        setInt("$VIDEO@@Frame Generation Target Rate", hz.coerceIn(0, 480))
+
     fun setFrameGeneration(index: Int) =
         setEnum("$VIDEO@@Frame Generation", FRAME_GENERATION.getOrElse(index) { FRAME_GENERATION[0] })
 

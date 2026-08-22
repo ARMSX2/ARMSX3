@@ -134,6 +134,8 @@ data class Ps3Settings(
     val frameGenPerformance: Boolean = true,
     // Optical-flow resolution as a percentage of full; lower is cheaper and blurrier in motion.
     val frameGenFlowScale: Int = 100,
+    /** Hz to hold, or 0 for the fixed multiplier. Non-zero selects adaptive pacing. */
+    val frameGenTargetRate: Int = 0,
     val writeColorBuffers: Boolean = false,
     val writeDepthBuffer: Boolean = false,
     val readColorBuffers: Boolean = false,
@@ -1109,6 +1111,7 @@ data class Settings(
         put("PS3/Video", "Frame Generation", "enum", ps3.frameGeneration.toString())
         put("PS3/Video", "Frame Generation Performance Mode", "bool", ps3.frameGenPerformance.toString())
         put("PS3/Video", "Frame Generation Flow Scale", "int", ps3.frameGenFlowScale.toString())
+        put("PS3/Video", "Frame Generation Target Rate", "int", ps3.frameGenTargetRate.toString())
         put("PS3/Video", "Write Color Buffers", "bool", ps3.writeColorBuffers.toString())
         put("PS3/Video", "Write Depth Buffer", "bool", ps3.writeDepthBuffer.toString())
         put("PS3/Video", "Read Color Buffers", "bool", ps3.readColorBuffers.toString())
@@ -2088,6 +2091,7 @@ data class Settings(
         put("ps3FrameGeneration", ps3.frameGeneration)
         put("ps3FrameGenPerformance", ps3.frameGenPerformance)
         put("ps3FrameGenFlowScale", ps3.frameGenFlowScale)
+        put("ps3FrameGenTargetRate", ps3.frameGenTargetRate)
         put("ps3WriteColorBuffers", ps3.writeColorBuffers)
         put("ps3GpuTurbo", ps3.gpuTurbo)
         put("ps3SilenceAllLogs", ps3.silenceAllLogs)
@@ -2442,6 +2446,7 @@ data class Settings(
                     frameGeneration = json.optInt("ps3FrameGeneration", def.ps3.frameGeneration),
                     frameGenPerformance = json.optBoolean("ps3FrameGenPerformance", def.ps3.frameGenPerformance),
                     frameGenFlowScale = json.optInt("ps3FrameGenFlowScale", def.ps3.frameGenFlowScale),
+                    frameGenTargetRate = json.optInt("ps3FrameGenTargetRate", def.ps3.frameGenTargetRate),
                     writeColorBuffers = json.optBoolean("ps3WriteColorBuffers", def.ps3.writeColorBuffers),
                     gpuTurbo = json.optBoolean("ps3GpuTurbo", def.ps3.gpuTurbo),
                     silenceAllLogs = json.optBoolean("ps3SilenceAllLogs", def.ps3.silenceAllLogs),
@@ -2781,6 +2786,7 @@ data class Settings(
             if (current.ps3.frameGeneration != base.ps3.frameGeneration) j.put("ps3FrameGeneration", current.ps3.frameGeneration)
             if (current.ps3.frameGenPerformance != base.ps3.frameGenPerformance) j.put("ps3FrameGenPerformance", current.ps3.frameGenPerformance)
             if (current.ps3.frameGenFlowScale != base.ps3.frameGenFlowScale) j.put("ps3FrameGenFlowScale", current.ps3.frameGenFlowScale)
+            if (current.ps3.frameGenTargetRate != base.ps3.frameGenTargetRate) j.put("ps3FrameGenTargetRate", current.ps3.frameGenTargetRate)
             if (current.ps3.writeColorBuffers != base.ps3.writeColorBuffers) j.put("ps3WriteColorBuffers", current.ps3.writeColorBuffers)
             if (current.ps3.gpuTurbo != base.ps3.gpuTurbo) j.put("ps3GpuTurbo", current.ps3.gpuTurbo)
             if (current.ps3.silenceAllLogs != base.ps3.silenceAllLogs) j.put("ps3SilenceAllLogs", current.ps3.silenceAllLogs)
@@ -3096,6 +3102,7 @@ data class Settings(
                     frameGeneration = if (overrides.has("ps3FrameGeneration")) overrides.getInt("ps3FrameGeneration") else base.ps3.frameGeneration,
                     frameGenPerformance = if (overrides.has("ps3FrameGenPerformance")) overrides.getBoolean("ps3FrameGenPerformance") else base.ps3.frameGenPerformance,
                     frameGenFlowScale = if (overrides.has("ps3FrameGenFlowScale")) overrides.getInt("ps3FrameGenFlowScale") else base.ps3.frameGenFlowScale,
+                    frameGenTargetRate = if (overrides.has("ps3FrameGenTargetRate")) overrides.getInt("ps3FrameGenTargetRate") else base.ps3.frameGenTargetRate,
                     writeColorBuffers = if (overrides.has("ps3WriteColorBuffers")) overrides.getBoolean("ps3WriteColorBuffers") else base.ps3.writeColorBuffers,
                     gpuTurbo = if (overrides.has("ps3GpuTurbo")) overrides.getBoolean("ps3GpuTurbo") else base.ps3.gpuTurbo,
                     silenceAllLogs = if (overrides.has("ps3SilenceAllLogs")) overrides.getBoolean("ps3SilenceAllLogs") else base.ps3.silenceAllLogs,

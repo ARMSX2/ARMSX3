@@ -442,6 +442,19 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(frameGenFlowScale = it))) },
             )
             SettingsDivider()
+            SettingsDivider()
+            SegmentedGridRow(
+                label = str("perf.framegen.targetRate.label"),
+                options = listOf(str("perf.framegen.off"), "60 Hz", "90 Hz", "120 Hz"),
+                selectedIndex = when (s.ps3.frameGenTargetRate) { 60 -> 1; 90 -> 2; 120 -> 3; else -> 0 },
+                columns = 4,
+                description = str("perf.framegen.targetRate.description"),
+                onChange = { idx ->
+                    val hz = when (idx) { 1 -> 60; 2 -> 90; 3 -> 120; else -> 0 }
+                    apply(s.copy(ps3 = s.ps3.copy(frameGenTargetRate = hz)))
+                },
+            )
+            SettingsDivider()
             FrameGenShaderRow()
         }
         SettingsDivider()

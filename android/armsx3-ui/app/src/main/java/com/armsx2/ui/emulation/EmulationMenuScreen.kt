@@ -1059,6 +1059,29 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
                 selected = settings.ps3.frameGeneration,
                 onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGeneration = v)) } },
             )
+
+            // The rest of frame generation, which until now only existed in the main settings
+            // screen. Someone who opens this menu mid-game is here to change exactly these:
+            // the multiplier alone cannot answer "it is generating, but the picture is unsteady"
+            // (target rate) or "it is generating, but too expensive" (flow scale, performance).
+            HorizontalOptions(
+                title = str("perf.framegen.targetRate.label"),
+                options = listOf(0 to str("perf.framegen.off"), 60 to "60 Hz", 90 to "90 Hz", 120 to "120 Hz"),
+                selected = settings.ps3.frameGenTargetRate,
+                onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenTargetRate = v)) } },
+            )
+            HorizontalOptions(
+                title = str("perf.framegen.flowScale.label"),
+                options = listOf(50 to "50%", 75 to "75%", 100 to "100%"),
+                selected = settings.ps3.frameGenFlowScale,
+                onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenFlowScale = v)) } },
+            )
+            HorizontalOptions(
+                title = str("perf.framegen.performance.label"),
+                options = listOf(1 to str("common.on"), 0 to str("common.off")),
+                selected = if (settings.ps3.frameGenPerformance) 1 else 0,
+                onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenPerformance = v == 1)) } },
+            )
         }
         Spacer(Modifier.height(10.dp))
     }

@@ -449,14 +449,27 @@ namespace vk::frame_gen
 			return 0;
 		}
 
-		// The cache is consulted here rather than at load time because this is the first thing
-		// anything asks, and it costs one stat() when there is nothing to restore.
-		if (const u32 restored = load_shader_cache())
+		// Asks whether the CACHE is usable, not whether Lossless.dll is still sitting there.
+		//
+		// Two wrong answers were possible here and both were given. First this counted
+		// g_shaders, which import_shaders stopped filling when it moved to the ported extractor,
+		// so generated_frame_count() returned 0 and frame generation sat on "starting" with
+		// nothing logged. Then it asked GetInstalledLosslessStatus(), which validates the DLL
+		// PATH -- and the UI copies the picked file into app cache, which Android is free to
+		// purge. Re-importing wrote a perfectly good 322KB shader cache and this still answered
+		// "no shaders", because it was asking about a file that no longer had to exist.
+		//
+		// The shaders are extracted once and cached; the source is not needed again. So the
+		// question is whether the cache loads.
+		VideoCore::FrameGen::ShaderModules probe;
+
+		if (VideoCore::FrameGen::LoadShaderModules(probe, false, false) !=
+			VideoCore::FrameGen::LosslessStatus::Ok || probe.empty())
 		{
-			return ::narrow<int>(restored);
+			return 0;
 		}
 
-		return g_api.shader_count ? g_api.shader_count() : 0;
+		return ::narrow<int>(probe.size());
 	}
 #else
 	// Frame generation is Android-only: framegen's other path shares images by file descriptor,
@@ -1109,12 +1122,32 @@ namespace vk::frame_gen
 			// device and frame generation allocates a handful of images, so giving it one of its
 			// own is cheaper than widening the renderer's abstraction to expose something that
 			// might not exist.
+			// Every field, for the reason memory.cpp documents at its own vmaCreateAllocator:
+			// Android builds with VK_NO_PROTOTYPES, so VMA takes its dynamic path and resolves
+			// the whole table through the two getters. It needs the INSTANCE to do that --
+			// vkGetInstanceProcAddr(nullptr, ...) answers only for global functions -- and with
+			// a null instance it stores nulls and then calls one from inside VmaAllocator_T's
+			// constructor. VMA_ASSERT compiles out in release, so the first symptom is a jump
+			// to address zero.
+			//
+			// This crashed exactly that way the first time frame generation was switched on:
+			// SIGSEGV at pc 0, inside vmaCreateAllocator, called from generate().
 			VmaAllocatorCreateInfo aci = {};
 			aci.physicalDevice = dev.gpu();
 			aci.device = dev;
+			aci.instance = static_cast<VkInstance>(dev.gpu());
+			aci.vulkanApiVersion = VK_API_VERSION_1_2;
+
 			VmaVulkanFunctions fns = {};
-			fns.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
-			fns.vkGetDeviceProcAddr = vkGetDeviceProcAddr;
+			fns.vkGetInstanceProcAddr = ::vkGetInstanceProcAddr;
+			fns.vkGetDeviceProcAddr = ::vkGetDeviceProcAddr;
+
+			if (!fns.vkGetInstanceProcAddr || !fns.vkGetDeviceProcAddr)
+			{
+				framegen_log.error("Vulkan dispatch table is not loaded; frame generation cannot start");
+				return false;
+			}
+
 			aci.pVulkanFunctions = &fns;
 
 			if (vmaCreateAllocator(&aci, &g_native.vma) != VK_SUCCESS)
@@ -1193,46 +1226,9 @@ namespace vk::frame_gen
 			return 0;
 		}
 
-		if (!initialized())
-		{
-			// Despite the name, framegen's "device UUID" is not one. It walks the physical devices
-			// on ITS instance and matches
-			//     (vendorID << 32) | deviceID
-			// against this value (framegen/src/core/device.cpp), with 0x1463ABAC as a wildcard.
-			// Passing 0 matches nothing, which is why this failed with "Could not find physical
-			// device with UUID" even once the shaders imported cleanly.
-			//
-			// Built from our own adapter rather than using the wildcard on purpose: framegen
-			// creates a second VkDevice, and it has to land on the SAME GPU we render with or the
-			// AHardwareBuffer handover has two unrelated devices on either end.
-			VkPhysicalDeviceProperties props{};
-			vkGetPhysicalDeviceProperties(dev.gpu(), &props);
-
-			const u64 device_id = (static_cast<u64>(props.vendorID) << 32) | props.deviceID;
-
-			// SDR only -- there is no HDR output path here for it to mean anything against.
-			//
-			// Both of the other two are read HERE rather than cached, because this is the only
-			// moment they can take effect: the shader family and the flow scale are baked into
-			// framegen's device and pipelines at initialize, so changing either mid-session does
-			// nothing until frame generation is turned off and on again.
-			// 100 / value, NOT value / 100. framegen treats this parameter as a DIVISOR --
-			// flowExtent = inputExtent / flowScale (framegen/v3.1_src/shaders/mipmaps.cpp) --
-			// and upstream's own layer passes 1.0f/conf.flowScale for exactly that reason.
-			// Dividing by 100 inverted the slider: "Motion detail 25%" asked for a flow pyramid
-			// FOUR times larger per axis, sixteen times the pixels, which is the opposite of
-			// what the setting says and gets slower the further it is turned down. Only the
-			// default of 100 happened to be correct, because 1.0 is its own reciprocal.
-			const f32 flow_scale = 100.f / std::max<u32>(g_cfg.video.frame_generation_flow_scale, 1u);
-			const bool performance = g_cfg.video.frame_generation_performance.get();
-
-			if (!initialize(device_id, false, flow_scale, want, performance, &shader_from_library, nullptr))
-			{
-				disable(fmt::format("framegen would not initialize on %s (vendor 0x%04x device 0x%04x)",
-					props.deviceName, props.vendorID, props.deviceID).c_str());
-				return 0;
-			}
-		}
+		// No initialize() here any more. That built the dlopen'd library's context on its own
+		// VkDevice; build_native_stack() below builds the passes instead, and leaving the old
+		// call in meant a failure inside a path nothing uses could still disable the feature.
 
 		if (g_context < 0 || g_context_outputs != want)
 		{

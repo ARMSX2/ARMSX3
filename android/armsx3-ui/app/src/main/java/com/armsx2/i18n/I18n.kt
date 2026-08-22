@@ -1155,6 +1155,8 @@ val EN: Map<String, String> = mapOf(
     "perf.framegen.performance.label" to "Performance shaders",
     "perf.framegen.performance.description" to "Use Lossless Scaling's lighter 3.1p shaders instead of the full-quality 3.1 set. Cheaper to run and slightly softer in motion \u2014 on by default, because the quality set usually costs more than the frames it buys on a phone. Both come from the file you imported, so switching does not need another import.\n\nTakes effect when frame generation next starts: turn it off and on again, or restart the game.",
     "perf.framegen.flowScale.label" to "Motion detail",
+    "perf.framegen.targetRate.label" to "Target refresh rate",
+    "perf.framegen.targetRate.description" to "Generate as many frames as it takes to hold this rate, instead of a fixed multiplier. Steadies the picture when the game's own frame rate moves. Off uses the multiplier above.",
     "perf.framegen.flowScale.description" to "How finely motion is measured between frames, as a percentage of full resolution. Lower is faster and blurrier around moving edges. Drop this before dropping the multiplier if frame generation is costing more than it gives.\n\nTakes effect when frame generation next starts.",
     "perf.framegen.off" to "Off",
     "perf.framegen.x2" to "x2",
