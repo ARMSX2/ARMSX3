@@ -48,8 +48,13 @@ bool OboeBackend::Open(std::string_view /*dev_id*/, AudioFreq freq, AudioSampleS
 {
 	Close();
 
-	oboe::AudioStreamBuilder builder;
+	// The PS3 side owns resampling, so the first attempt asks the device for the guest rate
+	// directly and forbids Oboe from converting. A device that cannot run at that rate opens at
+	// its own instead -- see the check after openStream, which reopens with conversion on.
+	oboe::SampleRateConversionQuality conversion = oboe::SampleRateConversionQuality::None;
 
+	const auto build = [&](oboe::AudioStreamBuilder& builder)
+	{
 	builder.setDirection(oboe::Direction::Output)
 		// Shared, not Exclusive.
 		//
@@ -65,7 +70,7 @@ bool OboeBackend::Open(std::string_view /*dev_id*/, AudioFreq freq, AudioSampleS
 		->setUsage(oboe::Usage::Game)
 		->setSampleRate(static_cast<s32>(freq))
 		// The PS3 side owns resampling; converting again here would be a second, worse pass.
-		->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::None)
+		->setSampleRateConversionQuality(conversion)
 		->setChannelCount(static_cast<s32>(ch_cnt))
 		->setFormat(sample_size == AudioSampleSize::FLOAT ? oboe::AudioFormat::Float : oboe::AudioFormat::I16)
 		->setDataCallback(this)
@@ -75,12 +80,53 @@ bool OboeBackend::Open(std::string_view /*dev_id*/, AudioFreq freq, AudioSampleS
 		// cannot hold it underruns no matter how the trigger level is set.
 		->setBufferCapacityInFrames(std::max<s32>(2048,
 			static_cast<s32>((static_cast<u64>(static_cast<s32>(freq)) * g_cfg.audio.desired_buffer_duration) / 1000)));
+	};
+
+	oboe::AudioStreamBuilder builder;
+	build(builder);
 
 	if (const oboe::Result result = builder.openStream(m_stream); result != oboe::Result::OK)
 	{
 		Oboe.error("Failed to open stream: %s", oboe::convertToText(result));
 		m_stream.reset();
 		return false;
+	}
+
+	// A device that cannot run at the guest rate opens at its own, and with conversion disabled
+	// nothing resamples: the emulator then feeds samples at one rate into a device consuming them
+	// at another. That is not a one-off pitch error, it is a permanent rate mismatch, so the
+	// offset between what is heard and what is on screen grows for as long as playback continues.
+	// The emulator cannot even see it -- every downstream calculation, including the buffering
+	// algorithm's idea of how much audio is queued, uses the rate we asked for.
+	//
+	// Letting Oboe convert is a worse signal path than matching rates outright, and a far better
+	// one than not converting at all. Cubeb resamples for the same reason.
+	if (m_stream->getSampleRate() != static_cast<s32>(freq))
+	{
+		Oboe.warning("Device opened at %dHz, not the requested %dHz; reopening with conversion.",
+			m_stream->getSampleRate(), static_cast<s32>(freq));
+
+		m_stream->close();
+		m_stream.reset();
+
+		conversion = oboe::SampleRateConversionQuality::Medium;
+
+		oboe::AudioStreamBuilder rebuilder;
+		build(rebuilder);
+
+		if (const oboe::Result result = rebuilder.openStream(m_stream); result != oboe::Result::OK)
+		{
+			Oboe.error("Failed to reopen stream with conversion: %s", oboe::convertToText(result));
+			m_stream.reset();
+			return false;
+		}
+
+		if (m_stream->getSampleRate() != static_cast<s32>(freq))
+		{
+			// Nothing further to try. Report it plainly rather than drifting in silence.
+			Oboe.error("Device still at %dHz after enabling conversion; audio will drift from video.",
+				m_stream->getSampleRate());
+		}
 	}
 
 	m_sampling_rate = freq;
