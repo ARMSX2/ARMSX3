@@ -101,6 +101,7 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("pad.section.playerRumble", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.editing.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.rumble.label", true, SettingsCategory.Controls),
+    SettingsSearchEntry("pad.rumblePhone.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.hapticStrength.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.pressureAmount.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.section.analogSticks", true, SettingsCategory.Controls),

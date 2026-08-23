@@ -393,6 +393,17 @@ object ControllerMappings {
         com.armsx3.NativeApp.sRumbleEnabled = on
     }
 
+    // Whether the PHONE's motor may be used. Rumble prefers a connected controller's motor and
+    // falls back to the phone; this gates only that fallback, so playing on a pad need not mean
+    // the phone buzzes too. Mirrored into NativeApp.sPhoneRumbleEnabled the same way KEY_RUMBLE
+    // is — live on change and at app start. Default on, so a phone-only player is unaffected.
+    private const val KEY_RUMBLE_PHONE = "pad.rumble.phone"
+    fun phoneRumbleEnabled(): Boolean = MainActivityRuntime.prefs.getBoolean(KEY_RUMBLE_PHONE, true)
+    fun setPhoneRumbleEnabled(on: Boolean) {
+        MainActivityRuntime.prefs.edit { putBoolean(KEY_RUMBLE_PHONE, on) }
+        com.armsx3.NativeApp.sPhoneRumbleEnabled = on
+    }
+
     // Haptic strength: one multiplier scaling ALL vibration — controller rumble AND on-screen
     // touch ticks both funnel through NativeApp.rumbleOne. 0..200 % (100 = as the game/UI
     // authored it), so it tames a too-strong motor or boosts a weak one. Persisted and mirrored

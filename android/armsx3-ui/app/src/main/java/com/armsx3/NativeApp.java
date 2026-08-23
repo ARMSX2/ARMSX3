@@ -247,6 +247,13 @@ public final class NativeApp {
     /** Master rumble toggle. */
     public static volatile boolean sRumbleEnabled = true;
 
+    /**
+     * Whether the PHONE's own motor may be used. A controller's motor is always allowed; this
+     * only gates the fallback, so a user playing on a pad can stop the phone buzzing in their
+     * pocket or dock without giving up rumble entirely (issue #89). Default on.
+     */
+    public static volatile boolean sPhoneRumbleEnabled = true;
+
     /** Volume applied to UI sounds played through NativeApp.playSound. */
     public static volatile float sSoundVolume = 1.0f;
 

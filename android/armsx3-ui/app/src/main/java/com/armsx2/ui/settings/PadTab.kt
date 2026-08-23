@@ -260,6 +260,16 @@ fun PadTab(state: MutableState<Settings>) {
                 ControllerMappings.setRumbleEnabled(it)
                 refreshToken.intValue++
             }
+            // Rumble prefers a connected controller's motor; this gates only the phone fallback,
+            // so playing on a pad need not mean the phone buzzes along with it.
+            ToggleRow(
+                str("pad.rumblePhone.label"),
+                ControllerMappings.phoneRumbleEnabled(),
+                description = str("pad.rumblePhone.description"),
+            ) {
+                ControllerMappings.setPhoneRumbleEnabled(it)
+                refreshToken.intValue++
+            }
             // Vibration strength: one multiplier over BOTH controller rumble and on-screen touch
             // haptics (they share the motor path), so an over-eager motor can be tamed or a weak
             // one boosted. 100% = as authored; 0% = off.

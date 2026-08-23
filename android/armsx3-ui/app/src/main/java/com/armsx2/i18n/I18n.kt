@@ -906,6 +906,9 @@ val EN: Map<String, String> = mapOf(
     "pad.players.help" to "The PS3 has seven controller ports and no multitap, so up to seven pads work with no setup. Connect them before launching — the order they first press a button in is the order they are assigned.",
     "pad.rumble.description" to "Master switch for controller rumble and the device's built-in vibration. Turn off to silence all haptics.",
     "pad.rumble.label" to "Rumble / Vibration",
+    "pad.rumblePhone.label" to "Vibrate the phone",
+    "pad.rumblePhone.description" to
+        "Use the phone's own motor when no controller has one. Turn this off to keep rumble on the controller only.",
     "pad.hapticStrength.description" to "Scales all vibration — controller rumble and on-screen touch haptics alike. Below 100% tames a strong motor; above 100% boosts a weak one.",
     "pad.hapticStrength.label" to "Vibration Strength",
     "pad.scopeHint.global" to "○ Editing GLOBAL controls (all games).",

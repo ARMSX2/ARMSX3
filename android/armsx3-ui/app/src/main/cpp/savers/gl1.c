@@ -72,7 +72,13 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "Savers", __VA_ARGS__)
 
 #define STACK_DEPTH 32
-#define GL1_MAX_LISTS 16
+/* Sixteen was not enough for two of the savers, and the failure was silent-ish: glGenLists
+ * returned 0, every subsequent glNewList/glCallList logged "bad list", and the geometry those
+ * lists held simply never drew. Lattice asks for 20 in one range (NUMOBJECTS), and Skyrocket
+ * accumulates 16 across separate calls -- flare 4, smoke 5, and seven singles in world.cpp.
+ * Names are 1-based, so the old ceiling allowed a longest run of 15 and neither could ever
+ * succeed. Sixty-four is a slot table of a pointer and two ints apiece: about a kilobyte. */
+#define GL1_MAX_LISTS 64
 
 typedef struct {
     float pos[3];

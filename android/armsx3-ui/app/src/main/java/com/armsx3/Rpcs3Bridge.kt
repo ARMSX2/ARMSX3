@@ -1390,7 +1390,8 @@ object Rpcs3Bridge {
     // called. Two stores, neither connected to the other.
     private val rumbleEnabled: Boolean get() = NativeApp.sRumbleEnabled
 
-    private fun vibrator(): Vibrator? {
+    /** The phone's own motor. */
+    private fun deviceVibrator(): Vibrator? {
         val ctx = appContext ?: return null
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
@@ -1399,6 +1400,50 @@ object Rpcs3Bridge {
             ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
         }
     }
+
+    /**
+     * The motor in a connected controller, if one has it.
+     *
+     * Rumble went to the PHONE even with a controller attached, because this only ever asked the
+     * system service. The pad is what the game is addressing; the phone buzzing in its place is
+     * wrong, and on a handheld it is the wrong motor entirely (issue #89).
+     *
+     * The first gamepad or joystick with a working motor wins, in InputDevice id order, so a
+     * single connected pad is unambiguous.
+     */
+    private fun controllerVibrator(): Vibrator? = runCatching {
+        for (id in android.view.InputDevice.getDeviceIds()) {
+            val dev = android.view.InputDevice.getDevice(id) ?: continue
+
+            val isPad = (dev.sources and android.view.InputDevice.SOURCE_GAMEPAD) ==
+                android.view.InputDevice.SOURCE_GAMEPAD ||
+                (dev.sources and android.view.InputDevice.SOURCE_JOYSTICK) ==
+                android.view.InputDevice.SOURCE_JOYSTICK
+
+            if (!isPad) continue
+
+            val v = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                dev.vibratorManager?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                dev.vibrator
+            }
+
+            if (v != null && v.hasVibrator()) return@runCatching v
+        }
+
+        null
+    }.getOrNull()
+
+    /**
+     * Where rumble goes: the controller if one can take it, otherwise the phone.
+     *
+     * Resolved on demand rather than cached, because a pad can be connected or disconnected
+     * mid-session. Callers only ask when the motor state changes, so enumerating devices is not a
+     * per-frame cost.
+     */
+    private fun vibrator(): Vibrator? =
+        controllerVibrator() ?: deviceVibrator().takeIf { NativeApp.sPhoneRumbleEnabled }
 
     @JvmStatic
     fun setPadVibration(on: Boolean) {
@@ -1410,12 +1455,13 @@ object Rpcs3Bridge {
     @JvmStatic
     fun startRumblePump() {
         if (rumbleRunning) return
-        val vib = vibrator() ?: return
-        if (!vib.hasVibrator()) return
 
         rumbleRunning = true
         rumbleThread = Thread {
             var lastAmplitude = 0
+            // The motor we last started, so it can be stopped even if the target has since
+            // changed underneath us -- otherwise unplugging a pad mid-rumble leaves it buzzing.
+            var active: Vibrator? = null
             while (rumbleRunning) {
                 val packed = runCatching { RPCSX.instance.getPadRumble(0) }.getOrDefault(0)
                 val large = (packed shr 8) and 0xFF
@@ -1428,8 +1474,15 @@ object Rpcs3Bridge {
 
                 if (want != lastAmplitude) {
                     runCatching {
-                        if (want <= 0) {
-                            vib.cancel()
+                        // Resolved per change, not once at startup: a pad connected mid-session
+                        // has to take over from the phone, and vice versa on disconnect.
+                        val vib = vibrator()
+
+                        active?.takeIf { it !== vib }?.cancel()
+                        active = null
+
+                        if (want <= 0 || vib == null) {
+                            vib?.cancel()
                         } else {
                             // Repeating one-shot rather than a fixed duration: the guest
                             // decides when rumble stops, and a timed effect would either cut
@@ -1439,6 +1492,7 @@ object Rpcs3Bridge {
                                     longArrayOf(0, 60), intArrayOf(0, want.coerceIn(1, 255)), 0
                                 )
                             )
+                            active = vib
                         }
                     }
                     lastAmplitude = want
@@ -1446,7 +1500,7 @@ object Rpcs3Bridge {
 
                 try { Thread.sleep(30) } catch (_: InterruptedException) { break }
             }
-            runCatching { vib.cancel() }
+            runCatching { active?.cancel() }
         }.apply { isDaemon = true; name = "rumble-pump"; start() }
     }
 
@@ -1500,13 +1554,9 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun touchHaptic() {
-        val ctx = appContext ?: return
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-        } ?: return
+        // The phone's motor deliberately, not vibrator(): this is feedback for a finger on the
+        // phone's own screen, so it belongs there even when a controller is holding the rumble.
+        val vibrator = deviceVibrator() ?: return
 
         runCatching {
             vibrator.vibrate(VibrationEffect.createOneShot(10, VibrationEffect.DEFAULT_AMPLITUDE))
