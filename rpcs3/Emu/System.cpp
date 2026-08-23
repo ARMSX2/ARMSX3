@@ -1881,6 +1881,39 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 
 			load_iso(m_path);
 
+			// load_iso() cannot report failure: it mounts the device whether or not the archive
+			// opened. An unreadable or undecryptable image therefore used to sail past here and
+			// die much further down as a bare "invalid file or folder", with nothing in the log
+			// saying which of a dozen causes it was. Decide it here, while the reason is knowable.
+			{
+				const auto device = fs::get_virtual_device(iso_device::virtual_device_name + "/");
+				const auto iso_dev = dynamic_cast<const iso_device*>(device.get());
+
+				if (!iso_dev || !iso_dev->archive_valid())
+				{
+					std::string key_path;
+
+					switch (iso_file_decryption::check_type(m_path, &key_path))
+					{
+					case iso_type_status::ERROR_OPENING_KEY:
+						sys_log.error("Cannot read ISO '%s'. If this is an encrypted (redump) disc "
+							"image, put its matching '.dkey' or '.key' file next to the ISO, or in '%s'.",
+							m_path, rpcs3::utils::get_redump_key_dir());
+						return game_boot_result::decryption_error;
+
+					case iso_type_status::ERROR_PROCESSING_KEY:
+						sys_log.error("Cannot read ISO '%s': the disc key '%s' was rejected.", m_path, key_path);
+						return game_boot_result::decryption_error;
+
+					default:
+						sys_log.error("Cannot read ISO '%s': the disc filesystem did not parse. The "
+							"image may be truncated or incomplete -- check that it copied whole, and "
+							"that the volume holding it can store a file that large.", m_path);
+						return game_boot_result::invalid_file_or_folder;
+					}
+				}
+			}
+
 			launching_from_disc_archive = true;
 
 			std::string path = iso_device::virtual_device_name + "/";
@@ -1890,6 +1923,23 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			if (fs::exists(path + m_game_dir + "/USRDIR/EBOOT.BIN"))
 			{
 				path = path + m_game_dir + "/USRDIR/EBOOT.BIN";
+			}
+			else
+			{
+				// Install discs legitimately lack one, so this is not fatal on its own -- but when
+				// the boot does go on to fail, what the disc root actually held is the difference
+				// between a diagnosable report and a bare error code.
+				std::string entries;
+
+				for (auto&& entry : fs::dir(iso_device::virtual_device_name + "/"))
+				{
+					if (entry.name == "." || entry.name == "..") continue;
+					if (!entries.empty()) entries += ", ";
+					entries += entry.name;
+				}
+
+				sys_log.warning("ISO has no '%s/USRDIR/EBOOT.BIN'. Disc root contains: %s",
+					m_game_dir, entries.empty() ? "(nothing)" : entries.c_str());
 			}
 
 			m_path_real = m_path;

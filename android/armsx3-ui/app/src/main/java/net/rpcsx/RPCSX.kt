@@ -57,15 +57,23 @@ enum class BootResult
     DecryptionError,
     FileCreationError,
     FirmwareMissing,
+    // Mirrors game_boot_result in Emu/System.h BY ORDINAL -- the native side sends the raw int.
+    // FirmwareVersion and DatabaseConfigMissing were missing here, so every value from this point
+    // down was reported as its neighbour (still_running surfaced as "AlreadyAdded") and the last
+    // two had no entry at all, making fromInt throw. Keep this list in step with the C++ enum.
+    FirmwareVersion,
     UnsupportedDiscType,
     SavestateCorrupted,
     SavestateVersionUnsupported,
     StillRunning,
     AlreadyAdded,
-    CurrentlyRestricted;
+    CurrentlyRestricted,
+    DatabaseConfigMissing;
 
     companion object {
-        fun fromInt(value: Int) = entries.first { it.ordinal == value }
+        // Total rather than throwing: an unrecognised code means the enums have drifted again,
+        // and reporting that as a generic failure beats taking the app down with it.
+        fun fromInt(value: Int) = entries.getOrNull(value) ?: GenericError
     }
 };
 

@@ -209,6 +209,10 @@ public:
 
 	const std::string& get_loaded_iso() const { return m_path; }
 
+	// Whether the mounted image actually opened. load_iso() mounts the device regardless, so
+	// this is the only way a caller can tell a readable disc from one that produced nothing.
+	bool archive_valid() const { return m_archive.is_valid(); }
+
 	bool stat(const std::string& path, fs::stat_t& info) override;
 	bool statfs(const std::string& path, fs::device_stat& info) override;
 
