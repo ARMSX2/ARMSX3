@@ -26,10 +26,21 @@ bool g_started = false;
 
 extern "C" {
 
+/* Defined below. port_new tears a stale run down through it rather than trusting
+ * g_started, so the declaration has to come first. */
+void skyrocket_port_free();
+
 int skyrocket_port_new(int preset)
 {
     (void) preset;  /* No presets upstream; every knob was a registry value. */
-    if (g_started) return 1;
+    /* NOT "if (g_started) return 1": nativeInit calls gl1_lost() before every create, so
+     * gl1 is guaranteed DOWN on entry now. Reporting success here would hand the caller a
+     * saver with no shim under it. That guard was only ever safe because gl1 state
+     * survived between savers -- which is exactly the property gl1_lost() removed, so it
+     * went from redundant to wrong. Unreachable today (port_free always clears g_started),
+     * but the rule is that a stale run is torn down and gl1_init() always runs, rather
+     * than that every caller gets the ordering right. */
+    if (g_started) skyrocket_port_free();
     if (!gl1_init()) return 0;
 
     saver_skyrocket::setDefaults();
