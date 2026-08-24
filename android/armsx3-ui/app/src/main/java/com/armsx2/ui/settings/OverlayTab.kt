@@ -244,6 +244,31 @@ fun OverlayTab(state: MutableState<Settings>) {
             ffToasts.value = it
             com.armsx2.runtime.MainActivityRuntime.prefs.edit { putBoolean("ui.hotkeyToasts", it) }
         }
+        SettingsDivider()
+        // Device temperatures on the perf overlay. Android exposes no supported API for SoC
+        // temperatures, so these come from the thermal sysfs, whose zone naming and units are
+        // vendor-specific -- a device with no readable zone simply shows nothing here.
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        ToggleRow(
+            str("overlay.toggle.temps"),
+            com.armsx2.Thermals.osdEnabled.value,
+            description = str("overlay.toggle.temps.description"),
+        ) {
+            com.armsx2.Thermals.setOsdEnabled(ctx, it)
+        }
+        // Poll interval. Asked for explicitly as the mitigation for sensor overhead. No
+        // "realtime" option: a temperature that moves slower than a second is not worth the
+        // syscalls.
+        if (com.armsx2.Thermals.osdEnabled.value) {
+            IntSliderRow(
+                label = str("overlay.tempInterval.label"),
+                value = com.armsx2.Thermals.intervalSec.value,
+                min = 1,
+                max = 5,
+                valueFormatter = { "${it}s" },
+                onChange = { com.armsx2.Thermals.setIntervalSec(it) },
+            )
+        }
     }
 }
 

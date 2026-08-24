@@ -2158,6 +2158,9 @@ open class MainActivityRuntime : ComponentActivity() {
         // Restore the saved rumble master toggle into the native gate (NativeApp.onPadRumble).
         NativeApp.sRumbleEnabled = ControllerMappings.rumbleEnabled()
         NativeApp.sPhoneRumbleEnabled = ControllerMappings.phoneRumbleEnabled()
+        // Starts the temperature poll if the overlay wants it. Costs one file read every couple
+        // of seconds and stops entirely when the option is off.
+        runCatching { com.armsx2.Thermals.load(this) }
         // Push the saved haptic strength + achievement-sound volume into their native gates before
         // any rumble or unlock sound can fire (both default to 1.0 = as authored until set here).
         ControllerMappings.syncHapticIntensity()

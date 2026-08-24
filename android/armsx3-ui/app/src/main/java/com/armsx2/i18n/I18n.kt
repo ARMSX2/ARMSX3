@@ -905,6 +905,10 @@ val EN: Map<String, String> = mapOf(
     "pad.rightStickFeel.title" to "Right Stick Feel",
     "pad.players.help" to "The PS3 has seven controller ports and no multitap, so up to seven pads work with no setup. Connect them before launching — the order they first press a button in is the order they are assigned.",
     "pad.rumble.description" to "Master switch for controller rumble and the device's built-in vibration. Turn off to silence all haptics.",
+    "overlay.toggle.temps" to "Device temperatures",
+    "overlay.toggle.temps.description" to
+        "Show CPU, GPU and battery temperature on the performance overlay. Not every device exposes these \u2014 one that doesn't simply shows nothing.",
+    "overlay.tempInterval.label" to "Temperature poll interval",
     "pad.rumble.label" to "Rumble / Vibration",
     "pad.rumblePhone.label" to "Vibrate the phone",
     "pad.rumblePhone.description" to
