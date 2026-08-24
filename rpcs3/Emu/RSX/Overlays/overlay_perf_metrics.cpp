@@ -640,6 +640,15 @@ namespace rsx
 					fmt::append(perf_text, "%s%s", perf_text.empty() ? "" : "\n", lsfg);
 				}
 
+				// Device temperatures, for the same reason and in the same place: appended after
+				// the switch so every detail level gets them without four format strings and
+				// their positional arguments having to agree. Empty when the option is off or no
+				// zone was readable, so the overlay is unchanged for anyone it cannot serve.
+				if (const std::string temps = thermals::status_text(); !temps.empty())
+				{
+					fmt::append(perf_text, "%s%s", perf_text.empty() ? "" : "\n", temps);
+				}
+
 				m_body.set_text(perf_text);
 
 				if (perf_text.empty())
@@ -938,6 +947,42 @@ namespace rsx
 			compiled_resources.add(m_label.get_compiled());
 
 			return compiled_resources;
+		}
+
+		namespace thermals
+		{
+			atomic_t<f32> g_cpu{none};
+			atomic_t<f32> g_gpu{none};
+			atomic_t<f32> g_battery{none};
+			atomic_t<bool> g_show{false};
+
+			std::string status_text()
+			{
+				if (!g_show)
+				{
+					return {};
+				}
+
+				std::string out;
+
+				// Whole degrees. A tenth is noise on a sysfs zone that updates every couple of
+				// seconds, and this is read at a glance.
+				const auto add = [&out](const char* label, f32 c)
+				{
+					if (c <= none)
+					{
+						return;
+					}
+
+					fmt::append(out, "%s%s %d\u00b0C", out.empty() ? "" : "  ", label, static_cast<int>(c));
+				};
+
+				add("CPU", g_cpu);
+				add("GPU", g_gpu);
+				add("BAT", g_battery);
+
+				return out;
+			}
 		}
 
 		extern void reset_performance_overlay()

@@ -113,5 +113,33 @@ namespace rsx
 		};
 
 		void reset_performance_overlay();
+
+		// Device temperatures, pushed in from the Android app layer.
+		//
+		// The core cannot read these and should not learn how: Android has no supported API for
+		// SoC temperatures (HardwarePropertiesManager is gated behind the signature-level
+		// DEVICE_POWER), so the only route is the thermal sysfs, whose zone naming, ordering and
+		// even units are vendor-specific. That discovery belongs in the app, which already deals
+		// in Android specifics; this side just holds what it was told and prints it.
+		//
+		// Atomic because the writer is a UI-thread poll and the reader is the render thread.
+		// Relaxed is fine: three independent display values with no ordering relationship to each
+		// other or to anything else, and the worst a torn read can do is show one stale number
+		// for one frame.
+		namespace thermals
+		{
+			// Below any real temperature, so one comparison separates "could not read" from
+			// "cold" without carrying a second flag per value. A device with no readable zone is
+			// a normal outcome, not an error.
+			constexpr f32 none = -1000.0f;
+
+			extern atomic_t<f32> g_cpu;
+			extern atomic_t<f32> g_gpu;
+			extern atomic_t<f32> g_battery;
+			extern atomic_t<bool> g_show;
+
+			// "45°C  GPU 43°C  BAT 31°C", or empty when off or nothing is readable.
+			std::string status_text();
+		}
 	}
 }

@@ -381,9 +381,12 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
     }
 
     private fun actionCount(tab: EmulationMenuTab): Int = when (tab) {
-        // MUST match SessionPane's action list length. This was 4 against a list of 5, so the pad
-        // could never reach Close at all.
-        EmulationMenuTab.Session -> 5
+        // MUST match SessionPane's action list length, AND activateSelection's Session branch
+        // below -- all three are indexed by the same number and nothing checks they agree.
+        // Fast-forward used to sit at index 1 in the grid but had no entry in activateSelection,
+        // so every index from 1 up dispatched to its neighbour: a pad press on Fast Forward
+        // restarted the game, and Close could not be activated at all.
+        EmulationMenuTab.Session -> 4
         EmulationMenuTab.Graphics -> 2
         EmulationMenuTab.Fixes -> 0
         EmulationMenuTab.Performance -> 3

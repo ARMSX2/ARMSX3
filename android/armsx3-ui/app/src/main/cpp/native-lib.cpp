@@ -47,6 +47,7 @@ struct RPCSXApi {
   void (*surfaceSizeChanged)(int width, int height);
   void (*setPadSensor)(int port, int x, int y, int z, int g);
   int (*getPadRumble)(int port);
+  void (*setThermals)(float cpu, float gpu, float battery, bool show);
   bool (*usbDeviceEvent)(int fd, int vendorId, int productId, int event);
   bool (*installFw)(JNIEnv *env, int fd, long progressId);
   bool (*isInstallableFile)(jint fd);
@@ -161,6 +162,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.surfaceSizeChanged = reinterpret_cast<decltype(surfaceSizeChanged)>(dlsym(handle, "_rpcsx_surfaceSizeChanged"));
     result.setPadSensor = reinterpret_cast<decltype(setPadSensor)>(dlsym(handle, "_rpcsx_setPadSensor"));
     result.getPadRumble = reinterpret_cast<decltype(getPadRumble)>(dlsym(handle, "_rpcsx_getPadRumble"));
+    result.setThermals = reinterpret_cast<decltype(setThermals)>(dlsym(handle, "_rpcsx_setThermals"));
     result.usbDeviceEvent = reinterpret_cast<decltype(usbDeviceEvent)>(dlsym(handle, "_rpcsx_usbDeviceEvent"));
     result.installFw = reinterpret_cast<decltype(installFw)>(dlsym(handle, "_rpcsx_installFw"));
     result.isInstallableFile = reinterpret_cast<decltype(isInstallableFile)>(dlsym(handle, "_rpcsx_isInstallableFile"));
@@ -504,6 +506,18 @@ extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_getPadRumble(
   }
 
   return rpcsxLib.getPadRumble(port);
+}
+
+// Device temperatures for the perf overlay. Discovery is the app's job -- Android exposes no
+// supported API for SoC temperatures, so it reads the thermal sysfs, whose zone naming and units
+// are vendor-specific -- and this only carries the result across.
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setThermals(
+    JNIEnv *, jobject, jfloat cpu, jfloat gpu, jfloat battery, jboolean show) {
+  if (rpcsxLib.setThermals == nullptr) {
+    return;
+  }
+
+  rpcsxLib.setThermals(cpu, gpu, battery, show == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_surfaceSizeChanged(

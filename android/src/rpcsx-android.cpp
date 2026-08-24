@@ -19,6 +19,7 @@
 #include "Emu/Io/pad_config_types.h"
 #include "Emu/RSX/Null/NullGSRender.h"
 #include "Emu/RSX/Overlays/overlay_manager.h"
+#include "Emu/RSX/Overlays/overlay_perf_metrics.h"
 #include "Emu/RSX/Overlays/overlay_save_dialog.h"
 #include "Emu/RSX/Overlays/overlay_trophy_notification.h"
 #include "Emu/RSX/Overlays/overlay_utils.h"
@@ -4307,6 +4308,15 @@ extern "C" void _rpcsx_setPadSensor(int port, int x, int y, int z, int g) {
 // whenever it likes, and there is no notification to hook. The caller reads it on a
 // timer and drives the phone's vibrator. Returns 0 when nothing is running, so a
 // caller that keeps polling after the game stops simply sees silence.
+// Device temperatures, pushed from the app layer -- see the note in overlay_perf_metrics.h for
+// why discovery lives there and not here. Values are degrees Celsius, or the 'none' sentinel.
+extern "C" void _rpcsx_setThermals(float cpu, float gpu, float battery, bool show) {
+  rsx::overlays::thermals::g_cpu = cpu;
+  rsx::overlays::thermals::g_gpu = gpu;
+  rsx::overlays::thermals::g_battery = battery;
+  rsx::overlays::thermals::g_show = show;
+}
+
 extern "C" int _rpcsx_getPadRumble(int port) {
   std::lock_guard lock(g_virtual_pad_mutex);
 

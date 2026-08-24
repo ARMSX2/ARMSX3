@@ -111,6 +111,13 @@ class RPCSX {
 
     /** What the game is asking the rumble motors to do: (large shl 8) or small, each 0..255. */
     external fun getPadRumble(port: Int): Int
+
+    /**
+     * Device temperatures for the perf overlay, in degrees Celsius, or Thermals.NONE for a
+     * reading that could not be taken. Discovery is the app's job -- Android has no supported
+     * API for SoC temperatures -- so the core is only ever told the answer.
+     */
+    external fun setThermals(cpu: Float, gpu: Float, battery: Float, show: Boolean)
     external fun usbDeviceEvent(fd: Int, vendorId: Int, productId: Int, event: Int): Boolean
     external fun processCompilationQueue(): Boolean
     external fun startMainThreadProcessor(): Boolean
