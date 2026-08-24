@@ -1446,6 +1446,13 @@ namespace rsx
 	// So the same condition is polled from the PPU syscall usage thread, which ticks once a
 	// second and keeps running regardless. This half only DUMPS -- the on-screen message and the
 	// native-UI flip stay on the RSX side, because the overlay is not safe to drive from here.
+	// Dump on demand, for a caller that has decided a hang is happening by its own means.
+	// The frame-based checks in this file cannot see a hang whose render loop keeps flipping.
+	void dump_guest_threads_now()
+	{
+		dump_guest_threads_stalled();
+	}
+
 	void poll_frame_stall_watchdog()
 	{
 		const u64 now = get_system_time();

@@ -1250,6 +1250,59 @@ public:
 			// Hang watchdog. This thread is independent of the RSX thread, which is the whole
 			// point: a hang where the RSX spins inside a method handler starves the stall check
 			// that lives on it. Cheap -- two atomic loads and a clock read unless it fires.
+			// Guest-logic hang detector.
+			//
+			// The frame-based check cannot see this class of hang at all. Tales of Xillia 2
+			// white-screens with its RENDER loop still running: it submits real flips every ~10ms
+			// forever, so "no frame presented" is never true, while the game logic behind them is
+			// dead. Measured on device -- g_last_frame_time was 9-12ms old on every sample across
+			// a nine-minute hang.
+			//
+			// What actually stops is lock traffic. Both hangs seen so far (Xillia 2's white
+			// screen, Kane & Lynch's freeze) show mutex acquisition at EXACTLY zero for minutes
+			// while sys_timer_usleep and sys_event_queue_receive tick at flat, identical rates --
+			// idle service loops and nothing else. A game doing any work at all takes locks;
+			// these were running 100k+ per 10s until the moment they stopped.
+			//
+			// Bounded like the other path: at most two dumps, re-armed only when lock traffic
+			// resumes, so a game that genuinely idles costs two log blocks and nothing more.
+			{
+				static u64 s_last_locks = 0;
+				static u64 s_quiet_since = 0;
+				static u32 s_dumps = 0;
+
+				u64 locks = 0;
+				for (u32 c = 0; c < 1024; c++)
+				{
+					const std::string n = ppu_get_syscall_name(c);
+					if (n == "sys_mutex_lock" || n == "_sys_lwmutex_lock" || n == "sys_mutex_trylock")
+					{
+						locks += stat[c];
+					}
+				}
+
+				const u64 now = get_system_time();
+
+				if (locks != s_last_locks || Emu.IsPaused() || Emu.IsStopped(true))
+				{
+					s_last_locks = locks;
+					s_quiet_since = now;
+					s_dumps = 0;
+				}
+				else if (s_quiet_since && now - s_quiet_since >= 30'000'000 && s_dumps < 2)
+				{
+					// Second sample 15s after the first, so a cia that has not moved between them
+					// is distinguishable from a thread merely making slow progress.
+					if (s_dumps == 0 || now - s_quiet_since >= 45'000'000)
+					{
+						s_dumps++;
+						ppu_log.error("Guest has taken no lock in %llus while still rendering: "
+							"dumping guest threads.", (now - s_quiet_since) / 1'000'000);
+						rsx::dump_guest_threads_now();
+					}
+				}
+			}
+
 			// IsStopped(TRUE), not the default.
 			//
 			// The default overload is `m_state <= system_state::stopping`, and the enum orders

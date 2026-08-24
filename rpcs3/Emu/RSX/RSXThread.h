@@ -42,6 +42,10 @@ namespace rsx
 	// report a hang in which the RSX thread itself is spinning; see the definition.
 	void poll_frame_stall_watchdog();
 
+	// Dump every guest thread's state now. For a caller that detected a hang some other way --
+	// the frame-based checks cannot see one whose render loop is still flipping.
+	void dump_guest_threads_now();
+
 	class RSXDMAWriter;
 
 	struct context;
