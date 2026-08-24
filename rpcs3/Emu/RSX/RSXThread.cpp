@@ -4148,12 +4148,26 @@ namespace rsx
 
 	void thread::on_frame_end(u32 buffer, bool forced)
 	{
-		// Cheap enough to re-read every frame, and being able to arm the profiler while a
-		// slowdown is already happening matters more here than saving a config lookup.
-		g_last_frame_time = get_system_time();
-		g_frame_stall_reported = false;
-		// Re-arm the dumps: a frame landed, so any later stall is a new one worth capturing.
-		g_frame_stall_dumps = 0;
+		// Only a frame the GUEST produced counts as the guest making progress.
+		//
+		// 'forced' means flip() found nothing queued and synthesised a frame end -- which is what
+		// a native-UI flip is. check_frame_stall() ARMS native-UI flipping when it reports a
+		// stall, so counting those frames made the detector disarm itself permanently: the first
+		// hang of a session switched on a flip source that then refreshed this timestamp forever,
+		// and no later hang in that session could ever be detected.
+		//
+		// Seen on Tales of Xillia 2: a stall was reported at 0:29:06, the game was closed and
+		// another booted, and when THAT one hung 90 seconds later nothing fired -- guest mutex
+		// traffic sat at exactly zero for minutes while VKGSRender::flip kept running. Without
+		// this the white-screen hang produces no dump at all, which is the one case it was
+		// written for.
+		if (!forced)
+		{
+			g_last_frame_time = get_system_time();
+			g_frame_stall_reported = false;
+			// Re-arm the dumps: a real frame landed, so any later stall is a new one worth capturing.
+			g_frame_stall_dumps = 0;
+		}
 
 		prof::set_enabled(g_cfg.video.rsx_profiler.get());
 		prof::tick_frame();
