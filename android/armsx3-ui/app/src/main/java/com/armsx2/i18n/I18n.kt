@@ -1060,6 +1060,8 @@ val EN: Map<String, String> = mapOf(
     "renderer.clearShaderCache.description" to "Wipes the compiled Vulkan + GL shader/pipeline caches. Use if a game renders corrupt after a driver swap or update — the next launch rebuilds them clean.",
     "renderer.clearShaderCache.label" to "Clear Shader Cache",
     "renderer.cas.sharpness.label" to "CAS Sharpness",
+    "renderer.cas.sharpness.fsr" to "FSR Sharpness",
+    "renderer.cas.sharpness.sgsr" to "SGSR Edge Sharpness",
     "renderer.displayMode.description" to "How the PS3 picture fills your screen. Fit keeps the correct shape and adds bars where needed; Stretch fills the whole screen and distorts the image. The picture's shape itself is set by Console Aspect Ratio.",
     "renderer.displayMode.label" to "Display Mode",
     "renderer.loadTexturePacks.description" to "Loads replacement textures from the active game's texture folder.",

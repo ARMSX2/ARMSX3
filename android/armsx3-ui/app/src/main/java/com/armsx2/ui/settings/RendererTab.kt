@@ -350,7 +350,15 @@ fun RendererTab(state: MutableState<Settings>) {
             )
             SettingsDivider()
             IntSliderRow(
-                label = str("renderer.cas.sharpness.label"),
+                // Named for whichever upscaler is actually selected: the value is an RCAS stop to
+                // FSR and an edge factor to SGSR.
+                label = str(
+                    when (s.casMode) {
+                        2 -> "renderer.cas.sharpness.fsr"
+                        3 -> "renderer.cas.sharpness.sgsr"
+                        else -> "renderer.cas.sharpness.label"
+                    }
+                ),
                 value = s.casSharpness.coerceIn(0, 100),
                 min = 0,
                 max = 100,

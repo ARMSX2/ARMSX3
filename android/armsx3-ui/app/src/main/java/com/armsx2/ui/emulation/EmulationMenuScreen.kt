@@ -889,6 +889,24 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
             selected = settings.casMode,
             onSelect = { v -> viewModel.updateSettings { it.copy(casMode = v) } },
         )
+        // Sharpening, shown only for the two upscalers that have any. It was missing from this
+        // menu entirely, which is the one people reach mid-game -- changing upscaler here and
+        // then having to leave the game to tune it defeats the point of the quick menu.
+        //
+        // The label follows the selection because the number does not mean the same thing to
+        // both: it is an RCAS stop to FSR and an edge factor to SGSR, and a slider named for the
+        // upscaler that is not running is simply wrong.
+        if (settings.casMode == 2 || settings.casMode == 3) {
+            Spacer(Modifier.height(6.dp))
+            com.armsx2.ui.settings.IntSliderRow(
+                label = str(if (settings.casMode == 3) "renderer.cas.sharpness.sgsr" else "renderer.cas.sharpness.fsr"),
+                value = settings.casSharpness.coerceIn(0, 100),
+                min = 0,
+                max = 100,
+                valueFormatter = { "$it%" },
+                onChange = { v -> viewModel.updateSettings { it.copy(casSharpness = v) } },
+            )
+        }
         Spacer(Modifier.height(6.dp))
         MenuSwitchRow(str("renderer.relaxedZcull.label"), settings.ps3.relaxedZcull) { v ->
             viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(relaxedZcull = v)) }
