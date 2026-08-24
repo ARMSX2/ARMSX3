@@ -3746,33 +3746,42 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 	{
 		if (raddr)
 		{
-			if (raddr != spurs_addr || pc != 0x11e4)
-			{
-				putllc_notify++;
-				vm::reservation_notifier_notify(addr, rtime);
-			}
-			else
+			// Always notify.
+			//
+			// Upstream (bc22df8ba, "SPU: Optimize cellSpurs reservations") skips waking waiters
+			// after a SUCCESSFUL conditional store when the SPU is at pc 0x11e4 with the SPURS
+			// control block reserved, unless byte 0x73 of that block shows this thread going
+			// running->idle. It is a throughput optimisation: the SPURS kernel stores to that
+			// block constantly and waking every waiter each time is a thundering herd.
+			//
+			// Both constants are guesses about one specific SPURS kernel build. 0x11e4 is a
+			// guest code address and 0x73 an offset inside the guest's own control block, and
+			// SPURS ships in many versions across titles. On a kernel whose layout differs, the
+			// running->idle test reads the wrong byte, answers 'no' forever, and the store then
+			// succeeds while every waiter stays asleep -- with nothing anywhere reporting it.
+			//
+			// Tales of Xillia (BLUS31006) hangs with all five graphics SPUs reserving this block
+			// and each of them suppressing ~100,000 notifications, and its SPURS kernel then
+			// executes its own HALT because two workload masks that must be disjoint both claim
+			// the same workload. Whether the missed wakeups cause that inconsistency or merely
+			// accompany it is not established -- but notifying is the correct behaviour and
+			// suppressing is the optimisation, so the optimisation goes and correctness stays.
+			//
+			// The counter is kept, now measuring how often the heuristic WOULD have suppressed,
+			// so the cost of this is visible in a log rather than guessed at.
+			if (raddr == spurs_addr && pc == 0x11e4)
 			{
 				const u32 thread_bit_mask = (1u << index);
 				constexpr usz SPU_IDLE = 0x73;
 
-				const bool switched_from_running_to_idle = (static_cast<u8>(rdata[SPU_IDLE]) & thread_bit_mask) == 0 && (_ref<u8>(0x100 + SPU_IDLE) & thread_bit_mask) != 0;
-
-				if (switched_from_running_to_idle)
+				if ((static_cast<u8>(rdata[SPU_IDLE]) & thread_bit_mask) != 0 || (_ref<u8>(0x100 + SPU_IDLE) & thread_bit_mask) == 0)
 				{
-					putllc_notify++;
-					vm::reservation_notifier_notify(addr, rtime);
-				}
-				else
-				{
-					// Deliberately not waking anyone. This is a hardcoded-PC heuristic for the
-					// SPURS kernel and it is the one place a successful conditional store can
-					// leave waiters asleep on purpose, so count it: if Borderlands 2's kernel
-					// stores here without ever tripping running->idle, its four waiters never
-					// get woken and that is the hang.
 					putllc_suppressed++;
 				}
 			}
+
+			putllc_notify++;
+			vm::reservation_notifier_notify(addr, rtime);
 
 			raddr = 0;
 		}
