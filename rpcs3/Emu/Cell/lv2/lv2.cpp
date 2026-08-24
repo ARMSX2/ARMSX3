@@ -7,8 +7,6 @@
 
 #include "Emu/Cell/PPUFunction.h"
 #include "Emu/Cell/PPUThread.h"
-
-#include <unordered_map>
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/ErrorCodes.h"
 #include "sys_sync.h"
@@ -27,7 +25,6 @@
 #include "sys_ppu_thread.h"
 #include "sys_process.h"
 #include "sys_prx.h"
-#include "Emu/RSX/RSXThread.h"
 #include "sys_rsx.h"
 #include "sys_rwlock.h"
 #include "sys_semaphore.h"
@@ -1252,136 +1249,6 @@ public:
 			// Hang watchdog. This thread is independent of the RSX thread, which is the whole
 			// point: a hang where the RSX spins inside a method handler starves the stall check
 			// that lives on it. Cheap -- two atomic loads and a clock read unless it fires.
-			// Spin detector.
-			//
-			// Five earlier attempts at catching this hang all keyed on something STOPPING --
-			// frames, then lock traffic -- and all missed it, because nothing stops. Measured on
-			// the hung device: PPU[0x1000000] burning 4.36s of CPU across 4s of wall clock, i.e.
-			// more than a full core, while rsx::thread spun on NV406E_SEMAPHORE_ACQUIRE. Tales of
-			// Xillia 2 white-screens when its Bandai logo is skipped, and the guest's main thread
-			// is not blocked at all -- it is in a tight guest-side wait loop, making no syscalls,
-			// producing no log output, and taking no locks. That is why a frame-based detector,
-			// a lock-based one, and a "no syscalls at all" one each saw nothing wrong.
-			//
-			// So look for the opposite of a stall: a thread that is RUNNING (no wait flag) whose
-			// cia has not left a small window. A spin loop is a handful of instructions branching
-			// to themselves; ordinary execution walks cia across the whole binary within a second.
-			// Threads parked in a syscall carry cpu_flag::wait and are skipped, so a normal idle
-			// game cannot trip this.
-			{
-				// Count how often a thread is found at the SAME cia, and DECAY on a miss
-				// rather than resetting.
-				//
-				// The range-window version reset on every excursion, and the report made that
-				// look like success: widest_range=0x0 does not mean an identical cia, it means
-				// the entry had just been reset, so lo==hi. The thread mostly sits in a small
-				// loop -- one sample caught it inside 0x500 -- and occasionally wanders far
-				// enough (a helper, a syscall handler) to blow any fixed window. Anything
-				// all-or-nothing therefore measured nothing.
-				//
-				// Decaying instead means an occasional excursion costs one point rather than all
-				// of them, so a thread parked at one address 90% of the time still accumulates,
-				// and a thread genuinely making progress still falls to zero.
-				struct spin_state { u32 cia; u32 hits; };
-				static std::unordered_map<u32, spin_state> s_spin;
-				static u32 s_dumps = 0;
-				static u32 s_worst = 0;
-				static u32 s_worst_cia = 0;
-
-				if (Emu.IsPaused() || Emu.IsStopped(true))
-				{
-					s_spin.clear();
-					s_dumps = 0;
-					s_worst = 0;
-				}
-				else
-				{
-					u32 worst = 0;
-					u32 worst_id = 0;
-					u32 worst_cia = 0;
-
-					idm::select<named_thread<ppu_thread>>([&](u32 id, ppu_thread& ppu)
-					{
-						// Parked in a syscall: skipped, not counted against. A thread that is
-						// only ever parked never accumulates hits, so idle cannot look like spin.
-						if (!ppu.state.load().none_of(cpu_flag::wait))
-						{
-							return;
-						}
-
-						const u32 cia = ppu.cia;
-						auto& st = s_spin[id];
-
-						if (st.hits == 0)
-						{
-							st.cia = cia;
-						}
-
-						if (cia == st.cia)
-						{
-							st.hits++;
-						}
-						else if (st.hits > 0)
-						{
-							st.hits--;
-
-							// Fully decayed: adopt wherever it is now as the new candidate.
-							if (st.hits == 0)
-							{
-								st.cia = cia;
-							}
-						}
-
-						if (st.hits > worst)
-						{
-							worst = st.hits;
-							worst_id = id;
-							worst_cia = st.cia;
-						}
-					}, idm::unlocked);
-
-					s_worst = worst;
-					s_worst_cia = worst_cia;
-
-					if ((worst == 30 || worst == 45) && s_dumps < 2)
-					{
-						s_dumps++;
-						ppu_log.error("PPU 0x%07x has been at cia=0x%08x for %u of the last "
-							"samples. Dumping guest threads.", worst_id, worst_cia, worst);
-						rsx::dump_guest_threads_now();
-					}
-
-					if (worst == 0)
-					{
-						s_dumps = 0;
-					}
-				}
-
-				if (i % 10 == 0)
-				{
-					// Report the widest range any tracked thread is covering. If this still does
-					// not fire, that number IS the answer -- it says how big the loop actually is
-					// and therefore what the threshold has to be, instead of costing another
-					// reproduction to find out.
-
-					ppu_log.notice("spin detector: tracked=%u best=%u@0x%08x dumps=%u",
-						static_cast<u32>(s_spin.size()), s_worst, s_worst_cia, s_dumps);
-				}
-			}
-
-			// IsStopped(TRUE), not the default.
-			//
-			// The default overload is `m_state <= system_state::stopping`, and the enum orders
-			// stopped, loading, stopping, running -- so it reports true while the game is
-			// LOADING. A hang during a load is precisely what this watches for (Tales of Xillia 2
-			// white-screens mid-load after its logos are skipped), so the plain guard skipped the
-			// watchdog on every tick of the exact case it exists for, and did it silently: no
-			// declined decision to see, just no call at all.
-			if (!Emu.IsPaused() && !Emu.IsStopped(true))
-			{
-				rsx::poll_frame_stall_watchdog();
-			}
-
 			const bool is_paused = Emu.IsPaused();
 
 			// Force-print all if paused
