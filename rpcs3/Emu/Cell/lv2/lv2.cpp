@@ -25,6 +25,7 @@
 #include "sys_ppu_thread.h"
 #include "sys_process.h"
 #include "sys_prx.h"
+#include "Emu/RSX/RSXThread.h"
 #include "sys_rsx.h"
 #include "sys_rwlock.h"
 #include "sys_semaphore.h"
@@ -1245,6 +1246,14 @@ public:
 		for (u32 i = 1; thread_ctrl::state() != thread_state::aborting; i++)
 		{
 			thread_ctrl::wait_until(&sleep_until, 1'000'000);
+
+			// Hang watchdog. This thread is independent of the RSX thread, which is the whole
+			// point: a hang where the RSX spins inside a method handler starves the stall check
+			// that lives on it. Cheap -- two atomic loads and a clock read unless it fires.
+			if (!Emu.IsPaused() && !Emu.IsStopped())
+			{
+				rsx::poll_frame_stall_watchdog();
+			}
 
 			const bool is_paused = Emu.IsPaused();
 

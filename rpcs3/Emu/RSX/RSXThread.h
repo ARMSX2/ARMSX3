@@ -38,6 +38,10 @@ extern rsx::frame_capture_data frame_capture;
 
 namespace rsx
 {
+	// Polled once a second from the PPU syscall usage thread. The RSX-side stall check cannot
+	// report a hang in which the RSX thread itself is spinning; see the definition.
+	void poll_frame_stall_watchdog();
+
 	class RSXDMAWriter;
 
 	struct context;

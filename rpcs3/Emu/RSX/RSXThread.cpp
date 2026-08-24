@@ -1433,6 +1433,45 @@ namespace rsx
 	// idm::unlocked deliberately: this runs on the RSX thread, and taking the id lock here to
 	// diagnose a hang would add exactly the kind of dependency being diagnosed. A torn read of
 	// a diagnostic line costs nothing.
+	// Independent watchdog, called from a thread that is NOT the RSX thread.
+	//
+	// check_frame_stall() runs from do_local_task, on the RSX thread's own FIFO loop. That is
+	// fine for a guest-side hang with the RSX idle, and useless for the opposite case: Tales of
+	// Xillia 2 hangs with rsx::thread spinning at 100% CPU inside NV406E_SEMAPHORE_ACQUIRE,
+	// waiting on a guest semaphore the stopped guest will never write. Spinning inside a method
+	// handler it never returns to do_local_task, so the detector that would report the hang is
+	// starved by the hang itself. Measured on the device: +4.99s of thread CPU across 5s of wall
+	// clock, with guest mutex traffic at exactly zero for minutes.
+	//
+	// So the same condition is polled from the PPU syscall usage thread, which ticks once a
+	// second and keeps running regardless. This half only DUMPS -- the on-screen message and the
+	// native-UI flip stay on the RSX side, because the overlay is not safe to drive from here.
+	void poll_frame_stall_watchdog()
+	{
+		const u64 now = get_system_time();
+
+		if (g_progr_text || !g_last_frame_time)
+		{
+			return;
+		}
+
+		if (now - g_last_frame_time < 30'000'000)
+		{
+			return;
+		}
+
+		// Shares the RSX side's counter and its two-sample budget, so the two paths can never
+		// produce four dumps between them.
+		if (const u32 taken = g_frame_stall_dumps; taken < 2)
+		{
+			g_frame_stall_dumps = taken + 1;
+
+			rsx_log.error("No frame presented in %us and the RSX thread is not polling: dumping "
+				"guest threads from the watchdog.", (now - g_last_frame_time) / 1'000'000);
+
+			dump_guest_threads_stalled();
+		}
+	}
 	static void dump_guest_threads_stalled()
 	{
 		std::string out;
