@@ -370,7 +370,10 @@ enum class output_scaling_mode
 	// ARMSX3: RetroArch (.slangp) chain via librashader, run as the output pass.
 	// Appended, never inserted -- these are serialised by ordinal in savestates
 	// and per-game configs, so inserting would silently remap existing settings.
-	shader
+	shader,
+	// Snapdragon Game Super Resolution: one dispatch and one target against FSR1's two,
+	// written by Qualcomm for Adreno. Same driver requirements as FSR1 or fewer.
+	sgsr
 #endif
 };
 

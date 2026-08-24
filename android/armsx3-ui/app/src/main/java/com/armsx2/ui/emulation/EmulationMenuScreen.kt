@@ -884,7 +884,7 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
             title = str("renderer.outputScaling.label"),
             options = listOf(
                 str("renderer.outputScaling.nearest"), str("renderer.outputScaling.bilinear"),
-                str("renderer.outputScaling.fsr"),
+                str("renderer.outputScaling.fsr"), str("renderer.outputScaling.sgsr"),
             ).mapIndexed { index, label -> index to label },
             selected = settings.casMode,
             onSelect = { v -> viewModel.updateSettings { it.copy(casMode = v) } },

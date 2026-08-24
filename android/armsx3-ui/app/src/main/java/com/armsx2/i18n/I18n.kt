@@ -909,6 +909,7 @@ val EN: Map<String, String> = mapOf(
     "overlay.toggle.temps.description" to
         "Show CPU, GPU and battery temperature on the performance overlay. Not every device exposes these \u2014 one that doesn't simply shows nothing.",
     "overlay.tempInterval.label" to "Temperature poll interval",
+    "renderer.outputScaling.sgsr" to "SGSR",
     "pad.rumble.label" to "Rumble / Vibration",
     "pad.rumblePhone.label" to "Vibrate the phone",
     "pad.rumblePhone.description" to

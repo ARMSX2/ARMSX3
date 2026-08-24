@@ -338,9 +338,13 @@ fun RendererTab(state: MutableState<Settings>) {
                     str("renderer.outputScaling.nearest"),
                     str("renderer.outputScaling.bilinear"),
                     str("renderer.outputScaling.fsr"),
+                    str("renderer.outputScaling.sgsr"),
                 ),
-                selectedIndex = s.casMode.coerceIn(0, 2),
-                columns = 3,
+                // Bound raised with the option. A clamp left at the old maximum silently rewrites
+                // the new choice back to the previous one, which reads as the setting refusing to
+                // take.
+                selectedIndex = s.casMode.coerceIn(0, 3),
+                columns = 2,
                 description = str("renderer.outputScaling.description"),
                 onChange = { apply(s.copy(casMode = it)) },
             )

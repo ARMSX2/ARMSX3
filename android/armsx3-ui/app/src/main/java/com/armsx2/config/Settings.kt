@@ -1844,7 +1844,7 @@ data class Settings(
         put("EmuCore/GS", "fxaa", "bool", fxaa.toString())
         // Scaling Mode writes Output Scaling Mode unconditionally, the shader chain only
         // when it is on, so CAS has to go first for the chain to keep the last word.
-        put("EmuCore/GS", "CASMode", "int", casMode.coerceIn(0, 2).toString())
+        put("EmuCore/GS", "CASMode", "int", casMode.coerceIn(0, 3).toString())
         put("EmuCore/GS", "CASSharpness", "int", casSharpness.coerceIn(0, 100).toString())
         put("EmuCore/GS", "ShaderChainEnabled", "bool", shaderChainEnabled.toString())
         put("EmuCore/GS", "ShaderChainPreset", "string", shaderChainPreset)

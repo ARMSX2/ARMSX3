@@ -11,6 +11,9 @@
 
 #include "upscalers/bilinear_pass.hpp"
 #include "upscalers/fsr_pass.h"
+#ifdef __ANDROID__
+#include "upscalers/sgsr_pass.h"
+#endif
 #include "upscalers/nearest_pass.hpp"
 #ifdef __ANDROID__
 #include "upscalers/librashader_pass.h"
@@ -1453,6 +1456,10 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		else if (m_output_scaling == output_scaling_mode::shader)
 		{
 			m_upscaler = std::make_unique<vk::librashader_upscale_pass>();
+		}
+		else if (m_output_scaling == output_scaling_mode::sgsr)
+		{
+			m_upscaler = std::make_unique<vk::sgsr_upscale_pass>();
 		}
 #endif
 		else
