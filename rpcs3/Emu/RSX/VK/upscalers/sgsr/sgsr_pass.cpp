@@ -1,3 +1,10 @@
+// Snapdragon Game Super Resolution, suggested by CamilleLaVey (Eden), who made the same filter
+// work there first and pointed it out as the right upscaler for mobile.
+//
+// The filter is Qualcomm's BSD-3-Clause release (see the shader for its copyright notice). None
+// of Eden's code is used: Eden is GPL-3.0-or-later and RPCS3 is GPL-2.0-only, so the crop mapping
+// and the widened sharpness range are reimplemented from a description of what they do.
+
 #include "../../vkutils/barriers.h"
 #include "../../VKHelpers.h"
 #include "../../VKResourceManager.h"
