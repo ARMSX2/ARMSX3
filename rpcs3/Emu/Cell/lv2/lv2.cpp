@@ -1269,7 +1269,7 @@ public:
 			// Threads parked in a syscall carry cpu_flag::wait and are skipped, so a normal idle
 			// game cannot trip this.
 			{
-				struct spin_state { u32 base; u32 secs; };
+				struct spin_state { u32 lo; u32 hi; u32 secs; };
 				static std::unordered_map<u32, spin_state> s_spin;
 				static u32 s_dumps = 0;
 				static u32 s_worst = 0;
@@ -1299,11 +1299,23 @@ public:
 						const u32 cia = ppu.cia;
 						auto it = s_spin.find(id);
 
-						// 1 KiB window: wide enough for a loop with a call in it, far narrower
-						// than the range real execution covers in a second.
-						if (it == s_spin.end() || cia < it->second.base || cia - it->second.base > 0x400)
+						if (it == s_spin.end())
 						{
-							s_spin[id] = spin_state{cia, 0};
+							s_spin[id] = spin_state{cia, cia, 0};
+							return;
+						}
+
+						// The RANGE cia has covered, not an offset from where it was first seen.
+						// A 1 KiB base+offset window measured nothing: the loop here walks
+						// further than that every second, so the window reset on every tick and
+						// the counter never advanced past zero. A polling loop that calls helpers
+						// still stays within tens of KiB; real execution covers megabytes.
+						it->second.lo = std::min(it->second.lo, cia);
+						it->second.hi = std::max(it->second.hi, cia);
+
+						if (it->second.hi - it->second.lo > 0x10000)
+						{
+							s_spin[id] = spin_state{cia, cia, 0};
 							return;
 						}
 
@@ -1337,8 +1349,18 @@ public:
 
 				if (i % 10 == 0)
 				{
-					ppu_log.notice("spin detector: tracked=%u longest=%us dumps=%u",
-						static_cast<u32>(s_spin.size()), s_worst, s_dumps);
+					// Report the widest range any tracked thread is covering. If this still does
+					// not fire, that number IS the answer -- it says how big the loop actually is
+					// and therefore what the threshold has to be, instead of costing another
+					// reproduction to find out.
+					u32 widest = 0;
+					for (const auto& [tid, st] : s_spin)
+					{
+						widest = std::max(widest, st.hi - st.lo);
+					}
+
+					ppu_log.notice("spin detector: tracked=%u longest=%us widest_range=0x%x dumps=%u",
+						static_cast<u32>(s_spin.size()), s_worst, widest, s_dumps);
 				}
 			}
 
