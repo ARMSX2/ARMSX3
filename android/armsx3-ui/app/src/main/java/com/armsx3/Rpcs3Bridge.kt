@@ -531,6 +531,7 @@ object Rpcs3Bridge {
                         // 3 skips the librashader chain, which is ordinal 3 in the native enum
                         // but is driven by its own toggle rather than this picker.
                         3 -> "Snapdragon Game Super Resolution"
+                        4 -> "Snapdragon Game Super Resolution (Edge Direction)"
                         else -> "Bilinear"
                     },
                 )

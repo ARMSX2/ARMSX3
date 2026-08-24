@@ -339,11 +339,12 @@ fun RendererTab(state: MutableState<Settings>) {
                     str("renderer.outputScaling.bilinear"),
                     str("renderer.outputScaling.fsr"),
                     str("renderer.outputScaling.sgsr"),
+                    str("renderer.outputScaling.sgsrEdge"),
                 ),
                 // Bound raised with the option. A clamp left at the old maximum silently rewrites
                 // the new choice back to the previous one, which reads as the setting refusing to
                 // take.
-                selectedIndex = s.casMode.coerceIn(0, 3),
+                selectedIndex = s.casMode.coerceIn(0, 4),
                 columns = 2,
                 description = str("renderer.outputScaling.description"),
                 onChange = { apply(s.copy(casMode = it)) },
@@ -355,7 +356,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 label = str(
                     when (s.casMode) {
                         2 -> "renderer.cas.sharpness.fsr"
-                        3 -> "renderer.cas.sharpness.sgsr"
+                        3, 4 -> "renderer.cas.sharpness.sgsr"
                         else -> "renderer.cas.sharpness.label"
                     }
                 ),
@@ -363,9 +364,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 min = 0,
                 max = 100,
                 description = str("renderer.casSharpness.description"),
-                // SGSR reads as 0-200%: 100% is Qualcomm's default and 200% the widened top end.
-                // Stored value is unchanged and still shared with FSR.
-                valueFormatter = { if (s.casMode == 3) "${it * 2}%" else "$it%" },
+                valueFormatter = { "$it%" },
                 onChange = { apply(s.copy(casSharpness = it)) },
             )
             SettingsDivider()

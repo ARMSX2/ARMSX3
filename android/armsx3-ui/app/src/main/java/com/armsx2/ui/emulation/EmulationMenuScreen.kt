@@ -885,6 +885,7 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
             options = listOf(
                 str("renderer.outputScaling.nearest"), str("renderer.outputScaling.bilinear"),
                 str("renderer.outputScaling.fsr"), str("renderer.outputScaling.sgsr"),
+                str("renderer.outputScaling.sgsrEdge"),
             ).mapIndexed { index, label -> index to label },
             selected = settings.casMode,
             onSelect = { v -> viewModel.updateSettings { it.copy(casMode = v) } },
@@ -896,18 +897,14 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
         // The label follows the selection because the number does not mean the same thing to
         // both: it is an RCAS stop to FSR and an edge factor to SGSR, and a slider named for the
         // upscaler that is not running is simply wrong.
-        if (settings.casMode == 2 || settings.casMode == 3) {
+        if (settings.casMode >= 2) {
             Spacer(Modifier.height(6.dp))
             com.armsx2.ui.settings.IntSliderRow(
-                label = str(if (settings.casMode == 3) "renderer.cas.sharpness.sgsr" else "renderer.cas.sharpness.fsr"),
+                label = str(if (settings.casMode >= 3) "renderer.cas.sharpness.sgsr" else "renderer.cas.sharpness.fsr"),
                 value = settings.casSharpness.coerceIn(0, 100),
                 min = 0,
                 max = 100,
-                // SGSR reads as 0-200%, where 100% is Qualcomm's own default and 200% is the
-                // widened top end. The stored value stays 0-100 and shared with FSR -- only the
-                // presentation differs, because showing "50%" for the default reads as half
-                // strength when it is in fact the intended setting.
-                valueFormatter = { if (settings.casMode == 3) "${it * 2}%" else "$it%" },
+                valueFormatter = { "$it%" },
                 onChange = { v -> viewModel.updateSettings { it.copy(casSharpness = v) } },
             )
         }

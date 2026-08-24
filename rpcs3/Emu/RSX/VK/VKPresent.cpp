@@ -1459,7 +1459,11 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		}
 		else if (m_output_scaling == output_scaling_mode::sgsr)
 		{
-			m_upscaler = std::make_unique<vk::sgsr_upscale_pass>();
+			m_upscaler = std::make_unique<vk::sgsr_upscale_pass>(false);
+		}
+		else if (m_output_scaling == output_scaling_mode::sgsr_edge)
+		{
+			m_upscaler = std::make_unique<vk::sgsr_upscale_pass>(true);
 		}
 #endif
 		else

@@ -17,13 +17,9 @@ namespace vk
 {
 	namespace SGSR
 	{
-		sgsr_pass::sgsr_pass()
+		sgsr_pass_base::sgsr_pass_base(const char* shader_source)
 		{
-			const char* shader_core =
-				#include "Emu/RSX/Program/Upscalers/SGSR/sgsr_shader.glsl"
-			;
-
-			m_src = shader_core;
+			m_src = shader_source;
 
 			// Fill with 0 to avoid sending incomplete/unused variables to the GPU
 			std::fill(m_constants_buf.begin(), m_constants_buf.end(), 0u);
@@ -36,7 +32,7 @@ namespace vk
 			create();
 		}
 
-		std::vector<glsl::program_input> sgsr_pass::get_inputs()
+		std::vector<glsl::program_input> sgsr_pass_base::get_inputs()
 		{
 			std::vector<vk::glsl::program_input> inputs =
 			{
@@ -62,7 +58,7 @@ namespace vk
 			return result;
 		}
 
-		void sgsr_pass::bind_resources(const vk::command_buffer& /*cmd*/)
+		void sgsr_pass_base::bind_resources(const vk::command_buffer& /*cmd*/)
 		{
 			if (!m_sampler)
 			{
@@ -76,7 +72,7 @@ namespace vk
 			m_program->bind_uniform({ *m_output_image }, 0, 1);
 		}
 
-		void sgsr_pass::run(const vk::command_buffer& cmd,
+		void sgsr_pass_base::run(const vk::command_buffer& cmd,
 			vk::viewable_image* src,
 			vk::viewable_image* dst,
 			const size2u& input_size,
@@ -114,11 +110,12 @@ namespace vk
 			write_f32(8, 1.f / src_w);                  // invSrcSize  @32
 			write_f32(9, 1.f / src_h);
 
-			// Qualcomm's edge_sharpness is 0..2 with 1.0 as their default. The existing 0..100
-			// sharpening slider maps onto it directly, so 50 is Qualcomm's default and 100 is the
-			// widened top end -- one control for both upscalers, because they want the same thing
-			// from the user and a second one only lets them disagree.
-			write_f32(10, g_cfg.video.rcas_sharpening_intensity / 50.f);
+			// Qualcomm's edge_sharpness is 0..2 with 1.0 as their default, and the existing
+			// 0..100 slider covers that whole range: each UI percent is worth 0.02 of edge
+			// sharpness, so 50% is Qualcomm's default and 100% is the widened top end. The slider
+			// itself needs no special casing -- one control for both upscalers, because they want
+			// the same thing from the user and a second one only lets them disagree.
+			write_f32(10, g_cfg.video.rcas_sharpening_intensity * 0.02f);
 
 			if (!m_program)
 			{
@@ -134,6 +131,21 @@ namespace vk
 			const auto invocations_y = utils::aligned_div(output_size.height, wg_size);
 
 			compute_task::run(cmd, invocations_x, invocations_y, 1);
+		}
+
+
+		sgsr_pass::sgsr_pass()
+			: sgsr_pass_base(
+				#include "Emu/RSX/Program/Upscalers/SGSR/sgsr_shader.glsl"
+			)
+		{
+		}
+
+		sgsr_edge_pass::sgsr_edge_pass()
+			: sgsr_pass_base(
+				#include "Emu/RSX/Program/Upscalers/SGSR/sgsr_shader_edge.glsl"
+			)
+		{
 		}
 	}
 
@@ -236,7 +248,12 @@ namespace vk
 
 			if (m_output_data)
 			{
-				auto cs_task = vk::get_compute_task<vk::SGSR::sgsr_pass>();
+				// Each variant is its own type, so get_compute_task hands back its own cached
+				// pipeline. Swapping m_src on a shared task would leave one cached pipeline
+				// serving two different programs.
+				vk::SGSR::sgsr_pass_base* cs_task = m_edge_direction
+					? static_cast<vk::SGSR::sgsr_pass_base*>(vk::get_compute_task<vk::SGSR::sgsr_edge_pass>())
+					: static_cast<vk::SGSR::sgsr_pass_base*>(vk::get_compute_task<vk::SGSR::sgsr_pass>());
 
 				// The displayed picture is a rectangle inside a larger target, so hand the shader
 				// the crop rather than letting it assume the whole texture. Taken from the blit

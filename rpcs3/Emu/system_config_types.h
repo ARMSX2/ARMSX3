@@ -373,7 +373,10 @@ enum class output_scaling_mode
 	shader,
 	// Snapdragon Game Super Resolution: one dispatch and one target against FSR1's two,
 	// written by Qualcomm for Adreno. Same driver requirements as FSR1 or fewer.
-	sgsr
+	sgsr,
+	// The same filter weighting along the estimated edge direction instead of isotropically.
+	// Qualcomm's own description is "a minimal cost increase" for better quality.
+	sgsr_edge
 #endif
 };
 
