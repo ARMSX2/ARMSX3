@@ -410,6 +410,10 @@ fun TouchControlsOverlay() {
             }
         }
 
+        // Momentary state: a panel that stayed collapsed into the next editing session would look
+        // like the controls had gone missing.
+        LaunchedEffect(edit) { if (!edit) TouchControls.editorPanelCollapsed.value = false }
+
         if (edit) {
             // The editor panel is draggable + pinch-resizable (grip handle at its top) so it can be
             // moved off the buttons being edited. Offset is applied on the outer Box (real px); resize
@@ -1907,6 +1911,11 @@ private fun EditToolbar(modifier: Modifier = Modifier) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // First in the row on purpose: it must be in the same place whether the panel is
+            // open or collapsed, or the way back is somewhere the user has to hunt for.
+            PanelSizeButton(if (TouchControls.editorPanelCollapsed.value) "▼" else "▲") {
+                TouchControls.editorPanelCollapsed.value = !TouchControls.editorPanelCollapsed.value
+            }
             PanelSizeButton("－") {
                 val ls = OverlayDims.last?.let { it.widthPx > it.heightPx } ?: true
                 TouchControls.editorPanelScale(ls).floatValue =
@@ -1952,6 +1961,10 @@ private fun EditToolbar(modifier: Modifier = Modifier) {
                     (TouchControls.editorPanelScale(ls).floatValue + 0.1f).coerceIn(0.6f, 1.35f)
             }
         }
+        // Everything below is what the collapse toggle hides. Column is an inline composable,
+        // so this genuinely skips emitting the rest rather than drawing it invisibly.
+        if (TouchControls.editorPanelCollapsed.value) return@Column
+
         // Scope hint: with no game running the editor edits the GLOBAL Default
         // layout (per-game layouts need a running disc).
         Text(

@@ -122,6 +122,21 @@ object TouchControls {
      *  backdrop to deselect. */
     val selectedButton = mutableStateOf<TouchButtonId?>(null)
 
+    /**
+     * Whether the editor panel is collapsed to just its grip strip.
+     *
+     * The complaint this answers is not that the panel is ugly, it is that the panel covers the
+     * thing you are trying to edit -- and the only remedy was to drag it out of the way, every
+     * time. Auto-docking the panel away from the selected widget does not fix it either, because
+     * selecting a widget under the panel means touching through the panel first. One tap here
+     * uncovers everything beneath it and needs no drag.
+     *
+     * Deliberately NOT persisted, and reset on leaving edit mode: it is a momentary "let me see
+     * under this", and a session that opened the editor to a panel with no controls on it would
+     * just look broken.
+     */
+    val editorPanelCollapsed = mutableStateOf(false)
+
     /** Profile picker / save-as dialog shown over the editor. */
     val profileDialogOpen = mutableStateOf(false)
 
