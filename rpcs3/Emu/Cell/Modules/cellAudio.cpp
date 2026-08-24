@@ -923,6 +923,34 @@ void cell_audio_thread::operator()()
 				m_dynamic_period = cfg.minimum_block_period + static_cast<u64>((cfg.audio_block_period - cfg.minimum_block_period) * multiplier);
 			}
 
+			// Say how much audio is queued, once every 10s.
+			//
+			// Progressive audio delay is reported repeatedly (#87: Guitar Hero, where the audio
+			// starts synchronised and falls further behind the notes the longer a song runs, and
+			// pausing resets it). Every theory about it is unfalsifiable from the logs we get,
+			// because how full this ring is -- the thing that IS the delay -- was never recorded.
+			// It reproduces on both Cubeb and Oboe, so it is not the backend.
+			//
+			// One line per 10s: enough to see the curve across a song, few enough that the log
+			// volume cannot itself become the stall. Queued is the latency the player hears;
+			// target is what the algorithm is aiming for; period vs the nominal block period is
+			// how hard it is correcting (>100% throttles the guest, <100% hurries it).
+			if (timestamp - m_last_buffer_report >= 10'000'000)
+			{
+				m_last_buffer_report = timestamp;
+
+				cellAudio.notice("Audio buffer: queued=%.1fms target=%.1fms (%.0f%%) period=%.0f%% "
+					"blocks=%u ports=%u untouched=%u ratio=%.2f",
+					enqueued_playtime / 1000.0,
+					desired_duration_adjusted / 1000.0,
+					desired_duration_rate * 100.0f,
+					cfg.audio_block_period ? (m_dynamic_period * 100.0 / cfg.audio_block_period) : 0.0,
+					static_cast<u32>(enqueued_buffers),
+					active_ports,
+					untouched,
+					frequency_ratio);
+			}
+
 			const s64 time_left = m_dynamic_period - time_since_last_period;
 			if (time_left > cfg.period_comparison_margin)
 			{
