@@ -1269,10 +1269,24 @@ public:
 			// Threads parked in a syscall carry cpu_flag::wait and are skipped, so a normal idle
 			// game cannot trip this.
 			{
-				struct spin_state { u32 lo; u32 hi; u32 secs; };
+				// Count how often a thread is found at the SAME cia, and DECAY on a miss
+				// rather than resetting.
+				//
+				// The range-window version reset on every excursion, and the report made that
+				// look like success: widest_range=0x0 does not mean an identical cia, it means
+				// the entry had just been reset, so lo==hi. The thread mostly sits in a small
+				// loop -- one sample caught it inside 0x500 -- and occasionally wanders far
+				// enough (a helper, a syscall handler) to blow any fixed window. Anything
+				// all-or-nothing therefore measured nothing.
+				//
+				// Decaying instead means an occasional excursion costs one point rather than all
+				// of them, so a thread parked at one address 90% of the time still accumulates,
+				// and a thread genuinely making progress still falls to zero.
+				struct spin_state { u32 cia; u32 hits; };
 				static std::unordered_map<u32, spin_state> s_spin;
 				static u32 s_dumps = 0;
 				static u32 s_worst = 0;
+				static u32 s_worst_cia = 0;
 
 				if (Emu.IsPaused() || Emu.IsStopped(true))
 				{
@@ -1288,63 +1302,52 @@ public:
 
 					idm::select<named_thread<ppu_thread>>([&](u32 id, ppu_thread& ppu)
 					{
-						// A wait sample is SKIPPED, not a reset.
-						//
-						// Erasing here was the bug: this loop dips into a syscall regularly --
-						// almost certainly sys_ppu_thread_yield, which was running at ~100M --
-						// and every dip cleared the accumulated state, so the counter never got
-						// past 2s. Measured with widest_range=0x0, i.e. an identical cia on every
-						// sample: as tight a spin as exists, and invisible because of this line.
-						//
-						// A thread genuinely parked in a syscall simply never accumulates running
-						// samples, so idle threads still cannot trip the detector.
+						// Parked in a syscall: skipped, not counted against. A thread that is
+						// only ever parked never accumulates hits, so idle cannot look like spin.
 						if (!ppu.state.load().none_of(cpu_flag::wait))
 						{
 							return;
 						}
 
 						const u32 cia = ppu.cia;
-						auto it = s_spin.find(id);
+						auto& st = s_spin[id];
 
-						if (it == s_spin.end())
+						if (st.hits == 0)
 						{
-							s_spin[id] = spin_state{cia, cia, 0};
-							return;
+							st.cia = cia;
 						}
 
-						// The RANGE cia has covered, not an offset from where it was first seen.
-						// A 1 KiB base+offset window measured nothing: the loop here walks
-						// further than that every second, so the window reset on every tick and
-						// the counter never advanced past zero. A polling loop that calls helpers
-						// still stays within tens of KiB; real execution covers megabytes.
-						it->second.lo = std::min(it->second.lo, cia);
-						it->second.hi = std::max(it->second.hi, cia);
-
-						if (it->second.hi - it->second.lo > 0x10000)
+						if (cia == st.cia)
 						{
-							s_spin[id] = spin_state{cia, cia, 0};
-							return;
+							st.hits++;
+						}
+						else if (st.hits > 0)
+						{
+							st.hits--;
+
+							// Fully decayed: adopt wherever it is now as the new candidate.
+							if (st.hits == 0)
+							{
+								st.cia = cia;
+							}
 						}
 
-						it->second.secs++;
-
-						if (it->second.secs > worst)
+						if (st.hits > worst)
 						{
-							worst = it->second.secs;
+							worst = st.hits;
 							worst_id = id;
-							worst_cia = cia;
+							worst_cia = st.cia;
 						}
 					}, idm::unlocked);
 
 					s_worst = worst;
+					s_worst_cia = worst_cia;
 
-					// Two samples 15s apart, as elsewhere, so the second dump shows whether cia
-					// moved at all between them.
 					if ((worst == 30 || worst == 45) && s_dumps < 2)
 					{
 						s_dumps++;
-						ppu_log.error("PPU 0x%07x has been spinning at cia=0x%08x for %us without "
-							"leaving a 1KiB window. Dumping guest threads.", worst_id, worst_cia, worst);
+						ppu_log.error("PPU 0x%07x has been at cia=0x%08x for %u of the last "
+							"samples. Dumping guest threads.", worst_id, worst_cia, worst);
 						rsx::dump_guest_threads_now();
 					}
 
@@ -1360,14 +1363,9 @@ public:
 					// not fire, that number IS the answer -- it says how big the loop actually is
 					// and therefore what the threshold has to be, instead of costing another
 					// reproduction to find out.
-					u32 widest = 0;
-					for (const auto& [tid, st] : s_spin)
-					{
-						widest = std::max(widest, st.hi - st.lo);
-					}
 
-					ppu_log.notice("spin detector: tracked=%u longest=%us widest_range=0x%x dumps=%u",
-						static_cast<u32>(s_spin.size()), s_worst, widest, s_dumps);
+					ppu_log.notice("spin detector: tracked=%u best=%u@0x%08x dumps=%u",
+						static_cast<u32>(s_spin.size()), s_worst, s_worst_cia, s_dumps);
 				}
 			}
 
