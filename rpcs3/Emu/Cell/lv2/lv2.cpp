@@ -1252,54 +1252,84 @@ public:
 			// that lives on it. Cheap -- two atomic loads and a clock read unless it fires.
 			// Guest-logic hang detector.
 			//
-			// The frame-based check cannot see this class of hang at all. Tales of Xillia 2
-			// white-screens with its RENDER loop still running: it submits real flips every ~10ms
-			// forever, so "no frame presented" is never true, while the game logic behind them is
-			// dead. Measured on device -- g_last_frame_time was 9-12ms old on every sample across
-			// a nine-minute hang.
+			// The frame-based check cannot see this class of hang. Tales of Xillia 2 white-screens
+			// with its RENDER loop still running -- real, non-forced flips every ~10ms forever --
+			// so "no frame presented" is never true while the logic behind them is dead.
 			//
-			// What actually stops is lock traffic. Both hangs seen so far (Xillia 2's white
-			// screen, Kane & Lynch's freeze) show mutex acquisition at EXACTLY zero for minutes
-			// while sys_timer_usleep and sys_event_queue_receive tick at flat, identical rates --
-			// idle service loops and nothing else. A game doing any work at all takes locks;
-			// these were running 100k+ per 10s until the moment they stopped.
+			// Keyed on sys_mutex_lock ONLY, and on a RELATIVE collapse rather than silence.
+			// Both matter, and both were learned the hard way:
 			//
-			// Bounded like the other path: at most two dumps, re-armed only when lock traffic
-			// resumes, so a game that genuinely idles costs two log blocks and nothing more.
+			//   _sys_lwmutex_lock keeps ticking through the hang at a flat ~375 per 10s -- the
+			//   idle loops take lightweight mutexes -- so including it re-armed this on every
+			//   tick and it never fired.
+			//
+			//   "Exactly zero" only fits Xillia 2, where sys_mutex_lock froze outright. Kane &
+			//   Lynch collapsed from ~200,000 per 10s to ~300, which is just as dead and never
+			//   reaches zero.
+			//
+			// So: remember the busiest rate this game has shown, decay it slowly, and call it a
+			// hang when the current rate sits under a fiftieth of that for 30s. A game that has
+			// never been busy has no peak to fall from and cannot trip it.
 			{
-				static u64 s_last_locks = 0;
-				static u64 s_quiet_since = 0;
+				static u64 s_prev = 0;
+				static u64 s_peak = 0;      // locks/sec at its busiest, decaying
+				static u32 s_quiet = 0;     // consecutive quiet seconds
 				static u32 s_dumps = 0;
 
-				u64 locks = 0;
-				for (u32 c = 0; c < 1024; c++)
+				// Resolved by name once, from the table above, rather than hardcoding a number
+				// that would silently point at some other syscall if the table ever moved.
+				static const u32 s_code = []() -> u32
 				{
-					const std::string n = ppu_get_syscall_name(c);
-					if (n == "sys_mutex_lock" || n == "_sys_lwmutex_lock" || n == "sys_mutex_trylock")
+					for (u32 c = 0; c < g_ppu_syscall_table.size(); c++)
 					{
-						locks += stat[c];
+						if (g_ppu_syscall_table[c].second == "sys_mutex_lock")
+						{
+							return c;
+						}
 					}
-				}
+					return umax;
+				}();
 
-				const u64 now = get_system_time();
+				const u64 cur = s_code != umax ? stat[s_code].load() : 0;
+				const u64 rate = cur > s_prev ? cur - s_prev : 0;
+				s_prev = cur;
 
-				if (locks != s_last_locks || Emu.IsPaused() || Emu.IsStopped(true))
+				if (Emu.IsPaused() || Emu.IsStopped(true))
 				{
-					s_last_locks = locks;
-					s_quiet_since = now;
+					s_quiet = 0;
 					s_dumps = 0;
 				}
-				else if (s_quiet_since && now - s_quiet_since >= 30'000'000 && s_dumps < 2)
+				else
 				{
-					// Second sample 15s after the first, so a cia that has not moved between them
-					// is distinguishable from a thread merely making slow progress.
-					if (s_dumps == 0 || now - s_quiet_since >= 45'000'000)
+					s_peak = std::max(rate, s_peak - s_peak / 64);
+
+					// Needs a real workload to fall from: 5000 locks/sec is far below any of the
+					// busy rates measured (20,000+) and far above anything an idle title reaches.
+					if (s_peak > 5000 && rate < s_peak / 50)
+					{
+						s_quiet++;
+					}
+					else
+					{
+						s_quiet = 0;
+						s_dumps = 0;
+					}
+
+					// Two samples, 15s apart, so a cia that has not moved between them is
+					// distinguishable from a thread merely making slow progress.
+					if ((s_quiet == 30 || s_quiet == 45) && s_dumps < 2)
 					{
 						s_dumps++;
-						ppu_log.error("Guest has taken no lock in %llus while still rendering: "
-							"dumping guest threads.", (now - s_quiet_since) / 1'000'000);
+						ppu_log.error("Guest lock traffic collapsed: %llu/s against a peak of "
+							"%llu/s for %us. Dumping guest threads.", rate, s_peak, s_quiet);
 						rsx::dump_guest_threads_now();
 					}
+				}
+
+				if (i % 10 == 0)
+				{
+					ppu_log.notice("hang detector: locks/s=%llu peak=%llu quiet=%us dumps=%u",
+						rate, s_peak, s_quiet, s_dumps);
 				}
 			}
 
