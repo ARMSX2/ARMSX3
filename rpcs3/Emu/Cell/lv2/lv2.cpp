@@ -1250,7 +1250,15 @@ public:
 			// Hang watchdog. This thread is independent of the RSX thread, which is the whole
 			// point: a hang where the RSX spins inside a method handler starves the stall check
 			// that lives on it. Cheap -- two atomic loads and a clock read unless it fires.
-			if (!Emu.IsPaused() && !Emu.IsStopped())
+			// IsStopped(TRUE), not the default.
+			//
+			// The default overload is `m_state <= system_state::stopping`, and the enum orders
+			// stopped, loading, stopping, running -- so it reports true while the game is
+			// LOADING. A hang during a load is precisely what this watches for (Tales of Xillia 2
+			// white-screens mid-load after its logos are skipped), so the plain guard skipped the
+			// watchdog on every tick of the exact case it exists for, and did it silently: no
+			// declined decision to see, just no call at all.
+			if (!Emu.IsPaused() && !Emu.IsStopped(true))
 			{
 				rsx::poll_frame_stall_watchdog();
 			}

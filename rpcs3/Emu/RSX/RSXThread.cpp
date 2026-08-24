@@ -1450,6 +1450,28 @@ namespace rsx
 	{
 		const u64 now = get_system_time();
 
+		// Say why this declined, once every 10s.
+		//
+		// Three attempts at this detector have now failed SILENTLY on a reproducible hang -- it
+		// disarmed itself, then it sat on the thread that was stuck, then it would not seed its
+		// own clock -- and each time the only evidence was an absence, which says nothing about
+		// which branch below won. Reporting the decision costs one line per ten seconds and turns
+		// the next failure into a fact instead of another guess.
+		{
+			static atomic_t<u64> s_last_report{0};
+
+			if (now - s_last_report >= 10'000'000)
+			{
+				s_last_report = now;
+
+				const u64 last = g_last_frame_time;
+
+				rsx_log.notice("stall watchdog: progr=%d last_frame=%llu age=%lldms dumps=%u",
+					g_progr_text ? 1 : 0, last,
+					last ? static_cast<s64>(now - last) / 1000 : -1, g_frame_stall_dumps.load());
+			}
+		}
+
 		// SEED the timestamp, do not merely bail on it.
 		//
 		// The RSX-side check sets g_last_frame_time here, which is what starts its clock. This
