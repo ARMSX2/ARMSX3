@@ -231,7 +231,6 @@ struct cell_audio_config
 	u32 audio_sample_size = 0;
 	f64 audio_min_buffer_duration = 0.0;
 
-	u32 audio_buffer_length = 0;
 
 	/*
 	 * Buffering
