@@ -424,12 +424,33 @@ fun TouchControlsOverlay() {
             val dxState = TouchControls.editorPanelDx(isLandscape)
             val dyState = TouchControls.editorPanelDy(isLandscape)
             val panelScale = TouchControls.editorPanelScale(isLandscape).floatValue
+
+            // Auto-dock: never sit on the same half of the screen as the widget being edited.
+            //
+            // Halves rather than real overlap maths, on purpose. A panel that darts about as
+            // rectangles graze each other is less predictable than one that is simply never on
+            // the side you are working on, and predictability is what makes it stop being
+            // annoying.
+            //
+            // This complements the collapse toggle rather than replacing it: collapse answers "I
+            // cannot select what is under you in the first place", docking answers "I have
+            // selected it and now you are on top of it".
+            val selectedId = TouchControls.selectedButton.value
+            val selectedY = if (selectedId != null) {
+                TouchControls.activeLayout.value.buttons.firstOrNull { it.id == selectedId }?.yFrac
+            } else null
+            val dockBottom = selectedY != null && selectedY < 0.5f
+
             Box(
                 Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 12.dp)
+                    .align(if (dockBottom) Alignment.BottomCenter else Alignment.TopCenter)
+                    .padding(top = if (dockBottom) 0.dp else 12.dp, bottom = if (dockBottom) 12.dp else 0.dp)
                     .offset {
-                        IntOffset(dxState.floatValue.roundToInt(), dyState.floatValue.roundToInt())
+                        // The stored drag offset means "away from the anchored edge", so it has to
+                        // flip sign with the anchor. Applied unchanged while docked to the bottom,
+                        // a +dy the user had nudged in would push the panel straight off-screen.
+                        val dy = if (dockBottom) -dyState.floatValue else dyState.floatValue
+                        IntOffset(dxState.floatValue.roundToInt(), dy.roundToInt())
                     },
             ) {
                 CompositionLocalProvider(
