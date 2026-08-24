@@ -3081,12 +3081,46 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
                    stats.avail_free / 1000000.);
     }
 
-    // preserve old log file
-    if (std::filesystem::exists(fs::get_log_dir() + "RPCSX.log")) {
+    // Preserve previous logs.
+    //
+    // There used to be exactly one: RPCSX.log became RPCSX.old.log and the previous old was
+    // deleted. That loses the log people are trying to send, reliably, because of how they send
+    // it -- play, stop, relaunch the app to reach the file, and the relaunch rotates the session
+    // they wanted into .old; relaunch once more (to find it, to share it, because the launcher
+    // restored the app) and it is gone. Three separate captures have been lost this way, and in
+    // two of them what arrived was a 47-line log that ended before the game had booted.
+    //
+    // Two defences, because generations alone would not have saved those:
+    //
+    //  1. A session that produced almost nothing does not get a slot. The logs that did the
+    //     damage were boot-only -- a few KB, stopping within a second of launch -- and pushing
+    //     one of those down the chain is what evicted the real capture. Anything below the
+    //     threshold is simply discarded. A silenced-logging session still writes far more than
+    //     this (~190 KB for a 29-minute one), so "Silence All Logs" does not trip it.
+    //
+    //  2. Three generations rather than one, so an ordinary mistake costs nothing.
+    {
       std::error_code ec;
-      std::filesystem::remove(fs::get_log_dir() + "RPCSX.old.log", ec);
-      std::filesystem::rename(fs::get_log_dir() + "RPCSX.log",
-                              fs::get_log_dir() + "RPCSX.old.log", ec);
+      const std::string dir = fs::get_log_dir();
+      const std::string current = dir + "RPCSX.log";
+
+      // Boot-only logs stop within a second of launch and run to a few KB. A real session --
+      // even one with logging silenced immediately -- is orders of magnitude larger.
+      constexpr std::uintmax_t k_worth_keeping = 32u * 1024u;
+
+      const bool exists = std::filesystem::exists(current, ec);
+      const std::uintmax_t size = exists ? std::filesystem::file_size(current, ec) : 0u;
+
+      if (exists && size >= k_worth_keeping) {
+        // Oldest out, everything down one.
+        std::filesystem::remove(dir + "RPCSX.old3.log", ec);
+        std::filesystem::rename(dir + "RPCSX.old2.log", dir + "RPCSX.old3.log", ec);
+        std::filesystem::rename(dir + "RPCSX.old.log", dir + "RPCSX.old2.log", ec);
+        std::filesystem::rename(current, dir + "RPCSX.old.log", ec);
+      } else if (exists) {
+        // Nothing in it worth a slot, and keeping it would cost the oldest real log.
+        std::filesystem::remove(current, ec);
+      }
     }
 
     // Limit log size to ~25% of free space
