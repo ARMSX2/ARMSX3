@@ -1662,7 +1662,34 @@ namespace rsx
 		// One detailed kernel dump per report, not per SPU -- see the note at the use site.
 		bool spu_detail_done = false;
 
-		idm::select<named_thread<spu_thread>>([&spus, &spu_detail_done](u32 /*id*/, spu_thread& spu)
+		// WHICH SPU gets that dump, decided before walking them.
+		//
+		// It used to be whichever came first with raddr == spurs_addr -- a kernel waiting on its
+		// own control block, i.e. an IDLE one -- on the assumption that every kernel parks at the
+		// same pc so any of them would do. Tales of Xillia is the counter-example: one graphics
+		// kernel executed a guest HALT and sits stopped at pc=0x00f00 while the other four idle
+		// normally at 0x011a8. The old rule picked an idle one, so the only thread in the process
+		// that had anything to say printed no registers at all, and the capture could name the
+		// failing assertion but none of the values it tested.
+		//
+		// A stopped or halted SPU wins outright. Nothing else in a SPURS group stops on its own,
+		// so if one has, it is the reason the group never joined and the rest are just waiting on
+		// it.
+		u32 spu_detail_id = 0;
+		bool spu_detail_pinned = false;
+
+		idm::select<named_thread<spu_thread>>([&](u32 id, spu_thread& spu)
+		{
+			const auto st = spu.state.load();
+
+			if (!spu_detail_pinned && !st.none_of(cpu_flag::stop + cpu_flag::dbg_pause + cpu_flag::exit))
+			{
+				spu_detail_id = id;
+				spu_detail_pinned = true;
+			}
+		}, idm::unlocked);
+
+		idm::select<named_thread<spu_thread>>([&spus, &spu_detail_done, spu_detail_id, spu_detail_pinned](u32 id, spu_thread& spu)
 		{
 			const auto func = spu.current_func;
 
@@ -1768,13 +1795,21 @@ namespace rsx
 			// One SPU only. All six kernels park at the same pc running the same code, so six
 			// copies is six times the log for no extra fact. Picked by raddr == spurs_addr,
 			// which is what identifies a SPURS kernel waiting on its own control block.
-			if (!spu_detail_done && spu.raddr && spu.raddr == spu.spurs_addr)
+			const bool is_detail_target = spu_detail_pinned
+				? id == spu_detail_id
+				: spu.raddr && spu.raddr == spu.spurs_addr;
+
+			if (!spu_detail_done && is_detail_target)
 			{
 				spu_detail_done = true;
 
-				fmt::append(spus, "\n    --- kernel detail (one SPU; the others are identical) ---");
+				fmt::append(spus, "\n    --- kernel detail (%s) ---",
+					spu_detail_pinned ? "the stopped SPU -- the rest are waiting on it" : "one SPU; the others are idle at the same pc");
 
-				for (u32 i = 0; i < 16; i++)
+				// All 128, not the first 16. Xillia's assertion is a validity check over
+				// r12/r16/r17/r19/r33/r34, so the sixteen that used to be printed did not include
+				// a single operand of the test the log had just finished disassembling.
+				for (u32 i = 0; i < 128; i++)
 				{
 					const auto& r = spu.gpr[i];
 					fmt::append(spus, "\n    r%-3u = %08x %08x %08x %08x", i,
