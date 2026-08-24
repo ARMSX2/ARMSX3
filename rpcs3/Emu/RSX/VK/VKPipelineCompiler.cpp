@@ -247,11 +247,26 @@ namespace vk
 		VkPipelineColorBlendStateCreateInfo cs = create_info.state.cs;
 		cs.pAttachments = create_info.state.att_state;
 
+		// Flat shading, from upstream b97f4bd8d. Kept alongside our dynamic-state work rather
+		// than either side of the merge replacing the other: this rebases the rasterization
+		// state so the provoking-vertex extension can be chained onto it, which is independent
+		// of the topology-class collapsing above.
+		VkPipelineRasterizationStateCreateInfo rs = create_info.state.rs;
+		VkPipelineRasterizationProvokingVertexStateCreateInfoEXT provoking_vertex_state{};
+		if (flags & USE_LAST_PROVOKING_VERTEX)
+		{
+			ensure(m_device->get_provoking_vertex_last_support());
+			provoking_vertex_state.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT;
+			provoking_vertex_state.pNext = rs.pNext;
+			provoking_vertex_state.provokingVertexMode = VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT;
+			rs.pNext = &provoking_vertex_state;
+		}
+
 		VkGraphicsPipelineCreateInfo info = {};
 		info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
 		info.pVertexInputState = &vi;
 		info.pInputAssemblyState = &create_info.state.ia;
-		info.pRasterizationState = &create_info.state.rs;
+		info.pRasterizationState = &rs;
 		info.pColorBlendState = &cs;
 		info.pMultisampleState = pmss;
 		info.pViewportState = &vp;

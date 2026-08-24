@@ -682,6 +682,16 @@ namespace rpcn
 				break;
 			}
 
+			if (command == CommandType::UnlockTrophy)
+			{
+				const ErrorType err = static_cast<ErrorType>(data[0]);
+
+				if (err != ErrorType::NoError)
+					rpcn_log.error("UnlockTrophy failed with %s", err);
+
+				break;
+			}
+
 			// Those commands are handled synchronously and won't be forwarded to NP Handler
 			if (command == CommandType::Login || command == CommandType::GetServerList || command == CommandType::Create || command == CommandType::Delete ||
 				command == CommandType::AddFriend || command == CommandType::RemoveFriend ||
@@ -703,7 +713,7 @@ namespace rpcn
 				}
 				else
 				{
-					rpcn_log.error("Tried to forward a reply whose packet_id marks it as internal to RPCN");
+					rpcn_log.error("Tried to forward a reply whose packet_id marks it as internal to RPCN: %s:0x%x", command, packet_id);
 				}
 			}
 
