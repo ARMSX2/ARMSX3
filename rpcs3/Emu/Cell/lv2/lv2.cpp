@@ -1288,11 +1288,18 @@ public:
 
 					idm::select<named_thread<ppu_thread>>([&](u32 id, ppu_thread& ppu)
 					{
-						// Only threads actually executing. cpu_flag::wait means parked in a
-						// syscall, which is the ordinary way for a thread to sit still.
+						// A wait sample is SKIPPED, not a reset.
+						//
+						// Erasing here was the bug: this loop dips into a syscall regularly --
+						// almost certainly sys_ppu_thread_yield, which was running at ~100M --
+						// and every dip cleared the accumulated state, so the counter never got
+						// past 2s. Measured with widest_range=0x0, i.e. an identical cia on every
+						// sample: as tight a spin as exists, and invisible because of this line.
+						//
+						// A thread genuinely parked in a syscall simply never accumulates running
+						// samples, so idle threads still cannot trip the detector.
 						if (!ppu.state.load().none_of(cpu_flag::wait))
 						{
-							s_spin.erase(id);
 							return;
 						}
 
