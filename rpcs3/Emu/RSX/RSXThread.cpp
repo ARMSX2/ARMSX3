@@ -1320,6 +1320,12 @@ namespace rsx
 	static atomic_t<u64> g_last_frame_time{0};
 	static atomic_t<bool> g_frame_stall_reported{false};
 
+	// How many guest-thread dumps this stall has produced. See check_frame_stall.
+	static atomic_t<u32> g_frame_stall_dumps{0};
+
+	// Defined below; check_frame_stall is what decides a stall has happened.
+	static void dump_guest_threads_stalled();
+
 	// Say when the picture has stopped, instead of leaving the last frame standing.
 	//
 	// A guest that stops progressing presents nothing further, so whatever was last drawn stays
@@ -1368,29 +1374,52 @@ namespace rsx
 		{
 			g_last_frame_time = now;
 			g_frame_stall_reported = false;
+			g_frame_stall_dumps = 0;
 			return;
 		}
 
 		const u64 since = now - g_last_frame_time;
 
-		if (since < 30'000'000 || g_frame_stall_reported)
+		if (since < 30'000'000)
 		{
 			return;
 		}
 
-		g_frame_stall_reported = true;
+		if (!g_frame_stall_reported)
+		{
+			g_frame_stall_reported = true;
 
-		rsx_log.error("No frame presented in %us with nothing in progress: the game has stopped.",
-			since / 1'000'000);
+			rsx_log.error("No frame presented in %us with nothing in progress: the game has stopped.",
+				since / 1'000'000);
 
-		// Draw it, rather than logging into a file nobody has when they file the report. The
-		// native UI flip is what gets it on screen at all -- the guest is not flipping, which is
-		// the whole point.
-		rsx::overlays::queue_message(
-			std::string("Game has stopped responding - it is no longer drawing frames"),
-			10'000'000);
+			// Draw it, rather than logging into a file nobody has when they file the report. The
+			// native UI flip is what gets it on screen at all -- the guest is not flipping, which is
+			// the whole point.
+			rsx::overlays::queue_message(
+				std::string("Game has stopped responding - it is no longer drawing frames"),
+				10'000'000);
 
-		set_native_ui_flip();
+			set_native_ui_flip();
+		}
+
+		// Say WHERE the guest is parked, not merely that it is.
+		//
+		// dump_guest_threads_stalled() already existed and is thorough, but the only thing that
+		// called it was the RSX profiler's poll_stall() -- which returns false immediately unless
+		// the profiler is switched on, and testers do not switch it on. So every freeze report
+		// arrived with this line and nothing behind it: the emulator detected the hang, told the
+		// user, and recorded none of what it could see. Confirmed against a Kane & Lynch capture
+		// where the guest stopped at 0:04:15 and this fired at 0:04:45 with no dump.
+		//
+		// Twice, ~15s apart, because one sample cannot distinguish a thread spinning from one
+		// making very slow progress -- a cia that has not moved between two samples is itself the
+		// finding. Twice and no more: this runs to hundreds of lines per thread, and log volume
+		// alone is enough to stall the emulator on Android.
+		if (const u32 taken = g_frame_stall_dumps; taken < 2 && since >= 30'000'000 + u64{taken} * 15'000'000)
+		{
+			g_frame_stall_dumps = taken + 1;
+			dump_guest_threads_stalled();
+		}
 	}
 
 	// Say where every guest thread is parked once frames have stopped arriving.
@@ -4088,6 +4117,8 @@ namespace rsx
 		// slowdown is already happening matters more here than saving a config lookup.
 		g_last_frame_time = get_system_time();
 		g_frame_stall_reported = false;
+		// Re-arm the dumps: a frame landed, so any later stall is a new one worth capturing.
+		g_frame_stall_dumps = 0;
 
 		prof::set_enabled(g_cfg.video.rsx_profiler.get());
 		prof::tick_frame();
