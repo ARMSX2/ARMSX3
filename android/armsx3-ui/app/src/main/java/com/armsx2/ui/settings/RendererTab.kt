@@ -363,7 +363,9 @@ fun RendererTab(state: MutableState<Settings>) {
                 min = 0,
                 max = 100,
                 description = str("renderer.casSharpness.description"),
-                valueFormatter = { "$it%" },
+                // SGSR reads as 0-200%: 100% is Qualcomm's default and 200% the widened top end.
+                // Stored value is unchanged and still shared with FSR.
+                valueFormatter = { if (s.casMode == 3) "${it * 2}%" else "$it%" },
                 onChange = { apply(s.copy(casSharpness = it)) },
             )
             SettingsDivider()

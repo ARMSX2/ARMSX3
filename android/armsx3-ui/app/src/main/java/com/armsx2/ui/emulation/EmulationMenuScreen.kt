@@ -903,7 +903,11 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
                 value = settings.casSharpness.coerceIn(0, 100),
                 min = 0,
                 max = 100,
-                valueFormatter = { "$it%" },
+                // SGSR reads as 0-200%, where 100% is Qualcomm's own default and 200% is the
+                // widened top end. The stored value stays 0-100 and shared with FSR -- only the
+                // presentation differs, because showing "50%" for the default reads as half
+                // strength when it is in fact the intended setting.
+                valueFormatter = { if (settings.casMode == 3) "${it * 2}%" else "$it%" },
                 onChange = { v -> viewModel.updateSettings { it.copy(casSharpness = v) } },
             )
         }

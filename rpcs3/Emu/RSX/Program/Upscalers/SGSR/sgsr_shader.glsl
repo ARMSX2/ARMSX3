@@ -42,7 +42,22 @@ layout(set = 0, binding = 1, rgba8) uniform writeonly image2D OutputTexture;
 vec4 weightY(vec4 dx, vec4 dy, vec4 std)
 {
     vec4 x = ((dx * dx) + (dy * dy)) * 0.55f + std;
-    return (x - 1.f) * (x - 4.f) * 3.8125f; // approx. of (x - 1) * (x - 4)^3
+
+    // Qualcomm's fastLanczos2, applied to four lanes at once.
+    //
+    // It expands to (x-1)(x-4)^3. What was here instead was
+    // `(x - 1) * (x - 4) * 3.8125`, commented as an approximation of that -- but substituting
+    // 3.8125 for (x-4)^2 only holds near x = 2 and diverges everywhere else, so it is a real
+    // deviation from the filter rather than a cheaper spelling of it. It also appears in none of
+    // Qualcomm's sources, GLSL or HLSL, so its provenance was unclear -- which matters here,
+    // because the only reason this filter can ship in a GPL-2.0-only tree is that it is
+    // Qualcomm's BSD-3-Clause code.
+    //
+    // Vectorising a scalar expression is mechanical, so this stays Qualcomm's.
+    vec4 wA = x - 4.0f;
+    vec4 wB = x * wA - wA;
+    wA *= wA;
+    return wB * wA;
 }
 
 layout(local_size_x = 8, local_size_y = 8) in;
