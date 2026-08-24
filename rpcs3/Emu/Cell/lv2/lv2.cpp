@@ -7,6 +7,8 @@
 
 #include "Emu/Cell/PPUFunction.h"
 #include "Emu/Cell/PPUThread.h"
+
+#include <unordered_map>
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/ErrorCodes.h"
 #include "sys_sync.h"
@@ -1250,86 +1252,93 @@ public:
 			// Hang watchdog. This thread is independent of the RSX thread, which is the whole
 			// point: a hang where the RSX spins inside a method handler starves the stall check
 			// that lives on it. Cheap -- two atomic loads and a clock read unless it fires.
-			// Guest-logic hang detector.
+			// Spin detector.
 			//
-			// The frame-based check cannot see this class of hang. Tales of Xillia 2 white-screens
-			// with its RENDER loop still running -- real, non-forced flips every ~10ms forever --
-			// so "no frame presented" is never true while the logic behind them is dead.
+			// Five earlier attempts at catching this hang all keyed on something STOPPING --
+			// frames, then lock traffic -- and all missed it, because nothing stops. Measured on
+			// the hung device: PPU[0x1000000] burning 4.36s of CPU across 4s of wall clock, i.e.
+			// more than a full core, while rsx::thread spun on NV406E_SEMAPHORE_ACQUIRE. Tales of
+			// Xillia 2 white-screens when its Bandai logo is skipped, and the guest's main thread
+			// is not blocked at all -- it is in a tight guest-side wait loop, making no syscalls,
+			// producing no log output, and taking no locks. That is why a frame-based detector,
+			// a lock-based one, and a "no syscalls at all" one each saw nothing wrong.
 			//
-			// Keyed on sys_mutex_lock ONLY, and on a RELATIVE collapse rather than silence.
-			// Both matter, and both were learned the hard way:
-			//
-			//   _sys_lwmutex_lock keeps ticking through the hang at a flat ~375 per 10s -- the
-			//   idle loops take lightweight mutexes -- so including it re-armed this on every
-			//   tick and it never fired.
-			//
-			//   "Exactly zero" only fits Xillia 2, where sys_mutex_lock froze outright. Kane &
-			//   Lynch collapsed from ~200,000 per 10s to ~300, which is just as dead and never
-			//   reaches zero.
-			//
-			// So: remember the busiest rate this game has shown, decay it slowly, and call it a
-			// hang when the current rate sits under a fiftieth of that for 30s. A game that has
-			// never been busy has no peak to fall from and cannot trip it.
+			// So look for the opposite of a stall: a thread that is RUNNING (no wait flag) whose
+			// cia has not left a small window. A spin loop is a handful of instructions branching
+			// to themselves; ordinary execution walks cia across the whole binary within a second.
+			// Threads parked in a syscall carry cpu_flag::wait and are skipped, so a normal idle
+			// game cannot trip this.
 			{
-				static u64 s_prev = 0;
-				static u64 s_peak = 0;      // locks/sec at its busiest, decaying
-				static u32 s_quiet = 0;     // consecutive quiet seconds
+				struct spin_state { u32 base; u32 secs; };
+				static std::unordered_map<u32, spin_state> s_spin;
 				static u32 s_dumps = 0;
-
-				// Resolved by name once, from the table above, rather than hardcoding a number
-				// that would silently point at some other syscall if the table ever moved.
-				static const u32 s_code = []() -> u32
-				{
-					for (u32 c = 0; c < g_ppu_syscall_table.size(); c++)
-					{
-						if (g_ppu_syscall_table[c].second == "sys_mutex_lock")
-						{
-							return c;
-						}
-					}
-					return umax;
-				}();
-
-				const u64 cur = s_code != umax ? stat[s_code].load() : 0;
-				const u64 rate = cur > s_prev ? cur - s_prev : 0;
-				s_prev = cur;
+				static u32 s_worst = 0;
 
 				if (Emu.IsPaused() || Emu.IsStopped(true))
 				{
-					s_quiet = 0;
+					s_spin.clear();
 					s_dumps = 0;
+					s_worst = 0;
 				}
 				else
 				{
-					s_peak = std::max(rate, s_peak - s_peak / 64);
+					u32 worst = 0;
+					u32 worst_id = 0;
+					u32 worst_cia = 0;
 
-					// Needs a real workload to fall from: 5000 locks/sec is far below any of the
-					// busy rates measured (20,000+) and far above anything an idle title reaches.
-					if (s_peak > 5000 && rate < s_peak / 50)
+					idm::select<named_thread<ppu_thread>>([&](u32 id, ppu_thread& ppu)
 					{
-						s_quiet++;
-					}
-					else
-					{
-						s_quiet = 0;
-						s_dumps = 0;
-					}
+						// Only threads actually executing. cpu_flag::wait means parked in a
+						// syscall, which is the ordinary way for a thread to sit still.
+						if (!ppu.state.load().none_of(cpu_flag::wait))
+						{
+							s_spin.erase(id);
+							return;
+						}
 
-					// Two samples, 15s apart, so a cia that has not moved between them is
-					// distinguishable from a thread merely making slow progress.
-					if ((s_quiet == 30 || s_quiet == 45) && s_dumps < 2)
+						const u32 cia = ppu.cia;
+						auto it = s_spin.find(id);
+
+						// 1 KiB window: wide enough for a loop with a call in it, far narrower
+						// than the range real execution covers in a second.
+						if (it == s_spin.end() || cia < it->second.base || cia - it->second.base > 0x400)
+						{
+							s_spin[id] = spin_state{cia, 0};
+							return;
+						}
+
+						it->second.secs++;
+
+						if (it->second.secs > worst)
+						{
+							worst = it->second.secs;
+							worst_id = id;
+							worst_cia = cia;
+						}
+					}, idm::unlocked);
+
+					s_worst = worst;
+
+					// Two samples 15s apart, as elsewhere, so the second dump shows whether cia
+					// moved at all between them.
+					if ((worst == 30 || worst == 45) && s_dumps < 2)
 					{
 						s_dumps++;
-						ppu_log.error("Guest lock traffic collapsed: %llu/s against a peak of "
-							"%llu/s for %us. Dumping guest threads.", rate, s_peak, s_quiet);
+						ppu_log.error("PPU 0x%07x has been spinning at cia=0x%08x for %us without "
+							"leaving a 1KiB window. Dumping guest threads.", worst_id, worst_cia, worst);
 						rsx::dump_guest_threads_now();
+					}
+
+					if (worst == 0)
+					{
+						s_dumps = 0;
 					}
 				}
 
 				if (i % 10 == 0)
 				{
-					ppu_log.notice("hang detector: locks/s=%llu peak=%llu quiet=%us dumps=%u",
-						rate, s_peak, s_quiet, s_dumps);
+					ppu_log.notice("spin detector: tracked=%u longest=%us dumps=%u",
+						static_cast<u32>(s_spin.size()), s_worst, s_dumps);
 				}
 			}
 
