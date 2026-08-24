@@ -877,6 +877,9 @@ data class Settings(
     /** Scaling Mode row: 0 Nearest, 1 Bilinear, 2 FSR. Bilinear because that is what the
      *  core has always actually used, and what RPCS3 itself defaults to. */
     val casMode: Int = 1,
+    /** SGSR edge sharpness, 0..200. 100 is Qualcomm's default. Separate from casSharpness
+     *  because that one is natively clamped to 100 and cannot express this range. */
+    val sgsrSharpness: Int = 100,
     /** EmuCore/GS/CASSharpness — sharpening strength 0..100 (%). */
     val casSharpness: Int = 50,
     /** EmuCore/GS/LoadTextureReplacements. */
@@ -1845,6 +1848,7 @@ data class Settings(
         // Scaling Mode writes Output Scaling Mode unconditionally, the shader chain only
         // when it is on, so CAS has to go first for the chain to keep the last word.
         put("EmuCore/GS", "CASMode", "int", casMode.coerceIn(0, 4).toString())
+        put("EmuCore/GS", "SGSRSharpness", "int", sgsrSharpness.coerceIn(0, 200).toString())
         put("EmuCore/GS", "CASSharpness", "int", casSharpness.coerceIn(0, 100).toString())
         put("EmuCore/GS", "ShaderChainEnabled", "bool", shaderChainEnabled.toString())
         put("EmuCore/GS", "ShaderChainPreset", "string", shaderChainPreset)
@@ -2027,6 +2031,7 @@ data class Settings(
             shadeBoostGamma != other.shadeBoostGamma ||
             fxaa != other.fxaa ||
             casMode != other.casMode ||
+            sgsrSharpness != other.sgsrSharpness ||
             casSharpness != other.casSharpness ||
             accurateBlendingUnit != other.accurateBlendingUnit ||
             hwMipmap != other.hwMipmap ||
@@ -2334,6 +2339,7 @@ data class Settings(
         put("shaderChainPreset", shaderChainPreset)
         put("shaderChainParams", shaderChainParamsToJson(shaderChainParams))
         put("casMode", casMode)
+        put("sgsrSharpness", sgsrSharpness)
         put("casSharpness", casSharpness)
         put("loadTextureReplacements", loadTextureReplacements)
         put("loadTextureReplacementsAsync", loadTextureReplacementsAsync)
@@ -2700,6 +2706,7 @@ data class Settings(
                 shaderChainParams = json.optJSONObject("shaderChainParams")
                     ?.let { shaderChainParamsFromJson(it) } ?: def.shaderChainParams,
                 casMode = json.optInt("casMode", def.casMode),
+                sgsrSharpness = json.optInt("sgsrSharpness", def.sgsrSharpness),
                 casSharpness = json.optInt("casSharpness", def.casSharpness),
                 loadTextureReplacements = json.optBoolean("loadTextureReplacements", def.loadTextureReplacements),
                 loadTextureReplacementsAsync = json.optBoolean("loadTextureReplacementsAsync", def.loadTextureReplacementsAsync),
@@ -3025,6 +3032,7 @@ data class Settings(
             if (current.shaderChainPreset   != base.shaderChainPreset)   j.put("shaderChainPreset", current.shaderChainPreset)
             if (current.shaderChainParams   != base.shaderChainParams)   j.put("shaderChainParams", shaderChainParamsToJson(current.shaderChainParams))
             if (current.casMode             != base.casMode)             j.put("casMode", current.casMode)
+            if (current.sgsrSharpness       != base.sgsrSharpness)       j.put("sgsrSharpness", current.sgsrSharpness)
             if (current.casSharpness        != base.casSharpness)        j.put("casSharpness", current.casSharpness)
             if (current.loadTextureReplacements != base.loadTextureReplacements) j.put("loadTextureReplacements", current.loadTextureReplacements)
             if (current.loadTextureReplacementsAsync != base.loadTextureReplacementsAsync) j.put("loadTextureReplacementsAsync", current.loadTextureReplacementsAsync)
@@ -3366,6 +3374,7 @@ data class Settings(
                 shaderChainParamsFromJson(overrides.optJSONObject("shaderChainParams"))
             } else base.shaderChainParams,
             casMode = if (overrides.has("casMode")) overrides.getInt("casMode") else base.casMode,
+            sgsrSharpness = if (overrides.has("sgsrSharpness")) overrides.getInt("sgsrSharpness") else base.sgsrSharpness,
             casSharpness = if (overrides.has("casSharpness")) overrides.getInt("casSharpness") else base.casSharpness,
             loadTextureReplacements = if (overrides.has("loadTextureReplacements")) overrides.getBoolean("loadTextureReplacements") else base.loadTextureReplacements,
             loadTextureReplacementsAsync = if (overrides.has("loadTextureReplacementsAsync")) overrides.getBoolean("loadTextureReplacementsAsync") else base.loadTextureReplacementsAsync,

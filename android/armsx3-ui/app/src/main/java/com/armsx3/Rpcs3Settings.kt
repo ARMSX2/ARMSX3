@@ -276,6 +276,10 @@ object Rpcs3Settings {
     fun setCasSharpening(percent: Int) =
         setInt("$VIDEO@@FidelityFX CAS Sharpening Intensity", percent.coerceIn(0, 100))
 
+    /** SGSR edge sharpness, 0..200. 100 is Qualcomm's default, 200 the widened top end. */
+    fun setSgsrSharpening(percent: Int) =
+        setInt("$VIDEO@@SGSR Edge Sharpness", percent.coerceIn(0, 200))
+
     fun setVramLimitMb(mb: Int) =
         setInt("$VULKAN@@VRAM allocation limit (MB)", mb.coerceIn(256, 65536))
 

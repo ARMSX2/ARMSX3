@@ -360,12 +360,14 @@ fun RendererTab(state: MutableState<Settings>) {
                         else -> "renderer.cas.sharpness.label"
                     }
                 ),
-                value = s.casSharpness.coerceIn(0, 100),
+                // SGSR reaches 200 -- Qualcomm's 0..2 range, 100 being their default -- on its
+                // own stored value, since FSR's is natively clamped to 100.
+                value = if (s.casMode >= 3) s.sgsrSharpness.coerceIn(0, 200) else s.casSharpness.coerceIn(0, 100),
                 min = 0,
-                max = 100,
+                max = if (s.casMode >= 3) 200 else 100,
                 description = str("renderer.casSharpness.description"),
                 valueFormatter = { "$it%" },
-                onChange = { apply(s.copy(casSharpness = it)) },
+                onChange = { if (s.casMode >= 3) apply(s.copy(sgsrSharpness = it)) else apply(s.copy(casSharpness = it)) },
             )
             SettingsDivider()
             IntSliderRow(

@@ -899,13 +899,21 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
         // upscaler that is not running is simply wrong.
         if (settings.casMode >= 2) {
             Spacer(Modifier.height(6.dp))
+            // SGSR reaches 200: Qualcomm's edge_sharpness is 0..2 with 1.0 as their default, so
+            // 100 is that default and 200 the widened top end. It is a separate stored value
+            // because FSR's is natively clamped to 100 and cannot express the range.
+            val sgsr = settings.casMode >= 3
             com.armsx2.ui.settings.IntSliderRow(
-                label = str(if (settings.casMode >= 3) "renderer.cas.sharpness.sgsr" else "renderer.cas.sharpness.fsr"),
-                value = settings.casSharpness.coerceIn(0, 100),
+                label = str(if (sgsr) "renderer.cas.sharpness.sgsr" else "renderer.cas.sharpness.fsr"),
+                value = if (sgsr) settings.sgsrSharpness.coerceIn(0, 200) else settings.casSharpness.coerceIn(0, 100),
                 min = 0,
-                max = 100,
+                max = if (sgsr) 200 else 100,
                 valueFormatter = { "$it%" },
-                onChange = { v -> viewModel.updateSettings { it.copy(casSharpness = v) } },
+                onChange = { v ->
+                    viewModel.updateSettings {
+                        if (sgsr) it.copy(sgsrSharpness = v) else it.copy(casSharpness = v)
+                    }
+                },
             )
         }
         Spacer(Modifier.height(6.dp))

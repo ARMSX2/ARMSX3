@@ -536,6 +536,7 @@ object Rpcs3Bridge {
                     },
                 )
                 "CASSharpness" -> Rpcs3Settings.setCasSharpening(asInt(value))
+                "SGSRSharpness" -> Rpcs3Settings.setSgsrSharpening(asInt(value))
                 "ShaderChainEnabled" ->
                     if (asBool(value)) Rpcs3Settings.setOutputScaling("Shader chain (librashader)")
                 "ShaderChainPreset" -> Rpcs3Settings.setShaderPresetPath(value)

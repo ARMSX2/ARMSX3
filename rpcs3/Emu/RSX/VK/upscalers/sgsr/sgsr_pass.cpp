@@ -110,12 +110,11 @@ namespace vk
 			write_f32(8, 1.f / src_w);                  // invSrcSize  @32
 			write_f32(9, 1.f / src_h);
 
-			// Qualcomm's edge_sharpness is 0..2 with 1.0 as their default, and the existing
-			// 0..100 slider covers that whole range: each UI percent is worth 0.02 of edge
-			// sharpness, so 50% is Qualcomm's default and 100% is the widened top end. The slider
-			// itself needs no special casing -- one control for both upscalers, because they want
-			// the same thing from the user and a second one only lets them disagree.
-			write_f32(10, g_cfg.video.rcas_sharpening_intensity * 0.02f);
+			// Qualcomm's edge_sharpness is 0..2 with 1.0 as their default, so one percent of the
+			// slider is worth 0.01: 100% is their default and 200% the widened top end. Its own
+			// setting rather than FSR's, which is natively clamped to 100 and would cut the range
+			// in half.
+			write_f32(10, g_cfg.video.sgsr_sharpening_intensity * 0.01f);
 
 			if (!m_program)
 			{

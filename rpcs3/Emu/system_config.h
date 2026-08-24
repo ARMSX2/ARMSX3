@@ -228,6 +228,12 @@ struct cfg_root : cfg::node
 		cfg::_bool record_with_overlays{ this, "Record With Overlays", true, true };
 		cfg::_bool disable_hardware_texel_remapping{ this, "Disable Hardware ColorSpace Remapping", false, true };
 		cfg::uint<0, 100> rcas_sharpening_intensity{ this, "FidelityFX CAS Sharpening Intensity", 50, true };
+		// SGSR's own, because it wants a range the FSR one cannot express. Qualcomm's
+		// edge_sharpness is 0..2 with 1.0 as their default, so 100 here is their default and 200
+		// the widened top end -- one percent is worth 0.01. Sharing rcas_sharpening_intensity
+		// would mean either clipping at half the useful range (it is clamped 0..100) or widening
+		// that clamp, which would silently change what every existing FSR config means.
+		cfg::uint<0, 200> sgsr_sharpening_intensity{ this, "SGSR Edge Sharpness", 100, true };
 
 		struct node_vk : cfg::node
 		{
