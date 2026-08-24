@@ -2916,6 +2916,119 @@ static const char *rpcn_with_connection(
   return rpcn_ok();
 }
 
+// Friend operations need an AUTHENTICATED session, not merely a connected one.
+//
+// rpcn_with_connection is enough for account creation, password resets and token resends --
+// those are what the server accepts from an anonymous connection. Adding a friend is not: the
+// server has to know who is asking. So sign in with the saved credentials first, which is also
+// what makes this usable outside a running game, where nothing else would have logged in.
+//
+// wait_for_authentified() is called only AFTER login(), because it blocks forever otherwise --
+// there is nothing in flight for it to wait on.
+static const char *rpcn_with_auth(
+    const std::function<bool(rpcn::rpcn_client &)> &op) {
+  const auto rpcn = rpcn::rpcn_client::get_instance(0);
+
+  if (!rpcn) {
+    return rpcn_fail("Could not create the RPCN client.");
+  }
+
+  if (const auto state = rpcn->wait_for_connection();
+      state != rpcn::rpcn_state::failure_no_failure) {
+    return rpcn_fail(fmt::format("Could not reach the RPCN server: %s",
+                                 rpcn::rpcn_state_to_string(state)));
+  }
+
+  if (!rpcn->is_authentified()) {
+    // The client signs itself in from rpcn.yml -- connect() and login() are both private, and
+    // its own thread drives them. So there is nothing to call here but the wait, and no
+    // credentials to pass: this only reports whether that worked.
+    g_cfg_rpcn.load();
+
+    if (g_cfg_rpcn.get_npid().empty() || g_cfg_rpcn.get_password().empty()) {
+      return rpcn_fail("Sign in to RPCN first.");
+    }
+
+    if (const auto state = rpcn->wait_for_authentified();
+        state != rpcn::rpcn_state::failure_no_failure) {
+      return rpcn_fail(fmt::format("RPCN sign-in failed: %s",
+                                   rpcn::rpcn_state_to_string(state)));
+    }
+  }
+
+  if (!op(*rpcn)) {
+    return rpcn_fail("The server rejected that request.");
+  }
+
+  return rpcn_ok();
+}
+
+extern "C" const char *_rpcsx_rpcnAddFriend(std::string_view npid) {
+  const std::string name{npid};
+
+  if (name.empty()) {
+    return rpcn_fail("Enter a username to add.");
+  }
+
+  return rpcn_with_auth([&](rpcn::rpcn_client &client) {
+    const auto err = client.add_friend(name);
+
+    // add_friend returns an optional error rather than a bool: empty means it went through.
+    if (!err) {
+      return true;
+    }
+
+    return *err == rpcn::ErrorType::NoError;
+  });
+}
+
+extern "C" const char *_rpcsx_rpcnRemoveFriend(std::string_view npid) {
+  const std::string name{npid};
+
+  if (name.empty()) {
+    return rpcn_fail("Enter a username to remove.");
+  }
+
+  return rpcn_with_auth([&](rpcn::rpcn_client &client) {
+    return client.remove_friend(name);
+  });
+}
+
+// The friend list as JSON, or an empty array when not signed in.
+//
+// Deliberately does NOT sign in on its own: this is polled to draw a list, and a screen that
+// silently opens a network session just by being looked at is not what anyone expects. Adding a
+// friend is an explicit action and can afford to authenticate; showing a list cannot.
+extern "C" const char *_rpcsx_rpcnGetFriends() {
+  static thread_local std::string result;
+
+  const auto rpcn = rpcn::rpcn_client::get_instance(0);
+
+  if (!rpcn || !rpcn->is_authentified()) {
+    result = "[]";
+    return result.c_str();
+  }
+
+  std::string entries;
+
+  for (u32 i = 0, count = rpcn->get_num_friends(); i < count; i++) {
+    const auto presence = rpcn->get_friend_presence_by_index(i);
+
+    if (!presence) {
+      continue;
+    }
+
+    if (!entries.empty()) entries += ",";
+
+    fmt::append(entries, R"({"npid":"%s","online":%s})",
+                json_escape(presence->first),
+                presence->second.online ? "true" : "false");
+  }
+
+  result = fmt::format("[%s]", entries);
+  return result.c_str();
+}
+
 extern "C" const char *_rpcsx_rpcnCreateAccount(std::string_view npid,
                                                 std::string_view password,
                                                 std::string_view onlineName,

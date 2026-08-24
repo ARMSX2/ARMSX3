@@ -66,6 +66,9 @@ struct RPCSXApi {
   const char *(*rpcnGetConfig)();
   void (*rpcnSetConfig)(std::string_view host, std::string_view npid,
                         std::string_view password, std::string_view token);
+  const char *(*rpcnAddFriend)(std::string_view npid);
+  const char *(*rpcnRemoveFriend)(std::string_view npid);
+  const char *(*rpcnGetFriends)();
   const char *(*rpcnCreateAccount)(std::string_view npid, std::string_view password,
                                    std::string_view onlineName, std::string_view email);
   const char *(*rpcnResendToken)(std::string_view npid, std::string_view password);
@@ -177,6 +180,9 @@ struct RPCSXLibrary : RPCSXApi {
     // such symbols, and the Kotlin side treats a null as "this build cannot do RPCN".
     result.rpcnGetConfig = reinterpret_cast<decltype(rpcnGetConfig)>(dlsym(handle, "_rpcsx_rpcnGetConfig"));
     result.rpcnSetConfig = reinterpret_cast<decltype(rpcnSetConfig)>(dlsym(handle, "_rpcsx_rpcnSetConfig"));
+    result.rpcnAddFriend = reinterpret_cast<decltype(rpcnAddFriend)>(dlsym(handle, "_rpcsx_rpcnAddFriend"));
+    result.rpcnRemoveFriend = reinterpret_cast<decltype(rpcnRemoveFriend)>(dlsym(handle, "_rpcsx_rpcnRemoveFriend"));
+    result.rpcnGetFriends = reinterpret_cast<decltype(rpcnGetFriends)>(dlsym(handle, "_rpcsx_rpcnGetFriends"));
     result.rpcnCreateAccount = reinterpret_cast<decltype(rpcnCreateAccount)>(dlsym(handle, "_rpcsx_rpcnCreateAccount"));
     result.rpcnResendToken = reinterpret_cast<decltype(rpcnResendToken)>(dlsym(handle, "_rpcsx_rpcnResendToken"));
     result.rpcnSendResetToken = reinterpret_cast<decltype(rpcnSendResetToken)>(dlsym(handle, "_rpcsx_rpcnSendResetToken"));
@@ -1217,6 +1223,38 @@ Java_net_rpcsx_RPCSX_rpcnSetConfig(JNIEnv *env, jobject, jstring host, jstring n
 
   const std::string h = str(host), n = str(npid), p = str(password), t = str(token);
   rpcsxLib.rpcnSetConfig(h, n, p, t);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnAddFriend(JNIEnv *env, jobject, jstring npid) {
+  if (!rpcsxLib.rpcnAddFriend) return rpcn_unavailable(env);
+
+  const char *c = npid ? env->GetStringUTFChars(npid, nullptr) : nullptr;
+  const std::string name = c ? c : "";
+  if (c) env->ReleaseStringUTFChars(npid, c);
+
+  const char *msg = rpcsxLib.rpcnAddFriend(name);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnRemoveFriend(JNIEnv *env, jobject, jstring npid) {
+  if (!rpcsxLib.rpcnRemoveFriend) return rpcn_unavailable(env);
+
+  const char *c = npid ? env->GetStringUTFChars(npid, nullptr) : nullptr;
+  const std::string name = c ? c : "";
+  if (c) env->ReleaseStringUTFChars(npid, c);
+
+  const char *msg = rpcsxLib.rpcnRemoveFriend(name);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnGetFriends(JNIEnv *env, jobject) {
+  if (!rpcsxLib.rpcnGetFriends) return env->NewStringUTF("[]");
+
+  const char *msg = rpcsxLib.rpcnGetFriends();
+  return env->NewStringUTF(msg ? msg : "[]");
 }
 
 extern "C" JNIEXPORT jstring JNICALL

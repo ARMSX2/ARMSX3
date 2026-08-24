@@ -909,6 +909,16 @@ val EN: Map<String, String> = mapOf(
     "overlay.toggle.temps.description" to
         "Show CPU, GPU and battery temperature on the performance overlay. Not every device exposes these \u2014 one that doesn't simply shows nothing.",
     "overlay.tempInterval.label" to "Temperature poll interval",
+    "rpcn.friends.title" to "Friends",
+    "rpcn.friends.username" to "PSN username",
+    "rpcn.friends.add" to "Add",
+    "rpcn.friends.remove" to "Remove",
+    "rpcn.friends.working" to "Working\u2026",
+    "rpcn.friends.added" to "Friend request sent to %s.",
+    "rpcn.friends.removed" to "Removed %s.",
+    "rpcn.friends.need.name" to "Enter a username to add.",
+    "rpcn.friends.empty" to
+        "No friends to show. The list comes from a signed-in RPCN session \u2014 add someone, or start a game, to sign in.",
     "renderer.outputScaling.sgsr" to "SGSR",
     "renderer.outputScaling.sgsrEdge" to "SGSR Edge Dir",
     "pad.rumble.label" to "Rumble / Vibration",

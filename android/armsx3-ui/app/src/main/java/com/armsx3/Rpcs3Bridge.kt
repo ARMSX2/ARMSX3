@@ -1181,6 +1181,15 @@ object Rpcs3Bridge {
     }
 
     @JvmStatic
+    fun rpcnAddFriend(npid: String): String =
+        runCatching { RPCSX.instance.rpcnAddFriend(npid) }.getOrElse { it.message ?: "" }
+
+    fun rpcnRemoveFriend(npid: String): String =
+        runCatching { RPCSX.instance.rpcnRemoveFriend(npid) }.getOrElse { it.message ?: "" }
+
+    fun rpcnGetFriends(): String =
+        runCatching { RPCSX.instance.rpcnGetFriends() }.getOrElse { "[]" }
+
     fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String =
         runCatching { RPCSX.instance.rpcnCreateAccount(npid, password, onlineName, email) }
             .getOrElse { "Could not reach the emulator core." }

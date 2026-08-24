@@ -152,6 +152,15 @@ class RPCSX {
      *  password the UI never displayed. */
     external fun rpcnSetConfig(host: String, npid: String, password: String, token: String)
 
+    /** Sends a friend request. Signs in first if needed; returns "" on success or a message. */
+    external fun rpcnAddFriend(npid: String): String
+
+    /** Removes a friend. Returns "" on success or a message. */
+    external fun rpcnRemoveFriend(npid: String): String
+
+    /** Friend list as JSON, or [] when not signed in. Never signs in on its own. */
+    external fun rpcnGetFriends(): String
+
     external fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String
     external fun rpcnResendToken(npid: String, password: String): String
     external fun rpcnSendResetToken(npid: String, email: String): String

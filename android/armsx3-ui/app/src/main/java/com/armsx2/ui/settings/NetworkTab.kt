@@ -85,6 +85,8 @@ fun NetworkTab(state: MutableState<Settings>) {
         if (s.ps3.psnStatus == 2) {
             SettingsDivider()
             RpcnAccountSection()
+            SettingsDivider()
+            RpcnFriendsSection()
         }
         SettingsDivider()
         ToggleRow(
