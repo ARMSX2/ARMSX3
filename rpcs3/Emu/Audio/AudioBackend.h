@@ -380,6 +380,23 @@ public:
 		}
 	}
 
+	/**
+	 * Callbacks the backend could not fill completely, and had to pad.
+	 *
+	 * A padded callback is a hole in the output -- the device asked for N frames of audio and the
+	 * emulator did not have them, so the gap is filled by repeating the last sample. That is what
+	 * crackling IS, and until now nothing counted it: the buffer-level report samples every ten
+	 * seconds and a starved callback lasts milliseconds, so every transient underrun passed
+	 * between samples unseen. Counted here rather than per backend so Cubeb and Oboe report the
+	 * same number the same way.
+	 *
+	 * Monotonic; readers take deltas.
+	 */
+	atomic_t<u64> m_underruns{0};
+
+public:
+	u64 get_underruns() const { return m_underruns; }
+
 protected:
 	void setup_channel_layout(u32 input_channel_count, u32 output_channel_count, audio_channel_layout layout, logs::channel& log);
 

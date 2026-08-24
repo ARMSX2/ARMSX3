@@ -274,6 +274,13 @@ oboe::DataCallbackResult OboeBackend::onAudioReady(oboe::AudioStream* /*stream*/
 		}
 	}
 
+	// One count per starved callback, not per padded frame: the audible event is the gap, and
+	// its length is already implied by how much of the callback had to be invented.
+	if (written < bytes_req)
+	{
+		m_underruns++;
+	}
+
 	// Pad the remainder by repeating the last sample. Holding a value is much less audible
 	// than a hole, and the emulator legitimately runs dry whenever it stalls.
 	for (u32 i = written; i < bytes_req; i += sample_size)

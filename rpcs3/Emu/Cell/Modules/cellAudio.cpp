@@ -953,8 +953,15 @@ void cell_audio_thread::operator()()
 			{
 				m_last_buffer_report = timestamp;
 
+				// Underruns SINCE THE LAST LINE, not since boot: what matters is whether the
+				// output is breaking up now, and a running total from a rough patch minutes ago
+				// hides that. Non-zero here is crackling, measured rather than inferred.
+				const u64 underruns_total = cfg.backend ? cfg.backend->get_underruns() : 0;
+				const u64 underruns = underruns_total - m_last_underruns;
+				m_last_underruns = underruns_total;
+
 				cellAudio.notice("Audio buffer: queued=%.1fms target=%.1fms (%.0f%%) period=%.0f%% "
-					"blocks=%u ports=%u untouched=%u avg=%.2f ratio=%.2f",
+					"blocks=%u ports=%u untouched=%u avg=%.2f ratio=%.2f underruns=%u",
 					enqueued_playtime / 1000.0,
 					desired_duration_adjusted / 1000.0,
 					desired_duration_rate * 100.0f,
@@ -963,7 +970,8 @@ void cell_audio_thread::operator()()
 					active_ports,
 					untouched,
 					average_playtime_ratio,
-					frequency_ratio);
+					frequency_ratio,
+					underruns);
 			}
 
 			const s64 time_left = m_dynamic_period - time_since_last_period;
