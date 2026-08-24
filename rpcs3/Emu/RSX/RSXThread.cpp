@@ -1450,8 +1450,17 @@ namespace rsx
 	{
 		const u64 now = get_system_time();
 
+		// SEED the timestamp, do not merely bail on it.
+		//
+		// The RSX-side check sets g_last_frame_time here, which is what starts its clock. This
+		// half returned instead -- and since the case it exists for is an RSX thread too stuck to
+		// run that check, nothing ever seeded it, g_last_frame_time stayed zero, and the watchdog
+		// bailed on every tick forever. Blocked in exactly the scenario it was written for.
 		if (g_progr_text || !g_last_frame_time)
 		{
+			g_last_frame_time = now;
+			g_frame_stall_reported = false;
+			g_frame_stall_dumps = 0;
 			return;
 		}
 
