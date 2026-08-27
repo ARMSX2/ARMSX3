@@ -5380,6 +5380,31 @@ static bool cfg_is_float(const cfg::_base *node) {
   return min.find('.') != std::string::npos;
 }
 
+// Can this node actually be written back through settingsSet?
+//
+// cfg::set_entry, map_entry, node_map_entry, log_entry and device_entry are collections
+// that never implemented from_string, so they inherit the pure-virtual base stub: writing
+// one logs "cfg::_base::from_string() purecall" at FATAL and changes nothing. They all fall
+// into cfg_type_name's default: "string" branch, so the generic settings screen rendered
+// each as an editable text field -- issue #97 reported three fatals from a user typing into
+// the "Log" field, one per keystroke, with the setting silently never applying.
+//
+// Only emit what the UI can honestly edit. cfg::_float reports type::_int, so it is covered.
+static bool cfg_is_editable(const cfg::_base *node) {
+  switch (node->get_type()) {
+  case cfg::type::node:
+  case cfg::type::_bool:
+  case cfg::type::_enum:
+  case cfg::type::_int:
+  case cfg::type::uint:
+  case cfg::type::uint128:
+  case cfg::type::string:
+    return true;
+  default:
+    return false;
+  }
+}
+
 static const char *cfg_type_name(const cfg::_base *node) {
   switch (node->get_type()) {
   case cfg::type::_bool: return "bool";
@@ -5395,6 +5420,9 @@ static void emit_cfg_json(const cfg::_base *node, std::string &out) {
     out += '{';
     bool first = true;
     for (const auto *child : static_cast<const cfg::node *>(node)->get_nodes()) {
+      if (!cfg_is_editable(child)) {
+        continue;
+      }
       if (!first) out += ',';
       first = false;
       json_append_escaped(out, child->get_name());
@@ -5518,6 +5546,14 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
 
   if (root == nullptr) {
     rpcsx_android.error("settingsSet: node %s not found", path);
+    return false;
+  }
+
+  // Refuse collection nodes before from_string can hit the pure-virtual base stub, which
+  // logs at FATAL and looks like a crash in a bug report. Defence in depth: the emitter no
+  // longer offers these, but a stale override file or an older UI can still name one.
+  if (!cfg_is_editable(root)) {
+    rpcsx_android.error("settingsSet: node %s is a collection, not an editable value", path);
     return false;
   }
 
