@@ -1,6 +1,7 @@
 #include "device.h"
 #include <cstdlib>
 #include <algorithm>
+#include <string_view>
 #include "Utilities/File.h"
 #include "util/sysinfo.hpp"
 #include "instance.h"
@@ -162,6 +163,27 @@ namespace vk
 		optional_features_support.extended_device_fault = !!device_fault_info.deviceFault;
 		optional_features_support.extended_dynamic_state = !!extended_dynamic_state_info.extendedDynamicState;
 		optional_features_support.provoking_vertex_last = !!provoking_vertex_info.provokingVertexLast;
+
+		// ARMSX3: Mali r44p1 faults on the attachment feedback loop path.
+		//
+		// This driver blob (Mali-G615, driverInfo 'v1.r44p1-...') loses the GPU inside the
+		// in-tile feedback-loop blend path. On Android the fault is inside the blob itself,
+		// so the process dies with no VK_ERROR_DEVICE_LOST and nothing in the log -- it just
+		// stops mid-line, which reads as an out-of-memory kill and gets reported as one.
+		// ARMSX2 hit the same blob (its issue #390) and fixed it the same way; the
+		// per-primitive barrier fallback measured no slower there.
+		//
+		// Narrow by DRIVER BUILD, never by vendor: other Mali-G615 units on different driver
+		// builds take this path correctly, so blocking ARM outright would cost all of them
+		// for one bad blob. driver_properties is already populated here --
+		// get_physical_device_properties_0() runs before this function.
+		if (optional_features_support.framebuffer_loops &&
+			props.vendorID == 0x13B5 &&
+			std::string_view(driver_properties.driverInfo).find("r44p1") != umax)
+		{
+			rsx_log.warning("Mali r44p1 detected; disabling attachment feedback loops (this driver faults on that path).");
+			optional_features_support.framebuffer_loops = false;
+		}
 
 		features = features2.features;
 
