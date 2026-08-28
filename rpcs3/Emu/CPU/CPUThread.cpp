@@ -659,6 +659,31 @@ void cpu_thread::operator()()
 	{
 		thread_ctrl::set_thread_affinity_mask(thread_ctrl::get_affinity_mask(get_class()));
 	}
+	else if (get_class() == thread_class::spu && thread_ctrl::is_arm_big_little())
+	{
+		// Keep SPU threads off the little cluster even under OS scheduling.
+		//
+		// The reservation protocol has no fairness: GETLLAR/PUTLLC is a compare-and-swap
+		// retry loop, and a thread on a core a third as fast loses every race to one on a
+		// big core. It does not lose throughput, it loses the line, permanently.
+		//
+		// Measured on Portal 2, Snapdragon 8 Gen 2 (capacity 280..1024). Android placed
+		// three SPURS kernels on cpu3/5/7 and three on cpu1/1/2, and the dump split exactly
+		// along that line: the three on big cores ran ~3% PUTLLC failures over ~21M calls,
+		// the three on A510s ran 99.5-99.997% failures over ~1.3M calls, having executed as
+		// few as 841 blocks. Every PPU then waited behind them and the guest wedged with the
+		// process at 0.5% CPU. It is a livelock, not a deadlock -- it resolved on its own
+		// after about five minutes once the scheduler moved things.
+		//
+		// rsx's mask, not spu's: both exclude the little cluster, but spu's additionally
+		// reserves the prime core for RSX, which puts six SPU threads on four cores. That
+		// crowding was measured worse than the problem it solved, and it is a throughput
+		// tuning that belongs with the full affinity modes, not with this correctness guard.
+		//
+		// Only under arm_big_little. Every other layout returns an x86-shaped mask that has
+		// no business being applied when the user asked for OS scheduling.
+		thread_ctrl::set_thread_affinity_mask(thread_ctrl::get_affinity_mask(thread_class::rsx));
+	}
 
 	ensure(g_fxo->is_init<cpu_profiler>());
 

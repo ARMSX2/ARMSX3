@@ -338,6 +338,11 @@ public:
 	// Returns a core affinity mask. Set whether to generate the high priority set or not
 	static u64 get_affinity_mask(thread_class group);
 
+	// True when the CPU has heterogeneous cores (ARM big.LITTLE / DynamIQ). Callers need this
+	// to tell a placement problem from a scheduling preference: on such a machine a thread in a
+	// compare-and-swap retry loop cannot share a line with threads on cores three times faster.
+	static bool is_arm_big_little();
+
 	// Sets the native thread priority
 	static void set_native_priority(int priority);
 
