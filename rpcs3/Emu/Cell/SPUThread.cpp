@@ -3786,6 +3786,7 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			raddr = 0;
 		}
 
+		putllc_streak = 0;
 		perf0.reset();
 		return true;
 	}
@@ -3815,6 +3816,31 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 		}
 
 		raddr = 0;
+
+		// Yield once this thread is demonstrably losing the line.
+		//
+		// The guest retries a failed conditional store immediately, so a thread that keeps losing
+		// re-enters at full speed and keeps the line hot for everyone. Nothing anywhere breaks
+		// that tie during normal play: the only backoff in the SPU path is gated on
+		// g_spu_work_count, i.e. it engages while blocks are being COMPILED and is inert once
+		// compilation finishes ~12s into a boot.
+		//
+		// Measured on Portal 2: the frame pipeline advances only when this handoff succeeds, and
+		// the success rate is what varies -- ~3% failures over ~21M calls on a healthy kernel
+		// against 99.5-99.997% over ~1.3M on a losing one. It is one mechanism across the whole
+		// range: high success is 29fps, collapsed-but-nonzero is the 2fps slideshow, zero is the
+		// hang. With no fairness the losing side keeps losing until something external perturbs
+		// the timing, which is why recovery takes minutes and looks random.
+		//
+		// Only after a long streak, so ordinary contention is untouched -- a healthy kernel at 3%
+		// failures essentially never reaches 64 in a row. The sleep is short and jittered by the
+		// thread index so the losers do not resynchronise and collide again on the next attempt.
+		if (++putllc_streak >= 64)
+		{
+			putllc_streak = 0;
+			thread_ctrl::wait_for(20 + (index & 7) * 5);
+		}
+
 		perf1.reset();
 		return false;
 	}
