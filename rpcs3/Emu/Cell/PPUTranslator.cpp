@@ -127,6 +127,18 @@ PPUTranslator::PPUTranslator(LLVMContext& context, Module* _module, const ppu_mo
 	const auto caddr = m_info.segs[0].addr;
 	const auto cend = caddr + m_info.segs[0].size;
 
+	// Relocation logging is per-module, not per-relocation.
+	//
+	// These three sites each logged once per relocation. One Portal 2 session produced a
+	// 1.26 GB RPCSX.log that was ~100% the "relative relocation" notice alone, and the
+	// volume does not merely waste disk: the log writer falls behind, every thread that
+	// logs blocks behind it, and the emulator parks at 0% CPU looking exactly like a
+	// deadlock. Two of the three were at error level, which no log-level setting filters.
+	// Count them instead and report once per module, keeping the first address so the
+	// message still points somewhere.
+	usz reloc_relative = 0, reloc_64bit = 0, reloc_repeated = 0;
+	u32 first_relative = 0, first_64bit = 0, first_repeated = 0;
+
 	for (const auto& rel : m_info.get_relocs())
 	{
 		if (rel.addr >= caddr && rel.addr < cend)
@@ -144,7 +156,7 @@ PPUTranslator::PPUTranslator(LLVMContext& context, Module* _module, const ppu_mo
 			// case 26:
 			// case 28:
 			{
-				ppu_log.notice("Ignoring relative relocation at 0x%x (%u)", rel.addr, rel.type);
+				if (!reloc_relative++) first_relative = rel.addr;
 				continue;
 			}
 
@@ -161,7 +173,7 @@ PPUTranslator::PPUTranslator(LLVMContext& context, Module* _module, const ppu_mo
 			case 73:
 			case 78:
 			{
-				ppu_log.error("Ignoring 64-bit relocation at 0x%x (%u)", rel.addr, rel.type);
+				if (!reloc_64bit++) first_64bit = rel.addr;
 				continue;
 			}
 			default: break;
@@ -170,9 +182,24 @@ PPUTranslator::PPUTranslator(LLVMContext& context, Module* _module, const ppu_mo
 			// Align relocation address (TODO)
 			if (!m_relocs.emplace(rel.addr & ~3, &rel).second)
 			{
-				ppu_log.error("Relocation repeated at 0x%x (%u)", rel.addr, rel.type);
+				if (!reloc_repeated++) first_repeated = rel.addr;
 			}
 		}
+	}
+
+	if (reloc_relative)
+	{
+		ppu_log.notice("Ignored %u relative relocations (first at 0x%x)", reloc_relative, first_relative);
+	}
+
+	if (reloc_64bit)
+	{
+		ppu_log.error("Ignored %u 64-bit relocations (first at 0x%x)", reloc_64bit, first_64bit);
+	}
+
+	if (reloc_repeated)
+	{
+		ppu_log.error("Relocation repeated %u times (first at 0x%x)", reloc_repeated, first_repeated);
 	}
 
 	if (m_info.is_relocatable)
