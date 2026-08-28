@@ -3787,6 +3787,7 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 		}
 
 		putllc_streak = 0;
+		putllc_backoff = 0;
 		perf0.reset();
 		return true;
 	}
@@ -3835,10 +3836,27 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 		// Only after a long streak, so ordinary contention is untouched -- a healthy kernel at 3%
 		// failures essentially never reaches 64 in a row. The sleep is short and jittered by the
 		// thread index so the losers do not resynchronise and collide again on the next attempt.
+		// Escalating, because a flat backoff is not a backoff at a 100% failure rate.
+		//
+		// Measured on Portal 2, two samples 15s apart: a starved kernel attempted 148,066
+		// conditional stores and ALL of them failed, executing zero blocks and notifying nobody,
+		// while a healthy one ran 8.9M calls at 1.7% failures and 455M blocks. A fixed 35us sleep
+		// every 64 losses is ~5ms across those 15s -- a 0.03% duty cycle, which is noise. The
+		// loser stayed on the line at full speed and never got in.
+		//
+		// So double the wait for each further run of 64 losses, to a 2ms ceiling: ordinary
+		// contention (a healthy kernel at 1.7% essentially never reaches one run of 64) is
+		// untouched, while a thread that cannot win at all ends up yielding most of its time
+		// instead of holding the line hot. Jittered by thread index so losers do not
+		// resynchronise and collide again on the next attempt. Reset on any success.
 		if (++putllc_streak >= 64)
 		{
 			putllc_streak = 0;
-			thread_ctrl::wait_for(20 + (index & 7) * 5);
+
+			const u32 steps = std::min<u32>(putllc_backoff++, 6);
+			const u32 usec = std::min<u32>((20u << steps) + (index & 7) * 5, 2000);
+
+			thread_ctrl::wait_for(usec);
 		}
 
 		perf1.reset();
