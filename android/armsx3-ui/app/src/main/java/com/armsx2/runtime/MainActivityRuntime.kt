@@ -657,11 +657,25 @@ open class MainActivityRuntime : ComponentActivity() {
                     // which the app cannot do any other way — HOME never reaches us (#425).
                     instance?.let { com.armsx2.ui.ScreenPinning.start(it) }
                     applyRendererPrefs()
+                    // Learn this title's real serial for next time.
+                    //
+                    // The library only gets a serial by regex over the filename, so a disc that
+                    // does not spell out its title id resolves per-game settings under its
+                    // filename while the core boots it as the serial and reads there. The core
+                    // reports the serial about a second into boot, which is too late for the
+                    // settings just pushed above -- but recording it now means every later boot
+                    // resolves under the right key. See ConfigStore.rememberSerial.
+                    runCatching {
+                        com.armsx2.config.ConfigStore.rememberSerial(
+                            currentGame.value?.settingsKey,
+                            com.armsx3.NativeApp.getGameSerial())
+                    }
                     // Both of these are consumed by native when the VM boots, so they must be
                     // pushed BEFORE runVMThread (which blocks until the VM exits). One resolve,
                     // per-game ∘ global.
                     val bootCfg = com.armsx2.config.ConfigStore
-                        .resolveForGame(currentGame.value?.settingsKey)
+                        .resolveForGame(
+                            com.armsx2.config.ConfigStore.effectiveKey(currentGame.value?.settingsKey))
                     // Read by VMManager::SetEmuThreadAffinities during boot.
                     runCatching { NativeApp.setAffinityMode(bootCfg.affinityMode) }
                     // The hold itself waits for the VM to come up. BIOS boots skip it.
@@ -778,7 +792,8 @@ open class MainActivityRuntime : ComponentActivity() {
             // Resolve via settingsKey (serial for discs, filename stem for
             // serial-less ELF/homebrew) so ELF per-game settings survive a reboot
             // instead of falling back to global (issue #253).
-            var resolved = com.armsx2.config.ConfigStore.resolveForGame(currentGame.value?.settingsKey)
+            var resolved = com.armsx2.config.ConfigStore.resolveForGame(
+                com.armsx2.config.ConfigStore.effectiveKey(currentGame.value?.settingsKey))
             // Build immutable input maps before the VM starts so the first ABXY
             // edge never pays SharedPreferences parsing on the UI thread.
             ControllerMappings.warmRuntimeCaches()

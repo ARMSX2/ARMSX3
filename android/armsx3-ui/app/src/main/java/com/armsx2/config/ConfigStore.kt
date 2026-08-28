@@ -122,6 +122,38 @@ object ConfigStore {
     private const val LEGACY_BACKUP_FILENAME = "armsx2-settings.json"
     private fun keyForGame(serial: String) = "config.game.$serial"
 
+    // Serial aliases, so per-game settings land under the key the core actually uses.
+    //
+    // GameInfo.settingsKey is the serial when the library found one and the filename stem
+    // otherwise -- and the library's only source is a regex over the filename, because
+    // NativeApp.getGameSerialFromFd is a PCSX2-era stub that returns "" on every call. A PS3
+    // disc whose filename does not spell out its title id therefore gets every per-game
+    // setting stored under its filename, while the core boots it as e.g. BLUS30732 and looks
+    // there. Caught on Portal 2: a per-title seed written to config.game.BLUS30732 was never
+    // read, and the core kept loading global values.
+    //
+    // The core knows the serial a second into boot (NativeApp.getGameSerial). Remember it
+    // against the stem the first time, and every later boot resolves under the real serial.
+    // Fixing the probe itself means parsing PARAM.SFO out of the image, which is the proper
+    // fix and a bigger one; this makes per-game settings work in the meantime.
+    private fun aliasKey(stem: String) = "config.serialalias.$stem"
+
+    /** Record the core-reported serial for a title whose library entry had none. */
+    fun rememberSerial(settingsKey: String?, serial: String?) {
+        val stem = settingsKey?.takeIf { it.isNotBlank() } ?: return
+        val real = serial?.takeIf { it.isNotBlank() } ?: return
+        if (stem == real) return
+        if (MainActivityRuntime.prefs.getString(aliasKey(stem), null) == real) return
+        MainActivityRuntime.prefs.edit { putString(aliasKey(stem), real) }
+    }
+
+    /** The key per-game settings should actually be stored and resolved under. */
+    fun effectiveKey(settingsKey: String?): String? {
+        val stem = settingsKey?.takeIf { it.isNotBlank() } ?: return settingsKey
+        return runCatching { MainActivityRuntime.prefs.getString(aliasKey(stem), null) }
+            .getOrNull()?.takeIf { it.isNotBlank() } ?: stem
+    }
+
     // Memoized result of loadGlobal(). The function below is a JSON parse plus every
     // migration block in this file -- 24,555 dex instructions by ART's count, over its
     // JIT ceiling, so it runs interpreted every single call. That would be fine if it
