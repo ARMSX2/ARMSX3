@@ -6155,13 +6155,24 @@ s64 spu_thread::get_ch_value(u32 ch)
 				{
 					if (u32 work_count = g_spu_work_count)
 					{
-						// The fixed headroom of 10 assumes a many-core desktop. On an 8-thread phone
-						// sub_saturate(8, 10) is 0, so this throttle fires on EVERY background SPU
-						// compile and sleeps productive reservation waiters through scene warm-up.
-						// Keep the desktop behaviour above 10 threads, give low-core devices a sane
-						// non-zero floor. Ported from ouroboros420/rpcsx (d8a19e2c8).
-						const u32 hw_threads = utils::get_thread_count();
-						const u32 true_free = hw_threads > 10 ? (hw_threads - 10) : (hw_threads / 2);
+						// Upstream's formula, restored. The ouroboros420 port (d8a19e2c8) replaced it
+						// with `hw_threads > 10 ? hw_threads - 10 : hw_threads / 2` on the reasoning
+						// that sub_saturate(8, 10) == 0 makes the throttle fire on every background
+						// SPU compile and sleep productive reservation waiters through warm-up.
+						//
+						// That reads as a throughput win and is a fairness loss. This throttle is
+						// what stops SPUs spinning on a contended line while compilation is in
+						// flight: the backoff probability is (work_count - true_free) / thread_count,
+						// so on an 8-thread device raising true_free from 0 to 4 cuts it to about a
+						// third. Portal 2 then livelocks with all six SPURS kernels on the SPURS
+						// control block at 0x42168280 -- 99.5-99.997% PUTLLC failure on three of
+						// them, as few as 841 blocks executed, every PPU waiting behind them. It
+						// recovers on its own after ~5 minutes, which is what a fairness problem
+						// looks like rather than a lost wakeup.
+						//
+						// Sleeping a waiter that cannot win anyway costs nothing. Spinning it
+						// costs everyone else the line.
+						const u32 true_free = utils::sub_saturate<u32>(utils::get_thread_count(), 10);
 
 						if (work_count > true_free)
 						{
