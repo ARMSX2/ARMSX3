@@ -59,9 +59,10 @@ object ConfigStore {
     // can't update in place and re-point setup at their old folder). See reconcileReusedFolder.
     private const val KEY_FOLDER_RECONCILE = "config.migrated.folderReconcile"
     private const val KEY_SHADER_INTERP_MIGRATED = "config.migrated.shaderInterpOff"
-    private const val KEY_XFLOAT_ACCURATE_MIGRATED = "config.migrated.xfloatAccurate"
     private const val KEY_SPU_DECODER_RESTORE = "config.migrated.spuDecoderRestoreLlvm"
-    private const val KEY_XFLOAT_BACK_TO_APPROX = "config.migrated.xfloatBackToApprox"
+    // Supersedes config.migrated.xfloatAccurate and config.migrated.xfloatBackToApprox,
+    // which forced this field in opposite directions; see loadGlobal.
+    private const val KEY_XFLOAT_SETTLED_APPROX = "config.migrated.xfloatSettledApprox"
     private const val KEY_PRECISE_SPU_OFF = "config.migrated.preciseSpuVerifyOff"
     // Oboe became the Android default in 0.7.2; move anyone still on the old Cubeb default.
     private const val KEY_AUDIO_OBOE = "config.migrated.audioOboeDefault"
@@ -396,15 +397,29 @@ object ConfigStore {
             MainActivityRuntime.prefs.edit { putBoolean(KEY_PRECISE_SPU_OFF, true) }
         }
 
-        // ...and back off it again: Accurate was a wrong guess at the SPU freeze,
-        // which was really the block-verification checksum. Return anyone carrying
-        // the forced Accurate value to upstream's Approximate.
-        if (!MainActivityRuntime.prefs.getBoolean(KEY_XFLOAT_BACK_TO_APPROX, false)) {
+        // XFloat was forced in BOTH directions by two one-shot migrations that each
+        // guarded on their own key and marked themselves done. An older pass moved
+        // everyone Approximate -> Accurate on a DMA-corruption theory; a later pass moved
+        // them back, Accurate having been a wrong guess at the SPU freeze (the real cause
+        // was the block-verification checksum).
+        //
+        // The corrective pass ran FIRST in loadGlobal, so an install meeting both in a
+        // single load took the no-op branch of the corrective one, consumed its key, and
+        // was then pushed onto Accurate by the superseded one with nothing left to bring
+        // it back. Installs that met them under separate builds landed the other way, so
+        // the same build shipped two cohorts running different SPU float semantics,
+        // decided by install date. Confirmed against ps3autotests: Approximate and
+        // Accurate are different enough to be worth 14532 lines of output.
+        //
+        // One migration, one key, applied once to everyone: settle on upstream's
+        // Approximate. A deliberate Relaxed/Inaccurate (2/3) is still left alone, and
+        // raw == null (a fresh install) already defaults to Approximate untouched.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_XFLOAT_SETTLED_APPROX, false)) {
             if (raw != null && parsed.ps3.spuXFloat == 0) {
                 parsed = parsed.copy(ps3 = parsed.ps3.copy(spuXFloat = 1))
                 dirty = true
             }
-            MainActivityRuntime.prefs.edit { putBoolean(KEY_XFLOAT_BACK_TO_APPROX, true) }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_XFLOAT_SETTLED_APPROX, true) }
         }
 
         // Return the two reservation settings to upstream's defaults, both off.
@@ -649,18 +664,6 @@ object ConfigStore {
                 )
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_SHADOWING_OVERRIDES_PURGED, true) }
-        }
-
-        // Move anyone still on the old Approximate xfloat default onto Accurate.
-        // Approximate corrupted SPU float registers badly enough that a job
-        // manager built a DMA command out of one; see Settings.spuXFloat. A
-        // deliberate choice of Relaxed/Inaccurate is left alone.
-        if (!MainActivityRuntime.prefs.getBoolean(KEY_XFLOAT_ACCURATE_MIGRATED, false)) {
-            if (raw != null && parsed.ps3.spuXFloat == 1) {
-                parsed = parsed.copy(ps3 = parsed.ps3.copy(spuXFloat = 0))
-                dirty = true
-            }
-            MainActivityRuntime.prefs.edit { putBoolean(KEY_XFLOAT_ACCURATE_MIGRATED, true) }
         }
 
         // The shader interpreter cannot compile on Adreno -- vkCreateGraphicsPipelines
