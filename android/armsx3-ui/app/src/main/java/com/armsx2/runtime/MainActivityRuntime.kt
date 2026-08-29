@@ -646,6 +646,29 @@ open class MainActivityRuntime : ComponentActivity() {
                 try {
                     eState.value = EmuState.RUNNING
                     println("@@ANDROID_START_VM@@ kind=game path=${m_szGamefile.take(240)}")
+
+                    // Push the curated settings before the VM reads them.
+                    //
+                    // applyTo() was only ever called from UI actions -- a settings screen, the
+                    // in-game overlay, the texture manager. Nothing pushed at LAUNCH, so
+                    // config.yml was authoritative at boot and, once it diverged from the store,
+                    // stayed diverged forever: nothing rewrites a node the user is not actively
+                    // changing.
+                    //
+                    // That is not theoretical. A stale "PPU Decoder: Interpreter (static)" sat in
+                    // config.yml while the settings screen and the store both read Recompiler
+                    // (LLVM), so every game ran interpreted -- black screen, OSD fine, one PPU
+                    // thread pegged, no PPU compile, and identical behaviour on a build with none
+                    // of our commits. A day went into bisecting code for it.
+                    //
+                    // Cheap: applyTo batches its ~165 keys, and this runs once per launch.
+                    try {
+                        com.armsx2.config.ConfigStore
+                            .resolveForGame(currentGame.value?.settingsKey)
+                            .applyTo()
+                    } catch (t: Throwable) {
+                        android.util.Log.w("ARMSX2", "launch: failed to apply settings", t)
+                    }
                     // Local co-op: re-pair controllers each session (first pad = P1,
                     // next = P2) so player slots are deterministic per boot.
                     com.armsx2.input.PadRouter.reset()
