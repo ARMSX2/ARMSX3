@@ -114,6 +114,20 @@ fun InfoTab(game: GameInfo?) {
             Spacer(Modifier.height(10.dp))
             InfoRow(str("info.title"), game.title, clipboard)
             InfoRow(str("info.serial"), serial ?: "—", clipboard)
+            // Which build of the game this actually is.
+            //
+            // A disc reports APP_VER 01.00 forever; installing a title update does not touch it,
+            // the update lands in dev_hdd0/game/<serial> with its own PARAM.SFO. So "did my
+            // update install?" was unanswerable from this screen -- the only way to tell was to
+            // read APP_VER out of the emulator log. It matters: unpatched 1.00 Portal 2 behaves
+            // differently from the patched build, and a missing update reads as an emulator bug.
+            InfoRow(
+                str("info.gameVersion"),
+                com.armsx2.Ps3Sfo.installedUpdateVersion(serial)
+                    ?.let { "$it (update)" }
+                    ?: str("info.noUpdate"),
+                clipboard,
+            )
             // Always present, so the row does not appear mid-identification and shove the rows
             // below it down. This is the value that goes in the PNACH filename.
             InfoRow(str("info.crc"), crc ?: "—", clipboard)

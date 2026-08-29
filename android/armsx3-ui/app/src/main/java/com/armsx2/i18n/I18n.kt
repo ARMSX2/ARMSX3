@@ -218,6 +218,8 @@ val EN: Map<String, String> = mapOf(
     "info.noGame.body" to "Open this from a game's settings to see its details.",
     "info.title" to "Name",
     "info.serial" to "Serial",
+    "info.gameVersion" to "Game version",
+    "info.noUpdate" to "No update installed",
     "info.crc" to "CRC",
     "info.customName.label" to "Custom name",
     "info.customName.set" to "Set custom name",
