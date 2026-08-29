@@ -1812,24 +1812,47 @@ open class MainActivityRuntime : ComponentActivity() {
         // format version, module hash, the settings that affect codegen, and the CPU target -- so a
         // build that changes any of that simply does not match them, and one that does not change
         // it has no reason to discard them.
-        runCatching {
-            val prevVc = prefs.getInt("lastRunVersionCode", 0)
-            val curVc = BuildConfig.VERSION_CODE
-            if (prevVc != 0 && prevVc != curVc) {
-                val root = File(assetCopyRoot(applicationContext), "cache")
-                var cleared = 0
-                // Depth-first over the cache root, removing only directories named shaders_cache
-                // (RPCS3 puts one beside each title's compiled modules). walkBottomUp so a match is
-                // deleted whole without the walk then descending into a directory that is gone.
-                root.walkBottomUp()
-                    .filter { it.isDirectory && it.name == "shaders_cache" }
-                    .forEach { if (it.deleteRecursively()) cleared++ }
-                android.util.Log.i(
-                    "ARMSX2",
-                    "Update $prevVc -> $curVc: cleared $cleared shader cache(s); compiled modules kept",
-                )
-            }
-            if (prevVc != curVc) prefs.edit { putInt("lastRunVersionCode", curVc) }
+        //
+        // OFF THE MAIN THREAD. kickoffEmucoreInit runs from onCreate, and this walk covers the
+        // WHOLE cache root -- which holds every compiled PPU module and reaches tens of GB on a
+        // full library. Walking that on the UI thread blocks it for seconds and Android kills the
+        // app as unresponsive, which users report as "crashes during the logo animation after
+        // updating" (#94, seen on Retroid Pocket 6 and AYN Thor).
+        //
+        // It also explains why re-launching eventually works: lastRunVersionCode is only written
+        // once the walk finishes, so a kill part-way through means the next launch retries, each
+        // attempt deleting a few more directories until the walk is finally short enough to
+        // survive. A clean install has no cache to walk, which is why reinstalling "fixes" it.
+        //
+        // Nothing below depends on this having finished -- the caches are regenerable and the core
+        // rebuilds them on demand -- so it is safe to let it run behind startup.
+        val prevVc = prefs.getInt("lastRunVersionCode", 0)
+        val curVc = BuildConfig.VERSION_CODE
+
+        if (prevVc != 0 && prevVc != curVc) {
+            Thread {
+                runCatching {
+                    val root = File(assetCopyRoot(applicationContext), "cache")
+                    var cleared = 0
+                    // Depth-first over the cache root, removing only directories named
+                    // shaders_cache (RPCS3 puts one beside each title's compiled modules).
+                    // walkBottomUp so a match is deleted whole without the walk then descending
+                    // into a directory that is gone.
+                    root.walkBottomUp()
+                        .filter { it.isDirectory && it.name == "shaders_cache" }
+                        .forEach { if (it.deleteRecursively()) cleared++ }
+                    android.util.Log.i(
+                        "ARMSX2",
+                        "Update $prevVc -> $curVc: cleared $cleared shader cache(s); compiled modules kept",
+                    )
+                }
+                // Recorded only after the sweep actually completes, so an interrupted run repeats
+                // rather than silently leaving a build's stale pipeline blobs behind.
+                runCatching { prefs.edit { putInt("lastRunVersionCode", curVc) } }
+            }.apply { isDaemon = true; name = "shader-cache-sweep"; priority = Thread.MIN_PRIORITY }
+                .start()
+        } else if (prevVc != curVc) {
+            runCatching { prefs.edit { putInt("lastRunVersionCode", curVc) } }
         }
 
         // Point the ANGLE EGL env vars at the bundled libs (or clear them) before the
