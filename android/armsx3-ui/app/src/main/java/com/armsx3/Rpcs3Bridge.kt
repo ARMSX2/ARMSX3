@@ -319,6 +319,7 @@ object Rpcs3Bridge {
         // layer that the guest wrote the motors, so something has to poll getPadRumble. It was
         // written and never started, which is why vibration did nothing in any game.
         startRumblePump()
+        startSixaxis()
 
         try {
             while (!stopRequested && RPCSX.getState() != EmulatorState.Stopped) {
@@ -329,6 +330,7 @@ object Rpcs3Bridge {
             // stopRequested, and a pump left running would keep the motor buzzing on whatever
             // value the dead guest last wrote.
             stopRumblePump()
+            stopSixaxis()
         }
 
         return true
@@ -1554,6 +1556,31 @@ object Rpcs3Bridge {
 
     // ---- SIXAXIS motion ------------------------------------------------
 
+    private var sixaxis: com.armsx2.input.Sixaxis? = null
+
+    /**
+     * Report motion for as long as a game is running.
+     *
+     * Not gated on the gyro-to-stick setting: that one is an aim preference, while this is the
+     * controller telling the truth about itself. A real DualShock 3 reports motion whether or not
+     * the player has configured anything, and the titles that need it (Killzone 3's valve, Ratchet
+     * ToD's flight) have no button fallback -- so a switch would just reproduce the original
+     * complaint, which was that nothing in the UI could make the gyro work.
+     */
+    @JvmStatic
+    fun startSixaxis() {
+        val ctx = appContext ?: return
+        stopSixaxis()
+        val feed = com.armsx2.input.Sixaxis(ctx)
+        sixaxis = if (feed.start()) feed else null
+    }
+
+    @JvmStatic
+    fun stopSixaxis() {
+        sixaxis?.stop()
+        sixaxis = null
+    }
+
     /**
      * Feed the phone's orientation to the pad's motion sensors.
      *
@@ -1566,9 +1593,12 @@ object Rpcs3Bridge {
         val center = 512
         val perG = 113f
         fun axis(v: Float) = (center + (v * perG)).toInt().coerceIn(0, 1023)
-        // Gyro is a rate, not a position: scale so a brisk turn approaches the rails
-        // without a gentle one being lost in the noise.
-        val g = (center + (gyro * 120f)).toInt().coerceIn(0, 1023)
+        // Gyro is a rate, not a position, and the scale is fixed by the core rather than
+        // chosen: PadHandler.cpp reads m_sensors[3] back as degrees/s via (value - 512) /
+        // (123/90). So one rad/s is (180/PI) * (123/90) = 78.31 units, and picking a rounder
+        // number just misreports the rate to the game.
+        val perRadPerSec = 78.31f
+        val g = (center + (gyro * perRadPerSec)).toInt().coerceIn(0, 1023)
         runCatching { RPCSX.instance.setPadSensor(port, axis(ax), axis(ay), axis(az), g) }
     }
 
