@@ -101,6 +101,38 @@ bool rsx::thread::send_event(u64 data1, u64 event_flags, u64 data3)
 
 	auto error = sys_event_port_send(rsx_event_port, data1, event_flags, data3);
 
+	// A vblank is a periodic tick, so do not block the thread that produces them to deliver a
+	// stale one.
+	//
+	// This loop retries every 100us for as long as the queue is full, which strands the VBlank
+	// thread completely: it stops generating vblanks at all, and the whole display pipeline goes
+	// with it. Portal 2 reaches that state whenever _gcm_intr_thread cannot drain the queue --
+	// it polls sys_mutex_trylock for a mutex main_thread took once and has not released
+	// (acq=1 rel=0 across dump samples 15s apart, with ~1750 failed trylocks a second). The queue
+	// holds 32 events and 60Hz fills it in half a second, so any pause that long in the interrupt
+	// thread wedges everything, and the VBlank thread's own spinning then guarantees no vblank
+	// ever arrives to break it.
+	//
+	// Dropping is safe for exactly this event: the EAGAIN path below already excludes
+	// SYS_RSX_EVENT_VBLANK and its second-head variants from the "must not be lost" assertion,
+	// i.e. duplicates and losses are allowed by design. Anything else still spins, because those
+	// events are not reproducible.
+	static constexpr u64 vblank_bits =
+		SYS_RSX_EVENT_VBLANK | SYS_RSX_EVENT_SECOND_VBLANK_BASE | (SYS_RSX_EVENT_SECOND_VBLANK_BASE * 2);
+
+	if (error + 0u == CELL_EBUSY && (event_flags & ~vblank_bits) == 0)
+	{
+		static atomic_t<u64> s_dropped{0};
+
+		if ((++s_dropped & 0x3ff) == 0)
+		{
+			rsx_log.warning("Dropped %u vblank events into a full queue -- the guest is not draining it.",
+				static_cast<u32>(s_dropped));
+		}
+
+		return false;
+	}
+
 	while (error + 0u == CELL_EBUSY)
 	{
 		auto cpu = get_current_cpu_thread();
