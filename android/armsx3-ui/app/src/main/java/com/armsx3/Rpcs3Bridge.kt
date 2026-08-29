@@ -1484,7 +1484,13 @@ object Rpcs3Bridge {
                 // One vibrator, two motors: take the stronger. The small motor is the
                 // high-frequency one and reads as weaker for the same value, so it is
                 // scaled down rather than competing with the large one on equal terms.
-                val want = if (!rumbleEnabled) 0 else maxOf(large, small * 2 / 3)
+                // `paused` too, not just the enable flag. The effect started below repeats
+                // INDEFINITELY and is only ever cancelled on a transition back to zero, so a
+                // pause taken while a rumble is active left the motor buzzing with nothing able
+                // to stop it -- stopRumblePump only runs when the VM loop exits, which a pause
+                // does not do. Folding pause into `want` makes it a normal transition: the motor
+                // stops on pause and resumes on unpause, through the existing change path.
+                val want = if (!rumbleEnabled || paused) 0 else maxOf(large, small * 2 / 3)
 
                 if (want != lastAmplitude) {
                     runCatching {
