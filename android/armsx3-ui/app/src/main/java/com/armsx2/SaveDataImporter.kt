@@ -431,7 +431,7 @@ object SaveDataImporter {
      * then would be a confusing rule to explain. Answers null only when there is no user directory
      * at all, which is a genuinely fresh install.
      */
-    private fun savedataRoot(): File? {
+    internal fun savedataRoot(): File? {
         val home = File(RPCSX.getHdd0Dir(), "home")
         val preferred = runCatching { RPCSX.instance.getUser() }.getOrNull()
             ?.takeIf { it.isNotBlank() }

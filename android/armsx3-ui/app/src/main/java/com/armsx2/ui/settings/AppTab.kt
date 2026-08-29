@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -1093,6 +1094,82 @@ private fun BackupRestoreRows() {
         "📂", "app.savedata.importFolder", "app.savedata.importFolder.desc", "", busy,
         doSaveFolderImport,
     )
+
+    // Deleting saves. The app is the ONLY thing that can: Android 11 blocks file managers from
+    // Android/data, and adb can remove the files but not the directory (rmdir returns EPERM, and
+    // run-as is refused for a release build). A save folder left without a PARAM.SFO hung Sonic
+    // '06 in cellSaveDataFixedLoad with no error on screen, and there was no way to clear it from
+    // inside the app -- short of a reinstall, which takes everything else with it.
+    //
+    // Damaged saves are listed rather than hidden. They are the ones worth removing.
+    var saveList by remember { mutableStateOf(emptyList<com.armsx2.SaveDataManager.Entry>()) }
+    var savesShown by remember { mutableStateOf(false) }
+
+    val refreshSaves = {
+        scope.launch(Dispatchers.IO) {
+            val items = com.armsx2.SaveDataManager.list()
+            withContext(Dispatchers.Main) { saveList = items }
+        }
+        Unit
+    }
+
+    BackupActionRow("💾", "app.savedata.manage", "app.savedata.manage.desc", "", busy) {
+        savesShown = !savesShown
+        if (savesShown) refreshSaves()
+    }
+
+    if (savesShown) {
+        if (saveList.isEmpty()) {
+            Text(
+                str("app.savedata.manage.empty"),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(start = 48.dp, top = 4.dp, bottom = 8.dp),
+            )
+        } else {
+            saveList.forEach { entry ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 48.dp, end = 12.dp, top = 4.dp, bottom = 4.dp),
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(entry.label, style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            if (entry.malformed) str("app.savedata.manage.malformed")
+                            else "${entry.dirName} · ${com.armsx2.SaveDataManager.formatSize(entry.bytes)}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    TextButton(onClick = {
+                        com.armsx2.ui.common.GlobalConfirm.ask(
+                            title = I18n.get("app.savedata.manage.remove.title"),
+                            message = I18n.get("app.savedata.manage.remove.body")
+                                .replace("%s", entry.label),
+                            confirmLabel = I18n.get("packages.licence.remove"),
+                            destructive = true,
+                        ) {
+                            scope.launch(Dispatchers.IO) {
+                                val ok = com.armsx2.SaveDataManager.delete(entry)
+                                val items = com.armsx2.SaveDataManager.list()
+                                withContext(Dispatchers.Main) {
+                                    saveList = items
+                                    Toast.makeText(
+                                        context,
+                                        I18n.get(
+                                            if (ok) "app.savedata.manage.removed"
+                                            else "app.savedata.manage.remove.failed"
+                                        ),
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            }
+                        }
+                    }) { Text(str("packages.licence.remove")) }
+                }
+            }
+        }
+    }
 
     // Factory reset. Sits with Backup/Restore because Export is the thing to do first — the
     // prompt says so. Routed through GlobalConfirm rather than a local overlay: this row is
