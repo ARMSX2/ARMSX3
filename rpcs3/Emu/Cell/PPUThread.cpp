@@ -6212,6 +6212,54 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 	{
 		ppu_log.error("LLVM: %u of %u modules could not be loaded; those functions will be "
 			"interpreted, the rest are compiled as usual", failed_module_count, link_workload.size());
+
+		// Say it on screen, and say WHY, rather than only in a log nobody reads.
+		//
+		// Skipping a module that LLVM genuinely cannot codegen is deliberate and fine -- its
+		// functions are interpreted and the rest of the game is compiled normally. What is NOT
+		// fine is that a SYSTEMIC failure looked identical: run the storage out of space and
+		// every remaining module fails to write, the game boots anyway with most of its code
+		// missing, and the result is a black screen or a wild jump with nothing on screen to
+		// explain it. That is unattributable in a bug report -- it reads as an emulator fault
+		// in whatever the game happened to do next.
+		//
+		// Cost a full day here: a device at 98% full silently produced a half-compiled title
+		// (606 objects in one cache generation, 202 in the next), and every theory chased was
+		// about code, because the emulator gave no indication anything had failed.
+		u64 free_bytes = 0;
+
+		if (fs::device_stat stat{}; fs::statfs(cache_path, stat))
+		{
+			free_bytes = stat.avail_free;
+		}
+
+		// Low free space is the tell. A codegen failure hits one module out of hundreds; running
+		// out of room fails everything from that point on, so a large fraction plus a nearly full
+		// volume is a different event and deserves a different answer.
+		const bool likely_out_of_space = free_bytes && free_bytes < 512ull * 1024 * 1024;
+		const bool most_of_it_failed = failed_module_count * 4 >= link_workload.size();
+
+		if (likely_out_of_space || most_of_it_failed)
+		{
+			rsx::overlays::queue_message(
+				fmt::format("Compilation did not finish: %u of %u modules are missing (%u MB free).\n"
+					"Free up storage and boot the game again -- what compiled is kept.",
+					failed_module_count, link_workload.size(), free_bytes >> 20),
+				30'000'000);
+
+			// Stop rather than limp, for the same reason the out-of-memory path above does. A
+			// title missing a quarter of its code does not fail in a way anyone can act on.
+			ppu_log.fatal("LLVM: refusing to run a partially compiled executable (%u of %u modules "
+				"missing, %u MB free)", failed_module_count, link_workload.size(), free_bytes >> 20);
+
+			Emu.Pause(true);
+			return compiled_new;
+		}
+
+		rsx::overlays::queue_message(
+			fmt::format("%u of %u code modules could not be compiled and will be interpreted. "
+				"Expect lower performance in places.", failed_module_count, link_workload.size()),
+			15'000'000);
 	}
 
 	if (!is_being_used_in_emulation || (cpu ? cpu->state.all_of(cpu_flag::exit) : Emu.IsStopped()))
