@@ -239,7 +239,7 @@ static void pgo_flush()
 #endif
 
 // Severity threshold for the logcat mirror. Defaults to warning: notice/trace still reach
-// RPCSX.log, they just stop costing a logd round trip each. Lower it at runtime when
+// ARMSX3.log, they just stop costing a logd round trip each. Lower it at runtime when
 // actively debugging on a device.
 static std::atomic<int> g_logcat_min_level{static_cast<int>(logs::level::warning)};
 
@@ -284,7 +284,7 @@ struct LogListener : logs::listener {
     // It should not have to be. The FILE log is the artifact that gets attached to a bug
     // report; logcat is a live-debugging convenience for whoever is holding the device. So
     // mirror only what that person needs -- warnings and worse -- and let the rest go to the
-    // file alone, which is buffered and cheap. Nothing is lost from RPCSX.log.
+    // file alone, which is buffered and cheap. Nothing is lost from ARMSX3.log.
     //
     // Severity is INVERTED in logs::level (always=0 .. trace=7), so '>' drops the noisy end.
     if (static_cast<int>(static_cast<logs::level>(msg)) >
@@ -3217,7 +3217,7 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
 
     // Preserve previous logs.
     //
-    // There used to be exactly one: RPCSX.log became RPCSX.old.log and the previous old was
+    // There used to be exactly one: ARMSX3.log became ARMSX3.old.log and the previous old was
     // deleted. That loses the log people are trying to send, reliably, because of how they send
     // it -- play, stop, relaunch the app to reach the file, and the relaunch rotates the session
     // they wanted into .old; relaunch once more (to find it, to share it, because the launcher
@@ -3236,7 +3236,14 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
     {
       std::error_code ec;
       const std::string dir = fs::get_log_dir();
-      const std::string current = dir + "RPCSX.log";
+      const std::string current = dir + "ARMSX3.log";
+
+      // Adopt a log left by a build that still wrote RPCSX.log, so the rename does not
+      // strand the one file people are asked to attach to bug reports.
+      if (!fs::is_file(current) && fs::is_file(dir + "RPCSX.log"))
+      {
+        std::filesystem::rename(dir + "RPCSX.log", current, ec);
+      }
 
       // Boot-only logs stop within a second of launch and run to a few KB. A real session --
       // even one with logging silenced immediately -- is orders of magnitude larger.
@@ -3247,10 +3254,10 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
 
       if (exists && size >= k_worth_keeping) {
         // Oldest out, everything down one.
-        std::filesystem::remove(dir + "RPCSX.old3.log", ec);
-        std::filesystem::rename(dir + "RPCSX.old2.log", dir + "RPCSX.old3.log", ec);
-        std::filesystem::rename(dir + "RPCSX.old.log", dir + "RPCSX.old2.log", ec);
-        std::filesystem::rename(current, dir + "RPCSX.old.log", ec);
+        std::filesystem::remove(dir + "ARMSX3.old3.log", ec);
+        std::filesystem::rename(dir + "ARMSX3.old2.log", dir + "ARMSX3.old3.log", ec);
+        std::filesystem::rename(dir + "ARMSX3.old.log", dir + "ARMSX3.old2.log", ec);
+        std::filesystem::rename(current, dir + "ARMSX3.old.log", ec);
       } else if (exists) {
         // Nothing in it worth a slot, and keeping it would cost the oldest real log.
         std::filesystem::remove(current, ec);
@@ -3258,7 +3265,7 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
     }
 
     // Limit log size to ~25% of free space
-    log_file = logs::make_file_listener(fs::get_log_dir() + "RPCSX.log",
+    log_file = logs::make_file_listener(fs::get_log_dir() + "ARMSX3.log",
                                         stats.avail_free / 4);
   }
 
@@ -3299,7 +3306,7 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
   }
 
   logs::stored_message ver{rpcsx_android.always()};
-  ver.text = fmt::format("RPCSX-ps3-android v%s", rpcs3::get_version().to_string());
+  ver.text = fmt::format("ARMSX3 v%s", rpcs3::get_version().to_string());
 
   // Write exact SoC identity (from Android, not inferred from MIDRs)
   logs::stored_message soc{rpcsx_android.always()};
@@ -5687,7 +5694,7 @@ extern "C" std::string _rpcsx_getVersion() {
 //
 // The glue can only reach logcat, which nobody attaches to an issue, and the reason a
 // custom driver was refused is exactly what a report needs. Routed through the emulator
-// log channel so it lands in RPCSX.log beside the driver identity it explains.
+// log channel so it lands in ARMSX3.log beside the driver identity it explains.
 extern "C" void _rpcsx_reportDriverProblem(std::string message) {
   rpcsx_android.error("%s", message);
 }
