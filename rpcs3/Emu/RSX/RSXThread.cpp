@@ -1479,179 +1479,28 @@ namespace rsx
 		// issue #25), which parks its main thread at cia=0x000bc7d0 forever, right after
 		// _sys_lwmutex_create and before it creates a single thread or submits a single frame.
 		//
-		// Wait for PPU/SPU compilation to finish before spending the one shot.
-		//
-		// No frame is presented while modules are compiling either, so the very first stall of
-		// every session is the compile itself -- six minutes of it on a cold cache. Dumping there
-		// burns the one-shot on a thread that has not run a single guest instruction: every GPR
-		// reads zero and the call stack is empty, which is exactly what happened the first time
-		// this shipped. Neither "has a frame ever been presented" nor a plain time threshold
-		// separates the two cases, because the hang being chased also never presents a frame and
-		// also lasts forever. Outstanding progress work does.
-		//
 		// dump_callstack_list validates the stack pointer and every frame with vm::check_addr and
 		// gives up rather than walking garbage, so this is safe against a thread that is running
 		// and modifying its own stack underneath us. Torn values are acceptable here for the same
 		// reason the summary takes them: an approximate answer now beats an exact one never.
-		static atomic_t<bool> s_dumped_detail{false};
-
-		const bool compiling = g_progr_ptotal.load() != g_progr_pdone.load();
-
-		if (!compiling && !s_dumped_detail.exchange(true))
-		{
-			std::string detail;
-
-			// The guest instructions around the stuck cia -- the loop itself.
-			//
-			// Registers and a call stack say where the thread is and what it holds, but not what
-			// the code DOES, and from the outside a two-instruction compare-and-branch-to-self is
-			// indistinguishable from a long computation that simply has not finished. Printing the
-			// window settles it, and cpu_disasm_mode::dump emits address, opcode bytes and mnemonic
-			// per line, so the branch target is readable straight out of the log and can be matched
-			// against the guest binary without the debugger UI, which Android does not build.
-			//
-			// A fixed window rather than the whole function because function bounds are not known
-			// on this side, and every address is checked first: cia is read from a thread that is
-			// still running and can be stale or outright garbage, and faulting inside the diagnostic
-			// that explains a hang would be the worst possible trade.
-			PPUDisAsm dis_asm(cpu_disasm_mode::dump, vm::g_sudo_addr);
-
-			idm::select<named_thread<ppu_thread>>([&detail, &dis_asm](u32 id, ppu_thread& ppu)
-			{
-				fmt::append(detail, "\n=== PPU 0x%07x '%s' ===\n", id, *ppu.ppu_tname.load());
-				ppu.dump_all(detail);
-
-				const u32 pc = ppu.cia;
-				const u32 from = pc >= 0x20 ? pc - 0x20 : 0;
-
-				// A wide window for a thread that is spinning, a narrow one for a thread that is
-				// merely parked in a syscall.
-				//
-				// Under the recompiler cia is only written at block boundaries, so on a spinning
-				// thread it names the ENTRY of the function that never returned, not the loop
-				// inside it -- and a handful of instructions from the entry is just the prologue.
-				// Reading the whole body is the point: the question being answered is which PPU
-				// instructions the function uses, because the ARM64 backend only diverges from the
-				// portable path on a few of them (VCFUX, VMAXFP, VMINFP, VPERM) and seeing one of
-				// those in a function that hangs is what turns a guess into a candidate.
-				//
-				// Threads blocked in sys_* are not the suspects and there can be a dozen of them,
-				// so they keep the short window. Their cia is in liblv2 anyway.
-				const bool spinning = ppu.state.none_of(cpu_flag::wait);
-				const u32 span = spinning ? 0x600 : 0x40;
-
-				// What the registers POINT AT, for a thread spinning in guest code.
-				//
-				// dump_all prints 8 bytes behind each GPR, which is enough to recognise a
-				// pointer and not enough to read the structure it points to. Assassin's Creed
-				// needs byte 0x74 of the SPURS job chain -- the workloadId the guest tests
-				// before deciding a chain is usable -- and that is 0x74 bytes past a value
-				// sitting in r5. Every fact this hunt has turned on so far came from a struct
-				// field just out of reach of the 8-byte preview.
-				//
-				// Spinning threads only, deduplicated, capped: a dozen parked threads each
-				// dragging 0x80 bytes per register would bury the dump that explains the hang.
-				if (spinning)
-				{
-					std::vector<u32> seen;
-
-					for (u32 i = 3; i < 32 && seen.size() < 6; i++)
-					{
-						const u32 ptr = static_cast<u32>(ppu.gpr[i]);
-
-						// Aligned, mapped, and not already printed. The alignment test is what
-						// keeps counters and small integers out of it.
-						if (!ptr || (ptr & 0xf) || !vm::check_addr(ptr, vm::page_readable, 0x80))
-						{
-							continue;
-						}
-
-						if (std::find(seen.begin(), seen.end(), ptr) != seen.end())
-						{
-							continue;
-						}
-
-						seen.push_back(ptr);
-
-						fmt::append(detail, "\n[r%u] 0x%08x:", i, ptr);
-
-						for (u32 off = 0; off < 0x80; off += 16)
-						{
-							fmt::append(detail, "\n  +0x%02x ", off);
-							for (u32 b = 0; b < 16; b++)
-							{
-								fmt::append(detail, "%02x ", vm::read8(ptr + off + b));
-							}
-						}
-					}
-
-					detail += "\n";
-				}
-
-				fmt::append(detail, "\nCode around cia=0x%08x (%s):\n", pc,
-					spinning ? "spinning, wide window" : "waiting, short window");
-
-				for (u32 addr = from; addr <= from + span; addr += 4)
-				{
-					if (!vm::check_addr(addr))
-					{
-						continue;
-					}
-
-					dis_asm.disasm(addr);
-
-					// Mark the instruction the thread is actually parked on, so the loop can be
-					// read off without counting lines.
-					detail += (addr == pc ? "  >>" : "    ");
-					detail += dis_asm.last_opcode;
-				}
-
-				// The callers, which is where a control-flow divergence actually lives.
-				//
-				// cia only says where a thread is parked, and for anything blocked in an lv2 wait
-				// that is an address inside liblv2 or libsre -- the same address on every host, so
-				// it can never show a divergence. Borderlands 2 proves the point: ARM and an
-				// instrumented x86 build both park main_thread at 0x01b85e5c in libsre, both reach
-				// it through the cellSpursEventFlagWait import thunk at 0x011e785c, and both share
-				// an identical outer stack down to 0x001f59a4 -- then ARM calls straight into the
-				// wait via 0x000c6958 while x86 descends six further frames via 0x000c4b8c. The
-				// branch that picks between those two paths is the bug, and it is only visible by
-				// disassembling around the RETURN ADDRESSES, not around cia.
-				//
-				// Four frames: enough to cross the import thunk and reach guest code on either
-				// path, short enough that a dozen parked threads do not bury the log.
-				const auto frames = ppu.dump_callstack_list();
-
-				for (u32 i = 0; i < 4 && i < frames.size(); i++)
-				{
-					const u32 ret = frames[i].first;
-
-					if (!ret || !vm::check_addr(ret))
-					{
-						continue;
-					}
-
-					// The call is the instruction BEFORE the return address, so start behind it.
-					const u32 caller_from = ret >= 0x18 ? ret - 0x18 : 0;
-
-					fmt::append(detail, "\nCaller frame %u, code around return 0x%08x:\n", i, ret);
-
-					for (u32 addr = caller_from; addr <= ret + 0x8; addr += 4)
-					{
-						if (!vm::check_addr(addr))
-						{
-							continue;
-						}
-
-						dis_asm.disasm(addr);
-						detail += (addr == ret ? "  >>" : "    ");
-						detail += dis_asm.last_opcode;
-					}
-				}
-			}, idm::unlocked);
-
-			rsx_log.error("Stalled guest thread detail (reported once per session):%s", detail);
-		}
+		// The once-per-session deep dump (registers, disassembly window, guest call history)
+		// lived here and has been REMOVED from builds people play on.
+		//
+		// It faulted: RSX took a VM access violation reading guest 0xd ten milliseconds after
+		// the summary above printed, which freezes the emulator outright (system_state::frozen)
+		// and stops the log dead -- so it presents as the very hang it was added to explain, and
+		// masks whatever was actually happening. Third failure of this kind from this function,
+		// after the spu.raddr TOCTOU and the spu.dump_all hang.
+		//
+		// The cause is structural, not a missing check. It deep-dumps a thread that is STILL
+		// RUNNING: ppu_thread::dump_regs follows pointers it reads out of live guest memory
+		// (reg = reg_ptr) and then reads max_str_len bytes having validated only 8, so any
+		// check it does is a TOCTOU against a thread mutating that memory underneath it. The
+		// summary walk above is safe because it only reads thread-local scalars and a callstack
+		// walker that gives up rather than follow garbage.
+		//
+		// Bring it back only behind an explicit debug setting, and only after pausing the thread
+		// being dumped -- not by adding another check to the same race.
 
 		// The SPU half. A hang where every PPU is asleep and the SPUs are burning user time is
 		// the SPUs spinning in guest code, and nothing said WHICH code: /proc gives a tick count,
