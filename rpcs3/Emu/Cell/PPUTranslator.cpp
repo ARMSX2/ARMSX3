@@ -3465,10 +3465,24 @@ void PPUTranslator::MFSPR(ppu_opcode_t op)
 	switch (const u32 n = (op.spr >> 5) | ((op.spr & 0x1f) << 5))
 	{
 	case 0x001: // MFXER
+		// SO is bit 32, OV bit 33, CA bit 34 -- so 31, 30, 29 counting from the LSB. SO and CA
+		// were transposed here, which the interpreter gets right one file over
+		// (PPUInterpreter.cpp: so << 31 | ov << 30 | ca << 29 | cnt).
+		//
+		// Round-tripping hid it: MTXER below had the same two swapped, so a guest that only
+		// wrote and re-read XER saw itself. Internal carry chains were never affected either,
+		// since addc/adde use m_ca directly. What breaks is guest code that computes a carry and
+		// then reads XER to test it -- it gets SO where it expects CA.
+		//
+		// Measured against real hardware with tools/ps3autotests: 22,020 differing lines in
+		// cpu/ppu_gpr and 863 in cpu/ppu_integer_arithmetic, every one of them with the correct
+		// RESULT and only this field wrong, hardware reporting 0x20000000 where we reported
+		// 0x80000000. Present in upstream too, so it is not the cause of any Android-specific
+		// problem -- it is simply wrong, and cheap to correct.
 		result = ZExt(RegLoad(m_cnt), GetType<u64>());
-		result = m_ir->CreateOr(result, m_ir->CreateShl(ZExt(RegLoad(m_so), GetType<u64>()), 29));
+		result = m_ir->CreateOr(result, m_ir->CreateShl(ZExt(RegLoad(m_so), GetType<u64>()), 31));
 		result = m_ir->CreateOr(result, m_ir->CreateShl(ZExt(RegLoad(m_ov), GetType<u64>()), 30));
-		result = m_ir->CreateOr(result, m_ir->CreateShl(ZExt(RegLoad(m_ca), GetType<u64>()), 31));
+		result = m_ir->CreateOr(result, m_ir->CreateShl(ZExt(RegLoad(m_ca), GetType<u64>()), 29));
 		break;
 	case 0x008: // MFLR
 		result = RegLoad(m_lr);
@@ -3609,9 +3623,10 @@ void PPUTranslator::MTSPR(ppu_opcode_t op)
 	switch (const u32 n = (op.spr >> 5) | ((op.spr & 0x1f) << 5))
 	{
 	case 0x001: // MTXER
-		RegStore(Trunc(m_ir->CreateLShr(value, 31), GetType<bool>()), m_ca);
+		// Same transposition as MFXER above, in the other direction.
+		RegStore(Trunc(m_ir->CreateLShr(value, 31), GetType<bool>()), m_so);
 		RegStore(Trunc(m_ir->CreateLShr(value, 30), GetType<bool>()), m_ov);
-		RegStore(Trunc(m_ir->CreateLShr(value, 29), GetType<bool>()), m_so);
+		RegStore(Trunc(m_ir->CreateLShr(value, 29), GetType<bool>()), m_ca);
 		RegStore(Trunc(value, GetType<u8>()), m_cnt);
 		break;
 	case 0x008: // MTLR
