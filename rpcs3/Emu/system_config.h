@@ -84,7 +84,26 @@ struct cfg_root : cfg::node
 		cfg::uint<0, (1 << 6) - 1> spu_wakeup_delay_mask{ this, "SPU Wake-Up Delay Thread Mask", (1 << 6) - 1, true };
 		cfg::uint<0, 400> max_cpu_preempt_count_per_frame{ this, "Max CPU Preempt Count", 0, true };
 		cfg::_bool allow_rsx_cpu_preempt{ this, "Allow RSX CPU Preemptions", true, true };
-#if defined (__linux__) || defined (__APPLE__)
+#if defined (__ANDROID__)
+		// Android is not desktop Linux here.
+		//
+		// As Host takes lv2.cpp's plain wait_for() branch, which is written for a machine whose
+		// timers are precise. Measured on a Snapdragon 8 Gen 2: a 30us sleep takes 50-161us and a
+		// 60us sleep takes 69-135us, so 1.1-5.4x. The cost is not the sleep, it is that guest poll
+		// loops run several times slower than the guest intends.
+		//
+		// That is load-bearing for Portal 2. _gcm_intr_thread polls sys_mutex_trylock on a 30us
+		// timer waiting for a mutex main_thread holds, and main_thread is waiting on a semaphore
+		// only _gcm_intr_thread can post -- a circular wait the game survives only because
+		// main_thread's wait eventually times out, which is the minutes-long stall. Polling at a
+		// third of the intended rate makes the interrupt thread that much less likely to catch the
+		// mutex free and win the race it wins on hardware.
+		//
+		// Usleep Only busy-waits the short ones instead, which is what the non-Linux default
+		// already does, so this is not novel behaviour -- just the right side of an #if for a
+		// platform that did not exist when it was written.
+		cfg::_enum<sleep_timers_accuracy_level> sleep_timers_accuracy{ this, "Sleep Timers Accuracy", sleep_timers_accuracy_level::_usleep, true };
+#elif defined (__linux__) || defined (__APPLE__)
 		cfg::_enum<sleep_timers_accuracy_level> sleep_timers_accuracy{ this, "Sleep Timers Accuracy", sleep_timers_accuracy_level::_as_host, true };
 #else
 		cfg::_enum<sleep_timers_accuracy_level> sleep_timers_accuracy{ this, "Sleep Timers Accuracy", sleep_timers_accuracy_level::_usleep, true };

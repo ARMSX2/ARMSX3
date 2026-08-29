@@ -81,6 +81,7 @@ object ConfigStore {
     // The GLOBAL Accurate SPU Reservations value left off by the same debugging. The per-title
     // clear above never touched it, so installs carried an off-spec global for releases.
     private const val KEY_GLOBAL_RSV_ON = "config.migrated.globalSpuRsvOn"
+    private const val KEY_SLEEP_USLEEP = "config.migrated.sleepTimersUsleep"
     // "Save LLVM logs", left on while chasing the Saint Seiya register scavenger. Bumped: the
     // first pass only un-pinned the override, which does nothing for a key no code writes -- the
     // value already in config.yml is reloaded and saved again on every boot.
@@ -439,6 +440,41 @@ object ConfigStore {
         // Found via Borderlands 2 hanging after its logo with one SPURS SPU and the RSX pinned
         // while every PPU sat in a legitimate wait. The same desync is the likeliest source of the
         // wild guest register values that were crashing the process before that.
+        // Undo an earlier migration of mine that set "Accurate RSX reservation access" false.
+        //
+        // It was true on device and differs from upstream's default, so I corrected it on that
+        // basis alone. That was wrong: the value was load-bearing here. With true, Portal 2 ran
+        // about five minutes before deadlocking; with false it livelocked inside a minute, with
+        // rsx::thread, all six SPURS kernels and _gcm_intr_thread spinning at wchan=0.
+        //
+        // A defaults diff is a lead, not a verdict. Restore what the device had, for anyone the
+        // bad migration already reached.
+        // Move Sleep Timers Accuracy off As Host.
+        //
+        // The stored value is 0 (As Host) on every install, because that was the default. It takes
+        // lv2.cpp's plain wait_for() branch, which assumes precise host timers -- measured on a
+        // Snapdragon 8 Gen 2, a 30us sleep takes 50-161us and a 60us sleep 69-135us. Guest poll
+        // loops therefore run at a fraction of their intended rate.
+        //
+        // Portal 2 is the case that found it: _gcm_intr_thread polls sys_mutex_trylock on a 30us
+        // timer for a mutex main_thread holds, while main_thread waits on a semaphore only
+        // _gcm_intr_thread posts. Polling three times slower than intended makes the interrupt
+        // thread that much less likely to win a race it wins on hardware, and the game only
+        // escapes when main_thread's wait times out -- the minutes-long stall.
+        //
+        // Only touches installs still on the old default, so a deliberate choice is preserved.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_SLEEP_USLEEP, false)) {
+            if (raw != null && parsed.ps3.sleepTimers == 0) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(sleepTimers = 1))
+                dirty = true
+            }
+
+            runCatching {
+                CoreSettingOverrides.forget(SettingsScope.Global, null, "Core@@Sleep Timers Accuracy")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_SLEEP_USLEEP, true) }
+        }
+
         if (!MainActivityRuntime.prefs.getBoolean(KEY_GLOBAL_RSV_ON, false)) {
             if (raw != null && !parsed.ps3.accurateSpuRsv) {
                 parsed = parsed.copy(ps3 = parsed.ps3.copy(accurateSpuRsv = true))
