@@ -1,3 +1,4 @@
+#include <sys/prctl.h>
 #include <fstream>
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
@@ -3149,6 +3150,26 @@ extern "C" void _rpcsx_setSocInfo(std::string_view socInfo) {
 
 extern "C" bool _rpcsx_initialize(std::string_view rootDir,
                                   std::string_view user) {
+  // Ask for precise timers, the way every other RPCS3 frontend does.
+  //
+  // rpcs3.cpp sets this in main() under __linux__ with the comment "we value precise timers",
+  // and lv2.cpp's wait path is written against it: "With timerslack set low, Linux is precise
+  // for all values above", so on Linux/Android sleep_timers_accuracy defaults to As Host and
+  // takes the plain wait_for() branch rather than the busy-wait one. We never run that main() --
+  // the app dlopen()s this core and comes in here instead -- so the prctl never happened and the
+  // process kept Android's default 50,000ns slack while the sleep path assumed 1ns.
+  //
+  // sys_timer_usleep then overshoots, and the cost is not the sleep itself but what is held
+  // across it. Portal 2 stalls with main_thread inside sys_timer_usleep owning both mutexes the
+  // Bink audio and IO threads are blocked on, unchanged across dump samples 15s apart, while the
+  // RSX event queue sits full at 32/32 because _gcm_intr_thread cannot get in either. Frames
+  // crawl to 2.6 fps rather than stopping, which is why it reads as an intermittent hang that
+  // recovers on its own.
+  //
+  // Set on the calling thread; threads created afterwards inherit it, which is exactly how the
+  // desktop path gets it to the emulation threads.
+  prctl(PR_SET_TIMERSLACK, 1, 0, 0, 0);
+
   auto rootDirStr = fix_dir_path(std::string(rootDir));
 
   if (g_android_executable_dir != rootDirStr) {
