@@ -7768,14 +7768,31 @@ public:
 		}
 
 		// When single source, either indicated by KnownBits or both are the same
-		// Also pre-a7fc31f32: drop the KnownBits idx_selects_single trigger.
+		// Also pre-a7fc31f32: the KnownBits idx_selects_single trigger, now guarded (see below).
 		//
 		// Reverting the byteswap-const widening ALONE is not enough -- tested, and Borderlands 2
 		// hangs again at LS 0x25da8 with seven stall dumps. Both of that commit's semantic changes
 		// have to go. idx_selects_single treats a mask whose bit 4 is known-constant across all
 		// lanes as single-source; combined with the ARM64 tbl/tbx paths below that is where the
 		// remaining miscompile lives.
-		const std::optional<value_t<u8[16]>> single_src = ((op.ra == op.rb && !m_interp_magn))
+		// Single-source when the operands are the same register, or when the mask provably
+		// selects from one side.
+		//
+		// The second case is upstream a7fc31f32's idx_selects_single, restored with the guard it
+		// was missing. On its own it is wrong: it reads bit 4 of the index to decide which source
+		// is in play, but an SPU special index (0x80 -> 0x00, 0xC0 -> 0xFF, 0xE0 -> 0x80) has
+		// bit 4 clear and selects NO source at all, so a mask containing one looks like "source A
+		// only" and the special-constant handling is optimised away. That is the miscompile that
+		// hung Borderlands 2 and crashed Spider-Man: Edge of Time.
+		//
+		// perm_only is known_idx.Zero[7]: bit 7 clear across every lane means no index is in any
+		// special class, so the bit-4 reasoning holds and the optimisation is sound. Where the
+		// mask might contain a special index we take the two-source path as before.
+		//
+		// The other half of a7fc31f32 -- widening the byteswap fold from splat-only to any
+		// constant -- stays reverted. Reverting it was required empirically and its mechanism was
+		// never derived, so it is not something to restore on reasoning alone.
+		const std::optional<value_t<u8[16]>> single_src = ((op.ra == op.rb && !m_interp_magn) || (idx_selects_single && perm_only))
 			? std::make_optional(known_idx.One[4] ? bv : av)
 			: std::nullopt;
 
