@@ -95,6 +95,16 @@ namespace rsx::prof
 	u64 g_stall_spu_exec = 0;
 	u64 g_stall_spu_ticks = 0;
 
+	// Where the ONE running SPU is during a slow frame.
+	//
+	// Everything else is eliminated by measurement: GPU max 14.9ms, CPU 11%, semaphore waits max
+	// 14ms, group parks max 9.7ms -- none can make a 135ms frame. What remains is main_thread
+	// spinning ~97ms on a guest mutex while the nine worker threads are all parked at one address,
+	// so none of them holds it, and about one SPU is executing. That SPU is the holder, and this
+	// says what it is doing while it holds.
+	pc_bucket g_stall_spu_pc[24]{};
+	u64 g_stall_spu_pc_total = 0;
+
 	struct fn_bucket { const char* fn; u32 hits; };
 	fn_bucket g_main_state[20]{};
 	u64 g_main_total = 0;
@@ -232,6 +242,17 @@ namespace rsx::prof
 				g_stall_spu_ticks++;
 			}
 			g_spu_tick_count++;
+
+			if (spu_pc && in_stall)
+			{
+				g_stall_spu_pc_total++;
+
+				for (auto& b : g_stall_spu_pc)
+				{
+					if (b.pc == spu_pc) { b.hits++; break; }
+					if (!b.pc) { b.pc = spu_pc; b.hits = 1; break; }
+				}
+			}
 
 			if (spu_pc)
 			{
@@ -1114,6 +1135,27 @@ namespace rsx::prof
 				g_stall_spu_wait = 0;
 				g_stall_spu_exec = 0;
 				g_stall_spu_ticks = 0;
+
+				if (g_stall_spu_pc_total)
+				{
+					std::sort(std::begin(g_stall_spu_pc), std::end(g_stall_spu_pc),
+						[](const pc_bucket& a, const pc_bucket& b) { return a.hits > b.hits; });
+
+					std::string sp;
+
+					for (const auto& b : g_stall_spu_pc)
+					{
+						if (!b.hits) break;
+						fmt::append(sp, "\n\t  pc=0x%05x  %4.1f%%  (%u)", b.pc,
+							b.hits * 100.0 / g_stall_spu_pc_total, b.hits);
+					}
+
+					prof_log.success("\tSTALL-only SPU PC  %u samples of the running SPU during slow frames:%s",
+						g_stall_spu_pc_total, sp);
+
+					for (auto& b : g_stall_spu_pc) b = {};
+					g_stall_spu_pc_total = 0;
+				}
 
 				for (auto& b : g_stall_pc) b = {};
 				g_stall_pc_total = 0;
