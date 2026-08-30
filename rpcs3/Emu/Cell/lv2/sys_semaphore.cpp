@@ -126,6 +126,12 @@ atomic_t<u64> g_sema_wait_us{0};
 atomic_t<u64> g_sema_wait_count{0};
 atomic_t<u64> g_sema_wait_max_us{0};
 
+// Distribution, because the mean hides the shape. If the long tail clusters near one
+// vblank period (16.67ms at 60Hz) then these waits are quantised to the frame clock --
+// main_thread missing a wakeup and paying a whole period for it -- and the fix is in the
+// wakeup chain. If the tail is smooth, it is genuinely waiting for variable work.
+atomic_t<u64> g_sema_hist[6]{};
+
 error_code sys_semaphore_wait(ppu_thread& ppu, u32 sem_id, u64 timeout)
 {
 	ppu.state += cpu_flag::wait;
@@ -149,6 +155,9 @@ error_code sys_semaphore_wait(ppu_thread& ppu, u32 sem_id, u64 timeout)
 			g_sema_wait_us += us;
 			g_sema_wait_count++;
 			g_sema_wait_max_us.fetch_op([us](u64& v) { if (us > v) { v = us; return true; } return false; });
+
+			const u32 bucket = us < 1000 ? 0 : us < 4000 ? 1 : us < 10000 ? 2 : us < 14000 ? 3 : us < 20000 ? 4 : 5;
+			g_sema_hist[bucket]++;
 		}
 	} sema_timer_v{wait_start};
 

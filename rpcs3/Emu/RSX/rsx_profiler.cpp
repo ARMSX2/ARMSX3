@@ -8,6 +8,7 @@
 extern atomic_t<u64> g_sema_wait_us;
 extern atomic_t<u64> g_sema_wait_count;
 extern atomic_t<u64> g_sema_wait_max_us;
+extern atomic_t<u64> g_sema_hist[6];
 
 #include "Emu/IdManager.h"
 
@@ -969,6 +970,12 @@ namespace rsx::prof
 					static_cast<double>(n) / frames,
 					(g_sema_wait_us.load() / 1000.0) / n,
 					g_sema_wait_max_us.load() / 1000.0);
+
+				prof_log.success("\t  sema spread  <1ms:%u  1-4:%u  4-10:%u  10-14:%u  14-20:%u  >20ms:%u",
+					g_sema_hist[0].load(), g_sema_hist[1].load(), g_sema_hist[2].load(),
+					g_sema_hist[3].load(), g_sema_hist[4].load(), g_sema_hist[5].load());
+
+				for (auto& h : g_sema_hist) h = 0;
 			}
 
 			g_sema_wait_us = 0;
