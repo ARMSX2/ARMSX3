@@ -3674,26 +3674,6 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 				return true;
 			}
 
-			// Was this a real conflict, or an artifact of the reservation table?
-			//
-			// vm::g_reservations is indexed (addr & 0xff80) / 2 -- only bits 7..15 of the
-			// address -- so every 128-byte line shares its reservation word with every line
-			// 64KB away. A write anywhere in that alias set bumps the counter and fails this
-			// test, even though nothing touched the line we reserved.
-			//
-			// The test above fires BEFORE any data comparison, so the existing failure counter
-			// cannot tell the two apart, and at 6,489-62,768 conditional stores per frame with
-			// 81-98.4% failing that distinction decides the fix entirely. If the line is
-			// byte-identical on most failures the contention is largely an aliasing artifact and
-			// belongs in the reservation table; if it really changed, the contention is genuine
-			// and no amount of table widening helps.
-			//
-			// A 128-byte compare on an already-failing path, and only when the profiler is on.
-			if (rsx::prof::enabled() && cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)))
-			{
-				putllc_spurious++;
-			}
-
 			return false;
 		}
 
@@ -3825,7 +3805,6 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			raddr = 0;
 		}
 
-		putllc_fail_streak = 0;
 
 		perf0.reset();
 		return true;
@@ -3833,55 +3812,6 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 	else
 	{
 		putllc_fails++;
-
-		// PPU/SPU reservation ping-pong.
-		//
-		// A guest cellSync mutex is a 16-bit ticket pair in one 128-byte line. The PPU takes it
-		// with lwarx/stwcx and an SPU takes it with GETLLAR/PUTLLC, and each side's store
-		// invalidates the other's reservation, so both can retry indefinitely while neither
-		// completes. Real hardware serialises them in the coherency protocol; we do not, and the
-		// result is a livelock: profiling a slow frame finds the PPU spending 72% of it in
-		// cellSyncMutexTryLock while one SPU spends 75% of it in the GETLLAR/PUTLLC loop at LS
-		// 0x18140, with the mutex never once observed free.
-		//
-		// The existing getllar_spin_count detector does not catch this. It fingerprints a
-		// GETLLAR-only poll waiting for a value to change; this is a genuine read-modify-write
-		// that keeps losing, so it never looks like a poll.
-		//
-		// Park on the reservation notifier rather than retrying hot. That is the same primitive
-		// the GETLLAR path already uses: the wake is the other side's actual write, so the SPU
-		// resumes the moment the line is free and no sooner. Explicitly NOT a timed backoff --
-		// three of those were reverted from this branch for taking 2179ms frames precisely
-		// because a guessed sleep length is wrong at both ends. begin_wait re-checks the line
-		// before committing, so a write that lands in the gap cannot be missed, and the 100us
-		// bound is only a safety net.
-		//
-		// Gated on a long streak against the SAME line so ordinary contention, which resolves in
-		// a retry or two, is untouched.
-		if (raddr == addr && addr == putllc_fail_addr)
-		{
-			putllc_fail_streak++;
-		}
-		else
-		{
-			putllc_fail_streak = 1;
-			putllc_fail_addr = addr;
-		}
-
-		if (putllc_fail_streak >= 32 && raddr == addr)
-		{
-			state += cpu_flag::wait;
-
-			if (auto [wait_var, flag_val] = vm::reservation_notifier_begin_wait(addr, rtime); wait_var)
-			{
-				utils::bless<atomic_t<u32>>(&wait_var->raw().wait_flag)->wait(flag_val, atomic_wait_timeout{100'000});
-				vm::reservation_notifier_end_wait(*wait_var);
-			}
-
-			static_cast<void>(test_stopped());
-			putllc_parks++;
-			putllc_fail_streak = 0;
-		}
 
 		if (raddr)
 		{
