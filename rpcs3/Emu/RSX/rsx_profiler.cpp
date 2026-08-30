@@ -4,6 +4,7 @@
 #include "Emu/Cell/PPUDisAsm.h"
 #include "Emu/Memory/vm.h"
 #include "Emu/Cell/SPUThread.h"
+#include "Emu/Cell/SPUDisAsm.h"
 
 extern atomic_t<u64> g_spu_group_susp_us;
 extern atomic_t<u64> g_spu_group_susp_count;
@@ -104,6 +105,7 @@ namespace rsx::prof
 	// says what it is doing while it holds.
 	pc_bucket g_stall_spu_pc[24]{};
 	u64 g_stall_spu_pc_total = 0;
+	bool g_stall_spu_disasm_done = false;
 
 	struct fn_bucket { const char* fn; u32 hits; };
 	fn_bucket g_main_state[20]{};
@@ -245,6 +247,45 @@ namespace rsx::prof
 
 			if (spu_pc && in_stall)
 			{
+				// Disassemble the loop once. The PPU side of this only became legible when its PC was
+				// disassembled -- that is what identified cellSyncMutexTryLock -- and the SPU holder is
+				// now pinned to a 64-byte window, so the same treatment should say what it spins on.
+				// Local store is the thread's own memory and always mapped, so no address check is
+				// needed; reading it costs nothing beyond the one dump.
+				if (!g_stall_spu_disasm_done)
+				{
+					idm::select<named_thread<spu_thread>>([](u32 id, spu_thread& spu)
+					{
+						if (g_stall_spu_disasm_done || (spu.state.load() & cpu_flag::wait))
+						{
+							return;
+						}
+
+						const u32 pc = spu.pc;
+						const u32 start = pc >= 0x40 ? (pc - 0x40) & ~3u : 0;
+
+						if (start + 0x90 >= SPU_LS_SIZE)
+						{
+							return;
+						}
+
+						g_stall_spu_disasm_done = true;
+
+						std::string out;
+						fmt::append(out, "\n  SPU 0x%07x loop around LS 0x%05x:", id, pc);
+
+						SPUDisAsm dis(cpu_disasm_mode::normal, spu.ls);
+
+						for (u32 a = start; a <= start + 0x80; a += 4)
+						{
+							dis.disasm(a);
+							fmt::append(out, "\n    %s 0x%05x: %s", a == pc ? "->" : "  ", a, dis.last_opcode);
+						}
+
+						prof_log.error("STALL SPU disasm:%s", out);
+					}, idm::unlocked);
+				}
+
 				g_stall_spu_pc_total++;
 
 				for (auto& b : g_stall_spu_pc)
