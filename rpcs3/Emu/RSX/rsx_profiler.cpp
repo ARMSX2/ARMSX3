@@ -39,6 +39,8 @@ namespace rsx::prof
 	u64 g_sync_samples = 0;
 	u64 g_sync_free = 0;
 	u64 g_sync_queue = 0;
+	u32 g_sync_last_word = 0;
+	u32 g_sync_last_addr = 0;
 
 	void sample_guest_pc()
 	{
@@ -79,7 +81,12 @@ namespace rsx::prof
 		{
 			idm::select<named_thread<ppu_thread>>([](u32, ppu_thread& ppu)
 			{
-				if (ppu.state.load() & cpu_flag::wait || (ppu.cia & ~0x3fu) != 0x01940380u)
+				// EXACTLY the entry instruction. r3 holds the mutex pointer only there: the very
+				// next instruction is `lis r3,-0x7fbf`, which overwrites it with an error
+				// constant. Accepting the whole 64-byte bucket meant most samples read r3 long
+				// after it stopped being the argument, which is where "avg queue 65535" came
+				// from -- a fixed garbage value, not a measurement.
+				if (ppu.state.load() & cpu_flag::wait || ppu.cia != 0x01940380u)
 				{
 					return;
 				}
@@ -96,6 +103,8 @@ namespace rsx::prof
 				const u16 serving = static_cast<u16>(word);
 
 				g_sync_samples++;
+				g_sync_last_word = word;
+				g_sync_last_addr = addr;
 
 				if (next == serving)
 				{
@@ -760,7 +769,8 @@ namespace rsx::prof
 					g_sync_samples, g_sync_free, g_sync_free * 100.0 / g_sync_samples,
 					g_sync_samples > g_sync_free
 						? static_cast<double>(g_sync_queue) / (g_sync_samples - g_sync_free)
-						: 0.0);
+						: 0.0,
+					g_sync_last_word, g_sync_last_addr);
 
 				g_sync_samples = 0;
 				g_sync_free = 0;
