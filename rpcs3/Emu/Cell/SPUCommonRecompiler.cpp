@@ -9322,6 +9322,23 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 		{
 			add_pattern(inst_attr::putllc16, pattern.put_pc - result.entry_point, value.data);
 		}
+		else
+		{
+			// Say which pattern was refused, and give its hash.
+			//
+			// The whitelist above holds exactly one entry and it is prefixed "disabled_", so with
+			// accurate reservations on -- the default here and upstream -- allow_pattern is always
+			// false and PUTLLC16 is never installed for anything. Every conditional store then
+			// takes do_putllc, which wraps its commit in vm::writer_lock: a global barrier that
+			// stamps cpu_flag::memory on every registered PPU thread and busy-spins until they all
+			// park. Measured on this title that path runs 6,489-62,768 times a frame at 81-98.4%
+			// failure.
+			//
+			// The hash is over the guest bytes of the pattern, so it identifies this loop and no
+			// other build's. Without logging it there is no way to name a pattern for the
+            // whitelist, which is presumably why the list still has one disabled placeholder in it.
+			spu_log.notice("PUTLLC16 pattern refused: hash=%s put_pc=0x%05x lsa_pc=0x%05x", pattern_hash, pattern.put_pc, pattern.lsa_pc);
+		}
 
 		spu_log.trace("PUTLLC16 Pattern Detected! (mem_count=%d, put_pc=0x%x, pc_rel=%d, offset=0x%x, const=%u, two_regs=%d, reg=%u, runtime=%d, 0x%x-%s, pattern-hash=%s) (putllc0=%d, putllc16+0=%d, all=%d)"
 			, pattern.mem_count, pattern.put_pc, value.type == v_relative, value.off18, value.type == v_const, value.type == v_reg2, value.reg, value.runtime16_select, entry_point, func_hash, pattern_hash, +stats.nowrite, ++stats.single, +stats.all);
