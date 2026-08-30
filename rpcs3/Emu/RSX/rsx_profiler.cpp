@@ -3,6 +3,8 @@
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
 
+extern atomic_t<u64> g_usleep_over_us;
+extern atomic_t<u64> g_usleep_over_count;
 extern atomic_t<u64> g_mmapper_calls;
 extern atomic_t<u64> g_mmapper_tsc;
 #include "Emu/IdManager.h"
@@ -328,8 +330,18 @@ namespace rsx::prof
 		const u64 mm_tsc = g_mmapper_tsc.load();
 		const u64 mm_ms = ((mm_tsc - s_last_tsc) * 1000ull) / freq;
 
-		prof_log.error("STALL: %u ms into a frame with no flip (sample %u/30) -- guest mmapper: %u calls, %u ms since last sample%s",
-			stalled_ms, s_dumps, calls - s_last_calls, mm_ms, sample_guest_threads(false));
+		static u64 s_last_over_us = 0;
+		static u64 s_last_over_n = 0;
+
+		const u64 over_us = g_usleep_over_us.load();
+		const u64 over_n = g_usleep_over_count.load();
+
+		prof_log.error("STALL: %u ms into a frame with no flip (sample %u/60) -- mmapper: %u calls/%u ms -- usleep overshoot: %u times, %u ms%s",
+			stalled_ms, s_dumps, calls - s_last_calls, mm_ms,
+			over_n - s_last_over_n, (over_us - s_last_over_us) / 1000, sample_guest_threads(false));
+
+		s_last_over_us = over_us;
+		s_last_over_n = over_n;
 
 		s_last_calls = calls;
 		s_last_tsc = mm_tsc;

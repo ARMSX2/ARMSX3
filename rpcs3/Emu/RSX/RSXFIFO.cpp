@@ -749,6 +749,13 @@ namespace rsx
 				// each drain gets its own short hot window before parking.
 				static thread_local u32 s_fifo_idle_spins = 0;
 
+				// Sleep only once the FIFO has been empty long enough that the guest is plainly
+				// blocked rather than a few microseconds behind. 250us is ~1.5% of a 16ms frame,
+				// so the hot path a fast PUT travels is untouched; the sleep is short enough that
+				// noticing the guest again costs well under a frame either way.
+				constexpr u64 fifo_idle_backoff_us = 250;
+				constexpr u64 fifo_idle_sleep_us = 100;
+
 				if (performance_counters.state == FIFO::state::running)
 				{
 					performance_counters.FIFO_idle_timestamp = get_system_time();
@@ -799,11 +806,35 @@ namespace rsx
 					// had to walk it back (832c23078) when the wake latency cost frametime smoothness.
 					RSX_PROF_SCOPE(idle_fifo);
 
+					// How long the FIFO has been empty for, this idle period.
+					//
+					// Splitting the idle bucket showed this path alone is 30.955 ms/frame, 69%
+					// of frame time, while the semaphore and cpu_wait waits are ~zero. And
+					// sampling inside those stalls found EVERY guest thread blocked -- no PPU
+					// and no SPU running at all, for 60-100ms at a stretch. So the commands
+					// this loop is spinning for cannot arrive: there is nobody left to queue
+					// them. Meanwhile rsx::thread measures as the busiest thread in the
+					// process, burning a full core, on a device whose affinity path is gated
+					// off by Thread Scheduler Mode: Operating System -- so it is competing for
+					// cores with the very guest threads that have to wake up to end the stall.
+					//
+					// The short waits stay exactly as they were, because they are load-bearing:
+					// a PUT landing within microseconds must still be caught without paying
+					// wake latency, and parking bare here is what ouroboros420/rpcsx had to
+					// walk back (e31ef44ef -> 832c23078) when it cost frametime smoothness.
+					// This only adds a third tier BELOW them, for emptiness so sustained that
+					// no amount of spinning is going to find work.
+					const u64 idle_us = get_system_time() - performance_counters.FIFO_idle_timestamp;
+
 #if defined(ARCH_ARM64)
 					if (s_fifo_idle_spins < 8)
 					{
 						s_fifo_idle_spins++;
 						utils::pause();
+					}
+					else if (idle_us >= fifo_idle_backoff_us)
+					{
+						thread_ctrl::wait_for(fifo_idle_sleep_us);
 					}
 					else if (utils::has_wfe_event_stream())
 					{
@@ -818,7 +849,14 @@ namespace rsx
 						std::this_thread::yield();
 					}
 #else
-					std::this_thread::yield();
+					if (idle_us >= fifo_idle_backoff_us)
+					{
+						thread_ctrl::wait_for(fifo_idle_sleep_us);
+					}
+					else
+					{
+						std::this_thread::yield();
+					}
 #endif
 				}
 
