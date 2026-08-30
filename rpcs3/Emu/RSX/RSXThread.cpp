@@ -1095,6 +1095,10 @@ namespace rsx
 
 				iterations++;
 
+				// Sampled here because this thread wakes ~60Hz regardless of what the guest
+				// or the RSX are doing, so it lands mid-stall instead of at the flip.
+				rsx::prof::stall_watchdog();
+
 				// Calculate the time at which we need to send a new VBLANK signal
 				const u64 post_event_time = start_time + (local_vblank_count + 1) * vblank_period / vblank_rate;
 

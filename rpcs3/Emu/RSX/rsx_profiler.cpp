@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "rsx_profiler.h"
 #include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/SPUThread.h"
 #include "Emu/IdManager.h"
 
 #include "util/sysinfo.hpp"
@@ -17,6 +18,7 @@ namespace rsx::prof
 {
 	std::atomic<bool> g_enabled{false};
 	accounting g_acc{};
+	std::atomic<u64> g_last_frame_tsc{0};
 	bucket g_current = bucket::unclassified;
 	u64 g_last_switch = 0;
 	const void* g_owner_thread = nullptr;
@@ -206,8 +208,94 @@ namespace rsx::prof
 		prof_log.success("RSX profiling %s", enabled ? "enabled" : "disabled");
 	}
 
+	// Walk every guest thread and say what it is in. Thread-local scalars only: id, name,
+	// state flags, and the current blocking function each thread already records for its own
+	// diagnostics. No call stacks, no registers, no guest memory reads -- those are what made
+	// the earlier stall dump fault three times and freeze the emulator into something that
+	// looked exactly like the hang it was supposed to explain.
+	static std::string sample_guest_threads()
+	{
+		std::string out;
+
+		idm::select<named_thread<ppu_thread>>([&out](u32 id, ppu_thread& ppu)
+		{
+			const auto name = ppu.ppu_tname.load();
+			const bool inside = !!ppu.current_function;
+			const auto func = inside ? ppu.current_function : ppu.last_function;
+
+			fmt::append(out, "\n    PPU 0x%07x %-24s [%s] %s%s", id,
+				name ? name->c_str() : "?", ppu.state.load(),
+				inside ? "in=" : "last=", func ? func : "");
+		}, idm::unlocked);
+
+		// PPUs waiting on a semaphore are usually waiting for an SPU to post it, so the SPU
+		// side is the half that actually names the culprit.
+		idm::select<named_thread<spu_thread>>([&out](u32 id, spu_thread& spu)
+		{
+			const auto name = spu.spu_tname.load();
+
+			fmt::append(out, "\n    SPU 0x%07x %-24s [%s] pc=0x%05x %s", id,
+				name ? name->c_str() : "?", spu.state.load(), spu.pc,
+				spu.current_func ? spu.current_func : "");
+		}, idm::unlocked);
+
+		return out;
+	}
+
+	void stall_watchdog()
+	{
+		if (!g_enabled.load())
+		{
+			return;
+		}
+
+		const u64 last = g_last_frame_tsc.load();
+		const u64 freq = utils::get_tsc_freq();
+
+		if (!last || !freq)
+		{
+			return;
+		}
+
+		const u64 now = utils::get_tsc();
+
+		if (now <= last)
+		{
+			return;
+		}
+
+		const u64 stalled_ms = ((now - last) * 1000ull) / freq;
+
+		if (stalled_ms < 60)
+		{
+			return;
+		}
+
+		// One sample per stall, and a hard cap: this logs from the vblank thread, and log
+		// volume alone has stalled this emulator before.
+		static u64 s_dumped_frame = umax;
+		static u32 s_dumps = 0;
+
+		if (s_dumped_frame == g_acc.frames)
+		{
+			return;
+		}
+
+		s_dumped_frame = g_acc.frames;
+
+		if (++s_dumps > 30)
+		{
+			return;
+		}
+
+		prof_log.error("STALL: %u ms into a frame with no flip (sample %u/30)%s",
+			stalled_ms, s_dumps, sample_guest_threads());
+	}
+
 	void tick_frame()
 	{
+		g_last_frame_tsc.store(utils::get_tsc());
+
 		if (!g_enabled.load(std::memory_order_relaxed)) [[likely]]
 		{
 			return;

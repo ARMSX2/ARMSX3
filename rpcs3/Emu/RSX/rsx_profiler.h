@@ -502,6 +502,17 @@ namespace rsx::prof
 	/** Call once per frame from the RSX thread so the report can express per-frame cost. */
 	void tick_frame();
 
+	// Timestamp of the last flip, and a watchdog sampled from the vblank thread (~60Hz).
+	//
+	// The spike trace cannot answer "what was the guest doing during the stall": it runs
+	// at the flip that ENDS the slow frame, by which point the guest has finished its work
+	// and gone back to waiting. Sampling there showed every thread parked on a semaphore --
+	// which is also exactly what a healthy frame looks like at that same instant. Useless.
+	//
+	// This one fires while the stall is still happening.
+	extern std::atomic<u64> g_last_frame_tsc;
+	void stall_watchdog();
+
 	/** Write the current window to the log and start a new one. Safe to call from anywhere. */
 	void dump_and_reset();
 
