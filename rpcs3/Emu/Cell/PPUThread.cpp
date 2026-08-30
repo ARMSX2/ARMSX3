@@ -3419,6 +3419,44 @@ static T ppu_load_acquire_reservation(ppu_thread& ppu, u32 addr)
 	const u64 size_off = (sizeof(T) * 8) & 63;
 	const u64 data_off = (addr & 7) * 8;
 
+	// Guest try-lock spin detection, and a park that stops us hammering the line.
+	//
+	// A try-lock that finds the mutex held does lwarx, compares, and branches out WITHOUT ever
+	// issuing the stwcx -- and only ppu_store_reservation clears raddr. So finding raddr already
+	// equal to addr on entry means the guest came back here without storing, which is exactly the
+	// shape of a spin that keeps losing.
+	//
+	// Why this matters here: the PPU and an SPU contend for the same guest cellSync ticket lock,
+	// the PPU with lwarx/stwcx and the SPU with GETLLAR/PUTLLC in one 128-byte line. Measured on
+	// device, the SPU issues 6,489-62,768 conditional stores per frame and 81-98.4% of them FAIL,
+	// while the PPU spends ~70% of a slow frame in the guest's cellSyncMutexTryLock. Both sides
+	// pound the line and neither completes. Parking the SPU was tried and does nothing -- it
+	// engages 164-1926 times a frame because the line never goes quiet. So quiet the other side.
+	//
+	// WFE on the exclusive monitor, NOT a sleep: the wake is the line being written, so the PPU
+	// resumes the moment the SPU's store lands and no later. Three timed backoffs were reverted
+	// from this branch today for producing 2179ms frames, and a guessed duration is exactly what
+	// makes them wrong. The guest instruction stream is untouched -- it re-executes this lwarx and
+	// reads whatever the line then holds -- so only the timing changes, in the same way
+	// cpu_flag::yield already does.
+	{
+		const bool respinning = ppu.raddr == addr;
+		ppu.res_spin_count = respinning ? ppu.res_spin_count + 1 : 0;
+
+#if defined(ARCH_ARM64)
+		if (ppu.res_spin_count >= 16 && !ppu.state)
+		{
+			const u64 observed = data.load();
+
+			ppu.state += cpu_flag::wait;
+			utils::spin_on_cacheline_once(data, be_t<u64>{observed}, 50);
+			static_cast<void>(ppu.test_stopped());
+
+			ppu.res_spin_count = 0;
+		}
+#endif
+	}
+
 	ppu.raddr = addr;
 
 	u32 addr_mask = -1;

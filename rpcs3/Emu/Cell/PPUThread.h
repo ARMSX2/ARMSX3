@@ -298,6 +298,11 @@ public:
 	u64 end_time{umax}; // Sleep end timepoint
 	s32 cancel_sleep{0}; // Flag to cancel the next lv2_obj::sleep call (when equals 2)
 	u64 syscall_args[8]{0}; // Last syscall arguments stored
+	// Consecutive reservation loads on the same address with no conditional store between them:
+	// what a guest try-lock leaves behind when it keeps finding the lock held. Scheduling hint
+	// only, deliberately not serialized.
+	u32 res_spin_count{};
+
 	const char* current_function{}; // Current function name for diagnosis, optimized for speed.
 	const char* last_function{}; // Sticky copy of current_function, is not cleared on function return
 	const char* current_module{}; // Current module name, for savestates.
