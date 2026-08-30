@@ -1801,6 +1801,27 @@ public:
 			// after the XER fix). Bump this letter whenever ARM64 SPU codegen changes semantics.
 			fmt::append(m_hash, "__spu-a-0x%05x-%s", func.entry_point, fmt::base57(output));
 
+#ifdef ARCH_ARM64
+			// The ARM64 retry recompiles the SAME guest function with different codegen -- it
+			// drops tbl2, then fma, to get past the register scavenger. Those attempts produce
+			// different machine code from identical guest bytes, so without this they would all
+			// claim one cache entry and a later run could load the wrong variant. Only the
+			// non-default combinations are tagged, so the common case keeps its name and existing
+			// caches stay valid.
+			if (g_spu_llvm_compile_context)
+			{
+				if (!g_spu_llvm_compile_context->use_tbl2)
+				{
+					m_hash += "-notbl2";
+				}
+
+				if (!g_spu_llvm_compile_context->use_fma)
+				{
+					m_hash += "-nofma";
+				}
+			}
+#endif
+
 			be_t<u64> hash_start;
 			std::memcpy(&hash_start, output, sizeof(hash_start));
 			m_hash_start = hash_start;
@@ -4048,6 +4069,20 @@ public:
 				{
 					// Testing only
 					added = m_jit.try_add(std::move(_module), m_spurt->get_cache_path() + "llvm/", llvm_error);
+				}
+				else if (const std::string& obj_cache = m_spurt->get_obj_cache_path(); !obj_cache.empty())
+				{
+					// Persistent object cache, same as the non-recoverable path below.
+					//
+					// This branch is ARM64's, and it is the branch ARM64 actually takes: the
+					// register-scavenge retry wraps every compile in a spu_llvm_compile_scope, so
+					// g_spu_llvm_compile_context is always set and `recoverable` is always true.
+					// It called the cache-less try_add overload, so nothing was ever written --
+					// which is why a device has PPU objects on disk (v9-kusa-*) and no SPU ones,
+					// and why every session recompiles its SPU functions from scratch and stutters
+					// through it. try_add reports failure rather than caching a bad object, so a
+					// scavenge retry does not poison the entry it is about to replace.
+					added = m_jit.try_add(std::move(_module), obj_cache, llvm_error);
 				}
 				else
 				{
