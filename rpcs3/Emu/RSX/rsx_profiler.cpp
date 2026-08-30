@@ -35,6 +35,18 @@ namespace rsx::prof
 	pc_bucket g_pc_samples[24]{};
 	u64 g_pc_total = 0;
 
+	// SPU-side sampling.
+	//
+	// The guest profiler only ever looked at PPU threads, so every conclusion about "the PPU is
+	// waiting on an SPU" has been inference from the PPU side. This says what the SPUs are
+	// actually doing: how many are running at all, and where their PCs sit. Saturated SPUs mean
+	// the work is real and the answer is codegen or scheduling; idle SPUs while the PPU waits
+	// means they are blocked on something and the answer is elsewhere entirely.
+	pc_bucket g_spu_samples[24]{};
+	u64 g_spu_total = 0;
+	u64 g_spu_running_sum = 0;
+	u64 g_spu_tick_count = 0;
+
 	// cellSync mutex state at the dominant spin site.
 	u64 g_sync_samples = 0;
 	u64 g_sync_free = 0;
@@ -59,6 +71,41 @@ namespace rsx::prof
 				pc = ppu.cia & ~0x3fu;
 			}
 		}, idm::unlocked);
+
+		// SPU side, every tick regardless of whether a PPU was running.
+		{
+			u32 running = 0;
+			u32 spu_pc = 0;
+
+			idm::select<named_thread<spu_thread>>([&running, &spu_pc](u32, spu_thread& spu)
+			{
+				if (spu.state.load() & cpu_flag::wait)
+				{
+					return;
+				}
+
+				running++;
+
+				if (!spu_pc)
+				{
+					spu_pc = spu.pc & ~0x3fu;
+				}
+			}, idm::unlocked);
+
+			g_spu_running_sum += running;
+			g_spu_tick_count++;
+
+			if (spu_pc)
+			{
+				g_spu_total++;
+
+				for (auto& b : g_spu_samples)
+				{
+					if (b.pc == spu_pc) { b.hits++; break; }
+					if (!b.pc) { b.pc = spu_pc; b.hits = 1; break; }
+				}
+			}
+		}
 
 		if (!pc)
 		{
@@ -741,6 +788,37 @@ namespace rsx::prof
 		prof_log.success("\tpacing         %u/%u frames over 33ms, %u over 100ms, worst %.1f ms",
 			static_cast<u32>(g_slow_frames), static_cast<u32>(g_acc.frames),
 			static_cast<u32>(g_very_slow_frames), g_worst_frame_ns / 1'000'000.0);
+
+		if (g_spu_tick_count)
+		{
+			std::sort(std::begin(g_spu_samples), std::end(g_spu_samples),
+				[](const pc_bucket& a, const pc_bucket& b) { return a.hits > b.hits; });
+
+			std::string top;
+
+			for (const auto& b : g_spu_samples)
+			{
+				if (!b.hits)
+				{
+					break;
+				}
+
+				fmt::append(top, "\n\t  pc=0x%05x  %4.1f%%  (%u)", b.pc,
+					b.hits * 100.0 / g_spu_total, b.hits);
+			}
+
+			prof_log.success("\tSPU            %.2f running on average, %u samples:%s",
+				static_cast<double>(g_spu_running_sum) / g_spu_tick_count, g_spu_total, top);
+
+			for (auto& b : g_spu_samples)
+			{
+				b = {};
+			}
+
+			g_spu_total = 0;
+			g_spu_running_sum = 0;
+			g_spu_tick_count = 0;
+		}
 
 		if (g_pc_total)
 		{
