@@ -819,7 +819,7 @@ void VKGSRender::frame_context_cleanup(vk::frame_context_t *ctx)
 			m_last_heap_sync_time = ctx->last_frame_sync_time;
 
 			// Heap cleanup; deallocates memory consumed by the frame if it is still held
-			vk::data_heap_manager::restore_snapshot(ctx->heap_snapshot);
+			vk::data_heap_manager::restore_snapshot(ctx->heap_snapshot, ctx->heap_snapshot_id);
 		}
 	}
 

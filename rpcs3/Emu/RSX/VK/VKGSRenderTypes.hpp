@@ -59,11 +59,26 @@ namespace vk
 		u64 reset_id = 0;
 		shared_mutex guard_mutex;
 
+		// Ring memory that was allocated before this buffer was submitted.
+		//
+		// Reclaim used to happen only when a FRAME retired, and frames only queue around
+		// presents -- so a game drawing through a long load could never give ring space back
+		// and its heaps grew until an allocation killed the renderer. A submitted command
+		// buffer is the finer-grained truth: once its fence signals the GPU is done with
+		// everything recorded into it, whether or not anything was ever presented.
+		data_heap_manager::managed_heap_snapshot_t heap_snapshot;
+		u64 heap_snapshot_id = 0;
+
 		command_buffer_chunk() = default;
 
 		inline void tag()
 		{
 			eid_tag = vk::get_event_id();
+
+			// Taken at submit: it records where each ring's put pointer stands now, so when this
+			// buffer completes everything below those marks is provably finished with.
+			heap_snapshot = data_heap_manager::get_heap_snapshot();
+			heap_snapshot_id = data_heap_manager::next_snapshot_id();
 		}
 
 		void reset()
@@ -119,6 +134,15 @@ namespace vk
 				{
 					m_submit_fence->reset();
 					vk::on_event_completed(eid_tag);
+
+					// The GPU is done with this buffer, so the ring memory it consumed is free.
+					// This is what decouples reclaim from presentation.
+					if (heap_snapshot_id)
+					{
+						data_heap_manager::restore_snapshot(heap_snapshot, heap_snapshot_id);
+						heap_snapshot.clear();
+						heap_snapshot_id = 0;
+					}
 
 					is_pending = false;
 					eid_tag = 0;
@@ -229,9 +253,12 @@ namespace vk
 			heap_snapshot = other.heap_snapshot;
 		}
 
+		u64 heap_snapshot_id = 0;
+
 		void tag_frame_end()
 		{
 			heap_snapshot = data_heap_manager::get_heap_snapshot();
+			heap_snapshot_id = data_heap_manager::next_snapshot_id();
 			last_frame_sync_time = rsx::get_shared_tag();
 		}
 

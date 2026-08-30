@@ -23,7 +23,12 @@ namespace vk
 		managed_heap_snapshot_t get_heap_snapshot();
 
 		// Synchronize heap with snapshot
-		void restore_snapshot(const managed_heap_snapshot_t& snapshot);
+		// Monotonic ticket for a snapshot. Completions can be observed out of order, and
+		// set_get_pos is a plain assignment, so an older snapshot applied after a newer one
+		// would hand back memory that has since been reused.
+		u64 next_snapshot_id();
+
+		void restore_snapshot(const managed_heap_snapshot_t& snapshot, u64 id);
 
 		// Reset all managed heap allocations
 		void reset_heap_allocations();
