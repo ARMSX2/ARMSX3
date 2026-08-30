@@ -100,6 +100,27 @@ public:
 		std::fill(std::begin(m_timestamps), std::end(m_timestamps), 0);
 	}
 
+	// Sample only when the report is actually on.
+	//
+	// restart() is utils::get_tsc(), which on ARM64 is `mrs cntvct_el0` -- a system-register read
+	// of tens of cycles that does not pipeline. The destructor already discards the sample unless
+	// g_cfg.core.perf_report is set, and it defaults off, so on the hot paths that construct one
+	// of these per guest atomic the read is paid and thrown away every single time.
+	//
+	// Use this where the meter is only ever read under perf_report. operator bool() stays honest:
+	// it reports false, which is the same thing perf_meter(int) does.
+	FORCE_INLINE SAFE_BUFFERS() perf_meter(std::nullptr_t) noexcept
+	{
+		if (g_cfg.core.perf_report) [[unlikely]]
+		{
+			restart();
+		}
+		else
+		{
+			std::fill(std::begin(m_timestamps), std::end(m_timestamps), 0);
+		}
+	}
+
 	FORCE_INLINE SAFE_BUFFERS(operator bool) () const noexcept
 	{
 		return m_timestamps[0] != 0;
