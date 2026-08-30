@@ -107,6 +107,17 @@ namespace rsx::prof
 	u64 g_stall_spu_pc_total = 0;
 	bool g_stall_spu_disasm_done = false;
 
+	// PUTLLC success vs failure, summed across SPU threads.
+	//
+	// These counters have existed all along and are reported nowhere, yet they settle the question
+	// the last two fixes both depended on. If conditional stores are FAILING in bulk, the SPU is
+	// losing a reservation race and the livelock is ours to fix in the reservation path. If they
+	// are SUCCEEDING, the SPU is taking and releasing the ticket normally and the spin is the
+	// game's own busy-wait -- a completely different problem, and neither of the last two commits
+	// would have touched it.
+	u64 g_putllc_calls_prev = 0;
+	u64 g_putllc_fails_prev = 0;
+
 	struct fn_bucket { const char* fn; u32 hits; };
 	fn_bucket g_main_state[20]{};
 	u64 g_main_total = 0;
@@ -1087,6 +1098,29 @@ namespace rsx::prof
 			}
 
 			prof_log.success("\tmain_thread    %u samples of its wall time:%s", g_main_total, top);
+
+			{
+				u64 calls = 0;
+				u64 fails = 0;
+
+				idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
+				{
+					calls += spu.putllc_calls;
+					fails += spu.putllc_fails;
+				}, idm::unlocked);
+
+				const u64 dc = calls - g_putllc_calls_prev;
+				const u64 df = fails - g_putllc_fails_prev;
+
+				if (dc)
+				{
+					prof_log.success("\t  PUTLLC       %.0f/frame, %.1f%% failed (%u of %u)",
+						static_cast<double>(dc) / frames, df * 100.0 / dc, df, dc);
+				}
+
+				g_putllc_calls_prev = calls;
+				g_putllc_fails_prev = fails;
+			}
 
 			if (const u64 n = g_sema_wait_count.load(); n)
 			{
