@@ -47,7 +47,23 @@ namespace rsx::prof
 	u64 g_spu_running_sum = 0;
 	u64 g_spu_total_sum = 0;
 	u64 g_spu_stopped_sum = 0;
+	u64 g_spu_suspended_sum = 0;
 	u64 g_spu_tick_count = 0;
+
+	// Where main_thread's wall time goes, bucketed by what it is doing.
+	//
+	// Everything so far has measured the machine's resources -- GPU, CPU, faults, throttling --
+	// and all of them came back idle during a 117ms frame. The RSX spike traces say the RSX is
+	// waiting on an empty FIFO, so the guest is the critical path, and main_thread runs at only
+	// 28% CPU: it alternates between executing and blocking. Nothing has ever measured WHAT it
+	// blocks on, weighted by time, which is the actual question.
+	//
+	// Sampled at the same 200Hz as the PC histogram: a thread's share of samples is its share of
+	// wall time. "RUNNING" means executing guest code; everything else is the lv2 or HLE call it
+	// is sitting in.
+	struct fn_bucket { const char* fn; u32 hits; };
+	fn_bucket g_main_state[20]{};
+	u64 g_main_total = 0;
 
 	// cellSync mutex state at the dominant spin site.
 	u64 g_sync_samples = 0;
@@ -115,6 +131,7 @@ namespace rsx::prof
 
 			u32 total = 0;
 			u32 stopped = 0;
+			u32 suspended = 0;
 
 			idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
 			{
@@ -125,6 +142,19 @@ namespace rsx::prof
 				if (st & cpu_flag::stop)
 				{
 					stopped++;
+					return;
+				}
+
+				// Parked by the group, not merely waiting in a syscall.
+				//
+				// sys_spu_thread_receive_event on an empty queue sets cpu_flag::suspend on EVERY
+				// thread in the group and parks them with an untimed state.wait(), cleared only by
+				// resume_spu_thread_group_from_waiting. That is the one mechanism that idles a
+				// whole group at once, and lumping it in with ordinary waiting hides exactly the
+				// thing worth knowing during a 117ms frame where nothing is running.
+				if (st & cpu_flag::suspend)
+				{
+					suspended++;
 					return;
 				}
 
@@ -144,6 +174,7 @@ namespace rsx::prof
 			g_spu_running_sum += running;
 			g_spu_total_sum += total;
 			g_spu_stopped_sum += stopped;
+			g_spu_suspended_sum += suspended;
 			g_spu_tick_count++;
 
 			if (spu_pc)
@@ -157,6 +188,30 @@ namespace rsx::prof
 				}
 			}
 		}
+
+		// main_thread's own time budget, independent of which thread the PC histogram picked.
+		idm::select<named_thread<ppu_thread>>([](u32 id, ppu_thread& ppu)
+		{
+			if (id != 0x1000000)
+			{
+				return;
+			}
+
+			const char* what = "RUNNING";
+
+			if (ppu.state.load() & cpu_flag::wait)
+			{
+				what = ppu.current_function ? ppu.current_function : "?blocked";
+			}
+
+			g_main_total++;
+
+			for (auto& b : g_main_state)
+			{
+				if (b.fn == what) { b.hits++; return; }
+				if (!b.fn) { b.fn = what; b.hits = 1; return; }
+			}
+		}, idm::unlocked);
 
 		if (!pc)
 		{
@@ -864,9 +919,10 @@ namespace rsx::prof
 			// loop that busy-waits at full tilt, so a core-burning SPU counts as not running. Report
 			// the denominator and the stopped count alongside it, because 0.32 of an unknown total
 			// invited exactly the wrong conclusion once already.
-			prof_log.success("\tSPU            %.2f exec / %.2f waiting / %.2f stopped of %.2f, %u pc samples:%s",
+			prof_log.success("\tSPU            %.2f exec / %.2f waiting / %.2f GROUP-SUSPENDED / %.2f stopped of %.2f, %u pc samples:%s",
 				static_cast<double>(g_spu_running_sum) / g_spu_tick_count,
-				static_cast<double>(g_spu_total_sum - g_spu_running_sum - g_spu_stopped_sum) / g_spu_tick_count,
+				static_cast<double>(g_spu_total_sum - g_spu_running_sum - g_spu_stopped_sum - g_spu_suspended_sum) / g_spu_tick_count,
+				static_cast<double>(g_spu_suspended_sum) / g_spu_tick_count,
 				static_cast<double>(g_spu_stopped_sum) / g_spu_tick_count,
 				static_cast<double>(g_spu_total_sum) / g_spu_tick_count,
 				g_spu_total, top);
@@ -880,7 +936,35 @@ namespace rsx::prof
 			g_spu_running_sum = 0;
 			g_spu_total_sum = 0;
 			g_spu_stopped_sum = 0;
+			g_spu_suspended_sum = 0;
 			g_spu_tick_count = 0;
+		}
+
+		if (g_main_total)
+		{
+			std::sort(std::begin(g_main_state), std::end(g_main_state),
+				[](const fn_bucket& a, const fn_bucket& b) { return a.hits > b.hits; });
+
+			std::string top;
+
+			for (const auto& b : g_main_state)
+			{
+				if (!b.hits)
+				{
+					break;
+				}
+
+				fmt::append(top, "\n\t  %-28s %4.1f%%  (%u)", b.fn, b.hits * 100.0 / g_main_total, b.hits);
+			}
+
+			prof_log.success("\tmain_thread    %u samples of its wall time:%s", g_main_total, top);
+
+			for (auto& b : g_main_state)
+			{
+				b = {};
+			}
+
+			g_main_total = 0;
 		}
 
 		if (g_pc_total)
