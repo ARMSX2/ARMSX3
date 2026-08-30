@@ -66,6 +66,16 @@ namespace rsx::prof
 	// Sampled at the same 200Hz as the PC histogram: a thread's share of samples is its share of
 	// wall time. "RUNNING" means executing guest code; everything else is the lv2 or HLE call it
 	// is sitting in.
+	// A second PC histogram, sampled ONLY while a slow frame is in progress.
+	//
+	// Every guest measurement so far has averaged across all frames, which drowns the frames that
+	// matter: 9 of 10 frames are fine, so a hot spot in the bad ones is diluted ~10x and reads as
+	// background. The semaphore distribution just ruled the waits out -- nothing exceeds 14ms, so
+	// a 138ms frame is not spent blocked -- which means main_thread is EXECUTING through it, and
+	// the question is what.
+	pc_bucket g_stall_pc[24]{};
+	u64 g_stall_pc_total = 0;
+
 	struct fn_bucket { const char* fn; u32 hits; };
 	fn_bucket g_main_state[20]{};
 	u64 g_main_total = 0;
@@ -194,6 +204,19 @@ namespace rsx::prof
 			}
 		}
 
+		// Is a slow frame in progress right now? Same clock the pacing line uses.
+		bool in_stall = false;
+		{
+			const u64 last = g_last_frame_tsc.load();
+			const u64 freq = utils::get_tsc_freq();
+
+			if (last && freq)
+			{
+				const u64 now_tsc = utils::get_tsc();
+				in_stall = now_tsc > last && ((now_tsc - last) * 1000ull) / freq >= 33;
+			}
+		}
+
 		// main_thread's own time budget, independent of which thread the PC histogram picked.
 		idm::select<named_thread<ppu_thread>>([](u32 id, ppu_thread& ppu)
 		{
@@ -224,6 +247,17 @@ namespace rsx::prof
 		}
 
 		g_pc_total++;
+
+		if (in_stall)
+		{
+			g_stall_pc_total++;
+
+			for (auto& b : g_stall_pc)
+			{
+				if (b.pc == pc) { b.hits++; break; }
+				if (!b.pc) { b.pc = pc; b.hits = 1; break; }
+			}
+		}
 
 		// For the one site that dominates the profile, also record what it is waiting on.
 		//
@@ -1010,6 +1044,26 @@ namespace rsx::prof
 			}
 
 			prof_log.success("\tguest PC       %u samples of a RUNNING thread:%s", g_pc_total, top);
+
+			if (g_stall_pc_total)
+			{
+				std::sort(std::begin(g_stall_pc), std::end(g_stall_pc),
+					[](const pc_bucket& a, const pc_bucket& b) { return a.hits > b.hits; });
+
+				std::string stop;
+
+				for (const auto& b : g_stall_pc)
+				{
+					if (!b.hits) break;
+					fmt::append(stop, "\n\t  0x%08x  %4.1f%%  (%u)", b.pc, b.hits * 100.0 / g_stall_pc_total, b.hits);
+				}
+
+				prof_log.success("\tSTALL-only PC  %u samples taken during frames already over 33ms:%s",
+					g_stall_pc_total, stop);
+
+				for (auto& b : g_stall_pc) b = {};
+				g_stall_pc_total = 0;
+			}
 
 			if (g_sync_samples)
 			{
