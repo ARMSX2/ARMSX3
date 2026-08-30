@@ -1,5 +1,7 @@
 #include "stdafx.h"
 #include "rsx_profiler.h"
+#include "Emu/Cell/PPUThread.h"
+#include "Emu/IdManager.h"
 
 #include "util/sysinfo.hpp"
 
@@ -288,9 +290,34 @@ namespace rsx::prof
 						}
 					}
 
-					prof_log.error("SPIKE: frame took %.1f ms (%u so far)%s",
+					// When the stall is Idle, the RSX had nothing to draw -- the guest stopped
+					// feeding it. Say what the guest is sitting in, because that is the actual
+					// question and nothing else in this report can answer it.
+					//
+					// Thread-local scalars only: id, name and the current HLE/LV2 function. No
+					// call stacks, no registers, no guest memory. Those are what made the old
+					// stall dump fault three times and freeze the emulator.
+					std::string guest;
+
+					if (const u64 idle_ns = ((g_acc.ticks[static_cast<usz>(bucket::idle)] - s_prev.ticks[static_cast<usz>(bucket::idle)]) * 1'000'000'000ull) / freq;
+						idle_ns * 2 > frame_ns)
+					{
+						idm::select<named_thread<ppu_thread>>([&guest](u32 id, ppu_thread& ppu)
+						{
+							const auto nameptr = ppu.ppu_tname.load();
+							const bool inside = !!ppu.current_function;
+							const auto func = inside ? ppu.current_function : ppu.last_function;
+
+							fmt::append(guest, "\n    PPU 0x%07x %-24s %s=%s",
+								id, nameptr ? nameptr->c_str() : "?",
+								inside ? "in" : "last", func ? func : "");
+						}, idm::unlocked);
+					}
+
+					prof_log.error("SPIKE: frame took %.1f ms (%u so far)%s%s",
 						frame_ns / 1'000'000.0, static_cast<u32>(s_spikes),
-						detail.empty() ? "\n    (no bucket over 0.5ms -- the time was spent OUTSIDE any instrumented region)" : detail.c_str());
+						detail.empty() ? "\n    (no bucket over 0.5ms -- the time was spent OUTSIDE any instrumented region)" : detail.c_str(),
+						guest.c_str());
 				}
 			}
 
