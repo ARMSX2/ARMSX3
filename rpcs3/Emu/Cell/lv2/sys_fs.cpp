@@ -17,14 +17,8 @@
 #include <span>
 #include <shared_mutex>
 
-#include <functional>
-#include "util/tsc.hpp"
-
 LOG_CHANNEL(sys_fs);
 
-// Total time the guest spent inside file reads. Read by the RSX stall watchdog.
-atomic_t<u64> g_fs_read_us{0};
-atomic_t<u64> g_fs_read_count{0};
 
 lv2_fs_mount_point g_mp_sys_dev_usb{"/dev_usb", "CELL_FS_FAT", "CELL_FS_IOS:USB_MASS_STORAGE", 512, 0x100, 4096, lv2_mp_flag::no_uid_gid};
 lv2_fs_mount_point g_mp_sys_dev_dvd{"/dev_ps2disc", "CELL_FS_ISO9660", "CELL_FS_IOS:PATA1_BDVD_DRIVE", 2048, 0x100, 32768, lv2_mp_flag::read_only + lv2_mp_flag::no_uid_gid, &g_mp_sys_dev_usb};
@@ -1267,17 +1261,6 @@ error_code sys_fs_open(ppu_thread& ppu, vm::cptr<char> path, s32 flags, vm::ptr<
 
 error_code sys_fs_read(ppu_thread& ppu, u32 fd, vm::ptr<void> buf, u64 nbytes, vm::ptr<u64> nread)
 {
-	// Guest-visible file read time. During a stutter every guest thread is blocked at once
-	// and the log is silent -- which is what a blocking read looks like from the inside, and
-	// this game streams from disc constantly. Measured rather than assumed.
-	const u64 fs_read_start = utils::get_tsc();
-	const auto fs_read_timer = [fs_read_start]()
-	{
-		g_fs_read_us += utils::get_tsc() - fs_read_start;
-		g_fs_read_count++;
-	};
-	struct fs_read_guard { const std::function<void()>& f; ~fs_read_guard() noexcept { f(); } } fs_read_guard_v{fs_read_timer};
-
 	lv2_obj::sleep(ppu);
 
 	sys_fs.trace("sys_fs_read(fd=%d, buf=*0x%x, nbytes=0x%llx, nread=*0x%x)", fd, buf, nbytes, nread);

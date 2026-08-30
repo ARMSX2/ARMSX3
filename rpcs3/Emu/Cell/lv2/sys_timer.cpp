@@ -17,11 +17,6 @@
 
 LOG_CHANNEL(sys_timer);
 
-// How much longer than asked for the guest actually slept, in total. Read by the RSX stall
-// watchdog so a stall can say outright whether it was spent oversleeping.
-atomic_t<u64> g_usleep_over_us{0};
-atomic_t<u64> g_usleep_over_count{0};
-
 struct lv2_timer_thread
 {
 	shared_mutex mutex;
@@ -472,24 +467,11 @@ error_code sys_timer_usleep(ppu_thread& ppu, u64 sleep_time)
 			sleep_time = std::max<u64>(1, utils::sub_saturate<u64>(sleep_time, -add_time));
 		}
 
-		// Overshoot accounting. During a stutter every guest thread is blocked at once --
-		// no PPU and no SPU running for 60-100ms -- and several of them are sitting here.
-		// If our sleeps return late, that alone would hold the whole machine down, and it
-		// would look exactly like this from every other vantage point we have tried. So
-		// measure it rather than reason about it.
-		const u64 wait_start = get_system_time();
-
 		lv2_obj::sleep(ppu, g_cfg.core.sleep_timers_accuracy < sleep_timers_accuracy_level::_usleep ? sleep_time : 0);
 
 		if (!lv2_obj::wait_timeout(sleep_time, &ppu, true, true))
 		{
 			ppu.state += cpu_flag::again;
-		}
-
-		if (const u64 elapsed = get_system_time() - wait_start; elapsed > sleep_time + 1000)
-		{
-			g_usleep_over_us += elapsed - sleep_time;
-			g_usleep_over_count++;
 		}
 	}
 	else

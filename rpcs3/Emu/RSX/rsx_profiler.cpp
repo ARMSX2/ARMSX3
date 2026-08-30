@@ -3,12 +3,6 @@
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
 
-extern atomic_t<u64> g_fs_read_us;
-extern atomic_t<u64> g_fs_read_count;
-extern atomic_t<u64> g_usleep_over_us;
-extern atomic_t<u64> g_usleep_over_count;
-extern atomic_t<u64> g_mmapper_calls;
-extern atomic_t<u64> g_mmapper_tsc;
 #include "Emu/IdManager.h"
 
 #include "util/sysinfo.hpp"
@@ -322,41 +316,8 @@ namespace rsx::prof
 			return;
 		}
 
-		// How much of this stall was the guest remapping memory. Every mmapper call takes the
-		// VM lock and suspends every other thread, so if this number tracks the stall length
-		// the barrier is the stutter and no amount of renderer work will touch it.
-		static u64 s_last_calls = 0;
-		static u64 s_last_tsc = 0;
-
-		const u64 calls = g_mmapper_calls.load();
-		const u64 mm_tsc = g_mmapper_tsc.load();
-		const u64 mm_ms = ((mm_tsc - s_last_tsc) * 1000ull) / freq;
-
-		static u64 s_last_over_us = 0;
-		static u64 s_last_over_n = 0;
-
-		const u64 over_us = g_usleep_over_us.load();
-		const u64 over_n = g_usleep_over_count.load();
-
-		static u64 s_last_fs_us = 0;
-		static u64 s_last_fs_n = 0;
-
-		const u64 fs_us = g_fs_read_us.load();
-		const u64 fs_n = g_fs_read_count.load();
-
-		prof_log.error("STALL: %u ms (sample %u/60) -- mmapper %u/%u ms -- usleep over %u/%u ms -- fs_read %u reads/%u ms%s",
-			stalled_ms, s_dumps, calls - s_last_calls, mm_ms,
-			over_n - s_last_over_n, (over_us - s_last_over_us) / 1000,
-			fs_n - s_last_fs_n, ((fs_us - s_last_fs_us) * 1000ull) / freq, sample_guest_threads(false));
-
-		s_last_fs_us = fs_us;
-		s_last_fs_n = fs_n;
-
-		s_last_over_us = over_us;
-		s_last_over_n = over_n;
-
-		s_last_calls = calls;
-		s_last_tsc = mm_tsc;
+		prof_log.error("STALL: %u ms into a frame with no flip (sample %u/60)%s",
+			stalled_ms, s_dumps, sample_guest_threads(false));
 	}
 
 	void tick_frame()
