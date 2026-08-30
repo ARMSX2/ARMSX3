@@ -6,6 +6,7 @@
 #include "../VKHelpers.h"
 #include "../VKResourceManager.h"
 #include "Emu/IdManager.h"
+#include "util/sysinfo.hpp"
 
 #include <memory>
 
@@ -98,7 +99,32 @@ namespace vk
 	bool data_heap::grow(usz size)
 	{
 		// Create new heap. All sizes are aligned up by 64M, upto 1GiB
-		const usz size_limit = (m_flags & heap_pool_fixed_size) ? initial_size : 1024 * 0x100000;
+		usz size_limit = (m_flags & heap_pool_fixed_size) ? initial_size : 1024 * 0x100000;
+
+		// ...but never past what the device can actually hand over.
+		//
+		// The 1GiB ceiling is a desktop figure and is unrelated to whether the allocation can
+		// succeed. On a phone the GPU shares system RAM, so a heap that has already reached
+		// 512MB asks for 576MB, the driver refuses, and the allocation failure is FATAL -- the
+		// RSX thread is terminated, rendering stops, and the game hangs with audio still playing
+		// because every other thread is fine. Sonic '06 dies this way, Ratchet & Clank dies at
+		// 144MB in this same function, and neither failure names the heap without the growth log
+		// below.
+		//
+		// Growing into a size the device cannot satisfy is never right: the allocation is
+		// guaranteed to fail, and the swap-out path below is the correct answer instead. Bound
+		// the ceiling by free memory so that decision gets made before the fatal allocation
+		// rather than after it. A quarter of what is free leaves room for the copy, since the
+		// old heap is still resident while the new one is created.
+		if (!(m_flags & heap_pool_fixed_size))
+		{
+			if (const u64 avail = utils::get_avail_memory())
+			{
+				const usz mem_limit = utils::align(std::max<u64>(avail / 4, 64 * 0x100000), 64 * 0x100000);
+				size_limit = std::min<usz>(size_limit, mem_limit);
+			}
+		}
+
 		usz aligned_new_size = utils::align(m_size + size, 64 * 0x100000);
 
 		if (aligned_new_size >= size_limit)
