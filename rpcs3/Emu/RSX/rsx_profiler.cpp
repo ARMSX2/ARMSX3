@@ -2,6 +2,9 @@
 #include "rsx_profiler.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
+
+extern atomic_t<u64> g_mmapper_calls;
+extern atomic_t<u64> g_mmapper_tsc;
 #include "Emu/IdManager.h"
 
 #include "util/sysinfo.hpp"
@@ -288,8 +291,21 @@ namespace rsx::prof
 			return;
 		}
 
-		prof_log.error("STALL: %u ms into a frame with no flip (sample %u/30)%s",
-			stalled_ms, s_dumps, sample_guest_threads());
+		// How much of this stall was the guest remapping memory. Every mmapper call takes the
+		// VM lock and suspends every other thread, so if this number tracks the stall length
+		// the barrier is the stutter and no amount of renderer work will touch it.
+		static u64 s_last_calls = 0;
+		static u64 s_last_tsc = 0;
+
+		const u64 calls = g_mmapper_calls.load();
+		const u64 mm_tsc = g_mmapper_tsc.load();
+		const u64 mm_ms = ((mm_tsc - s_last_tsc) * 1000ull) / freq;
+
+		prof_log.error("STALL: %u ms into a frame with no flip (sample %u/30) -- guest mmapper: %u calls, %u ms since last sample%s",
+			stalled_ms, s_dumps, calls - s_last_calls, mm_ms, sample_guest_threads());
+
+		s_last_calls = calls;
+		s_last_tsc = mm_tsc;
 	}
 
 	void tick_frame()

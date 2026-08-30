@@ -11,8 +11,33 @@
 #include <span>
 
 #include "util/vm.hpp"
+#include "util/tsc.hpp"
 
 LOG_CHANNEL(sys_mmapper);
+
+// Sonic '06 streams assets as 64KB shared-memory blocks: ~1900 allocs, ~1500 frees and ~600
+// maps in a single session, arriving in bursts. Every one of those takes the VM lock and puts
+// cpu_flag::suspend + cpu_flag::memory on every other thread, so the whole emulator -- PPUs,
+// SPUs and RSX -- stops dead for the duration. Mid-stall sampling caught exactly that: main_thread
+// running these calls while all 11 other threads sat suspended behind it.
+//
+// Measured here so we can tell the barrier cost apart from the logging cost, rather than guess.
+atomic_t<u64> g_mmapper_calls{0};
+atomic_t<u64> g_mmapper_tsc{0};
+
+namespace
+{
+	struct mmapper_timer
+	{
+		const u64 start = utils::get_tsc();
+
+		~mmapper_timer() noexcept
+		{
+			g_mmapper_tsc += utils::get_tsc() - start;
+			g_mmapper_calls++;
+		}
+	};
+}
 
 template <>
 void fmt_class_string<lv2_mem_container_id>::format(std::string& out, u64 arg)
@@ -191,7 +216,11 @@ error_code sys_mmapper_allocate_shared_memory(ppu_thread& ppu, u64 ipc_key, u64 
 {
 	ppu.state += cpu_flag::wait;
 
-	sys_mmapper.warning("sys_mmapper_allocate_shared_memory(ipc_key=0x%x, size=0x%x, flags=0x%x, mem_id=*0x%x)", ipc_key, size, flags, mem_id);
+	const mmapper_timer timer;
+
+	// trace, not warning: this fires thousands of times per session in a streaming game,
+	// and log volume alone has stalled this emulator before.
+	sys_mmapper.trace("sys_mmapper_allocate_shared_memory(ipc_key=0x%x, size=0x%x, flags=0x%x, mem_id=*0x%x)", ipc_key, size, flags, mem_id);
 
 	if (size == 0)
 	{
@@ -576,7 +605,9 @@ error_code sys_mmapper_free_shared_memory(ppu_thread& ppu, u32 mem_id)
 {
 	ppu.state += cpu_flag::wait;
 
-	sys_mmapper.warning("sys_mmapper_free_shared_memory(mem_id=0x%x)", mem_id);
+	const mmapper_timer timer;
+
+	sys_mmapper.trace("sys_mmapper_free_shared_memory(mem_id=0x%x)", mem_id);
 
 	// Conditionally remove memory ID
 	const auto mem = idm::withdraw<lv2_obj, lv2_memory>(mem_id, [&](lv2_memory& mem) -> CellError
@@ -692,7 +723,9 @@ error_code sys_mmapper_search_and_map(ppu_thread& ppu, u32 start_addr, u32 mem_i
 {
 	ppu.state += cpu_flag::wait;
 
-	sys_mmapper.warning("sys_mmapper_search_and_map(start_addr=0x%x, mem_id=0x%x, flags=0x%x, alloc_addr=*0x%x)", start_addr, mem_id, flags, alloc_addr);
+	const mmapper_timer timer;
+
+	sys_mmapper.trace("sys_mmapper_search_and_map(start_addr=0x%x, mem_id=0x%x, flags=0x%x, alloc_addr=*0x%x)", start_addr, mem_id, flags, alloc_addr);
 
 	const auto area = vm::get(vm::any, start_addr);
 
@@ -756,7 +789,7 @@ error_code sys_mmapper_search_and_map(ppu_thread& ppu, u32 start_addr, u32 mem_i
 		return CELL_ENOMEM;
 	}
 
-	sys_mmapper.notice("sys_mmapper_search_and_map(): Found 0x%x address", addr);
+	sys_mmapper.trace("sys_mmapper_search_and_map(): Found 0x%x address", addr);
 
 	vm::lock_sudo(addr, mem->size);
 	ppu.check_state();
