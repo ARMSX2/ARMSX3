@@ -6114,7 +6114,18 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				}
 
 				fmt::append(tracing, " of %d failures", fail_count);
-				spu_log.trace("%s\n%s", break_error, tracing);
+				// Promoted out of trace.
+				//
+				// This is the only thing in the tree that says WHY a GETLLAR/PUTLLC loop is rejected
+				// from the JIT's lock-free PUTLLC16 path, and it was reachable only by enabling SPU
+				// trace logging wholesale -- tens of thousands of lines a second on this title, which
+				// perturbs the very timing being investigated. The summary is one line per distinct
+				// breaking site, emitted once each.
+				//
+				// It matters because every measured conditional store here goes through do_putllc,
+				// which takes vm::writer_lock and stops every PPU thread, while PUTLLC16 commits the
+				// identical operation with no barrier. Whatever cause this names is the difference.
+				spu_log.notice("%s\n%s", break_error, tracing);
 			}
 		};
 
