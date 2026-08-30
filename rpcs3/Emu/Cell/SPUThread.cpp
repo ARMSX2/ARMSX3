@@ -3738,51 +3738,25 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 		auto& super_data = *vm::get_super_ptr<spu_rdata_t>(addr);
 		const bool success = [&]()
 		{
-			// A store confined to ONE aligned 16-byte chunk commits without the heavyweight lock.
-			//
-			// vm::writer_lock is not a lock on this address. Its constructor sets a bit in the
-			// GLOBAL g_range_lock_bits, stamps cpu_flag::memory onto every registered PPU thread,
-			// and then busy-spins until every one of them has parked (vm.cpp:547-641). The PPU
-			// side then waits for that whole global word to reach zero, not for this address
-			// (vm.cpp:399) -- so with several SPUs each issuing thousands of conditional stores a
-			// frame there is almost no globally quiet instant for a PPU to run in.
-			//
-			// It is also self-reinforcing. rsrv_unique_lock, taken just above, is held across the
-			// entire barrier, so every other SPU's PUTLLC fails immediately at !_ok and every
-			// other GETLLAR spins -- which is where a measured 81-98.4% failure rate over
-			// 6,489-62,768 stores per frame comes from. The barrier does not merely accompany the
-			// contention, it manufactures it.
-			//
-			// And it is asymmetric by construction: with ppu_128_reservations_loop_max_length at
-			// its default 0 the PPU's stwcx takes an 8-byte path with no barrier at all
-			// (PPUThread.cpp:3688-3737), so SPUs stop PPUs and PPUs never stop SPUs.
-			//
-			// diff16_pos is the index of the single differing aligned 16-byte chunk, already
-			// computed above by scan16_rdata. When it is set, this compare-exchange IS the atomic
-			// commit -- the same commit the SPU JIT's PUTLLC16 path performs with no writer_lock
-			// at all (SPULLVMRecompiler.cpp:1436-1456), and a wider check than the PPU's own
-			// 8-byte stwcx. A guest ticket increment changes two bytes, so this is the path it
-			// always takes.
-			//
-			// The trade is narrow and stated plainly: the other 112 bytes are still compared, but
-			// no longer under exclusion from plain guest stores and DMA, so a write into bytes
-			// this SPU is not touching, landing inside a window of tens of nanoseconds, would now
-			// be missed. That is strictly more accurate than either of the two paths above which
-			// already ship without the barrier.
-			if (diff16_pos != umax)
-			{
-				return cmp_rdata(rdata, super_data)
-					&& atomic_storage<u128>::compare_exchange(*cast_as(super_data, diff16_pos), *cast_as(rdata, diff16_pos), *cast_as_const(to_write, diff16_pos));
-			}
-
-			// Whole-line store: still needs the heavyweight lock.
+			// Full lock (heavyweight)
 			// TODO: vm::check_addr
 			vm::writer_lock lock(addr, range_lock);
 
 			if (cmp_rdata(rdata, super_data))
 			{
-				mov_rdata(super_data, to_write);
-				return true;
+				if (diff16_pos != umax)
+				{
+					// Do it with CMPXCHG16B if possible, this allows to improve accuracy whenever "RSX Accurate Reservations" is off 
+					if (atomic_storage<u128>::compare_exchange(*cast_as(super_data, diff16_pos), *cast_as(rdata, diff16_pos), *cast_as_const(to_write, diff16_pos)))
+					{
+						return true;
+					}
+				}
+				else
+				{
+					mov_rdata(super_data, to_write);
+					return true;
+				}
 			}
 
 			return false;
