@@ -238,7 +238,7 @@ namespace rsx
 						}
 
 						{
-							RSX_PROF_SCOPE(idle);
+							RSX_PROF_SCOPE(idle_pause);
 							m_thread->cpu_wait({});
 						}
 
@@ -797,7 +797,7 @@ namespace rsx
 					//
 					// The pre-spin is not optional: ouroboros420/rpcsx parked bare here (e31ef44ef) and
 					// had to walk it back (832c23078) when the wake latency cost frametime smoothness.
-					RSX_PROF_SCOPE(idle);
+					RSX_PROF_SCOPE(idle_fifo);
 
 #if defined(ARCH_ARM64)
 					if (s_fifo_idle_spins < 8)

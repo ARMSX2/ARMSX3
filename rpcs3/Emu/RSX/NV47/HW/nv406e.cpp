@@ -127,7 +127,7 @@ namespace rsx
 
 				RSX(ctx)->on_semaphore_acquire_wait();
 
-				RSX_PROF_SCOPE(idle);
+				RSX_PROF_SCOPE(idle_sema);
 
 #if defined(ARCH_ARM64)
 				// The armed one-shot wait below does not park on every core: on Oryon

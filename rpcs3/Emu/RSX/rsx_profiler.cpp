@@ -184,6 +184,9 @@ namespace rsx::prof
 		case bucket::zcull: return "ZCULL update";
 		case bucket::local_task: return "Local task";
 		case bucket::idle: return "Idle";
+		case bucket::idle_fifo: return "Idle: FIFO empty";
+		case bucket::idle_sema: return "Idle: guest semaphore";
+		case bucket::idle_pause: return "Idle: cpu_wait";
 		case bucket::unclassified: return "Unclassified";
 		default: return "?";
 		}
@@ -226,8 +229,10 @@ namespace rsx::prof
 			const bool inside = !!ppu.current_function;
 			const auto func = inside ? ppu.current_function : ppu.last_function;
 
-			fmt::append(out, "\n    PPU 0x%07x %-24s [%s] %s%s", id,
-				name ? name->c_str() : "?", ppu.state.load(),
+			// cia is the guest PC. Across samples it says whether a running thread is
+			// making progress or spinning on the same handful of instructions.
+			fmt::append(out, "\n    PPU 0x%07x %-24s [%s] cia=0x%08x %s%s", id,
+				name ? name->c_str() : "?", ppu.state.load(), ppu.cia,
 				inside ? "in=" : "last=", func ? func : "");
 		}, idm::unlocked);
 
@@ -403,7 +408,10 @@ namespace rsx::prof
 					// stall dump fault three times and freeze the emulator.
 					std::string guest;
 
-					if (const u64 idle_ns = ((g_acc.ticks[static_cast<usz>(bucket::idle)] - s_prev.ticks[static_cast<usz>(bucket::idle)]) * 1'000'000'000ull) / freq;
+					if (const u64 idle_ns = (((g_acc.ticks[static_cast<usz>(bucket::idle)] - s_prev.ticks[static_cast<usz>(bucket::idle)])
+								+ (g_acc.ticks[static_cast<usz>(bucket::idle_fifo)] - s_prev.ticks[static_cast<usz>(bucket::idle_fifo)])
+								+ (g_acc.ticks[static_cast<usz>(bucket::idle_sema)] - s_prev.ticks[static_cast<usz>(bucket::idle_sema)])
+								+ (g_acc.ticks[static_cast<usz>(bucket::idle_pause)] - s_prev.ticks[static_cast<usz>(bucket::idle_pause)])) * 1'000'000'000ull) / freq;
 						idle_ns * 2 > frame_ns)
 					{
 						idm::select<named_thread<ppu_thread>>([&guest](u32 id, ppu_thread& ppu)

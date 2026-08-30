@@ -68,7 +68,10 @@ namespace rsx::prof
 		page_protect,     // mprotect for guest write tracking, including its TLB maintenance
 		zcull,            // ZCULL occlusion report update
 		local_task,       // Backend local task queue drained from the FIFO loop
-		idle,             // Deliberately idle: FIFO empty, frame limiter, semaphore
+		idle,             // Deliberately idle: frame limiter and anything not split out below
+		idle_fifo,        // FIFO empty: the guest has not queued any commands
+		idle_sema,        // nv406e semaphore acquire: waiting for the guest to release us
+		idle_pause,       // cpu_wait: emulator-level pause/sync, not the guest
 		unclassified,     // RSX thread time not covered by any scope above
 
 		count
