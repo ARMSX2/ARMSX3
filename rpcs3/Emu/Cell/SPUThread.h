@@ -898,6 +898,7 @@ public:
 	// Consecutive failed conditional stores against the same line, for the notifier park in
 	// do_putllc. Runtime scheduling state only; deliberately not serialized.
 	u32 putllc_fail_streak{};
+	u64 putllc_parks{}; // Times the notifier park below actually engaged
 	u32 putllc_fail_addr{};
 
 	const char* current_func{}; // Current STOP or RDCH blocking function

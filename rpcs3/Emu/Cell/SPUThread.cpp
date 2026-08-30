@@ -3841,6 +3841,7 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			}
 
 			static_cast<void>(test_stopped());
+			putllc_parks++;
 			putllc_fail_streak = 0;
 		}
 
