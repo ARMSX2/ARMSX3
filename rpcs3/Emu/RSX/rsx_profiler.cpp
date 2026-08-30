@@ -245,6 +245,59 @@ namespace rsx::prof
 
 		g_acc.frames++;
 
+		// Per-frame spike trace.
+		//
+		// The window report divides by 300 frames, so a frame that took 200ms and 299 that took
+		// 30 average away to nothing -- and variance is the whole complaint. Averages cannot
+		// describe a stall; only the frame that stalled can.
+		//
+		// So diff the buckets against the previous tick and, when a single frame runs long,
+		// print where THAT frame's time went. Cheap: one subtraction per bucket per frame, and
+		// nothing is printed unless a frame is actually slow.
+		{
+			static accounting s_prev{};
+			static u64 s_last_tsc = 0;
+			static u64 s_spikes = 0;
+
+			const u64 now = utils::get_tsc();
+			const u64 freq = utils::get_tsc_freq();
+
+			if (s_last_tsc && freq)
+			{
+				const u64 frame_ns = ((now - s_last_tsc) * 1'000'000'000ull) / freq;
+
+				// 50ms: comfortably above a bad-but-normal frame at this frame rate, so this
+				// only fires on the excursions worth explaining.
+				if (frame_ns > 50'000'000ull && ++s_spikes <= 40)
+				{
+					std::string detail;
+
+					for (usz i = 0; i < bucket_count; i++)
+					{
+						const u64 d = g_acc.ticks[i] - s_prev.ticks[i];
+
+						if (!d) continue;
+
+						const u64 ns = (d * 1'000'000'000ull) / freq;
+
+						// Only what actually mattered in this frame.
+						if (ns >= 1'000'000ull / 2)
+						{
+							fmt::append(detail, "\n    %-16s %6.2f ms",
+								name_of(static_cast<bucket>(i)), ns / 1'000'000.0);
+						}
+					}
+
+					prof_log.error("SPIKE: frame took %.1f ms (%u so far)%s",
+						frame_ns / 1'000'000.0, static_cast<u32>(s_spikes),
+						detail.empty() ? "\n    (no bucket over 0.5ms -- the time was spent OUTSIDE any instrumented region)" : detail.c_str());
+				}
+			}
+
+			s_prev = g_acc;
+			s_last_tsc = now;
+		}
+
 		// Pass numbering is NOT restarted here.
 		//
 		// It used to be, on the claim that the GPU timer's event index resets on the same
