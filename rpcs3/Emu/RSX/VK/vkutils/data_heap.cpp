@@ -116,14 +116,30 @@ namespace vk
 		// the ceiling by free memory so that decision gets made before the fatal allocation
 		// rather than after it. A quarter of what is free leaves room for the copy, since the
 		// old heap is still resident while the new one is created.
+#ifdef __ANDROID__
+		// A hard ceiling, because free memory is not the constraint that matters.
+		//
+		// The first attempt bounded this by utils::get_avail_memory()/4 and did nothing: that
+		// reads MemAvailable, which counts reclaimable page cache, so it reported ~2.5GB while
+		// the driver would not grant a single 576MB device allocation. "Memory the kernel could
+		// reclaim" and "memory the GPU can have in one contiguous block" are different numbers.
+		//
+		// So bound it by what the ring can plausibly need instead. Sonic '06 climbs
+		// 192->256->320->384->448->512->576MB in seven seconds while its LARGEST request in that
+		// span is 217K -- three orders of magnitude smaller. A ring that has reached 256MB is
+		// already far past serving its traffic and is growing for some other reason; letting it
+		// keep going only decides how long before an allocation fails.
+		//
+		// Reaching the limit is not fatal: the branch below swaps the heap out instead, which is
+		// the behaviour we want and never got to because the allocation died first.
+		//
+		// Empirical, and deliberately generous -- retention self-disengages if the ring cannot
+		// hold several frames, so this is set far above peak frame traffic rather than close to it.
 		if (!(m_flags & heap_pool_fixed_size))
 		{
-			if (const u64 avail = utils::get_avail_memory())
-			{
-				const usz mem_limit = utils::align(std::max<u64>(avail / 4, 64 * 0x100000), 64 * 0x100000);
-				size_limit = std::min<usz>(size_limit, mem_limit);
-			}
+			size_limit = std::min<usz>(size_limit, 256 * 0x100000);
 		}
+#endif
 
 		usz aligned_new_size = utils::align(m_size + size, 64 * 0x100000);
 
