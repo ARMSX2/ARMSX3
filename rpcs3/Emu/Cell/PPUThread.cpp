@@ -11,6 +11,7 @@
 #include "Emu/Memory/vm_reservation.h"
 #include "Emu/Memory/vm_locking.h"
 #include "Emu/RSX/Core/RSXReservationLock.hpp"
+#include "Emu/RSX/Overlays/overlay_message.h"
 #include "Emu/VFS.h"
 #include "Emu/system_progress.hpp"
 #include "Emu/system_utils.hpp"
@@ -177,6 +178,14 @@ extern std::pair<shared_ptr<lv2_overlay>, CellError> ppu_load_overlay(const ppu_
 extern void ppu_unload_prx(const lv2_prx&);
 extern shared_ptr<lv2_prx> ppu_load_prx(const ppu_prx_object&, bool virtual_load, const std::string&, s64 file_offset, utils::serial* = nullptr);
 extern void ppu_execute_syscall(ppu_thread& ppu, u64 code);
+
+// Defined in PPUTranslator.cpp: emit the allocator-friendly form of VMADDFP for this translation.
+extern thread_local bool g_ppu_avoid_strict_fma;
+
+// Set by a compile worker when LLVM could not get memory, read once after the workers join so
+// the user is told rather than left watching a progress bar that quietly produced an
+// uncompiled game. Not thread_local: any worker may be the one that hits it.
+static atomic_t<bool> g_ppu_compile_oom{false};
 static void ppu_break(ppu_thread&, ppu_opcode_t, be_t<u32>*, ppu_intrp_func*);
 
 extern void do_cell_atomic_128_store(u32 addr, const void* to_write);
@@ -2330,8 +2339,14 @@ void ppu_thread::cpu_on_stop()
 		ppu_log.notice("thread context: %s", ret);
 	}
 
-	if (is_stopped())
+	// Report once. Nothing guarantees this hook runs a single time, and a PPU thread that
+	// re-enters the stop path without exiting reports on every pass -- measured at ~100,000
+	// lines per second from one thread, which saturates the log writer and stalls the whole
+	// emulator during shutdown on Android, where the log goes to external storage.
+	if (is_stopped() && !perf_stats_reported)
 	{
+		perf_stats_reported = true;
+
 		if (last_succ == 0 && last_fail == 0 && exec_bytes == 0)
 		{
 			perf_log.notice("PPU thread perf stats are not available.");
@@ -3138,6 +3153,19 @@ static T ppu_load_acquire_reservation(ppu_thread& ppu, u32 addr)
 	{
 		// Reload "cached" reservation of previous succeeded conditional store
 		// This seems like a hardware feature according to cellSpursAddUrgentCommand function
+		//
+		// Deliberately keeps ppu.rtime as-is, which only works because the successful store
+		// below advances it to the value it left in the line's counter. Upstream carries this
+		// branch empty AND without that advance, so rtime stays one increment behind and every
+		// conditional store after the first on the same line fails by exactly 128 -- forever,
+		// because the guest's loop restarts on failure.
+		//
+		// Assassin's Creed is the case: libsre's cellSpursAddUrgentCommand walks four
+		// urgent-command slots inside one reservation loop, stores slot 0 unchanged to release
+		// it, then can never claim slot 1. Measured at 490 million failures of exactly this test on
+		// 0x102ed6b8, res-rtime==128 on every single one, data unchanged. 047f71b43 added a
+		// "-= 128" here to pair with the advance; the two cancel, which is presumably why the
+		// pair was dropped rather than corrected.
 	}
 	else
 	{
@@ -3421,6 +3449,11 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 
 		ppu.last_faddr = 0;
 		ppu.res_cached = ppu.raddr;
+
+		// The other half of upstream 047f71b43; see the note in ppu_load_acquire_reservation.
+		// Every success path above leaves the line's counter at rtime + 128, so this is what
+		// keeps a cached re-reservation of the same line validating against the right value.
+		ppu.rtime += 128;
 		ppu.raddr = 0;
 		return true;
 	}
@@ -5340,6 +5373,11 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				contains_symbol_resolver,
 				daz_and_ftz,
 				arm64_codegen_v2,
+				arm64_codegen_v3,
+				arm64_codegen_v4,
+				arm64_codegen_v5,
+				arm64_codegen_v6,
+				arm64_codegen_v7,
 
 				__bitset_enum_max
 			};
@@ -5360,7 +5398,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			// Add a new value (arm64_codegen_v3, ...) and set that instead whenever ARM64 PPU
 			// codegen changes. Never re-toggle an old one -- that would collide with hashes already
 			// on disk from an earlier build.
-			settings += ppu_settings::arm64_codegen_v2;
+			settings += ppu_settings::arm64_codegen_v7;
 #endif
 			if (g_cfg.core.use_accurate_dfma)
 				settings += ppu_settings::accurate_dfma;
@@ -5577,6 +5615,50 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						// Use another JIT instance
 						jit_compiler jit2({}, g_cfg.core.llvm_cpu.to_string(), 0x1);
 						compiled_this_module = ppu_initialize2(jit2, part, cache_path, obj_name);
+
+#if defined(ARCH_ARM64)
+						// One retry with allocator-friendly codegen before giving the module up.
+						//
+						// Should now be unreachable: the cause was an LLVM bug, fixed in our
+						// vendored tree (AArch64FrameLowering::determineCalleeSaves returned
+						// early for CallingConv::GHC and so never reserved an emergency spill
+						// slot). Kept anyway, because it costs nothing unless a module actually
+						// fails and it is the difference between one slower module and a title
+						// that will not boot. If it ever fires again, the LLVM patch has been
+						// lost in a submodule bump.
+						//
+						// LLVM refuses some modules on AArch64 with "Cannot scavenge register
+						// without an emergency spill slot", triggered by the register pressure of
+						// llvm.fma on <4 x float> in VMADDFP. Losing the module is expensive out of
+						// all proportion to its size: its functions run through
+						// ppu_recompiler_fallback, which interprets a single instruction per
+						// iteration with a dispatcher read and a compare each time, so one lost
+						// module can take a title from full speed to unplayable. Saint Seiya: The
+						// Sanctuary (BLES01421, issue #25) black-screens on it, and was reported at
+						// 7fps before that.
+						//
+						// Retrying only here is what keeps the cost off everyone else: every module
+						// that compiled normally keeps its single fused FMLA, and only a module LLVM
+						// has ALREADY rejected pays for the double-precision form. A fresh jit is
+						// mandatory -- the previous instance is poisoned by the failed add and its
+						// engine cannot be reused.
+						if (!compiled_this_module && !Emu.IsStopped())
+						{
+							ppu_log.warning("LLVM: Retrying module %s with allocator-friendly codegen", obj_name);
+
+							g_ppu_avoid_strict_fma = true;
+
+							jit_compiler jit3({}, g_cfg.core.llvm_cpu.to_string(), 0x1);
+							compiled_this_module = ppu_initialize2(jit3, part, cache_path, obj_name);
+
+							g_ppu_avoid_strict_fma = false;
+
+							if (compiled_this_module)
+							{
+								ppu_log.success("LLVM: Module %s compiled on retry", obj_name);
+							}
+						}
+#endif
 					}
 
 					if (compiled_this_module)
@@ -5643,6 +5725,40 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 		
 		thread_ctrl::set_name(old_name);
 		g_watchdog_hold_ctr--;
+
+		// One message for the whole run, not one per module: when memory runs out every
+		// remaining module fails the same way, and 200 identical popups would be worse than
+		// silence. Modules that did compile are already written to the cache, so starting the
+		// game again resumes from there rather than beginning afresh -- which is the only
+		// action that actually helps, and so is the only one suggested.
+		if (g_ppu_compile_oom.exchange(false))
+		{
+			// std::string, not a literal: message_item is only instantiated for std::string
+			// and localized_string_id, so a const char* fails to link.
+			//
+			// Queued before the throw below, and it survives it: the overlay is drawn by the RSX
+			// thread, which is not the thread this kills.
+			rsx::overlays::queue_message(
+				std::string("Ran out of memory while compiling.\n"
+					"Close the game and start it again -- what already compiled is kept, so each "
+					"attempt gets further."),
+				30'000'000);
+
+			// Stop rather than limp.
+			//
+			// Everything that failed here would fall back to ppu_recompiler_fallback, which is
+			// correct -- the dispatcher entry interprets, nothing runs garbage -- but it is
+			// per-instruction dispatch, and it is slower than the interpreter outright. Saint
+			// Seiya measured 6fps against 23 with most of its modules missing. A game at that
+			// speed looks broken, and it gets reported as broken, when the real answer is one
+			// restart away.
+			//
+			// So this is a deliberate choice of an honest stop over a degraded run. It kills this
+			// thread the way running out of memory always did; what is different is that the
+			// reason is now on screen instead of being left to guess at.
+			fmt::throw_exception("Out of memory while compiling PPU modules -- restart the game to "
+				"continue compiling. Modules that already compiled are cached.");
+		}
 	}
 
 	// Initialize compiler instance
@@ -5790,7 +5906,23 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 					index++;
 
 					ensure(!sim);
-					sim = ensure(reinterpret_cast<void(*)(u8*, u64)>(jits[index]->get("__resolve_symbols")));
+					sim = reinterpret_cast<void(*)(u8*, u64)>(jits[index]->get("__resolve_symbols"));
+
+					if (!sim)
+					{
+						// NOT fatal, for the same reason a module that fails to load is not: a
+						// guest function with no compiled code keeps its dispatcher entry and is
+						// interpreted. __resolve_symbols lives in the compiled output, so when
+						// every module in a group fails -- Arkham City ran the JIT worker out of
+						// memory and lost 240 of 410 -- the resolver is simply absent.
+						//
+						// ensure() here turned that into a dead main_thread, which threw away the
+						// 170 modules that HAD compiled and surfaced as a boot that never
+						// finishes. Losing one group's speed beats losing the boot.
+						ppu_log.error("LLVM: Symbol resolver #%u is missing; the functions in that "
+							"group will be interpreted", index);
+						continue;
+					}
 
 					ppu_log.notice("Resolved symbol resolver function #%u", index);
 				}
@@ -5809,7 +5941,14 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			{
 				index++;
 
-				ensure(sim);
+				if (!sim)
+				{
+					// Absent resolver, already reported above. Calling it would be the crash the
+					// ensure() was guarding against; skipping it is what makes the group
+					// interpret instead.
+					continue;
+				}
+
 				sim(vm::g_exec_addr, info.segs[0].addr);
 
 				ppu_log.notice("Executed symbol resolver #%u", index);
@@ -6018,7 +6157,9 @@ static bool ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module
 		if (g_cfg.core.llvm_logs)
 		{
 			out << *_module; // print IR
+
 			fs::write_file(cache_path + obj_name + ".log", fs::rewrite, out.str());
+
 			result.clear();
 		}
 
@@ -6056,6 +6197,15 @@ static bool ppu_initialize2(jit_compiler& jit, const ppu_module<lv2_obj>& module
 	if (!jit.try_add(std::move(_module), cache_path, llvm_error))
 	{
 		ppu_log.error("LLVM: Failed to compile module %s: %s", obj_name, llvm_error);
+
+		// Out of memory is the one compile failure the user can do something about, and the one
+		// that arrives in bulk -- every remaining module fails the same way once the device is
+		// short. Flag it for a single message after the workers join.
+		if (llvm_error.find("Out of memory") != umax)
+		{
+			g_ppu_compile_oom = true;
+		}
+
 		return false;
 	}
 #else

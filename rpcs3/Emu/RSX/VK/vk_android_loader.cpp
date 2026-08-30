@@ -60,6 +60,7 @@ extern "C"
 	PFN_vkCmdSetViewport vkCmdSetViewport = nullptr;
 	PFN_vkCmdUpdateBuffer vkCmdUpdateBuffer = nullptr;
 	PFN_vkCmdWaitEvents vkCmdWaitEvents = nullptr;
+	PFN_vkCmdWriteTimestamp vkCmdWriteTimestamp = nullptr;
 	PFN_vkCreateAndroidSurfaceKHR vkCreateAndroidSurfaceKHR = nullptr;
 	PFN_vkCreateBuffer vkCreateBuffer = nullptr;
 	PFN_vkCreateBufferView vkCreateBufferView = nullptr;
@@ -111,6 +112,7 @@ extern "C"
 	PFN_vkFlushMappedMemoryRanges vkFlushMappedMemoryRanges = nullptr;
 	PFN_vkFreeCommandBuffers vkFreeCommandBuffers = nullptr;
 	PFN_vkFreeMemory vkFreeMemory = nullptr;
+	PFN_vkGetAndroidHardwareBufferPropertiesANDROID vkGetAndroidHardwareBufferPropertiesANDROID = nullptr;
 	PFN_vkGetBufferMemoryRequirements vkGetBufferMemoryRequirements = nullptr;
 	PFN_vkGetBufferMemoryRequirements2 vkGetBufferMemoryRequirements2 = nullptr;
 	PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr = nullptr;
@@ -133,12 +135,14 @@ extern "C"
 	PFN_vkGetPhysicalDeviceSurfaceFormatsKHR vkGetPhysicalDeviceSurfaceFormatsKHR = nullptr;
 	PFN_vkGetPhysicalDeviceSurfacePresentModesKHR vkGetPhysicalDeviceSurfacePresentModesKHR = nullptr;
 	PFN_vkGetPhysicalDeviceSurfaceSupportKHR vkGetPhysicalDeviceSurfaceSupportKHR = nullptr;
+	PFN_vkGetPipelineCacheData vkGetPipelineCacheData = nullptr;
 	PFN_vkGetQueryPoolResults vkGetQueryPoolResults = nullptr;
-	PFN_vkCmdWriteTimestamp vkCmdWriteTimestamp = nullptr;
 	PFN_vkInvalidateMappedMemoryRanges vkInvalidateMappedMemoryRanges = nullptr;
 	PFN_vkMapMemory vkMapMemory = nullptr;
 	PFN_vkQueueSubmit vkQueueSubmit = nullptr;
 	PFN_vkResetCommandBuffer vkResetCommandBuffer = nullptr;
+	// Needed by frame generation, which frees its descriptor sets individually.
+	PFN_vkFreeDescriptorSets vkFreeDescriptorSets = nullptr;
 	PFN_vkResetDescriptorPool vkResetDescriptorPool = nullptr;
 	PFN_vkResetEvent vkResetEvent = nullptr;
 	PFN_vkResetFences vkResetFences = nullptr;
@@ -267,6 +271,8 @@ namespace vk::android
 			if (!vkCmdUpdateBuffer) vkCmdUpdateBuffer = reinterpret_cast<PFN_vkCmdUpdateBuffer>(dlsym(handle, "vkCmdUpdateBuffer"));
 			vkCmdWaitEvents = reinterpret_cast<PFN_vkCmdWaitEvents>(vkGetInstanceProcAddr(nullptr, "vkCmdWaitEvents"));
 			if (!vkCmdWaitEvents) vkCmdWaitEvents = reinterpret_cast<PFN_vkCmdWaitEvents>(dlsym(handle, "vkCmdWaitEvents"));
+			vkCmdWriteTimestamp = reinterpret_cast<PFN_vkCmdWriteTimestamp>(vkGetInstanceProcAddr(nullptr, "vkCmdWriteTimestamp"));
+			if (!vkCmdWriteTimestamp) vkCmdWriteTimestamp = reinterpret_cast<PFN_vkCmdWriteTimestamp>(dlsym(handle, "vkCmdWriteTimestamp"));
 			vkCreateAndroidSurfaceKHR = reinterpret_cast<PFN_vkCreateAndroidSurfaceKHR>(vkGetInstanceProcAddr(nullptr, "vkCreateAndroidSurfaceKHR"));
 			if (!vkCreateAndroidSurfaceKHR) vkCreateAndroidSurfaceKHR = reinterpret_cast<PFN_vkCreateAndroidSurfaceKHR>(dlsym(handle, "vkCreateAndroidSurfaceKHR"));
 			vkCreateBuffer = reinterpret_cast<PFN_vkCreateBuffer>(vkGetInstanceProcAddr(nullptr, "vkCreateBuffer"));
@@ -369,6 +375,8 @@ namespace vk::android
 			if (!vkFreeCommandBuffers) vkFreeCommandBuffers = reinterpret_cast<PFN_vkFreeCommandBuffers>(dlsym(handle, "vkFreeCommandBuffers"));
 			vkFreeMemory = reinterpret_cast<PFN_vkFreeMemory>(vkGetInstanceProcAddr(nullptr, "vkFreeMemory"));
 			if (!vkFreeMemory) vkFreeMemory = reinterpret_cast<PFN_vkFreeMemory>(dlsym(handle, "vkFreeMemory"));
+			vkGetAndroidHardwareBufferPropertiesANDROID = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(vkGetInstanceProcAddr(nullptr, "vkGetAndroidHardwareBufferPropertiesANDROID"));
+			if (!vkGetAndroidHardwareBufferPropertiesANDROID) vkGetAndroidHardwareBufferPropertiesANDROID = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(dlsym(handle, "vkGetAndroidHardwareBufferPropertiesANDROID"));
 			vkGetBufferMemoryRequirements = reinterpret_cast<PFN_vkGetBufferMemoryRequirements>(vkGetInstanceProcAddr(nullptr, "vkGetBufferMemoryRequirements"));
 			if (!vkGetBufferMemoryRequirements) vkGetBufferMemoryRequirements = reinterpret_cast<PFN_vkGetBufferMemoryRequirements>(dlsym(handle, "vkGetBufferMemoryRequirements"));
 			vkGetBufferMemoryRequirements2 = reinterpret_cast<PFN_vkGetBufferMemoryRequirements2>(vkGetInstanceProcAddr(nullptr, "vkGetBufferMemoryRequirements2"));
@@ -411,10 +419,10 @@ namespace vk::android
 			if (!vkGetPhysicalDeviceSurfacePresentModesKHR) vkGetPhysicalDeviceSurfacePresentModesKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfacePresentModesKHR>(dlsym(handle, "vkGetPhysicalDeviceSurfacePresentModesKHR"));
 			vkGetPhysicalDeviceSurfaceSupportKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(vkGetInstanceProcAddr(nullptr, "vkGetPhysicalDeviceSurfaceSupportKHR"));
 			if (!vkGetPhysicalDeviceSurfaceSupportKHR) vkGetPhysicalDeviceSurfaceSupportKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(dlsym(handle, "vkGetPhysicalDeviceSurfaceSupportKHR"));
+			vkGetPipelineCacheData = reinterpret_cast<PFN_vkGetPipelineCacheData>(vkGetInstanceProcAddr(nullptr, "vkGetPipelineCacheData"));
+			if (!vkGetPipelineCacheData) vkGetPipelineCacheData = reinterpret_cast<PFN_vkGetPipelineCacheData>(dlsym(handle, "vkGetPipelineCacheData"));
 			vkGetQueryPoolResults = reinterpret_cast<PFN_vkGetQueryPoolResults>(vkGetInstanceProcAddr(nullptr, "vkGetQueryPoolResults"));
 			if (!vkGetQueryPoolResults) vkGetQueryPoolResults = reinterpret_cast<PFN_vkGetQueryPoolResults>(dlsym(handle, "vkGetQueryPoolResults"));
-			vkCmdWriteTimestamp = reinterpret_cast<PFN_vkCmdWriteTimestamp>(vkGetInstanceProcAddr(nullptr, "vkCmdWriteTimestamp"));
-			if (!vkCmdWriteTimestamp) vkCmdWriteTimestamp = reinterpret_cast<PFN_vkCmdWriteTimestamp>(dlsym(handle, "vkCmdWriteTimestamp"));
 			vkInvalidateMappedMemoryRanges = reinterpret_cast<PFN_vkInvalidateMappedMemoryRanges>(vkGetInstanceProcAddr(nullptr, "vkInvalidateMappedMemoryRanges"));
 			if (!vkInvalidateMappedMemoryRanges) vkInvalidateMappedMemoryRanges = reinterpret_cast<PFN_vkInvalidateMappedMemoryRanges>(dlsym(handle, "vkInvalidateMappedMemoryRanges"));
 			vkMapMemory = reinterpret_cast<PFN_vkMapMemory>(vkGetInstanceProcAddr(nullptr, "vkMapMemory"));
@@ -423,6 +431,8 @@ namespace vk::android
 			if (!vkQueueSubmit) vkQueueSubmit = reinterpret_cast<PFN_vkQueueSubmit>(dlsym(handle, "vkQueueSubmit"));
 			vkResetCommandBuffer = reinterpret_cast<PFN_vkResetCommandBuffer>(vkGetInstanceProcAddr(nullptr, "vkResetCommandBuffer"));
 			if (!vkResetCommandBuffer) vkResetCommandBuffer = reinterpret_cast<PFN_vkResetCommandBuffer>(dlsym(handle, "vkResetCommandBuffer"));
+			vkFreeDescriptorSets = reinterpret_cast<PFN_vkFreeDescriptorSets>(vkGetInstanceProcAddr(nullptr, "vkFreeDescriptorSets"));
+			if (!vkFreeDescriptorSets) vkFreeDescriptorSets = reinterpret_cast<PFN_vkFreeDescriptorSets>(dlsym(handle, "vkFreeDescriptorSets"));
 			vkResetDescriptorPool = reinterpret_cast<PFN_vkResetDescriptorPool>(vkGetInstanceProcAddr(nullptr, "vkResetDescriptorPool"));
 			if (!vkResetDescriptorPool) vkResetDescriptorPool = reinterpret_cast<PFN_vkResetDescriptorPool>(dlsym(handle, "vkResetDescriptorPool"));
 			vkResetEvent = reinterpret_cast<PFN_vkResetEvent>(vkGetInstanceProcAddr(nullptr, "vkResetEvent"));
@@ -497,6 +507,7 @@ namespace vk::android
 		if (auto p = vkGetInstanceProcAddr(instance, "vkCmdSetViewport")) vkCmdSetViewport = reinterpret_cast<PFN_vkCmdSetViewport>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkCmdUpdateBuffer")) vkCmdUpdateBuffer = reinterpret_cast<PFN_vkCmdUpdateBuffer>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkCmdWaitEvents")) vkCmdWaitEvents = reinterpret_cast<PFN_vkCmdWaitEvents>(p);
+		if (auto p = vkGetInstanceProcAddr(instance, "vkCmdWriteTimestamp")) vkCmdWriteTimestamp = reinterpret_cast<PFN_vkCmdWriteTimestamp>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkCreateAndroidSurfaceKHR")) vkCreateAndroidSurfaceKHR = reinterpret_cast<PFN_vkCreateAndroidSurfaceKHR>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkCreateBuffer")) vkCreateBuffer = reinterpret_cast<PFN_vkCreateBuffer>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkCreateBufferView")) vkCreateBufferView = reinterpret_cast<PFN_vkCreateBufferView>(p);
@@ -547,6 +558,7 @@ namespace vk::android
 		if (auto p = vkGetInstanceProcAddr(instance, "vkFlushMappedMemoryRanges")) vkFlushMappedMemoryRanges = reinterpret_cast<PFN_vkFlushMappedMemoryRanges>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkFreeCommandBuffers")) vkFreeCommandBuffers = reinterpret_cast<PFN_vkFreeCommandBuffers>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkFreeMemory")) vkFreeMemory = reinterpret_cast<PFN_vkFreeMemory>(p);
+		if (auto p = vkGetInstanceProcAddr(instance, "vkGetAndroidHardwareBufferPropertiesANDROID")) vkGetAndroidHardwareBufferPropertiesANDROID = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetBufferMemoryRequirements")) vkGetBufferMemoryRequirements = reinterpret_cast<PFN_vkGetBufferMemoryRequirements>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetBufferMemoryRequirements2")) vkGetBufferMemoryRequirements2 = reinterpret_cast<PFN_vkGetBufferMemoryRequirements2>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetDeviceProcAddr")) vkGetDeviceProcAddr = reinterpret_cast<PFN_vkGetDeviceProcAddr>(p);
@@ -568,12 +580,13 @@ namespace vk::android
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceFormatsKHR")) vkGetPhysicalDeviceSurfaceFormatsKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceFormatsKHR>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfacePresentModesKHR")) vkGetPhysicalDeviceSurfacePresentModesKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfacePresentModesKHR>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceSurfaceSupportKHR")) vkGetPhysicalDeviceSurfaceSupportKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(p);
+		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPipelineCacheData")) vkGetPipelineCacheData = reinterpret_cast<PFN_vkGetPipelineCacheData>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetQueryPoolResults")) vkGetQueryPoolResults = reinterpret_cast<PFN_vkGetQueryPoolResults>(p);
-		if (auto p = vkGetInstanceProcAddr(instance, "vkCmdWriteTimestamp")) vkCmdWriteTimestamp = reinterpret_cast<PFN_vkCmdWriteTimestamp>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkInvalidateMappedMemoryRanges")) vkInvalidateMappedMemoryRanges = reinterpret_cast<PFN_vkInvalidateMappedMemoryRanges>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkMapMemory")) vkMapMemory = reinterpret_cast<PFN_vkMapMemory>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkQueueSubmit")) vkQueueSubmit = reinterpret_cast<PFN_vkQueueSubmit>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkResetCommandBuffer")) vkResetCommandBuffer = reinterpret_cast<PFN_vkResetCommandBuffer>(p);
+		if (auto p = vkGetInstanceProcAddr(instance, "vkFreeDescriptorSets")) vkFreeDescriptorSets = reinterpret_cast<PFN_vkFreeDescriptorSets>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkResetDescriptorPool")) vkResetDescriptorPool = reinterpret_cast<PFN_vkResetDescriptorPool>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkResetEvent")) vkResetEvent = reinterpret_cast<PFN_vkResetEvent>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkResetFences")) vkResetFences = reinterpret_cast<PFN_vkResetFences>(p);
@@ -629,12 +642,7 @@ namespace vk::android
 		}
 
 		g_handle = handle;
-
-		// "custom" describes the handle we were given, not necessarily the driver that
-		// answers through it: adrenotools falls back to the system driver inside that
-		// handle when its own dlopen fails, and says so only to logcat. The identity
-		// logged by physical_device::create is what actually answered.
-		vk_loader.success("Vulkan dispatch bound to the %s driver handle", g_custom ? "custom" : "system");
+		vk_loader.success("Vulkan driver bound (%s)", g_custom ? "custom" : "system");
 		return previous;
 	}
 

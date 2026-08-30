@@ -1053,7 +1053,7 @@ void fmt_class_string<CellError>::format(std::string& out, u64 arg)
 		if (upper == s_error_codes_formatting_by_type.begin())
 		{
 			// Format as unknown
-			format_enum(out, arg, [](auto error)
+			format_enum(out, arg, [](auto /*error*/)
 			{
 				return unknown;
 			});
@@ -1246,6 +1246,9 @@ public:
 		{
 			thread_ctrl::wait_until(&sleep_until, 1'000'000);
 
+			// Hang watchdog. This thread is independent of the RSX thread, which is the whole
+			// point: a hang where the RSX spins inside a method handler starves the stall check
+			// that lives on it. Cheap -- two atomic loads and a clock read unless it fires.
 			const bool is_paused = Emu.IsPaused();
 
 			// Force-print all if paused

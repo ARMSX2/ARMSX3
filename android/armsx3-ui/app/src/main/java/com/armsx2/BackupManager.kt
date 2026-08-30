@@ -34,7 +34,11 @@ import java.util.zip.ZipOutputStream
  *    onto another device.
  */
 object BackupManager {
-    private const val MANIFEST = "armsx2-backup.json"
+    private const val MANIFEST = "armsx3-backup.json"
+
+    // The ARMSX2-era names (issue #82). Archives made before the rename still carry them, and
+    // restoring an old backup has to keep working.
+    private const val LEGACY_MANIFEST = "armsx2-backup.json"
     private const val PREFS_DIR = "prefs/"
     private const val FILES_DIR = "files/"
 
@@ -61,6 +65,9 @@ object BackupManager {
         "overlays",
     )
     private val INCLUDED_FILES = listOf(
+        "armsx3-settings.json",
+        // Still collected so a backup taken right after upgrading, before anything has been
+        // saved under the new name, is not missing the user's settings.
         "armsx2-settings.json",
         "games.json", "recent_games.json", "fw.json",
         // RPCS3's own configuration. config.yml holds every emulator setting, and the per-game
@@ -141,7 +148,9 @@ object BackupManager {
                 while (true) {
                     val e = zip.nextEntry ?: break
                     val name = e.name
-                    if (e.isDirectory || name == MANIFEST) { zip.closeEntry(); continue }
+                    if (e.isDirectory || name == MANIFEST || name == LEGACY_MANIFEST) {
+                        zip.closeEntry(); continue
+                    }
                     val dest = when {
                         name.startsWith(PREFS_DIR) -> File(prefsDir, name.removePrefix(PREFS_DIR))
                         name.startsWith(FILES_DIR) -> File(root, name.removePrefix(FILES_DIR))

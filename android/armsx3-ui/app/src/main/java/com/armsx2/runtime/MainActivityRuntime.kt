@@ -308,7 +308,7 @@ open class MainActivityRuntime : ComponentActivity() {
 
         /**
          * Probe the resolved POSIX path for emucore-compatible write
-         * access. Creates a `.armsx2-write-probe` file, deletes it,
+         * access. Creates a `.armsx3-write-probe` file, deletes it,
          * returns true on success.
          *
          * Catches the scoped-storage trap: Android lets the SAF tree-URI
@@ -322,7 +322,7 @@ open class MainActivityRuntime : ComponentActivity() {
                 val dir = File(posixPath)
                 if (!dir.exists() && !dir.mkdirs()) return false
                 if (!dir.isDirectory) return false
-                val probe = File(dir, ".armsx2-write-probe")
+                val probe = File(dir, ".armsx3-write-probe")
                 val ok = probe.createNewFile()
                 if (ok) probe.delete()
                 ok
@@ -2157,6 +2157,10 @@ open class MainActivityRuntime : ComponentActivity() {
         startAutosaveIntervalJob()
         // Restore the saved rumble master toggle into the native gate (NativeApp.onPadRumble).
         NativeApp.sRumbleEnabled = ControllerMappings.rumbleEnabled()
+        NativeApp.sPhoneRumbleEnabled = ControllerMappings.phoneRumbleEnabled()
+        // Starts the temperature poll if the overlay wants it. Costs one file read every couple
+        // of seconds and stops entirely when the option is off.
+        runCatching { com.armsx2.Thermals.load(this) }
         // Push the saved haptic strength + achievement-sound volume into their native gates before
         // any rumble or unlock sound can fire (both default to 1.0 = as authored until set here).
         ControllerMappings.syncHapticIntensity()
@@ -3290,6 +3294,35 @@ open class MainActivityRuntime : ComponentActivity() {
         val physicalCode = event.keyCode
         if (physicalCode == KeyEvent.KEYCODE_UNKNOWN) return false
 
+        // A trigger that reports BOTH ways gets written by both paths, and they fight.
+        //
+        // Retroid pads have an L2/R2 mode called "both": the trigger sends KEYCODE_BUTTON_L2/R2
+        // AND an analog axis. sendTrigger already writes the button from the axis, so letting
+        // the key through as well gives one physical squeeze two independent writers on the
+        // same pad button -- which lands as a delayed or doubled press, and made long jumps in
+        // the Ratchet games (hold R2) unreliable.
+        //
+        // sendTrigger has the opposite guard already: a pad with no trigger axis at all leaves
+        // "the key path in sole charge". This is that guard's mirror, and the two together mean
+        // exactly one writer owns a trigger on every pad -- axis where there is an axis, key
+        // where there is not.
+        //
+        // Deliberately keyed on the PHYSICAL code before remapping: what decides ownership is
+        // how the hardware reports the trigger, not what the user bound it to.
+        if (physicalCode == KeyEvent.KEYCODE_BUTTON_L2 || physicalCode == KeyEvent.KEYCODE_BUTTON_R2)
+        {
+            val isLeft = physicalCode == KeyEvent.KEYCODE_BUTTON_L2
+            val axisA = if (isLeft) MotionEvent.AXIS_LTRIGGER else MotionEvent.AXIS_RTRIGGER
+            val axisB = if (isLeft) MotionEvent.AXIS_BRAKE else MotionEvent.AXIS_GAS
+            val axisC = if (isLeft) -1 else rightTriggerExtraAxis(event.deviceId)
+
+            if (deviceHasAxis(event.deviceId, axisA) || deviceHasAxis(event.deviceId, axisB) ||
+                deviceHasAxis(event.deviceId, axisC))
+            {
+                return true
+            }
+        }
+
         // Local co-op routing and macro precedence exactly match the old Compose
         // onKeyEvent path; only the dispatch layer has changed.
         val port = com.armsx2.input.PadRouter.portForDevice(event.deviceId)
@@ -3346,7 +3379,7 @@ open class MainActivityRuntime : ComponentActivity() {
             else -> return false // MULTIPLE etc. — ignore
         }
         return runCatching {
-            NativeApp.usbKeyboardKey(0, kc, pressed)
+            NativeApp.usbKeyboardKey(0, kc, event.unicodeChar, pressed)
         }.getOrDefault(false)
     }
 
@@ -4132,6 +4165,9 @@ open class MainActivityRuntime : ComponentActivity() {
      *  button and hold-button-then-push-direction both bind combos, and a push
      *  released with nothing else still binds the plain single direction. */
     private val captureHeldSynth = HashSet<Int>()
+    /** Trigger pull that counts as a press while binding. Half, so resting drift cannot bind. */
+    private val CAPTURE_TRIGGER_ON = 0.5f
+
     private fun handleCaptureMotion(ev: MotionEvent): Boolean {
         // Desired engaged-direction set for this event: at most one per HAT axis
         // pair and one per stick (dominant direction), so sweeping through a
@@ -4146,6 +4182,23 @@ open class MainActivityRuntime : ComponentActivity() {
         // here is why its directions could never be bound.
         val (capRightX, capRightY) = rightStickAxes(ev.deviceId)
         captureStickCode(ev, capRightX, capRightY, false).takeIf { it != 0 }?.let { want.add(it) }
+        // Analog triggers. On a pad that reports L2/R2 as AXES rather than buttons they arrive
+        // here and never as a key, so the binder -- which lives in Compose's onPreviewKeyEvent --
+        // could not see them and L2/R2 simply would not bind. Everything else on the same pad
+        // binds, which is what makes it look player-specific rather than trigger-specific: it
+        // depends on the controller model, so a second pad of a different make fails where the
+        // first one worked. Reported on Player 2.
+        //
+        // Same axis pairs the gameplay path uses (sendTrigger), including the per-device third
+        // axis some pads put the right trigger on, so a trigger that works in game can be bound.
+        // Threshold is a deliberate half-pull: resting drift on a worn trigger must not self-bind.
+        val capLt = maxOf(ev.getAxisValue(MotionEvent.AXIS_LTRIGGER), ev.getAxisValue(MotionEvent.AXIS_BRAKE))
+        var capRt = maxOf(ev.getAxisValue(MotionEvent.AXIS_RTRIGGER), ev.getAxisValue(MotionEvent.AXIS_GAS))
+        rightTriggerExtraAxis(ev.deviceId).takeIf { it != 0 }?.let { extra ->
+            capRt = maxOf(capRt, ev.getAxisValue(extra))
+        }
+        if (capLt >= CAPTURE_TRIGGER_ON) want.add(KeyEvent.KEYCODE_BUTTON_L2)
+        if (capRt >= CAPTURE_TRIGGER_ON) want.add(KeyEvent.KEYCODE_BUTTON_R2)
         captureHatX = dx
         captureHatY = dy
         val now = SystemClock.uptimeMillis()
@@ -4896,7 +4949,13 @@ open class MainActivityRuntime : ComponentActivity() {
         // worked (.iso/.bin/.chd) can never be made worse by this.
         val uri = resolveCueToTrack(raw) ?: raw
         currentGame.value = null
-        pendingExternalLaunch.value = uri.toString()
+        // A file:// URI has to be reduced to its path before the core sees it. Handed the string
+        // form, the core takes "file:///sdcard/x/y.elf" as a filesystem path: it mounts /app_home
+        // at "/file:/sdcard/x/" and then reports "Failed to open executable". content:// is passed
+        // through untouched, since the core opens those by fd. This is the same conversion
+        // launchCurrentGameFromSaveSlot already does, and it was simply missing on the external
+        // path -- so anything launching us with file:// (a file manager, a front-end, adb) failed.
+        pendingExternalLaunch.value = if (uri.scheme == "file") (uri.path ?: uri.toString()) else uri.toString()
         launchPendingExternalGameIfReady()
     }
 

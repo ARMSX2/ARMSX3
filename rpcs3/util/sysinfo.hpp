@@ -57,6 +57,10 @@ namespace utils
 #ifdef ARCH_ARM64
 	bool has_neon();
 
+	// True when the kernel advertises the architected timer event stream
+	// (HWCAP_EVTSTRM) — the wake-latency bound for monitor-less WFE waits.
+	bool has_wfe_event_stream();
+
 	bool has_sha3();
 
 	bool has_dotprod();
@@ -77,7 +81,16 @@ namespace utils
 
 	std::string get_firmware_version();
 
+	// SYSTEM-WIDE: { total, in use }. In use is MemTotal - MemAvailable, so it counts every
+	// process on the machine plus page cache -- not this process. Do not label it as ours.
 	std::pair<u64, u64> get_memory_usage();
+
+	// THIS PROCESS's resident set, in bytes, or 0 where it cannot be determined.
+	//
+	// This is the number that decides whether Android's low-memory killer takes the app, so it
+	// is the one worth reporting and watching. get_memory_usage() above answers a different
+	// question and reads convincingly like this one.
+	u64 get_process_memory_usage();
 
 	struct OS_version
 	{

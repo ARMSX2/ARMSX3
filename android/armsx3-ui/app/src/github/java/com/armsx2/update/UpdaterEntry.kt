@@ -2,6 +2,7 @@ package com.armsx2.update
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -284,7 +285,7 @@ private suspend fun checkForUpdate(includeNightly: Boolean, checkFailedPrefix: S
             // never prompt it — and never offer it a stable (that would be a versionCode downgrade).
             if (BuildConfig.VERSION_CODE > NIGHTLY_VC_THRESHOLD) return@withContext UpdateState.UpToDate
             val obj = JSONObject(httpGet(LATEST_URL))
-            val apkUrl = firstApkAsset(obj) ?: return@withContext UpdateState.UpToDate
+            val apkUrl = pickApkAsset(obj) ?: return@withContext UpdateState.UpToDate
             val tag = obj.getString("tag_name")
             return@withContext if (isNewer(tag, BuildConfig.VERSION_NAME))
                 UpdateState.Available(tag, obj.optString("body", ""), apkUrl)
@@ -302,7 +303,7 @@ private suspend fun checkForUpdate(includeNightly: Boolean, checkFailedPrefix: S
         for (i in 0 until arr.length()) {
             val rel = arr.getJSONObject(i)
             if (rel.optBoolean("draft", false)) continue
-            val apkUrl = firstApkAsset(rel) ?: continue
+            val apkUrl = pickApkAsset(rel) ?: continue
             val tag = rel.getString("tag_name")
             val isNightlyRel = rel.optBoolean("prerelease", false) || tag.startsWith("nightly-", ignoreCase = true)
             val newer = if (isNightlyRel) {
@@ -318,15 +319,83 @@ private suspend fun checkForUpdate(includeNightly: Boolean, checkFailedPrefix: S
     }
 }
 
-/** First `.apk` asset download URL in a release JSON object, or null if it has none. */
-private fun firstApkAsset(release: JSONObject): String? {
+/**
+ * Does this CPU have the ARMv8.2 features the a13/a15 builds are compiled with?
+ *
+ * Those two are built -march=armv8.2-a+dotprod+fp16, which is a hard floor: the instructions can
+ * appear anywhere in the core and a device without them takes SIGILL rather than falling back.
+ * Handing such a device the wrong APK is a crash on launch with no explanation, so this is
+ * checked rather than inferred from the Android version -- a budget A53 part can and does ship
+ * with Android 13.
+ *
+ * /proc/cpuinfo is the portable read here: HWCAP needs NDK glue, and this runs once.
+ */
+private val hasArmv8_2Features: Boolean by lazy {
+    runCatching {
+        val features = File("/proc/cpuinfo").useLines { lines ->
+            lines.firstOrNull { it.startsWith("Features") }.orEmpty()
+        }
+        // asimddp = FEAT_DotProd, asimdhp = FEAT_FP16 (half-precision Advanced SIMD).
+        features.contains("asimddp") && features.contains("asimdhp")
+    }.getOrDefault(false)
+}
+
+/**
+ * Best `.apk` asset for THIS device, or null if the release has none.
+ *
+ * Releases carry four APKs that are alternatives, not an upgrade path (see
+ * android/build-variants.sh):
+ *
+ *   -a15-armv8.2-sdk35       API 35 + armv8.2   newest devices
+ *   -a13-armv8.2-sdk33       API 33 + armv8.2   the standard build
+ *   -a11-armv8.2-sdk30       API 30 + armv8.2
+ *   -legacy-armv8.1-sdk26    API 26 + armv8.1   fallback, no dotprod/FP16 required
+ *
+ * Picking the first asset the API happens to list would hand everyone the same file -- and
+ * alphabetically that is a11, which fails to install below Android 11 and faults outright on a
+ * pre-8.2 core. So walk the preference order and take the best one the device can actually run,
+ * falling back to any .apk so single-asset releases (everything before 0.7.2) still work.
+ *
+ * Both tests matter and neither implies the other. The SDK gate is what the installer would
+ * enforce anyway; the ISA gate is not enforced by anything, because a budget A53 part ships with
+ * a current Android and would take SIGILL on the first dotprod instruction. A device that passes
+ * the SDK test but fails the ISA test correctly falls all the way to legacy.
+ */
+private fun pickApkAsset(release: JSONObject): String? {
     val assets = release.optJSONArray("assets") ?: return null
-    for (i in 0 until assets.length()) {
-        val a = assets.getJSONObject(i)
-        if (a.getString("name").endsWith(".apk", ignoreCase = true))
-            return a.getString("browser_download_url")
+
+    val byName = buildMap {
+        for (i in 0 until assets.length()) {
+            val a = assets.getJSONObject(i)
+            val name = a.getString("name")
+            if (name.endsWith(".apk", ignoreCase = true)) put(name.lowercase(), a.getString("browser_download_url"))
+        }
     }
-    return null
+    if (byName.isEmpty()) return null
+
+    val sdk = Build.VERSION.SDK_INT
+    val preferred = buildList {
+        if (sdk >= 35 && hasArmv8_2Features) add("-a15-armv8.2-sdk35")
+        if (sdk >= 33 && hasArmv8_2Features) add("-a13-armv8.2-sdk33")
+        if (sdk >= 30 && hasArmv8_2Features) add("-a11-armv8.2-sdk30")
+        add("-legacy-armv8.1-sdk26")
+
+        // Pre-0.7.3 spellings, kept so an install from an older release still finds a variant
+        // by name instead of dropping to "first asset wins" below. Ordered after the current
+        // names so a release carrying both is read with the new scheme.
+        if (sdk >= 35 && hasArmv8_2Features) add("-a15")
+        if (sdk >= 33 && hasArmv8_2Features) add("-a13")
+        add("-generic")
+    }
+
+    for (suffix in preferred) {
+        byName.entries.firstOrNull { it.key.contains(suffix) }?.let { return it.value }
+    }
+
+    // No variant matched by name: an older single-APK release, or a naming change. Taking the
+    // only asset is right for the former; for the latter a wrong guess beats offering nothing,
+    // because the installer still refuses an APK whose minSdk this device fails.
+    return byName.values.firstOrNull()
 }
 
 /** "nightly-YYYYMMDD" -> YYYYMMDD as an int (0 if the tag isn't a dated nightly). */

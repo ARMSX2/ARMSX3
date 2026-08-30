@@ -345,6 +345,22 @@ enum class gpu_preset_level
 	_auto
 };
 
+// How many frames Lossless Scaling generates between each pair of real ones.
+//
+// Multipliers, not counts: "x2" inserts one generated frame, "x3" two, "x4" three. Named the way
+// the feature is described everywhere else so the setting reads the same as the docs.
+//
+// Android only. The passes run on OUR device, in our own present path -- there is no second
+// VkDevice and no AHardwareBuffer round-trip, which is what the earlier dlopen-based
+// implementation needed and what made it expensive.
+enum class frame_generation_mode
+{
+	off = 0,
+	x2,
+	x3,
+	x4,
+};
+
 enum class output_scaling_mode
 {
 	nearest,
@@ -354,7 +370,13 @@ enum class output_scaling_mode
 	// ARMSX3: RetroArch (.slangp) chain via librashader, run as the output pass.
 	// Appended, never inserted -- these are serialised by ordinal in savestates
 	// and per-game configs, so inserting would silently remap existing settings.
-	shader
+	shader,
+	// Snapdragon Game Super Resolution: one dispatch and one target against FSR1's two,
+	// written by Qualcomm for Adreno. Same driver requirements as FSR1 or fewer.
+	sgsr,
+	// The same filter weighting along the estimated edge direction instead of isotropically.
+	// Qualcomm's own description is "a minimal cost increase" for better quality.
+	sgsr_edge
 #endif
 };
 

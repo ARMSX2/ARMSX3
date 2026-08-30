@@ -317,6 +317,11 @@ public:
 	u64 last_succ = 0;
 	u64 exec_bytes = 0; // Amount of "bytes" executed (4 for each instruction)
 
+	// cpu_on_stop() is a teardown hook with nothing enforcing that it runs once, and a thread
+	// that re-enters the stop path reports its perf stats again every time. Deliberately not
+	// serialized: it describes this run's reporting, not guest state.
+	bool perf_stats_reported = false;
+
 	u32 dbg_step_pc = 0;
 	atomic_t<ppu_debugger_mode> debugger_mode{};
 

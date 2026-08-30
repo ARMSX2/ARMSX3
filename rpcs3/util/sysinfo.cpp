@@ -392,6 +392,28 @@ bool utils::has_neon()
 	return g_value;
 }
 
+bool utils::has_wfe_event_stream()
+{
+	static const bool g_value = []() -> bool
+	{
+#if defined(__linux__)
+		// HWCAP_EVTSTRM: the kernel has enabled the architected timer event
+		// stream (CNTKCTL_EL1.EVNTEN), which is what bounds a bare WFE's wake
+		// latency. Waits that rely on WFE without an armed exclusive monitor
+		// must check this; with the stream off, such a WFE parks until the
+		// next unrelated interrupt.
+		return (getauxval(AT_HWCAP) & HWCAP_EVTSTRM) != 0;
+#else
+		// Non-Linux ARM64 (Apple, Windows-on-ARM): no HWCAP equivalent exists.
+		// Report true so callers keep the same wait shapes they used before this
+		// probe existed; a platform where the stream-paced wait misbehaves needs
+		// a measured probe here, not a capability bit.
+		return true;
+#endif
+	}();
+	return g_value;
+}
+
 bool utils::has_sha3()
 {
 	static const bool g_value = []() -> bool
@@ -577,6 +599,10 @@ std::string utils::get_system_info()
 	{
 		result += " | Neon";
 	}
+
+	// Surfaced so every log records whether monitor-less WFE waits have a
+	// bounded wake on this kernel (drives the RSX wait-shape selection).
+	fmt::append(result, " | EVTSTRM-%s", has_wfe_event_stream() ? "on" : "off");
 #else
 
 	if (has_avx())
@@ -734,6 +760,37 @@ std::pair<u64, u64> utils::get_memory_usage()
 #else
 	// TODO
 	return { get_total_memory(), 0 };
+#endif
+}
+
+u64 utils::get_process_memory_usage()
+{
+#ifdef _WIN32
+	::PROCESS_MEMORY_COUNTERS pmc{};
+
+	if (::GetProcessMemoryInfo(::GetCurrentProcess(), &pmc, sizeof(pmc)))
+	{
+		return pmc.WorkingSetSize;
+	}
+
+	return 0;
+#elif defined(__linux__)
+	// statm, not status: the second field is the resident page count and needs no parsing beyond
+	// two integers, where VmRSS in /proc/self/status means scanning a few dozen lines of text
+	// for something read once a second.
+	std::ifstream statm("/proc/self/statm");
+
+	u64 total_pages = 0;
+	u64 resident_pages = 0;
+
+	if (statm >> total_pages >> resident_pages)
+	{
+		return resident_pages * static_cast<u64>(::sysconf(_SC_PAGESIZE));
+	}
+
+	return 0;
+#else
+	return 0;
 #endif
 }
 

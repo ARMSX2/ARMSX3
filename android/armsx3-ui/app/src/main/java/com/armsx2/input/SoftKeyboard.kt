@@ -54,7 +54,27 @@ object SoftKeyboard {
         activity.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING)
         view.isFocusableInTouchMode = true
         view.requestFocus()
+
+        // Two ways of asking, because one of them does not work here.
+        //
+        // SHOW_IMPLICIT is a hint, and the system is free to decline it -- which it does for a
+        // fullscreen immersive window like the game surface. The result was the extra-keys bar
+        // appearing (it follows [visible]) with no keyboard under it, because visible was set
+        // whether or not anything came up.
+        //
+        // WindowInsetsControllerCompat drives the IME through the insets animation instead,
+        // which is the supported path once setDecorFitsSystemWindows(false) is in effect --
+        // and it is, set in MainActivityRuntime. Keep showSoftInput as well: it is what works
+        // on older/odd IMEs, and asking twice is harmless.
         imm(activity)?.showSoftInput(view, InputMethodManager.SHOW_IMPLICIT)
+
+        activity.window?.let { win ->
+            runCatching {
+                androidx.core.view.WindowInsetsControllerCompat(win, view)
+                    .show(androidx.core.view.WindowInsetsCompat.Type.ime())
+            }
+        }
+
         visible.value = true
     }
 
@@ -66,6 +86,15 @@ object SoftKeyboard {
         val view = sink
         if (view != null) {
             imm(activity)?.hideSoftInputFromWindow(view.windowToken, 0)
+
+            // Mirror of show(): whichever route raised it is the one that can lower it.
+            activity.window?.let { win ->
+                runCatching {
+                    androidx.core.view.WindowInsetsControllerCompat(win, view)
+                        .hide(androidx.core.view.WindowInsetsCompat.Type.ime())
+                }
+            }
+
             view.clearFocus()
         }
         visible.value = false
@@ -96,22 +125,27 @@ object SoftKeyboard {
      */
     private const val KEY_STEP_MS = 24L
 
-    private val pending = java.util.concurrent.LinkedBlockingQueue<Pair<Int, Boolean>>()
+    /** keyCode, the character it produced (0 if none), pressed. */
+    private data class KeyStep(val keyCode: Int, val unicode: Int, val pressed: Boolean)
+
+    private val pending = java.util.concurrent.LinkedBlockingQueue<KeyStep>()
 
     /** Drains [pending] on its own thread: the UI thread must not sleep between key states. */
     private val worker: Thread by lazy {
         Thread({
             while (true) {
-                val (keyCode, pressed) = pending.take()
-                runCatching { NativeApp.usbKeyboardKey(0, keyCode, pressed) }
+                val step = pending.take()
+                runCatching {
+                    NativeApp.usbKeyboardKey(0, step.keyCode, step.unicode, step.pressed)
+                }
                 runCatching { Thread.sleep(KEY_STEP_MS) }
             }
         }, "usb-kbd-ime").apply { isDaemon = true; start() }
     }
 
-    private fun enqueue(keyCode: Int, pressed: Boolean) {
+    private fun enqueue(keyCode: Int, unicode: Int, pressed: Boolean) {
         worker // start on first use
-        pending.put(keyCode to pressed)
+        pending.put(KeyStep(keyCode, unicode, pressed))
     }
 
     /** Send one character as the key-down/key-up pair(s) a real keyboard would produce. */
@@ -129,12 +163,12 @@ object SoftKeyboard {
             KeyEvent.ACTION_UP -> false
             else -> return
         }
-        enqueue(event.keyCode, pressed)
+        enqueue(event.keyCode, event.unicodeChar, pressed)
     }
 
     internal fun tap(keyCode: Int) {
-        enqueue(keyCode, true)
-        enqueue(keyCode, false)
+        enqueue(keyCode, 0, true)
+        enqueue(keyCode, 0, false)
     }
 }
 

@@ -1,4 +1,5 @@
 #include "VKCompute.h"
+#include <cstdlib>
 #include "Emu/RSX/rsx_profiler.h"
 #include "VKHelpers.h"
 #include "VKRenderPass.h"
@@ -55,21 +56,35 @@ namespace vk
 				optimal_kernel_size = 1;
 				optimal_group_size = 128;
 				break;
+			case vk::driver_vendor::ADRENO:
+			case vk::driver_vendor::TURNIP:
+				// Splitting Adreno out from the rest of mobile is sashkinbro's (EmuCoreC
+				// b9f0f3631). The comment this replaces held everything at 32 on the belief
+				// that Mali was also 64-wide, which is wrong -- his split was the better call.
+				//
+				// Qualcomm runs 64-wide waves, and a workgroup narrower than the wave does
+				// not pack together with its neighbours -- it takes a whole wave and masks
+				// the surplus lanes off. So 32 does not mean "smaller groups" here, it means
+				// half of every wave sits idle on every dispatch. Widening costs nothing to
+				// weigh against that: these kernels carry no shared memory and no barriers,
+				// so group size is a scheduling hint and nothing else. ARMSX3_CS_GROUP_SIZE
+				// overrides it if some part turns out to disagree.
+				unroll_loops = true;
+				optimal_kernel_size = 1;
+				optimal_group_size = 64;
+				break;
 			case vk::driver_vendor::LAVAPIPE:
 			case vk::driver_vendor::V3DV:
 			case vk::driver_vendor::PANVK:
 			case vk::driver_vendor::ARM_MALI:
-			case vk::driver_vendor::ADRENO:
-			case vk::driver_vendor::TURNIP:
 			case vk::driver_vendor::POWERVR:
 			case vk::driver_vendor::XCLIPSE:
 			case vk::driver_vendor::BROADCOM:
 			case vk::driver_vendor::VERISILICON:
-				// Mobile tilers. Falls through to 32 with everything else.
-				// Adreno and Mali both have a 64-wide wave, so 32 likely leaves
-				// half of each wave idle -- but that is reasoning, not a
-				// measurement, and guessing wrong here costs performance
-				// silently. Left at 32 until benched on device.
+				// The rest of mobile, which does NOT inherit the Adreno reasoning above.
+				// Mali warps are 16 lanes on Valhall and 4-8 on Bifrost, so 32 already spans
+				// several of them and there is no half-empty wave to reclaim; Xclipse is
+				// RDNA-derived and prefers wave32 for compute. Falls through to 32.
 			case vk::driver_vendor::DOZEN:
 				// Actual optimal size depends on the D3D device. Use 32 since it should work well on both AMD and NVIDIA
 			case vk::driver_vendor::NVIDIA:
@@ -96,6 +111,28 @@ namespace vk
 
 			const auto& gpu = vk::g_render_device->gpu();
 			max_invocations_x = gpu.get_limits().maxComputeWorkGroupCount[0];
+
+			// Every group size above is a per-vendor guess, and the mobile one has never been
+			// measured on a phone. This override exists so the candidates can be compared on a
+			// single build -- set ARMSX3_CS_GROUP_SIZE in driver_env.txt -- rather than
+			// shipping another guess. Powers of two only, and never past what the device
+			// accepts: an over-large local_size_x fails shader compilation, not validation.
+			if (const char* const env = std::getenv("ARMSX3_CS_GROUP_SIZE"))
+			{
+				const auto& limits = gpu.get_limits();
+				const u32 ceiling = std::min(limits.maxComputeWorkGroupSize[0], limits.maxComputeWorkGroupInvocations);
+				const u64 requested = std::strtoull(env, nullptr, 10);
+
+				if (requested >= 1 && requested <= ceiling && (requested & (requested - 1)) == 0)
+				{
+					rsx_log.warning("cs: work group size overridden %u -> %u by ARMSX3_CS_GROUP_SIZE.", optimal_group_size, static_cast<u32>(requested));
+					optimal_group_size = static_cast<u32>(requested);
+				}
+				else
+				{
+					rsx_log.error("cs: ARMSX3_CS_GROUP_SIZE='%s' ignored; expected a power of two in [1, %u].", env, ceiling);
+				}
+			}
 
 			initialized = true;
 		}

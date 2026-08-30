@@ -8,6 +8,7 @@
 #include "VKCommonPipelineLayout.h"
 #include "VKCompute.h"
 #include "VKGSRender.h"
+#include "VKFrameGen.h"
 #include "Emu/RSX/rsx_profiler.h"
 #include "vkutils/gpu_timer.h"
 #include "VKHelpers.h"
@@ -401,6 +402,10 @@ namespace vk
 			properties.state.set_multisample_shading_rate(1.f);
 		}
 
+		// Last, after the stencil block above has finished reading state.ds -- this erases the
+		// fields the draw path sets per draw and nothing may look at them afterwards.
+		vk::normalize_dynamic_pipeline_state(properties);
+
 		return properties;
 	}
 }
@@ -414,6 +419,7 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 {
 	// Initialize dependencies
 	g_fxo->need<rsx::dma_manager>();
+	g_fxo->need<vk::driver_manager_thread>();
 
 	if (!m_instance.create("RPCS3"))
 	{
@@ -624,7 +630,16 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	else
 		m_vertex_cache = std::make_unique<vk::weak_vertex_cache>();
 
-	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", "v1.95");
+	// The on-disk cache stores pipeline_props as a raw struct, so the meaning of the bytes is
+	// what the version directory has to protect -- not just their layout. Two things move here:
+	// v1.95 -> v1.96 because the fields normalize_dynamic_pipeline_state() erases changed what a
+	// given props means, and the "-eds" suffix because whether they were erased depends on the
+	// DEVICE, not on the build. A user swapping in a driver through adrenotools can lose the
+	// extension between two runs of the same game, and reading a normalized entry back without
+	// it would build pipelines with culling off and the depth test disabled -- silently, since
+	// nothing in the entry says which convention wrote it.
+	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan",
+		m_device->get_extended_dynamic_state_support() ? "v1.96-eds" : "v1.96");
 
 	for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
 	{
@@ -651,6 +666,12 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 
 	backend_config.supports_multidraw = true;
 	backend_config.supports_hw_instanced_rendering = true;
+
+	backend_config.supports_last_provoking_vertex = m_device->get_provoking_vertex_last_support();
+	if (!backend_config.supports_last_provoking_vertex)
+	{
+		rsx_log.warning("VK_EXT_provoking_vertex with provokingVertexLast is unavailable; RSX flat shading will fall back to smooth interpolation.");
+	}
 
 	// NVIDIA has broken attribute interpolation
 	backend_config.supports_normalized_barycentrics = (
@@ -843,6 +864,11 @@ VKGSRender::~VKGSRender()
 
 	//Wait for device to finish up with resources
 	vkDeviceWaitIdle(*m_device);
+
+	// Frame generation owns fences, a command pool, an allocator and images, all children of this
+	// device. Released here, while it is still alive: without this they outlived it, and the next
+	// boot in the same process reused the stale handles because the stack still looked valid.
+	vk::frame_gen::release_device_resources();
 
 	// Globals. TODO: Refactor lifetime management
 	if (auto async_scheduler = g_fxo->try_get<vk::AsyncTaskScheduler>())
@@ -1111,6 +1137,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 		// Hard sync before trying to evict anything. This guarantees no UAF crashes in the driver.
 		// As a bonus, we also get a free gc pass
 		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[1]++; flush_command_queue(true, true);
+		g_fxo->get<vk::driver_manager_thread>().drain();
 
 		if (m_texture_cache.is_overallocated())
 		{
@@ -1895,6 +1922,12 @@ bool VKGSRender::load_program()
 	// TODO: EXT_dynamic_state should get rid of this sillyness soon (kd)
 	const auto vertex_state = vk::decode_vertex_input_assembly_state();
 
+	// What the pipeline object is keyed on, which is no longer the topology the draw uses once
+	// the topology is dynamic. Both are needed: this one to decide whether the current pipeline
+	// still fits, the real one below to issue with the draw.
+	const auto pipeline_topology = vk::get_pipeline_topology(vertex_state.primitive, vertex_state.restart_index_enabled);
+	m_current_primitive_topology = vertex_state.primitive;
+
 	if (m_graphics_state & rsx::pipeline_state::invalidate_pipeline_bits)
 	{
 		get_current_fragment_program(fs_sampler_state);
@@ -1906,7 +1939,7 @@ bool VKGSRender::load_program()
 	}
 	else if (!(m_graphics_state & rsx::pipeline_state::pipeline_config_dirty) &&
 		m_program &&
-		m_pipeline_properties.state.ia.topology == vertex_state.primitive &&
+		m_pipeline_properties.state.ia.topology == pipeline_topology &&
 		m_pipeline_properties.state.ia.primitiveRestartEnable == vertex_state.restart_index_enabled)
 	{
 		if (!m_shader_interpreter.is_interpreter(m_program)) [[ likely ]]
@@ -1957,8 +1990,9 @@ bool VKGSRender::load_program()
 	}
 	else
 	{
-		// Update primitive type and restart index. Note that this is not needed with EXT_dynamic_state
-		m_pipeline_properties.state.set_primitive_type(vertex_state.primitive);
+		// Update primitive type and restart index. With EXT_extended_dynamic_state only the
+		// topology class is left in here; restart is not covered by it and still keys pipelines.
+		m_pipeline_properties.state.set_primitive_type(pipeline_topology);
 		m_pipeline_properties.state.enable_primitive_restart(vertex_state.restart_index_enabled);
 		m_pipeline_properties.renderpass_key = m_current_renderpass_key;
 	}
@@ -2795,12 +2829,6 @@ void VKGSRender::renderctl(u32 request_code, void* args)
 		const auto packet = reinterpret_cast<vk::queue_submit_t*>(args);
 		vk::queue_submit(packet);
 		free(packet);
-		break;
-	}
-	case vk::rctrl_run_gc:
-	{
-		auto eid = reinterpret_cast<u64>(args);
-		vk::on_event_completed(eid, true);
 		break;
 	}
 	default:

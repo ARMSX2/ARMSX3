@@ -51,6 +51,71 @@ object Rpcs3Settings {
     private const val IO = "Input/Output"
     private const val SAVESTATE = "Savestate"
     private const val MISC = "Miscellaneous"
+    private const val SYSTEM = "System"
+
+    // ---- Console (System) -----------------------------------------------
+    //
+    // What the emulated console reports to games: cellSysutil reads these, so they change the
+    // language a game picks, which region it thinks it is in, and how it formats dates.
+    //
+    // Every one is a cfg::_enum, which serialises by NAME, so these tables must match the core's
+    // own formatters exactly -- cellSysutil.cpp, KeyboardHandler.cpp, system_config_types.cpp.
+    // Two traps live here, hence tables rather than arithmetic on the index:
+    //
+    //   - Order is by NUMERIC enum value, not by the order the formatter prints. The formatter
+    //     lists English (UK) before Portuguese (Brazil); the values are 17 for Brazil and 18 for
+    //     the UK, so following the formatter would silently swap two languages.
+    //   - License Area is NOT contiguous: J..C are 0-5 and OTHER is 100. Anything mapping an
+    //     index onto a value would land on 6 and be rejected or clamped.
+    //
+    // The index is a position in these lists and nothing else; the core only ever sees the name.
+
+    private val CONSOLE_LANGUAGES = listOf(
+        "Japanese", "English (US)", "French", "Spanish", "German", "Italian", "Dutch",
+        "Portuguese (Portugal)", "Russian", "Korean", "Chinese (Traditional)",
+        "Chinese (Simplified)", "Finnish", "Swedish", "Danish", "Norwegian", "Polish",
+        "Portuguese (Brazil)", "English (UK)", "Turkish",
+    )
+
+    private val CONSOLE_REGIONS = listOf("SCEJ", "SCEA", "SCEE", "SCEH", "SCEK", "SCH", "Other")
+
+    private val KEYBOARD_TYPES = listOf(
+        "English keyboard (US standard)", "Japanese keyboard", "Japanese keyboard (Kana state)",
+        "German keyboard", "Spanish keyboard", "French keyboard", "Italian keyboard",
+        "Dutch keyboard", "Portuguese keyboard (Portugal)", "Russian keyboard",
+        "English keyboard (UK standard)", "Korean keyboard", "Norwegian keyboard",
+        "Finnish keyboard", "Danish keyboard", "Swedish keyboard",
+        "Chinese keyboard (Traditional)", "Chinese keyboard (Simplified)",
+        "French keyboard (Switzerland)", "German keyboard (Switzerland)",
+        "French keyboard (Canada)", "French keyboard (Belgium)", "Polish keyboard",
+        "Portuguese keyboard (Brazil)", "Turkish keyboard",
+    )
+
+    private val DATE_FORMATS = listOf("yyyymmdd", "ddmmyyyy", "mmddyyyy")
+    private val TIME_FORMATS = listOf("clock12", "clock24")
+    private val ENTER_BUTTONS = listOf("Enter with circle", "Enter with cross")
+
+    /** Names, in the order the pickers show them, so the UI never repeats these tables. */
+    fun consoleLanguageNames(): List<String> = CONSOLE_LANGUAGES
+    fun consoleRegionNames(): List<String> = CONSOLE_REGIONS
+    fun keyboardTypeNames(): List<String> = KEYBOARD_TYPES
+
+    private fun setIndexedEnum(path: String, names: List<String>, index: Int, fallback: Int) =
+        setEnum(path, names.getOrElse(index) { names[fallback] })
+
+    fun setConsoleLanguage(index: Int) = setIndexedEnum("$SYSTEM@@Language", CONSOLE_LANGUAGES, index, 1)
+    fun setConsoleRegion(index: Int) = setIndexedEnum("$SYSTEM@@License Area", CONSOLE_REGIONS, index, 1)
+    fun setKeyboardType(index: Int) = setIndexedEnum("$SYSTEM@@Keyboard Type", KEYBOARD_TYPES, index, 0)
+
+    /** Which keyboard handler cellKb is served by. "Basic" is the Android handler
+     *  (virtual_keyboard_handler); "Null" reports no keyboard attached, which is the
+     *  default and what every build before this one always used. Read once, during
+     *  Emulator::Load. */
+    fun setKeyboardHandler(enabled: Boolean) = setEnum("$IO@@Keyboard", if (enabled) "Basic" else "Null")
+    fun setDateFormat(index: Int) = setIndexedEnum("$SYSTEM@@Date Format", DATE_FORMATS, index, 1)
+    fun setTimeFormat(index: Int) = setIndexedEnum("$SYSTEM@@Time Format", TIME_FORMATS, index, 1)
+    fun setEnterButtonAssign(index: Int) =
+        setIndexedEnum("$SYSTEM@@Enter button assignment", ENTER_BUTTONS, index, 1)
 
     // ---- Renderer -------------------------------------------------------
 
@@ -114,7 +179,19 @@ object Rpcs3Settings {
             30, 50, 60, 120 -> fps.toString()
             else -> null
         }
-        if (fps <= 0) {
+        if (fps < 0) {
+            // PS3 Native: pace flips on the emulated vblank instead of capping by wall clock.
+            //
+            // This is the only Frame limit mode that honours cellGcmSetFlipMode(VSYNC) -- see
+            // handle_emu_flip, where every other mode falls through and flips immediately. A game
+            // that paces itself to 30fps by flipping on alternate vblanks therefore free-runs to
+            // the 60 cap under Auto, which is what issue #77 reported for Tales of Symphonia.
+            //
+            // Not the default: with no vsync request from the game this mode applies no limit at
+            // all, so titles that do not ask for vsync would run unbounded.
+            setFrameLimitMode("PS3 Native")
+            setSecondFrameLimit(0f)
+        } else if (fps == 0) {
             setFrameLimitMode("Off")
             setSecondFrameLimit(0f)
         } else if (preset != null) {
@@ -152,7 +229,10 @@ object Rpcs3Settings {
         }
 
         val cap = lastExplicitFpsCap
-        if (cap > 0) {
+        if (cap != 0) {
+            // Not `> 0`: the explicit control also uses -1 for PS3 Native, and this method runs
+            // LAST, so treating that as "no explicit rate" wrote Auto straight back over it -- the
+            // same collision this comment describes, one value along.
             setFrameLimit(cap)
         } else {
             // No explicit rate to honour, so "limit on" means the console's own pacing.
@@ -195,6 +275,10 @@ object Rpcs3Settings {
     /** FidelityFX CAS sharpening, 0..100. Only applies with FSR output scaling. */
     fun setCasSharpening(percent: Int) =
         setInt("$VIDEO@@FidelityFX CAS Sharpening Intensity", percent.coerceIn(0, 100))
+
+    /** SGSR edge sharpness, 0..200. 100 is Qualcomm's default, 200 the widened top end. */
+    fun setSgsrSharpening(percent: Int) =
+        setInt("$VIDEO@@SGSR Edge Sharpness", percent.coerceIn(0, 200))
 
     fun setVramLimitMb(mb: Int) =
         setInt("$VULKAN@@VRAM allocation limit (MB)", mb.coerceIn(256, 65536))
@@ -403,6 +487,23 @@ object Rpcs3Settings {
     fun setShaderMode(index: Int) =
         setEnum("$VIDEO@@Shader Mode", SHADER_MODES.getOrElse(index) { SHADER_MODES[2] })
 
+    /** Frame Generation. Names, not indices -- cfg::_enum matches on the string the core's
+     *  fmt_class_string produces, and these have to stay in step with frame_generation_mode. */
+    private val FRAME_GENERATION = arrayOf("Off", "x2", "x3", "x4")
+
+    fun setFrameGenPerformance(on: Boolean) =
+        setBool("$VIDEO@@Frame Generation Performance Mode", on)
+
+    fun setFrameGenFlowScale(percent: Int) =
+        setInt("$VIDEO@@Frame Generation Flow Scale", percent.coerceIn(25, 100))
+
+    /** Hz to hold, or 0 for the fixed multiplier. Bounds match what the core accepts. */
+    fun setFrameGenTargetRate(hz: Int) =
+        setInt("$VIDEO@@Frame Generation Target Rate", hz.coerceIn(0, 480))
+
+    fun setFrameGeneration(index: Int) =
+        setEnum("$VIDEO@@Frame Generation", FRAME_GENERATION.getOrElse(index) { FRAME_GENERATION[0] })
+
     fun setWriteDepthBuffer(v: Boolean) = setBool("$VIDEO@@Write Depth Buffer", v)
     fun setReadColorBuffers(v: Boolean) = setBool("$VIDEO@@Read Color Buffers", v)
     fun setReadDepthBuffer(v: Boolean) = setBool("$VIDEO@@Read Depth Buffer", v)
@@ -431,10 +532,33 @@ object Rpcs3Settings {
         setEnum("Net@@Internet enabled", if (enabled) "Connected" else "Disconnected")
 
     /** np_psn_status: "Disconnected" | "Simulated" | "RPCN". Simulated is offline-safe. */
-    fun setPsnStatus(enabled: Boolean) =
-        setEnum("Net@@PSN status", if (enabled) "Simulated" else "Disconnected")
+    /** np_psn_status: 0 Disconnected, 1 Simulated, 2 RPCN.
+     *
+     *  This took a Boolean and could only ever write the first two, so "RPCN" -- the state
+     *  that actually connects, and whose client is fully compiled into the core -- had no
+     *  writer anywhere in the app. */
+    private val PSN_STATES = arrayOf("Disconnected", "Simulated", "RPCN")
+
+    fun setPsnStatus(state: Int) =
+        setEnum("Net@@PSN status", PSN_STATES.getOrElse(state) { PSN_STATES[0] })
 
     fun setUpnp(enabled: Boolean) = setBool("Net@@UPNP Enabled", enabled)
+
+    // The rest of the core's Net node. These had no writer at all, so the only way to set
+    // a DNS server -- the thing a private/fan game server needs, RPCN being Sony's side
+    // only -- was a raw core override.
+    fun setIpAddress(value: String) = setString("Net@@IP address", value)
+    fun setBindAddress(value: String) = setString("Net@@Bind address", value)
+    fun setDnsAddress(value: String) = setString("Net@@DNS address", value)
+
+    /** "host=1.2.3.4" entries joined by "&&"; np::dnshook drops any entry it cannot parse. */
+    fun setIpSwapList(value: String) = setString("Net@@IP swap list", value)
+
+    fun setDeriveMacFromPsid(enabled: Boolean) =
+        setBool("Net@@Derive MAC from PSID", enabled)
+
+    fun setPsnCountry(code: String) = setString("Net@@PSN Country", code)
+    fun setClansEnabled(enabled: Boolean) = setBool("Net@@Clans Enabled", enabled)
 
     // ---- PS3 advanced (core accuracy) ----------------------------------
 

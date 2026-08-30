@@ -286,6 +286,10 @@ namespace rpcn
 		rpcn_client(rpcn_client& other)    = delete;
 		void operator=(const rpcn_client&) = delete;
 		static std::shared_ptr<rpcn_client> get_instance(u32 binding_address, bool check_config = false);
+		// Whatever client already exists, or nullptr. Unlike get_instance this never creates
+		// one, so a caller that only wants to report state does not spawn three threads and
+		// immediately tear them down again.
+		static std::shared_ptr<rpcn_client> peek_instance();
 		rpcn_state wait_for_connection();
 		rpcn_state wait_for_authentified();
 		bool terminate_connection();
@@ -370,6 +374,8 @@ namespace rpcn
 		bool tus_get_friends_data_status(u32 req_id, SceNpCommunicationId& communication_id, SceNpTusSlotId slotId, bool includeSelf, s32 sortType, s32 arrayNum);
 		bool tus_delete_multislot_data(u32 req_id, SceNpCommunicationId& communication_id, const SceNpOnlineId& targetNpId, vm::cptr<SceNpTusSlotId> slotIdArray, s32 arrayNum, bool vuser);
 		bool send_presence(const SceNpCommunicationId& pr_com_id, const std::string& pr_title, const std::string& pr_status, const std::string& pr_comment, const std::vector<u8>& pr_data);
+		bool unlock_trophy(const SceNpCommunicationId& communication_id, s32 trophy_id, s64 timestamp);
+		std::vector<std::pair<s32, s64>> sync_trophies(const SceNpCommunicationId& communication_id, const std::vector<std::pair<s32, s64>>& local_unlocked);
 		bool createjoin_room_gui(u32 req_id, const SceNpCommunicationId& communication_id, const SceNpMatchingAttr* attr_list);
 		bool join_room_gui(u32 req_id, const SceNpRoomId& room_id);
 		bool leave_room_gui(u32 req_id, const SceNpRoomId& room_id);

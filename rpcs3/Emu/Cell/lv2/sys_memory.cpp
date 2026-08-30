@@ -447,7 +447,16 @@ error_code sys_memory_container_get_size(cpu_thread& cpu, vm::ptr<sys_memory_inf
 {
 	cpu.state += cpu_flag::wait;
 
-	sys_memory.warning("sys_memory_container_get_size(mem_info=*0x%x, cid=0x%x)", mem_info, cid);
+	// A pure query with no side effects, and a game is free to poll it in a loop: Tales of
+	// Xillia 2 (BLUS31397) called it 20,664 times in a 19 minute session, 5,123 of them inside
+	// a single second. At warning level that is thousands of lines a second onto external
+	// storage, which is the same way the SPU recompiler diagnostics stalled the emulator.
+	//
+	// Nothing is lost: a container's size is fixed at creation, and both
+	// sys_memory_container_create and _destroy already log at warning, so the interesting
+	// events are still on the record. Compare sys_memory_get_user_memory_size above, which
+	// upstream already rate-limits by only logging when the reported values change.
+	sys_memory.trace("sys_memory_container_get_size(mem_info=*0x%x, cid=0x%x)", mem_info, cid);
 
 	const auto ct = idm::get_unlocked<lv2_memory_container>(cid);
 

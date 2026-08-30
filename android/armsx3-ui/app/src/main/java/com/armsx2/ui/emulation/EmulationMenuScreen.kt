@@ -539,7 +539,7 @@ private fun MenuHeader(
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    game?.title ?: "PlayStation 2",
+                    game?.title ?: "PlayStation 3",
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -636,12 +636,6 @@ private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuVie
     ActionGrid(
         actions = listOf(
             MenuAction(str("action.resume"), str("action.play"), "▶", Success, viewModel::resume),
-            MenuAction(
-                str("action.fastForward"),
-                if (MainActivityRuntime.fastForwardToggleActive) str("action.fastForward.on") else str("action.fastForward.detail"),
-                "⏩",
-                if (MainActivityRuntime.fastForwardToggleActive) Success else null,
-            ) { MainActivityRuntime.instance?.toggleFastForward(); viewModel.resume() },
             MenuAction(str("memcard.restart"), str("action.reset"), "↻", null, MainActivityRuntime::restart),
             MenuAction(str("action.swapDisc"), str("action.swapDisc.detail"), "⏏", null, MainActivityRuntime::promptSwapDisc),
             MenuAction(str("action.close"), MainActivityRuntime.currentGame.value?.title.orEmpty(), "■", Danger) {
@@ -710,15 +704,41 @@ private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuVie
         // than carrying its own copy. Safe to add here: this card's rows are plain switches with
         // their own callbacks — SessionPane's selectedAction indexes the action GRID above, not
         // these, so inserting a row can't shift the controller dispatch.
-        val osdColorIndex = com.armsx2.ui.settings.OSD_COLORS
-            .indexOf(state.settings.osdColor).coerceAtLeast(0)
+        //
+        // Writes RPCS3's overlay body colour. It used to write `osdColor`, i.e. PCSX2's
+        // EmuCore/GS/OsdColor plus a stubbed NativeApp.osdSetColor(), so cycling this row in a
+        // game changed nothing whatsoever — the most visible place for a control that did not work.
+        val osdColorIndex = com.armsx2.ui.settings.osdPresetIndex(state.settings.ps3.overlayBodyColor)
         MenuCycleRow(
             title = str("overlay.osdColor.label"),
-            valueLabel = str(com.armsx2.ui.settings.OSD_COLOR_LABEL_KEYS[osdColorIndex]),
+            // A colour set with the RGBA sliders is on no preset; say so rather than naming
+            // whichever preset happens to sit at index 0.
+            valueLabel = if (osdColorIndex >= 0)
+                str(com.armsx2.ui.settings.OSD_COLOR_LABEL_KEYS[osdColorIndex])
+            else str("overlay.osdColor.custom"),
         ) { step ->
             val size = com.armsx2.ui.settings.OSD_COLORS.size
             val next = ((osdColorIndex + step) % size + size) % size
-            viewModel.updateSettings { it.copy(osdColor = com.armsx2.ui.settings.OSD_COLORS[next]) }
+            viewModel.updateSettings {
+                it.copy(ps3 = it.ps3.copy(overlayBodyColor = com.armsx2.ui.settings.OSD_COLORS[next]))
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        // Where the overlay sits. Only the All Settings tab had this, which made it unreachable
+        // at the one moment it matters -- when the stats are sitting on top of something in the
+        // game you are trying to look at.
+        val osdPositionLabels = listOf(
+            "overlay.position.topLeft", "overlay.position.topRight",
+            "overlay.position.bottomLeft", "overlay.position.bottomRight",
+        )
+        val osdPositionIndex = state.settings.ps3.overlayPosition.coerceIn(0, 3)
+        MenuCycleRow(
+            title = str("overlay.position.label"),
+            valueLabel = str(osdPositionLabels[osdPositionIndex]),
+        ) { step ->
+            val size = osdPositionLabels.size
+            val next = ((osdPositionIndex + step) % size + size) % size
+            viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(overlayPosition = next)) }
         }
     }
     SectionCard(str("savestate.title.loadManage")) {
@@ -864,11 +884,38 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
             title = str("renderer.outputScaling.label"),
             options = listOf(
                 str("renderer.outputScaling.nearest"), str("renderer.outputScaling.bilinear"),
-                str("renderer.outputScaling.fsr"),
+                str("renderer.outputScaling.fsr"), str("renderer.outputScaling.sgsr"),
+                str("renderer.outputScaling.sgsrEdge"),
             ).mapIndexed { index, label -> index to label },
             selected = settings.casMode,
             onSelect = { v -> viewModel.updateSettings { it.copy(casMode = v) } },
         )
+        // Sharpening, shown only for the two upscalers that have any. It was missing from this
+        // menu entirely, which is the one people reach mid-game -- changing upscaler here and
+        // then having to leave the game to tune it defeats the point of the quick menu.
+        //
+        // The label follows the selection because the number does not mean the same thing to
+        // both: it is an RCAS stop to FSR and an edge factor to SGSR, and a slider named for the
+        // upscaler that is not running is simply wrong.
+        if (settings.casMode >= 2) {
+            Spacer(Modifier.height(6.dp))
+            // SGSR reaches 200: Qualcomm's edge_sharpness is 0..2 with 1.0 as their default, so
+            // 100 is that default and 200 the widened top end. It is a separate stored value
+            // because FSR's is natively clamped to 100 and cannot express the range.
+            val sgsr = settings.casMode >= 3
+            com.armsx2.ui.settings.IntSliderRow(
+                label = str(if (sgsr) "renderer.cas.sharpness.sgsr" else "renderer.cas.sharpness.fsr"),
+                value = if (sgsr) settings.sgsrSharpness.coerceIn(0, 200) else settings.casSharpness.coerceIn(0, 100),
+                min = 0,
+                max = if (sgsr) 200 else 100,
+                valueFormatter = { "$it%" },
+                onChange = { v ->
+                    viewModel.updateSettings {
+                        if (sgsr) it.copy(sgsrSharpness = v) else it.copy(casSharpness = v)
+                    }
+                },
+            )
+        }
         Spacer(Modifier.height(6.dp))
         MenuSwitchRow(str("renderer.relaxedZcull.label"), settings.ps3.relaxedZcull) { v ->
             viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(relaxedZcull = v)) }
@@ -984,8 +1031,15 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
         // Limit above that loses the min() at RSXThread.cpp:3676 and the rate stays 60. Offering
         // them just invited "the cap does nothing" reports for the two values where that is true
         // by construction. (Measured: second=90.00 -> limit=60.00.)
-        options = listOf(0, 20, 30, 45, 60).map {
-            it to if (it == 0) str("setup.toggle.off") else "$it FPS"
+        // -1 is not a rate: it selects Frame limit "PS3 Native", the only mode that honours the
+        // game's own cellGcmSetFlipMode(VSYNC) request. A title that paces itself to 30fps needs
+        // it; under any other mode it flips every vblank and runs at 60 (issue #77).
+        options = listOf(0, -1, 20, 30, 45, 60).map {
+            it to when (it) {
+                0 -> str("setup.toggle.off")
+                -1 -> str("perf.displayFpsCap.ps3")
+                else -> "$it FPS"
+            }
         },
         selected = settings.fpsLimit,
         onSelect = viewModel::setFpsLimit,
@@ -1012,6 +1066,71 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
     // Removed: PS2 wait-loop detection.
     // The PS3's processors, not the PS2's. EE/IOP/VU0/VU1/Fastmem are PCSX2
     // recompiler toggles for silicon that does not exist here.
+    // Frame generation first: it is the one setting here that changes the framerate rather than
+    // how fast the emulator runs, so it is what someone opening this menu mid-game is looking for.
+    // Not in the play build: libarmsx3_lsfg.so is not bundled there, so this would be inert.
+    if (com.armsx2.BuildConfig.FRAME_GENERATION) {
+        SectionCard(str("perf.framegen.title")) {
+            HorizontalOptions(
+                title = str("perf.framegen.label"),
+                options = listOf(
+                    str("perf.framegen.off"), str("perf.framegen.x2"),
+                    str("perf.framegen.x3"), str("perf.framegen.x4"),
+                ).mapIndexed { index, label -> index to label },
+                selected = settings.ps3.frameGeneration,
+                onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGeneration = v)) } },
+            )
+
+            // The rest of frame generation, which until now only existed in the main settings
+            // screen. Someone who opens this menu mid-game is here to change exactly these:
+            // the multiplier alone cannot answer "it is generating, but the picture is unsteady"
+            // (target rate) or "it is generating, but too expensive" (flow scale, performance).
+            HorizontalOptions(
+                title = str("perf.framegen.targetRate.label"),
+                options = listOf(0 to str("perf.framegen.off"), 60 to "60 Hz", 90 to "90 Hz", 120 to "120 Hz"),
+                selected = settings.ps3.frameGenTargetRate,
+                onSelect = { v ->
+                    android.util.Log.i("FRAMEGEN", "pause menu: target rate chip -> $v")
+                    viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenTargetRate = v)) }
+                },
+            )
+            // Motion detail is continuous, so it gets a slider rather than three stops -- the
+            // useful values are wherever the picture stops improving on a given game, not a set
+            // someone picked in advance. 25 is the floor the core clamps to.
+            Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        str("perf.framegen.flowScale.label"),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        "${settings.ps3.frameGenFlowScale}%",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Slider(
+                    value = settings.ps3.frameGenFlowScale.coerceIn(25, 100).toFloat(),
+                    onValueChange = { v ->
+                        viewModel.updateSettings {
+                            it.copy(ps3 = it.ps3.copy(frameGenFlowScale = Math.round(v).coerceIn(25, 100)))
+                        }
+                    },
+                    valueRange = 25f..100f,
+                )
+            }
+            MenuSwitchRow(
+                str("perf.framegen.performance.label"),
+                settings.ps3.frameGenPerformance,
+            ) { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenPerformance = v)) } }
+        }
+        Spacer(Modifier.height(10.dp))
+    }
     SectionCard(str("perf.ps3cpu.title")) {
         HorizontalOptions(
             title = str("perf.ppuDecoder.label"),

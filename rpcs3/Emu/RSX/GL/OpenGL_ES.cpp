@@ -465,6 +465,27 @@ namespace gl::es
 		glNamedFramebufferTextureEXT(framebuffer, attachment, texture, level);
 	}
 
+	// Layered attach, needed since upstream started binding 3D/array/cube levels through DSA.
+	// EXT_direct_state_access has no NamedFramebufferTextureLayer, so this binds the framebuffer
+	// and uses the non-DSA entry point -- correct, and no worse than what the caller did before
+	// DSA_CALL2 existed. The previous binding is restored so the caller sees no side effect.
+	void glNamedFramebufferTextureLayer(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level, GLint layer)
+	{
+		GLint previous = 0;
+		glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previous);
+
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+		glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, attachment, texture, level, layer);
+
+		glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previous));
+	}
+
+	// DSA_CALL2 resolves either spelling, so both have to exist here.
+	void glNamedFramebufferTextureLayerEXT(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level, GLint layer)
+	{
+		glNamedFramebufferTextureLayer(framebuffer, attachment, texture, level, layer);
+	}
+
 	GLenum glCheckNamedFramebufferStatus(GLuint framebuffer, GLenum target)
 	{
 		return glCheckNamedFramebufferStatusEXT(framebuffer, target);

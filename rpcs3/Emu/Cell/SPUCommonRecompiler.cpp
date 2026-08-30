@@ -21,6 +21,7 @@
 
 #include "SPUThread.h"
 #include "SPUAnalyser.h"
+#include "SPUFailedBlocks.h"
 #include "SPUInterpreter.h"
 #include "SPUDisAsm.h"
 #include <algorithm>
@@ -91,10 +92,11 @@ constexpr const char s_spu_llvm_reg_scavenge_error[] = "Cannot scavenge register
 class spu_llvm_compile_scope
 {
 public:
-	spu_llvm_compile_scope(spu_llvm_compile_context& context, bool use_tbl2) noexcept
+	spu_llvm_compile_scope(spu_llvm_compile_context& context, bool use_tbl2, bool use_fma = true) noexcept
 	{
 		context = {};
 		context.use_tbl2 = use_tbl2;
+		context.use_fma = use_fma;
 		spu_llvm_set_compile_context(&context);
 	}
 
@@ -123,35 +125,51 @@ static shared_mutex s_spu_failed_blocks_mutex;
 // one instruction, whereupon the recompiler tried the NEXT address, failed the same way, and
 // marked that too: 111 consecutive entries were recorded walking two blocks four bytes at a time,
 // each step paying a full failed LLVM compile.
-static std::map<u32, u32> s_spu_failed_blocks;
+//
+// Cleared per emulation session by the spu_runtime constructor. The keys are local-store offsets,
+// which every SPU thread, every image and every title in the process share, so a set that outlived
+// the session would let one title's compile failures route an unrelated title's code at the same
+// offset to the interpreter.
+static spu_failed_block_set s_spu_failed_blocks;
+
+static void spu_reset_failed_blocks()
+{
+	std::lock_guard lock(s_spu_failed_blocks_mutex);
+	s_spu_failed_blocks.clear();
+}
+
+// The fallback is spu_recompiler_base::old_interpreter, which reads the opcode table, the thread
+// and the local store and nothing else -- see spu_thread::cpu_task. It is always linked, so on the
+// backends that can reach a failed block there is always something to fall back to.
+//
+// This previously tested spu_runtime::g_interpreter, which is the LLVM-built interpreter used when
+// the user selects a recompiler. That is a different object with a different failure mode: when it
+// fails to build, the check disabled a fallback that was in fact available, and dispatch dropped
+// into the "Compilation failed" path instead.
+// Size of the shared stack scratchpad the ARM64 SPU gateway reserves for generated code.
+//
+// Compiled SPU functions build no frames of their own on ARM64 -- GHC_frame_preservation_pass runs
+// with use_stack_frames = false -- so every one of them spills into this single reservation. It
+// therefore has to cover the WORST function the recompiler will ever emit, not a typical one.
+//
+// 8192 did not. Borderlands 2's 2401-instruction SPURS function at LS 0x25da8 wants ~21 KB and
+// wrote past it: the fault landed at sp+21760, exactly the top of the thread's stack mapping, on
+// the PROT_NONE guard page above it. That is unrecoverable for a second reason -- a guard page is
+// not emulator memory, so is_emulator_fault() declines it, the handler forwards to libsigchain, and
+// ART's FaultManager reads the guest registers as an ArtMethod* and kills the process with no
+// tombstone.
+//
+// STILL A FIXED BOUND. A function larger than BL2's could overflow 256 KB the same way; the
+// scaling fix is use_stack_frames = true, whose cost the pass comments call out and which is not
+// measured. Address space only until touched.
+//
+// x86 reserves 0xc8 in the same place because LLVM emits ordinary per-function frames there, so
+// this arrangement -- and this failure -- are ARM64-only.
+static constexpr u32 SPU_GW_SCRATCH_SIZE = 262144;
 
 static bool spu_interpreter_fallback_available()
 {
-	const auto interp = spu_runtime::g_interpreter;
-	return interp && interp != spu_runtime::g_gateway;
-}
-
-// Range containing addr, or {0,0}. Same lookup as spu_block_compile_failed, but returns the extent
-// so a caller can cache it and stop consulting this map.
-static std::pair<u32, u32> spu_block_failed_range(u32 addr)
-{
-	reader_lock lock(s_spu_failed_blocks_mutex);
-
-	auto it = s_spu_failed_blocks.upper_bound(addr);
-
-	if (it == s_spu_failed_blocks.begin())
-	{
-		return {};
-	}
-
-	--it;
-
-	if (addr >= it->first && addr < it->second)
-	{
-		return {it->first, it->second};
-	}
-
-	return {};
+	return true;
 }
 
 static bool spu_block_compile_failed(u32 addr)
@@ -160,15 +178,7 @@ static bool spu_block_compile_failed(u32 addr)
 
 	// Any recorded range containing addr, so execution stays interpreted for the whole of a block
 	// that cannot be compiled rather than only at its entry.
-	auto it = s_spu_failed_blocks.upper_bound(addr);
-
-	if (it == s_spu_failed_blocks.begin())
-	{
-		return false;
-	}
-
-	--it;
-	return addr >= it->first && addr < it->second;
+	return s_spu_failed_blocks.contains(addr);
 }
 
 static void spu_mark_block_compile_failed(u32 entry_point, u32 lower_bound = 0, u32 size_bytes = 0)
@@ -179,10 +189,93 @@ static void spu_mark_block_compile_failed(u32 entry_point, u32 lower_bound = 0, 
 	const u32 begin = size_bytes ? lower_bound : entry_point;
 	const u32 end = size_bytes ? lower_bound + size_bytes : entry_point + 4;
 
-	if (s_spu_failed_blocks.insert_or_assign(begin, std::max(end, s_spu_failed_blocks.count(begin) ? s_spu_failed_blocks[begin] : end)).second)
+	if (s_spu_failed_blocks.mark(begin, end))
 	{
 		spu_log.error("SPU block 0x%05x cannot be compiled on this backend, its thread switches to the interpreter", entry_point);
 	}
+}
+
+// A range that is guaranteed to contain pc and to be non-empty.
+//
+// old_interpreter releases the thread when (pc < begin || pc >= end), which is unconditionally true
+// for begin == end, so arming the fallback with an empty range makes the interpreter return without
+// executing an instruction while dispatch re-enters at an unchanged pc. Not every path into the
+// fallback has marked the block first: a compile can return null having produced no diagnostic, in
+// which case nothing was recorded and the lookup finds nothing.
+static std::pair<u32, u32> spu_arm_interp_fallback(u32 pc, u32 lower_bound, u32 size_bytes)
+{
+	// One critical section, not a lookup followed by a separate mark: with the two split, a
+	// concurrent clear landing in the gap would take the answer back to empty and hand the caller
+	// the range it must not have. Holding the writer lock throughout makes the guarantee
+	// structural rather than a property of who happens to call the reset today.
+	std::lock_guard lock(s_spu_failed_blocks_mutex);
+
+	if (const auto range = s_spu_failed_blocks.range_of(pc); range.second > range.first)
+	{
+		return range;
+	}
+
+	// Deliberately silent, and deliberately not routed through spu_mark_block_compile_failed.
+	//
+	// Reaching here means a compile returned null having reported nothing, which is not evidence
+	// that the backend cannot compile this block: an engine poisoned by an earlier fatal error, an
+	// analyser that produced no program for a wild branch into data, and a lost race for the
+	// compile claim all land here too. Recording the entry is still required, because the
+	// interpreter's release test needs a non-empty range -- but claiming a backend limitation in
+	// the log would send the next investigation at the wrong subsystem, and doing it once per four
+	// bytes of a walked region is the log flood this mechanism already had once.
+	//
+	// Record the analysed extent when the caller has one. Recording only [pc, pc + 4) instead
+	// makes the interpreter release the thread after a single instruction, whereupon dispatch
+	// re-enters four bytes later, finds that address unmarked, and pays another full analyse and
+	// another full failed compile -- the 4-bytes-at-a-time walk this file already documents at
+	// the top of the failed-block set.
+	if (size_bytes && pc >= lower_bound && pc - lower_bound < size_bytes)
+	{
+		s_spu_failed_blocks.mark(lower_bound, lower_bound + size_bytes);
+	}
+	else
+	{
+		s_spu_failed_blocks.mark(pc, pc + 4);
+	}
+
+	return s_spu_failed_blocks.range_of(pc);
+}
+
+// Run the uncompilable block here, inside the gateway invocation dispatch was called from.
+//
+// The interpreter used to be started from spu_thread::cpu_task, after dispatch had escaped. That
+// executed guest code outside any gateway call, while spu_runtime::g_escape resumes through the
+// gateway epilogue whose address and stack pointer the gateway prologue stored in hv_ctx. Those
+// describe a gateway call that has already returned, so an escape taken from inside the
+// interpreter -- a guest HALT, an MFC interrupt, cpu_work -- restored a stack pointer into a dead
+// frame. Running the interpreter from here keeps that frame live for as long as anything inside it
+// can escape.
+static void spu_run_interp_fallback(spu_thread& spu, u32 lower_bound = 0, u32 size_bytes = 0)
+{
+	std::tie(spu.interp_fallback_begin, spu.interp_fallback_end) =
+		spu_arm_interp_fallback(spu.pc, lower_bound, size_bytes);
+
+	// The release test below is (pc < begin || pc >= end); an empty range makes it true on the
+	// first iteration and the interpreter returns having executed nothing.
+	ensure(spu.interp_fallback_end > spu.interp_fallback_begin);
+
+	spu.interp_fallback = true;
+
+	// Matches the interpreter-only path in spu_thread::cpu_task, which enables interrupt servicing
+	// for as long as it is interpreting.
+	//
+	// Cleared by cpu_task before the next gateway entry, NOT restored around this call. A guest
+	// HALT, an MFC interrupt or cpu_work can escape from inside old_interpreter, and an escape is
+	// a far jump to the gateway epilogue that discards every frame in between without running one
+	// destructor or one further statement -- so anything written after this call is skipped on
+	// exactly the paths the flag is set for. cpu_task's loop is where control lands afterwards,
+	// and it runs on both the normal and the escaping path.
+	spu.allow_interrupts_in_cpu_work = true;
+
+	spu_recompiler_base::old_interpreter(spu, spu._ptr<u8>(0), nullptr);
+
+	spu_runtime::g_escape(&spu);
 }
 
 static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler_base>& compiler, const spu_program& program)
@@ -266,6 +359,57 @@ static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler
 		// Compilation produced nothing and said nothing. Reached in practice, and it was the
 		// one path here that left the block unmarked.
 		spu_log.error("LLVM produced no code for SPU block 0x%x without TBL2/TBX2 and reported no error.", program.entry_point);
+	}
+
+	// Second retry: drop strict FMA as well.
+	//
+	// Dropping TBL2/TBX2 relieves pressure in the permute path, which is not where every block
+	// spends its registers. spu_fma emits llvm.fma on f32[4] whenever m_use_fma is set -- and it
+	// is hardcoded set on ARM64 -- and llvm.fma is a HARD requirement to fuse, so the allocator
+	// cannot decompose it to get out of trouble. That exact instruction shape is what cost the PPU
+	// side a whole module: PPUTranslator's VMADDFP failed identically until it was allowed to fall
+	// back to the f64 form, at which point the module compiled and Saint Seiya (BLES01421) booted
+	// at full speed.
+	//
+	// Worth trying before giving the block up because the alternative is permanent: a marked block
+	// runs on the SPU interpreter for the rest of the session, every time it is entered, and these
+	// are SPURS kernels doing real work. Sonic Unleashed's block 0x7350 fails here with the same
+	// scavenger error and has been interpreted ever since; the TBL2/TBX2 retry did not save it.
+	//
+	// Only the block that already failed twice pays the f64 cost; everything else keeps its FMLA.
+	{
+		const auto fma_program = analyse_spu_llvm_program(*compiler, program);
+
+		if (fma_program == program)
+		{
+			spu_llvm_compile_context fma_context;
+			spu_function_t fma_result = nullptr;
+
+			{
+				spu_llvm_compile_scope scope(fma_context, false, false);
+
+				fma_result = compiler->compile(spu_program{fma_program});
+			}
+
+			if (fma_result)
+			{
+				spu_log.success("SPU LLVM block 0x%x compiled successfully without TBL2/TBX2 or strict FMA.", program.entry_point);
+				return fma_result;
+			}
+
+			if (!fma_context.llvm_error.empty())
+			{
+				spu_log.error("LLVM failed to compile SPU block 0x%x without strict FMA: %s. Discarding the poisoned JIT instance.", program.entry_point, fma_context.llvm_error);
+
+				static_cast<void>(compiler.release());
+				compiler = spu_recompiler_base::make_llvm_recompiler();
+				compiler->init();
+			}
+		}
+		else
+		{
+			spu_log.error("[0x%05x] SPU analyser failed during strict-FMA retry, %u vs %u", fma_program.entry_point, fma_program.data.size(), program.data.size());
+		}
 	}
 
 	// Every path that gives up marks the block, so the thread falls back to the interpreter.
@@ -630,7 +774,7 @@ DECLARE(spu_runtime::g_gateway) = build_function_asm<spu_function_t>("spu_gatewa
 	c.mov(a64::x22, args[3]);
 
 	// Inject stack frame for scratchpad. Alternatively use per-function frames but that adds some overhead
-	c.sub(a64::sp, a64::sp, Imm(8192));
+	c.sub(a64::sp, a64::sp, Imm(SPU_GW_SCRATCH_SIZE));
 
 	c.mov(a64::x0, Imm(reinterpret_cast<u64>(spu_runtime::tr_all)));
 	c.blr(a64::x0);
@@ -639,7 +783,7 @@ DECLARE(spu_runtime::g_gateway) = build_function_asm<spu_function_t>("spu_gatewa
 	c.bind(epilogue_addr);
 
 	// Cleanup scratchpad (not needed, we'll reload sp shortly)
-	// c.add(a64::sp, a64::sp, Imm(8192));
+	// c.add(a64::sp, a64::sp, Imm(SPU_GW_SCRATCH_SIZE));
 
 	// Restore thread context
 	c.mov(a64::x14, Imm(hv_regs_base));
@@ -726,14 +870,14 @@ DECLARE(spu_runtime::g_tail_escape) = build_function_asm<void(*)(spu_thread*, sp
 	c.str(args[0], arm::Mem(a64::sp));
 
 	// Allocate scratchpad. Not needed if using per-function frames, or if we just don't care about returning to C++ (jump to gw exit instead)
-	c.sub(a64::sp, a64::sp, Imm(8192));
+	c.sub(a64::sp, a64::sp, Imm(SPU_GW_SCRATCH_SIZE));
 
 	// Make the far jump
 	c.mov(a64::x15, args[1]);
 	c.blr(a64::x15);
 
 	// Clear scratch allocation
-	c.add(a64::sp, a64::sp, Imm(8192));
+	c.add(a64::sp, a64::sp, Imm(SPU_GW_SCRATCH_SIZE));
 
 	// Restore context. Escape point expects the current thread pointer at x19
 	c.ldr(a64::x19, arm::Mem(a64::sp));
@@ -1322,7 +1466,7 @@ void spu_cache::initialize(bool build_existing_cache)
 				{
 					if (ls[start_new / 4] && g_spu_itype.decode(ls[start_new / 4]) != spu_itype::UNK)
 					{
-						spu_log.notice("Precompiling fallthrough to 0x%05x", start_new);
+						spu_log.trace("Precompiling fallthrough to 0x%05x", start_new);
 						func2 = compiler->analyse(ls.data(), start_new, &targets);
 						block_addr = start_new;
 						continue;
@@ -1386,7 +1530,7 @@ void spu_cache::initialize(bool build_existing_cache)
 				}
 
 
-				spu_log.notice("Precompiling filler space at 0x%05x (next=0x%05x)", new_entry, next_func);
+				spu_log.trace("Precompiling filler space at 0x%05x (next=0x%05x)", new_entry, next_func);
 				func2 = compiler->analyse(ls.data(), new_entry, &targets);
 				block_addr = new_entry;
 			}
@@ -1435,13 +1579,26 @@ void spu_cache::initialize(bool build_existing_cache)
 		return;
 	}
 
+	// Running out of JIT memory part-way is not a reason to throw the cache away.
+	//
+	// This used to return here, which skipped the global cache instance below and left
+	// g_fxo's spu_cache empty for the whole session. Nothing said so, and the consequence is
+	// invisible and permanent: every SPU function compiled after this point is compiled again
+	// from scratch on the next boot, so a title that exhausts JIT memory once pays the full
+	// precompilation cost every single launch and can exhaust it again the same way. Reported
+	// against God of War III, which trips this during boot and then carries on running -- the
+	// message says "fatal" and execution continues, which sent the reporter looking for a crash
+	// that never happened.
+	//
+	// The programs that DID build are valid and worth keeping; the rest are compiled on demand,
+	// which is the normal path for anything precompilation did not reach anyway. So report what
+	// was actually lost and fall through.
 	if (fail_flag)
 	{
-		spu_log.fatal("SPU Runtime: Cache building failed (out of memory).");
-		return;
+		spu_log.error("SPU Runtime: ran out of JIT memory after building %u programs."
+			" The rest are compiled on demand; cached programs are kept.", built_total);
 	}
-
-	if ((g_cfg.core.spu_decoder == spu_decoder_type::asmjit || g_cfg.core.spu_decoder == spu_decoder_type::llvm) && !func_list.empty())
+	else if ((g_cfg.core.spu_decoder == spu_decoder_type::asmjit || g_cfg.core.spu_decoder == spu_decoder_type::llvm) && !func_list.empty())
 	{
 		spu_log.success("SPU Runtime: Built %u functions.", func_list.size());
 	}
@@ -1492,6 +1649,21 @@ bool spu_program::operator<(const spu_program& rhs) const noexcept
 
 spu_runtime::spu_runtime()
 {
+	// Drop the previous session's failed-block set.
+	//
+	// It is keyed on local-store offsets, which are per-thread 18-bit addresses that every SPU
+	// thread, every image and every title in the process reuse. Left in place, a block that failed
+	// to compile while one title ran would route a different title's unrelated code at the same
+	// offset to the interpreter for the rest of the process's life. This object is created per
+	// emulation session, so its constructor is where a session-scoped set is emptied. Above the
+	// early return below, which is taken when there is no cache path.
+	//
+	// Guarded because the set and its accessors only exist on ARM64: it is the backend that can
+	// fail to compile a block, so no other target has anything to reset.
+#ifdef ARCH_ARM64
+	spu_reset_failed_blocks();
+#endif
+
 	// Clear LLVM output
 	m_cache_path = rpcs3::cache::get_ppu_cache();
 
@@ -1526,7 +1698,7 @@ spu_runtime::spu_runtime()
 	// including compile-time switches such as ARMSX3_SPU_ARM64_BYTE_GATHER.
 	// Ported from ouroboros420/rpcsx (8430a6558), key re-derived against our config surface.
 	{
-		constexpr u32 SPU_OBJ_CACHE_VERSION = 1;
+		constexpr u32 SPU_OBJ_CACHE_VERSION = 2;
 		constexpr usz SPU_OBJ_CACHE_MAX_FILES = 12000;
 
 		sha1_context ctx;
@@ -1540,6 +1712,34 @@ spu_runtime::spu_runtime()
 
 		const u32 version = SPU_OBJ_CACHE_VERSION;
 		fold(version);
+
+		// Build stamp, so a remembered version bump is not the only thing between a new binary and
+		// the objects an old one emitted.
+		//
+		// The note above asks whoever changes SPU codegen to bump the constant by hand, and the
+		// cost of forgetting is not a cache miss: it is executing stale machine code against a
+		// changed spu_thread. Its host base pointers (memory_base_addr and friends) sit directly in
+		// front of gpr[], so a register store at a stale offset lands on one of them and the next
+		// guest access dereferences SPU register data as a host pointer.
+		//
+		// This stamp changes whenever this file is recompiled, which any edit to SPUThread.h or
+		// SPURecompiler.h forces, so two builds at the same commit cannot share objects either --
+		// which a git-version stamp would happily let them do.
+		static constexpr std::string_view s_build_stamp = __DATE__ " " __TIME__;
+		sha1_update(&ctx, reinterpret_cast<const u8*>(s_build_stamp.data()), s_build_stamp.size());
+
+		// ...and the CODE GENERATOR's own stamp, which is the one that actually matters.
+		//
+		// The stamp above only moves when this file recompiles, and editing the recompiler does
+		// not do that -- they are separate translation units. So a change to fma32x4 was cached
+		// straight over: a verification run loaded the previous build's objects, produced
+		// byte-identical results, and made a fix look disproven when it had never run. Folding a
+		// stamp from SPULLVMRecompiler.cpp closes that, since any edit to the emitter moves it.
+#ifdef LLVM_AVAILABLE
+		extern const char* spu_llvm_codegen_build_stamp();
+		const std::string_view codegen_stamp = spu_llvm_codegen_build_stamp();
+		sha1_update(&ctx, reinterpret_cast<const u8*>(codegen_stamp.data()), codegen_stamp.size());
+#endif
 
 		// Settings that change the emitted IR.
 		const u32 xfloat = static_cast<u32>(g_cfg.core.spu_xfloat_accuracy.get());
@@ -1579,6 +1779,28 @@ spu_runtime::spu_runtime()
 		sha1_finish(&ctx, key);
 
 		m_obj_cache_path = m_cache_path + fmt::format("spuobj-v%u-%s/", SPU_OBJ_CACHE_VERSION, fmt::base57(key, 16));
+
+		// Drop keyed directories left by other builds.
+		//
+		// Folding the build stamp means every update lands on a fresh directory, so without this
+		// the superseded ones would stay forever, and an SPU object cache runs to hundreds of
+		// megabytes per title. Only siblings this code named are touched. Names are collected
+		// before anything is removed: fs::dir is a live handle on the directory being modified.
+		std::vector<std::string> stale_caches;
+
+		for (auto&& entry : fs::dir(m_cache_path))
+		{
+			if (entry.is_directory && entry.name.starts_with("spuobj-") && m_cache_path + entry.name + "/" != m_obj_cache_path)
+			{
+				stale_caches.push_back(entry.name);
+			}
+		}
+
+		for (const std::string& name : stale_caches)
+		{
+			spu_log.notice("Removing SPU object cache from another build: %s", name);
+			fs::remove_all(m_cache_path + name + "/");
+		}
 
 		if (!fs::create_path(m_obj_cache_path))
 		{
@@ -1917,7 +2139,12 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 			if (w.level >= w.beg->first.size() || w.level >= it->first.size())
 			{
 				// If functions cannot be compared, assume smallest function
-				spu_log.error("Trampoline simplified at ??? (level=%u)", w.level);
+				// Routine control-flow simplification, not a failure -- it was at error level
+				// and fired ~1500 times in a 15 minute session. Every diagnostic in this
+				// recompiler is per-block or per-instruction, which upstream can afford and a
+				// phone writing to /sdcard cannot: the burst lands exactly while a game is
+				// already stalling to compile. Still reachable by raising the SPU channel.
+				spu_log.trace("Trampoline simplified at ??? (level=%u)", w.level);
 #if defined(ARCH_X64)
 				make_jump(0xe9, w.beg->second); // jmp rel32
 #elif defined(ARCH_ARM64)
@@ -1956,7 +2183,7 @@ spu_function_t spu_runtime::rebuild_ubertrampoline(u32 id_inst)
 
 			if (it == m_flat_list.end())
 			{
-				spu_log.error("Trampoline simplified (II) at ??? (level=%u)", w.level);
+				spu_log.trace("Trampoline simplified (II) at ??? (level=%u)", w.level);
 #if defined(ARCH_X64)
 				make_jump(0xe9, w.beg->second); // jmp rel32
 #elif defined(ARCH_ARM64)
@@ -2437,9 +2664,7 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 		// boundary constantly: God of War 3 wrote thousands of lines a second ping-ponging
 		// between two addresses, which cost more than the interpretation. The block is already
 		// recorded once by spu_mark_block_compile_failed.
-		std::tie(spu.interp_fallback_begin, spu.interp_fallback_end) = spu_block_failed_range(spu.pc);
-		spu.interp_fallback = true;
-		spu_runtime::g_escape(&spu);
+		spu_run_interp_fallback(spu);
 		return;
 	}
 #endif
@@ -2462,9 +2687,9 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 #if defined(__APPLE__)
 			pthread_jit_write_protect_np(true);
 #endif
-			std::tie(spu.interp_fallback_begin, spu.interp_fallback_end) = spu_block_failed_range(spu.pc);
-			spu.interp_fallback = true;
-			spu_runtime::g_escape(&spu);
+			// The analysed extent is in scope here, so a block that reached the fallback without
+			// being recorded is still recorded whole rather than four bytes at a time.
+			spu_run_interp_fallback(spu, program.lower_bound, ::size32(program.data) * 4);
 			return;
 		}
 #endif
@@ -2626,11 +2851,14 @@ void spu_recompiler_base::old_interpreter(spu_thread& spu, void* ls, u8* /*rip*/
 		// slow, and these are SPURS kernels doing real work: Sonic Unleashed reached its loading
 		// screen that way and then crawled through it.
 		//
-		// The set holds entry points, so this keeps interpreting while pc sits on the bad entry
-		// -- which is where a branch-to-self idle loop stays -- and releases the thread once
-		// execution moves on. Leaving is safe at any instruction boundary, since all SPU state
-		// lives in spu_thread, the same assumption the JIT dispatch makes. Re-entering the bad
-		// block simply sets the flag again.
+		// The set holds ranges, so this keeps interpreting for the whole of the block that could
+		// not be compiled -- including a branch-to-self idle loop inside it -- and releases the
+		// thread once execution leaves that range. Leaving is safe at any instruction boundary,
+		// since all SPU state lives in spu_thread, the same assumption the JIT dispatch makes.
+		// Re-entering the bad block simply sets the flag again.
+		//
+		// The range is guaranteed non-empty by spu_arm_interp_fallback: begin == end would make
+		// this test true on the first iteration and return without executing an instruction.
 		if (spu.interp_fallback && (spu.pc < spu.interp_fallback_begin || spu.pc >= spu.interp_fallback_end)) [[unlikely]]
 		{
 			spu.interp_fallback = false;
@@ -5846,7 +6074,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				getllar_starts[previous.lsa_pc] = true;
 				g_fxo->get<putllc16_statistics_t>().breaking_reason[cause]++;
 
-				if (!spu_log.notice)
+				if (!spu_log.trace)
 				{
 					return;
 				}
@@ -5886,7 +6114,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				}
 
 				fmt::append(tracing, " of %d failures", fail_count);
-				spu_log.notice("%s\n%s", break_error, tracing);
+				spu_log.trace("%s\n%s", break_error, tracing);
 			}
 		};
 
@@ -5903,7 +6131,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 
 				g_fxo->get<rchcnt_statistics_t>().breaking_reason[cause]++;
 
-				if (!spu_log.notice)
+				if (!spu_log.trace)
 				{
 					return;
 				}
@@ -5943,7 +6171,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				}
 
 				fmt::append(tracing, " of %d failures", fail_count);
-				spu_log.notice("%s\n%s", break_error, tracing);
+				spu_log.trace("%s\n%s", break_error, tracing);
 			}
 		};
 
@@ -5953,7 +6181,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			{
 				g_fxo->get<reduced_statistics_t>().breaking_reason[cause]++;
 
-				if (!spu_log.notice)
+				if (!spu_log.trace)
 				{
 					return;
 				}
@@ -5998,12 +6226,12 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				}
 
 				fmt::append(tracing, " of %d failures", fail_count);
-				spu_log.notice("%s\n%s", break_error, tracing);
+				spu_log.trace("%s\n%s", break_error, tracing);
 
 				std::string block_dump;
 				this->dump(result, block_dump, previous.loop_pc, previous.loop_end + 1);
 	
-				spu_log.notice("SPU Block Dump:\n%s", block_dump);
+				spu_log.trace("SPU Block Dump:\n%s", block_dump);
 			}
 		};
 
@@ -6214,7 +6442,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 						{
 							if (!std::exchange(logged_block[target_pc / 4], true))
 							{
-								spu_log.notice("SPU block is a loop at [0x%05x -> 0x%05x]", state_it->pc, target_pc);
+								spu_log.trace("SPU block is a loop at [0x%05x -> 0x%05x]", state_it->pc, target_pc);
 							}
 
 							state_it->parent_target_index++;
@@ -7736,7 +7964,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 							if (getllar_starts.emplace(atomic16->lsa_pc, false).second)
 							{
 								g_fxo->get<putllc16_statistics_t>().all++;
-								spu_log.notice("[0x%05x] GETLLAR pattern entry point", pos);
+								spu_log.trace("[0x%05x] GETLLAR pattern entry point", pos);
 							}
 						}
 
@@ -9064,7 +9292,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			add_pattern(inst_attr::putllc16, pattern.put_pc - result.entry_point, value.data);
 		}
 
-		spu_log.success("PUTLLC16 Pattern Detected! (mem_count=%d, put_pc=0x%x, pc_rel=%d, offset=0x%x, const=%u, two_regs=%d, reg=%u, runtime=%d, 0x%x-%s, pattern-hash=%s) (putllc0=%d, putllc16+0=%d, all=%d)"
+		spu_log.trace("PUTLLC16 Pattern Detected! (mem_count=%d, put_pc=0x%x, pc_rel=%d, offset=0x%x, const=%u, two_regs=%d, reg=%u, runtime=%d, 0x%x-%s, pattern-hash=%s) (putllc0=%d, putllc16+0=%d, all=%d)"
 			, pattern.mem_count, pattern.put_pc, value.type == v_relative, value.off18, value.type == v_const, value.type == v_reg2, value.reg, value.runtime16_select, entry_point, func_hash, pattern_hash, +stats.nowrite, ++stats.single, +stats.all);
 	}
 
@@ -9170,12 +9398,32 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 
 	if (likely_putllc_loop && !had_putllc_evaluation)
 	{
-		spu_log.notice("Likely missed PUTLLC16 patterns. (entry=0x%x)", entry_point);
+		spu_log.trace("Likely missed PUTLLC16 patterns. (entry=0x%x)", entry_point);
 	}
 
 	if (result.data.empty())
 	{
 		// Blocks starting from 0x0 or invalid instruction won't be compiled, may need special interpreter fallback
+#ifdef ARCH_ARM64
+		// Take the fallback the comment above asks for.
+		//
+		// An empty program tells the caller "nothing to compile", but nothing records that this
+		// address is hopeless, so the thread comes straight back and analyses it again. It never
+		// progresses and it never stops. Eternal Sonata (BLJS10017) pins two SPU threads this way
+		// at 0x5370 and 0xe1d8 the moment a battle ends, and the retry loop alone writes 300+ log
+		// lines a second -- on Android that is enough to stall the emulator by itself, so the game
+		// reads as frozen on the battle results screen rather than as anything SPU-related.
+		//
+		// Marking the block is what the compile-failure path already does, and it routes the
+		// thread to the SPU interpreter. Only the entry point is known here -- there is no program
+		// to describe the extent -- so the helper's entry+4 fallback applies and the interpreter
+		// releases the thread as soon as execution leaves that instruction. That is enough: the
+		// point is to break the loop, not to interpret the whole function.
+		//
+		// ARM64-only because the fallback machinery is: on x86 every block compiles, so there is
+		// nothing to fall back to and nothing to mark.
+		spu_mark_block_compile_failed(entry_point);
+#endif
 	}
 
 	if (!m_patterns.empty() && g_cfg.core.spu_debug)

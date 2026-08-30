@@ -4,6 +4,10 @@
 
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/RSX/rsx_profiler.h"
+#include "util/sysinfo.hpp"
+
+#include <chrono>
+#include <thread>
 
 #include "context_accessors.define.h"
 
@@ -51,8 +55,37 @@ namespace rsx
 			u64 start = get_system_time();
 			u64 last_check_val = start;
 
-			while (sema != arg)
+			// Kept for the timeout log: lets a report distinguish a semaphore that
+			// changed after we started waiting from one that never moved at all.
+			const u32 first_observed = static_cast<u32>(sema);
+
+			// The exclusive-load wait below faults on an unaligned address; the
+			// release side ignores unaligned semaphores, so mirror that here and
+			// fall back to a plain paced wait instead of the armed one.
+			const bool aligned = (addr % 4) == 0;
+
+			if (!aligned)
 			{
+				rsx_log.warning("NV406E semaphore acquire is using an unaligned semaphore; using unmonitored waits. (address=0x%x)", addr);
+			}
+
+#if defined(ARCH_ARM64)
+			u64 spin_budget = 0;
+			// Whether wait_for_event() below has a bounded wake on this kernel.
+			// Without it the tiered wait degrades to a timed sleep rather than
+			// re-exposing the unpaced spin (or an unbounded park).
+			const bool has_event_stream = utils::has_wfe_event_stream();
+#endif
+
+			while (true)
+			{
+				const RsxSemaphore observed = atomic_sema.observe();
+
+				if (observed == arg)
+				{
+					break;
+				}
+
 				if (RSX(ctx)->test_stopped())
 				{
 					RSX(ctx)->state += cpu_flag::again;
@@ -75,8 +108,12 @@ namespace rsx
 
 					if ((current - start) > tdr)
 					{
-						// If longer than driver timeout force exit
-						rsx_log.error("nv406e::semaphore_acquire has timed out. semaphore_address=0x%X", addr);
+						// If longer than driver timeout force exit. first/last observed
+						// let a report distinguish a value that changed during the wait
+						// (first != last, or last != first-known-stuck) from one that
+						// never moved; a transient hit of the awaited value between
+						// observations remains invisible by nature.
+						rsx_log.error("nv406e::semaphore_acquire has timed out. semaphore_address=0x%X, awaited=0x%X, first_observed=0x%X, last_observed=0x%X", addr, arg, first_observed, static_cast<u32>(observed));
 						break;
 					}
 				}
@@ -92,8 +129,52 @@ namespace rsx
 
 				RSX_PROF_SCOPE(idle);
 
-				// Wait until the value changes or until 100us pass.
-				utils::spin_on_cacheline_once(atomic_sema, sema, 100);
+#if defined(ARCH_ARM64)
+				// The armed one-shot wait below does not park on every core: on Oryon
+				// (Snapdragon 8 Elite class) WFE returns immediately while the exclusive
+				// monitor is armed, so this loop ran at tens of millions of iterations per
+				// second instead of waiting. Give the armed form a short window first - on
+				// cores where it parks it keeps its instant wake-on-write, and where it
+				// does not it acts as a brief spin that still catches short waits - then
+				// interleave a paced wait: the event-stream park when the kernel provides
+				// the stream, a timed sleep when it does not. The armed one-shot still
+				// runs each iteration afterwards, so on cores where it parks, a store
+				// wakes the second half of every post-budget iteration promptly; during
+				// the paced half a store is only seen at the next tick, so post-budget
+				// wake latency on such cores is bounded by (not free of) the pacing
+				// period.
+				if (++spin_budget > 500)
+				{
+					if (has_event_stream)
+					{
+						utils::wait_for_event();
+					}
+					else
+					{
+						// No event stream: neither WFE form has a wake this code can
+						// bound, so pace with the scheduler instead of spinning or
+						// parking blind. Also keeps the timeout and service polls
+						// above running at a bounded cadence.
+						std::this_thread::sleep_for(std::chrono::microseconds(100));
+					}
+				}
+
+				if (!aligned)
+				{
+					// Exclusive loads fault on unaligned addresses; rely on the
+					// pacing above plus the plain re-read at the loop top.
+					utils::pause();
+					continue;
+				}
+#endif
+				// On x86 with waitpkg/mwaitx this waits on the address, bounded by
+				// the timeout; without those extensions it degrades to a yield. On
+				// ARM the timeout is ignored: the wait ends on a write to the armed
+				// cache line or an event-stream tick on cores where the armed WFE
+				// parks, and returns immediately on cores where it does not
+				// (measured on Oryon), where the paced wait above sets the loop's
+				// cadence instead.
+				utils::spin_on_cacheline_once(atomic_sema, observed, 100);
 			}
 
 			RSX(ctx)->fifo_wake_delay();

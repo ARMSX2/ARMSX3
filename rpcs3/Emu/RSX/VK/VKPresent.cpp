@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "VKGSRender.h"
+#include "VKFrameGen.h"
 #include "vkutils/buffer_object.h"
 #include "vkutils/memory.h"
 #include "Emu/RSX/Overlays/overlay_manager.h"
@@ -10,6 +11,9 @@
 
 #include "upscalers/bilinear_pass.hpp"
 #include "upscalers/fsr_pass.h"
+#ifdef __ANDROID__
+#include "upscalers/sgsr_pass.h"
+#endif
 #include "upscalers/nearest_pass.hpp"
 #ifdef __ANDROID__
 #include "upscalers/librashader_pass.h"
@@ -63,6 +67,11 @@ bool VKGSRender::reinitialize_swapchain()
 
 	m_swapchain_dims.width = m_frame->client_width();
 	m_swapchain_dims.height = m_frame->client_height();
+	m_display_epoch = m_frame->display_epoch();
+
+	// A genuine rebuild re-arms the SUBOPTIMAL handling above: the latch exists to stop a rebuild
+	// that changes nothing from repeating, not to disable the signal for the rest of the session.
+	m_suboptimal_present_count = 0;
 
 	// Reject requests to acquire new swapchain if the window is minimized
 	// The NVIDIA driver will spam VK_ERROR_OUT_OF_DATE_KHR if you try to acquire an image from the swapchain and the window is minimized
@@ -108,6 +117,12 @@ bool VKGSRender::reinitialize_swapchain()
 	// Drain all the queues
 	vkDeviceWaitIdle(*m_device);
 
+	// Clean the FBO caches
+	for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
+	{
+		vk::remove_framebuffers_with_image(m_swapchain->get_image(i));
+	}
+
 	// Reset frame context storage
 	for (auto& ctx : m_frame_context_storage)
 	{
@@ -118,11 +133,27 @@ bool VKGSRender::reinitialize_swapchain()
 	m_current_queue_index = 0;
 	m_frame_context_storage.clear();
 
+	// The frame frame generation was holding back lives in the storage just cleared, and its
+	// swapchain image belongs to the swapchain about to be destroyed. There is nothing left to
+	// present it to, so drop it rather than carry a pointer into freed contexts.
+	m_deferred_present_frame = nullptr;
+	m_framegen_blit_cb_count = 0;
+
 	// Rebuild swapchain. Old swapchain destruction is handled by the init_swapchain call
 	if (!m_swapchain->init(m_swapchain_dims.width, m_swapchain_dims.height))
 	{
 		rsx_log.warning("Swapchain initialization failed. Request ignored [%dx%d]", m_swapchain_dims.width, m_swapchain_dims.height);
 		swapchain_unavailable = true;
+
+		// Distinguish "no usable window right now" from "the VkSurfaceKHR is dead". Retrying
+		// against a dead surface queries the same dead handle forever; the block at the top of
+		// this function is what rebuilds it, and it only runs when this flag is set.
+		if (auto* wsi = dynamic_cast<vk::swapchain_WSI*>(m_swapchain.get());
+			wsi && wsi->surface_is_lost())
+		{
+			m_surface_lost = true;
+		}
+
 		return false;
 	}
 
@@ -184,9 +215,136 @@ bool VKGSRender::reinitialize_swapchain()
 	return true;
 }
 
+// Put one generated image on screen.
+//
+// A self-contained acquire/blit/present that deliberately does NOT touch m_current_frame: that
+// context belongs to the real frame still being assembled, and borrowing its image index or
+// semaphores would present the same swapchain image twice.
+//
+// Best-effort throughout. A generated frame is an extra, so every failure path here simply
+// returns and lets the real frame present normally -- dropping an interpolated frame is invisible,
+// while stalling or presenting a torn one is not.
+vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
+{
+	if (src == VK_NULL_HANDLE || swapchain_unavailable || m_swapchain->is_headless())
+	{
+		return nullptr;
+	}
+
+	// One acquire/present semaphore pair per swapchain image, rotated.
+	if (m_framegen_acquire_sems.size() < m_swapchain->get_swap_image_count())
+	{
+		VkSemaphoreCreateInfo sem_info = {};
+		sem_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+		while (m_framegen_acquire_sems.size() < m_swapchain->get_swap_image_count())
+		{
+			VkSemaphore acquire = VK_NULL_HANDLE;
+			VkSemaphore present = VK_NULL_HANDLE;
+
+			if (vkCreateSemaphore(*m_device, &sem_info, nullptr, &acquire) != VK_SUCCESS ||
+				vkCreateSemaphore(*m_device, &sem_info, nullptr, &present) != VK_SUCCESS)
+			{
+				rsx_log.error("Could not create frame generation present semaphores.");
+				return nullptr;
+			}
+
+			m_framegen_acquire_sems.push_back(acquire);
+			m_framegen_present_sems.push_back(present);
+		}
+	}
+
+	const u32 sem_slot = m_framegen_sem_index++ % ::size32(m_framegen_acquire_sems);
+	const VkSemaphore acquire_sem = m_framegen_acquire_sems[sem_slot];
+	const VkSemaphore present_sem = m_framegen_present_sems[sem_slot];
+
+	u32 image = umax;
+
+	// Acquire WITH a semaphore, and make the blit below wait on it.
+	//
+	// This passed VK_NULL_HANDLE and then blitted into the image immediately: nothing established
+	// that the presentation engine had finished with it, which is a use-before-ready and undefined.
+	// On Adreno it shows as smearing during motion that no interpolation setting changes, because
+	// the interpolation was never at fault. ARMSX2 acquires with a fence and blocks on it before
+	// submitting; waiting on the GPU is the same guarantee without the CPU stall.
+	//
+	// Zero timeout still: if no image is free the display is keeping up, and waiting for one would
+	// make frame generation cost latency instead of adding smoothness.
+	if (m_swapchain->acquire_next_swapchain_image(acquire_sem, 0ull, &image) != VK_SUCCESS ||
+		image == umax)
+	{
+		return nullptr;
+	}
+
+	auto* cmd = m_primary_cb_list.next();
+	cmd->reset();
+	cmd->begin();
+
+	VkImage target = m_swapchain->get_image(image);
+
+	const VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+	vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_UNDEFINED,
+		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, range);
+
+	VkImageBlit region = {};
+	region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+	region.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+	region.srcOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
+	region.dstOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
+
+	// The generated image was written by framegen's device and waited on with its device idle, so
+	// it is complete by the time we get here; no cross-device semaphore exists to use instead. The
+	// opposite direction -- framegen overwriting this image while this blit is still reading it --
+	// is guarded by the caller, which waits for this command buffer before the next generation.
+	vkCmdBlitImage(*cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+		// NEAREST: source and destination are the same size, so linear filtering buys nothing and
+		// costs a filtered sampling pass instead of the fast copy path.
+		target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_NEAREST);
+
+	vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+		VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, range);
+
+	cmd->end();
+
+	// No semaphores either side. The source was already made visible by framegen's device idle,
+	// and the present below has nothing to wait on because this command buffer is the only writer
+	// of this swapchain image.
+	vk::queue_submit_t submit_info{};
+	submit_info.queue = m_device->get_graphics_queue();
+
+	// Wait for the acquire, signal the present. Without the wait the blit races the display;
+	// without the signal the present races the blit.
+	submit_info.wait_semaphores[submit_info.wait_semaphores_count] = acquire_sem;
+	submit_info.wait_stages[submit_info.wait_semaphores_count++] = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	submit_info.signal_semaphores[submit_info.signal_semaphores_count++] = present_sem;
+
+	cmd->submit(submit_info);
+
+	// Flush before presenting, as the real present path does at its own present.
+	//
+	// submit() goes through queue_submit, which DEFERS to the offloader thread when multithreaded
+	// RSX is on. Presenting immediately then waits on a semaphore whose signal operation has not
+	// been submitted yet -- forbidden, and it hangs the present without ever returning the
+	// acquired image.
+	cmd->flush();
+
+	m_swapchain->present(present_sem, image);
+	return cmd;
+}
+
 void VKGSRender::present(vk::frame_context_t *ctx)
 {
-	ensure(ctx->present_image != umax);
+	// Both of these are torn down by frame_context_cleanup, and frame generation's deferred
+	// present is the one caller that can hold a context across the throttle that reclaims them.
+	// The reclaim itself is prevented in advance_queued_frames, but a present owed by a context
+	// that has already been recycled must not take the RSX thread down with it -- dropping the
+	// present costs one frame on screen, and says so.
+	if (ctx->present_image == umax || !ctx->swap_command_buffer)
+	{
+		rsx_log.error("Present requested for a frame context that was already retired; dropping it.");
+		return;
+	}
 
 	// Partial CS flush
 	ctx->swap_command_buffer->flush();
@@ -196,10 +354,38 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 		switch (VkResult error = m_swapchain->present(ctx->present_wait_semaphore, ctx->present_image))
 		{
 		case VK_SUCCESS:
+			m_suboptimal_present_count = 0;
 			break;
 		case VK_SUBOPTIMAL_KHR:
 #ifndef ANDROID
 			should_reinitialize_swapchain = true;
+#else
+			// Android used to drop this signal entirely, which left no way back from a swapchain
+			// the surface has outgrown.
+			//
+			// SUBOPTIMAL is what the driver reports when the swapchain no longer suits the surface
+			// -- most often because its preTransform (forced to IDENTITY when the surface supports
+			// it, see swapchain.cpp) disagrees with a currentTransform that has since rotated.
+			// Opening a game the moment the app starts is how that happens: the swapchain is built
+			// while the surface is still portrait and the landscape surface arrives a second later.
+			// With this ignored, the only remaining recovery was VK_ERROR_OUT_OF_DATE_KHR, which is
+			// what a MANUAL orientation change produces -- hence a black picture that the user could
+			// only fix by rotating the device.
+			//
+			// It was ignored for a reason, though: some Android drivers report SUBOPTIMAL as a
+			// standing condition, and rebuilding the swapchain on every frame that reports it would
+			// be far worse than the problem. So act on it only once it has persisted, and only once
+			// per surface size -- a rebuild that does not clear the condition must not be retried
+			// forever.
+			if (++m_suboptimal_present_count > 8 && m_suboptimal_handled_at != m_swapchain_dims.width)
+			{
+				m_suboptimal_handled_at = m_swapchain_dims.width;
+				m_suboptimal_present_count = 0;
+				should_reinitialize_swapchain = true;
+
+				rsx_log.warning("Swapchain reported SUBOPTIMAL persistently at %ux%u; rebuilding.",
+					m_swapchain_dims.width, m_swapchain_dims.height);
+			}
 #endif
 			break;
 		case VK_ERROR_OUT_OF_DATE_KHR:
@@ -277,6 +463,24 @@ void VKGSRender::advance_queued_frames()
 	{
 		auto frame = m_queued_frames.front();
 
+		// A frame frame generation is holding back has NOT been presented yet, and it still owns
+		// the swapchain image it acquired. Reclaiming its context here tears down the two things
+		// the outstanding present needs -- present_image and swap_command_buffer -- so the present
+		// that comes due next frame dereferences a command buffer that is gone, and the acquired
+		// image is never handed back to the swapchain either.
+		//
+		// That is the crash from turning frame generation on mid-game: the deferral begins, this
+		// throttle reclaims the deferred context on the very next frame (max_frames_in_flight is
+		// only 1 once the memory-pressure path drops depth_limit to 2), and the following
+		// queue_swap_request presents it. Flush the deferral instead -- presenting a frame slightly
+		// early costs one interpolated frame's ordering, which is invisible; the alternative is a
+		// dead RSX thread.
+		if (frame == m_deferred_present_frame)
+		{
+			present(m_deferred_present_frame);
+			m_deferred_present_frame = nullptr;
+		}
+
 		if (!frame->swap_command_buffer)
 		{
 			m_queued_frames.pop_front();
@@ -301,6 +505,102 @@ void VKGSRender::queue_swap_request()
 	ensure(!m_current_frame->swap_command_buffer);
 	m_current_frame->swap_command_buffer = m_current_command_buffer;
 
+	const u32 framegen_frames = vk::frame_gen::generated_frame_count();
+
+	if (!framegen_frames)
+	{
+		// Forget the recorded blits rather than leave them to be waited on if the setting comes back
+		// on: the command buffers come from a ring and will have been reused by then, so the wait
+		// would be for unrelated work.
+		m_framegen_blit_cb_count = 0;
+	}
+
+	// Does this swapchain have room to run frame generation a frame behind?
+	//
+	// The pipelined path holds the real frame back by one present so the generated image can go out
+	// ahead of it, which means one more image in flight than normal presentation needs: the one
+	// being composited into, the one held back, and one for the generated frame. Below that,
+	// present_generated_frame's zero-timeout acquire would fail every frame and frame generation
+	// would compute images nothing ever puts on screen -- worse than the serialised path it
+	// replaces, and silently so. So fall back rather than degrade.
+	// Pipelining is OFF, and this is the switch rather than a revert.
+	//
+	// Holding the real frame back by one present conflicts with how frame contexts are recycled.
+	// They are a fixed array, and the throttle in advance_queued_frames retires the deferred one
+	// before the present it still owes -- first as a null swap_command_buffer dereference on the
+	// RSX thread, then, once present() was taught to drop a retired context, as a lockup: the
+	// dropped present never hands its acquired swapchain image back and acquire eventually starves.
+	// Presenting the deferred frame before the throttle can reclaim it closed one of those paths,
+	// but "already retired" still fired twice on device, so at least one more reclaim path exists
+	// and has not been found.
+	//
+	// Everything else the pipelined work brought stays live and is worth keeping: the AHB teardown
+	// ordering (release_shared_images used to free the input buffers while framegen's context still
+	// held them imported -- a use-after-free on any resize with frame generation on), the leaked
+	// g_shared_out[2] when dropping x4 to x2, and the recorded-vs-committed capture split.
+	//
+	// Flip this to true to resume that work; the serialised path below is what shipped working.
+	constexpr bool k_framegen_pipelining_enabled = false;
+
+	const bool pipelined = k_framegen_pipelining_enabled && framegen_frames != 0 &&
+		!m_swapchain->is_headless() && m_swapchain->get_swap_image_count() >= 4;
+
+	if (pipelined != m_framegen_pipelined)
+	{
+		m_framegen_pipelined = pipelined;
+
+		if (framegen_frames)
+		{
+			rsx_log.notice("Frame generation: %s (swapchain has %u images)",
+				pipelined ? "pipelined a frame behind" : "serialised, swapchain too shallow to pipeline",
+				m_swapchain->get_swap_image_count());
+		}
+	}
+
+	// Every generation reuses the same output images, and the blits that read the previous set were
+	// submitted a frame ago. This is the cheapest place to make that reuse safe: the work is a frame
+	// old, so in the steady state the fence is already signalled and this costs a fence poll.
+	auto retire_generated_blits = [this]()
+	{
+		for (u32 i = 0; i < m_framegen_blit_cb_count; ++i)
+		{
+			m_framegen_blit_cb[i]->wait(FRAME_PRESENT_TIMEOUT);
+		}
+
+		m_framegen_blit_cb_count = 0;
+	};
+
+	u32 generated = 0;
+
+	if (m_framegen_pipelined)
+	{
+		// Generate BEFORE this frame is submitted, from the pair of captures that have already
+		// retired.
+		//
+		// This is the whole point of running a frame behind. framegen reads the shared images on its
+		// own VkDevice with no semaphore joining it to ours, so it can only be given captures whose
+		// submission has completed -- and the way that used to be arranged was to submit this frame
+		// and then block on it, which put a full frame of GPU work on the critical path before
+		// framegen had even started. Here the newest usable capture is the one from the previous
+		// frame, which the game has had a whole frame to finish, so the wait below is normally
+		// already satisfied. Waiting for that one covers the other half of the pair as well: it was
+		// submitted to the same queue a frame earlier, and this renderer already treats work on the
+		// graphics queue as retiring in submission order -- frame_context_cleanup walks the queued
+		// frames oldest-first on exactly that basis.
+		//
+		// It also has to happen before the submit rather than after: this frame's command buffer
+		// carries a capture that overwrites one of the two images framegen is about to read, and
+		// with only two of them there is no slot that is not being read. See VKFrameGen.cpp for why
+		// a third one cannot exist.
+		if (m_deferred_present_frame && m_deferred_present_frame->swap_command_buffer)
+		{
+			m_deferred_present_frame->swap_command_buffer->wait(FRAME_PRESENT_TIMEOUT);
+		}
+
+		retire_generated_blits();
+		generated = vk::frame_gen::generate(*m_device);
+	}
+
 	if (m_swapchain->is_headless())
 	{
 		m_swapchain->end_frame(*m_current_command_buffer, m_current_frame->present_image);
@@ -314,8 +614,129 @@ void VKGSRender::queue_swap_request()
 			VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT);
 	}
 
-	// Set up a present request for this frame as well
-	present(m_current_frame);
+	// The capture recorded during flip() is only now a write that has happened.
+	//
+	// Nothing may interpolate from it before this point, and framegen has no way to find out on its
+	// own: it is a second VkDevice reading the same AHardwareBuffer, with no semaphore between them.
+	vk::frame_gen::commit_capture();
+
+	if (framegen_frames && !m_framegen_pipelined)
+	{
+		// The CPU wait that used to be here is GONE, and this is the single biggest thing frame
+		// generation was paying.
+		//
+		// It waited on this frame's own submission -- a full frame of GPU work, on the critical
+		// path, every frame -- because frame generation read the captured image on a SECOND
+		// VkDevice with no semaphore joining the two, so nothing else could prove the capture
+		// had landed. Measured on an Adreno 740 it took 60fps content to 25, and because the
+		// cost was a stall rather than arithmetic, halving the shader cost with fp16 moved it
+		// not at all.
+		//
+		// The passes run on OUR device and OUR graphics queue now, and generate() submits to
+		// that same queue. Vulkan orders submissions on a queue, so the interpolation cannot
+		// begin before the frame it reads has finished -- the guarantee the wait was buying is
+		// now free.
+		retire_generated_blits();
+		generated = vk::frame_gen::generate(*m_device);
+	}
+
+	// Present the generated frames before the real one.
+	//
+	// This is what makes frame generation visible rather than merely computed: each generated
+	// image gets its own acquire, blit and present, so the display sees more frames than the game
+	// drew. Before the real frame because the interpolated image sits BETWEEN the previous frame
+	// and this one -- presenting it afterwards would run time backwards.
+	//
+	// Which real frame that is differs by path, and it is the reason the pipelined one holds a frame
+	// back at all: it interpolates the pair ending at the PREVIOUS frame, so the frame the generated
+	// image leads into is the previous one, not this one. Presenting this frame here and the
+	// generated image before it would show the interpolation after the frame it was interpolated
+	// towards, which is time running backwards by half a frame, every frame.
+	//
+	// Everything is gated on generate() having succeeded, and any failure inside it disables the
+	// feature for the session rather than retrying per frame. If nothing was generated this is a
+	// single integer test and presentation is untouched.
+	// Counts what actually reaches the screen. Every theory about this judder so far has been
+	// wrong and not one of them was measured: asked = what the pacer planned, shown = what
+	// present_generated_frame accepted, dropped = the acquire found nothing free. The gap spread
+	// separates "not enough frames" from "the right number at the wrong times".
+	static u64 s_fg_window = 0;
+	static u32 s_fg_asked = 0, s_fg_shown = 0, s_fg_dropped = 0;
+	static u64 s_fg_last = 0, s_fg_min = ~0ull, s_fg_max = 0, s_fg_sum = 0;
+	static u32 s_fg_gaps = 0;
+
+	s_fg_asked += generated;
+
+	for (u32 i = 0; i < generated; ++i)
+	{
+		auto* cb = present_generated_frame(vk::frame_gen::generated_image(i));
+
+		if (cb) { s_fg_shown++; } else { s_fg_dropped++; }
+
+		// Null when the acquire found no free swapchain image, which is a dropped generated frame
+		// and nothing more. Only a blit that actually happened has to be waited for.
+		if (cb && m_framegen_blit_cb_count < std::size(m_framegen_blit_cb))
+		{
+			m_framegen_blit_cb[m_framegen_blit_cb_count++] = cb;
+		}
+	}
+
+	if (framegen_frames)
+	{
+		const u64 now = get_system_time();
+
+		if (s_fg_last)
+		{
+			const u64 gap = now - s_fg_last;
+			s_fg_min = std::min(s_fg_min, gap);
+			s_fg_max = std::max(s_fg_max, gap);
+			s_fg_sum += gap;
+			s_fg_gaps++;
+		}
+
+		s_fg_last = now;
+
+		if (now - s_fg_window > 1'000'000)
+		{
+			if (s_fg_window && s_fg_gaps)
+			{
+				rsx_log.notice("FRAMEGEN present: asked=%u shown=%u dropped=%u | real-frame gap us:"
+					" min=%u avg=%u max=%u",
+					s_fg_asked, s_fg_shown, s_fg_dropped, static_cast<u32>(s_fg_min),
+					static_cast<u32>(s_fg_sum / s_fg_gaps), static_cast<u32>(s_fg_max));
+			}
+
+			s_fg_window = now;
+			s_fg_asked = s_fg_shown = s_fg_dropped = 0;
+			s_fg_min = ~0ull; s_fg_max = 0; s_fg_sum = 0; s_fg_gaps = 0;
+		}
+	}
+
+
+	if (m_framegen_pipelined)
+	{
+		// Hand this frame's present to the next call and put the held-back one on screen now.
+		vk::frame_context_t* const to_present = m_deferred_present_frame;
+		m_deferred_present_frame = m_current_frame;
+
+		if (to_present)
+		{
+			present(to_present);
+		}
+	}
+	else
+	{
+		// A frame held back by the pipelined path has to go out before this one, or it is stranded
+		// holding an acquired swapchain image that is never presented.
+		if (m_deferred_present_frame)
+		{
+			present(m_deferred_present_frame);
+			m_deferred_present_frame = nullptr;
+		}
+
+		// Set up a present request for this frame as well
+		present(m_current_frame);
+	}
 
 	// Grab next cb in line and make it usable
 	m_current_command_buffer = m_primary_cb_list.next();
@@ -524,11 +945,11 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 
 			if (vk::formats_are_bitcast_compatible(dst_img.get(), image_to_flip))
 			{
-				vk::copy_image(*m_current_command_buffer, image_to_flip, dst_img.get(), src_rect, dst_rect, 1);
+				vk::copy_image(*m_current_command_buffer, image_to_flip, dst_img.get(), src_rect, dst_rect);
 			}
 			else
 			{
-				vk::copy_image_typeless(*m_current_command_buffer, image_to_flip, dst_img.get(), src_rect, dst_rect, 1);
+				vk::copy_image_typeless(*m_current_command_buffer, image_to_flip, dst_img.get(), src_rect, dst_rect);
 			}
 
 			image_to_flip = dst_img.get();
@@ -618,6 +1039,17 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		{
 			swapchain_unavailable = true;
 		}
+	}
+
+	// A replacement window is not a resize, and the size check above cannot see one.
+	//
+	// Opening a game the instant the app starts swaps the SurfaceView under a swapchain that has
+	// already been built, at identical dimensions -- so nothing above fired and the renderer went
+	// on presenting into a window that was no longer composited. That is the black screen that
+	// "fixed itself" on rotation: rotating changes the size, which is the trigger that did exist.
+	if (m_display_epoch != m_frame->display_epoch())
+	{
+		swapchain_unavailable = true;
 	}
 
 	if (m_vsync_mode != g_cfg.video.vsync)
@@ -923,24 +1355,32 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			single_target_pass = vk::get_renderpass(*m_device, key);
 			ensure(single_target_pass != VK_NULL_HANDLE);
 
-			if (!m_overlay_recording_img ||
-				m_overlay_recording_img->type() != image_to_flip->type() ||
-				m_overlay_recording_img->format() != image_to_flip->format() ||
-				m_overlay_recording_img->width() != image_to_flip->width() ||
-				m_overlay_recording_img->height() != image_to_flip->height() ||
-				m_overlay_recording_img->layers() != image_to_flip->layers())
+			if (m_overlay_recording_img)
+			{
+				// Validate
+				if (m_overlay_recording_img->format() != image_to_flip->format() ||
+					m_overlay_recording_img->width() != image_to_flip->width() ||
+					m_overlay_recording_img->height() != image_to_flip->height())
+				{
+					// Dispose correctly
+					vk::remove_framebuffers_with_image(m_overlay_recording_img.get());
+					vk::get_resource_manager()->dispose(m_overlay_recording_img);
+				}
+			}
+
+			if (!m_overlay_recording_img)
 			{
 				m_overlay_recording_img = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-					image_to_flip->type(), image_to_flip->format(), image_to_flip->width(), image_to_flip->height(), 1, 1, image_to_flip->layers(), VK_SAMPLE_COUNT_1_BIT,
+					VK_IMAGE_TYPE_2D, image_to_flip->format(), image_to_flip->width(), image_to_flip->height(), 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
 					VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-					0, VMM_ALLOCATION_POOL_UNDEFINED);
+					0, VMM_ALLOCATION_POOL_SYSTEM);
 			}
 
 			m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 			image_to_flip->push_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
 			const areai rect = areai(0, 0, buffer_width, buffer_height);
-			vk::copy_image(*m_current_command_buffer, image_to_flip, m_overlay_recording_img.get(), rect, rect, 1);
+			vk::copy_image(*m_current_command_buffer, image_to_flip, m_overlay_recording_img.get(), rect, rect);
 
 			image_to_flip->pop_layout(*m_current_command_buffer);
 			m_overlay_recording_img->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -1016,6 +1456,14 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		else if (m_output_scaling == output_scaling_mode::shader)
 		{
 			m_upscaler = std::make_unique<vk::librashader_upscale_pass>();
+		}
+		else if (m_output_scaling == output_scaling_mode::sgsr)
+		{
+			m_upscaler = std::make_unique<vk::sgsr_upscale_pass>(false);
+		}
+		else if (m_output_scaling == output_scaling_mode::sgsr_edge)
+		{
+			m_upscaler = std::make_unique<vk::sgsr_upscale_pass>(true);
 		}
 #endif
 		else
@@ -1179,6 +1627,41 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		}
 
 		direct_fbo->release();
+	}
+
+	// Hand the finished frame to frame generation.
+	//
+	// HERE, after the overlays and before the image becomes PRESENT_SRC, so what framegen
+	// interpolates is exactly what the user sees. It used to capture image_to_flip -- the game
+	// image, upstream of the output pipeline and of every overlay -- and since generated frames are
+	// presented straight from framegen's output, the performance overlay ended up on real frames
+	// only. Presenting generated/real/generated/real then blinked it at half the display rate.
+	//
+	// This is also the one place that covers every configuration: presentation splits into a
+	// calibration pass and a raw blit depending on scaling mode and stereo, and both converge here.
+	//
+	// Still gated on image_to_flip, which is what the old site got for free by sitting inside that
+	// branch. Without the gate this also captures frames the GAME did not draw -- the PPU/SPU
+	// compilation screen is the obvious one, being overlay on a cleared background -- and
+	// interpolating a progress dialog produced exactly the flicker that moving the capture was
+	// meant to remove.
+	//
+	// A swapchain image is not something framegen's separate VkDevice can see, so this copies into
+	// AHardwareBuffer-backed storage both devices share. Returns false and costs nothing when the
+	// feature is off, which is the default.
+	if (image_to_flip)
+	{
+		vk::frame_gen::capture_presented_frame(*m_current_command_buffer, *m_device,
+			// present_layout, NOT target_layout.
+			//
+			// generate() records into its own command buffer, submitted AFTER this frame's --
+			// and the transition just below moves the image to present_layout before then. Handing
+			// it target_layout meant its barrier declared an oldLayout the image was no longer in,
+			// and restored that same wrong layout afterwards, so the frame was presented outside
+			// PRESENT_SRC_KHR. Both are spec violations, and on a driver that really re-tiles
+			// between the two they corrupt the presented image.
+			target_image, present_layout, m_swapchain_dims.width, m_swapchain_dims.height,
+			buffer_width, buffer_height);
 	}
 
 	if (target_layout != present_layout)

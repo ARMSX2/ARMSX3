@@ -360,15 +360,32 @@ void applyPresence(const std::string& serial, const std::string& title,
     // So: use the cover URL when we have one (the API accepts an https URL here,
     // no upload required), and otherwise send no assets rather than a key we
     // cannot guarantee exists.
-    const bool has_art = !cover.empty();
-    if (has_art) {
-        discordpp::ActivityAssets assets{};
+    // The app icon, by URL rather than by asset key, for the reason above: a key that is not in
+    // the portal makes Discord reject the whole update, while an https URL always resolves. It is
+    // the launcher icon out of this repository, so it cannot drift from the app it represents.
+    static constexpr const char* kLogoUrl =
+        "https://raw.githubusercontent.com/ARMSX2/ARMSX3/master/android/armsx3-ui/app/src/main/"
+        "res/mipmap-xxxhdpi/ic_launcher.png";
+
+    discordpp::ActivityAssets assets{};
+
+    if (!cover.empty()) {
+        // Cover art large, emulator small -- the shape ARMSX2 uses, and the one that reads as
+        // "playing this, on this" rather than just naming a game.
         assets.SetLargeImage(cover);
         if (!title.empty()) {
             assets.SetLargeText(title);
         }
-        activity.SetAssets(assets);
+        assets.SetSmallImage(kLogoUrl);
+        assets.SetSmallText("ARMSX3");
+    } else {
+        // No cover: the logo takes the large slot instead of sending no assets at all, which is
+        // what used to happen and left the card blank.
+        assets.SetLargeImage(kLogoUrl);
+        assets.SetLargeText("ARMSX3");
     }
+
+    activity.SetAssets(assets);
 
     LOGI("presence: title='%s' serial='%s' cover=%s ra=%s", title.c_str(), serial.c_str(),
          cover.empty() ? "none" : "yes", ra.empty() ? "none" : "yes");

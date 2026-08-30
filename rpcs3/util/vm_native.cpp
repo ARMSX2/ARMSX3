@@ -336,6 +336,40 @@ namespace utils
 #endif
 	}
 
+	bool try_memory_commit(void* pointer, usz size, protection prot)
+	{
+		if (!size)
+		{
+			return true;
+		}
+
+#ifdef _WIN32
+		return ::VirtualAlloc(pointer, size, MEM_COMMIT, +prot) != nullptr;
+#else
+		const u64 ptr64 = reinterpret_cast<u64>(pointer);
+		void* const base = reinterpret_cast<void*>(ptr64 & -get_page_size());
+		const usz len = size + (ptr64 & (get_page_size() - 1));
+
+		if (::mprotect(base, len, +prot) == -1)
+		{
+			return false;
+		}
+
+		// Advisory only. A failure here does not mean the pages are unusable, so unlike the
+		// mprotect above it is not worth failing the caller over.
+		if constexpr (c_madv_dump != 0)
+		{
+			::madvise(base, len, c_madv_dump);
+		}
+		else
+		{
+			::madvise(base, len, MADV_WILLNEED);
+		}
+
+		return true;
+#endif
+	}
+
 	void memory_decommit(void* pointer, usz size, [[maybe_unused]] bool can_be_jit)
 	{
 		if (!size)

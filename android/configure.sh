@@ -21,7 +21,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # compiler was not. rpcsx-ui-android pins the NDK 29 line for the same reason.
 : "${NDK_VERSION:=29.0.14206865}"
 : "${CMAKE_VERSION:=3.30.5}"
-: "${ANDROID_API:=29}"          # matches rpcsx-ui-android's minSdk
+: "${ANDROID_API:=33}"          # keep in step with armsx3-ui minSdk
 : "${BUILD_DIR:=$ROOT/build-android}"
 
 NDK="$ANDROID_HOME/ndk/$NDK_VERSION"

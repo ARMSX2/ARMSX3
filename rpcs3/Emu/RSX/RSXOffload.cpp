@@ -197,10 +197,65 @@ namespace rsx
 				return false;
 			}
 
-			while (_thr.m_enqueued_count.load() > _thr.m_processed_count.load())
+			// Spin briefly for the short common handoff, then park until the offloader
+			// drains the queue (it notify_all()s m_processed_count then -- see operator()
+			// above) or 100us pass, whichever is first. Before this, the loop was a pure
+			// pause() spin: measured on MGR gameplay (Odin, warm shader cache), it held
+			// 26.6% of the RSX thread's wall time while the offloader sat parked at 99.8%,
+			// burning a core per wake latency on every small handoff.
+			//
+			// The timeout is load-bearing, not a formality. Two conditions leave the
+			// drain-notify unable to fire while work is outstanding: the offloader can be
+			// stopped mid-job by a memory fault (it then spins in on_access_violation
+			// until THIS thread's upkeep clears the deadlock flag), and the upkeep below
+			// can itself enqueue new jobs from inside the wait (queue_submit callbacks
+			// reach backend_ctrl through flush_command_queue), which pushes the
+			// equal-counters notify out to the next drain. Both resolve within one
+			// timeout tick, and neither may ever be used to justify removing it.
+			//
+			// on_semaphore_acquire_wait() runs on every iteration because it is the only
+			// agent that clears an offloader fault-deadlock, and, on paths that have not
+			// set the 'flushing' guard, it services pending flushes and async flips.
+			//
+			// Park only when the upkeep call made no progress visible: the drain-notify
+			// is one-shot, so parking on a value read before the upkeep would absorb a
+			// whole timeout when the offloader drained during it -- and parking on a
+			// blind re-read makes any PARTIAL progress during the upkeep return the
+			// wait immediately, degrading the park into a hot upkeep loop for the whole
+			// drain. If the count moved, loop and re-evaluate; if it did not, the
+			// pre-upkeep value is still current and is the correct wait target.
+			//
+			// If the offloader thread is not running -- never started because the config
+			// was off at boot and toggled on mid-session, aborting, or dead from an
+			// unrecoverable fault -- the drain can never come. Do not park then: keep the
+			// visible spin, so the (pre-existing) hang shows up as a busy RSX thread in
+			// any profiler instead of an idle one that reads as a healthy app.
+			u32 spins = 0;
+
+			while (true)
 			{
+				const u64 processed = _thr.m_processed_count.load();
+
+				if (_thr.m_enqueued_count.load() <= processed)
+				{
+					break;
+				}
+
 				rsxthr->on_semaphore_acquire_wait();
-				utils::pause();
+
+				if (++spins < 500 || static_cast<thread_state>(_thr) != thread_state::created)
+				{
+					utils::pause();
+					continue;
+				}
+
+				if (_thr.m_processed_count.load() != processed)
+				{
+					// Progress during the upkeep call -- re-evaluate before parking.
+					continue;
+				}
+
+				_thr.m_processed_count.wait(processed, atomic_wait_timeout{100'000});
 			}
 		}
 		else

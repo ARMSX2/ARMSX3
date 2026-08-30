@@ -122,6 +122,21 @@ object TouchControls {
      *  backdrop to deselect. */
     val selectedButton = mutableStateOf<TouchButtonId?>(null)
 
+    /**
+     * Whether the editor panel is collapsed to just its grip strip.
+     *
+     * The complaint this answers is not that the panel is ugly, it is that the panel covers the
+     * thing you are trying to edit -- and the only remedy was to drag it out of the way, every
+     * time. Auto-docking the panel away from the selected widget does not fix it either, because
+     * selecting a widget under the panel means touching through the panel first. One tap here
+     * uncovers everything beneath it and needs no drag.
+     *
+     * Deliberately NOT persisted, and reset on leaving edit mode: it is a momentary "let me see
+     * under this", and a session that opened the editor to a panel with no controls on it would
+     * just look broken.
+     */
+    val editorPanelCollapsed = mutableStateOf(false)
+
     /** Profile picker / save-as dialog shown over the editor. */
     val profileDialogOpen = mutableStateOf(false)
 
@@ -1325,7 +1340,14 @@ enum class TouchButtonId(val label: String, val keycode: Int, val kind: Kind) {
     // additionally hit-tests this widget's own circle so a thumb that glides up off
     // the stick latches it without lifting; see StickWidget. Its keycode is chosen in
     // Pad settings (analogExtraKeycode), so the enum entry carries none.
-    ANALOG_EXTRA("Extra", 0, Kind.ANALOGEXTRA);
+    ANALOG_EXTRA("Extra", 0, Kind.ANALOGEXTRA),
+
+    // On-screen keyboard toggle. Emits no PS3 keycode; tapping raises or drops the Android
+    // keyboard via MainActivityRuntime.toggleSoftKeyboard(), the same action as the
+    // "On-Screen Keyboard (toggle)" hotkey -- so a device with no spare pad button, or no
+    // controller at all, can still reach it. Requires Emulate USB Keyboard (Network settings);
+    // the action says so itself when it is off. Opt-in: absent from the default layout.
+    KEYBOARD("KBD", 0, Kind.STATEACTION);
 
     enum class Kind { FACE, SHOULDER, MENU, DPAD, STICK, PAUSE, PRESSURE, FASTFORWARD, MACRO, STATEACTION, ANALOGEXTRA }
 }
@@ -1495,6 +1517,12 @@ data class TouchLayout(val buttons: List<TouchButtonCfg>) {
                 TouchButtonCfg(TouchButtonId.SAVE_STATE, 0.30f, 0.54f, 44f, enabled = false),
                 TouchButtonCfg(TouchButtonId.LOAD_STATE, 0.38f, 0.54f, 44f, enabled = false),
                 TouchButtonCfg(TouchButtonId.SCREENSHOT, 0.46f, 0.54f, 44f, enabled = false),
+                // On-screen keyboard toggle -- OPT-IN, same row. Being listed here is what makes it
+                // reachable at all: the editor offers what the layout CONTAINS, not what the enum
+                // declares, so adding the TouchButtonId alone left it invisible. Existing layouts
+                // pick it up because fromJson splices in any default button they lack, and
+                // defaultPortrait splices from this same table.
+                TouchButtonCfg(TouchButtonId.KEYBOARD, 0.54f, 0.54f, 44f, enabled = false),
                 // Extra analog button, parked directly above the D-PAD (0.10, 0.55) — not above the
                 // left stick, which is where it first went. The button is for sprint/jump held while
                 // you keep moving, so it belongs above whichever control the thumb is already on,

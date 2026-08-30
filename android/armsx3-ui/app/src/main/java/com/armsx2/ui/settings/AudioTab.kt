@@ -101,6 +101,10 @@ fun AudioTab(state: MutableState<Settings>) {
             description = str("audio.channels.description"),
             onChange = { apply(s.copy(ps3 = s.ps3.copy(audioChannels = intArrayOf(0, 1, 2, 6, 7)[it]))) },
         )
+        // Cubeb only. g_cfg.audio.cubeb_backend is read once, in CubebBackend's constructor, so
+        // under Oboe this row is inert -- yet it stayed interactive and kept showing a selection,
+        // which is how issue #73 produced "I tried OpenSL too" as a meaningful-looking result.
+        if (s.ps3.audioRenderer == 2) {
         SettingsDivider()
         // The replacement for PCSX2's OpenSL ES toggle, which was removed from here on the
         // reasoning that "RPCS3 picks its backend via Audio Renderer". That is not the same knob:
@@ -120,6 +124,7 @@ fun AudioTab(state: MutableState<Settings>) {
             description = str("audio.cubebBackend.description"),
             onChange = { apply(s.copy(ps3 = s.ps3.copy(audioCubebBackend = it))) },
         )
+        }
         // Removed: SPU2 is the PS2's sound chip; its NEON reverb path does not exist here.
         // Removed: PCSX2 SPU2 lightweight mixing mode. No RPCS3 counterpart.
     }

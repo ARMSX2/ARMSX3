@@ -196,7 +196,23 @@ namespace vk
 		}
 #endif
 		VkSurfaceCapabilitiesKHR surface_descriptors = {};
-		CHECK_RESULT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.gpu(), m_surface, &surface_descriptors));
+		if (const VkResult res = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.gpu(), m_surface, &surface_descriptors);
+			res != VK_SUCCESS)
+		{
+			// Reported through the same flag as the present-mode queries; the caller recreates the
+			// surface before retrying. currentExtent is left zeroed, which init() already reads as
+			// "no usable window" and refuses to build a swapchain from.
+			if (res == VK_ERROR_SURFACE_LOST_KHR)
+			{
+				m_surface_is_lost = true;
+				rsx_log.warning("Swapchain: surface was lost while querying capabilities; it will be recreated.");
+				surface_descriptors = {};
+			}
+			else
+			{
+				vk::die_with_error(res);
+			}
+		}
 		return { surface_descriptors, false };
 	}
 
@@ -207,6 +223,8 @@ namespace vk
 			rsx_log.error("Cannot create WSI swapchain without a present queue");
 			return false;
 		}
+
+		m_surface_is_lost = false;
 
 		VkSwapchainKHR old_swapchain = m_vk_swapchain;
 		vk::physical_device& gpu = const_cast<vk::physical_device&>(dev.gpu());
@@ -235,14 +253,63 @@ namespace vk
 		}
 
 		u32 nb_available_modes = 0;
-		CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, nullptr));
+
+		if (const VkResult res = vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, nullptr);
+			res != VK_SUCCESS)
+		{
+			// A lost surface is recoverable and, on Android, routine: the ANativeWindow is destroyed
+			// every time the app leaves the foreground. The acquire and present paths have always
+			// treated it that way; this one called die_with_error and took the process down, which
+			// then tore the RSX thread apart mid-operation and turned a recoverable event into a
+			// heap corruption in ~ZCULL_control.
+			if (res == VK_ERROR_SURFACE_LOST_KHR)
+			{
+				m_surface_is_lost = true;
+				rsx_log.warning("Swapchain: surface was lost while querying present modes; it will be recreated.");
+				return false;
+			}
+
+			vk::die_with_error(res);
+		}
 
 		std::vector<VkPresentModeKHR> present_modes(nb_available_modes);
-		CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, present_modes.data()));
+
+		if (const VkResult res = vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, present_modes.data());
+			res != VK_SUCCESS)
+		{
+			if (res == VK_ERROR_SURFACE_LOST_KHR)
+			{
+				m_surface_is_lost = true;
+				rsx_log.warning("Swapchain: surface was lost while reading present modes; it will be recreated.");
+				return false;
+			}
+
+			vk::die_with_error(res);
+		}
 
 		VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
 		std::vector<VkPresentModeKHR> preferred_modes;
 
+		// Frame generation needs FIFO, whatever vsync is set to.
+		//
+		// Interpolated frames are presented BETWEEN the real ones, so each has to survive to a
+		// vblank of its own to be seen at all. IMMEDIATE tears through them and MAILBOX keeps
+		// only the newest image per vblank -- so the interpolated frame is replaced by the real
+		// one that follows it microseconds later and never reaches the screen. What is left is
+		// the real frames alone, at an interval now disturbed by the generation work: judder
+		// that gets worse the faster the picture changes, which is exactly how it presents when
+		// the camera moves.
+		//
+		// ARMSX2 forces FIFO for the same reason at the same point (VKSwapChain::SelectPresentMode).
+		if (g_cfg.video.frame_generation != frame_generation_mode::off &&
+			g_cfg.video.vsync != vsync_mode::full)
+		{
+			rsx_log.warning("Frame generation is enabled; using FIFO presentation so interpolated "
+				"frames are displayed rather than discarded.");
+
+			preferred_modes = { VK_PRESENT_MODE_FIFO_KHR };
+		}
+		else
 		switch (g_cfg.video.vsync)
 		{
 		case vsync_mode::off:
@@ -279,11 +346,26 @@ namespace vk
 		rsx_log.notice("Swapchain: present mode %d in use.", static_cast<int>(swapchain_present_mode));
 
 		u32 nb_swap_images = surface_descriptors.minImageCount + 1;
+
+		// Frame generation presents TWO images per rendered frame, so it needs a deeper chain.
+		//
+		// With the usual three, the acquire for the interpolated frame finds nothing free and
+		// present_generated_frame returns null -- the frame is computed in full and then dropped.
+		// That presents as frame generation doing nothing except adding judder: the displayed
+		// rate stays exactly what it was without it, because only the real frames ever reach the
+		// screen, at intervals now disturbed by the work done for the ones that did not.
+		//
+		// ARMSX2 gates its own pipelined path on the chain having at least four images for the
+		// same reason.
+		const u32 extra_for_framegen =
+			g_cfg.video.frame_generation != frame_generation_mode::off ? 2u : 0u;
+
 		if (surface_descriptors.maxImageCount > 0)
 		{
 			//Try to negotiate for a triple buffer setup
 			//In cases where the front-buffer isnt available for present, its better to have a spare surface
-			nb_swap_images = std::max(surface_descriptors.minImageCount + 2u, 3u);
+			nb_swap_images = std::max(surface_descriptors.minImageCount + 2u + extra_for_framegen,
+				3u + extra_for_framegen);
 
 			if (nb_swap_images > surface_descriptors.maxImageCount)
 			{
@@ -291,6 +373,10 @@ namespace vk
 				nb_swap_images = surface_descriptors.maxImageCount;
 			}
 		}
+
+		rsx_log.notice("Swapchain: requesting %u images (surface allows %u..%u)%s.", nb_swap_images,
+			surface_descriptors.minImageCount, surface_descriptors.maxImageCount,
+			extra_for_framegen ? ", deeper for frame generation" : "");
 
 		VkSurfaceTransformFlagBitsKHR pre_transform = surface_descriptors.currentTransform;
 		if (surface_descriptors.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
@@ -324,6 +410,26 @@ namespace vk
 		swap_info.imageColorSpace = m_color_space;
 
 		swap_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+
+		// Frame generation READS the presented image: FrameGen::Process copies it into the
+		// interpolation chain as TRANSFER_SRC_OPTIMAL. Both that layout and vkCmdCopyImage
+		// require the image to have been created with TRANSFER_SRC, and nothing else in the
+		// renderer ever reads a WSI image, so this was never needed before and was never asked
+		// for -- the copy was reading an image the driver had not prepared for reading.
+		//
+		// Requested only where the surface offers it, since TRANSFER_SRC is not guaranteed on
+		// Android surfaces. Where it is missing, frame generation captures nothing valid, which
+		// is a better failure than an invalid one.
+		if (g_cfg.video.frame_generation != frame_generation_mode::off &&
+			(surface_descriptors.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))
+		{
+			swap_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+		}
+		else if (g_cfg.video.frame_generation != frame_generation_mode::off)
+		{
+			rsx_log.warning("Swapchain: surface does not support TRANSFER_SRC; frame generation"
+				" cannot read presented frames on this surface.");
+		}
 		swap_info.preTransform = pre_transform;
 		swap_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 		swap_info.imageArrayLayers = 1;

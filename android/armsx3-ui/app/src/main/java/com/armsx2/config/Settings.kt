@@ -126,6 +126,16 @@ data class Ps3Settings(
      * wait for their real shader instead of running through the interpreter.
      */
     val shaderMode: Int = 1,
+    /** Lossless Scaling frame generation: 0 Off, 1 x2, 2 x3, 3 x4. Off unless the user has
+     *  supplied shaders from their own copy -- nothing is bundled. */
+    val frameGeneration: Int = 0,
+    // Default ON: 3.1p is the cheaper of the two shader families framegen ships, and on a mobile
+    // GPU the full-quality path costs more than the frames it buys.
+    val frameGenPerformance: Boolean = true,
+    // Optical-flow resolution as a percentage of full; lower is cheaper and blurrier in motion.
+    val frameGenFlowScale: Int = 100,
+    /** Hz to hold, or 0 for the fixed multiplier. Non-zero selects adaptive pacing. */
+    val frameGenTargetRate: Int = 0,
     val writeColorBuffers: Boolean = false,
     val writeDepthBuffer: Boolean = false,
     val readColorBuffers: Boolean = false,
@@ -187,8 +197,29 @@ data class Ps3Settings(
      *  off by default and the UI says so plainly. */
     val silenceAllLogs: Boolean = false,
     val netEnabled: Boolean = false,
-    val psnStatus: Boolean = false,
+    /** Net/PSN status: 0 = Disconnected, 1 = Simulated, 2 = RPCN.
+     *
+     *  Was a Boolean, which could only ever pick Disconnected or Simulated -- so
+     *  np_psn_status::psn_rpcn had no writer anywhere in the app and RPCN, which is fully
+     *  compiled into the core, was unreachable. */
+    val psnStatus: Int = 0,
     val upnpEnabled: Boolean = false,
+    /** The IPv4 address games are told the console has. "0.0.0.0" means "work it out". */
+    val ipAddress: String = "0.0.0.0",
+    /** Which local interface the emulated network stack binds to. "0.0.0.0" = any. */
+    val bindAddress: String = "0.0.0.0",
+    /** DNS server for the emulated stack. This is the one that matters for private/fan
+     *  game servers: RPCN replaces Sony's PSN, but a publisher's own backend was never PSN,
+     *  so reaching a revival of one means resolving its hostnames somewhere else. */
+    val dnsAddress: String = "8.8.8.8",
+    /** Per-hostname redirects, "host=1.2.3.4" joined by "&&" -- finer than dnsAddress
+     *  because it moves one hostname instead of every lookup. Parsed by np::dnshook. */
+    val ipSwapList: String = "",
+    /** Derive the console's MAC from its PSID rather than using a fixed one. */
+    val deriveMacFromPsid: Boolean = false,
+    /** Two-letter country code reported to PSN/RPCN. */
+    val psnCountry: String = "us",
+    val clansEnabled: Boolean = false,
     /**
      * 0 = Accurate, 1 = Approximate, 2 = Relaxed, 3 = Inaccurate.
      *
@@ -204,6 +235,22 @@ data class Ps3Settings(
      * the world uses cross, which is why RPCS3 exposes it rather than deriving it from region.
      */
     val enterButtonAssign: Int = 1,
+    /**
+     * The rest of the console's identity, as cellSysutil reports it to games: language, region,
+     * keyboard layout and clock formats.
+     *
+     * All five are an INDEX into the tables in Rpcs3Settings, not the core's enum value, and the
+     * bridge turns them into the enum NAME the config expects. Defaults match upstream --
+     * English (US), SCEA, US keyboard, ddmmyyyy, clock24 -- so an existing install is unchanged.
+     *
+     * A game reads these: the language decides which text a multi-language disc shows, and the
+     * region is what makes a title behave as its NTSC or PAL self.
+     */
+    val consoleLanguage: Int = 1,
+    val consoleRegion: Int = 1,
+    val keyboardType: Int = 0,
+    val dateFormat: Int = 1,
+    val timeFormat: Int = 1,
     val spuXFloat: Int = 1,
     val accurateSpuRsv: Boolean = true,
     /**
@@ -278,10 +325,17 @@ data class Ps3Settings(
     val overlayPosition: Int = 0,
     // RPCS3 stores these as "#RRGGBBAA" strings. Kept as packed ARGB ints here so
     // the existing colour picker can drive them, and converted on the way out.
-    val overlayBodyColor: Int = 0xFFE138FF.toInt(),
-    val overlayBodyBg: Int = 0x002339FF,
-    val overlayTitleColor: Int = 0xF26C24FF.toInt(),
-    val overlayTitleBg: Int = 0x00000000,
+    // ARGB, because that is what Android colour ints are and what argbToRgba() converts FROM.
+    //
+    // These used to hold RPCS3's RGBA hex values verbatim (0xFFE138FF and friends), which are the
+    // right colours in the wrong order: argbToRgba then read the leading FF as alpha and rotated
+    // every channel one byte left, turning the default orange #FFE138FF into #E138FFFF. That is
+    // the pink the overlay has always drawn in, and it made the colour pickers look broken --
+    // every value the user chose was rotated the same way, so nothing ever matched.
+    val overlayBodyColor: Int = 0xFFFFE138.toInt(),   // core #FFE138FF
+    val overlayBodyBg: Int = 0xFF002339.toInt(),      // core #002339FF
+    val overlayTitleColor: Int = 0xFFF26C24.toInt(),  // core #F26C24FF
+    val overlayTitleBg: Int = 0x00000000,             // core #00000000, fully transparent
 )
 
 data class Settings(
@@ -705,12 +759,18 @@ data class Settings(
     val memoryCardSlot2Enabled: Boolean = true,
     val memoryCardSlot2Filename: String = "mcd002.ps2",
 
-    // ---- USB ----
-    /** USB1/Type = hidkbd — attach an emulated USB HID keyboard on USB port 1.
-     *  Needed by games that require a real USB keyboard (EverQuest Online
-     *  Adventures, Konami-keyboard titles). A physical/Bluetooth keyboard's key
-     *  events are forwarded to it (see MainActivityRuntime.dispatchKeyEvent → NativeApp.usbKeyboardKey).
-     *  Default off. */
+    // ---- Keyboard ----
+    /** Input/Output/Keyboard = Basic — serve cellKb from the Android keyboard handler.
+     *  Needed by games that want a keyboard (EverQuest Online Adventures, in-game
+     *  text chat, the debug menus some titles put behind one). Keys come from a
+     *  physical/Bluetooth keyboard (MainActivityRuntime.forwardKeyToUsbKeyboard) or
+     *  from the Android IME the On-Screen Keyboard hotkey raises (SoftKeyboard), and
+     *  reach the core through NativeApp.usbKeyboardKey.
+     *
+     *  The name is ARMSX2's. RPCS3 has no emulated USB HID keyboard device; it has a
+     *  keyboard handler, which is what this drives.
+     *
+     *  Read once, in Emulator::Load, so it takes effect on the next boot. Default off. */
     val usbKeyboard: Boolean = false,
 
     // ---- EmuCore/CPU/Recompiler — recompiler enables ----
@@ -817,6 +877,9 @@ data class Settings(
     /** Scaling Mode row: 0 Nearest, 1 Bilinear, 2 FSR. Bilinear because that is what the
      *  core has always actually used, and what RPCS3 itself defaults to. */
     val casMode: Int = 1,
+    /** SGSR edge sharpness, 0..200. 100 is Qualcomm's default. Separate from casSharpness
+     *  because that one is natively clamped to 100 and cannot express this range. */
+    val sgsrSharpness: Int = 100,
     /** EmuCore/GS/CASSharpness — sharpening strength 0..100 (%). */
     val casSharpness: Int = 50,
     /** EmuCore/GS/LoadTextureReplacements. */
@@ -1048,6 +1111,13 @@ data class Settings(
         put("PS3/Overlay", "Title Background (hex)", "string", argbToRgba(ps3.overlayTitleBg))
         put("PS3/Video", "MSAA", "enum", ps3.msaaMode.toString())
         put("PS3/Video", "Shader Mode", "enum", ps3.shaderMode.toString())
+        put("PS3/Video", "Frame Generation", "enum", ps3.frameGeneration.toString())
+        put("PS3/Video", "Frame Generation Performance Mode", "bool", ps3.frameGenPerformance.toString())
+        put("PS3/Video", "Frame Generation Flow Scale", "int", ps3.frameGenFlowScale.toString())
+        put("PS3/Video", "Frame Generation Target Rate", "int", ps3.frameGenTargetRate.toString())
+        // Temporary: the value reaches the core as 0 whatever the UI is set to, and all six
+        // plumbing sites read correctly. This says what the object being applied actually holds.
+        android.util.Log.i("FRAMEGEN", "applyTo: targetRate=${ps3.frameGenTargetRate} mult=${ps3.frameGeneration}")
         put("PS3/Video", "Write Color Buffers", "bool", ps3.writeColorBuffers.toString())
         put("PS3/Video", "Write Depth Buffer", "bool", ps3.writeDepthBuffer.toString())
         put("PS3/Video", "Read Color Buffers", "bool", ps3.readColorBuffers.toString())
@@ -1071,7 +1141,19 @@ data class Settings(
         put("PS3/Net", "Internet enabled", "enum", ps3.netEnabled.toString())
         put("PS3/Net", "PSN status", "enum", ps3.psnStatus.toString())
         put("PS3/Net", "UPNP Enabled", "bool", ps3.upnpEnabled.toString())
+        put("PS3/Net", "IP address", "string", ps3.ipAddress)
+        put("PS3/Net", "Bind address", "string", ps3.bindAddress)
+        put("PS3/Net", "DNS address", "string", ps3.dnsAddress)
+        put("PS3/Net", "IP swap list", "string", ps3.ipSwapList)
+        put("PS3/Net", "Derive MAC from PSID", "bool", ps3.deriveMacFromPsid.toString())
+        put("PS3/Net", "PSN Country", "string", ps3.psnCountry)
+        put("PS3/Net", "Clans Enabled", "bool", ps3.clansEnabled.toString())
         put("PS3/System", "Enter button assignment", "enum", ps3.enterButtonAssign.toString())
+        put("PS3/System", "Language", "enum", ps3.consoleLanguage.toString())
+        put("PS3/System", "License Area", "enum", ps3.consoleRegion.toString())
+        put("PS3/System", "Keyboard Type", "enum", ps3.keyboardType.toString())
+        put("PS3/System", "Date Format", "enum", ps3.dateFormat.toString())
+        put("PS3/System", "Time Format", "enum", ps3.timeFormat.toString())
         put("PS3/Core", "SPU XFloat Accuracy", "enum", ps3.spuXFloat.toString())
         put("PS3/Core", "Accurate SPU Reservations", "bool", ps3.accurateSpuRsv.toString())
         put("PS3/Core", "Accurate Cache Line Stores", "bool", ps3.accurateCacheLine.toString())
@@ -1144,7 +1226,7 @@ data class Settings(
         // Max presented-FPS cap — independent of the Speed Limit % above. Caps
         // the display rate by dropping presents on the GS thread (emulation keeps
         // full speed, NominalScalar untouched); 0 = off. See GSRenderer::VSync.
-        if (emitSink == null) NativeApp.setFpsCap(fpsLimit.coerceIn(0, 1000))
+        if (emitSink == null) NativeApp.setFpsCap(fpsLimit.coerceIn(-1, 1000)) // -1 = PS3 native pacing
         // Manual frameskip (0..5) — present 1 of every (N+1) frames. Held as a
         // GS-thread global, applied live; no persisted EmuCore key needed.
         if (emitSink == null) NativeApp.setFrameSkip(frameSkip.coerceIn(0, 5))
@@ -1236,12 +1318,10 @@ data class Settings(
         put("MemoryCards", "Slot1_Filename", "string", memoryCardSlot1Filename.ifEmpty { "mcd001.ps2" })
         put("MemoryCards", "Slot2_Enable", "bool", memoryCardSlot2Enabled.toString())
         put("MemoryCards", "Slot2_Filename", "string", memoryCardSlot2Filename.ifEmpty { "mcd002.ps2" })
-        // USB keyboard (#254). Persist [USB1] Type so USBOptions::LoadSave attaches
-        // the emulated HID keyboard on the next boot (or ApplySettings). The live
-        // attach/detach on a running VM is done via NativeApp.usbSetKeyboardEnabled
-        // below (CheckForConfigChanges recreates the device), since a plain
-        // setSetting write doesn't reattach USB devices on its own.
-        put("USB1", "Type", "string", if (usbKeyboard) "hidkbd" else "None")
+        // Keyboard: NOT written here. [USB1] Type = hidkbd is a PCSX2 key -- there is
+        // no such USB device in RPCS3, so that write only ever reached
+        // Unsupported.note("USB1/Type"). The PS3 equivalent is the keyboard handler,
+        // pushed by NativeApp.usbSetKeyboardEnabled below.
         // Recompiler enables. Picked up by VMManager::ApplySettings →
         // SysCpuProviderPack rebind. Toggling these on a running VM swaps
         // the dispatch pointer; existing JIT block caches are flushed by
@@ -1297,10 +1377,8 @@ data class Settings(
         NativeApp.osdShowVersion(osdShowVersion)
         NativeApp.osdShowSettings(osdShowSettings)
         NativeApp.osdShowInputs(osdShowInputs)
-        // USB keyboard (#254): live attach/detach on the running VM. A plain
-        // setSetting("USB1","Type",...) write is persisted but doesn't reattach
-        // USB devices, so drive the device (re)creation explicitly. No-op before
-        // the VM exists — the persisted Type above handles the cold boot.
+        // Keyboard handler (#254). Installed by Emulator::Load, so this is a persist,
+        // not a live attach: a game already running keeps whatever it booted with.
         NativeApp.usbSetKeyboardEnabled(0, usbKeyboard)
         // Vblank at the PS3's own rate, pushed on every apply rather than left to a
         // migration.
@@ -1769,7 +1847,8 @@ data class Settings(
         put("EmuCore/GS", "fxaa", "bool", fxaa.toString())
         // Scaling Mode writes Output Scaling Mode unconditionally, the shader chain only
         // when it is on, so CAS has to go first for the chain to keep the last word.
-        put("EmuCore/GS", "CASMode", "int", casMode.coerceIn(0, 2).toString())
+        put("EmuCore/GS", "CASMode", "int", casMode.coerceIn(0, 4).toString())
+        put("EmuCore/GS", "SGSRSharpness", "int", sgsrSharpness.coerceIn(0, 200).toString())
         put("EmuCore/GS", "CASSharpness", "int", casSharpness.coerceIn(0, 100).toString())
         put("EmuCore/GS", "ShaderChainEnabled", "bool", shaderChainEnabled.toString())
         put("EmuCore/GS", "ShaderChainPreset", "string", shaderChainPreset)
@@ -1952,6 +2031,7 @@ data class Settings(
             shadeBoostGamma != other.shadeBoostGamma ||
             fxaa != other.fxaa ||
             casMode != other.casMode ||
+            sgsrSharpness != other.sgsrSharpness ||
             casSharpness != other.casSharpness ||
             accurateBlendingUnit != other.accurateBlendingUnit ||
             hwMipmap != other.hwMipmap ||
@@ -2016,6 +2096,10 @@ data class Settings(
         put("ps3MsaaMode", ps3.msaaMode)
         put("ps3AudioCubebBackend", ps3.audioCubebBackend)
         put("ps3ShaderMode", ps3.shaderMode)
+        put("ps3FrameGeneration", ps3.frameGeneration)
+        put("ps3FrameGenPerformance", ps3.frameGenPerformance)
+        put("ps3FrameGenFlowScale", ps3.frameGenFlowScale)
+        put("ps3FrameGenTargetRate", ps3.frameGenTargetRate)
         put("ps3WriteColorBuffers", ps3.writeColorBuffers)
         put("ps3GpuTurbo", ps3.gpuTurbo)
         put("ps3SilenceAllLogs", ps3.silenceAllLogs)
@@ -2040,7 +2124,19 @@ data class Settings(
         put("ps3NetEnabled", ps3.netEnabled)
         put("ps3PsnStatus", ps3.psnStatus)
         put("ps3UpnpEnabled", ps3.upnpEnabled)
+        put("ps3IpAddress", ps3.ipAddress)
+        put("ps3BindAddress", ps3.bindAddress)
+        put("ps3DnsAddress", ps3.dnsAddress)
+        put("ps3IpSwapList", ps3.ipSwapList)
+        put("ps3DeriveMacFromPsid", ps3.deriveMacFromPsid)
+        put("ps3PsnCountry", ps3.psnCountry)
+        put("ps3ClansEnabled", ps3.clansEnabled)
         put("ps3EnterButtonAssign", ps3.enterButtonAssign)
+        put("ps3ConsoleLanguage", ps3.consoleLanguage)
+        put("ps3ConsoleRegion", ps3.consoleRegion)
+        put("ps3KeyboardType", ps3.keyboardType)
+        put("ps3DateFormat", ps3.dateFormat)
+        put("ps3TimeFormat", ps3.timeFormat)
         put("ps3SpuXFloat", ps3.spuXFloat)
         put("ps3AccurateSpuRsv", ps3.accurateSpuRsv)
         put("ps3AccurateCacheLine", ps3.accurateCacheLine)
@@ -2243,6 +2339,7 @@ data class Settings(
         put("shaderChainPreset", shaderChainPreset)
         put("shaderChainParams", shaderChainParamsToJson(shaderChainParams))
         put("casMode", casMode)
+        put("sgsrSharpness", sgsrSharpness)
         put("casSharpness", casSharpness)
         put("loadTextureReplacements", loadTextureReplacements)
         put("loadTextureReplacementsAsync", loadTextureReplacementsAsync)
@@ -2355,6 +2452,10 @@ data class Settings(
                     msaaMode = json.optInt("ps3MsaaMode", def.ps3.msaaMode),
                     audioCubebBackend = json.optInt("ps3AudioCubebBackend", def.ps3.audioCubebBackend),
                     shaderMode = json.optInt("ps3ShaderMode", def.ps3.shaderMode),
+                    frameGeneration = json.optInt("ps3FrameGeneration", def.ps3.frameGeneration),
+                    frameGenPerformance = json.optBoolean("ps3FrameGenPerformance", def.ps3.frameGenPerformance),
+                    frameGenFlowScale = json.optInt("ps3FrameGenFlowScale", def.ps3.frameGenFlowScale),
+                    frameGenTargetRate = json.optInt("ps3FrameGenTargetRate", def.ps3.frameGenTargetRate),
                     writeColorBuffers = json.optBoolean("ps3WriteColorBuffers", def.ps3.writeColorBuffers),
                     gpuTurbo = json.optBoolean("ps3GpuTurbo", def.ps3.gpuTurbo),
                     silenceAllLogs = json.optBoolean("ps3SilenceAllLogs", def.ps3.silenceAllLogs),
@@ -2377,9 +2478,26 @@ data class Settings(
                     audioBuffering = json.optBoolean("ps3AudioBuffering", def.ps3.audioBuffering),
                     audioBufferMs = json.optInt("ps3AudioBufferMs", def.ps3.audioBufferMs),
                     netEnabled = json.optBoolean("ps3NetEnabled", def.ps3.netEnabled),
-                    psnStatus = json.optBoolean("ps3PsnStatus", def.ps3.psnStatus),
+                    // optInt with a Boolean fallback for installs written before this was a
+                    // tri-state: a stored `true` reads back as 1 (Simulated), which is what it
+                    // meant.
+                    psnStatus = if (json.opt("ps3PsnStatus") is Boolean)
+                        (if (json.optBoolean("ps3PsnStatus")) 1 else 0)
+                    else json.optInt("ps3PsnStatus", def.ps3.psnStatus),
                     upnpEnabled = json.optBoolean("ps3UpnpEnabled", def.ps3.upnpEnabled),
+                    ipAddress = json.optString("ps3IpAddress", def.ps3.ipAddress),
+                    bindAddress = json.optString("ps3BindAddress", def.ps3.bindAddress),
+                    dnsAddress = json.optString("ps3DnsAddress", def.ps3.dnsAddress),
+                    ipSwapList = json.optString("ps3IpSwapList", def.ps3.ipSwapList),
+                    deriveMacFromPsid = json.optBoolean("ps3DeriveMacFromPsid", def.ps3.deriveMacFromPsid),
+                    psnCountry = json.optString("ps3PsnCountry", def.ps3.psnCountry),
+                    clansEnabled = json.optBoolean("ps3ClansEnabled", def.ps3.clansEnabled),
                     enterButtonAssign = json.optInt("ps3EnterButtonAssign", def.ps3.enterButtonAssign),
+                    consoleLanguage = json.optInt("ps3ConsoleLanguage", def.ps3.consoleLanguage),
+                    consoleRegion = json.optInt("ps3ConsoleRegion", def.ps3.consoleRegion),
+                    keyboardType = json.optInt("ps3KeyboardType", def.ps3.keyboardType),
+                    dateFormat = json.optInt("ps3DateFormat", def.ps3.dateFormat),
+                    timeFormat = json.optInt("ps3TimeFormat", def.ps3.timeFormat),
                     spuXFloat = json.optInt("ps3SpuXFloat", def.ps3.spuXFloat),
                     accurateSpuRsv = json.optBoolean("ps3AccurateSpuRsv", def.ps3.accurateSpuRsv),
                     accurateCacheLine = json.optBoolean("ps3AccurateCacheLine", def.ps3.accurateCacheLine),
@@ -2588,6 +2706,7 @@ data class Settings(
                 shaderChainParams = json.optJSONObject("shaderChainParams")
                     ?.let { shaderChainParamsFromJson(it) } ?: def.shaderChainParams,
                 casMode = json.optInt("casMode", def.casMode),
+                sgsrSharpness = json.optInt("sgsrSharpness", def.sgsrSharpness),
                 casSharpness = json.optInt("casSharpness", def.casSharpness),
                 loadTextureReplacements = json.optBoolean("loadTextureReplacements", def.loadTextureReplacements),
                 loadTextureReplacementsAsync = json.optBoolean("loadTextureReplacementsAsync", def.loadTextureReplacementsAsync),
@@ -2674,6 +2793,10 @@ data class Settings(
             if (current.ps3.msaaMode != base.ps3.msaaMode) j.put("ps3MsaaMode", current.ps3.msaaMode)
             if (current.ps3.audioCubebBackend != base.ps3.audioCubebBackend) j.put("ps3AudioCubebBackend", current.ps3.audioCubebBackend)
             if (current.ps3.shaderMode != base.ps3.shaderMode) j.put("ps3ShaderMode", current.ps3.shaderMode)
+            if (current.ps3.frameGeneration != base.ps3.frameGeneration) j.put("ps3FrameGeneration", current.ps3.frameGeneration)
+            if (current.ps3.frameGenPerformance != base.ps3.frameGenPerformance) j.put("ps3FrameGenPerformance", current.ps3.frameGenPerformance)
+            if (current.ps3.frameGenFlowScale != base.ps3.frameGenFlowScale) j.put("ps3FrameGenFlowScale", current.ps3.frameGenFlowScale)
+            if (current.ps3.frameGenTargetRate != base.ps3.frameGenTargetRate) j.put("ps3FrameGenTargetRate", current.ps3.frameGenTargetRate)
             if (current.ps3.writeColorBuffers != base.ps3.writeColorBuffers) j.put("ps3WriteColorBuffers", current.ps3.writeColorBuffers)
             if (current.ps3.gpuTurbo != base.ps3.gpuTurbo) j.put("ps3GpuTurbo", current.ps3.gpuTurbo)
             if (current.ps3.silenceAllLogs != base.ps3.silenceAllLogs) j.put("ps3SilenceAllLogs", current.ps3.silenceAllLogs)
@@ -2698,7 +2821,19 @@ data class Settings(
             if (current.ps3.netEnabled != base.ps3.netEnabled) j.put("ps3NetEnabled", current.ps3.netEnabled)
             if (current.ps3.psnStatus != base.ps3.psnStatus) j.put("ps3PsnStatus", current.ps3.psnStatus)
             if (current.ps3.upnpEnabled != base.ps3.upnpEnabled) j.put("ps3UpnpEnabled", current.ps3.upnpEnabled)
+            if (current.ps3.ipAddress != base.ps3.ipAddress) j.put("ps3IpAddress", current.ps3.ipAddress)
+            if (current.ps3.bindAddress != base.ps3.bindAddress) j.put("ps3BindAddress", current.ps3.bindAddress)
+            if (current.ps3.dnsAddress != base.ps3.dnsAddress) j.put("ps3DnsAddress", current.ps3.dnsAddress)
+            if (current.ps3.ipSwapList != base.ps3.ipSwapList) j.put("ps3IpSwapList", current.ps3.ipSwapList)
+            if (current.ps3.deriveMacFromPsid != base.ps3.deriveMacFromPsid) j.put("ps3DeriveMacFromPsid", current.ps3.deriveMacFromPsid)
+            if (current.ps3.psnCountry != base.ps3.psnCountry) j.put("ps3PsnCountry", current.ps3.psnCountry)
+            if (current.ps3.clansEnabled != base.ps3.clansEnabled) j.put("ps3ClansEnabled", current.ps3.clansEnabled)
             if (current.ps3.enterButtonAssign != base.ps3.enterButtonAssign) j.put("ps3EnterButtonAssign", current.ps3.enterButtonAssign)
+            if (current.ps3.consoleLanguage != base.ps3.consoleLanguage) j.put("ps3ConsoleLanguage", current.ps3.consoleLanguage)
+            if (current.ps3.consoleRegion != base.ps3.consoleRegion) j.put("ps3ConsoleRegion", current.ps3.consoleRegion)
+            if (current.ps3.keyboardType != base.ps3.keyboardType) j.put("ps3KeyboardType", current.ps3.keyboardType)
+            if (current.ps3.dateFormat != base.ps3.dateFormat) j.put("ps3DateFormat", current.ps3.dateFormat)
+            if (current.ps3.timeFormat != base.ps3.timeFormat) j.put("ps3TimeFormat", current.ps3.timeFormat)
             if (current.ps3.spuXFloat != base.ps3.spuXFloat) j.put("ps3SpuXFloat", current.ps3.spuXFloat)
             if (current.ps3.accurateSpuRsv != base.ps3.accurateSpuRsv) j.put("ps3AccurateSpuRsv", current.ps3.accurateSpuRsv)
             if (current.ps3.accurateCacheLine != base.ps3.accurateCacheLine) j.put("ps3AccurateCacheLine", current.ps3.accurateCacheLine)
@@ -2897,6 +3032,7 @@ data class Settings(
             if (current.shaderChainPreset   != base.shaderChainPreset)   j.put("shaderChainPreset", current.shaderChainPreset)
             if (current.shaderChainParams   != base.shaderChainParams)   j.put("shaderChainParams", shaderChainParamsToJson(current.shaderChainParams))
             if (current.casMode             != base.casMode)             j.put("casMode", current.casMode)
+            if (current.sgsrSharpness       != base.sgsrSharpness)       j.put("sgsrSharpness", current.sgsrSharpness)
             if (current.casSharpness        != base.casSharpness)        j.put("casSharpness", current.casSharpness)
             if (current.loadTextureReplacements != base.loadTextureReplacements) j.put("loadTextureReplacements", current.loadTextureReplacements)
             if (current.loadTextureReplacementsAsync != base.loadTextureReplacementsAsync) j.put("loadTextureReplacementsAsync", current.loadTextureReplacementsAsync)
@@ -2974,6 +3110,10 @@ data class Settings(
                     msaaMode = if (overrides.has("ps3MsaaMode")) overrides.getInt("ps3MsaaMode") else base.ps3.msaaMode,
                     audioCubebBackend = if (overrides.has("ps3AudioCubebBackend")) overrides.getInt("ps3AudioCubebBackend") else base.ps3.audioCubebBackend,
                     shaderMode = if (overrides.has("ps3ShaderMode")) overrides.getInt("ps3ShaderMode") else base.ps3.shaderMode,
+                    frameGeneration = if (overrides.has("ps3FrameGeneration")) overrides.getInt("ps3FrameGeneration") else base.ps3.frameGeneration,
+                    frameGenPerformance = if (overrides.has("ps3FrameGenPerformance")) overrides.getBoolean("ps3FrameGenPerformance") else base.ps3.frameGenPerformance,
+                    frameGenFlowScale = if (overrides.has("ps3FrameGenFlowScale")) overrides.getInt("ps3FrameGenFlowScale") else base.ps3.frameGenFlowScale,
+                    frameGenTargetRate = if (overrides.has("ps3FrameGenTargetRate")) overrides.getInt("ps3FrameGenTargetRate") else base.ps3.frameGenTargetRate,
                     writeColorBuffers = if (overrides.has("ps3WriteColorBuffers")) overrides.getBoolean("ps3WriteColorBuffers") else base.ps3.writeColorBuffers,
                     gpuTurbo = if (overrides.has("ps3GpuTurbo")) overrides.getBoolean("ps3GpuTurbo") else base.ps3.gpuTurbo,
                     silenceAllLogs = if (overrides.has("ps3SilenceAllLogs")) overrides.getBoolean("ps3SilenceAllLogs") else base.ps3.silenceAllLogs,
@@ -2996,9 +3136,25 @@ data class Settings(
                     audioBuffering = if (overrides.has("ps3AudioBuffering")) overrides.getBoolean("ps3AudioBuffering") else base.ps3.audioBuffering,
                     audioBufferMs = if (overrides.has("ps3AudioBufferMs")) overrides.getInt("ps3AudioBufferMs") else base.ps3.audioBufferMs,
                     netEnabled = if (overrides.has("ps3NetEnabled")) overrides.getBoolean("ps3NetEnabled") else base.ps3.netEnabled,
-                    psnStatus = if (overrides.has("ps3PsnStatus")) overrides.getBoolean("ps3PsnStatus") else base.ps3.psnStatus,
+                    psnStatus = if (overrides.has("ps3PsnStatus"))
+                        (if (overrides.opt("ps3PsnStatus") is Boolean)
+                            (if (overrides.getBoolean("ps3PsnStatus")) 1 else 0)
+                        else overrides.getInt("ps3PsnStatus"))
+                    else base.ps3.psnStatus,
                     upnpEnabled = if (overrides.has("ps3UpnpEnabled")) overrides.getBoolean("ps3UpnpEnabled") else base.ps3.upnpEnabled,
+                    ipAddress = if (overrides.has("ps3IpAddress")) overrides.getString("ps3IpAddress") else base.ps3.ipAddress,
+                    bindAddress = if (overrides.has("ps3BindAddress")) overrides.getString("ps3BindAddress") else base.ps3.bindAddress,
+                    dnsAddress = if (overrides.has("ps3DnsAddress")) overrides.getString("ps3DnsAddress") else base.ps3.dnsAddress,
+                    ipSwapList = if (overrides.has("ps3IpSwapList")) overrides.getString("ps3IpSwapList") else base.ps3.ipSwapList,
+                    deriveMacFromPsid = if (overrides.has("ps3DeriveMacFromPsid")) overrides.getBoolean("ps3DeriveMacFromPsid") else base.ps3.deriveMacFromPsid,
+                    psnCountry = if (overrides.has("ps3PsnCountry")) overrides.getString("ps3PsnCountry") else base.ps3.psnCountry,
+                    clansEnabled = if (overrides.has("ps3ClansEnabled")) overrides.getBoolean("ps3ClansEnabled") else base.ps3.clansEnabled,
                     enterButtonAssign = if (overrides.has("ps3EnterButtonAssign")) overrides.getInt("ps3EnterButtonAssign") else base.ps3.enterButtonAssign,
+                    consoleLanguage = if (overrides.has("ps3ConsoleLanguage")) overrides.getInt("ps3ConsoleLanguage") else base.ps3.consoleLanguage,
+                    consoleRegion = if (overrides.has("ps3ConsoleRegion")) overrides.getInt("ps3ConsoleRegion") else base.ps3.consoleRegion,
+                    keyboardType = if (overrides.has("ps3KeyboardType")) overrides.getInt("ps3KeyboardType") else base.ps3.keyboardType,
+                    dateFormat = if (overrides.has("ps3DateFormat")) overrides.getInt("ps3DateFormat") else base.ps3.dateFormat,
+                    timeFormat = if (overrides.has("ps3TimeFormat")) overrides.getInt("ps3TimeFormat") else base.ps3.timeFormat,
                     spuXFloat = if (overrides.has("ps3SpuXFloat")) overrides.getInt("ps3SpuXFloat") else base.ps3.spuXFloat,
                     accurateSpuRsv = if (overrides.has("ps3AccurateSpuRsv")) overrides.getBoolean("ps3AccurateSpuRsv") else base.ps3.accurateSpuRsv,
                     accurateCacheLine = if (overrides.has("ps3AccurateCacheLine")) overrides.getBoolean("ps3AccurateCacheLine") else base.ps3.accurateCacheLine,
@@ -3218,6 +3374,7 @@ data class Settings(
                 shaderChainParamsFromJson(overrides.optJSONObject("shaderChainParams"))
             } else base.shaderChainParams,
             casMode = if (overrides.has("casMode")) overrides.getInt("casMode") else base.casMode,
+            sgsrSharpness = if (overrides.has("sgsrSharpness")) overrides.getInt("sgsrSharpness") else base.sgsrSharpness,
             casSharpness = if (overrides.has("casSharpness")) overrides.getInt("casSharpness") else base.casSharpness,
             loadTextureReplacements = if (overrides.has("loadTextureReplacements")) overrides.getBoolean("loadTextureReplacements") else base.loadTextureReplacements,
             loadTextureReplacementsAsync = if (overrides.has("loadTextureReplacementsAsync")) overrides.getBoolean("loadTextureReplacementsAsync") else base.loadTextureReplacementsAsync,

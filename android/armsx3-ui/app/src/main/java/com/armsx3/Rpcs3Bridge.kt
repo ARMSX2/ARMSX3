@@ -35,6 +35,66 @@ object Rpcs3Bridge {
 
     private var appContext: Context? = null
 
+    /**
+     * Set when the CPU cannot run this build, so the UI can say so rather than looking broken.
+     * Null on every device that is fine.
+     */
+    @JvmStatic
+    @Volatile
+    var unsupportedCpuMessage: String? = null
+        private set
+
+    /**
+     * Why this CPU cannot run ARMSX3, or null if it can.
+     *
+     * The core is built for armv8.1-a and that is a floor, not a preference: util/simd.hpp emits
+     * SQRDMLAH and util/asm.hpp contains inline LSE atomics, both ARMv8.1. On ARMv8.0 silicon --
+     * Cortex-A53/A57/A73, so Exynos 9610, Snapdragon 660 and similar -- those are illegal
+     * opcodes. The failure is a SIGILL inside a static constructor while the linker is still
+     * running libarmsx3-core.so's initialisers, which means it happens before any of our code can
+     * report anything, and the crash names a log-channel registration rather than a CPU problem.
+     * Reported as issue #15, where it looked like a firmware installer bug because the core is
+     * dlopen'd lazily and installing firmware was the first thing that needed it.
+     *
+     * Fails OPEN. An unreadable or unfamiliar /proc/cpuinfo returns null, because refusing to
+     * start a device that would have worked is worse than the crash this avoids.
+     */
+    private fun unsupportedCpuReason(): String? {
+        val perCore = runCatching {
+            File("/proc/cpuinfo").readLines()
+                .filter { it.trimStart().startsWith("Features") }
+                .map { it.substringAfter(':').trim().split(' ').filter { f -> f.isNotEmpty() }.toSet() }
+        }.getOrNull().orEmpty()
+
+        if (perCore.isEmpty()) return null
+
+        // Checked across every core listed, not just the first: emulator threads are scheduled on
+        // all of them, so one core lacking the extension is enough to fault.
+        val missing = buildList {
+            if (perCore.any { "atomics" !in it }) add("LSE atomics")
+            if (perCore.any { "asimdrdm" !in it }) add("RDMA")
+        }
+
+        if (missing.isEmpty()) return null
+
+        val names = missing.joinToString(separator = " and ")
+        return "This device's CPU is ARMv8.0 and ARMSX3 requires ARMv8.1 " +
+            "(missing " + names + "). No ARMSX3 build can run on it."
+    }
+
+    /** Toast on the main looper -- Toast.makeText throws on a thread with no Looper. */
+    private fun reportFatal(context: Context, message: String) {
+        runCatching {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                runCatching {
+                    android.widget.Toast.makeText(
+                        context.applicationContext, message, android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        }
+    }
+
     // ---------------------------------------------------------------
     // Lifecycle
     // ---------------------------------------------------------------
@@ -51,6 +111,14 @@ object Rpcs3Bridge {
         if (RPCSX.activeLibrary.value == null) {
             val libDir = context.applicationInfo.nativeLibraryDir
             RPCSX.nativeLibDirectory = libDir
+            // Before the dlopen, which is where an unsupported CPU dies with no explanation.
+            unsupportedCpuReason()?.let { reason ->
+                unsupportedCpuMessage = reason
+                android.util.Log.e("ARMSX3", reason)
+                reportFatal(context, reason)
+                return
+            }
+
             val core = File(libDir, "libarmsx3-core.so")
             if (!core.exists()) {
                 android.util.Log.e("ARMSX3", "core missing at ${'$'}{core.absolutePath}")
@@ -124,6 +192,8 @@ object Rpcs3Bridge {
         // Discard database configs split by an older build, so a setting later found to
         // break a game is not left applying forever on machines that already downloaded.
         runCatching { com.armsx2.config.ConfigDatabase.purgeIfStale() }
+        // Applies whether or not the database was ever downloaded.
+        runCatching { com.armsx2.config.ConfigDatabase.ensureLocalOverrides() }
         RPCSX.instance.initialize(RPCSX.rootDirectory, "00000001", com.armsx2.DeviceTier.socIdentity())
         RPCSX.initialized = true
 
@@ -245,8 +315,20 @@ object Rpcs3Bridge {
         // Stopped. This loop then spun forever, runVMThread never returned, and
         // MainActivityRuntime went on believing state=RUNNING, so Close and
         // Restart both became silent no-ops with no way out but force-stop.
-        while (!stopRequested && RPCSX.getState() != EmulatorState.Stopped) {
-            Thread.sleep(POLL_INTERVAL_MS)
+        // The pump is what makes rumble happen at all: the core has no way to notify the JNI
+        // layer that the guest wrote the motors, so something has to poll getPadRumble. It was
+        // written and never started, which is why vibration did nothing in any game.
+        startRumblePump()
+
+        try {
+            while (!stopRequested && RPCSX.getState() != EmulatorState.Stopped) {
+                Thread.sleep(POLL_INTERVAL_MS)
+            }
+        } finally {
+            // finally, not after the loop: the abnormal-teardown path above leaves via
+            // stopRequested, and a pump left running would keep the motor buzzing on whatever
+            // value the dead guest last wrote.
+            stopRumblePump()
         }
 
         return true
@@ -446,10 +528,15 @@ object Rpcs3Bridge {
                     when (asInt(value)) {
                         0 -> "Nearest"
                         2 -> "FidelityFX Super Resolution"
+                        // 3 skips the librashader chain, which is ordinal 3 in the native enum
+                        // but is driven by its own toggle rather than this picker.
+                        3 -> "Snapdragon Game Super Resolution"
+                        4 -> "Snapdragon Game Super Resolution (Edge Direction)"
                         else -> "Bilinear"
                     },
                 )
                 "CASSharpness" -> Rpcs3Settings.setCasSharpening(asInt(value))
+                "SGSRSharpness" -> Rpcs3Settings.setSgsrSharpening(asInt(value))
                 "ShaderChainEnabled" ->
                     if (asBool(value)) Rpcs3Settings.setOutputScaling("Shader chain (librashader)")
                 "ShaderChainPreset" -> Rpcs3Settings.setShaderPresetPath(value)
@@ -536,6 +623,10 @@ object Rpcs3Bridge {
                 "Resolution Scale" -> Rpcs3Settings.setResolutionScalePercent(asInt(value))
                 "MSAA" -> Rpcs3Settings.setMsaa(asInt(value))
                 "Shader Mode" -> Rpcs3Settings.setShaderMode(asInt(value))
+                "Frame Generation" -> Rpcs3Settings.setFrameGeneration(asInt(value))
+                "Frame Generation Performance Mode" -> Rpcs3Settings.setFrameGenPerformance(asBool(value))
+                "Frame Generation Flow Scale" -> Rpcs3Settings.setFrameGenFlowScale(asInt(value))
+                "Frame Generation Target Rate" -> Rpcs3Settings.setFrameGenTargetRate(asInt(value))
                 "Write Color Buffers" -> Rpcs3Settings.setWriteColorBuffers(asBool(value))
                 "Write Depth Buffer" -> Rpcs3Settings.setWriteDepthBuffer(asBool(value))
                 "Read Color Buffers" -> Rpcs3Settings.setReadColorBuffers(asBool(value))
@@ -595,8 +686,34 @@ object Rpcs3Bridge {
 
             "PS3/Net" -> when (key) {
                 "Internet enabled" -> Rpcs3Settings.setInternetEnabled(asBool(value))
-                "PSN status" -> Rpcs3Settings.setPsnStatus(asBool(value))
+                "PSN status" -> Rpcs3Settings.setPsnStatus(asInt(value))
                 "UPNP Enabled" -> Rpcs3Settings.setUpnp(asBool(value))
+                "IP address" -> Rpcs3Settings.setIpAddress(value)
+                "Bind address" -> Rpcs3Settings.setBindAddress(value)
+                "DNS address" -> Rpcs3Settings.setDnsAddress(value)
+                "IP swap list" -> Rpcs3Settings.setIpSwapList(value)
+                "Derive MAC from PSID" -> Rpcs3Settings.setDeriveMacFromPsid(asBool(value))
+                "PSN Country" -> Rpcs3Settings.setPsnCountry(value)
+                "Clans Enabled" -> Rpcs3Settings.setClansEnabled(asBool(value))
+                else -> return false
+            }
+
+            // The console's own identity, as cellSysutil reports it to games.
+            //
+            // This whole section was missing, which made "Enter button assignment" inert: it had
+            // a field, a UI row and an applyTo write, and then fell through to Unsupported.note()
+            // and never reached the core. Everything Settings.applyTo emits has to appear here or
+            // it is silently dropped -- there is no build error for a forgotten key.
+            //
+            // Values cross as indices and Rpcs3Settings turns them into the core's enum NAMES;
+            // see the tables there for why an index cannot be mapped arithmetically.
+            "PS3/System" -> when (key) {
+                "Language" -> Rpcs3Settings.setConsoleLanguage(asInt(value))
+                "License Area" -> Rpcs3Settings.setConsoleRegion(asInt(value))
+                "Keyboard Type" -> Rpcs3Settings.setKeyboardType(asInt(value))
+                "Date Format" -> Rpcs3Settings.setDateFormat(asInt(value))
+                "Time Format" -> Rpcs3Settings.setTimeFormat(asInt(value))
+                "Enter button assignment" -> Rpcs3Settings.setEnterButtonAssign(asInt(value))
                 else -> return false
             }
 
@@ -659,6 +776,18 @@ object Rpcs3Bridge {
     @JvmStatic
     fun hasState(slot: Int): Boolean =
         runCatching { RPCSX.instance.hasStateInSlot(slot) }.getOrDefault(false)
+
+    /**
+     * Delete a slot's state and its thumbnail.
+     *
+     * The core resolves the filename itself: the extension depends on which build wrote the
+     * state (.zst today, .gz and bare historically), and the picker used to build a path by
+     * hand -- from getGamePathSlot, which answers occupancy rather than a path, so the delete
+     * always failed (issue #80).
+     */
+    @JvmStatic
+    fun deleteState(slot: Int): Boolean =
+        runCatching { RPCSX.instance.deleteStateFromSlot(slot) }.getOrDefault(false)
 
     /**
      * The auto-save lives one slot above the ten the picker shows.
@@ -909,6 +1038,213 @@ object Rpcs3Bridge {
         else -> -1
     }
 
+    // ---- Digital transition pacing -----------------------------------------------------------
+    //
+    // The guest polls cellPad at ITS rate -- 33ms at 30fps -- and a press plus its release are two
+    // separate snapshot pushes with nothing between them. A press shorter than one poll interval
+    // therefore lands entirely between polls and the game never sees it. Steady presses always
+    // span a poll, which is why a button works everywhere except during a rapid mash, and why a
+    // held button (crouch) keeps working while everything tapped alongside it does not.
+    //
+    // GestureLayer already knew this and works around it locally with a 40ms hold in pulse();
+    // ordinary touch taps and physical controller presses had no equivalent. Reported on Iron
+    // Man's quick-time event, where circle has to be pressed repeatedly and does not register.
+    //
+    // Simply DELAYING a too-short release is not enough, and would look identical to the bug: in a
+    // mash, press N's deferred release collides with press N+1 and the game sees one long press
+    // instead of several, while a QTE is counting presses. So each transition is given its own
+    // slot instead -- press visible for MIN_MS, then release visible for MIN_MS, then the next
+    // press -- which is what makes a mash arrive as distinct presses rather than a hold.
+    //
+    // 40ms matches the gesture path and clears one 60Hz sample; it caps sustained mashing at
+    // ~12 presses/second, comfortably above human rate (~6-8).
+    private const val TRANSITION_MIN_MS = 40L
+
+    // Queue depth guard: if the guest stops consuming (paused, load screen) a held-down mash must
+    // not accumulate unboundedly. Beyond this, the oldest pending transitions are what matter
+    // least, so new ones are dropped rather than growing the backlog.
+    private const val TRANSITION_MAX_PENDING = 8
+
+    private val transitionScheduler by lazy {
+        java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "armsx3-pad-pacing").apply { isDaemon = true }
+        }
+    }
+
+    // Per (port, button) next instant a transition may become visible, and how many are queued.
+    private val nextTransitionAt = HashMap<Long, Long>()
+    private val pendingTransitions = HashMap<Long, Int>()
+
+    // The last state each button was asked for, so a REPEAT can be told from an EDGE.
+    //
+    // Analog triggers write through here on every motion event -- dozens a second while held,
+    // every one of them "pressed" -- and pacing a repeat is meaningless: there is no
+    // transition to hold open. Worse, the repeats consumed the queue, so the release that
+    // followed was the entry that hit the cap and got dropped, leaving the button stuck down
+    // until the next press. That is the "R2 double-presses, or sticks until I press it again"
+    // report, and it is why only triggers showed it.
+    private val lastRequested = HashMap<Long, Boolean>()
+
+    /**
+     * Apply a digital press/release, pacing it so the guest cannot miss it.
+     *
+     * Returns true when the caller should apply and push immediately; false when this transition
+     * has been scheduled instead and the caller must do nothing.
+     */
+    private fun paceDigital(port: Int, index: Int, pressed: Boolean): Boolean {
+        val key = (port.toLong() shl 32) or (index.toLong() and 0xffffffffL)
+        val now = android.os.SystemClock.uptimeMillis()
+
+        synchronized(nextTransitionAt) {
+            // Not an edge: the button is already being asked for the state it is in. Let it
+            // straight through without touching the pacing budget, so an analog trigger's
+            // stream of same-state updates keeps its pressure current and cannot starve the
+            // release that follows it.
+            if (lastRequested[key] == pressed) {
+                return true
+            }
+
+            lastRequested[key] = pressed
+
+            val ready = nextTransitionAt[key] ?: 0L
+
+            if (now >= ready) {
+                // Nothing queued ahead of this one: let it through now and reserve its slot.
+                nextTransitionAt[key] = now + TRANSITION_MIN_MS
+                return true
+            }
+
+            val queued = pendingTransitions[key] ?: 0
+
+            if (queued >= TRANSITION_MAX_PENDING) {
+                // Never drop a release. Losing a press costs one input; losing a release
+                // leaves the pad holding a button the user let go of, and nothing clears it
+                // until they press it again. Apply it now and reset the budget -- a release
+                // arriving late is worth less than a button that stays down.
+                if (!pressed) {
+                    nextTransitionAt[key] = now + TRANSITION_MIN_MS
+                    return true
+                }
+
+                return false
+            }
+
+            pendingTransitions[key] = queued + 1
+            nextTransitionAt[key] = ready + TRANSITION_MIN_MS
+
+            transitionScheduler.schedule({
+                synchronized(nextTransitionAt) {
+                    pendingTransitions[key] = (pendingTransitions[key] ?: 1) - 1
+                }
+
+                runCatching {
+                    val pad = pads.getOrNull(port)
+
+                    if (pad != null) {
+                        applyButton(pad, index, pressed)
+                        push(port)
+                    }
+                }
+            }, ready - now, java.util.concurrent.TimeUnit.MILLISECONDS)
+
+            return false
+        }
+    }
+
+    /**
+     * Attach or detach the emulated PS3 keyboard.
+     *
+     * RPCS3 decides this once, in Emulator::Load, from Input/Output@@Keyboard --
+     * there is no live attach the way a USB device has one. So this writes the
+     * setting and the next boot picks it up; a running game keeps whatever it
+     * started with. Flipping it mid-game and expecting cellKb to notice is the one
+     * thing this cannot do.
+     */
+    @JvmStatic
+    fun setKeyboardEnabled(enabled: Boolean) {
+        Rpcs3Settings.setKeyboardHandler(enabled)
+    }
+
+    // ---- RPCN ----
+    //
+    // Thin pass-throughs; every one blocks on the network and the callers run them off the
+    // main thread. A failure comes back as a sentence from the core rather than a code, so
+    // the two error enums are not duplicated here.
+
+    @JvmStatic
+    fun rpcnGetConfig(): String =
+        runCatching { RPCSX.instance.rpcnGetConfig() }.getOrDefault("")
+
+    @JvmStatic
+    fun rpcnSetConfig(host: String, npid: String, password: String, token: String) {
+        runCatching { RPCSX.instance.rpcnSetConfig(host, npid, password, token) }
+    }
+
+    @JvmStatic
+    fun rpcnAddFriend(npid: String): String =
+        runCatching { RPCSX.instance.rpcnAddFriend(npid) }.getOrElse { it.message ?: "" }
+
+    fun rpcnRemoveFriend(npid: String): String =
+        runCatching { RPCSX.instance.rpcnRemoveFriend(npid) }.getOrElse { it.message ?: "" }
+
+    fun rpcnGetFriends(): String =
+        runCatching { RPCSX.instance.rpcnGetFriends() }.getOrElse { "[]" }
+
+    fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String =
+        runCatching { RPCSX.instance.rpcnCreateAccount(npid, password, onlineName, email) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnResendToken(npid: String, password: String): String =
+        runCatching { RPCSX.instance.rpcnResendToken(npid, password) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnSendResetToken(npid: String, email: String): String =
+        runCatching { RPCSX.instance.rpcnSendResetToken(npid, email) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnResetPassword(npid: String, token: String, password: String): String =
+        runCatching { RPCSX.instance.rpcnResetPassword(npid, token, password) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnTestLogin(): String =
+        runCatching { RPCSX.instance.rpcnTestLogin() }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnAddHost(desc: String, host: String): String =
+        runCatching { RPCSX.instance.rpcnAddHost(desc, host) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnDelHost(desc: String, host: String): String =
+        runCatching { RPCSX.instance.rpcnDelHost(desc, host) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
+    fun rpcnResetHosts() {
+        runCatching { RPCSX.instance.rpcnResetHosts() }
+    }
+
+    @JvmStatic
+    fun rpcnSetIpv6(enabled: Boolean) {
+        runCatching { RPCSX.instance.rpcnSetIpv6(enabled) }
+    }
+
+    @JvmStatic
+    fun rpcnStatus(): String =
+        runCatching { RPCSX.instance.rpcnStatus() }.getOrDefault("")
+
+    /** One key transition for cellKb. See RPCSX.keyboardKey. */
+    @JvmStatic
+    fun keyboardKey(androidKeyCode: Int, unicode: Int, pressed: Boolean): Boolean =
+        runCatching {
+            RPCSX.instance.keyboardKey(androidKeyCode, unicode, pressed, false)
+        }.getOrDefault(false)
+
     @JvmStatic
     fun setPadButton(port: Int, index: Int, range: Int, pressed: Boolean) {
         val pad = pads.getOrNull(port) ?: return
@@ -923,6 +1259,11 @@ object Rpcs3Bridge {
                 else -> (range / 32767f).coerceIn(0f, 1f)
             }
         } else {
+            // Paced: a press too short to span a guest poll would otherwise be dropped entirely.
+            if (!paceDigital(port, index, pressed)) {
+                return
+            }
+
             applyButton(pad, index, pressed)
 
             // `range` was dropped here for every non-stick button, so a physical
@@ -1047,15 +1388,189 @@ object Rpcs3Bridge {
     @JvmStatic
     fun playSound(path: String) { Unsupported.note("playSound") }
 
-    @JvmStatic
-    fun touchHaptic() {
-        val ctx = appContext ?: return
-        val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    // ---- Rumble -------------------------------------------------------
+    //
+    // The pad already advertises CELL_PAD_CAPABILITY_ACTUATOR, so games have always
+    // believed rumble existed here and asked for it; nothing was listening. cellPad
+    // gives no notification when the guest writes the motors, so this polls what the
+    // core currently wants and drives the phone's vibrator to match.
+
+    private var rumbleThread: Thread? = null
+    @Volatile private var rumbleRunning = false
+
+    // NativeApp.sRumbleEnabled is the flag, not a copy of it. There used to be a private
+    // `rumbleEnabled` here as well: the settings toggle wrote sRumbleEnabled, which nothing
+    // read, and the pump read the private copy, which only setPadVibration wrote and nothing
+    // called. Two stores, neither connected to the other.
+    private val rumbleEnabled: Boolean get() = NativeApp.sRumbleEnabled
+
+    /** The phone's own motor. */
+    private fun deviceVibrator(): Vibrator? {
+        val ctx = appContext ?: return null
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             (ctx.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
         } else {
             @Suppress("DEPRECATION")
             ctx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-        } ?: return
+        }
+    }
+
+    /**
+     * The motor in a connected controller, if one has it.
+     *
+     * Rumble went to the PHONE even with a controller attached, because this only ever asked the
+     * system service. The pad is what the game is addressing; the phone buzzing in its place is
+     * wrong, and on a handheld it is the wrong motor entirely (issue #89).
+     *
+     * The first gamepad or joystick with a working motor wins, in InputDevice id order, so a
+     * single connected pad is unambiguous.
+     */
+    private fun controllerVibrator(): Vibrator? = runCatching {
+        for (id in android.view.InputDevice.getDeviceIds()) {
+            val dev = android.view.InputDevice.getDevice(id) ?: continue
+
+            val isPad = (dev.sources and android.view.InputDevice.SOURCE_GAMEPAD) ==
+                android.view.InputDevice.SOURCE_GAMEPAD ||
+                (dev.sources and android.view.InputDevice.SOURCE_JOYSTICK) ==
+                android.view.InputDevice.SOURCE_JOYSTICK
+
+            if (!isPad) continue
+
+            val v = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                dev.vibratorManager?.defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                dev.vibrator
+            }
+
+            if (v != null && v.hasVibrator()) return@runCatching v
+        }
+
+        null
+    }.getOrNull()
+
+    /**
+     * Where rumble goes: the controller if one can take it, otherwise the phone.
+     *
+     * Resolved on demand rather than cached, because a pad can be connected or disconnected
+     * mid-session. Callers only ask when the motor state changes, so enumerating devices is not a
+     * per-frame cost.
+     */
+    private fun vibrator(): Vibrator? =
+        controllerVibrator() ?: deviceVibrator().takeIf { NativeApp.sPhoneRumbleEnabled }
+
+    @JvmStatic
+    fun setPadVibration(on: Boolean) {
+        NativeApp.sRumbleEnabled = on
+        if (!on) vibrator()?.cancel()
+    }
+
+    /** Start following the core's motor state. Idempotent. */
+    @JvmStatic
+    fun startRumblePump() {
+        if (rumbleRunning) return
+
+        rumbleRunning = true
+        rumbleThread = Thread {
+            var lastAmplitude = 0
+            // The motor we last started, so it can be stopped even if the target has since
+            // changed underneath us -- otherwise unplugging a pad mid-rumble leaves it buzzing.
+            var active: Vibrator? = null
+            while (rumbleRunning) {
+                val packed = runCatching { RPCSX.instance.getPadRumble(0) }.getOrDefault(0)
+                val large = (packed shr 8) and 0xFF
+                val small = packed and 0xFF
+
+                // One vibrator, two motors: take the stronger. The small motor is the
+                // high-frequency one and reads as weaker for the same value, so it is
+                // scaled down rather than competing with the large one on equal terms.
+                val want = if (!rumbleEnabled) 0 else maxOf(large, small * 2 / 3)
+
+                if (want != lastAmplitude) {
+                    runCatching {
+                        // Resolved per change, not once at startup: a pad connected mid-session
+                        // has to take over from the phone, and vice versa on disconnect.
+                        val vib = vibrator()
+
+                        active?.takeIf { it !== vib }?.cancel()
+                        active = null
+
+                        if (want <= 0 || vib == null) {
+                            vib?.cancel()
+                        } else {
+                            // Repeating one-shot rather than a fixed duration: the guest
+                            // decides when rumble stops, and a timed effect would either cut
+                            // a long rumble short or outlive a brief one.
+                            vib.vibrate(
+                                VibrationEffect.createWaveform(
+                                    longArrayOf(0, 60), intArrayOf(0, want.coerceIn(1, 255)), 0
+                                )
+                            )
+                            active = vib
+                        }
+                    }
+                    lastAmplitude = want
+                }
+
+                try { Thread.sleep(30) } catch (_: InterruptedException) { break }
+            }
+            runCatching { active?.cancel() }
+        }.apply { isDaemon = true; name = "rumble-pump"; start() }
+    }
+
+    @JvmStatic
+    fun stopRumblePump() {
+        rumbleRunning = false
+        rumbleThread?.interrupt()
+        rumbleThread = null
+        runCatching { vibrator()?.cancel() }
+    }
+
+    /** Settings' test button: a short burst so the user can tell the motor works. */
+    @JvmStatic
+    fun testRumble(port: Int) {
+        val vib = vibrator() ?: return
+        runCatching {
+            vib.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE))
+        }
+    }
+
+    /** Text for the test toast. Returned "" before, which is why the popup had none. */
+    @JvmStatic
+    fun rumbleStatusForPort(port: Int): String {
+        val vib = vibrator()
+        return when {
+            vib == null || !vib.hasVibrator() -> "This device has no vibration motor"
+            !rumbleEnabled -> "Vibration is switched off in settings"
+            else -> "Vibration test sent to player ${port + 1}"
+        }
+    }
+
+    // ---- SIXAXIS motion ------------------------------------------------
+
+    /**
+     * Feed the phone's orientation to the pad's motion sensors.
+     *
+     * [ax]/[ay]/[az] are gravity-relative acceleration in g, [gyro] a yaw rate in
+     * rad/s. The PS3 reports each axis 0..1023 with 512 at rest and roughly 113 units
+     * per g, which is what a DualShock 3 produces lying flat.
+     */
+    @JvmStatic
+    fun setPadMotion(port: Int, ax: Float, ay: Float, az: Float, gyro: Float) {
+        val center = 512
+        val perG = 113f
+        fun axis(v: Float) = (center + (v * perG)).toInt().coerceIn(0, 1023)
+        // Gyro is a rate, not a position: scale so a brisk turn approaches the rails
+        // without a gentle one being lost in the noise.
+        val g = (center + (gyro * 120f)).toInt().coerceIn(0, 1023)
+        runCatching { RPCSX.instance.setPadSensor(port, axis(ax), axis(ay), axis(az), g) }
+    }
+
+    @JvmStatic
+    fun touchHaptic() {
+        // The phone's motor deliberately, not vibrator(): this is feedback for a finger on the
+        // phone's own screen, so it belongs there even when a controller is holding the rumble.
+        val vibrator = deviceVibrator() ?: return
 
         runCatching {
             vibrator.vibrate(VibrationEffect.createOneShot(10, VibrationEffect.DEFAULT_AMPLITUDE))

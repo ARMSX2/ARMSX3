@@ -1,5 +1,6 @@
 package com.armsx2.ui
 
+import com.armsx2.input.KeyboardExtraKeys
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -129,6 +130,12 @@ object WindowImpl {
                 ) {
                     com.armsx2.ui.touch.TouchControlsOverlay()
                 }
+
+                // The keys the IME does not have (arrows, Esc, Tab, function row), shown only
+                // while the emulated keyboard is up. Outside the density override above: this
+                // is normal UI and should scale with the UI scale setting, unlike the touch
+                // controls, whose size comes from the user's own layout.
+                KeyboardExtraKeys()
 
             if (showLibrary.value && MainActivityRuntime.eState.value == EmuState.RUNNING && !overlayVisible.value) {
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.56f))) {

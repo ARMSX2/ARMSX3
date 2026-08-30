@@ -139,6 +139,9 @@ public final class NativeApp {
 
     /** [MAPPED] Whether a slot holds a state. Ask this rather than probing a path. */
     public static boolean hasStateInSlot(int slot) { return Rpcs3Bridge.hasState(slot); }
+
+    /** [MAPPED] Delete a slot's state and thumbnail. The core resolves the real filename. */
+    public static boolean deleteStateFromSlot(int slot) { return Rpcs3Bridge.deleteState(slot); }
     public static String getAutosaveGamePath() { Unsupported.note("getAutosaveGamePath"); return ""; }
     public static byte[] getAutosaveImage() { Unsupported.note("getAutosaveImage"); return null; }
 
@@ -243,6 +246,13 @@ public final class NativeApp {
 
     /** Master rumble toggle. */
     public static volatile boolean sRumbleEnabled = true;
+
+    /**
+     * Whether the PHONE's own motor may be used. A controller's motor is always allowed; this
+     * only gates the fallback, so a user playing on a pad can stop the phone buzzing in their
+     * pocket or dock without giving up rumble entirely (issue #89). Default on.
+     */
+    public static volatile boolean sPhoneRumbleEnabled = true;
 
     /** Volume applied to UI sounds played through NativeApp.playSound. */
     public static volatile float sSoundVolume = 1.0f;
@@ -433,10 +443,16 @@ public final class NativeApp {
 
     /** [TODO] */
     public static void resetKeyStatus() { Unsupported.note("resetKeyStatus"); }
-    public static void setPadVibration(boolean on) { Unsupported.note("setPadVibration"); }
+    public static void setPadVibration(boolean on) { Rpcs3Bridge.setPadVibration(on); }
+    /** Unused here: the core is polled instead, since cellPad gives no rumble notification. */
     public static void onPadRumble(int pad, int large, int small) { Unsupported.note("onPadRumble"); }
-    public static void testRumble(int port) { Unsupported.note("testRumble"); }
-    public static String rumbleStatusForPort(int port) { return ""; }
+    public static void testRumble(int port) { Rpcs3Bridge.testRumble(port); }
+    public static String rumbleStatusForPort(int port) { return Rpcs3Bridge.rumbleStatusForPort(port); }
+    public static void startRumblePump() { Rpcs3Bridge.startRumblePump(); }
+    public static void stopRumblePump() { Rpcs3Bridge.stopRumblePump(); }
+    public static void setPadMotion(int port, float ax, float ay, float az, float gyro) {
+        Rpcs3Bridge.setPadMotion(port, ax, ay, az, gyro);
+    }
     public static void enablePad2() { Unsupported.note("enablePad2"); }
 
 
@@ -466,8 +482,29 @@ public final class NativeApp {
     public static void usbLightgunButton(int p, int b, boolean pressed) { Unsupported.note("usbLightgunButton"); }
     public static void usbSetDeviceType(int port, String type) { Unsupported.note("usbSetDeviceType"); }
     public static void usbSetDeviceSubtype(int port, int subtype) { Unsupported.note("usbSetDeviceSubtype"); }
-    public static void usbSetKeyboardEnabled(int port, boolean e) { Unsupported.note("usbSetKeyboardEnabled"); }
-    public static boolean usbKeyboardKey(int p, int k, boolean pressed) { Unsupported.note("usbKeyboardKey"); return false; }
+    /** [MAPPED] Attach or detach the emulated PS3 keyboard (cellKb).
+     *
+     *  There is no PS3 equivalent of PCSX2's USB HID keyboard device, so the ARMSX2
+     *  name is kept but the thing it drives is RPCS3's keyboard handler: Basic
+     *  installs the Android handler, Null reports nothing attached. Takes effect on
+     *  the next boot, since the handler is created during Emulator::Load.
+     *
+     *  port is ignored: RPCS3 has one keyboard handler, not one per USB port. */
+    public static void usbSetKeyboardEnabled(int port, boolean e) {
+        Rpcs3Bridge.setKeyboardEnabled(e);
+    }
+
+    /** [MAPPED] -> _rpcsx_keyboardKey. port is ignored (single handler). */
+    public static boolean usbKeyboardKey(int p, int k, boolean pressed) {
+        return Rpcs3Bridge.keyboardKey(k, 0, pressed);
+    }
+
+    /** [MAPPED] As above, plus the character the key produced (KeyEvent.getUnicodeChar()).
+     *  cellKb derives its own character from the raw code and the live modifier state, so
+     *  this only matters to the emulator's own overlays. */
+    public static boolean usbKeyboardKey(int p, int k, int unicode, boolean pressed) {
+        return Rpcs3Bridge.keyboardKey(k, unicode, pressed);
+    }
     public static String usbDeviceTypes() { return ""; }
 
     // ===== PS2-only subsystems: these screens must be REMOVED, not stubbed =====

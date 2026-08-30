@@ -48,6 +48,9 @@ set(ARMSX3_INPUT_SOURCES
     ${CMAKE_SOURCE_DIR}/rpcs3/Input/mouse_gyro_handler.cpp
     # Ours: on-screen touch controls.
     ${CMAKE_SOURCE_DIR}/rpcs3/Input/virtual_pad_handler.cpp
+    # Ours: cellKb fed from the Android IME / a physical keyboard. The desktop
+    # handler is a QObject and cannot be built here.
+    ${CMAKE_SOURCE_DIR}/rpcs3/Input/virtual_keyboard_handler.cpp
 )
 
 add_library(rpcsx-android SHARED

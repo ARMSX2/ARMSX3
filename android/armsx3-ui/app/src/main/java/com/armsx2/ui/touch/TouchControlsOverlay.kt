@@ -410,6 +410,10 @@ fun TouchControlsOverlay() {
             }
         }
 
+        // Momentary state: a panel that stayed collapsed into the next editing session would look
+        // like the controls had gone missing.
+        LaunchedEffect(edit) { if (!edit) TouchControls.editorPanelCollapsed.value = false }
+
         if (edit) {
             // The editor panel is draggable + pinch-resizable (grip handle at its top) so it can be
             // moved off the buttons being edited. Offset is applied on the outer Box (real px); resize
@@ -420,12 +424,33 @@ fun TouchControlsOverlay() {
             val dxState = TouchControls.editorPanelDx(isLandscape)
             val dyState = TouchControls.editorPanelDy(isLandscape)
             val panelScale = TouchControls.editorPanelScale(isLandscape).floatValue
+
+            // Auto-dock: never sit on the same half of the screen as the widget being edited.
+            //
+            // Halves rather than real overlap maths, on purpose. A panel that darts about as
+            // rectangles graze each other is less predictable than one that is simply never on
+            // the side you are working on, and predictability is what makes it stop being
+            // annoying.
+            //
+            // This complements the collapse toggle rather than replacing it: collapse answers "I
+            // cannot select what is under you in the first place", docking answers "I have
+            // selected it and now you are on top of it".
+            val selectedId = TouchControls.selectedButton.value
+            val selectedY = if (selectedId != null) {
+                TouchControls.activeLayout.value.buttons.firstOrNull { it.id == selectedId }?.yFrac
+            } else null
+            val dockBottom = selectedY != null && selectedY < 0.5f
+
             Box(
                 Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 12.dp)
+                    .align(if (dockBottom) Alignment.BottomCenter else Alignment.TopCenter)
+                    .padding(top = if (dockBottom) 0.dp else 12.dp, bottom = if (dockBottom) 12.dp else 0.dp)
                     .offset {
-                        IntOffset(dxState.floatValue.roundToInt(), dyState.floatValue.roundToInt())
+                        // The stored drag offset means "away from the anchored edge", so it has to
+                        // flip sign with the anchor. Applied unchanged while docked to the bottom,
+                        // a +dy the user had nudged in would push the panel straight off-screen.
+                        val dy = if (dockBottom) -dyState.floatValue else dyState.floatValue
+                        IntOffset(dxState.floatValue.roundToInt(), dy.roundToInt())
                     },
             ) {
                 CompositionLocalProvider(
@@ -569,6 +594,7 @@ private fun drawableFor(id: TouchButtonId, pressed: Boolean): Int = when (id) {
     TouchButtonId.PAUSE, TouchButtonId.PRESSURE, TouchButtonId.FAST_FORWARD,
     TouchButtonId.MACRO1, TouchButtonId.MACRO2, TouchButtonId.MACRO3, TouchButtonId.MACRO4,
     TouchButtonId.SAVE_STATE, TouchButtonId.LOAD_STATE, TouchButtonId.SCREENSHOT,
+    TouchButtonId.KEYBOARD,
     TouchButtonId.ANALOG_EXTRA -> R.drawable.pad_cross
 }
 
@@ -1037,6 +1063,7 @@ private fun StateActionWidget(cfg: TouchButtonCfg, edit: Boolean) {
     val label = when (cfg.id) {
         TouchButtonId.SAVE_STATE -> str("touch.stateAction.save")
         TouchButtonId.LOAD_STATE -> str("touch.stateAction.load")
+        TouchButtonId.KEYBOARD -> str("touch.stateAction.keyboard")
         else -> str("touch.stateAction.screenshot")
     }
     if (edit) {
@@ -1062,6 +1089,7 @@ private fun StateActionWidget(cfg: TouchButtonCfg, edit: Boolean) {
                             when (cfg.id) {
                                 TouchButtonId.SAVE_STATE -> MainActivityRuntime.instance?.saveState()
                                 TouchButtonId.LOAD_STATE -> MainActivityRuntime.instance?.loadState()
+                                TouchButtonId.KEYBOARD -> MainActivityRuntime.toggleSoftKeyboard()
                                 else -> MainActivityRuntime.instance?.applicationContext?.let {
                                     com.armsx2.Screenshots.capture(it)
                                 }
@@ -1904,6 +1932,11 @@ private fun EditToolbar(modifier: Modifier = Modifier) {
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // First in the row on purpose: it must be in the same place whether the panel is
+            // open or collapsed, or the way back is somewhere the user has to hunt for.
+            PanelSizeButton(if (TouchControls.editorPanelCollapsed.value) "▼" else "▲") {
+                TouchControls.editorPanelCollapsed.value = !TouchControls.editorPanelCollapsed.value
+            }
             PanelSizeButton("－") {
                 val ls = OverlayDims.last?.let { it.widthPx > it.heightPx } ?: true
                 TouchControls.editorPanelScale(ls).floatValue =
@@ -1949,6 +1982,10 @@ private fun EditToolbar(modifier: Modifier = Modifier) {
                     (TouchControls.editorPanelScale(ls).floatValue + 0.1f).coerceIn(0.6f, 1.35f)
             }
         }
+        // Everything below is what the collapse toggle hides. Column is an inline composable,
+        // so this genuinely skips emitting the rest rather than drawing it invisibly.
+        if (TouchControls.editorPanelCollapsed.value) return@Column
+
         // Scope hint: with no game running the editor edits the GLOBAL Default
         // layout (per-game layouts need a running disc).
         Text(

@@ -348,6 +348,72 @@ fun AppTab() {
                 description = str("app.bg.simple.desc"),
                 onChange = { com.armsx2.ui.home.LibraryBackground.setAnimated2D(it) },
             )
+            // Flurry: Calum Robinson's 2002 screensaver, ported and offered as the backdrop.
+            // Requested by a tester who has wanted it on a handheld since the Mac original.
+            //
+            // Off by default and said plainly in the description, because it is a live particle
+            // simulation rather than a still: ARMSX2 shipped a looping video behind this same
+            // library and removed it in 2.5.9 when the continuous decode turned out to cost real
+            // performance. This is opt-in for the same reason.
+            ToggleRow(
+                label = str("app.bg.flurry"),
+                value = com.armsx2.ui.home.LibraryBackground.flurry.value,
+                description = str("app.bg.flurry.desc"),
+                onChange = { com.armsx2.ui.home.LibraryBackground.setFlurry(it) },
+            )
+            if (com.armsx2.ui.home.LibraryBackground.flurry.value) {
+                val kind = com.armsx2.ui.home.LibraryBackground.saverKind.value
+                SegmentedGridRow(
+                    label = str("app.bg.saver"),
+                    options = listOf("Flurry", "Flux", "Plasma", "SolarWinds", "Hyperspace", "Lattice", "Skyrocket"),
+                    selectedIndex = kind,
+                    columns = 4,
+                    onChange = { com.armsx2.ui.home.LibraryBackground.setSaverKind(it) },
+                )
+                if (kind == 0) {
+                    // Values are Flurry's own preset enum; -1 is "insane" upstream and 99 is this
+                    // port's "pick one each time", so the list is not an index range.
+                    val presetValues = listOf(99, 0, 1, 2, 3, 4, 5, -1)
+                    SegmentedGridRow(
+                        label = str("app.bg.flurry.preset"),
+                        options = listOf(
+                            str("app.bg.flurry.random"), "Water", "Fire", "Psychedelic",
+                            "RGB", "Binary", "Classic", "Insane",
+                        ),
+                        selectedIndex = presetValues
+                            .indexOf(com.armsx2.ui.home.LibraryBackground.flurryPreset.value)
+                            .coerceAtLeast(0),
+                        columns = 4,
+                        onChange = {
+                            com.armsx2.ui.home.LibraryBackground.setFlurryPreset(presetValues[it])
+                        },
+                    )
+                } else if (kind != 4 && kind != 6) {
+                    // Hyperspace and Skyrocket ship no presets upstream, so they show no picker.
+                    // Six presets plus this port's 99 for "pick one each time", so not an index
+                    // range. Flux and SolarWinds ship their own named defaults; Plasma had none
+                    // upstream, so those are built here from the settings its config dialog
+                    // exposed.
+                    val rssValues = listOf(99, 1, 2, 3, 4, 5, 6)
+                    val names = when (kind) {
+                        1 -> listOf("Regular", "Hypnotic", "Insane", "Sparklers", "Paradigm", "Galactic")
+                        2 -> listOf("Classic", "Tight", "Wide", "Fast", "Slow drift", "Coarse")
+                        5 -> listOf("Regular", "Chainmail", "Brass Mesh", "Computer", "Slick", "Tasty")
+                        else -> listOf("Regular", "Cosmic Strings", "Cold Pricklies", "Space Fur", "Jiggly", "Undertow")
+                    }
+                    SegmentedGridRow(
+                        label = str("app.bg.flux.preset"),
+                        options = listOf(str("app.bg.flurry.random")) + names,
+                        selectedIndex = rssValues
+                            .indexOf(com.armsx2.ui.home.LibraryBackground.rssPreset.value)
+                            .coerceAtLeast(0),
+                        columns = 4,
+                        onChange = {
+                            com.armsx2.ui.home.LibraryBackground.setRssPreset(rssValues[it])
+                        },
+                    )
+                }
+            }
             // Colour of the BAR itself (the rounded header pill), as opposed to the animated
             // backdrop the rest of this section controls. Requested because the background picker
             // is labelled "Library Bar Color" but recolours the background — so there was no way to
@@ -971,6 +1037,62 @@ private fun BackupRestoreRows() {
 
     BackupActionRow("💾", "app.backup.export", "app.backup.export.desc", status, busy, doExport)
     BackupActionRow("📥", "app.backup.import", "app.backup.import.desc", "", busy, doImport)
+
+    // Save-data import. Sits here rather than in a library screen because it is the same act as
+    // Restore -- bringing files the app cannot otherwise receive into its own data folder.
+    //
+    // It exists because of a platform rule: Android 11 stopped third-party file managers from
+    // writing into Android/data, so dropping a downloaded roster into savedata/ now fails with
+    // EACCES no matter which file manager is used. We are the only process that can still write
+    // there. Reported against All Pro Football 2K8.
+    //
+    // Two rows because the two pickers are different intents and a user has whichever they have:
+    // an archive straight from a download, or an already-unzipped folder.
+    val onImported = { r: com.armsx2.SaveDataImporter.Outcome ->
+        busy = false
+        val names = r.saves.joinToString(", ") { s -> s.title?.takeIf { it.isNotBlank() } ?: s.dirName }
+        status = when {
+            r.ok && r.saves.any { it.replaced } -> I18n.get("app.savedata.replaced").replace("%s", names)
+            r.ok -> I18n.get("app.savedata.done").replace("%s", names)
+            // A cancelled picker reports no error; saying "failed" at someone who backed out
+            // themselves is noise.
+            r.error == null -> ""
+            else -> I18n.get("app.savedata.failed").replace("%s", r.error)
+        }
+        if (status.isNotEmpty()) Toast.makeText(context, status, Toast.LENGTH_LONG).show()
+    }
+    val saveArchivePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        status = I18n.get("app.savedata.working")
+        scope.launch(Dispatchers.IO) {
+            val r = com.armsx2.SaveDataImporter.importArchive(context, uri)
+            withContext(Dispatchers.Main) { onImported(r) }
+        }
+    }
+    val saveFolderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        status = I18n.get("app.savedata.working")
+        scope.launch(Dispatchers.IO) {
+            val r = com.armsx2.SaveDataImporter.importFolder(context, uri)
+            withContext(Dispatchers.Main) { onImported(r) }
+        }
+    }
+    val doSaveImport = {
+        if (!busy) saveArchivePicker.launch(arrayOf("application/zip", "application/octet-stream"))
+    }
+    val doSaveFolderImport = { if (!busy) saveFolderPicker.launch(null) }
+
+    BackupActionRow("🎮", "app.savedata.import", "app.savedata.import.desc", "", busy, doSaveImport)
+    BackupActionRow(
+        "📂", "app.savedata.importFolder", "app.savedata.importFolder.desc", "", busy,
+        doSaveFolderImport,
+    )
 
     // Factory reset. Sits with Backup/Restore because Export is the thing to do first — the
     // prompt says so. Routed through GlobalConfirm rather than a local overlay: this row is

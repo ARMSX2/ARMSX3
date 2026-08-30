@@ -393,6 +393,36 @@ extern void mov_rdata(spu_rdata_t& _dst, const spu_rdata_t& _src)
 	_mm_storeu_si128(reinterpret_cast<__m128i*>(_dst + 80), v1);
 	_mm_storeu_si128(reinterpret_cast<__m128i*>(_dst + 96), v2);
 	_mm_storeu_si128(reinterpret_cast<__m128i*>(_dst + 112), v3);
+#elif defined(ARCH_ARM64)
+	// 16-byte granular, to match what x86 gets for free.
+	//
+	// This copies the 128-byte reservation line -- the GETLLAR snapshot, and the fill back into
+	// live guest local store -- while another thread may be writing the source. On x86 the code
+	// above is four 16-byte vector moves, so each quarter lands whole and a racing reader sees
+	// either the old or the new 16 bytes. std::memcpy makes no such promise: its granularity is a
+	// libc detail and AArch64 implementations mix sizes freely, so a reader can observe a line
+	// stitched together from both versions. Borderlands 2's SPURS job manager streams job state
+	// through exactly these lines, and every byte we captured at rest matched x86 -- which only
+	// ever proved the data was identical AFTER the copy settled, never during it.
+	const u8* const src_b = reinterpret_cast<const u8*>(_src);
+	u8* const dst_b = reinterpret_cast<u8*>(_dst);
+
+	const uint8x16_t v0 = vld1q_u8(src_b + 0x00);
+	const uint8x16_t v1 = vld1q_u8(src_b + 0x10);
+	const uint8x16_t v2 = vld1q_u8(src_b + 0x20);
+	const uint8x16_t v3 = vld1q_u8(src_b + 0x30);
+	const uint8x16_t v4 = vld1q_u8(src_b + 0x40);
+	const uint8x16_t v5 = vld1q_u8(src_b + 0x50);
+	const uint8x16_t v6 = vld1q_u8(src_b + 0x60);
+	const uint8x16_t v7 = vld1q_u8(src_b + 0x70);
+	vst1q_u8(dst_b + 0x00, v0);
+	vst1q_u8(dst_b + 0x10, v1);
+	vst1q_u8(dst_b + 0x20, v2);
+	vst1q_u8(dst_b + 0x30, v3);
+	vst1q_u8(dst_b + 0x40, v4);
+	vst1q_u8(dst_b + 0x50, v5);
+	vst1q_u8(dst_b + 0x60, v6);
+	vst1q_u8(dst_b + 0x70, v7);
 #else
 	std::memcpy(_dst, _src, 128);
 #endif
@@ -477,6 +507,36 @@ extern void mov_rdata_nt(spu_rdata_t& _dst, const spu_rdata_t& _src)
 	_mm_stream_si128(reinterpret_cast<__m128i*>(_dst + 80), v1);
 	_mm_stream_si128(reinterpret_cast<__m128i*>(_dst + 96), v2);
 	_mm_stream_si128(reinterpret_cast<__m128i*>(_dst + 112), v3);
+#elif defined(ARCH_ARM64)
+	// 16-byte granular, to match what x86 gets for free.
+	//
+	// This copies the 128-byte reservation line -- the GETLLAR snapshot, and the fill back into
+	// live guest local store -- while another thread may be writing the source. On x86 the code
+	// above is four 16-byte vector moves, so each quarter lands whole and a racing reader sees
+	// either the old or the new 16 bytes. std::memcpy makes no such promise: its granularity is a
+	// libc detail and AArch64 implementations mix sizes freely, so a reader can observe a line
+	// stitched together from both versions. Borderlands 2's SPURS job manager streams job state
+	// through exactly these lines, and every byte we captured at rest matched x86 -- which only
+	// ever proved the data was identical AFTER the copy settled, never during it.
+	const u8* const src_b = reinterpret_cast<const u8*>(_src);
+	u8* const dst_b = reinterpret_cast<u8*>(_dst);
+
+	const uint8x16_t v0 = vld1q_u8(src_b + 0x00);
+	const uint8x16_t v1 = vld1q_u8(src_b + 0x10);
+	const uint8x16_t v2 = vld1q_u8(src_b + 0x20);
+	const uint8x16_t v3 = vld1q_u8(src_b + 0x30);
+	const uint8x16_t v4 = vld1q_u8(src_b + 0x40);
+	const uint8x16_t v5 = vld1q_u8(src_b + 0x50);
+	const uint8x16_t v6 = vld1q_u8(src_b + 0x60);
+	const uint8x16_t v7 = vld1q_u8(src_b + 0x70);
+	vst1q_u8(dst_b + 0x00, v0);
+	vst1q_u8(dst_b + 0x10, v1);
+	vst1q_u8(dst_b + 0x20, v2);
+	vst1q_u8(dst_b + 0x30, v3);
+	vst1q_u8(dst_b + 0x40, v4);
+	vst1q_u8(dst_b + 0x50, v5);
+	vst1q_u8(dst_b + 0x60, v6);
+	vst1q_u8(dst_b + 0x70, v7);
 #else
 	std::memcpy(_dst, _src, 128);
 #endif
@@ -1550,48 +1610,53 @@ void spu_thread::cpu_task()
 	{
 		while (true)
 		{
+			dbg_loops++;
+			dbg_where = spu_at_loop_top;
+
 			if (state) [[unlikely]]
 			{
+				dbg_where = spu_at_check_state;
+
 				if (check_state())
 					break;
 			}
 
 			if (_ref<u32>(pc) == 0x0u)
 			{
+				dbg_where = spu_at_stop_signal;
+
 				if (spu_thread::stop_and_signal(0x0))
 					pc += 4;
 				continue;
 			}
 
-			if (interp_fallback) [[unlikely]]
-			{
-				allow_interrupts_in_cpu_work = true;
+			// A block that cannot be compiled is interpreted by spu_run_interp_fallback, which
+			// runs inside the gateway call below rather than out here.
+			//
+			// It used to run here, after dispatch had escaped. The interpreter is self-contained
+			// and that part worked, but guest code then executed outside any gateway invocation
+			// while spu_runtime::g_escape resumes through the gateway epilogue recorded in
+			// hv_ctx -- belonging to a call that had already returned. A guest HALT, an MFC
+			// interrupt or cpu_work escaping from inside the interpreter restored a stack pointer
+			// into a dead frame.
+			//
+			// Note the fallback is NOT spu_runtime::g_interpreter: that is the LLVM-built
+			// interpreter used when a recompiler is selected, and on ARM64 calling it for this
+			// purpose executes nothing -- measured a million consecutive calls on Sonic
+			// Unleashed's stuck SPURS kernel without pc moving once.
+			//
+			// Both flags are cleared here rather than by the code that sets them. An escape taken
+			// from inside the fallback interpreter jumps to the gateway epilogue and abandons the
+			// frames that would have cleared them, so a thread that met one uncompilable block
+			// would otherwise run every later JIT block with interrupt servicing enabled and
+			// report itself as interpreting for the rest of its life. This is the one point every
+			// escape returns through.
+			interp_fallback = false;
+			allow_interrupts_in_cpu_work = false;
 
-				// Check the fallback is actually executing, once.
-				//
-				// This loop re-enters unconditionally, so if g_interpreter returns without
-				// running an instruction the pc never moves and the thread spins here in C++ at
-				// a fixed pc while looking like it is running. Sonic Unleashed's
-				// RsdxPrimaryCellSpursKernel4 sits at pc=0x07350 with interp_fb=1 and is the only
-				// SPU in the process using this path, which is what this distinguishes: a guest
-				// spin loop that legitimately waits, versus a fallback that executes nothing.
-				// The legacy C++ interpreter, NOT spu_runtime::g_interpreter.
-				//
-				// g_interpreter is the LLVM-built interpreter when a recompiler is selected, and
-				// on ARM64 calling it here executes nothing: measured a million consecutive calls
-				// on Sonic Unleashed's stuck SPURS kernel without pc moving once. The thread then
-				// spins in this loop forever at a fixed pc with no flags set, which looks like a
-				// busy SPU and hangs the title with no diagnostic. Any block that fails to compile
-				// lands here, so this is not one game's problem.
-				//
-				// old_interpreter is what the static decoder ultimately runs, via tr_interpreter,
-				// and it is self-contained. It loops until the thread is interrupted, which is the
-				// intended semantic: the THREAD switches to the interpreter, as the log says.
-				spu_recompiler_base::old_interpreter(*this, _ptr<u8>(0), nullptr);
-				continue;
-			}
-
+			dbg_where = spu_at_gateway_enter;
 			spu_runtime::g_gateway(*this, _ptr<u8>(0), nullptr);
+			dbg_where = spu_at_gateway_exit;
 		}
 
 		if (unsavable && is_stopped(state - cpu_flag::stop))
@@ -2073,6 +2138,152 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 
 	u32 eal = args.eal;
 	u32 lsa = args.lsa & 0x3ffff;
+
+	// Code-sized transfers, which is how a SPURS workload would arrive.
+	//
+	// The previous version of this filtered on lsa >= 0x30000 and capped at 64 lines -- and the cap
+	// filled inside one second on top-of-LS polling noise (0x3f600/0x3f700 descriptors, 0x3f800
+	// save area), leaving no visibility afterwards. That is a blind spot, not evidence: Borderlands
+	// 2's wake-up lives at pc 0x32038 and NO block is ever built at or above 0x30000 across five
+	// captures, so the code never RUNS, but whether it is ever FETCHED was never actually observed.
+	//
+	// Filter by size instead. A workload image is kilobytes; the polling descriptors are 0x80. This
+	// keeps the budget for transfers that could plausibly be code, wherever they land.
+	// The two SPURS control-block bytes that differ from x86, tracked over time.
+	//
+	// Captured at the same instant x86 issues the overlay GET, its control block differs from ours
+	// at exactly two of 128 bytes: +0x73 (the idle bitmap, which merely says WHICH kernel is
+	// running -- 0x17 here vs 0x1d there, both four-idle-one-running, so not a cause) and +0x04,
+	// where we hold 0x01 and x86 holds 0x00. +0x24 is 0x01 on both, so these read as parallel
+	// per-slot fields and we have an extra one set.
+	//
+	// The two snapshots came from different lifecycle moments, so a single comparison cannot say
+	// whether our 0x01 is a stuck flag or a normal transient. Logging it on CHANGE answers that
+	// without another round trip: a value that is set once and never clears while the kernels spin
+	// for minutes is a stuck flag, and a stuck per-workload flag would explain why selection never
+	// picks the workload whose overlay contains the wake-up.
+	if (_this && _this->spurs_addr && _this->spurs_addr < 0xfffffff0 && vm::check_addr(_this->spurs_addr, vm::page_readable, 0x80)) [[unlikely]]
+	{
+		// Key on (control block, +0x04) and log each combination once.
+		//
+		// The first attempt packed +0x04 together with +0x73 and shared one last-value across every
+		// SPU. Both were wrong: +0x73 is the idle bitmap and churns constantly as kernels rotate, so
+		// it ate the whole budget while +0x04 never moved; and the two SPURS groups have DIFFERENT
+		// control blocks (PhysWISE 0x1866b80, CompPatch 0x1867b80), so sampling each thread's own
+		// spurs_addr against one shared previous value made unrelated blocks look like transitions.
+		// Keying on the address and the byte of interest survives both.
+		static atomic_t<u32> s_ctl_n{0};
+		static shared_mutex s_ctl_mtx;
+		static std::array<u64, 32> s_ctl_seen{};
+
+		const u8* const ctl = static_cast<const u8*>(vm::base(_this->spurs_addr));
+		const u64 key = (u64{_this->spurs_addr} << 8) | ctl[0x04];
+
+		bool fresh = false;
+		{
+			std::lock_guard lock(s_ctl_mtx);
+
+			const u32 n = s_ctl_n.load();
+
+			if (n < 32 && std::find(s_ctl_seen.begin(), s_ctl_seen.begin() + n, key) == s_ctl_seen.begin() + n)
+			{
+				s_ctl_seen[n] = key;
+				s_ctl_n.store(n + 1);
+				fresh = true;
+			}
+		}
+
+		if (fresh)
+		{
+			spu_log.warning("SPURS ctl: block=0x%08x +0x04=0x%02x (+0x73=0x%02x) thread='%s'",
+				_this->spurs_addr, ctl[0x04], ctl[0x73], *_this->spu_tname.load());
+		}
+	}
+
+	// Registers at the last DMA both hosts issue in common.
+	//
+	// The overlay loader at pc=0x0451c pulls a job in as ten chunks, byte-identical on both hosts,
+	// ending with lsa=0x30c00 eal=0x01381680 size=0x820. x86 then issues an ELEVENTH DMA
+	// (lsa=0x31800 eal=0x0133ab80 size=0x890) whose code signals the wake-up; we issue nothing and
+	// the game deadlocks. Both hosts execute pc=0x0451c constantly, the polled descriptors are
+	// byte-identical, and the SPURS control block matches -- so whatever decides the eleventh
+	// transfer is loop state held in REGISTERS at this instant, not in memory we have compared.
+	// Dump them here and diff against the same moment on x86: the differing register is the
+	// segment count, index, or table pointer that terminates the loop early.
+	if (_this && is_get && lsa == 0x30c00 && args.size == 0x820) [[unlikely]]
+	{
+		static atomic_t<u32> s_regs_done{0};
+
+		if (s_regs_done.fetch_add(1) < 2)
+		{
+			std::string regs;
+
+			for (u32 i = 0; i < 128; i++)
+			{
+				const auto& r = _this->gpr[i];
+
+				// Preformatted four words per register, 4 per line.
+				fmt::append(regs, "%s r%-3u = %08x %08x %08x %08x", (i % 4 == 0 ? "\n    " : "   "),
+					i, r._u32[3], r._u32[2], r._u32[1], r._u32[0]);
+			}
+
+			spu_log.warning("SPU regs at chunk-10 GET (lsa=0x30c00 eal=0x%08x size=0x%x) pc=0x%05x thread='%s':%s",
+				eal, args.size, _this->pc, *_this->spu_tname.load(), regs);
+		}
+	}
+
+	// GETs only, and one line per DISTINCT (lsa, size) shape.
+	//
+	// Third time a budget here has been eaten by a single repeating pattern: first the 0x80
+	// descriptor polls, then 96 identical PUTs of 0x2800 from lsa 0x2ef80/0x31780 out to the
+	// mapped 0x60000000 region, all inside 100ms. Volume is not the signal. Code ARRIVES, so only
+	// GETs can be a workload load, and what matters is the VARIETY of destinations -- ARM executes
+	// nothing above 0x29b48 while x86 runs the port-20 job at 0x32038, so the question is purely
+	// which local-store addresses ever receive a code-sized fetch.
+	// Any size once the destination is high, because the interesting transfer is the SHORT one.
+	//
+	// PhysWISE loads its workload as nine contiguous 0x4000 chunks, LS 0x0cc00 <- EA 0x0135d680
+	// ending at LS 0x30c00. The next chunk in that sequence is issued as
+	// `GETF 0x30c00:0x01381680 0x820` -- 0x820, not 0x4000 -- so the image stops at LS 0x31420,
+	// and x86 throws the port-20 wake-up from 0x32038, which is 0xC18 bytes further in. A
+	// `size >= 0x1000` filter cannot see that final short chunk, which is exactly the transfer
+	// that matters. Log every GET landing at or past the tail of the image instead.
+	if (_this && is_get && (args.size >= 0x1000 || lsa >= 0x2c000)) [[unlikely]]
+	{
+		static atomic_t<u32> s_shapes{0};
+		static shared_mutex s_shape_mtx;
+		static std::array<u64, 64> s_shape{};
+
+		// Key on the destination alone, not (lsa, size).
+		//
+		// Keying on both let CompPatch's variable-size streaming into lsa=0x0c480 produce ~50
+		// distinct shapes and eat the budget -- the fourth time a cap here has been consumed by one
+		// repeating pattern. The question is only WHICH local-store addresses ever receive code, so
+		// one line per destination is exactly the right resolution: ARM loads its PhysWISE workload
+		// to 0x0b000..0x1c9d0 and its CompPatch workload to 0x03000..0x0c350, while x86 runs the
+		// port-20 job at 0x32038, which is in neither range.
+		const u64 shape = lsa;
+
+		bool fresh = false;
+		{
+			std::lock_guard lock(s_shape_mtx);
+
+			const u32 n = s_shapes.load();
+
+			if (n < 64 && std::find(s_shape.begin(), s_shape.begin() + n, shape) == s_shape.begin() + n)
+			{
+				s_shape[n] = shape;
+				s_shapes.store(n + 1);
+				fresh = true;
+			}
+		}
+
+		if (fresh)
+		{
+			spu_log.warning("SPU code-sized GET: lsa=0x%05x eal=0x%08x size=0x%x tag=%u thread='%s'",
+				lsa, eal, args.size, +args.tag, *_this->spu_tname.load());
+		}
+	}
 
 	// Keep src point to const
 	u8* dst = nullptr;
@@ -3416,6 +3627,8 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 	perf_meter<"PUTLLC-"_u64> perf0;
 	perf_meter<"PUTLLC+"_u64> perf1 = perf0;
 
+	putllc_calls++;
+
 	// Store conditionally
 	const u32 addr = args.eal & -128;
 
@@ -3533,22 +3746,42 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 	{
 		if (raddr)
 		{
-			if (raddr != spurs_addr || pc != 0x11e4)
-			{
-				vm::reservation_notifier_notify(addr, rtime);
-			}
-			else
+			// Always notify.
+			//
+			// Upstream (bc22df8ba, "SPU: Optimize cellSpurs reservations") skips waking waiters
+			// after a SUCCESSFUL conditional store when the SPU is at pc 0x11e4 with the SPURS
+			// control block reserved, unless byte 0x73 of that block shows this thread going
+			// running->idle. It is a throughput optimisation: the SPURS kernel stores to that
+			// block constantly and waking every waiter each time is a thundering herd.
+			//
+			// Both constants are guesses about one specific SPURS kernel build. 0x11e4 is a
+			// guest code address and 0x73 an offset inside the guest's own control block, and
+			// SPURS ships in many versions across titles. On a kernel whose layout differs, the
+			// running->idle test reads the wrong byte, answers 'no' forever, and the store then
+			// succeeds while every waiter stays asleep -- with nothing anywhere reporting it.
+			//
+			// Tales of Xillia (BLUS31006) hangs with all five graphics SPUs reserving this block
+			// and each of them suppressing ~100,000 notifications, and its SPURS kernel then
+			// executes its own HALT because two workload masks that must be disjoint both claim
+			// the same workload. Whether the missed wakeups cause that inconsistency or merely
+			// accompany it is not established -- but notifying is the correct behaviour and
+			// suppressing is the optimisation, so the optimisation goes and correctness stays.
+			//
+			// The counter is kept, now measuring how often the heuristic WOULD have suppressed,
+			// so the cost of this is visible in a log rather than guessed at.
+			if (raddr == spurs_addr && pc == 0x11e4)
 			{
 				const u32 thread_bit_mask = (1u << index);
 				constexpr usz SPU_IDLE = 0x73;
 
-				const bool switched_from_running_to_idle = (static_cast<u8>(rdata[SPU_IDLE]) & thread_bit_mask) == 0 && (_ref<u8>(0x100 + SPU_IDLE) & thread_bit_mask) != 0;
-
-				if (switched_from_running_to_idle)
+				if ((static_cast<u8>(rdata[SPU_IDLE]) & thread_bit_mask) != 0 || (_ref<u8>(0x100 + SPU_IDLE) & thread_bit_mask) == 0)
 				{
-					vm::reservation_notifier_notify(addr, rtime);
+					putllc_suppressed++;
 				}
 			}
+
+			putllc_notify++;
+			vm::reservation_notifier_notify(addr, rtime);
 
 			raddr = 0;
 		}
@@ -3558,6 +3791,8 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 	}
 	else
 	{
+		putllc_fails++;
+
 		if (raddr)
 		{
 			// Last check for event before we clear the reservation
@@ -5732,6 +5967,13 @@ s64 spu_thread::get_ch_value(u32 ch)
 				val = static_cast<u8>(std::min<u32>(val + 1, u8{umax}));
 			}
 
+			// NOTE: this threshold is 12, which no phone reaches -- an 8 Gen 2 reports 8 threads
+			// where a desktop reports 16 -- so one thread is elected to poll reservations on
+			// desktop and none ever is here. Tried lowering it to 4 to see if that was the
+			// Borderlands 2 hang: it is not. Same stall, and the SPU threads are already burning
+			// 200-283 jiffies per 8s each in the reservation wait, so they were never asleep and
+			// there was nothing for a dedicated poller to rescue. Left at upstream's value rather
+			// than paying a permanent busy-waiter for no behaviour change.
 			if (!s_is_reservation_data_checking_thread && utils::get_thread_count() >= 12)// && std::find(raddr_busy_wait_addr.begin(), raddr_busy_wait_addr.end(), raddr) != raddr_busy_wait_addr.end())
 			{
 				if (s_is_reservation_data_checking_thread.compare_and_swap_test(0, 1))
@@ -5840,6 +6082,13 @@ s64 spu_thread::get_ch_value(u32 ch)
 				// Don't be stubborn, force operating sleep if too much time has passed
 				const u64 time_since = get_system_time() - eventstat_evaluate_time;
 
+				// NOTE: the 9-thread split gives a phone 3ms of patience where a desktop gets
+				// 50ms. Tried giving the 8-thread case the desktop window to see whether the
+				// short fuse was what turned a contended wait into the thrash Borderlands 2
+				// shows (~1.43M voluntary context switches per SPURS kernel, ~12k sleep/wake
+				// cycles a second each). It is not: same hang, and the frozen kernel is frozen
+				// for another reason entirely. Left at upstream's value rather than making every
+				// 8-thread device busy-wait 16x longer for nothing.
 				if (!is_reservation_data_checking_thread && time_since >= (utils::get_thread_count() >= 9 ? 50'000 : 3000))
 				{
 					spu_log.trace("SPU RdEventStat wait for 0x%x failed", raddr);
@@ -6150,6 +6399,41 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 		lv2_obj::notify_all_t notify;
 
 		const u32 code = value >> 24;
+
+		// DIAGNOSTIC (Borderlands 2 hang): does an SPU ever try to signal the PPU at all?
+		//
+		// main_thread waits forever in sys_event_queue_receive on a queue it attached to this
+		// group with sys_spu_thread_group_connect_event_all_threads, and the whole question is
+		// whether the SPURS kernels ever reach the point of signalling it. Every SPU->PPU
+		// notification -- send_event, throw_event, event_flag_set_bit and its impatient variant --
+		// passes through this one channel write, so this single point covers all of them, before
+		// any branch, so a wrong guess about WHICH call it uses cannot hide the answer.
+		//
+		// Reported once per (port, kind) pair, 256 lines at absolute worst: this is a channel
+		// write on a hot path, and unbounded logging here would stall the emulator by itself --
+		// which has already happened once in this port and cost hours.
+		{
+			events_sent++;
+
+			static atomic_t<u32> s_signal_seen[64]{};
+
+			const u32 port = code & 63;
+			const u32 kind = code >> 6; // 0 send_event, 1 throw_event, 2 set_bit, 3 impatient
+			const u32 bit = 1u << kind;
+
+			if ((s_signal_seen[port].fetch_or(bit) & bit) == 0)
+			{
+				// pc and the thread matter as much as the port. Borderlands 2 hangs because the
+				// kind=1 port=20 throw (value 0x54000000) that wakes main_thread is never issued
+				// here, while a deliberately slowed x86 host issues it within microseconds of the
+				// same wait. Knowing WHICH spu and at WHAT pc emits each throw is what makes the
+				// two hosts comparable: if x86 throws port 20 from a pc our kernels never reach,
+				// that pc is the last place the SPURS handoff diverges.
+				spu_log.warning("SPU->PPU signal: kind=%u port=%u value=0x%x pc=0x%05x thread='%s' (first for this pair)",
+					kind, port, value, pc, *spu_tname.load());
+			}
+		}
+
 		{
 			if (code < 64)
 			{
@@ -7058,7 +7342,26 @@ void spu_thread::halt()
 		spu_runtime::g_escape(this);
 	}
 
-	spu_log.fatal("Halt");
+	// Once per pc, for the same reason as UNK above: a halted SPURS kernel is re-entered and
+	// re-halts forever, and the two together wrote 600MB in a minute on Eternal Sonata.
+	{
+		static shared_mutex s_mutex;
+		static std::set<u32> s_seen;
+
+		bool first = false;
+
+		{
+			std::lock_guard lock(s_mutex);
+			first = s_seen.insert(pc).second;
+		}
+
+		if (first)
+		{
+			spu_log.fatal("Halt at 0x%05x -- the guest executed a HALT instruction, which is its"
+				" own assertion firing. Further halts here will not be reported.", pc);
+		}
+	}
+
 	spu_runtime::g_escape(this);
 }
 

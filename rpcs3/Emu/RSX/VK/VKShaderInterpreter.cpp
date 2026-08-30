@@ -289,6 +289,7 @@ namespace vk
 		{
 			.domain = ::glsl::program_domain::glsl_fragment_program,
 			.require_lit_emulation = true,
+			.ROP_channel_remap = !!(compiler_options & COMPILER_OPT_ENABLE_ROP_REMAP),
 		};
 
 		u32 len;
@@ -462,8 +463,10 @@ namespace vk
 	{
 		m_device = dev;
 
-		VkPipelineCacheCreateInfo drv_cache_info{ VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
-		vkCreatePipelineCache(m_device, &drv_cache_info, nullptr, &m_driver_pipeline_cache);
+		// Share the device's persistent cache rather than opening a private one. The
+		// interpreter's programs are the expensive ubershaders, and a private cache threw
+		// that work away at every shutdown. Borrowed, not owned -- see destroy().
+		m_driver_pipeline_cache = dev.get_pipeline_cache();
 	}
 
 	void shader_interpreter::destroy()
@@ -473,11 +476,8 @@ namespace vk
 		m_vs_shader_cache.clear();
 		m_fs_shader_cache.clear();
 
-		if (m_driver_pipeline_cache)
-		{
-			vkDestroyPipelineCache(m_device, m_driver_pipeline_cache, nullptr);
-			m_driver_pipeline_cache = VK_NULL_HANDLE;
-		}
+		// Owned by the render_device, which saves and destroys it. Just drop the borrow.
+		m_driver_pipeline_cache = VK_NULL_HANDLE;
 	}
 
 	std::shared_ptr<glsl::program> shader_interpreter::link(const vk::pipeline_props& properties, u64 compiler_opt, bool async, async_build_fn_callback async_callback)
@@ -591,6 +591,7 @@ namespace vk
 		if (fp_ctrl & CELL_GCM_SHADER_CONTROL_DEPTH_EXPORT) key.compiler_opt |= COMPILER_OPT_ENABLE_DEPTH_EXPORT;
 		if (fp_ctrl & CELL_GCM_SHADER_CONTROL_32_BITS_EXPORTS) key.compiler_opt |= COMPILER_OPT_ENABLE_F32_EXPORT;
 		if (fp_ctrl & RSX_SHADER_CONTROL_USES_KIL) key.compiler_opt |= COMPILER_OPT_ENABLE_KIL;
+		if (fp_ctrl & RSX_SHADER_CONTROL_ROP_OUTPUT_REMAP) key.compiler_opt |= COMPILER_OPT_ENABLE_ROP_REMAP;
 		if (fp_metadata.referenced_textures_mask) key.compiler_opt |= COMPILER_OPT_ENABLE_TEXTURES;
 		if (fp_metadata.has_branch_instructions) key.compiler_opt |= COMPILER_OPT_ENABLE_FLOW_CTRL;
 		if (fp_metadata.has_pack_instructions) key.compiler_opt |= COMPILER_OPT_ENABLE_PACKING;
@@ -750,6 +751,15 @@ namespace vk
 		base_props.state.enable_depth_test(VK_COMPARE_OP_LESS);
 		base_props.state.set_depth_mask(true);
 		pipe_properties.push_back(base_props);
+
+		// These are guesses at what the runtime will ask for, so they have to be spelled the same
+		// way the runtime spells it. Without this the seeds keep their cull mode and depth test
+		// and get() looks up a normalized key that matches none of them -- the precompile still
+		// runs, it just warms pipelines nothing goes on to use.
+		for (auto& props : pipe_properties)
+		{
+			vk::normalize_dynamic_pipeline_state(props);
+		}
 
 		const auto variants = program_common::interpreter::get_interpreter_variants();
 		const u32 limit1 = ::size32(variants.base_pipelines) * ::size32(pipe_properties);

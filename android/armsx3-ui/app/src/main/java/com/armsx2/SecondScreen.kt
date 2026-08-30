@@ -216,9 +216,6 @@ object SecondScreen {
             row1.addView(action(I18n.get("touch.stateAction.load")) {
                 MainActivityRuntime.instance?.loadState()
             }, rowLp())
-            row1.addView(action(I18n.get("secondScreen.fastForward")) {
-                MainActivityRuntime.instance?.toggleFastForward()
-            }, rowLp())
             row2.addView(action(I18n.get("secondScreen.pause")) {
                 // Same toggle the on-screen pause button uses.
                 if (MainActivityRuntime.eState.value == EmuState.PAUSED) MainActivityRuntime.resume()

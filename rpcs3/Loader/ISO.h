@@ -175,6 +175,11 @@ public:
 	const iso_fs_node& root() const { return m_root; }
 
 	iso_fs_node* retrieve(const std::string& path);
+	// Kept from upstream d6d5c6082 while the rest of that ISO series is reverted: System.cpp
+	// calls it, and it is the one piece of the refactor that is not implicated in the region
+	// read failing.
+	bool is_valid() const;
+
 	bool exists(const std::string& path);
 	bool is_file(const std::string& path);
 
@@ -203,6 +208,10 @@ public:
 	~iso_device() override = default;
 
 	const std::string& get_loaded_iso() const { return m_path; }
+
+	// Whether the mounted image actually opened. load_iso() mounts the device regardless, so
+	// this is the only way a caller can tell a readable disc from one that produced nothing.
+	bool archive_valid() const { return m_archive.is_valid(); }
 
 	bool stat(const std::string& path, fs::stat_t& info) override;
 	bool statfs(const std::string& path, fs::device_stat& info) override;

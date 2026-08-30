@@ -147,6 +147,19 @@ fun HomeScreen(
     var showClearRecentsConfirm by remember { mutableStateOf(false) }
     // #9 custom library background — inert until the user picks an image.
     LaunchedEffect(Unit) { LibraryBackground.ensureLoaded(); CoverArtStyle.load() }
+    // The animated background switched itself off because the last run died with it on screen
+    // (LibraryBackground.armSaver). Say so -- silently reverting a setting the user chose reads
+    // as the setting being broken, and the name tells them which one to avoid.
+    LaunchedEffect(LibraryBackground.crashedSaver.value) {
+        LibraryBackground.crashedSaver.value?.let { kind ->
+            LibraryBackground.crashedSaver.value = null
+            Toast.makeText(
+                context,
+                "Animated background turned off: ${LibraryBackground.saverName(kind)} crashed last time.",
+                Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
     val backgroundPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
         picked?.let { LibraryBackground.set(context, it) }
     }
@@ -184,7 +197,31 @@ fun HomeScreen(
                 // finally get an animated, recolourable backdrop instead of the old fixed GIF. The
                 // bundled still is the cheap floor shown during GL startup (and, once the wave is up,
                 // sits hidden behind it). Custom backgrounds below override all of this.
-                if (LibraryBackground.animated2D.value) {
+                if (LibraryBackground.flurry.value) {
+                    // Flurry, in the same shell as the XMB wave: if GL cannot come up we get the
+                    // 2D backdrop rather than a hole, exactly as XmbGlView does below.
+                    // Keyed on the selection: an AndroidView factory runs once, so without this
+                    // switching saver or preset would leave the old one running.
+                    val kind = LibraryBackground.saverKind.value
+                    val preset = if (kind == 0) LibraryBackground.flurryPreset.value
+                                 else LibraryBackground.rssPreset.value
+                    androidx.compose.runtime.key(kind, preset) {
+                        var saverGl by remember { mutableStateOf<Boolean?>(null) }
+                        if (saverGl == false) {
+                            LibraryWaveBackground(Modifier.fillMaxSize())
+                        } else {
+                            AndroidView(
+                                factory = {
+                                    SaverGlView(it, LibraryBackground.currentSpec()).apply {
+                                        onGlStatus = { ok -> saverGl = ok }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxSize(),
+                                onRelease = { it.stop() },
+                            )
+                        }
+                    }
+                } else if (LibraryBackground.animated2D.value) {
                     // User opted into the lightweight 2D animated wave everywhere (#Luminz) — the same
                     // backdrop GL-fail devices get; skip the GLES3 XmbGlView entirely.
                     LibraryWaveBackground(Modifier.fillMaxSize())

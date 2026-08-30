@@ -87,6 +87,10 @@ void spu_llvm_set_compile_context(spu_llvm_compile_context* context) noexcept
 #define ARMSX3_SPU_ARM64_BYTE_GATHER 0
 #endif
 
+// Defined in SPUCommonRecompiler.cpp; ranges forced to the interpreter.
+#include "Emu/Cell/SPUDisAsm.h"
+
+
 class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 {
 	// JIT Instance
@@ -729,6 +733,17 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 		ensure(val && val->getType() == get_type<u32[4]>());
 
 		const auto x = m_ir->CreateZExt(val, get_type<u64[4]>());
+
+		// Use integer operations here so LLVM can fold the masks into VPTERNLOG
+		if (m_use_avx512)
+		{
+			const auto s = m_ir->CreateAnd(m_ir->CreateShl(x, 32), 0x8000000000000000);
+			const auto m = m_ir->CreateAnd(m_ir->CreateShl(x, 29), 0x0fffffffe0000000);
+			const auto f = m_ir->CreateAdd(m_ir->CreateOr(s, m), splat<u64[4]>(0x3800000000000000).eval(m_ir));
+			const auto e = m_ir->CreateAnd(val, 0x7f800000);
+			return uint64_as_double(m_ir->CreateSelect(m_ir->CreateIsNotNull(e), f, s));
+		}
+
 		const auto s = m_ir->CreateShl(m_ir->CreateAnd(x, 0x80000000), 32);
 		const auto a = m_ir->CreateAnd(x, 0x7fffffff);
 		const auto m = m_ir->CreateShl(m_ir->CreateAdd(a, splat<u64[4]>(0x1c0000000).eval(m_ir)), 29);
@@ -741,6 +756,19 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 	llvm::Value* xfloat_in_double(llvm::Value* val)
 	{
 		ensure(val && val->getType() == get_type<f64[4]>());
+
+		// Use integer operations here so LLVM can fold the masks into VPTERNLOG
+		if (m_use_avx512)
+		{
+			const auto d = double_as_uint64(val);
+			const auto smax = splat<u64[4]>(0x47ffffffe0000000).eval(m_ir);
+			const auto smin = splat<u64[4]>(0x3810000000000000).eval(m_ir);
+			const auto a = m_ir->CreateAnd(d, 0x7fffffffe0000000);
+			const auto n = m_ir->CreateICmpUGE(a, smin);
+			const auto c = m_ir->CreateSelect(m_ir->CreateICmpULT(a, smax), a, smax);
+			const auto r = m_ir->CreateOr(c, m_ir->CreateAnd(d, 0x8000000000000000));
+			return uint64_as_double(m_ir->CreateSelect(n, r, splat<u64[4]>(0).eval(m_ir)));
+		}
 
 		const auto smax = uint64_as_double(splat<u64[4]>(0x47ffffffe0000000).eval(m_ir));
 		const auto smin = uint64_as_double(splat<u64[4]>(0x3810000000000000).eval(m_ir));
@@ -1771,6 +1799,15 @@ public:
 #ifdef ARCH_ARM64
 		m_use_tbl2 = !g_spu_llvm_compile_context || g_spu_llvm_compile_context->use_tbl2;
 
+		// NOTE: clearing m_use_fma here does NOT unfuse multiply-add on ARM64, and was tried.
+		// The flag only picks llvm.fma vs llvm.fmuladd, and AArch64 reports a fast FMA, so the
+		// backend contracts llvm.fmuladd into FMLA regardless. Verified: ps3autotests cpu/spu_fpu
+		// produced a byte-identical file with the flag both ways (cache confirmed rebuilt via the
+		// codegen build stamp), so this only costs the f64 widening in fma32x4 for no behaviour
+		// change. x86 gets the unfused two-rounding form because it lacks the FMA target feature
+		// entirely, not because of this flag. Forcing separate fmul+fadd would take explicit IR.
+		m_use_fma = !g_spu_llvm_compile_context || g_spu_llvm_compile_context->use_fma;
+
 		if (g_spu_llvm_compile_context)
 		{
 			g_spu_llvm_compile_context->llvm_error.clear();
@@ -1778,7 +1815,6 @@ public:
 #endif
 
 		spu_log.notice("Building function 0x%x... (size %u, %s)", func.entry_point, func.data.size(), m_hash);
-
 		m_pos = func.lower_bound;
 		m_base = func.entry_point;
 		m_size = ::size32(func.data) * 4;
@@ -4119,7 +4155,7 @@ public:
 				cache.add(func);
 			}
 
-			spu_log.success("New SPU block compiled successfully (size=%u)", func_size);
+			spu_log.trace("New SPU block compiled successfully (size=%u)", func_size);
 		}
 
 		return fn;
@@ -5256,7 +5292,7 @@ public:
 				}
 			}
 
-			spu_log.warning("[0x%x] MFC_EAH: $%u is not a zero constant", m_pos, +op.rt);
+			spu_log.trace("[0x%x] MFC_EAH: $%u is not a zero constant", m_pos, +op.rt);
 			//m_ir->CreateStore(val.value, spu_ptr(&spu_thread::ch_mfc_cmd, &spu_mfc_cmd::eah));
 			return;
 		}
@@ -5614,7 +5650,7 @@ public:
 			}
 
 			// Fallback to unoptimized WRCH implementation (TODO)
-			spu_log.warning("[0x%x] MFC_Cmd: $%u is not a constant", m_pos, +op.rt);
+			spu_log.trace("[0x%x] MFC_Cmd: $%u is not a constant", m_pos, +op.rt);
 			break;
 		}
 		case MFC_WrListStallAck:
@@ -7410,7 +7446,7 @@ public:
 
 				if (auto [a, b] = match_vrs<f64[4]>(op.ra, op.rb); a || b)
 				{
-					set_vr(op.rt4, select(sel_bool, get_vr<f64[4]>(op.rb), get_vr<f64[4]>(op.ra)));
+					set_vr(op.rt4, select(sel_bool, get_vr<f64[4]>(op.rb), get_vr<f64[4]>(op.ra)), nullptr, !(a && b));
 					return true;
 				}
 
@@ -7468,7 +7504,7 @@ public:
 			{
 				if (const auto [a_f64, b_f64] = match_vrs<f64[4]>(op.ra, op.rb); a_f64 || b_f64)
 				{
-					set_vr(op.rt4, select(noncast<s32[4]>(c) != 0, get_vr<f64[4]>(op.rb), get_vr<f64[4]>(op.ra)));
+					set_vr(op.rt4, select(noncast<s32[4]>(c) != 0, get_vr<f64[4]>(op.rb), get_vr<f64[4]>(op.ra)), nullptr, !(a_f64 && b_f64));
 					return;
 				}
 
@@ -7629,7 +7665,7 @@ public:
 		const auto known_idx = get_known_bits(c);
 		const bool perm_only = known_idx.Zero[7];
 		const bool perm_or_zero_only = known_idx.Zero[6];
-		const bool idx_selects_single = known_idx.extractBits(1, 4).isConstant();
+		[[maybe_unused]] const bool idx_selects_single = known_idx.extractBits(1, 4).isConstant();
 
 		const auto a = get_vr<u8[16]>(op.ra);
 		const auto b = get_vr<u8[16]>(op.rb);
@@ -7645,7 +7681,7 @@ public:
 		const bool b_is_splat = b_is_const && b_data == v128::from8p(b_data._u8[0]);
 
 
-		auto get_swap_from_const = [this](v128 data, bool is_splat) {
+		[[maybe_unused]] auto get_swap_from_const = [this](v128 data, bool is_splat) {
 			// Splats are their own byteswap
 			if (!is_splat)
 				std::reverse(std::begin(data._bytes), std::end(data._bytes));
@@ -7653,15 +7689,27 @@ public:
 			return make_const_vector(data, get_type<u8[16]>());
 		};
 
-		if (a_is_const)
-			a_swap.value = get_swap_from_const(a_data, a_is_splat);
+		// ARM64: fold the byteswap only for SPLAT constants, as before upstream a7fc31f32
+		// ("[SPU LLVM] Additional SHUFB splat/special-index fast paths").
+		//
+		// That commit widened this to ANY constant and byte-reverses non-splat ones in
+		// get_swap_from_const. Borderlands 2's SPURS function at LS 0x25da8 is 1446 shufb whose
+		// data operand is usually a non-splat constant -- 0xbf800000 built by ilhu/iohl, or a mask
+		// straight out of cbd/cwd -- i.e. exactly the case the widening newly captured, and that
+		// function hangs the game when compiled and boots it when interpreted.
+		//
+		// Confirmed two independent ways: reverting this one condition, and separately disabling
+		// the whole ARM64 shufb block so it uses the generic path. Both give zero SPU stalls with
+		// the function compiled. Kept narrow so ARM64 keeps its tbl/tbx fast paths.
+		if (a_is_splat)
+			a_swap.value = a.value;
 
-		if (b_is_const)
-			b_swap.value = get_swap_from_const(b_data, b_is_splat);
+		if (b_is_splat)
+			b_swap.value = b.value;
 
 		// Shuffle index reversal is equivalent to a byteswap
 		value_t<u8[16]> av, bv, cv;
-		if ((a_was_swapped || a_is_const) && (b_was_swapped || b_is_const))
+		if ((a_was_swapped || a_is_splat) && (b_was_swapped || b_is_splat))
 		{
 			av = eval(a_swap);
 			bv = eval(b_swap);
@@ -7675,7 +7723,14 @@ public:
 		}
 
 		// When single source, either indicated by KnownBits or both are the same
-		const std::optional<value_t<u8[16]>> single_src = (idx_selects_single || (op.ra == op.rb && !m_interp_magn))
+		// Also pre-a7fc31f32: drop the KnownBits idx_selects_single trigger.
+		//
+		// Reverting the byteswap-const widening ALONE is not enough -- tested, and Borderlands 2
+		// hangs again at LS 0x25da8 with seven stall dumps. Both of that commit's semantic changes
+		// have to go. idx_selects_single treats a mask whose bit 4 is known-constant across all
+		// lanes as single-source; combined with the ARM64 tbl/tbx paths below that is where the
+		// remaining miscompile lives.
+		const std::optional<value_t<u8[16]>> single_src = ((op.ra == op.rb && !m_interp_magn))
 			? std::make_optional(known_idx.One[4] ? bv : av)
 			: std::nullopt;
 
@@ -7750,7 +7805,7 @@ public:
 
 		// Calculate shuffle
 
-		bool shuf_zero_when_msb = false;
+		bool or_combine_safe = false;
 
 		value_t<u8[16]> ab_shuf;
 		if (single_src)
@@ -7762,7 +7817,7 @@ public:
 			else
 			{
 				ab_shuf = eval(pshufb(single_src.value(), cv));
-				shuf_zero_when_msb = true;
+				or_combine_safe = true;
 			}
 		}
 		else if (a_is_splat && b_is_splat)
@@ -7792,7 +7847,7 @@ public:
 			ab_shuf = eval(select_by_bit4(c, a_shuf, b_shuf));
 
 			// pshufb zeros when the MSB is set
-			shuf_zero_when_msb = !(a_is_splat || b_is_splat);
+			or_combine_safe = !(a_is_splat || b_is_splat);
 		}
 
 		if (perm_only)
@@ -7808,10 +7863,14 @@ public:
 		{
 			idx_consts = eval(splat<u8[16]>(0));
 		}
-		else if (m_use_avx512_icl)
+		else if (m_use_gfni)
 		{
+			// TODO: Due to vpblendvb, the pshufb OR combine path is one fewer micro-ops post Rocket Lake. Check if it is faster.
 			const auto gfni = gf2p8affineqb(c, build<u8[16]>(0x40, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x40, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20), 0x7f);
 			idx_consts = eval(select(noncast<s8[16]>(gfni) >= 0, splat<u8[16]>(0), gfni));
+			
+			// Logic assumes that the MSB is always set
+			or_combine_safe = false;
 		}
 		else
 		{
@@ -7821,7 +7880,7 @@ public:
 
 		// Combine shuffle and special index constants
 
-		if (shuf_zero_when_msb)
+		if (or_combine_safe)
 			set_vr(op.rt4, ab_shuf | idx_consts);
 		else
 			set_vr(op.rt4, select(noncast<s8[16]>(c) >= 0, ab_shuf, idx_consts));
@@ -8574,6 +8633,34 @@ public:
 		return eval(fpcast<f32[4]>(xr));
 	}
 
+	// -c for the addend of an FMS, with the sign of a NaN pattern left alone on ARM64.
+	//
+	// FMS is a * b - c, and both hosts express it as fma(a, b, -c). x86 folds that into vfmsub,
+	// which never materialises -c, so when c is a NaN it is c's own bits that propagate. AArch64
+	// cannot fold it -- FMLS computes Zd - Zn*Zm, the wrong shape -- so it emits the FNEG and
+	// propagates the negated NaN instead. Both are legal IEEE NaN propagation, and the value only
+	// differs in the sign bit, but the SPU has no NaN in extended range: 0x7fffffff is an ordinary
+	// large number there, so the two hosts disagree about the sign of a huge result rather than
+	// about which NaN to return. ps3autotests cpu/spu_fpu measured 484 such lines, all with
+	// c = 0x7fffffff, ARM returning 0xffffffff against x86's 0x7fffffff.
+	//
+	// That is the same shape of defect as the FCTIW saturation inversion, which flipped a
+	// saturated-high coordinate to saturated-low and spawned Armored Core's mech under the floor,
+	// so it is worth two instructions to not have it. Not guarded by ARCH_ARM64: x86 folds the
+	// select away with the negate, and keeping one definition means the two cannot drift.
+	value_t<f32[4]> negate_addend(value_t<f32[4]> c)
+	{
+		const auto c_known = get_known_fp_class<4>(c, llvm::FPClassTest::fcNan);
+
+		// Nothing to preserve if it can never be a NaN, which is the common case.
+		if (c_known.isKnownNeverNaN())
+		{
+			return eval(-c);
+		}
+
+		return eval(select(fcmp_uno(c != c), c, -c));
+	}
+
 	template <typename T, typename U, typename V>
 	static llvm_calli<f32[4], T, U, V> fnms(T&& a, U&& b, V&& c)
 	{
@@ -8954,6 +9041,16 @@ public:
 			if (g_cfg.core.spu_xfloat_accuracy == xfloat_accuracy::approximate)
 			{
 #ifdef ARCH_ARM64
+				// NOTE: this branch is dead on every Snapdragon tested -- an 8 Gen 2 is ARMv9 but
+				// exposes no sve at all in HWCAP, so m_use_sve2_128 is false. It was tried as the
+				// explanation for the 484 fms lines where ARM disagrees with x86 (c = [18] =
+				// 0x7fffffff, ARM 0xffffffff vs x86 0x7fffffff): rewriting it as fmla against a
+				// materialised -c changed the output by exactly nothing, cache confirmed rebuilt.
+				// Check HWCAP before attributing anything here. The real split is that x86 folds
+				// fma(a, b, fneg(c)) into vfmsub and propagates c's own NaN, while AArch64's FMLS
+				// computes Zd - Zn*Zm and cannot take that shape, so it materialises the FNEG and
+				// propagates the negated NaN. Both are legal, and both differ from hardware
+				// (0x7ff80000) because 0x7fffffff is only a NaN in f32, not on a real SPU.
 				if (m_use_sve2_128)
 				{
 					const auto ca = eval(clamp_smax(a));
@@ -8969,7 +9066,7 @@ public:
 				const auto a_clamp = clamp_smax(a, a_known);
 				const auto b_clamp = clamp_smax(b, b_known);
 
-				return fma32x4(a_clamp, b_clamp, eval(-c), a_known, b_known);
+				return fma32x4(a_clamp, b_clamp, negate_addend(c), a_known, b_known);
 			}
 			else
 			{
@@ -8980,7 +9077,7 @@ public:
 				}
 #endif
 
-				return fma32x4(a, b, eval(-c));
+				return fma32x4(a, b, negate_addend(c));
 			}
 		});
 
@@ -9203,7 +9300,22 @@ public:
 			}
 
 			r.value = m_ir->CreateFPToSI(a.value, get_type<s32[4]>());
+#if defined(ARCH_ARM64)
+			// Saturate instead of correcting afterwards; see the approximate path below for why the
+			// x86 XOR is wrong here.
+			//
+			// Unlike the f32 path, BOTH ends need patching. That path is a single saturating
+			// fcvtzs.4s, but there is no v4f64->v4i32 instruction, so this one lowers to
+			//   fcvtzs.2d v1, v1 / fcvtzs.2d v0, v0 / uzp1.4s v0, v0, v1
+			// -- saturation happens at INT64 range and uzp1 then keeps the low 32 bits. Negative
+			// overflow therefore does not produce 0x80000000, it produces the low word of the i64:
+			// -3e9 came back as +1295786496, a saturated-low value reappearing as a large positive
+			// integer, which is the same failure shape as the FCTIW inversion.
+			set_vr(op.rt, select(fcmp_ord(a >= fsplat<f64[4]>(std::exp2(31.f))), splat<s32[4]>(0x7fffffff),
+				select(fcmp_ord(a < fsplat<f64[4]>(-std::exp2(31.f))), splat<s32[4]>(0x80000000), r)));
+#else
 			set_vr(op.rt, r ^ sext<s32[4]>(fcmp_ord(a >= fsplat<f64[4]>(std::exp2(31.f)))));
+#endif
 		}
 		else
 		{
@@ -9218,7 +9330,26 @@ public:
 
 			value_t<s32[4]> r;
 			r.value = m_ir->CreateFPToSI(a.value, get_type<s32[4]>());
+
+			// The XOR below is an x86 correction, not a portable one. cvttps2dq returns the
+			// "integer indefinite" value 0x80000000 for every input it cannot represent, positive
+			// overflow included, so flipping all the bits when the input is >= 2^31 turns that into
+			// the 0x7fffffff CFLTS wants. AArch64's FCVTZS already saturates the right way, so the
+			// same XOR turns a correct saturated-high result back into saturated-low. Measured with
+			// ps3autotests cpu/spu_fpu against real hardware output: 48 words came back 0x80000000
+			// where x86 and the console both give 0x7fffffff.
+			//
+			// NaN is the second half of it. FCVTZS converts NaN to 0, which the XOR then turns into
+			// 0xffffffff (16 more words), while cvttps2dq's 0x80000000 lands on 0x7fffffff. An SPU
+			// has no NaN in extended range -- the pattern is just a large number -- so saturating by
+			// sign is also the behaviour the hardware shows. Select up front rather than correct
+			// after, which covers both cases and leaves FCVTZS's own low-side saturation alone.
+#if defined(ARCH_ARM64)
+			const auto sat_hi = bitcast<s32[4]>(a) > splat<s32[4]>(((31 + 127) << 23) - 1);
+			set_vr(op.rt, select(sat_hi, splat<s32[4]>(0x7fffffff), select(fcmp_uno(a != a), splat<s32[4]>(0x80000000), r)));
+#else
 			set_vr(op.rt, r ^ sext<s32[4]>(bitcast<s32[4]>(a) > splat<s32[4]>(((31 + 127) << 23) - 1)));
+#endif
 		}
 	}
 
@@ -10455,6 +10586,17 @@ const spu_decoder<spu_llvm_recompiler> s_spu_llvm_decoder;
 decltype(&spu_llvm_recompiler::UNK) spu_llvm_recompiler::decode(u32 op)
 {
 	return s_spu_llvm_decoder.decode(op);
+}
+
+// Build stamp for the SPU object cache key, defined HERE because this is the file that generates
+// the code. The key already folded a stamp, but that one lived in SPUCommonRecompiler.cpp and so
+// only moved when THAT translation unit recompiled -- which an edit to the code generator does
+// not do. A change to fma32x4 was therefore cached straight over: the objects on disk stayed as
+// the previous build emitted them, a verification run reported byte-identical results, and the
+// fix looked disproven when it had simply never executed.
+const char* spu_llvm_codegen_build_stamp()
+{
+	return __DATE__ " " __TIME__;
 }
 
 #else

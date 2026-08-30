@@ -433,6 +433,14 @@ long CubebBackend::data_cb(cubeb_stream* stream, void* user_ptr, void const* /* 
 			memcpy(cubeb->m_last_sample.data(), static_cast<u8*>(output_buffer) + written - sample_size, sample_size);
 		}
 
+		// One count per starved callback -- see AudioBackend::m_underruns. This is the hole the
+		// player hears as a crackle, and it was previously invisible: the buffer-level report
+		// samples every ten seconds and this lasts milliseconds.
+		if (written < bytes_req)
+		{
+			cubeb->m_underruns++;
+		}
+
 		for (u32 i = written; i < bytes_req; i += sample_size)
 		{
 			memcpy(static_cast<u8*>(output_buffer) + i, cubeb->m_last_sample.data(), sample_size);

@@ -180,7 +180,18 @@ namespace vk
 	{
 		VkSurfaceKHR m_surface = VK_NULL_HANDLE;
 
+		// Set when a surface query inside init() came back VK_ERROR_SURFACE_LOST_KHR.
+		//
+		// init() can only report failure as a bool, and the caller has to tell "the window is
+		// minimized, try again later" apart from "the VkSurfaceKHR is dead and has to be recreated
+		// before any retry can work". Without that distinction the retry queries the same dead
+		// surface forever.
+		bool m_surface_is_lost = false;
+
 	public:
+		// True when the last init() failure was a lost surface. Cleared by the next successful init.
+		bool surface_is_lost() const { return m_surface_is_lost; }
+
 		// Tear down ONLY the VkSwapchainKHR, keeping the device and everything else.
 		//
 		// Must run before the surface it was created from is destroyed: a

@@ -103,15 +103,30 @@ namespace vk
 			bool conditional_rendering = false;
 			bool debug_utils = false;
 			bool external_memory_host = false;
+			bool extended_dynamic_state = false;
 			bool framebuffer_loops = false;
 			bool memory_budget = false;
 			bool shader_stencil_export = false;
 			bool surface_capabilities_2 = false;
 			bool synchronization_2 = false;
 			bool unrestricted_depth_range = false;
+
+			// VK_ANDROID_external_memory_android_hardware_buffer.
+			//
+			// Gates frame generation. framegen runs on its OWN VkDevice, so images cannot be
+			// shared as VkImage -- they have to go across as AHardwareBuffer, and importing one
+			// needs this. framegen's other sharing path uses vkGetMemoryFdKHR(OPAQUE_FD), which
+			// both Adreno and Mali refuse for AHB-backed memory, so there is no fallback.
+			bool external_memory_ahb = false;
+
+			// What the Lossless Scaling shaders themselves need, independent of how the images
+			// are shared. Eden gates on exactly these two; see the note in device.cpp.
+			bool vulkan_memory_model = false;
+			bool null_descriptor = false;
 			bool extended_device_fault = false;
 			bool texture_compression_bc = false;
 			bool portability = false;
+			bool provoking_vertex_last = false;
 		} optional_features_support;
 
 		friend class render_device;
@@ -143,7 +158,7 @@ namespace vk
 		operator VkPhysicalDevice() const;
 		operator VkInstance() const;
 
-		bool is_integrated_gpu() const { return props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU; }
+		VkPhysicalDeviceType get_type() const { return props.deviceType; }
 	};
 
 	/**
@@ -167,6 +182,20 @@ namespace vk
 		gpu_formats_support m_formats_support{};
 		std::unique_ptr<mem_allocator_base> m_allocator;
 		VkDevice dev = VK_NULL_HANDLE;
+
+		// Driver-side pipeline cache, seeded from disk at device creation and written
+		// back at teardown. Every vkCreate*Pipelines call is handed this, which lets the
+		// driver skip compilation work it has already done -- including work done in a
+		// PREVIOUS run, which is the whole point on mobile where a cold pipeline compile
+		// is a visible stall. Orthogonal to RSX's own shader cache: that one remembers
+		// WHICH pipelines a title needs, this one makes each one cheap to create.
+		VkPipelineCache m_pipeline_cache = VK_NULL_HANDLE;
+		mutable usz m_pipeline_cache_saved_size = 0;
+
+		std::string get_pipeline_cache_path() const;
+		void load_pipeline_cache();
+		void save_pipeline_cache() const;
+		void save_and_destroy_pipeline_cache();
 
 		VkQueue m_graphics_queue = VK_NULL_HANDLE;
 		VkQueue m_present_queue = VK_NULL_HANDLE;
@@ -195,6 +224,12 @@ namespace vk
 		const physical_device& gpu() const { return *pgpu; }
 		const memory_type_mapping& get_memory_mapping() const { return memory_map; }
 		const gpu_formats_support& get_formats_support() const { return m_formats_support; }
+
+		// May be VK_NULL_HANDLE, which is a legal argument to vkCreate*Pipelines and simply
+		// means "no cache". Safe to pass from several pipeline compiler threads at once:
+		// the spec only requires external synchronisation on a cache created with
+		// VK_PIPELINE_CACHE_CREATE_EXTERNALLY_SYNCHRONIZED_BIT_EXT, which this is not.
+		VkPipelineCache get_pipeline_cache() const { return m_pipeline_cache; }
 		const gpu_shader_types_support& get_shader_types_support() const { return pgpu->shader_types_support; }
 		const custom_border_color_features& get_custom_border_color_support() const { return pgpu->custom_border_color_support; }
 		bool get_unsized_array_support() const { return pgpu->unsized_array_support; }
@@ -218,7 +253,19 @@ namespace vk
 		bool get_anisotropic_filtering_support() const { return pgpu->features.samplerAnisotropy != VK_FALSE; }
 		bool get_wide_lines_support() const { return pgpu->features.wideLines != VK_FALSE; }
 		bool get_conditional_render_support() const { return pgpu->optional_features_support.conditional_rendering; }
+
+		// Topology, cull mode, front face and the depth test are set per draw instead of being
+		// baked into a pipeline object. That is what keeps the permutation count down on mobile,
+		// where every extra pipeline is a compile stall the first time it is seen and another
+		// entry in a cache that already takes minutes to warm. Everything keyed on this must have
+		// a static fallback: the extension is core in 1.3 but plenty of shipped Android 11/13
+		// drivers predate it.
+		bool get_extended_dynamic_state_support() const { return pgpu->optional_features_support.extended_dynamic_state; }
+
 		bool get_unrestricted_depth_range_support() const { return pgpu->optional_features_support.unrestricted_depth_range; }
+		bool get_external_memory_ahb_support() const { return pgpu->optional_features_support.external_memory_ahb; }
+		bool get_vulkan_memory_model_support() const { return pgpu->optional_features_support.vulkan_memory_model; }
+		bool get_null_descriptor_support() const { return pgpu->optional_features_support.null_descriptor; }
 		bool get_external_memory_host_support() const { return pgpu->optional_features_support.external_memory_host; }
 		bool get_memory_budget_support() const { return pgpu->optional_features_support.memory_budget; }
 		bool get_surface_capabilities_2_support() const { return pgpu->optional_features_support.surface_capabilities_2; }
@@ -228,6 +275,7 @@ namespace vk
 		bool get_synchronization2_support() const { return pgpu->optional_features_support.synchronization_2; }
 		bool get_extended_device_fault_support() const { return pgpu->optional_features_support.extended_device_fault; }
 		bool get_texture_compression_bc_support() const { return pgpu->optional_features_support.texture_compression_bc; }
+		bool get_provoking_vertex_last_support() const { return pgpu->optional_features_support.provoking_vertex_last; }
 
 		u64 get_descriptor_update_after_bind_support() const { return pgpu->descriptor_indexing_support.update_after_bind_mask; }
 		u32 get_descriptor_max_draw_calls() const { return pgpu->descriptor_max_draw_calls; }

@@ -193,7 +193,10 @@ namespace vk
 			vkGetPhysicalDeviceMemoryProperties(pdev, &memory_properties);
 			for (u32 i = 0; i < memory_properties.memoryHeapCount; ++i)
 			{
-				const u64 max_sz = (memory_properties.memoryHeaps[i].flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+				// VK_MEMORY_HEAP_DEVICE_LOCAL_BIT, not VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT: this is a
+				// heap flag, not a memory-type property. Both are 0x1 so the behaviour is unchanged,
+				// but the property enum does not belong on a VkMemoryHeap::flags test.
+				const u64 max_sz = (memory_properties.memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
 					? vram_allocation_limit
 					: VK_WHOLE_SIZE;
 

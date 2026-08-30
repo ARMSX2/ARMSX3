@@ -57,20 +57,34 @@ enum class BootResult
     DecryptionError,
     FileCreationError,
     FirmwareMissing,
+    // Mirrors game_boot_result in Emu/System.h BY ORDINAL -- the native side sends the raw int.
+    // FirmwareVersion and DatabaseConfigMissing were missing here, so every value from this point
+    // down was reported as its neighbour (still_running surfaced as "AlreadyAdded") and the last
+    // two had no entry at all, making fromInt throw. Keep this list in step with the C++ enum.
+    FirmwareVersion,
     UnsupportedDiscType,
     SavestateCorrupted,
     SavestateVersionUnsupported,
     StillRunning,
     AlreadyAdded,
-    CurrentlyRestricted;
+    CurrentlyRestricted,
+    DatabaseConfigMissing;
 
     companion object {
-        fun fromInt(value: Int) = entries.first { it.ordinal == value }
+        // Total rather than throwing: an unrecognised code means the enums have drifted again,
+        // and reporting that as a generic failure beats taking the app down with it.
+        fun fromInt(value: Int) = entries.getOrNull(value) ?: GenericError
     }
 };
 
 class RPCSX {
     external fun openLibrary(path: String): Boolean
+
+    /** Extract the Lossless Scaling shaders from a real filesystem path. Returns how many were
+     *  found, or a negative value; frameGenShaderError() then explains why. */
+    external fun frameGenImportShaders(path: String): Int
+    external fun frameGenShaderCount(): Int
+    external fun frameGenShaderError(): String
     external fun getLibraryVersion(path: String): String?
     external fun initialize(rootDir: String, user: String, socInfo: String): Boolean
     external fun installFw(fd: Int, progressId: Long): Boolean
@@ -91,6 +105,19 @@ class RPCSX {
      * changed shape.
      */
     external fun surfaceSizeChanged(width: Int, height: Int)
+
+    /** SIXAXIS motion. Values are the PS3's own 0..1023 range with 512 at rest. */
+    external fun setPadSensor(port: Int, x: Int, y: Int, z: Int, g: Int)
+
+    /** What the game is asking the rumble motors to do: (large shl 8) or small, each 0..255. */
+    external fun getPadRumble(port: Int): Int
+
+    /**
+     * Device temperatures for the perf overlay, in degrees Celsius, or Thermals.NONE for a
+     * reading that could not be taken. Discovery is the app's job -- Android has no supported
+     * API for SoC temperatures -- so the core is only ever told the answer.
+     */
+    external fun setThermals(cpu: Float, gpu: Float, battery: Float, show: Boolean)
     external fun usbDeviceEvent(fd: Int, vendorId: Int, productId: Int, event: Int): Boolean
     external fun processCompilationQueue(): Boolean
     external fun startMainThreadProcessor(): Boolean
@@ -99,10 +126,66 @@ class RPCSX {
      *  (RIGHT, LEFT, UP, DOWN, TRIANGLE, CIRCLE, CROSS, SQUARE, L1, R1, L2, R2),
      *  each 1..255, or 0 to leave that button digital. */
     external fun overlayPadPressure(port: Int, values: IntArray): Boolean
+    /** One key transition for the emulated PS3 keyboard (cellKb).
+     *
+     *  [androidKeyCode] is an android.view.KeyEvent keycode and [unicode] is what
+     *  KeyEvent.getUnicodeChar() returned for it, or 0. Returns false when nothing
+     *  consumed the key — no game running, the keyboard handler off, or a key the
+     *  PS3 keyboard has no equivalent of. */
+    external fun keyboardKey(androidKeyCode: Int, unicode: Int, pressed: Boolean, repeat: Boolean): Boolean
     external fun collectGameInfo(rootDir: String, progressId: Long): Boolean
     external fun systemInfo(): String
     external fun settingsGet(path: String): String
     external fun settingsSet(path: String, value: String): Boolean
+    // ---- RPCN ----
+    //
+    // All of these block on the network. Call them off the main thread.
+    //
+    // Each returns a human-readable failure, or an empty string on success -- the core owns
+    // the message so the two error enums (ErrorType and rpcn_state) do not have to be
+    // mirrored here and kept in step across a dlopen boundary that is allowed to skew.
+
+    /** JSON: {host, npid, hasPassword, hasToken, hosts:[{desc,host}]}. Empty if unsupported. */
+    external fun rpcnGetConfig(): String
+
+    /** Empty strings mean "leave unchanged", so a host can be saved without resending a
+     *  password the UI never displayed. */
+    external fun rpcnSetConfig(host: String, npid: String, password: String, token: String)
+
+    /** Sends a friend request. Signs in first if needed; returns "" on success or a message. */
+    external fun rpcnAddFriend(npid: String): String
+
+    /** Removes a friend. Returns "" on success or a message. */
+    external fun rpcnRemoveFriend(npid: String): String
+
+    /** Friend list as JSON, or [] when not signed in. Never signs in on its own. */
+    external fun rpcnGetFriends(): String
+
+    external fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String
+    external fun rpcnResendToken(npid: String, password: String): String
+    external fun rpcnSendResetToken(npid: String, email: String): String
+    external fun rpcnResetPassword(npid: String, token: String, password: String): String
+
+    /** Connect and authenticate with the saved account. */
+    external fun rpcnTestLogin(): String
+
+    // Saved servers. The list lives in the core's own cfg_rpcn "Hosts" entry, so these are
+    // a view onto it, not a second store -- and the official server is protected from
+    // deletion there, not here.
+    external fun rpcnAddHost(desc: String, host: String): String
+    external fun rpcnDelHost(desc: String, host: String): String
+
+    /** Restore the shipped server list and select the official address. */
+    external fun rpcnResetHosts()
+
+    external fun rpcnSetIpv6(enabled: Boolean)
+
+    /** JSON: {configured, npid, connected, authentified, onlineName}. Empty if unsupported.
+     *
+     *  RPCN keeps no persistent session -- every connection re-authenticates from the saved
+     *  credentials -- so `configured` is what survives a restart, not `authentified`. */
+    external fun rpcnStatus(): String
+
     /** Coalesce the config file writes of every settingsSet until [settingsEndBatch]. */
     external fun settingsBeginBatch()
     external fun settingsEndBatch()
@@ -140,6 +223,7 @@ class RPCSX {
     external fun saveStateToSlot(slot: Int): Boolean
     external fun loadStateFromSlot(slot: Int): Boolean
     external fun hasStateInSlot(slot: Int): Boolean
+    external fun deleteStateFromSlot(slot: Int): Boolean
     external fun patchEngineVersion(): String
     external fun patchesImport(content: String): Int
     external fun patchesList(serial: String): String

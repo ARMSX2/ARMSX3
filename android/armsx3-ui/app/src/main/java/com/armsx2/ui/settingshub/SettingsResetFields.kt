@@ -48,6 +48,7 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
         "osdShowTextureReplacements", "portraitRenderTop", "precacheTextureReplacements",
         "ps3AnisoFilter", "ps3AsyncTexStream", "ps3DisableZcull", "ps3DisplayAspect",
         "ps3MsaaMode", "ps3MultithreadedRsx", "ps3ReadColorBuffers", "ps3ReadDepthBuffer",
+        "ps3FrameGeneration",
         "ps3RelaxedZcull", "ps3Resolution", "ps3ShaderMode", "ps3StrictRendering",
         "ps3VramLimitMb", "ps3WriteColorBuffers", "ps3WriteDepthBuffer", "renderer",
         "shadeBoost", "shadeBoostBrightness", "shadeBoostContrast", "shadeBoostGamma",
@@ -68,7 +69,8 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
         "dev9EthDevice", "dev9EthEnable", "dev9EthHosts", "dev9EthLogDhcp", "dev9EthLogDns",
         "dev9Gateway", "dev9HddEnable", "dev9HddFile", "dev9InterceptDhcp", "dev9Mask",
         "dev9ModeDns1", "dev9ModeDns2", "dev9Ps2Ip", "ip", "ps3NetEnabled", "ps3PsnStatus",
-        "ps3UpnpEnabled", "url", "usbKeyboard",
+        "ps3UpnpEnabled", "ps3IpAddress", "ps3BindAddress", "ps3DnsAddress", "ps3IpSwapList",
+        "ps3DeriveMacFromPsid", "ps3PsnCountry", "ps3ClansEnabled", "url", "usbKeyboard",
     ),
     // OverlayTab.kt
     SettingsCategory.OnScreen to listOf(

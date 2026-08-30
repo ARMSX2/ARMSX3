@@ -7,7 +7,7 @@ Uses the latest RPCS3 upstream code (the recent ARM64 improvements included).
 Building
 --------
 
-Only arm64-v8a is supported. You need the Android SDK with NDK r27 or newer,
+ arm64-v8a and armv8.2 is supported. You need the Android SDK with NDK r27 or newer,
 CMake 3.30 or newer, and a JDK 17. Android Studio ships all of these.
 
 Clone with submodules, then fetch the two third party checkouts that are not

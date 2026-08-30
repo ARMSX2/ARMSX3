@@ -61,6 +61,53 @@ object ConfigDatabase {
         // rather than denying a setting on suspicion.
     )
 
+    /**
+     * ARMSX3's own per-title settings, layered on top of whatever the RPCS3 database says.
+     *
+     * The upstream database is maintained against desktop, where some of our problems do not
+     * exist, so there is nowhere upstream to put a fix that is specific to this port. These are
+     * applied whether or not the database was ever downloaded, and re-applied after every
+     * refresh -- refresh() clears the directory first, so anything written once would not
+     * survive it.
+     *
+     * Keep this SMALL and evidenced. Every entry names the issue it answers.
+     */
+    private val LOCAL_OVERRIDES: Map<String, String> = mapOf(
+        // Tales of Symphonia Chronicles: reported running at 60fps when the game targets 30,
+        // with battles playing at double speed (issue #77).
+        //
+        // PS3 Native is the only Frame limit mode that honours the game's own
+        // cellGcmSetFlipMode(CELL_GCM_DISPLAY_VSYNC); every other mode flips immediately, so a
+        // title that paces itself by flipping on alternate vblanks free-runs to the 60 cap.
+        //
+        // The risk if this is ever wrong for a title: PS3 Native applies NO limit when the game
+        // does not request vsync, so it would run unbounded instead of capped. Only add a serial
+        // here once someone has confirmed the mode helps on that game.
+        "BLUS31213" to "Video:\n  Frame limit: PS3 Native\n",
+        "BLES01935" to "Video:\n  Frame limit: PS3 Native\n",
+    )
+
+    /**
+     * Write the local overrides, merging under any database entry for the same title.
+     *
+     * Ours go LAST in the file so they win: the core parses the YAML in order and a later key
+     * of the same name replaces an earlier one.
+     */
+    fun ensureLocalOverrides() = applyLocalOverrides()
+
+    private fun applyLocalOverrides() {
+        val dir = liveDir().apply { mkdirs() }
+
+        for ((serial, yaml) in LOCAL_OVERRIDES) {
+            runCatching {
+                val file = File(dir, "$serial.yml")
+                val existing = if (file.isFile) file.readText() else ""
+                if (existing.contains("Frame limit:")) return@runCatching
+                file.writeText(if (existing.isBlank()) yaml else existing.trimEnd() + "\n" + yaml)
+            }
+        }
+    }
+
     /** Drop denied settings from one title's YAML, keeping everything else intact. */
     private fun sanitise(config: String): String =
         config.lineSequence()
@@ -109,6 +156,10 @@ object ConfigDatabase {
             }
         }
         MainActivityRuntime.prefs.edit { putBoolean(KEY_ENABLED, enabled) }
+
+        // Ours are ARMSX3 fixes, not part of the downloaded database, so they stay live
+        // either way -- the toggle above just moved them into the parked directory.
+        applyLocalOverrides()
     }
 
     /**
@@ -209,6 +260,9 @@ object ConfigDatabase {
                     written++
                 }
             }
+
+            // After the split, not before: refresh() clears the directory above.
+            applyLocalOverrides()
 
             MainActivityRuntime.prefs.edit {
                 putInt(KEY_COUNT, written)

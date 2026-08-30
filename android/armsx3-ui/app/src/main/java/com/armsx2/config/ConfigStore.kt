@@ -73,10 +73,18 @@ object ConfigStore {
     // Bumped: the profiler was recorded again during the 0.5 debugging work, after the first
     // purge had already marked itself done.
     private const val KEY_DIAG_OVERRIDES_PURGED_2 = "config.migrated.diagOverridesPurged2"
+    private const val KEY_SHADOWING_OVERRIDES_PURGED = "config.migrated.shadowingOverridesPurged"
     // Core settings left pinned as raw overrides by the 0.5 debugging sessions.
     private const val KEY_TUNING_OVERRIDES_PURGED = "config.migrated.tuningOverridesPurged"
     // Per-title Accurate SPU Reservations values left behind by the same debugging.
     private const val KEY_PERGAME_RSV_CLEARED = "config.migrated.perGameRsvCleared"
+    // The GLOBAL Accurate SPU Reservations value left off by the same debugging. The per-title
+    // clear above never touched it, so installs carried an off-spec global for releases.
+    private const val KEY_GLOBAL_RSV_ON = "config.migrated.globalSpuRsvOn"
+    // "Save LLVM logs", left on while chasing the Saint Seiya register scavenger. Bumped: the
+    // first pass only un-pinned the override, which does nothing for a key no code writes -- the
+    // value already in config.yml is reloaded and saved again on every boot.
+    private const val KEY_LLVM_LOGS_OFF_2 = "config.migrated.llvmLogsOff2"
     private const val KEY_RELAXED_ZCULL_ON = "config.migrated.relaxedZcullOn"
     private const val KEY_RELAXED_ZCULL_OFF = "config.migrated.relaxedZcullOff"
     // The relaxed-ZCULL default was recorded as a raw core override as well, and the OFF
@@ -106,10 +114,28 @@ object ConfigStore {
     private const val KEY_CAS_MODE_BILINEAR = "config.migrated.casModeBilinear"
     // Mirror of the settings, written INTO the data folder so a later fresh install that
     // reuses the same folder can restore them (SharedPreferences don't survive uninstall).
-    private const val BACKUP_FILENAME = "armsx2-settings.json"
+    private const val BACKUP_FILENAME = "armsx3-settings.json"
+
+    // What the mirror was called when this app was still branded ARMSX2 (issue #82). Anyone
+    // upgrading has one of these in their data folder and nothing else, so it stays readable
+    // forever -- it is the only copy of their settings after a reinstall.
+    private const val LEGACY_BACKUP_FILENAME = "armsx2-settings.json"
     private fun keyForGame(serial: String) = "config.game.$serial"
 
+    // Memoized result of loadGlobal(). The function below is a JSON parse plus every
+    // migration block in this file -- 24,555 dex instructions by ART's count, over its
+    // JIT ceiling, so it runs interpreted every single call. That would be fine if it
+    // were called rarely, but EmulationSurface's frame-rate monitor re-resolves the
+    // config every 5 seconds of gameplay (measured: one ART bailout log line per 5.00s
+    // for entire sessions), all to read one boolean. The migrations are one-shot by
+    // their own prefs flags, so caching the parsed result is behavior-identical; the
+    // cache is refreshed by saveGlobal (the only writer of KEY_GLOBAL after boot) and
+    // dropped by reconcileReusedFolder, whose restore writes the pref directly.
+    @Volatile
+    private var cachedGlobal: Settings? = null
+
     fun loadGlobal(): Settings {
+        cachedGlobal?.let { return it }
         val raw = MainActivityRuntime.prefs.getString(KEY_GLOBAL, null)
         var parsed = if (raw != null) {
             try { Settings.fromJson(JSONObject(raw)) } catch (_: Exception) { Settings() }
@@ -369,6 +395,55 @@ object ConfigStore {
             MainActivityRuntime.prefs.edit { putBoolean(KEY_ATOMIC_DMA_OFF, true) }
         }
 
+        // Put the GLOBAL Accurate SPU Reservations back on, which is upstream's default and this
+        // app's default too.
+        //
+        // Off is not a slower-but-correct trade, it is off-spec: it forces the SPURS scheduler to
+        // HLE and bypasses the reservation lock, so SPU threads desync and end up executing
+        // whatever they land on. See KEY_PERGAME_RSV_CLEARED below, which cleared the PER-TITLE
+        // values this same debugging left behind -- but never the global, so an install kept
+        // running off-spec no matter what any title said.
+        //
+        // Found via Borderlands 2 hanging after its logo with one SPURS SPU and the RSX pinned
+        // while every PPU sat in a legitimate wait. The same desync is the likeliest source of the
+        // wild guest register values that were crashing the process before that.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_GLOBAL_RSV_ON, false)) {
+            if (raw != null && !parsed.ps3.accurateSpuRsv) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(accurateSpuRsv = true))
+                dirty = true
+            }
+
+            // Both stores, because either alone is not enough: a raw core override is re-pushed
+            // after the settings themselves, so one left recorded would put false straight back
+            // over the line above. KEY_TUNING_OVERRIDES_PURGED cleared these once already, but it
+            // marks itself done, so anything recorded afterwards survived it.
+            //
+            // Global scope ONLY, deliberately. This is correcting the baseline everyone inherited,
+            // not overruling a per-title decision -- Web of Shadows (BLUS30218) is kept off on
+            // purpose, and forgetEverywhere() would take that with it.
+            runCatching {
+                CoreSettingOverrides.forget(SettingsScope.Global, null, "Core@@Accurate SPU Reservations")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_GLOBAL_RSV_ON, true) }
+        }
+
+        // Drop "Save LLVM logs", left pinned as a raw override while chasing the Saint Seiya
+        // register-scavenger failure.
+        //
+        // Upstream defaults it off and this app has no field or UI for it, so nothing would ever
+        // turn it back off again -- it writes the IR for every compiled module to disk on every
+        // boot, which costs compile time and a lot of storage for output nobody is reading.
+        // Recorded as false rather than merely un-pinned, and that distinction is the whole fix:
+        // forgetting an override only stops us re-pushing a value, and nothing in this app writes
+        // this key at all, so whatever is already in config.yml is simply reloaded and saved again
+        // forever. It has to be actively written off, the way the Vblank migration writes 60.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_LLVM_LOGS_OFF_2, false)) {
+            runCatching {
+                CoreSettingOverrides.record(SettingsScope.Global, null, "Core@@Save LLVM logs", "false")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_LLVM_LOGS_OFF_2, true) }
+        }
+
         // Put Vblank Rate back to 60, which is both upstream's default and what a PS3
         // actually runs at.
         //
@@ -451,6 +526,61 @@ object ConfigStore {
                 )
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_DIAG_OVERRIDES_PURGED_2, true) }
+        }
+
+        // Drop raw overrides on nodes a curated settings screen also writes.
+        //
+        // These two cannot coexist. Overrides replay at the tail of applyTo, after the curated
+        // store has written the same node, so the recorded value wins every time and the normal
+        // screen becomes decorative: it shows the choice, saves the choice, and the choice is
+        // overwritten a moment later with nothing on screen to say so. A test device carried
+        // Core@@PPU Decoder = "Recompiler (LLVM)" this way, which silently defeated every
+        // attempt to boot a game on the interpreter -- including one run specifically to find
+        // out whether a hang was a codegen bug.
+        //
+        // Named rather than derived: the curated set is spread across applyToInner and the
+        // Rpcs3Bridge routing table, and a wrong automatic answer here would delete real user
+        // edits. Every path in the first group is reachable from Settings, so nothing is lost --
+        // the value still applies, it just comes from the screen that shows it.
+        //
+        // Video@@Accurate ZCULL stats is deliberately NOT purged: it has no curated writer and
+        // no debugging history, so a recorded value there is most likely a deliberate per-game
+        // performance choice. It is visible and clearable in All Core Settings now instead.
+        //
+        // The two migrations above purged diagnostics by name and both had already run on the
+        // device that still had RSX Profiler recorded, which is why All Core Settings now shows
+        // and clears overrides directly instead of waiting for the next migration.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_SHADOWING_OVERRIDES_PURGED, false)) {
+            runCatching {
+                CoreSettingOverrides.forgetEverywhere(
+                    "Core@@PPU Decoder",
+                    "Core@@SPU Decoder",
+                    "Core@@SPU XFloat Accuracy",
+                    "Core@@Max SPURS Threads",
+                    "Core@@Precise SPU Verification",
+                    "Core@@PPU Vector NaN Handling",
+                    "Video@@Shader Mode",
+                    "Video@@Multithreaded RSX",
+                )
+
+                // These three have no curated writer, so forgetting alone would leave the
+                // recorded value sitting in config.yml with nothing to overwrite it -- the
+                // record would be gone and the effect would remain, which is worse than
+                // leaving it. Write the core's own default off instead, the way the Vblank
+                // migration writes 60 rather than deleting.
+                //
+                // All three are instrumentation or debug levers, off by default upstream:
+                // the RSX profiler keeps per-scope timers on the RSX thread and reports every
+                // 300 frames, PPU calling history records every call, and the GETLLAR spin
+                // optimization being disabled changes how an SPU waiting on a reservation
+                // behaves -- which is not something to ship switched off by accident.
+                CoreSettingOverrides.record(SettingsScope.Global, null, "Video@@RSX Profiler", "false")
+                CoreSettingOverrides.record(SettingsScope.Global, null, "Core@@PPU Calling History", "false")
+                CoreSettingOverrides.record(
+                    SettingsScope.Global, null, "Core@@Disable SPU GETLLAR Spin Optimization", "false",
+                )
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_SHADOWING_OVERRIDES_PURGED, true) }
         }
 
         // Move anyone still on the old Approximate xfloat default onto Accurate.
@@ -567,6 +697,7 @@ object ConfigStore {
         }
 
         if (dirty) saveGlobal(parsed)
+        cachedGlobal = parsed
         return parsed
     }
 
@@ -586,6 +717,7 @@ object ConfigStore {
 
     fun saveGlobal(s: Settings) {
         MainActivityRuntime.prefs.edit { putString(KEY_GLOBAL, s.toJson().toString()) }
+        cachedGlobal = s
         writeBackupMirror()
     }
 
@@ -741,6 +873,14 @@ object ConfigStore {
         return File(root, BACKUP_FILENAME)
     }
 
+    /** The mirror to READ: the current name, or the ARMSX2-era one if that is all there is. */
+    private fun backupFileForRead(): File? {
+        val current = backupFile() ?: return null
+        if (current.exists()) return current
+        val legacy = File(current.parentFile, LEGACY_BACKUP_FILENAME)
+        return if (legacy.exists()) legacy else current
+    }
+
     /** Write the in-folder settings mirror (global + every per-game blob). Cheap; called
      *  on each save. Silently no-ops until the data root is known. */
     private fun writeBackupMirror() {
@@ -770,8 +910,13 @@ object ConfigStore {
         // Hard guard: an existing new-UI user (has config.global) is off-limits.
         if (MainActivityRuntime.prefs.getString(KEY_GLOBAL, null) != null) return
 
+        // The restore below writes KEY_GLOBAL behind loadGlobal's back; drop any
+        // default Settings() a pre-restore call may have pinned in the cache.
+        cachedGlobal = null
+
         // (1) Lossless restore from the in-folder mirror (written by a prior new-UI install).
-        val mirror = backupFile()
+        // Reads the ARMSX2-era name too: for anyone upgrading it is the only copy there is.
+        val mirror = backupFileForRead()
         if (mirror != null && mirror.exists() && mirror.length() > 0L) {
             val restored = runCatching {
                 val root = JSONObject(mirror.readText())
@@ -811,7 +956,12 @@ object ConfigStore {
      * Games, firmware, save data, save states and covers are untouched.
      */
     fun purgeAllSettingsFiles() {
+        // Both names -- leaving the old one behind would silently re-seed the settings this
+        // just deleted, the next time reconcileReusedFolder runs.
         runCatching { backupFile()?.delete() }
+        runCatching {
+            backupFile()?.parentFile?.let { File(it, LEGACY_BACKUP_FILENAME).delete() }
+        }
         val root = MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return
         runCatching { File(root, "gamesettings").deleteRecursively() }
     }

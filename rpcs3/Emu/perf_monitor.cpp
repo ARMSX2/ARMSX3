@@ -37,8 +37,17 @@ void perf_monitor::operator()()
 
 		stats.get_per_core_usage(per_core_usage, total_usage);
 
-		const u64 current_mem_use = utils::get_memory_usage().second;
+		// OUR resident set, not the machine's. This used to report
+		// utils::get_memory_usage().second -- MemTotal minus MemAvailable from /proc/meminfo,
+		// which counts every process on the device plus page cache -- under the label "RAM
+		// Usage", directly beside this emulator's own CPU figures. On a 7.4 GB phone it read
+		// ~5.6 GB while the emulator itself held ~3.3 GB, so three separate investigations into
+		// "the emulator is using 5.6 GB" were chasing the device's number. The process RSS is
+		// also the figure Android's low-memory killer actually decides on.
+		const u64 current_mem_use = utils::get_process_memory_usage();
 		const u64 mem_use_increase = current_mem_use >= max_memory_usage ? current_mem_use - max_memory_usage : 0;
+
+		const auto [system_total, system_used] = utils::get_memory_usage();
 
 		const u64 log_interval = (mem_use_increase >= log_mem_increase ? log_interval_us_min : log_interval_us_max);
 
@@ -84,7 +93,17 @@ void perf_monitor::operator()()
 
 			if (max_memory_usage)
 			{
-				fmt::append(msg, ", RAM Usage: %dMB (Peak: %dMB)", current_mem_use / (1024 * 1024), max_memory_usage / (1024 * 1024));
+				// Both numbers, each named for what it is. The headroom is what a report about
+				// being killed needs: our own total says nothing about how close the device is.
+				fmt::append(msg, ", Process RSS: %dMB (Peak: %dMB)",
+					current_mem_use / (1024 * 1024), max_memory_usage / (1024 * 1024));
+			}
+
+			if (system_total)
+			{
+				fmt::append(msg, ", System: %dMB/%dMB used (%dMB free)",
+					system_used / (1024 * 1024), system_total / (1024 * 1024),
+					(system_total - system_used) / (1024 * 1024));
 			}
 
 			perf_log.notice("%s", msg);

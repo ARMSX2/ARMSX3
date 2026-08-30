@@ -43,6 +43,11 @@ namespace utils
 	*/
 	void memory_commit(void* pointer, usz size, protection prot = protection::rw);
 
+	// memory_commit, but a failure to commit is returned instead of being fatal. For callers
+	// that have a real fallback -- the JIT can interpret the functions it could not compile --
+	// and so should report running out of memory rather than aborting their thread.
+	bool try_memory_commit(void* pointer, usz size, protection prot = protection::rw);
+
 	// Decommit all memory committed via commit_page_memory.
 	void memory_decommit(void* pointer, usz size, bool can_be_jit = false);
 

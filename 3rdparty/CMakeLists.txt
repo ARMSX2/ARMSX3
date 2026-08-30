@@ -373,6 +373,15 @@ add_subdirectory(fusion EXCLUDE_FROM_ALL)
 # FERAL INTERACTIVE
 add_subdirectory(feralinteractive EXCLUDE_FROM_ALL)
 
+# LSFG: Lossless Scaling frame generation. Android only, and deliberately NOT EXCLUDE_FROM_ALL --
+# libarmsx3_lsfg.so has to be built and packaged even though nothing links it, because the core
+# reaches it by dlopen rather than by linking. Marking it excluded produces a build that succeeds
+# and an APK with no frame generation in it.
+#
+# The subdir returns immediately when the submodule is absent, so a checkout without it still
+# builds; frame generation simply reports itself unavailable at runtime.
+add_subdirectory(lsfg)
+
 # add nice ALIAS targets for ease of use
 if(USE_SYSTEM_LIBUSB)
 	add_library(3rdparty::libusb ALIAS usb-1.0-shared)

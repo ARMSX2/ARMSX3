@@ -24,6 +24,7 @@ struct RPCSXApi {
   bool (*overlayPadData)(int port, int digital1, int digital2, int leftStickX,
                          int leftStickY, int rightStickX, int rightStickY);
   bool (*overlayPadPressure)(int port, const int *values, int count);
+  bool (*keyboardKey)(int androidKeyCode, int unicode, bool pressed, bool repeat);
   bool (*initialize)(std::string_view rootDir, std::string_view user);
   void (*setSocInfo)(std::string_view socInfo);
   bool (*processCompilationQueue)(JNIEnv *env);
@@ -44,6 +45,9 @@ struct RPCSXApi {
   std::string (*getCurrentTrophyName)();
   bool (*surfaceEvent)(JNIEnv *env, jobject surface, jint event);
   void (*surfaceSizeChanged)(int width, int height);
+  void (*setPadSensor)(int port, int x, int y, int z, int g);
+  int (*getPadRumble)(int port);
+  void (*setThermals)(float cpu, float gpu, float battery, bool show);
   bool (*usbDeviceEvent)(int fd, int vendorId, int productId, int event);
   bool (*installFw)(JNIEnv *env, int fd, long progressId);
   bool (*isInstallableFile)(jint fd);
@@ -56,6 +60,27 @@ struct RPCSXApi {
   std::string (*getUser)();
   std::string (*settingsGet)(std::string_view path);
   bool (*settingsSet)(std::string_view path, std::string_view valueString);
+  int (*frameGenImportShaders)(std::string_view path);
+  int (*frameGenShaderCount)();
+  const char *(*frameGenShaderError)();
+  const char *(*rpcnGetConfig)();
+  void (*rpcnSetConfig)(std::string_view host, std::string_view npid,
+                        std::string_view password, std::string_view token);
+  const char *(*rpcnAddFriend)(std::string_view npid);
+  const char *(*rpcnRemoveFriend)(std::string_view npid);
+  const char *(*rpcnGetFriends)();
+  const char *(*rpcnCreateAccount)(std::string_view npid, std::string_view password,
+                                   std::string_view onlineName, std::string_view email);
+  const char *(*rpcnResendToken)(std::string_view npid, std::string_view password);
+  const char *(*rpcnSendResetToken)(std::string_view npid, std::string_view email);
+  const char *(*rpcnResetPassword)(std::string_view npid, std::string_view token,
+                                   std::string_view password);
+  const char *(*rpcnTestLogin)();
+  const char *(*rpcnAddHost)(std::string_view desc, std::string_view host);
+  const char *(*rpcnDelHost)(std::string_view desc, std::string_view host);
+  void (*rpcnResetHosts)();
+  void (*rpcnSetIpv6)(bool enabled);
+  const char *(*rpcnStatus)();
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
   bool (*installSplitPkg)(JNIEnv *env, const int *fds, int count, long progressId);
@@ -72,6 +97,7 @@ struct RPCSXApi {
   bool (*saveStateToSlot)(unsigned int slot);
   bool (*loadStateFromSlot)(unsigned int slot);
   bool (*hasStateInSlot)(unsigned int slot);
+  bool (*deleteStateFromSlot)(unsigned int slot);
   std::string (*patchEngineVersion)();
   int (*patchesImport)(std::string_view content);
   std::string (*patchesList)(std::string_view serial);
@@ -117,6 +143,7 @@ struct RPCSXLibrary : RPCSXApi {
     // clang-format off
     result.overlayPadData = reinterpret_cast<decltype(overlayPadData)>(dlsym(handle, "_rpcsx_overlayPadData"));
     result.overlayPadPressure = reinterpret_cast<decltype(overlayPadPressure)>(dlsym(handle, "_rpcsx_overlayPadPressure"));
+    result.keyboardKey = reinterpret_cast<decltype(keyboardKey)>(dlsym(handle, "_rpcsx_keyboardKey"));
     result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_rpcsx_initialize"));
     result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_rpcsx_setSocInfo"));
     result.processCompilationQueue = reinterpret_cast<decltype(processCompilationQueue)>(dlsym(handle, "_rpcsx_processCompilationQueue"));
@@ -136,6 +163,9 @@ struct RPCSXLibrary : RPCSXApi {
     result.getCurrentTrophyName = reinterpret_cast<decltype(getCurrentTrophyName)>(dlsym(handle, "_rpcsx_getCurrentTrophyName"));
     result.surfaceEvent = reinterpret_cast<decltype(surfaceEvent)>(dlsym(handle, "_rpcsx_surfaceEvent"));
     result.surfaceSizeChanged = reinterpret_cast<decltype(surfaceSizeChanged)>(dlsym(handle, "_rpcsx_surfaceSizeChanged"));
+    result.setPadSensor = reinterpret_cast<decltype(setPadSensor)>(dlsym(handle, "_rpcsx_setPadSensor"));
+    result.getPadRumble = reinterpret_cast<decltype(getPadRumble)>(dlsym(handle, "_rpcsx_getPadRumble"));
+    result.setThermals = reinterpret_cast<decltype(setThermals)>(dlsym(handle, "_rpcsx_setThermals"));
     result.usbDeviceEvent = reinterpret_cast<decltype(usbDeviceEvent)>(dlsym(handle, "_rpcsx_usbDeviceEvent"));
     result.installFw = reinterpret_cast<decltype(installFw)>(dlsym(handle, "_rpcsx_installFw"));
     result.isInstallableFile = reinterpret_cast<decltype(isInstallableFile)>(dlsym(handle, "_rpcsx_isInstallableFile"));
@@ -146,7 +176,30 @@ struct RPCSXLibrary : RPCSXApi {
     result.loginUser = reinterpret_cast<decltype(loginUser)>(dlsym(handle, "_rpcsx_loginUser"));
     result.getUser = reinterpret_cast<decltype(getUser)>(dlsym(handle, "_rpcsx_getUser"));
     result.settingsGet = reinterpret_cast<decltype(settingsGet)>(dlsym(handle, "_rpcsx_settingsGet"));
+    // Optional like the frame-gen group above: a core predating RPCN support simply has no
+    // such symbols, and the Kotlin side treats a null as "this build cannot do RPCN".
+    result.rpcnGetConfig = reinterpret_cast<decltype(rpcnGetConfig)>(dlsym(handle, "_rpcsx_rpcnGetConfig"));
+    result.rpcnSetConfig = reinterpret_cast<decltype(rpcnSetConfig)>(dlsym(handle, "_rpcsx_rpcnSetConfig"));
+    result.rpcnAddFriend = reinterpret_cast<decltype(rpcnAddFriend)>(dlsym(handle, "_rpcsx_rpcnAddFriend"));
+    result.rpcnRemoveFriend = reinterpret_cast<decltype(rpcnRemoveFriend)>(dlsym(handle, "_rpcsx_rpcnRemoveFriend"));
+    result.rpcnGetFriends = reinterpret_cast<decltype(rpcnGetFriends)>(dlsym(handle, "_rpcsx_rpcnGetFriends"));
+    result.rpcnCreateAccount = reinterpret_cast<decltype(rpcnCreateAccount)>(dlsym(handle, "_rpcsx_rpcnCreateAccount"));
+    result.rpcnResendToken = reinterpret_cast<decltype(rpcnResendToken)>(dlsym(handle, "_rpcsx_rpcnResendToken"));
+    result.rpcnSendResetToken = reinterpret_cast<decltype(rpcnSendResetToken)>(dlsym(handle, "_rpcsx_rpcnSendResetToken"));
+    result.rpcnResetPassword = reinterpret_cast<decltype(rpcnResetPassword)>(dlsym(handle, "_rpcsx_rpcnResetPassword"));
+    result.rpcnTestLogin = reinterpret_cast<decltype(rpcnTestLogin)>(dlsym(handle, "_rpcsx_rpcnTestLogin"));
+    result.rpcnAddHost = reinterpret_cast<decltype(rpcnAddHost)>(dlsym(handle, "_rpcsx_rpcnAddHost"));
+    result.rpcnDelHost = reinterpret_cast<decltype(rpcnDelHost)>(dlsym(handle, "_rpcsx_rpcnDelHost"));
+    result.rpcnResetHosts = reinterpret_cast<decltype(rpcnResetHosts)>(dlsym(handle, "_rpcsx_rpcnResetHosts"));
+    result.rpcnSetIpv6 = reinterpret_cast<decltype(rpcnSetIpv6)>(dlsym(handle, "_rpcsx_rpcnSetIpv6"));
+    result.rpcnStatus = reinterpret_cast<decltype(rpcnStatus)>(dlsym(handle, "_rpcsx_rpcnStatus"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
+    // Resolved without ensure(): a core built before frame generation existed simply has no such
+    // symbol, and refusing to load it over a missing optional feature would be worse than the
+    // feature being absent. The Kotlin side treats a null here as "unsupported".
+    result.frameGenImportShaders = reinterpret_cast<decltype(frameGenImportShaders)>(dlsym(handle, "_rpcsx_frameGenImportShaders"));
+    result.frameGenShaderCount = reinterpret_cast<decltype(frameGenShaderCount)>(dlsym(handle, "_rpcsx_frameGenShaderCount"));
+    result.frameGenShaderError = reinterpret_cast<decltype(frameGenShaderError)>(dlsym(handle, "_rpcsx_frameGenShaderError"));
     result.settingsBeginBatch = reinterpret_cast<decltype(settingsBeginBatch)>(dlsym(handle, "_rpcsx_settingsBeginBatch"));
     result.settingsEndBatch = reinterpret_cast<decltype(settingsEndBatch)>(dlsym(handle, "_rpcsx_settingsEndBatch"));
     result.installSplitPkg = reinterpret_cast<decltype(installSplitPkg)>(dlsym(handle, "_rpcsx_installSplitPkg"));
@@ -160,6 +213,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.saveStateToSlot = reinterpret_cast<decltype(saveStateToSlot)>(dlsym(handle, "_rpcsx_saveStateToSlot"));
     result.loadStateFromSlot = reinterpret_cast<decltype(loadStateFromSlot)>(dlsym(handle, "_rpcsx_loadStateFromSlot"));
     result.hasStateInSlot = reinterpret_cast<decltype(hasStateInSlot)>(dlsym(handle, "_rpcsx_hasStateInSlot"));
+    result.deleteStateFromSlot = reinterpret_cast<decltype(deleteStateFromSlot)>(dlsym(handle, "_rpcsx_deleteStateFromSlot"));
     result.patchEngineVersion = reinterpret_cast<decltype(patchEngineVersion)>(dlsym(handle, "_rpcsx_patchEngineVersion"));
     result.patchesImport = reinterpret_cast<decltype(patchesImport)>(dlsym(handle, "_rpcsx_patchesImport"));
     result.patchesList = reinterpret_cast<decltype(patchesList)>(dlsym(handle, "_rpcsx_patchesList"));
@@ -248,6 +302,20 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_overlayPadPressure(
 
   env->ReleasePrimitiveArrayCritical(values, elems, JNI_ABORT);
   return ok;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_keyboardKey(
+    JNIEnv *, jobject, jint androidKeyCode, jint unicode, jboolean pressed,
+    jboolean repeat) {
+  // Absent on a core older than this export. Returning false is right either
+  // way: it means "nothing consumed this key", which is also what an emulator
+  // with no keyboard attached reports.
+  if (rpcsxLib.keyboardKey == nullptr) {
+    return false;
+  }
+
+  return rpcsxLib.keyboardKey(androidKeyCode, unicode, pressed == JNI_TRUE,
+                              repeat == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_initialize(
@@ -426,6 +494,36 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_surfaceEvent(
   }
 
   return rpcsxLib.surfaceEvent(env, surface, event);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setPadSensor(
+    JNIEnv *, jobject, jint port, jint x, jint y, jint z, jint g) {
+  if (rpcsxLib.setPadSensor == nullptr) {
+      return;
+  }
+
+  rpcsxLib.setPadSensor(port, x, y, z, g);
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_getPadRumble(
+    JNIEnv *, jobject, jint port) {
+  if (rpcsxLib.getPadRumble == nullptr) {
+      return 0;
+  }
+
+  return rpcsxLib.getPadRumble(port);
+}
+
+// Device temperatures for the perf overlay. Discovery is the app's job -- Android exposes no
+// supported API for SoC temperatures, so it reads the thermal sysfs, whose zone naming and units
+// are vendor-specific -- and this only carries the result across.
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setThermals(
+    JNIEnv *, jobject, jfloat cpu, jfloat gpu, jfloat battery, jboolean show) {
+  if (rpcsxLib.setThermals == nullptr) {
+    return;
+  }
+
+  rpcsxLib.setThermals(cpu, gpu, battery, show == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_surfaceSizeChanged(
@@ -931,6 +1029,15 @@ Java_net_rpcsx_RPCSX_hasStateInSlot(JNIEnv *, jobject, jint slot) {
   return rpcsxLib.hasStateInSlot(static_cast<unsigned int>(slot));
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_deleteStateFromSlot(JNIEnv *, jobject, jint slot) {
+  if (rpcsxLib.deleteStateFromSlot == nullptr || slot < 0) {
+    return false;
+  }
+
+  return rpcsxLib.deleteStateFromSlot(static_cast<unsigned int>(slot));
+}
+
 // ---------------------------------------------------------------------------
 // Patches
 // ---------------------------------------------------------------------------
@@ -1010,4 +1117,222 @@ Java_net_rpcsx_RPCSX_getRsxThreadTid(JNIEnv *, jobject) {
     return 0;
   }
   return static_cast<jint>(rpcsxLib.getRsxThreadTid());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_frameGenImportShaders(JNIEnv *env, jobject, jstring path) {
+  if (!rpcsxLib.frameGenImportShaders) {
+    return -1;
+  }
+
+  return rpcsxLib.frameGenImportShaders(unwrap(env, path));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_frameGenShaderCount(JNIEnv *, jobject) {
+  return rpcsxLib.frameGenShaderCount ? rpcsxLib.frameGenShaderCount() : 0;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_frameGenShaderError(JNIEnv *env, jobject) {
+  const char *msg = rpcsxLib.frameGenShaderError ? rpcsxLib.frameGenShaderError() : "";
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+// ---- RPCN ----
+//
+// Every one of these blocks on the network; the Kotlin side calls them off the UI thread.
+// A null pointer means the core predates RPCN support, which is reported as a message
+// rather than a crash so an old core degrades to "unavailable" instead of taking the app
+// down.
+
+static jstring rpcn_unavailable(JNIEnv *env) {
+  return env->NewStringUTF("This build of the emulator core has no RPCN support.");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnGetConfig(JNIEnv *env, jobject) {
+  if (!rpcsxLib.rpcnGetConfig) return env->NewStringUTF("");
+  const char *json = rpcsxLib.rpcnGetConfig();
+  return env->NewStringUTF(json ? json : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnStatus(JNIEnv *env, jobject) {
+  if (!rpcsxLib.rpcnStatus) return env->NewStringUTF("");
+  const char *json = rpcsxLib.rpcnStatus();
+  return env->NewStringUTF(json ? json : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnAddHost(JNIEnv *env, jobject, jstring desc, jstring host) {
+  if (!rpcsxLib.rpcnAddHost) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string d = str(desc), h = str(host);
+  const char *msg = rpcsxLib.rpcnAddHost(d, h);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnDelHost(JNIEnv *env, jobject, jstring desc, jstring host) {
+  if (!rpcsxLib.rpcnDelHost) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string d = str(desc), h = str(host);
+  const char *msg = rpcsxLib.rpcnDelHost(d, h);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_rpcnResetHosts(JNIEnv *, jobject) {
+  if (rpcsxLib.rpcnResetHosts) rpcsxLib.rpcnResetHosts();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_rpcnSetIpv6(JNIEnv *, jobject, jboolean enabled) {
+  if (rpcsxLib.rpcnSetIpv6) rpcsxLib.rpcnSetIpv6(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_rpcnSetConfig(JNIEnv *env, jobject, jstring host, jstring npid,
+                                   jstring password, jstring token) {
+  if (!rpcsxLib.rpcnSetConfig) return;
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string h = str(host), n = str(npid), p = str(password), t = str(token);
+  rpcsxLib.rpcnSetConfig(h, n, p, t);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnAddFriend(JNIEnv *env, jobject, jstring npid) {
+  if (!rpcsxLib.rpcnAddFriend) return rpcn_unavailable(env);
+
+  const char *c = npid ? env->GetStringUTFChars(npid, nullptr) : nullptr;
+  const std::string name = c ? c : "";
+  if (c) env->ReleaseStringUTFChars(npid, c);
+
+  const char *msg = rpcsxLib.rpcnAddFriend(name);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnRemoveFriend(JNIEnv *env, jobject, jstring npid) {
+  if (!rpcsxLib.rpcnRemoveFriend) return rpcn_unavailable(env);
+
+  const char *c = npid ? env->GetStringUTFChars(npid, nullptr) : nullptr;
+  const std::string name = c ? c : "";
+  if (c) env->ReleaseStringUTFChars(npid, c);
+
+  const char *msg = rpcsxLib.rpcnRemoveFriend(name);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnGetFriends(JNIEnv *env, jobject) {
+  if (!rpcsxLib.rpcnGetFriends) return env->NewStringUTF("[]");
+
+  const char *msg = rpcsxLib.rpcnGetFriends();
+  return env->NewStringUTF(msg ? msg : "[]");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnCreateAccount(JNIEnv *env, jobject, jstring npid,
+                                       jstring password, jstring onlineName,
+                                       jstring email) {
+  if (!rpcsxLib.rpcnCreateAccount) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string n = str(npid), p = str(password), o = str(onlineName), e = str(email);
+  const char *msg = rpcsxLib.rpcnCreateAccount(n, p, o, e);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnResendToken(JNIEnv *env, jobject, jstring npid,
+                                     jstring password) {
+  if (!rpcsxLib.rpcnResendToken) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string n = str(npid), p = str(password);
+  const char *msg = rpcsxLib.rpcnResendToken(n, p);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnSendResetToken(JNIEnv *env, jobject, jstring npid,
+                                        jstring email) {
+  if (!rpcsxLib.rpcnSendResetToken) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string n = str(npid), e = str(email);
+  const char *msg = rpcsxLib.rpcnSendResetToken(n, e);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnResetPassword(JNIEnv *env, jobject, jstring npid, jstring token,
+                                       jstring password) {
+  if (!rpcsxLib.rpcnResetPassword) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string n = str(npid), t = str(token), p = str(password);
+  const char *msg = rpcsxLib.rpcnResetPassword(n, t, p);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnTestLogin(JNIEnv *env, jobject) {
+  if (!rpcsxLib.rpcnTestLogin) return rpcn_unavailable(env);
+  const char *msg = rpcsxLib.rpcnTestLogin();
+  return env->NewStringUTF(msg ? msg : "");
 }

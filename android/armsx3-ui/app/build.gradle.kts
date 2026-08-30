@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
@@ -27,21 +29,26 @@ android {
 
     defaultConfig {
         applicationId = "com.armsx3"
-        minSdk = 26
+        // Set per variant by android/build-variants.sh: 33 for the A13 build (NDK 28), 35 for
+        // the A15 build (NDK 29). The core is compiled against the matching API, so these must
+        // agree -- an APK that installs below its core's target is a dlopen failure at boot.
+        minSdk = (project.findProperty("armsx3.minSdk") as String?)?.toInt() ?: 33
         targetSdk = 37
-        versionCode = 13
-        versionName = "0.7.2"
+        versionCode = 38
+        versionName = "0.9.4.4"
 
         // ARMSX2's UI reads these. STORAGE_ALL_FILES gates the all-files storage path in
         // onboarding; IN_APP_UPDATER gates the in-app GitHub-release updater.
         //
-        // On because ARMSX3 ships as a sideloaded APK from its own GitHub releases, which is
-        // exactly the case an in-app updater is for. It must go back off, and the code and the
-        // REQUEST_INSTALL_PACKAGES permission must move into a github-only flavor, before any
-        // Play build exists: Play forbids self-updating apps, and it is the PERMISSION in the
-        // bundle that gets rejected, which this runtime flag does nothing about.
+        // These are the github values; the play flavor overrides all three below.
+        //
+        // The warning that used to live here was right and is now acted on: a runtime boolean
+        // does nothing about the PERMISSION in the bundle, which is what Play rejects. The
+        // permissions have moved into the github flavor's manifest, so the play bundle does not
+        // declare them at all.
         buildConfigField("boolean", "STORAGE_ALL_FILES", "true")
         buildConfigField("boolean", "IN_APP_UPDATER", "true")
+        buildConfigField("boolean", "FRAME_GENERATION", "true")
 
         ndk {
             // The core is arm64-only.
@@ -65,6 +72,40 @@ android {
         }
     }
 
+    // Two distributions, and they are not interchangeable.
+    //
+    // github is the sideloaded build: it updates itself from GitHub releases, can be pointed at
+    // an arbitrary data folder, and ships frame generation.
+    //
+    // play is what Google Play will accept. Self-updating is forbidden outright, all-files
+    // storage is a policy review it does not need, and frame generation is left out. The
+    // applicationId differs so the two install side by side instead of over each other.
+    flavorDimensions += "distribution"
+
+    productFlavors {
+        create("github") {
+            dimension = "distribution"
+        }
+
+        create("play") {
+            dimension = "distribution"
+            applicationId = "com.armsx3.play"
+
+            buildConfigField("boolean", "STORAGE_ALL_FILES", "false")
+            buildConfigField("boolean", "IN_APP_UPDATER", "false")
+            buildConfigField("boolean", "FRAME_GENERATION", "false")
+
+            // Frame generation is excluded by SOURCE SET, not by a packaging filter: a
+            // packaging block inside a flavor is not honoured and silently applied to both,
+            // which dropped the library from the github build too. libarmsx3_lsfg.so lives in
+            // src/github/jniLibs, so only that flavor bundles it.
+            //
+            // Excluding the file is the whole exclusion. The shim is dlopen'd by name, and the
+            // core already reports frame generation unavailable when the library is absent,
+            // which is the same path a device that cannot run it takes.
+        }
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -72,17 +113,73 @@ android {
         }
     }
 
+    // Reads android/armsx3-ui/keystore.properties when it exists:
+    //
+    //     storeFile=/absolute/path/to/upload.jks
+    //     storePassword=...
+    //     keyAlias=upload
+    //     keyPassword=...
+    //
+    // Absent, only the debug key exists and release builds stay sideload-only. The file is
+    // gitignored and nothing here echoes its contents.
+    signingConfigs {
+        val props = rootProject.file("keystore.properties")
+
+        if (props.exists()) {
+            val k = Properties().apply { props.inputStream().use { load(it) } }
+
+            create("upload") {
+                storeFile = file(k.getProperty("storeFile"))
+                storePassword = k.getProperty("storePassword")
+                keyAlias = k.getProperty("keyAlias")
+                keyPassword = k.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
+            // Off for the Play bundle, on for GitHub APKs.
+            //
+            // Not a preference: AGP 9.2.1's R8 writes its mapping as mapping.prt, a compressed
+            // per-class archive, while packageBundle still demands a plain mapping.txt, so an
+            // AAB cannot be built with R8 enabled at all. Set by build-play-aab.sh.
+            //
+            // The cost is small and there is precedent: ARMSX2 ships its Play build with minify
+            // off entirely, and here a 94 MB native core dominates a 76 MB APK, so shrinking the
+            // Kotlin saves comparatively little.
+            //
+            // A gradle property rather than the variant API, matching how armsx3.minSdk is
+            // already threaded through by build-variants.sh.
+            val noMinify = project.hasProperty("armsx3.noMinify")
+            isMinifyEnabled = !noMinify
+            isShrinkResources = !noMinify
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Debug-signed so alpha release builds are sideloadable without the
-            // upload key. Swap this for the real config before any public build.
-            signingConfig = signingConfigs.getByName("debug")
+            // The upload key when one is configured, the debug key otherwise.
+            //
+            // GitHub APKs are deliberately debug-signed so an alpha stays sideloadable without
+            // the upload key present. Play rejects a debug-signed bundle outright, so
+            // build-play-aab.sh refuses to run without keystore.properties.
+            //
+            // The file is gitignored (*.jks, keystore.properties) and read at build time, so no
+            // credential is ever in the repo or on a command line.
+            // The upload key ONLY when explicitly asked for, which build-play-aab.sh does.
+            //
+            // Opt-in rather than "use it if it exists": once the keystore was created, every
+            // release build silently started using it, and a differently-signed APK cannot be
+            // installed over an existing one. That turns a sideload build into something testers
+            // cannot install, and the error Android shows says nothing about signatures. It was
+            // being worked around by hiding keystore.properties by hand before each build, which
+            // is exactly the kind of step that gets forgotten once.
+            signingConfig = if (project.hasProperty("armsx3.uploadSigning")) {
+                signingConfigs.findByName("upload")
+                    ?: throw GradleException("armsx3.uploadSigning set but keystore.properties is missing")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

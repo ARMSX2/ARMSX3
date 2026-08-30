@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "OboeBackend.h"
 
+#include <algorithm>
+
 #include "Emu/System.h"
 #include "Emu/system_config.h"
 
@@ -18,37 +20,113 @@ OboeBackend::~OboeBackend()
 
 bool OboeBackend::Operational()
 {
-	return m_stream && !m_reset_req.observe();
+	if (!m_stream || m_reset_req.observe())
+	{
+		return false;
+	}
+
+	// The stream state matters, not just its existence. This used to answer true for a stream
+	// that had failed to start or had been disconnected, so cellAudio's "backend stopped
+	// unexpectedly" recovery never ran and the silence was permanent.
+	switch (m_stream->getState())
+	{
+	case oboe::StreamState::Open:
+	case oboe::StreamState::Starting:
+	case oboe::StreamState::Started:
+	case oboe::StreamState::Pausing:
+	case oboe::StreamState::Paused:
+	case oboe::StreamState::Flushing:
+	case oboe::StreamState::Flushed:
+		return true;
+	default:
+		// Disconnected, Closing, Closed, Stopping, Stopped, Uninitialized, Unknown.
+		return false;
+	}
 }
 
 bool OboeBackend::Open(std::string_view /*dev_id*/, AudioFreq freq, AudioSampleSize sample_size, AudioChannelCnt ch_cnt, audio_channel_layout layout)
 {
 	Close();
 
-	oboe::AudioStreamBuilder builder;
+	// The PS3 side owns resampling, so the first attempt asks the device for the guest rate
+	// directly and forbids Oboe from converting. A device that cannot run at that rate opens at
+	// its own instead -- see the check after openStream, which reopens with conversion on.
+	oboe::SampleRateConversionQuality conversion = oboe::SampleRateConversionQuality::None;
 
+	const auto build = [&](oboe::AudioStreamBuilder& builder)
+	{
 	builder.setDirection(oboe::Direction::Output)
-		// LowLatency asks for the fast mixer path. Exclusive asks to bypass the mixer
-		// entirely; Oboe silently downgrades to Shared where the device will not grant it,
-		// so requesting it costs nothing on hardware that refuses.
+		// Shared, not Exclusive.
+		//
+		// An Exclusive AAudio stream bypasses the system mixer and holds the device to the
+		// callback deadline; miss it often enough and the platform disconnects the stream. That
+		// is survivable on a machine running at full speed and fatal on one that is not -- a game
+		// running at 10fps misses the deadline continuously. ARMSX2's Oboe backend settled on
+		// Shared for the same device class before this one was written.
 		->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-		->setSharingMode(oboe::SharingMode::Exclusive)
+		->setSharingMode(oboe::SharingMode::Shared)
 		// Game usage tells the platform not to apply the media post-processing chain, which
 		// on some devices adds tens of milliseconds of latency we cannot see or control.
 		->setUsage(oboe::Usage::Game)
 		->setSampleRate(static_cast<s32>(freq))
 		// The PS3 side owns resampling; converting again here would be a second, worse pass.
-		->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::None)
+		->setSampleRateConversionQuality(conversion)
 		->setChannelCount(static_cast<s32>(ch_cnt))
 		->setFormat(sample_size == AudioSampleSize::FLOAT ? oboe::AudioFormat::Float : oboe::AudioFormat::I16)
 		->setDataCallback(this)
-		->setErrorCallback(this);
+		->setErrorCallback(this)
+		// Capacity from the buffer duration the emulator is already targeting, rather than a
+		// multiple of the device burst. cellAudio fills ahead by this much, so a stream that
+		// cannot hold it underruns no matter how the trigger level is set.
+		->setBufferCapacityInFrames(std::max<s32>(2048,
+			static_cast<s32>((static_cast<u64>(static_cast<s32>(freq)) * g_cfg.audio.desired_buffer_duration) / 1000)));
+	};
+
+	oboe::AudioStreamBuilder builder;
+	build(builder);
 
 	if (const oboe::Result result = builder.openStream(m_stream); result != oboe::Result::OK)
 	{
 		Oboe.error("Failed to open stream: %s", oboe::convertToText(result));
 		m_stream.reset();
 		return false;
+	}
+
+	// A device that cannot run at the guest rate opens at its own, and with conversion disabled
+	// nothing resamples: the emulator then feeds samples at one rate into a device consuming them
+	// at another. That is not a one-off pitch error, it is a permanent rate mismatch, so the
+	// offset between what is heard and what is on screen grows for as long as playback continues.
+	// The emulator cannot even see it -- every downstream calculation, including the buffering
+	// algorithm's idea of how much audio is queued, uses the rate we asked for.
+	//
+	// Letting Oboe convert is a worse signal path than matching rates outright, and a far better
+	// one than not converting at all. Cubeb resamples for the same reason.
+	if (m_stream->getSampleRate() != static_cast<s32>(freq))
+	{
+		Oboe.warning("Device opened at %dHz, not the requested %dHz; reopening with conversion.",
+			m_stream->getSampleRate(), static_cast<s32>(freq));
+
+		m_stream->close();
+		m_stream.reset();
+
+		conversion = oboe::SampleRateConversionQuality::Medium;
+
+		oboe::AudioStreamBuilder rebuilder;
+		build(rebuilder);
+
+		if (const oboe::Result result = rebuilder.openStream(m_stream); result != oboe::Result::OK)
+		{
+			Oboe.error("Failed to reopen stream with conversion: %s", oboe::convertToText(result));
+			m_stream.reset();
+			return false;
+		}
+
+		if (m_stream->getSampleRate() != static_cast<s32>(freq))
+		{
+			// Nothing further to try. Report it plainly rather than drifting in silence.
+			Oboe.error("Device still at %dHz after enabling conversion; audio will drift from video.",
+				m_stream->getSampleRate());
+		}
 	}
 
 	m_sampling_rate = freq;
@@ -59,12 +137,17 @@ bool OboeBackend::Open(std::string_view /*dev_id*/, AudioFreq freq, AudioSampleS
 
 	m_full_sample_size = static_cast<u8>(m_channels * get_sample_size());
 
-	// A buffer of two bursts is the standard low-latency compromise: one burst in flight and
-	// one being filled. Anything smaller underruns on the first scheduling hiccup, and the
-	// device caps this anyway.
+	// Two bursts is roughly 4-10ms and is a desktop-grade latency target. It underruns on the
+	// first scheduling hiccup, which on a device that is already struggling is continuous. Ask
+	// for the emulator's own buffer duration instead and let Oboe clamp to the capacity above.
 	if (const s32 burst = m_stream->getFramesPerBurst(); burst > 0)
 	{
-		m_stream->setBufferSizeInFrames(burst * 2);
+		const s32 target = static_cast<s32>(
+			(static_cast<u64>(m_stream->getSampleRate()) * g_cfg.audio.desired_buffer_duration) / 1000);
+
+		// Rounded up to a whole burst: AAudio works in bursts and a partial one buys nothing.
+		const s32 bursts = std::max<s32>(2, (target + burst - 1) / burst);
+		m_stream->setBufferSizeInFrames(bursts * burst);
 	}
 
 	m_reset_req = false;
@@ -124,12 +207,24 @@ void OboeBackend::Play()
 	{
 		std::lock_guard lock(m_cb_mutex);
 		if (m_playing) return;
-		m_playing = true;
 	}
 
+	// Start FIRST, and only claim to be playing if it worked.
+	//
+	// This used to set m_playing before requestStart() and never roll it back. onAudioReady
+	// requires m_playing, but a stream that failed to start never calls it -- so cellAudio's
+	// backend_active never armed, every audio block it enqueued was silently discarded, and the
+	// early return above made the failure permanent for the rest of the session.
 	if (const oboe::Result result = m_stream->requestStart(); result != oboe::Result::OK)
 	{
 		Oboe.error("requestStart failed: %s", oboe::convertToText(result));
+		m_reset_req = true;
+		return;
+	}
+
+	{
+		std::lock_guard lock(m_cb_mutex);
+		m_playing = true;
 	}
 }
 
@@ -177,6 +272,13 @@ oboe::DataCallbackResult OboeBackend::onAudioReady(oboe::AudioStream* /*stream*/
 		{
 			std::memcpy(m_last_sample.data(), static_cast<u8*>(audio_data) + written - sample_size, sample_size);
 		}
+	}
+
+	// One count per starved callback, not per padded frame: the audible event is the gap, and
+	// its length is already implied by how much of the callback had to be invented.
+	if (written < bytes_req)
+	{
+		m_underruns++;
 	}
 
 	// Pad the remainder by repeating the last sample. Holding a value is much less audible

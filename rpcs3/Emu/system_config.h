@@ -188,6 +188,38 @@ struct cfg_root : cfg::node
 		cfg::_bool disable_async_host_memory_manager{ this, "Disable Asynchronous Memory Manager", false, true };
 		cfg::_enum<output_scaling_mode> output_scaling{ this, "Output Scaling Mode", output_scaling_mode::bilinear, true };
 #ifdef __ANDROID__
+		// ARMSX3: Lossless Scaling frame generation.
+		//
+		// Default off and it stays off unless the user supplies shaders from their own copy of
+		// Lossless Scaling -- nothing here ships or downloads them. Dynamic (the trailing true)
+		// because it can be turned off mid-game; turning it ON mid-game still has to rebuild the
+		// shared images, which the present path handles.
+		cfg::_enum<frame_generation_mode> frame_generation{ this, "Frame Generation", frame_generation_mode::off, true };
+
+		// Defaults to ON. This selects framegen's 3.1p shader family, which is materially cheaper
+		// than 3.1, and on a mobile GPU the full-quality path costs more than the frames it buys.
+		// Both families are extracted from the user's DLL already, so this switches between shaders
+		// that are both sitting in the cache.
+		cfg::_bool frame_generation_performance{ this, "Frame Generation Performance Mode", true, true };
+
+		// Optical-flow resolution, as a percentage of full. Lower is cheaper and blurrier in
+		// motion. Stored as a percentage rather than upstream's divisor because a slider from 25
+		// to 100 reads the right way round -- bigger is better quality -- and the conversion to
+		// framegen's fraction happens at the one call site.
+		cfg::uint<25, 100> frame_generation_flow_scale{ this, "Frame Generation Flow Scale", 100, true };
+
+		// Adaptive pacing: the refresh rate to aim for, in Hz, or 0 to use the fixed multiplier
+		// above. With a target set, framegen generates as many frames as it needs to hold that
+		// rate as the game's own frame rate moves, instead of always multiplying by the same
+		// number -- which is what makes the output steady when the game's is not.
+		cfg::uint<0, 480> frame_generation_target_rate{ this, "Frame Generation Target Rate", 0, true };
+
+		// Where the user's own Lossless Scaling install lives. Nothing ships the shaders -- they
+		// are THS's property -- so the interpolation shaders are read out of a legitimately
+		// purchased copy. Kept here so the shader cache can be rebuilt without asking again.
+		cfg::string frame_generation_dll_path{ this, "Frame Generation Lossless Path", "", true };
+#endif
+#ifdef __ANDROID__
 		// ARMSX3: absolute path to a RetroArch .slangp preset, used when
 		// Output Scaling Mode is "Shader chain (librashader)". Empty = no chain,
 		// which falls back to a plain blit rather than failing to present.
@@ -196,6 +228,12 @@ struct cfg_root : cfg::node
 		cfg::_bool record_with_overlays{ this, "Record With Overlays", true, true };
 		cfg::_bool disable_hardware_texel_remapping{ this, "Disable Hardware ColorSpace Remapping", false, true };
 		cfg::uint<0, 100> rcas_sharpening_intensity{ this, "FidelityFX CAS Sharpening Intensity", 50, true };
+		// SGSR's own, because it wants a range the FSR one cannot express. Qualcomm's
+		// edge_sharpness is 0..2 with 1.0 as their default, so 100 here is their default and 200
+		// the widened top end -- one percent is worth 0.01. Sharing rcas_sharpening_intensity
+		// would mean either clipping at half the useful range (it is clamped 0..100) or widening
+		// that clamp, which would silently change what every existing FSR config means.
+		cfg::uint<0, 200> sgsr_sharpening_intensity{ this, "SGSR Edge Sharpness", 100, true };
 
 		struct node_vk : cfg::node
 		{

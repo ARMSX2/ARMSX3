@@ -697,6 +697,34 @@ namespace np
 		}
 #endif
 
+#ifdef __ANDROID__
+		// Android has not let an app read a MAC address since Android 6 and enforces it hard
+		// from 10: SIOCGIFHWADDR above returns EPERM and /sys/class/net/*/address is
+		// unreadable. So that branch cannot succeed here, discover_ether_address() always
+		// failed, and np_handler answered "Failed to discover ethernet or ip address!" -- which
+		// leaves the network stack unidentified and blocks RPCN and any game that asks it who
+		// it is. Reported as issue #79, where the network settings looked correct and nothing
+		// in them could have helped.
+		//
+		// Derive one, exactly as the derive_mac_from_psid path at the top of this function
+		// does. Nothing validates this against real hardware: it identifies the console to the
+		// network stack and to peers, and a locally administered address is the right thing to
+		// present when the platform will not hand over the real one. Console PSID defaults to a
+		// per-install random value, so two users do not collide.
+		//
+		// Tried after the ioctl rather than instead of it, so a device or ROM that does answer
+		// still gets its own address.
+		{
+			const u128 psid = g_cfg.sys.console_psid;
+			memcpy(ether_address.data(), &psid, 6);
+			ether_address[0] &= 0xFE; // Not a multicast address
+			ether_address[0] |= 0x02; // Locally administered
+
+			nph_log.notice("Derived the Ethernet address from Console PSID: the platform does not expose one.");
+			return true;
+		}
+#endif
+
 		return false;
 	}
 
@@ -1636,6 +1664,32 @@ namespace np
 			presence_self.advertised = true;
 			rpcn->send_presence(presence_self.pr_com_id, presence_self.pr_title, presence_self.pr_status, presence_self.pr_comment, presence_self.pr_data);
 		}
+	}
+
+	void np_handler::rpcn_trophy_unlock(const SceNpCommunicationId& communication_id, s32 trophy_id, s64 timestamp)
+	{
+		if (!is_psn_active || g_cfg.net.psn_status != np_psn_status::psn_rpcn)
+			return;
+
+		std::lock_guard lock(mutex_rpcn);
+		if (!rpcn || !rpcn->is_authentified())
+			return;
+
+		rpcn->unlock_trophy(communication_id, trophy_id, timestamp);
+	}
+
+	std::vector<std::pair<s32, s64>> np_handler::rpcn_trophy_sync(
+		const SceNpCommunicationId& communication_id,
+		const std::vector<std::pair<s32, s64>>& local_unlocked)
+	{
+		if (!is_psn_active || g_cfg.net.psn_status != np_psn_status::psn_rpcn)
+			return {};
+
+		std::lock_guard lock(mutex_rpcn);
+		if (!rpcn || !rpcn->is_authentified())
+			return {};
+
+		return rpcn->sync_trophies(communication_id, local_unlocked);
 	}
 
 	template <typename T>

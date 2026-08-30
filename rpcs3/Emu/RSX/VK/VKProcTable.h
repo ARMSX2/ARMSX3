@@ -37,6 +37,16 @@ VK_FUNC(vkCmdDrawMultiIndexedEXT);
 // EXT_external_memory_host
 VK_FUNC(vkGetMemoryHostPointerPropertiesEXT);
 
+// EXT_extended_dynamic_state
+// Resolved unconditionally like everything else here, so these stay null when the extension was
+// not enabled. Only call them behind render_device::get_extended_dynamic_state_support().
+VK_FUNC(vkCmdSetPrimitiveTopologyEXT);
+VK_FUNC(vkCmdSetCullModeEXT);
+VK_FUNC(vkCmdSetFrontFaceEXT);
+VK_FUNC(vkCmdSetDepthTestEnableEXT);
+VK_FUNC(vkCmdSetDepthWriteEnableEXT);
+VK_FUNC(vkCmdSetDepthCompareOpEXT);
+
 #undef VK_FUNC
 #undef DECLARE_VK_FUNCTION_HEADER
 #undef DECLARE_VK_FUNCTION_BODY

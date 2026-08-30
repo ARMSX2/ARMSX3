@@ -153,6 +153,61 @@ fun FixesTab(state: MutableState<Settings>) {
             ) { apply(s.copy(ps3 = s.ps3.copy(debugConsoleMode = it))) }
         }
 
+        // What the emulated console tells games about itself.
+        //
+        // These are not app preferences: a multi-language disc picks its text from the console
+        // language, and region is what makes a title behave as its NTSC or PAL self. Option
+        // labels come from the core's own enum names (the same strings the All Core Settings
+        // screen shows) rather than 60 new translation keys -- they are proper nouns like
+        // "SCEA" and keyboard layout names, which are not usefully translated.
+        CollapsibleSection(str("adv.section.console")) {
+            SegmentedGridRow(
+                label = str("adv.consoleLanguage.label"),
+                options = com.armsx3.Rpcs3Settings.consoleLanguageNames(),
+                selectedIndex = s.ps3.consoleLanguage.coerceIn(0, com.armsx3.Rpcs3Settings.consoleLanguageNames().lastIndex),
+                columns = 2,
+                description = str("adv.consoleLanguage.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(consoleLanguage = it))) },
+            )
+            SettingsDivider()
+            SegmentedGridRow(
+                label = str("adv.consoleRegion.label"),
+                options = com.armsx3.Rpcs3Settings.consoleRegionNames(),
+                selectedIndex = s.ps3.consoleRegion.coerceIn(0, com.armsx3.Rpcs3Settings.consoleRegionNames().lastIndex),
+                columns = 3,
+                description = str("adv.consoleRegion.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(consoleRegion = it))) },
+            )
+            SettingsDivider()
+            SegmentedGridRow(
+                label = str("adv.keyboardType.label"),
+                options = com.armsx3.Rpcs3Settings.keyboardTypeNames(),
+                selectedIndex = s.ps3.keyboardType.coerceIn(0, com.armsx3.Rpcs3Settings.keyboardTypeNames().lastIndex),
+                columns = 1,
+                description = str("adv.keyboardType.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(keyboardType = it))) },
+            )
+            SettingsDivider()
+            SegmentedGridRow(
+                label = str("adv.dateFormat.label"),
+                options = listOf(
+                    str("adv.dateFormat.ymd"),
+                    str("adv.dateFormat.dmy"),
+                    str("adv.dateFormat.mdy"),
+                ),
+                selectedIndex = s.ps3.dateFormat.coerceIn(0, 2),
+                columns = 3,
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(dateFormat = it))) },
+            )
+            SettingsDivider()
+            SegmentedRow(
+                label = str("adv.timeFormat.label"),
+                options = listOf(str("adv.timeFormat.clock12"), str("adv.timeFormat.clock24")),
+                selectedIndex = s.ps3.timeFormat.coerceIn(0, 1),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(timeFormat = it))) },
+            )
+        }
+
         Spacer(Modifier.height(12.dp))
     }
 }

@@ -2,6 +2,8 @@
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
 #include "Emu/Audio/Cubeb/CubebBackend.h"
+#include "Emu/Cell/Modules/cellAudio.h"
+#include "Emu/RSX/VK/VKFrameGen.h"
 #include "Emu/Audio/Oboe/OboeBackend.h"
 #include "Emu/Audio/Null/NullAudioBackend.h"
 #include "Emu/Cell/PPUAnalyser.h"
@@ -17,6 +19,7 @@
 #include "Emu/Io/pad_config_types.h"
 #include "Emu/RSX/Null/NullGSRender.h"
 #include "Emu/RSX/Overlays/overlay_manager.h"
+#include "Emu/RSX/Overlays/overlay_perf_metrics.h"
 #include "Emu/RSX/Overlays/overlay_save_dialog.h"
 #include "Emu/RSX/Overlays/overlay_trophy_notification.h"
 #include "Emu/RSX/Overlays/overlay_utils.h"
@@ -28,6 +31,8 @@
 #include "Utilities/bin_patch.h"
 #include "Emu/localized_string_id.h"
 #include "Emu/system_config.h"
+#include "Emu/NP/rpcn_client.h"
+#include "Emu/NP/rpcn_config.h"
 #include "Emu/system_config_types.h"
 #include "Emu/system_progress.hpp"
 #include "Emu/system_utils.hpp"
@@ -37,6 +42,7 @@
 #include "Input/dualsense_pad_handler.h"
 #include "Input/hid_pad_handler.h"
 #include "Input/pad_thread.h"
+#include "Input/virtual_keyboard_handler.h"
 #include "Input/virtual_pad_handler.h"
 #include "Loader/ISO.h"
 #include "Loader/PSF.h"
@@ -113,6 +119,12 @@ static std::atomic<u64> g_native_window_size;
 // Set when losing the surface is what paused the emulator, so getting it back resumes only
 // the pause we caused.
 static std::atomic<bool> g_paused_by_surface_loss;
+
+// Bumped every time g_native_window starts pointing somewhere else. See
+// GSFrameBase::display_epoch: a new Surface with the same dimensions as the old one is otherwise
+// undetectable by the renderer, and boot-then-immediately-open-a-game is exactly when the
+// emulation SurfaceView is replaced under a swapchain that has already been built.
+static std::atomic<u64> g_native_window_epoch;
 extern std::string g_android_executable_dir;
 extern std::string g_android_config_dir;
 extern std::string g_android_cache_dir;
@@ -387,12 +399,26 @@ struct GraphicsFrame : GSFrameBase {
 
   ANativeWindow *getNativeWindow() const {
     ANativeWindow *result;
+
+    // Waiting here is normal for a moment at boot -- the RSX thread usually starts before the
+    // SurfaceView has been laid out. Waiting here FOREVER is not, and used to be completely
+    // silent: surfaceChanged is a one-shot, so a single missed delivery parked this loop for the
+    // rest of the session. The symptom was a black game area at 0% CPU with the log stopping dead
+    // just after Vulkan device creation and nothing at all to say why. Say so instead.
+    u32 waited_ms = 0;
+
     while ((result = g_native_window.load()) == nullptr) [[unlikely]] {
       if (Emu.IsStopped()) {
         return activeNativeWindow;
       }
 
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      waited_ms += 100;
+
+      if (waited_ms % 3000 == 0) {
+        rpcsx_android.error("Still waiting for a Surface after %u ms -- the renderer cannot start "
+                            "until surfaceChanged reaches native.", waited_ms);
+      }
     }
 
     if (result != activeNativeWindow) [[unlikely]] {
@@ -528,6 +554,8 @@ struct GraphicsFrame : GSFrameBase {
   }
 
   display_handle_t handle() const override { return getNativeWindow(); }
+
+  u64 display_epoch() const override { return g_native_window_epoch.load(); }
 
   bool can_consume_frame() const override { return false; }
 
@@ -2253,8 +2281,20 @@ static void setupCallbacks() {
       .handle_taskbar_progress = [](auto...) {},
       .init_kb_handler =
           [](auto...) {
-            ensure(g_fxo->init<KeyboardHandlerBase, NullKeyboardHandler>(
-                Emu.DeserialManager()));
+            // Was hardcoded to the null handler, so cellKb reported no keyboard
+            // attached no matter what the UI said. Games that want a keyboard --
+            // EverQuest Online Adventures, in-game text chat, the debug menus some
+            // titles put behind one -- saw nothing at all.
+            switch (g_cfg.io.keyboard.get()) {
+            case keyboard_handler::null:
+              ensure(g_fxo->init<KeyboardHandlerBase, NullKeyboardHandler>(
+                  Emu.DeserialManager()));
+              break;
+            case keyboard_handler::basic:
+              ensure(g_fxo->init<KeyboardHandlerBase, virtual_keyboard_handler>(
+                  Emu.DeserialManager()));
+              break;
+            }
           },
       .init_mouse_handler =
           [](auto...) {
@@ -2442,12 +2482,23 @@ static void setupCallbacks() {
 
 static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {
   u32 pclass_profile = 0;
-  pad->Init(CELL_PAD_STATUS_CONNECTED,
+
+  // Only player 1 starts CONNECTED. Ports 2-7 exist but report nothing plugged in until a device
+  // actually drives them (see the hot-plug in _rpcsx_overlayPadData).
+  //
+  // Claiming all seven ports for the virtual handler is what lets a second controller work at all,
+  // but "the port exists" and "a controller is plugged into it" are different things, and Init
+  // conflated them: every port came up CONNECTED, so games saw SEVEN pads permanently attached.
+  // Reported on LittleBigPlanet 2, which reacts to the connected count -- it behaved as though
+  // 4+ controllers were present at all times.
+  const u32 initial_status =
+      pad->m_player_id == 0 ? CELL_PAD_STATUS_CONNECTED : 0;
+
+  pad->Init(initial_status,
             CELL_PAD_CAPABILITY_PS3_CONFORMITY |
                 CELL_PAD_CAPABILITY_PRESS_MODE |
                 CELL_PAD_CAPABILITY_HP_ANALOG_STICK |
-                CELL_PAD_CAPABILITY_ACTUATOR //| CELL_PAD_CAPABILITY_SENSOR_MODE
-            ,
+                CELL_PAD_CAPABILITY_ACTUATOR | CELL_PAD_CAPABILITY_SENSOR_MODE,
             CELL_PAD_DEV_TYPE_STANDARD, CELL_PAD_PCLASS_TYPE_STANDARD,
             pclass_profile, 0, 0, 50);
 
@@ -2529,6 +2580,12 @@ extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,
     return false;
   }
 
+  // Hot-plug: this port is being driven, so report it connected from now on. Ports 2-7 start
+  // disconnected precisely so a game is not told about controllers nobody has.
+  if (!(pad->m_port_status & CELL_PAD_STATUS_CONNECTED)) {
+    pad->m_port_status |= CELL_PAD_STATUS_CONNECTED | CELL_PAD_STATUS_ASSIGN_CHANGES;
+  }
+
   const auto &pressure = g_virtual_pad_pressure[port];
 
   for (auto &btn : pad->m_buttons) {
@@ -2592,6 +2649,491 @@ extern "C" bool _rpcsx_overlayPadPressure(int port, const int *values,
   return true;
 }
 
+// One key transition from the UI, for the emulated PS3 keyboard.
+//
+// androidKeyCode is an android.view.KeyEvent keycode; unicode is what
+// KeyEvent.getUnicodeChar() produced for it (0 when the key has no character, and
+// the overlay consumer is the only thing that reads it -- cellKb derives its own
+// character from the raw code plus the live modifier state).
+//
+// Returns false when nothing consumed the key: no game running, the keyboard
+// handler set to Null, or a key the PS3 keyboard has no equivalent of. The caller
+// uses that to decide whether to let the key fall through to the front end.
+extern "C" bool _rpcsx_keyboardKey(int androidKeyCode, int unicode, bool pressed,
+                                   bool repeat) {
+  return handle_android_key(androidKeyCode, static_cast<char32_t>(unicode),
+                            pressed, repeat);
+}
+
+// ---------------------------------------------------------------------------
+// RPCN
+//
+// The core has had a complete RPCN client all along -- rpcn_client, rpcn_config and the
+// localized login/creation error strings are all compiled into this library. What it never
+// had on Android was a way in: "PSN status" was surfaced as a BOOLEAN that could only pick
+// Disconnected or Simulated, so np_psn_status::psn_rpcn had no writer anywhere in the app,
+// and there was no screen to enter an NPID, a password or a server. Online was not broken
+// here, it was unreachable.
+//
+// These are separate exports rather than extra parameters on an existing one for the reason
+// given above _rpcsx_setSocInfo: the core is dlopen()ed and updated independently of the JNI
+// glue, so widening a shipped export makes older glue call it with garbage.
+//
+// Every one of these blocks on the network. They are called from a background thread on the
+// Kotlin side; nothing here may run on the UI thread.
+
+// The config, as JSON, so one call carries the whole account rather than five.
+// Server descriptions are free text the user typed, so they can contain the two characters
+// that would otherwise end the field and hand the parser garbage.
+static std::string json_escape(std::string_view in) {
+  std::string out;
+  out.reserve(in.size());
+
+  for (const char c : in) {
+    switch (c) {
+    case '"': out += "\\\""; break;
+    case '\\': out += "\\\\"; break;
+    case '\n': out += "\\n"; break;
+    case '\r': out += "\\r"; break;
+    case '\t': out += "\\t"; break;
+    default:
+      // Anything below 0x20 is illegal unescaped in JSON; nothing here needs it.
+      if (static_cast<unsigned char>(c) >= 0x20) out += c;
+      break;
+    }
+  }
+
+  return out;
+}
+
+extern "C" const char *_rpcsx_rpcnGetConfig() {
+  static thread_local std::string result;
+
+  g_cfg_rpcn.load();
+
+  std::string hosts;
+  for (const auto &[desc, addr] : g_cfg_rpcn.get_hosts()) {
+    if (!hosts.empty()) hosts += ",";
+    fmt::append(hosts, R"({"desc":"%s","host":"%s"})", json_escape(desc),
+                json_escape(addr));
+  }
+
+  // hasPassword, not the password: cfg_rpcn stores it in PLAINTEXT in rpcn.yml
+  // (set_password is a straight from_string), so there is nothing safe to hand back and
+  // no reason to -- the UI only ever needs to know whether one is set.
+  result = fmt::format(
+      R"({"host":"%s","npid":"%s","hasPassword":%s,"hasToken":%s,"ipv6":%s,"hosts":[%s]})",
+      json_escape(g_cfg_rpcn.get_host()), json_escape(g_cfg_rpcn.get_npid()),
+      g_cfg_rpcn.get_password().empty() ? "false" : "true",
+      g_cfg_rpcn.get_token().empty() ? "false" : "true",
+      g_cfg_rpcn.get_ipv6_support() ? "true" : "false", hosts);
+
+  return result.c_str();
+}
+
+// Save whatever is non-empty. Empty means "leave alone", so the UI can save a host without
+// resending a password it never displayed.
+extern "C" void _rpcsx_rpcnSetConfig(std::string_view host, std::string_view npid,
+                                     std::string_view password, std::string_view token) {
+  g_cfg_rpcn.load();
+
+  if (!host.empty()) g_cfg_rpcn.set_host(host);
+  if (!npid.empty()) g_cfg_rpcn.set_npid(npid);
+  if (!password.empty()) g_cfg_rpcn.set_password(password);
+  if (!token.empty()) g_cfg_rpcn.set_token(token);
+
+  g_cfg_rpcn.save();
+}
+
+// Everything below reports failure as a human sentence, empty meaning success.
+//
+// Returning ErrorType/rpcn_state integers would mean a second copy of both enums on the
+// Kotlin side, kept in step by hand across a dlopen boundary that is explicitly allowed to
+// version-skew. The strings are the contract instead.
+static thread_local std::string s_rpcn_result;
+
+static const char *rpcn_ok() {
+  s_rpcn_result.clear();
+  return s_rpcn_result.c_str();
+}
+
+static const char *rpcn_fail(std::string message) {
+  s_rpcn_result = std::move(message);
+  rpcsx_android.error("RPCN: %s", s_rpcn_result);
+  return s_rpcn_result.c_str();
+}
+
+static std::string rpcn_describe(rpcn::ErrorType error) {
+  switch (error) {
+  case rpcn::ErrorType::NoError: return {};
+  case rpcn::ErrorType::CreationExistingUsername:
+    return "An account with that username already exists.";
+  case rpcn::ErrorType::CreationExistingEmail:
+    return "An account with that email address already exists.";
+  case rpcn::ErrorType::CreationBannedEmailProvider:
+    return "That email provider is not accepted by the server.";
+  case rpcn::ErrorType::CreationError:
+    return "The server refused to create the account.";
+  case rpcn::ErrorType::InvalidInput:
+    return "The server rejected those details. Usernames are 3-16 characters, "
+           "letters, numbers, - and _ only.";
+  case rpcn::ErrorType::TooSoon:
+    return "Too soon since the last attempt. Wait a few minutes and try again.";
+  case rpcn::ErrorType::LoginInvalidUsername: return "Unknown username.";
+  case rpcn::ErrorType::LoginInvalidPassword: return "Wrong password.";
+  case rpcn::ErrorType::LoginInvalidToken:
+    return "That token is not valid. Check the email, or send a new token.";
+  case rpcn::ErrorType::LoginAlreadyLoggedIn:
+    return "That account is already logged in somewhere else.";
+  case rpcn::ErrorType::LoginError: return "The server refused the login.";
+
+  // These three were reaching users as "Server error 1" and the like, which says nothing about
+  // what to do. Malformed in particular is OUR fault, not the server's: it means a required
+  // field was sent empty, which is exactly what Reset password did when the email box was
+  // hidden outside account creation.
+  case rpcn::ErrorType::Malformed:
+    return "The request was incomplete -- a required field was empty. This is a bug; please "
+           "report which button you pressed.";
+  case rpcn::ErrorType::Invalid:
+    return "The server rejected that request as out of order. Try Test sign-in first.";
+  default: return fmt::format("Unexpected server error %d.", static_cast<int>(error));
+  }
+}
+
+// What the account screen shows on entry, so "did it remember me?" has an answer without
+// pressing anything.
+//
+// RPCN has no persistent session: every connection re-authenticates from the saved
+// credentials, and the client is destroyed as soon as the last shared_ptr to it goes. So
+// "logged in" is not a thing that survives a restart -- the ACCOUNT is what persists, and
+// that is what this reports. Live connection state is included when a client happens to
+// exist (a game is online), via peek_instance so that asking does not create one.
+extern "C" const char *_rpcsx_rpcnStatus() {
+  static thread_local std::string result;
+
+  g_cfg_rpcn.load();
+
+  const std::string npid = g_cfg_rpcn.get_npid();
+  const bool configured = !npid.empty() && !g_cfg_rpcn.get_password().empty();
+
+  bool connected = false, authentified = false;
+  std::string online_name;
+
+  if (const auto rpcn = rpcn::rpcn_client::peek_instance()) {
+    connected = rpcn->is_connected();
+    authentified = rpcn->is_authentified();
+    if (authentified) online_name = rpcn->get_online_name();
+  }
+
+  result = fmt::format(
+      R"({"configured":%s,"npid":"%s","connected":%s,"authentified":%s,"onlineName":"%s"})",
+      configured ? "true" : "false", json_escape(npid),
+      connected ? "true" : "false", authentified ? "true" : "false",
+      json_escape(online_name));
+
+  return result.c_str();
+}
+
+// ---- Saved servers -------------------------------------------------------------------
+//
+// The list already exists in the core (cfg_rpcn "Hosts", "desc|host" entries joined by
+// "|||") and get_hosts() restores the default whenever the list ends up empty, so this is
+// a view onto it rather than a second store. add_host/del_host do NOT save, so every one
+// of these has to.
+
+extern "C" const char *_rpcsx_rpcnAddHost(std::string_view desc, std::string_view host) {
+  g_cfg_rpcn.load();
+
+  const std::string s_desc{desc}, s_host{host};
+
+  if (s_desc.empty() || s_host.empty()) {
+    return rpcn_fail("A saved server needs both a name and an address.");
+  }
+
+  if (!g_cfg_rpcn.add_host(s_desc, s_host)) {
+    return rpcn_fail("That server is already saved.");
+  }
+
+  g_cfg_rpcn.save();
+  return rpcn_ok();
+}
+
+extern "C" const char *_rpcsx_rpcnDelHost(std::string_view desc, std::string_view host) {
+  g_cfg_rpcn.load();
+
+  const std::string s_desc{desc}, s_host{host};
+
+  // del_host returns true without removing anything for the official server, which is
+  // deliberate upstream -- it is what stops the list being emptied of the one address that
+  // is known to work. Report that rather than claiming a delete that did not happen.
+  if (s_desc == "Official RPCN Server" && s_host == "np.rpcs3.net") {
+    return rpcn_fail("The official server cannot be removed.");
+  }
+
+  if (!g_cfg_rpcn.del_host(s_desc, s_host)) {
+    return rpcn_fail("That server is not in the list.");
+  }
+
+  g_cfg_rpcn.save();
+  return rpcn_ok();
+}
+
+// Back to the shipped list and the official address, for when a custom server has been
+// typed over the top of it and the working one is no longer to hand.
+extern "C" void _rpcsx_rpcnResetHosts() {
+  g_cfg_rpcn.load();
+  g_cfg_rpcn.hosts.from_default();
+  g_cfg_rpcn.set_host("np.rpcs3.net");
+  g_cfg_rpcn.save();
+}
+
+extern "C" void _rpcsx_rpcnSetIpv6(bool enabled) {
+  g_cfg_rpcn.load();
+  g_cfg_rpcn.set_ipv6_support(enabled);
+  g_cfg_rpcn.save();
+}
+
+// Connect first; a connection failure has to read differently from an operation failure,
+// because one is the user's network and the other is their input.
+static const char *rpcn_with_connection(
+    const std::function<rpcn::ErrorType(rpcn::rpcn_client &)> &op) {
+  const auto rpcn = rpcn::rpcn_client::get_instance(0);
+
+  if (!rpcn) {
+    return rpcn_fail("Could not create the RPCN client.");
+  }
+
+  if (const auto state = rpcn->wait_for_connection();
+      state != rpcn::rpcn_state::failure_no_failure) {
+    return rpcn_fail(fmt::format("Could not reach the RPCN server: %s",
+                                 rpcn::rpcn_state_to_string(state)));
+  }
+
+  if (auto message = rpcn_describe(op(*rpcn)); !message.empty()) {
+    return rpcn_fail(std::move(message));
+  }
+
+  return rpcn_ok();
+}
+
+// Friend operations need an AUTHENTICATED session, not merely a connected one.
+//
+// rpcn_with_connection is enough for account creation, password resets and token resends --
+// those are what the server accepts from an anonymous connection. Adding a friend is not: the
+// server has to know who is asking. So sign in with the saved credentials first, which is also
+// what makes this usable outside a running game, where nothing else would have logged in.
+//
+// wait_for_authentified() is called only AFTER login(), because it blocks forever otherwise --
+// there is nothing in flight for it to wait on.
+static const char *rpcn_with_auth(
+    const std::function<bool(rpcn::rpcn_client &)> &op) {
+  const auto rpcn = rpcn::rpcn_client::get_instance(0);
+
+  if (!rpcn) {
+    return rpcn_fail("Could not create the RPCN client.");
+  }
+
+  if (const auto state = rpcn->wait_for_connection();
+      state != rpcn::rpcn_state::failure_no_failure) {
+    return rpcn_fail(fmt::format("Could not reach the RPCN server: %s",
+                                 rpcn::rpcn_state_to_string(state)));
+  }
+
+  if (!rpcn->is_authentified()) {
+    // The client signs itself in from rpcn.yml -- connect() and login() are both private, and
+    // its own thread drives them. So there is nothing to call here but the wait, and no
+    // credentials to pass: this only reports whether that worked.
+    g_cfg_rpcn.load();
+
+    if (g_cfg_rpcn.get_npid().empty() || g_cfg_rpcn.get_password().empty()) {
+      return rpcn_fail("Sign in to RPCN first.");
+    }
+
+    if (const auto state = rpcn->wait_for_authentified();
+        state != rpcn::rpcn_state::failure_no_failure) {
+      return rpcn_fail(fmt::format("RPCN sign-in failed: %s",
+                                   rpcn::rpcn_state_to_string(state)));
+    }
+  }
+
+  if (!op(*rpcn)) {
+    return rpcn_fail("The server rejected that request.");
+  }
+
+  return rpcn_ok();
+}
+
+extern "C" const char *_rpcsx_rpcnAddFriend(std::string_view npid) {
+  const std::string name{npid};
+
+  if (name.empty()) {
+    return rpcn_fail("Enter a username to add.");
+  }
+
+  return rpcn_with_auth([&](rpcn::rpcn_client &client) {
+    const auto err = client.add_friend(name);
+
+    // add_friend returns an optional error rather than a bool: empty means it went through.
+    if (!err) {
+      return true;
+    }
+
+    return *err == rpcn::ErrorType::NoError;
+  });
+}
+
+extern "C" const char *_rpcsx_rpcnRemoveFriend(std::string_view npid) {
+  const std::string name{npid};
+
+  if (name.empty()) {
+    return rpcn_fail("Enter a username to remove.");
+  }
+
+  return rpcn_with_auth([&](rpcn::rpcn_client &client) {
+    return client.remove_friend(name);
+  });
+}
+
+// The friend list as JSON, or an empty array when not signed in.
+//
+// Deliberately does NOT sign in on its own: this is polled to draw a list, and a screen that
+// silently opens a network session just by being looked at is not what anyone expects. Adding a
+// friend is an explicit action and can afford to authenticate; showing a list cannot.
+extern "C" const char *_rpcsx_rpcnGetFriends() {
+  static thread_local std::string result;
+
+  const auto rpcn = rpcn::rpcn_client::get_instance(0);
+
+  if (!rpcn || !rpcn->is_authentified()) {
+    result = "[]";
+    return result.c_str();
+  }
+
+  std::string entries;
+
+  for (u32 i = 0, count = rpcn->get_num_friends(); i < count; i++) {
+    const auto presence = rpcn->get_friend_presence_by_index(i);
+
+    if (!presence) {
+      continue;
+    }
+
+    if (!entries.empty()) entries += ",";
+
+    fmt::append(entries, R"({"npid":"%s","online":%s})",
+                json_escape(presence->first),
+                presence->second.online ? "true" : "false");
+  }
+
+  result = fmt::format("[%s]", entries);
+  return result.c_str();
+}
+
+extern "C" const char *_rpcsx_rpcnCreateAccount(std::string_view npid,
+                                                std::string_view password,
+                                                std::string_view onlineName,
+                                                std::string_view email) {
+  // Same default avatar the desktop dialog sends; the server requires the field.
+  static constexpr std::string_view avatar =
+      "https://rpcs3.net/cdn/netplay/DefaultAvatar.png";
+
+  const std::string s_npid{npid}, s_pass{password}, s_name{onlineName}, s_email{email};
+
+  return rpcn_with_connection([&](rpcn::rpcn_client &client) {
+    const auto err = client.create_user(s_npid, s_pass, s_name, avatar, s_email);
+
+    if (err == rpcn::ErrorType::NoError) {
+      // Save on success, as the desktop dialog does: the token that arrives by email is
+      // redeemed against these, and retyping them is a needless way to get it wrong.
+      g_cfg_rpcn.load();
+      g_cfg_rpcn.set_npid(s_npid);
+      g_cfg_rpcn.set_password(s_pass);
+      g_cfg_rpcn.save();
+    }
+
+    return err;
+  });
+}
+
+extern "C" const char *_rpcsx_rpcnResendToken(std::string_view npid,
+                                              std::string_view password) {
+  const std::string s_npid{npid}, s_pass{password};
+
+  return rpcn_with_connection([&](rpcn::rpcn_client &client) {
+    return client.resend_token(s_npid, s_pass);
+  });
+}
+
+extern "C" const char *_rpcsx_rpcnSendResetToken(std::string_view npid,
+                                                 std::string_view email) {
+  const std::string s_npid{npid}, s_email{email};
+
+  return rpcn_with_connection([&](rpcn::rpcn_client &client) {
+    return client.send_reset_token(s_npid, s_email);
+  });
+}
+
+extern "C" const char *_rpcsx_rpcnResetPassword(std::string_view npid,
+                                                std::string_view token,
+                                                std::string_view password) {
+  const std::string s_npid{npid}, s_token{token}, s_pass{password};
+
+  return rpcn_with_connection([&](rpcn::rpcn_client &client) {
+    const auto err = client.reset_password(s_npid, s_token, s_pass);
+
+    if (err == rpcn::ErrorType::NoError) {
+      g_cfg_rpcn.load();
+      g_cfg_rpcn.set_password(s_pass);
+      g_cfg_rpcn.save();
+    }
+
+    return err;
+  });
+}
+
+// Connect and authenticate with the saved account, so "is my account set up" can be
+// answered here instead of by booting a game and guessing.
+//
+// wait_for_authentified is the public path -- login() itself is private -- but it is only
+// half of it, and the half that hangs on its own. See below.
+extern "C" const char *_rpcsx_rpcnTestLogin() {
+  g_cfg_rpcn.load();
+
+  if (g_cfg_rpcn.get_npid().empty() || g_cfg_rpcn.get_password().empty()) {
+    return rpcn_fail("No account set up yet. Create one, or enter an existing username "
+                     "and password.");
+  }
+
+  // get_instance's check_config flag does NOT return an error -- it calls
+  // fmt::throw_exception, which on a non-guest thread is a fatal abort. Passing it from a
+  // settings button meant tapping "Test sign-in" with PSN status not yet set to RPCN killed
+  // the process. Desktop passes the default (false) for exactly this reason.
+  const auto rpcn = rpcn::rpcn_client::get_instance(0);
+
+  if (!rpcn) {
+    return rpcn_fail("Could not create the RPCN client.");
+  }
+
+  // Connect FIRST. rpcn_thread's state machine only acts on want_conn while disconnected:
+  // wait_for_authentified sets want_auth alone, so on a fresh client the thread wakes, sees
+  // no connection request, breaks back to its semaphore and never releases sem_authentified.
+  // The call then blocks forever with nothing in the log after "Loading RPCN config" --
+  // which is exactly what it did. np_handler does these two in this order for this reason.
+  if (const auto state = rpcn->wait_for_connection();
+      state != rpcn::rpcn_state::failure_no_failure) {
+    return rpcn_fail(fmt::format("Could not reach the RPCN server: %s",
+                                 rpcn::rpcn_state_to_string(state)));
+  }
+
+  if (const auto state = rpcn->wait_for_authentified();
+      state != rpcn::rpcn_state::failure_no_failure) {
+    return rpcn_fail(fmt::format("Sign-in failed: %s",
+                                 rpcn::rpcn_state_to_string(state)));
+  }
+
+  return rpcn_ok();
+}
+
 // Hand the core Android's exact SoC identity. Deliberately a separate export
 // rather than an extra _rpcsx_initialize parameter: the core is dlopen()ed and
 // can be updated independently of the JNI glue that calls it, so changing an
@@ -2652,12 +3194,46 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
                    stats.avail_free / 1000000.);
     }
 
-    // preserve old log file
-    if (std::filesystem::exists(fs::get_log_dir() + "RPCSX.log")) {
+    // Preserve previous logs.
+    //
+    // There used to be exactly one: RPCSX.log became RPCSX.old.log and the previous old was
+    // deleted. That loses the log people are trying to send, reliably, because of how they send
+    // it -- play, stop, relaunch the app to reach the file, and the relaunch rotates the session
+    // they wanted into .old; relaunch once more (to find it, to share it, because the launcher
+    // restored the app) and it is gone. Three separate captures have been lost this way, and in
+    // two of them what arrived was a 47-line log that ended before the game had booted.
+    //
+    // Two defences, because generations alone would not have saved those:
+    //
+    //  1. A session that produced almost nothing does not get a slot. The logs that did the
+    //     damage were boot-only -- a few KB, stopping within a second of launch -- and pushing
+    //     one of those down the chain is what evicted the real capture. Anything below the
+    //     threshold is simply discarded. A silenced-logging session still writes far more than
+    //     this (~190 KB for a 29-minute one), so "Silence All Logs" does not trip it.
+    //
+    //  2. Three generations rather than one, so an ordinary mistake costs nothing.
+    {
       std::error_code ec;
-      std::filesystem::remove(fs::get_log_dir() + "RPCSX.old.log", ec);
-      std::filesystem::rename(fs::get_log_dir() + "RPCSX.log",
-                              fs::get_log_dir() + "RPCSX.old.log", ec);
+      const std::string dir = fs::get_log_dir();
+      const std::string current = dir + "RPCSX.log";
+
+      // Boot-only logs stop within a second of launch and run to a few KB. A real session --
+      // even one with logging silenced immediately -- is orders of magnitude larger.
+      constexpr std::uintmax_t k_worth_keeping = 32u * 1024u;
+
+      const bool exists = std::filesystem::exists(current, ec);
+      const std::uintmax_t size = exists ? std::filesystem::file_size(current, ec) : 0u;
+
+      if (exists && size >= k_worth_keeping) {
+        // Oldest out, everything down one.
+        std::filesystem::remove(dir + "RPCSX.old3.log", ec);
+        std::filesystem::rename(dir + "RPCSX.old2.log", dir + "RPCSX.old3.log", ec);
+        std::filesystem::rename(dir + "RPCSX.old.log", dir + "RPCSX.old2.log", ec);
+        std::filesystem::rename(current, dir + "RPCSX.old.log", ec);
+      } else if (exists) {
+        // Nothing in it worth a slot, and keeping it would cost the oldest real log.
+        std::filesystem::remove(current, ec);
+      }
     }
 
     // Limit log size to ~25% of free space
@@ -2774,6 +3350,23 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
 
   g_cfg_input.player1.handler.set(pad_handler::virtual_pad);
   g_cfg_input.player1.device.from_string("Virtual");
+
+  // Ports 2-7 as well, here at startup.
+  //
+  // The same loop already existed, but only inside _rpcsx_usbDeviceEvent -- so it ran only when a
+  // USB device was plugged or unplugged. A second controller on a phone is normally BLUETOOTH,
+  // which never produces that event, so ports 2-7 stayed Null forever and a second pad simply did
+  // not exist in the core. Per-player button mapping looked fine because the UI stores those
+  // bindings regardless; there was just no pad for them to drive. Reported against Tekken 6.
+  //
+  // The app is the input source for every port either way: it reads Android input events itself
+  // and pushes whole-pad snapshots through _rpcsx_overlayPadData, so no core-side HID handler is
+  // wanted here.
+  for (usz i = 1; i < g_cfg_input.player.size(); i++) {
+    g_cfg_input.player[i]->handler.set(pad_handler::virtual_pad);
+    g_cfg_input.player[i]->device.from_string("Virtual");
+  }
+
   g_cfg_input.save("", g_cfg_input_configs.default_config);
 
   // LLVM JIT target.
@@ -2920,15 +3513,29 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
   // Kill() is idempotent and returns quickly when already stopped. The bound is generous
   // because a real teardown joins the RSX and SPU threads and flushes caches; past it we
   // boot anyway and let BootGame report a normal error rather than hanging the UI.
-  if (!Emu.IsStopped()) {
+  // IsStopped(true), not IsStopped().
+  //
+  // The default overload is `m_state <= system_state::stopping`, so it answers TRUE while the
+  // previous VM is still stopping -- and loading. This whole block was therefore skipped exactly
+  // when it was needed: Kill() signals the threads and hands the actual joining to a detached
+  // "Emulation Join Thread", the state reaches stopping immediately, and the guard read that as
+  // stopped. Observed on device as a boot starting three seconds into a teardown that never
+  // finished, with the join thread still waiting on an SPU interrupt thread seventeen seconds
+  // later, seven SPUs parked in EXIT|w|G-PAUSE, and the app frozen on the last frame of the
+  // previous game. There was no "previous VM still running" line in the log, because the check
+  // passed.
+  //
+  // The `true` overload requires system_state::stopped, which is only reached once that join
+  // thread has run to completion.
+  if (!Emu.IsStopped(true)) {
     rpcsx_android.notice("boot: previous VM still running, stopping it first");
     Emu.Kill();
 
-    for (int waited = 0; !Emu.IsStopped() && waited < 10000; waited += 20) {
+    for (int waited = 0; !Emu.IsStopped(true) && waited < 10000; waited += 20) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
 
-    if (!Emu.IsStopped()) {
+    if (!Emu.IsStopped(true)) {
       rpcsx_android.error("boot: previous VM did not stop in time, booting anyway");
     }
   }
@@ -2951,6 +3558,65 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
     if (auto eboot = locateEbootPath(path); !eboot.empty() && fs::is_file(eboot)) {
       rpcsx_android.notice("boot: resolved directory '%s' to '%s'", path, eboot);
       path = eboot;
+    }
+  }
+
+  // Say so, loudly, when the core is configured in a way known to hang.
+  //
+  // These are reachable only through raw core overrides -- there is no UI for them -- so they
+  // are set deliberately, usually chasing performance, and then forgotten. Nothing reported
+  // them, which meant a log from an affected user looked identical to a log from a healthy one
+  // and the setting had to be spotted by eye in the config dump.
+  //
+  // PPU Threads is the one that actually bites: the PS3 has two PPU hardware threads and
+  // upstream's own config comment says "must be 2". With 1, SPURS does not get the concurrent
+  // PPU progress it expects, and its task modules fail validation -- the SPU executes its own
+  // HALT and the graphics pipeline stops. It presents as an intermittent freeze after 10-30
+  // minutes, on hardware where the same build with the default is fine.
+  if (const u32 ppu_threads = g_cfg.core.ppu_threads; ppu_threads != 2) {
+    rpcsx_android.error(
+        "boot: PPU Threads is %u, not 2. The PS3 has two PPU hardware threads and this must be "
+        "2; other values are known to hang SPURS titles intermittently. Clear this raw core "
+        "override before reporting a freeze.",
+        ppu_threads);
+  }
+
+  // Prove the content is actually READABLE before handing it to the core.
+  //
+  // A game the app can see but cannot read is the failure mode that costs the most time,
+  // because nothing about it looks like a permissions problem. Without All files access the
+  // library scanner falls back to SAF document trees, and a title found that way has no
+  // filesystem path the core can open -- but it still appears in the library, still launches,
+  // and then stalls on its first loading screen when the reads it needs never arrive. The same
+  // shape appears when the grant is revoked after a folder was added, or when a disc sits on
+  // storage the app was never given.
+  //
+  // Two offsets, because size alone proves nothing: a directory entry can be listed with its
+  // real size and still refuse to deliver bytes. The second read is at the ISO descriptor, the
+  // first place any disc is read for real.
+  if (fs::is_file(path)) {
+    fs::file probe(path);
+    char byte = 0;
+
+    if (!probe) {
+      rpcsx_android.error(
+          "boot: '%s' cannot be opened for reading. If it lives outside the emulator folder, "
+          "grant All files access, or move it into the games directory.",
+          path);
+      return static_cast<int>(game_boot_result::invalid_file_or_folder);
+    }
+
+    const bool head_ok = probe.read_at(0, &byte, 1) == 1;
+    const u64 sz = probe.size();
+    const bool body_ok = sz <= 32769 || probe.read_at(32769, &byte, 1) == 1;
+
+    if (!head_ok || !body_ok) {
+      rpcsx_android.error(
+          "boot: '%s' opened but reads returned nothing (size=%d, head=%d, body=%d). The file is "
+          "visible but its contents are not reachable -- typically storage the app was not "
+          "granted. Grant All files access, or move the game into the games directory.",
+          path, static_cast<int>(sz), head_ok ? 1 : 0, body_ok ? 1 : 0);
+      return static_cast<int>(game_boot_result::invalid_file_or_folder);
     }
   }
 
@@ -3248,6 +3914,45 @@ extern "C" bool _rpcsx_loadStateFromSlot(unsigned int slot) {
 
 extern "C" bool _rpcsx_hasStateInSlot(unsigned int slot) {
   return !armsx3_slot_find(Emu.GetTitleID(), slot).empty();
+}
+
+// Delete a slot, both the state and its thumbnail.
+//
+// There was no delete entry point at all, so the picker deleted the string it got back from
+// getGamePathSlot -- which answers OCCUPANCY, and whose own declaration says "Not
+// getGamePathSlot, which answers a title id". java.io.File("SHVH06660").delete() removes
+// nothing and returns false, which is issue #80: a state that could not be deleted, every time,
+// with the UI correctly reporting that it had failed.
+//
+// Resolved through armsx3_slot_find rather than a built path, for the reason that function
+// exists: the extension depends on which build wrote the state (.zst today, .gz and bare
+// historically) and guessing it is how this went wrong in the first place.
+extern "C" bool _rpcsx_deleteStateFromSlot(unsigned int slot) {
+  const std::string title = Emu.GetTitleID();
+  const std::string path = armsx3_slot_find(title, slot);
+
+  if (path.empty()) {
+    rpcsx_android.error("deleteState: slot %u holds nothing", slot);
+    return false;
+  }
+
+  if (!fs::remove_file(path)) {
+    rpcsx_android.error("deleteState: slot %u, could not remove '%s' (%s)", slot,
+                        path, fs::g_tls_error);
+    return false;
+  }
+
+  // Best effort: a slot with no thumbnail is normal, and a state that is gone while its
+  // thumbnail lingers would still show the slot as occupied in some views.
+  const std::string thumb =
+      armsx3_slot_dir(title) + "slot" + std::to_string(slot) + ".thumb";
+
+  if (fs::is_file(thumb)) {
+    fs::remove_file(thumb);
+  }
+
+  rpcsx_android.notice("deleteState: slot %u removed '%s'", slot, path);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -3631,6 +4336,7 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
     auto prevWindow = g_native_window.exchange(nullptr);
     if (prevWindow != nullptr) {
       ANativeWindow_release(prevWindow);
+      g_native_window_epoch.fetch_add(1);
     }
 
     // get_pad_thread() defaults to relaxed=false, which is
@@ -3691,6 +4397,15 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
       ANativeWindow_release(prevWindow);
     }
 
+    // Only when it really is a different window. Rotation keeps the same one (the activity
+    // handles orientation itself), and bumping on every surfaceChanged would rebuild the
+    // swapchain for nothing on every rotation.
+    if (prevWindow != newWindow) {
+      g_native_window_epoch.fetch_add(1);
+      rpcsx_android.notice("native window replaced (%p -> %p), swapchain will be rebuilt",
+                           prevWindow, newWindow);
+    }
+
     if (event == 0 && g_paused_by_surface_loss && Emu.IsPaused()) {
       g_paused_by_surface_loss = false;
       Emu.Resume();
@@ -3698,6 +4413,73 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
   }
 
   return true;
+}
+
+// SIXAXIS motion, straight from the phone's sensors.
+//
+// The pad has always carried m_sensors, but they were left at the DEFAULT_MOTION_*
+// neutrals and the SENSOR_MODE capability bit was commented out, so a game that asked
+// whether this pad could report motion was told no. Games that read the sticks were
+// unaffected, which is why the gyro appeared to work in some titles and not at all in
+// the ones that actually use SIXAXIS -- Ratchet & Clank ToD's flight sections among them.
+//
+// Values are the PS3's own 10-bit range, 0..1023 with 512 at rest; the caller does the
+// scaling because it is the side that knows the device orientation.
+extern "C" void _rpcsx_setPadSensor(int port, int x, int y, int z, int g) {
+  std::lock_guard lock(g_virtual_pad_mutex);
+
+  if (port < 0 || static_cast<usz>(port) >= g_virtual_pads.size()) {
+    return;
+  }
+
+  const auto &pad = g_virtual_pads[port];
+
+  if (!pad) {
+    return;
+  }
+
+  const auto clamp10 = [](int v) {
+    return static_cast<u16>(std::clamp(v, 0, 1023));
+  };
+
+  pad->m_sensors[0].m_value = clamp10(x);
+  pad->m_sensors[1].m_value = clamp10(y);
+  pad->m_sensors[2].m_value = clamp10(z);
+  pad->m_sensors[3].m_value = clamp10(g);
+}
+
+// What the game is currently asking the rumble motors to do, packed as
+// (large << 8) | small, both 0..255.
+//
+// Polled rather than pushed: the guest writes these through cellPadSetActDirect
+// whenever it likes, and there is no notification to hook. The caller reads it on a
+// timer and drives the phone's vibrator. Returns 0 when nothing is running, so a
+// caller that keeps polling after the game stops simply sees silence.
+// Device temperatures, pushed from the app layer -- see the note in overlay_perf_metrics.h for
+// why discovery lives there and not here. Values are degrees Celsius, or the 'none' sentinel.
+extern "C" void _rpcsx_setThermals(float cpu, float gpu, float battery, bool show) {
+  rsx::overlays::thermals::g_cpu = cpu;
+  rsx::overlays::thermals::g_gpu = gpu;
+  rsx::overlays::thermals::g_battery = battery;
+  rsx::overlays::thermals::g_show = show;
+}
+
+extern "C" int _rpcsx_getPadRumble(int port) {
+  std::lock_guard lock(g_virtual_pad_mutex);
+
+  if (port < 0 || static_cast<usz>(port) >= g_virtual_pads.size()) {
+    return 0;
+  }
+
+  const auto &pad = g_virtual_pads[port];
+
+  if (!pad || pad->m_vibrate_motors.size() < 2) {
+    return 0;
+  }
+
+  const int large = pad->m_vibrate_motors[0].value;
+  const int small = pad->m_vibrate_motors[1].value;
+  return (large << 8) | small;
 }
 
 extern "C" bool _rpcsx_usbDeviceEvent(int fd, int vendorId, int productId,
@@ -3974,8 +4756,21 @@ static bool installPkg(JNIEnv *env, std::vector<fs::file> &&files,
   }};
 
   package_install_result result = {};
-  named_thread worker("PKG Installer", [&readers, &result, &bootable_paths] {
+
+  // Publishes `result`, which is NOT safe to read without it.
+  //
+  // package_install_result is an enum followed by three std::strings, and the worker assigns
+  // the whole struct at once. Struct assignment writes members in order, so `error` lands
+  // BEFORE the strings -- which meant the poll below could see a failure and then read
+  // version.expected while it was still being constructed, i.e. a std::string mid-assignment.
+  // That is a torn pointer, and reading it is a segfault, not a wrong message. The window is
+  // structural rather than theoretical: the failure branch reads exactly the members written
+  // last. Acquire/release makes the strings visible before `finished` ever reads true.
+  std::atomic<bool> finished{false};
+
+  named_thread worker("PKG Installer", [&readers, &result, &bootable_paths, &finished] {
     result = package_reader::extract_data(readers, bootable_paths);
+    finished.store(true, std::memory_order_release);
     return result.error == package_install_result::error_type::no_error;
   });
 
@@ -3988,10 +4783,38 @@ static bool installPkg(JNIEnv *env, std::vector<fs::file> &&files,
   const jlong maxProgress = 10000;
 
   while (true) {
+    // Read once per pass: everything below depends on extraction having finished, and on
+    // `result` being fully published when it has.
+    const bool done = finished.load(std::memory_order_acquire);
+
     std::uint64_t totalProgress = 0;
     for (auto &reader : readers) {
-      if (result.error != package_install_result::error_type::no_error) {
-        progress.failure("Installation failed");
+      if (done && result.error != package_install_result::error_type::no_error) {
+        // Say WHICH failure. app_version is not a crash and not a bad file: it is the
+        // installer correctly refusing a game update when the base game is not installed
+        // yet, or when the update does not match the version that is. Desktop RPCS3 puts
+        // that in a dialog; here every cause collapsed into "Installation failed", so a
+        // legitimate refusal was indistinguishable from a broken package -- which is how
+        // a Tekken Tag 2 update ended up being reported as an emulator bug.
+        if (result.error == package_install_result::error_type::app_version) {
+          std::string msg = "Update cannot be installed: ";
+
+          if (result.version.expected.empty()) {
+            msg += "the base game is not installed yet. Install the game first, then the "
+                   "update.";
+          } else {
+            msg += "this update needs game version " + result.version.expected +
+                   ", but version " +
+                   (result.version.installed.empty() ? std::string("none")
+                                                     : result.version.installed) +
+                   " is installed.";
+          }
+
+          progress.failure(msg);
+        } else {
+          progress.failure("Installation failed");
+        }
+
         for (package_reader &reader : readers) {
           reader.abort_extract();
         }
@@ -4001,7 +4824,9 @@ static bool installPkg(JNIEnv *env, std::vector<fs::file> &&files,
       totalProgress += reader.get_progress(maxProgress);
     }
 
-    if (totalProgress == maxProgress * readers.size()) {
+    // Finishing is what the worker says, not what the progress counters add up to. A reader
+    // that stops short would otherwise spin here forever.
+    if (done || totalProgress == maxProgress * readers.size()) {
       break;
     }
 
@@ -4667,6 +5492,26 @@ extern "C" void _rpcsx_settingsEndBatch() {
   }
 }
 
+// Import the Lossless Scaling shaders from a file the user chose.
+//
+// The path is a real filesystem path, not a content:// URI -- the Kotlin side copies the picked
+// file into app storage first, because the extraction walks the PE with ordinary file IO.
+//
+// Returns the number of shaders extracted, negative on failure. The message is left where
+// frameGenShaderError can retrieve it, so the settings screen can say what actually went wrong
+// rather than "import failed".
+extern "C" int _rpcsx_frameGenImportShaders(std::string_view path) {
+  return vk::frame_gen::import_shaders(std::string(path));
+}
+
+extern "C" int _rpcsx_frameGenShaderCount() {
+  return vk::frame_gen::shader_count();
+}
+
+extern "C" const char *_rpcsx_frameGenShaderError() {
+  return vk::frame_gen::last_error();
+}
+
 extern "C" bool _rpcsx_settingsSet(std::string_view path,
                                    std::string_view valueString) {
   auto root = find_cfg_node(&g_cfg, path);
@@ -4748,6 +5593,19 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
   } else if (path.starts_with("Video@@Debug overlay") ||
              path.starts_with("Miscellaneous@@Debug overlay")) {
     rsx::overlays::reset_debug_overlay();
+  } else if (path.starts_with("Audio@@")) {
+    // Same shape of gap as the overlays above, in the audio config.
+    //
+    // audio::configure_audio() is the only thing that turns a changed audio node into a rebuilt
+    // backend, and its only caller is main_application.cpp -- Qt, which this build excludes. So
+    // writing Audio Renderer here changed the YAML and nothing else: the running backend stayed
+    // whatever it was until the next boot. Anyone told to "try a different audio backend" was
+    // running a null experiment unless they happened to fully relaunch the game, which is how
+    // issue #73 collected three backends' worth of identical results.
+    //
+    // It re-reads the config and only acts when something it cares about actually differs, so
+    // the ~200 settings applyTo pushes at boot do not each rebuild the stream.
+    audio::configure_audio();
   }
   return true;
 }

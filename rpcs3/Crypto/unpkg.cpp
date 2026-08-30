@@ -2,6 +2,7 @@
 #include "aes.h"
 #include "sha1.h"
 #include "key_vault.h"
+#include "util/asm.hpp"
 #include "util/logs.hpp"
 #include "Utilities/StrUtil.h"
 #include "Utilities/Thread.h"
@@ -190,7 +191,8 @@ bool package_reader::read_header()
 		m_file = fs::make_gather(std::move(filelist));
 	}
 
-	if (m_header.data_size + m_header.data_offset > m_header.pkg_size)
+	if ((m_header.data_size + m_header.data_offset) > m_header.pkg_size ||
+		m_header.data_size > (u64{umax} - m_header.data_offset)) // Check for overflow
 	{
 		pkg_log.error("PKG data size mismatch (data_size=0x%llx, data_offset=0x%llx, file_size=0x%llx)", m_header.data_size, m_header.data_offset, m_header.pkg_size);
 		return false;
@@ -203,7 +205,7 @@ bool package_reader::read_metadata()
 {
 	// Read title ID and use it as an installation directory
 	m_install_dir.resize(9);
-	archive_read_block(55, &m_install_dir.front(), m_install_dir.size());
+	archive_read_block(55, {reinterpret_cast<u8*>(m_install_dir.data()), m_install_dir.size()}, m_install_dir.size());
 
 	// Read package metadata
 
@@ -548,7 +550,7 @@ bool package_reader::read_entries(std::vector<PKGEntry>& entries)
 	entries.clear();
 	entries.resize(m_header.file_count + BUF_PADDING / sizeof(PKGEntry) + 1);
 
-	const usz read_size = decrypt(0, m_header.file_count * sizeof(PKGEntry), m_header.pkg_platform == PKG_PLATFORM_TYPE_PSP_PSVITA ? PKG_AES_KEY2 : m_dec_key.data(), entries.data());
+	const usz read_size = decrypt(0, m_header.file_count * sizeof(PKGEntry), m_header.pkg_platform == PKG_PLATFORM_TYPE_PSP_PSVITA ? PKG_AES_KEY2 : m_dec_key.data(), std::span<u8>{reinterpret_cast<u8*>(entries.data()), entries.size() * sizeof(PKGEntry)});
 
 	if (read_size < m_header.file_count * sizeof(PKGEntry))
 	{
@@ -620,7 +622,7 @@ bool package_reader::read_param_sfo()
 
 		std::string name_buf(entry.name_size + BUF_PADDING, '\0');
 
-		if (usz read_size = decrypt(entry.name_offset, entry.name_size, is_psp ? PKG_AES_KEY2 : m_dec_key.data(), name_buf.data()); read_size < entry.name_size)
+		if (usz read_size = decrypt(entry.name_offset, entry.name_size, is_psp ? PKG_AES_KEY2 : m_dec_key.data(), std::span<u8>{reinterpret_cast<u8*>(name_buf.data()), name_buf.size()}); read_size < entry.name_size)
 		{
 			pkg_log.error("PKG name could not be read (size=0x%x, offset=0x%x)", entry.name_size, entry.name_offset);
 			continue;
@@ -643,7 +645,7 @@ bool package_reader::read_param_sfo()
 
 				data_buf.resize(block_size + BUF_PADDING);
 
-				if (decrypt(entry.file_offset + pos, block_size, is_psp ? PKG_AES_KEY2 : m_dec_key.data(), data_buf.data()) != block_size)
+				if (decrypt(entry.file_offset + pos, block_size, is_psp ? PKG_AES_KEY2 : m_dec_key.data(), data_buf) != block_size)
 				{
 					pkg_log.error("Failed to decrypt PARAM.SFO file");
 					return false;
@@ -902,6 +904,32 @@ bool package_reader::fill_data(std::map<std::string, install_entry*>& all_instal
 		return false;
 	}
 
+	// Refuse an install that cannot fit, before writing a single byte.
+	//
+	// Nothing on this path checked. A full device produced one of two outcomes, neither of
+	// them a "disk full" message: a hard abort out of ensure(r > 0) in fs::file::write, or --
+	// if the backend returned a short write instead of failing -- a truncated file that was
+	// logged as "Created file", counted as fully written, and reported as a successful
+	// install, surfacing later as a corrupt game nobody can explain.
+	//
+	// data_size is the PKG's own total for its contents, so unlike the game-data check this
+	// one is exact rather than a floor. The 64MiB margin covers the directory entries and
+	// filesystem overhead the figure does not include.
+	if (fs::device_stat dev{}; fs::statfs(m_install_path, dev))
+	{
+		const u64 needed = m_header.data_size + (64 * 1024 * 1024);
+
+		if (dev.avail_free < needed)
+		{
+			pkg_log.error("Not enough space to install: need %u MiB, %u MiB free on the target device",
+				needed / (1024 * 1024), dev.avail_free / (1024 * 1024));
+			return false;
+		}
+
+		pkg_log.notice("Installing %u MiB, %u MiB free",
+			m_header.data_size / (1024 * 1024), dev.avail_free / (1024 * 1024));
+	}
+
 	m_install_entries.clear();
 	m_bootable_file_path.clear();
 	m_entry_indexer = 0;
@@ -930,7 +958,7 @@ bool package_reader::fill_data(std::map<std::string, install_entry*>& all_instal
 
 		const bool is_psp = (entry.type & PKG_FILE_ENTRY_PSP) != 0u;
 
-		if (const usz read_size = decrypt(entry.name_offset, entry.name_size, is_psp ? PKG_AES_KEY2 : m_dec_key.data(), name_buf.data()); read_size < entry.name_size)
+		if (const usz read_size = decrypt(entry.name_offset, entry.name_size, is_psp ? PKG_AES_KEY2 : m_dec_key.data(), std::span<u8>{reinterpret_cast<u8*>(name_buf.data()), name_buf.size()}); read_size < entry.name_size)
 		{
 			num_failures++;
 			pkg_log.error("PKG name could not be read (size=0x%x, offset=0x%x)", entry.name_size, entry.name_offset);
@@ -1109,7 +1137,7 @@ void package_reader::extract_worker()
 					const install_entry& m_entry;
 					usz m_pos;
 
-					explicit pkg_file_reader(std::function<u64(u64, void* buffer, u64)> read_func, const install_entry& entry) noexcept
+					explicit pkg_file_reader(std::function<u64(u64, void*, u64)> read_func, const install_entry& entry) noexcept
 						: m_read_func(std::move(read_func))
 						, m_entry(entry)
 						, m_pos(0)
@@ -1178,6 +1206,9 @@ void package_reader::extract_worker()
 
 				read_cache.clear();
 
+				// 16MB buffer
+				std::vector<u8> buffer(std::min<usz>(entry.file_size, 1u << 24) + BUF_PADDING);
+
 				auto reader = std::make_unique<pkg_file_reader>([&, cache_off = u64{umax}](usz pos, void* ptr, usz size) mutable -> u64
 				{
 					if (pos >= entry.file_size || !size)
@@ -1185,6 +1216,7 @@ void package_reader::extract_worker()
 						return 0;
 					}
 
+					const usz original_size = size;
 					size = std::min<u64>(entry.file_size - pos, size);
 
 					u64 size_cache_end = 0;
@@ -1219,7 +1251,7 @@ void package_reader::extract_worker()
 						read_cache.resize(block_size + BUF_PADDING);
 						cache_off = pos;
 
-						const usz advance_size = decrypt(entry.file_offset + pos, block_size, is_psp ? PKG_AES_KEY2 : m_dec_key.data(), read_cache.data());
+						const usz advance_size = decrypt(entry.file_offset + pos, block_size, is_psp ? PKG_AES_KEY2 : m_dec_key.data(), read_cache);
 
 						if (!advance_size)
 						{
@@ -1237,8 +1269,17 @@ void package_reader::extract_worker()
 					while (read_size < size)
 					{
 						const u64 block_size = std::min<u64>(BUF_SIZE, size - read_size);
+						u64 available_buffer_size = original_size - read_size;
 
-						const usz advance_size = decrypt(entry.file_offset + pos, block_size, is_psp ? PKG_AES_KEY2 : m_dec_key.data(), static_cast<u8*>(ptr) + read_size);
+						if (buffer.data() == ptr)
+						{
+							available_buffer_size = buffer.size() - read_size;
+							ensure(buffer.size() == original_size + BUF_PADDING);
+						}
+
+						ensure(available_buffer_size >= block_size);
+
+						const usz advance_size = decrypt(entry.file_offset + pos, block_size, is_psp ? PKG_AES_KEY2 : m_dec_key.data(), std::span<u8>{static_cast<u8*>(ptr) + read_size, available_buffer_size});
 
 						if (!advance_size)
 						{
@@ -1273,13 +1314,29 @@ void package_reader::extract_worker()
 					break;
 				}
 
-				// 16MB buffer
-				std::vector<u8> buffer(std::min<usz>(entry.file_size, 1u << 24) + BUF_PADDING);
-
 				while (usz read_size = final_data.read(buffer.data(), buffer.size() - BUF_PADDING))
 				{
-					out.write(buffer.data(), read_size);
-					m_written_bytes += read_size;
+					// Check what actually landed.
+					//
+					// This return value was discarded, and extract_success was declared true and
+					// never assigned again -- so the failure branch below was unreachable, every
+					// file logged "Created file" whatever happened, and m_written_bytes counted
+					// bytes INTENDED rather than written, which is why the progress bar reaches
+					// 100% on a failed install.
+					//
+					// A short write is what a full device produces if the backend returns one
+					// instead of raising, and it leaves a truncated file that installs
+					// "successfully" and surfaces much later as a corrupt game.
+					const usz wrote = out.write(buffer.data(), read_size);
+					m_written_bytes += wrote;
+
+					if (wrote != read_size)
+					{
+						pkg_log.error("Short write extracting %s: wrote %u of %u bytes (%s)",
+							path, wrote, read_size, fs::g_tls_error);
+						extract_success = false;
+						break;
+					}
 				}
 
 				final_data.close();
@@ -1378,14 +1435,32 @@ package_install_result package_reader::extract_data(std::deque<package_reader>& 
 		if (reader.m_num_failures == 0)
 		{
 			const usz thread_count = std::min<usz>(utils::get_thread_count(), reader.m_install_entries.size());
+			atomic_t<u32> num_threads_succeeded {0}; // Check if any thread didn't finish. For example when hitting an exception.
 
-			named_thread_group workers("PKG Installer "sv, std::max<u32>(::narrow<u32>(thread_count), 1) - 1, [&]()
+			if (thread_count > 1)
+			{
+				named_thread_group workers("PKG Installer "sv, ::narrow<u32>(thread_count) - 1, [&]()
+				{
+					reader.extract_worker();
+					num_threads_succeeded++;
+				});
+
+				reader.extract_worker();
+				num_threads_succeeded++;
+
+				workers.join();
+			}
+			else
 			{
 				reader.extract_worker();
-			});
+				num_threads_succeeded++;
+			}
 
-			reader.extract_worker();
-			workers.join();
+			if (thread_count != num_threads_succeeded)
+			{
+				pkg_log.error("%d thread(s) failed with an exception!", thread_count - num_threads_succeeded);
+				reader.m_num_failures++;
+			}
 		}
 
 		num_failures += reader.m_num_failures;
@@ -1453,14 +1528,16 @@ u64 package_reader::archive_read(void* data_ptr, const u64 num_bytes)
 	return m_file ? m_file.read(data_ptr, num_bytes) : 0;
 }
 
-std::span<const char> package_reader::archive_read_block(u64 offset, void* data_ptr, u64 num_bytes)
+std::span<const char> package_reader::archive_read_block(u64 offset, std::span<u8> dst, u64 num_bytes)
 {
-	const usz read_n = m_file.read_at(offset, data_ptr, num_bytes);
+	ensure(dst.size() >= num_bytes);
 
-	return {static_cast<const char*>(data_ptr), read_n};
+	const usz read_n = m_file.read_at(offset, dst.data(), num_bytes);
+
+	return {reinterpret_cast<const char*>(dst.data()), read_n};
 }
 
-usz package_reader::decrypt(u64 offset, u64 size, const uchar* key, void* local_buf)
+usz package_reader::decrypt(u64 offset, u64 size, const uchar* key, std::span<u8> local_buf)
 {
 	if (!m_is_valid)
 	{
@@ -1472,15 +1549,26 @@ usz package_reader::decrypt(u64 offset, u64 size, const uchar* key, void* local_
 		return 0;
 	}
 
+	ensure(local_buf.size() >= size);
+
 	// Read the data and set available size
 	const auto data_span = archive_read_block(m_header.data_offset + offset, local_buf, size);
-	ensure(data_span.data() == static_cast<void*>(local_buf));
+	ensure(data_span.data() == static_cast<void*>(local_buf.data()));
+	ensure(data_span.size() <= size);
 
-	// Get block count
-	const u64 blocks = (data_span.size() + 15) / 16;
-	const auto out_data = reinterpret_cast<u8*>(local_buf);
+	// Clear padding
+	if (data_span.size() < local_buf.size())
+	{
+		std::memset(&local_buf[data_span.size()], 0, local_buf.size() - data_span.size());
+	}
 
-	if (m_header.pkg_type == PKG_RELEASE_TYPE_DEBUG)
+	// Get block count. Round up.
+	const u64 blocks = utils::aligned_div<u64>(data_span.size(), sizeof(u128));
+	const u64 read_size = blocks * sizeof(u128);
+
+	switch (m_header.pkg_type)
+	{
+	case PKG_RELEASE_TYPE_DEBUG:
 	{
 		// Debug key
 		be_t<u64> input[8] =
@@ -1494,7 +1582,7 @@ usz package_reader::decrypt(u64 offset, u64 size, const uchar* key, void* local_
 		for (u64 i = 0; i < blocks; i++)
 		{
 			// Initialize stream cipher for current position
-			input[7] = offset / 16 + i;
+			input[7] = offset / sizeof(u128) + i;
 
 			struct sha1_hash
 			{
@@ -1503,11 +1591,13 @@ usz package_reader::decrypt(u64 offset, u64 size, const uchar* key, void* local_
 
 			sha1(reinterpret_cast<const u8*>(input), sizeof(input), hash.data);
 
-			const u128 v = read_from_ptr_unsafe<u128>(out_data, i * 16);
-			write_to_ptr_unsafe<u128>(out_data, i * 16, v ^ read_from_ptr<u128>(hash.data));
+			const u128 v = read_from_ptr<u128>(local_buf, i * sizeof(u128));
+			write_to_ptr<u128>(local_buf, i * sizeof(u128), v ^ read_from_ptr<u128>(hash.data));
 		}
+
+		break;
 	}
-	else if (m_header.pkg_type == PKG_RELEASE_TYPE_RELEASE)
+	case PKG_RELEASE_TYPE_RELEASE:
 	{
 		aes_context ctx;
 
@@ -1515,7 +1605,7 @@ usz package_reader::decrypt(u64 offset, u64 size, const uchar* key, void* local_
 		aes_setkey_enc(&ctx, key, 128);
 
 		// Initialize stream cipher for start position
-		be_t<u128> input = m_header.klicensee.value() + offset / 16;
+		be_t<u128> input = m_header.klicensee.value() + offset / sizeof(u128);
 
 		// Increment stream position for every block
 		for (u64 i = 0; i < blocks; i++, input++)
@@ -1524,19 +1614,25 @@ usz package_reader::decrypt(u64 offset, u64 size, const uchar* key, void* local_
 
 			aes_crypt_ecb(&ctx, AES_ENCRYPT, reinterpret_cast<const u8*>(&input), reinterpret_cast<u8*>(&key));
 
-			const u128 v = read_from_ptr_unsafe<u128>(out_data, i * 16);
-			write_to_ptr_unsafe<u128>(out_data, i * 16, v ^ key);
+			const u128 v = read_from_ptr<u128>(local_buf, i * sizeof(u128));
+			write_to_ptr<u128>(local_buf, i * sizeof(u128), v ^ key);
 		}
+
+		break;
 	}
-	else
+	default:
 	{
 		pkg_log.error("Unknown release type (0x%x)", m_header.pkg_type);
+		break;
+	}
 	}
 
-	if (blocks * 16 != size)
+	if (read_size > size)
 	{
 		// Put NTS and other zeroes on unaligned reads
-		std::memset(out_data + size, 0, blocks * 16 - size);
+		const u64 pad_size = read_size - size;
+		ensure(local_buf.size() >= (size + pad_size));
+		std::memset(&local_buf[size], 0, pad_size);
 	}
 
 	// Return the amount of data written in buf

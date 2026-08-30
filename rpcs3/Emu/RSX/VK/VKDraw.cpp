@@ -13,6 +13,11 @@
 
 namespace vk
 {
+	// Defined in VKGSRender.cpp, where they feed the pipeline object. The draw path needs them
+	// too now that the same values are issued per draw.
+	VkFrontFace get_front_face(rsx::front_face ffv);
+	VkCullModeFlags get_cull_face(rsx::cull_face cfv);
+
 	VkImageViewType get_view_type(rsx::texture_dimension_extended type)
 	{
 		switch (type)
@@ -156,6 +161,42 @@ void VKGSRender::invalidate_render_pass()
 		m_current_renderpass_key = key;
 		m_cached_renderpass = VK_NULL_HANDLE;
 	}
+}
+
+void VKGSRender::set_extended_dynamic_state()
+{
+	// Deliberately NOT folded into update_draw_state(). That runs once per draw clause and only
+	// when the render pass is (re)started, which was safe while these values were part of the
+	// pipeline object -- a change to any of them produced a different pipeline. Now it does not,
+	// so consecutive draws share one object and the state has to be re-issued for each of them.
+	//
+	// It is also why this cannot be skipped when the pipeline handle is unchanged: overlays,
+	// blits and the present path bind pipelines that declare these states statically, and doing
+	// so discards the dynamic values. The redundant-bind cache in command_buffer::bind_pipeline
+	// then means the game's own bind is elided on the way back and never restores them.
+	_vkCmdSetPrimitiveTopologyEXT(*m_current_command_buffer, m_current_primitive_topology);
+
+	_vkCmdSetCullModeEXT(*m_current_command_buffer,
+		rsx::method_registers.cull_face_enabled()
+			? vk::get_cull_face(rsx::method_registers.cull_face_mode())
+			: VK_CULL_MODE_NONE);
+
+	_vkCmdSetFrontFaceEXT(*m_current_command_buffer,
+		vk::get_front_face(rsx::method_registers.front_face_mode()));
+
+	// Depth write and compare op are meaningless with the test off, and decode_rsx_state left
+	// both at zero in that case rather than at whatever the RSX registers happened to hold.
+	// Reproduce that exactly: a driver that reads the compare op regardless of the test must see
+	// the value it saw before this change.
+	const bool depth_test_enabled = rsx::method_registers.depth_test_enabled();
+
+	_vkCmdSetDepthTestEnableEXT(*m_current_command_buffer, depth_test_enabled ? VK_TRUE : VK_FALSE);
+
+	_vkCmdSetDepthWriteEnableEXT(*m_current_command_buffer,
+		(depth_test_enabled && rsx::method_registers.depth_write_enabled()) ? VK_TRUE : VK_FALSE);
+
+	_vkCmdSetDepthCompareOpEXT(*m_current_command_buffer,
+		depth_test_enabled ? vk::get_compare_func(rsx::method_registers.depth_func()) : VK_COMPARE_OP_NEVER);
 }
 
 void VKGSRender::update_draw_state()
@@ -475,14 +516,9 @@ void VKGSRender::load_texture_env()
 			{
 				actual_mipmaps = static_cast<f32>(mipmap_count);
 			}
-			else if (sampler_state->external_subresource_desc.op == rsx::deferred_request_command::mipmap_gather)
+			else if (sampler_state->external_subresource_desc.op != rsx::deferred_request_command::nop)
 			{
-				// Clamp min and max lod
-				actual_mipmaps = static_cast<f32>(sampler_state->external_subresource_desc.sections_to_copy.size());
-			}
-			else if (sampler_state->external_subresource_desc.op == rsx::deferred_request_command::cubemap_unwrap)
-			{
-				actual_mipmaps = static_cast<f32>(sampler_state->external_subresource_desc.mipmaps);
+				actual_mipmaps = sampler_state->external_subresource_desc.exact_mip_count();
 			}
 			else
 			{
@@ -863,11 +899,12 @@ bool VKGSRender::bind_interpreter_texture_env()
 
 		using deferred_subresource_t = vk::texture_cache::deferred_subresource;
 		auto image = static_cast<vk::viewable_image*>(base->image());
+		auto rtt = vk::try_as_rtt(base->image());
 
 		if (is_msaa)
 		{
 			// MSAA resolve
-			auto rtt = vk::as_rtt(base->image());
+			ensure(rtt);
 			rtt->memory_barrier(*m_current_command_buffer, rsx::surface_access::transfer_read);
 			image = rtt->get_surface(rsx::surface_access::transfer_read);
 		}
@@ -875,18 +912,22 @@ bool VKGSRender::bind_interpreter_texture_env()
 		if (is_redirected)
 		{
 			// Force bitcast
-			deferred_subresource_t flatten_op{};
-			flatten_op.address = desc->ref_address;
-			flatten_op.external_handle = image;
-			flatten_op.op = desc->is_cyclic_reference
-				? rsx::deferred_request_command::copy_image_dynamic
-				: rsx::deferred_request_command::copy_image_static;
-			flatten_op.width = flatten_op.external_handle->width();
-			flatten_op.height = flatten_op.external_handle->height();
-			flatten_op.depth = 1;
-			flatten_op.gcm_format = desc->format_ex.format();
-			flatten_op.remap = decoded_remap;
-			flatten_op.cache_range = utils::address_range32::start_length(desc->ref_address, attr.pitch * attr.height);
+			rsx::image_section_attributes_t flatten_attrs{};
+			flatten_attrs.address = desc->ref_address;
+			flatten_attrs.gcm_format = desc->format_ex.format();
+			flatten_attrs.width = image->width();
+			flatten_attrs.height = image->height();
+			flatten_attrs.depth = 1;
+
+			const coord3u flatten_rect = { 0, 0, 0, flatten_attrs.width, flatten_attrs.height, 1 };
+			auto flatten_op = deferred_subresource_t::create_copy(
+				image, flatten_attrs, flatten_rect, rsx::surface_transform::identity, decoded_remap, desc->is_cyclic_reference);
+
+			ensure(desc->ref_address);
+			flatten_op.cache_range = rtt
+				? rtt->get_memory_range()
+				: utils::address_range32::start_length(desc->ref_address, attr.pitch * attr.height);
+
 			return m_texture_cache.create_temporary_subresource(*m_current_command_buffer, flatten_op);
 		}
 
@@ -1110,6 +1151,11 @@ void VKGSRender::emit_geometry(u32 sub_index)
 	// Bind both pipe and descriptors in one go
 	// FIXME: We only need to rebind the pipeline when reload state is set. Flags?
 	m_program->bind(*m_current_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS);
+
+	if (m_device->get_extended_dynamic_state_support())
+	{
+		set_extended_dynamic_state();
+	}
 
 	if (reload_state)
 	{

@@ -1,0 +1,32 @@
+/* Exported surface of libarmsx3_lsfg.so.
+ *
+ * This list IS the isolation. framegen and volk are statically linked into this library and
+ * between them define 655 globals named vkCreateImage, vkQueueSubmit, ... -- 124 of which are
+ * exactly the names libarmsx3-core.so's Vulkan loader declares. If any of those stay dynamic,
+ * the loader is free to bind the renderer's entry points to framegen's copies, and framegen's
+ * volkLoadDevice() has already pointed those at a different VkDevice.
+ *
+ * -fvisibility=hidden covers most of it; this covers the rest, including anything upstream marks
+ * __attribute__((visibility("default"))) -- which framegen's public API does.
+ *
+ * Check it, do not assume it:
+ *   llvm-nm --defined-only --extern-only libarmsx3_lsfg.so
+ * Nothing but armsx3_lsfg_* should be listed.
+ */
+{
+	global:
+		armsx3_lsfg_abi_version;
+		armsx3_lsfg_initialize;
+		armsx3_lsfg_create_context_ahb;
+		armsx3_lsfg_present;
+		armsx3_lsfg_destroy_context;
+		armsx3_lsfg_wait_idle;
+		armsx3_lsfg_finalize;
+		armsx3_lsfg_last_error;
+		armsx3_lsfg_import_shaders;
+		armsx3_lsfg_shader_count;
+		armsx3_lsfg_get_shader;
+
+	local:
+		*;
+};

@@ -231,7 +231,6 @@ struct cell_audio_config
 	u32 audio_sample_size = 0;
 	f64 audio_min_buffer_duration = 0.0;
 
-	u32 audio_buffer_length = 0;
 
 	/*
 	 * Buffering
@@ -410,6 +409,12 @@ public:
 	u64 m_counter = 0;
 	u64 m_start_time = 0;
 	u64 m_dynamic_period = 0;
+
+	// Timestamp of the last "Audio buffer:" line, so it stays at one per 10s.
+	u64 m_last_buffer_report = 0;
+
+	// Backend underrun total at that line, so the next one can report the delta.
+	u64 m_last_underruns = 0;
 	f32 m_average_playtime = 0.0f;
 	bool m_backend_failed = false;
 	bool m_audio_should_restart = false;

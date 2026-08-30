@@ -629,6 +629,7 @@ endif()
 if(TARGET 3rdparty_vulkan)
     target_sources(rpcs3_emu PRIVATE
         RSX/VK/upscalers/fsr1/fsr_pass.cpp
+        RSX/VK/upscalers/sgsr/sgsr_pass.cpp
         RSX/VK/vkutils/barriers.cpp
         RSX/VK/vkutils/buffer_object.cpp
         RSX/VK/vkutils/chip_class.cpp
@@ -648,6 +649,25 @@ if(TARGET 3rdparty_vulkan)
         RSX/VK/vkutils/sampler.cpp
         RSX/VK/vkutils/shared.cpp
         RSX/VK/vkutils/unique_resource.cpp
+        # Frame generation, ported from Eden (CamilleLaVey, eden PR #4263) via ARMSX2, and
+        # relicensed GPL-2.0-or-later by its author for use here. Runs the passes on OUR device
+        # in our own present path -- the earlier implementation lived behind a dlopen'd .so with
+        # its own VkDevice, which forced every frame through an AHardwareBuffer round-trip.
+        RSX/VK/FrameGen/FrameGen.cpp
+        RSX/VK/FrameGen/FrameGenPacer.cpp
+        RSX/VK/FrameGen/LosslessDll.cpp
+        RSX/VK/FrameGen/LsfgAlpha.cpp
+        RSX/VK/FrameGen/LsfgBeta.cpp
+        RSX/VK/FrameGen/LsfgChain.cpp
+        RSX/VK/FrameGen/LsfgCommon.cpp
+        RSX/VK/FrameGen/LsfgDelta.cpp
+        RSX/VK/FrameGen/LsfgGamma.cpp
+        RSX/VK/FrameGen/LsfgGenerate.cpp
+        RSX/VK/FrameGen/LsfgMipmaps.cpp
+        RSX/VK/FrameGen/LsfgShaders.cpp
+        RSX/VK/FrameGen/LsfgTranslate.cpp
+        RSX/VK/FrameGen/LsfgUtil.cpp
+        RSX/VK/FrameGen/LsfgVkCompat.cpp
         RSX/VK/VKAsyncScheduler.cpp
         RSX/VK/VKCommandStream.cpp
         RSX/VK/VKCommonDecompiler.cpp
@@ -655,6 +675,7 @@ if(TARGET 3rdparty_vulkan)
         RSX/VK/VKCompute.cpp
         RSX/VK/VKDataHeapManager.cpp
         RSX/VK/VKDMA.cpp
+        RSX/VK/VKFrameGen.cpp
         RSX/VK/VKDraw.cpp
         RSX/VK/VKFormats.cpp
         RSX/VK/VKFragmentProgram.cpp
