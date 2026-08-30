@@ -988,9 +988,13 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			for (u32 i = 0; i < vk::gpu_timer::region_count; i++)
 			{
 				if (ms[i] <= 0.0) continue;
-				fmt::append(report, "\n\t%-14s %7.3f ms/frame  %5.1f events/frame",
+				// Worst single frame alongside the mean. A mean of 14ms is equally consistent
+				// with a steady 14 and with 250 cheap frames plus 44 expensive ones; only the
+				// second is a churn, and only this column separates them.
+				fmt::append(report, "\n\t%-14s %7.3f ms/frame  %5.1f events/frame  worst %7.3f ms",
 					vk::gpu_timer::name_of(static_cast<vk::gpu_timer::region>(i)), ms[i],
-					static_cast<double>(counts[i]) / static_cast<double>(timer.collected_frames()));
+					static_cast<double>(counts[i]) / static_cast<double>(timer.collected_frames()),
+					timer.worst_ms(static_cast<vk::gpu_timer::region>(i)));
 			}
 
 			// Per-pass, so the draw total stops being a single number that only says "inside

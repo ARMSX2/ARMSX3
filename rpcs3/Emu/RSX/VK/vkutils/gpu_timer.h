@@ -103,6 +103,12 @@ namespace vk
 
 		std::vector<pass_cost> draw_pass_costs() const;
 
+		// Worst single-frame cost for a region in this window, in milliseconds.
+		double worst_ms(region r) const
+		{
+			return static_cast<double>(m_worst_ns[static_cast<u32>(r)]) / 1'000'000.0;
+		}
+
 	private:
 		// A frame issues many readbacks and blits, and the interesting number is what they
 		// cost in total, so each region gets room for several timed events per frame rather
@@ -161,6 +167,15 @@ namespace vk
 		std::array<slot_state, ring_depth> m_slots{};
 
 		std::array<u64, region_count> m_totals_ns{};
+
+		// Worst single frame in the window, per region.
+		//
+		// The averages alone are misleading and misled me: "GPU frame 14.16 ms/frame" over 300
+		// frames is equally consistent with a steady 14ms and with 250 frames at 8ms plus 44 at
+		// 50ms. The second is what a churn looks like, and the mean cannot tell them apart --
+		// which is why the GPU was written off as a constant floor rather than examined as the
+		// variance.
+		std::array<u64, region_count> m_worst_ns{};
 		std::array<u64, region_count> m_events_seen{};
 
 		// Draw region only, indexed by pass ordinal within the frame.

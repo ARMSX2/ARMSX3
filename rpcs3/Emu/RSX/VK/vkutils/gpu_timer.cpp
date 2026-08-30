@@ -308,6 +308,9 @@ namespace vk
 				continue;
 			}
 
+			// Per-region total for THIS frame only, so the worst frame can be tracked.
+			std::array<u64, region_count> frame_region_ns{};
+
 			for (u32 i = 0; i < region_count; i++)
 			{
 				const auto r = static_cast<region>(i);
@@ -336,6 +339,7 @@ namespace vk
 					const u64 ns = static_cast<u64>(static_cast<double>(t1 - t0) * m_period_ns);
 
 					m_totals_ns[i] += ns;
+					frame_region_ns[i] += ns;
 					m_events_seen[i]++;
 
 					if (r == region::draw)
@@ -346,6 +350,11 @@ namespace vk
 				}
 
 				m_dropped += state.dropped[i];
+			}
+
+			for (u32 i = 0; i < region_count; i++)
+			{
+				m_worst_ns[i] = std::max(m_worst_ns[i], frame_region_ns[i]);
 			}
 
 			m_frames++;
@@ -404,6 +413,7 @@ namespace vk
 	void gpu_timer::reset()
 	{
 		m_totals_ns = {};
+		m_worst_ns = {};
 		m_events_seen = {};
 		m_draw_pass_ns = {};
 		m_draw_pass_samples = {};
