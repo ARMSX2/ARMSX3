@@ -219,12 +219,17 @@ namespace rsx::prof
 	// diagnostics. No call stacks, no registers, no guest memory reads -- those are what made
 	// the earlier stall dump fault three times and freeze the emulator into something that
 	// looked exactly like the hang it was supposed to explain.
-	static std::string sample_guest_threads()
+	static std::string sample_guest_threads(bool running_only)
 	{
 		std::string out;
 
-		idm::select<named_thread<ppu_thread>>([&out](u32 id, ppu_thread& ppu)
+		idm::select<named_thread<ppu_thread>>([&out, running_only](u32 id, ppu_thread& ppu)
 		{
+			if (running_only && ppu.state.load() & cpu_flag::wait)
+			{
+				return;
+			}
+
 			const auto name = ppu.ppu_tname.load();
 			const bool inside = !!ppu.current_function;
 			const auto func = inside ? ppu.current_function : ppu.last_function;
@@ -238,8 +243,13 @@ namespace rsx::prof
 
 		// PPUs waiting on a semaphore are usually waiting for an SPU to post it, so the SPU
 		// side is the half that actually names the culprit.
-		idm::select<named_thread<spu_thread>>([&out](u32 id, spu_thread& spu)
+		idm::select<named_thread<spu_thread>>([&out, running_only](u32 id, spu_thread& spu)
 		{
+			if (running_only && spu.state.load() & cpu_flag::wait)
+			{
+				return;
+			}
+
 			const auto name = spu.spu_tname.load();
 
 			fmt::append(out, "\n    SPU 0x%07x %-24s [%s] pc=0x%05x %s", id,
@@ -279,20 +289,32 @@ namespace rsx::prof
 			return;
 		}
 
-		// One sample per stall, and a hard cap: this logs from the vblank thread, and log
-		// volume alone has stalled this emulator before.
-		static u64 s_dumped_frame = umax;
+		// Resample WITHIN a stall, once per vblank tick. One sample per stall could not tell a
+		// thread spinning on one instruction from a thread doing slow work sampled at the same
+		// phase each time -- and 19 of 30 stalls landed on the identical guest PC, which needs
+		// consecutive samples to interpret. Later samples print only the threads still running,
+		// since the blocked list does not change and repeating it is just log volume.
+		static u64 s_frame = umax;
+		static u32 s_in_frame = 0;
 		static u32 s_dumps = 0;
 
-		if (s_dumped_frame == g_acc.frames)
+		if (s_frame != g_acc.frames)
+		{
+			s_frame = g_acc.frames;
+			s_in_frame = 0;
+		}
+
+		if (s_in_frame >= 5 || ++s_dumps > 60)
 		{
 			return;
 		}
 
-		s_dumped_frame = g_acc.frames;
+		s_in_frame++;
 
-		if (++s_dumps > 30)
+		if (s_in_frame > 1)
 		{
+			prof_log.error("STALL+%u: %u ms in, still running:%s", s_in_frame, stalled_ms,
+				sample_guest_threads(true));
 			return;
 		}
 
@@ -307,7 +329,7 @@ namespace rsx::prof
 		const u64 mm_ms = ((mm_tsc - s_last_tsc) * 1000ull) / freq;
 
 		prof_log.error("STALL: %u ms into a frame with no flip (sample %u/30) -- guest mmapper: %u calls, %u ms since last sample%s",
-			stalled_ms, s_dumps, calls - s_last_calls, mm_ms, sample_guest_threads());
+			stalled_ms, s_dumps, calls - s_last_calls, mm_ms, sample_guest_threads(false));
 
 		s_last_calls = calls;
 		s_last_tsc = mm_tsc;
