@@ -158,7 +158,11 @@ namespace vk
 		// sides; doing it on every exhausted ring turned the lockup into a slideshow -- 707
 		// reclaims against a single grow, five hard syncs a second. Growing is cheap and now
 		// bounded, so grow first and pay for the sync only when there is no room left to take.
-		if (aligned_new_size >= size_limit && vk::reclaim_ring_memory())
+		// Strictly greater: at 192M a 64M step computes exactly the 256M ceiling, and >= sent
+		// that down the reclaim path instead of letting the ring take its last allowed step. The
+		// heap then sat at 192M hard-syncing twice a second while 64M of its own budget went
+		// unused.
+		if (aligned_new_size > size_limit && vk::reclaim_ring_memory())
 		{
 			// Conservative: grow() cannot see the alignment its caller will apply, so claim
 			// success only with a 4K margin. Being wrong hands out memory still in flight.
