@@ -7,6 +7,7 @@
 #include "Emu/Cell/PPUThread.h"
 
 #include "util/asm.hpp"
+#include "util/tsc.hpp"
 
 LOG_CHANNEL(sys_semaphore);
 
@@ -113,9 +114,43 @@ error_code sys_semaphore_destroy(ppu_thread& ppu, u32 sem_id)
 	return CELL_OK;
 }
 
+// How long main_thread actually blocks here, and how often.
+//
+// It spends 61% of its wall time in this call while the SPUs it waits for run under 10% of the
+// time -- so the machine is idle and the frame is a chain of handoffs. That is only actionable
+// once the shape is known: a handful of long waits means it is genuinely waiting for work to
+// finish and the producer is the target, while many short ones mean the wakeups themselves are
+// the cost and the scheduler path is. The two want opposite fixes and the percentage alone
+// cannot tell them apart.
+atomic_t<u64> g_sema_wait_us{0};
+atomic_t<u64> g_sema_wait_count{0};
+atomic_t<u64> g_sema_wait_max_us{0};
+
 error_code sys_semaphore_wait(ppu_thread& ppu, u32 sem_id, u64 timeout)
 {
 	ppu.state += cpu_flag::wait;
+
+	const bool is_main = ppu.id == 0x1000000;
+	const u64 wait_start = is_main ? utils::get_tsc() : 0;
+
+	struct sema_timer
+	{
+		const u64 start;
+
+		~sema_timer() noexcept
+		{
+			if (!start)
+			{
+				return;
+			}
+
+			const u64 freq = utils::get_tsc_freq();
+			const u64 us = freq ? ((utils::get_tsc() - start) * 1000000ull) / freq : 0;
+			g_sema_wait_us += us;
+			g_sema_wait_count++;
+			g_sema_wait_max_us.fetch_op([us](u64& v) { if (us > v) { v = us; return true; } return false; });
+		}
+	} sema_timer_v{wait_start};
 
 	sys_semaphore.trace("sys_semaphore_wait(sem_id=0x%x, timeout=0x%llx)", sem_id, timeout);
 

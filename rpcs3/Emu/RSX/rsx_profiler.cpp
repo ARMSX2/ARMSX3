@@ -5,6 +5,10 @@
 #include "Emu/Memory/vm.h"
 #include "Emu/Cell/SPUThread.h"
 
+extern atomic_t<u64> g_sema_wait_us;
+extern atomic_t<u64> g_sema_wait_count;
+extern atomic_t<u64> g_sema_wait_max_us;
+
 #include "Emu/IdManager.h"
 
 #include "util/sysinfo.hpp"
@@ -958,6 +962,18 @@ namespace rsx::prof
 			}
 
 			prof_log.success("\tmain_thread    %u samples of its wall time:%s", g_main_total, top);
+
+			if (const u64 n = g_sema_wait_count.load(); n)
+			{
+				prof_log.success("\t  sema waits   %.1f/frame, mean %.2f ms, worst %.1f ms",
+					static_cast<double>(n) / frames,
+					(g_sema_wait_us.load() / 1000.0) / n,
+					g_sema_wait_max_us.load() / 1000.0);
+			}
+
+			g_sema_wait_us = 0;
+			g_sema_wait_count = 0;
+			g_sema_wait_max_us = 0;
 
 			for (auto& b : g_main_state)
 			{
