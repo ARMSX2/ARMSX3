@@ -9313,6 +9313,34 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			static constexpr std::initializer_list<std::string_view> allowed_patterns =
 			{
 				"disabled_620oYSe8uQqq9eTkhWfMqoEXX0us"sv, // CellSpurs JobChain acquire pattern (disabled for now)
+
+				// cellSync mutex ticket increment, Sonic '06 (BLUS30008), LS 0x18140 -> 0x181a0.
+				//
+				// Admitted against the condition stated above -- an atomic 16-byte compare-exchange
+				// whose observed line is not read afterwards -- verified by disassembling the loop
+				// off local store rather than inferred:
+				//
+				//   GETLLAR / rdch MFC_RdAtomicStat / lqd r2,0(r8) / rotmi r2,r3,-0x10 /
+				//   ahi r2,r2,1 / shufb #i16[0] / stqd r4,0(r8) / PUTLLC
+				//
+				// One quadword loaded at 0(r8), the same quadword stored back, a 16-bit field
+				// incremented in between, and the other 112 bytes of the line never touched. That
+				// is case 1 in the comment above, not case 2.
+				//
+				// Why it is worth admitting: with this refused, every conditional store falls to
+				// do_putllc, whose commit is wrapped in vm::writer_lock -- a global barrier that
+				// stamps cpu_flag::memory on every registered PPU thread and busy-spins until each
+				// one parks, while holding rsrv_unique_lock throughout so every other SPU fails
+				// meanwhile. Measured on device: 6,489-62,768 conditional stores per frame at
+				// 81-98.4% failure, with the PPU spending ~70% of a slow frame in the guest's
+				// cellSyncMutexTryLock and the mutex never once observed free. PUTLLC16 commits
+				// the same operation with no barrier.
+				//
+				// Keyed on the hash of the guest bytes, so a different build of cellSync does not
+				// match and simply keeps the old path. The sibling pattern at 0x17ff8 was also
+				// refused and is deliberately NOT listed: it has not been disassembled, and the
+				// safety condition here is a property of the code, not of the function's name.
+				"WA0WuYLrZXrcc6Jyw5EMgYRV2bwo"sv,
 			};
 
 			allow_pattern = std::any_of(allowed_patterns.begin(), allowed_patterns.end(), FN(pattern_hash == x));
