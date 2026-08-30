@@ -58,6 +58,8 @@ object SaveDataImporter {
         val ok: Boolean,
         val saves: List<Imported> = emptyList(),
         val error: String? = null,
+        /** Names of imported saves whose data files are still encrypted. See [looksEncrypted]. */
+        val encrypted: List<String> = emptyList(),
     )
 
     // ---- entry points ---------------------------------------------------------------------
@@ -137,6 +139,7 @@ object SaveDataImporter {
 
             onProgress(Progress.Installing)
             val imported = mutableListOf<Imported>()
+            val encryptedSaves = mutableListOf<String>()
             for ((staged, dirName) in found) {
                 val dest = File(savedataRoot, dirName)
                 val replaced = dest.exists()
@@ -152,8 +155,9 @@ object SaveDataImporter {
                     title = ParamSfo.string(File(dest, "PARAM.SFO"), "TITLE"),
                     replaced = replaced,
                 )
+                if (looksEncrypted(dest)) encryptedSaves += dirName
             }
-            return Outcome(true, imported)
+            return Outcome(true, imported, encrypted = encryptedSaves)
         } catch (e: Exception) {
             Log.w(TAG, "import failed: ${e.message}")
             return Outcome(false, error = e.message ?: "Import failed")
@@ -172,6 +176,56 @@ object SaveDataImporter {
      * Searched recursively because the source shape is not ours to dictate -- a user may hand us
      * the save, its parent, or an archive that wraps both in a download folder.
      */
+    /**
+     * Whether a save still carries the copy protection a real PS3 applies, which makes it
+     * unusable here.
+     *
+     * We store secure files as plaintext -- the id is recorded in the PSF and nothing is ever
+     * encrypted -- so a save lifted straight off a console hands the game 175KB of ciphertext
+     * where its own structure should be. The game follows a pointer out of it and the PPU
+     * thread segfaults inside recompiled code, which reads as an emulator crash and gives the
+     * user nothing to act on. It is worth a message instead.
+     *
+     * Two signals, both required, because either alone is wrong:
+     *  - PARAM.PFD exists. We never write one, so it came from a console. But a properly
+     *    decrypted save keeps its PFD too, which is why this cannot decide on its own.
+     *  - A data file still reads as ciphertext. Save data is structured -- headers, padding,
+     *    counters, runs of zeroes -- while encrypted data is close to uniform. A 4KB window
+     *    with nearly every byte value present and no repeated run is not plaintext.
+     */
+    private fun looksEncrypted(dir: File): Boolean {
+        if (!File(dir, "PARAM.PFD").isFile) return false
+
+        val candidates = dir.listFiles()
+            ?.filter { it.isFile && it.length() >= 4096 && it.name.uppercase() !in SKIP_ENTROPY }
+            ?: return false
+
+        return candidates.any { file ->
+            runCatching {
+                val buf = ByteArray(4096)
+                val read = file.inputStream().use { it.read(buf) }
+                if (read < 4096) return@runCatching false
+
+                val seen = BooleanArray(256)
+                var distinct = 0
+                var longestRun = 0
+                var run = 0
+
+                for (i in 0 until read) {
+                    val b = buf[i].toInt() and 0xff
+                    if (!seen[b]) { seen[b] = true; distinct++ }
+                    run = if (i > 0 && buf[i] == buf[i - 1]) run + 1 else 1
+                    if (run > longestRun) longestRun = run
+                }
+
+                distinct >= 250 && longestRun < 5
+            }.getOrDefault(false)
+        }
+    }
+
+    /** Media and metadata: compressed images are high-entropy too and would false-positive. */
+    private val SKIP_ENTROPY = setOf("ICON0.PNG", "ICON1.PAM", "PIC1.PNG", "SND0.AT3", "PARAM.SFO", "PARAM.PFD")
+
     private fun discover(staging: File): List<Pair<File, String>> {
         val out = mutableListOf<Pair<File, String>>()
         fun walk(dir: File, depth: Int) {

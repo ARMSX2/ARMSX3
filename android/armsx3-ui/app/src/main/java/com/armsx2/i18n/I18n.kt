@@ -315,6 +315,7 @@ val EN: Map<String, String> = mapOf(
     "app.savedata.importFolder.desc" to "Pick an unzipped save folder — the one containing PARAM.SFO — or a folder holding several.",
     "app.savedata.working" to "Importing…",
     "app.savedata.done" to "Imported %s.",
+    "app.savedata.encrypted" to "Imported %s, but it is still copy-protected from a real PS3 and the game will crash if you load it. Decrypt and resign the save first.",
     "app.savedata.replaced" to "Imported %s, replacing an existing save.",
     "app.savedata.failed" to "Import failed: %s",
     "app.clearCache" to "Clear cached data",

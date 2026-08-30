@@ -1053,6 +1053,11 @@ private fun BackupRestoreRows() {
         busy = false
         val names = r.saves.joinToString(", ") { s -> s.title?.takeIf { it.isNotBlank() } ?: s.dirName }
         status = when {
+            // Copy-protected saves import perfectly and then crash the game, because we hand
+            // it ciphertext where its save structure should be. Say so at import, since after
+            // this point the only symptom is a segfault in recompiled code.
+            r.ok && r.encrypted.isNotEmpty() ->
+                I18n.get("app.savedata.encrypted").replace("%s", r.encrypted.joinToString(", "))
             r.ok && r.saves.any { it.replaced } -> I18n.get("app.savedata.replaced").replace("%s", names)
             r.ok -> I18n.get("app.savedata.done").replace("%s", names)
             // A cancelled picker reports no error; saying "failed" at someone who backed out
