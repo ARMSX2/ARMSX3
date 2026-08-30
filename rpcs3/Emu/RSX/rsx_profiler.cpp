@@ -76,6 +76,22 @@ namespace rsx::prof
 	pc_bucket g_stall_pc[24]{};
 	u64 g_stall_pc_total = 0;
 
+	// SPU state during slow frames only.
+	//
+	// Testing one specific mechanism: an SPU that holds the guest cellSync mutex and then calls
+	// sys_spu_thread_receive_event on an empty queue has its WHOLE group suspended, untimed, so
+	// it cannot release the lock -- while the event that would resume it comes from the PPU,
+	// which is at that moment spinning on the very lock the SPU holds. That is a circular wait,
+	// and it would look exactly like this: 70% of a slow frame in cellSyncMutexTryLock, six
+	// waiters queued, every resource idle.
+	//
+	// If group-suspension is markedly higher during slow frames than overall, that is the shape.
+	// If it is flat, the circular wait is not happening and the holder is slow for another reason.
+	u64 g_stall_spu_susp = 0;
+	u64 g_stall_spu_wait = 0;
+	u64 g_stall_spu_exec = 0;
+	u64 g_stall_spu_ticks = 0;
+
 	struct fn_bucket { const char* fn; u32 hits; };
 	fn_bucket g_main_state[20]{};
 	u64 g_main_total = 0;
@@ -139,6 +155,20 @@ namespace rsx::prof
 			}
 		}, idm::unlocked);
 
+		// Slow frame in progress right now? Computed before the SPU walk so both histograms can
+		// use it.
+		bool in_stall = false;
+		{
+			const u64 last = g_last_frame_tsc.load();
+			const u64 freq = utils::get_tsc_freq();
+
+			if (last && freq)
+			{
+				const u64 now_tsc = utils::get_tsc();
+				in_stall = now_tsc > last && ((now_tsc - last) * 1000ull) / freq >= 33;
+			}
+		}
+
 		// SPU side, every tick regardless of whether a PPU was running.
 		{
 			u32 running = 0;
@@ -190,6 +220,14 @@ namespace rsx::prof
 			g_spu_total_sum += total;
 			g_spu_stopped_sum += stopped;
 			g_spu_suspended_sum += suspended;
+
+			if (in_stall)
+			{
+				g_stall_spu_susp += suspended;
+				g_stall_spu_wait += total - running - stopped - suspended;
+				g_stall_spu_exec += running;
+				g_stall_spu_ticks++;
+			}
 			g_spu_tick_count++;
 
 			if (spu_pc)
@@ -201,19 +239,6 @@ namespace rsx::prof
 					if (b.pc == spu_pc) { b.hits++; break; }
 					if (!b.pc) { b.pc = spu_pc; b.hits = 1; break; }
 				}
-			}
-		}
-
-		// Is a slow frame in progress right now? Same clock the pacing line uses.
-		bool in_stall = false;
-		{
-			const u64 last = g_last_frame_tsc.load();
-			const u64 freq = utils::get_tsc_freq();
-
-			if (last && freq)
-			{
-				const u64 now_tsc = utils::get_tsc();
-				in_stall = now_tsc > last && ((now_tsc - last) * 1000ull) / freq >= 33;
 			}
 		}
 
@@ -1060,6 +1085,20 @@ namespace rsx::prof
 
 				prof_log.success("\tSTALL-only PC  %u samples taken during frames already over 33ms:%s",
 					g_stall_pc_total, stop);
+
+				if (g_stall_spu_ticks)
+				{
+					prof_log.success("\tSTALL-only SPU %.2f exec / %.2f waiting / %.2f GROUP-SUSPENDED  (vs %.2f suspended overall)",
+						static_cast<double>(g_stall_spu_exec) / g_stall_spu_ticks,
+						static_cast<double>(g_stall_spu_wait) / g_stall_spu_ticks,
+						static_cast<double>(g_stall_spu_susp) / g_stall_spu_ticks,
+						g_spu_tick_count ? static_cast<double>(g_spu_suspended_sum) / g_spu_tick_count : 0.0);
+				}
+
+				g_stall_spu_susp = 0;
+				g_stall_spu_wait = 0;
+				g_stall_spu_exec = 0;
+				g_stall_spu_ticks = 0;
 
 				for (auto& b : g_stall_pc) b = {};
 				g_stall_pc_total = 0;
