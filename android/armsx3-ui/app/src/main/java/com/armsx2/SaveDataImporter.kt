@@ -88,10 +88,13 @@ object SaveDataImporter {
         val archiveResult = input.use { stageArchive(it, staging, onProgress, isCancelled) }
 
         // A decrypted save file is what a save decrypter hands back -- one loose file, not an
-        // archive -- and ZipInputStream simply reports no entries for it, which surfaced as
-        // "the archive was empty" and told the user nothing about what to do instead. If
-        // nothing was staged, take the pick at face value and stage it as that one file.
-        if (archiveResult == null && staging.walkTopDown().none { it.isFile }) {
+        // archive -- and ZipInputStream reports no entries for it, which surfaced as "Archive was
+        // empty": true, useless, and about the wrong thing.
+        //
+        // Keyed on nothing having been STAGED, not on what stageArchive returned. It returns an
+        // Outcome for the empty case rather than null, so testing the return value here meant this
+        // never ran and the same misleading error came back unchanged.
+        if (!isCancelled() && staging.walkTopDown().none { it.isFile }) {
             val name = displayName(context, uri)
                 ?: return@runImport Outcome(false, error = "Could not read the selected file's name")
 
@@ -104,7 +107,9 @@ object SaveDataImporter {
                 } != null
             }.getOrDefault(false)
 
-            if (!copied) return@runImport Outcome(false, error = "Could not read the selected file")
+            // Carry on to discover/merge rather than reporting the archive failure, which was
+            // only ever a statement about the file not being a zip.
+            if (copied) return@runImport null
         }
 
         archiveResult
