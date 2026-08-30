@@ -35,6 +35,11 @@ namespace rsx::prof
 	pc_bucket g_pc_samples[24]{};
 	u64 g_pc_total = 0;
 
+	// cellSync mutex state at the dominant spin site.
+	u64 g_sync_samples = 0;
+	u64 g_sync_free = 0;
+	u64 g_sync_queue = 0;
+
 	void sample_guest_pc()
 	{
 		if (!g_enabled.load())
@@ -59,6 +64,49 @@ namespace rsx::prof
 		}
 
 		g_pc_total++;
+
+		// For the one site that dominates the profile, also record what it is waiting on.
+		//
+		// cellSyncMutexTryLock is a guest ticket lock: the 32-bit sync word holds the next ticket
+		// in the high half and now-serving in the low half. r3 is the mutex pointer and is still
+		// live at the function's first instruction, which is where these samples land.
+		//
+		// This distinguishes the two cases that need opposite fixes. If next != serving the lock
+		// is genuinely held and the spin is the game waiting for its owner, so the owner is the
+		// problem. If next == serving the lock is FREE and the trylock is failing anyway -- which
+		// would be our reservation losing a race it should win, and an emulator bug.
+		if (pc == 0x01940380u)
+		{
+			idm::select<named_thread<ppu_thread>>([](u32, ppu_thread& ppu)
+			{
+				if (ppu.state.load() & cpu_flag::wait || (ppu.cia & ~0x3fu) != 0x01940380u)
+				{
+					return;
+				}
+
+				const u32 addr = static_cast<u32>(ppu.gpr[3]);
+
+				if (!addr || (addr & 3) || !vm::check_addr(addr, vm::page_readable, 4))
+				{
+					return;
+				}
+
+				const u32 word = *vm::get_super_ptr<const atomic_be_t<u32>>(addr);
+				const u16 next = static_cast<u16>(word >> 16);
+				const u16 serving = static_cast<u16>(word);
+
+				g_sync_samples++;
+
+				if (next == serving)
+				{
+					g_sync_free++;
+				}
+				else
+				{
+					g_sync_queue += static_cast<u16>(next - serving);
+				}
+			}, idm::unlocked);
+		}
 
 		for (auto& b : g_pc_samples)
 		{
@@ -705,6 +753,19 @@ namespace rsx::prof
 			}
 
 			prof_log.success("\tguest PC       %u samples of a RUNNING thread:%s", g_pc_total, top);
+
+			if (g_sync_samples)
+			{
+				prof_log.success("\tcellSync mutex %u samples: %u free (%.1f%%), avg queue %.2f",
+					g_sync_samples, g_sync_free, g_sync_free * 100.0 / g_sync_samples,
+					g_sync_samples > g_sync_free
+						? static_cast<double>(g_sync_queue) / (g_sync_samples - g_sync_free)
+						: 0.0);
+
+				g_sync_samples = 0;
+				g_sync_free = 0;
+				g_sync_queue = 0;
+			}
 
 			for (auto& b : g_pc_samples)
 			{
