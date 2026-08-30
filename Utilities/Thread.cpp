@@ -4085,12 +4085,6 @@ static const std::array<u32, 64>& get_arm_core_capacities()
 }
 #endif
 
-bool thread_ctrl::is_arm_big_little()
-{
-	detect_cpu_layout();
-	return g_native_core_layout == native_core_arrangement::arm_big_little;
-}
-
 void thread_ctrl::detect_cpu_layout()
 {
 	if (!g_native_core_layout.compare_and_swap_test(native_core_arrangement::undefined, native_core_arrangement::generic))
