@@ -895,6 +895,11 @@ public:
 	std::array<v128, 0x4000> stack_mirror; // Return address information
 	std::array<u32, 8> raddr_busy_wait_addr{}; // Return address information
 
+	// Consecutive failed conditional stores against the same line, for the notifier park in
+	// do_putllc. Runtime scheduling state only; deliberately not serialized.
+	u32 putllc_fail_streak{};
+	u32 putllc_fail_addr{};
+
 	const char* current_func{}; // Current STOP or RDCH blocking function
 	u64 start_time{}; // Starting time of STOP or RDCH bloking function
 	bool unsavable = false; // Flag indicating whether saving the spu thread state is currently unsafe

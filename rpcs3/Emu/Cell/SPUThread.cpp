@@ -3787,12 +3787,62 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			raddr = 0;
 		}
 
+		putllc_fail_streak = 0;
+
 		perf0.reset();
 		return true;
 	}
 	else
 	{
 		putllc_fails++;
+
+		// PPU/SPU reservation ping-pong.
+		//
+		// A guest cellSync mutex is a 16-bit ticket pair in one 128-byte line. The PPU takes it
+		// with lwarx/stwcx and an SPU takes it with GETLLAR/PUTLLC, and each side's store
+		// invalidates the other's reservation, so both can retry indefinitely while neither
+		// completes. Real hardware serialises them in the coherency protocol; we do not, and the
+		// result is a livelock: profiling a slow frame finds the PPU spending 72% of it in
+		// cellSyncMutexTryLock while one SPU spends 75% of it in the GETLLAR/PUTLLC loop at LS
+		// 0x18140, with the mutex never once observed free.
+		//
+		// The existing getllar_spin_count detector does not catch this. It fingerprints a
+		// GETLLAR-only poll waiting for a value to change; this is a genuine read-modify-write
+		// that keeps losing, so it never looks like a poll.
+		//
+		// Park on the reservation notifier rather than retrying hot. That is the same primitive
+		// the GETLLAR path already uses: the wake is the other side's actual write, so the SPU
+		// resumes the moment the line is free and no sooner. Explicitly NOT a timed backoff --
+		// three of those were reverted from this branch for taking 2179ms frames precisely
+		// because a guessed sleep length is wrong at both ends. begin_wait re-checks the line
+		// before committing, so a write that lands in the gap cannot be missed, and the 100us
+		// bound is only a safety net.
+		//
+		// Gated on a long streak against the SAME line so ordinary contention, which resolves in
+		// a retry or two, is untouched.
+		if (raddr == addr && addr == putllc_fail_addr)
+		{
+			putllc_fail_streak++;
+		}
+		else
+		{
+			putllc_fail_streak = 1;
+			putllc_fail_addr = addr;
+		}
+
+		if (putllc_fail_streak >= 32 && raddr == addr)
+		{
+			state += cpu_flag::wait;
+
+			if (auto [wait_var, flag_val] = vm::reservation_notifier_begin_wait(addr, rtime); wait_var)
+			{
+				utils::bless<atomic_t<u32>>(&wait_var->raw().wait_flag)->wait(flag_val, atomic_wait_timeout{100'000});
+				vm::reservation_notifier_end_wait(*wait_var);
+			}
+
+			static_cast<void>(test_stopped());
+			putllc_fail_streak = 0;
+		}
 
 		if (raddr)
 		{
