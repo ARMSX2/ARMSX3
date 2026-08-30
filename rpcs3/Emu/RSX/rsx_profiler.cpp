@@ -22,6 +22,11 @@ namespace rsx::prof
 	std::atomic<bool> g_enabled{false};
 	accounting g_acc{};
 	std::atomic<u64> g_last_frame_tsc{0};
+
+	// Frame pacing for the current window only; reset by dump_and_reset.
+	u64 g_slow_frames = 0;
+	u64 g_very_slow_frames = 0;
+	u64 g_worst_frame_ns = 0;
 	bucket g_current = bucket::unclassified;
 	u64 g_last_switch = 0;
 	const void* g_owner_thread = nullptr;
@@ -434,6 +439,16 @@ namespace rsx::prof
 			{
 				const u64 frame_ns = ((now - s_last_tsc) * 1'000'000'000ull) / freq;
 
+				// Per-window frame pacing, uncapped.
+				//
+				// The SPIKE trace caps at 40 and the stall watchdog at 60 -- right for log volume,
+				// useless for iterative testing: once capped the numbers stop moving, so a change
+				// that helped and one that did nothing read identically. I compared two builds off
+				// a frozen list before catching it. These reset every window.
+				if (frame_ns > 33'000'000ull) g_slow_frames++;
+				if (frame_ns > 100'000'000ull) g_very_slow_frames++;
+				if (frame_ns > g_worst_frame_ns) g_worst_frame_ns = frame_ns;
+
 				// 50ms: comfortably above a bad-but-normal frame at this frame rate, so this
 				// only fires on the excursions worth explaining.
 				if (frame_ns > 50'000'000ull && ++s_spikes <= 40)
@@ -610,6 +625,15 @@ namespace rsx::prof
 			"RSX profile over %u frames, %.1f ms of thread time (%.2f ms/frame)",
 			g_acc.frames, static_cast<double>(window) * to_ms,
 			static_cast<double>(window) * to_ms / frames);
+
+		// The number to read when testing whether a change helped.
+		prof_log.success("\tpacing         %u/%u frames over 33ms, %u over 100ms, worst %.1f ms",
+			static_cast<u32>(g_slow_frames), static_cast<u32>(g_acc.frames),
+			static_cast<u32>(g_very_slow_frames), g_worst_frame_ns / 1'000'000.0);
+
+		g_slow_frames = 0;
+		g_very_slow_frames = 0;
+		g_worst_frame_ns = 0;
 
 		for (usz i = 0; i < bucket_count; i++)
 		{
