@@ -276,6 +276,7 @@ namespace rsx::prof
 	u64 g_mprotect_calls = 0;
 	u64 g_mprotect_bytes = 0;
 	u64 g_access_violations = 0;
+	std::atomic<u64> g_access_violation_tsc{0};
 	u64 g_rp_sites[rp_site_count] = {};
 	const char* g_rp_site_names[rp_site_count] = {
 		"Draw:1044",
@@ -968,6 +969,14 @@ namespace rsx::prof
 				static_cast<double>(g_mprotect_calls) / frames,
 				static_cast<double>(g_mprotect_bytes) / 1048576.0 / frames,
 				static_cast<double>(g_access_violations) / frames);
+
+		if (const u64 av_tsc = g_access_violation_tsc.load(); av_tsc && utils::get_tsc_freq())
+		{
+			prof_log.success("\tguest AV time  %.3f ms/frame across guest threads (invisible to the buckets above)",
+				(av_tsc * 1000.0 / utils::get_tsc_freq()) / frames);
+		}
+
+		g_access_violation_tsc.store(0);
 
 			fmt::append(report, "\n\trender passes   %.1f/frame",
 				static_cast<double>(g_render_passes) / frames);

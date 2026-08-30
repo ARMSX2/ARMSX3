@@ -471,6 +471,10 @@ namespace rsx::prof
 	extern u64 g_mprotect_bytes;
 	extern u64 g_access_violations;
 
+	// Wall time spent inside on_access_violation, summed across GUEST threads. Not a bucket:
+	// buckets only accumulate on the RSX thread, and this handler never runs there.
+	extern std::atomic<u64> g_access_violation_tsc;
+
 	// Which site tore the pass down. Every one of these is a tile store and reload on a
 	// tiler, so the distribution decides what is worth batching or deferring.
 	inline constexpr u32 rp_site_count = 20;

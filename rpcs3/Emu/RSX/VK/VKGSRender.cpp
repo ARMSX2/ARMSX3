@@ -956,10 +956,31 @@ bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 {
 	RSX_PROF_SCOPE(texcache_lookup);
 
+	// Timed separately from the bucket above, because this runs on whichever GUEST thread touched
+	// protected memory -- and RSX_PROF_SCOPE only accumulates for the RSX thread, so on a guest
+	// thread it records nothing at all. That blind spot matters here: the upstream blit refactor
+	// now locks every blit target with protection::no "regardless of WCB/RCB settings", and this
+	// device went from 0.1 mprotect and 0.0 faults per frame to 15.0 and 5.0. Whether that costs
+	// frame time is exactly the question the RSX-side numbers cannot answer.
+	const u64 av_start = rsx::prof::enabled() ? utils::get_tsc() : 0;
+
 	if (rsx::prof::enabled()) [[unlikely]]
 	{
 		rsx::prof::g_access_violations++;
 	}
+
+	struct av_timer
+	{
+		const u64 start;
+
+		~av_timer() noexcept
+		{
+			if (start)
+			{
+				rsx::prof::g_access_violation_tsc.fetch_add(utils::get_tsc() - start, std::memory_order_relaxed);
+			}
+		}
+	} av_timer_v{av_start};
 
 	rsx::mm_flush(address);
 
