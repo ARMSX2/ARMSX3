@@ -100,6 +100,35 @@ namespace vk
 
 	bool data_heap::grow(usz size)
 	{
+		// Reclaim before growing.
+		//
+		// Ring memory is only returned when a frame RETIRES (frame_context_cleanup, reached via
+		// check_present_status), and frames only queue around presents. So a game that draws
+		// without presenting can never give space back, and the ring grows until an allocation
+		// fails and takes the renderer with it.
+		//
+		// That is not a corner case: it is every long load. Sonic '06 spends sixteen seconds
+		// loading a level -- 68 shared-memory allocations, SPU images, particle threads, all
+		// healthy forward progress -- and correctly presents nothing the whole time, while the
+		// attrib ring climbs 64M to 576M on requests no larger than 217K. Ratchet & Clank does
+		// the same to its index buffer, 16M to 256M in 290ms on 2K requests.
+		//
+		// Growing was never the right answer to a full ring: the GPU has finished with most of
+		// it. Ask for that memory back first, and only grow if it genuinely is all still in use.
+		if (!(m_flags & heap_pool_fixed_size) && vk::reclaim_ring_memory())
+		{
+			// Conservative on purpose. The caller checks can_alloc<Alignment> with an alignment
+			// this function cannot see, so claim success only with a 4K margin -- enough to cover
+			// any alignment it might apply. Being wrong here would let it allocate over memory
+			// still in flight, which is far worse than growing unnecessarily.
+			if (can_alloc_impl(utils::align(m_put_pos, 4096), size + 4096))
+			{
+				rsx_log.notice("[%s] Reclaimed instead of growing (heap %uM, requested %uK).",
+					m_name, static_cast<u32>(m_size / 0x100000), static_cast<u32>(size / 1024));
+				return true;
+			}
+		}
+
 		// Create new heap. All sizes are aligned up by 64M, upto 1GiB
 		usz size_limit = (m_flags & heap_pool_fixed_size) ? initial_size : 1024 * 0x100000;
 

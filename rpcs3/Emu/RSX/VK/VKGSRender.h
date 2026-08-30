@@ -320,6 +320,10 @@ public:
 	// External callback in case we need to suddenly submit a commandlist unexpectedly, e.g in a violation handler
 	void emergency_query_cleanup(vk::command_buffer* commands);
 
+	// Retire finished work so the data heaps can reclaim. Narrow public entry point for
+	// vk::reclaim_ring_memory(); flush_command_queue itself stays private.
+	void retire_completed_work();
+
 	// External callback to handle out of video memory problems
 	bool on_vram_exhausted(rsx::problem_severity severity);
 

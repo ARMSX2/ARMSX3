@@ -337,6 +337,21 @@ namespace vk
 		return test_status_interrupt(runtime_state::uninterruptible);
 	}
 
+	bool reclaim_ring_memory()
+	{
+		auto renderer = dynamic_cast<VKGSRender*>(rsx::get_current_renderer());
+
+		if (!renderer || is_uninterruptible())
+		{
+			return false;
+		}
+
+		// Hard sync: this must actually retire frames, not merely submit. check_present_status()
+		// inside flush_command_queue is what returns each retired frame's ring memory.
+		renderer->retire_completed_work();
+		return true;
+	}
+
 	void advance_completed_frame_counter()
 	{
 		g_num_processed_frames++;
