@@ -9216,9 +9216,29 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			{
 				if (state.is_const() && (state.value & -0x20) == (CELL_SYNC_ERROR_ALIGN & -0x20))
 				{
-					// Do not notify if it is a cellSync function
-					value.no_notify = 1;
-					spu_log.success("Detected cellSync function at 0x%x, disabling reservation notification.", pattern.put_pc);
+					// Detected, but the notification is NOT suppressed any more.
+					//
+					// Upstream sets no_notify here so a cellSync PUTLLC skips waking reservation
+					// waiters, on the reasoning that these functions store constantly and waking
+					// everyone is a thundering herd. The cost is that releasing a cellSync mutex
+					// wakes nobody: a thread waiting on that line only learns it is free by
+					// polling or by timing out.
+					//
+					// That is the same trade-off this tree already resolved for the SPURS variant
+					// in do_putllc, and for the same reason -- notifying is correct behaviour and
+					// suppressing is an optimisation, so the optimisation goes.
+					//
+					// Measured here rather than argued: in Sonic '06 a slow frame is main_thread
+					// spending ~70% of it spinning in the guest's cellSyncMutexTryLock on a mutex
+					// never once observed free, while one SPU spends 75% of that frame in the
+					// GETLLAR/PUTLLC loop of the very same ticket lock, at an address this
+					// detector had flagged and silenced. Every other candidate was measured and
+					// cleared: GPU worst frame 14.9ms against 135ms wall frames, CPU 11% at full
+					// clocks, semaphore waits capped at 14ms, group parks capped at 9.7ms.
+					//
+					// Keep the detection log, since knowing where these functions are is useful,
+					// and say plainly that nothing is being disabled now.
+					spu_log.success("Detected cellSync function at 0x%x (reservation notification kept).", pattern.put_pc);
 					break;
 				}
 			}
