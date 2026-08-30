@@ -5,6 +5,9 @@
 #include "Emu/Memory/vm.h"
 #include "Emu/Cell/SPUThread.h"
 
+extern atomic_t<u64> g_spu_group_susp_us;
+extern atomic_t<u64> g_spu_group_susp_count;
+extern atomic_t<u64> g_spu_group_susp_max;
 extern atomic_t<u64> g_sema_wait_us;
 extern atomic_t<u64> g_sema_wait_count;
 extern atomic_t<u64> g_sema_wait_max_us;
@@ -1088,6 +1091,18 @@ namespace rsx::prof
 
 				if (g_stall_spu_ticks)
 				{
+					if (const u64 n = g_spu_group_susp_count.load(); n)
+					{
+						prof_log.success("\t  group parks  %.1f/frame, mean %.2f ms, worst %.1f ms",
+							static_cast<double>(n) / frames,
+							(g_spu_group_susp_us.load() / 1000.0) / n,
+							g_spu_group_susp_max.load() / 1000.0);
+
+						g_spu_group_susp_us = 0;
+						g_spu_group_susp_count = 0;
+						g_spu_group_susp_max = 0;
+					}
+
 					prof_log.success("\tSTALL-only SPU %.2f exec / %.2f waiting / %.2f GROUP-SUSPENDED  (vs %.2f suspended overall)",
 						static_cast<double>(g_stall_spu_exec) / g_stall_spu_ticks,
 						static_cast<double>(g_stall_spu_wait) / g_stall_spu_ticks,

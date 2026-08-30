@@ -6827,6 +6827,12 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 	fmt::throw_exception("Unknown/illegal channel in WRCH (ch=%d [%s], value=0x%x)", ch, ch < 128 ? spu_ch_name[ch] : "???", value);
 }
 
+// Duration of the whole-group park in sys_spu_thread_receive_event.
+atomic_t<u64> g_spu_group_susp_start{0};
+atomic_t<u64> g_spu_group_susp_us{0};
+atomic_t<u64> g_spu_group_susp_count{0};
+atomic_t<u64> g_spu_group_susp_max{0};
+
 extern void resume_spu_thread_group_from_waiting(spu_thread& spu, std::array<shared_ptr<named_thread<spu_thread>>, 8>& notify_spus)
 {
 	const auto group = spu.group;
@@ -6836,6 +6842,17 @@ extern void resume_spu_thread_group_from_waiting(spu_thread& spu, std::array<sha
 	if (group->run_state == SPU_THREAD_GROUP_STATUS_WAITING)
 	{
 		group->run_state = SPU_THREAD_GROUP_STATUS_RUNNING;
+
+		if (const u64 start = g_spu_group_susp_start; start)
+		{
+			const u64 freq = utils::get_tsc_freq();
+			const u64 us = freq ? ((utils::get_tsc() - start) * 1000000ull) / freq : 0;
+
+			g_spu_group_susp_us += us;
+			g_spu_group_susp_count++;
+			g_spu_group_susp_max.fetch_op([us](u64& v) { if (us > v) { v = us; return true; } return false; });
+			g_spu_group_susp_start = 0;
+		}
 	}
 	else if (group->run_state == SPU_THREAD_GROUP_STATUS_WAITING_AND_SUSPENDED)
 	{
@@ -7037,6 +7054,16 @@ bool spu_thread::stop_and_signal(u32 code)
 				lv2_obj::emplace(queue->sq, this);
 				group->run_state = SPU_THREAD_GROUP_STATUS_WAITING;
 				group->waiter_spu_index = index;
+
+				// How long the group stays parked here.
+				//
+				// This suspends the WHOLE group untimed until someone sends the event, and if the
+				// SPU being parked holds a guest lock, nothing can take that lock until then.
+				// Profiling shows group suspension appears only during slow frames (0.10-1.00
+				// suspended, against 0.00 overall) while main_thread spends 72% of such a frame
+				// spinning in cellSyncMutexTryLock -- so the duration of this park is the thing
+				// worth knowing.
+				g_spu_group_susp_start = utils::get_tsc();
 
 				for (auto& thread : group->threads)
 				{
