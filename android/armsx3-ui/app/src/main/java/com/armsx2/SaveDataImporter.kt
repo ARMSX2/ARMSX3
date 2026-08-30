@@ -2,6 +2,7 @@ package com.armsx2
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.armsx2.data.library.ParamSfo
@@ -60,6 +61,8 @@ object SaveDataImporter {
         val error: String? = null,
         /** Names of imported saves whose data files are still encrypted. See [looksEncrypted]. */
         val encrypted: List<String> = emptyList(),
+        /** `dirName to fileNames` for loose files merged into an existing save. */
+        val merged: List<Pair<String, List<String>>> = emptyList(),
     )
 
     // ---- entry points ---------------------------------------------------------------------
@@ -82,8 +85,37 @@ object SaveDataImporter {
         val input = runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
             ?: return@runImport Outcome(false, error = "Could not open the selected file")
 
-        input.use { stageArchive(it, staging, onProgress, isCancelled) }
+        val archiveResult = input.use { stageArchive(it, staging, onProgress, isCancelled) }
+
+        // A decrypted save file is what a save decrypter hands back -- one loose file, not an
+        // archive -- and ZipInputStream simply reports no entries for it, which surfaced as
+        // "the archive was empty" and told the user nothing about what to do instead. If
+        // nothing was staged, take the pick at face value and stage it as that one file.
+        if (archiveResult == null && staging.walkTopDown().none { it.isFile }) {
+            val name = displayName(context, uri)
+                ?: return@runImport Outcome(false, error = "Could not read the selected file's name")
+
+            val safe = sanitizedDirName(name)
+                ?: return@runImport Outcome(false, error = "Unsupported file name: $name")
+
+            val copied = runCatching {
+                context.contentResolver.openInputStream(uri)?.use { raw ->
+                    File(staging, safe).outputStream().use { out -> raw.copyTo(out) }
+                } != null
+            }.getOrDefault(false)
+
+            if (!copied) return@runImport Outcome(false, error = "Could not read the selected file")
+        }
+
+        archiveResult
     }
+
+    /** The picked document's file name, which for a loose file is the only clue to its identity. */
+    private fun displayName(context: Context, uri: Uri): String? = runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            ?: uri.lastPathSegment?.substringAfterLast('/')
+    }.getOrNull()
 
     /**
      * Imports from a folder picked with `ActivityResultContracts.OpenDocumentTree`.
@@ -131,6 +163,15 @@ object SaveDataImporter {
 
             val found = discover(staging)
             if (found.isEmpty()) {
+                // No PARAM.SFO anywhere, so this is not a save in its own right. It may still be
+                // the useful half of one: a decrypter returns the data files on their own, and
+                // those have to go back into a save that already exists. See [resolveMergeTarget]
+                // for why the target is only ever accepted when it is unambiguous.
+                val loose = staging.walkTopDown().filter { it.isFile && !isJunk(it.name) }.toList()
+                if (loose.isNotEmpty()) {
+                    return mergeLoose(savedataRoot, loose)
+                }
+
                 return Outcome(
                     false,
                     error = "No save data found. A save is a folder containing PARAM.SFO.",
@@ -225,6 +266,79 @@ object SaveDataImporter {
 
     /** Media and metadata: compressed images are high-entropy too and would false-positive. */
     private val SKIP_ENTROPY = setOf("ICON0.PNG", "ICON1.PAM", "PIC1.PNG", "SND0.AT3", "PARAM.SFO", "PARAM.PFD")
+
+    /**
+     * Merges loose save files into a save that already exists.
+     *
+     * A save decrypter hands back the data files alone -- no PARAM.SFO, no folder we can name --
+     * so there is nothing in them that says which save they belong to. Guessing wrong overwrites
+     * the wrong game's progress, so this only proceeds when the answer is forced, by one of two
+     * signals, and refuses with an explanation otherwise:
+     *
+     *  - The staged folder's own name matches an existing save directory. This is the deliberate
+     *    path: put the files in a folder named after the save and import that folder.
+     *  - Failing that, exactly ONE existing save already contains a file with that name. One match
+     *    is an answer; two is a coin flip, and a coin flip here costs a save file.
+     *
+     * The replaced file is kept alongside as `.old-import` until the whole merge succeeds, so a
+     * failure part way through does not leave the save short of a file it had before.
+     */
+    private fun mergeLoose(savedataRoot: File, loose: List<File>): Outcome {
+        val saves = savedataRoot.listFiles().orEmpty()
+            .filter { it.isDirectory && File(it, "PARAM.SFO").isFile }
+
+        if (saves.isEmpty()) {
+            return Outcome(false, error = "There are no saves here yet to merge these files into.")
+        }
+
+        val byFolderName = loose.mapNotNull { it.parentFile?.name }.distinct()
+            .firstNotNullOfOrNull { n -> saves.firstOrNull { it.name.equals(n, true) } }
+
+        val target = byFolderName ?: run {
+            val names = loose.map { it.name }
+            val hits = saves.filter { save ->
+                names.any { n -> File(save, n).isFile }
+            }
+            when (hits.size) {
+                1 -> hits.first()
+                0 -> return Outcome(
+                    false,
+                    error = "No existing save contains ${loose.joinToString(", ") { it.name }}. " +
+                        "Put the file in a folder named after the save and import that folder.",
+                )
+                else -> return Outcome(
+                    false,
+                    error = "${hits.size} saves contain a file by that name, so this would be a " +
+                        "guess. Put the file in a folder named after the save you want " +
+                        "(${hits.joinToString(", ") { it.name }}) and import that folder.",
+                )
+            }
+        }
+
+        val backups = mutableListOf<Pair<File, File>>()
+        val names = mutableListOf<String>()
+
+        for (file in loose) {
+            val dest = File(target, file.name)
+            if (dest.exists()) {
+                val backup = File(target, "${file.name}.old-import")
+                backup.delete()
+                if (!dest.renameTo(backup)) {
+                    backups.forEach { (b, d) -> b.renameTo(d) }
+                    return Outcome(false, error = "Could not replace ${file.name} in ${target.name}")
+                }
+                backups += backup to dest
+            }
+            if (!file.renameTo(dest)) {
+                backups.forEach { (b, d) -> b.renameTo(d) }
+                return Outcome(false, error = "Could not write ${file.name} into ${target.name}")
+            }
+            names += file.name
+        }
+
+        backups.forEach { (b, _) -> b.delete() }
+        return Outcome(true, merged = listOf(target.name to names))
+    }
 
     private fun discover(staging: File): List<Pair<File, String>> {
         val out = mutableListOf<Pair<File, String>>()

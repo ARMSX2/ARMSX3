@@ -1056,6 +1056,12 @@ private fun BackupRestoreRows() {
             // Copy-protected saves import perfectly and then crash the game, because we hand
             // it ciphertext where its save structure should be. Say so at import, since after
             // this point the only symptom is a segfault in recompiled code.
+            r.ok && r.merged.isNotEmpty() -> {
+                val m = r.merged.first()
+                I18n.get("app.savedata.merged")
+                    .replace("%1", m.second.joinToString(", "))
+                    .replace("%2", m.first)
+            }
             r.ok && r.encrypted.isNotEmpty() ->
                 I18n.get("app.savedata.encrypted").replace("%s", r.encrypted.joinToString(", "))
             r.ok && r.saves.any { it.replaced } -> I18n.get("app.savedata.replaced").replace("%s", names)
