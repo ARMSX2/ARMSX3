@@ -102,7 +102,8 @@ void main()
         color.w = color[OperationMode] - mean;
 
         float sum = (((((abs(left.x) + abs(left.y)) + abs(left.z)) + abs(left.w)) + (((abs(right.x) + abs(right.y)) + abs(right.z)) + abs(right.w))) + (((abs(upDown.x) + abs(upDown.y)) + abs(upDown.z)) + abs(upDown.w)));
-        float sumMean = 1.014185e+01f / sum;
+        // Same unguarded 0/0 as the plain variant had: sum is zero on a flat block.
+        float sumMean = 1.014185e+01f / max(sum, 6.0e-02f);
         float std = (sumMean * sumMean);
 
         vec3 data = vec3(std, edgeDirection(left, right));

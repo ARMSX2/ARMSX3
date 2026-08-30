@@ -19,6 +19,16 @@ R"(
 
 #define EDGE_THRESHOLD (8.0 / 255.0)
 
+// Floors the deviation reciprocal below. `sum` is the summed absolute deviation from the block
+// mean, so it is exactly ZERO on a flat block and the divide is a 0/0. Qualcomm's own shaders do
+// not guard it -- on a flat block the edgeVote above normally rejects the pixel before reaching
+// here, but that is a property of the threshold, not a guarantee.
+#define DEVIATION_FLOOR 6.0e-02
+
+// Same class of guard for the direction estimate: on a flat block both deltas are zero and the
+// inversesqrt is 1/0. Value is Qualcomm's own, matching sgsr_shader_edge.glsl.
+#define DIRECTION_EPSILON 3.075740e-05
+
 layout(push_constant) uniform const_buffer
 {
     // Output extent, for the bounds check. A dispatch is rounded up to whole workgroups, so the
@@ -39,9 +49,33 @@ layout(push_constant) uniform const_buffer
 layout(set = 0, binding = 0) uniform sampler2D InputTexture;
 layout(set = 0, binding = 1, rgba8) uniform writeonly image2D OutputTexture;
 
-vec4 weightY(vec4 dx, vec4 dy, vec4 std)
+// Estimates the local edge direction from the left and right gathers. Qualcomm's, vectorised
+// only in the sense that it reads vec4 gathers; the maths is scalar and unchanged from
+// sgsr_shader_edge.glsl.
+vec2 edgeDirection(vec4 left, vec4 right)
 {
-    vec4 x = ((dx * dx) + (dy * dy)) * 0.55f + std;
+    float RxLz = right.x - left.z;
+    float RwLy = right.w - left.y;
+    vec2 delta = vec2(RxLz + RwLy, RxLz - RwLy);
+    float lengthInv = inversesqrt((delta.x * delta.x + DIRECTION_EPSILON) + (delta.y * delta.y));
+    return delta * lengthInv;
+}
+
+// Weights along the edge direction rather than isotropically.
+//
+// This is the edge-direction weighting that sgsr_shader_edge.glsl already does, brought into the
+// plain variant -- which changes what the two variants are for. The edge shader takes a fourth
+// gather to do it; this reuses the three the plain path already has, so the extra cost here is
+// arithmetic rather than bandwidth.
+//
+// `c` is now the raw deviation and `std` the squared reciprocal-mean, matching Qualcomm's
+// scalar weightY. The previous form took a pre-clamped `abs(dg) * std` and an isotropic
+// `* 0.55 + std`; both are gone, so the std computation below had to change with it.
+vec4 weightY(vec4 dx, vec4 dy, vec4 c, float std, vec2 dir)
+{
+    vec4 edgeDis = (dx * dir.y) + (dy * dir.x);
+    vec4 x = ((dx * dx) + (dy * dy))
+           + ((edgeDis * edgeDis) * ((clamp((c * c) * std, 0.0f, 1.0f) * 0.7f) - 1.0f));
 
     // Qualcomm's fastLanczos2, applied to four lanes at once.
     //
@@ -92,20 +126,26 @@ void main()
         float mean = (dg[0].y + dg[0].z + dg[1].x + dg[1].w) * 0.25f;
         dg = dg - mean;
         vec4 sum = abs(dg[0]) + abs(dg[1]) + abs(dg[2]);
-        float std = 2.181818f / (sum.x + sum.y + sum.z + sum.w);
+
+        // Qualcomm's constant and squaring, from their scalar shader. The 2.181818 that was here
+        // belongs to the isotropic weightY that has just been replaced, and carrying it over
+        // would scale the new edge term wrongly rather than merely differently.
+        float sumMean = 1.014185e+01f / max(sum.x + sum.y + sum.z + sum.w, DEVIATION_FLOOR);
+        float std = sumMean * sumMean;
+        vec2 dir = edgeDirection(dg[0], dg[1]);
         mat2x4 w = mat2x4(
             weightY(
                 pl.xxxx + vec4(+1.0f, +0.0f, +0.0f, +1.0f),
                 pl.yyyy + vec4(-1.0f, -1.0f, +0.0f, +0.0f),
-                clamp(abs(dg[0]) * std, 0.0f, 1.0f)
+                dg[0], std, dir
             ) + weightY(
                 pl.xxxx + vec4(-1.0f, -2.0f, -2.0f, -1.0f),
                 pl.yyyy + vec4(-1.0f, -1.0f, +0.0f, +0.0f),
-                clamp(abs(dg[1]) * std, 0.0f, 1.0f)
+                dg[1], std, dir
             ) + weightY(
                 pl.xxxx + vec4(+0.0f, -1.0f, -1.0f, +0.0f),
                 pl.yyyy + vec4(+1.0f, +1.0f, -2.0f, -2.0f),
-                clamp(abs(dg[2]) * std, 0.0f, 1.0f)
+                dg[2], std, dir
             ),
             dg[0] + dg[1] + dg[2]
         );
