@@ -35,7 +35,7 @@ android {
         minSdk = (project.findProperty("armsx3.minSdk") as String?)?.toInt() ?: 33
         targetSdk = 37
         versionCode = 38
-        versionName = "0.9.4.4"
+        versionName = "0.9.5"
 
         // ARMSX2's UI reads these. STORAGE_ALL_FILES gates the all-files storage path in
         // onboarding; IN_APP_UPDATER gates the in-app GitHub-release updater.
