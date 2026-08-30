@@ -20,6 +20,7 @@
 #include "Emu/Cell/SPUDisAsm.h"
 #include "Emu/Cell/SPUAnalyser.h"
 #include "Emu/Cell/SPUThread.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include "Emu/Cell/SPURecompiler.h"
 #include "Emu/Cell/timers.hpp"
 
@@ -3654,6 +3655,26 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			{
 				raddr = 0;
 				return true;
+			}
+
+			// Was this a real conflict, or an artifact of the reservation table?
+			//
+			// vm::g_reservations is indexed (addr & 0xff80) / 2 -- only bits 7..15 of the
+			// address -- so every 128-byte line shares its reservation word with every line
+			// 64KB away. A write anywhere in that alias set bumps the counter and fails this
+			// test, even though nothing touched the line we reserved.
+			//
+			// The test above fires BEFORE any data comparison, so the existing failure counter
+			// cannot tell the two apart, and at 6,489-62,768 conditional stores per frame with
+			// 81-98.4% failing that distinction decides the fix entirely. If the line is
+			// byte-identical on most failures the contention is largely an aliasing artifact and
+			// belongs in the reservation table; if it really changed, the contention is genuine
+			// and no amount of table widening helps.
+			//
+			// A 128-byte compare on an already-failing path, and only when the profiler is on.
+			if (rsx::prof::enabled() && cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)))
+			{
+				putllc_spurious++;
 			}
 
 			return false;

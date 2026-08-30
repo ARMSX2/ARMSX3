@@ -118,6 +118,7 @@ namespace rsx::prof
 	u64 g_putllc_calls_prev = 0;
 	u64 g_putllc_fails_prev = 0;
 	u64 g_putllc_parks_prev = 0;
+	u64 g_putllc_spurious_prev = 0;
 
 	struct fn_bucket { const char* fn; u32 hits; };
 	fn_bucket g_main_state[20]{};
@@ -1104,12 +1105,14 @@ namespace rsx::prof
 				u64 calls = 0;
 				u64 fails = 0;
 				u64 parks = 0;
+				u64 spurious = 0;
 
 				idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
 				{
 					calls += spu.putllc_calls;
 					fails += spu.putllc_fails;
 					parks += spu.putllc_parks;
+					spurious += spu.putllc_spurious;
 				}, idm::unlocked);
 
 				const u64 dc = calls - g_putllc_calls_prev;
@@ -1120,11 +1123,18 @@ namespace rsx::prof
 					prof_log.success("\t  PUTLLC       %.0f/frame, %.1f%% failed (%u of %u), %.1f parks/frame",
 						static_cast<double>(dc) / frames, df * 100.0 / dc, df, dc,
 						static_cast<double>(parks - g_putllc_parks_prev) / frames);
+
+					if (df)
+					{
+						prof_log.success("\t  of those      %.1f%% SPURIOUS (line unchanged; reservation-table aliasing, not a real conflict)",
+							(spurious - g_putllc_spurious_prev) * 100.0 / df);
+					}
 				}
 
 				g_putllc_calls_prev = calls;
 				g_putllc_fails_prev = fails;
 				g_putllc_parks_prev = parks;
+				g_putllc_spurious_prev = spurious;
 			}
 
 			if (const u64 n = g_sema_wait_count.load(); n)
