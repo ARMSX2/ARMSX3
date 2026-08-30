@@ -516,8 +516,10 @@ namespace rsx::prof
 	extern std::atomic<u64> g_last_frame_tsc;
 	void stall_watchdog();
 
-	// Statistical guest profiler, sampled from the vblank thread.
+	// Statistical guest profiler. Runs on its own thread so samples are not phase-locked to
+	// the frame clock; start_sampler() is idempotent.
 	void sample_guest_pc();
+	void start_sampler();
 
 	/** Write the current window to the log and start a new one. Safe to call from anywhere. */
 	void dump_and_reset();

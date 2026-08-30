@@ -1066,6 +1066,8 @@ namespace rsx
 #else
 			constexpr u32 host_min_quantum = 500;
 #endif
+			rsx::prof::start_sampler();
+
 			u64 start_time = get_system_time();
 
 			u64 vblank_rate = g_cfg.video.vblank_rate;
@@ -1098,7 +1100,6 @@ namespace rsx
 				// Sampled here because this thread wakes ~60Hz regardless of what the guest
 				// or the RSX are doing, so it lands mid-stall instead of at the flip.
 				rsx::prof::stall_watchdog();
-				rsx::prof::sample_guest_pc();
 
 				// Calculate the time at which we need to send a new VBLANK signal
 				const u64 post_event_time = start_time + (local_vblank_count + 1) * vblank_period / vblank_rate;

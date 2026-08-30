@@ -56,6 +56,40 @@ namespace rsx::prof
 	u32 g_sync_last_word = 0;
 	u32 g_sync_last_addr = 0;
 
+	// Sampled from a dedicated thread rather than the vblank thread.
+	//
+	// The vblank thread wakes at a fixed phase, so every sample landed within microseconds of the
+	// vblank instant -- which is the one moment in the frame when the previous frame's SPU work
+	// has drained and the next has not been kicked, i.e. the structural minimum of SPU occupancy,
+	// and equally a biased instant for the PPU. The headline "54.8% of guest time in
+	// cellSyncMutexTryLock" was measured that way and may be partly that bias.
+	//
+	// This runs free of the frame clock at ~200Hz, which is uncorrelated with vblank at 60Hz.
+	void start_sampler()
+	{
+		static std::unique_ptr<named_thread<std::function<void()>>> s_sampler;
+
+		if (s_sampler)
+		{
+			return;
+		}
+
+		s_sampler = std::make_unique<named_thread<std::function<void()>>>("RSX Sampler"sv, []()
+		{
+			while (thread_ctrl::state() != thread_state::aborting)
+			{
+				if (g_enabled.load())
+				{
+					sample_guest_pc();
+				}
+
+				// 5ms: fast enough for a useful sample count over a 300-frame window, slow enough
+				// that the walk itself is not a load on a machine this contended.
+				thread_ctrl::wait_for(5'000);
+			}
+		});
+	}
+
 	void sample_guest_pc()
 	{
 		if (!g_enabled.load())
