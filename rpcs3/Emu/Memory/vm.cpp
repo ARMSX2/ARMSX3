@@ -401,10 +401,22 @@ namespace vm
 					return;
 				}
 
+				// Wait on the word rather than yielding blind.
+				//
+				// The old form span 100 times and then yielded for a whole scheduler quantum,
+				// which on a machine where SPUs take this lock thousands of times a frame means
+				// sleeping through the very gaps being waited for. ~writer_lock now notifies on
+				// the transition to zero, so this wakes when the word is actually clear. The
+				// timeout is a safety net, not the mechanism -- guessed sleep durations are what
+				// made three earlier backoff attempts on this branch produce 2179ms frames.
 				if (i < 100)
+				{
 					busy_wait(200);
-				else
-					std::this_thread::yield();
+				}
+				else if (const u64 bits = get_range_lock_bits(true))
+				{
+					get_range_lock_bits(true).wait(bits, atomic_wait_timeout{50'000});
+				}
 
 				if (cpu_flag::wait - cpu.state)
 				{

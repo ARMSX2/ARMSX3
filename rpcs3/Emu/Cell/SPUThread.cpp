@@ -596,14 +596,31 @@ namespace vm
 	// Defined here for performance reasons
 	writer_lock::~writer_lock() noexcept
 	{
+		// Wake the PPUs parked on this word.
+		//
+		// vm::passive_lock waits for g_range_lock_bits[1] to reach ZERO -- the whole word, not
+		// this address -- and nothing here ever notified it, so a parked PPU could only find the
+		// gap by polling: 100 busy_wait(200) spins and then a yield for a full scheduler quantum.
+		// With several SPUs each taking this lock thousands of times a frame, the quiet instants
+		// are short and a yielding PPU sleeps straight through them.
+		//
+		// Only the transition to zero can release anyone, so that is the only case that notifies
+		// and the common release stays a plain clear.
 		if (range_lock)
 		{
-			g_range_lock_bits[1] &= ~(1ull << (range_lock - g_range_lock_set));
+			const u64 left = (g_range_lock_bits[1] &= ~(1ull << (range_lock - g_range_lock_set)));
 			range_lock->release(0);
+
+			if (!left)
+			{
+				g_range_lock_bits[1].notify_all();
+			}
+
 			return;
 		}
 
 		g_range_lock_bits[1].release(0);
+		g_range_lock_bits[1].notify_all();
 	}
 }
 
