@@ -298,12 +298,7 @@ data class Ps3Settings(
     val accurateDfma: Boolean = true,
     val setDazFtz: Boolean = false,
     val hleLwmutex: Boolean = false,
-    // 1 = Usleep Only, not 0 = As Host. As Host takes lv2.cpp's plain wait_for(), written for a
-    // machine with precise timers; measured on a Snapdragon 8 Gen 2 a 30us sleep takes 50-161us.
-    // Guest poll loops then run several times slower than intended -- which is load-bearing for
-    // Portal 2, where _gcm_intr_thread polls a mutex on a 30us timer against a main_thread that
-    // is waiting on a semaphore only that thread can post.
-    val sleepTimers: Int = 1,
+    val sleepTimers: Int = 0,
     val debugConsoleMode: Boolean = false,
     val resolution: Int = 2,
     val anisoFilter: Int = 0,

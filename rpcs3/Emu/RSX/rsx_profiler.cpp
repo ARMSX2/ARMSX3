@@ -23,6 +23,60 @@ namespace rsx::prof
 	accounting g_acc{};
 	std::atomic<u64> g_last_frame_tsc{0};
 
+	// Guest PC sampling. The vblank thread ticks ~60Hz regardless of what anything else is
+	// doing, so sampling main_thread's cia there is a cheap statistical profiler for the GUEST --
+	// the one question none of this session's instrumentation could answer. Stall dumps only ever
+	// fire on frames already over 60ms, so they say where a bad frame is, never where the time
+	// goes overall.
+	//
+	// Fixed table, no allocation, no locks: PCs are quantised to 64 bytes so a loop lands in one
+	// slot, and a full table just stops learning new sites rather than evicting.
+	struct pc_bucket { u32 pc; u32 hits; };
+	pc_bucket g_pc_samples[24]{};
+	u64 g_pc_total = 0;
+
+	void sample_guest_pc()
+	{
+		if (!g_enabled.load())
+		{
+			return;
+		}
+
+		u32 pc = 0;
+
+		idm::select<named_thread<ppu_thread>>([&pc](u32, ppu_thread& ppu)
+		{
+			// Only a thread actually executing guest code; a blocked one has no PC worth having.
+			if (!pc && !(ppu.state.load() & cpu_flag::wait))
+			{
+				pc = ppu.cia & ~0x3fu;
+			}
+		}, idm::unlocked);
+
+		if (!pc)
+		{
+			return;
+		}
+
+		g_pc_total++;
+
+		for (auto& b : g_pc_samples)
+		{
+			if (b.pc == pc)
+			{
+				b.hits++;
+				return;
+			}
+
+			if (!b.pc)
+			{
+				b.pc = pc;
+				b.hits = 1;
+				return;
+			}
+		}
+	}
+
 	// Frame pacing for the current window only; reset by dump_and_reset.
 	u64 g_slow_frames = 0;
 	u64 g_very_slow_frames = 0;
@@ -630,6 +684,35 @@ namespace rsx::prof
 		prof_log.success("\tpacing         %u/%u frames over 33ms, %u over 100ms, worst %.1f ms",
 			static_cast<u32>(g_slow_frames), static_cast<u32>(g_acc.frames),
 			static_cast<u32>(g_very_slow_frames), g_worst_frame_ns / 1'000'000.0);
+
+		if (g_pc_total)
+		{
+			// Ranked, so the top line is where the guest actually is.
+			std::sort(std::begin(g_pc_samples), std::end(g_pc_samples),
+				[](const pc_bucket& a, const pc_bucket& b) { return a.hits > b.hits; });
+
+			std::string top;
+
+			for (const auto& b : g_pc_samples)
+			{
+				if (!b.hits)
+				{
+					break;
+				}
+
+				fmt::append(top, "\n\t  0x%08x  %4.1f%%  (%u)", b.pc,
+					b.hits * 100.0 / g_pc_total, b.hits);
+			}
+
+			prof_log.success("\tguest PC       %u samples of a RUNNING thread:%s", g_pc_total, top);
+
+			for (auto& b : g_pc_samples)
+			{
+				b = {};
+			}
+
+			g_pc_total = 0;
+		}
 
 		g_slow_frames = 0;
 		g_very_slow_frames = 0;

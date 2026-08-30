@@ -83,6 +83,7 @@ object ConfigStore {
     // clear above never touched it, so installs carried an off-spec global for releases.
     private const val KEY_GLOBAL_RSV_ON = "config.migrated.globalSpuRsvOn"
     private const val KEY_SLEEP_USLEEP = "config.migrated.sleepTimersUsleep"
+    private const val KEY_SLEEP_AS_HOST = "config.migrated.sleepTimersAsHost"
     // "Save LLVM logs", left on while chasing the Saint Seiya register scavenger. Bumped: the
     // first pass only un-pinned the override, which does nothing for a key no code writes -- the
     // value already in config.yml is reloaded and saved again on every boot.
@@ -488,6 +489,31 @@ object ConfigStore {
                 CoreSettingOverrides.forget(SettingsScope.Global, null, "Core@@Sleep Timers Accuracy")
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_SLEEP_USLEEP, true) }
+        }
+
+        // ...and put it back. The migration above moved Android off As Host because Android's
+        // default 50us timer slack makes lv2.cpp's plain wait_for() branch imprecise -- but the
+        // commit that shipped alongside it sets PR_SET_TIMERSLACK to 1ns at startup
+        // (rpcsx-android.cpp), which is the exact precondition that branch documents: "With
+        // timerslack set low, Linux is precise for all values above". The workaround and the fix
+        // for the same problem landed together, so the workaround was redundant on arrival.
+        //
+        // As Host is what upstream uses for Linux and macOS, and what this app defaulted to
+        // before any of it. Diverging from both, for one title, on a premise another commit had
+        // already removed, is not a default worth keeping.
+        //
+        // Only touches installs the migration above actually moved, so a deliberate Usleep Only
+        // is preserved.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_SLEEP_AS_HOST, false)) {
+            if (raw != null && parsed.ps3.sleepTimers == 1) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(sleepTimers = 0))
+                dirty = true
+            }
+
+            runCatching {
+                CoreSettingOverrides.forget(SettingsScope.Global, null, "Core@@Sleep Timers Accuracy")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_SLEEP_AS_HOST, true) }
         }
 
         if (!MainActivityRuntime.prefs.getBoolean(KEY_GLOBAL_RSV_ON, false)) {
