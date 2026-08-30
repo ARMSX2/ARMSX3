@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "rsx_profiler.h"
 #include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/PPUDisAsm.h"
+#include "Emu/Memory/vm.h"
 #include "Emu/Cell/SPUThread.h"
 
 #include "Emu/IdManager.h"
@@ -258,6 +260,54 @@ namespace rsx::prof
 		return out;
 	}
 
+	// Disassemble around the PC of a PPU that is RUNNING during a stall.
+	//
+	// 17 of 27 resamples inside stalls landed on one instruction, at varying offsets into the
+	// stall, so the thread is busy-waiting rather than working. A PC alone cannot say what it
+	// waits ON, and that is the whole question: the game's own frame-pacing spin is working as
+	// intended, a wait for something we deliver late is ours to fix.
+	//
+	// Reads guest memory, which is what made earlier stall dumps fault -- but those walked call
+	// stacks through arbitrary pointers. This reads a fixed window around a PC the thread is
+	// currently EXECUTING, so it is mapped by construction, and every address is still checked.
+	static std::string disasm_running_ppu()
+	{
+		std::string out;
+		bool done = false;
+
+		idm::select<named_thread<ppu_thread>>([&out, &done](u32 id, ppu_thread& ppu)
+		{
+			if (done || ppu.state.load() & cpu_flag::wait)
+			{
+				return;
+			}
+
+			const u32 pc = ppu.cia;
+
+			// A spin loop is short and backwards-branching, so the instruction that decides it
+			// is just behind the sampled PC.
+			const u32 start = pc >= 0x40 ? pc - 0x40 : 0;
+
+			if (!vm::check_addr(start, vm::page_readable, 0x90))
+			{
+				return;
+			}
+
+			done = true;
+			fmt::append(out, "\n  disasm around 0x%08x (PPU 0x%07x):", pc, id);
+
+			PPUDisAsm dis_asm(cpu_disasm_mode::normal, vm::g_sudo_addr);
+
+			for (u32 addr = start; addr <= start + 0x80; addr += 4)
+			{
+				dis_asm.disasm(addr);
+				fmt::append(out, "\n    %s 0x%08x: %s", addr == pc ? "->" : "  ", addr, dis_asm.last_opcode);
+			}
+		}, idm::unlocked);
+
+		return out;
+	}
+
 	void stall_watchdog()
 	{
 		if (!g_enabled.load())
@@ -316,8 +366,8 @@ namespace rsx::prof
 			return;
 		}
 
-		prof_log.error("STALL: %u ms into a frame with no flip (sample %u/60)%s",
-			stalled_ms, s_dumps, sample_guest_threads(false));
+		prof_log.error("STALL: %u ms into a frame with no flip (sample %u/60)%s%s",
+			stalled_ms, s_dumps, sample_guest_threads(false), disasm_running_ppu());
 	}
 
 	void tick_frame()
