@@ -6,6 +6,8 @@
 #include "../VKHelpers.h"
 #include "../VKResourceManager.h"
 #include "Emu/IdManager.h"
+#include "Emu/RSX/Overlays/overlay_message.h"
+#include "Emu/System.h"
 #include "util/sysinfo.hpp"
 
 #include <memory>
@@ -190,6 +192,37 @@ namespace vk
 
 		VkFlags memory_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 		auto memory_index = m_prefer_writethrough ? memory_map.device_bar : memory_map.host_visible_coherent;
+
+		// Refuse a growth the device cannot satisfy, and SAY SO, instead of walking into an
+		// unrecoverable Vulkan assert.
+		//
+		// vk::die_with_error kills the RSX thread outright. Every other thread survives, so the
+		// game does not crash -- it hangs with audio still playing, VBlank still ticking and CPU
+		// near idle, which reads as a guest deadlock and not as the renderer having died. That
+		// cost most of an evening to recognise on Sonic '06.
+		//
+		// This is a symptom, not the disease: the ring only reclaims in restore_snapshot(),
+		// which is called from the present path alone, so a game that stops flipping can never
+		// give space back and its heap climbs until an allocation fails. Nothing here fixes
+		// that. What it does is turn a silent lockup into a stated reason.
+		if (!can_allocate_heap(memory_index, aligned_new_size, 95))
+		{
+			rsx_log.fatal("[%s] Cannot grow to %uM: the device will not allocate it. The heap only "
+				"reclaims when a frame is presented, so this means no frame has completed.",
+				m_name, static_cast<u32>(aligned_new_size / 0x100000));
+
+			rsx::overlays::queue_message(
+				fmt::format("Out of video memory: the '%s' buffer needed %uM and could not get it.\n"
+					"No frame has completed, so the renderer cannot reclaim what it already holds.",
+					m_name, static_cast<u32>(aligned_new_size / 0x100000)),
+				30'000'000);
+
+			// Stop rather than die mid-frame. Emu.Pause leaves the session inspectable and the
+			// log intact, where the assert took the RSX thread down and left everything else
+			// running as if nothing had happened.
+			Emu.Pause(true);
+			return false;
+		}
 
 		// Update heap information and reset the allocator
 		rsx::data_heap::init(aligned_new_size, m_name, m_min_guard_size);
