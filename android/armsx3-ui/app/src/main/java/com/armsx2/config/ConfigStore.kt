@@ -84,6 +84,7 @@ object ConfigStore {
     private const val KEY_GLOBAL_RSV_ON = "config.migrated.globalSpuRsvOn"
     private const val KEY_SLEEP_USLEEP = "config.migrated.sleepTimersUsleep"
     private const val KEY_SLEEP_AS_HOST = "config.migrated.sleepTimersAsHost"
+    private const val KEY_SPU_LOOPDET_OFF = "config.migrated.spuLoopDetectionOff"
     // "Save LLVM logs", left on while chasing the Saint Seiya register scavenger. Bumped: the
     // first pass only un-pinned the override, which does nothing for a key no code writes -- the
     // value already in config.yml is reloaded and saved again on every boot.
@@ -489,6 +490,30 @@ object ConfigStore {
                 CoreSettingOverrides.forget(SettingsScope.Global, null, "Core@@Sleep Timers Accuracy")
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_SLEEP_USLEEP, true) }
+        }
+
+        // Turn SPU loop detection off, which is what this app and upstream both default it to.
+        //
+        // It is stored true on installs that predate the default, and on ARM64 it costs twice.
+        // exec_read_dec (SPULLVMRecompiler.cpp) yields the thread whenever the decrementer reads
+        // above 1500 -- about 19us at 79.8MHz, so effectively the entire countdown, meaning an SPU
+        // polling the decrementer yields on every poll rather than on a detected wait loop. And
+        // enabling it disables the inline cntvct_el0 decrementer read, turning every rdch RdDec
+        // into an out-of-line call.
+        //
+        // Both penalties land on the SPURS kernels, which is exactly where a PPU spinning in
+        // cellSyncMutexTryLock is waiting. Only touches installs still carrying true, so a
+        // deliberate choice made after this ships is preserved.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_SPU_LOOPDET_OFF, false)) {
+            if (raw != null && parsed.ps3.spuLoopDetection) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(spuLoopDetection = false))
+                dirty = true
+            }
+
+            runCatching {
+                CoreSettingOverrides.forget(SettingsScope.Global, null, "Core@@SPU loop detection")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_SPU_LOOPDET_OFF, true) }
         }
 
         // ...and put it back. The migration above moved Android off As Host because Android's

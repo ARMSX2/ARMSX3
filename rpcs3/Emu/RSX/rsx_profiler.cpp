@@ -45,6 +45,8 @@ namespace rsx::prof
 	pc_bucket g_spu_samples[24]{};
 	u64 g_spu_total = 0;
 	u64 g_spu_running_sum = 0;
+	u64 g_spu_total_sum = 0;
+	u64 g_spu_stopped_sum = 0;
 	u64 g_spu_tick_count = 0;
 
 	// cellSync mutex state at the dominant spin site.
@@ -77,9 +79,22 @@ namespace rsx::prof
 			u32 running = 0;
 			u32 spu_pc = 0;
 
-			idm::select<named_thread<spu_thread>>([&running, &spu_pc](u32, spu_thread& spu)
+			u32 total = 0;
+			u32 stopped = 0;
+
+			idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
 			{
-				if (spu.state.load() & cpu_flag::wait)
+				const auto st = spu.state.load();
+
+				total++;
+
+				if (st & cpu_flag::stop)
+				{
+					stopped++;
+					return;
+				}
+
+				if (st & cpu_flag::wait)
 				{
 					return;
 				}
@@ -93,6 +108,8 @@ namespace rsx::prof
 			}, idm::unlocked);
 
 			g_spu_running_sum += running;
+			g_spu_total_sum += total;
+			g_spu_stopped_sum += stopped;
 			g_spu_tick_count++;
 
 			if (spu_pc)
@@ -807,8 +824,17 @@ namespace rsx::prof
 					b.hits * 100.0 / g_spu_total, b.hits);
 			}
 
-			prof_log.success("\tSPU            %.2f running on average, %u samples:%s",
-				static_cast<double>(g_spu_running_sum) / g_spu_tick_count, g_spu_total, top);
+			// "running" here means "executing guest code outside a channel op" -- NOT "using CPU".
+			// cpu_flag::wait is held for the whole of an SPU channel wait, including the reservation
+			// loop that busy-waits at full tilt, so a core-burning SPU counts as not running. Report
+			// the denominator and the stopped count alongside it, because 0.32 of an unknown total
+			// invited exactly the wrong conclusion once already.
+			prof_log.success("\tSPU            %.2f exec / %.2f waiting / %.2f stopped of %.2f, %u pc samples:%s",
+				static_cast<double>(g_spu_running_sum) / g_spu_tick_count,
+				static_cast<double>(g_spu_total_sum - g_spu_running_sum - g_spu_stopped_sum) / g_spu_tick_count,
+				static_cast<double>(g_spu_stopped_sum) / g_spu_tick_count,
+				static_cast<double>(g_spu_total_sum) / g_spu_tick_count,
+				g_spu_total, top);
 
 			for (auto& b : g_spu_samples)
 			{
@@ -817,6 +843,8 @@ namespace rsx::prof
 
 			g_spu_total = 0;
 			g_spu_running_sum = 0;
+			g_spu_total_sum = 0;
+			g_spu_stopped_sum = 0;
 			g_spu_tick_count = 0;
 		}
 

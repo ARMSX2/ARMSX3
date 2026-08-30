@@ -338,6 +338,10 @@ public:
 	u64 get_enqueued_samples() const;
 	u64 get_enqueued_playtime() const;
 
+	// Blocks commit_data could not fit into the ring. Each one is 5.33ms of audio discarded
+	// whole, which is audible; counted so it stops being invisible.
+	atomic_t<u32> m_dropped_blocks{0};
+
 	bool is_playing() const
 	{
 		return playing;
