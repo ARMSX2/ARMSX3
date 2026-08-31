@@ -1448,6 +1448,20 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	{
 		m_output_scaling = output_scaling;
 
+		// Hand the outgoing upscaler to the GC instead of letting the assignment below delete it.
+		//
+		// This runs on the flip path, so it fires the moment the setting changes -- with the frame
+		// that was just submitted still in flight. Destroying it here destroys pipelines, samplers
+		// and descriptor sets that command buffers on the GPU still reference, which is undefined
+		// and surfaces as a fault inside the driver rather than in our code: switching output
+		// scaling to SGSR mid-game crashed at 0xe1 inside vulkan.ad08xx.so, one frame after the
+		// switch. The GC already exists for exactly this and releases the pointer, so the branches
+		// below still assign into an empty unique_ptr.
+		if (m_upscaler)
+		{
+			vk::get_resource_manager()->dispose(m_upscaler);
+		}
+
 		if (m_output_scaling == output_scaling_mode::nearest)
 		{
 			m_upscaler = std::make_unique<vk::nearest_upscale_pass>();
