@@ -13,6 +13,7 @@ extern atomic_t<u64> g_sema_wait_max_us;
 extern atomic_t<u64> g_sema_hist[6];
 
 #include "Emu/IdManager.h"
+#include "Emu/RSX/RSXThread.h"
 
 #include "util/sysinfo.hpp"
 
@@ -129,6 +130,9 @@ namespace rsx::prof
 	// cellSyncMutexTryLock" was measured that way and may be partly that bias.
 	//
 	// This runs free of the frame clock at ~200Hz, which is uncorrelated with vblank at 60Hz.
+	// Defined below; the sampler drives it because it must keep running after frames stop.
+	bool poll_stall();
+
 	void start_sampler()
 	{
 		static std::unique_ptr<named_thread<std::function<void()>>> s_sampler;
@@ -145,6 +149,10 @@ namespace rsx::prof
 				if (g_enabled.load())
 				{
 					sample_guest_pc();
+
+					// Self-rate-limited to once per 5s. Driven from here, not the frame path:
+					// a hang is precisely when no frame arrives to drive anything.
+					poll_stall();
 				}
 
 				// 5ms: fast enough for a useful sample count over a 300-frame window, slow enough
@@ -858,10 +866,21 @@ namespace rsx::prof
 			return false;
 		}
 
-		prof_log.error("RSX has not finished a frame in %.1fs; current bucket '%s', in it for %.2fs",
+		std::string fifo = "fifo: <no renderer>";
+
+		if (auto* rsxt = rsx::get_current_renderer(); rsxt && rsxt->fifo_ctrl)
+		{
+			fifo = rsxt->fifo_ctrl->debug_snapshot();
+		}
+
+		// GET vs PUT is the whole question for a hang that presents as an idle RSX: equal means
+		// the ring really is drained and the guest has stopped producing, unequal means we are
+		// sitting on work we never consumed, or never told the guest we consumed.
+		prof_log.error("RSX has not finished a frame in %.1fs; current bucket '%s', in it for %.2fs\n\t%s%s",
 			static_cast<double>(now - g_stall_started) / static_cast<double>(freq),
 			name_of(g_current),
-			static_cast<double>(now - g_last_switch) / static_cast<double>(freq));
+			static_cast<double>(now - g_last_switch) / static_cast<double>(freq),
+			fifo, sample_guest_threads(false));
 
 		return true;
 	}

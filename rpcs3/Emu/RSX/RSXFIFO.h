@@ -5,6 +5,7 @@
 #include "Emu/RSX/gcm_enums.h"
 
 #include <span>
+#include <string>
 
 struct RsxDmaControl;
 
@@ -223,6 +224,9 @@ namespace rsx
 
 			template <bool = true>
 			u32 read_put() const;
+
+			// Diagnostic snapshot for the stuck-FIFO report; see rsx::profiler poll_stall().
+			std::string debug_snapshot() const;
 
 			void read(register_pair& data);
 			inline bool read_unsafe(register_pair& data);
