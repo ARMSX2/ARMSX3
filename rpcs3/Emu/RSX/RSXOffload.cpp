@@ -24,12 +24,26 @@ namespace rsx
 
 		void operator ()()
 		{
-			if (!g_cfg.video.multithreaded_rsx)
-			{
-				// Abort if disabled
-				return;
-			}
-
+			// Deliberately NOT gated on multithreaded_rsx.
+			//
+			// This used to return immediately when the setting was off, which reads as harmless and
+			// is not: the setting is sampled once, here, at the moment the thread starts, and the
+			// per-game configuration is applied AFTER the RSX initialises. A title whose config
+			// turns MTRSX on therefore starts this thread while it is still off, the thread exits,
+			// and the setting then reads true for the rest of the session with no thread behind it.
+			//
+			// Everything that offloads work checks the setting, not the thread, so from that point
+			// on jobs are pushed onto a queue nobody drains, m_enqueued_count climbs away from
+			// m_processed_count, and dma_manager::sync() -- called from the flip -- waits for a
+			// drain that cannot come. It presents as the emulator locking up with the RSX thread at
+			// 100%, and because sync() is reached from the flip the thread cannot be joined, so the
+			// game cannot be closed either.
+			//
+			// It also means MTRSX has been silently inert for anyone in that configuration rather
+			// than doing what they asked for.
+			//
+			// Staying alive costs one parked thread when the feature is off. can_offload() still
+			// gates the work, so nothing is handed over that should not be.
 			current_thread_ = thread_ctrl::get_current();
 			ensure(current_thread_);
 

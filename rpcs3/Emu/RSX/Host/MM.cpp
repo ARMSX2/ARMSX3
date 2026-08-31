@@ -110,7 +110,9 @@ namespace rsx
 
 	void mm_flush_lazy()
 	{
-		if (!g_cfg.video.multithreaded_rsx)
+		// can_offload(), not the setting: with no offloader running this must flush inline rather
+		// than queue a job that will never be processed.
+		if (!g_fxo->get<rsx::dma_manager>().can_offload())
 		{
 			mm_flush();
 			return;
