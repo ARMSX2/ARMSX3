@@ -98,6 +98,119 @@ object CustomNames {
     }
 }
 
+/**
+ * User-made library categories, the way NetherSX2's playlists work.
+ *
+ * TAGS, not folders: a game can be in any number at once. Exclusive grouping would force a
+ * "which one does it go in" decision on every game that plausibly belongs to two, and allowing
+ * several costs nothing.
+ *
+ * Keyed by [GameInfo.settingsKey] -- the serial -- which is the same identity per-game settings,
+ * [CustomNames] and custom covers already use. NOT the file path or URI: a SAF URI changes when
+ * the user re-picks their ROM folder, so path-keyed categories would silently empty themselves on
+ * the next rescan, and the old keys would be unrecoverable by the time anyone noticed.
+ *
+ * The known consequence, accepted deliberately: the serial is shared by two copies of one game (a
+ * retail dump and a modded build), so they cannot be filed apart. That is already true of their
+ * settings, name and cover; making categories the lone exception would confuse more than the
+ * limit does.
+ *
+ * Stored as one JSON object in prefs, name -> [serial], and cached because it is read while
+ * building every library frame.
+ */
+object GameCategories {
+    private const val KEY = "library.categories"
+
+    /** Bumped on every edit and read inside each accessor, so the library recomposes: prefs are
+     *  not observable by Compose. Same reason [CustomNames.version] exists. */
+    val version = mutableIntStateOf(0)
+
+    private var cache: MutableMap<String, MutableSet<String>>? = null
+
+    private fun load(): MutableMap<String, MutableSet<String>> {
+        cache?.let { return it }
+        val out = linkedMapOf<String, MutableSet<String>>()
+        runCatching {
+            val raw = MainActivityRuntime.prefs.getString(KEY, null)
+            if (!raw.isNullOrBlank()) {
+                val obj = org.json.JSONObject(raw)
+                for (name in obj.keys()) {
+                    val arr = obj.optJSONArray(name) ?: continue
+                    val members = linkedSetOf<String>()
+                    for (i in 0 until arr.length()) arr.optString(i)?.takeIf { it.isNotBlank() }?.let(members::add)
+                    out[name] = members
+                }
+            }
+        }
+        cache = out
+        return out
+    }
+
+    private fun persist(map: Map<String, Set<String>>) {
+        val obj = org.json.JSONObject()
+        for ((name, members) in map) obj.put(name, org.json.JSONArray(members.toList()))
+        MainActivityRuntime.prefs.edit().putString(KEY, obj.toString()).apply()
+        version.intValue++
+    }
+
+    /** Every category name, in the order they were created. */
+    fun names(): List<String> {
+        version.intValue // subscribe: see [version]
+        return load().keys.toList()
+    }
+
+    /** Categories [key] belongs to. */
+    fun categoriesFor(key: String?): Set<String> {
+        version.intValue
+        if (key.isNullOrBlank()) return emptySet()
+        return load().filterValues { key in it }.keys.toSet()
+    }
+
+    /** Serials filed under [name]. */
+    fun membersOf(name: String): Set<String> {
+        version.intValue
+        return load()[name]?.toSet().orEmpty()
+    }
+
+    /** Creates the category if it does not exist. Blank names are ignored. */
+    fun create(name: String) {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        val map = load()
+        if (map.containsKey(trimmed)) return
+        map[trimmed] = linkedSetOf()
+        persist(map)
+    }
+
+    /** File [key] into [name], or remove it. Creates the category when filing into a new one. */
+    fun setMembership(key: String?, name: String, member: Boolean) {
+        if (key.isNullOrBlank()) return
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return
+        val map = load()
+        val members = map.getOrPut(trimmed) { linkedSetOf() }
+        if (member) members.add(key) else members.remove(key)
+        persist(map)
+    }
+
+    /** Rename in place, keeping the members. A collision merges into the existing category. */
+    fun rename(from: String, to: String) {
+        val target = to.trim()
+        if (target.isEmpty() || target == from) return
+        val map = load()
+        val members = map.remove(from) ?: return
+        map.getOrPut(target) { linkedSetOf() }.addAll(members)
+        persist(map)
+    }
+
+    /** Removes the category. The games stay in the library -- this only forgets the grouping. */
+    fun delete(name: String) {
+        val map = load()
+        if (map.remove(name) == null) return
+        persist(map)
+    }
+}
+
 /** Show the game title under every cover in the main library grid (the old-UI behaviour),
  *  not only where a name is otherwise shown. Toggled from the library 3-dot overflow menu. */
 object GridLabels {

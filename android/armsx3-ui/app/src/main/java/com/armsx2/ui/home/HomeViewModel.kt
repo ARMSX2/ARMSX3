@@ -28,6 +28,9 @@ data class HomeUiState(
     val error: String? = null,
     val selectedIndex: Int = 0,
     val initialized: Boolean = false,
+    /** Active category filter, or null for the whole library. Only the List layout uses it;
+     *  Grid and Shelf show categories as sections instead. */
+    val categoryFilter: String? = null,
 )
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
@@ -173,6 +176,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         state.value = buildState(state.value)
     }
 
+    /** Set (or clear, with null) the active category filter. */
+    fun setCategoryFilter(name: String?) {
+        state.value = buildState(state.value.copy(categoryFilter = name))
+    }
+
+    /** Re-run the filter after a category edit, so removing the active one does not leave the
+     *  library filtered by a name that no longer exists. */
+    fun refreshCategories() {
+        val active = state.value.categoryFilter
+        val stillExists = active == null || active in com.armsx2.GameCategories.names()
+        state.value = buildState(state.value.copy(categoryFilter = if (stillExists) active else null))
+    }
+
     /** Toggle whether hidden games are shown (so they can be un-hidden). */
     fun setShowHidden(value: Boolean) {
         com.armsx2.HiddenGames.setShowHidden(value)
@@ -198,7 +214,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         val filtered = base.allGames.filter { game ->
             val query = base.query.trim()
             // Exclude games the user marked hidden (long-press → Hide), unless "Show hidden" is on.
-            (com.armsx2.HiddenGames.showHidden.value || !com.armsx2.HiddenGames.isHidden(game)) &&
+            // Category filter, when one is active. Resolved against the games actually present,
+            // so a category still holding a game that has since been deleted shows fewer rather
+            // than nothing.
+            (base.categoryFilter == null ||
+                game.settingsKey?.let { it in com.armsx2.GameCategories.membersOf(base.categoryFilter) } == true) &&
+                (com.armsx2.HiddenGames.showHidden.value || !com.armsx2.HiddenGames.isHidden(game)) &&
                 (query.isBlank() ||
                     // Match BOTH names regardless of which is displayed: someone typing
                     // "Katakamuna" should find a game listed as 片神名, and vice versa.

@@ -56,6 +56,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -144,6 +146,13 @@ fun HomeScreen(
     var menuGame by remember { mutableStateOf<GameInfo?>(null) }
     // Set by the context menu's "Install licence" entry; drives the .rap file browser.
     var licenceGame by remember { mutableStateOf<GameInfo?>(null) }
+    // The game whose categories are being edited. Its own sheet rather than a submenu, because
+    // filing a game usually means ticking more than one box.
+    var categoriesGame by remember { mutableStateOf<GameInfo?>(null) }
+    var categoryPicker by remember { mutableStateOf(false) }
+    // The category being renamed, if any. Long-press a row in the picker.
+    var renameCategory by remember { mutableStateOf<String?>(null) }
+    var deleteCategory by remember { mutableStateOf<String?>(null) }
     var showClearRecentsConfirm by remember { mutableStateOf(false) }
     // #9 custom library background — inert until the user picks an image.
     LaunchedEffect(Unit) { LibraryBackground.ensureLoaded(); CoverArtStyle.load() }
@@ -455,6 +464,7 @@ fun HomeScreen(
                                 customNames = com.armsx2.CustomNames.enabled.value,
                                 englishTitles = EnglishTitles.enabled.value,
                                 showHidden = com.armsx2.HiddenGames.showHidden.value,
+                                onOpenCategories = { categoryPicker = true },
                                 hasCustomBackground = LibraryBackground.uri.value != null,
                                 onDismiss = { overflowMenu = false },
                                 onOpenNavigation = onOpenMenu,
@@ -806,6 +816,14 @@ fun HomeScreen(
                 // Pin to the launcher (issue #242). The action was lost when this menu was
                 // rebuilt, leaving HomeShortcuts with no call site at all (issue #335).
                 // pin() returns false only when the launcher can't pin — surface that.
+                // Only for a game with a serial: categories are keyed on it, so a disc we could
+                // not identify has nothing stable to file under.
+                if (!game.settingsKey.isNullOrBlank()) {
+                    GameMenuAction("🏷", str("games.categories")) {
+                        categoriesGame = game
+                        menuGame = null
+                    }
+                }
                 val addToHomeFailed = str("games.addToHome.unsupported")
                 GameMenuAction("📌", str("games.addToHome")) {
                     menuGame = null
@@ -841,6 +859,188 @@ fun HomeScreen(
     // id it unlocks: one saved as "license(1).rap" or renamed on the way over installs under a
     // name nothing looks for, so the install reports success and the game stays locked. Asking
     // the game's own EBOOT for the id gets it right whatever the file is called.
+    // Assign categories. Stays OPEN as boxes are ticked, because filing a game usually means
+    // more than one, and typing a name both creates the category and files this game into it --
+    // which is invariably why someone types one while looking at a game.
+    categoriesGame?.let { game ->
+        val key = game.settingsKey
+        var newName by remember(game.uri) { mutableStateOf("") }
+        com.armsx2.GameCategories.version.intValue // recompose as boxes are ticked
+        ModalBottomSheet(onDismissRequest = { categoriesGame = null }) {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                    .padding(start = 8.dp, end = 8.dp, bottom = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    str("games.categories"),
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                )
+                Text(
+                    game.displayTitle(EnglishTitles.enabled.value),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
+                val mine = com.armsx2.GameCategories.categoriesFor(key)
+                for (name in com.armsx2.GameCategories.names()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .clickable { com.armsx2.GameCategories.setMembership(key, name, name !in mine) }
+                            .padding(horizontal = 8.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = name in mine,
+                            onCheckedChange = { com.armsx2.GameCategories.setMembership(key, name, it) },
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(name, style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text(str("games.categories.new")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                )
+                TextButton(
+                    onClick = {
+                        val trimmed = newName.trim()
+                        if (trimmed.isNotEmpty()) {
+                            com.armsx2.GameCategories.setMembership(key, trimmed, true)
+                            newName = ""
+                            viewModel.refreshCategories()
+                        }
+                    },
+                    enabled = newName.isNotBlank(),
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                ) { Text(str("games.categories.add")) }
+            }
+        }
+    }
+
+    // Pick the active category. A sheet, not a DropdownMenu, so it stays controller-navigable.
+    // Long-press a row to rename or delete it -- there is no separate management screen.
+    if (categoryPicker) {
+        com.armsx2.GameCategories.version.intValue
+        ModalBottomSheet(onDismissRequest = { categoryPicker = false }) {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                    .padding(start = 8.dp, end = 8.dp, bottom = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    str("games.categories"),
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                )
+                // "All games" is not a category: it clears the filter, and long-pressing it does
+                // nothing because there is nothing to rename or delete.
+                Row(
+                    modifier = Modifier.fillMaxWidth()
+                        .clickable { viewModel.setCategoryFilter(null); categoryPicker = false }
+                        .padding(horizontal = 8.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        str("games.categories.all"),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (state.categoryFilter == null) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+                for (name in com.armsx2.GameCategories.names()) {
+                    val count = state.allGames.count { g ->
+                        g.settingsKey?.let { it in com.armsx2.GameCategories.membersOf(name) } == true
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth()
+                            .combinedClickable(
+                                onClick = { viewModel.setCategoryFilter(name); categoryPicker = false },
+                                onLongClick = { renameCategory = name },
+                            )
+                            .padding(horizontal = 8.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            name,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (state.categoryFilter == name) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                        // Counted against the games actually present, so a category still holding
+                        // something since deleted reads as fewer rather than showing an empty list.
+                        Text(
+                            "$count",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    renameCategory?.let { name ->
+        var draft by remember(name) { mutableStateOf(name) }
+        AlertDialog(
+            onDismissRequest = { renameCategory = null },
+            title = { Text(str("games.categories.rename")) },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    singleLine = true,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val to = draft.trim()
+                    if (to.isNotEmpty() && to != name) {
+                        com.armsx2.GameCategories.rename(name, to)
+                        // Rename FOLLOWS the filter: otherwise the user is silently dumped back to
+                        // All Games because the name they were looking at stopped existing.
+                        if (state.categoryFilter == name) viewModel.setCategoryFilter(to)
+                        viewModel.refreshCategories()
+                    }
+                    renameCategory = null
+                }) { Text(str("action.ok")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteCategory = name; renameCategory = null }) {
+                    Text(str("games.categories.delete"))
+                }
+            },
+        )
+    }
+
+    deleteCategory?.let { name ->
+        AlertDialog(
+            onDismissRequest = { deleteCategory = null },
+            title = { Text(str("games.categories.delete")) },
+            // Says what it does NOT do. Without that line "Delete category" reads like it might
+            // remove the games, which is the one outcome that cannot be undone from here.
+            text = { Text(name + "\n\n" + str("games.categories.deleteNote")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    com.armsx2.GameCategories.delete(name)
+                    if (state.categoryFilter == name) viewModel.setCategoryFilter(null)
+                    viewModel.refreshCategories()
+                    deleteCategory = null
+                }) { Text(str("action.ok")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteCategory = null }) { Text(str("action.cancel")) }
+            },
+        )
+    }
+
     if (licenceGame != null) {
         // Resolved during composition: str() is @Composable and cannot be called from the
         // pick callback, the same reason games.addToHome.unsupported is hoisted above.
@@ -905,6 +1105,7 @@ private fun LibraryOverflowMenu(
     onToggleCustomNames: () -> Unit,
     onToggleEnglishTitles: () -> Unit,
     onToggleShowHidden: () -> Unit,
+    onOpenCategories: () -> Unit,
     onChooseBackground: () -> Unit,
     onClearBackground: () -> Unit,
     onExitApp: () -> Unit,
@@ -998,6 +1199,12 @@ private fun LibraryOverflowMenu(
             trailing = if (showHidden) str("common.on") else str("common.off"),
         ) {
             closeThen(onToggleShowHidden)
+        }
+        OverflowSeparator()
+        // Opens a sheet rather than nesting a submenu here: a DropdownMenu is its own focused
+        // window and swallows pad keys, so a picker built inside one is unusable on a handheld.
+        LibraryOverflowItem("\uD83C\uDFF7", str("games.categories")) {
+            closeThen(onOpenCategories)
         }
         OverflowSeparator()
         LibraryOverflowItem("▧", str("games.background.choose")) {
