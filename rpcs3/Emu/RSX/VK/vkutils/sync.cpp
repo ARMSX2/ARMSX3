@@ -7,6 +7,8 @@
 #include "shared.h"
 
 #include "Emu/Cell/timers.hpp"
+#include "Emu/system.h"
+#include "Utilities/Thread.h"
 #include "Emu/RSX/rsx_profiler.h"
 
 #include <chrono>
@@ -611,7 +613,42 @@ namespace vk
 				utils::pause();
 			}
 
-			return vkWaitForFences(*g_render_device, 1, &pFence->handle, VK_FALSE, UINT64_MAX);
+			// Bounded slices rather than UINT64_MAX, so this stays interruptible.
+			//
+			// An unbounded wait cannot be abandoned. If the GPU never signals -- a wedged
+			// submission, a shader chain the driver never finishes -- the RSX thread parks here
+			// permanently: Emu.Kill() cannot join it, the game will not close, the emulator keeps
+			// running with no window, and nothing short of killing the process recovers it. The
+			// hang itself is bad; being unable to leave it is what turns it into a dead app.
+			//
+			// Reported with a librashader bezel preset: 88 seconds in this function with work
+			// still queued, then a game that would not restart.
+			//
+			// A second of granularity is nothing against a wait already long enough to reach the
+			// unbounded path, and it costs one extra vkWaitForFences per second of hang.
+			for (u64 slice = 0;; slice++)
+			{
+				const VkResult status = vkWaitForFences(*g_render_device, 1, &pFence->handle, VK_FALSE, 1'000'000'000ull);
+
+				if (status != VK_TIMEOUT)
+				{
+					return status;
+				}
+
+				// Say so, once, rather than looking identical to a freeze.
+				if (slice == 2)
+				{
+					rsx_log.error("GPU has not signalled a fence in 3s. If this persists the driver "
+						"is not completing submitted work; closing the game is still possible.");
+				}
+
+				if (thread_ctrl::state() == thread_state::aborting || Emu.IsStopped())
+				{
+					// Leaving a fence unwaited is not clean, but the alternative is never leaving.
+					rsx_log.error("Abandoning a GPU fence wait after %us because emulation is stopping.", slice + 1);
+					return VK_TIMEOUT;
+				}
+			}
 		}
 	}
 
