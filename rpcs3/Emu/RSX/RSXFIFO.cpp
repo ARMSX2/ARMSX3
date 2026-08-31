@@ -38,15 +38,30 @@ namespace rsx
 
 		void FIFO_control::sync_get() const
 		{
-			// Every 8th packet. The guest reads GET to work out how much ring space is
-			// free, and it is far ahead of us here (FIFO stalls measure 0.1/frame), so a
-			// bounded lag is invisible to it. Anything that can idle or block publishes
-			// immediately via sync_get_force so a waiting producer is never held up.
-			if (++m_get_sync_counter & 7)
-			{
-				return;
-			}
-
+			// Publish every packet. GET must take every value it passes through.
+			//
+			// This used to publish one packet in eight, on the reasoning that the guest reads GET
+			// only to work out how much ring space is free, where a bounded lag is invisible. That
+			// is not the only thing GET is used for: cellGcmFinish snapshots PUT and then spins
+			// until GET equals that exact value, so a GET that advances in steps of eight can step
+			// straight over the value being waited on and the wait never completes.
+			//
+			// Caught in Ratchet & Clank on a new game, with main_thread at 100% in a three
+			// instruction loop and every other thread blocked:
+			//
+			//     r11 = 0x50100040 -> [0x0161af6c, 0x0161af6c]   RSX DMA control, put/get
+			//     r29 = 0x161af54                                snapshotted before the loop
+			//
+			// GET had reached 0x161af6c, 0x18 past the target -- six words, inside the skip window.
+			// Intermittent for the same reason: it only wedges when the target lands in a window
+			// that gets skipped, which is why the same boot sometimes works.
+			//
+			// sync_get_force on the idle paths cannot rescue this. By the time the ring drains, GET
+			// is already past the value, and publishing the final one does not satisfy an equality
+			// test against an earlier one.
+			//
+			// The cost this gives back is a store into guest DMA memory per packet, on a line the
+			// guest PPU also writes. That was worth having and is not worth a hang.
 			m_ctrl->get.release(m_published_get = m_internal_get);
 		}
 
