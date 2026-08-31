@@ -2753,6 +2753,71 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 	// keeps that working, and keeps ordinary tombstones for crashes that are genuinely elsewhere.
 	if (!is_emulator_fault(info->si_addr))
 	{
+		// Say whether this is a stack overflow before handing the fault on, because the tombstone
+		// cannot. A guard page is PROT_NONE, so overrunning a stack reports SEGV_ACCERR at an address
+		// that looks like any other bad pointer, and the backtrace shows only the JIT'd frame that
+		// happened to touch it -- nothing that says "you ran out of stack".
+		//
+		// Worth the cost here specifically: the ARM64 SPU gateway subtracts SPU_GW_SCRATCH_SIZE from
+		// sp per entry and unwinds by reloading sp rather than adding it back, so a path that re-enters
+		// without restoring walks the stack down in fixed steps to a guard page at a FIXED address --
+		// which is what a repeated identical fault address means. sp against the stack bounds tells
+		// that apart from one oversized function overflowing the scratchpad in a single call.
+		//
+		// Only runs on a fault that is already fatal, so pthread_getattr_np not being async-signal-safe
+		// costs nothing we still have.
+#ifdef ARCH_ARM64
+		{
+			const u64 fault_at = reinterpret_cast<u64>(info->si_addr);
+			const u64 sp = static_cast<u64>(context->uc_mcontext.sp);
+
+			void* stack_addr = nullptr;
+			usz stack_size = 0;
+			pthread_attr_t attr;
+
+			if (pthread_getattr_np(pthread_self(), &attr) == 0)
+			{
+				pthread_attr_getstack(&attr, &stack_addr, &stack_size);
+				pthread_attr_destroy(&attr);
+			}
+
+			const u64 lo = reinterpret_cast<u64>(stack_addr);
+			const u64 hi = lo + stack_size;
+
+			char tname[32]{};
+			pthread_getname_np(pthread_self(), tname, sizeof(tname));
+
+			char line[512]{};
+
+			if (stack_size && fault_at < lo && lo - fault_at < 0x100000)
+			{
+				std::snprintf(line, sizeof(line),
+					"STACK OVERFLOW in '%s': fault 0x%llx is %llu bytes below the stack [0x%llx,0x%llx). "
+					"sp=0x%llx, %llu of %llu KB used (%.1f x 256KB gateway frames).",
+					tname, static_cast<unsigned long long>(fault_at),
+					static_cast<unsigned long long>(lo - fault_at),
+					static_cast<unsigned long long>(lo), static_cast<unsigned long long>(hi),
+					static_cast<unsigned long long>(sp),
+					static_cast<unsigned long long>((hi - sp) / 1024),
+					static_cast<unsigned long long>(stack_size / 1024),
+					static_cast<double>(hi - sp) / 262144.0);
+			}
+			else
+			{
+				std::snprintf(line, sizeof(line),
+					"non-emulator fault in '%s': addr=0x%llx sp=0x%llx stack=[0x%llx,0x%llx) %lluKB, "
+					"%llu KB of stack used. Not a guard page.",
+					tname, static_cast<unsigned long long>(fault_at),
+					static_cast<unsigned long long>(sp),
+					static_cast<unsigned long long>(lo), static_cast<unsigned long long>(hi),
+					static_cast<unsigned long long>(stack_size / 1024),
+					static_cast<unsigned long long>(stack_size ? (hi - sp) / 1024 : 0));
+			}
+
+			__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", line);
+		}
+#endif
+
 		// Forward once and once only. If whatever we forward to comes back here -- which it did
 		// while this handler was also registered inside libsigchain's chain -- looping would burn
 		// the alternate stack and kill the process silently. Second time through, stand down: put
