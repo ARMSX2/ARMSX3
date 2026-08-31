@@ -84,6 +84,14 @@ namespace rsx
 		// and whoever waits for it waits forever.
 		bool is_offloader_running() const;
 
+		// Whether work may be handed to the offloader at all.
+		//
+		// The setting alone is not enough: it says what the user asked for, not whether the thread
+		// exists to honour it. Every deferral decision must use this, because the cost of getting
+		// it wrong is not a slow path but a permanent one -- sync() waits for a drain that cannot
+		// come, and it is called from the flip.
+		bool can_offload() const;
+
 		bool is_current_thread() const;
 		bool sync() const;
 		void join();

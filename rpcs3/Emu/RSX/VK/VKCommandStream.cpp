@@ -69,7 +69,7 @@ namespace vk
 		// Multithreaded RSX was on, no "RSX Offloader" thread existed, and the RSX thread sat at
 		// 100% in wait_for_fence. Submitting inline is what the non-MTRSX path does anyway, so the
 		// fallback is a slower frame rather than a different one.
-		if (!flush && g_cfg.video.multithreaded_rsx && g_fxo->get<rsx::dma_manager>().is_offloader_running())
+		if (!flush && g_fxo->get<rsx::dma_manager>().can_offload())
 		{
 			auto packet = new queue_submit_t(submit_info);
 			g_fxo->get<rsx::dma_manager>().backend_ctrl(rctrl_queue_submit, packet);
