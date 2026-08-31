@@ -1267,6 +1267,10 @@ namespace rsx
 
 	void thread::on_exit()
 	{
+		// Before anything else: the sampler walks guest thread objects, and everything below
+		// leads to those being destroyed.
+		rsx::prof::stop_sampler();
+
 		if (zcull_ctrl)
 		{
 			zcull_ctrl->sync(this);

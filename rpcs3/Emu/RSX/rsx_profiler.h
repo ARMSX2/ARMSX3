@@ -525,6 +525,9 @@ namespace rsx::prof
 	void sample_guest_pc();
 	void start_sampler();
 
+	// Joins the sampler. Must run before Emu teardown destroys what it walks.
+	void stop_sampler();
+
 	/** Write the current window to the log and start a new one. Safe to call from anywhere. */
 	void dump_and_reset();
 

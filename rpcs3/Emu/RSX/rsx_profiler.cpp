@@ -133,9 +133,13 @@ namespace rsx::prof
 	// Defined below; the sampler drives it because it must keep running after frames stop.
 	bool poll_stall();
 
+	// The sampler thread is shared, so its handle has to outlive any one start_sampler()
+	// call. stop_sampler() is the only thing that may destroy it.
+	std::unique_ptr<named_thread<std::function<void()>>> g_sampler;
+
 	void start_sampler()
 	{
-		static std::unique_ptr<named_thread<std::function<void()>>> s_sampler;
+		auto& s_sampler = g_sampler;
 
 		if (s_sampler)
 		{
@@ -160,6 +164,17 @@ namespace rsx::prof
 				thread_ctrl::wait_for(5'000);
 			}
 		});
+	}
+
+	void stop_sampler()
+	{
+		// Join, do not merely disarm. The walks below go through idm, and Emu teardown destroys
+		// the id manager's storage along with the rest of g_fxo without taking id_manager::g_mutex
+		// -- so the reader lock those walks hold does not exclude it, and a sampler still running
+		// at that point reads freed memory. Closing a game crashed here with a 0xcc-poisoned
+		// pointer inside sample_guest_pc. Checking a flag would only narrow the window; the thread
+		// has to be gone before the objects are.
+		g_sampler.reset();
 	}
 
 	// NOTE: every idm::select here takes the reader lock, i.e. the DEFAULT, not idm::unlocked.
