@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "sys_semaphore.h"
+#include "Emu/RSX/rsx_profiler.h"
 
 #include "Emu/IdManager.h"
 
@@ -136,7 +137,14 @@ error_code sys_semaphore_wait(ppu_thread& ppu, u32 sem_id, u64 timeout)
 {
 	ppu.state += cpu_flag::wait;
 
-	const bool is_main = ppu.id == 0x1000000;
+	// Instrumentation, and gated as such.
+	//
+	// This is a per-wait timer on a syscall a game makes millions of times in a session, and it
+	// reads the ARM system counter twice per call. Ungated it is exactly the kind of always-on
+	// measurement that was removed from the guest atomic and DMA paths this cycle for costing more
+	// than it reported. Nothing reads these counters unless the RSX profiler is on, so nothing
+	// should pay for them unless it is.
+	const bool is_main = ppu.id == 0x1000000 && rsx::prof::enabled();
 	const u64 wait_start = is_main ? utils::get_tsc() : 0;
 
 	struct sema_timer
