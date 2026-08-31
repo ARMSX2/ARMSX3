@@ -57,7 +57,19 @@ namespace vk
 		// Offloader is guaranteed to never call this for async flushes.
 		vk::descriptors::flush();
 
-		if (!flush && g_cfg.video.multithreaded_rsx)
+		// Defer only if there is something to defer to.
+		//
+		// backend_ctrl pushes onto the offloader's work queue and returns. If that thread is not
+		// running, the packet is never processed, the fence is never signalled as flushed, and
+		// anything waiting on it waits forever -- fence::wait_flush spins on exactly that, and it
+		// is reached from command_buffer::begin(), so the RSX thread is lost with it. The emulator
+		// then cannot be shut down either, because Emu.Kill() has to join that thread.
+		//
+		// Reported as RetroArch shaders locking the emulator with the game unable to restart:
+		// Multithreaded RSX was on, no "RSX Offloader" thread existed, and the RSX thread sat at
+		// 100% in wait_for_fence. Submitting inline is what the non-MTRSX path does anyway, so the
+		// fallback is a slower frame rather than a different one.
+		if (!flush && g_cfg.video.multithreaded_rsx && g_fxo->get<rsx::dma_manager>().is_offloader_running())
 		{
 			auto packet = new queue_submit_t(submit_info);
 			g_fxo->get<rsx::dma_manager>().backend_ctrl(rctrl_queue_submit, packet);

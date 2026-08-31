@@ -168,6 +168,11 @@ namespace rsx
 		m_thread->m_work_queue.push(request_code, args);
 	}
 
+	bool dma_manager::is_offloader_running() const
+	{
+		return m_thread && m_thread->current_thread_ != nullptr;
+	}
+
 	// Synchronization
 	bool dma_manager::is_current_thread() const
 	{
