@@ -2845,6 +2845,28 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 				}
 
 				__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", regs);
+
+				// SPU context, to place the bad pointer against the things it could have come from.
+				//
+				// The value is byte-identical in every process while the mappings around it move,
+				// so it is not a relocated host pointer. LS is the one buffer whose CONTENTS are
+				// identical run to run, being guest data, so the question is whether this is a
+				// value read out of LS and used as a host address -- and if it is an LS access
+				// gone wrong, fault-ls lands inside or just past the 256K window.
+				if (const auto cpu_at_fault = get_current_cpu_thread();
+					cpu_at_fault && cpu_at_fault->get_class() == thread_class::spu)
+				{
+					const auto spu = static_cast<spu_thread*>(cpu_at_fault);
+					const u64 ls_base = reinterpret_cast<u64>(spu->ls);
+
+					char sc[512]{};
+					std::snprintf(sc, sizeof(sc),
+						"  spu: pc=0x%05x ls=0x%llx fault-ls=%lld (LS window is %u bytes) index=%u",
+						spu->pc, static_cast<unsigned long long>(ls_base),
+						static_cast<long long>(fault_at - ls_base),
+						static_cast<u32>(SPU_LS_SIZE), spu->index);
+					__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", sc);
+				}
 			}
 
 			// Name the mapping the fault landed in.
