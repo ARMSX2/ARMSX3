@@ -167,6 +167,19 @@ namespace rsx::prof
 		});
 	}
 
+	// NOTE: every idm::select here takes the reader lock, i.e. the DEFAULT, not idm::unlocked.
+	//
+	// idm::select's Lock parameter is not a hint: with idm::unlocked it binds a reference to
+	// id_manager::g_mutex and never locks it, then walks map.vec_data regardless. That is
+	// tolerable for a one-shot dump from the vblank thread, which is where this code started.
+	// It is not tolerable here -- this samples at 200Hz and performs several traversals per
+	// tick, roughly two thousand unsynchronised walks a second, while SPURS creates and
+	// destroys SPU threads underneath it.
+	//
+	// Ratchet & Clank: A Crack in Time hung on load and then died with SEGV_ACCERR inside an
+	// SPU thread, and loaded perfectly with the profiler switched off. A reader lock is shared,
+	// so it excludes only thread creation and destruction -- which is precisely the mutation
+	// being raced -- and nothing inside these callbacks blocks.
 	void sample_guest_pc()
 	{
 		if (!g_enabled.load())
@@ -183,7 +196,7 @@ namespace rsx::prof
 			{
 				pc = ppu.cia & ~0x3fu;
 			}
-		}, idm::unlocked);
+		});
 
 		// Slow frame in progress right now? Computed before the SPU walk so both histograms can
 		// use it.
@@ -244,7 +257,7 @@ namespace rsx::prof
 				{
 					spu_pc = spu.pc & ~0x3fu;
 				}
-			}, idm::unlocked);
+			});
 
 			g_spu_running_sum += running;
 			g_spu_total_sum += total;
@@ -312,7 +325,7 @@ namespace rsx::prof
 						}
 
 						prof_log.error("STALL SPU disasm:%s", out);
-					}, idm::unlocked);
+					});
 				}
 
 				g_stall_spu_pc_total++;
@@ -358,7 +371,7 @@ namespace rsx::prof
 				if (b.fn == what) { b.hits++; return; }
 				if (!b.fn) { b.fn = what; b.hits = 1; return; }
 			}
-		}, idm::unlocked);
+		});
 
 		if (!pc)
 		{
@@ -425,7 +438,7 @@ namespace rsx::prof
 				{
 					g_sync_queue += static_cast<u16>(next - serving);
 				}
-			}, idm::unlocked);
+			});
 		}
 
 		for (auto& b : g_pc_samples)
@@ -667,7 +680,7 @@ namespace rsx::prof
 			fmt::append(out, "\n    PPU 0x%07x %-24s [%s] cia=0x%08x %s%s", id,
 				name ? name->c_str() : "?", ppu.state.load(), ppu.cia,
 				inside ? "in=" : "last=", func ? func : "");
-		}, idm::unlocked);
+		});
 
 		// PPUs waiting on a semaphore are usually waiting for an SPU to post it, so the SPU
 		// side is the half that actually names the culprit.
@@ -683,7 +696,7 @@ namespace rsx::prof
 			fmt::append(out, "\n    SPU 0x%07x %-24s [%s] pc=0x%05x %s", id,
 				name ? name->c_str() : "?", spu.state.load(), spu.pc,
 				spu.current_func ? spu.current_func : "");
-		}, idm::unlocked);
+		});
 
 		return out;
 	}
@@ -731,7 +744,7 @@ namespace rsx::prof
 				dis_asm.disasm(addr);
 				fmt::append(out, "\n    %s 0x%08x: %s", addr == pc ? "->" : "  ", addr, dis_asm.last_opcode);
 			}
-		}, idm::unlocked);
+		});
 
 		return out;
 	}
@@ -918,7 +931,7 @@ namespace rsx::prof
 							fmt::append(guest, "\n    PPU 0x%07x %-24s %s=%s",
 								id, nameptr ? nameptr->c_str() : "?",
 								inside ? "in" : "last", func ? func : "");
-						}, idm::unlocked);
+						});
 					}
 
 					prof_log.error("SPIKE: frame took %.1f ms (%u so far)%s%s",
@@ -1125,7 +1138,7 @@ namespace rsx::prof
 				{
 					calls += spu.putllc_calls;
 					fails += spu.putllc_fails;
-				}, idm::unlocked);
+				});
 
 				const u64 dc = calls - g_putllc_calls_prev;
 				const u64 df = fails - g_putllc_fails_prev;
