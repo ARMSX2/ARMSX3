@@ -2816,6 +2816,37 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 
 			__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", line);
 
+			// The faulting instruction and whichever registers formed the address.
+			//
+			// The address is identical across processes while the mappings around it move with
+			// ASLR, so it is computed rather than loaded from anything that got relocated. The
+			// encoding says which register was dereferenced and the register file says what went
+			// into it -- a base that should be a live pointer, an index that should have been
+			// masked, or a value that is simply guest data being used as a host address.
+			{
+				char regs[640]{};
+				int off = std::snprintf(regs, sizeof(regs), "  pc=0x%llx",
+					static_cast<unsigned long long>(context->uc_mcontext.pc));
+
+				// PC is what just executed, so it is mapped and readable.
+				const u32 insn = *reinterpret_cast<const u32*>(context->uc_mcontext.pc);
+				off += std::snprintf(regs + off, sizeof(regs) - off, " insn=0x%08x", insn);
+
+				for (int i = 0; i < 31 && off < static_cast<int>(sizeof(regs)) - 32; i++)
+				{
+					const u64 v = context->uc_mcontext.regs[i];
+
+					// Only the ones that plausibly built the address; a full dump is unreadable.
+					if (v == fault_at || (v <= fault_at && fault_at - v < 0x10000) || (v > fault_at && v - fault_at < 0x10000))
+					{
+						off += std::snprintf(regs + off, sizeof(regs) - off, " x%d=0x%llx%s",
+							i, static_cast<unsigned long long>(v), v == fault_at ? "(=fault)" : "");
+					}
+				}
+
+				__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", regs);
+			}
+
 			// Name the mapping the fault landed in.
 			//
 			// SEGV_ACCERR means the page is there and the access was refused, so the mapping's
