@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "rsx_profiler.h"
 #include "Emu/Cell/PPUThread.h"
+#include "Emu/Cell/PPUDisAsm.h"
 #include "Emu/Memory/vm.h"
 #include "Emu/Cell/SPUThread.h"
 
@@ -896,6 +897,52 @@ namespace rsx::prof
 			name_of(g_current),
 			static_cast<double>(now - g_last_switch) / static_cast<double>(freq),
 			fifo, sample_guest_threads(false));
+
+		// Disassemble whatever guest thread is actually running.
+		//
+		// A hang where the ring is drained and GET == PUT is the guest declining to produce, not us
+		// failing to consume, so the useful question stops being about the FIFO and becomes what the
+		// guest is looping on. Both the new-game black screen and the lock-up after it park
+		// main_thread at the same cia with every other thread blocked, which a PC alone cannot
+		// explain -- the loop body can.
+		//
+		// Read through g_sudo_addr, not g_base_addr. The sudo mapping is the unprotected alias, so
+		// this does not touch the pages the texture cache mprotects, which is what made an earlier
+		// version of this fault from a non-guest thread. check_addr still guards each word.
+		{
+			u32 run_cia = 0;
+			std::string run_name;
+
+			idm::select<named_thread<ppu_thread>>([&](u32, ppu_thread& ppu)
+			{
+				if (!run_cia && !(ppu.state.load() & cpu_flag::wait))
+				{
+					run_cia = ppu.cia;
+					run_name = ppu.get_name();
+				}
+			});
+
+			if (run_cia && !(run_cia & 3))
+			{
+				PPUDisAsm dis_asm(cpu_disasm_mode::normal, vm::g_sudo_addr);
+				std::string out;
+
+				const u32 lo = run_cia < 32 ? 0 : run_cia - 32;
+
+				for (u32 a = lo; a <= run_cia + 32; a += 4)
+				{
+					if (!vm::check_addr(a, vm::page_readable, 4))
+					{
+						continue;
+					}
+
+					dis_asm.disasm(a);
+					fmt::append(out, "\n\t %s %s", a == run_cia ? "->" : "  ", dis_asm.last_opcode);
+				}
+
+				prof_log.error("Running guest thread '%s' at 0x%08x:%s", run_name, run_cia, out);
+			}
+		}
 
 		return true;
 	}
