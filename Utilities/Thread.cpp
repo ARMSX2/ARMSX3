@@ -2827,6 +2827,8 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 				if (FILE* maps = std::fopen("/proc/self/maps", "re"))
 				{
 					char row[512]{};
+					char prev1[640]{};
+					char prev2[640]{};
 
 					while (std::fgets(row, sizeof(row), maps))
 					{
@@ -2847,7 +2849,32 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 							std::snprintf(hit, sizeof(hit), "  fault mapping (+0x%llx into it): %s",
 								static_cast<unsigned long long>(fault_at - lo_a), row);
 							__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", hit);
+
+							// Neighbours, because an anonymous PROT_NONE row identifies nothing on its
+							// own. The rows either side do: an rwx one above it means this is the
+							// uncommitted tail of the JIT pool, a named one means it belongs to whoever
+							// is named, and a stack guard sits next to a matching rw- stack.
+							if (prev2[0]) __android_log_write(ANDROID_LOG_FATAL, "ARMSX3", prev2);
+							if (prev1[0]) __android_log_write(ANDROID_LOG_FATAL, "ARMSX3", prev1);
+
+							for (int seen = 0; seen < 2 && std::fgets(row, sizeof(row), maps); seen++)
+							{
+								if (char* nl = std::strchr(row, '\n')) *nl = '\0';
+
+								char nxt[640]{};
+								std::snprintf(nxt, sizeof(nxt), "  after : %s", row);
+								__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", nxt);
+							}
+
 							break;
+						}
+
+						std::snprintf(prev2, sizeof(prev2), "%s", prev1);
+						{
+							char tmp[512]{};
+							std::snprintf(tmp, sizeof(tmp), "%s", row);
+							if (char* nl = std::strchr(tmp, '\n')) *nl = '\0';
+							std::snprintf(prev1, sizeof(prev1), "  before: %s", tmp);
 						}
 					}
 
