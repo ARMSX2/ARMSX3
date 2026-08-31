@@ -105,7 +105,11 @@ namespace rsx::prof
 	// says what it is doing while it holds.
 	pc_bucket g_stall_spu_pc[24]{};
 	u64 g_stall_spu_pc_total = 0;
-	bool g_stall_spu_disasm_done = false;
+	// Distinct SPU PCs already disassembled, so a hang that settles somewhere new still gets
+	// dumped. The old one-shot flag meant the first stall of a session consumed the only dump,
+	// and during a hang no frame ever completes, so nothing resets per window either -- the
+	// disassembly on screen was from an unrelated earlier stall on a different SPU.
+	u32 g_stall_spu_disasm_pcs[6]{};
 
 	// PUTLLC success vs failure, summed across SPU threads.
 	//
@@ -263,11 +267,10 @@ namespace rsx::prof
 				// now pinned to a 64-byte window, so the same treatment should say what it spins on.
 				// Local store is the thread's own memory and always mapped, so no address check is
 				// needed; reading it costs nothing beyond the one dump.
-				if (!g_stall_spu_disasm_done)
 				{
 					idm::select<named_thread<spu_thread>>([](u32 id, spu_thread& spu)
 					{
-						if (g_stall_spu_disasm_done || (spu.state.load() & cpu_flag::wait))
+						if (spu.state.load() & cpu_flag::wait)
 						{
 							return;
 						}
@@ -280,7 +283,22 @@ namespace rsx::prof
 							return;
 						}
 
-						g_stall_spu_disasm_done = true;
+						// One dump per distinct 64-byte window, up to the table size.
+						const u32 key = pc & ~0x3fu;
+						u32* slot = nullptr;
+
+						for (auto& e : g_stall_spu_disasm_pcs)
+						{
+							if (e == key) return;
+							if (!e) { slot = &e; break; }
+						}
+
+						if (!slot)
+						{
+							return;
+						}
+
+						*slot = key;
 
 						std::string out;
 						fmt::append(out, "\n  SPU 0x%07x loop around LS 0x%05x:", id, pc);
