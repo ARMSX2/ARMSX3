@@ -1698,7 +1698,11 @@ spu_runtime::spu_runtime()
 	// including compile-time switches such as ARMSX3_SPU_ARM64_BYTE_GATHER.
 	// Ported from ouroboros420/rpcsx (8430a6558), key re-derived against our config surface.
 	{
-		constexpr u32 SPU_OBJ_CACHE_VERSION = 2;
+		// v3 retires every object written by the ARM64 cache while it was enabled. Those carry an
+		// absolute host address baked in as movz/movk immediates with no relocation covering them,
+		// so they fault as soon as a later process maps things elsewhere. Disabling the write is
+		// not enough on its own -- what is already on disk would still be read back.
+		constexpr u32 SPU_OBJ_CACHE_VERSION = 3;
 		constexpr usz SPU_OBJ_CACHE_MAX_FILES = 12000;
 
 		sha1_context ctx;

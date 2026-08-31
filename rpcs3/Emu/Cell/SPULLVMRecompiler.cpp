@@ -4072,17 +4072,31 @@ public:
 				}
 				else if (const std::string& obj_cache = m_spurt->get_obj_cache_path(); !obj_cache.empty())
 				{
-					// Persistent object cache, same as the non-recoverable path below.
+					// DISABLED: cached SPU objects are not safe to reuse across processes on ARM64.
 					//
-					// This branch is ARM64's, and it is the branch ARM64 actually takes: the
-					// register-scavenge retry wraps every compile in a spu_llvm_compile_scope, so
-					// g_spu_llvm_compile_context is always set and `recoverable` is always true.
-					// It called the cache-less try_add overload, so nothing was ever written --
-					// which is why a device has PPU objects on disk (v9-kusa-*) and no SPU ones,
-					// and why every session recompiles its SPU functions from scratch and stutters
-					// through it. try_add reports failure rather than caching a bad object, so a
-					// scavenge retry does not poison the entry it is about to replace.
-					added = m_jit.try_add(std::move(_module), obj_cache, llvm_error);
+					// This branch used to call the cache-less try_add overload, so ARM64 never wrote
+					// SPU objects at all and recompiled every session. Passing obj_cache here made it
+					// write them, which cut a cold boot from minutes to seconds -- and started
+					// crashing at roughly twelve seconds into boot, in CellSpursKernel0, always at
+					// the same host address:
+					//
+					//     insn=0xb940012b  ->  ldr w11, [x9]     x9 = 0x78ba91f798
+					//
+					// x9 is built by movz/movk immediates in the cached object itself, and
+					// readelf shows NO relocation covering those instructions. The relocations that
+					// are there -- .rodata.cst16 page-relative, CALL26 to spu_escape/spu_dispatch --
+					// all resolve on load; this one cannot, because nothing marks it as an address.
+					// So the object carries an absolute host pointer captured when it was compiled,
+					// which is why the fault address is byte-identical in every process while the
+					// mappings around it move with ASLR, and why it lands in whatever unrelated
+					// mapping now occupies that spot.
+					//
+					// Fixing the one constant would not make this safe. Any address the recompiler
+					// bakes into IR has the same problem -- g_timebase_offs is baked the same way in
+					// two more places -- so the cache is only sound once every such site goes through
+					// a relocatable symbol instead of IntToPtr(getInt64(...)). Until then, correctness
+					// over the boot time: recompile per session, as ARM64 always did before.
+					added = m_jit.try_add(std::move(_module), llvm_error);
 				}
 				else
 				{
