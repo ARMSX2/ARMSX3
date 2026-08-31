@@ -941,6 +941,53 @@ namespace rsx::prof
 				}
 
 				prof_log.error("Running guest thread '%s' at 0x%08x:%s", run_name, run_cia, out);
+
+				// The operands, and what the addresses among them point at.
+				//
+				// The loop this catches is a counter spin -- load a word, compare against a target
+				// read once before the loop, branch back if unequal -- so the registers are the
+				// question: which address is being polled, what it currently holds, and what it is
+				// waiting to become. A pair that is close says work is still draining; a pair that
+				// is far apart, or a target that was never going to arrive, says whoever advances
+				// it is the thread to chase.
+				std::string ops;
+
+				idm::select<named_thread<ppu_thread>>([&](u32, ppu_thread& ppu)
+				{
+					if (ppu.cia != run_cia || (ppu.state.load() & cpu_flag::wait))
+					{
+						return;
+					}
+
+					for (u32 i = 0; i < 32; i++)
+					{
+						const u64 v = ppu.gpr[i];
+
+						if (!v)
+						{
+							continue;
+						}
+
+						// Guest pointers only; anything else is noise at this width.
+						const u32 as_addr = static_cast<u32>(v);
+
+						if (v <= 0xffffffffull && vm::check_addr(as_addr, vm::page_readable, 8))
+						{
+							fmt::append(ops, "\n\t  r%-2u = 0x%08x -> [0x%08x, 0x%08x]", i, as_addr,
+								*reinterpret_cast<const be_t<u32>*>(vm::g_sudo_addr + as_addr),
+								*reinterpret_cast<const be_t<u32>*>(vm::g_sudo_addr + as_addr + 4));
+						}
+						else
+						{
+							fmt::append(ops, "\n\t  r%-2u = 0x%llx", i, v);
+						}
+					}
+				});
+
+				if (!ops.empty())
+				{
+					prof_log.error("Its registers:%s", ops);
+				}
 			}
 		}
 
