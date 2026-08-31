@@ -91,3 +91,43 @@ SPU-42bae8e5d6a9304068ba1c6bbfdc18d656e287a1:
       # LS 0x3208 is the first instruction of the overlay routine (il r5,0).
       # Offsets are LS addresses: apply_modification subtracts p_vaddr (0x3000).
       - [ be32, 0x3208, 0x35000000 ] # bi lr -- return immediately
+
+# RATCHET & CLANK FUTURE: A CRACK IN TIME -- hangs starting a New Game.
+#
+# The engine waits for the RSX to drain its command ring, but reads GET once before
+# the loop rather than inside it:
+#
+#       lwz  r29,4(r12)        ; GET, read ONCE
+#   0x5cb1bc:
+#       lwz  r9,0(r11)         ; PUT
+#       cmpw cr6,r9,r29
+#       bne  cr6,0x5cb1bc      ; branches back AFTER the read
+#
+# That only terminates if GET has already reached PUT at the instant it is sampled.
+# On hardware the RSX has essentially always caught up by then, so the loop exits
+# immediately. Catch it one command short and it compares PUT against a value GET has
+# since moved past, and it spins forever.
+#
+# Captured with the stall watchdog: PUT = GET = 0x161af6c with the snapshot holding
+# 0x161af64, unchanged across eight samples 40 seconds apart, every other guest thread
+# blocked and the ring drained. The game does its own FIFO management -- it imports no
+# cellGcmFlush or cellGcmFinish -- so there is no HLE call to fix this behind.
+#
+# Moving the branch target back one instruction re-reads GET each pass, which is what
+# the loop means. It exits as soon as GET reaches PUT, and is a no-op in every case
+# where the original would already have exited, so it cannot change a working boot.
+#
+# Ps3PatchRepo.BUNDLED must list this, or it is imported but never enabled.
+
+PPU-0997e35d2b6738f5cecfda1d76380acca0828365:
+  FIFO drain wait fix:
+    Games:
+      "Ratchet & Clank Future: A Crack in Time":
+        BCUS98124:
+          - "All"
+    Author: ARMSX3
+    Patch Version: 1.0
+    Notes: Fixes the hang when starting a New Game.
+    Patch:
+      # bne cr6,0x5cb1bc -> bne cr6,0x5cb1b8, so the GET load is inside the loop.
+      - [ be32, 0x005cb1c4, 0x409AFFF4 ]

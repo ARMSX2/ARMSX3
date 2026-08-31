@@ -204,6 +204,15 @@ object Ps3PatchRepo {
             appVersion = "All",
             sinceRevision = 2,
         ),
+        // RATCHET & CLANK FUTURE: A CRACK IN TIME, BCUS98124 -- without this the game
+        // hangs starting a New Game, in its own RSX drain wait. See canary_patches.yml.
+        Bundled(
+            hash = "PPU-0997e35d2b6738f5cecfda1d76380acca0828365",
+            name = "FIFO drain wait fix",
+            serial = "BCUS98124",
+            appVersion = "All",
+            sinceRevision = 3,
+        ),
     )
 
     private const val BUNDLED_ASSET = "canary_patches.yml"
@@ -213,7 +222,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 2
+    private const val BUNDLED_REVISION = 3
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
