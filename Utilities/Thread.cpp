@@ -2815,6 +2815,45 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 			}
 
 			__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", line);
+
+			// Name the mapping the fault landed in.
+			//
+			// SEGV_ACCERR means the page is there and the access was refused, so the mapping's
+			// permissions and backing file are the whole answer -- and a tombstone prints neither.
+			// Reading maps from outside is not an option: /proc/<pid>/maps of another app is not
+			// readable by shell, and perf only records executable mappings, so a data mapping is
+			// invisible to both. In-process it is just a file.
+			{
+				if (FILE* maps = std::fopen("/proc/self/maps", "re"))
+				{
+					char row[512]{};
+
+					while (std::fgets(row, sizeof(row), maps))
+					{
+						u64 lo_a = 0, hi_a = 0;
+
+						if (std::sscanf(row, "%llx-%llx",
+							reinterpret_cast<unsigned long long*>(&lo_a),
+							reinterpret_cast<unsigned long long*>(&hi_a)) != 2)
+						{
+							continue;
+						}
+
+						if (fault_at >= lo_a && fault_at < hi_a)
+						{
+							if (char* nl = std::strchr(row, '\n')) *nl = '\0';
+
+							char hit[640]{};
+							std::snprintf(hit, sizeof(hit), "  fault mapping (+0x%llx into it): %s",
+								static_cast<unsigned long long>(fault_at - lo_a), row);
+							__android_log_write(ANDROID_LOG_FATAL, "ARMSX3", hit);
+							break;
+						}
+					}
+
+					std::fclose(maps);
+				}
+			}
 		}
 #endif
 
