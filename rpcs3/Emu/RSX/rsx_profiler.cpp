@@ -1,10 +1,8 @@
 #include "stdafx.h"
 #include "rsx_profiler.h"
 #include "Emu/Cell/PPUThread.h"
-#include "Emu/Cell/PPUDisAsm.h"
 #include "Emu/Memory/vm.h"
 #include "Emu/Cell/SPUThread.h"
-#include "Emu/Cell/SPUDisAsm.h"
 
 extern atomic_t<u64> g_spu_group_susp_us;
 extern atomic_t<u64> g_spu_group_susp_count;
@@ -105,11 +103,6 @@ namespace rsx::prof
 	// says what it is doing while it holds.
 	pc_bucket g_stall_spu_pc[24]{};
 	u64 g_stall_spu_pc_total = 0;
-	// Distinct SPU PCs already disassembled, so a hang that settles somewhere new still gets
-	// dumped. The old one-shot flag meant the first stall of a session consumed the only dump,
-	// and during a hang no frame ever completes, so nothing resets per window either -- the
-	// disassembly on screen was from an unrelated earlier stall on a different SPU.
-	u32 g_stall_spu_disasm_pcs[6]{};
 
 	// PUTLLC success vs failure, summed across SPU threads.
 	//
@@ -126,12 +119,6 @@ namespace rsx::prof
 	fn_bucket g_main_state[20]{};
 	u64 g_main_total = 0;
 
-	// cellSync mutex state at the dominant spin site.
-	u64 g_sync_samples = 0;
-	u64 g_sync_free = 0;
-	u64 g_sync_queue = 0;
-	u32 g_sync_last_word = 0;
-	u32 g_sync_last_addr = 0;
 
 	// Sampled from a dedicated thread rather than the vblank thread.
 	//
@@ -280,54 +267,6 @@ namespace rsx::prof
 				// now pinned to a 64-byte window, so the same treatment should say what it spins on.
 				// Local store is the thread's own memory and always mapped, so no address check is
 				// needed; reading it costs nothing beyond the one dump.
-				{
-					idm::select<named_thread<spu_thread>>([](u32 id, spu_thread& spu)
-					{
-						if (spu.state.load() & cpu_flag::wait)
-						{
-							return;
-						}
-
-						const u32 pc = spu.pc;
-						const u32 start = pc >= 0x40 ? (pc - 0x40) & ~3u : 0;
-
-						if (start + 0x90 >= SPU_LS_SIZE)
-						{
-							return;
-						}
-
-						// One dump per distinct 64-byte window, up to the table size.
-						const u32 key = pc & ~0x3fu;
-						u32* slot = nullptr;
-
-						for (auto& e : g_stall_spu_disasm_pcs)
-						{
-							if (e == key) return;
-							if (!e) { slot = &e; break; }
-						}
-
-						if (!slot)
-						{
-							return;
-						}
-
-						*slot = key;
-
-						std::string out;
-						fmt::append(out, "\n  SPU 0x%07x loop around LS 0x%05x:", id, pc);
-
-						SPUDisAsm dis(cpu_disasm_mode::normal, spu.ls);
-
-						for (u32 a = start; a <= start + 0x80; a += 4)
-						{
-							dis.disasm(a);
-							fmt::append(out, "\n    %s 0x%05x: %s", a == pc ? "->" : "  ", a, dis.last_opcode);
-						}
-
-						prof_log.error("STALL SPU disasm:%s", out);
-					});
-				}
-
 				g_stall_spu_pc_total++;
 
 				for (auto& b : g_stall_spu_pc)
@@ -389,56 +328,6 @@ namespace rsx::prof
 				if (b.pc == pc) { b.hits++; break; }
 				if (!b.pc) { b.pc = pc; b.hits = 1; break; }
 			}
-		}
-
-		// For the one site that dominates the profile, also record what it is waiting on.
-		//
-		// cellSyncMutexTryLock is a guest ticket lock: the 32-bit sync word holds the next ticket
-		// in the high half and now-serving in the low half. r3 is the mutex pointer and is still
-		// live at the function's first instruction, which is where these samples land.
-		//
-		// This distinguishes the two cases that need opposite fixes. If next != serving the lock
-		// is genuinely held and the spin is the game waiting for its owner, so the owner is the
-		// problem. If next == serving the lock is FREE and the trylock is failing anyway -- which
-		// would be our reservation losing a race it should win, and an emulator bug.
-		if (pc == 0x01940380u)
-		{
-			idm::select<named_thread<ppu_thread>>([](u32, ppu_thread& ppu)
-			{
-				// EXACTLY the entry instruction. r3 holds the mutex pointer only there: the very
-				// next instruction is `lis r3,-0x7fbf`, which overwrites it with an error
-				// constant. Accepting the whole 64-byte bucket meant most samples read r3 long
-				// after it stopped being the argument, which is where "avg queue 65535" came
-				// from -- a fixed garbage value, not a measurement.
-				if (ppu.state.load() & cpu_flag::wait || ppu.cia != 0x01940380u)
-				{
-					return;
-				}
-
-				const u32 addr = static_cast<u32>(ppu.gpr[3]);
-
-				if (!addr || (addr & 3) || !vm::check_addr(addr, vm::page_readable, 4))
-				{
-					return;
-				}
-
-				const u32 word = *vm::get_super_ptr<const atomic_be_t<u32>>(addr);
-				const u16 next = static_cast<u16>(word >> 16);
-				const u16 serving = static_cast<u16>(word);
-
-				g_sync_samples++;
-				g_sync_last_word = word;
-				g_sync_last_addr = addr;
-
-				if (next == serving)
-				{
-					g_sync_free++;
-				}
-				else
-				{
-					g_sync_queue += static_cast<u16>(next - serving);
-				}
-			});
 		}
 
 		for (auto& b : g_pc_samples)
@@ -701,54 +590,6 @@ namespace rsx::prof
 		return out;
 	}
 
-	// Disassemble around the PC of a PPU that is RUNNING during a stall.
-	//
-	// 17 of 27 resamples inside stalls landed on one instruction, at varying offsets into the
-	// stall, so the thread is busy-waiting rather than working. A PC alone cannot say what it
-	// waits ON, and that is the whole question: the game's own frame-pacing spin is working as
-	// intended, a wait for something we deliver late is ours to fix.
-	//
-	// Reads guest memory, which is what made earlier stall dumps fault -- but those walked call
-	// stacks through arbitrary pointers. This reads a fixed window around a PC the thread is
-	// currently EXECUTING, so it is mapped by construction, and every address is still checked.
-	static std::string disasm_running_ppu()
-	{
-		std::string out;
-		bool done = false;
-
-		idm::select<named_thread<ppu_thread>>([&out, &done](u32 id, ppu_thread& ppu)
-		{
-			if (done || ppu.state.load() & cpu_flag::wait)
-			{
-				return;
-			}
-
-			const u32 pc = ppu.cia;
-
-			// A spin loop is short and backwards-branching, so the instruction that decides it
-			// is just behind the sampled PC.
-			const u32 start = pc >= 0x40 ? pc - 0x40 : 0;
-
-			if (!vm::check_addr(start, vm::page_readable, 0x90))
-			{
-				return;
-			}
-
-			done = true;
-			fmt::append(out, "\n  disasm around 0x%08x (PPU 0x%07x):", pc, id);
-
-			PPUDisAsm dis_asm(cpu_disasm_mode::normal, vm::g_sudo_addr);
-
-			for (u32 addr = start; addr <= start + 0x80; addr += 4)
-			{
-				dis_asm.disasm(addr);
-				fmt::append(out, "\n    %s 0x%08x: %s", addr == pc ? "->" : "  ", addr, dis_asm.last_opcode);
-			}
-		});
-
-		return out;
-	}
-
 	void stall_watchdog()
 	{
 		if (!g_enabled.load())
@@ -807,8 +648,8 @@ namespace rsx::prof
 			return;
 		}
 
-		prof_log.error("STALL: %u ms into a frame with no flip (sample %u/60)%s%s",
-			stalled_ms, s_dumps, sample_guest_threads(false), disasm_running_ppu());
+		prof_log.error("STALL: %u ms into a frame with no flip (sample %u/60)%s",
+			stalled_ms, s_dumps, sample_guest_threads(false));
 	}
 
 	void tick_frame()
@@ -1267,19 +1108,6 @@ namespace rsx::prof
 				g_stall_pc_total = 0;
 			}
 
-			if (g_sync_samples)
-			{
-				prof_log.success("\tcellSync mutex %u samples: %u free (%.1f%%), avg queue %.2f",
-					g_sync_samples, g_sync_free, g_sync_free * 100.0 / g_sync_samples,
-					g_sync_samples > g_sync_free
-						? static_cast<double>(g_sync_queue) / (g_sync_samples - g_sync_free)
-						: 0.0,
-					g_sync_last_word, g_sync_last_addr);
-
-				g_sync_samples = 0;
-				g_sync_free = 0;
-				g_sync_queue = 0;
-			}
 
 			for (auto& b : g_pc_samples)
 			{
