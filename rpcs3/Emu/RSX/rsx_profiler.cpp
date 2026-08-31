@@ -927,7 +927,10 @@ namespace rsx::prof
 				PPUDisAsm dis_asm(cpu_disasm_mode::normal, vm::g_sudo_addr);
 				std::string out;
 
-				const u32 lo = run_cia < 32 ? 0 : run_cia - 32;
+				// Wide enough to show how the loop was entered, not just the loop. The three
+				// instructions that spin say nothing about which value is being waited for or who
+				// was supposed to produce it; the setup above them, and the calls around it, do.
+				const u32 lo = run_cia < 0x80 ? 0 : run_cia - 0x80;
 
 				for (u32 a = lo; a <= run_cia + 32; a += 4)
 				{
@@ -983,6 +986,28 @@ namespace rsx::prof
 						}
 					}
 				});
+
+				// Link register: names the caller, which is the context the loop lacks.
+				idm::select<named_thread<ppu_thread>>([&](u32, ppu_thread& ppu)
+				{
+					if (ppu.cia != run_cia || (ppu.state.load() & cpu_flag::wait))
+					{
+						return;
+					}
+
+					fmt::append(ops, "\n\t  lr  = 0x%08x  ctr = 0x%08x", static_cast<u32>(ppu.lr), static_cast<u32>(ppu.ctr));
+				});
+
+				// The whole RSX control block, not just the two words the loop touches.
+				//
+				// put/get/ref sit at +0x40/+0x44/+0x48 of the DMA control area. A wait that polls
+				// put while ref is the register the RSX actually advances is a different bug from
+				// one where put and get simply never converge, and only ref distinguishes them.
+				if (const auto* r = rsx::get_current_renderer(); r && r->ctrl)
+				{
+					fmt::append(ops, "\n\t  RSX ctrl: put=0x%08x get=0x%08x ref=0x%08x",
+						+r->ctrl->put, +r->ctrl->get, +r->ctrl->ref);
+				}
 
 				if (!ops.empty())
 				{
