@@ -1555,6 +1555,22 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			// render into it rather than blitting need the real one; see upscaler::set_present_format.
 			m_upscaler->set_present_format(m_swapchain->get_surface_format());
 			m_upscaler->scale_output(*m_current_command_buffer, image_to_flip, target_image, target_layout, rgn, UPSCALE_AND_COMMIT | UPSCALE_DEFAULT_VIEW);
+
+			// Flush a pass that RENDERS into the swapchain image, before anything waits on it.
+			//
+			// Same hazard the frame generator hit: queue_submit defers to the offloader thread when
+			// multithreaded RSX is on, so work recorded here has not been submitted when the present
+			// path goes on to wait for it. The blit upscalers survive that because vkCmdBlitImage
+			// leaves nothing for the present to synchronise against; a chain that renders its own
+			// passes does, and the wait never completes -- the RSX ends up spinning in
+			// fence::wait_flush for a submit that is still sitting in the offloader queue.
+			//
+			// Reported as RetroArch shaders hanging the emulator, with the game then refusing to
+			// restart because the RSX thread could not be joined.
+			if (m_upscaler->is_rendering_pass() && g_cfg.video.multithreaded_rsx)
+			{
+				m_current_command_buffer->flush();
+			}
 		}
 	}
 

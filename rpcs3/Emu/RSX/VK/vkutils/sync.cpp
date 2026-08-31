@@ -183,9 +183,35 @@ namespace vk
 
 	void fence::wait_flush()
 	{
+		// Bounded and abortable, because this spins rather than sleeps.
+		//
+		// `flushed` is set by queue_submit_impl after vkQueueSubmit. Under multithreaded RSX that
+		// submit is handed to the offloader thread, so anything waiting here is waiting on another
+		// thread to run -- and if that never happens, this spins at 100% forever with no way out.
+		// It is reached from command_buffer::begin(), so it takes the RSX thread with it: Emu.Kill()
+		// cannot join, the game will not close, and the emulator stays alive with no window.
+		//
+		// Seen with a librashader chain: 100% of RSX samples in wait_for_fence, an Emulation Join
+		// thread parked behind it, and a process that had to be killed.
+		u64 spins = 0;
+
 		while (!flushed)
 		{
 			utils::pause();
+
+			// Cheap: the check runs about once every 64k pauses, which is nothing against a spin
+			// that is already pathological by the time it matters.
+			if ((++spins & 0xffff) != 0)
+			{
+				continue;
+			}
+
+			if (thread_ctrl::state() == thread_state::aborting || Emu.IsStopped())
+			{
+				rsx_log.error("Abandoning a fence flush wait because emulation is stopping. "
+					"A queued submit was never flushed -- this would otherwise hang shutdown.");
+				return;
+			}
 		}
 	}
 
