@@ -845,11 +845,11 @@ namespace rsx::prof
 			return false;
 		}
 
-		// Only the thread the buckets are armed against; anyone else's clock is meaningless.
-		if (current_thread_token() != g_owner_thread)
-		{
-			return false;
-		}
+		// Deliberately NOT gated on being the owner thread, unlike everything else here.
+		// This runs from the sampler precisely because the RSX thread is the thing that has
+		// stopped: requiring the owner would mean the watchdog can only report while the
+		// condition it reports is absent, which is how it sat silent through two hangs.
+		// The reads below are plain scalars and a stale bucket name costs nothing.
 
 		const u64 freq = utils::get_tsc_freq();
 
