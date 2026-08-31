@@ -262,8 +262,14 @@ fun SkinsTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
         // One place decides what "(default)" is attached to, and it reads the store rather
         // than assuming, so moving DEFAULT_SKIN_ID moves the label with it.
         val defaultTag = str("skins.defaultTag")
-        fun label(name: String, id: String?): String =
-            if (id == ControllerSkinStore.DEFAULT_SKIN_ID) "$name  ·  $defaultTag" else name
+        val byTag = str("skins.byAuthor")
+        fun label(name: String, id: String?, author: String = ""): String = buildString {
+            append(name)
+            if (id == ControllerSkinStore.DEFAULT_SKIN_ID) append("  ·  ").append(defaultTag)
+            // Only when there is someone to name. A pack that arrived with the emulator it is
+            // named after has no author to credit, and an empty "by" reads worse than nothing.
+            if (author.isNotEmpty()) append("  ·  ").append(byTag).append(' ').append(author)
+        }
 
         val builtinPreviews = remember {
             ControllerSkinStore.BUILTIN.associate { it.id to ControllerSkinStore.builtinPreview(ctx, it) }
@@ -271,7 +277,7 @@ fun SkinsTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
 
         ControllerSkinStore.BUILTIN.firstOrNull()?.let { first ->
             SkinRow(
-                name = label(first.name, first.id),
+                name = label(first.name, first.id, first.author),
                 selected = activeId == first.id,
                 controllerId = "skin-${first.id}",
                 onSelect = { ControllerSkinStore.setActive(ctx, first.id, editSerial); refresh.intValue++ },
@@ -295,7 +301,7 @@ fun SkinsTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
         for (b in ControllerSkinStore.BUILTIN.drop(1)) {
             SettingsDivider()
             SkinRow(
-                name = label(b.name, b.id),
+                name = label(b.name, b.id, b.author),
                 selected = activeId == b.id,
                 controllerId = "skin-${b.id}",
                 onSelect = { ControllerSkinStore.setActive(ctx, b.id, editSerial); refresh.intValue++ },

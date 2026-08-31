@@ -1399,6 +1399,7 @@ val EN: Map<String, String> = mapOf(
     // Appended to whichever skin is the default, so the label follows DEFAULT_SKIN_ID
     // instead of being baked into one row's name and going stale the next time it moves.
     "skins.defaultTag" to "default",
+    "skins.byAuthor" to "by",
     "skins.perGame.description" to "Off, this game uses whatever skin you picked for all games. On, it keeps its own — handy for giving a light-gun or racing game its own look without touching the rest of your library.",
     "skins.perGame.label" to "Use a different skin for this game",
     "skins.description" to "Import a folder or .zip of ic_controller_*.png images (iOS-format skin packs work). ",

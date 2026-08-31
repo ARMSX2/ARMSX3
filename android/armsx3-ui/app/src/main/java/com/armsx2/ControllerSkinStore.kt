@@ -225,10 +225,18 @@ object ControllerSkinStore {
     /** Skins bundled in app assets (under `assets/<assetDir>/`), selectable as
      *  secondary defaults without importing. id is prefixed "builtin:" so it can
      *  never collide with an imported skin's folder name. */
-    data class BuiltinSkin(val id: String, val name: String, val assetDir: String)
+    /** [author] is optional and shown only when set, the same way a custom driver's is: the
+     *  NetherSX2 packs came with the emulator they are named after and have no one person to
+     *  credit, while the ARMSX3 and ARMSX1 packs were made for us and should say so. */
+    data class BuiltinSkin(
+        val id: String,
+        val name: String,
+        val assetDir: String,
+        val author: String = "",
+    )
     val BUILTIN: List<BuiltinSkin> = listOf(
-        BuiltinSkin("builtin:armsx3_textured", "ARMSX3 Textured", "controller_skins/armsx3_textured"),
-        BuiltinSkin("builtin:armsx1", "ARMSX1", "controller_skins/armsx1"),
+        BuiltinSkin("builtin:armsx3_textured", "ARMSX3 Textured", "controller_skins/armsx3_textured", "bagas"),
+        BuiltinSkin("builtin:armsx1", "ARMSX1", "controller_skins/armsx1", "bagas"),
         BuiltinSkin("builtin:nethersx2", "NetherSX2", "controller_skins/nethersx2"),
         BuiltinSkin("builtin:nethersx2_old", "NetherSX2 Old", "controller_skins/nethersx2_old"),
     )
