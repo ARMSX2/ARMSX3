@@ -14,6 +14,8 @@
 
 #if defined(__APPLE__)
 #include <pthread.h>
+#elif defined(ANDROID)
+#include "util/cctype.hpp"
 #endif
 
 LOG_CHANNEL(jit_log, "JIT");
