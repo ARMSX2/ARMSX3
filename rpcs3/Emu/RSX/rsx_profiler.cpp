@@ -436,6 +436,7 @@ namespace rsx::prof
 		"TexCache:1227",
 		"ImgHelper:43",
 		"GSR:2811",
+		"Barrier:xition",
 	};
 	u64 g_flush_sites[flush_site_count] = {};
 	const char* g_flush_site_names[flush_site_count] = {
@@ -1418,7 +1419,7 @@ namespace rsx::prof
 					const double draws_per_frame = static_cast<double>(count) / frames;
 					const double verts_per_frame = static_cast<double>(g_pass_vertices[ordinal]) / frames;
 
-					fmt::append(list, "\n\t  pass #%-3u %5.0f draws  %8.0f verts  %5.0f v/draw  %ux%u  vp %.0f fp %.0f words/draw  SUBDRAWS %.1f/draw  QUERIES %.0f (%.2f/draw)",
+					fmt::append(list, "\n\t  pass #%-3u %5.0f draws  %8.0f verts  %5.0f v/draw  %ux%u  vp %.0f fp %.0f words/draw  SUBDRAWS %.1f/draw  QUERIES %.0f (%.2f/draw)  BARRIERS %.1f/frame (in-pass %.1f)",
 						ordinal, draws_per_frame, verts_per_frame,
 						count ? static_cast<double>(g_pass_vertices[ordinal]) / static_cast<double>(count) : 0.0,
 						g_pass_width[ordinal], g_pass_height[ordinal],
@@ -1426,7 +1427,9 @@ namespace rsx::prof
 						count ? static_cast<double>(g_pass_fp_words[ordinal]) / static_cast<double>(count) : 0.0,
 						count ? static_cast<double>(g_pass_subdraws[ordinal]) / static_cast<double>(count) : 0.0,
 						static_cast<double>(g_pass_queries[ordinal]) / frames,
-						count ? static_cast<double>(g_pass_queries[ordinal]) / static_cast<double>(count) : 0.0);
+						count ? static_cast<double>(g_pass_queries[ordinal]) / static_cast<double>(count) : 0.0,
+						static_cast<double>(g_pass_barriers[ordinal]) / frames,
+						static_cast<double>(g_pass_cyclic[ordinal]) / frames);
 				}
 				fmt::append(report, "\n\tby pass%s", list);
 			}
