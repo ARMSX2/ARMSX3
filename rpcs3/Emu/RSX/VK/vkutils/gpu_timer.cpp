@@ -146,7 +146,24 @@ namespace vk
 			state.needs_reset = false;
 		}
 
-		vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *m_pool, q);
+		// BOTTOM_OF_PIPE at both ends, deliberately.
+		//
+		// This was TOP_OF_PIPE, which is not symmetric with the BOTTOM_OF_PIPE in end(): the
+		// begin stamp lands as soon as the command reaches the front of the pipe, while the end
+		// stamp waits for everything ahead of it to drain. A region therefore reported its own
+		// work PLUS the drain of whatever was still in flight when it started, and the first
+		// substantial pass of a frame absorbed the whole backlog.
+		//
+		// That is not a small correction: pass #6 measured 8.38ms of a 24.46ms GPU draw budget --
+		// 34% in one pass -- while having the lightest workload of the expensive passes, which is
+		// exactly the shape this artifact manufactures. Whether that pass is genuinely expensive
+		// or a measurement ghost decides where GPU work goes next, so the ruler has to be right
+		// before anything is optimised against it.
+		//
+		// Two BOTTOM_OF_PIPE stamps measure the interval between completion points, which is the
+		// region's actual contribution to the timeline. Absolute values are no longer wall-clock
+		// "time spent inside the region" and are not comparable to numbers captured before this.
+		vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *m_pool, q);
 	}
 
 	void gpu_timer::end(const command_buffer& cmd, region r)
