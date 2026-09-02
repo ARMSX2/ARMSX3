@@ -5,6 +5,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.os.Build
+import android.view.InputDevice
 import android.view.Surface
 import android.view.WindowManager
 import kotlin.math.PI
@@ -63,6 +65,36 @@ class AndroidGyroscopeInput(
             return null
         }
 
+        /** The SensorManager of a connected controller that actually carries motion sensors,
+         *  or null to mean "use the handheld's own".
+         *
+         *  A pad's gyro is not on the system SensorManager and never was. Android exposes it
+         *  per input device through InputDevice.getSensorManager(), added in API 31, so
+         *  everything here used to read the handheld's sensors no matter what was plugged in
+         *  -- which is why motion worked when you tilted the device and did nothing at all
+         *  when you tilted the controller holding the sticks.
+         *
+         *  First match wins. A pad with motion is the one the player is holding; if none has
+         *  any, the caller falls back to the device and behaviour is unchanged. */
+        fun controllerSensorManager(): SensorManager? {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+            for (id in InputDevice.getDeviceIds()) {
+                val dev = InputDevice.getDevice(id) ?: continue
+                if (dev.isVirtual) continue
+                if (!dev.supportsSource(InputDevice.SOURCE_GAMEPAD) &&
+                    !dev.supportsSource(InputDevice.SOURCE_JOYSTICK)
+                ) continue
+                // Wrapped: a device can disappear between the id list and the query.
+                val sm = runCatching { dev.sensorManager }.getOrNull() ?: continue
+                val hasMotion = runCatching {
+                    sm.getSensorList(Sensor.TYPE_GYROSCOPE).isNotEmpty() ||
+                        sm.getSensorList(Sensor.TYPE_ACCELEROMETER).isNotEmpty()
+                }.getOrDefault(false)
+                if (hasMotion) return sm
+            }
+            return null
+        }
+
         fun isModeAvailable(context: Context, mode: Int): Boolean =
             mode == 0 || resolveKind(context, mode) != KIND_NONE
 
@@ -70,13 +102,19 @@ class AndroidGyroscopeInput(
          *  [mode]. The Pad tab reads this so it can say "using the accelerometer" rather than
          *  claiming the mode is unavailable. */
         fun resolveKind(context: Context, mode: Int): Int {
-            val manager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+            val manager = controllerSensorManager()
+                ?: context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
             return sensorChainFor(manager, mode)?.second ?: KIND_NONE
         }
     }
 
     private val appContext = context.applicationContext
-    private val sensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+    private val deviceSensorManager = appContext.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+
+    /** Whichever manager [start] settled on. Re-resolved per start so plugging a pad in
+     *  between sessions is picked up, and so [stop] always unregisters from the one it
+     *  registered with. */
+    private var sensorManager: SensorManager = deviceSensorManager
     private val windowManager = appContext.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var activeSensor: Sensor? = null
     private var activeKind = KIND_NONE
@@ -119,6 +157,9 @@ class AndroidGyroscopeInput(
         tiltCenterX = null
         tiltCenterY = null
         haveGravity = false
+        // A controller's own motion sensors win when it has them: someone holding a pad is
+        // aiming with the pad, not by waving the screen around. Falls back to the handheld.
+        sensorManager = controllerSensorManager() ?: deviceSensorManager
         val resolved = sensorChainFor(sensorManager, mode) ?: return false
         activeSensor = resolved.first
         activeKind = resolved.second
