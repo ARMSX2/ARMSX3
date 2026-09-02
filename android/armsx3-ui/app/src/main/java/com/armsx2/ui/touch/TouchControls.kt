@@ -433,6 +433,15 @@ object TouchControls {
      *  so the auto-hide timer restarts. Not persisted. */
     val interactionTick = mutableIntStateOf(0)
 
+    /** How many fingers are on the overlay right now, counted once at the overlay root.
+     *
+     *  The auto-hide timer needs this because a press is not the same thing as use. Every
+     *  widget reports the moment it is pressed and nothing after, so holding a stick or a
+     *  button for longer than the timeout counted as idle and the controls vanished under
+     *  the player's thumb mid-game. Idle means no finger on the glass, which is what this
+     *  counts. Not persisted. */
+    val pointersDown = mutableIntStateOf(0)
+
     // ---- On-screen macro / combo buttons (Macro1-4) ----------------------------
     // Each macro fires a user-chosen SET of pad buttons at once (e.g. R1+R2+R3).
     // Stored per macro under touch.macro.<id> = comma-separated TouchButtonId names.
