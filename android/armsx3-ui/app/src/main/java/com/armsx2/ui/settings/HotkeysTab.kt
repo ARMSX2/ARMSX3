@@ -57,7 +57,7 @@ fun HotkeysTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
         HelpText(
             str("hotkeys.help"),
         )
-        ControllerMappings.SysHotkey.entries.forEach { hk ->
+        ControllerMappings.SysHotkey.entries.filter { it.supported }.forEach { hk ->
             @Suppress("UNUSED_EXPRESSION") ControllerMappings.hotkeyBindTick.value
             val capturing = ControllerMappings.captureHotkey.value == hk
             val binding = ControllerMappings.hotkeyLabel(hk)

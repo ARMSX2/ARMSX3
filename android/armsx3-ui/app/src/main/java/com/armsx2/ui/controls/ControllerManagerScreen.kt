@@ -175,7 +175,7 @@ private fun ControllerBindings(state: ControllerManagerUiState, viewModel: Contr
             }
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ControllerMappings.SysHotkey.entries.forEach { hotkey ->
+                ControllerMappings.SysHotkey.entries.filter { it.supported }.forEach { hotkey ->
                     BindingRow(
                         controllerId = "controls.hotkey.${hotkey.name}",
                         label = hotkey.label,

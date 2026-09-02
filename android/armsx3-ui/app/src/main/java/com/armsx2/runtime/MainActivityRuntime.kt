@@ -982,10 +982,6 @@ open class MainActivityRuntime : ComponentActivity() {
             }
             currentGame.value = info
             launchedExternally = external
-            // Arm a one-shot auto-load of the autosave state for this boot (fired by
-            // onVmRunning once the game's CRC is set). Set here — not in start() — so
-            // a manual Reset Game (which re-enters start() directly) doesn't re-load.
-            pendingAutoLoadOnBoot = prefs.getBoolean("autoLoadOnBoot", false)
             m_szGamefile = uri
             synchronized(vmLifecycleLock) {
                 if (eState.value != EmuState.STOPPED || vmStopInProgress || vmRunLoopActive) {
@@ -1207,12 +1203,16 @@ open class MainActivityRuntime : ComponentActivity() {
 
             WindowImpl.overlayVisible.value = false
             WindowImpl.showLibrary.value = false
-            // Auto-save-on-exit: any normal close (not a reset/restart) writes the
-            // autosave state when the user has the toggle on, so the next boot can
-            // auto-load it. An explicit Save-and-Exit still forces it via saveAutosave.
-            val doAutosave = saveAutosave ||
-                (!restartAfterStop &&
-                    runCatching { prefs.getBoolean("autoSaveOnExit", false) }.getOrDefault(false))
+            // ONLY an explicit Save State & Exit writes a state on the way out.
+            //
+            // The automatic variants (on-exit, on-boot, and an every-N-minutes interval) are
+            // gone. Writing a savestate is not a background operation here: RPCS3 has to stop
+            // the emulator to serialise it, so the app then reboots the state to carry on.
+            // Players read that as the game freezing and recompiling itself at random, and
+            // when the stop missed its timeout the app booted on top of a core that was still
+            // running -- which dropped them back in the library with the old game still
+            // making sound. A save the user did not ask for is not worth that.
+            val doAutosave = saveAutosave
             vmStopControl.execute {
                 println("@@ANDROID_STOP_JAVA@@ begin saveAutosave=$doAutosave forced=$saveAutosave restart=$restartAfterStop")
                 if (doAutosave)
@@ -1328,12 +1328,6 @@ open class MainActivityRuntime : ComponentActivity() {
             runCatching { NativeApp.emulog("@@ANGLE@@ $msg") }
         }
 
-        // Armed per-launch in launchGame when "Auto-load last state on boot" is on;
-        // consumed once by onVmRunning. Set in launchGame (NOT start) so a manual
-        // Reset Game — which re-enters start() directly — never re-loads the state.
-        @Volatile
-        var pendingAutoLoadOnBoot = false
-
         @Volatile
         private var pendingSlotLoadOnBoot: Int? = null
 
@@ -1352,7 +1346,6 @@ open class MainActivityRuntime : ComponentActivity() {
             }
             if (launchPath.isBlank()) return false
             pendingSlotLoadOnBoot = slot
-            pendingAutoLoadOnBoot = false
             launchGame(launchPath, game)
             return true
         }
@@ -1370,58 +1363,6 @@ open class MainActivityRuntime : ComponentActivity() {
          * The core knows the serial once the disc is read, which is the same key the save
          * path uses — so build the missing GameInfo from it and the two agree again.
          */
-        /** Minutes between interval autosaves. 0 = off, which is the default: writing a
-         *  savestate costs a visible hitch, so it is never turned on for you. */
-        const val KEY_AUTOSAVE_INTERVAL_MIN = "autoSaveIntervalMin"
-
-        /** How often the job below wakes to check. Well under the shortest interval (1
-         *  minute), so a freshly-lowered setting takes effect promptly without the job
-         *  spinning. */
-        private const val AUTOSAVE_POLL_MS = 15_000L
-
-        private var autosaveIntervalJob: kotlinx.coroutines.Job? = null
-
-        /**
-         * Interval autosave: while a game is actually RUNNING, write the autosave slot
-         * every N minutes so a crash or a flat battery costs at most that much progress.
-         *
-         * Writes the SAME dedicated `.autosave.p2s` that auto-save-on-exit uses, so the
-         * numbered slots 0-9 stay entirely the user's and auto-load-on-boot picks this up
-         * with no extra plumbing.
-         *
-         * Started once and self-gating rather than hooked to VM start/stop: the state it
-         * cares about (running, not covered by a menu, interval > 0) is all readable here,
-         * and a single long-lived job can't be leaked by a boot path that forgets to stop
-         * it. It deliberately does NOT fire while paused or while the pause menu / a
-         * manager screen is up — the game isn't advancing, so a save then costs a hitch
-         * and buys nothing.
-         */
-        private fun startAutosaveIntervalJob() {
-            autosaveIntervalJob?.cancel()
-            autosaveIntervalJob = instance?.lifecycleScope?.launch {
-                var lastSaveAt = 0L
-                while (true) {
-                    kotlinx.coroutines.delay(AUTOSAVE_POLL_MS)
-                    val minutes = runCatching { prefs.getInt(KEY_AUTOSAVE_INTERVAL_MIN, 0) }.getOrDefault(0)
-                    if (minutes <= 0 || eState.value != EmuState.RUNNING || WindowImpl.frontendCovers) {
-                        // Reset the clock while it can't fire, so re-entering a game doesn't
-                        // immediately dump a save from time that accrued in a menu.
-                        lastSaveAt = 0L
-                        continue
-                    }
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    if (lastSaveAt == 0L) {
-                        lastSaveAt = now
-                        continue
-                    }
-                    if (now - lastSaveAt < minutes * 60_000L) continue
-                    runCatching { NativeApp.saveAutosaveState() }
-                    // Stamped AFTER the write: a savestate takes real time, and starting
-                    // the next interval from before it would make saves creep earlier.
-                    lastSaveAt = android.os.SystemClock.elapsedRealtime()
-                }
-            }
-        }
 
         private fun adoptExternalGameIdentity() {
             if (!launchedExternally || currentGame.value != null) return
@@ -1465,11 +1406,8 @@ open class MainActivityRuntime : ComponentActivity() {
         @JvmStatic
         fun onVmRunning() {
             adoptExternalGameIdentity()
-            val requestedSlot = pendingSlotLoadOnBoot
-            val loadAutosave = pendingAutoLoadOnBoot && requestedSlot == null
-            if (requestedSlot == null && !loadAutosave) return
+            val requestedSlot = pendingSlotLoadOnBoot ?: return
             pendingSlotLoadOnBoot = null
-            pendingAutoLoadOnBoot = false
             val handler = android.os.Handler(android.os.Looper.getMainLooper())
             val tryLoad = object : Runnable {
                 var attempts = 0
@@ -1494,8 +1432,7 @@ open class MainActivityRuntime : ComponentActivity() {
                         return
                     }
                     val loaded = runCatching {
-                        if (requestedSlot != null) NativeApp.loadStateFromSlot(requestedSlot)
-                        else NativeApp.loadAutosaveState()
+                        NativeApp.loadStateFromSlot(requestedSlot)
                     }.getOrDefault(false)
                     if (!loaded && ++attempts < 60)
                         handler.postDelayed(this, 250)
@@ -2215,7 +2152,6 @@ open class MainActivityRuntime : ComponentActivity() {
         com.armsx2.SecondScreen.attach(applicationContext)
         com.armsx2.BatteryWatcher.load()
         com.armsx2.BatteryWatcher.start(applicationContext)
-        startAutosaveIntervalJob()
         // Restore the saved rumble master toggle into the native gate (NativeApp.onPadRumble).
         NativeApp.sRumbleEnabled = ControllerMappings.rumbleEnabled()
         NativeApp.sPhoneRumbleEnabled = ControllerMappings.phoneRumbleEnabled()
@@ -3279,28 +3215,12 @@ open class MainActivityRuntime : ComponentActivity() {
                     }
                     return true
                 }
-                ControllerMappings.SysHotkey.FAST_FORWARD -> {
-                    // Hold to fast-forward (Turbo), release to return to the user's
-                    // current limiter mode (Nominal if frame-limit is on, else Unlimited)
-                    // — not blindly Nominal, which would re-enable a disabled limiter.
-                    if (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) {
-                        if (event.repeatCount == 0) {
-                            // Holding FF supersedes any latched FF-toggle.
-                            if (down) fastForwardToggleActive = false
-                            runCatching { NativeApp.speedhackLimitermode(if (down) ffLimiterMode() else baseLimiterMode()) }
-                        }
-                    }
-                    return true
-                }
-                ControllerMappings.SysHotkey.FAST_FORWARD_TOGGLE -> {
-                    // Press once to lock fast-forward (Turbo) on, press again to return
-                    // to the user's current limiter mode. Shared with the on-screen
-                    // fast-forward touch button (FastForwardWidget).
-                    if (down && event.repeatCount == 0) toggleFastForward()
-                    return true
-                }
+                ControllerMappings.SysHotkey.FAST_FORWARD,
+                ControllerMappings.SysHotkey.FAST_FORWARD_TOGGLE,
                 ControllerMappings.SysHotkey.SLOW_DOWN -> {
-                    if (down && event.repeatCount == 0) toggleSlowDown()
+                    // Unsupported on this core (SysHotkey.supported = false), so these do
+                    // nothing at all. Still swallowed rather than passed along: a binding left
+                    // over from an older build must not reach the game as a stray button press.
                     return true
                 }
                 ControllerMappings.SysHotkey.RES_UP -> {
@@ -3477,31 +3397,19 @@ open class MainActivityRuntime : ComponentActivity() {
         hotkeyToast("Motion recentered")
     }
 
-    fun toggleFastForward() {
-        fastForwardToggleActive = !fastForwardToggleActive
-        val on = fastForwardToggleActive
-        // Fast-forward supersedes an active slow-down latch (mutually exclusive).
-        if (on) slowDownToggleActive = false
-        runCatching { NativeApp.speedhackLimitermode(if (on) ffLimiterMode() else baseLimiterMode()) }
-        hotkeyToast(if (on) "Fast Forward ON" else "Fast Forward OFF")
-    }
+    /** No-op. Speed control is a PCSX2 feature: NativeApp.speedhackLimitermode is an
+     *  Unsupported shim on this core, so every one of these only ever flipped a flag and
+     *  showed a toast that lied. Worse, it latched -- a tester reported fast-forward
+     *  "turning on and never turning off", which is exactly a toggle whose ON state nothing
+     *  can act on and nothing clears. Left as an empty function rather than deleted because
+     *  the touch overlay, the second screen and the pause menu all call it. */
+    fun toggleFastForward() = Unit
 
     /** Toggle slow motion (native LimiterModeType::Slomo, ~50% speed). BLOCKED in
      *  RetroAchievements hardcore — slow-mo is a banned advantage there (matching
      *  desktop PCSX2's hardcore restrictions); shows a notice instead of engaging. */
-    fun toggleSlowDown() {
-        if (InGameOverlay.hardcoreOn.value) {
-            slowDownToggleActive = false
-            hotkeyToast("Slow Down is disabled in RetroAchievements Hardcore mode")
-            return
-        }
-        slowDownToggleActive = !slowDownToggleActive
-        val on = slowDownToggleActive
-        // Slow-down supersedes an active fast-forward latch (mutually exclusive).
-        if (on) fastForwardToggleActive = false
-        runCatching { NativeApp.speedhackLimitermode(if (on) 2 else baseLimiterMode()) }
-        hotkeyToast(if (on) "Slow Down ON (50%)" else "Slow Down OFF")
-    }
+    /** No-op, for the same reason as [toggleFastForward]. */
+    fun toggleSlowDown() = Unit
 
     // Hotkey pop-up toasts (Fast-Forward, etc.). Android Toasts QUEUE, so toggling a
     // hotkey rapidly stacks a long backlog that blocks the screen — cancel the previous
@@ -4648,12 +4556,6 @@ open class MainActivityRuntime : ComponentActivity() {
             }
             ControllerMappings.SysHotkey.CYCLE_SLOT -> cycleSaveSlot()
                 // TEXTURE_DUMP hotkey removed: PCSX2 texture dumping.
-            ControllerMappings.SysHotkey.FAST_FORWARD_TOGGLE -> {
-                fastForwardToggleActive = !fastForwardToggleActive
-                val on = fastForwardToggleActive
-                runCatching { NativeApp.speedhackLimitermode(if (on) ffLimiterMode() else baseLimiterMode()) }
-                hotkeyToast(if (on) "Fast Forward ON" else "Fast Forward OFF")
-            }
             ControllerMappings.SysHotkey.GYRO_TOGGLE -> toggleGyro()
             // GYRO_HOLD needs key up/down edges, which this edge-triggered path (stick
             // directions / combos) doesn't provide — behave as a toggle here rather than
@@ -4668,11 +4570,13 @@ open class MainActivityRuntime : ComponentActivity() {
             }
             ControllerMappings.SysHotkey.SAVE_AND_EXIT -> closeGame(saveAutosave = true)
             ControllerMappings.SysHotkey.RESET_GAME -> restart()
-            ControllerMappings.SysHotkey.SLOW_DOWN -> toggleSlowDown()
             ControllerMappings.SysHotkey.TOGGLE_OSD -> hotkeyToast(InGameOverlay.cycleOsd())
             ControllerMappings.SysHotkey.TOGGLE_KEYBOARD -> toggleSoftKeyboard()
-            // Hold-type hotkeys have no one-shot stick-edge meaning.
+            // Hold-type hotkeys have no one-shot stick-edge meaning, and the speed actions
+            // are unsupported on this core (SysHotkey.supported = false).
             ControllerMappings.SysHotkey.FAST_FORWARD,
+            ControllerMappings.SysHotkey.FAST_FORWARD_TOGGLE,
+            ControllerMappings.SysHotkey.SLOW_DOWN,
             ControllerMappings.SysHotkey.PRESSURE_MOD -> {}
         }
     }
