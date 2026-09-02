@@ -2562,6 +2562,30 @@ static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {
   return true;
 }
 
+// pad_thread::open_home_menu() does not return until the menu is dismissed, and the menu is
+// drawn by the renderer. Two rules follow from that, and every caller here was breaking one:
+//
+//  - It must not run on a thread that dismissing the menu depends on. The pad-data path below
+//    is one: opening the menu inline stopped the very button events that would have closed it
+//    from ever reaching the pad.
+//  - It must not be opened when there is no surface to draw on. A menu nobody can see is a menu
+//    nobody can dismiss, and it has already taken pad input away from the game. That is what
+//    "the game freezes but the audio is still playing" turned out to be.
+//
+// So: refuse it without a window, and always run it detached.
+static void open_home_menu_async() {
+  if (g_native_window.load() == nullptr) {
+    rpcsx_android.warning("home menu requested with no surface to draw it on; ignoring");
+    return;
+  }
+
+  std::thread([] {
+    if (auto padThread = pad::get_pad_thread(true)) {
+      padThread->open_home_menu();
+    }
+  }).detach();
+}
+
 extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,
                                       int leftStickX, int leftStickY,
                                       int rightStickX, int rightStickY) {
@@ -2594,9 +2618,7 @@ extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,
       btn.m_pressed = (digital1 & btn.m_outKeyCode) != 0;
 
       if (btn.m_outKeyCode == CELL_PAD_CTRL_PS && btn.m_pressed) {
-        if (auto padThread = pad::get_pad_thread(true)) {
-          padThread->open_home_menu();
-        }
+        open_home_menu_async();
       }
 
     } else if (btn.m_offset == CELL_PAD_BTN_OFFSET_DIGITAL2) {
@@ -3667,11 +3689,7 @@ extern "C" void _rpcsx_resume() { Emu.Resume(); }
 // underneath it, and why pause/resume were asymmetric: resume() reached the core, pause() did not.
 extern "C" void _rpcsx_pause() { Emu.Pause(); }
 
-extern "C" void _rpcsx_openHomeMenu() {
-  if (auto padThread = pad::get_pad_thread(true)) {
-    padThread->open_home_menu();
-  }
-}
+extern "C" void _rpcsx_openHomeMenu() { open_home_menu_async(); }
 
 extern "C" std::string _rpcsx_getTitleId() { return Emu.GetTitleID(); }
 
@@ -4383,13 +4401,22 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
     // actually requires -- so hand the rest to a detached worker and return now.
     // Ported from ouroboros420/rpcsx (31d1425bc).
     std::thread([] {
-      if (auto padThread = pad::get_pad_thread(true)) {
-        padThread->open_home_menu();
-      }
+      // The home menu used to be opened here, and that is exactly what "the game freezes but
+      // the audio keeps playing" was. open_home_menu() does not return until the menu is
+      // dismissed, and the menu is drawn by the renderer -- so with the surface just gone it
+      // could not be drawn, could not be dismissed, and never returned. Every line below it,
+      // the pause included, was unreachable for as long as the app stayed backgrounded, and
+      // the emulator ran on at full speed behind an invisible menu that had already taken pad
+      // input away from the game. Pausing is what this path is for. The menu belongs to the PS
+      // button, which can only reach open_home_menu_async() while there is something to draw on.
 
       // Only pause if the surface is still gone. A quick destroy->recreate (a rotation, a
       // transient focus loss) fires the gained event and resumes; that resume has to win
-      // the race against this deferred pause, not lose to it.
+      // the race against this deferred pause, not lose to it. That grace period used to be
+      // paid for accidentally, by however long the open_home_menu() call above took to run,
+      // so it has to be explicit now that the call is gone.
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
       if (g_native_window.load() != nullptr) {
         return;
       }

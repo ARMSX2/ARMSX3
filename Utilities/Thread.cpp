@@ -2766,9 +2766,19 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 		//
 		// Only runs on a fault that is already fatal, so pthread_getattr_np not being async-signal-safe
 		// costs nothing we still have.
+		//
+		// Skip a fault at address 0. On ARM64 that is how ART does both its implicit suspend
+		// checks and its implicit null checks -- a load through a register the runtime zeroes --
+		// so they land here on whichever managed thread happened to be running: the GC daemons,
+		// binder, hwui, the JIT. They are not crashes. libsigchain hands them to ART, which
+		// handles them and carries on, so the note above about this only running on an
+		// already-fatal fault is simply not true for them. Reporting each one wrote a
+		// fatal-level logcat line plus a register dump: 116 of them in twenty minutes of one
+		// tester's session, in the logs we ask people to send us. A real null dereference on a
+		// non-emulator thread still gets a tombstone from debuggerd, which is its proper reporter.
 #ifdef ARCH_ARM64
+		if (const u64 fault_at = reinterpret_cast<u64>(info->si_addr); fault_at != 0)
 		{
-			const u64 fault_at = reinterpret_cast<u64>(info->si_addr);
 			const u64 sp = static_cast<u64>(context->uc_mcontext.sp);
 
 			void* stack_addr = nullptr;
