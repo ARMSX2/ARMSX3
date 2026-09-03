@@ -193,14 +193,27 @@ object PadRouter {
      *  Lets per-slot rumble buzz the right pad. */
     fun deviceIdForPort(port: Int): Int {
         if (port !in slots.indices) return -1
-        if (slots[port] >= 0) return slots[port]
 
-        // Nothing has CLAIMED the slot, but the user may have pinned a controller to it. Slots
-        // are only filled from in-game input dispatch, so in the menus every slot reads
-        // unclaimed -- which is what made "test rumble on player 2" unanswerable from the
-        // settings screen. A pin is an answer, so honour it here.
+        // A PIN OUTRANKS A CLAIM. Slots are filled first-to-press, so a pad can auto-claim a
+        // port before the user ever states a preference -- on a handheld the built-in pad
+        // usually claims 0, pushing an external controller to 1. Reading the slot first meant
+        // the stale claim answered for the port the user had since assigned elsewhere, so a
+        // DualSense pinned to player 1 still replied as player 2.
+        //
+        // Checked against connected pads, so a pin for a controller that is not plugged in
+        // does not black-hole the port.
         for (pad in connectedPads()) {
             if (pinned[pad.descriptor] == port) return pad.deviceId
+        }
+
+        val claimed = slots[port]
+        if (claimed >= 0) {
+            // Drop the claim if the device is gone (ids are reassigned on every reconnect) or
+            // if it has since been pinned to somebody else. Self-healing here keeps a stale
+            // slot from outliving the session that made it.
+            val dev = runCatching { InputDevice.getDevice(claimed) }.getOrNull()
+            if (dev != null && !pinnedElsewhere(dev.descriptor, port)) return claimed
+            slots[port] = -1
         }
         return -1
     }

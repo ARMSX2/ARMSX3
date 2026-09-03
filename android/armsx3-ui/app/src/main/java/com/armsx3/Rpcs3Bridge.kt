@@ -1724,9 +1724,12 @@ object Rpcs3Bridge {
         // The port argument was accepted and then ignored, so "test player 3" buzzed whatever
         // the global lookup happened to find -- usually the handheld.
         val vib = vibrator(port)
+        val pins = runCatching { PadRouter.pins().entries.joinToString(",") { "${it.key.take(8)}=P${it.value + 1}" } }
+            .getOrDefault("?")
         logRumble(
             "test player ${port + 1} -> ${vib?.label ?: "nothing"} " +
-                "motors=${vib?.motorCount ?: 0}; ${rumbleInventory()}",
+                "motors=${vib?.motorCount ?: 0} device=${deviceForPort(port)?.name ?: "none"} " +
+                "pins=[$pins]; ${rumbleInventory()}",
         )
         if (vib == null) return
         runCatching { vib.play(200, 200) }
