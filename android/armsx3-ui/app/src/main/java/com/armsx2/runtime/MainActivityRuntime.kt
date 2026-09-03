@@ -2125,6 +2125,9 @@ open class MainActivityRuntime : ComponentActivity() {
         // Player-slot pins, so a controller the user assigned by hand is on its slot
         // before the first button press rather than after it.
         com.armsx2.input.PadRouter.loadPins()
+        // Direct USB rumble for a PlayStation pad. Asks for USB permission only when one is
+        // actually attached, so nobody sees a prompt for a controller they do not own.
+        com.armsx2.input.UsbRumble.start(this)
         // Discord needs an Activity to launch its sign-in browser and has no other way to obtain
         // one. Handing it over costs nothing when the user has not opted in — start() returns
         // immediately unless the feature is enabled AND a token is stored.

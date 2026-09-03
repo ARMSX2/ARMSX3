@@ -1439,18 +1439,41 @@ object Rpcs3Bridge {
      * manager with a parallel CombinedVibration drives them all, which is what a game asking for
      * rumble means.
      */
-    private class RumbleTarget(val label: String, private val motors: List<Vibrator>) {
-        val motorCount get() = motors.size
+    private class RumbleTarget(
+        val label: String,
+        private val motors: List<Vibrator> = emptyList(),
+        private val usb: com.armsx2.input.UsbRumble.Pad? = null,
+    ) {
+        val motorCount get() = if (usb != null) 2 else motors.size
 
-        fun vibrate(effect: VibrationEffect) {
+        /** Motor levels, 0..255, as the guest asked for them. */
+        fun play(large: Int, small: Int) {
+            if (usb != null) {
+                // A real pad with two real motors: pass both through rather than flattening them.
+                usb.rumble(large, small)
+                return
+            }
+            // One vibrator, two motors: take the stronger. The small motor is the high-frequency
+            // one and reads as weaker for the same value, so it is scaled down rather than
+            // competing with the large one on equal terms.
+            val amplitude = maxOf(large, small * 2 / 3)
+            if (amplitude <= 0) { cancel(); return }
+            // Repeating rather than a fixed duration: the guest decides when rumble stops, and a
+            // timed effect would either cut a long rumble short or outlive a brief one.
+            val effect = VibrationEffect.createWaveform(
+                longArrayOf(0, 60), intArrayOf(0, amplitude.coerceIn(1, 255)), 0,
+            )
             motors.forEach { runCatching { it.vibrate(effect) } }
         }
 
         fun cancel() {
+            val port = usb
+            if (port != null) { runCatching { port.stop() }; return }
             motors.forEach { runCatching { it.cancel() } }
         }
 
-        fun sameAs(other: RumbleTarget?): Boolean = other != null && other.motors == motors
+        fun sameAs(other: RumbleTarget?): Boolean =
+            other != null && other.motors == motors && other.usb === usb
     }
 
     /** Low volume by design: only resolution changes and explicit tests are logged, never the
@@ -1581,6 +1604,10 @@ object Rpcs3Bridge {
         // A pad that advertises motors it cannot drive looks identical to a working one, so
         // "send this player's rumble to the handheld instead" has to be sayable by hand.
         if (mode != PadRouter.RumbleMode.DEVICE) {
+            // The pad addressed directly over USB wins. On a handheld that bridges the
+            // controller, the motors the input API offers for it are fiction; this is the
+            // hardware itself.
+            com.armsx2.input.UsbRumble.padFor(dev)?.let { return RumbleTarget(it.label, usb = it) }
             targetOf(dev)?.let { return it }
         }
 
@@ -1615,7 +1642,8 @@ object Rpcs3Bridge {
             // Per PORT, not global. Both the amplitude last written and the motor it was written
             // to have to be tracked per player: with one shared pair, whichever port was polled
             // last dictated the state and cancelled everyone else's rumble.
-            val lastAmplitude = IntArray(PadRouter.MAX_PADS)
+            val lastLarge = IntArray(PadRouter.MAX_PADS) { -1 }
+            val lastSmall = IntArray(PadRouter.MAX_PADS) { -1 }
             // The motor we last started, so it can be stopped even if the target has since
             // changed underneath us -- otherwise unplugging a pad mid-rumble leaves it buzzing.
             val active = arrayOfNulls<RumbleTarget>(PadRouter.MAX_PADS)
@@ -1631,18 +1659,16 @@ object Rpcs3Bridge {
                     val large = (packed shr 8) and 0xFF
                     val small = packed and 0xFF
 
-                    // One vibrator, two motors: take the stronger. The small motor is the
-                    // high-frequency one and reads as weaker for the same value, so it is
-                    // scaled down rather than competing with the large one on equal terms.
-                    // `paused` too, not just the enable flag. The effect started below repeats
-                    // INDEFINITELY and is only ever cancelled on a transition back to zero, so a
-                    // pause taken while a rumble is active left the motor buzzing with nothing able
-                    // to stop it -- stopRumblePump only runs when the VM loop exits, which a pause
-                    // does not do. Folding pause into `want` makes it a normal transition: the motor
-                    // stops on pause and resumes on unpause, through the existing change path.
-                    val want = if (!rumbleEnabled || paused) 0 else maxOf(large, small * 2 / 3)
+                    // `paused` too, not just the enable flag. Rumble started below runs until it
+                    // is cancelled, and a pause taken mid-rumble left the motor going with nothing
+                    // able to stop it -- stopRumblePump only runs when the VM loop exits, which a
+                    // pause does not do. Folding pause in here makes it a normal transition: the
+                    // motor stops on pause and resumes on unpause, through the existing path.
+                    val gated = !rumbleEnabled || paused
+                    val wantLarge = if (gated) 0 else large
+                    val wantSmall = if (gated) 0 else small
 
-                    if (want == lastAmplitude[port]) continue
+                    if (wantLarge == lastLarge[port] && wantSmall == lastSmall[port]) continue
 
                     runCatching {
                         // Resolved per change, not once at startup: a pad connected mid-session
@@ -1660,21 +1686,15 @@ object Rpcs3Bridge {
                         active[port]?.takeIf { !it.sameAs(vib) }?.cancel()
                         active[port] = null
 
-                        if (want <= 0 || vib == null) {
+                        if (vib == null || (wantLarge <= 0 && wantSmall <= 0)) {
                             vib?.cancel()
                         } else {
-                            // Repeating one-shot rather than a fixed duration: the guest
-                            // decides when rumble stops, and a timed effect would either cut
-                            // a long rumble short or outlive a brief one.
-                            vib.vibrate(
-                                VibrationEffect.createWaveform(
-                                    longArrayOf(0, 60), intArrayOf(0, want.coerceIn(1, 255)), 0
-                                )
-                            )
+                            vib.play(wantLarge, wantSmall)
                             active[port] = vib
                         }
                     }
-                    lastAmplitude[port] = want
+                    lastLarge[port] = wantLarge
+                    lastSmall[port] = wantSmall
                 }
 
                 try { Thread.sleep(30) } catch (_: InterruptedException) { break }
@@ -1702,9 +1722,13 @@ object Rpcs3Bridge {
                 "motors=${vib?.motorCount ?: 0}; ${rumbleInventory()}",
         )
         if (vib == null) return
-        runCatching {
-            vib.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE))
-        }.onFailure { logRumble("test player ${port + 1} failed: $it") }
+        runCatching { vib.play(200, 200) }
+            .onFailure { logRumble("test player ${port + 1} failed: $it") }
+        // play() runs until cancelled, so the test has to end itself.
+        Thread {
+            runCatching { Thread.sleep(400) }
+            runCatching { vib.cancel() }
+        }.apply { isDaemon = true; name = "rumble-test"; start() }
     }
 
     /** Text for the test toast. Returned "" before, which is why the popup had none. */
