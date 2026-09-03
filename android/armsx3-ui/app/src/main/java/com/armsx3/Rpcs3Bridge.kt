@@ -1443,14 +1443,23 @@ object Rpcs3Bridge {
 
             if (!isPad) continue
 
-            val v = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                dev.vibratorManager?.defaultVibrator
-            } else {
-                @Suppress("DEPRECATION")
-                dev.vibrator
+            // Ask VibratorManager first on API 31+, but do NOT stop there. Some pads --
+            // certain DualShock/DualSense Bluetooth modes among them -- expose NO vibrators
+            // to VibratorManager while still driving fine through the legacy per-device API.
+            // Asking only the manager skipped those pads entirely: controllerVibrator()
+            // returned null, and rumble fell through to the phone -- the exact symptom #89
+            // was meant to end, still live for that class of pad. Try the legacy API for the
+            // same device before moving on to the next one.
+            val candidates = ArrayList<Vibrator?>(2)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                candidates.add(dev.vibratorManager?.defaultVibrator)
             }
+            @Suppress("DEPRECATION")
+            candidates.add(dev.vibrator)
 
-            if (v != null && v.hasVibrator()) return@runCatching v
+            for (v in candidates) {
+                if (v != null && v.hasVibrator()) return@runCatching v
+            }
         }
 
         null
