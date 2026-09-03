@@ -1749,10 +1749,10 @@ object Rpcs3Bridge {
             // external pad through its own HID node, those are different things and the toast
             // is the only place the difference is visible.
             // Naming the DEVICE, not just "your controller": on a handheld that bridges an
-            // external pad through its own HID node, those are different things, and a pad can
-            // report motors it never drives -- so say where it went and what to do if nothing moved.
-            onPad -> "Sent to ${vib.label}. Felt nothing? That controller reports motors it " +
-                "cannot drive — set its Rumble to Handheld."
+            // external pad through its own HID node those are different things, and that is the
+            // one fact the user cannot get from anywhere else. Kept to a line: a toast is not a
+            // paragraph, and the longer version was truncated mid-sentence.
+            onPad -> "Rumble sent to ${vib.label}"
             else -> "Vibration test sent to this device (no motor on player ${port + 1}'s controller)"
         }
     }

@@ -46,11 +46,28 @@ object UsbRumble {
         val label: String,
         val productName: String,
         private val connection: UsbDeviceConnection,
-        private val interfaceId: Int,
+        private val iface: android.hardware.usb.UsbInterface,
+        private val endpointOut: android.hardware.usb.UsbEndpoint?,
         private val dualsense: Boolean,
     ) {
         private var lastLarge = -1
         private var lastSmall = -1
+
+        /**
+         * How we are talking to the pad.
+         *
+         * Start unclaimed, because claiming detaches whatever driver owns the interface and the
+         * pad's BUTTONS would stop working. If an unclaimed control transfer is refused -- which
+         * it is when something else holds the interface -- there is no way to reach the motors
+         * without taking it, so that is tried once and the outcome recorded rather than retried
+         * on every report.
+         */
+        private enum class Mode { UNCLAIMED_CONTROL, CLAIMED, DEAD }
+        private var mode = Mode.UNCLAIMED_CONTROL
+        private var claimed = false
+
+        /** False once the pad has refused us, so callers fall back to the input API. */
+        fun usable(): Boolean = mode != Mode.DEAD
 
         /** Motor levels, 0..255. Returns true when the pad accepted the report. */
         @Synchronized
@@ -60,18 +77,45 @@ object UsbRumble {
             lastSmall = small
 
             val report = if (dualsense) dualsenseReport(large, small) else dualshock4Report(large, small)
-            // 0x21 = host-to-device | class | interface; 0x09 = SET_REPORT;
-            // wValue high byte 0x02 = Output report, low byte = report id.
-            val sent = runCatching {
-                connection.controlTransfer(
-                    0x21, 0x09, 0x0200 or (report[0].toInt() and 0xFF), interfaceId,
-                    report, report.size, 500,
-                )
-            }.getOrDefault(-1)
+            if (mode == Mode.DEAD) return false
 
-            if (sent < 0) Log.i(TAG, "usb rumble write failed on $label (large=$large small=$small)")
+            if (mode == Mode.UNCLAIMED_CONTROL) {
+                val sent = control(report)
+                if (sent >= 0) return true
+
+                // Claiming the interface WOULD get the motors working -- measured, it does -- but
+                // a DualSense has exactly one HID interface (index 3; the rest are audio), so
+                // taking it detaches the driver feeding the pad's input and every button, stick
+                // and trigger goes dead. Rumble is not worth a controller that cannot play games.
+                // Reaching the motors therefore requires reading input over USB as well and
+                // feeding it to the core, which is a feature, not a fallback -- until that exists,
+                // stand down and let the input API have it.
+                Log.i(TAG, "usb: control transfer refused ($sent) on $label; not claiming (it would kill the pad's input)")
+                mode = Mode.DEAD
+                return false
+            }
+
+            // Claimed: the interrupt OUT endpoint is the pad's normal channel, with the control
+            // transfer as a second chance for devices that only accept SET_REPORT.
+            var sent = -1
+            val ep = endpointOut
+            if (ep != null) {
+                sent = runCatching { connection.bulkTransfer(ep, report, report.size, 500) }.getOrDefault(-1)
+            }
+            if (sent < 0) sent = control(report)
+
+            if (sent < 0) Log.i(TAG, "usb rumble write failed on $label ($sent) (large=$large small=$small)")
             return sent >= 0
         }
+
+        /** HID SET_REPORT: 0x21 = host-to-device | class | interface, 0x09 = SET_REPORT,
+         *  wValue high byte 0x02 = Output report, low byte = the report id. */
+        private fun control(report: ByteArray): Int = runCatching {
+            connection.controlTransfer(
+                0x21, 0x09, 0x0200 or (report[0].toInt() and 0xFF), iface.id,
+                report, report.size, 500,
+            )
+        }.getOrDefault(-1)
 
         @Synchronized
         fun stop() {
@@ -81,6 +125,8 @@ object UsbRumble {
         @Synchronized
         fun close() {
             runCatching { rumble(0, 0) }
+            // Release before closing so whatever owned the interface can have it back.
+            if (claimed) runCatching { connection.releaseInterface(iface) }
             runCatching { connection.close() }
         }
 
@@ -113,8 +159,8 @@ object UsbRumble {
     private var receiver: BroadcastReceiver? = null
     private var appContext: Context? = null
 
-    /** True when a PlayStation pad is open and can be driven. */
-    fun available(): Boolean = pad != null
+    /** True when a PlayStation pad is open and can actually be driven. */
+    fun available(): Boolean = pad?.usable() == true
 
     /**
      * The open pad, if [dev] looks like the same controller.
@@ -123,7 +169,7 @@ object UsbRumble {
      * carries the handheld's vendor id, so only the product string survives to be compared.
      */
     fun padFor(dev: android.view.InputDevice?): Pad? {
-        val p = pad ?: return null
+        val p = pad?.takeIf { it.usable() } ?: return null
         val name = dev?.name ?: return null
         return if (namesMatch(name, p.productName)) p else null
     }
@@ -211,14 +257,20 @@ object UsbRumble {
 
         val dualsense = device.productId in DUALSENSE
         // The HID interface, which is the one SET_REPORT is addressed to.
-        var ifaceId = -1
+        var hid: android.hardware.usb.UsbInterface? = null
         for (i in 0 until device.interfaceCount) {
-            val iface = device.getInterface(i)
-            if (iface.interfaceClass == UsbConstants.USB_CLASS_HID) { ifaceId = iface.id; break }
+            val candidate = device.getInterface(i)
+            if (candidate.interfaceClass == UsbConstants.USB_CLASS_HID) { hid = candidate; break }
         }
-        if (ifaceId < 0) {
+        val iface = hid
+        if (iface == null) {
             Log.i(TAG, "usb rumble: ${device.productName} exposes no HID interface")
             return
+        }
+        var out: android.hardware.usb.UsbEndpoint? = null
+        for (i in 0 until iface.endpointCount) {
+            val ep = iface.getEndpoint(i)
+            if (ep.direction == UsbConstants.USB_DIR_OUT) { out = ep; break }
         }
 
         val conn = runCatching { usb.openDevice(device) }.getOrNull()
@@ -228,7 +280,7 @@ object UsbRumble {
         }
 
         val name = device.productName ?: (if (dualsense) "DualSense" else "DualShock 4")
-        pad = Pad("$name (USB)", name, conn, ifaceId, dualsense)
-        Log.i(TAG, "usb rumble ready: $name iface=$ifaceId dualsense=$dualsense")
+        pad = Pad("$name (USB)", name, conn, iface, out, dualsense)
+        Log.i(TAG, "usb rumble ready: $name iface=${iface.id} out=${out != null} dualsense=$dualsense")
     }
 }
