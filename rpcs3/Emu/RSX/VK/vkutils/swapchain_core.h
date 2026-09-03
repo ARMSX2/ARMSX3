@@ -58,7 +58,9 @@ namespace vk
 
 		virtual u32 get_swap_image_count() const = 0;
 		virtual VkImage get_image(u32 index) = 0;
-		virtual VkResult acquire_next_swapchain_image(VkSemaphore semaphore, u64 timeout, u32* result) = 0;
+		// The fence is for callers that must block on the acquire rather than chain it into a
+		// submit. Frame generation needs that: see present_generated_frame.
+		virtual VkResult acquire_next_swapchain_image(VkSemaphore semaphore, u64 timeout, u32* result, VkFence fence = VK_NULL_HANDLE) = 0;
 		virtual void end_frame(command_buffer& cmd, u32 index) = 0;
 		virtual VkResult present(VkSemaphore semaphore, u32 index) = 0;
 		virtual VkImageLayout get_optimal_present_layout() const = 0;
@@ -133,7 +135,7 @@ namespace vk
 	public:
 		using abstract_swapchain_impl::abstract_swapchain_impl;
 
-		VkResult acquire_next_swapchain_image(VkSemaphore semaphore, u64 timeout, u32* result) override;
+		VkResult acquire_next_swapchain_image(VkSemaphore semaphore, u64 timeout, u32* result, VkFence fence) override;
 
 		// Clients must implement these methods to render without WSI support
 		bool init() override
@@ -240,9 +242,9 @@ namespace vk
 			return m_wm_reports_flag;
 		}
 
-		VkResult acquire_next_swapchain_image(VkSemaphore semaphore, u64 timeout, u32* result) override
+		VkResult acquire_next_swapchain_image(VkSemaphore semaphore, u64 timeout, u32* result, VkFence fence) override
 		{
-			return vkAcquireNextImageKHR(dev, m_vk_swapchain, timeout, semaphore, VK_NULL_HANDLE, result);
+			return vkAcquireNextImageKHR(dev, m_vk_swapchain, timeout, semaphore, fence, result);
 		}
 
 		void end_frame(command_buffer& /*cmd*/, u32 /*index*/) override

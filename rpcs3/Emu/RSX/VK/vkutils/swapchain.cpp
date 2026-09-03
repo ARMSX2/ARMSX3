@@ -55,7 +55,7 @@ namespace vk
 	}
 
 	// NATIVE swapchain base
-	VkResult native_swapchain_base::acquire_next_swapchain_image(VkSemaphore /*semaphore*/, u64 /*timeout*/, u32* result)
+	VkResult native_swapchain_base::acquire_next_swapchain_image(VkSemaphore /*semaphore*/, u64 /*timeout*/, u32* result, VkFence /*fence*/)
 	{
 		u32 index = 0;
 		for (auto& p : swapchain_images)

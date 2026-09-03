@@ -205,9 +205,10 @@ private:
 	// before the presentation engine has finished with it -- undefined, and on Adreno it shows as
 	// smearing during motion that no interpolation setting can change, because the interpolation
 	// was never the thing at fault.
-	std::vector<VkSemaphore> m_framegen_acquire_sems;
 	std::vector<VkSemaphore> m_framegen_present_sems;
 	u32 m_framegen_sem_index = 0;
+	// Frame generation acquires with this rather than a semaphore; see present_generated_frame.
+	VkFence m_framegen_acquire_fence = VK_NULL_HANDLE;
 
 	// The command buffers the previous frame's generated images were blitted with. framegen writes
 	// the same output images every generation, so those blits have to have retired before the next

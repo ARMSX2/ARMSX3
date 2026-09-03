@@ -231,50 +231,74 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 		return nullptr;
 	}
 
-	// One acquire/present semaphore pair per swapchain image, rotated.
-	if (m_framegen_acquire_sems.size() < m_swapchain->get_swap_image_count())
+	// One present semaphore per swapchain image, rotated. There is no acquire semaphore any
+	// more -- the acquire is waited for on the CPU with a fence, for the reason below.
+	if (m_framegen_present_sems.size() < m_swapchain->get_swap_image_count())
 	{
 		VkSemaphoreCreateInfo sem_info = {};
 		sem_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-		while (m_framegen_acquire_sems.size() < m_swapchain->get_swap_image_count())
+		while (m_framegen_present_sems.size() < m_swapchain->get_swap_image_count())
 		{
-			VkSemaphore acquire = VK_NULL_HANDLE;
 			VkSemaphore present = VK_NULL_HANDLE;
 
-			if (vkCreateSemaphore(*m_device, &sem_info, nullptr, &acquire) != VK_SUCCESS ||
-				vkCreateSemaphore(*m_device, &sem_info, nullptr, &present) != VK_SUCCESS)
+			if (vkCreateSemaphore(*m_device, &sem_info, nullptr, &present) != VK_SUCCESS)
 			{
 				rsx_log.error("Could not create frame generation present semaphores.");
 				return nullptr;
 			}
 
-			m_framegen_acquire_sems.push_back(acquire);
 			m_framegen_present_sems.push_back(present);
 		}
 	}
 
-	const u32 sem_slot = m_framegen_sem_index++ % ::size32(m_framegen_acquire_sems);
-	const VkSemaphore acquire_sem = m_framegen_acquire_sems[sem_slot];
+	const u32 sem_slot = m_framegen_sem_index++ % ::size32(m_framegen_present_sems);
 	const VkSemaphore present_sem = m_framegen_present_sems[sem_slot];
 
 	u32 image = umax;
 
-	// Acquire WITH a semaphore, and make the blit below wait on it.
+	// Acquire with a FENCE and block on it, rather than chaining a semaphore into the submit.
 	//
-	// This passed VK_NULL_HANDLE and then blitted into the image immediately: nothing established
-	// that the presentation engine had finished with it, which is a use-before-ready and undefined.
-	// On Adreno it shows as smearing during motion that no interpolation setting changes, because
-	// the interpolation was never at fault. ARMSX2 acquires with a fence and blocks on it before
-	// submitting; waiting on the GPU is the same guarantee without the CPU stall.
+	// Something must establish that the presentation engine has finished with this image before
+	// the blit writes it; passing VK_NULL_HANDLE and blitting immediately is a use-before-ready,
+	// which showed on Adreno as smearing during motion that no interpolation setting changed.
+	// A semaphore looks like the cheaper way to say that, and it is what this did -- but frame
+	// generation exists to present MORE frames than the game renders, so one flip performs two
+	// or more acquires, and Turnip segfaults inside vkQueueSubmit when it is asked to wait on a
+	// semaphore that came from a second vkAcquireNextImageKHR in the same frame. Stock Qualcomm
+	// tolerates it. That is the crash reported as "the emulator closes with LSFG on", and it
+	// disappears with frame generation off because the second acquire goes with it.
+	//
+	// A fence carries the same guarantee at the cost of a short CPU wait, which is the trade
+	// ARMSX2 made for the same driver.
 	//
 	// Zero timeout still: if no image is free the display is keeping up, and waiting for one would
 	// make frame generation cost latency instead of adding smoothness.
-	if (m_swapchain->acquire_next_swapchain_image(acquire_sem, 0ull, &image) != VK_SUCCESS ||
+	if (m_framegen_acquire_fence == VK_NULL_HANDLE)
+	{
+		VkFenceCreateInfo fence_info{};
+		fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+		if (vkCreateFence(*m_device, &fence_info, nullptr, &m_framegen_acquire_fence) != VK_SUCCESS)
+		{
+			return nullptr;
+		}
+	}
+	else
+	{
+		// Legal on an unsignalled fence, which is what an acquire that failed below leaves behind.
+		vkResetFences(*m_device, 1, &m_framegen_acquire_fence);
+	}
+
+	if (m_swapchain->acquire_next_swapchain_image(VK_NULL_HANDLE, 0ull, &image, m_framegen_acquire_fence) != VK_SUCCESS ||
 		image == umax)
 	{
 		return nullptr;
 	}
+
+	// The acquire returned SUCCESS against a zero timeout, so an image was already free and this
+	// resolves immediately in practice.
+	vkWaitForFences(*m_device, 1, &m_framegen_acquire_fence, VK_TRUE, UINT64_MAX);
 
 	auto* cmd = m_primary_cb_list.next();
 	cmd->reset();
@@ -313,10 +337,8 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	vk::queue_submit_t submit_info{};
 	submit_info.queue = m_device->get_graphics_queue();
 
-	// Wait for the acquire, signal the present. Without the wait the blit races the display;
-	// without the signal the present races the blit.
-	submit_info.wait_semaphores[submit_info.wait_semaphores_count] = acquire_sem;
-	submit_info.wait_stages[submit_info.wait_semaphores_count++] = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	// Nothing to wait on: the acquire fence was already waited for on the CPU above. Still signal
+	// the present, or the present races the blit.
 	submit_info.signal_semaphores[submit_info.signal_semaphores_count++] = present_sem;
 
 	cmd->submit(submit_info);
