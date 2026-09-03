@@ -223,6 +223,7 @@ object Rpcs3Settings {
     fun setFrameLimitEnabled(enabled: Boolean) {
 
         if (!enabled) {
+            limiterWroteOff = true
             setFrameLimitMode("Off")
             setSecondFrameLimit(0f)
             return
@@ -233,12 +234,31 @@ object Rpcs3Settings {
             // Not `> 0`: the explicit control also uses -1 for PS3 Native, and this method runs
             // LAST, so treating that as "no explicit rate" wrote Auto straight back over it -- the
             // same collision this comment describes, one value along.
+            limiterWroteOff = false
             setFrameLimit(cap)
-        } else {
-            // No explicit rate to honour, so "limit on" means the console's own pacing.
+            return
+        }
+
+        // No explicit rate to honour. Only undo an "Off" WE wrote -- do not assert "Auto".
+        //
+        // This key defaults to true and is pushed on every apply, so asserting Auto here wrote
+        // Video@@Frame limit on every launch for everyone who never touched the FPS cap. That is
+        // the same node All Core Settings exposes, so a Frame limit chosen there ("PS3 Native")
+        // came back as Auto next time -- issue #104, and the only path in the app that produces
+        // "Auto" without being asked to.
+        //
+        // Doing nothing is correct: with no cap chosen and the limiter on, the right value is
+        // whatever the config already holds, which is Auto on a fresh install anyway.
+        if (limiterWroteOff) {
+            limiterWroteOff = false
             setFrameLimitMode("Auto")
         }
     }
+
+    /** True while the limiter toggle is responsible for the current "Off", so turning it back
+     *  on restores pacing without claiming that node on launches nobody touched it. */
+    @Volatile
+    private var limiterWroteOff: Boolean = false
 
     /** Free-form secondary cap (0 disables). Use for values the enum cannot express. */
     fun setSecondFrameLimit(fps: Float) =
