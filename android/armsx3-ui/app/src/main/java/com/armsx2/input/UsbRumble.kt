@@ -45,10 +45,11 @@ object UsbRumble {
     class Pad(
         val label: String,
         val productName: String,
-        private val connection: UsbDeviceConnection,
-        private val iface: android.hardware.usb.UsbInterface,
+        val connection: UsbDeviceConnection,
+        val iface: android.hardware.usb.UsbInterface,
         private val endpointOut: android.hardware.usb.UsbEndpoint?,
-        private val dualsense: Boolean,
+        val endpointIn: android.hardware.usb.UsbEndpoint?,
+        val dualsense: Boolean,
     ) {
         private var lastLarge = -1
         private var lastSmall = -1
@@ -69,6 +70,14 @@ object UsbRumble {
         /** False once the pad has refused us, so callers fall back to the input API. */
         fun usable(): Boolean = mode != Mode.DEAD
 
+        /** Take the interface so both input and the motors come through us. */
+        fun claim(): Boolean {
+            if (claimed) return true
+            claimed = runCatching { connection.claimInterface(iface, true) }.getOrDefault(false)
+            if (claimed) mode = Mode.CLAIMED
+            return claimed
+        }
+
         /** Motor levels, 0..255. Returns true when the pad accepted the report. */
         @Synchronized
         fun rumble(large: Int, small: Int): Boolean {
@@ -82,6 +91,7 @@ object UsbRumble {
             if (mode == Mode.UNCLAIMED_CONTROL) {
                 val sent = control(report)
                 if (sent >= 0) return true
+                if (claimed) { mode = Mode.CLAIMED } else {
 
                 // Claiming the interface WOULD get the motors working -- measured, it does -- but
                 // a DualSense has exactly one HID interface (index 3; the rest are audio), so
@@ -93,6 +103,7 @@ object UsbRumble {
                 Log.i(TAG, "usb: control transfer refused ($sent) on $label; not claiming (it would kill the pad's input)")
                 mode = Mode.DEAD
                 return false
+                }
             }
 
             // Claimed: the interrupt OUT endpoint is the pad's normal channel, with the control
@@ -159,6 +170,63 @@ object UsbRumble {
     private var receiver: BroadcastReceiver? = null
     private var appContext: Context? = null
 
+    private const val KEY_TAKEOVER = "usb_pad_takeover"
+
+    /**
+     * Off by default, and deliberately so.
+     *
+     * Turning it on claims the pad's only HID interface, which detaches the driver feeding
+     * Android's input for it. Everything then comes through us instead -- buttons, sticks,
+     * analog triggers and both rumble motors. That is the whole point, but it also means the
+     * pad stops existing for the rest of the system while a game is running, and a bug in here
+     * costs the user their controller rather than just their rumble. It has to be a choice.
+     */
+    @Volatile var takeover: Boolean = false
+        private set
+
+    fun loadTakeover() {
+        takeover = runCatching {
+            com.armsx2.runtime.MainActivityRuntime.prefs.getBoolean(KEY_TAKEOVER, false)
+        }.getOrDefault(false)
+    }
+
+    fun setTakeover(on: Boolean) {
+        takeover = on
+        runCatching {
+            com.armsx2.runtime.MainActivityRuntime.prefs.edit().putBoolean(KEY_TAKEOVER, on).apply()
+        }
+        val open = pad
+        if (on) {
+            if (open != null) engageTakeover(open)
+        } else {
+            UsbPadTakeover.stop()
+            Log.i(TAG, "usb pad takeover off — replug the controller to give its input back to Android")
+        }
+    }
+
+    /**
+     * Resolve the player slot BEFORE claiming, because claiming makes the Android input device
+     * disappear and PadRouter would have nothing left to answer with.
+     */
+    private fun engageTakeover(open: Pad) {
+        val ep = open.endpointIn
+        if (ep == null) {
+            Log.i(TAG, "usb pad takeover: ${open.productName} has no interrupt IN endpoint")
+            return
+        }
+        var port = 0
+        for (candidate in PadRouter.connectedPads()) {
+            if (!namesMatch(candidate.name, open.productName)) continue
+            port = PadRouter.pins()[candidate.descriptor] ?: 0
+            break
+        }
+        if (!open.claim()) {
+            Log.i(TAG, "usb pad takeover: could not claim ${open.productName}'s interface")
+            return
+        }
+        UsbPadTakeover.start(open.connection, ep, open.dualsense, port)
+    }
+
     /** True when a PlayStation pad is open and can actually be driven. */
     fun available(): Boolean = pad?.usable() == true
 
@@ -222,6 +290,7 @@ object UsbRumble {
     }
 
     fun stop() {
+        UsbPadTakeover.stop()
         pad?.close()
         pad = null
         receiver?.let { r -> runCatching { appContext?.unregisterReceiver(r) } }
@@ -268,9 +337,11 @@ object UsbRumble {
             return
         }
         var out: android.hardware.usb.UsbEndpoint? = null
+        var inEp: android.hardware.usb.UsbEndpoint? = null
         for (i in 0 until iface.endpointCount) {
             val ep = iface.getEndpoint(i)
-            if (ep.direction == UsbConstants.USB_DIR_OUT) { out = ep; break }
+            if (ep.direction == UsbConstants.USB_DIR_OUT && out == null) out = ep
+            if (ep.direction == UsbConstants.USB_DIR_IN && inEp == null) inEp = ep
         }
 
         val conn = runCatching { usb.openDevice(device) }.getOrNull()
@@ -280,7 +351,9 @@ object UsbRumble {
         }
 
         val name = device.productName ?: (if (dualsense) "DualSense" else "DualShock 4")
-        pad = Pad("$name (USB)", name, conn, iface, out, dualsense)
-        Log.i(TAG, "usb rumble ready: $name iface=${iface.id} out=${out != null} dualsense=$dualsense")
+        val opened = Pad("$name (USB)", name, conn, iface, out, inEp, dualsense)
+        pad = opened
+        Log.i(TAG, "usb rumble ready: $name iface=${iface.id} out=${out != null} in=${inEp != null} dualsense=$dualsense")
+        if (takeover) engageTakeover(opened)
     }
 }

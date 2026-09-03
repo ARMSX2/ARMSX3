@@ -920,6 +920,8 @@ val EN: Map<String, String> = mapOf(
     "pad.multiTouch.description" to "How far from a button's center a touch still counts as a press, so you can hit two adjacent on-screen buttons at once. Higher = more reach (easier rolls and combos).",
     "pad.onScreenControls.label" to "On-screen controls",
     "pad.assign.auto" to "Auto",
+    "pad.usbTakeover.label" to "Direct USB control (PlayStation pads)",
+    "pad.usbTakeover.description" to "For a DualSense or DualShock 4 connected by cable. Talks to the controller directly instead of going through Android, which is the only way to reach its rumble motors on devices where the system vibration does nothing. Also gives you real analog triggers. The controller is driven entirely by this while it is on, so its layout is fixed and your custom bindings do not apply. Unplug and replug the pad after switching this off.",
     "pad.assign.rumble" to "rumble",
     "pad.assign.rumble.controller" to "Controller",
     "pad.assign.rumble.device" to "Handheld",

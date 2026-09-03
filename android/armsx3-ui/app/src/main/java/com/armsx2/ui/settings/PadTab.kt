@@ -299,6 +299,18 @@ fun PadTab(state: MutableState<Settings>) {
                         },
                     )
                 }
+                // Taking the pad over on USB is the only way to reach a PlayStation controller's
+                // motors when the platform's own vibrator for it does nothing. It claims the
+                // pad's single HID interface, so input has to come through us too -- which is
+                // why it is a switch and not something done quietly on the user's behalf.
+                ToggleRow(
+                    str("pad.usbTakeover.label"),
+                    com.armsx2.input.UsbRumble.takeover,
+                    description = str("pad.usbTakeover.description"),
+                ) {
+                    com.armsx2.input.UsbRumble.setTakeover(it)
+                    refreshToken.intValue++
+                }
                 SettingsDivider()
             }
             // Master rumble / vibration enable — gates controller motors AND the device-haptic

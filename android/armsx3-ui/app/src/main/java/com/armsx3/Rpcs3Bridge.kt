@@ -1314,6 +1314,48 @@ object Rpcs3Bridge {
         push(port)
     }
 
+    /**
+     * A full pad snapshot read straight off USB, bypassing Android input entirely.
+     *
+     * Sticks arrive as CELL_PAD already uses them -- 0..255 with 128 at rest -- so they are
+     * decomposed back into the per-direction floats [PadState] holds rather than a second axis
+     * representation being bolted on beside it. Triggers carry their real travel, which the
+     * platform's own pad path throws away.
+     *
+     * Bindings do not apply here: this is a PlayStation pad on a PlayStation emulator, and the
+     * layout is already the one the guest expects.
+     */
+    @JvmStatic
+    fun usbPadState(
+        port: Int,
+        digital1: Int,
+        digital2: Int,
+        lx: Int, ly: Int, rx: Int, ry: Int,
+        l2: Int, r2: Int,
+    ) {
+        val pad = pads.getOrNull(port) ?: return
+        pad.digital1 = digital1
+        pad.digital2 = digital2
+
+        // axis() rebuilds each stick as 128 + (positive - negative) * 127, so split the byte
+        // back into that pair. Opposing directions are never both non-zero for a real stick.
+        fun split(value: Int, positive: Int, negative: Int) {
+            val offset = (value - 128) / 127f
+            pad.dir[positive] = if (offset > 0f) offset.coerceAtMost(1f) else 0f
+            pad.dir[negative] = if (offset < 0f) (-offset).coerceAtMost(1f) else 0f
+        }
+        split(lx, 1, 3)
+        split(ly, 2, 0)
+        split(rx, 5, 7)
+        split(ry, 6, 4)
+
+        // Analog triggers, in CELL_PAD press-offset order: L2 and R2 are the last two slots.
+        pad.pressure[PRESSURE_SLOTS - 2] = if (l2 > 0) l2.coerceIn(1, 255) else 0
+        pad.pressure[PRESSURE_SLOTS - 1] = if (r2 > 0) r2.coerceIn(1, 255) else 0
+
+        push(port)
+    }
+
     private fun push(port: Int) {
         val pad = pads.getOrNull(port) ?: return
         runCatching {
