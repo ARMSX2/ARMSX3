@@ -1446,17 +1446,25 @@ object Rpcs3Bridge {
     ) {
         val motorCount get() = if (usb != null) 2 else motors.size
 
-        /** Motor levels, 0..255, as the guest asked for them. */
+        /** Motor levels, 0..255, as the guest asked for them, scaled by the strength setting. */
         fun play(large: Int, small: Int) {
+            // Vibration strength. NativeApp.sHapticScale was written by the settings slider and
+            // read by NOTHING, so the control did nothing at all: 0%, 100% and 200% were
+            // indistinguishable. Applied here because this is the single point every motor --
+            // pad, phone and USB -- is driven from.
+            val scale = NativeApp.sHapticScale.takeIf { it.isFinite() && it >= 0f } ?: 1f
+            val l = (large * scale).toInt().coerceIn(0, 255)
+            val s = (small * scale).toInt().coerceIn(0, 255)
+
             if (usb != null) {
                 // A real pad with two real motors: pass both through rather than flattening them.
-                usb.rumble(large, small)
+                usb.rumble(l, s)
                 return
             }
             // One vibrator, two motors: take the stronger. The small motor is the high-frequency
             // one and reads as weaker for the same value, so it is scaled down rather than
             // competing with the large one on equal terms.
-            val amplitude = maxOf(large, small * 2 / 3)
+            val amplitude = maxOf(l, s * 2 / 3)
             if (amplitude <= 0) { cancel(); return }
             // Repeating rather than a fixed duration: the guest decides when rumble stops, and a
             // timed effect would either cut a long rumble short or outlive a brief one.
