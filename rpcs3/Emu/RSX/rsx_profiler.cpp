@@ -29,6 +29,13 @@ extern atomic_t<u64> g_sema_hist[6];
 // failure modes -- a silent EAGAIN retry, or an event DROPPED onto a full queue -- is visible
 // in a log, so a SPURS kernel spinning on event handoff while the RSX starves reads exactly
 // like one doing useful work.
+extern atomic_t<u64> g_rsx_ev_attempt;
+extern atomic_t<u64> g_rsx_ev_dropped;
+extern atomic_t<u64> g_rsx_ev_busy_spin;
+extern atomic_t<u64> g_rsx_ev_again;
+extern atomic_t<u32> g_rsx_q_id;
+extern atomic_t<u32> g_rsx_q_pending;
+extern atomic_t<u32> g_rsx_q_waiter;
 extern atomic_t<u64> g_spu_event_throw_ok;
 extern atomic_t<u64> g_spu_event_throw_drop;
 extern atomic_t<u64> g_spu_event_throw_again;
@@ -130,6 +137,7 @@ namespace rsx::prof
 	u64 g_putllc_barrier_prev = 0;
 	u64 g_spu_ev_prev[5] = {};
 	u64 g_stall_ev_prev[5] = {};
+	u64 g_stall_rsxev_prev[4] = {};
 	u64 g_stall_putllc_prev = 0;
 	u64 g_stall_barrier_prev = 0;
 
@@ -941,6 +949,8 @@ namespace rsx::prof
 			barrier += spu.putllc_barrier;
 		});
 
+		const u64 rv[4] = { +g_rsx_ev_attempt, +g_rsx_ev_dropped, +g_rsx_ev_busy_spin, +g_rsx_ev_again };
+
 		const u64 ev[5] = { +g_spu_event_throw_ok, +g_spu_event_throw_drop, +g_spu_event_throw_again, +g_spu_event_setbit_ok, +g_spu_event_setbit_again };
 
 		prof_log.error("RSX has not finished a frame in %.1fs; current bucket '%s', in it for %.2fs\n\tsince last report: PUTLLC +%u (barrier +%u) | SPU events throw +%u dropped +%u retry +%u, setbit +%u retry +%u\n\t%s%s",
@@ -951,6 +961,20 @@ namespace rsx::prof
 			ev[0] - g_stall_ev_prev[0], ev[1] - g_stall_ev_prev[1], ev[2] - g_stall_ev_prev[2],
 			ev[3] - g_stall_ev_prev[3], ev[4] - g_stall_ev_prev[4],
 			fifo, sample_guest_threads(false));
+
+		// Delivery of RSX events to the guest, which decides whether _gcm_intr_thread runs at all.
+		// Attempts near zero means the vblank source itself has stopped producing; attempts climbing
+		// alongside busy-retries means the guest is not draining the queue. Neither is visible in any
+		// other counter, and both present as an idle RSX with an empty FIFO.
+		prof_log.error("\tRSX->guest queue: id=0x%x pending=%u/32 ppu_waiting=%u", +g_rsx_q_id, +g_rsx_q_pending, +g_rsx_q_waiter);
+
+		prof_log.error("\tRSX->guest events since last report: attempted +%u, dropped +%u, busy-retries +%u, aborted +%u",
+			rv[0] - g_stall_rsxev_prev[0], rv[1] - g_stall_rsxev_prev[1], rv[2] - g_stall_rsxev_prev[2], rv[3] - g_stall_rsxev_prev[3]);
+
+		for (usz i = 0; i < 4; i++)
+		{
+			g_stall_rsxev_prev[i] = rv[i];
+		}
 
 		g_stall_putllc_prev = putllc;
 		g_stall_barrier_prev = barrier;

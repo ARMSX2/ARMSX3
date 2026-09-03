@@ -1099,7 +1099,11 @@ namespace rsx
 				if (current - last_heartbeat >= 5'000'000)
 				{
 					last_heartbeat = current;
-					rsx_log.notice("VBlank: alive, iterations=%u, vblank_count=%u", iterations, local_vblank_count);
+					// Promoted out of notice: the SPU/RSX channels do not pass notice to logcat on Android, so
+					// this heartbeat -- the one thing that says whether the vblank SOURCE is still producing
+					// while the guest's gcm interrupt thread has stopped waking -- was invisible in every
+					// device log we have ever collected.
+					rsx_log.success("VBlank: alive, iterations=%u, vblank_count=%u", iterations, local_vblank_count);
 				}
 
 				iterations++;
