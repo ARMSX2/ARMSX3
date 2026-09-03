@@ -502,6 +502,35 @@ fun HomeScreen(
                     bottomEdge = bottomEdge,
                 )
             }
+            // Category shelves, resolved once per change rather than per recomposition.
+            //
+            // The version read has to happen HERE: the grid's item lambdas are not composable
+            // scopes, so a snapshot read inside them never subscribes and a newly created or
+            // renamed category would not appear until the library was left and re-entered.
+            //
+            // Hidden while SEARCHING, exactly like Recently Played -- a search should show
+            // matches, not matches re-sorted into shelves. List layout is excluded too: it keeps
+            // the filter picker, because stacking rows in a one-column list just makes a longer
+            // list.
+            val categoryVersion = com.armsx2.GameCategories.version.intValue
+            val categorySections: List<Pair<String, List<GameInfo>>> = remember(
+                categoryVersion, state.visibleGames, state.layout, state.query, state.initialized,
+            ) {
+                if (state.layout == LibraryLayout.List || state.query.isNotBlank() || !state.initialized) {
+                    emptyList()
+                } else {
+                    com.armsx2.GameCategories.names().mapNotNull { name ->
+                        val members = com.armsx2.GameCategories.membersOf(name)
+                        // Resolved against the games actually in the library, so a category still
+                        // holding something since deleted reads as fewer games rather than an
+                        // empty shelf with a title over it.
+                        val games = state.visibleGames.filter { g ->
+                            g.settingsKey?.let { it in members } == true
+                        }
+                        if (games.isEmpty()) null else name to games
+                    }
+                }
+            }
             LazyVerticalGrid(
                 columns = columns,
                 state = gridState,
@@ -621,6 +650,71 @@ fun HomeScreen(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                // One shelf per category, above the full library. Creating a category changed
+                // nothing visible here before -- it only ever showed up inside the filter picker,
+                // which read as the category not having been created at all.
+                categorySections.forEach { (categoryName, categoryGames) ->
+                    item(span = { GridItemSpan(maxLineSpan) }, key = "category-$categoryName") {
+                        Column {
+                            SectionTitle(
+                                categoryName,
+                                detail = categoryGames.size.toString(),
+                                modifier = Modifier
+                                    // In shelf view nudge the header right so it lines up with
+                                    // the first cover's left edge (the shelf's inset).
+                                    .padding(start = if (state.layout == LibraryLayout.Shelf) 4.dp else 0.dp)
+                                    .combinedClickable(
+                                        onClick = {},
+                                        // The same affordance the picker's rows have: rename,
+                                        // with delete behind it.
+                                        onLongClick = { renameCategory = categoryName },
+                                    ),
+                            )
+                            Spacer(Modifier.height(9.dp))
+                            if (state.layout == LibraryLayout.Shelf) {
+                                GameShelf(
+                                    games = categoryGames,
+                                    shelfRes = R.drawable.shelf_frosted,
+                                    coverWidth = ((if (compact) 84f else 100f) * coverScale).dp,
+                                    scroll = true,
+                                    onLaunch = { viewModel.launch(it) },
+                                    onDetails = { menuGame = it },
+                                    // Bleed past the grid's 8dp side padding so the glass shelf
+                                    // reaches both screen edges instead of floating inset.
+                                    modifier = Modifier.layout { measurable, constraints ->
+                                        val edge = 8.dp.roundToPx()
+                                        val placeable = measurable.measure(
+                                            constraints.copy(
+                                                minWidth = constraints.maxWidth + edge * 2,
+                                                maxWidth = constraints.maxWidth + edge * 2,
+                                            ),
+                                        )
+                                        layout(constraints.maxWidth, placeable.height) {
+                                            placeable.placeRelative(-edge, 0)
+                                        }
+                                    },
+                                )
+                            } else {
+                                LazyRow(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp),
+                                ) {
+                                    itemsIndexed(categoryGames, key = { _, g -> g.uri.toString() }) { _, game ->
+                                        RecentGameCard(
+                                            game = game,
+                                            selected = false,
+                                            onClick = { viewModel.launch(game) },
+                                            onDetails = { menuGame = game },
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(Modifier.height(4.dp))
                         }
                     }
                 }
