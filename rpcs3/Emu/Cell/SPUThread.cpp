@@ -3641,6 +3641,18 @@ bool spu_thread::do_list_transfer(spu_mfc_cmd& args)
 	return true;
 }
 
+// SPU -> PPU event delivery outcomes, reported by the RSX profiler.
+//
+// Both SPU-side senders below are silent about failure in opposite directions: they retry
+// forever on EAGAIN without logging, and on a full queue (EBUSY) they log at a level the SPU
+// channel does not necessarily pass and then DROP the event. A SPURS kernel stuck cycling
+// through these syscalls therefore looks identical, in a log, to one doing useful work.
+atomic_t<u64> g_spu_event_throw_ok{0};
+atomic_t<u64> g_spu_event_throw_drop{0};
+atomic_t<u64> g_spu_event_throw_again{0};
+atomic_t<u64> g_spu_event_setbit_ok{0};
+atomic_t<u64> g_spu_event_setbit_again{0};
+
 bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 {
 	perf_meter<"PUTLLC-"_u64> perf0(nullptr);
@@ -3733,6 +3745,20 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 		}
 
 		auto& super_data = *vm::get_super_ptr<spu_rdata_t>(addr);
+
+		// How many conditional stores actually reach the barrier below. Counted, not timed: this
+		// is not the same question as how many PUTLLCs run -- vm::writer_lock is not a lock on this
+		// address, it stamps cpu_flag::memory on every registered PPU thread and spins until each
+		// reaches cpu_flag::wait. Its cost therefore scales with how many PPU threads exist and what
+		// they are doing, not with contention on the line -- so a call count alone, even at a 0%
+		// failure rate, cannot say whether a title is being starved by its own atomics.
+		//
+		// It was briefly timed with steady_clock here. Do not put that back: at ~2M conditional
+		// stores a second, the two clock reads became the single hottest symbol in the SPU thread
+		// (__kernel_clock_gettime, 7.9%, above vm::writer_lock itself at 7.3%), so the measurement
+		// outweighed what it measured. Use simpleperf for the cost and this counter for the rate.
+		putllc_barrier++;
+
 		const bool success = [&]()
 		{
 			// Full lock (heavyweight)
@@ -6534,11 +6560,18 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 				{
 					if (res == CELL_EAGAIN)
 					{
+						g_spu_event_throw_again++;
 						ch_out_mbox.set_value(data);
 						return false;
 					}
 
+					g_spu_event_throw_drop++;
+
 					spu_log.warning("sys_spu_thread_throw_event(spup=%d, data0=0x%x, data1=0x%x) failed (error=%s)", spup, (value & 0x00ffffff), data, res);
+				}
+				else
+				{
+					g_spu_event_throw_ok++;
 				}
 
 				return true;
@@ -6607,9 +6640,12 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 				// Use the syscall to set flag
 				if (sys_event_flag_set(*this, data, 1ull << flag) + 0u == CELL_EAGAIN)
 				{
+					g_spu_event_setbit_again++;
 					ch_out_mbox.set_value(data);
 					return false;
 				}
+
+				g_spu_event_setbit_ok++;
 
 				return true;
 			}

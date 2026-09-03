@@ -808,6 +808,7 @@ public:
 	// stall dump on another thread -- a torn read costs nothing there.
 	u64 putllc_calls = 0;
 	u64 putllc_fails = 0;
+	u64 putllc_barrier = 0; // conditional stores that reached the heavyweight vm::writer_lock
 	u64 putllc_notify = 0;
 	u64 putllc_suppressed = 0; // SPURS heuristic decided the waiters did not need waking
 

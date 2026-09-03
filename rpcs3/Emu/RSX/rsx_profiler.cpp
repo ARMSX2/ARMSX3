@@ -3,6 +3,7 @@
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/PPUDisAsm.h"
 #include "Emu/Memory/vm.h"
+#include "Emu/Memory/vm_reservation.h"
 #include "Emu/Cell/SPUThread.h"
 
 extern atomic_t<u64> g_spu_group_susp_us;
@@ -23,6 +24,16 @@ extern atomic_t<u64> g_sema_hist[6];
 #include <utility>
 #include <dlfcn.h>
 #include "gcm_printing.h"
+
+// SPU -> PPU event delivery counters, defined in SPUThread.cpp. Neither of that path's two
+// failure modes -- a silent EAGAIN retry, or an event DROPPED onto a full queue -- is visible
+// in a log, so a SPURS kernel spinning on event handoff while the RSX starves reads exactly
+// like one doing useful work.
+extern atomic_t<u64> g_spu_event_throw_ok;
+extern atomic_t<u64> g_spu_event_throw_drop;
+extern atomic_t<u64> g_spu_event_throw_again;
+extern atomic_t<u64> g_spu_event_setbit_ok;
+extern atomic_t<u64> g_spu_event_setbit_again;
 
 LOG_CHANNEL(prof_log, "RSXPROF");
 
@@ -116,6 +127,11 @@ namespace rsx::prof
 	// would have touched it.
 	u64 g_putllc_calls_prev = 0;
 	u64 g_putllc_fails_prev = 0;
+	u64 g_putllc_barrier_prev = 0;
+	u64 g_spu_ev_prev[5] = {};
+	u64 g_stall_ev_prev[5] = {};
+	u64 g_stall_putllc_prev = 0;
+	u64 g_stall_barrier_prev = 0;
 
 	struct fn_bucket { const char* fn; u32 hits; };
 	fn_bucket g_main_state[20]{};
@@ -607,9 +623,27 @@ namespace rsx::prof
 
 			const auto name = spu.spu_tname.load();
 
-			fmt::append(out, "\n    SPU 0x%07x %-24s [%s] pc=0x%05x %s", id,
+			// Reservation state, which is the whole question on a SPURS hang.
+			//
+			// A SPURS kernel with no work parks waiting for its reserved line to change. It wakes
+			// on the reservation counter moving. So if the LIVE counter has already advanced past
+			// the value this thread recorded, the write it is waiting for has already happened and
+			// its wakeup was lost -- it will now sleep forever on a line that moved on without it.
+			// That is a different failure from "nothing ever writes the block", and only this
+			// comparison tells the two apart.
+			std::string rsv;
+
+			if (const u32 raddr = spu.raddr)
+			{
+				const u64 live = vm::reservation_acquire(raddr) & ~127ull;
+				const u64 held = spu.rtime & ~127ull;
+
+				fmt::append(rsv, " raddr=0x%08x rtime=%u live=%u%s", raddr, held, live, live != held ? " MOVED-LOST-WAKEUP" : "");
+			}
+
+			fmt::append(out, "\n    SPU 0x%07x %-24s [%s] pc=0x%05x %s%s", id,
 				name ? name->c_str() : "?", spu.state.load(), spu.pc,
-				spu.current_func ? spu.current_func : "");
+				spu.current_func ? spu.current_func : "", rsv);
 		});
 
 		return out;
@@ -893,11 +927,38 @@ namespace rsx::prof
 		// GET vs PUT is the whole question for a hang that presents as an idle RSX: equal means
 		// the ring really is drained and the guest has stopped producing, unequal means we are
 		// sitting on work we never consumed, or never told the guest we consumed.
-		prof_log.error("RSX has not finished a frame in %.1fs; current bucket '%s', in it for %.2fs\n\t%s%s",
+		// Guest-side counters belong in THIS message, not only in the per-frame profile: the
+		// profile reports every 300 frames, and the whole point of this path is that frames have
+		// stopped completing, so during the hang it never prints. Deltas since the previous stall
+		// report say whether the guest is still working or has genuinely stopped -- an SPU that
+		// keeps issuing conditional stores is spinning, one that has gone quiet is parked.
+		u64 putllc = 0;
+		u64 barrier = 0;
+
+		idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
+		{
+			putllc += spu.putllc_calls;
+			barrier += spu.putllc_barrier;
+		});
+
+		const u64 ev[5] = { +g_spu_event_throw_ok, +g_spu_event_throw_drop, +g_spu_event_throw_again, +g_spu_event_setbit_ok, +g_spu_event_setbit_again };
+
+		prof_log.error("RSX has not finished a frame in %.1fs; current bucket '%s', in it for %.2fs\n\tsince last report: PUTLLC +%u (barrier +%u) | SPU events throw +%u dropped +%u retry +%u, setbit +%u retry +%u\n\t%s%s",
 			static_cast<double>(now - g_stall_started) / static_cast<double>(freq),
 			name_of(g_current),
 			static_cast<double>(now - g_last_switch) / static_cast<double>(freq),
+			putllc - g_stall_putllc_prev, barrier - g_stall_barrier_prev,
+			ev[0] - g_stall_ev_prev[0], ev[1] - g_stall_ev_prev[1], ev[2] - g_stall_ev_prev[2],
+			ev[3] - g_stall_ev_prev[3], ev[4] - g_stall_ev_prev[4],
 			fifo, sample_guest_threads(false));
+
+		g_stall_putllc_prev = putllc;
+		g_stall_barrier_prev = barrier;
+
+		for (usz i = 0; i < 5; i++)
+		{
+			g_stall_ev_prev[i] = ev[i];
+		}
 
 		// Disassemble whatever guest thread is actually running.
 		//
@@ -1128,11 +1189,13 @@ namespace rsx::prof
 			{
 				u64 calls = 0;
 				u64 fails = 0;
+				u64 barriers = 0;
 
 				idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
 				{
 					calls += spu.putllc_calls;
 					fails += spu.putllc_fails;
+					barriers += spu.putllc_barrier;
 				});
 
 				const u64 dc = calls - g_putllc_calls_prev;
@@ -1142,10 +1205,28 @@ namespace rsx::prof
 				{
 					prof_log.success("\t  PUTLLC       %.0f/frame, %.1f%% failed (%u of %u)",
 						static_cast<double>(dc) / frames, df * 100.0 / dc, df, dc);
+
+					const u64 db = barriers - g_putllc_barrier_prev;
+
+					// Rate only. The per-call cost belongs to a profiler, not to a clock read on a path
+					// that runs two million times a second -- see the note in do_putllc.
+					prof_log.success("\t    of those %.0f/frame took vm::writer_lock", static_cast<double>(db) / frames);
+
+					const u64 ev[5] = { +g_spu_event_throw_ok, +g_spu_event_throw_drop, +g_spu_event_throw_again, +g_spu_event_setbit_ok, +g_spu_event_setbit_again };
+
+					prof_log.success("\t  SPU events   throw ok %.0f/f, DROPPED %.0f/f, retry %.0f/f | setbit ok %.0f/f, retry %.0f/f",
+						(ev[0] - g_spu_ev_prev[0]) / frames, (ev[1] - g_spu_ev_prev[1]) / frames, (ev[2] - g_spu_ev_prev[2]) / frames,
+						(ev[3] - g_spu_ev_prev[3]) / frames, (ev[4] - g_spu_ev_prev[4]) / frames);
+
+					for (usz i = 0; i < 5; i++)
+					{
+						g_spu_ev_prev[i] = ev[i];
+					}
 				}
 
 				g_putllc_calls_prev = calls;
 				g_putllc_fails_prev = fails;
+				g_putllc_barrier_prev = barriers;
 			}
 
 			if (const u64 n = g_sema_wait_count.load(); n)

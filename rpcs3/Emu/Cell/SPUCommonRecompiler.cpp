@@ -9370,6 +9370,54 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			// other build's. Without logging it there is no way to name a pattern for the
             // whitelist, which is presumably why the list still has one disabled placeholder in it.
 			spu_log.notice("PUTLLC16 pattern refused: hash=%s put_pc=0x%05x lsa_pc=0x%05x", pattern_hash, pattern.put_pc, pattern.lsa_pc);
+
+			// A hash on its own cannot be checked by eye, and it is the only thing the whitelist
+			// above is keyed on, so print the loop it names -- disassembled off the analysed
+			// program -- right beside it.
+			//
+			// What to read it for: the condition stated above is that the observed line is not
+			// reused. The analyser has already confined the write, since set_invalid_ls discards
+			// any pattern that would need a full 128-byte reservation, so a loop that reaches here
+			// touches one quadword. What remains, and what nothing in this file can see, is whether
+			// the CALLER reads the other 112 bytes after the function returns. That is why this is
+			// a hand-verified list and not a predicate.
+			//
+			// Bounded on purpose -- one dump per distinct hash, capped overall -- because SPU
+			// logging at volume has stalled this emulator before, and perturbs the very timing a
+			// reservation investigation is measuring.
+			if (const u32 lo = result.lower_bound, hi = lo + static_cast<u32>(result.data.size()) * 4;
+				pattern.lsa_pc >= lo && pattern.put_pc < hi && pattern.put_pc > pattern.lsa_pc && pattern.put_pc - pattern.lsa_pc <= 256)
+			{
+				static shared_mutex s_refused_dump_mutex;
+				static std::vector<std::string> s_refused_dumped;
+
+				std::lock_guard lock(s_refused_dump_mutex);
+
+				if (s_refused_dumped.size() < 16 && std::none_of(s_refused_dumped.begin(), s_refused_dumped.end(), FN(pattern_hash == x)))
+				{
+					s_refused_dumped.emplace_back(pattern_hash);
+
+					SPUDisAsm dis_asm(cpu_disasm_mode::normal, reinterpret_cast<const u8*>(result.data.data()), lo);
+
+					std::string body;
+
+					for (u32 pos = pattern.lsa_pc; pos <= pattern.put_pc; pos += 4)
+					{
+						dis_asm.disasm(pos);
+
+						std::string_view op = dis_asm.last_opcode;
+
+						while (!op.empty() && (op.back() == '\n' || op.back() == ' ' || op.back() == '\t'))
+						{
+							op.remove_suffix(1);
+						}
+
+						fmt::append(body, "\n    0x%05x  %s", pos, op);
+					}
+
+					spu_log.success("PUTLLC16 refused loop hash=%s (0x%05x -> 0x%05x):%s", pattern_hash, pattern.lsa_pc, pattern.put_pc, body);
+				}
+			}
 		}
 
 		spu_log.trace("PUTLLC16 Pattern Detected! (mem_count=%d, put_pc=0x%x, pc_rel=%d, offset=0x%x, const=%u, two_regs=%d, reg=%u, runtime=%d, 0x%x-%s, pattern-hash=%s) (putllc0=%d, putllc16+0=%d, all=%d)"
