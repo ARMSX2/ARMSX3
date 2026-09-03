@@ -54,6 +54,7 @@ namespace rsx
 
 			u64 start = get_system_time();
 			u64 last_check_val = start;
+			bool warned_slow = false;
 
 			// Kept for the timeout log: lets a report distinguish a semaphore that
 			// changed after we started waiting from one that never moved at all.
@@ -106,7 +107,34 @@ namespace rsx
 
 					last_check_val = current;
 
-					if ((current - start) > tdr)
+					// Giving up here is not a recovery, it is a desync.
+					//
+					// This label is a producer/consumer handshake with the guest: an SPU writes
+					// CC0=N when frame N's data is ready, the RSX acquires it, and the very next
+					// FIFO command writes CD0 to release the SPU to prepare N+1. Real hardware
+					// simply waits. If we proceed as though satisfied, we write CD0, move on to
+					// await N+1, and the SPU delivers N to nobody a moment later -- from then on
+					// the RSX is permanently one increment ahead, every acquire is a genuine
+					// deadlock, and this timeout becomes the frame clock: Soul Calibur V ran at
+					// ~1 fps with audio intact, frames spaced at exactly the TDR, measured.
+					//
+					// The initial slip is a one-off guest hitch longer than the driver timeout
+					// (the SPU decompression burst at a load transition), which a desktop CPU
+					// finishes well inside a second and a phone does not. So: the driver timeout
+					// is for a dead GPU, not for a guest that is merely slow. Wait an order of
+					// magnitude longer before concluding the writer is gone, and only then
+					// force exit. A label that MOVED during the wait proves the writer alive
+					// and earns the full extension; one that never moved gets the same budget,
+					// because at the first slip it had not moved either.
+					const u64 budget = tdr * 10;
+
+					if ((current - start) > tdr && !warned_slow)
+					{
+						warned_slow = true;
+						rsx_log.warning("nv406e::semaphore_acquire is past the driver timeout, still waiting. semaphore_address=0x%X, awaited=0x%X, observed=0x%X", addr, arg, static_cast<u32>(observed));
+					}
+
+					if ((current - start) > budget)
 					{
 						// If longer than driver timeout force exit. first/last observed
 						// let a report distinguish a value that changed during the wait
