@@ -354,7 +354,7 @@ fun PadTab(state: MutableState<Settings>) {
                 label = str("pad.pressureAmount.label"),
                 value = com.armsx2.ui.touch.TouchControls.pressurePercent.intValue,
                 min = 5,
-                max = 95,
+                max = 100,
                 description = str("pad.pressureAmount.description"),
                 valueFormatter = { "${it}%" },
                 onChange = { com.armsx2.ui.touch.TouchControls.setPressurePercent(it) },
