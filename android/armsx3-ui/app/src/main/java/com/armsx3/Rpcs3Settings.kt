@@ -192,7 +192,17 @@ object Rpcs3Settings {
             setFrameLimitMode("PS3 Native")
             setSecondFrameLimit(0f)
         } else if (fps == 0) {
-            setFrameLimitMode("Off")
+            // "Off" on the Display FPS Cap row means "do not add a cap of my own", NOT "run
+            // unbounded". RPCS3's "Off" is the latter: no limit at all. Writing it here left the
+            // emulator free-running, which on a heavy title is not faster but far slower -- the
+            // RSX thread saturates, frames stop completing, and the picture freezes while audio
+            // keeps playing. Auto is the console's own pacing, which is what this row has always
+            // meant and what the vblank rate above is set for.
+            //
+            // This branch has always been wrong; it was masked because the frame limiter key ran
+            // afterwards and wrote "Auto" over it on every apply. Removing that assertion (the
+            // #104 fix) took the mask away and left the mistake exposed.
+            setFrameLimitMode("Auto")
             setSecondFrameLimit(0f)
         } else if (preset != null) {
             setFrameLimitMode(preset)
