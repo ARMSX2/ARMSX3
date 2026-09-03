@@ -1560,12 +1560,34 @@ object Rpcs3Bridge {
     private fun deviceForPort(port: Int): android.view.InputDevice? = runCatching {
         val claimed = PadRouter.deviceIdForPort(port)
         if (claimed >= 0) return@runCatching android.view.InputDevice.getDevice(claimed)
-        if (port != 0) return@runCatching null
 
-        // Guessing must never reach a pad the user pinned to somebody else. Player 1's slot
-        // being empty is not a reason to buzz player 2's controller, and it did exactly that:
-        // a DualSense pinned to player 2 answered player 1's rumble test, because it happened
-        // to be the last pad touched.
+        // Neither pinned nor claimed. Deal the controllers nobody has spoken for out to the
+        // players nobody has spoken for, in order.
+        //
+        // One pad must not be able to answer for every slot. Resolution used to guess with "the
+        // pad you last touched" and then "the first pad with a motor", and both of those name the
+        // SAME controller for every port -- so a single DualSense swallowed all seven players'
+        // rumble and every other controller stayed silent no matter which slot it was in.
+        //
+        // Pinned pads and pinned ports are removed from both sides first, so an explicit
+        // assignment is never part of the deal and never has a leftover handed to it.
+        val pins = PadRouter.pins()
+        val free = PadRouter.connectedPads().filter { pins[it.descriptor] == null }
+        if (free.isNotEmpty()) {
+            val pinnedPorts = pins.values.toSet()
+            var rank = 0
+            for (p in 0 until port) if (p !in pinnedPorts) rank++
+            free.getOrNull(rank)?.let { pad ->
+                android.view.InputDevice.getDevice(pad.deviceId)?.let { return@runCatching it }
+            }
+            // A leftover port past the end of the leftover pads genuinely has no controller.
+            return@runCatching null
+        }
+
+        // Nothing enumerated as a pad at all. Player 1 alone may fall back to whatever last
+        // sent input -- players 2+ stay silent, because buzzing someone else's controller is
+        // worse than not buzzing.
+        if (port != 0) return@runCatching null
         val lastActive = NativeApp.sRumbleDeviceId
         if (lastActive >= 0) {
             val dev = android.view.InputDevice.getDevice(lastActive)
