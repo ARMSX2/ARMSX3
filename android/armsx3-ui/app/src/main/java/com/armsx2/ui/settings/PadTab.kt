@@ -262,6 +262,13 @@ fun PadTab(state: MutableState<Settings>) {
                 HelpText(str("pad.assign.help"))
                 val slotLabels = listOf(str("pad.assign.auto")) +
                     (0 until com.armsx2.input.PadRouter.MAX_PADS).map { str("pad.player${it + 1}") }
+                val rumbleModes = com.armsx2.input.PadRouter.RumbleMode.entries
+                val rumbleLabels = listOf(
+                    str("pad.assign.auto"),
+                    str("pad.assign.rumble.controller"),
+                    str("pad.assign.rumble.device"),
+                    str("pad.assign.rumble.off"),
+                )
                 pads.forEach { pad ->
                     val pinnedPort = com.armsx2.input.PadRouter.pins()[pad.descriptor]
                     SegmentedRow(
@@ -273,6 +280,21 @@ fun PadTab(state: MutableState<Settings>) {
                                 pad.descriptor,
                                 if (index == 0) null else index - 1,
                             )
+                            refreshToken.intValue++
+                        },
+                    )
+                    // Where THIS pad's rumble goes. A controller can report motors it never
+                    // drives -- a handheld bridging an external pad through its own HID node
+                    // does exactly that -- and no API call can tell that apart from a working
+                    // motor, so the fallback has to be selectable rather than detected.
+                    SegmentedRow(
+                        label = pad.name + " — " + str("pad.assign.rumble"),
+                        options = rumbleLabels,
+                        selectedIndex = rumbleModes.indexOf(
+                            com.armsx2.input.PadRouter.rumbleMode(pad.descriptor),
+                        ).coerceAtLeast(0),
+                        onChange = { index ->
+                            com.armsx2.input.PadRouter.setRumbleMode(pad.descriptor, rumbleModes[index])
                             refreshToken.intValue++
                         },
                     )

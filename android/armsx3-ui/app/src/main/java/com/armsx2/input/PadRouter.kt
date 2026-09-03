@@ -44,17 +44,55 @@ object PadRouter {
     private val pinned = LinkedHashMap<String, Int>()
     private const val KEY_PINNED = "pad_router_pinned"
 
-    /** Load pins from prefs. Safe to call more than once. */
+    /**
+     * Where a controller's rumble should go.
+     *
+     * Needed because a pad can ADVERTISE motors it cannot drive. A handheld that bridges an
+     * external controller through its own HID node presents that node with a full vibrator
+     * inventory -- ids, hasVibrator, the lot -- accepts every vibrate call without error, and
+     * moves nothing, because it never forwards force feedback back to the pad. Nothing in the
+     * API distinguishes that from a working motor, so the choice has to be the user's.
+     */
+    enum class RumbleMode { AUTO, CONTROLLER, DEVICE, OFF }
+
+    private val rumbleModes = LinkedHashMap<String, RumbleMode>()
+    private const val KEY_RUMBLE = "pad_router_rumble"
+
+    /** Load pins and rumble choices from prefs. Safe to call more than once. */
     fun loadPins() {
         pinned.clear()
-        val raw = com.armsx2.runtime.MainActivityRuntime.prefs.getString(KEY_PINNED, null) ?: return
+        rumbleModes.clear()
         runCatching {
-            val obj = org.json.JSONObject(raw)
-            for (key in obj.keys()) {
-                val port = obj.optInt(key, -1)
-                if (port in 0 until MAX_PADS) pinned[key] = port
+            val raw = com.armsx2.runtime.MainActivityRuntime.prefs.getString(KEY_PINNED, null)
+            if (raw != null) {
+                val obj = org.json.JSONObject(raw)
+                for (key in obj.keys()) {
+                    val port = obj.optInt(key, -1)
+                    if (port in 0 until MAX_PADS) pinned[key] = port
+                }
             }
         }
+        runCatching {
+            val raw = com.armsx2.runtime.MainActivityRuntime.prefs.getString(KEY_RUMBLE, null)
+            if (raw != null) {
+                val obj = org.json.JSONObject(raw)
+                for (key in obj.keys()) {
+                    val name = obj.optString(key, "")
+                    RumbleMode.entries.firstOrNull { it.name == name }?.let { rumbleModes[key] = it }
+                }
+            }
+        }
+    }
+
+    /** Where this controller's rumble goes. */
+    fun rumbleMode(descriptor: String?): RumbleMode =
+        descriptor?.let { rumbleModes[it] } ?: RumbleMode.AUTO
+
+    fun setRumbleMode(descriptor: String, mode: RumbleMode) {
+        if (mode == RumbleMode.AUTO) rumbleModes.remove(descriptor) else rumbleModes[descriptor] = mode
+        val obj = org.json.JSONObject()
+        rumbleModes.forEach { (d, m) -> obj.put(d, m.name) }
+        com.armsx2.runtime.MainActivityRuntime.prefs.edit().putString(KEY_RUMBLE, obj.toString()).apply()
     }
 
     private fun savePins() {

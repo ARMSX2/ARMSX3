@@ -1430,18 +1430,87 @@ object Rpcs3Bridge {
         }
     }
 
-    /** A device's own motor, preferring VibratorManager but accepting the legacy API. */
-    private fun vibratorOf(dev: android.view.InputDevice?): Vibrator? {
-        if (dev == null) return null
-        // Ask VibratorManager first on API 31+, but do NOT stop there. Some pads --
-        // certain DualShock/DualSense Bluetooth modes among them -- expose NO vibrators
-        // to VibratorManager while still driving fine through the legacy per-device API.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            dev.vibratorManager?.defaultVibrator?.takeIf { it.hasVibrator() }?.let { return it }
+    /**
+     * Somewhere rumble can be sent: every motor of one controller, or a single motor.
+     *
+     * A pad is not one motor. A DualSense has two, and asking only for `defaultVibrator` drives
+     * whatever the platform nominates as the default -- which on some devices is a vibrator that
+     * exists but moves nothing, so the call succeeds and the pad stays still. Addressing the
+     * manager with a parallel CombinedVibration drives them all, which is what a game asking for
+     * rumble means.
+     */
+    private class RumbleTarget(val label: String, private val motors: List<Vibrator>) {
+        val motorCount get() = motors.size
+
+        fun vibrate(effect: VibrationEffect) {
+            motors.forEach { runCatching { it.vibrate(effect) } }
         }
-        @Suppress("DEPRECATION")
-        return dev.vibrator?.takeIf { it.hasVibrator() }
+
+        fun cancel() {
+            motors.forEach { runCatching { it.cancel() } }
+        }
+
+        fun sameAs(other: RumbleTarget?): Boolean = other != null && other.motors == motors
     }
+
+    /** Low volume by design: only resolution changes and explicit tests are logged, never the
+     *  per-change traffic of a rumbling game. */
+    private fun logRumble(msg: String) = android.util.Log.i("ARMSX3Rumble", msg)
+
+    /**
+     * Every motor on a controller, addressed one at a time, or null when Android exposes none.
+     *
+     * Each motor is driven through its own Vibrator rather than handing the device's
+     * VibratorManager a parallel CombinedVibration. The combined call is ACCEPTED on this class
+     * of device -- no exception, no log -- and then does nothing at all, which is indistinguishable
+     * from a pad with dead motors until you try the other API. The per-vibrator path is the one
+     * that has always worked here.
+     *
+     * Gate on the vibrator ID list rather than defaultVibrator.hasVibrator(): the default can
+     * report false on a device whose individual motors are perfectly addressable, and that reads
+     * exactly like a pad with no rumble at all.
+     */
+    private fun targetOf(dev: android.view.InputDevice?): RumbleTarget? {
+        if (dev == null) return null
+        val label = "${dev.name}#${dev.id}"
+        val motors = ArrayList<Vibrator>(2)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            dev.vibratorManager?.let { mgr ->
+                // defaultVibrator first: it is the addressing mode that has actually driven
+                // hardware here. Per-id vibrators are a fallback for pads whose default reports
+                // nothing, NOT a replacement -- swapping the order silenced pads that worked.
+                mgr.defaultVibrator.takeIf { it.hasVibrator() }?.let { motors.add(it) }
+                if (motors.isEmpty()) {
+                    for (id in mgr.vibratorIds) mgr.getVibrator(id)?.takeIf { it.hasVibrator() }?.let { motors.add(it) }
+                }
+            }
+        }
+        // Some pads -- certain DualShock/DualSense Bluetooth modes among them -- expose no
+        // vibrators to VibratorManager while still driving fine through the legacy per-device API.
+        if (motors.isEmpty()) {
+            @Suppress("DEPRECATION")
+            dev.vibrator?.takeIf { it.hasVibrator() }?.let { motors.add(it) }
+        }
+        return if (motors.isEmpty()) null else RumbleTarget(label, motors)
+    }
+
+    /** What Android says every connected pad can do, for the log. */
+    private fun rumbleInventory(): String = runCatching {
+        android.view.InputDevice.getDeviceIds().toList().mapNotNull { id ->
+            val dev = android.view.InputDevice.getDevice(id) ?: return@mapNotNull null
+            val src = dev.sources
+            val isPad = (src and android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD ||
+                (src and android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK
+            if (!isPad) return@mapNotNull null
+            val ids = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                dev.vibratorManager?.vibratorIds?.joinToString(",") ?: "none" else "n/a"
+            @Suppress("DEPRECATION")
+            "id=$id name=${dev.name} vendor=0x${Integer.toHexString(dev.vendorId)} " +
+                "product=0x${Integer.toHexString(dev.productId)} vibratorIds=[$ids] " +
+                "legacyHasVibrator=${dev.vibrator?.hasVibrator()}"
+        }.joinToString(" | ")
+    }.getOrDefault("inventory failed")
 
     /**
      * The motor belonging to the pad that owns [port].
@@ -1456,44 +1525,31 @@ object Rpcs3Bridge {
      * adds a touchpad node), and the node that claimed the port is not always the node carrying
      * the motor -- so siblings sharing its descriptor are tried before giving up.
      */
-    private fun controllerVibrator(port: Int): Vibrator? = runCatching {
+    /**
+     * The controller that owns [port].
+     *
+     * Ports are filled only from in-game input dispatch, so in the menus every slot reads
+     * unclaimed and a pin (set in Settings) is the answer. Failing that, player 1 falls back to
+     * the pad the user is demonstrably holding -- dispatchKeyEvent records the last gamepad to
+     * send anything, menus included -- and only then to a scan. Players 2+ never guess: buzzing
+     * another player's controller is worse than not buzzing.
+     */
+    private fun deviceForPort(port: Int): android.view.InputDevice? = runCatching {
         val claimed = PadRouter.deviceIdForPort(port)
-        if (claimed >= 0) {
-            val dev = android.view.InputDevice.getDevice(claimed)
-            vibratorOf(dev)?.let { return@runCatching it }
-
-            // Same physical controller, different node.
-            val descriptor = dev?.descriptor
-            if (descriptor != null) {
-                for (id in android.view.InputDevice.getDeviceIds()) {
-                    if (id == claimed) continue
-                    val sibling = android.view.InputDevice.getDevice(id) ?: continue
-                    if (sibling.descriptor != descriptor) continue
-                    vibratorOf(sibling)?.let { return@runCatching it }
-                }
-            }
-            // A claimed pad with no motor of its own must NOT fall through to the first pad
-            // that has one -- that is how another player's controller ended up buzzing.
-            return@runCatching null
-        }
-
-        // Port unclaimed. PadRouter is fed only by in-game input dispatch, so in the menus --
-        // where the rumble test button lives -- every slot is still -1. Only player 1 guesses.
+        if (claimed >= 0) return@runCatching android.view.InputDevice.getDevice(claimed)
         if (port != 0) return@runCatching null
 
-        // The pad actually in the user's hands: dispatchKeyEvent records the last gamepad to
-        // send anything, menus included. sRumbleDeviceId was written in two places and read in
-        // none, so the test button fell through to the id-order scan below and buzzed the
-        // handheld's built-in pad instead of the controller being used to press the button.
         val lastActive = NativeApp.sRumbleDeviceId
         if (lastActive >= 0) {
-            vibratorOf(android.view.InputDevice.getDevice(lastActive))?.let { return@runCatching it }
+            android.view.InputDevice.getDevice(lastActive)?.let { return@runCatching it }
         }
-        firstPadVibrator()
+        firstPadDevice()
     }.getOrNull()
 
+    private fun controllerVibrator(port: Int): RumbleTarget? = targetOf(deviceForPort(port))
+
     /** Last resort for an unclaimed player 1: the first gamepad advertising a motor. */
-    private fun firstPadVibrator(): Vibrator? = runCatching {
+    private fun firstPadDevice(): android.view.InputDevice? = runCatching {
         for (id in android.view.InputDevice.getDeviceIds()) {
             val dev = android.view.InputDevice.getDevice(id) ?: continue
 
@@ -1504,7 +1560,7 @@ object Rpcs3Bridge {
 
             if (!isPad) continue
 
-            vibratorOf(dev)?.let { return@runCatching it }
+            if (targetOf(dev) != null) return@runCatching dev
         }
 
         null
@@ -1517,11 +1573,24 @@ object Rpcs3Bridge {
      * mid-session. Callers only ask when the motor state changes, so enumerating devices is not a
      * per-frame cost.
      */
-    private fun vibrator(port: Int = 0): Vibrator? =
-        controllerVibrator(port)
-            // The phone stands in for player 1 only. Buzzing the handheld because player 3's
-            // pad has no motor would just be the wrong device again.
-            ?: deviceVibrator().takeIf { port == 0 && NativeApp.sPhoneRumbleEnabled }
+    private fun vibrator(port: Int = 0): RumbleTarget? {
+        val dev = deviceForPort(port)
+        val mode = PadRouter.rumbleMode(dev?.descriptor)
+        if (mode == PadRouter.RumbleMode.OFF) return null
+
+        // A pad that advertises motors it cannot drive looks identical to a working one, so
+        // "send this player's rumble to the handheld instead" has to be sayable by hand.
+        if (mode != PadRouter.RumbleMode.DEVICE) {
+            targetOf(dev)?.let { return it }
+        }
+
+        // The handheld stands in for player 1 only. Buzzing it because player 3's pad has no
+        // motor would just be the wrong device again.
+        val wantDevice = mode == PadRouter.RumbleMode.DEVICE || NativeApp.sPhoneRumbleEnabled
+        return deviceVibrator()
+            .takeIf { port == 0 && wantDevice && it?.hasVibrator() == true }
+            ?.let { RumbleTarget("this device", listOf(it)) }
+    }
 
     @JvmStatic
     fun setPadVibration(on: Boolean) {
@@ -1549,7 +1618,8 @@ object Rpcs3Bridge {
             val lastAmplitude = IntArray(PadRouter.MAX_PADS)
             // The motor we last started, so it can be stopped even if the target has since
             // changed underneath us -- otherwise unplugging a pad mid-rumble leaves it buzzing.
-            val active = arrayOfNulls<Vibrator>(PadRouter.MAX_PADS)
+            val active = arrayOfNulls<RumbleTarget>(PadRouter.MAX_PADS)
+            val announced = arrayOfNulls<String>(PadRouter.MAX_PADS)
             while (rumbleRunning) {
                 for (port in 0 until PadRouter.MAX_PADS) {
                     // Port 0 is always polled: touch controls and a pad yet to send its first
@@ -1579,7 +1649,15 @@ object Rpcs3Bridge {
                         // has to take over from the phone, and vice versa on disconnect.
                         val vib = vibrator(port)
 
-                        active[port]?.takeIf { it !== vib }?.cancel()
+                        // Only when the destination CHANGES -- a rumbling game changes amplitude
+                        // many times a second and logging that would be its own performance bug.
+                        val label = vib?.label ?: "nothing"
+                        if (announced[port] != label) {
+                            announced[port] = label
+                            logRumble("player ${port + 1} -> $label")
+                        }
+
+                        active[port]?.takeIf { !it.sameAs(vib) }?.cancel()
                         active[port] = null
 
                         if (want <= 0 || vib == null) {
@@ -1618,10 +1696,15 @@ object Rpcs3Bridge {
     fun testRumble(port: Int) {
         // The port argument was accepted and then ignored, so "test player 3" buzzed whatever
         // the global lookup happened to find -- usually the handheld.
-        val vib = vibrator(port) ?: return
+        val vib = vibrator(port)
+        logRumble(
+            "test player ${port + 1} -> ${vib?.label ?: "nothing"} " +
+                "motors=${vib?.motorCount ?: 0}; ${rumbleInventory()}",
+        )
+        if (vib == null) return
         runCatching {
             vib.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE))
-        }
+        }.onFailure { logRumble("test player ${port + 1} failed: $it") }
     }
 
     /** Text for the test toast. Returned "" before, which is why the popup had none. */
@@ -1631,14 +1714,21 @@ object Rpcs3Bridge {
         val onPad = controllerVibrator(port) != null
         return when {
             !rumbleEnabled -> "Vibration is switched off in settings"
-            vib == null || !vib.hasVibrator() ->
+            vib == null ->
                 if (PadRouter.deviceIdForPort(port) >= 0)
                     "Player ${port + 1}'s controller exposes no vibration motor to Android"
                 else
                     "No controller assigned to player ${port + 1} — assign one above"
             // Naming the target is the whole point of the toast: it separates "rumble is
             // broken" from "rumble went somewhere other than the pad you are holding".
-            onPad -> "Vibration test sent to player ${port + 1}'s controller"
+            // Naming the DEVICE, not just "your controller": on a handheld that bridges an
+            // external pad through its own HID node, those are different things and the toast
+            // is the only place the difference is visible.
+            // Naming the DEVICE, not just "your controller": on a handheld that bridges an
+            // external pad through its own HID node, those are different things, and a pad can
+            // report motors it never drives -- so say where it went and what to do if nothing moved.
+            onPad -> "Sent to ${vib.label}. Felt nothing? That controller reports motors it " +
+                "cannot drive — set its Rumble to Handheld."
             else -> "Vibration test sent to this device (no motor on player ${port + 1}'s controller)"
         }
     }
