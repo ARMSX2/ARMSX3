@@ -197,6 +197,10 @@ class RPCSX {
     external fun resume()
     external fun pause()
     external fun openHomeMenu()
+
+    /** Arm an RSX frame capture: the next frame the emulator renders is recorded to
+     *  config/captures/ and emulation pauses. */
+    external fun captureFrame()
     external fun loginUser(userId: String)
     external fun getUser(): String
     external fun getTitleId(): String

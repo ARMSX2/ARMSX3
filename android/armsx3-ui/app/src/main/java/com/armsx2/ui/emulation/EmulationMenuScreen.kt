@@ -70,6 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.armsx3.Rpcs3Bridge
 import com.armsx2.i18n.str
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.InGameOverlay
@@ -1178,6 +1179,20 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
             onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(clocksScale = v)) } },
         )
     }
+    // The only way to produce an .rrc on Android. Every graphics bug reported from a phone
+    // used to arrive without one, which is the file upstream asks for first and the only
+    // thing that shows which surface actually went wrong.
+    SectionCard(str("capture.title")) {
+        var armed by remember { mutableStateOf(false) }
+        MenuButtonRow(
+            title = str("capture.rsx"),
+            description = if (armed) str("capture.rsx.armed") else str("capture.rsx.detail"),
+            glyph = if (armed) "\u25cf" else "\u2b1a",
+        ) {
+            armed = true
+            Rpcs3Bridge.captureFrame()
+        }
+    }
     SectionCard(str("tab.overlay")) {
         // RPCS3's overlay has no per-element switches: one Enabled flag plus a
         // Detail Level decides what appears. These five wrote to PCSX2 fields
@@ -1758,6 +1773,43 @@ private fun MenuSwitchRow(
             }
             Spacer(Modifier.width(10.dp))
             Switch(checked = checked, onCheckedChange = if (enabled) onCheckedChange else null)
+        }
+    }
+}
+
+/** A row that just does something when you tap it. MenuSwitchRow and MenuCycleRow both carry
+ *  a value; this one is for a one-shot action, and matches their shape so the card reads evenly. */
+@Composable
+private fun MenuButtonRow(
+    title: String,
+    description: String,
+    glyph: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .controllerFocusable("pause.button.$title", onConfirm = onClick),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.34f)),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 13.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 2)
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 4,
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            Text(glyph, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
         }
     }
 }

@@ -1216,6 +1216,13 @@ object Rpcs3Bridge {
         runCatching { RPCSX.instance.rpcnTestLogin() }
             .getOrElse { "Could not reach the emulator core." }
 
+    /** Arm an RSX frame capture. The RSX thread acts on it at the next frame boundary, so
+     *  nothing happens until a frame is actually rendered -- close the pause menu first. */
+    @JvmStatic
+    fun captureFrame() {
+        runCatching { RPCSX.instance.captureFrame() }
+    }
+
     @JvmStatic
     fun rpcnDeleteTrophies(): String =
         runCatching { RPCSX.instance.rpcnDeleteTrophies() }

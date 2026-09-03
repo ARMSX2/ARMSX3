@@ -38,6 +38,7 @@ struct RPCSXApi {
   void (*resume)();
   void (*pause)();
   void (*openHomeMenu)();
+  void (*captureFrame)();
   std::string (*getTitleId)();
   unsigned long long (*getFramePeriodNs)();
   unsigned long long (*getFrameWorkNs)();
@@ -156,6 +157,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.kill = reinterpret_cast<decltype(kill)>(dlsym(handle, "_rpcsx_kill"));
     result.resume = reinterpret_cast<decltype(resume)>(dlsym(handle, "_rpcsx_resume"));
     result.pause = reinterpret_cast<decltype(pause)>(dlsym(handle, "_rpcsx_pause"));
+    result.captureFrame = reinterpret_cast<decltype(captureFrame)>(dlsym(handle, "_rpcsx_captureFrame"));
     result.openHomeMenu = reinterpret_cast<decltype(openHomeMenu)>(dlsym(handle, "_rpcsx_openHomeMenu"));
     result.getTitleId = reinterpret_cast<decltype(getTitleId)>(dlsym(handle, "_rpcsx_getTitleId"));
     result.getFramePeriodNs = reinterpret_cast<decltype(getFramePeriodNs)>(dlsym(handle, "_rpcsx_getFramePeriodNs"));
@@ -457,6 +459,15 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_openHomeMenu(JNIEnv *env,
   }
 
   return rpcsxLib.openHomeMenu();
+}
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_captureFrame(JNIEnv *env,
+                                                                    jobject) {
+  if (rpcsxLib.captureFrame == nullptr) {
+      return;
+  }
+
+  return rpcsxLib.captureFrame();
 }
 
 extern "C" JNIEXPORT jstring JNICALL

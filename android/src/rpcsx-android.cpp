@@ -3702,6 +3702,16 @@ extern "C" void _rpcsx_pause() { Emu.Pause(); }
 
 extern "C" void _rpcsx_openHomeMenu() { open_home_menu_async(); }
 
+// Arm an RSX frame capture.
+//
+// The desktop build triggers this from a menu and a keybind; there was no way to reach it
+// here at all, so every visual bug reported from Android arrived without the one artifact
+// that can actually settle it -- upstream asks for an .rrc on every graphics issue, and we
+// could not produce one. Setting the flag is the whole trigger: the RSX thread picks it up
+// at the next frame boundary, records that frame's command stream, writes it under
+// config/captures/ and pauses the emulator.
+extern "C" void _rpcsx_captureFrame() { g_user_asked_for_frame_capture = true; }
+
 extern "C" std::string _rpcsx_getTitleId() { return Emu.GetTitleID(); }
 
 // ADPF: what the last frame actually cost, and which OS thread presents it. The app feeds
