@@ -919,6 +919,8 @@ val EN: Map<String, String> = mapOf(
     "pad.onScreenControls.description" to "On-screen touch buttons. Never = always hidden (for physical-controls devices — also hides the settings cog so nothing overlaps R1). 1–10s = auto-hide after that long without a touch. Auto = show on touch, hide when you use a controller.",
     "pad.multiTouch.description" to "How far from a button's center a touch still counts as a press, so you can hit two adjacent on-screen buttons at once. Higher = more reach (easier rolls and combos).",
     "pad.onScreenControls.label" to "On-screen controls",
+    "pad.assign.auto" to "Auto",
+    "pad.assign.help" to "Assign a controller to a player slot. Auto gives it the next free slot when it first presses a button, which is why the pad you pick up second is not always player 2. An assignment is remembered per controller and kept when it reconnects.",
     "pad.player1" to "Player 1",
     "pad.player2" to "Player 2",
     "pad.player3" to "Player 3",

@@ -250,6 +250,35 @@ fun PadTab(state: MutableState<Settings>) {
                     refreshToken.intValue++
                 },
             )
+            // Which physical controller is which player.
+            //
+            // Slots are otherwise claimed first-to-press, which cannot express "the DualSense is
+            // player 1 and the built-in pad is player 2" -- and on a handheld the built-in pad is
+            // usually whatever presses something first. Pins are stored per controller (by
+            // descriptor, so they survive reconnects) and set once, rather than raced for at the
+            // start of every session.
+            val pads = remember(refreshToken.intValue) { com.armsx2.input.PadRouter.connectedPads() }
+            if (pads.isNotEmpty()) {
+                HelpText(str("pad.assign.help"))
+                val slotLabels = listOf(str("pad.assign.auto")) +
+                    (0 until com.armsx2.input.PadRouter.MAX_PADS).map { str("pad.player${it + 1}") }
+                pads.forEach { pad ->
+                    val pinnedPort = com.armsx2.input.PadRouter.pins()[pad.descriptor]
+                    SegmentedRow(
+                        label = pad.name,
+                        options = slotLabels,
+                        selectedIndex = pinnedPort?.plus(1) ?: 0,
+                        onChange = { index ->
+                            com.armsx2.input.PadRouter.setPin(
+                                pad.descriptor,
+                                if (index == 0) null else index - 1,
+                            )
+                            refreshToken.intValue++
+                        },
+                    )
+                }
+                SettingsDivider()
+            }
             // Master rumble / vibration enable — gates controller motors AND the device-haptic
             // fallback (NativeApp.onPadRumble). Off = no haptics anywhere.
             ToggleRow(

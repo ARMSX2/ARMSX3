@@ -30,6 +30,89 @@ object PadRouter {
     private val slots = IntArray(MAX_PADS) { -1 }
     @Volatile private var pad2Enabled = false
 
+    /**
+     * Player slots the user pinned by hand, descriptor -> port.
+     *
+     * Keyed by InputDevice.descriptor, not deviceId: ids are reassigned on reconnect (the very
+     * thing [forgetDevice] exists for), so an id-keyed pin would survive exactly one sleep/wake.
+     * The descriptor is derived from the device's identity and is stable across reconnects.
+     *
+     * Auto-assignment is first-to-press, which is fine until two people care WHICH player they
+     * are -- an external pad and a handheld's built-in controller cannot be told apart by press
+     * order alone. A pin overrides that for the pads it names and leaves the rest automatic.
+     */
+    private val pinned = LinkedHashMap<String, Int>()
+    private const val KEY_PINNED = "pad_router_pinned"
+
+    /** Load pins from prefs. Safe to call more than once. */
+    fun loadPins() {
+        pinned.clear()
+        val raw = com.armsx2.runtime.MainActivityRuntime.prefs.getString(KEY_PINNED, null) ?: return
+        runCatching {
+            val obj = org.json.JSONObject(raw)
+            for (key in obj.keys()) {
+                val port = obj.optInt(key, -1)
+                if (port in 0 until MAX_PADS) pinned[key] = port
+            }
+        }
+    }
+
+    private fun savePins() {
+        val obj = org.json.JSONObject()
+        pinned.forEach { (descriptor, port) -> obj.put(descriptor, port) }
+        com.armsx2.runtime.MainActivityRuntime.prefs.edit()
+            .putString(KEY_PINNED, obj.toString()).apply()
+    }
+
+    /** The user's pins, descriptor -> port. */
+    fun pins(): Map<String, Int> = LinkedHashMap(pinned)
+
+    /**
+     * Pin a controller to a player slot, or pass null to clear it.
+     *
+     * A slot holds one controller, so pinning displaces whatever else claimed it -- both the
+     * pin and the live slot, otherwise the settings screen would disagree with where input
+     * actually goes until the next reset.
+     */
+    fun setPin(descriptor: String, port: Int?) {
+        if (port == null) {
+            pinned.remove(descriptor)
+        } else {
+            if (port !in 0 until MAX_PADS) return
+            pinned.entries.removeAll { it.value == port && it.key != descriptor }
+            pinned[descriptor] = port
+            val claimed = slots[port]
+            if (claimed >= 0 && descriptorOf(claimed) != descriptor) slots[port] = -1
+            for (i in slots.indices) {
+                if (i != port && slots[i] >= 0 && descriptorOf(slots[i]) == descriptor) slots[i] = -1
+            }
+        }
+        savePins()
+    }
+
+    private fun descriptorOf(deviceId: Int): String? =
+        runCatching { InputDevice.getDevice(deviceId)?.descriptor }.getOrNull()
+
+    /** One physical controller, as the settings screen lists it. */
+    data class Pad(val descriptor: String, val name: String, val deviceId: Int)
+
+    /** Connected gamepads, deduped to one entry per physical controller. */
+    fun connectedPads(): List<Pad> {
+        val out = LinkedHashMap<String, Pad>()
+        for (id in runCatching { InputDevice.getDeviceIds() }.getOrDefault(IntArray(0))) {
+            val dev = InputDevice.getDevice(id) ?: continue
+            val src = dev.sources
+            val isPad = (src and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+                (src and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+            if (!isPad) continue
+            val descriptor = dev.descriptor ?: continue
+            // A controller can enumerate as several nodes (a DualSense adds touchpad and motion
+            // ones); keep the first GAMEPAD node, which is what claims a slot and carries the motor.
+            out.getOrPut(descriptor) { Pad(descriptor, dev.name ?: "Controller", id) }
+        }
+        return out.values.toList()
+    }
+
     /** Fired exactly once, the first time a second controller joins, so the app can
      *  react before any P2 input is sent. Ports 2-6 need no equivalent: the core opens
      *  every port up front, so they are live the moment a pad claims one. */
@@ -63,9 +146,20 @@ object PadRouter {
     fun coopActive(): Boolean = slots[1] != -1
 
     /** Android InputDevice id assigned to a unified pad slot, or -1 if unclaimed.
-     *  Lets per-slot PS2 rumble buzz the right pad. */
-    fun deviceIdForPort(port: Int): Int =
-        if (port in slots.indices) slots[port] else -1
+     *  Lets per-slot rumble buzz the right pad. */
+    fun deviceIdForPort(port: Int): Int {
+        if (port !in slots.indices) return -1
+        if (slots[port] >= 0) return slots[port]
+
+        // Nothing has CLAIMED the slot, but the user may have pinned a controller to it. Slots
+        // are only filled from in-game input dispatch, so in the menus every slot reads
+        // unclaimed -- which is what made "test rumble on player 2" unanswerable from the
+        // settings screen. A pin is an answer, so honour it here.
+        for (pad in connectedPads()) {
+            if (pinned[pad.descriptor] == port) return pad.deviceId
+        }
+        return -1
+    }
 
     /**
      * Map a physical input device to a PS3 pad port (0..6), claiming the next free
@@ -92,11 +186,24 @@ object PadRouter {
         val isPad = (src and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
             (src and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
         if (!isPad) return 0 // touchpad / mouse / keyboard node → treat as P1, don't claim
+        // A hand-picked slot beats press order. Written into `slots` too, so everything reading
+        // the live assignment agrees with the pin.
+        val descriptor = dev?.descriptor
+        if (descriptor != null) {
+            pinned[descriptor]?.let { port ->
+                slots[port] = deviceId
+                if (port == 1 && !pad2Enabled) { pad2Enabled = true; onPlayer2Joined?.invoke() }
+                return port
+            }
+        }
         // Always all seven. The PS2 needed a multitap accessory to go past two
         // controllers; the PS3 does not -- extra pads simply connect, so gating
         // on a multitap toggle would cap us at two for no reason.
         val maxSlots = MAX_PADS
         for (i in 0 until maxSlots) {
+            // A pinned slot belongs to its controller even while that controller is away;
+            // handing it to the next pad to press a button is what the pin exists to prevent.
+            if (pinned.containsValue(i)) continue
             if (slots[i] == -1) {
                 slots[i] = deviceId
                 if (i == 1 && !pad2Enabled) { pad2Enabled = true; onPlayer2Joined?.invoke() }
