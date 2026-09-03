@@ -105,6 +105,12 @@ object PadRouter {
     /** The user's pins, descriptor -> port. */
     fun pins(): Map<String, Int> = LinkedHashMap(pinned)
 
+    /** True when this controller is pinned to some OTHER player than [port]. */
+    fun pinnedElsewhere(descriptor: String?, port: Int): Boolean {
+        val pin = descriptor?.let { pinned[it] } ?: return false
+        return pin != port
+    }
+
     /**
      * Pin a controller to a player slot, or pass null to clear it.
      *

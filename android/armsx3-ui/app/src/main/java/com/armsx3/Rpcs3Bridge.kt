@@ -1562,17 +1562,23 @@ object Rpcs3Bridge {
         if (claimed >= 0) return@runCatching android.view.InputDevice.getDevice(claimed)
         if (port != 0) return@runCatching null
 
+        // Guessing must never reach a pad the user pinned to somebody else. Player 1's slot
+        // being empty is not a reason to buzz player 2's controller, and it did exactly that:
+        // a DualSense pinned to player 2 answered player 1's rumble test, because it happened
+        // to be the last pad touched.
         val lastActive = NativeApp.sRumbleDeviceId
         if (lastActive >= 0) {
-            android.view.InputDevice.getDevice(lastActive)?.let { return@runCatching it }
+            val dev = android.view.InputDevice.getDevice(lastActive)
+            if (dev != null && !PadRouter.pinnedElsewhere(dev.descriptor, port)) return@runCatching dev
         }
-        firstPadDevice()
+        firstPadDevice(port)
     }.getOrNull()
 
     private fun controllerVibrator(port: Int): RumbleTarget? = targetOf(deviceForPort(port))
 
-    /** Last resort for an unclaimed player 1: the first gamepad advertising a motor. */
-    private fun firstPadDevice(): android.view.InputDevice? = runCatching {
+    /** Last resort for an unclaimed player 1: the first gamepad advertising a motor that is
+     *  not already spoken for by another player. */
+    private fun firstPadDevice(port: Int): android.view.InputDevice? = runCatching {
         for (id in android.view.InputDevice.getDeviceIds()) {
             val dev = android.view.InputDevice.getDevice(id) ?: continue
 
@@ -1582,6 +1588,7 @@ object Rpcs3Bridge {
                 android.view.InputDevice.SOURCE_JOYSTICK
 
             if (!isPad) continue
+            if (PadRouter.pinnedElsewhere(dev.descriptor, port)) continue
 
             if (targetOf(dev) != null) return@runCatching dev
         }
