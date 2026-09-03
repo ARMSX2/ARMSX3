@@ -1079,7 +1079,14 @@ namespace rsx
 			u64 last_heartbeat = 0;
 			u64 iterations = 0;
 
-			while (!is_stopped() && !unsent_gcm_events && thread_ctrl::state() != thread_state::aborting)
+			// NOT gated on unsent_gcm_events.
+			//
+			// That flag is the savestate hand-off, but any live send failure sets it too, and
+			// this thread is the only vblank source in the emulator with nothing to restart it.
+			// Ending the loop for it converts one transient failure into a permanent guest
+			// deadlock. A savestate stops the emulator, so the two checks that remain still end
+			// the loop exactly when they should.
+			while (!is_stopped() && thread_ctrl::state() != thread_state::aborting)
 			{
 				// Get current time
 				const u64 current = get_system_time();

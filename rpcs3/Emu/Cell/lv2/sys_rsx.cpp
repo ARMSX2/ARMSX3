@@ -160,8 +160,23 @@ bool rsx::thread::send_event(u64 data1, u64 event_flags, u64 data3)
 
 	if (error + 0u == CELL_EAGAIN)
 	{
-		// Thread has aborted when sending event (VBLANK duplicates are allowed)
-		ensure((unsent_gcm_events.fetch_or(event_flags) & event_flags & ~(SYS_RSX_EVENT_VBLANK | SYS_RSX_EVENT_SECOND_VBLANK_BASE | SYS_RSX_EVENT_SECOND_VBLANK_BASE * 2)) == 0);
+		// Thread has aborted when sending event.
+		//
+		// Record only what actually has to be resent. VBLANK losses are allowed by design --
+		// the EBUSY path a few lines up drops them on purpose for exactly that reason -- but
+		// this recorded the whole mask, vblank bits included. That is not a bookkeeping detail:
+		// the vblank thread loops on !unsent_gcm_events, so a single lost vblank set the flag
+		// and the vblank source terminated itself, with nothing anywhere to restart it. Every
+		// later frame then had no interrupt: the guest's gcm interrupt thread never woke again,
+		// its VSync thread stayed parked in sys_semaphore_wait, and the engine spun forever on
+		// a flag its own handler was supposed to set, RSX idle with an empty FIFO.
+		const u64 must_resend = event_flags & ~vblank_bits;
+
+		if (must_resend)
+		{
+			ensure((unsent_gcm_events.fetch_or(must_resend) & must_resend) == 0);
+		}
+
 		return false;
 	}
 
