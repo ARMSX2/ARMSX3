@@ -88,6 +88,9 @@ object UsbPadTakeover {
         port: Int,
     ) {
         stop()
+        // Claim the slot for our synthetic id before any event goes out, or the first press
+        // arrives as player 1 regardless of what the user pinned.
+        PadRouter.setSyntheticPad(SYNTHETIC_DEVICE_ID, port)
         running = true
         reader = Thread {
             val buf = ByteArray(64)
@@ -138,6 +141,7 @@ object UsbPadTakeover {
         running = false
         reader?.interrupt()
         reader = null
+        PadRouter.clearSyntheticPad()
     }
 
     private class Report(val buttons: Int, val axes: IntArray)

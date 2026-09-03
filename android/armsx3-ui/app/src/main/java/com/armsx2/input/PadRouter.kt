@@ -204,7 +204,28 @@ object PadRouter {
      * slot. Synthetic / virtual events (deviceId < 0)
      * and non-gamepad nodes never claim a slot — they're treated as Player 1.
      */
+    /**
+     * A pad we deliver ourselves, and the slot it belongs to.
+     *
+     * The USB takeover claims a controller's interface, which destroys its Android input device,
+     * so its events are synthesised with an id no real device has. Without this they would fall
+     * into the `deviceId < 0` case below and always play as player 1, silently ignoring the slot
+     * the user pinned -- which is the one thing the pin exists to control.
+     */
+    @Volatile private var syntheticDeviceId: Int = 0
+    @Volatile private var syntheticPort: Int = 0
+
+    fun setSyntheticPad(deviceId: Int, port: Int) {
+        syntheticDeviceId = deviceId
+        syntheticPort = port.coerceIn(0, MAX_PADS - 1)
+    }
+
+    fun clearSyntheticPad() {
+        syntheticDeviceId = 0
+    }
+
     fun portForDevice(deviceId: Int): Int {
+        if (deviceId != 0 && deviceId == syntheticDeviceId) return syntheticPort
         if (deviceId < 0) return 0
         // Fast path: already-claimed nodes (no InputDevice lookup).
         for (i in slots.indices) if (slots[i] == deviceId) return i
