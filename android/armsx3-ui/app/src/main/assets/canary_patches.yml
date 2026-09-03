@@ -119,15 +119,148 @@ SPU-42bae8e5d6a9304068ba1c6bbfdc18d656e287a1:
 #
 # Ps3PatchRepo.BUNDLED must list this, or it is imported but never enabled.
 
+# RATCHET & CLANK, the whole family. Every one of these games freezes without its fix, and
+# the fixes are Juhn's, from the community patch database -- reproduced here so a fresh
+# install is not one download away from a game that hangs. Ps3PatchRepo.BUNDLED must list
+# every (hash, name, serial) below or the patch is imported and never enabled.
+#
+# A Crack in Time (BCUS98124) REPLACES an ARMSX3 patch of our own, "FIFO drain wait fix",
+# which wrote the same word at 0x005cb1c4 with 0x409AFFF4 against Juhn's 0x409EFFF4. Both
+# retarget the branch to -12; ours also moved the condition from cr7 to cr6, which is one
+# bit of a guess against a fix the whole RPCS3 community runs. They cannot coexist -- in a
+# tester's log both applied to the same instruction and the last one won -- so ours is
+# retired rather than left to race.
+
+PPU-c4e26433d1eed9166eb0c67b6f66b2268f3704e2:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Tools of Destruction":
+        BCES00052: [ All ]
+    Author: "Juhn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x005056f0, 0x409efff0 ]
+
+PPU-ec77eaf73a4f55d1c4ece532c3be6db0011e49ca:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Tools of Destruction":
+        NPEA00452: [ All ]
+    Author: "Juhn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x00539ee8, 0x409efff4 ]
+
+PPU-f67f3e99077ba256728ffa16800c75e006661158: # 1.00 game version
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Tools of Destruction (1.0)":
+        BCUS98127: [ 01.00 ]
+    Author: "Juhn, Alexis"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x005056d0, 0x409efff0 ]
+
+PPU-c14042df6304d3e420a9917e6f8e5fc05cc38b4c: # 2.00 game version
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Tools of Destruction (2.0)":
+        BCUS98127: [ 01.00 ]
+    Author: "Juhn, Epicalman"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x00505948, 0x409efff0 ]
+
+PPU-16506d9d5bf692d615645accd24bca1ee1f8f9a6:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Tools of Destruction":
+        NPUA80965: [ All ]
+    Author: "Juhn, Epicalman"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x0053a208, 0x409efff4 ]
+
+PPU-4c819c69904784a56685c31df12f5d492bc0ed64:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank: All 4 One":
+        BCAS20200: [ 01.03 ]
+        BCES01141: [ 01.03 ]
+        BCES01142: [ 01.03 ]
+        BCUS98175: [ 01.03 ]
+    Author: "Juhn, Hasster"
+    Notes: "Fixes game crashes/freezes"
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x006910f8, 0x4082fff4 ]
+      - [ be32, 0x006910fc, 0x42800018 ]
+
+PPU-ed460e668a491f5e39f6547f3a24c2f20e2cb39b:
+  "Freeze fix":
+    Games:
+      "Ratchet & Clank: Nexus":
+        BCES01908: [ 01.00 ]
+        BCES01949: [ 01.00 ]
+    Author: "Juhn, Joenn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x005f7128, 0x4082fff4 ]
+
+PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08:
+  "Freeze fix":
+    Games:
+      "Ratchet & Clank: Into the Nexus":
+        BCUS99245: [ 01.01 ]
+        NPUA80908: [ 01.01 ]
+      "Ratchet & Clank: Nexus":
+        BCES01908: [ 01.01 ]
+        BCES01949: [ 01.01 ]
+        NPEA00457: [ 01.01 ]
+    Author: "Juhn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x005f8ca8, 0x4082fff4 ]
+
+PPU-f07f7086588a4ea86a28bd768f0cbe710f5b813b:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Quest for Booty":
+        BCAS20052: [ All ]
+        BCES00301: [ All ]
+        NPEA00088: [ All ]
+        NPEA00106: [ All ]
+    Author: "Juhn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x003eb8b0, 0x409efff0 ]
+
+PPU-1d9e99e1f091cfbdf1714d04e690d9cd816e2971:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Quest for Booty":
+        NPUA80145: [ All ]
+    Author: "Juhn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x003eb730, 0x409efff0 ]
+
 PPU-0997e35d2b6738f5cecfda1d76380acca0828365:
-  FIFO drain wait fix:
+  "Freeze Fix":
     Games:
       "Ratchet & Clank Future: A Crack in Time":
-        BCUS98124:
-          - "All"
-    Author: ARMSX3
-    Patch Version: 1.0
-    Notes: Fixes the hang when starting a New Game.
+        BCUS98124: [ 01.00 ]
+    Author: "Juhn, Jonathan44062"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
     Patch:
-      # bne cr6,0x5cb1bc -> bne cr6,0x5cb1b8, so the GET load is inside the loop.
-      - [ be32, 0x005cb1c4, 0x409AFFF4 ]
+      - [ be32, 0x005cb1c4, 0x409efff4 ]

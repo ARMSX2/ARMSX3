@@ -204,14 +204,166 @@ object Ps3PatchRepo {
             appVersion = "All",
             sinceRevision = 2,
         ),
-        // RATCHET & CLANK FUTURE: A CRACK IN TIME, BCUS98124 -- without this the game
-        // hangs starting a New Game, in its own RSX drain wait. See canary_patches.yml.
+        // RATCHET & CLANK -- every game in the family hangs without its freeze fix, so all of
+        // them ship enabled. These are Juhn's patches from the community database; the name
+        // casing differs between entries ("Freeze Fix" vs "Freeze fix") and patchSetEnabled
+        // matches it exactly, so it is reproduced verbatim rather than tidied.
+        //
+        // A Crack in Time replaces our own "FIFO drain wait fix", which wrote the same word
+        // with a different condition register and could only race it. See canary_patches.yml.
+        Bundled(
+            hash = "PPU-c4e26433d1eed9166eb0c67b6f66b2268f3704e2",
+            name = "Freeze Fix",
+            serial = "BCES00052",
+            appVersion = "All",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-ec77eaf73a4f55d1c4ece532c3be6db0011e49ca",
+            name = "Freeze Fix",
+            serial = "NPEA00452",
+            appVersion = "All",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-f67f3e99077ba256728ffa16800c75e006661158",
+            name = "Freeze Fix",
+            serial = "BCUS98127",
+            appVersion = "01.00",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-c14042df6304d3e420a9917e6f8e5fc05cc38b4c",
+            name = "Freeze Fix",
+            serial = "BCUS98127",
+            appVersion = "01.00",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-16506d9d5bf692d615645accd24bca1ee1f8f9a6",
+            name = "Freeze Fix",
+            serial = "NPUA80965",
+            appVersion = "All",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-4c819c69904784a56685c31df12f5d492bc0ed64",
+            name = "Freeze Fix",
+            serial = "BCAS20200",
+            appVersion = "01.03",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-4c819c69904784a56685c31df12f5d492bc0ed64",
+            name = "Freeze Fix",
+            serial = "BCES01141",
+            appVersion = "01.03",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-4c819c69904784a56685c31df12f5d492bc0ed64",
+            name = "Freeze Fix",
+            serial = "BCES01142",
+            appVersion = "01.03",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-4c819c69904784a56685c31df12f5d492bc0ed64",
+            name = "Freeze Fix",
+            serial = "BCUS98175",
+            appVersion = "01.03",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-ed460e668a491f5e39f6547f3a24c2f20e2cb39b",
+            name = "Freeze fix",
+            serial = "BCES01908",
+            appVersion = "01.00",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-ed460e668a491f5e39f6547f3a24c2f20e2cb39b",
+            name = "Freeze fix",
+            serial = "BCES01949",
+            appVersion = "01.00",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
+            name = "Freeze fix",
+            serial = "BCUS99245",
+            appVersion = "01.01",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
+            name = "Freeze fix",
+            serial = "NPUA80908",
+            appVersion = "01.01",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
+            name = "Freeze fix",
+            serial = "BCES01908",
+            appVersion = "01.01",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
+            name = "Freeze fix",
+            serial = "BCES01949",
+            appVersion = "01.01",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
+            name = "Freeze fix",
+            serial = "NPEA00457",
+            appVersion = "01.01",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-f07f7086588a4ea86a28bd768f0cbe710f5b813b",
+            name = "Freeze Fix",
+            serial = "BCAS20052",
+            appVersion = "All",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-f07f7086588a4ea86a28bd768f0cbe710f5b813b",
+            name = "Freeze Fix",
+            serial = "BCES00301",
+            appVersion = "All",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-f07f7086588a4ea86a28bd768f0cbe710f5b813b",
+            name = "Freeze Fix",
+            serial = "NPEA00088",
+            appVersion = "All",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-f07f7086588a4ea86a28bd768f0cbe710f5b813b",
+            name = "Freeze Fix",
+            serial = "NPEA00106",
+            appVersion = "All",
+            sinceRevision = 4,
+        ),
+        Bundled(
+            hash = "PPU-1d9e99e1f091cfbdf1714d04e690d9cd816e2971",
+            name = "Freeze Fix",
+            serial = "NPUA80145",
+            appVersion = "All",
+            sinceRevision = 4,
+        ),
         Bundled(
             hash = "PPU-0997e35d2b6738f5cecfda1d76380acca0828365",
-            name = "FIFO drain wait fix",
+            name = "Freeze Fix",
             serial = "BCUS98124",
-            appVersion = "All",
-            sinceRevision = 3,
+            appVersion = "01.00",
+            sinceRevision = 4,
         ),
     )
 
@@ -222,7 +374,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 3
+    private const val BUNDLED_REVISION = 4
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
