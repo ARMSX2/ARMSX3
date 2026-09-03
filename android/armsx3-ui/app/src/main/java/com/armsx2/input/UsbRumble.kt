@@ -246,9 +246,13 @@ object UsbRumble {
         val a = inputName.lowercase()
         val b = productName.lowercase()
         if (b.isNotBlank() && (a.contains(b) || b.contains(a))) return true
-        // The product string is not always carried through verbatim; the family name is enough
-        // to tell a PlayStation pad from a handheld's built-in controller.
-        return listOf("dualsense", "dualshock", "wireless controller").any { a.contains(it) && b.contains(it) }
+        // Family names only, and only ones that actually identify a PlayStation pad.
+        //
+        // "wireless controller" used to be in this list, and it matches an Xbox pad just as well:
+        // on a handheld that renames every controller "<something> Wireless Controller", the USB
+        // DualSense matched EVERY pad and answered for every player slot, leaving the others with
+        // no rumble at all. A shared noun is not an identity.
+        return listOf("dualsense", "dualshock").any { a.contains(it) && b.contains(it) }
     }
 
     /** Scan, ask for permission if needed, and follow attach/detach. Safe to call repeatedly. */
