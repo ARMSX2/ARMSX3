@@ -3078,6 +3078,17 @@ extern "C" const char *_rpcsx_rpcnCreateAccount(std::string_view npid,
   });
 }
 
+// Delete every trophy this account has synced to RPCN.
+//
+// No per-title variant: delete_trophies takes a communication id and an empty one means all,
+// which is the request people actually make. The desktop offers per-title from its trophy
+// manager; there is no equivalent screen here to hang that off.
+extern "C" const char *_rpcsx_rpcnDeleteTrophies() {
+  return rpcn_with_connection([&](rpcn::rpcn_client &client) {
+    return client.delete_trophies();
+  });
+}
+
 extern "C" const char *_rpcsx_rpcnResendToken(std::string_view npid,
                                               std::string_view password) {
   const std::string s_npid{npid}, s_pass{password};

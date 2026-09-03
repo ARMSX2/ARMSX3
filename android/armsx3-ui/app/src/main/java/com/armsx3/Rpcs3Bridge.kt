@@ -1217,6 +1217,11 @@ object Rpcs3Bridge {
             .getOrElse { "Could not reach the emulator core." }
 
     @JvmStatic
+    fun rpcnDeleteTrophies(): String =
+        runCatching { RPCSX.instance.rpcnDeleteTrophies() }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
     fun rpcnAddHost(desc: String, host: String): String =
         runCatching { RPCSX.instance.rpcnAddHost(desc, host) }
             .getOrElse { "Could not reach the emulator core." }

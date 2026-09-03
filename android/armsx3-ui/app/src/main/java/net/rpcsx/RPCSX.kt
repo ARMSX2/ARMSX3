@@ -169,6 +169,9 @@ class RPCSX {
     /** Connect and authenticate with the saved account. */
     external fun rpcnTestLogin(): String
 
+    /** Delete every trophy this account has synced to the server. Not undoable. */
+    external fun rpcnDeleteTrophies(): String
+
     // Saved servers. The list lives in the core's own cfg_rpcn "Hosts" entry, so these are
     // a view onto it, not a second store -- and the official server is protected from
     // deletion there, not here.

@@ -76,6 +76,7 @@ struct RPCSXApi {
   const char *(*rpcnResetPassword)(std::string_view npid, std::string_view token,
                                    std::string_view password);
   const char *(*rpcnTestLogin)();
+  const char *(*rpcnDeleteTrophies)();
   const char *(*rpcnAddHost)(std::string_view desc, std::string_view host);
   const char *(*rpcnDelHost)(std::string_view desc, std::string_view host);
   void (*rpcnResetHosts)();
@@ -188,6 +189,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.rpcnSendResetToken = reinterpret_cast<decltype(rpcnSendResetToken)>(dlsym(handle, "_rpcsx_rpcnSendResetToken"));
     result.rpcnResetPassword = reinterpret_cast<decltype(rpcnResetPassword)>(dlsym(handle, "_rpcsx_rpcnResetPassword"));
     result.rpcnTestLogin = reinterpret_cast<decltype(rpcnTestLogin)>(dlsym(handle, "_rpcsx_rpcnTestLogin"));
+    result.rpcnDeleteTrophies = reinterpret_cast<decltype(rpcnDeleteTrophies)>(dlsym(handle, "_rpcsx_rpcnDeleteTrophies"));
     result.rpcnAddHost = reinterpret_cast<decltype(rpcnAddHost)>(dlsym(handle, "_rpcsx_rpcnAddHost"));
     result.rpcnDelHost = reinterpret_cast<decltype(rpcnDelHost)>(dlsym(handle, "_rpcsx_rpcnDelHost"));
     result.rpcnResetHosts = reinterpret_cast<decltype(rpcnResetHosts)>(dlsym(handle, "_rpcsx_rpcnResetHosts"));
@@ -1334,5 +1336,12 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_net_rpcsx_RPCSX_rpcnTestLogin(JNIEnv *env, jobject) {
   if (!rpcsxLib.rpcnTestLogin) return rpcn_unavailable(env);
   const char *msg = rpcsxLib.rpcnTestLogin();
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnDeleteTrophies(JNIEnv *env, jobject) {
+  if (!rpcsxLib.rpcnDeleteTrophies) return rpcn_unavailable(env);
+  const char *msg = rpcsxLib.rpcnDeleteTrophies();
   return env->NewStringUTF(msg ? msg : "");
 }
