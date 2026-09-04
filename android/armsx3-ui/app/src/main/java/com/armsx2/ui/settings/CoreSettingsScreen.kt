@@ -135,6 +135,13 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
     // Reset is two taps rather than an AlertDialog: dialogs swallow gamepad keys here, and
     // this screen is reachable from the in-game menu with only a controller in hand.
     var confirmingReset by remember { mutableStateOf(false) }
+    // Narrow the list to just the remembered settings.
+    //
+    // Every override already has its own Forget button, but finding them meant scrolling the
+    // whole core list -- which is every node the core exposes -- so in practice the only usable
+    // control was "Forget all". A stale override on ONE setting is the common case and cost a
+    // long debugging session here, so it needs to be findable on its own.
+    var onlyOverridden by remember { mutableStateOf(false) }
 
     LaunchedEffect(revision) {
         val loaded = withContext(Dispatchers.IO) {
@@ -191,6 +198,7 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
         }
         reapplyCurated()
         confirmingReset = false
+        onlyOverridden = false
         revision++
     }
 
@@ -205,9 +213,13 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
         revision++
     }
 
-    val filtered = remember(all, query) {
-        if (query.isBlank()) all
-        else all.filter {
+    val filtered = remember(all, query, onlyOverridden, overrides) {
+        // Guarded on isNotEmpty: forgetting the last override would otherwise leave the filter
+        // on with nothing to show and its own toggle hidden, i.e. an empty screen and no way out.
+        val base = if (onlyOverridden && overrides.isNotEmpty()) all.filter { it.path in overrides } else all
+
+        if (query.isBlank()) base
+        else base.filter {
             it.name.contains(query, ignoreCase = true) ||
                 it.section.contains(query, ignoreCase = true)
         }
@@ -248,12 +260,21 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary,
                     )
-                    TextButton(onClick = { if (confirmingReset) clearAll() else confirmingReset = true }) {
-                        Text(
-                            if (confirmingReset) str("core.settings.resetConfirm")
-                            else str("core.settings.reset"),
-                            color = MaterialTheme.colorScheme.error,
-                        )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { onlyOverridden = !onlyOverridden }) {
+                            Text(
+                                if (onlyOverridden) str("core.settings.showAll")
+                                else str("core.settings.showOnlyOverridden"),
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        TextButton(onClick = { if (confirmingReset) clearAll() else confirmingReset = true }) {
+                            Text(
+                                if (confirmingReset) str("core.settings.resetConfirm")
+                                else str("core.settings.reset"),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     }
                 }
             }

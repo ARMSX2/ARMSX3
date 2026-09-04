@@ -427,6 +427,8 @@ val EN: Map<String, String> = mapOf(
     "core.settings.overrideCount" to "Settings remembered here",
     "core.settings.overridden" to "Remembered here",
     "core.settings.clearOne" to "Forget",
+    "core.settings.showOnlyOverridden" to "Show only these",
+    "core.settings.showAll" to "Show all settings",
     "core.settings.reset" to "Forget all",
     "core.settings.resetConfirm" to "Tap again to forget all",
     // PS3 trophies (TrophiesScreen). Numbered placeholders (%1/%2/%3) rather than %d, because
