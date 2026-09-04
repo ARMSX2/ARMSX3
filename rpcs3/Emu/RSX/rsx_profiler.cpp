@@ -2,9 +2,20 @@
 #include "rsx_profiler.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/PPUDisAsm.h"
+#include "Emu/Cell/SPUDisAsm.h"
 #include "Emu/Memory/vm.h"
 #include "Emu/Memory/vm_reservation.h"
 #include "Emu/Cell/SPUThread.h"
+#include "Emu/Cell/timers.hpp"
+#include "Emu/Cell/lv2/sys_event.h"
+#include "Emu/Cell/lv2/sys_mutex.h"
+#include "Emu/Cell/lv2/sys_lwcond.h"
+#include "Emu/RSX/Overlays/overlay_message_dialog.h"
+#include "Emu/RSX/Overlays/overlay_manager.h"
+#include "Emu/Cell/lv2/sys_lwmutex.h"
+#include "Emu/Cell/lv2/sys_semaphore.h"
+#include "Emu/Cell/lv2/sys_cond.h"
+#include "Emu/system_config.h"
 
 extern atomic_t<u64> g_spu_group_susp_us;
 extern atomic_t<u64> g_spu_group_susp_count;
@@ -98,6 +109,9 @@ namespace rsx::prof
 	pc_bucket g_stall_pc[24]{};
 	u64 g_stall_pc_total = 0;
 
+	fifo_rec_t g_fifo_ring[fifo_ring_size]{};
+	u32 g_fifo_ring_pos = 0;
+
 	// SPU state during slow frames only.
 	//
 	// Testing one specific mechanism: an SPU that holds the guest cellSync mutex and then calls
@@ -135,6 +149,7 @@ namespace rsx::prof
 	u64 g_putllc_calls_prev = 0;
 	u64 g_putllc_fails_prev = 0;
 	u64 g_putllc_barrier_prev = 0;
+	u64 g_putllc_barrier_spurs_prev = 0;
 	u64 g_spu_ev_prev[5] = {};
 	u64 g_stall_ev_prev[5] = {};
 	u64 g_stall_rsxev_prev[4] = {};
@@ -215,11 +230,134 @@ namespace rsx::prof
 	// SPU thread, and loaded perfectly with the profiler switched off. A reader lock is shared,
 	// so it excludes only thread creation and destruction -- which is precisely the mutation
 	// being raced -- and nothing inside these callbacks blocks.
+	// Per-THREAD histogram of running PPUs during a stall.
+	//
+	// The existing stall histogram records only the FIRST non-waiting PPU it finds, which on this
+	// hang produced a flat, useless spread: the PPUs run about 5% of sampler ticks, so the one
+	// sample per tick lands on whichever thread happened to be awake. Recording every running
+	// thread WITH its id answers the actual question -- which thread is executing while the game
+	// refuses to render, and where.
+	struct run_slot_t
+	{
+		atomic_t<u32> pc;
+		atomic_t<u32> tid;
+		atomic_t<u32> hits;
+	};
+
+	run_slot_t g_run_hist[256]{};
+	atomic_t<u32> g_run_ticks{0};
+
+	void record_running(u32 pc, u32 tid)
+	{
+		const u32 h = ((pc >> 2) ^ (tid << 3)) % 256;
+
+		for (u32 i = 0; i < 12; i++)
+		{
+			auto& b = g_run_hist[(h + i) % 256];
+
+			if (b.hits.load() && b.pc.load() == pc && b.tid.load() == tid)
+			{
+				b.hits++;
+				return;
+			}
+
+			if (!b.hits.load())
+			{
+				b.pc = pc;
+				b.tid = tid;
+				b.hits++;
+				return;
+			}
+		}
+	}
+
+	// SPURS control-block address, learned from any SPU thread. Read by the label watch below
+	// WITHOUT a second idm walk -- nesting idm::select deadlocks the sampler.
+	u32 g_spurs_addr_seen = 0;
+
 	void sample_guest_pc()
 	{
 		if (!g_enabled.load())
 		{
 			return;
+		}
+
+		// Watch the one label the whole hang turns on.
+		//
+		// nv406e::semaphore_acquire times out on 0x40300CC0 in 15 of 15 captured hangs, ALWAYS
+		// exactly one increment short, and always 2.7-9.9s BEFORE the FIFO freezes -- so it is the
+		// trigger. Neither RSX label writer ever touches that address (both instrumented), which
+		// means the GUEST writes it and the guest stops. Sampling its value at 200Hz and logging
+		// only transitions gives the cadence and, more importantly, the exact instant it stops --
+		// which is the thing to line up against what the guest was doing.
+		{
+			static u32 s_label_prev = 0;
+			static u64 s_label_last_us = 0;
+			static u64 s_label_stuck_us = 0;
+			static bool s_label_seen = false;
+
+			constexpr u32 label = 0x40300CC0;
+
+			// wklReadyCount1[5] climbs 0 -> 2 -> 3 across the last two frames before the label dies and
+			// never falls again: workload 5 keeps asking for SPUs and nothing picks it up. Log the rows
+			// that decide whether the SPURS kernel is ALLOWED to schedule it -- current/pending/max
+			// contention -- so a refusal can be told apart from a workload that simply never runs.
+			const auto spurs_state = []() -> std::string
+			{
+				const u32 sa = g_spurs_addr_seen;
+
+				if (!sa || !vm::check_addr(sa, vm::page_readable, 0x80))
+				{
+					return "<no spurs>";
+				}
+
+				const auto row = [sa](u32 off) -> std::string
+				{
+					std::string r;
+
+					for (u32 i = 0; i < 16; i++)
+					{
+						fmt::append(r, "%02x", vm::read8(sa + off + i));
+					}
+
+					return r;
+				};
+
+				return fmt::format("rdy1=%s cur=%s pend=%s max=%s sig=%04x", row(0x00), row(0x20), row(0x30),
+					row(0x50), (vm::read8(sa + 0x70) << 8) | vm::read8(sa + 0x71));
+			};
+
+			if (vm::check_addr(label, vm::page_readable, 4))
+			{
+				const u32 now_val = vm::_ref<atomic_t<RsxSemaphore>>(label).observe();
+				const u64 now_us = get_system_time();
+
+				if (!s_label_seen)
+				{
+					s_label_seen = true;
+					s_label_prev = now_val;
+					s_label_last_us = now_us;
+				}
+				else if (now_val != s_label_prev)
+				{
+					prof_log.success("LABEL 0x%x: 0x%x -> 0x%x after %.3fs | %s", label, s_label_prev, now_val,
+						(now_us - s_label_last_us) / 1000000.0, spurs_state());
+
+					s_label_prev = now_val;
+					s_label_last_us = now_us;
+					s_label_stuck_us = 0;
+				}
+				else if (now_us - s_label_last_us > 1000000 && now_us - s_label_stuck_us > 1000000)
+				{
+					// The label is dead. Keep sampling: if the ready count keeps climbing while current
+					// contention stays at zero, the kernel is refusing to schedule the workload and the
+					// reason is in these rows, not in the workload's own code.
+					s_label_stuck_us = now_us;
+
+					prof_log.error("LABEL 0x%x STUCK at 0x%x for %.1fs | %s", label, s_label_prev,
+						(now_us - s_label_last_us) / 1000000.0, spurs_state());
+				}
+			}
 		}
 
 		u32 pc = 0;
@@ -232,6 +370,31 @@ namespace rsx::prof
 				pc = ppu.cia & ~0x3fu;
 			}
 		});
+
+		{
+			bool deep = false;
+			const u64 lf = g_last_frame_tsc.load();
+			const u64 fq = utils::get_tsc_freq();
+
+			if (lf && fq)
+			{
+				const u64 nw = utils::get_tsc();
+				deep = nw > lf && ((nw - lf) * 1000ull) / fq >= 1000;
+			}
+
+			if (deep)
+			{
+				g_run_ticks++;
+
+				idm::select<named_thread<ppu_thread>>([](u32 tid, ppu_thread& p)
+				{
+					if (!(p.state.load() & cpu_flag::wait))
+					{
+						record_running(p.cia, tid);
+					}
+				});
+			}
+		}
 
 		// Slow frame in progress right now? Computed before the SPU walk so both histograms can
 		// use it.
@@ -258,6 +421,11 @@ namespace rsx::prof
 
 			idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
 			{
+				if (spu.spurs_addr && spu.spurs_addr != 0u - 0x80u)
+				{
+					g_spurs_addr_seen = spu.spurs_addr;
+				}
+
 				const auto st = spu.state.load();
 
 				total++;
@@ -615,9 +783,276 @@ namespace rsx::prof
 
 			// cia is the guest PC. Across samples it says whether a running thread is
 			// making progress or spinning on the same handful of instructions.
-			fmt::append(out, "\n    PPU 0x%07x %-24s [%s] cia=0x%08x %s%s", id,
+			// Argument registers for a thread parked in a syscall.
+			//
+			// "in=sys_cond_wait" says a thread is blocked but not on WHAT, and on a hang the identity
+			// of that object is the whole question -- it is the only way to work back from a blocked
+			// waiter to whoever was supposed to signal it. lv2 takes the object id in r3, so r3-r5
+			// name the condvar, semaphore, mutex or queue. Printed only for threads actually inside a
+			// syscall, where those registers still hold the arguments.
+			std::string args;
+
+			if (inside)
+			{
+				fmt::append(args, " r3=0x%x r4=0x%x r5=0x%x", ppu.gpr[3], ppu.gpr[4], ppu.gpr[5]);
+			}
+
+			fmt::append(out, "\n    PPU 0x%07x %-24s [%s] cia=0x%08x %s%s%s", id,
 				name ? name->c_str() : "?", ppu.state.load(), ppu.cia,
-				inside ? "in=" : "last=", func ? func : "");
+				inside ? "in=" : "last=", func ? func : "", args);
+		});
+
+		// Which lv2 object each blocked thread is actually parked on.
+		//
+		// "in=sys_cond_wait" names the syscall, not the object, and the argument registers do not
+		// survive the wait -- lv2 overwrites r3 with the pending return value, so a blocked waiter
+		// reports r3=0. The objects themselves are the only remaining source: each keeps an
+		// intrusive queue of the threads parked on it, so walking those queues is the one way to get
+		// from "this thread is blocked" to "and THIS is what has to signal it".
+		//
+		// The state matters as much as the identity. A condvar names its mutex; a mutex names its
+		// OWNER. A thread parked on a condvar whose mutex is held by another parked thread is a
+		// deadlock, stated outright -- and that is invisible from the thread list alone.
+		// Is a guest message dialog currently up?
+		//
+		// The hang always begins immediately after a cellMsgDialogOpen2 -- the trophy check, the
+		// autosave notice, "Load complete." -- and those dialogs are RSX OVERLAYS, drawn during
+		// flip. A dialog that needs an OK press but is never drawn cannot be dismissed, and the
+		// game waits on it forever while the last frame stays on screen and audio keeps playing.
+		// That is the shape of this bug, so say outright whether one is active.
+		if (auto mgr = g_fxo->try_get<rsx::overlays::display_manager>())
+		{
+			if (auto dlg = mgr->get<rsx::overlays::message_dialog>())
+			{
+				fmt::append(out, "\n    -- MESSAGE DIALOG IS ACTIVE (uid=%u, visible=%d) --", dlg->uid, dlg->visible ? 1 : 0);
+			}
+			else
+			{
+				fmt::append(out, "\n    -- no message dialog active --");
+			}
+		}
+
+		fmt::append(out, "\n    -- lv2 waiters --");
+
+		idm::select<lv2_obj, lv2_cond>([&out](u32 id, lv2_cond& c)
+		{
+			std::string w;
+			u32 n = 0;
+
+			for (auto cpu = +c.sq; cpu && n < 32; cpu = cpu->next_cpu, n++)
+			{
+				fmt::append(w, " 0x%x", cpu->id);
+			}
+
+			if (!w.empty())
+			{
+				const u64 last = c.dbg_last_signal_us.load();
+
+				fmt::append(out, "\n      cond  0x%08x mutex=0x%08x waiters:%s | signals=%u last_by=0x%x last=%.1fs ago",
+					id, c.mtx_id, w, +c.dbg_signal_count, +c.dbg_last_signaller,
+					last ? (get_system_time() - last) / 1000000.0 : -1.0);
+			}
+		});
+
+		// Semaphores that have a waiter but no recent post, gathered for a second pass. The
+		// producer's PC has to be resolved outside the walk; see the note inside.
+		struct stale_sema_t
+		{
+			u32 sema_id;
+			u32 waiter_id;
+			u32 waiter_cia;
+			u32 poster_id;
+			u32 poster_cia;
+			u32 post_lr;   // guest call site of the last successful post
+		};
+
+		std::vector<stale_sema_t> stale;
+
+		idm::select<lv2_obj, lv2_sema>([&out, &stale](u32 id, lv2_sema& sem)
+		{
+			std::string w;
+			u32 n = 0;
+
+			for (auto cpu = +sem.sq; cpu && n < 32; cpu = cpu->next_cpu, n++)
+			{
+				fmt::append(w, " 0x%x", cpu->id);
+			}
+
+			if (!w.empty())
+			{
+				const u64 last = sem.dbg_last_post_us.load();
+				const u64 age = last ? (get_system_time() - last) : 0;
+
+				fmt::append(out, "\n      sema  0x%08x val=%d waiters:%s | posts=%u last_poster=0x%x last_post=%.1fs ago",
+					id, sem.val.load(), w, +sem.dbg_post_count, +sem.dbg_last_poster, last ? age / 1000000.0 : -1.0);
+
+				// A semaphore with a waiter that nobody has posted for seconds, while the rest of
+				// the process ticks normally, is the broken producer/consumer pair -- and it is
+				// the only thing on this hang that is actually stuck. Disassemble BOTH ends: the
+				// consumer parked on it, and the producer that stopped posting. The registers are
+				// gone by now (lv2 overwrites r3), but the code is not, and the instructions
+				// around each PC say what the pair is exchanging.
+				// Stale OR never posted, recorded here and resolved AFTER this walk.
+				//
+				// This used to call idm::select for the producer thread from INSIDE this one.
+				// id_manager::g_mutex is writer-preferring, so a nested reader blocks as soon as
+				// any writer queues while the outer reader still holds it -- a recursive-reader
+				// deadlock that froze the VBlank thread and the sampler, and made every capture
+				// come back empty. Never nest idm::select.
+				if (!w.empty() && (!last || age > 5'000'000))
+				{
+					for (auto cpu = +sem.sq; cpu; cpu = cpu->next_cpu)
+					{
+						stale.push_back({ id, cpu->id, static_cast<ppu_thread*>(cpu)->cia, +sem.dbg_last_poster, 0, +sem.dbg_last_post_lr });
+						break;
+					}
+				}
+			}
+		});
+
+		// Second pass, OUTSIDE every idm walk: resolve each stale semaphore's producer PC and
+		// disassemble both ends of the broken handshake.
+		//
+		// This must not run inside the semaphore walk. id_manager::g_mutex is writer-preferring,
+		// so taking a second reader while the first is still held deadlocks the moment any writer
+		// queues -- which froze the VBlank thread and the sampler and made several captures come
+		// back empty with no reports at all.
+		if (!stale.empty())
+		{
+			idm::select<named_thread<ppu_thread>>([&stale](u32 tid, ppu_thread& pp)
+			{
+				for (auto& e : stale)
+				{
+					if (e.poster_id == tid)
+					{
+						e.poster_cia = pp.cia;
+					}
+				}
+			});
+
+			PPUDisAsm da(cpu_disasm_mode::normal, vm::g_sudo_addr);
+
+			const auto dump_around = [&](const char* who, u32 tid, u32 at)
+			{
+				if (!at || (at & 3))
+				{
+					return;
+				}
+
+				fmt::append(out, "\n        %s 0x%07x @ 0x%08x:", who, tid, at);
+
+				for (u32 a2 = (at < 0x20 ? 0 : at - 0x20); a2 <= at + 0x1c; a2 += 4)
+				{
+					if (!vm::check_addr(a2, vm::page_readable, 4))
+					{
+						continue;
+					}
+
+					da.disasm(a2);
+					fmt::append(out, "\n          %s %s", a2 == at ? "->" : "  ", da.last_opcode);
+				}
+			};
+
+			for (const auto& e : stale)
+			{
+				fmt::append(out, "\n      STALE sema 0x%08x (waiter 0x%07x, producer 0x%07x, last post from 0x%08x):", e.sema_id, e.waiter_id, e.poster_id, e.post_lr);
+
+				// The call site that used to post this. Disassembling here shows the branch that
+				// stopped being taken, which is the actual question on a producer that goes quiet.
+				// A WIDE window here on purpose. The post itself is two instructions; what matters
+				// is the branch upstream that decides whether control ever reaches it, since the
+				// producer is alive and simply stops taking that path.
+				if (e.post_lr && !(e.post_lr & 3))
+				{
+					PPUDisAsm wd(cpu_disasm_mode::normal, vm::g_sudo_addr);
+
+					fmt::append(out, "\n        post-site region 0x%08x-0x%08x:", e.post_lr - 0x120, e.post_lr + 0x10);
+
+					for (u32 a3 = e.post_lr - 0x120; a3 <= e.post_lr + 0x10; a3 += 4)
+					{
+						if (!vm::check_addr(a3, vm::page_readable, 4))
+						{
+							continue;
+						}
+
+						wd.disasm(a3);
+						fmt::append(out, "\n          %s %s", a3 == e.post_lr ? "->" : "  ", wd.last_opcode);
+					}
+				}
+				dump_around("consumer", e.waiter_id, e.waiter_cia);
+
+				if (e.poster_id)
+				{
+					dump_around("producer", e.poster_id, e.poster_cia);
+				}
+			}
+		}
+
+		// LIGHTWEIGHT mutexes and condvars, which were the blind spot.
+		//
+		// The heavy cond/sema/mutex map above never covered these, and on this title mainThread
+		// was caught RUNNING with last=_sys_lwmutex_lock while the net workers sat in
+		// _sys_lwcond_queue_wait -- i.e. the interesting waits were happening entirely in objects
+		// this dump could not see. A lwmutex keeps its owner in a GUEST-side control block, so it
+		// names the holder directly, which is the one thing needed to turn "blocked" into a chain.
+		idm::select<lv2_obj, lv2_lwmutex>([&out](u32 id, lv2_lwmutex& lw)
+		{
+			std::string w;
+			u32 n = 0;
+
+			for (auto cpu = lw.load_sq(); cpu && n < 32; cpu = cpu->next_cpu, n++)
+			{
+				fmt::append(w, " 0x%x", cpu->id);
+			}
+
+			u32 owner = 0;
+			u32 waiter = 0;
+
+			if (lw.control && vm::check_addr(lw.control.addr(), vm::page_readable, sizeof(sys_lwmutex_t)))
+			{
+				const auto lv = lw.control->lock_var.load();
+				owner = lv.owner;
+				waiter = lv.waiter;
+			}
+
+			if (!w.empty() || owner)
+			{
+				fmt::append(out, "\n      lwmutex 0x%08x owner=0x%x waiter=0x%x lwcond_waiters=%d sq:%s",
+					id, owner, waiter, +lw.lwcond_waiters, w.empty() ? " -" : w.c_str());
+			}
+		});
+
+		idm::select<lv2_obj, lv2_lwcond>([&out](u32 id, lv2_lwcond& lc)
+		{
+			std::string w;
+			u32 n = 0;
+
+			for (auto cpu = +lc.sq; cpu && n < 32; cpu = cpu->next_cpu, n++)
+			{
+				fmt::append(w, " 0x%x", cpu->id);
+			}
+
+			if (!w.empty())
+			{
+				fmt::append(out, "\n      lwcond  0x%08x lwmutex=0x%08x waiters:%s", id, lc.lwid, w);
+			}
+		});
+
+		idm::select<lv2_obj, lv2_mutex>([&out](u32 id, lv2_mutex& m)
+		{
+			const auto ctrl = m.control.load();
+			std::string w;
+			u32 n = 0;
+
+			for (auto cpu = +ctrl.sq; cpu && n < 32; cpu = cpu->next_cpu, n++)
+			{
+				fmt::append(w, " 0x%x", cpu->id);
+			}
+
+			if (!w.empty() || ctrl.owner)
+			{
+				fmt::append(out, "\n      mutex 0x%08x owner=0x%x locks=%u waiters:%s", id, ctrl.owner, m.lock_count.load(), w.empty() ? " -" : w.c_str());
+			}
 		});
 
 		// PPUs waiting on a semaphore are usually waiting for an SPU to post it, so the SPU
@@ -639,6 +1074,28 @@ namespace rsx::prof
 			// its wakeup was lost -- it will now sleep forever on a line that moved on without it.
 			// That is a different failure from "nothing ever writes the block", and only this
 			// comparison tells the two apart.
+			// Contents of the line the SPU has reserved -- normally the SPURS control block.
+			//
+			// The kernels spin in their scheduler polling this line for work. Dumping it answers
+			// the question the PC histogram cannot: is a workload actually marked ready and being
+			// ignored, or did the PPU never queue one? A previous investigation on another title
+			// settled exactly this way ("nothing ever writes the SPURS control block"), so print
+			// the bytes rather than infer them.
+			std::string line;
+
+			if (const u32 ra = spu.raddr; ra && vm::check_addr(ra, vm::page_readable, 128))
+			{
+				for (u32 i = 0; i < 32; i++)
+				{
+					fmt::append(line, "%02x", vm::read8(ra + i));
+
+					if ((i & 7) == 7)
+					{
+						line += ' ';
+					}
+				}
+			}
+
 			std::string rsv;
 
 			if (const u32 raddr = spu.raddr)
@@ -646,12 +1103,38 @@ namespace rsx::prof
 				const u64 live = vm::reservation_acquire(raddr) & ~127ull;
 				const u64 held = spu.rtime & ~127ull;
 
-				fmt::append(rsv, " raddr=0x%08x rtime=%u live=%u%s", raddr, held, live, live != held ? " MOVED-LOST-WAKEUP" : "");
+				fmt::append(rsv, " raddr=0x%08x rtime=%u live=%u%s", raddr, held, live, live != held ? " MOVED" : "");
+
+				if (!line.empty())
+				{
+					fmt::append(rsv, "\n            line: %s", line);
+				}
 			}
 
 			fmt::append(out, "\n    SPU 0x%07x %-24s [%s] pc=0x%05x %s%s", id,
 				name ? name->c_str() : "?", spu.state.load(), spu.pc,
 				spu.current_func ? spu.current_func : "", rsv);
+
+			// Disassemble the loop a RUNNING SPURS kernel is executing.
+			//
+			// On this hang three of five kernels never stop, issuing millions of conditional
+			// stores a second against the SPURS control block while no workload is ever
+			// dispatched -- so the question is what the guest's own libsre scheduler is testing
+			// each iteration. Only for threads not in a wait: a parked one's pc is its park site
+			// and says nothing.
+			if (!(spu.state.load() & cpu_flag::wait))
+			{
+				SPUDisAsm sd(cpu_disasm_mode::normal, reinterpret_cast<const u8*>(spu.ls));
+
+				const u32 at = spu.pc;
+				const u32 lo = at < 0x18 ? 0 : at - 0x18;
+
+				for (u32 a2 = lo; a2 <= at + 0x14 && a2 < SPU_LS_SIZE; a2 += 4)
+				{
+					sd.disasm(a2);
+					fmt::append(out, "\n          %s 0x%05x  %s", a2 == at ? "->" : "  ", a2, sd.last_opcode);
+				}
+			}
 		});
 
 		return out;
@@ -911,10 +1394,20 @@ namespace rsx::prof
 
 		g_last_stall_check = now;
 
-		if (g_acc.frames != g_stall_frames)
+		// Fire on "barely moving", not only on "stopped".
+		//
+		// This used to require ZERO frames in the window, which silently excluded an entire
+		// failure mode: Soul Calibur V's trophy-check hang keeps completing frames -- it is still
+		// drawing the dialog -- so a zero-frame test never fires there, and every diagnostic in
+		// this file has therefore only ever observed the other state. Fewer than ~2 fps is not a
+		// game that is running, and the guest counters, lv2 waiter map and FIFO ring are exactly
+		// as meaningful there.
+		const u64 advanced = g_acc.frames - g_stall_frames;
+		g_stall_frames = g_acc.frames;
+
+		if (advanced > 10)
 		{
-			// Frames are still arriving, so tick_frame is doing the reporting.
-			g_stall_frames = g_acc.frames;
+			// Healthy enough; tick_frame is doing the reporting.
 			g_stall_started = now;
 			return false;
 		}
@@ -953,7 +1446,7 @@ namespace rsx::prof
 
 		const u64 ev[5] = { +g_spu_event_throw_ok, +g_spu_event_throw_drop, +g_spu_event_throw_again, +g_spu_event_setbit_ok, +g_spu_event_setbit_again };
 
-		prof_log.error("RSX has not finished a frame in %.1fs; current bucket '%s', in it for %.2fs\n\tsince last report: PUTLLC +%u (barrier +%u) | SPU events throw +%u dropped +%u retry +%u, setbit +%u retry +%u\n\t%s%s",
+		prof_log.error("RSX barely advancing: %.1fs since progress reset; current bucket '%s', in it for %.2fs\n\tsince last report: PUTLLC +%u (barrier +%u) | SPU events throw +%u dropped +%u retry +%u, setbit +%u retry +%u\n\t%s%s",
 			static_cast<double>(now - g_stall_started) / static_cast<double>(freq),
 			name_of(g_current),
 			static_cast<double>(now - g_last_switch) / static_cast<double>(freq),
@@ -966,6 +1459,128 @@ namespace rsx::prof
 		// Attempts near zero means the vblank source itself has stopped producing; attempts climbing
 		// alongside busy-retries means the guest is not draining the queue. Neither is visible in any
 		// other counter, and both present as an idle RSX with an empty FIFO.
+		// unsent_gcm_events is a LATCH, not a transient. send_event records any non-vblank event
+		// it failed to deliver here, and nothing clears it during play -- the only reset is
+		// exchange(0) when the RSX thread starts. Meanwhile the flip-notification loop in
+		// rsx::thread::flip bails out early whenever it is set ("TODO: A proper fix"), so once a
+		// single flip event fails, EVERY later flip notification is abandoned and the guest's
+		// VSync semaphore is never posted again. Printing it says whether that has happened.
+		if (const auto r = rsx::get_current_renderer())
+		{
+			prof_log.error("\tunsent_gcm_events=0x%x  (non-zero = flip notifications are being abandoned)", r->unsent_gcm_events.load());
+		}
+
+		// The stall PC histogram this file already keeps, surfaced from INSIDE the stall.
+		//
+		// It is accumulated whenever a slow frame is in progress and reported in the per-300-frame
+		// profile -- which is exactly the report that cannot fire here, because frames have
+		// stopped completing by definition. On this hang every thread and every sync object
+		// measures healthy (the gcm thread posts VSync continuously, mainThread signals its own
+		// condvar thousands of times, the draw thread polls every 30us) while the FIFO does not
+		// move for minutes, so the remaining question is what the RUNNING code is looping on.
+		{
+			std::string hot;
+			std::vector<pc_bucket> sorted(std::begin(g_stall_pc), std::end(g_stall_pc));
+
+			std::sort(sorted.begin(), sorted.end(), [](const pc_bucket& x, const pc_bucket& y) { return x.hits > y.hits; });
+
+			for (const auto& b : sorted)
+			{
+				if (!b.hits)
+				{
+					break;
+				}
+
+				fmt::append(hot, "\n      0x%08x  %4.1f%%  (%u)", b.pc, g_stall_pc_total ? b.hits * 100.0 / g_stall_pc_total : 0.0, b.hits);
+			}
+
+			if (!hot.empty())
+			{
+				prof_log.error("\tguest PCs while stalled (%u samples):%s", g_stall_pc_total, hot);
+			}
+		}
+
+		// Which PPU threads actually execute during the stall, and where.
+		{
+			std::vector<std::tuple<u32, u32, u32>> top;
+
+			for (auto& b : g_run_hist)
+			{
+				if (const u32 h = b.hits.load())
+				{
+					top.emplace_back(h, b.pc.load(), b.tid.load());
+				}
+			}
+
+			std::sort(top.begin(), top.end(), [](auto& x, auto& y) { return std::get<0>(x) > std::get<0>(y); });
+
+			std::string hot;
+
+			for (usz i = 0; i < top.size() && i < 14; i++)
+			{
+				fmt::append(hot, "\n      thread=0x%x  pc=0x%08x  hits=%u", std::get<2>(top[i]), std::get<1>(top[i]), std::get<0>(top[i]));
+			}
+
+			if (!hot.empty())
+			{
+				prof_log.error("\trunning PPUs during stall (%u ticks sampled):%s", +g_run_ticks, hot);
+			}
+		}
+
+		// The last FIFO methods executed before the guest went quiet.
+		{
+			const u32 end = g_fifo_ring_pos;
+			std::string tail;
+
+			for (u32 i = 0; i < fifo_ring_size; i++)
+			{
+				const auto& r = g_fifo_ring[(end + i) % fifo_ring_size];
+
+				if (!r.reg && !r.arg)
+				{
+					continue;
+				}
+
+				std::string scratch;
+				const auto nm = rsx::get_method_name(r.reg, scratch);
+
+				fmt::append(tail, "\n      0x%04x %-46s arg=0x%08x", r.reg << 2, nm.first, r.arg);
+			}
+
+			if (!tail.empty())
+			{
+				prof_log.error("\tlast FIFO methods executed:%s", tail);
+			}
+		}
+
+		// The SPU half of the same picture, and on this title it is the half that matters: during
+		// the stall the PPUs are idle ~95% of sampler ticks while the SPUs issue ~2.2 MILLION
+		// conditional stores a second. Whatever the guest is waiting for is being computed -- or
+		// not computed -- here.
+		{
+			std::vector<pc_bucket> sorted(std::begin(g_stall_spu_pc), std::end(g_stall_spu_pc));
+
+			std::sort(sorted.begin(), sorted.end(), [](const pc_bucket& x, const pc_bucket& y) { return x.hits > y.hits; });
+
+			std::string hot;
+
+			for (const auto& b : sorted)
+			{
+				if (!b.hits)
+				{
+					break;
+				}
+
+				fmt::append(hot, "\n      0x%05x  %4.1f%%  (%u)", b.pc, g_stall_spu_pc_total ? b.hits * 100.0 / g_stall_spu_pc_total : 0.0, b.hits);
+			}
+
+			if (!hot.empty())
+			{
+				prof_log.error("\tSPU PCs while stalled (%u samples) | exec=%u wait=%u susp=%u of %u ticks:%s",
+					g_stall_spu_pc_total, g_stall_spu_exec, g_stall_spu_wait, g_stall_spu_susp, g_stall_spu_ticks, hot);
+			}
+		}
+
 		prof_log.error("\tRSX->guest queue: id=0x%x pending=%u/32 ppu_waiting=%u", +g_rsx_q_id, +g_rsx_q_pending, +g_rsx_q_waiter);
 
 		prof_log.error("\tRSX->guest events since last report: attempted +%u, dropped +%u, busy-retries +%u, aborted +%u",
@@ -1215,11 +1830,14 @@ namespace rsx::prof
 				u64 fails = 0;
 				u64 barriers = 0;
 
+				u64 barriers_spurs = 0;
+
 				idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
 				{
 					calls += spu.putllc_calls;
 					fails += spu.putllc_fails;
 					barriers += spu.putllc_barrier;
+					barriers_spurs += spu.putllc_barrier_spurs;
 				});
 
 				const u64 dc = calls - g_putllc_calls_prev;
@@ -1234,7 +1852,19 @@ namespace rsx::prof
 
 					// Rate only. The per-call cost belongs to a profiler, not to a clock read on a path
 					// that runs two million times a second -- see the note in do_putllc.
-					prof_log.success("\t    of those %.0f/frame took vm::writer_lock", static_cast<double>(db) / frames);
+					const u64 dbs = barriers_spurs - g_putllc_barrier_spurs_prev;
+
+					// vm::writer_lock stamps cpu_flag::memory on EVERY registered PPU and spins until each
+					// parks, so its rate -- not the PUTLLC rate -- is what starves the guest's PPU threads.
+					// The SPURS split says whether do_putllc's spurs_addr fast path is actually engaging;
+					// that path is gated on spu_accurate_reservations, so print the gate next to it.
+					prof_log.success("\t    of those %.0f/frame took vm::writer_lock (%.0f/frame on the SPURS block, accurate_reservations=%s)",
+						static_cast<double>(db) / frames, static_cast<double>(dbs) / frames,
+						g_cfg.core.spu_accurate_reservations ? "ON" : "off");
+
+					g_putllc_barrier_spurs_prev = barriers_spurs;
+
+					prof_log.success("\t    barrier sites (addr:count):%s", spu_putllc_barrier_sites());
 
 					const u64 ev[5] = { +g_spu_event_throw_ok, +g_spu_event_throw_drop, +g_spu_event_throw_again, +g_spu_event_setbit_ok, +g_spu_event_setbit_again };
 

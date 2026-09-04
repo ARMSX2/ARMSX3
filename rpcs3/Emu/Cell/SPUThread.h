@@ -809,6 +809,8 @@ public:
 	u64 putllc_calls = 0;
 	u64 putllc_fails = 0;
 	u64 putllc_barrier = 0; // conditional stores that reached the heavyweight vm::writer_lock
+	u64 putllc_barrier_spurs = 0; // ...of those, ones on this thread's own SPURS control block
+
 	u64 putllc_notify = 0;
 	u64 putllc_suppressed = 0; // SPURS heuristic decided the waiters did not need waking
 
@@ -1043,3 +1045,6 @@ public:
 		}
 	}
 };
+
+// The lines that actually reach do_putllc's vm::writer_lock, most-hammered first.
+std::string spu_putllc_barrier_sites();

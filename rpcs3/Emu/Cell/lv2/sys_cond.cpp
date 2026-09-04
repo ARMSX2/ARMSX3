@@ -8,6 +8,7 @@
 #include "Emu/Cell/PPUThread.h"
 
 #include "sys_cond.h"
+#include "Emu/Cell/timers.hpp"
 
 #include "util/asm.hpp"
 
@@ -158,6 +159,13 @@ error_code sys_cond_destroy(ppu_thread& ppu, u32 cond_id)
 
 error_code sys_cond_signal(ppu_thread& ppu, u32 cond_id)
 {
+	if (const auto c = idm::check_unlocked<lv2_obj, lv2_cond>(cond_id))
+	{
+		c->dbg_last_signal_us = get_system_time();
+		c->dbg_last_signaller = ppu.id;
+		c->dbg_signal_count++;
+	}
+
 	ppu.state += cpu_flag::wait;
 
 	sys_cond.trace("sys_cond_signal(cond_id=0x%x)", cond_id);
@@ -230,6 +238,13 @@ error_code sys_cond_signal(ppu_thread& ppu, u32 cond_id)
 
 error_code sys_cond_signal_all(ppu_thread& ppu, u32 cond_id)
 {
+	if (const auto c = idm::check_unlocked<lv2_obj, lv2_cond>(cond_id))
+	{
+		c->dbg_last_signal_us = get_system_time();
+		c->dbg_last_signaller = ppu.id;
+		c->dbg_signal_count++;
+	}
+
 	ppu.state += cpu_flag::wait;
 
 	sys_cond.trace("sys_cond_signal_all(cond_id=0x%x)", cond_id);
@@ -312,6 +327,13 @@ error_code sys_cond_signal_all(ppu_thread& ppu, u32 cond_id)
 
 error_code sys_cond_signal_to(ppu_thread& ppu, u32 cond_id, u32 thread_id)
 {
+	if (const auto c = idm::check_unlocked<lv2_obj, lv2_cond>(cond_id))
+	{
+		c->dbg_last_signal_us = get_system_time();
+		c->dbg_last_signaller = ppu.id;
+		c->dbg_signal_count++;
+	}
+
 	ppu.state += cpu_flag::wait;
 
 	sys_cond.trace("sys_cond_signal_to(cond_id=0x%x, thread_id=0x%x)", cond_id, thread_id);

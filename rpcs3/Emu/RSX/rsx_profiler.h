@@ -522,6 +522,23 @@ namespace rsx::prof
 
 	// Statistical guest profiler. Runs on its own thread so samples are not phase-locked to
 	// the frame clock; start_sampler() is idempotent.
+	// Ring of the last FIFO methods the RSX executed.
+	//
+	// On this hang the guest stops submitting while every thread and sync object stays healthy, so
+	// the question is what it set up immediately before going quiet. The FIFO dump already shows
+	// the last command word (always 0x00041d70 = NV4097_BACK_END_WRITE_SEMAPHORE_RELEASE here);
+	// the ring gives the sequence around it, which is what says WHICH label and what the guest is
+	// now waiting to observe.
+	struct fifo_rec_t
+	{
+		u32 reg;
+		u32 arg;
+	};
+
+	inline constexpr u32 fifo_ring_size = 64;
+	extern fifo_rec_t g_fifo_ring[fifo_ring_size];
+	extern u32 g_fifo_ring_pos; // racy by design; a torn slot only costs one ring entry
+
 	void sample_guest_pc();
 	void start_sampler();
 

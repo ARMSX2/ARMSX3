@@ -1061,6 +1061,11 @@ namespace rsx
 
 			if (auto method = methods[reg])
 			{
+				{
+					const u32 slot = rsx::prof::g_fifo_ring_pos++ % rsx::prof::fifo_ring_size;
+					rsx::prof::g_fifo_ring[slot] = { reg, value };
+				}
+
 				// Splits the handler bodies out of fifo_decode, which is the enclosing scope of
 				// the whole loop and therefore holds both. Arkham City spends 38.5 ms a frame in
 				// there at 164 ns a dispatch against Sonic's 45 ns on the same machinery, so the

@@ -9344,6 +9344,25 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				// match and simply keeps the old path. The sibling pattern at 0x17ff8 was also
 				// refused and is deliberately NOT listed: it has not been disassembled, and the
 				// safety condition here is a property of the code, not of the function's name.
+				// NOTE: PUTLLC16's success notify is aimed at the wrong address.
+				//
+				// PUTLLC16's success path notifies on the RESERVATION COUNTER word
+				// (SPULLVMRecompiler.cpp:1464 passes rptr, built from reserv_base_addr =
+				// vm::g_reservations), but every reservation waiter in this tree parks on
+				// g_resrv_waiters_count[...].wait_flag instead. atomic_wait_engine hashes the address,
+				// so that notify and those waits never meet: a PUTLLC16 commit advances the counter and
+				// changes the line while no parked SPU or PPU is woken, and they recover only via their
+				// 50-200us poll timeouts.
+				//
+				// Upstream never trips this because its whitelist holds only a "disabled_"-prefixed
+				// placeholder, so PUTLLC16 is never installed. Admitting this hash made the path LIVE,
+				// and the gate is a hash of guest bytes -- so every title shipping the same cellSync
+				// build inherits it, not just the one it was verified against.
+				//
+				// KEPT: withdrawing it was measured against Soul Calibur V's hang and changed nothing,
+				// and Sonic '06 measured faster WITH it -- waiters still recover on their 50-200us poll
+				// timeouts, so the missed wake costs latency rather than correctness. The notify target
+				// is still wrong and should be fixed at the source rather than by dropping this entry.
 				"WA0WuYLrZXrcc6Jyw5EMgYRV2bwo"sv,
 			};
 

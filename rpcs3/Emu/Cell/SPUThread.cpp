@@ -3653,6 +3653,68 @@ atomic_t<u64> g_spu_event_throw_again{0};
 atomic_t<u64> g_spu_event_setbit_ok{0};
 atomic_t<u64> g_spu_event_setbit_again{0};
 
+namespace
+{
+	// Which lines reach the barrier. At tens of thousands per frame this is a livelock, not
+	// contention noise, and naming the line names the object that is livelocking. Deliberately
+	// racy: a histogram does not need to be exact, and this runs about a million times a second,
+	// so anything with a lock or a clock read here costs more than what it measures.
+	struct putllc_site_t
+	{
+		atomic_t<u32> addr;
+		atomic_t<u32> count;
+	};
+
+	std::array<putllc_site_t, 64> g_putllc_sites{};
+}
+
+void record_putllc_barrier_site(u32 addr)
+{
+	const u32 line = addr & -128;
+
+	for (u32 probe = 0; probe < 8; probe++)
+	{
+		auto& slot = g_putllc_sites[((line >> 7) + probe) % g_putllc_sites.size()];
+		const u32 have = slot.addr.load();
+
+		if (have == line)
+		{
+			slot.count++;
+			return;
+		}
+
+		if (!have && slot.addr.compare_and_swap_test(0, line))
+		{
+			slot.count++;
+			return;
+		}
+	}
+}
+
+std::string spu_putllc_barrier_sites()
+{
+	std::vector<std::pair<u32, u32>> v;
+
+	for (auto& slot : g_putllc_sites)
+	{
+		if (const u32 c = slot.count.load())
+		{
+			v.emplace_back(c, slot.addr.load());
+		}
+	}
+
+	std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.first > b.first; });
+
+	std::string out;
+
+	for (usz i = 0; i < v.size() && i < 8; i++)
+	{
+		fmt::append(out, " 0x%08x:%u", v[i].second, v[i].first);
+	}
+
+	return out;
+}
+
 bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 {
 	perf_meter<"PUTLLC-"_u64> perf0(nullptr);
@@ -3708,6 +3770,7 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			return false;
 		}
 
+
 		static const auto cast_as = [](void* ptr, usz pos){ return reinterpret_cast<u128*>(ptr) + pos; };
 		static const auto cast_as_const = [](const void* ptr, usz pos){ return reinterpret_cast<const u128*>(ptr) + pos; };
 
@@ -3758,6 +3821,16 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 		// (__kernel_clock_gettime, 7.9%, above vm::writer_lock itself at 7.3%), so the measurement
 		// outweighed what it measured. Use simpleperf for the cost and this counter for the rate.
 		putllc_barrier++;
+
+		// Of those, the ones landing on this thread's own SPURS control block -- the exact case the
+		// fast path above exists to keep OUT of here. If this tracks putllc_barrier, then the barrier
+		// storm is the SPURS kernel's own atomics and the fast path is not engaging.
+		if (addr - spurs_addr <= 0x80)
+		{
+			putllc_barrier_spurs++;
+		}
+
+		record_putllc_barrier_site(addr);
 
 		const bool success = [&]()
 		{

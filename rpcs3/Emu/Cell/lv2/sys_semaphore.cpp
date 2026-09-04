@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "sys_semaphore.h"
+#include "Emu/Cell/timers.hpp"
 #include "Emu/RSX/rsx_profiler.h"
 
 #include "Emu/IdManager.h"
@@ -336,6 +337,11 @@ error_code sys_semaphore_post(ppu_thread& ppu, u32 sem_id, s32 count)
 	{
 		return CELL_EINVAL;
 	}
+
+	sem->dbg_last_post_us = get_system_time();
+	sem->dbg_last_poster = ppu.id;
+	sem->dbg_last_post_lr = static_cast<u32>(ppu.lr);
+	sem->dbg_post_count++;
 
 	lv2_obj::notify_all_t notify;
 
