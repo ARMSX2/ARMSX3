@@ -26,6 +26,8 @@
 #include "Emu/Io/PadHandler.h"
 #include "Emu/Io/pad_config.h"
 #include "Emu/System.h"
+#include "Emu/RSX/Overlays/overlays.h"
+#include "Emu/RSX/Overlays/overlay_manager.h"
 #include "Emu/system_config.h"
 #include "Emu/RSX/Overlays/HomeMenu/overlay_home_menu.h"
 #include "Emu/RSX/Overlays/overlay_message.h"
@@ -699,6 +701,43 @@ void pad_thread::operator()()
 			}
 
 			m_ps_button_pressed = ps_button_pressed;
+		}
+
+		// Keep native-UI overlays presentable when the guest has stopped rendering.
+		//
+		// An overlay is only ever drawn during a GUEST flip. That is fine while a game keeps
+		// rendering, but cellMsgDialogOpen2 is non-blocking: a title may park its render loop and
+		// wait for the dialog's callback, because on real hardware the SYSTEM composites that
+		// dialog independently of the game. Here nothing does, so the dialog is created, marked
+		// visible, and never presented -- it cannot be seen, therefore cannot be dismissed, and
+		// the game waits forever on a callback that can never fire.
+		//
+		// Measured on Soul Calibur V (NPEB01363/BLUS30736): the hang begins on the instruction
+		// after cellMsgDialogOpen2 ("Load complete.", type=0xa2 = BUTTON_TYPE_OK), with the
+		// dialog reporting active and visible for the whole stall, the FIFO drained
+		// (get==put==published), every thread and lv2 object healthy, and audio still playing.
+		// The trophy-check and autosave dialogs are the same shape, which is why the hang point
+		// moved between runs.
+		//
+		// set_native_ui_flip() already exists for exactly this and was requested for the home
+		// menu and for resume-from-pause -- but nothing requested it for a game's own dialogs.
+		// overlay::refresh() carries its own rate limit (min_refresh_duration_us measured against
+		// last_host_flip_timestamp), so asking each visible overlay to refresh costs a flip only
+		// when one is genuinely due; a game that is still rendering normally is unaffected.
+		//
+		// The pad thread is the right home for it: it runs at a fixed cadence independent of the
+		// guest, which is precisely the property the RSX flip path lacks here.
+		if (auto manager = g_fxo->try_get<rsx::overlays::display_manager>(); manager && manager->has_visible())
+		{
+			std::lock_guard lock(*manager);
+
+			for (const auto& view : manager->get_views())
+			{
+				if (view)
+				{
+					view->refresh();
+				}
+			}
 		}
 
 		// Handle paused emulation (if triggered by home menu).
