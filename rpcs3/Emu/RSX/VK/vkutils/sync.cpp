@@ -636,6 +636,17 @@ namespace vk
 
 				if (status != VK_NOT_READY)
 				{
+					if (status == VK_ERROR_DEVICE_LOST)
+					{
+						// Measured: with only the present/event/query sites latched, the loss was
+						// latched correctly and then this fence poll killed the RSX thread 4 ms
+						// later anyway, so on_exit() was still skipped and the savestate aborted
+						// with "Aborting unsaveable state". Every wait in the RSX loop has to
+						// return rather than die, not just the ones that observe the loss first.
+						rsx::request_device_lost_shutdown("waiting on a fence");
+						return status;
+					}
+
 					die_with_error(status);
 					return status;
 				}

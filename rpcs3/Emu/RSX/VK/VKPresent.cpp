@@ -1333,6 +1333,13 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			continue;
 		}
 		default:
+			if (status == VK_ERROR_DEVICE_LOST)
+			{
+				// Same reason as the present arm below: dying here skips on_exit().
+				rsx::request_device_lost_shutdown("acquiring a swapchain image");
+				return;
+			}
+
 			vk::die_with_error(status);
 		}
 
