@@ -1302,6 +1302,33 @@ namespace rsx
 		// g_access_violation_handler, never finishes the vblank thread, and never sets
 		// cpu_flag::exit. That is why a lost device left the app frozen with audio still playing
 		// and needing a force-close.
+		// Bounded, because a wedging GPU wedges repeatedly.
+		//
+		// Saving and restarting on every loss is an endless restart loop and an unbounded pile of
+		// savestates -- a PS3 savestate is hundreds of megabytes and a device that hangs every few
+		// minutes would fill the card in an evening. Recover a couple of times, which covers the
+		// occasional fault, then stop and say so rather than thrashing.
+		//
+		// The counter is per-process and never reset: if the GPU is faulting this often, the
+		// session is not healthy and continuing to relaunch into it helps nobody.
+		static atomic_t<u32> s_device_lost_recoveries{0};
+		const bool allow_recovery = s_device_lost_recoveries++ < 2;
+
+		if (!allow_recovery)
+		{
+			rsx_log.fatal("GPU device lost again (%s) after %u recovery attempts. Stopping without"
+				" another savestate -- the GPU is faulting repeatedly and restarting into it will"
+				" not help.", reason, s_device_lost_recoveries.load() - 1);
+
+			Emu.CallFromMainThread([]()
+			{
+				// No savestate this time: the earlier ones are still on disk and writing another
+				// hundreds-of-megabytes state per fault is how a full card happens.
+				Emu.Kill(false, false);
+			});
+			return;
+		}
+
 		Emu.CallFromMainThread([]()
 		{
 			// The field-proven save recipe, lifted verbatim from the Android save-state entry
