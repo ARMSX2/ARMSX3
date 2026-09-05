@@ -245,7 +245,29 @@ namespace vk
 		{
 			return std::max<u32>(1u, pgpu->max_ubo_range / element_size);
 		}
-		const multidraw_features get_multidraw_support() const { return pgpu->multidraw_support; }
+		// Multi-draw needs BOTH the feature and the entry points, which are not the same question.
+		//
+		// pgpu->multidraw_support.supported is set from the PHYSICAL device's multiDraw feature
+		// during enumeration (device.cpp), before a logical device exists -- so it cannot know
+		// whether vkGetDeviceProcAddr later returned the functions. The extension entry points are
+		// resolved separately in VulkanAPI.cpp and stay NULL when VK_EXT_multi_draw was not
+		// actually enabled, or when a driver advertises the feature but does not hand the pointers
+		// back. Guarding the call on the feature alone then calls through a null pointer.
+		//
+		// Observed: SIGSEGV with pc=0 (blr through a null x8) inside VKGSRender::emit_geometry on
+		// Adreno, on the multi-draw branch. This is the same class as the null vkWaitForFences seen
+		// with a custom Turnip ICD -- an entry point nothing verified before use.
+		//
+		// VKProcTable.h already documents this contract for EXT_extended_dynamic_state ("these stay
+		// null when the extension was not enabled -- only call them behind ...support()"). Multi-draw
+		// had the guard but never tied it to the pointers. Checking here rather than at the feature
+		// query is deliberate: this is read at draw time, long after the proc table is populated.
+		const multidraw_features get_multidraw_support() const
+		{
+			multidraw_features result = pgpu->multidraw_support;
+			result.supported = result.supported && _vkCmdDrawMultiEXT && _vkCmdDrawMultiIndexedEXT;
+			return result;
+		}
 
 		bool get_shader_stencil_export_support() const { return pgpu->optional_features_support.shader_stencil_export; }
 		bool get_depth_bounds_support() const { return pgpu->features.depthBounds != VK_FALSE; }
