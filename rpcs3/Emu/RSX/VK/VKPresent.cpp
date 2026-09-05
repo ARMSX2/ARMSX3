@@ -426,6 +426,21 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 			swapchain_unavailable = true;
 			m_surface_lost = true;
 			break;
+		case VK_ERROR_DEVICE_LOST:
+			// Terminal. Not something a new swapchain can fix.
+			//
+			// This used to fall into the default below and be treated as a 3rd-party-injector
+			// problem worth recovering from, so a lost device was answered by building a swapchain
+			// on it. Every call after the loss is undefined, so what actually followed was a burst
+			// of "CB chain has run out of free entries!" and then a fatal DEVICE_LOST from
+			// wait_for_event ten milliseconds later -- at a site with no connection to the present
+			// that really lost the device. That misattribution sent a long investigation after the
+			// command buffer chain, which was only ever a symptom of driving a dead device.
+			//
+			// Reported here instead, where the loss is actually observed. The acquire path already
+			// does this by falling through to die_with_error; this makes present agree with it.
+			vk::die_with_error(error);
+			break;
 		default:
 			// Other errors not part of rpcs3. This can be caused by 3rd party injectors with bad code, of which we have no control over.
 			// Let the application attempt to recover instead of crashing outright.
