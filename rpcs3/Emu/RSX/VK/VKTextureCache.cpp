@@ -551,7 +551,27 @@ namespace vk
 					const u32 requested_width = dst->width();
 					const u32 requested_height = src_y + src_h + section.dst_h; // Accounts for possible typeless ref on the same helper on src
 					_dst = vk::get_typeless_helper(src_image->format(), src_image->format_class(), requested_width, requested_height);
-					_dst->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+					// GENERAL, and only when it is not already there.
+					//
+					// get_typeless_helper returns a SHARED scratch image, so every section that
+					// needs a bitcast was flipping the same image TRANSFER_DST -> TRANSFER_SRC and
+					// back, once per section. Same image, so the driver cannot overlap them: each
+					// flip is a full pipeline drain.
+					//
+					// Read out of an Adreno 830 GPU snapshot taken at a hang: one command buffer
+					// held CP_BLIT x40, CP_WAIT_FOR_IDLE x68, and the same nine registers re-emitted
+					// forty times -- the GPU serialised itself sixty-eight times in a single
+					// submit. The ringbuffer stopped inside CP_INDIRECT_BUFFER_PFE for that buffer.
+					//
+					// GENERAL is valid for both ends of a copy and for blit source and destination,
+					// so holding the helper there for the whole loop removes the ping-pong entirely.
+					// This is the same trick already used on the source images above, for the same
+					// reason.
+					if (_dst->current_layout != VK_IMAGE_LAYOUT_GENERAL)
+					{
+						_dst->change_layout(cmd, VK_IMAGE_LAYOUT_GENERAL);
+					}
 				}
 
 				auto dst_rect = coord3i{ { section.dst_x, section.dst_y, 0 }, { section.dst_w, section.dst_h, 1 } };
@@ -585,7 +605,10 @@ namespace vk
 				{
 					// Casting comes after the scaling!
 					const auto copy_rgn = get_output_region(section, dst_rect.position.x, dst_rect.position.y, section.dst_w, section.dst_h, _dst);
-					_dst->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+					// No transition here. The helper is already GENERAL, which is a legal copy
+					// source, and flipping it to TRANSFER_SRC and back was the other half of the
+					// per-section ping-pong described above.
 					vkCmdCopyImage(cmd, _dst->value, _dst->current_layout, dst->value, dst->current_layout, 1, &copy_rgn);
 				}
 			}
