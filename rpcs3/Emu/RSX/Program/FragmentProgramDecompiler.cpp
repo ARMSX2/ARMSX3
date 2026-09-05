@@ -835,10 +835,13 @@ std::string FragmentProgramDecompiler::BuildCode()
 	for (u32 n = 0; n < 4; ++n)
 	{
 		const auto& reg_name = output_register_names[n];
-		if (!m_parr.HasParam(PF_PARAM_NONE, float4_type, reg_name))
+		if (m_parr.HasParam(PF_PARAM_NONE, float4_type, reg_name))
 		{
-			m_parr.AddParam(PF_PARAM_NONE, float4_type, reg_name, init_value);
+			// Register is already declared, nothing to add and nothing to report.
+			continue;
 		}
+
+		m_parr.AddParam(PF_PARAM_NONE, float4_type, reg_name, init_value);
 
 		if (n >= m_prog.mrt_buffers_count)
 		{
@@ -847,7 +850,14 @@ std::string FragmentProgramDecompiler::BuildCode()
 		}
 
 		// Emit debug warning. Useful to diagnose regressions, but should be removed in future.
-		rsx_log.warning("ROP reads from %s without writing to it. Final value will be gathered.", reg_name);
+		//
+		// The guard above is why this is worth keeping at warning level: it used to sit OUTSIDE
+		// the HasParam test and fired on every decompile regardless, which is both spam and a
+		// false statement on the path it usually printed on. Reachable now only when the register
+		// is not declared at all -- which is what HasParam actually tests, since AddReg() is
+		// called for source reads as well as destination writes, so the wording says "referenced"
+		// rather than "written".
+		rsx_log.warning("ROP output register %s is never referenced by the ucode. Default value will be gathered.", reg_name);
 	}
 
 	if (properties.has_dynamic_register_load)
