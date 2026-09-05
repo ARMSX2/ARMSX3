@@ -3,6 +3,10 @@
 #include "VKResolveHelper.h"
 #include "VKRenderPass.h"
 #include "VKRenderTargets.h"
+#include "vkutils/barriers.h"
+#include "vkutils/scratch.h"
+
+#include <cstdlib>
 
 namespace
 {
@@ -43,6 +47,7 @@ namespace vk
 	std::unique_ptr<vk::stencilonly_unresolve> g_stencil_unresolver;
 	std::unique_ptr<vk::depthstencil_resolve_EXT> g_depthstencil_resolver;
 	std::unique_ptr<vk::depthstencil_unresolve_EXT> g_depthstencil_unresolver;
+	std::unique_ptr<vk::gfx_shuffle_pass> g_gfx_shuffle;
 
 	template <typename T, typename ...Args>
 	void initialize_pass(std::unique_ptr<T>& ptr, vk::render_device& dev, Args&&... extras)
@@ -192,8 +197,96 @@ namespace vk
 		}
 	}
 
+	bool gfx_shuffle_32_16(const vk::command_buffer& cmd_, vk::buffer* data, u32 data_length)
+	{
+		// Opt-out lever. This replaces a path that has worked on every other GPU for years, and it
+		// can only be exercised on hardware, so leave a way to get the old behaviour back without a
+		// rebuild: ARMSX3_GFX_SHUFFLE=0 in driver_env.txt. Function-local on purpose -- at
+		// namespace scope this would initialise before driver_env.txt is parsed and read as unset.
+		static const bool s_enabled = []()
+		{
+			const char* v = std::getenv("ARMSX3_GFX_SHUFFLE");
+			const bool off = v && v[0] == '0';
+			if (off) rsx_log.error("ARMSX3_GFX_SHUFFLE=0: falling back to the compute byteswap.");
+			return !off;
+		}();
+
+		if (!s_enabled || data_length < 4 || (data_length % 4) != 0)
+		{
+			return false;
+		}
+
+		auto& cmd = const_cast<vk::command_buffer&>(cmd_);
+		auto& dev = cmd.get_command_pool().get_owner();
+
+		const u32 words = data_length / 4;
+		constexpr u32 tex_w = 1024;
+		const u32 full_rows = words / tex_w;
+		const u32 remainder = words % tex_w;
+		const u32 tex_h = full_rows + (remainder ? 1 : 0);
+
+		auto src_img = vk::get_shuffle_helper(0, tex_w, tex_h);
+		auto dst_img = vk::get_shuffle_helper(1, tex_w, tex_h);
+
+		if (!src_img || !dst_img)
+		{
+			return false;
+		}
+
+		// The word count is not generally a multiple of the row width, so the tail row is copied as
+		// its own region. Texels past the tail are never copied back, so their contents do not
+		// matter.
+		const VkImageSubresourceLayers layer = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		rsx::simple_array<VkBufferImageCopy> regions;
+
+		if (full_rows)
+		{
+			regions.push_back({ 0, 0, 0, layer, { 0, 0, 0 }, { tex_w, full_rows, 1 } });
+		}
+
+		if (remainder)
+		{
+			regions.push_back({ u64(full_rows) * tex_w * 4, 0, 0, layer,
+				{ 0, static_cast<s32>(full_rows), 0 }, { remainder, 1, 1 } });
+		}
+
+		vk::insert_buffer_memory_barrier(cmd, data->value, 0, data_length,
+			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+
+		src_img->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		vkCmdCopyBufferToImage(cmd, data->value, src_img->value, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			regions.size(), regions.data());
+
+		src_img->change_layout(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+		dst_img->change_layout(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+		std::vector<vk::image*> surface = { dst_img };
+		auto renderpass = vk::get_renderpass(dev, vk::get_renderpass_key(surface));
+
+		initialize_pass(g_gfx_shuffle, dev);
+		g_gfx_shuffle->run(cmd, dst_img,
+			src_img->get_view(rsx::default_remap_vector.with_encoding(VK_REMAP_IDENTITY)),
+			tex_w, tex_h, renderpass);
+
+		// overlay_pass::run leaves the render pass open.
+		vk::end_renderpass(cmd);
+
+		dst_img->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+		vkCmdCopyImageToBuffer(cmd, dst_img->value, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, data->value,
+			regions.size(), regions.data());
+
+		return true;
+	}
+
 	void clear_resolve_helpers()
 	{
+		if (g_gfx_shuffle)
+		{
+			g_gfx_shuffle->destroy();
+			g_gfx_shuffle.reset();
+		}
+
 		for (auto &task : g_resolve_helpers)
 		{
 			task.second->destroy();

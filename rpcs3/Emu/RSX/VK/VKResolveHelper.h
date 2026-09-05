@@ -385,6 +385,64 @@ namespace vk
 		}
 	};
 
+	// Swaps the two 16-bit halves of every 32-bit word in a buffer, on the GRAPHICS pipe.
+	//
+	// This is the fragment-shader twin of vk::cs_shuffle_32_16. It exists because on Adreno 830
+	// every compute dispatch is a graphics->compute engine switch, and a decoded GPU hang snapshot
+	// put the wedged units at exactly that transition: unslice PC (which owns the gfx<->compute
+	// switch) and unslice HLSQ (the wave-context allocator) busy, with UCHE, VPC, VSC, CMP, DCMP
+	// and VBIF_GX all idle and zero page faults -- nothing waiting on memory, a launch that never
+	// retires. Dispatch COUNT was not the variable: 18, 22 and 11 dispatches per submit all hung,
+	// and only removing every dispatch stopped it. cs_shuffle_32_16 was the last one left, at over
+	// 10000 dispatches in four minutes of play, all from copy_image_typeless.
+	//
+	// A draw does not switch engines, so this does the same work without the transition.
+	// bswap32 followed by bswap16 is just a halfword rotate, which is why the shader is one line.
+	struct gfx_shuffle_pass : overlay_pass
+	{
+		gfx_shuffle_pass()
+		{
+			vs_src =
+				"#version 450\n"
+				"void main()\n"
+				"{\n"
+				"	// Fullscreen triangle from gl_VertexIndex; no vertex buffer is read.\n"
+				"	vec2 p = vec2(float((gl_VertexIndex & 1) << 2) - 1., float((gl_VertexIndex & 2) << 1) - 1.);\n"
+				"	gl_Position = vec4(p, 0., 1.);\n"
+				"}\n";
+
+			fs_src =
+				"#version 450\n"
+				"layout(set=0, binding=1) uniform usampler2D fs0;\n"
+				"layout(location=0) out uvec4 ocol;\n"
+				"void main()\n"
+				"{\n"
+				"	uint v = texelFetch(fs0, ivec2(gl_FragCoord.xy), 0).x;\n"
+				"	ocol = uvec4((v >> 16) | (v << 16), 0u, 0u, 0u);\n"
+				"}\n";
+
+			m_num_usable_samplers = 1;
+			m_sampler_filter = VK_FILTER_NEAREST;
+
+			renderpass_config.set_primitive_type(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+			renderpass_config.set_attachment_count(1);
+			renderpass_config.set_color_mask(0, true, true, true, true);
+			renderpass_config.set_depth_mask(false);
+
+			num_drawable_elements = 3;
+			first_vertex = 0;
+		}
+
+		void run(vk::command_buffer& cmd, vk::image* dst, vk::image_view* src, u32 w, u32 h, VkRenderPass render_pass)
+		{
+			overlay_pass::run(cmd, { 0, 0, w, h }, dst, src, render_pass);
+		}
+	};
+
+	// Returns false when the graphics path could not be used, so the caller can fall back to the
+	// compute kernel rather than silently skipping the conversion.
+	bool gfx_shuffle_32_16(const vk::command_buffer& cmd, vk::buffer* data, u32 data_length);
+
 	//void resolve_image(vk::command_buffer& cmd, vk::viewable_image* dst, vk::viewable_image* src);
 	//void unresolve_image(vk::command_buffer& cmd, vk::viewable_image* dst, vk::viewable_image* src);
 	void reset_resolve_resources();

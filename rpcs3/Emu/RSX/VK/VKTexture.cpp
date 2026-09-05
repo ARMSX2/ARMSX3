@@ -6,6 +6,7 @@
 #include "VKHelpers.h"
 #include "VKFormats.h"
 #include "VKRenderPass.h"
+#include "VKResolveHelper.h"
 
 #include "vkutils/data_heap.h"
 #include "vkutils/image_helpers.h"
@@ -476,7 +477,20 @@ namespace vk
 			const bool needs_shuffle = (src_convert.first || dst_convert.first) &&
 				(src_convert.first != dst_convert.first || src_convert.second != dst_convert.second);
 
-			if (needs_shuffle)
+			// The 32<->16 case is the byteswap that Batman: Arkham City drives hardest -- over
+			// 10000 dispatches in four minutes, every one of them a graphics->compute engine
+			// switch, which is where the Adreno 830 hang was traced to. Run it on the graphics
+			// pipe instead; falls through to the compute kernel if that is unavailable.
+			if (needs_shuffle && src_convert.first && dst_convert.first &&
+				vk::gfx_shuffle_32_16(cmd, scratch_buf, src_length))
+			{
+				vk::insert_buffer_memory_barrier(cmd, scratch_buf->value, 0, src_length,
+					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+					VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+
+				require_rw_barrier = false;
+			}
+			else if (needs_shuffle)
 			{
 				insert_buffer_memory_barrier(cmd, scratch_buf->value, 0, src_length,
 					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,

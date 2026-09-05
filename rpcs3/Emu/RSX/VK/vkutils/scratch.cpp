@@ -10,6 +10,7 @@ namespace vk
 {
 	std::unordered_map<VkImageViewType, std::unique_ptr<viewable_image>> g_null_image_views;
 	std::unordered_map<u32, std::unique_ptr<image>> g_typeless_textures;
+	std::unordered_map<u32, std::unique_ptr<viewable_image>> g_shuffle_textures;
 	VkSampler g_null_sampler = nullptr;
 
 	// Scratch memory handling. Use double-buffered resource to significantly cut down on GPU stalls
@@ -151,6 +152,34 @@ namespace vk
 		return ptr.get();
 	}
 
+	viewable_image* get_shuffle_helper(u32 index, u32 requested_width, u32 requested_height)
+	{
+		auto& ptr = g_shuffle_textures[index];
+
+		if (!ptr || ptr->width() < requested_width || ptr->height() < requested_height)
+		{
+			if (ptr)
+			{
+				requested_width = std::max(requested_width, ptr->width());
+				requested_height = std::max(requested_height, ptr->height());
+				get_resource_manager()->dispose(ptr);
+			}
+
+			const u32 new_width = utils::align(requested_width, 256u);
+			const u32 new_height = utils::align(requested_height, 256u);
+
+			ptr = std::make_unique<viewable_image>(*g_render_device, g_render_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				VK_IMAGE_TYPE_2D, VK_FORMAT_R32_UINT, new_width, new_height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+				0, VMM_ALLOCATION_POOL_SCRATCH, RSX_FORMAT_CLASS_COLOR);
+
+			ptr->set_debug_name(fmt::format("Scratch: gfx shuffle %u", index));
+		}
+
+		return ptr.get();
+	}
+
 	std::pair<vk::buffer*, bool> get_scratch_buffer(u32 queue_family, u64 min_required_size)
 	{
 		auto& scratch_buffer = g_scratch_buffers_pool[queue_family].get_buf();
@@ -207,6 +236,7 @@ namespace vk
 		g_scratch_buffers_pool.clear();
 
 		g_typeless_textures.clear();
+		g_shuffle_textures.clear();
 
 		if (g_null_sampler)
 		{
