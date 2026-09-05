@@ -222,6 +222,14 @@ namespace vk
 			return;
 		}
 
+		// One line per task type, the first time it dispatches. This is the measurement that
+		// should have come before the last two fix attempts.
+		if (!m_logged_first_dispatch)
+		{
+			m_logged_first_dispatch = true;
+			rsx_log.notice("Compute DISPATCH from: %s", m_debug_name);
+		}
+
 		load_program(cmd);
 		vkCmdDispatch(cmd, invocations_x, invocations_y, invocations_z);
 	}

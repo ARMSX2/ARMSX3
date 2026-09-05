@@ -14,6 +14,10 @@ namespace vk
 {
 	struct compute_task
 	{
+		// Set by get_compute_task<T>() so a dispatch can name its own concrete type.
+		const char* m_debug_name = "<unknown>";
+		bool m_logged_first_dispatch = false;
+
 		std::string m_src;
 		vk::glsl::shader m_shader;
 		std::unique_ptr<vk::glsl::program> m_program;
@@ -670,6 +674,15 @@ namespace vk
 		{
 			e = std::make_unique<T>();
 			e->create();
+
+			// Which compute tasks actually dispatch, by concrete type.
+			//
+			// Every graphics->compute engine switch is a GPU hang risk on Adreno 830, and two
+			// rounds of guessing which call sites were responsible were both wrong -- the
+			// texture-cache byteswap and the tiling job were each assumed and each turned out not
+			// to be the path in use. This prints the real answer once per type instead.
+			e->m_debug_name = typeid(T).name();
+			rsx_log.notice("Compute task instantiated: %s", e->m_debug_name);
 		}
 
 		return static_cast<T*>(e.get());
