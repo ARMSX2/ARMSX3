@@ -111,12 +111,18 @@ namespace vk
 			bool synchronization_2 = false;
 			bool unrestricted_depth_range = false;
 
-			// VK_ANDROID_external_memory_android_hardware_buffer.
+			// VK_ANDROID_external_memory_android_hardware_buffer. PROBED, NOT ENABLED.
 			//
-			// Gates frame generation. framegen runs on its OWN VkDevice, so images cannot be
-			// shared as VkImage -- they have to go across as AHardwareBuffer, and importing one
-			// needs this. framegen's other sharing path uses vkGetMemoryFdKHR(OPAQUE_FD), which
-			// both Adreno and Mali refuse for AHB-backed memory, so there is no fallback.
+			// This used to gate frame generation, back when framegen ran on its own VkDevice and
+			// images could only cross as AHardwareBuffer. The passes live on our device now, so
+			// nothing imports or exports one; the flag is kept only so the startup log can still
+			// report what the device offers. The render_device accessor that used to expose it was
+			// removed on purpose -- it reported a PHYSICAL-device capability for an extension the
+			// logical device deliberately does not enable, which is the latch-without-enable shape
+			// that produced a null-function-pointer crash elsewhere in this header. Do not
+			// re-derive an enablement from this flag without also enabling
+			// VK_EXT_queue_family_foreign -- it is a required dependency that, unlike the
+			// extension's other three, was never promoted to core.
 			bool external_memory_ahb = false;
 
 			// What the Lossless Scaling shaders themselves need, independent of how the images
@@ -285,7 +291,6 @@ namespace vk
 		bool get_extended_dynamic_state_support() const { return pgpu->optional_features_support.extended_dynamic_state; }
 
 		bool get_unrestricted_depth_range_support() const { return pgpu->optional_features_support.unrestricted_depth_range; }
-		bool get_external_memory_ahb_support() const { return pgpu->optional_features_support.external_memory_ahb; }
 		bool get_vulkan_memory_model_support() const { return pgpu->optional_features_support.vulkan_memory_model; }
 		bool get_null_descriptor_support() const { return pgpu->optional_features_support.null_descriptor; }
 		bool get_external_memory_host_support() const { return pgpu->optional_features_support.external_memory_host; }

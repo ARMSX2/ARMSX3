@@ -206,17 +206,19 @@ namespace vk
 		optional_features_support.synchronization_2        = device_extensions.is_supported(VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME);
 		optional_features_support.unrestricted_depth_range = device_extensions.is_supported(VK_EXT_DEPTH_RANGE_UNRESTRICTED_EXTENSION_NAME);
 #ifdef __ANDROID__
+		// Probed for the log only. Frame generation no longer shares images by AHardwareBuffer,
+		// and this extension is NOT requested at vkCreateDevice -- see the note there.
 		optional_features_support.external_memory_ahb      = device_extensions.is_supported(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
 		optional_features_support.vulkan_memory_model      = !!vk12_info.vulkanMemoryModel;
 		optional_features_support.null_descriptor          = !!robustness2_info.nullDescriptor;
 
-		// Reported unconditionally because it decides whether frame generation can exist at all
+		// Reported unconditionally because these decide whether frame generation can exist at all
 		// on this device, and the answer is otherwise invisible until something fails much later.
-		rsx_log.notice("Vulkan: frame generation requirements -- AHardwareBuffer external memory: %s,"
-			" vulkanMemoryModel: %s, nullDescriptor: %s",
-			optional_features_support.external_memory_ahb ? "yes" : "NO",
+		rsx_log.notice("Vulkan: frame generation requirements -- vulkanMemoryModel: %s, nullDescriptor: %s"
+			" (AHardwareBuffer external memory, no longer required: %s)",
 			optional_features_support.vulkan_memory_model ? "yes" : "NO",
-			optional_features_support.null_descriptor ? "yes" : "NO");
+			optional_features_support.null_descriptor ? "yes" : "NO",
+			optional_features_support.external_memory_ahb ? "yes" : "no");
 #endif
 #ifdef __APPLE__
 		optional_features_support.portability              = device_extensions.is_supported(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
@@ -746,7 +748,13 @@ namespace vk
 
 	void render_device::create(vk::physical_device& pdev, u32 graphics_queue_idx, u32 present_queue_idx, u32 transfer_queue_idx)
 	{
-		float queue_priorities[1] = { 0.f };
+		// vkCreateDevice reads exactly queueCount floats through pQueuePriorities, so this
+		// array must be sized for the LARGEST queueCount we ever ask of a single family.
+		// On a GPU with no dedicated transfer+compute family we bump the graphics entry to
+		// two queues below, and a one-element array made the driver read uninitialised stack
+		// for the second priority (VUID-VkDeviceQueueCreateInfo-pQueuePriorities-00383).
+		constexpr u32 max_queues_per_family = 2;
+		float queue_priorities[max_queues_per_family] = { 0.f, 0.f };
 		pgpu = &pdev;
 
 		// Verdict for the adapter actually in use. Logged here rather than where the
@@ -765,6 +773,14 @@ namespace vk
 
 		ensure(graphics_queue_idx == present_queue_idx || present_queue_idx == umax); // TODO
 		std::vector<VkDeviceQueueCreateInfo> device_queues;
+
+		// graphics_queue below is a REFERENCE into this vector and a second entry may be
+		// emplaced further down. The two branches are mutually exclusive today (the
+		// transfer_queue_idx == umax path assigns transfer_queue_idx = graphics_queue_idx,
+		// which makes the graphics_queue_idx != transfer_queue_idx test below false) and the
+		// reference is not touched after that point, so nothing dangles -- but reserving
+		// removes the footgun for free.
+		device_queues.reserve(max_queues_per_family);
 
 		auto& graphics_queue = device_queues.emplace_back();
 		graphics_queue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -787,6 +803,12 @@ namespace vk
 				rsx_log.notice("Will use a spare graphics queue to push transfer operations.");
 				graphics_queue.queueCount++;
 				transfer_queue_sub_index = 1;
+
+				// Every requested queue needs its own priority entry. This is provably true
+				// where it stands (queueCount is 1, then 2) -- it is documentation of the
+				// coupling, not a live guard. If a third queue is ever requested from one
+				// family, widen queue_priorities to match rather than clamping the read.
+				ensure(graphics_queue.queueCount <= max_queues_per_family);
 			}
 		}
 
@@ -850,19 +872,21 @@ namespace vk
 			requested_extensions.push_back(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
 		}
 
-#ifdef __ANDROID__
-		// Frame generation only. Requested when present because the cost of carrying it is a
-		// string in a list, and the cost of NOT having it is that frame generation cannot share
-		// images at all -- there is no second way to hand a VkImage to a different VkDevice.
+		// VK_ANDROID_external_memory_android_hardware_buffer is deliberately NOT requested.
 		//
-		// Its dependencies (external_memory, dedicated_allocation, sampler_ycbcr_conversion,
-		// queue_family_foreign) are all core in Vulkan 1.1+, which is the floor here, so only the
-		// extension itself needs naming.
-		if (pgpu->optional_features_support.external_memory_ahb)
-		{
-			requested_extensions.push_back(VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME);
-		}
-#endif
+		// It used to be, for frame generation: framegen ran on its own VkDevice behind a dlopen'd
+		// library and an AHardwareBuffer was the only currency the two devices shared. The passes
+		// run on OUR device now (RSX/VK/FrameGen/*, and shared_image::create in VKFrameGen.cpp
+		// allocates a plain device-local VkImage), so nothing in this process ever imports or
+		// exports an AHardwareBuffer.
+		//
+		// Enabling it anyway was not free. Its dependency list includes VK_EXT_queue_family_foreign,
+		// which -- unlike sampler_ycbcr_conversion, external_memory and dedicated_allocation -- was
+		// never promoted to core in ANY Vulkan version, so requesting AHB at the apiVersion 1.2 this
+		// build asks for (instance.cpp) violates VUID-vkCreateDevice-ppEnabledExtensionNames-01387.
+		// Drivers do not enforce that VUID, so vkCreateDevice still succeeded and the only symptom
+		// was a validation-layer error. If an AHB sharing path ever comes back, restore the push AND
+		// add VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME next to it, guarded by its own is_supported().
 
 		if (pgpu->optional_features_support.external_memory_host)
 		{
