@@ -2973,12 +2973,32 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 		// Forward once and once only. If whatever we forward to comes back here -- which it did
 		// while this handler was also registered inside libsigchain's chain -- looping would burn
 		// the alternate stack and kill the process silently. Second time through, stand down: put
-		// the default action back and return, so the instruction faults again and the platform
+		// the PREVIOUS handler back and return, so the instruction faults again and the platform
 		// produces an honest tombstone instead of a recursion.
+		//
+		// It has to be the previous handler and not SIG_DFL. s_prev_fault_action is libsigchain's,
+		// which fronts ART and debuggerd, and debuggerd's handler is what writes the tombstone.
+		// Installing SIG_DFL does not "let the platform report it" -- it removes the only thing that
+		// would have. The re-fault then terminates the process by signal with no tombstone, nothing
+		// in the crash buffer, and nothing in logcat after the last line the emulator itself wrote.
+		//
+		// Observed on an Odin 3: a VK_ERROR_DEVICE_LOST teardown re-entered this handler and the
+		// process left as "exited due to signal 11 (Segmentation fault)" with no tombstone written,
+		// which is indistinguishable from a lowmemorykiller kill in the log and cost a long time to
+		// tell apart. This is the same restore-and-return the recoverable path already does further
+		// down; a handler that does not return cannot loop, and debuggerd's does not return.
 		static thread_local bool s_forwarding = false;
 
 		if (s_forwarding)
 		{
+			const struct ::sigaction& fallback = s_prev_fault_action[sig];
+
+			if (fallback.sa_sigaction && fallback.sa_handler != SIG_IGN)
+			{
+				::sigaction(sig, &fallback, nullptr);
+				return;
+			}
+
 			struct ::sigaction dfl{};
 			dfl.sa_handler = SIG_DFL;
 			sigemptyset(&dfl.sa_mask);
