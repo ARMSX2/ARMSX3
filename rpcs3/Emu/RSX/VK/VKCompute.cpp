@@ -1,5 +1,6 @@
 #include "VKCompute.h"
 #include <cstdlib>
+#include <cstring>
 #include "Emu/RSX/rsx_profiler.h"
 #include "VKHelpers.h"
 #include "VKRenderPass.h"
@@ -222,12 +223,45 @@ namespace vk
 			return;
 		}
 
-		// One line per task type, the first time it dispatches. This is the measurement that
-		// should have come before the last two fix attempts.
-		if (!m_logged_first_dispatch)
+		// Per-task selective skip. ARMSX3_SKIP_COMPUTE is a comma-separated list of substrings
+		// matched against the mangled task name, so a run can eliminate ONE compute task without a
+		// rebuild -- driver_env.txt is editable on the device. Note the mangled names end in 'E',
+		// so "cs_shuffle_32E" selects cs_shuffle_32 alone while "cs_shuffle_32" also takes
+		// cs_shuffle_32_16.
+		if (m_skip_state < 0) [[unlikely]]
+		{
+			m_skip_state = 0;
+			if (const char* list = std::getenv("ARMSX3_SKIP_COMPUTE"); list && list[0])
+			{
+				for (const char* p = list; *p;)
+				{
+					const char* e = std::strchr(p, ',');
+					const std::string tok(p, e ? e - p : std::strlen(p));
+					if (!tok.empty() && std::strstr(m_debug_name, tok.c_str()))
+					{
+						m_skip_state = 1;
+						rsx_log.error("ARMSX3_SKIP_COMPUTE: dispatches from %s are DISABLED.", m_debug_name);
+						break;
+					}
+					if (!e) break;
+					p = e + 1;
+				}
+			}
+		}
+
+		if (m_skip_state == 1) [[unlikely]]
+		{
+			return;
+		}
+
+		// Per-task dispatch volume. Logged at widening milestones so `grep "Compute DISPATCH"` on a
+		// captured log ranks the tasks by how much engine switching each one actually causes --
+		// which is the number the last two fix attempts were guessed without.
+		if (const u64 n = ++m_dispatch_count;
+			n == 1 || n == 100 || n == 1000 || n == 10000 || (n % 100000) == 0) [[unlikely]]
 		{
 			m_logged_first_dispatch = true;
-			rsx_log.notice("Compute DISPATCH from: %s", m_debug_name);
+			rsx_log.notice("Compute DISPATCH %s x%d", m_debug_name, n);
 		}
 
 		load_program(cmd);

@@ -17,6 +17,9 @@ namespace vk
 		// Set by get_compute_task<T>() so a dispatch can name its own concrete type.
 		const char* m_debug_name = "<unknown>";
 		bool m_logged_first_dispatch = false;
+		u64  m_dispatch_count = 0;
+		// -1 = not resolved yet, 0 = dispatch, 1 = skip (ARMSX3_SKIP_COMPUTE matched this name)
+		s8   m_skip_state = -1;
 
 		std::string m_src;
 		vk::glsl::shader m_shader;

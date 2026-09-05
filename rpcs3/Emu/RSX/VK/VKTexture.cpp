@@ -1171,11 +1171,21 @@ namespace vk
 			// sends the long tail of small textures and mip levels down the CPU byteswap path in
 			// TextureUtils.cpp instead. That costs some CPU time and removes most of the engine
 			// switches per submission.
-			constexpr u32 gpu_conversion_size_threshold = 1u << 20;
-
+			// GPU-side conversion only for data the CPU physically cannot touch.
+			//
+			// The bar was 1 KB, then 1 MB. At 1 MB, Minecraft stopped hanging but Batman: Arkham
+			// City did not, and the compute-task log showed cs_shuffle_32 still dispatching from
+			// uploads that clear the megabyte. Every one of those is a graphics->compute engine
+			// switch, and removing all of them (ARMSX3_NO_COMPUTE=1) is the only change that has
+			// ever stopped this hang.
+			//
+			// source_is_gpu_resident is the one case with no alternative: that data lives in GPU
+			// memory and there is no CPU pointer to it, which the buf_allocator below asserts.
+			// Everything else takes the CPU byteswap path in TextureUtils.cpp, which is correct
+			// and costs CPU time rather than a pipeline drain.
 			if (check_hw_caps)
 			{
-				caps.supports_byteswap = (image_linear_size >= gpu_conversion_size_threshold) || (image_setup_flags & source_is_gpu_resident);
+				caps.supports_byteswap = !!(image_setup_flags & source_is_gpu_resident);
 				caps.supports_hw_deswizzle = caps.supports_byteswap;
 				caps.supports_zero_copy = caps.supports_byteswap;
 				caps.supports_vtc_decoding = false;
