@@ -170,6 +170,23 @@ namespace vk
 					shuffle_kernel = nullptr;
 				}
 
+				// Defer the byteswap to the CPU where the layout is plain linear.
+				//
+				// This dispatch is a graphics->compute engine switch, and those wedge the GPU on
+				// Adreno 830 under Turnip -- removing them is what stopped both Minecraft and
+				// Batman: Arkham City hanging. imp_flush() does the swap with the NEON
+				// copy_data_swap_u32 after flush_dma instead.
+				//
+				// Tiled and swizzled regions keep the GPU path: their bytes are rearranged after
+				// this point, so a flat swap over the flushed range would be wrong rather than
+				// merely slower.
+				if (shuffle_kernel && !require_tiling && !is_swizzled())
+				{
+					deferred_cpu_byteswap_element_size = static_cast<u8>(elem_size);
+					shuffle_kernel = nullptr;
+					require_rw_barrier = false;
+				}
+
 				if (shuffle_kernel)
 				{
 					vk::insert_buffer_memory_barrier(cmd, working_buffer->value, 0, task_length,

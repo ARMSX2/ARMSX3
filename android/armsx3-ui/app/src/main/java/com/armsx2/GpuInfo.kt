@@ -82,11 +82,16 @@ object GpuInfo {
             // (QueueSignalReleaseImageANDROID -4 -> VK_ERROR_DEVICE_LOST). v35 clears the same
             // scene with none of it. Same build, same config, only the driver changed.
             //
-            // v35 is named rather than the source alone because v34 is still offered there and is
-            // the version that fails. Note the two are indistinguishable by version string -- both
-            // report "26.2.99" -- and differ only by the Mesa git hash in the driver identity line.
+            // Deliberately does NOT single out a version. An earlier draft said "avoid v34: device
+            // loss on 830", which generalised ONE title's behaviour (Batman: Arkham City) into a
+            // device-wide verdict -- the same tester played two hours of Web of Shadows on v34
+            // without trouble, and the Arkham device loss was later traced to our own command
+            // stream rather than to the driver version. Recommend the source; let the user pick.
+            //
+            // Worth knowing when triaging: gen8 v34 and v35 both report driver "26.2.99" and are
+            // distinguishable only by the Mesa git hash in the "Vulkan driver identity" log line.
             model != null && model >= 800 -> Recommendation("StevenMXZ · Adreno-Tools",
-                "Turnip gen8 v35 or newer for Snapdragon 8 Elite / Adreno 8xx. Avoid v34: device loss on 830.")
+                "Turnip gen8 builds for Snapdragon 8 Elite / Adreno 8xx.")
             model != null && model >= 700 -> Recommendation("MrPurple · purple-turnip", "purple-turnip builds for Adreno 7xx")
             model != null && model in 600..699 -> Recommendation("AdrenoToolsDrivers", "AdrenoTools Turnip for Adreno 6xx")
             else -> Recommendation("AdrenoToolsDrivers", "AdrenoTools Turnip (Adreno)")

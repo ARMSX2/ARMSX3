@@ -7,6 +7,7 @@
 #include "vkutils/image_helpers.h"
 
 #include "../Common/texture_cache.h"
+#include "Emu/RSX/Common/BufferUtils.h"   // copy_data_swap_u32 for the deferred readback byteswap
 #include "../Common/tiled_dma_copy.hpp"
 
 #include <memory>
@@ -39,6 +40,10 @@ namespace vk
 
 		// DMA relevant data
 		std::unique_ptr<vk::event> dma_fence;
+
+		// Set by dma_transfer when the readback byteswap was deferred to the CPU instead of run as
+		// a compute dispatch. Zero means the GPU already did it (or none was needed).
+		u8 deferred_cpu_byteswap_element_size = 0;
 		vk::render_device* m_device = nullptr;
 		vk::viewable_image* vram_texture = nullptr;
 
@@ -315,6 +320,39 @@ namespace vk
 			}
 
 			vk::flush_dma(range.start, flush_length);
+
+			// Byteswap on the CPU rather than with a compute dispatch.
+			//
+			// The GPU path ran cs_shuffle_16/32 over the readback buffer between the image->buffer
+			// copy and the DMA out. That is a graphics->compute engine switch, and on an Adreno 830
+			// under Turnip those wedge the GPU: bisecting them out (ARMSX3_NO_COMPUTE=1) is the one
+			// change that stopped both Minecraft and Batman: Arkham City hanging, the latter
+			// clearing the batsuit drop and suit-up scene it had never passed.
+			//
+			// Doing it here costs CPU time on a NEON-accelerated path and removes the switch.
+			// Only the plain linear case is taken: tiled and swizzled regions keep the GPU path
+			// because their layout is rearranged below and by the tiling shader, and getting the
+			// element order wrong there would corrupt guest memory rather than merely look wrong.
+			if (deferred_cpu_byteswap_element_size)
+			{
+				auto* const dst = static_cast<u8*>(get_ptr(range.start));
+
+				if (deferred_cpu_byteswap_element_size == 4)
+				{
+					auto* const words = reinterpret_cast<u32*>(dst);
+					copy_data_swap_u32(words, words, flush_length / 4);
+				}
+				else
+				{
+					auto* const halves = reinterpret_cast<u16*>(dst);
+					for (u32 i = 0, n = flush_length / 2; i < n; i++)
+					{
+						halves[i] = static_cast<u16>((halves[i] >> 8) | (halves[i] << 8));
+					}
+				}
+
+				deferred_cpu_byteswap_element_size = 0;
+			}
 
 #if DEBUG_DMA_TILING
 			// Are we a tiled region?
