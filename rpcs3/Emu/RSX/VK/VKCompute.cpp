@@ -261,7 +261,10 @@ namespace vk
 			n == 1 || n == 100 || n == 1000 || n == 10000 || (n % 100000) == 0) [[unlikely]]
 		{
 			m_logged_first_dispatch = true;
-			rsx_log.notice("Compute DISPATCH %s x%d", m_debug_name, n);
+			// error level on purpose: notice sits below the shipped log level, so the counters
+			// this was built for produced NOTHING in the capture they were meant to inform.
+			// The milestones are rare (1/100/1000/10000/100k), so this cannot spam.
+			rsx_log.error("Compute DISPATCH %s x%d", m_debug_name, n);
 		}
 
 		load_program(cmd);

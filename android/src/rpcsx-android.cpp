@@ -3316,7 +3316,22 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
   // Mesa caches each option the first time it is read.
   //
   // A missing file does nothing, which is the normal case.
-  if (std::ifstream env_file(g_android_executable_dir + "driver_env.txt"); env_file.is_open()) {
+  //
+  // Two locations are tried, internal first so an existing setup keeps winning. The internal
+  // files dir needs root or a debuggable package to write, which a release build is not -- so on
+  // a shipping APK there was no way to set one of these without a root file manager. The
+  // external app dir (/sdcard/Android/data/<pkg>/files) is writable over plain adb by anyone,
+  // which is what makes a driver experiment possible on a device that is not rooted.
+  std::string env_path = g_android_executable_dir + "driver_env.txt";
+  if (!fs::is_file(env_path)) {
+    if (const std::string ext = "/sdcard/Android/data/com.armsx3/files/driver_env.txt";
+        fs::is_file(ext)) {
+      env_path = ext;
+    }
+  }
+
+  if (std::ifstream env_file(env_path); env_file.is_open()) {
+    rpcsx_android.warning("driver_env: reading %s", env_path);
     std::string line;
     while (std::getline(env_file, line)) {
       if (const auto eq = line.find('=');

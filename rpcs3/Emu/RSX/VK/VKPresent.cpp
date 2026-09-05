@@ -1300,6 +1300,12 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	// whole present path -- overlays, blit, submit -- as swapchain wait.
 	{
 	rsx::prof::scope acquire_scope{rsx::prof::bucket::present_wait};
+	// Bounds THIS flip's acquire loop. m_consecutive_swapchain_rebuild_failures only counts
+	// rebuilds that FAIL, and the OUT_OF_DATE arm resets it to 0 and continues whenever a rebuild
+	// SUCCEEDS -- so a swapchain that rebuilds cleanly and then immediately reports out-of-date
+	// again spins here forever inside one flip(). Measured: 30939 identical acquire warnings in a
+	// single capture, which is also enough log volume to stall the emulator on its own.
+	u32 acquire_attempts = 0;
 	while (VkResult status = m_swapchain->acquire_next_swapchain_image(m_current_frame->acquire_signal_semaphore, timeout, &m_current_frame->present_image))
 	{
 		switch (status)
@@ -1334,6 +1340,15 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			//
 			// VK_ERROR_SURFACE_LOST_KHR immediately below already had the right shape: check the
 			// rebuild, and drop the frame rather than spin. This matches it.
+			if (++acquire_attempts > 8)
+			{
+				rsx_log.error("vkAcquireNextImageKHR kept returning VK_ERROR_OUT_OF_DATE_KHR across %u rebuilds in one flip. Dropping the frame.", acquire_attempts);
+				swapchain_unavailable = true;
+				m_frame->flip(m_context);
+				rsx::thread::flip(info);
+				return;
+			}
+
 			rsx_log.warning("vkAcquireNextImageKHR failed with VK_ERROR_OUT_OF_DATE_KHR. Flip request ignored until surface is recreated.");
 			swapchain_unavailable = true;
 
