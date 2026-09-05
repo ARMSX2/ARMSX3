@@ -1281,76 +1281,36 @@ namespace rsx
 	{
 		if (g_gpu_device_lost.exchange(true))
 		{
-			// Already latched. The device is lost at every call site from here on, so this is
+			// Already latched. Every call site sees the dead device from here on, so this is
 			// reached repeatedly; only the first one means anything.
 			return;
 		}
 
-		rsx_log.fatal("GPU device lost (%s). Saving a savestate and stopping.", reason);
+		rsx_log.fatal("GPU device lost (%s). Stopping.", reason);
 
-		// Queued, not executed here.
+		// Stop. No savestate, and no automatic restart.
 		//
-		// This runs on the RSX thread, and the shutdown it asks for joins the RSX thread. Doing it
-		// inline would be a self-join. CallFromMainThread with a null wake_up enqueues and returns
-		// (Emulator::CallFromMainThread, System.cpp:191-209) -- BlockingCallFromMainThread is the
-		// one that waits, and is not what we want. rsx::thread already posts callbacks this way.
+		// Both were tried and both were wrong. A savestate per fault is hundreds of megabytes on a
+		// card that is already 96% full, and a GPU that faults every few minutes turns an automatic
+		// restart into a loop the user cannot get out of. Capping the attempts did not fix that; it
+		// only made the loop shorter. The savestate did not write anyway -- the guest threads are
+		// being torn down by then and every SPU reports "Aborting unsaveable state".
 		//
-		// The caller must NOT stop here. It returns to the RSX loop, which keeps running until
-		// test_stopped() goes true, so on_task() returns normally and cpu_task() reaches on_exit().
-		// That is the entire point: the old path called die_with_error -> fmt::throw_exception ->
-		// emergency_exit -> pthread_exit, which skips on_exit() and therefore never clears
-		// g_access_violation_handler, never finishes the vblank thread, and never sets
-		// cpu_flag::exit. That is why a lost device left the app frozen with audio still playing
-		// and needing a force-close.
-		// Bounded, because a wedging GPU wedges repeatedly.
+		// A clean stop with a clear reason is what is actually wanted: the app stays up, the user
+		// decides what to do, and the failure stays visible instead of being hidden behind an
+		// automatic relaunch.
 		//
-		// Saving and restarting on every loss is an endless restart loop and an unbounded pile of
-		// savestates -- a PS3 savestate is hundreds of megabytes and a device that hangs every few
-		// minutes would fill the card in an evening. Recover a couple of times, which covers the
-		// occasional fault, then stop and say so rather than thrashing.
+		// Queued rather than called inline: this runs on the RSX thread and the shutdown joins it.
+		// CallFromMainThread with a null wake_up enqueues and returns (System.cpp:191-209).
 		//
-		// The counter is per-process and never reset: if the GPU is faulting this often, the
-		// session is not healthy and continuing to relaunch into it helps nobody.
-		static atomic_t<u32> s_device_lost_recoveries{0};
-		const bool allow_recovery = s_device_lost_recoveries++ < 2;
-
-		if (!allow_recovery)
-		{
-			rsx_log.fatal("GPU device lost again (%s) after %u recovery attempts. Stopping without"
-				" another savestate -- the GPU is faulting repeatedly and restarting into it will"
-				" not help.", reason, s_device_lost_recoveries.load() - 1);
-
-			Emu.CallFromMainThread([]()
-			{
-				// No savestate this time: the earlier ones are still on disk and writing another
-				// hundreds-of-megabytes state per fault is how a full card happens.
-				Emu.Kill(false, false);
-			});
-			return;
-		}
-
+		// The caller must NOT stop here -- it returns to the RSX loop, which keeps running until
+		// test_stopped() goes true so on_task() returns normally and cpu_task() reaches on_exit().
+		// That is what clears g_access_violation_handler, finishes the vblank thread and sets
+		// cpu_flag::exit; skipping it is why a lost device used to leave the app frozen with audio
+		// still playing and needing a force-close.
 		Emu.CallFromMainThread([]()
 		{
-			// The field-proven save recipe, lifted verbatim from the Android save-state entry
-			// point (android/src/rpcsx-android.cpp) rather than reinvented.
-			//
-			// GracefulShutdown(false, true, true) was tried first and did NOT produce a
-			// savestate: every SPU logged "Aborting unsaveable state" and the session was lost
-			// anyway, which defeated the whole point. Emu::Kill(allow_autoexit = false,
-			// savestate = true) is the call the working path actually uses.
-			//
-			// The restart callback matters as much as the save. The kernel resets the GPU after
-			// it wedges -- kgsl recovers it and only bans the context -- so coming back up builds
-			// a brand new VkDevice on healthy hardware and resumes from the state just written.
-			// That is the device rebuild, obtained through the emulator's own restart path
-			// instead of by tearing the renderer apart underneath itself.
-			if (!g_cfg.savestate.suspend_emu.get())
-			{
-				Emu.after_kill_callback = []() { Emu.Restart(true, false); };
-				Emu.SetContinuousMode(true);
-			}
-
-			Emu.Kill(false, true);
+			Emu.GracefulShutdown(false, true, false);
 		});
 	}
 
