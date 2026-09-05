@@ -192,17 +192,23 @@ namespace vk
 	// Skipping the dispatch removes every graphics<->compute engine switch and its paired cache
 	// operations while leaving the render-pass split above intact, so the rest of the command
 	// stream is unchanged. Textures decode wrong with this on -- it is a bisect, not a fix.
-	static const bool s_skip_compute_dispatch = []()
-	{
-		const char* v = std::getenv("ARMSX3_NO_COMPUTE");
-		const bool on = v && v[0] == '1';
-		if (on) rsx_log.error("ARMSX3_NO_COMPUTE=1: compute dispatches DISABLED (GPU hang bisect)."
-			" Textures will be wrong. Unset this in driver_env.txt to restore normal rendering.");
-		return on;
-	}();
-
 	void compute_task::run(const vk::command_buffer& cmd, u32 invocations_x, u32 invocations_y, u32 invocations_z)
 	{
+		// FUNCTION-LOCAL on purpose. At namespace scope this initialises when the library loads,
+		// which is long before rpcsx-android.cpp reads driver_env.txt and calls setenv -- so
+		// getenv returned null and the switch silently did nothing. A function-local static is
+		// initialised on first use, i.e. on the first dispatch, which is well after the env is set.
+		// The missing "compute dispatches DISABLED" line was the only sign the test had not run.
+		static const bool s_skip_compute_dispatch = []()
+		{
+			const char* v = std::getenv("ARMSX3_NO_COMPUTE");
+			const bool on = v && v[0] == '1';
+			if (on) rsx_log.error("ARMSX3_NO_COMPUTE=1: compute dispatches DISABLED (GPU hang bisect)."
+				" Textures will be wrong. Unset this in driver_env.txt to restore normal rendering.");
+			else rsx_log.notice("ARMSX3_NO_COMPUTE not set; compute dispatches enabled (normal).");
+			return on;
+		}();
+
 		// CmdDispatch is outside renderpass scope only
 		if (vk::is_renderpass_open(cmd))
 		{
