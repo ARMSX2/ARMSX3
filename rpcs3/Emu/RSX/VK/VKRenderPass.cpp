@@ -58,7 +58,34 @@ namespace vk
 			case 3:
 				return static_cast<VkImageLayout>(encoded);
 			case 4:
-				return VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+			{
+				// A renderpass_key can outlive the device that produced it. pipeline_props --
+				// this key included -- is written to the on-disk shader cache verbatim and
+				// replayed on the next run, and on Android the driver underneath can change
+				// between those two runs with two taps (adrenotools).
+				// VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT is not a valid
+				// VkImageLayout unless VK_EXT_attachment_feedback_loop_layout was enabled on
+				// THIS device, so a key written where it was enabled would otherwise build a
+				// render pass out of an enum this driver never agreed to. Observed on an
+				// Adreno 830: Turnip exposes the extension, the stock Qualcomm blob does not,
+				// and vkCreateRenderPass returned VK_SUCCESS for every invalid description.
+				//
+				// GENERAL is the exact fallback texture_barrier() picks on a device without the
+				// extension (VKRenderTargets.cpp), so this reproduces the pass a native run
+				// would have built. The entry stays dead either way -- renderpass_key is part of
+				// pipeline_key, so it cannot match a live key on this device -- this only keeps
+				// the invalid enum out of the driver.
+				//
+				// Clamped HERE because this is the single decode path: get_image_layouts()
+				// (color + depth) and get_input_attachments() (VkAttachmentReference::layout,
+				// VUID-VkAttachmentReference-attachmentFeedbackLoopLayout-07311) both route
+				// through it, so the two consumers cannot diverge later. It runs only on a
+				// g_renderpass_cache MISS, a few times per session, never per draw.
+				const auto* pdev = vk::get_current_renderer();
+				return (pdev && !pdev->get_framebuffer_loops_support())
+					? VK_IMAGE_LAYOUT_GENERAL
+					: VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT;
+			}
 			default:
 				fmt::throw_exception("Unsupported layout encoding 0x%llx here", encoded);
 			}

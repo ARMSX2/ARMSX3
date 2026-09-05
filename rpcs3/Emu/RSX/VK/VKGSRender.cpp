@@ -638,20 +638,64 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	// extension between two runs of the same game, and reading a normalized entry back without
 	// it would build pipelines with culling off and the depth test disabled -- silently, since
 	// nothing in the entry says which convention wrote it.
-	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan",
-		m_device->get_extended_dynamic_state_support() ? "v1.96-eds" : "v1.96");
-
-	for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
+	//
+	// "-nofbl" is a WEAKER argument than "-eds", and deliberately narrower. pipeline_props
+	// carries renderpass_key, which encodes each attachment's VkImageLayout -- including
+	// VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT, which is not a legal VkImageLayout
+	// at all unless VK_EXT_attachment_feedback_loop_layout was enabled on THIS device. The bytes
+	// mean the same thing everywhere; the entry is simply UNUSABLE, because renderpass_key is
+	// part of pipeline_key, so a key this device can never produce can never match at draw time
+	// and the pipeline gets recompiled live mid-frame instead. Observed on an Adreno 830: Turnip
+	// exposes the extension, the stock Qualcomm blob (512.800.72) does not, and a cache written
+	// under one and replayed under the other fed vkCreateRenderPass a layout the device never
+	// agreed to (~40 validation errors, all accepted by the driver).
+	//
+	// Android-only, and suffixed on the ABSENCE of the extension, because only Android lets the
+	// driver change under a running install (adrenotools). A desktop driver update only ever
+	// GAINS this extension, which produces dead entries, never invalid ones, and get_renderpass
+	// already clamps the layout on any device that lacks it -- so MoltenVK, pre-2023
+	// NVIDIA/AMD/Intel and older Mesa keep the directory they are using instead of eating a
+	// live mid-gameplay rebuild of the whole pipeline cache.
+	std::string shader_cache_version = m_device->get_extended_dynamic_state_support() ? "v1.96-eds" : "v1.96";
+#ifdef __ANDROID__
+	if (!m_device->get_framebuffer_loops_support())
 	{
-		const auto target_layout = m_swapchain->get_optimal_present_layout();
-		const auto target_image = m_swapchain->get_image(i);
-		VkClearColorValue clear_color{};
-		VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		shader_cache_version += "-nofbl";
+	}
+#endif
 
-		vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, range);
-		vkCmdClearColorImage(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
-		vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, target_layout, range);
+	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", shader_cache_version);
 
+	// Pre-initialising swapchain images is only legal for a swapchain WE own.
+	//
+	// On a WSI swapchain these images belong to the presentation engine until
+	// vkAcquireNextImageKHR hands one over, and that includes their layout. Barriering and
+	// clearing all of them here is "vkQueueSubmit(): pSubmits[0] performs a layout transition
+	// on presentable VkImage ..., but the image has not been acquired from VkSwapchainKHR",
+	// which the validation layers report once per image on every swapchain build. The command
+	// buffer this is recorded into is also submitted with no wait semaphore, so there is not
+	// even an implicit dependency on the presentation engine being finished with them.
+	//
+	// The loop existed only to bootstrap flip()'s assumption that an acquired image is already
+	// in PRESENT_SRC_KHR. flip() no longer assumes that: it starts each acquired image at
+	// VK_IMAGE_LAYOUT_UNDEFINED and explicitly tests that the blit covers the whole surface,
+	// clearing it when it does not. See VKPresent.cpp.
+	//
+	// The native/headless swapchain owns its images outright and is never acquired from a
+	// presentation engine, so it keeps the old behaviour verbatim.
+	if (m_swapchain->is_headless())
+	{
+		for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
+		{
+			const auto target_layout = m_swapchain->get_optimal_present_layout();
+			const auto target_image = m_swapchain->get_image(i);
+			VkClearColorValue clear_color{};
+			VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+			vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, range);
+			vkCmdClearColorImage(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
+			vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, target_layout, range);
+		}
 	}
 
 	m_texture_cache.initialize((*m_device), m_device->get_graphics_queue(),

@@ -186,17 +186,24 @@ bool VKGSRender::reinitialize_swapchain()
 	m_current_queue_index = 0;
 	m_current_frame = &m_frame_context_storage[0];
 
-	// Prepare new swapchain images for use
-	for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
+	// Prepare new swapchain images for use.
+	//
+	// Headless only -- see the identical block in VKGSRender::on_init_thread for why touching
+	// un-acquired WSI images is a spec violation. flip() starts every acquired image at
+	// UNDEFINED, so nothing downstream needs these images pre-transitioned.
+	if (m_swapchain->is_headless())
 	{
-		const auto target_layout = m_swapchain->get_optimal_present_layout();
-		const auto target_image = m_swapchain->get_image(i);
-		VkClearColorValue clear_color{};
-		VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+		for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
+		{
+			const auto target_layout = m_swapchain->get_optimal_present_layout();
+			const auto target_image = m_swapchain->get_image(i);
+			VkClearColorValue clear_color{};
+			VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-		vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, range);
-		vkCmdClearColorImage(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
-		vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, target_layout, range);
+			vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, range);
+			vkCmdClearColorImage(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
+			vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, target_layout, range);
+		}
 	}
 
 	// Will have to block until rendering is completed
@@ -638,8 +645,10 @@ void VKGSRender::queue_swap_request()
 
 	// The capture recorded during flip() is only now a write that has happened.
 	//
-	// Nothing may interpolate from it before this point, and framegen has no way to find out on its
-	// own: it is a second VkDevice reading the same AHardwareBuffer, with no semaphore between them.
+	// Nothing may interpolate from it before this point. The capture becomes readable when the
+	// command buffer carrying it is submitted, and queue submission order -- not a cross-device
+	// handshake -- is what orders the interpolation after it. (See the note ~20 lines below: the
+	// passes run on OUR device and OUR graphics queue.)
 	vk::frame_gen::commit_capture();
 
 	if (framegen_frames && !m_framegen_pipelined)
@@ -1322,7 +1331,22 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	const auto present_layout = m_swapchain->get_optimal_present_layout();
 
 	const VkImageSubresourceRange subresource_range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-	VkImageLayout target_layout = present_layout;
+
+	// The contents of a just-acquired presentable image are UNDEFINED by spec, and declaring
+	// PRESENT_SRC_KHR here only asked the driver to preserve pixels we are about to overwrite.
+	// It is also what forced every swapchain image to be transitioned into PRESENT_SRC_KHR
+	// before it had ever been acquired; that pre-init is now headless-only.
+	//
+	// This makes full coverage of the target load-bearing, so the clear-to-black branch below
+	// no longer tests the top-left inset alone -- it tests coverage explicitly, because
+	// x1 == 0 && y1 == 0 does NOT imply the blit fills the surface. Read the comment there
+	// before changing either.
+	//
+	// The native/headless swapchain is not acquired from a presentation engine and end_frame()
+	// DMAs out of its images, so it keeps the tracked layout it has always used.
+	VkImageLayout target_layout = m_swapchain->is_headless()
+		? present_layout
+		: VK_IMAGE_LAYOUT_UNDEFINED;
 
 	VkRenderPass single_target_pass = VK_NULL_HANDLE;
 	vk::framebuffer_holder* direct_fbo = nullptr;
@@ -1441,11 +1465,41 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		}
 	}
 
-	if (!image_to_flip || aspect_ratio.x1 || aspect_ratio.y1)
+	// Coverage, not just inset.
+	//
+	// target_layout is now UNDEFINED on the WSI path, so any pixel the blit does not write is
+	// genuine driver garbage rather than the previous frame -- and on a UBWC-capable tiler an
+	// UNDEFINED transition can reset compression metadata for the whole image, so the leftover
+	// strip is noise, not stale pixels. x1/y1 alone do not prove full coverage:
+	// convert_aspect_ratio_impl (rsx_utils.cpp) computes width = output.width * ratio with a
+	// truncating cast and then x1 = (output.width - width) / 2 with INTEGER division, so a
+	// one-pixel shortfall lands entirely on x2/y2 with x1/y1 still 0. 1366x768 at 16:9 yields
+	// exactly (0,0,1365,768). aspect_convert_region reproduces the same shape for any
+	// non-integral stretch, and returns a degenerate areau{}, which this also catches.
+	//
+	// Compared against the swapchain's real extent rather than m_swapchain_dims, because
+	// vkCmdClearColorImage clears the whole VkImage regardless, and this also covers the transient
+	// window where m_swapchain_dims lags the actual image size (Android rotation, a WSI
+	// currentExtent override). Exact-fit and stretch_to_display_area cases are unaffected, so the
+	// extra clear costs nothing in the normal path.
+	if (!image_to_flip || aspect_ratio.x1 || aspect_ratio.y1 ||
+		u32(aspect_ratio.x2) < m_swapchain->get_width() ||
+		u32(aspect_ratio.y2) < m_swapchain->get_height())
 	{
 		// Clear the window background to black
 		VkClearColorValue clear_black {};
-		vk::change_image_layout(*m_current_command_buffer, target_image, present_layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, subresource_range);
+		vk::change_image_layout(*m_current_command_buffer, target_image, target_layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, subresource_range);
+
+		// Assign BEFORE the WAW barrier below, not after it.
+		//
+		// The barrier orders the clear against the writes that follow, both of them in
+		// TRANSFER_DST_OPTIMAL. It was passing target_layout, which at this point still held
+		// present_layout -- so it declared a PRESENT_SRC_KHR -> PRESENT_SRC_KHR transition on an
+		// image the line above had already moved to TRANSFER_DST_OPTIMAL. That is an oldLayout
+		// that does not match the image's real layout, and on any driver that honours the
+		// declaration it is a full-surface re-tile/decompress on every letterboxed frame.
+		target_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
 		vkCmdClearColorImage(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_black, 1, &subresource_range);
 
 		// Prevent WAW on transfer writes
@@ -1460,8 +1514,6 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			VK_ACCESS_TRANSFER_WRITE_BIT,
 			subresource_range
 		);
-
-		target_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 	}
 
 	const output_scaling_mode output_scaling = g_cfg.video.output_scaling.get();
@@ -1702,9 +1754,9 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	// interpolating a progress dialog produced exactly the flicker that moving the capture was
 	// meant to remove.
 	//
-	// A swapchain image is not something framegen's separate VkDevice can see, so this copies into
-	// AHardwareBuffer-backed storage both devices share. Returns false and costs nothing when the
-	// feature is off, which is the default.
+	// A swapchain image is not usable as a pass input, so this copies it into a plain device-local
+	// VkImage on our own device (vk::frame_gen::shared_image). There is no second device and no
+	// AHardwareBuffer. Returns false and costs nothing when the feature is off, which is the default.
 	if (image_to_flip)
 	{
 		vk::frame_gen::capture_presented_frame(*m_current_command_buffer, *m_device,
