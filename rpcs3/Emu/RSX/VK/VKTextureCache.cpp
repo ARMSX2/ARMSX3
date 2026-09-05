@@ -521,12 +521,22 @@ namespace vk
 				}
 
 				src_image = vk::get_typeless_helper(dst->format(), dst->format_class(), convert_x + convert_w, src_y + src_h);
-				src_image->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+				// GENERAL for the same reason as the output helper below: this is the SAME shared
+				// scratch image on every section, so flipping it TRANSFER_DST -> TRANSFER_SRC per
+				// section serialises the GPU once per flip.
+				//
+				// Measured on an Adreno 830 snapshot: fixing only the output side took one command
+				// buffer from CP_WAIT_FOR_IDLE x68 / CP_BLIT x40 down to x26 / x19. This is the
+				// other half of the same pattern. The ensure() below already accepts GENERAL.
+				if (src_image->current_layout != VK_IMAGE_LAYOUT_GENERAL)
+				{
+					src_image->change_layout(cmd, VK_IMAGE_LAYOUT_GENERAL);
+				}
 
 				const areai src_rect = coordi{{ src_x, src_y }, { src_w, src_h }};
 				const areai dst_rect = coordi{{ 0, 0 }, { convert_w, src_h }};
 				vk::copy_image_typeless(cmd, section.src, src_image, src_rect, dst_rect);
-				src_image->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
 				src_x = 0;
 				src_y = 0;
