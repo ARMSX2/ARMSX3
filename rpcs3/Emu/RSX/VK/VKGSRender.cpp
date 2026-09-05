@@ -980,6 +980,24 @@ VKGSRender::~VKGSRender()
 	m_command_buffer_pool.destroy();
 	m_secondary_command_buffer_pool.destroy();
 
+	// Frame generation's present semaphores and acquire fence.
+	//
+	// Created lazily in present_generated_frame (VKPresent.cpp) and never destroyed, so every
+	// emulator restart within one process leaked one fence plus one semaphore per swapchain image.
+	// Destroyed here rather than there because they are sized to the swapchain and outlive
+	// individual flips; the device is still alive at this point in the destructor.
+	for (VkSemaphore sem : m_framegen_present_sems)
+	{
+		vkDestroySemaphore(*m_device, sem, nullptr);
+	}
+	m_framegen_present_sems.clear();
+
+	if (m_framegen_acquire_fence != VK_NULL_HANDLE)
+	{
+		vkDestroyFence(*m_device, m_framegen_acquire_fence, nullptr);
+		m_framegen_acquire_fence = VK_NULL_HANDLE;
+	}
+
 	// Descriptors
 	vk::descriptors::flush();
 

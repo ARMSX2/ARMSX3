@@ -42,8 +42,26 @@ namespace vk
 			.pSignalSemaphores = submit_info.signal_semaphores.data()
 		};
 
-		vkQueueSubmit(submit_info.queue, 1, &info, submit_info.pfence->handle);
+		const VkResult submit_result = vkQueueSubmit(submit_info.queue, 1, &info, submit_info.pfence->handle);
 		release_global_submit_lock();
+
+		// Observed, not acted on.
+		//
+		// This result was discarded outright, so a device that died during submission was invisible
+		// here and surfaced later at whichever call happened to touch the device next -- four losses
+		// on one device landed at four unrelated sites, none of which had anything to do with the
+		// submit that actually failed.
+		//
+		// Deliberately does NOT change control flow: signal_flushed() below stays unconditional,
+		// because a waiter that is never released is a silent hang, which is strictly worse than a
+		// waiter released on a fence that will never signal. The point is to find out whether the
+		// loss is observable HERE first, which every detection design assumes and nothing has
+		// confirmed.
+		if (submit_result != VK_SUCCESS) [[unlikely]]
+		{
+			rsx_log.error("vkQueueSubmit returned %s. This is the first site to observe it.",
+				submit_result == VK_ERROR_DEVICE_LOST ? "VK_ERROR_DEVICE_LOST" : "an error");
+		}
 
 		// Signal fence
 		submit_info.pfence->signal_flushed();

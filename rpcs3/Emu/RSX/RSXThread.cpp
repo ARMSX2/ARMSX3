@@ -54,6 +54,7 @@ atomic_t<bool> g_user_asked_for_recording = false;
 atomic_t<bool> g_user_asked_for_screenshot = false;
 atomic_t<bool> g_user_asked_for_frame_capture = false;
 atomic_t<bool> g_disable_frame_limit = false;
+atomic_t<bool> g_gpu_device_lost = false;
 rsx::frame_trace_data frame_debug;
 rsx::frame_capture_data frame_capture;
 
@@ -1276,13 +1277,51 @@ namespace rsx
 		}
 	}
 
+	void request_device_lost_shutdown(const char* reason)
+	{
+		if (g_gpu_device_lost.exchange(true))
+		{
+			// Already latched. The device is lost at every call site from here on, so this is
+			// reached repeatedly; only the first one means anything.
+			return;
+		}
+
+		rsx_log.fatal("GPU device lost (%s). Saving a savestate and stopping.", reason);
+
+		// Queued, not executed here.
+		//
+		// This runs on the RSX thread, and the shutdown it asks for joins the RSX thread. Doing it
+		// inline would be a self-join. CallFromMainThread with a null wake_up enqueues and returns
+		// (Emulator::CallFromMainThread, System.cpp:191-209) -- BlockingCallFromMainThread is the
+		// one that waits, and is not what we want. rsx::thread already posts callbacks this way.
+		//
+		// The caller must NOT stop here. It returns to the RSX loop, which keeps running until
+		// test_stopped() goes true, so on_task() returns normally and cpu_task() reaches on_exit().
+		// That is the entire point: the old path called die_with_error -> fmt::throw_exception ->
+		// emergency_exit -> pthread_exit, which skips on_exit() and therefore never clears
+		// g_access_violation_handler, never finishes the vblank thread, and never sets
+		// cpu_flag::exit. That is why a lost device left the app frozen with audio still playing
+		// and needing a force-close.
+		Emu.CallFromMainThread([]()
+		{
+			// savestate = true: the GPU is gone but guest state is intact, so the player loses
+			// nothing. allow_autoexit = false keeps the app open. async_op = true so the shutdown
+			// does not block the main thread while it joins the emulation threads.
+			Emu.GracefulShutdown(false, true, true);
+		});
+	}
+
 	void thread::on_exit()
 	{
 		// Before anything else: the sampler walks guest thread objects, and everything below
 		// leads to those being destroyed.
 		rsx::prof::stop_sampler();
 
-		if (zcull_ctrl)
+		// Not on a lost device. sync() blocks on occlusion query results that a dead GPU can
+		// never produce, and it is the FIRST statement in on_exit -- so waiting here would defeat
+		// the clean shutdown this whole path exists to reach, and leave the app hung exactly as
+		// before at a different line.
+		if (zcull_ctrl && !g_gpu_device_lost)
 		{
 			zcull_ctrl->sync(this);
 		}

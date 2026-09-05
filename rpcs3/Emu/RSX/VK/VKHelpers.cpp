@@ -82,6 +82,13 @@ namespace vk
 		}
 		g_overlay_passes.clear();
 
+		// Pairs with descriptors::init() in initialize_pipe_compatibility_queries.
+		//
+		// This clears dispatch_manager's registry of live descriptor_set pointers. It had no caller
+		// at all, so the list survived teardown holding pointers to sets whose owners were gone --
+		// harmless only for as long as nothing walked it on the next boot.
+		vk::descriptors::destroy();
+
 		// This must be the last item destroyed
 		vk::get_resource_manager()->destroy();
 

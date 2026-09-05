@@ -305,7 +305,21 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 
 	// The acquire returned SUCCESS against a zero timeout, so an image was already free and this
 	// resolves immediately in practice.
-	vkWaitForFences(*m_device, 1, &m_framegen_acquire_fence, VK_TRUE, UINT64_MAX);
+	//
+	// Bounded anyway. "Resolves immediately in practice" holds only while the device is healthy:
+	// on a lost device the fence is never signalled and UINT64_MAX parks the RSX thread inside
+	// flip() forever, with no log line and no way out -- the app is simply frozen. That is the one
+	// failure shape with no diagnostic at all, so it is worth a timeout even though the wait is
+	// expected to be instant.
+	if (const VkResult wait_result = vkWaitForFences(*m_device, 1, &m_framegen_acquire_fence, VK_TRUE, 1000000000ull);
+		wait_result != VK_SUCCESS)
+	{
+		// Drop this generated frame rather than presenting from an image whose acquire never
+		// completed. The caller treats nullptr as "no generated frame this flip" and carries on.
+		rsx_log.error("Frame generation: acquire fence did not signal within 1s (%s). Skipping this frame.",
+			wait_result == VK_TIMEOUT ? "timeout" : "error");
+		return nullptr;
+	}
 
 	auto* cmd = m_primary_cb_list.next();
 	cmd->reset();
@@ -439,7 +453,11 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 			//
 			// Reported here instead, where the loss is actually observed. The acquire path already
 			// does this by falling through to die_with_error; this makes present agree with it.
-			vk::die_with_error(error);
+			//
+			// Latching rather than dying: die_with_error here killed the RSX thread mid-present,
+			// which skips rsx::thread::on_exit() and is why a lost device left the app frozen with
+			// audio still playing. The frame is abandoned either way.
+			rsx::request_device_lost_shutdown("presenting a frame");
 			break;
 		default:
 			// Other errors not part of rpcs3. This can be caused by 3rd party injectors with bad code, of which we have no control over.

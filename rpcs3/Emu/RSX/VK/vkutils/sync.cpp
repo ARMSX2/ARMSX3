@@ -17,6 +17,10 @@
 #include "util/sysinfo.hpp"
 #include "util/asm.hpp"
 
+// Forward-declared rather than including Emu/RSX/RSXThread.h: this is a low-level vkutils
+// translation unit and pulling the RSX thread header in here would invert the dependency.
+namespace rsx { void request_device_lost_shutdown(const char* reason); }
+
 namespace vk
 {
 	namespace globals
@@ -715,6 +719,15 @@ namespace vk
 			case VK_EVENT_RESET:
 				break;
 			default:
+				if (status == VK_ERROR_DEVICE_LOST)
+				{
+					// Do not die here. Killing the RSX thread from inside a wait skips
+					// rsx::thread::on_exit() and leaves the app frozen with audio playing.
+					// Latch instead and return; the RSX loop will see the stop request.
+					rsx::request_device_lost_shutdown("waiting on an event");
+					return status;
+				}
+
 				die_with_error(status);
 				return status;
 			}

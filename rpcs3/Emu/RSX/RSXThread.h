@@ -33,11 +33,24 @@
 
 extern atomic_t<bool> g_user_asked_for_frame_capture;
 extern atomic_t<bool> g_disable_frame_limit;
+
+// Set once the GPU device has been lost and cannot be used again.
+//
+// Read by rsx::thread::on_exit() to skip teardown work that talks to the device. Backend-neutral
+// on purpose: the VK backend sets it, but on_exit() must not depend on VK to read it.
+extern atomic_t<bool> g_gpu_device_lost;
 extern rsx::frame_trace_data frame_debug;
 extern rsx::frame_capture_data frame_capture;
 
 namespace rsx
 {
+	// Latch a lost GPU device and ask for a clean, savestated shutdown.
+	//
+	// Safe to call from any thread and any number of times; only the first call does anything.
+	// Does NOT stop the calling thread -- the RSX thread must keep running its loop until
+	// test_stopped() becomes true, which is what lets cpu_task() reach on_exit().
+	void request_device_lost_shutdown(const char* reason);
+
 
 	class RSXDMAWriter;
 
