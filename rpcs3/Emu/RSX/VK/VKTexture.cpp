@@ -1153,9 +1153,29 @@ namespace vk
 			image_linear_size = row_pitch * layout.depth * (rsx::is_compressed_host_format(caps, format) ? layout.height_in_block : layout.height_in_texel);
 
 			// Only do GPU-side conversion if occupancy is good
+			//
+			// The old bar was 1 KB, which every texture and every mip level in a chain clears, so
+			// effectively every upload ran a compute dispatch. Each one is a graphics->compute
+			// engine switch: vkCmdCopyBuffer, a barrier, vkCmdDispatch, another barrier, then
+			// vkCmdCopyBufferToImage, which the driver emits as CP_BLIT -> CP_EXEC_CS -> CP_BLIT
+			// with a full pipeline drain and a cache invalidate on each side.
+			//
+			// On an Adreno 830 under Turnip that pattern hangs the GPU. Eight snapshots taken at
+			// the hang all park the command processor on a CP_WAIT_FOR_IDLE next to one of those
+			// switches, with PC and HLSQ busy and every other block idle. Disabling compute
+			// dispatch entirely (ARMSX3_NO_COMPUTE=1, VKCompute.cpp) makes the hang stop, which is
+			// the only single-variable change that has.
+			//
+			// 1 MB keeps the GPU path where it actually pays -- large surfaces and anything
+			// already resident in GPU memory, which cannot be touched by the CPU at all -- and
+			// sends the long tail of small textures and mip levels down the CPU byteswap path in
+			// TextureUtils.cpp instead. That costs some CPU time and removes most of the engine
+			// switches per submission.
+			constexpr u32 gpu_conversion_size_threshold = 1u << 20;
+
 			if (check_hw_caps)
 			{
-				caps.supports_byteswap = (image_linear_size >= 1024) || (image_setup_flags & source_is_gpu_resident);
+				caps.supports_byteswap = (image_linear_size >= gpu_conversion_size_threshold) || (image_setup_flags & source_is_gpu_resident);
 				caps.supports_hw_deswizzle = caps.supports_byteswap;
 				caps.supports_zero_copy = caps.supports_byteswap;
 				caps.supports_vtc_decoding = false;
