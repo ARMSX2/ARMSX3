@@ -250,9 +250,35 @@ namespace vk
 					.image_bpp = context == rsx::texture_upload_context::dma ? internal_bpp : rsx::get_format_block_size_in_bytes(gcm_format)
 				};
 
+				// DIAGNOSTIC BISECT, off unless ARMSX3_NO_TILE_COMPUTE=1 is in driver_env.txt.
+				//
+				// cs_tile_memcpy is the last compute dispatch left in the readback path once the
+				// byteswap moved to the CPU, and it is the one Batman: Arkham City actually hits,
+				// because its Write Color Buffers render targets live in tiled memory. Removing
+				// every dispatch (ARMSX3_NO_COMPUTE=1) is the only change that has stopped the
+				// Adreno 830 hang; this narrows that to the tiling job specifically.
+				//
+				// Skipping it leaves the readback untiled in guest memory, so the picture will be
+				// wrong. It answers whether this dispatch is the remaining cause, nothing else.
+				//
+				// Function-local static: at namespace scope it would be initialised before
+				// driver_env.txt is parsed and getenv would return null.
+				static const bool s_skip_tile_compute = []()
+				{
+					const char* v = std::getenv("ARMSX3_NO_TILE_COMPUTE");
+					const bool on = v && v[0] == '1';
+					if (on) rsx_log.error("ARMSX3_NO_TILE_COMPUTE=1: tiling compute DISABLED (GPU hang"
+						" bisect). Tiled readbacks will be wrong. Unset it in driver_env.txt to restore.");
+					else rsx_log.notice("ARMSX3_NO_TILE_COMPUTE not set; tiling compute enabled (normal).");
+					return on;
+				}();
+
 				// Execute
-				const auto job = vk::get_compute_task<vk::cs_tile_memcpy<RSX_detiler_op::encode>>();
-				job->run(cmd, config);
+				if (!s_skip_tile_compute) [[likely]]
+				{
+					const auto job = vk::get_compute_task<vk::cs_tile_memcpy<RSX_detiler_op::encode>>();
+					job->run(cmd, config);
+				}
 
 				// Update internal variables
 				result_offset = task_length;
