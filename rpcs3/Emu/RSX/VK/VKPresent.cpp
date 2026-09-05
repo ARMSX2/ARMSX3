@@ -45,6 +45,23 @@ namespace
 
 bool VKGSRender::reinitialize_swapchain()
 {
+	// Never rebuild a swapchain on a lost device.
+	//
+	// Guarded at the function rather than at its three call sites, because enumerating call sites
+	// is how the previous two attempts at this missed one.
+	//
+	// Measured on the Odin 3: with the waits latched but this unguarded, the latch fired, flip()
+	// carried on, vkAcquireNextImageKHR returned VK_ERROR_OUT_OF_DATE_KHR, and the recreate path
+	// ran against the dead device. libvulkan logged "getting images for non-active swapchain
+	// 0x6f1dfaf8d0" twice and scudo then aborted the process with "corrupted chunk header at
+	// address 0x200006f1dfaf8d0" -- the same swapchain pointer -- inside rsx::thread. So the
+	// recreate attempt is not merely futile here, it corrupts the heap and turns a recoverable
+	// stop into SIGABRT.
+	if (g_gpu_device_lost)
+	{
+		return false;
+	}
+
 	if (m_surface_lost)
 	{
 		// handle() blocks until the app hands us a live native window again, so
