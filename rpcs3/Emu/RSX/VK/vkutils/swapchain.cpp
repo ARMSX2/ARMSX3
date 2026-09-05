@@ -431,7 +431,64 @@ namespace vk
 				" cannot read presented frames on this surface.");
 		}
 		swap_info.preTransform = pre_transform;
-		swap_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+
+		// compositeAlpha must be one of the bits in surface_descriptors.supportedCompositeAlpha
+		// (VUID-VkSwapchainCreateInfoKHR-compositeAlpha-01280).
+		//
+		// Observed on Odin 3 / Android 15 (VVL 1.4.357.0): the surface's supportedCompositeAlpha
+		// does not include OPAQUE, so the hardcoded value was an invalid request there. The exact
+		// mask Android reports is NOT assumed here -- the loop below picks whatever the surface
+		// actually offers, and the notice prints the mask so it can be measured rather than
+		// guessed.
+		//
+		// Preference order matters. OPAQUE first, so every desktop surface (Win32, X11/Wayland,
+		// MoltenVK) selects exactly the value that was hardcoded and stays byte-identical. INHERIT
+		// second, ahead of the premultiplied modes: on Android the composition is decided by the
+		// SurfaceView layer, which EmulationSurface.kt leaves opaque (it never calls
+		// holder.setFormat() or setZOrderOnTop()), and INHERIT means precisely "composition
+		// determined by the native platform surface".
+		{
+			constexpr VkCompositeAlphaFlagBitsKHR composite_alpha_preference[] =
+			{
+				VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+				VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+				VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+				VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR
+			};
+
+			VkCompositeAlphaFlagBitsKHR composite_alpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+			bool composite_alpha_found = false;
+
+			for (VkCompositeAlphaFlagBitsKHR candidate : composite_alpha_preference)
+			{
+				if (surface_descriptors.supportedCompositeAlpha & candidate)
+				{
+					composite_alpha = candidate;
+					composite_alpha_found = true;
+					break;
+				}
+			}
+
+			if (!composite_alpha_found)
+			{
+				// Nothing usable reported. This branch deliberately keeps the historical value and
+				// therefore STILL violates 01280 -- an implementation reporting a zero mask is
+				// already out of spec, and refusing to build a swapchain that used to build is the
+				// worse failure. A printed mask of 0x0 means init_surface_capabilities is handing
+				// back a zeroed struct, which is a separate and bigger problem.
+				rsx_log.warning("Swapchain: surface reports no supported composite alpha modes (mask 0x%x); requesting OPAQUE.",
+					static_cast<u32>(surface_descriptors.supportedCompositeAlpha));
+			}
+			else if (composite_alpha != VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR)
+			{
+				rsx_log.notice("Swapchain: composite alpha OPAQUE unsupported (mask 0x%x); using 0x%x.",
+					static_cast<u32>(surface_descriptors.supportedCompositeAlpha),
+					static_cast<u32>(composite_alpha));
+			}
+
+			swap_info.compositeAlpha = composite_alpha;
+		}
+
 		swap_info.imageArrayLayers = 1;
 		swap_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 		swap_info.presentMode = swapchain_present_mode;
