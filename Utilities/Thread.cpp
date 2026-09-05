@@ -2777,7 +2777,30 @@ static void signal_handler(int sig, siginfo_t* info, void* uct) noexcept
 		// tester's session, in the logs we ask people to send us. A real null dereference on a
 		// non-emulator thread still gets a tombstone from debuggerd, which is its proper reporter.
 #ifdef ARCH_ARM64
-		if (const u64 fault_at = reinterpret_cast<u64>(info->si_addr); fault_at != 0)
+		// Hard lifetime cap on this whole report.
+		//
+		// The note above says this only runs on a fault that is already fatal. That is not true on
+		// Android 15, whose ART uses a userfaultfd concurrent mark-compact collector: HeapTaskDaemon
+		// takes ordinary, recoverable faults at NON-ZERO addresses inside [anon:dalvik-LinearAlloc]
+		// as normal GC work, so they clear the fault_at != 0 filter above and get the full treatment
+		// -- pthread_getattr_np, an fopen and full parse of /proc/self/maps, and five logcat writes,
+		// per fault, inside a signal handler.
+		//
+		// Observed on an Odin 3 (Adreno 830, Android 15): 109 of these in about a second across
+		// HeapTaskDaemon, rumble-pump, pool-3-thread-1 and the main thread. The GC cannot make
+		// progress while every one of its faults parses the process map, so the Java heap stops, the
+		// UI never draws, and the app presents as hung with audio still playing -- audio being a
+		// native thread that needs nothing from the managed heap. It followed a VK_ERROR_DEVICE_LOST,
+		// so what should have been a fatal-error dialog became an indefinite freeze instead.
+		//
+		// The first few reports carry all the diagnostic value; a storm carries none and costs the
+		// process. Capping trades away stack-overflow detection for any overflow that happens after
+		// a storm has already burned the budget, which is the right way round: the storm makes the
+		// app unusable on its own, and a genuine crash elsewhere still gets a debuggerd tombstone.
+		static atomic_t<u32> s_foreign_fault_reports{0};
+
+		if (const u64 fault_at = reinterpret_cast<u64>(info->si_addr);
+			fault_at != 0 && s_foreign_fault_reports.fetch_add(1) < 8)
 		{
 			const u64 sp = static_cast<u64>(context->uc_mcontext.sp);
 
