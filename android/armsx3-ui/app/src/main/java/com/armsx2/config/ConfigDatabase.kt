@@ -51,8 +51,26 @@ object ConfigDatabase {
      *
      * Keep this to settings with EVIDENCE, not suspicion. Every entry should name what broke.
      */
-    private val UNSAFE_ON_ANDROID = setOf<String>(
-        // Empty on purpose. "Multithreaded RSX" was listed here on the belief that it froze
+    private val UNSAFE_ON_ANDROID = setOf(
+        // Max SPURS Threads: a workaround for LOW-CORE-COUNT DESKTOPS, which no Android device is.
+        //
+        // Its own tooltip says it "may improve performance ... especially on systems with limited
+        // number of hardware threads". Every ARMSX3 device has 8 cores -- armv8.1-a is the compile
+        // floor, so nothing weaker can run this at all -- and capping SPURS below that starves the
+        // job chain instead of helping it.
+        //
+        // Measured on Sonic Unleashed (BLUS30244), Snapdragon 8 Elite: the database forces 3, and
+        // uncapping to 6 took the problem hub area from 11.1 to 19.1 fps, with useful SPU work
+        // rising 27% -> 37%. Nothing else in the entry mattered; this one value was serialising
+        // the primary SPURS chain.
+        //
+        // 19 of the database's 2194 titles set this (12 at 3, 7 at 4), so the blast radius is
+        // small and it is wrong for all of them on this platform for the same structural reason.
+        // Only Unleashed was measured, and the tooltip does warn the cap is sometimes load-bearing
+        // against crashes -- if a title in that list regresses, this is the entry to revisit.
+        "Max SPURS Threads",
+
+        // "Multithreaded RSX" was listed here on the belief that it froze
         // Minecraft. It did not: the freeze was Accurate SPU DMA plus Accurate Cache Line
         // Stores turning every SPU DMA into an atomic reservation store, and it reproduced
         // with Multithreaded RSX off and an empty database. Multithreaded RSX is a real
