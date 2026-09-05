@@ -1323,11 +1323,41 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			should_reinitialize_swapchain = true;
 			break;
 		case VK_ERROR_OUT_OF_DATE_KHR:
+		{
+			// Bounded, and the rebuild's result is not ignored.
+			//
+			// This used to warn, call reinitialize_swapchain() without looking at what it
+			// returned, and `continue` -- an unbounded retry inside one flip(). Measured on the
+			// Odin 3 after a GPU hang: acquire returned OUT_OF_DATE forever and this spun,
+			// emitting thousands of identical warnings within a single millisecond, with the RSX
+			// thread pinned. The device was gone, so no rebuild was ever going to succeed.
+			//
+			// VK_ERROR_SURFACE_LOST_KHR immediately below already had the right shape: check the
+			// rebuild, and drop the frame rather than spin. This matches it.
 			rsx_log.warning("vkAcquireNextImageKHR failed with VK_ERROR_OUT_OF_DATE_KHR. Flip request ignored until surface is recreated.");
 			swapchain_unavailable = true;
-			reinitialize_swapchain();
+
+			if (!reinitialize_swapchain())
+			{
+				// A swapchain that cannot be rebuilt is not a transient resize. Give it a few
+				// flips in case the window is genuinely mid-change, then treat it as terminal --
+				// otherwise the game runs on with no picture and no way out, which is the same
+				// frozen-app-with-audio this whole path exists to avoid.
+				if (++m_consecutive_swapchain_rebuild_failures >= 8)
+				{
+					rsx::request_device_lost_shutdown("the swapchain could not be rebuilt");
+				}
+
+				// Drop this frame; the next flip retries. Never spin here.
+				m_frame->flip(m_context);
+				rsx::thread::flip(info);
+				return;
+			}
+
+			m_consecutive_swapchain_rebuild_failures = 0;
 			ensure(m_current_frame, "Could not reinitialize swapchain after VK_ERROR_OUT_OF_DATE_KHR signal!");
 			continue;
+		}
 		case VK_ERROR_SURFACE_LOST_KHR:
 		{
 			// Recoverable, and on Android routine: the ANativeWindow is destroyed

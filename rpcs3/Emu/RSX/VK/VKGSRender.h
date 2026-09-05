@@ -210,6 +210,10 @@ private:
 	// Frame generation acquires with this rather than a semaphore; see present_generated_frame.
 	VkFence m_framegen_acquire_fence = VK_NULL_HANDLE;
 
+	// Consecutive failed swapchain rebuilds in the acquire path. Reset on any success; once it
+	// passes the threshold the swapchain is treated as unrecoverable rather than retried forever.
+	u32 m_consecutive_swapchain_rebuild_failures = 0;
+
 	// The command buffers the previous frame's generated images were blitted with. framegen writes
 	// the same output images every generation, so those blits have to have retired before the next
 	// generation starts overwriting them.
