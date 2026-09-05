@@ -1044,6 +1044,43 @@ namespace vk
 		vk::blitter hw_blitter;
 		const auto dst_bpp = get_bpp();
 
+		// DIAGNOSTIC BISECT for the Adreno 830 GPU hang, off unless ARMSX3_NO_SURFACE_INHERIT=1
+		// is set in <root>/driver_env.txt. Function-local so it is evaluated on first use, which
+		// is after driver_env.txt has been read -- at namespace scope it would initialise at
+		// library load and getenv would return null.
+		//
+		// Skips the old_contents replay entirely: every blit that copies a previous overlapping
+		// surface into this one. That is where Batman: Arkham City's 469 CP_BLIT and 147
+		// CP_WAIT_FOR_IDLE per submission come from (it needs Write Color Buffers, so the lists
+		// are long). Surfaces will be missing inherited content and the picture will be wrong --
+		// this answers "is the blit volume the cause", nothing else.
+		static const bool s_skip_surface_inherit = []()
+		{
+			const char* v = std::getenv("ARMSX3_NO_SURFACE_INHERIT");
+			const bool on = v && v[0] == '1';
+			if (on) rsx_log.error("ARMSX3_NO_SURFACE_INHERIT=1: surface content inheritance DISABLED"
+				" (GPU hang bisect). Rendering will be wrong. Unset it in driver_env.txt to restore.");
+			else rsx_log.notice("ARMSX3_NO_SURFACE_INHERIT not set; surface inheritance enabled (normal).");
+			return on;
+		}();
+
+		if (s_skip_surface_inherit) [[unlikely]]
+		{
+			// Take the same path as "found no valid data to fill this surface", which is an
+			// existing, exercised branch rather than a new one.
+			clear_rw_barrier();
+			state_flags |= rsx::surface_state_flags::erase_bkgnd;
+			initialize_memory(cmd, access);
+			ensure(state_flags == rsx::surface_state_flags::ready);
+			on_write_copy(0, false);
+
+			if (access == rsx::surface_access::shader_write && samples() > 1)
+			{
+				unresolve(cmd);
+			}
+			return;
+		}
+
 		unsigned first = prepare_rw_barrier_for_transfer(this);
 		const bool accept_all = (last_use_tag && test());
 		bool optimize_copy = true;
