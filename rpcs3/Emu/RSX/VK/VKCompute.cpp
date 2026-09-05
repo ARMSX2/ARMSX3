@@ -176,12 +176,44 @@ namespace vk
 		m_program->bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
 	}
 
+	// DIAGNOSTIC BISECT for the Adreno 830 GPU hang. Off unless ARMSX3_NO_COMPUTE=1 is set in
+	// <root>/driver_env.txt, so shipping builds behave exactly as before and it needs no rebuild
+	// to toggle.
+	//
+	// Eight GPU snapshots taken at the hang all show the command processor parked on a
+	// CP_WAIT_FOR_IDLE immediately after a CP_BLIT or CP_EXEC_CS, with RBBM_STATUS reporting
+	// PC_BUSY and HLSQ_BUSY while UCHE, VPC, VSC, CMP and DCMP are all idle -- the front end is
+	// wedged and the CP is merely the next thing to block. The submissions that hang are the
+	// texture transfer path: staging buffer -> compute byteswap/deswizzle -> image, emitted as
+	// CP_BLIT -> CP_EXEC_CS -> CP_BLIT five to fourteen times per submit, each side wrapped in a
+	// full pipeline drain (26-108 CP_WAIT_FOR_IDLE and one CP_CCHE_INVALIDATE per dispatch,
+	// exactly matching the CP_EXEC_CS count in all eight captures).
+	//
+	// Skipping the dispatch removes every graphics<->compute engine switch and its paired cache
+	// operations while leaving the render-pass split above intact, so the rest of the command
+	// stream is unchanged. Textures decode wrong with this on -- it is a bisect, not a fix.
+	static const bool s_skip_compute_dispatch = []()
+	{
+		const char* v = std::getenv("ARMSX3_NO_COMPUTE");
+		const bool on = v && v[0] == '1';
+		if (on) rsx_log.error("ARMSX3_NO_COMPUTE=1: compute dispatches DISABLED (GPU hang bisect)."
+			" Textures will be wrong. Unset this in driver_env.txt to restore normal rendering.");
+		return on;
+	}();
+
 	void compute_task::run(const vk::command_buffer& cmd, u32 invocations_x, u32 invocations_y, u32 invocations_z)
 	{
 		// CmdDispatch is outside renderpass scope only
 		if (vk::is_renderpass_open(cmd))
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[3]++; vk::end_renderpass(cmd);
+		}
+
+		// The render-pass split above still happens on purpose: dropping it too would change
+		// render-pass segmentation as well and the test would no longer be single-variable.
+		if (s_skip_compute_dispatch) [[unlikely]]
+		{
+			return;
 		}
 
 		load_program(cmd);
