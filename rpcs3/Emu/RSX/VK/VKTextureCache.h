@@ -339,8 +339,12 @@ namespace vk
 
 				if (deferred_cpu_byteswap_element_size == 4)
 				{
+					// Bounded to the texture's own bytes rather than the whole flushed range: a
+					// tiled flush can cover tile padding belonging to other resident data. The
+					// swizzle path below takes the same care for the same reason.
+					const u32 own_bytes = std::min<u32>(flush_length, rsx_pitch * height);
 					auto* const words = reinterpret_cast<u32*>(dst);
-					copy_data_swap_u32(words, words, flush_length / 4);
+					copy_data_swap_u32(words, words, own_bytes / 4);
 				}
 				else
 				{

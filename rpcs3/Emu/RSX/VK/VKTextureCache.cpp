@@ -180,11 +180,30 @@ namespace vk
 				// Tiled and swizzled regions keep the GPU path: their bytes are rearranged after
 				// this point, so a flat swap over the flushed range would be wrong rather than
 				// merely slower.
-				if (shuffle_kernel && !require_tiling && !is_swizzled())
+				// Tiled regions are eligible too, for 32-bit elements only.
+				//
+				// A byteswap is element-wise and tiling is a permutation of whole u32 texels
+				// (rsx::tile_texel_data<u32>, tiled_dma_copy.hpp), so the two commute: swapping
+				// after the tiler gives the same bytes as swapping before it. That is what lets
+				// the swap move to the CPU while the tiling job stays on the GPU.
+				//
+				// elem_size 4 only, because the tiler is u32-based -- a 16-bit swap over
+				// u32-permuted data would not commute. Swizzled regions also keep the GPU path:
+				// convert_linear_swizzle rewrites the layout afterwards and is not a whole-element
+				// permutation.
+				const bool tiling_commutes = !require_tiling || elem_size == 4;
+
+				if (shuffle_kernel && tiling_commutes && !is_swizzled())
 				{
 					deferred_cpu_byteswap_element_size = static_cast<u8>(elem_size);
 					shuffle_kernel = nullptr;
-					require_rw_barrier = false;
+
+					// Only drop the barrier when nothing writes this buffer afterwards. The tiling
+					// job below still runs and still needs it.
+					if (!require_tiling)
+					{
+						require_rw_barrier = false;
+					}
 				}
 
 				if (shuffle_kernel)
