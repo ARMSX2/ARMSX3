@@ -65,17 +65,31 @@ object GpuInfo {
     /**
      * Suggested driver source for [renderer], or null when no custom driver
      * applies (custom Turnip packs are Adreno-only; Mali/Xclipse/PowerVR run the
-     * built-in system driver). [sourceLabel] matches friendlyDriverSource().
+     * built-in system driver). [sourceLabel] should match a DriverSource name in
+     * CustomDriver.SOURCES so the user can find it in the list -- it is displayed
+     * verbatim. (It previously said it matched friendlyDriverSource(), which does
+     * not exist anywhere in the tree.)
      */
     fun recommendation(renderer: String?): Recommendation? {
         val r = renderer ?: return null
         if (!r.contains("Adreno", ignoreCase = true)) return null
         val model = Regex("""(\d{3,4})""").find(r.substringAfter("Adreno", ""))?.value?.toIntOrNull()
         return when {
-            model != null && model >= 800 -> Recommendation("GameHub 8Elite", "Turnip tuned for Snapdragon 8 Elite / Adreno 8xx")
-            model != null && model >= 700 -> Recommendation("Mr Purple", "purple-turnip builds for Adreno 7xx")
-            model != null && model in 600..699 -> Recommendation("KIMCHI", "AdrenoTools Turnip for Adreno 6xx")
-            else -> Recommendation("KIMCHI", "AdrenoTools Turnip (Adreno)")
+            // Adreno 8xx: StevenMXZ's gen8 Turnip builds, v35 or newer.
+            //
+            // Measured on a Snapdragon 8 Elite / Adreno 830 against Batman: Arkham City, which
+            // reproducibly lost the device mid-scene on both the stock Qualcomm blob and gen8 v34
+            // (QueueSignalReleaseImageANDROID -4 -> VK_ERROR_DEVICE_LOST). v35 clears the same
+            // scene with none of it. Same build, same config, only the driver changed.
+            //
+            // v35 is named rather than the source alone because v34 is still offered there and is
+            // the version that fails. Note the two are indistinguishable by version string -- both
+            // report "26.2.99" -- and differ only by the Mesa git hash in the driver identity line.
+            model != null && model >= 800 -> Recommendation("StevenMXZ · Adreno-Tools",
+                "Turnip gen8 v35 or newer for Snapdragon 8 Elite / Adreno 8xx. Avoid v34: device loss on 830.")
+            model != null && model >= 700 -> Recommendation("MrPurple · purple-turnip", "purple-turnip builds for Adreno 7xx")
+            model != null && model in 600..699 -> Recommendation("AdrenoToolsDrivers", "AdrenoTools Turnip for Adreno 6xx")
+            else -> Recommendation("AdrenoToolsDrivers", "AdrenoTools Turnip (Adreno)")
         }
     }
 }
