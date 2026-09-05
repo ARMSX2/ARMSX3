@@ -80,6 +80,33 @@ object ConfigDatabase {
     )
 
     /**
+     * Settings that are fine in general but have specific VALUES that are wrong on a handheld.
+     *
+     * Separate from UNSAFE_ON_ANDROID because denying the whole setting would throw away the
+     * useful values with the harmful one. Matched on name AND value; anything not listed is kept.
+     */
+    private val UNSAFE_VALUES_ON_ANDROID = mapOf(
+        // Frame limit "Off" and "Infinite" both uncap the presented frame rate entirely.
+        //
+        // RSXThread.cpp resolves both to limit = 0., which skips the pacing block outright:
+        // "Off" via `case frame_limit_type::none` (only when Max CPU Preempt Count is 0, which is
+        // the default and the shipped value), and "Infinite" via `case frame_limit_type::infinite`.
+        //
+        // Measured on Minecraft: PlayStation(R)3 Edition (BLUS31426), Snapdragon 8 Elite: the
+        // database sets "Off" and the game ran at roughly 1000 fps. On a desktop that is a
+        // reasonable thing to recommend. On a handheld it is a hot SoC, a flat battery, and the
+        // "games running too fast" reports.
+        //
+        // 11 of the database's 2195 titles are affected (5 "Off", 6 "Infinite"). Dropping the line
+        // falls back to the global Frame limit, which is Auto -> vblank_rate -> 60.
+        //
+        // "PS3 Native" also resolves to limit = 0. but is NOT listed: it has its own pacing path
+        // further down the same function and is the only mode that honours the game's own
+        // cellGcmSetFlipMode(VSYNC) request, which titles that pace themselves to 30 fps need.
+        "Frame limit" to setOf("Off", "Infinite"),
+    )
+
+    /**
      * ARMSX3's own per-title settings, layered on top of whatever the RPCS3 database says.
      *
      * The upstream database is maintained against desktop, where some of our problems do not
@@ -131,7 +158,12 @@ object ConfigDatabase {
         config.lineSequence()
             .filterNot { line ->
                 val name = line.substringBefore(':').trim().removePrefix("- ")
-                name in UNSAFE_ON_ANDROID
+                if (name in UNSAFE_ON_ANDROID) return@filterNot true
+
+                // Value-based entries: only drop the line when the value is one of the bad ones,
+                // so a title that legitimately asks for "30" keeps it.
+                val bad = UNSAFE_VALUES_ON_ANDROID[name] ?: return@filterNot false
+                line.contains(':') && line.substringAfter(':').trim() in bad
             }
             .joinToString("\n")
 
