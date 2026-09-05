@@ -1304,10 +1304,26 @@ namespace rsx
 		// and needing a force-close.
 		Emu.CallFromMainThread([]()
 		{
-			// savestate = true: the GPU is gone but guest state is intact, so the player loses
-			// nothing. allow_autoexit = false keeps the app open. async_op = true so the shutdown
-			// does not block the main thread while it joins the emulation threads.
-			Emu.GracefulShutdown(false, true, true);
+			// The field-proven save recipe, lifted verbatim from the Android save-state entry
+			// point (android/src/rpcsx-android.cpp) rather than reinvented.
+			//
+			// GracefulShutdown(false, true, true) was tried first and did NOT produce a
+			// savestate: every SPU logged "Aborting unsaveable state" and the session was lost
+			// anyway, which defeated the whole point. Emu::Kill(allow_autoexit = false,
+			// savestate = true) is the call the working path actually uses.
+			//
+			// The restart callback matters as much as the save. The kernel resets the GPU after
+			// it wedges -- kgsl recovers it and only bans the context -- so coming back up builds
+			// a brand new VkDevice on healthy hardware and resumes from the state just written.
+			// That is the device rebuild, obtained through the emulator's own restart path
+			// instead of by tearing the renderer apart underneath itself.
+			if (!g_cfg.savestate.suspend_emu.get())
+			{
+				Emu.after_kill_callback = []() { Emu.Restart(true, false); };
+				Emu.SetContinuousMode(true);
+			}
+
+			Emu.Kill(false, true);
 		});
 	}
 
