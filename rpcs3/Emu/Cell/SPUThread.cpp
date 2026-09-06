@@ -3663,12 +3663,17 @@ namespace
 	{
 		atomic_t<u32> addr;
 		atomic_t<u32> count;
+		// The SPU PC of the store that reached the barrier. Without it the site histogram says
+		// WHERE the barriers land but not WHICH loop issues them, and the PUTLLC16 whitelist is
+		// keyed by loop, not by address -- so the histogram alone cannot aim a fix. Last writer
+		// wins; these sites are dominated by a single loop each, so a sample is enough.
+		atomic_t<u32> pc;
 	};
 
 	std::array<putllc_site_t, 64> g_putllc_sites{};
 }
 
-void record_putllc_barrier_site(u32 addr)
+void record_putllc_barrier_site(u32 addr, u32 pc)
 {
 	const u32 line = addr & -128;
 
@@ -3680,12 +3685,14 @@ void record_putllc_barrier_site(u32 addr)
 		if (have == line)
 		{
 			slot.count++;
+			slot.pc.release(pc);
 			return;
 		}
 
 		if (!have && slot.addr.compare_and_swap_test(0, line))
 		{
 			slot.count++;
+			slot.pc.release(pc);
 			return;
 		}
 	}
@@ -3694,12 +3701,14 @@ void record_putllc_barrier_site(u32 addr)
 std::string spu_putllc_barrier_sites()
 {
 	std::vector<std::pair<u32, u32>> v;
+	std::unordered_map<u32, u32> pcs;
 
 	for (auto& slot : g_putllc_sites)
 	{
 		if (const u32 c = slot.count.load())
 		{
 			v.emplace_back(c, slot.addr.load());
+			pcs[slot.addr.load()] = slot.pc.load();
 		}
 	}
 
@@ -3709,7 +3718,7 @@ std::string spu_putllc_barrier_sites()
 
 	for (usz i = 0; i < v.size() && i < 8; i++)
 	{
-		fmt::append(out, " 0x%08x:%u", v[i].second, v[i].first);
+		fmt::append(out, " 0x%08x:%u@pc%05x", v[i].second, v[i].first, pcs[v[i].second]);
 	}
 
 	return out;
@@ -3830,7 +3839,7 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			putllc_barrier_spurs++;
 		}
 
-		record_putllc_barrier_site(addr);
+		record_putllc_barrier_site(addr, pc);
 
 		const bool success = [&]()
 		{
