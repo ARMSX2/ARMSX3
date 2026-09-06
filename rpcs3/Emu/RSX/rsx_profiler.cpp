@@ -1351,7 +1351,19 @@ namespace rsx::prof
 
 		// Report on a frame boundary rather than a timer, so per-frame costs divide by a
 		// whole number of frames and a long stall lands in the window that contains it.
-		if (g_acc.frames >= 300)
+		// ...or once the window has simply lasted long enough.
+		//
+		// 300 frames is a fine boundary at 60 fps and useless at 1: Soulcalibur V churns at about
+		// one frame a second, so the report -- including the PUTLLC barrier histogram that says
+		// which loop is causing it -- would not have appeared for five minutes, precisely in the
+		// case worth reporting. The frame count still wins when frames are arriving, so healthy
+		// windows divide by a whole number of frames exactly as before.
+		const u64 tick_now = utils::get_tsc();
+		const u64 tick_freq = utils::get_tsc_freq();
+		const bool window_is_stale = tick_freq && g_acc.window_start &&
+			(tick_now - g_acc.window_start) > tick_freq * 10;
+
+		if (g_acc.frames >= 300 || window_is_stale)
 		{
 			dump_and_reset();
 		}
