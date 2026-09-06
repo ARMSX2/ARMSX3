@@ -47,6 +47,45 @@ namespace vk
 	std::unique_ptr<vk::stencilonly_unresolve> g_stencil_unresolver;
 	std::unique_ptr<vk::depthstencil_resolve_EXT> g_depthstencil_resolver;
 	std::unique_ptr<vk::depthstencil_unresolve_EXT> g_depthstencil_unresolver;
+	// Qualcomm GPUs only.
+	//
+	// Both graphics-pipe conversions exist for one reason: on Adreno a graphics->compute engine
+	// switch can wedge the GPU, and replacing the dispatch with a draw removes the switch. Nothing
+	// about them helps any other vendor, and they are new code on paths every game uses --
+	// copy_image_typeless has nine call sites and the D24S8 readback seven -- so running them
+	// everywhere would spend risk with no return.
+	//
+	// Gated on the GPU, not the SoC. The bug is a property of the Adreno command processor, not of
+	// a phone: it reproduces on both the proprietary driver and Turnip, and the same GPU ships in
+	// several parts. A SoC-model gate would also have to be revisited for every new chip, and
+	// getting it wrong disables the fix on the exact hardware that needs it.
+	//
+	// ARMSX3_GFX_CONVERT=1 forces the paths on elsewhere, which is how anyone would find out
+	// whether another vendor benefits. 0 forces them off.
+	static bool gfx_conversion_available()
+	{
+		static const bool s_available = []()
+		{
+			if (const char* v = std::getenv("ARMSX3_GFX_CONVERT"))
+			{
+				const bool on = v[0] != '0';
+				rsx_log.error("ARMSX3_GFX_CONVERT=%s: graphics-pipe conversion forced %s.",
+					v, on ? "ON" : "OFF");
+				return on;
+			}
+
+			const auto vendor = vk::get_driver_vendor();
+			const bool adreno = vendor == vk::driver_vendor::ADRENO || vendor == vk::driver_vendor::TURNIP;
+
+			rsx_log.notice("Graphics-pipe texture conversion %s (driver vendor %d).",
+				adreno ? "enabled" : "disabled", static_cast<int>(vendor));
+
+			return adreno;
+		}();
+
+		return s_available;
+	}
+
 	std::unique_ptr<vk::gfx_shuffle_pass> g_gfx_shuffle;
 	std::unique_ptr<vk::gfx_gather_d24x8_pass> g_gfx_gather_d24x8[2];
 
@@ -212,7 +251,7 @@ namespace vk
 			return !off;
 		}();
 
-		if (!s_enabled || data_length < 4 || (data_length % 4) != 0)
+		if (!s_enabled || !gfx_conversion_available() || data_length < 4 || (data_length % 4) != 0)
 		{
 			return false;
 		}
@@ -291,7 +330,7 @@ namespace vk
 			return !off;
 		}();
 
-		if (!s_enabled || !width || !height)
+		if (!s_enabled || !gfx_conversion_available() || !width || !height)
 		{
 			return false;
 		}
