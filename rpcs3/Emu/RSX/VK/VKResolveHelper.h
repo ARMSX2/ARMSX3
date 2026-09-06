@@ -439,9 +439,67 @@ namespace vk
 		}
 	};
 
-	// Returns false when the graphics path could not be used, so the caller can fall back to the
-	// compute kernel rather than silently skipping the conversion.
+	// Interleaves a separated depth bank and stencil bank into packed D24S8, on the GRAPHICS pipe.
+	//
+	// The fragment-shader twin of vk::cs_gather_d24x8. Same reason as gfx_shuffle_pass: every
+	// compute dispatch is a graphics->compute engine switch, and those wedge the Adreno 830. After
+	// the byteswap moved to a draw, this kernel was the only one still running at volume -- over
+	// ten thousand dispatches during an Arkham City cutscene, against roughly one thousand in the
+	// open-world play that survived. Same kernel, ten times the rate, and it hangs.
+	//
+	// The compute version reads a packed stencil bank and does its own shift and mask. Staging the
+	// bank into an R8_UINT image instead gives one byte per texel directly, so the shader is just
+	// the interleave.
+	struct gfx_gather_d24x8_pass : overlay_pass
+	{
+		gfx_gather_d24x8_pass(bool swap_bytes)
+		{
+			vs_src =
+				"#version 450\n"
+				"void main()\n"
+				"{\n"
+				"	vec2 p = vec2(float((gl_VertexIndex & 1) << 2) - 1., float((gl_VertexIndex & 2) << 1) - 1.);\n"
+				"	gl_Position = vec4(p, 0., 1.);\n"
+				"}\n";
+
+			const std::string store = swap_bytes
+				? "	v = ((v >> 24) & 0xFFu) | ((v >> 8) & 0xFF00u) | ((v << 8) & 0xFF0000u) | (v << 24);\n"
+				: "";
+
+			fs_src =
+				"#version 450\n"
+				"layout(set=0, binding=1) uniform usampler2D fs0;\n"   // depth bank,   R32_UINT
+				"layout(set=0, binding=2) uniform usampler2D fs1;\n"   // stencil bank, R8_UINT
+				"layout(location=0) out uvec4 ocol;\n"
+				"void main()\n"
+				"{\n"
+				"	ivec2 c = ivec2(gl_FragCoord.xy);\n"
+				"	uint d = texelFetch(fs0, c, 0).x & 0x00FFFFFFu;\n"
+				"	uint s = texelFetch(fs1, c, 0).x & 0xFFu;\n"
+				"	uint v = (d << 8) | s;\n"
+				+ store +
+				"	ocol = uvec4(v, 0u, 0u, 0u);\n"
+				"}\n";
+
+			m_num_usable_samplers = 2;
+			m_sampler_filter = VK_FILTER_NEAREST;
+
+			renderpass_config.set_primitive_type(VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST);
+			renderpass_config.set_attachment_count(1);
+			renderpass_config.set_color_mask(0, true, true, true, true);
+			renderpass_config.set_depth_mask(false);
+
+			num_drawable_elements = 3;
+			first_vertex = 0;
+		}
+	};
+
+	// Both return false when the graphics path could not be used, so the caller can fall back to
+	// the compute kernel rather than silently skipping the conversion.
 	bool gfx_shuffle_32_16(const vk::command_buffer& cmd, vk::buffer* data, u32 data_length);
+
+	bool gfx_gather_d24x8(const vk::command_buffer& cmd, const vk::buffer* data, u32 data_offset,
+		u32 z_offset, u32 s_offset, u32 width, u32 height, bool swap_bytes);
 
 	//void resolve_image(vk::command_buffer& cmd, vk::viewable_image* dst, vk::viewable_image* src);
 	//void unresolve_image(vk::command_buffer& cmd, vk::viewable_image* dst, vk::viewable_image* src);

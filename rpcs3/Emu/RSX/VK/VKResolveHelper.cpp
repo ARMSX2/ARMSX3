@@ -48,6 +48,7 @@ namespace vk
 	std::unique_ptr<vk::depthstencil_resolve_EXT> g_depthstencil_resolver;
 	std::unique_ptr<vk::depthstencil_unresolve_EXT> g_depthstencil_unresolver;
 	std::unique_ptr<vk::gfx_shuffle_pass> g_gfx_shuffle;
+	std::unique_ptr<vk::gfx_gather_d24x8_pass> g_gfx_gather_d24x8[2];
 
 	template <typename T, typename ...Args>
 	void initialize_pass(std::unique_ptr<T>& ptr, vk::render_device& dev, Args&&... extras)
@@ -225,8 +226,8 @@ namespace vk
 		const u32 remainder = words % tex_w;
 		const u32 tex_h = full_rows + (remainder ? 1 : 0);
 
-		auto src_img = vk::get_shuffle_helper(0, tex_w, tex_h);
-		auto dst_img = vk::get_shuffle_helper(1, tex_w, tex_h);
+		auto src_img = vk::get_shuffle_helper(0, VK_FORMAT_R32_UINT, tex_w, tex_h);
+		auto dst_img = vk::get_shuffle_helper(1, VK_FORMAT_R32_UINT, tex_w, tex_h);
 
 		if (!src_img || !dst_img)
 		{
@@ -279,8 +280,91 @@ namespace vk
 		return true;
 	}
 
+	bool gfx_gather_d24x8(const vk::command_buffer& cmd_, const vk::buffer* data, u32 data_offset,
+		u32 z_offset, u32 s_offset, u32 width, u32 height, bool swap_bytes)
+	{
+		static const bool s_enabled = []()
+		{
+			const char* v = std::getenv("ARMSX3_GFX_GATHER");
+			const bool off = v && v[0] == '0';
+			if (off) rsx_log.error("ARMSX3_GFX_GATHER=0: falling back to the compute depth gather.");
+			return !off;
+		}();
+
+		if (!s_enabled || !width || !height)
+		{
+			return false;
+		}
+
+		auto& cmd = const_cast<vk::command_buffer&>(cmd_);
+		auto& dev = cmd.get_command_pool().get_owner();
+
+		// Three slots: the two banks in, the packed result out. Slots 0 and 1 belong to
+		// gfx_shuffle_32_16, which can be live in the same command buffer.
+		auto depth_img   = vk::get_shuffle_helper(2, VK_FORMAT_R32_UINT, width, height);
+		auto stencil_img = vk::get_shuffle_helper(3, VK_FORMAT_R8_UINT,  width, height);
+		auto out_img     = vk::get_shuffle_helper(4, VK_FORMAT_R32_UINT, width, height);
+
+		if (!depth_img || !stencil_img || !out_img)
+		{
+			return false;
+		}
+
+		const VkImageSubresourceLayers layer = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		const VkExtent3D extent = { width, height, 1 };
+
+		vk::insert_buffer_memory_barrier(cmd, data->value, z_offset,
+			(u64(width) * height * 4) + (u64(width) * height),
+			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+
+		// Banks in. Both are tightly packed, so bufferRowLength/ImageHeight stay 0.
+		const VkBufferImageCopy z_rgn = { z_offset, 0, 0, layer, { 0, 0, 0 }, extent };
+		const VkBufferImageCopy s_rgn = { s_offset, 0, 0, layer, { 0, 0, 0 }, extent };
+
+		depth_img->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		vkCmdCopyBufferToImage(cmd, data->value, depth_img->value, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &z_rgn);
+		depth_img->change_layout(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+		stencil_img->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+		vkCmdCopyBufferToImage(cmd, data->value, stencil_img->value, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &s_rgn);
+		stencil_img->change_layout(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+		out_img->change_layout(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
+		std::vector<vk::image*> surface = { out_img };
+		auto renderpass = vk::get_renderpass(dev, vk::get_renderpass_key(surface));
+
+		auto& pass = g_gfx_gather_d24x8[swap_bytes ? 1 : 0];
+		initialize_pass(pass, dev, swap_bytes);
+
+		const auto remap = rsx::default_remap_vector.with_encoding(VK_REMAP_IDENTITY);
+		std::vector<vk::image_view*> views = { depth_img->get_view(remap), stencil_img->get_view(remap) };
+
+		pass->run(cmd, { 0, 0, width, height }, static_cast<vk::image*>(out_img), views, renderpass);
+
+		// overlay_pass::run leaves the render pass open.
+		vk::end_renderpass(cmd);
+
+		out_img->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+		const VkBufferImageCopy out_rgn = { data_offset, 0, 0, layer, { 0, 0, 0 }, extent };
+		vkCmdCopyImageToBuffer(cmd, out_img->value, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, data->value, 1, &out_rgn);
+
+		return true;
+	}
+
 	void clear_resolve_helpers()
 	{
+		for (auto& p : g_gfx_gather_d24x8)
+		{
+			if (p)
+			{
+				p->destroy();
+				p.reset();
+			}
+		}
+
 		if (g_gfx_shuffle)
 		{
 			g_gfx_shuffle->destroy();
