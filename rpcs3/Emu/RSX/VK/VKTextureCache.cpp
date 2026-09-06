@@ -193,16 +193,28 @@ namespace vk
 				// permutation.
 				const bool tiling_commutes = !require_tiling || elem_size == 4;
 
-				// This path replaced a compute dispatch with CPU work, so unlike every other
-				// conversion it leaves NO trace in the log -- which made "no compute dispatched"
-				// read as "this code did not run". It ran. Log it, and allow it to be turned off
-				// from driver_env.txt so it can be A/B'd against the GPU kernel it replaced.
+				// OFF by default: this deferral corrupts guest memory.
+				//
+				// The GPU kernel swaps the readback BUFFER, which holds only the packed image, and
+				// flush_dma then writes it out a row at a time at rsx_pitch stride. Deferring the
+				// swap to after the DMA moves it onto GUEST memory, where a flat run over
+				// rsx_pitch * height also covers the padding between rows -- bytes this flush never
+				// wrote. Minecraft does over a thousand of these flushes in thirteen seconds, and
+				// the damage accumulated into visible texture corruption that faded as you
+				// approached a surface. Confirmed on device: forcing this path back to the GPU
+				// kernel fixes it outright.
+				//
+				// A correct version has to walk rows and swap only the real_pitch bytes per row,
+				// the way the swizzle path in imp_flush already does. That needs the sub-range
+				// cases worked through properly, so it is not enabled on a hunch --
+				// ARMSX3_CPU_READBACK_SWAP=1 opts back in for whoever does that work.
 				static const bool s_cpu_readback_swap = []()
 				{
 					const char* v = std::getenv("ARMSX3_CPU_READBACK_SWAP");
-					const bool off = v && v[0] == '0';
-					if (off) rsx_log.error("ARMSX3_CPU_READBACK_SWAP=0: readback byteswap back on the GPU.");
-					return !off;
+					const bool on = v && v[0] == '1';
+					if (on) rsx_log.error("ARMSX3_CPU_READBACK_SWAP=1: deferring the readback byteswap"
+						" to the CPU. This is known to corrupt guest memory when real_pitch != rsx_pitch.");
+					return on;
 				}();
 
 				if (s_cpu_readback_swap && shuffle_kernel && tiling_commutes && !is_swizzled())
