@@ -9312,7 +9312,23 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			return {};
 		};
 
-		if (g_cfg.core.spu_accurate_reservations)
+		// The whitelist runs in BOTH reservation modes.
+		//
+		// It used to sit inside `if (g_cfg.core.spu_accurate_reservations)`, which meant turning
+		// accurate reservations OFF did two entirely unrelated things: it took the non-accurate
+		// shortcuts in do_putllc, AND it skipped this filter completely -- allow_pattern is
+		// initialised true, so every pattern the analyser found was installed unchecked, including
+		// the ones this list exists to refuse.
+		//
+		// That is what "Accurate SPU Reservations = off renders nothing" has always been. The note
+		// on the Soulcalibur V entry below already says it: clearing the gate takes that title to
+		// 50 fps "but the game then renders nothing, because that also admits patterns which are
+		// genuinely unsafe". The speed and the corruption were being attributed to one switch when
+		// they come from two separate mechanisms, and only one of them was wanted.
+		//
+		// Filtering unconditionally can only make the non-accurate mode STRICTER -- it installs a
+		// subset of what it installed before, and exactly what accurate mode already installs -- so
+		// it cannot introduce a pattern that was not already trusted.
 		{
 			// The problem with PUTLLC16 optimization, that it is in theory correct at the bounds of the spu function.
 			// But if the SPU code reuses the cache line data observed, it is not truly atomic.
@@ -9428,7 +9444,11 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			// The hash is over the guest bytes of the pattern, so it identifies this loop and no
 			// other build's. Without logging it there is no way to name a pattern for the
             // whitelist, which is presumably why the list still has one disabled placeholder in it.
-			spu_log.notice("PUTLLC16 pattern refused: hash=%s put_pc=0x%05x lsa_pc=0x%05x", pattern_hash, pattern.put_pc, pattern.lsa_pc);
+			// Warning, not notice: notice is below the shipped Android log level, so with the
+			// whitelist now running in both reservation modes there was no way to confirm from a
+			// device log that it was filtering anything at all -- the only evidence was
+			// behavioural. This line is what says the gate is live.
+			spu_log.warning("PUTLLC16 pattern refused: hash=%s put_pc=0x%05x lsa_pc=0x%05x", pattern_hash, pattern.put_pc, pattern.lsa_pc);
 
 			// A hash on its own cannot be checked by eye, and it is the only thing the whitelist
 			// above is keyed on, so print the loop it names -- disassembled off the analysed
