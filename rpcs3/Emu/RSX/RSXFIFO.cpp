@@ -812,14 +812,37 @@ namespace rsx
 					RSX_PROF_SCOPE(idle_fifo);
 
 #if defined(ARCH_ARM64)
-					if (s_fifo_idle_spins < 8)
+					s_fifo_idle_spins++;
+
+					if (s_fifo_idle_spins <= 8)
 					{
-						s_fifo_idle_spins++;
 						utils::pause();
 					}
 					else if (utils::has_wfe_event_stream())
 					{
 						utils::wait_for_event();
+
+						// WFE does not actually park on Oryon (Snapdragon 8 Elite class), even
+						// with the architected event stream reported present -- the same defect
+						// nv406e.cpp documents for its semaphore wait. Measured here with
+						// simpleperf while Soulcalibur V sat at 1 fps: 99.92% of every sample in
+						// run_FIFO landed on the single branch immediately after the second WFE,
+						// which is 24% of the whole process's cycles. A thread parked in WFE
+						// accrues no cycles at all, so that distribution can only mean the wait
+						// returns instantly and this becomes a tight spin.
+						//
+						// Burning a core here is worse than the wake latency it buys: on an
+						// 8-core part with five SPU threads saturated, this is a core taken from
+						// the work the RSX is waiting for, and it holds the SoC at ~90C.
+						//
+						// So once idle is clearly sustained, pace with a real sleep. The 8-spin
+						// hot path above still catches a PUT that lands within microseconds, which
+						// is what ouroboros420 had to restore (832c23078) after parking bare here
+						// cost frametime smoothness -- this keeps that and only bounds the tail.
+						if (s_fifo_idle_spins > 512)
+						{
+							std::this_thread::sleep_for(std::chrono::microseconds(50));
+						}
 					}
 					else
 					{
