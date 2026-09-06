@@ -177,50 +177,24 @@ namespace vk
 		m_program->bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
 	}
 
-	// DIAGNOSTIC BISECT for the Adreno 830 GPU hang. Off unless ARMSX3_NO_COMPUTE=1 is set in
-	// <root>/driver_env.txt, so shipping builds behave exactly as before and it needs no rebuild
-	// to toggle.
+	// Every dispatch here is a graphics->compute engine switch, and on Adreno 830 that path is
+	// where a reproducible GPU hang lived. Decoded RBBM registers from the kgsl snapshot put the
+	// wedge at unslice PC (which owns the gfx<->compute transition) and unslice HLSQ (the wave
+	// context allocator), with UCHE, VPC, VSC, CMP, DCMP and VBIF_GX idle and zero page faults --
+	// a launched grid that never retires, not a memory stall. The CP parks on whatever drain point
+	// it reaches next, which differs between captures while the registers stay byte-identical, so
+	// the park point is not the fault site.
 	//
-	// Eight GPU snapshots taken at the hang all show the command processor parked on a
-	// CP_WAIT_FOR_IDLE immediately after a CP_BLIT or CP_EXEC_CS, with RBBM_STATUS reporting
-	// PC_BUSY and HLSQ_BUSY while UCHE, VPC, VSC, CMP and DCMP are all idle -- the front end is
-	// wedged and the CP is merely the next thing to block. The submissions that hang are the
-	// texture transfer path: staging buffer -> compute byteswap/deswizzle -> image, emitted as
-	// CP_BLIT -> CP_EXEC_CS -> CP_BLIT five to fourteen times per submit, each side wrapped in a
-	// full pipeline drain (26-108 CP_WAIT_FOR_IDLE and one CP_CCHE_INVALIDATE per dispatch,
-	// exactly matching the CP_EXEC_CS count in all eight captures).
-	//
-	// Skipping the dispatch removes every graphics<->compute engine switch and its paired cache
-	// operations while leaving the render-pass split above intact, so the rest of the command
-	// stream is unchanged. Textures decode wrong with this on -- it is a bisect, not a fix.
+	// The fix was to stop generating the transition on the hot path rather than to tune it: see
+	// vk::gfx_shuffle_32_16, which does the same byteswap from a fragment shader. The counters and
+	// ARMSX3_SKIP_COMPUTE below exist so the next occurrence can be attributed to a specific
+	// kernel in one run instead of guessed at -- guessing cost several rounds here.
 	void compute_task::run(const vk::command_buffer& cmd, u32 invocations_x, u32 invocations_y, u32 invocations_z)
 	{
-		// FUNCTION-LOCAL on purpose. At namespace scope this initialises when the library loads,
-		// which is long before rpcsx-android.cpp reads driver_env.txt and calls setenv -- so
-		// getenv returned null and the switch silently did nothing. A function-local static is
-		// initialised on first use, i.e. on the first dispatch, which is well after the env is set.
-		// The missing "compute dispatches DISABLED" line was the only sign the test had not run.
-		static const bool s_skip_compute_dispatch = []()
-		{
-			const char* v = std::getenv("ARMSX3_NO_COMPUTE");
-			const bool on = v && v[0] == '1';
-			if (on) rsx_log.error("ARMSX3_NO_COMPUTE=1: compute dispatches DISABLED (GPU hang bisect)."
-				" Textures will be wrong. Unset this in driver_env.txt to restore normal rendering.");
-			else rsx_log.notice("ARMSX3_NO_COMPUTE not set; compute dispatches enabled (normal).");
-			return on;
-		}();
-
 		// CmdDispatch is outside renderpass scope only
 		if (vk::is_renderpass_open(cmd))
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[3]++; vk::end_renderpass(cmd);
-		}
-
-		// The render-pass split above still happens on purpose: dropping it too would change
-		// render-pass segmentation as well and the test would no longer be single-variable.
-		if (s_skip_compute_dispatch) [[unlikely]]
-		{
-			return;
 		}
 
 		// Per-task selective skip. ARMSX3_SKIP_COMPUTE is a comma-separated list of substrings
@@ -264,7 +238,7 @@ namespace vk
 			// error level on purpose: notice sits below the shipped log level, so the counters
 			// this was built for produced NOTHING in the capture they were meant to inform.
 			// The milestones are rare (1/100/1000/10000/100k), so this cannot spam.
-			rsx_log.error("Compute DISPATCH %s x%d", m_debug_name, n);
+			rsx_log.warning("Compute DISPATCH %s x%d", m_debug_name, n);
 		}
 
 		load_program(cmd);
