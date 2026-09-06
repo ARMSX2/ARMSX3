@@ -663,13 +663,35 @@ namespace vm
 						// YIELD is arm64's actual spin-wait hint. Keep an occasional ISB so the
 						// backoff still has weight on cores where YIELD retires as a nop, and so
 						// the loop cannot become a tight unhinted spin.
-						if ((spins & 15) == 15)
+						if (spins < 64)
 						{
-							utils::pause();
+							if ((spins & 15) == 15)
+							{
+								utils::pause();
+							}
+							else
+							{
+								__asm__ volatile("yield" ::: "memory");
+							}
 						}
 						else
 						{
-							__asm__ volatile("yield" ::: "memory");
+							// Give the core up, because the thread we are waiting for may need it.
+							//
+							// Spinning here is self-defeating under load. This waits for a PPU
+							// thread to reach cpu_flag::wait, which it can only do by RUNNING far
+							// enough to check its state -- and on an 8-core part with five SPU
+							// threads saturated in this very loop, the PPU is runnable but starved.
+							// Measured in Soulcalibur V while wedged: PPU on-CPU 8.9% against
+							// 23.1% run_delay, i.e. it spends more time waiting for a core than
+							// using one, while five SPUs hold the cores spinning on its behalf.
+							//
+							// Making the spin cheaper does not help and was tried: replacing the
+							// ISB with YIELD left vm::writer_lock at 8.57% of the process against
+							// 8.10% before, because the loop is latency-bound on the PPU parking,
+							// not throughput-bound on the spin. The wait only shortens if the PPU
+							// gets to run.
+							std::this_thread::yield();
 						}
 #else
 						utils::pause();
