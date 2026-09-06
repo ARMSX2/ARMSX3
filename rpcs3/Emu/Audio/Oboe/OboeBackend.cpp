@@ -63,14 +63,26 @@ bool OboeBackend::Open(std::string_view /*dev_id*/, AudioFreq freq, AudioSampleS
 	//
 	// PerformanceMode::None keeps the stream on the ordinary mixer, which is capturable. It costs
 	// latency, so it is opt-in: set ARMSX3_AUDIO_LOWLATENCY=0 in driver_env.txt before recording.
-	static const bool s_low_latency = []()
+	// The setting is the source of truth; the env var only exists so this can be flipped without
+	// the UI while debugging, and it says so in the log when it wins. Two silent stores for one
+	// value is how a setting ends up reading OFF in the UI and ON in config.yml.
+	bool low_latency = !g_cfg.audio.recording_compatible;
+
+	if (const char* v = std::getenv("ARMSX3_AUDIO_LOWLATENCY"))
 	{
-		const char* v = std::getenv("ARMSX3_AUDIO_LOWLATENCY");
-		const bool off = v && v[0] == '0';
-		if (off) Oboe.error("ARMSX3_AUDIO_LOWLATENCY=0: PerformanceMode::None, so screen recording"
-			" can capture the audio. Expect a little more latency.");
-		return !off;
-	}();
+		const bool env_low_latency = v[0] != '0';
+		if (env_low_latency != low_latency)
+		{
+			Oboe.error("ARMSX3_AUDIO_LOWLATENCY=%s overrides the Recording Compatible setting.", v);
+		}
+		low_latency = env_low_latency;
+	}
+
+	if (!low_latency)
+	{
+		Oboe.notice("PerformanceMode::None: the stream stays on the mixer so screen recording can"
+			" capture it, at the cost of some latency.");
+	}
 
 	const auto build = [&](oboe::AudioStreamBuilder& builder)
 	{
@@ -82,7 +94,7 @@ bool OboeBackend::Open(std::string_view /*dev_id*/, AudioFreq freq, AudioSampleS
 		// is survivable on a machine running at full speed and fatal on one that is not -- a game
 		// running at 10fps misses the deadline continuously. ARMSX2's Oboe backend settled on
 		// Shared for the same device class before this one was written.
-		->setPerformanceMode(s_low_latency ? oboe::PerformanceMode::LowLatency : oboe::PerformanceMode::None)
+		->setPerformanceMode(low_latency ? oboe::PerformanceMode::LowLatency : oboe::PerformanceMode::None)
 		->setSharingMode(oboe::SharingMode::Shared)
 		// Game usage tells the platform not to apply the media post-processing chain, which
 		// on some devices adds tens of milliseconds of latency we cannot see or control.

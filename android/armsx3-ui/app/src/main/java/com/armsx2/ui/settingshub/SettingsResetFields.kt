@@ -61,7 +61,8 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
         "audioBufferMs", "audioFastForwardVolume", "audioMuted", "audioOpenSLES",
         "audioOutputLatencyMs", "audioSwapChannels", "audioTimeStretch", "audioVolume",
         "ps3AudioBufferMs", "ps3AudioChannels", "ps3AudioCubebBackend", "ps3AudioFormat",
-        "ps3AudioRenderer", "ps3AudioTimeStretch", "spu2LightweightMix", "spu2NeonReverb",
+        "ps3AudioRecordingCompat", "ps3AudioRenderer", "ps3AudioTimeStretch",
+        "spu2LightweightMix", "spu2NeonReverb",
     ),
     // NetworkTab.kt
     SettingsCategory.Network to listOf(

@@ -498,6 +498,8 @@ val EN: Map<String, String> = mapOf(
     "audio.volume.label" to "Volume",
     "audio.volume.description" to "Above 100% boosts/amplifies SPU2 output — handy for quiet games, but very high levels can distort/clip.",
     "audio.mute.label" to "Mute",
+    "audio.recordingcompat.label" to "Recording-compatible audio",
+    "audio.recordingcompat.description" to "Routes audio through the system mixer so screen recorders can capture it. Without this, recordings can come out silent even though the audio plays normally on the device. Adds a little latency, so leave it off unless you are recording.",
     "audio.synchronization.label" to "Time Stretching",
     "audio.synchronization.description" to "Keeps audio pitch correct when the emulator runs below full speed, instead of letting sound slow and drop in pitch along with it. Costs a little CPU; turn it off if audio stutters more with it on.",
     "audio.buffer.label" to "Audio Buffer",

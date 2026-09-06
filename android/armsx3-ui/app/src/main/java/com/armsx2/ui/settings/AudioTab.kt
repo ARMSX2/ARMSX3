@@ -58,6 +58,12 @@ fun AudioTab(state: MutableState<Settings>) {
             description = str("audio.synchronization.description"),
         ) { apply(s.copy(ps3 = s.ps3.copy(audioTimeStretch = it))) }
         SettingsDivider()
+        ToggleRow(
+            str("audio.recordingcompat.label"),
+            s.ps3.audioRecordingCompat,
+            description = str("audio.recordingcompat.description"),
+        ) { apply(s.copy(ps3 = s.ps3.copy(audioRecordingCompat = it))) }
+        SettingsDivider()
         IntSliderRow(
             label = str("audio.buffer.label"),
             value = s.ps3.audioBufferMs.coerceIn(4, 250),

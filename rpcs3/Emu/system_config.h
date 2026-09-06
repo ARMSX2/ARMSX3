@@ -324,6 +324,12 @@ struct cfg_root : cfg::node
 		cfg::_bool enable_buffering{ this, "Enable Buffering", true, true };
 		cfg::_int <4, 250> desired_buffer_duration{ this, "Desired Audio Buffer Duration", 34, true };
 		cfg::_bool enable_time_stretching{ this, "Enable Time Stretching", false, true };
+		// Android screen recorders capture nothing while Oboe runs in low-latency mode, because
+		// AAudio's MMAP fast path writes past the mixer AudioPlaybackCapture reads from. The audio
+		// is audible the whole time and no error is raised, so this looks like a broken recorder.
+		// Setting this puts the stream on the ordinary mixer, where it can be captured, at the
+		// cost of some latency -- so it is off unless you are recording.
+		cfg::_bool recording_compatible{ this, "Recording Compatible", false, true };
 		cfg::_bool disable_sampling_skip{ this, "Disable Sampling Skip", false, true };
 		// Which backend cubeb should use, or empty for its own auto-selection.
 		//

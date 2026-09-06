@@ -660,6 +660,7 @@ object Rpcs3Bridge {
                 "Audio Format" -> Rpcs3Settings.setAudioFormat(asInt(value))
                 "Audio Channel Layout" -> Rpcs3Settings.setAudioChannelLayout(asInt(value))
                 "Enable Time Stretching" -> Rpcs3Settings.setTimeStretching(asBool(value))
+                "Recording Compatible" -> Rpcs3Settings.setRecordingCompatible(asBool(value))
                 "Enable Buffering" -> Rpcs3Settings.setAudioBuffering(asBool(value))
                 "Desired Audio Buffer Duration" -> Rpcs3Settings.setAudioBufferDuration(asInt(value))
                 "Renderer" -> Rpcs3Settings.setAudioRenderer(asInt(value))

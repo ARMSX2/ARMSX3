@@ -356,6 +356,9 @@ object Rpcs3Settings {
 
     fun setTimeStretching(enabled: Boolean) = setBool("$AUDIO@@Enable Time Stretching", enabled)
 
+    /** Keeps Oboe off AAudio's MMAP fast path so screen recording can capture the audio. */
+    fun setRecordingCompatible(enabled: Boolean) = setBool("$AUDIO@@Recording Compatible", enabled)
+
     /**
      * Which cubeb backend delivers the audio, or auto.
      *
