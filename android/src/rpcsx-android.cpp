@@ -2464,9 +2464,9 @@ static void setupCallbacks() {
           },
       .get_font_dirs = [](auto...) { return std::vector<std::string>(); },
       .on_install_pkgs =
-          [](const std::vector<std::string> &pkgs) {
+          [](const std::vector<std::string> &pkgs, bool from_optical_drive) {
             for (const std::string &pkg : pkgs) {
-              if (!rpcs3::utils::install_pkg(pkg)) {
+              if (!rpcs3::utils::install_pkg(pkg, from_optical_drive)) {
                 rpcsx_android.error("cd install pkgs: failed to install %s",
                                     pkg);
                 return false;
@@ -4860,7 +4860,9 @@ static bool installPkg(JNIEnv *env, std::vector<fs::file> &&files,
   std::atomic<bool> finished{false};
 
   named_thread worker("PKG Installer", [&readers, &result, &bootable_paths, &finished] {
-    result = package_reader::extract_data(readers, bootable_paths);
+    // Android has no optical drive: packages always come from storage or SAF, so the
+    // single-threaded optical path upstream added in 44a2e4d66 never applies here.
+    result = package_reader::extract_data(readers, bootable_paths, false);
     finished.store(true, std::memory_order_release);
     return result.error == package_install_result::error_type::no_error;
   });

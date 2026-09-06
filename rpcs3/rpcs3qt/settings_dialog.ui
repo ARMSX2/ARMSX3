@@ -4458,6 +4458,13 @@
                  </widget>
                 </item>
                 <item>
+                  <widget class="QCheckBox" name="blitEngineScaling">
+                  <property name="text">
+                    <string>Disable Blit Engine Upscaling</string>
+                  </property>
+                  </widget>
+                </item>
+                <item>
                  <widget class="QCheckBox" name="disableFIFOReordering">
                   <property name="text">
                    <string>Disable FIFO Reordering</string>

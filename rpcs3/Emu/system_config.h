@@ -234,7 +234,7 @@ struct cfg_root : cfg::node
 		// would mean either clipping at half the useful range (it is clamped 0..100) or widening
 		// that clamp, which would silently change what every existing FSR config means.
 		cfg::uint<0, 200> sgsr_sharpening_intensity{ this, "SGSR Edge Sharpness", 100, true };
-		cfg::_bool allow_blit_engine_upscaling{ this, "Allow Blit Engine Upscaling", false, true };
+		cfg::_bool disable_blit_engine_upscaling{ this, "Disable Blit Engine Upscaling", false, true };
 
 		struct node_vk : cfg::node
 		{
