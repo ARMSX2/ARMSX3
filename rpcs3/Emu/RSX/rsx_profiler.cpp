@@ -1724,6 +1724,32 @@ namespace rsx::prof
 	{
 		if (!g_acc.frames)
 		{
+			// No frames does not mean nothing to report -- it is the state most worth reporting.
+			//
+			// Everything below is normalised per frame, so the whole report used to be skipped
+			// when the emulator produced none. That hid the PUTLLC barrier counters during exactly
+			// the stall they explain: Soulcalibur V sat at roughly one vblank every five seconds
+			// with five SPUs and the RSX thread pegged, and the barrier histogram -- the one thing
+			// that says which loop is doing it -- was unavailable because the instrument needed
+			// the frames the barriers were preventing.
+			//
+			// Emit the frame-independent part, then reset as before.
+			u64 calls = 0, barriers = 0;
+			idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
+			{
+				calls += spu.putllc_calls;
+				barriers += spu.putllc_barrier;
+			});
+
+			if (const u64 dc = calls - g_putllc_calls_prev)
+			{
+				prof_log.error("RSX produced no frames this window. PUTLLC +%u (barrier +%u)\n\t    barrier sites (addr:count):%s",
+					dc, barriers - g_putllc_barrier_prev, spu_putllc_barrier_sites());
+
+				g_putllc_calls_prev = calls;
+				g_putllc_barrier_prev = barriers;
+			}
+
 			return;
 		}
 
