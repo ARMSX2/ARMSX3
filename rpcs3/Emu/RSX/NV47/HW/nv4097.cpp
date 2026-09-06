@@ -4,6 +4,7 @@
 
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/RSX/Common/BufferUtils.h"
+#include "Emu/RSX/Host/MM.h"
 #include "Emu/RSX/rsx_profiler.h"
 
 #define RSX(ctx) ctx->rsxthr
@@ -759,6 +760,9 @@ namespace rsx
 			const u32 addr = RSX(ctx)->iomap_table.get_addr(0xf100000 + (index * 0x40));
 
 			ensure(addr != umax);
+
+			// Notify ticks are strongly ordered
+			RSX(ctx)->sync();
 
 			vm::_ptr<atomic_t<RsxNotify>>(addr)->store(
 			{

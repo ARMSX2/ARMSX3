@@ -65,12 +65,12 @@ namespace rsx
 			m_highlight->back_color = color4f(0.f, 0.f, 0.f, 0.f);
 			m_highlight->pulse_effect_enabled = true;
 
-			m_back_hint.set_image_resource(resource_config::standard_image_resource::circle);
+			m_back_hint.set_image_resource(resource_config::cancel_button_resource());
 			m_back_hint.set_text(localized_string_id::BIG_PICTURE_HINT_BACK);
 			m_back_hint.set_font("Arial", 16);
 			m_back_hint.set_pos(x + width - 2 * (30 + 120), y + height + 20);
 
-			m_select_hint.set_image_resource(resource_config::standard_image_resource::cross);
+			m_select_hint.set_image_resource(resource_config::confirm_button_resource());
 			m_select_hint.set_text(localized_string_id::BIG_PICTURE_HINT_SELECT);
 			m_select_hint.set_font("Arial", 16);
 			m_select_hint.set_pos(x + width - (30 + 120), y + height + 20);
@@ -161,7 +161,7 @@ namespace rsx
 
 		void big_picture_game_grid::finish_reload(std::vector<std::unique_ptr<big_picture_game_tile>>&& tiles)
 		{
-			std::lock_guard lock(m_reload_mutex);
+			std::lock_guard lock(m_mutex);
 
 			if (thread_ctrl::state() == thread_state::aborting)
 			{
@@ -280,6 +280,8 @@ namespace rsx
 
 		page_navigation big_picture_game_grid::handle_button_press(pad_button button_press, bool is_auto_repeat, u64 auto_repeat_interval_ms)
 		{
+			std::lock_guard lock(m_mutex);
+
 			if (m_loading) return page_navigation::stay;
 
 			const bool do_play_sound = !is_auto_repeat || auto_repeat_interval_ms >= user_interface::m_auto_repeat_ms_interval_default;
@@ -322,12 +324,8 @@ namespace rsx
 				if (button_press == pad_button::circle)
 				{
 					play_sound(sound_effect::cancel);
-					if (parent)
-					{
-						set_current_page(parent);
-						return page_navigation::back;
-					}
-					return page_navigation::exit;
+					set_current_page(ensure(parent));
+					return page_navigation::back;
 				}
 
 				return page_navigation::stay;
@@ -372,12 +370,8 @@ namespace rsx
 				return page_navigation::stay;
 			case pad_button::circle:
 				play_sound(sound_effect::cancel);
-				if (parent)
-				{
-					set_current_page(parent);
-					return page_navigation::back;
-				}
-				return page_navigation::exit;
+				set_current_page(ensure(parent));
+				return page_navigation::back;
 			default:
 				return page_navigation::stay;
 			}
@@ -392,7 +386,7 @@ namespace rsx
 
 		compiled_resource& big_picture_game_grid::get_compiled()
 		{
-			std::lock_guard lock(m_reload_mutex);
+			std::lock_guard lock(m_mutex);
 
 			if (!m_highlight->is_compiled() ||
 				(!m_tiles.empty() && m_grid && !m_grid->is_compiled()) ||

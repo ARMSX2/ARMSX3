@@ -9,6 +9,7 @@
 #include "../Common/texture_cache.h"
 #include "Emu/RSX/Common/BufferUtils.h"   // copy_data_swap_u32 for the deferred readback byteswap
 #include "../Common/tiled_dma_copy.hpp"
+#include "../Utils/image_utils.hpp"
 
 #include <memory>
 #include <vector>
