@@ -3841,6 +3841,52 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 
 		record_putllc_barrier_site(addr, pc);
 
+		// One-shot disassembly of the loop actually issuing the barriers.
+		//
+		// The site histogram named a single PC responsible for ~99% of them, and no refused-loop
+		// dump covered it -- the refused dump caps at 16 hashes and skips loops longer than 256
+		// bytes, so "not in that list" does not mean "not a pattern". Without the code there is no
+		// way to tell whether PUTLLC16 could ever apply here or whether the fix lies elsewhere.
+		// Fires once per PC, at most four PCs, only after a site is clearly hot.
+		if (putllc_barrier > 1000000) [[unlikely]]
+		{
+			static atomic_t<u32> s_dumped_pcs[4]{};
+
+			for (auto& slot : s_dumped_pcs)
+			{
+				const u32 have = slot.load();
+
+				if (have == pc)
+				{
+					break;
+				}
+
+				if (!have && slot.compare_and_swap_test(0, pc))
+				{
+					SPUDisAsm dis_asm(cpu_disasm_mode::normal, reinterpret_cast<const u8*>(ls), 0);
+
+					std::string body;
+					const u32 lo = pc > 0x80 ? pc - 0x80 : 0u;
+
+					for (u32 i = lo; i <= pc + 0x10 && i < 0x40000; i += 4)
+					{
+						dis_asm.disasm(i);
+						std::string_view op = dis_asm.last_opcode;
+
+						while (!op.empty() && (op.back() == '\n' || op.back() == ' ' || op.back() == '\t'))
+						{
+							op.remove_suffix(1);
+						}
+
+						fmt::append(body, "\n    0x%05x  %s%s", i, op, i == pc ? "   <<<< PUTLLC" : "");
+					}
+
+					spu_log.error("PUTLLC barrier hot loop at pc 0x%05x (addr 0x%08x):%s", pc, addr, body);
+					break;
+				}
+			}
+		}
+
 		const bool success = [&]()
 		{
 			// Full lock (heavyweight)
