@@ -8,6 +8,8 @@
 #include "VKRenderPass.h"
 #include "VKResolveHelper.h"
 
+#include <cstdlib>
+
 #include "vkutils/data_heap.h"
 #include "vkutils/image_helpers.h"
 #include "VKGSRender.h"
@@ -1166,40 +1168,47 @@ namespace vk
 			// Calculate estimated memory utilization for this subresource
 			image_linear_size = row_pitch * layout.depth * (rsx::is_compressed_host_format(caps, format) ? layout.height_in_block : layout.height_in_texel);
 
-			// Only do GPU-side conversion if occupancy is good
+			// How much of the texture conversion runs on the GPU.
 			//
-			// The old bar was 1 KB, which every texture and every mip level in a chain clears, so
-			// effectively every upload ran a compute dispatch. Each one is a graphics->compute
-			// engine switch: vkCmdCopyBuffer, a barrier, vkCmdDispatch, another barrier, then
-			// vkCmdCopyBufferToImage, which the driver emits as CP_BLIT -> CP_EXEC_CS -> CP_BLIT
-			// with a full pipeline drain and a cache invalidate on each side.
+			// Upstream uses `image_linear_size >= 1024`, which every texture and nearly every mip
+			// level clears, so in practice every upload ran a compute dispatch. On Adreno 830 each
+			// dispatch is a graphics->compute engine switch, and those wedge the GPU: the decoded
+			// hang snapshot put the stall at exactly that transition. Raising the bar to 1 MB
+			// stopped Minecraft hanging; dropping GPU conversion entirely for CPU-reachable data
+			// removed the rest.
 			//
-			// On an Adreno 830 under Turnip that pattern hangs the GPU. Eight snapshots taken at
-			// the hang all park the command processor on a CP_WAIT_FOR_IDLE next to one of those
-			// switches, with PC and HLSQ busy and every other block idle. Disabling compute
-			// dispatch entirely (ARMSX3_NO_COMPUTE=1, VKCompute.cpp) makes the hang stop, which is
-			// the only single-variable change that has.
+			// NOTE this decision is made ONCE, on mip level 0, and then applies to the whole mip
+			// chain -- `check_hw_caps` is cleared at the end of this block but the block sits
+			// inside the per-subresource loop. So a texture whose level 0 clears the bar sends
+			// every level down the same path.
 			//
-			// 1 MB keeps the GPU path where it actually pays -- large surfaces and anything
-			// already resident in GPU memory, which cannot be touched by the CPU at all -- and
-			// sends the long tail of small textures and mip levels down the CPU byteswap path in
-			// TextureUtils.cpp instead. That costs some CPU time and removes most of the engine
-			// switches per submission.
-			// GPU-side conversion only for data the CPU physically cannot touch.
-			//
-			// The bar was 1 KB, then 1 MB. At 1 MB, Minecraft stopped hanging but Batman: Arkham
-			// City did not, and the compute-task log showed cs_shuffle_32 still dispatching from
-			// uploads that clear the megabyte. Every one of those is a graphics->compute engine
-			// switch, and removing all of them (ARMSX3_NO_COMPUTE=1) is the only change that has
-			// ever stopped this hang.
-			//
-			// source_is_gpu_resident is the one case with no alternative: that data lives in GPU
-			// memory and there is no CPU pointer to it, which the buf_allocator below asserts.
-			// Everything else takes the CPU byteswap path in TextureUtils.cpp, which is correct
-			// and costs CPU time rather than a pipeline drain.
+			// ARMSX3_GPU_CONVERT_THRESHOLD sets the bar in bytes without a rebuild, so a rendering
+			// question can be answered against the original behaviour on the device:
+			//   1024    -> exactly upstream
+			//   1048576 -> the 1 MB step that first stopped the Minecraft hang
+			//   unset   -> GPU conversion only for source_is_gpu_resident, the current default
+			// Function-local static: at namespace scope this would initialise before
+			// driver_env.txt is read and getenv would return null.
+			static const u32 s_gpu_convert_threshold = []() -> u32
+			{
+				if (const char* v = std::getenv("ARMSX3_GPU_CONVERT_THRESHOLD"))
+				{
+					const u32 parsed = static_cast<u32>(std::strtoul(v, nullptr, 10));
+					rsx_log.warning("ARMSX3_GPU_CONVERT_THRESHOLD=%u: GPU texture conversion for"
+						" subresources of at least this many bytes.", parsed);
+					return parsed;
+				}
+
+				return umax;
+			}();
+
 			if (check_hw_caps)
 			{
-				caps.supports_byteswap = !!(image_setup_flags & source_is_gpu_resident);
+				// source_is_gpu_resident has no alternative: that data has no CPU pointer at all,
+				// which the buf_allocator below asserts. Everything else can take the CPU byteswap
+				// path in TextureUtils.cpp, which costs CPU time instead of a pipeline drain.
+				caps.supports_byteswap = (image_linear_size >= s_gpu_convert_threshold) ||
+					!!(image_setup_flags & source_is_gpu_resident);
 				caps.supports_hw_deswizzle = caps.supports_byteswap;
 				caps.supports_zero_copy = caps.supports_byteswap;
 				caps.supports_vtc_decoding = false;
