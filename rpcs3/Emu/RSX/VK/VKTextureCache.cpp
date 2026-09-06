@@ -587,7 +587,11 @@ namespace vk
 				// Measured on an Adreno 830 snapshot: fixing only the output side took one command
 				// buffer from CP_WAIT_FOR_IDLE x68 / CP_BLIT x40 down to x26 / x19. This is the
 				// other half of the same pattern. The ensure() below already accepts GENERAL.
-				if (src_image->current_layout != VK_IMAGE_LAYOUT_GENERAL)
+				if (!vk::typeless_helper_general())
+				{
+					src_image->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+				}
+				else if (src_image->current_layout != VK_IMAGE_LAYOUT_GENERAL)
 				{
 					src_image->change_layout(cmd, VK_IMAGE_LAYOUT_GENERAL);
 				}
@@ -596,11 +600,24 @@ namespace vk
 				const areai dst_rect = coordi{{ 0, 0 }, { convert_w, src_h }};
 				vk::copy_image_typeless(cmd, section.src, src_image, src_rect, dst_rect);
 
+				if (!vk::typeless_helper_general())
+				{
+					src_image->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+				}
+
 				src_x = 0;
 				src_y = 0;
 				src_w = convert_w;
 			}
 
+			// A/B against the pre-14:16 layout handling.
+			//
+			// Holding the shared typeless helper in GENERAL removed a per-section pipeline drain,
+			// but change_layout() early-returns when the layout already matches, so a later
+			// push_layout(GENERAL) -- which copy_scaled_image issues on its write-to-self path,
+			// and get_typeless_helper does hand back the same image for both ends -- stopped
+			// emitting a barrier at all. ARMSX3_TYPELESS_GENERAL=0 restores the original
+			// TRANSFER_DST/TRANSFER_SRC ping-pong so the two can be compared on device.
 			ensure(src_image->current_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL || src_image->current_layout == VK_IMAGE_LAYOUT_GENERAL);
 			ensure(transform == rsx::surface_transform::identity);
 
@@ -636,7 +653,11 @@ namespace vk
 					// so holding the helper there for the whole loop removes the ping-pong entirely.
 					// This is the same trick already used on the source images above, for the same
 					// reason.
-					if (_dst->current_layout != VK_IMAGE_LAYOUT_GENERAL)
+					if (!vk::typeless_helper_general())
+					{
+						_dst->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+					}
+					else if (_dst->current_layout != VK_IMAGE_LAYOUT_GENERAL)
 					{
 						_dst->change_layout(cmd, VK_IMAGE_LAYOUT_GENERAL);
 					}
@@ -674,9 +695,11 @@ namespace vk
 					// Casting comes after the scaling!
 					const auto copy_rgn = get_output_region(section, dst_rect.position.x, dst_rect.position.y, section.dst_w, section.dst_h, _dst);
 
-					// No transition here. The helper is already GENERAL, which is a legal copy
-					// source, and flipping it to TRANSFER_SRC and back was the other half of the
-					// per-section ping-pong described above.
+					if (!vk::typeless_helper_general())
+					{
+						_dst->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+					}
+
 					vkCmdCopyImage(cmd, _dst->value, _dst->current_layout, dst->value, dst->current_layout, 1, &copy_rgn);
 				}
 			}

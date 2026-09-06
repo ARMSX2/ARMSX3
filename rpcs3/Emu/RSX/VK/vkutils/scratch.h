@@ -10,6 +10,7 @@ namespace vk
 	// Colour-attachment scratch for the graphics-pipeline byteswap. Unlike the typeless helper this
 	// needs SAMPLED and COLOR_ATTACHMENT usage, because the swap runs as a fragment shader rather
 	// than a compute dispatch. See gfx_shuffle_pass.
+	bool typeless_helper_general();
 	viewable_image* get_shuffle_helper(u32 index, u32 requested_width, u32 requested_height);
 
 	buffer* get_scratch_buffer(

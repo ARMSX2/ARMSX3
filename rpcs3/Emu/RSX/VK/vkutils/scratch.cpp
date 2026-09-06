@@ -2,6 +2,8 @@
 #include "buffer_object.h"
 #include "image.h"
 
+#include <cstdlib>
+
 #include "../VKResourceManager.h"
 
 #include <util/asm.hpp>
@@ -118,6 +120,20 @@ namespace vk
 
 		// Return view
 		return tex->get_view(rsx::default_remap_vector.with_encoding(VK_REMAP_IDENTITY));
+	}
+
+	bool typeless_helper_general()
+	{
+		static const bool s_general = []()
+		{
+			const char* v = std::getenv("ARMSX3_TYPELESS_GENERAL");
+			const bool off = v && v[0] == '0';
+			if (off) rsx_log.error("ARMSX3_TYPELESS_GENERAL=0: typeless helper uses the original"
+				" TRANSFER_DST/TRANSFER_SRC transitions.");
+			return !off;
+		}();
+
+		return s_general;
 	}
 
 	vk::image* get_typeless_helper(VkFormat format, rsx::format_class format_class, u32 requested_width, u32 requested_height)
