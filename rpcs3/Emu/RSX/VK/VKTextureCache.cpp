@@ -193,8 +193,28 @@ namespace vk
 				// permutation.
 				const bool tiling_commutes = !require_tiling || elem_size == 4;
 
-				if (shuffle_kernel && tiling_commutes && !is_swizzled())
+				// This path replaced a compute dispatch with CPU work, so unlike every other
+				// conversion it leaves NO trace in the log -- which made "no compute dispatched"
+				// read as "this code did not run". It ran. Log it, and allow it to be turned off
+				// from driver_env.txt so it can be A/B'd against the GPU kernel it replaced.
+				static const bool s_cpu_readback_swap = []()
 				{
+					const char* v = std::getenv("ARMSX3_CPU_READBACK_SWAP");
+					const bool off = v && v[0] == '0';
+					if (off) rsx_log.error("ARMSX3_CPU_READBACK_SWAP=0: readback byteswap back on the GPU.");
+					return !off;
+				}();
+
+				if (s_cpu_readback_swap && shuffle_kernel && tiling_commutes && !is_swizzled())
+				{
+					static u64 s_deferred_count = 0;
+					if (const u64 n = ++s_deferred_count;
+						n == 1 || n == 100 || n == 1000 || n == 10000 || (n % 100000) == 0) [[unlikely]]
+					{
+						rsx_log.warning("CPU readback byteswap x%d (elem=%u, tiled=%d)",
+							n, elem_size, require_tiling ? 1 : 0);
+					}
+
 					deferred_cpu_byteswap_element_size = static_cast<u8>(elem_size);
 					shuffle_kernel = nullptr;
 
