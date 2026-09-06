@@ -79,6 +79,17 @@ bool VKGSRender::reinitialize_swapchain()
 			wsi->replace_surface(m_instance.recreate_surface(m_frame->handle()));
 		}
 
+		// A NEW surface is new state, so the SUBOPTIMAL latch from the old one must not carry
+		// over. m_suboptimal_handled_at is set once when a rebuild is attempted at a given width
+		// and was never cleared anywhere, so after the window was destroyed and recreated -- which
+		// Android does routinely -- the recovery stayed disarmed at that width for the rest of the
+		// process. The swapchain then sat SUBOPTIMAL forever and the picture never came back,
+		// which is why rotating the device "fixed" it: rotating changes the width.
+		//
+		// Cleared here and not in the general rebuild path below, because the latch still has to
+		// stop a rebuild that changes nothing from repeating every frame.
+		m_suboptimal_handled_at = 0;
+
 		m_surface_lost = false;
 	}
 
