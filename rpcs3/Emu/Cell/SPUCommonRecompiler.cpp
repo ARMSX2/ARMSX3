@@ -9302,6 +9302,16 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 
 		bool allow_pattern = true;
 
+		// Title gate for entries admitted on evidence of benefit rather than proof of safety.
+		// The whitelist is keyed by guest-code hash, and CellSpurs is Sony's shared library, so an
+		// entry added for one game turns on for every game that links the same routine. Anything
+		// listed here is confined to the title it was measured on until it has been disassembled.
+		const auto pattern_is_title_gated = [](std::string_view h) -> std::string_view
+		{
+			if (h == "620oYSe8uQqq9eTkhWfMqoEXX0us"sv) return "BLUS30736"sv; // Soulcalibur V
+			return {};
+		};
+
 		if (g_cfg.core.spu_accurate_reservations)
 		{
 			// The problem with PUTLLC16 optimization, that it is in theory correct at the bounds of the spu function.
@@ -9317,6 +9327,25 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			static constexpr std::initializer_list<std::string_view> allowed_patterns =
 			{
 				"disabled_620oYSe8uQqq9eTkhWfMqoEXX0us"sv, // CellSpurs JobChain acquire pattern (disabled for now)
+
+				// UNVERIFIED, and admitted for ONE title only -- see the title gate below.
+				//
+				// This is the same CellSpurs JobChain acquire pattern as the disabled entry above,
+				// and it is what Soulcalibur V spins on: SPU PC 0x00ad4, 22.3M PUTLLC per report
+				// with 13.2M taking the global barrier, which pins the game at 1 fps. Clearing the
+				// gate entirely (Accurate SPU Reservations = off) takes it to 50 fps, so the
+				// barrier is the whole bottleneck -- but the game then renders nothing, because
+				// that also admits patterns which are genuinely unsafe.
+				//
+				// It has NOT been shown to meet the condition above. The loop reads only the 16
+				// bytes it compare-exchanges (LS 0x4a20, inside the 128 observed at 0x4a00) and
+				// 0x4a90 lies outside that window, which is promising -- but it calls out to
+				// 0x4620 at 0x00a8c and that callee has not been disassembled. If it reads
+				// elsewhere in the observed line this optimisation is silently wrong.
+				//
+				// So it is gated to BLUS30736 rather than admitted for every game using CellSpurs.
+				// Remove the title gate only after disassembling 0x4620.
+				"620oYSe8uQqq9eTkhWfMqoEXX0us"sv,
 
 				// cellSync mutex ticket increment, Sonic '06 (BLUS30008), LS 0x18140 -> 0x181a0.
 				//
@@ -9367,6 +9396,17 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			};
 
 			allow_pattern = std::any_of(allowed_patterns.begin(), allowed_patterns.end(), FN(pattern_hash == x));
+
+			if (allow_pattern)
+			{
+				if (const auto only_title = pattern_is_title_gated(pattern_hash);
+					!only_title.empty() && Emu.GetTitleID() != only_title)
+				{
+					// Admitted on measured benefit, not proven safety, so it stays on the one
+					// title it was measured on.
+					allow_pattern = false;
+				}
+			}
 		}
 
 		if (allow_pattern)
