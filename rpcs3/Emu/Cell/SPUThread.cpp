@@ -3839,7 +3839,26 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			putllc_barrier_spurs++;
 		}
 
-		record_putllc_barrier_site(addr, pc);
+		// Diagnostics only, and OFF by default.
+		//
+		// record_putllc_barrier_site does an atomic increment on a shared, falsely-shared global
+		// slot for EVERY barrier-taking conditional store. Soulcalibur V issues those at over a
+		// million a second, so leaving this on ships a measurable cost to every user for a
+		// histogram nobody is reading -- and it inflates the very thing it was added to measure.
+		//
+		// ARMSX3_PUTLLC_SITES=1 in files/driver_env.txt turns it and the loop dump below back on.
+		// Function-local: at namespace scope this reads the environment before driver_env.txt is
+		// parsed and comes back unset.
+		static const bool s_putllc_sites = []
+		{
+			const char* v = std::getenv("ARMSX3_PUTLLC_SITES");
+			return v && v[0] == '1' && v[1] == '\0';
+		}();
+
+		if (s_putllc_sites) [[unlikely]]
+		{
+			record_putllc_barrier_site(addr, pc);
+		}
 
 		// One-shot disassembly of the loop actually issuing the barriers.
 		//
@@ -3848,7 +3867,7 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 		// bytes, so "not in that list" does not mean "not a pattern". Without the code there is no
 		// way to tell whether PUTLLC16 could ever apply here or whether the fix lies elsewhere.
 		// Fires once per PC, at most four PCs, only after a site is clearly hot.
-		if (putllc_barrier > 1000000) [[unlikely]]
+		if (s_putllc_sites && putllc_barrier > 1000000) [[unlikely]]
 		{
 			static atomic_t<u32> s_dumped_pcs[4]{};
 

@@ -153,7 +153,18 @@ namespace rsx
 						g_stuck_sema_addr = addr;
 						g_stuck_sema_count++;
 
-						rsx_log.error("nv406e::semaphore_acquire has timed out. semaphore_address=0x%X, awaited=0x%X, first_observed=0x%X, last_observed=0x%X", addr, arg, first_observed, static_cast<u32>(observed));
+						// How long we actually waited, and the FIFO state at the moment we gave up.
+						//
+						// first/last observed distinguish a value that moved during the wait from one
+						// that never moved. get vs internal says whether the RSX is parked holding
+						// progress it never announced -- if they differ, a guest agent gating on "GET
+						// has passed X" is waiting on something we consumed and did not publish. Both
+						// pairs were what finally separated a slow producer from a deadlocked one.
+						const auto* fc = RSX(ctx)->fifo_ctrl.get();
+
+						rsx_log.error("nv406e::semaphore_acquire has timed out. semaphore_address=0x%X, awaited=0x%X, first_observed=0x%X, last_observed=0x%X, waited=%uus, %s",
+							addr, arg, first_observed, static_cast<u32>(observed), static_cast<u32>(current - start),
+							fc ? fc->debug_snapshot() : std::string("fifo: <none>"));
 						break;
 					}
 				}

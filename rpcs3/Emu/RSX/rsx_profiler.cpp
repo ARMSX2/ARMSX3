@@ -275,6 +275,30 @@ namespace rsx::prof
 	// WITHOUT a second idm walk -- nesting idm::select deadlocks the sampler.
 	u32 g_spurs_addr_seen = 0;
 
+	// Heavy stall dumps: PPU/SPU disassembly, the lwmutex table, the FIFO ring listing.
+	//
+	// Measured on device at 154 ARMSX3 log lines a second during a stall, of which the lwmutex
+	// table alone was 1218 of every 4000. This project has already had 20-30 second "lockups"
+	// that turned out to be pure log volume, so a diagnostic running at that rate is not a
+	// neutral observer of a timing bug -- it is part of the timing.
+	//
+	// The one-line summaries (label transitions, the acquire timeout, PUTLLC counters, the RSX
+	// barely-advancing line and its fifo snapshot) stay unconditional: they are what the last
+	// several findings were actually read from, and they are a handful of lines per 5s tick.
+	//
+	// Set ARMSX3_DEEP_STALL_DUMP=1 in files/driver_env.txt to get the rest back.
+	// Function-local: at namespace scope this would run getenv before driver_env.txt is parsed.
+	static bool deep_stall_dump()
+	{
+		static const bool enabled = []
+		{
+			const char* v = std::getenv("ARMSX3_DEEP_STALL_DUMP");
+			return v && v[0] == '1' && v[1] == '\0';
+		}();
+
+		return enabled;
+	}
+
 	void sample_guest_pc()
 	{
 		if (!g_enabled.load())
@@ -934,7 +958,7 @@ namespace rsx::prof
 
 			const auto dump_around = [&](const char* who, u32 tid, u32 at)
 			{
-				if (!at || (at & 3))
+				if (!at || (at & 3) || !deep_stall_dump())
 				{
 					return;
 				}
@@ -962,7 +986,7 @@ namespace rsx::prof
 				// A WIDE window here on purpose. The post itself is two instructions; what matters
 				// is the branch upstream that decides whether control ever reaches it, since the
 				// producer is alive and simply stops taking that path.
-				if (e.post_lr && !(e.post_lr & 3))
+				if (e.post_lr && !(e.post_lr & 3) && deep_stall_dump())
 				{
 					PPUDisAsm wd(cpu_disasm_mode::normal, vm::g_sudo_addr);
 
@@ -1015,7 +1039,7 @@ namespace rsx::prof
 				waiter = lv.waiter;
 			}
 
-			if (!w.empty() || owner)
+			if ((!w.empty() || owner) && deep_stall_dump())
 			{
 				fmt::append(out, "\n      lwmutex 0x%08x owner=0x%x waiter=0x%x lwcond_waiters=%d sq:%s",
 					id, owner, waiter, +lw.lwcond_waiters, w.empty() ? " -" : w.c_str());
@@ -1122,7 +1146,7 @@ namespace rsx::prof
 			// dispatched -- so the question is what the guest's own libsre scheduler is testing
 			// each iteration. Only for threads not in a wait: a parked one's pc is its park site
 			// and says nothing.
-			if (!(spu.state.load() & cpu_flag::wait))
+			if (!(spu.state.load() & cpu_flag::wait) && deep_stall_dump())
 			{
 				SPUDisAsm sd(cpu_disasm_mode::normal, reinterpret_cast<const u8*>(spu.ls));
 
@@ -1553,7 +1577,7 @@ namespace rsx::prof
 
 			if (!hot.empty())
 			{
-				prof_log.error("\tguest PCs while stalled (%u samples):%s", g_stall_pc_total, hot);
+				if (deep_stall_dump()) prof_log.error("\tguest PCs while stalled (%u samples):%s", g_stall_pc_total, hot);
 			}
 		}
 
@@ -1580,11 +1604,12 @@ namespace rsx::prof
 
 			if (!hot.empty())
 			{
-				prof_log.error("\trunning PPUs during stall (%u ticks sampled):%s", +g_run_ticks, hot);
+				if (deep_stall_dump()) prof_log.error("\trunning PPUs during stall (%u ticks sampled):%s", +g_run_ticks, hot);
 			}
 		}
 
 		// The last FIFO methods executed before the guest went quiet.
+		if (deep_stall_dump())
 		{
 			const u32 end = g_fifo_ring_pos;
 			std::string tail;
