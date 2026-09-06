@@ -2,6 +2,7 @@
 #include "OboeBackend.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "Emu/System.h"
 #include "Emu/system_config.h"
@@ -53,6 +54,24 @@ bool OboeBackend::Open(std::string_view /*dev_id*/, AudioFreq freq, AudioSampleS
 	// its own instead -- see the check after openStream, which reopens with conversion on.
 	oboe::SampleRateConversionQuality conversion = oboe::SampleRateConversionQuality::None;
 
+	// Screen recording captures nothing while LowLatency is in force.
+	//
+	// LowLatency lets AAudio take Qualcomm's MMAP fast path, which writes past the mixer that
+	// AudioPlaybackCapture taps. The audio is audible on the device and simply absent from the
+	// recording -- there is no error anywhere, and whether MMAP is granted varies per run, so the
+	// same device records fine one session and silently fails the next.
+	//
+	// PerformanceMode::None keeps the stream on the ordinary mixer, which is capturable. It costs
+	// latency, so it is opt-in: set ARMSX3_AUDIO_LOWLATENCY=0 in driver_env.txt before recording.
+	static const bool s_low_latency = []()
+	{
+		const char* v = std::getenv("ARMSX3_AUDIO_LOWLATENCY");
+		const bool off = v && v[0] == '0';
+		if (off) Oboe.error("ARMSX3_AUDIO_LOWLATENCY=0: PerformanceMode::None, so screen recording"
+			" can capture the audio. Expect a little more latency.");
+		return !off;
+	}();
+
 	const auto build = [&](oboe::AudioStreamBuilder& builder)
 	{
 	builder.setDirection(oboe::Direction::Output)
@@ -63,7 +82,7 @@ bool OboeBackend::Open(std::string_view /*dev_id*/, AudioFreq freq, AudioSampleS
 		// is survivable on a machine running at full speed and fatal on one that is not -- a game
 		// running at 10fps misses the deadline continuously. ARMSX2's Oboe backend settled on
 		// Shared for the same device class before this one was written.
-		->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+		->setPerformanceMode(s_low_latency ? oboe::PerformanceMode::LowLatency : oboe::PerformanceMode::None)
 		->setSharingMode(oboe::SharingMode::Shared)
 		// Game usage tells the platform not to apply the media post-processing chain, which
 		// on some devices adds tens of milliseconds of latency we cannot see or control.
@@ -230,7 +249,10 @@ void OboeBackend::Play()
 
 void OboeBackend::Pause()
 {
-	if (!m_stream)
+	// m_playing as well as m_stream: this is called per audio period, and requestPause() on an
+	// already-paused stream is not free. A backgrounded app was issuing about fifty of them a
+	// second, visible in logcat as an unbroken run of AAudioStream_requestPause.
+	if (!m_stream || !m_playing)
 	{
 		return;
 	}
