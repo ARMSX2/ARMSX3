@@ -1147,6 +1147,51 @@ namespace rsx::prof
 			return;
 		}
 
+		// PUTLLC barrier report, on its own clock.
+		//
+		// This is the only place that runs regardless of what has stopped. The frame-window dump
+		// hangs off tick_frame (on_frame_end), so it reports nothing when no frames end; and
+		// poll_stall below returns early whenever the RSX is still advancing -- which it is when
+		// it is merely spinning, exactly the case being investigated. So a title pinned at ~1 fps
+		// with the RSX and five SPUs pegged produced no barrier data at all from either path.
+		//
+		// The histogram carries the issuing SPU PC and is what identifies which loop to look at;
+		// without it the PUTLLC16 whitelist cannot be aimed, because it is keyed by loop.
+		{
+			static u64 s_last_barrier_report = 0;
+			static u64 s_calls_prev = 0;
+			static u64 s_barriers_prev = 0;
+
+			const u64 bnow = utils::get_tsc();
+			const u64 bfreq = utils::get_tsc_freq();
+
+			if (bfreq && bnow - s_last_barrier_report > bfreq * 10)
+			{
+				s_last_barrier_report = bnow;
+
+				u64 calls = 0, barriers = 0;
+				idm::select<named_thread<spu_thread>>([&](u32, spu_thread& spu)
+				{
+					calls += spu.putllc_calls;
+					barriers += spu.putllc_barrier;
+				});
+
+				// Signed deltas: threads exiting make the accumulators drop, and an unsigned
+				// subtraction there prints 1.8e19 and looks like a catastrophe.
+				const s64 dc = static_cast<s64>(calls) - static_cast<s64>(s_calls_prev);
+				const s64 db = static_cast<s64>(barriers) - static_cast<s64>(s_barriers_prev);
+
+				s_calls_prev = calls;
+				s_barriers_prev = barriers;
+
+				if (dc > 0)
+				{
+					prof_log.error("PUTLLC/10s: +%d (barrier +%d)\n\t    barrier sites (addr:count@pc):%s",
+						dc, db, spu_putllc_barrier_sites());
+				}
+			}
+		}
+
 		const u64 last = g_last_frame_tsc.load();
 		const u64 freq = utils::get_tsc_freq();
 
