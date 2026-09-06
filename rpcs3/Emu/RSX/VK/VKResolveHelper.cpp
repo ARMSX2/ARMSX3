@@ -77,7 +77,10 @@ namespace vk
 			const auto vendor = vk::get_driver_vendor();
 			const bool adreno = vendor == vk::driver_vendor::ADRENO || vendor == vk::driver_vendor::TURNIP;
 
-			rsx_log.notice("Graphics-pipe texture conversion %s (driver vendor %d).",
+			// warning, not notice: notice sits below the shipped log level, so this line was
+			// invisible in a capture and whether the gate resolved on had to be inferred from
+			// dispatch counts. A gate you cannot read is a gate you cannot trust.
+			rsx_log.warning("Graphics-pipe texture conversion %s (driver vendor %d).",
 				adreno ? "enabled" : "disabled", static_cast<int>(vendor));
 
 			return adreno;
