@@ -16,7 +16,7 @@
 #include "LsfgUtil.h"
 
 #include "../vkutils/device.h"
-#include "Emu/RSX/rsx_utils.h"
+#include "Emu/RSX/Utils/rsx_utils.h"
 
 LOG_CHANNEL(framegen_log, "FRAMEGEN");
 
