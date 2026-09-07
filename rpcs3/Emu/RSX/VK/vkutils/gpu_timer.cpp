@@ -104,6 +104,15 @@ namespace vk
 			return;
 		}
 
+		// Same invariant as end(): a timestamp may only be recorded into a buffer that is
+		// currently open. Nothing is known to open a region against a submitted buffer, but
+		// the cost of being wrong here is a driver-side null dereference rather than a bad
+		// measurement, so it is checked rather than assumed.
+		if (!cmd.is_recording())
+		{
+			return;
+		}
+
 		const u32 idx = static_cast<u32>(r);
 		auto& state = m_slots[m_write_slot];
 
@@ -186,6 +195,26 @@ namespace vk
 		// timing for the rest of the session. The timestamp is skipped, the bookkeeping is not.
 		if (!rsx::prof::enabled()) [[likely]]
 		{
+			m_open[idx].active = false;
+			return;
+		}
+
+		// The command buffer captured at begin, not necessarily the one still current.
+		//
+		// gpu_scope holds a reference to the command buffer it was constructed with, and a
+		// region can outlive it: scaled_image_from_memory opens a blit scope and then calls
+		// flush_command_queue() when the blit queued a dma transfer, which SUBMITS that
+		// buffer and swaps m_current_command_buffer for the next one. The scope's destructor
+		// then ran vkCmdWriteTimestamp against a buffer that had already been submitted and
+		// recycled, and the Adreno driver dereferenced its freed recording state -- SIGSEGV
+		// at a small offset inside vkCmdWriteTimestamp2, on the RSX thread, in Ratchet.
+		//
+		// Clear the flag and skip the stamp, exactly as the disarm path above does. The
+		// begin stamp is left orphaned in the pool, which is harmless: events[idx] is only
+		// incremented below, so collect() never reads a pair this end did not complete.
+		if (!cmd.is_recording())
+		{
+			m_slots[m_open[idx].slot].dropped[idx]++;
 			m_open[idx].active = false;
 			return;
 		}
