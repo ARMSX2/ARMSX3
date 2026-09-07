@@ -264,3 +264,21 @@ PPU-0997e35d2b6738f5cecfda1d76380acca0828365:
     Patch Version: 1.2
     Patch:
       - [ be32, 0x005cb1c4, 0x409efff4 ]
+
+# Unlike the entries above, this one IS in the official feed -- it is bundled anyway
+# because it has to default to ON, and a fresh install that has never downloaded the
+# database would otherwise not have it at all. Merging is by hash + name, so it
+# collapses onto the official entry once that database is fetched.
+#
+# This is the PPU "Disable MLAA", NOT the generic "Disable SPU MLAA". The address is
+# specific to BLUS30736 v01.00 -- do not widen the version list.
+PPU-aa798f32a1fda1c23a20066edb1c623c486d53cc:
+  "Disable MLAA":
+    Games:
+      "SoulCalibur V":
+        BLUS30736: [ 01.00 ]
+    Author: "illusion"
+    Notes: "Disables the game's morphological AA pass. Without it the title sits at ~1 fps and wedges."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00304770, 0x38000001 ]

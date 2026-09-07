@@ -186,6 +186,18 @@ object Ps3PatchRepo {
     )
 
     private val BUNDLED = listOf(
+        // SOULCALIBUR V, BLUS30736 v01.00 -- illusion's "Disable MLAA". Without it the
+        // title runs at ~1 fps and wedges; with it, ~56-60 fps at the menu. This is a
+        // WORKAROUND: the underlying SPU synchronisation defect is still undiagnosed, and
+        // the patch only sidesteps it by stopping the game issuing the MLAA job.
+        // Confirmed on an Odin 3 (Snapdragon 8 Elite). See canary_patches.yml.
+        Bundled(
+            hash = "PPU-aa798f32a1fda1c23a20066edb1c623c486d53cc",
+            name = "Disable MLAA",
+            serial = "BLUS30736",
+            appVersion = "01.00",
+            sinceRevision = 5,
+        ),
         // SONIC THE HEDGEHOG (2006), BLUS30008 v01.01 -- without this the game
         // renders only its HUD and skybox. See canary_patches.yml.
         Bundled(
@@ -374,7 +386,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 4
+    private const val BUNDLED_REVISION = 5
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
