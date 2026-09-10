@@ -1698,7 +1698,11 @@ spu_runtime::spu_runtime()
 	// including compile-time switches such as ARMSX3_SPU_ARM64_BYTE_GATHER.
 	// Ported from ouroboros420/rpcsx (8430a6558), key re-derived against our config surface.
 	{
-		constexpr u32 SPU_OBJ_CACHE_VERSION = 2;
+		// v3 retires every object written by the ARM64 cache while it was enabled. Those carry an
+		// absolute host address baked in as movz/movk immediates with no relocation covering them,
+		// so they fault as soon as a later process maps things elsewhere. Disabling the write is
+		// not enough on its own -- what is already on disk would still be read back.
+		constexpr u32 SPU_OBJ_CACHE_VERSION = 3;
 		constexpr usz SPU_OBJ_CACHE_MAX_FILES = 12000;
 
 		sha1_context ctx;
@@ -6114,7 +6118,18 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				}
 
 				fmt::append(tracing, " of %d failures", fail_count);
-				spu_log.trace("%s\n%s", break_error, tracing);
+				// Promoted out of trace.
+				//
+				// This is the only thing in the tree that says WHY a GETLLAR/PUTLLC loop is rejected
+				// from the JIT's lock-free PUTLLC16 path, and it was reachable only by enabling SPU
+				// trace logging wholesale -- tens of thousands of lines a second on this title, which
+				// perturbs the very timing being investigated. The summary is one line per distinct
+				// breaking site, emitted once each.
+				//
+				// It matters because every measured conditional store here goes through do_putllc,
+				// which takes vm::writer_lock and stops every PPU thread, while PUTLLC16 commits the
+				// identical operation with no barrier. Whatever cause this names is the difference.
+				spu_log.notice("%s\n%s", break_error, tracing);
 			}
 		};
 
@@ -9216,9 +9231,29 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			{
 				if (state.is_const() && (state.value & -0x20) == (CELL_SYNC_ERROR_ALIGN & -0x20))
 				{
-					// Do not notify if it is a cellSync function
-					value.no_notify = 1;
-					spu_log.success("Detected cellSync function at 0x%x, disabling reservation notification.", pattern.put_pc);
+					// Detected, but the notification is NOT suppressed any more.
+					//
+					// Upstream sets no_notify here so a cellSync PUTLLC skips waking reservation
+					// waiters, on the reasoning that these functions store constantly and waking
+					// everyone is a thundering herd. The cost is that releasing a cellSync mutex
+					// wakes nobody: a thread waiting on that line only learns it is free by
+					// polling or by timing out.
+					//
+					// That is the same trade-off this tree already resolved for the SPURS variant
+					// in do_putllc, and for the same reason -- notifying is correct behaviour and
+					// suppressing is an optimisation, so the optimisation goes.
+					//
+					// Measured here rather than argued: in Sonic '06 a slow frame is main_thread
+					// spending ~70% of it spinning in the guest's cellSyncMutexTryLock on a mutex
+					// never once observed free, while one SPU spends 75% of that frame in the
+					// GETLLAR/PUTLLC loop of the very same ticket lock, at an address this
+					// detector had flagged and silenced. Every other candidate was measured and
+					// cleared: GPU worst frame 14.9ms against 135ms wall frames, CPU 11% at full
+					// clocks, semaphore waits capped at 14ms, group parks capped at 9.7ms.
+					//
+					// Keep the detection log, since knowing where these functions are is useful,
+					// and say plainly that nothing is being disabled now.
+					spu_log.success("Detected cellSync function at 0x%x (reservation notification kept).", pattern.put_pc);
 					break;
 				}
 			}
@@ -9267,7 +9302,33 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 
 		bool allow_pattern = true;
 
-		if (g_cfg.core.spu_accurate_reservations)
+		// Title gate for entries admitted on evidence of benefit rather than proof of safety.
+		// The whitelist is keyed by guest-code hash, and CellSpurs is Sony's shared library, so an
+		// entry added for one game turns on for every game that links the same routine. Anything
+		// listed here is confined to the title it was measured on until it has been disassembled.
+		const auto pattern_is_title_gated = [](std::string_view h) -> std::string_view
+		{
+			if (h == "620oYSe8uQqq9eTkhWfMqoEXX0us"sv) return "BLUS30736"sv; // Soulcalibur V
+			return {};
+		};
+
+		// The whitelist runs in BOTH reservation modes.
+		//
+		// It used to sit inside `if (g_cfg.core.spu_accurate_reservations)`, which meant turning
+		// accurate reservations OFF did two entirely unrelated things: it took the non-accurate
+		// shortcuts in do_putllc, AND it skipped this filter completely -- allow_pattern is
+		// initialised true, so every pattern the analyser found was installed unchecked, including
+		// the ones this list exists to refuse.
+		//
+		// That is what "Accurate SPU Reservations = off renders nothing" has always been. The note
+		// on the Soulcalibur V entry below already says it: clearing the gate takes that title to
+		// 50 fps "but the game then renders nothing, because that also admits patterns which are
+		// genuinely unsafe". The speed and the corruption were being attributed to one switch when
+		// they come from two separate mechanisms, and only one of them was wanted.
+		//
+		// Filtering unconditionally can only make the non-accurate mode STRICTER -- it installs a
+		// subset of what it installed before, and exactly what accurate mode already installs -- so
+		// it cannot introduce a pattern that was not already trusted.
 		{
 			// The problem with PUTLLC16 optimization, that it is in theory correct at the bounds of the spu function.
 			// But if the SPU code reuses the cache line data observed, it is not truly atomic.
@@ -9282,14 +9343,160 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			static constexpr std::initializer_list<std::string_view> allowed_patterns =
 			{
 				"disabled_620oYSe8uQqq9eTkhWfMqoEXX0us"sv, // CellSpurs JobChain acquire pattern (disabled for now)
+
+				// UNVERIFIED, and admitted for ONE title only -- see the title gate below.
+				//
+				// This is the same CellSpurs JobChain acquire pattern as the disabled entry above,
+				// and it is what Soulcalibur V spins on: SPU PC 0x00ad4, 22.3M PUTLLC per report
+				// with 13.2M taking the global barrier, which pins the game at 1 fps. Clearing the
+				// gate entirely (Accurate SPU Reservations = off) takes it to 50 fps, so the
+				// barrier is the whole bottleneck -- but the game then renders nothing, because
+				// that also admits patterns which are genuinely unsafe.
+				//
+				// It has NOT been shown to meet the condition above. The loop reads only the 16
+				// bytes it compare-exchanges (LS 0x4a20, inside the 128 observed at 0x4a00) and
+				// 0x4a90 lies outside that window, which is promising -- but it calls out to
+				// 0x4620 at 0x00a8c and that callee has not been disassembled. If it reads
+				// elsewhere in the observed line this optimisation is silently wrong.
+				//
+				// So it is gated to BLUS30736 rather than admitted for every game using CellSpurs.
+				// Remove the title gate only after disassembling 0x4620.
+				"620oYSe8uQqq9eTkhWfMqoEXX0us"sv,
+
+				// cellSync mutex ticket increment, Sonic '06 (BLUS30008), LS 0x18140 -> 0x181a0.
+				//
+				// Admitted against the condition stated above -- an atomic 16-byte compare-exchange
+				// whose observed line is not read afterwards -- verified by disassembling the loop
+				// off local store rather than inferred:
+				//
+				//   GETLLAR / rdch MFC_RdAtomicStat / lqd r2,0(r8) / rotmi r2,r3,-0x10 /
+				//   ahi r2,r2,1 / shufb #i16[0] / stqd r4,0(r8) / PUTLLC
+				//
+				// One quadword loaded at 0(r8), the same quadword stored back, a 16-bit field
+				// incremented in between, and the other 112 bytes of the line never touched. That
+				// is case 1 in the comment above, not case 2.
+				//
+				// Why it is worth admitting: with this refused, every conditional store falls to
+				// do_putllc, whose commit is wrapped in vm::writer_lock -- a global barrier that
+				// stamps cpu_flag::memory on every registered PPU thread and busy-spins until each
+				// one parks, while holding rsrv_unique_lock throughout so every other SPU fails
+				// meanwhile. Measured on device: 6,489-62,768 conditional stores per frame at
+				// 81-98.4% failure, with the PPU spending ~70% of a slow frame in the guest's
+				// cellSyncMutexTryLock and the mutex never once observed free. PUTLLC16 commits
+				// the same operation with no barrier.
+				//
+				// Keyed on the hash of the guest bytes, so a different build of cellSync does not
+				// match and simply keeps the old path. The sibling pattern at 0x17ff8 was also
+				// refused and is deliberately NOT listed: it has not been disassembled, and the
+				// safety condition here is a property of the code, not of the function's name.
+				// NOTE: PUTLLC16's success notify is aimed at the wrong address.
+				//
+				// PUTLLC16's success path notifies on the RESERVATION COUNTER word
+				// (SPULLVMRecompiler.cpp:1464 passes rptr, built from reserv_base_addr =
+				// vm::g_reservations), but every reservation waiter in this tree parks on
+				// g_resrv_waiters_count[...].wait_flag instead. atomic_wait_engine hashes the address,
+				// so that notify and those waits never meet: a PUTLLC16 commit advances the counter and
+				// changes the line while no parked SPU or PPU is woken, and they recover only via their
+				// 50-200us poll timeouts.
+				//
+				// Upstream never trips this because its whitelist holds only a "disabled_"-prefixed
+				// placeholder, so PUTLLC16 is never installed. Admitting this hash made the path LIVE,
+				// and the gate is a hash of guest bytes -- so every title shipping the same cellSync
+				// build inherits it, not just the one it was verified against.
+				//
+				// KEPT: withdrawing it was measured against Soul Calibur V's hang and changed nothing,
+				// and Sonic '06 measured faster WITH it -- waiters still recover on their 50-200us poll
+				// timeouts, so the missed wake costs latency rather than correctness. The notify target
+				// is still wrong and should be fixed at the source rather than by dropping this entry.
+				"WA0WuYLrZXrcc6Jyw5EMgYRV2bwo"sv,
 			};
 
 			allow_pattern = std::any_of(allowed_patterns.begin(), allowed_patterns.end(), FN(pattern_hash == x));
+
+			if (allow_pattern)
+			{
+				if (const auto only_title = pattern_is_title_gated(pattern_hash);
+					!only_title.empty() && Emu.GetTitleID() != only_title)
+				{
+					// Admitted on measured benefit, not proven safety, so it stays on the one
+					// title it was measured on.
+					allow_pattern = false;
+				}
+			}
 		}
 
 		if (allow_pattern)
 		{
 			add_pattern(inst_attr::putllc16, pattern.put_pc - result.entry_point, value.data);
+		}
+		else
+		{
+			// Say which pattern was refused, and give its hash.
+			//
+			// The whitelist above holds exactly one entry and it is prefixed "disabled_", so with
+			// accurate reservations on -- the default here and upstream -- allow_pattern is always
+			// false and PUTLLC16 is never installed for anything. Every conditional store then
+			// takes do_putllc, which wraps its commit in vm::writer_lock: a global barrier that
+			// stamps cpu_flag::memory on every registered PPU thread and busy-spins until they all
+			// park. Measured on this title that path runs 6,489-62,768 times a frame at 81-98.4%
+			// failure.
+			//
+			// The hash is over the guest bytes of the pattern, so it identifies this loop and no
+			// other build's. Without logging it there is no way to name a pattern for the
+            // whitelist, which is presumably why the list still has one disabled placeholder in it.
+			// Warning, not notice: notice is below the shipped Android log level, so with the
+			// whitelist now running in both reservation modes there was no way to confirm from a
+			// device log that it was filtering anything at all -- the only evidence was
+			// behavioural. This line is what says the gate is live.
+			spu_log.warning("PUTLLC16 pattern refused: hash=%s put_pc=0x%05x lsa_pc=0x%05x", pattern_hash, pattern.put_pc, pattern.lsa_pc);
+
+			// A hash on its own cannot be checked by eye, and it is the only thing the whitelist
+			// above is keyed on, so print the loop it names -- disassembled off the analysed
+			// program -- right beside it.
+			//
+			// What to read it for: the condition stated above is that the observed line is not
+			// reused. The analyser has already confined the write, since set_invalid_ls discards
+			// any pattern that would need a full 128-byte reservation, so a loop that reaches here
+			// touches one quadword. What remains, and what nothing in this file can see, is whether
+			// the CALLER reads the other 112 bytes after the function returns. That is why this is
+			// a hand-verified list and not a predicate.
+			//
+			// Bounded on purpose -- one dump per distinct hash, capped overall -- because SPU
+			// logging at volume has stalled this emulator before, and perturbs the very timing a
+			// reservation investigation is measuring.
+			if (const u32 lo = result.lower_bound, hi = lo + static_cast<u32>(result.data.size()) * 4;
+				pattern.lsa_pc >= lo && pattern.put_pc < hi && pattern.put_pc > pattern.lsa_pc && pattern.put_pc - pattern.lsa_pc <= 256)
+			{
+				static shared_mutex s_refused_dump_mutex;
+				static std::vector<std::string> s_refused_dumped;
+
+				std::lock_guard lock(s_refused_dump_mutex);
+
+				if (s_refused_dumped.size() < 16 && std::none_of(s_refused_dumped.begin(), s_refused_dumped.end(), FN(pattern_hash == x)))
+				{
+					s_refused_dumped.emplace_back(pattern_hash);
+
+					SPUDisAsm dis_asm(cpu_disasm_mode::normal, reinterpret_cast<const u8*>(result.data.data()), lo);
+
+					std::string body;
+
+					for (u32 pos = pattern.lsa_pc; pos <= pattern.put_pc; pos += 4)
+					{
+						dis_asm.disasm(pos);
+
+						std::string_view op = dis_asm.last_opcode;
+
+						while (!op.empty() && (op.back() == '\n' || op.back() == ' ' || op.back() == '\t'))
+						{
+							op.remove_suffix(1);
+						}
+
+						fmt::append(body, "\n    0x%05x  %s", pos, op);
+					}
+
+					spu_log.success("PUTLLC16 refused loop hash=%s (0x%05x -> 0x%05x):%s", pattern_hash, pattern.lsa_pc, pattern.put_pc, body);
+				}
+			}
 		}
 
 		spu_log.trace("PUTLLC16 Pattern Detected! (mem_count=%d, put_pc=0x%x, pc_rel=%d, offset=0x%x, const=%u, two_regs=%d, reg=%u, runtime=%d, 0x%x-%s, pattern-hash=%s) (putllc0=%d, putllc16+0=%d, all=%d)"

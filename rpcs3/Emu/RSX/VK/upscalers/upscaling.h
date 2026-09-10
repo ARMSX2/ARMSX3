@@ -36,6 +36,15 @@ namespace vk
 		// (rotation, resolution change) cannot leave a stale value behind.
 		void set_present_format(VkFormat format) { m_present_format = format; }
 
+		// True for a pass that records its own render passes into the present target, rather than
+		// ending in a vkCmdBlitImage.
+		//
+		// The present path has to flush such a pass before anything waits on it: queue_submit
+		// defers to the offloader thread under multithreaded RSX, and a wait against work that has
+		// not been submitted yet never completes. A blit leaves nothing to synchronise against, so
+		// the blit passes do not pay for this.
+		virtual bool is_rendering_pass() const { return false; }
+
 	protected:
 		VkFormat m_present_format = VK_FORMAT_B8G8R8A8_UNORM;
 

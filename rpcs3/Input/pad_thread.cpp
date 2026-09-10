@@ -26,6 +26,9 @@
 #include "Emu/Io/PadHandler.h"
 #include "Emu/Io/pad_config.h"
 #include "Emu/System.h"
+#include "Emu/RSX/Overlays/overlays.h"
+#include "Emu/RSX/RSXThread.h"
+#include "Emu/RSX/Overlays/overlay_manager.h"
 #include "Emu/system_config.h"
 #include "Emu/RSX/Overlays/HomeMenu/overlay_home_menu.h"
 #include "Emu/RSX/Overlays/overlay_message.h"
@@ -699,6 +702,84 @@ void pad_thread::operator()()
 			}
 
 			m_ps_button_pressed = ps_button_pressed;
+		}
+
+		// Keep native-UI overlays presentable when the guest has stopped rendering.
+		//
+		// An overlay is only ever drawn during a GUEST flip. That is fine while a game keeps
+		// rendering, but cellMsgDialogOpen2 is non-blocking: a title may park its render loop and
+		// wait for the dialog's callback, because on real hardware the SYSTEM composites that
+		// dialog independently of the game. Here nothing does, so the dialog is created, marked
+		// visible, and never presented -- it cannot be seen, therefore cannot be dismissed, and
+		// the game waits forever on a callback that can never fire.
+		//
+		// Measured on Soul Calibur V (NPEB01363/BLUS30736): the hang begins on the instruction
+		// after cellMsgDialogOpen2 ("Load complete.", type=0xa2 = BUTTON_TYPE_OK), with the
+		// dialog reporting active and visible for the whole stall, the FIFO drained
+		// (get==put==published), every thread and lv2 object healthy, and audio still playing.
+		// The trophy-check and autosave dialogs are the same shape, which is why the hang point
+		// moved between runs.
+		//
+		// set_native_ui_flip() already exists for exactly this and was requested for the home
+		// menu and for resume-from-pause -- but nothing requested it for a game's own dialogs.
+		// overlay::refresh() carries its own rate limit (min_refresh_duration_us measured against
+		// last_host_flip_timestamp), so asking each visible overlay to refresh costs a flip only
+		// when one is genuinely due; a game that is still rendering normally is unaffected.
+		//
+		// The pad thread is the right home for it: it runs at a fixed cadence independent of the
+		// guest, which is precisely the property the RSX flip path lacks here.
+		// ONLY while the guest itself has stopped presenting.
+		//
+		// The first version of this poked every visible overlay unconditionally, and the perf
+		// overlay is always visible when enabled -- so it drove a native_ui flip continuously
+		// even while a game was rendering perfectly well. That path runs flush_command_queue()
+		// and flip() on the current display buffer, i.e. it flushes a partial command buffer and
+		// ends the frame from underneath a live render loop. Measured: it blanked Soul Calibur
+		// V's FMV, which had been showing video a moment earlier.
+		//
+		// Gate on the GUEST's own flip timestamp, not the host's -- the host one is updated by
+		// the very flips this triggers, so it would happily sustain itself forever.
+		if (auto rsxthr = rsx::get_current_renderer())
+		{
+			// Track the guest's own flip COUNTER, not a timestamp.
+			//
+			// last_guest_flip_timestamp is written as (now - 1'000'000), i.e. it always reads a
+			// second in the past, so any threshold under a second passes immediately and the gate
+			// would do nothing. Watching int_flip_index for "unchanged for a while" is the honest
+			// test of whether the guest has actually stopped presenting.
+			constexpr u64 guest_flip_grace_us = 250'000;
+
+			static u64 s_last_flip_index = 0;
+			static u64 s_last_change_us = 0;
+
+			const u64 now = get_system_time();
+			const u64 idx = rsxthr->int_flip_index;
+
+			if (idx != s_last_flip_index)
+			{
+				s_last_flip_index = idx;
+				s_last_change_us = now;
+			}
+			else if (!s_last_change_us)
+			{
+				s_last_change_us = now;
+			}
+
+			if (s_last_change_us && (now - s_last_change_us) > guest_flip_grace_us)
+			{
+				if (auto manager = g_fxo->try_get<rsx::overlays::display_manager>(); manager && manager->has_visible())
+				{
+					std::lock_guard lock(*manager);
+
+					for (const auto& view : manager->get_views())
+					{
+						if (view)
+						{
+							view->refresh();
+						}
+					}
+				}
+			}
 		}
 
 		// Handle paused emulation (if triggered by home menu).

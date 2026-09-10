@@ -355,13 +355,17 @@ object TouchControls {
 
     /** How hard the modifier presses, as a percentage of a full press. 50 reproduces the value
      *  that used to be hardcoded (PCSX2's DEFAULT_PRESSURE_MODIFIER), which is why the on-screen
-     *  PRESSURE button was stuck at exactly half. Clamped away from BOTH ends deliberately: 0
-     *  would collide with the "full press" sentinel above, and 100 is indistinguishable from not
-     *  holding the modifier at all — neither is a usable setting. Persisted. */
+     *  PRESSURE button was stuck at exactly half.
+     *
+     *  Kept off 0, which would collide with the "full press" sentinel above. The top used to stop
+     *  at 95 on the reasoning that 100 is indistinguishable from not holding the modifier — true,
+     *  but it made the slider look broken to everyone who dragged it to the end, and 100 is a
+     *  perfectly honest value: press fully. A range that stops just short of a round number costs
+     *  more in confusion than the redundant setting is worth. Persisted. */
     val pressurePercent = mutableIntStateOf(50)
 
     fun setPressurePercent(v: Int) {
-        val c = v.coerceIn(5, 95)
+        val c = v.coerceIn(5, 100)
         pressurePercent.intValue = c
         // Persisted immediately rather than waiting for the layout save() — this is driven from a
         // settings slider, not from the layout editor, so save() may never be called.
@@ -432,6 +436,15 @@ object TouchControls {
     /** Bumped on every touch interaction (screen tap or on-screen button press)
      *  so the auto-hide timer restarts. Not persisted. */
     val interactionTick = mutableIntStateOf(0)
+
+    /** How many fingers are on the overlay right now, counted once at the overlay root.
+     *
+     *  The auto-hide timer needs this because a press is not the same thing as use. Every
+     *  widget reports the moment it is pressed and nothing after, so holding a stick or a
+     *  button for longer than the timeout counted as idle and the controls vanished under
+     *  the player's thumb mid-game. Idle means no finger on the glass, which is what this
+     *  counts. Not persisted. */
+    val pointersDown = mutableIntStateOf(0)
 
     // ---- On-screen macro / combo buttons (Macro1-4) ----------------------------
     // Each macro fires a user-chosen SET of pad buttons at once (e.g. R1+R2+R3).

@@ -127,6 +127,18 @@ PPUTranslator::PPUTranslator(LLVMContext& context, Module* _module, const ppu_mo
 	const auto caddr = m_info.segs[0].addr;
 	const auto cend = caddr + m_info.segs[0].size;
 
+	// Relocation logging is per-module, not per-relocation.
+	//
+	// These three sites each logged once per relocation. One Portal 2 session produced a
+	// 1.26 GB RPCSX.log that was ~100% the "relative relocation" notice alone, and the
+	// volume does not merely waste disk: the log writer falls behind, every thread that
+	// logs blocks behind it, and the emulator parks at 0% CPU looking exactly like a
+	// deadlock. Two of the three were at error level, which no log-level setting filters.
+	// Count them instead and report once per module, keeping the first address so the
+	// message still points somewhere.
+	usz reloc_relative = 0, reloc_64bit = 0, reloc_repeated = 0;
+	u32 first_relative = 0, first_64bit = 0, first_repeated = 0;
+
 	for (const auto& rel : m_info.get_relocs())
 	{
 		if (rel.addr >= caddr && rel.addr < cend)
@@ -144,7 +156,7 @@ PPUTranslator::PPUTranslator(LLVMContext& context, Module* _module, const ppu_mo
 			// case 26:
 			// case 28:
 			{
-				ppu_log.notice("Ignoring relative relocation at 0x%x (%u)", rel.addr, rel.type);
+				if (!reloc_relative++) first_relative = rel.addr;
 				continue;
 			}
 
@@ -161,7 +173,7 @@ PPUTranslator::PPUTranslator(LLVMContext& context, Module* _module, const ppu_mo
 			case 73:
 			case 78:
 			{
-				ppu_log.error("Ignoring 64-bit relocation at 0x%x (%u)", rel.addr, rel.type);
+				if (!reloc_64bit++) first_64bit = rel.addr;
 				continue;
 			}
 			default: break;
@@ -170,9 +182,24 @@ PPUTranslator::PPUTranslator(LLVMContext& context, Module* _module, const ppu_mo
 			// Align relocation address (TODO)
 			if (!m_relocs.emplace(rel.addr & ~3, &rel).second)
 			{
-				ppu_log.error("Relocation repeated at 0x%x (%u)", rel.addr, rel.type);
+				if (!reloc_repeated++) first_repeated = rel.addr;
 			}
 		}
+	}
+
+	if (reloc_relative)
+	{
+		ppu_log.notice("Ignored %u relative relocations (first at 0x%x)", reloc_relative, first_relative);
+	}
+
+	if (reloc_64bit)
+	{
+		ppu_log.error("Ignored %u 64-bit relocations (first at 0x%x)", reloc_64bit, first_64bit);
+	}
+
+	if (reloc_repeated)
+	{
+		ppu_log.error("Relocation repeated %u times (first at 0x%x)", reloc_repeated, first_repeated);
 	}
 
 	if (m_info.is_relocatable)
@@ -3438,10 +3465,24 @@ void PPUTranslator::MFSPR(ppu_opcode_t op)
 	switch (const u32 n = (op.spr >> 5) | ((op.spr & 0x1f) << 5))
 	{
 	case 0x001: // MFXER
+		// SO is bit 32, OV bit 33, CA bit 34 -- so 31, 30, 29 counting from the LSB. SO and CA
+		// were transposed here, which the interpreter gets right one file over
+		// (PPUInterpreter.cpp: so << 31 | ov << 30 | ca << 29 | cnt).
+		//
+		// Round-tripping hid it: MTXER below had the same two swapped, so a guest that only
+		// wrote and re-read XER saw itself. Internal carry chains were never affected either,
+		// since addc/adde use m_ca directly. What breaks is guest code that computes a carry and
+		// then reads XER to test it -- it gets SO where it expects CA.
+		//
+		// Measured against real hardware with tools/ps3autotests: 22,020 differing lines in
+		// cpu/ppu_gpr and 863 in cpu/ppu_integer_arithmetic, every one of them with the correct
+		// RESULT and only this field wrong, hardware reporting 0x20000000 where we reported
+		// 0x80000000. Present in upstream too, so it is not the cause of any Android-specific
+		// problem -- it is simply wrong, and cheap to correct.
 		result = ZExt(RegLoad(m_cnt), GetType<u64>());
-		result = m_ir->CreateOr(result, m_ir->CreateShl(ZExt(RegLoad(m_so), GetType<u64>()), 29));
+		result = m_ir->CreateOr(result, m_ir->CreateShl(ZExt(RegLoad(m_so), GetType<u64>()), 31));
 		result = m_ir->CreateOr(result, m_ir->CreateShl(ZExt(RegLoad(m_ov), GetType<u64>()), 30));
-		result = m_ir->CreateOr(result, m_ir->CreateShl(ZExt(RegLoad(m_ca), GetType<u64>()), 31));
+		result = m_ir->CreateOr(result, m_ir->CreateShl(ZExt(RegLoad(m_ca), GetType<u64>()), 29));
 		break;
 	case 0x008: // MFLR
 		result = RegLoad(m_lr);
@@ -3582,9 +3623,10 @@ void PPUTranslator::MTSPR(ppu_opcode_t op)
 	switch (const u32 n = (op.spr >> 5) | ((op.spr & 0x1f) << 5))
 	{
 	case 0x001: // MTXER
-		RegStore(Trunc(m_ir->CreateLShr(value, 31), GetType<bool>()), m_ca);
+		// Same transposition as MFXER above, in the other direction.
+		RegStore(Trunc(m_ir->CreateLShr(value, 31), GetType<bool>()), m_so);
 		RegStore(Trunc(m_ir->CreateLShr(value, 30), GetType<bool>()), m_ov);
-		RegStore(Trunc(m_ir->CreateLShr(value, 29), GetType<bool>()), m_so);
+		RegStore(Trunc(m_ir->CreateLShr(value, 29), GetType<bool>()), m_ca);
 		RegStore(Trunc(value, GetType<u8>()), m_cnt);
 		break;
 	case 0x008: // MTLR

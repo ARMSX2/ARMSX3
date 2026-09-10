@@ -68,7 +68,10 @@ namespace rsx::prof
 		page_protect,     // mprotect for guest write tracking, including its TLB maintenance
 		zcull,            // ZCULL occlusion report update
 		local_task,       // Backend local task queue drained from the FIFO loop
-		idle,             // Deliberately idle: FIFO empty, frame limiter, semaphore
+		idle,             // Deliberately idle: frame limiter and anything not split out below
+		idle_fifo,        // FIFO empty: the guest has not queued any commands
+		idle_sema,        // nv406e semaphore acquire: waiting for the guest to release us
+		idle_pause,       // cpu_wait: emulator-level pause/sync, not the guest
 		unclassified,     // RSX thread time not covered by any scope above
 
 		count
@@ -468,6 +471,10 @@ namespace rsx::prof
 	extern u64 g_mprotect_bytes;
 	extern u64 g_access_violations;
 
+	// Wall time spent inside on_access_violation, summed across GUEST threads. Not a bucket:
+	// buckets only accumulate on the RSX thread, and this handler never runs there.
+	extern std::atomic<u64> g_access_violation_tsc;
+
 	// Which site tore the pass down. Every one of these is a tile store and reload on a
 	// tiler, so the distribution decides what is worth batching or deferring.
 	inline constexpr u32 rp_site_count = 20;
@@ -501,6 +508,42 @@ namespace rsx::prof
 
 	/** Call once per frame from the RSX thread so the report can express per-frame cost. */
 	void tick_frame();
+
+	// Timestamp of the last flip, and a watchdog sampled from the vblank thread (~60Hz).
+	//
+	// The spike trace cannot answer "what was the guest doing during the stall": it runs
+	// at the flip that ENDS the slow frame, by which point the guest has finished its work
+	// and gone back to waiting. Sampling there showed every thread parked on a semaphore --
+	// which is also exactly what a healthy frame looks like at that same instant. Useless.
+	//
+	// This one fires while the stall is still happening.
+	extern std::atomic<u64> g_last_frame_tsc;
+	void stall_watchdog();
+
+	// Statistical guest profiler. Runs on its own thread so samples are not phase-locked to
+	// the frame clock; start_sampler() is idempotent.
+	// Ring of the last FIFO methods the RSX executed.
+	//
+	// On this hang the guest stops submitting while every thread and sync object stays healthy, so
+	// the question is what it set up immediately before going quiet. The FIFO dump already shows
+	// the last command word (always 0x00041d70 = NV4097_BACK_END_WRITE_SEMAPHORE_RELEASE here);
+	// the ring gives the sequence around it, which is what says WHICH label and what the guest is
+	// now waiting to observe.
+	struct fifo_rec_t
+	{
+		u32 reg;
+		u32 arg;
+	};
+
+	inline constexpr u32 fifo_ring_size = 64;
+	extern fifo_rec_t g_fifo_ring[fifo_ring_size];
+	extern u32 g_fifo_ring_pos; // racy by design; a torn slot only costs one ring entry
+
+	void sample_guest_pc();
+	void start_sampler();
+
+	// Joins the sampler. Must run before Emu teardown destroys what it walks.
+	void stop_sampler();
 
 	/** Write the current window to the log and start a new one. Safe to call from anywhere. */
 	void dump_and_reset();

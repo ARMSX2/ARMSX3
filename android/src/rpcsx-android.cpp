@@ -1,3 +1,4 @@
+#include <sys/prctl.h>
 #include <fstream>
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
@@ -238,7 +239,7 @@ static void pgo_flush()
 #endif
 
 // Severity threshold for the logcat mirror. Defaults to warning: notice/trace still reach
-// RPCSX.log, they just stop costing a logd round trip each. Lower it at runtime when
+// ARMSX3.log, they just stop costing a logd round trip each. Lower it at runtime when
 // actively debugging on a device.
 static std::atomic<int> g_logcat_min_level{static_cast<int>(logs::level::warning)};
 
@@ -283,7 +284,7 @@ struct LogListener : logs::listener {
     // It should not have to be. The FILE log is the artifact that gets attached to a bug
     // report; logcat is a live-debugging convenience for whoever is holding the device. So
     // mirror only what that person needs -- warnings and worse -- and let the rest go to the
-    // file alone, which is buffered and cheap. Nothing is lost from RPCSX.log.
+    // file alone, which is buffered and cheap. Nothing is lost from ARMSX3.log.
     //
     // Severity is INVERTED in logs::level (always=0 .. trace=7), so '>' drops the noisy end.
     if (static_cast<int>(static_cast<logs::level>(msg)) >
@@ -2463,9 +2464,9 @@ static void setupCallbacks() {
           },
       .get_font_dirs = [](auto...) { return std::vector<std::string>(); },
       .on_install_pkgs =
-          [](const std::vector<std::string> &pkgs) {
+          [](const std::vector<std::string> &pkgs, bool from_optical_drive) {
             for (const std::string &pkg : pkgs) {
-              if (!rpcs3::utils::install_pkg(pkg)) {
+              if (!rpcs3::utils::install_pkg(pkg, from_optical_drive)) {
                 rpcsx_android.error("cd install pkgs: failed to install %s",
                                     pkg);
                 return false;
@@ -2561,6 +2562,30 @@ static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {
   return true;
 }
 
+// pad_thread::open_home_menu() does not return until the menu is dismissed, and the menu is
+// drawn by the renderer. Two rules follow from that, and every caller here was breaking one:
+//
+//  - It must not run on a thread that dismissing the menu depends on. The pad-data path below
+//    is one: opening the menu inline stopped the very button events that would have closed it
+//    from ever reaching the pad.
+//  - It must not be opened when there is no surface to draw on. A menu nobody can see is a menu
+//    nobody can dismiss, and it has already taken pad input away from the game. That is what
+//    "the game freezes but the audio is still playing" turned out to be.
+//
+// So: refuse it without a window, and always run it detached.
+static void open_home_menu_async() {
+  if (g_native_window.load() == nullptr) {
+    rpcsx_android.warning("home menu requested with no surface to draw it on; ignoring");
+    return;
+  }
+
+  std::thread([] {
+    if (auto padThread = pad::get_pad_thread(true)) {
+      padThread->open_home_menu();
+    }
+  }).detach();
+}
+
 extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,
                                       int leftStickX, int leftStickY,
                                       int rightStickX, int rightStickY) {
@@ -2593,9 +2618,7 @@ extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,
       btn.m_pressed = (digital1 & btn.m_outKeyCode) != 0;
 
       if (btn.m_outKeyCode == CELL_PAD_CTRL_PS && btn.m_pressed) {
-        if (auto padThread = pad::get_pad_thread(true)) {
-          padThread->open_home_menu();
-        }
+        open_home_menu_async();
       }
 
     } else if (btn.m_offset == CELL_PAD_BTN_OFFSET_DIGITAL2) {
@@ -3055,6 +3078,17 @@ extern "C" const char *_rpcsx_rpcnCreateAccount(std::string_view npid,
   });
 }
 
+// Delete every trophy this account has synced to RPCN.
+//
+// No per-title variant: delete_trophies takes a communication id and an empty one means all,
+// which is the request people actually make. The desktop offers per-title from its trophy
+// manager; there is no equivalent screen here to hang that off.
+extern "C" const char *_rpcsx_rpcnDeleteTrophies() {
+  return rpcn_with_connection([&](rpcn::rpcn_client &client) {
+    return client.delete_trophies();
+  });
+}
+
 extern "C" const char *_rpcsx_rpcnResendToken(std::string_view npid,
                                               std::string_view password) {
   const std::string s_npid{npid}, s_pass{password};
@@ -3149,6 +3183,26 @@ extern "C" void _rpcsx_setSocInfo(std::string_view socInfo) {
 
 extern "C" bool _rpcsx_initialize(std::string_view rootDir,
                                   std::string_view user) {
+  // Ask for precise timers, the way every other RPCS3 frontend does.
+  //
+  // rpcs3.cpp sets this in main() under __linux__ with the comment "we value precise timers",
+  // and lv2.cpp's wait path is written against it: "With timerslack set low, Linux is precise
+  // for all values above", so on Linux/Android sleep_timers_accuracy defaults to As Host and
+  // takes the plain wait_for() branch rather than the busy-wait one. We never run that main() --
+  // the app dlopen()s this core and comes in here instead -- so the prctl never happened and the
+  // process kept Android's default 50,000ns slack while the sleep path assumed 1ns.
+  //
+  // sys_timer_usleep then overshoots, and the cost is not the sleep itself but what is held
+  // across it. Portal 2 stalls with main_thread inside sys_timer_usleep owning both mutexes the
+  // Bink audio and IO threads are blocked on, unchanged across dump samples 15s apart, while the
+  // RSX event queue sits full at 32/32 because _gcm_intr_thread cannot get in either. Frames
+  // crawl to 2.6 fps rather than stopping, which is why it reads as an intermittent hang that
+  // recovers on its own.
+  //
+  // Set on the calling thread; threads created afterwards inherit it, which is exactly how the
+  // desktop path gets it to the emulation threads.
+  prctl(PR_SET_TIMERSLACK, 1, 0, 0, 0);
+
   auto rootDirStr = fix_dir_path(std::string(rootDir));
 
   if (g_android_executable_dir != rootDirStr) {
@@ -3196,7 +3250,7 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
 
     // Preserve previous logs.
     //
-    // There used to be exactly one: RPCSX.log became RPCSX.old.log and the previous old was
+    // There used to be exactly one: ARMSX3.log became ARMSX3.old.log and the previous old was
     // deleted. That loses the log people are trying to send, reliably, because of how they send
     // it -- play, stop, relaunch the app to reach the file, and the relaunch rotates the session
     // they wanted into .old; relaunch once more (to find it, to share it, because the launcher
@@ -3215,7 +3269,14 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
     {
       std::error_code ec;
       const std::string dir = fs::get_log_dir();
-      const std::string current = dir + "RPCSX.log";
+      const std::string current = dir + "ARMSX3.log";
+
+      // Adopt a log left by a build that still wrote RPCSX.log, so the rename does not
+      // strand the one file people are asked to attach to bug reports.
+      if (!fs::is_file(current) && fs::is_file(dir + "RPCSX.log"))
+      {
+        std::filesystem::rename(dir + "RPCSX.log", current, ec);
+      }
 
       // Boot-only logs stop within a second of launch and run to a few KB. A real session --
       // even one with logging silenced immediately -- is orders of magnitude larger.
@@ -3226,10 +3287,10 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
 
       if (exists && size >= k_worth_keeping) {
         // Oldest out, everything down one.
-        std::filesystem::remove(dir + "RPCSX.old3.log", ec);
-        std::filesystem::rename(dir + "RPCSX.old2.log", dir + "RPCSX.old3.log", ec);
-        std::filesystem::rename(dir + "RPCSX.old.log", dir + "RPCSX.old2.log", ec);
-        std::filesystem::rename(current, dir + "RPCSX.old.log", ec);
+        std::filesystem::remove(dir + "ARMSX3.old3.log", ec);
+        std::filesystem::rename(dir + "ARMSX3.old2.log", dir + "ARMSX3.old3.log", ec);
+        std::filesystem::rename(dir + "ARMSX3.old.log", dir + "ARMSX3.old2.log", ec);
+        std::filesystem::rename(current, dir + "ARMSX3.old.log", ec);
       } else if (exists) {
         // Nothing in it worth a slot, and keeping it would cost the oldest real log.
         std::filesystem::remove(current, ec);
@@ -3237,7 +3298,7 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
     }
 
     // Limit log size to ~25% of free space
-    log_file = logs::make_file_listener(fs::get_log_dir() + "RPCSX.log",
+    log_file = logs::make_file_listener(fs::get_log_dir() + "ARMSX3.log",
                                         stats.avail_free / 4);
   }
 
@@ -3255,7 +3316,22 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
   // Mesa caches each option the first time it is read.
   //
   // A missing file does nothing, which is the normal case.
-  if (std::ifstream env_file(g_android_executable_dir + "driver_env.txt"); env_file.is_open()) {
+  //
+  // Two locations are tried, internal first so an existing setup keeps winning. The internal
+  // files dir needs root or a debuggable package to write, which a release build is not -- so on
+  // a shipping APK there was no way to set one of these without a root file manager. The
+  // external app dir (/sdcard/Android/data/<pkg>/files) is writable over plain adb by anyone,
+  // which is what makes a driver experiment possible on a device that is not rooted.
+  std::string env_path = g_android_executable_dir + "driver_env.txt";
+  if (!fs::is_file(env_path)) {
+    if (const std::string ext = "/sdcard/Android/data/com.armsx3/files/driver_env.txt";
+        fs::is_file(ext)) {
+      env_path = ext;
+    }
+  }
+
+  if (std::ifstream env_file(env_path); env_file.is_open()) {
+    rpcsx_android.warning("driver_env: reading %s", env_path);
     std::string line;
     while (std::getline(env_file, line)) {
       if (const auto eq = line.find('=');
@@ -3278,7 +3354,7 @@ extern "C" bool _rpcsx_initialize(std::string_view rootDir,
   }
 
   logs::stored_message ver{rpcsx_android.always()};
-  ver.text = fmt::format("RPCSX-ps3-android v%s", rpcs3::get_version().to_string());
+  ver.text = fmt::format("ARMSX3 v%s", rpcs3::get_version().to_string());
 
   // Write exact SoC identity (from Android, not inferred from MIDRs)
   logs::stored_message soc{rpcsx_android.always()};
@@ -3639,11 +3715,17 @@ extern "C" void _rpcsx_resume() { Emu.Resume(); }
 // underneath it, and why pause/resume were asymmetric: resume() reached the core, pause() did not.
 extern "C" void _rpcsx_pause() { Emu.Pause(); }
 
-extern "C" void _rpcsx_openHomeMenu() {
-  if (auto padThread = pad::get_pad_thread(true)) {
-    padThread->open_home_menu();
-  }
-}
+extern "C" void _rpcsx_openHomeMenu() { open_home_menu_async(); }
+
+// Arm an RSX frame capture.
+//
+// The desktop build triggers this from a menu and a keybind; there was no way to reach it
+// here at all, so every visual bug reported from Android arrived without the one artifact
+// that can actually settle it -- upstream asks for an .rrc on every graphics issue, and we
+// could not produce one. Setting the flag is the whole trigger: the RSX thread picks it up
+// at the next frame boundary, records that frame's command stream, writes it under
+// config/captures/ and pauses the emulator.
+extern "C" void _rpcsx_captureFrame() { g_user_asked_for_frame_capture = true; }
 
 extern "C" std::string _rpcsx_getTitleId() { return Emu.GetTitleID(); }
 
@@ -4355,13 +4437,22 @@ extern "C" bool _rpcsx_surfaceEvent(JNIEnv *env, jobject surface, jint event) {
     // actually requires -- so hand the rest to a detached worker and return now.
     // Ported from ouroboros420/rpcsx (31d1425bc).
     std::thread([] {
-      if (auto padThread = pad::get_pad_thread(true)) {
-        padThread->open_home_menu();
-      }
+      // The home menu used to be opened here, and that is exactly what "the game freezes but
+      // the audio keeps playing" was. open_home_menu() does not return until the menu is
+      // dismissed, and the menu is drawn by the renderer -- so with the surface just gone it
+      // could not be drawn, could not be dismissed, and never returned. Every line below it,
+      // the pause included, was unreachable for as long as the app stayed backgrounded, and
+      // the emulator ran on at full speed behind an invisible menu that had already taken pad
+      // input away from the game. Pausing is what this path is for. The menu belongs to the PS
+      // button, which can only reach open_home_menu_async() while there is something to draw on.
 
       // Only pause if the surface is still gone. A quick destroy->recreate (a rotation, a
       // transient focus loss) fires the gained event and resumes; that resume has to win
-      // the race against this deferred pause, not lose to it.
+      // the race against this deferred pause, not lose to it. That grace period used to be
+      // paid for accidentally, by however long the open_home_menu() call above took to run,
+      // so it has to be explicit now that the call is gone.
+      std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
       if (g_native_window.load() != nullptr) {
         return;
       }
@@ -4769,7 +4860,9 @@ static bool installPkg(JNIEnv *env, std::vector<fs::file> &&files,
   std::atomic<bool> finished{false};
 
   named_thread worker("PKG Installer", [&readers, &result, &bootable_paths, &finished] {
-    result = package_reader::extract_data(readers, bootable_paths);
+    // Android has no optical drive: packages always come from storage or SAF, so the
+    // single-threaded optical path upstream added in 44a2e4d66 never applies here.
+    result = package_reader::extract_data(readers, bootable_paths, false);
     finished.store(true, std::memory_order_release);
     return result.error == package_install_result::error_type::no_error;
   });
@@ -5380,6 +5473,31 @@ static bool cfg_is_float(const cfg::_base *node) {
   return min.find('.') != std::string::npos;
 }
 
+// Can this node actually be written back through settingsSet?
+//
+// cfg::set_entry, map_entry, node_map_entry, log_entry and device_entry are collections
+// that never implemented from_string, so they inherit the pure-virtual base stub: writing
+// one logs "cfg::_base::from_string() purecall" at FATAL and changes nothing. They all fall
+// into cfg_type_name's default: "string" branch, so the generic settings screen rendered
+// each as an editable text field -- issue #97 reported three fatals from a user typing into
+// the "Log" field, one per keystroke, with the setting silently never applying.
+//
+// Only emit what the UI can honestly edit. cfg::_float reports type::_int, so it is covered.
+static bool cfg_is_editable(const cfg::_base *node) {
+  switch (node->get_type()) {
+  case cfg::type::node:
+  case cfg::type::_bool:
+  case cfg::type::_enum:
+  case cfg::type::_int:
+  case cfg::type::uint:
+  case cfg::type::uint128:
+  case cfg::type::string:
+    return true;
+  default:
+    return false;
+  }
+}
+
 static const char *cfg_type_name(const cfg::_base *node) {
   switch (node->get_type()) {
   case cfg::type::_bool: return "bool";
@@ -5395,6 +5513,9 @@ static void emit_cfg_json(const cfg::_base *node, std::string &out) {
     out += '{';
     bool first = true;
     for (const auto *child : static_cast<const cfg::node *>(node)->get_nodes()) {
+      if (!cfg_is_editable(child)) {
+        continue;
+      }
       if (!first) out += ',';
       first = false;
       json_append_escaped(out, child->get_name());
@@ -5521,6 +5642,14 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
     return false;
   }
 
+  // Refuse collection nodes before from_string can hit the pure-virtual base stub, which
+  // logs at FATAL and looks like a crash in a bug report. Defence in depth: the emitter no
+  // longer offers these, but a stale override file or an older UI can still name one.
+  if (!cfg_is_editable(root)) {
+    rpcsx_android.error("settingsSet: node %s is a collection, not an editable value", path);
+    return false;
+  }
+
   // Values arrive JSON-encoded: bools/numbers bare, enums and strings quoted.
   // cfg::from_string wants the raw value, so unwrap one level of quoting and
   // undo the escapes we emit above.
@@ -5630,7 +5759,7 @@ extern "C" std::string _rpcsx_getVersion() {
 //
 // The glue can only reach logcat, which nobody attaches to an issue, and the reason a
 // custom driver was refused is exactly what a report needs. Routed through the emulator
-// log channel so it lands in RPCSX.log beside the driver identity it explains.
+// log channel so it lands in ARMSX3.log beside the driver identity it explains.
 extern "C" void _rpcsx_reportDriverProblem(std::string message) {
   rpcsx_android.error("%s", message);
 }

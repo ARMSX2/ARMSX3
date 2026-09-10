@@ -59,9 +59,10 @@ object ConfigStore {
     // can't update in place and re-point setup at their old folder). See reconcileReusedFolder.
     private const val KEY_FOLDER_RECONCILE = "config.migrated.folderReconcile"
     private const val KEY_SHADER_INTERP_MIGRATED = "config.migrated.shaderInterpOff"
-    private const val KEY_XFLOAT_ACCURATE_MIGRATED = "config.migrated.xfloatAccurate"
     private const val KEY_SPU_DECODER_RESTORE = "config.migrated.spuDecoderRestoreLlvm"
-    private const val KEY_XFLOAT_BACK_TO_APPROX = "config.migrated.xfloatBackToApprox"
+    // Supersedes config.migrated.xfloatAccurate and config.migrated.xfloatBackToApprox,
+    // which forced this field in opposite directions; see loadGlobal.
+    private const val KEY_XFLOAT_SETTLED_APPROX = "config.migrated.xfloatSettledApprox"
     private const val KEY_PRECISE_SPU_OFF = "config.migrated.preciseSpuVerifyOff"
     // Oboe became the Android default in 0.7.2; move anyone still on the old Cubeb default.
     private const val KEY_AUDIO_OBOE = "config.migrated.audioOboeDefault"
@@ -81,6 +82,9 @@ object ConfigStore {
     // The GLOBAL Accurate SPU Reservations value left off by the same debugging. The per-title
     // clear above never touched it, so installs carried an off-spec global for releases.
     private const val KEY_GLOBAL_RSV_ON = "config.migrated.globalSpuRsvOn"
+    private const val KEY_SLEEP_USLEEP = "config.migrated.sleepTimersUsleep"
+    private const val KEY_SLEEP_AS_HOST = "config.migrated.sleepTimersAsHost"
+    private const val KEY_SPU_LOOPDET_OFF = "config.migrated.spuLoopDetectionOff"
     // "Save LLVM logs", left on while chasing the Saint Seiya register scavenger. Bumped: the
     // first pass only un-pinned the override, which does nothing for a key no code writes -- the
     // value already in config.yml is reloaded and saved again on every boot.
@@ -121,6 +125,38 @@ object ConfigStore {
     // forever -- it is the only copy of their settings after a reinstall.
     private const val LEGACY_BACKUP_FILENAME = "armsx2-settings.json"
     private fun keyForGame(serial: String) = "config.game.$serial"
+
+    // Serial aliases, so per-game settings land under the key the core actually uses.
+    //
+    // GameInfo.settingsKey is the serial when the library found one and the filename stem
+    // otherwise -- and the library's only source is a regex over the filename, because
+    // NativeApp.getGameSerialFromFd is a PCSX2-era stub that returns "" on every call. A PS3
+    // disc whose filename does not spell out its title id therefore gets every per-game
+    // setting stored under its filename, while the core boots it as e.g. BLUS30732 and looks
+    // there. Caught on Portal 2: a per-title seed written to config.game.BLUS30732 was never
+    // read, and the core kept loading global values.
+    //
+    // The core knows the serial a second into boot (NativeApp.getGameSerial). Remember it
+    // against the stem the first time, and every later boot resolves under the real serial.
+    // Fixing the probe itself means parsing PARAM.SFO out of the image, which is the proper
+    // fix and a bigger one; this makes per-game settings work in the meantime.
+    private fun aliasKey(stem: String) = "config.serialalias.$stem"
+
+    /** Record the core-reported serial for a title whose library entry had none. */
+    fun rememberSerial(settingsKey: String?, serial: String?) {
+        val stem = settingsKey?.takeIf { it.isNotBlank() } ?: return
+        val real = serial?.takeIf { it.isNotBlank() } ?: return
+        if (stem == real) return
+        if (MainActivityRuntime.prefs.getString(aliasKey(stem), null) == real) return
+        MainActivityRuntime.prefs.edit { putString(aliasKey(stem), real) }
+    }
+
+    /** The key per-game settings should actually be stored and resolved under. */
+    fun effectiveKey(settingsKey: String?): String? {
+        val stem = settingsKey?.takeIf { it.isNotBlank() } ?: return settingsKey
+        return runCatching { MainActivityRuntime.prefs.getString(aliasKey(stem), null) }
+            .getOrNull()?.takeIf { it.isNotBlank() } ?: stem
+    }
 
     // Memoized result of loadGlobal(). The function below is a JSON parse plus every
     // migration block in this file -- 24,555 dex instructions by ART's count, over its
@@ -363,15 +399,29 @@ object ConfigStore {
             MainActivityRuntime.prefs.edit { putBoolean(KEY_PRECISE_SPU_OFF, true) }
         }
 
-        // ...and back off it again: Accurate was a wrong guess at the SPU freeze,
-        // which was really the block-verification checksum. Return anyone carrying
-        // the forced Accurate value to upstream's Approximate.
-        if (!MainActivityRuntime.prefs.getBoolean(KEY_XFLOAT_BACK_TO_APPROX, false)) {
+        // XFloat was forced in BOTH directions by two one-shot migrations that each
+        // guarded on their own key and marked themselves done. An older pass moved
+        // everyone Approximate -> Accurate on a DMA-corruption theory; a later pass moved
+        // them back, Accurate having been a wrong guess at the SPU freeze (the real cause
+        // was the block-verification checksum).
+        //
+        // The corrective pass ran FIRST in loadGlobal, so an install meeting both in a
+        // single load took the no-op branch of the corrective one, consumed its key, and
+        // was then pushed onto Accurate by the superseded one with nothing left to bring
+        // it back. Installs that met them under separate builds landed the other way, so
+        // the same build shipped two cohorts running different SPU float semantics,
+        // decided by install date. Confirmed against ps3autotests: Approximate and
+        // Accurate are different enough to be worth 14532 lines of output.
+        //
+        // One migration, one key, applied once to everyone: settle on upstream's
+        // Approximate. A deliberate Relaxed/Inaccurate (2/3) is still left alone, and
+        // raw == null (a fresh install) already defaults to Approximate untouched.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_XFLOAT_SETTLED_APPROX, false)) {
             if (raw != null && parsed.ps3.spuXFloat == 0) {
                 parsed = parsed.copy(ps3 = parsed.ps3.copy(spuXFloat = 1))
                 dirty = true
             }
-            MainActivityRuntime.prefs.edit { putBoolean(KEY_XFLOAT_BACK_TO_APPROX, true) }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_XFLOAT_SETTLED_APPROX, true) }
         }
 
         // Return the two reservation settings to upstream's defaults, both off.
@@ -407,6 +457,90 @@ object ConfigStore {
         // Found via Borderlands 2 hanging after its logo with one SPURS SPU and the RSX pinned
         // while every PPU sat in a legitimate wait. The same desync is the likeliest source of the
         // wild guest register values that were crashing the process before that.
+        // Undo an earlier migration of mine that set "Accurate RSX reservation access" false.
+        //
+        // It was true on device and differs from upstream's default, so I corrected it on that
+        // basis alone. That was wrong: the value was load-bearing here. With true, Portal 2 ran
+        // about five minutes before deadlocking; with false it livelocked inside a minute, with
+        // rsx::thread, all six SPURS kernels and _gcm_intr_thread spinning at wchan=0.
+        //
+        // A defaults diff is a lead, not a verdict. Restore what the device had, for anyone the
+        // bad migration already reached.
+        // Move Sleep Timers Accuracy off As Host.
+        //
+        // The stored value is 0 (As Host) on every install, because that was the default. It takes
+        // lv2.cpp's plain wait_for() branch, which assumes precise host timers -- measured on a
+        // Snapdragon 8 Gen 2, a 30us sleep takes 50-161us and a 60us sleep 69-135us. Guest poll
+        // loops therefore run at a fraction of their intended rate.
+        //
+        // Portal 2 is the case that found it: _gcm_intr_thread polls sys_mutex_trylock on a 30us
+        // timer for a mutex main_thread holds, while main_thread waits on a semaphore only
+        // _gcm_intr_thread posts. Polling three times slower than intended makes the interrupt
+        // thread that much less likely to win a race it wins on hardware, and the game only
+        // escapes when main_thread's wait times out -- the minutes-long stall.
+        //
+        // Only touches installs still on the old default, so a deliberate choice is preserved.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_SLEEP_USLEEP, false)) {
+            if (raw != null && parsed.ps3.sleepTimers == 0) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(sleepTimers = 1))
+                dirty = true
+            }
+
+            runCatching {
+                CoreSettingOverrides.forget(SettingsScope.Global, null, "Core@@Sleep Timers Accuracy")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_SLEEP_USLEEP, true) }
+        }
+
+        // Turn SPU loop detection off, which is what this app and upstream both default it to.
+        //
+        // It is stored true on installs that predate the default, and on ARM64 it costs twice.
+        // exec_read_dec (SPULLVMRecompiler.cpp) yields the thread whenever the decrementer reads
+        // above 1500 -- about 19us at 79.8MHz, so effectively the entire countdown, meaning an SPU
+        // polling the decrementer yields on every poll rather than on a detected wait loop. And
+        // enabling it disables the inline cntvct_el0 decrementer read, turning every rdch RdDec
+        // into an out-of-line call.
+        //
+        // Both penalties land on the SPURS kernels, which is exactly where a PPU spinning in
+        // cellSyncMutexTryLock is waiting. Only touches installs still carrying true, so a
+        // deliberate choice made after this ships is preserved.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_SPU_LOOPDET_OFF, false)) {
+            if (raw != null && parsed.ps3.spuLoopDetection) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(spuLoopDetection = false))
+                dirty = true
+            }
+
+            runCatching {
+                CoreSettingOverrides.forget(SettingsScope.Global, null, "Core@@SPU loop detection")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_SPU_LOOPDET_OFF, true) }
+        }
+
+        // ...and put it back. The migration above moved Android off As Host because Android's
+        // default 50us timer slack makes lv2.cpp's plain wait_for() branch imprecise -- but the
+        // commit that shipped alongside it sets PR_SET_TIMERSLACK to 1ns at startup
+        // (rpcsx-android.cpp), which is the exact precondition that branch documents: "With
+        // timerslack set low, Linux is precise for all values above". The workaround and the fix
+        // for the same problem landed together, so the workaround was redundant on arrival.
+        //
+        // As Host is what upstream uses for Linux and macOS, and what this app defaulted to
+        // before any of it. Diverging from both, for one title, on a premise another commit had
+        // already removed, is not a default worth keeping.
+        //
+        // Only touches installs the migration above actually moved, so a deliberate Usleep Only
+        // is preserved.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_SLEEP_AS_HOST, false)) {
+            if (raw != null && parsed.ps3.sleepTimers == 1) {
+                parsed = parsed.copy(ps3 = parsed.ps3.copy(sleepTimers = 0))
+                dirty = true
+            }
+
+            runCatching {
+                CoreSettingOverrides.forget(SettingsScope.Global, null, "Core@@Sleep Timers Accuracy")
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_SLEEP_AS_HOST, true) }
+        }
+
         if (!MainActivityRuntime.prefs.getBoolean(KEY_GLOBAL_RSV_ON, false)) {
             if (raw != null && !parsed.ps3.accurateSpuRsv) {
                 parsed = parsed.copy(ps3 = parsed.ps3.copy(accurateSpuRsv = true))
@@ -581,18 +715,6 @@ object ConfigStore {
                 )
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_SHADOWING_OVERRIDES_PURGED, true) }
-        }
-
-        // Move anyone still on the old Approximate xfloat default onto Accurate.
-        // Approximate corrupted SPU float registers badly enough that a job
-        // manager built a DMA command out of one; see Settings.spuXFloat. A
-        // deliberate choice of Relaxed/Inaccurate is left alone.
-        if (!MainActivityRuntime.prefs.getBoolean(KEY_XFLOAT_ACCURATE_MIGRATED, false)) {
-            if (raw != null && parsed.ps3.spuXFloat == 1) {
-                parsed = parsed.copy(ps3 = parsed.ps3.copy(spuXFloat = 0))
-                dirty = true
-            }
-            MainActivityRuntime.prefs.edit { putBoolean(KEY_XFLOAT_ACCURATE_MIGRATED, true) }
         }
 
         // The shader interpreter cannot compile on Adreno -- vkCreateGraphicsPipelines

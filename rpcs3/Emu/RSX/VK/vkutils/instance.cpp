@@ -227,7 +227,49 @@ namespace vk
 			}
 #endif //(WIN32, __APPLE__)
 			if (g_cfg.video.debug_output)
-				layers.push_back("VK_LAYER_KHRONOS_validation");
+			{
+				// Only ask for the validation layer if it is actually installed.
+				//
+				// vkCreateInstance fails outright with VK_ERROR_LAYER_NOT_PRESENT when a named layer
+				// is missing, and the caller reports that as "Could not find a Vulkan compatible GPU
+				// driver" -- so ticking Debug output on a machine without the validation layer made
+				// every game fail to boot behind an error blaming the GPU. That is the normal state
+				// on Android, where the layer is only ever present if it was packaged into the APK.
+				//
+				// Resolved through the global procedure address rather than called directly, for the
+				// same reason as vkEnumerateInstanceVersion above: on the custom-ICD path the loader
+				// in vk_android_loader.cpp only populates the entry points it names explicitly, and
+				// this is not one of them.
+				bool has_validation = false;
+
+				if (const auto pfn_enumerate_instance_layers = reinterpret_cast<PFN_vkEnumerateInstanceLayerProperties>(
+						vkGetInstanceProcAddr(nullptr, "vkEnumerateInstanceLayerProperties")))
+				{
+					u32 layer_count = 0;
+					if (pfn_enumerate_instance_layers(&layer_count, nullptr) == VK_SUCCESS && layer_count)
+					{
+						std::vector<VkLayerProperties> available_layers(layer_count);
+						if (pfn_enumerate_instance_layers(&layer_count, available_layers.data()) == VK_SUCCESS)
+						{
+							has_validation = std::any_of(available_layers.begin(), available_layers.end(),
+								[](const VkLayerProperties& layer)
+								{
+									return std::string_view(layer.layerName) == "VK_LAYER_KHRONOS_validation";
+								});
+						}
+					}
+				}
+
+				if (has_validation)
+				{
+					layers.push_back("VK_LAYER_KHRONOS_validation");
+				}
+				else
+				{
+					rsx_log.warning("Debug output is enabled but VK_LAYER_KHRONOS_validation is not installed;"
+						" continuing without it.");
+				}
+			}
 		}
 #ifdef __APPLE__ 
 		// MoltenVK's ICD will not be detected without these extensions enabled.

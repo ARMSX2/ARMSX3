@@ -20,6 +20,7 @@
 #include "Emu/Cell/SPUDisAsm.h"
 #include "Emu/Cell/SPUAnalyser.h"
 #include "Emu/Cell/SPUThread.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include "Emu/Cell/SPURecompiler.h"
 #include "Emu/Cell/timers.hpp"
 
@@ -595,14 +596,31 @@ namespace vm
 	// Defined here for performance reasons
 	writer_lock::~writer_lock() noexcept
 	{
+		// Wake the PPUs parked on this word.
+		//
+		// vm::passive_lock waits for g_range_lock_bits[1] to reach ZERO -- the whole word, not
+		// this address -- and nothing here ever notified it, so a parked PPU could only find the
+		// gap by polling: 100 busy_wait(200) spins and then a yield for a full scheduler quantum.
+		// With several SPUs each taking this lock thousands of times a frame, the quiet instants
+		// are short and a yielding PPU sleeps straight through them.
+		//
+		// Only the transition to zero can release anyone, so that is the only case that notifies
+		// and the common release stays a plain clear.
 		if (range_lock)
 		{
-			g_range_lock_bits[1] &= ~(1ull << (range_lock - g_range_lock_set));
+			const u64 left = (g_range_lock_bits[1] &= ~(1ull << (range_lock - g_range_lock_set)));
 			range_lock->release(0);
+
+			if (!left)
+			{
+				g_range_lock_bits[1].notify_all();
+			}
+
 			return;
 		}
 
 		g_range_lock_bits[1].release(0);
+		g_range_lock_bits[1].notify_all();
 	}
 }
 
@@ -2132,7 +2150,8 @@ void spu_thread::push_snr(u32 number, u32 value)
 
 void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8* ls)
 {
-	perf_meter<"DMA"_u32> perf_;
+	// Per DMA transfer; only the destructor reads it, and only under perf_report.
+	perf_meter<"DMA"_u32> perf_(nullptr);
 
 	const bool is_get = (args.cmd & ~(MFC_BARRIER_MASK | MFC_FENCE_MASK | MFC_START_MASK)) == MFC_GET_CMD;
 
@@ -3068,7 +3087,7 @@ bool spu_thread::do_dma_check(const spu_mfc_cmd& args)
 
 bool spu_thread::do_list_transfer(spu_mfc_cmd& args)
 {
-	perf_meter<"MFC_LIST"_u64> perf0;
+	perf_meter<"MFC_LIST"_u64> perf0(nullptr);
 
 	// Amount of elements to fetch in one go
 	constexpr u32 fetch_size = 6;
@@ -3622,9 +3641,92 @@ bool spu_thread::do_list_transfer(spu_mfc_cmd& args)
 	return true;
 }
 
+// SPU -> PPU event delivery outcomes, reported by the RSX profiler.
+//
+// Both SPU-side senders below are silent about failure in opposite directions: they retry
+// forever on EAGAIN without logging, and on a full queue (EBUSY) they log at a level the SPU
+// channel does not necessarily pass and then DROP the event. A SPURS kernel stuck cycling
+// through these syscalls therefore looks identical, in a log, to one doing useful work.
+atomic_t<u64> g_spu_event_throw_ok{0};
+atomic_t<u64> g_spu_event_throw_drop{0};
+atomic_t<u64> g_spu_event_throw_again{0};
+atomic_t<u64> g_spu_event_setbit_ok{0};
+atomic_t<u64> g_spu_event_setbit_again{0};
+
+namespace
+{
+	// Which lines reach the barrier. At tens of thousands per frame this is a livelock, not
+	// contention noise, and naming the line names the object that is livelocking. Deliberately
+	// racy: a histogram does not need to be exact, and this runs about a million times a second,
+	// so anything with a lock or a clock read here costs more than what it measures.
+	struct putllc_site_t
+	{
+		atomic_t<u32> addr;
+		atomic_t<u32> count;
+		// The SPU PC of the store that reached the barrier. Without it the site histogram says
+		// WHERE the barriers land but not WHICH loop issues them, and the PUTLLC16 whitelist is
+		// keyed by loop, not by address -- so the histogram alone cannot aim a fix. Last writer
+		// wins; these sites are dominated by a single loop each, so a sample is enough.
+		atomic_t<u32> pc;
+	};
+
+	std::array<putllc_site_t, 64> g_putllc_sites{};
+}
+
+void record_putllc_barrier_site(u32 addr, u32 pc)
+{
+	const u32 line = addr & -128;
+
+	for (u32 probe = 0; probe < 8; probe++)
+	{
+		auto& slot = g_putllc_sites[((line >> 7) + probe) % g_putllc_sites.size()];
+		const u32 have = slot.addr.load();
+
+		if (have == line)
+		{
+			slot.count++;
+			slot.pc.release(pc);
+			return;
+		}
+
+		if (!have && slot.addr.compare_and_swap_test(0, line))
+		{
+			slot.count++;
+			slot.pc.release(pc);
+			return;
+		}
+	}
+}
+
+std::string spu_putllc_barrier_sites()
+{
+	std::vector<std::pair<u32, u32>> v;
+	std::unordered_map<u32, u32> pcs;
+
+	for (auto& slot : g_putllc_sites)
+	{
+		if (const u32 c = slot.count.load())
+		{
+			v.emplace_back(c, slot.addr.load());
+			pcs[slot.addr.load()] = slot.pc.load();
+		}
+	}
+
+	std::sort(v.begin(), v.end(), [](auto& a, auto& b) { return a.first > b.first; });
+
+	std::string out;
+
+	for (usz i = 0; i < v.size() && i < 8; i++)
+	{
+		fmt::append(out, " 0x%08x:%u@pc%05x", v[i].second, v[i].first, pcs[v[i].second]);
+	}
+
+	return out;
+}
+
 bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 {
-	perf_meter<"PUTLLC-"_u64> perf0;
+	perf_meter<"PUTLLC-"_u64> perf0(nullptr);
 	perf_meter<"PUTLLC+"_u64> perf1 = perf0;
 
 	putllc_calls++;
@@ -3677,6 +3779,7 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			return false;
 		}
 
+
 		static const auto cast_as = [](void* ptr, usz pos){ return reinterpret_cast<u128*>(ptr) + pos; };
 		static const auto cast_as_const = [](const void* ptr, usz pos){ return reinterpret_cast<const u128*>(ptr) + pos; };
 
@@ -3714,6 +3817,95 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 		}
 
 		auto& super_data = *vm::get_super_ptr<spu_rdata_t>(addr);
+
+		// How many conditional stores actually reach the barrier below. Counted, not timed: this
+		// is not the same question as how many PUTLLCs run -- vm::writer_lock is not a lock on this
+		// address, it stamps cpu_flag::memory on every registered PPU thread and spins until each
+		// reaches cpu_flag::wait. Its cost therefore scales with how many PPU threads exist and what
+		// they are doing, not with contention on the line -- so a call count alone, even at a 0%
+		// failure rate, cannot say whether a title is being starved by its own atomics.
+		//
+		// It was briefly timed with steady_clock here. Do not put that back: at ~2M conditional
+		// stores a second, the two clock reads became the single hottest symbol in the SPU thread
+		// (__kernel_clock_gettime, 7.9%, above vm::writer_lock itself at 7.3%), so the measurement
+		// outweighed what it measured. Use simpleperf for the cost and this counter for the rate.
+		putllc_barrier++;
+
+		// Of those, the ones landing on this thread's own SPURS control block -- the exact case the
+		// fast path above exists to keep OUT of here. If this tracks putllc_barrier, then the barrier
+		// storm is the SPURS kernel's own atomics and the fast path is not engaging.
+		if (addr - spurs_addr <= 0x80)
+		{
+			putllc_barrier_spurs++;
+		}
+
+		// Diagnostics only, and OFF by default.
+		//
+		// record_putllc_barrier_site does an atomic increment on a shared, falsely-shared global
+		// slot for EVERY barrier-taking conditional store. Soulcalibur V issues those at over a
+		// million a second, so leaving this on ships a measurable cost to every user for a
+		// histogram nobody is reading -- and it inflates the very thing it was added to measure.
+		//
+		// ARMSX3_PUTLLC_SITES=1 in files/driver_env.txt turns it and the loop dump below back on.
+		// Function-local: at namespace scope this reads the environment before driver_env.txt is
+		// parsed and comes back unset.
+		static const bool s_putllc_sites = []
+		{
+			const char* v = std::getenv("ARMSX3_PUTLLC_SITES");
+			return v && v[0] == '1' && v[1] == '\0';
+		}();
+
+		if (s_putllc_sites) [[unlikely]]
+		{
+			record_putllc_barrier_site(addr, pc);
+		}
+
+		// One-shot disassembly of the loop actually issuing the barriers.
+		//
+		// The site histogram named a single PC responsible for ~99% of them, and no refused-loop
+		// dump covered it -- the refused dump caps at 16 hashes and skips loops longer than 256
+		// bytes, so "not in that list" does not mean "not a pattern". Without the code there is no
+		// way to tell whether PUTLLC16 could ever apply here or whether the fix lies elsewhere.
+		// Fires once per PC, at most four PCs, only after a site is clearly hot.
+		if (s_putllc_sites && putllc_barrier > 1000000) [[unlikely]]
+		{
+			static atomic_t<u32> s_dumped_pcs[4]{};
+
+			for (auto& slot : s_dumped_pcs)
+			{
+				const u32 have = slot.load();
+
+				if (have == pc)
+				{
+					break;
+				}
+
+				if (!have && slot.compare_and_swap_test(0, pc))
+				{
+					SPUDisAsm dis_asm(cpu_disasm_mode::normal, reinterpret_cast<const u8*>(ls), 0);
+
+					std::string body;
+					const u32 lo = pc > 0x80 ? pc - 0x80 : 0u;
+
+					for (u32 i = lo; i <= pc + 0x10 && i < 0x40000; i += 4)
+					{
+						dis_asm.disasm(i);
+						std::string_view op = dis_asm.last_opcode;
+
+						while (!op.empty() && (op.back() == '\n' || op.back() == ' ' || op.back() == '\t'))
+						{
+							op.remove_suffix(1);
+						}
+
+						fmt::append(body, "\n    0x%05x  %s%s", i, op, i == pc ? "   <<<< PUTLLC" : "");
+					}
+
+					spu_log.error("PUTLLC barrier hot loop at pc 0x%05x (addr 0x%08x):%s", pc, addr, body);
+					break;
+				}
+			}
+		}
+
 		const bool success = [&]()
 		{
 			// Full lock (heavyweight)
@@ -3785,6 +3977,7 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 
 			raddr = 0;
 		}
+
 
 		perf0.reset();
 		return true;
@@ -6514,11 +6707,18 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 				{
 					if (res == CELL_EAGAIN)
 					{
+						g_spu_event_throw_again++;
 						ch_out_mbox.set_value(data);
 						return false;
 					}
 
+					g_spu_event_throw_drop++;
+
 					spu_log.warning("sys_spu_thread_throw_event(spup=%d, data0=0x%x, data1=0x%x) failed (error=%s)", spup, (value & 0x00ffffff), data, res);
+				}
+				else
+				{
+					g_spu_event_throw_ok++;
 				}
 
 				return true;
@@ -6587,9 +6787,12 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 				// Use the syscall to set flag
 				if (sys_event_flag_set(*this, data, 1ull << flag) + 0u == CELL_EAGAIN)
 				{
+					g_spu_event_setbit_again++;
 					ch_out_mbox.set_value(data);
 					return false;
 				}
+
+				g_spu_event_setbit_ok++;
 
 				return true;
 			}
@@ -6826,6 +7029,12 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 	fmt::throw_exception("Unknown/illegal channel in WRCH (ch=%d [%s], value=0x%x)", ch, ch < 128 ? spu_ch_name[ch] : "???", value);
 }
 
+// Duration of the whole-group park in sys_spu_thread_receive_event.
+atomic_t<u64> g_spu_group_susp_start{0};
+atomic_t<u64> g_spu_group_susp_us{0};
+atomic_t<u64> g_spu_group_susp_count{0};
+atomic_t<u64> g_spu_group_susp_max{0};
+
 extern void resume_spu_thread_group_from_waiting(spu_thread& spu, std::array<shared_ptr<named_thread<spu_thread>>, 8>& notify_spus)
 {
 	const auto group = spu.group;
@@ -6835,6 +7044,17 @@ extern void resume_spu_thread_group_from_waiting(spu_thread& spu, std::array<sha
 	if (group->run_state == SPU_THREAD_GROUP_STATUS_WAITING)
 	{
 		group->run_state = SPU_THREAD_GROUP_STATUS_RUNNING;
+
+		if (const u64 start = g_spu_group_susp_start; start)
+		{
+			const u64 freq = utils::get_tsc_freq();
+			const u64 us = freq ? ((utils::get_tsc() - start) * 1000000ull) / freq : 0;
+
+			g_spu_group_susp_us += us;
+			g_spu_group_susp_count++;
+			g_spu_group_susp_max.fetch_op([us](u64& v) { if (us > v) { v = us; return true; } return false; });
+			g_spu_group_susp_start = 0;
+		}
 	}
 	else if (group->run_state == SPU_THREAD_GROUP_STATUS_WAITING_AND_SUSPENDED)
 	{
@@ -7036,6 +7256,16 @@ bool spu_thread::stop_and_signal(u32 code)
 				lv2_obj::emplace(queue->sq, this);
 				group->run_state = SPU_THREAD_GROUP_STATUS_WAITING;
 				group->waiter_spu_index = index;
+
+				// How long the group stays parked here.
+				//
+				// This suspends the WHOLE group untimed until someone sends the event, and if the
+				// SPU being parked holds a guest lock, nothing can take that lock until then.
+				// Profiling shows group suspension appears only during slow frames (0.10-1.00
+				// suspended, against 0.00 overall) while main_thread spends 72% of such a frame
+				// spinning in cellSyncMutexTryLock -- so the duration of this park is the thing
+				// worth knowing.
+				g_spu_group_susp_start = utils::get_tsc();
 
 				for (auto& thread : group->threads)
 				{

@@ -92,6 +92,7 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("backend.graphicsApi.label", true, SettingsCategory.Graphics),
     SettingsSearchEntry("audio.volume.label", true, SettingsCategory.Audio),
     SettingsSearchEntry("audio.mute.label", true, SettingsCategory.Audio),
+    SettingsSearchEntry("audio.recordingcompat.label", true, SettingsCategory.Audio),
     SettingsSearchEntry("audio.synchronization.label", true, SettingsCategory.Audio),
     SettingsSearchEntry("audio.buffer.label", true, SettingsCategory.Audio),
     SettingsSearchEntry("audio.renderer.label", true, SettingsCategory.Audio),

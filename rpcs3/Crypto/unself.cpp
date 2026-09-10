@@ -625,18 +625,22 @@ bool SCEDecrypter::LoadHeaders()
 
 bool SCEDecrypter::LoadMetadata(const u8 erk[32], const u8 riv[16])
 {
-	const u64 sce_size = sce_f.size();
-	const u64 headers_off = u64{sce_hdr.se_meta} + sizeof(sce_hdr) + sizeof(meta_info);
+	aes_context aes;
+	std::vector<u8> metadata_info(sizeof(meta_info));
+	constexpr usz sizeof_meta_and_header = sizeof(meta_info) + sizeof(sce_hdr);
+	const usz metadata_offset = static_cast<usz>(sce_hdr.se_meta);
 
-	if (sce_hdr.se_hsize > sce_size || headers_off > sce_hdr.se_hsize)
+	if (metadata_offset > usz{umax} - sizeof_meta_and_header ||
+		sce_hdr.se_hsize < sizeof_meta_and_header + metadata_offset ||
+		sce_hdr.se_hsize - (sizeof_meta_and_header + metadata_offset) < sizeof(meta_hdr) ||
+		sce_hdr.se_hsize > sce_f.size())
 	{
-		self_log.error("Invalid SCE metadata layout (header size=0x%x, metadata offset=0x%x, file size=0x%x)", sce_hdr.se_hsize, sce_hdr.se_meta, sce_size);
+		self_log.error("Invalid SCE metadata header size!");
 		return false;
 	}
 
-	aes_context aes;
-	std::vector<u8> metadata_info(sizeof(meta_info));
-	std::vector<u8> metadata_headers(sce_hdr.se_hsize - headers_off);
+	const usz metadata_headers_offset = sizeof_meta_and_header + metadata_offset;
+	std::vector<u8> metadata_headers(sce_hdr.se_hsize - metadata_headers_offset);
 
 	// Locate and read the encrypted metadata info.
 	sce_f.seek(sce_hdr.se_meta + sizeof(sce_hdr));
@@ -1130,18 +1134,22 @@ const NPD_HEADER* SELFDecrypter::GetNPDHeader() const
 
 bool SELFDecrypter::LoadMetadata(const u8* klic_key)
 {
-	const u64 self_size = self_f.size();
-	const u64 headers_off = u64{sce_hdr.se_meta} + sizeof(sce_hdr) + sizeof(meta_info);
+	aes_context aes;
+	std::vector<u8> metadata_info(sizeof(meta_info));
+	constexpr usz sizeof_meta_and_header = sizeof(meta_info) + sizeof(sce_hdr);
+	const usz metadata_offset = static_cast<usz>(sce_hdr.se_meta);
 
-	if (sce_hdr.se_hsize > self_size || headers_off > sce_hdr.se_hsize)
+	if (metadata_offset > usz{umax} - sizeof_meta_and_header ||
+		sce_hdr.se_hsize < sizeof_meta_and_header + metadata_offset ||
+		sce_hdr.se_hsize - (sizeof_meta_and_header + metadata_offset) < sizeof(meta_hdr) ||
+		sce_hdr.se_hsize > self_f.size())
 	{
-		self_log.error("Invalid SELF metadata layout (header size=0x%x, metadata offset=0x%x, file size=0x%x)", sce_hdr.se_hsize, sce_hdr.se_meta, self_size);
+		self_log.error("Invalid SELF metadata header size!");
 		return false;
 	}
 
-	aes_context aes;
-	std::vector<u8> metadata_info(sizeof(meta_info));
-	std::vector<u8> metadata_headers(sce_hdr.se_hsize - headers_off);
+	const usz metadata_headers_offset = sizeof_meta_and_header + metadata_offset;
+	std::vector<u8> metadata_headers(sce_hdr.se_hsize - metadata_headers_offset);
 
 	// Locate and read the encrypted metadata info.
 	self_f.seek(sce_hdr.se_meta + sizeof(sce_hdr));

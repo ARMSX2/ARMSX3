@@ -1,5 +1,6 @@
 #include "VKCompute.h"
 #include <cstdlib>
+#include <cstring>
 #include "Emu/RSX/rsx_profiler.h"
 #include "VKHelpers.h"
 #include "VKRenderPass.h"
@@ -176,12 +177,68 @@ namespace vk
 		m_program->bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE);
 	}
 
+	// Every dispatch here is a graphics->compute engine switch, and on Adreno 830 that path is
+	// where a reproducible GPU hang lived. Decoded RBBM registers from the kgsl snapshot put the
+	// wedge at unslice PC (which owns the gfx<->compute transition) and unslice HLSQ (the wave
+	// context allocator), with UCHE, VPC, VSC, CMP, DCMP and VBIF_GX idle and zero page faults --
+	// a launched grid that never retires, not a memory stall. The CP parks on whatever drain point
+	// it reaches next, which differs between captures while the registers stay byte-identical, so
+	// the park point is not the fault site.
+	//
+	// The fix was to stop generating the transition on the hot path rather than to tune it: see
+	// vk::gfx_shuffle_32_16, which does the same byteswap from a fragment shader. The counters and
+	// ARMSX3_SKIP_COMPUTE below exist so the next occurrence can be attributed to a specific
+	// kernel in one run instead of guessed at -- guessing cost several rounds here.
 	void compute_task::run(const vk::command_buffer& cmd, u32 invocations_x, u32 invocations_y, u32 invocations_z)
 	{
 		// CmdDispatch is outside renderpass scope only
 		if (vk::is_renderpass_open(cmd))
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[3]++; vk::end_renderpass(cmd);
+		}
+
+		// Per-task selective skip. ARMSX3_SKIP_COMPUTE is a comma-separated list of substrings
+		// matched against the mangled task name, so a run can eliminate ONE compute task without a
+		// rebuild -- driver_env.txt is editable on the device. Note the mangled names end in 'E',
+		// so "cs_shuffle_32E" selects cs_shuffle_32 alone while "cs_shuffle_32" also takes
+		// cs_shuffle_32_16.
+		if (m_skip_state < 0) [[unlikely]]
+		{
+			m_skip_state = 0;
+			if (const char* list = std::getenv("ARMSX3_SKIP_COMPUTE"); list && list[0])
+			{
+				for (const char* p = list; *p;)
+				{
+					const char* e = std::strchr(p, ',');
+					const std::string tok(p, e ? e - p : std::strlen(p));
+					if (!tok.empty() && std::strstr(m_debug_name, tok.c_str()))
+					{
+						m_skip_state = 1;
+						rsx_log.error("ARMSX3_SKIP_COMPUTE: dispatches from %s are DISABLED.", m_debug_name);
+						break;
+					}
+					if (!e) break;
+					p = e + 1;
+				}
+			}
+		}
+
+		if (m_skip_state == 1) [[unlikely]]
+		{
+			return;
+		}
+
+		// Per-task dispatch volume. Logged at widening milestones so `grep "Compute DISPATCH"` on a
+		// captured log ranks the tasks by how much engine switching each one actually causes --
+		// which is the number the last two fix attempts were guessed without.
+		if (const u64 n = ++m_dispatch_count;
+			n == 1 || n == 100 || n == 1000 || n == 10000 || (n % 100000) == 0) [[unlikely]]
+		{
+			m_logged_first_dispatch = true;
+			// error level on purpose: notice sits below the shipped log level, so the counters
+			// this was built for produced NOTHING in the capture they were meant to inform.
+			// The milestones are rare (1/100/1000/10000/100k), so this cannot spam.
+			rsx_log.warning("Compute DISPATCH %s x%d", m_debug_name, n);
 		}
 
 		load_program(cmd);

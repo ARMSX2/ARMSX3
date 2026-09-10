@@ -808,6 +808,9 @@ public:
 	// stall dump on another thread -- a torn read costs nothing there.
 	u64 putllc_calls = 0;
 	u64 putllc_fails = 0;
+	u64 putllc_barrier = 0; // conditional stores that reached the heavyweight vm::writer_lock
+	u64 putllc_barrier_spurs = 0; // ...of those, ones on this thread's own SPURS control block
+
 	u64 putllc_notify = 0;
 	u64 putllc_suppressed = 0; // SPURS heuristic decided the waiters did not need waking
 
@@ -894,6 +897,7 @@ public:
 
 	std::array<v128, 0x4000> stack_mirror; // Return address information
 	std::array<u32, 8> raddr_busy_wait_addr{}; // Return address information
+
 
 	const char* current_func{}; // Current STOP or RDCH blocking function
 	u64 start_time{}; // Starting time of STOP or RDCH bloking function
@@ -1041,3 +1045,6 @@ public:
 		}
 	}
 };
+
+// The lines that actually reach do_putllc's vm::writer_lock, most-hammered first.
+std::string spu_putllc_barrier_sites();

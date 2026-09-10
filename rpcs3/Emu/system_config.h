@@ -234,6 +234,7 @@ struct cfg_root : cfg::node
 		// would mean either clipping at half the useful range (it is clamped 0..100) or widening
 		// that clamp, which would silently change what every existing FSR config means.
 		cfg::uint<0, 200> sgsr_sharpening_intensity{ this, "SGSR Edge Sharpness", 100, true };
+		cfg::_bool disable_blit_engine_upscaling{ this, "Disable Blit Engine Upscaling", false, true };
 
 		struct node_vk : cfg::node
 		{
@@ -323,6 +324,12 @@ struct cfg_root : cfg::node
 		cfg::_bool enable_buffering{ this, "Enable Buffering", true, true };
 		cfg::_int <4, 250> desired_buffer_duration{ this, "Desired Audio Buffer Duration", 34, true };
 		cfg::_bool enable_time_stretching{ this, "Enable Time Stretching", false, true };
+		// Android screen recorders capture nothing while Oboe runs in low-latency mode, because
+		// AAudio's MMAP fast path writes past the mixer AudioPlaybackCapture reads from. The audio
+		// is audible the whole time and no error is raised, so this looks like a broken recorder.
+		// Setting this puts the stream on the ordinary mixer, where it can be captured, at the
+		// cost of some latency -- so it is off unless you are recording.
+		cfg::_bool recording_compatible{ this, "Recording Compatible", false, true };
 		cfg::_bool disable_sampling_skip{ this, "Disable Sampling Skip", false, true };
 		// Which backend cubeb should use, or empty for its own auto-selection.
 		//
@@ -432,6 +439,7 @@ struct cfg_root : cfg::node
 		cfg::_bool autoexit{ this, "Exit RPCS3 when process finishes", false, true };
 		cfg::_bool autopause{ this, "Pause emulation on RPCS3 focus loss", false, true };
 		cfg::_bool start_fullscreen{ this, "Start games in fullscreen mode", true, true };
+		cfg::_bool start_big_picture_mode{ this, "Start Big Picture Mode on boot", false, true };
 		cfg::_bool prevent_display_sleep{ this, "Prevent display sleep while running games", true, true };
 		cfg::_bool show_trophy_popups{ this, "Show trophy popups", true, true };
 		cfg::_bool show_rpcn_popups{ this, "Show RPCN popups", true, true };

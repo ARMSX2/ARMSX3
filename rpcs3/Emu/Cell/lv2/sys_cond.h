@@ -30,6 +30,14 @@ struct lv2_cond final : lv2_obj
 	shared_ptr<lv2_obj> _mutex;
 	ppu_thread* sq{};
 
+	// Who last signalled this condvar, and how often. The semaphore equivalent showed that
+	// threads which look permanently parked are in fact cycling -- a snapshot catches them
+	// mid-wait. Only a signal COUNT distinguishes "blocked forever" from "waiting normally
+	// between iterations", and that distinction has flipped the diagnosis twice on this hang.
+	atomic_t<u64> dbg_last_signal_us{0};
+	atomic_t<u32> dbg_last_signaller{0};
+	atomic_t<u64> dbg_signal_count{0};
+
 	lv2_cond(u64 key, u64 name, u32 mtx_id, shared_ptr<lv2_obj> mutex0) noexcept;
 
 	lv2_cond(utils::serial& ar) noexcept;

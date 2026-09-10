@@ -48,6 +48,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.pointerInput
@@ -184,7 +185,29 @@ fun TouchControlsOverlay() {
     // shouldn't paint over the library cards.
     if (WindowImpl.showLibrary.value && !edit) return
 
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(
+        Modifier
+            .fillMaxSize()
+            // Count the fingers on the overlay from one place. INITIAL pass and nothing is
+            // consumed, so every widget below still receives its events exactly as before;
+            // this only watches. It has to live here rather than in the widgets because a
+            // widget only ever reports the instant it is pressed, and the thing that was
+            // breaking is a press that lasts -- a held stick, a held button, a drag.
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val ev = awaitPointerEvent(PointerEventPass.Initial)
+                        val down = ev.changes.count { it.pressed }
+                        val was = TouchControls.pointersDown.intValue
+                        TouchControls.pointersDown.intValue = down
+                        // Only on the edges. Bumping the tick for every move would cancel and
+                        // relaunch the timer coroutine on each event of a drag, for nothing:
+                        // while a finger is down the timer does not run at all.
+                        if ((down > 0) != (was > 0)) TouchControls.noteTouchInteraction()
+                    }
+                }
+            }
+    ) {
         val w = maxWidth
         val h = maxHeight
         val density = LocalDensity.current
@@ -238,8 +261,14 @@ fun TouchControlsOverlay() {
         // changes (screen tap / on-screen button press) and when they reappear.
         val visMode = TouchControls.visibilityMode.intValue
         val tick = TouchControls.interactionTick.intValue
+        val touching = TouchControls.pointersDown.intValue > 0
         if (visMode in 1..10 && TouchControls.visible.value && !edit) {
-            LaunchedEffect(visMode, tick) {
+            LaunchedEffect(visMode, tick, touching) {
+                // Never count down while a finger is on the screen. This setting means "hide
+                // when I am not using them", and holding a stick through a cutscene-length
+                // stretch of gameplay is use -- it just does not generate press events.
+                // Lifting the last finger re-keys this effect and starts the full delay again.
+                if (touching) return@LaunchedEffect
                 delay(visMode * 1000L)
                 TouchControls.visible.value = false
             }

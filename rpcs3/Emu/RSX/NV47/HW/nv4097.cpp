@@ -4,6 +4,7 @@
 
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/RSX/Common/BufferUtils.h"
+#include "Emu/RSX/Host/MM.h"
 #include "Emu/RSX/rsx_profiler.h"
 
 #define RSX(ctx) ctx->rsxthr
@@ -760,6 +761,9 @@ namespace rsx
 
 			ensure(addr != umax);
 
+			// Notify ticks are strongly ordered
+			RSX(ctx)->sync();
+
 			vm::_ptr<atomic_t<RsxNotify>>(addr)->store(
 			{
 				RSX(ctx)->timestamp(),
@@ -821,6 +825,23 @@ namespace rsx
 			}
 
 			const u32 val = (arg & 0xff00ff00) | ((arg & 0xff) << 16) | ((arg >> 16) & 0xff);
+
+			// Who writes the label that nv406e::semaphore_acquire waits on.
+			//
+			// Across 15 captured hangs the acquire ALWAYS times out on 0x40300CC0 and ALWAYS
+			// exactly one increment short (awaited - observed == 1), 2.7-9.9s BEFORE the FIFO
+			// freezes -- i.e. it is the trigger, not a symptom. An earlier trace cleared the
+			// self-deadlock theory by watching nv406e::semaphore_release and seeing no writes to
+			// that address, but THIS is the other writer, reached by a different method
+			// (NV4097_BACK_END_WRITE_SEMAPHORE_RELEASE, 0x1d70) -- and 0x1d70 is the last command
+			// in every FIFO ring dump. If the value written here never reaches what the acquire
+			// awaits, that pair is the whole bug.
+			if (addr == 0x40300CC0)
+			{
+				rsx_log.success("BACK_END label write: addr=0x%X arg=0x%08x -> val=0x%08x (prev=0x%08x)",
+					addr, arg, val, static_cast<u32>(vm::_ref<RsxSemaphore>(addr)));
+			}
+
 			util::write_gcm_label<true, true>(ctx, reg, addr, val);
 		}
 

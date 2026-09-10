@@ -104,6 +104,15 @@ namespace vk
 			return;
 		}
 
+		// Same invariant as end(): a timestamp may only be recorded into a buffer that is
+		// currently open. Nothing is known to open a region against a submitted buffer, but
+		// the cost of being wrong here is a driver-side null dereference rather than a bad
+		// measurement, so it is checked rather than assumed.
+		if (!cmd.is_recording())
+		{
+			return;
+		}
+
 		const u32 idx = static_cast<u32>(r);
 		auto& state = m_slots[m_write_slot];
 
@@ -146,7 +155,24 @@ namespace vk
 			state.needs_reset = false;
 		}
 
-		vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, *m_pool, q);
+		// BOTTOM_OF_PIPE at both ends, deliberately.
+		//
+		// This was TOP_OF_PIPE, which is not symmetric with the BOTTOM_OF_PIPE in end(): the
+		// begin stamp lands as soon as the command reaches the front of the pipe, while the end
+		// stamp waits for everything ahead of it to drain. A region therefore reported its own
+		// work PLUS the drain of whatever was still in flight when it started, and the first
+		// substantial pass of a frame absorbed the whole backlog.
+		//
+		// That is not a small correction: pass #6 measured 8.38ms of a 24.46ms GPU draw budget --
+		// 34% in one pass -- while having the lightest workload of the expensive passes, which is
+		// exactly the shape this artifact manufactures. Whether that pass is genuinely expensive
+		// or a measurement ghost decides where GPU work goes next, so the ruler has to be right
+		// before anything is optimised against it.
+		//
+		// Two BOTTOM_OF_PIPE stamps measure the interval between completion points, which is the
+		// region's actual contribution to the timeline. Absolute values are no longer wall-clock
+		// "time spent inside the region" and are not comparable to numbers captured before this.
+		vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, *m_pool, q);
 	}
 
 	void gpu_timer::end(const command_buffer& cmd, region r)
@@ -169,6 +195,26 @@ namespace vk
 		// timing for the rest of the session. The timestamp is skipped, the bookkeeping is not.
 		if (!rsx::prof::enabled()) [[likely]]
 		{
+			m_open[idx].active = false;
+			return;
+		}
+
+		// The command buffer captured at begin, not necessarily the one still current.
+		//
+		// gpu_scope holds a reference to the command buffer it was constructed with, and a
+		// region can outlive it: scaled_image_from_memory opens a blit scope and then calls
+		// flush_command_queue() when the blit queued a dma transfer, which SUBMITS that
+		// buffer and swaps m_current_command_buffer for the next one. The scope's destructor
+		// then ran vkCmdWriteTimestamp against a buffer that had already been submitted and
+		// recycled, and the Adreno driver dereferenced its freed recording state -- SIGSEGV
+		// at a small offset inside vkCmdWriteTimestamp2, on the RSX thread, in Ratchet.
+		//
+		// Clear the flag and skip the stamp, exactly as the disarm path above does. The
+		// begin stamp is left orphaned in the pool, which is harmless: events[idx] is only
+		// incremented below, so collect() never reads a pair this end did not complete.
+		if (!cmd.is_recording())
+		{
+			m_slots[m_open[idx].slot].dropped[idx]++;
 			m_open[idx].active = false;
 			return;
 		}
@@ -308,6 +354,9 @@ namespace vk
 				continue;
 			}
 
+			// Per-region total for THIS frame only, so the worst frame can be tracked.
+			std::array<u64, region_count> frame_region_ns{};
+
 			for (u32 i = 0; i < region_count; i++)
 			{
 				const auto r = static_cast<region>(i);
@@ -336,6 +385,7 @@ namespace vk
 					const u64 ns = static_cast<u64>(static_cast<double>(t1 - t0) * m_period_ns);
 
 					m_totals_ns[i] += ns;
+					frame_region_ns[i] += ns;
 					m_events_seen[i]++;
 
 					if (r == region::draw)
@@ -346,6 +396,11 @@ namespace vk
 				}
 
 				m_dropped += state.dropped[i];
+			}
+
+			for (u32 i = 0; i < region_count; i++)
+			{
+				m_worst_ns[i] = std::max(m_worst_ns[i], frame_region_ns[i]);
 			}
 
 			m_frames++;
@@ -404,6 +459,7 @@ namespace vk
 	void gpu_timer::reset()
 	{
 		m_totals_ns = {};
+		m_worst_ns = {};
 		m_events_seen = {};
 		m_draw_pass_ns = {};
 		m_draw_pass_samples = {};

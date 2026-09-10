@@ -1,7 +1,7 @@
 #include "stdafx.h"
 #include "rsx_utils.h"
-#include "rsx_methods.h"
-#include "rsx_profiler.h"
+#include "Emu/RSX/rsx_methods.h"
+#include "Emu/RSX/rsx_profiler.h"
 #include "Emu/Cell/Modules/cellVideoOut.h"
 
 #ifdef _MSC_VER

@@ -111,12 +111,18 @@ namespace vk
 			bool synchronization_2 = false;
 			bool unrestricted_depth_range = false;
 
-			// VK_ANDROID_external_memory_android_hardware_buffer.
+			// VK_ANDROID_external_memory_android_hardware_buffer. PROBED, NOT ENABLED.
 			//
-			// Gates frame generation. framegen runs on its OWN VkDevice, so images cannot be
-			// shared as VkImage -- they have to go across as AHardwareBuffer, and importing one
-			// needs this. framegen's other sharing path uses vkGetMemoryFdKHR(OPAQUE_FD), which
-			// both Adreno and Mali refuse for AHB-backed memory, so there is no fallback.
+			// This used to gate frame generation, back when framegen ran on its own VkDevice and
+			// images could only cross as AHardwareBuffer. The passes live on our device now, so
+			// nothing imports or exports one; the flag is kept only so the startup log can still
+			// report what the device offers. The render_device accessor that used to expose it was
+			// removed on purpose -- it reported a PHYSICAL-device capability for an extension the
+			// logical device deliberately does not enable, which is the latch-without-enable shape
+			// that produced a null-function-pointer crash elsewhere in this header. Do not
+			// re-derive an enablement from this flag without also enabling
+			// VK_EXT_queue_family_foreign -- it is a required dependency that, unlike the
+			// extension's other three, was never promoted to core.
 			bool external_memory_ahb = false;
 
 			// What the Lossless Scaling shaders themselves need, independent of how the images
@@ -245,7 +251,29 @@ namespace vk
 		{
 			return std::max<u32>(1u, pgpu->max_ubo_range / element_size);
 		}
-		const multidraw_features get_multidraw_support() const { return pgpu->multidraw_support; }
+		// Multi-draw needs BOTH the feature and the entry points, which are not the same question.
+		//
+		// pgpu->multidraw_support.supported is set from the PHYSICAL device's multiDraw feature
+		// during enumeration (device.cpp), before a logical device exists -- so it cannot know
+		// whether vkGetDeviceProcAddr later returned the functions. The extension entry points are
+		// resolved separately in VulkanAPI.cpp and stay NULL when VK_EXT_multi_draw was not
+		// actually enabled, or when a driver advertises the feature but does not hand the pointers
+		// back. Guarding the call on the feature alone then calls through a null pointer.
+		//
+		// Observed: SIGSEGV with pc=0 (blr through a null x8) inside VKGSRender::emit_geometry on
+		// Adreno, on the multi-draw branch. This is the same class as the null vkWaitForFences seen
+		// with a custom Turnip ICD -- an entry point nothing verified before use.
+		//
+		// VKProcTable.h already documents this contract for EXT_extended_dynamic_state ("these stay
+		// null when the extension was not enabled -- only call them behind ...support()"). Multi-draw
+		// had the guard but never tied it to the pointers. Checking here rather than at the feature
+		// query is deliberate: this is read at draw time, long after the proc table is populated.
+		const multidraw_features get_multidraw_support() const
+		{
+			multidraw_features result = pgpu->multidraw_support;
+			result.supported = result.supported && _vkCmdDrawMultiEXT && _vkCmdDrawMultiIndexedEXT;
+			return result;
+		}
 
 		bool get_shader_stencil_export_support() const { return pgpu->optional_features_support.shader_stencil_export; }
 		bool get_depth_bounds_support() const { return pgpu->features.depthBounds != VK_FALSE; }
@@ -263,7 +291,6 @@ namespace vk
 		bool get_extended_dynamic_state_support() const { return pgpu->optional_features_support.extended_dynamic_state; }
 
 		bool get_unrestricted_depth_range_support() const { return pgpu->optional_features_support.unrestricted_depth_range; }
-		bool get_external_memory_ahb_support() const { return pgpu->optional_features_support.external_memory_ahb; }
 		bool get_vulkan_memory_model_support() const { return pgpu->optional_features_support.vulkan_memory_model; }
 		bool get_null_descriptor_support() const { return pgpu->optional_features_support.null_descriptor; }
 		bool get_external_memory_host_support() const { return pgpu->optional_features_support.external_memory_host; }

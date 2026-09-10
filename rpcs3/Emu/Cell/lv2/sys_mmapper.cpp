@@ -14,6 +14,7 @@
 
 LOG_CHANNEL(sys_mmapper);
 
+
 template <>
 void fmt_class_string<lv2_mem_container_id>::format(std::string& out, u64 arg)
 {
@@ -191,7 +192,9 @@ error_code sys_mmapper_allocate_shared_memory(ppu_thread& ppu, u64 ipc_key, u64 
 {
 	ppu.state += cpu_flag::wait;
 
-	sys_mmapper.warning("sys_mmapper_allocate_shared_memory(ipc_key=0x%x, size=0x%x, flags=0x%x, mem_id=*0x%x)", ipc_key, size, flags, mem_id);
+	// trace, not warning: this fires thousands of times per session in a streaming game,
+	// and log volume alone has stalled this emulator before.
+	sys_mmapper.trace("sys_mmapper_allocate_shared_memory(ipc_key=0x%x, size=0x%x, flags=0x%x, mem_id=*0x%x)", ipc_key, size, flags, mem_id);
 
 	if (size == 0)
 	{
@@ -576,7 +579,7 @@ error_code sys_mmapper_free_shared_memory(ppu_thread& ppu, u32 mem_id)
 {
 	ppu.state += cpu_flag::wait;
 
-	sys_mmapper.warning("sys_mmapper_free_shared_memory(mem_id=0x%x)", mem_id);
+	sys_mmapper.trace("sys_mmapper_free_shared_memory(mem_id=0x%x)", mem_id);
 
 	// Conditionally remove memory ID
 	const auto mem = idm::withdraw<lv2_obj, lv2_memory>(mem_id, [&](lv2_memory& mem) -> CellError
@@ -692,7 +695,7 @@ error_code sys_mmapper_search_and_map(ppu_thread& ppu, u32 start_addr, u32 mem_i
 {
 	ppu.state += cpu_flag::wait;
 
-	sys_mmapper.warning("sys_mmapper_search_and_map(start_addr=0x%x, mem_id=0x%x, flags=0x%x, alloc_addr=*0x%x)", start_addr, mem_id, flags, alloc_addr);
+	sys_mmapper.trace("sys_mmapper_search_and_map(start_addr=0x%x, mem_id=0x%x, flags=0x%x, alloc_addr=*0x%x)", start_addr, mem_id, flags, alloc_addr);
 
 	const auto area = vm::get(vm::any, start_addr);
 
@@ -756,7 +759,7 @@ error_code sys_mmapper_search_and_map(ppu_thread& ppu, u32 start_addr, u32 mem_i
 		return CELL_ENOMEM;
 	}
 
-	sys_mmapper.notice("sys_mmapper_search_and_map(): Found 0x%x address", addr);
+	sys_mmapper.trace("sys_mmapper_search_and_map(): Found 0x%x address", addr);
 
 	vm::lock_sudo(addr, mem->size);
 	ppu.check_state();

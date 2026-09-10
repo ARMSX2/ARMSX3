@@ -2,6 +2,7 @@ package com.armsx2
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.armsx2.data.library.ParamSfo
@@ -58,6 +59,10 @@ object SaveDataImporter {
         val ok: Boolean,
         val saves: List<Imported> = emptyList(),
         val error: String? = null,
+        /** Names of imported saves whose data files are still encrypted. See [looksEncrypted]. */
+        val encrypted: List<String> = emptyList(),
+        /** `dirName to fileNames` for loose files merged into an existing save. */
+        val merged: List<Pair<String, List<String>>> = emptyList(),
     )
 
     // ---- entry points ---------------------------------------------------------------------
@@ -80,8 +85,42 @@ object SaveDataImporter {
         val input = runCatching { context.contentResolver.openInputStream(uri) }.getOrNull()
             ?: return@runImport Outcome(false, error = "Could not open the selected file")
 
-        input.use { stageArchive(it, staging, onProgress, isCancelled) }
+        val archiveResult = input.use { stageArchive(it, staging, onProgress, isCancelled) }
+
+        // A decrypted save file is what a save decrypter hands back -- one loose file, not an
+        // archive -- and ZipInputStream reports no entries for it, which surfaced as "Archive was
+        // empty": true, useless, and about the wrong thing.
+        //
+        // Keyed on nothing having been STAGED, not on what stageArchive returned. It returns an
+        // Outcome for the empty case rather than null, so testing the return value here meant this
+        // never ran and the same misleading error came back unchanged.
+        if (!isCancelled() && staging.walkTopDown().none { it.isFile }) {
+            val name = displayName(context, uri)
+                ?: return@runImport Outcome(false, error = "Could not read the selected file's name")
+
+            val safe = sanitizedDirName(name)
+                ?: return@runImport Outcome(false, error = "Unsupported file name: $name")
+
+            val copied = runCatching {
+                context.contentResolver.openInputStream(uri)?.use { raw ->
+                    File(staging, safe).outputStream().use { out -> raw.copyTo(out) }
+                } != null
+            }.getOrDefault(false)
+
+            // Carry on to discover/merge rather than reporting the archive failure, which was
+            // only ever a statement about the file not being a zip.
+            if (copied) return@runImport null
+        }
+
+        archiveResult
     }
+
+    /** The picked document's file name, which for a loose file is the only clue to its identity. */
+    private fun displayName(context: Context, uri: Uri): String? = runCatching {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+            ?: uri.lastPathSegment?.substringAfterLast('/')
+    }.getOrNull()
 
     /**
      * Imports from a folder picked with `ActivityResultContracts.OpenDocumentTree`.
@@ -129,6 +168,15 @@ object SaveDataImporter {
 
             val found = discover(staging)
             if (found.isEmpty()) {
+                // No PARAM.SFO anywhere, so this is not a save in its own right. It may still be
+                // the useful half of one: a decrypter returns the data files on their own, and
+                // those have to go back into a save that already exists. See [resolveMergeTarget]
+                // for why the target is only ever accepted when it is unambiguous.
+                val loose = staging.walkTopDown().filter { it.isFile && !isJunk(it.name) }.toList()
+                if (loose.isNotEmpty()) {
+                    return mergeLoose(savedataRoot, loose)
+                }
+
                 return Outcome(
                     false,
                     error = "No save data found. A save is a folder containing PARAM.SFO.",
@@ -137,6 +185,7 @@ object SaveDataImporter {
 
             onProgress(Progress.Installing)
             val imported = mutableListOf<Imported>()
+            val encryptedSaves = mutableListOf<String>()
             for ((staged, dirName) in found) {
                 val dest = File(savedataRoot, dirName)
                 val replaced = dest.exists()
@@ -152,8 +201,9 @@ object SaveDataImporter {
                     title = ParamSfo.string(File(dest, "PARAM.SFO"), "TITLE"),
                     replaced = replaced,
                 )
+                if (looksEncrypted(dest)) encryptedSaves += dirName
             }
-            return Outcome(true, imported)
+            return Outcome(true, imported, encrypted = encryptedSaves)
         } catch (e: Exception) {
             Log.w(TAG, "import failed: ${e.message}")
             return Outcome(false, error = e.message ?: "Import failed")
@@ -172,6 +222,129 @@ object SaveDataImporter {
      * Searched recursively because the source shape is not ours to dictate -- a user may hand us
      * the save, its parent, or an archive that wraps both in a download folder.
      */
+    /**
+     * Whether a save still carries the copy protection a real PS3 applies, which makes it
+     * unusable here.
+     *
+     * We store secure files as plaintext -- the id is recorded in the PSF and nothing is ever
+     * encrypted -- so a save lifted straight off a console hands the game 175KB of ciphertext
+     * where its own structure should be. The game follows a pointer out of it and the PPU
+     * thread segfaults inside recompiled code, which reads as an emulator crash and gives the
+     * user nothing to act on. It is worth a message instead.
+     *
+     * Two signals, both required, because either alone is wrong:
+     *  - PARAM.PFD exists. We never write one, so it came from a console. But a properly
+     *    decrypted save keeps its PFD too, which is why this cannot decide on its own.
+     *  - A data file still reads as ciphertext. Save data is structured -- headers, padding,
+     *    counters, runs of zeroes -- while encrypted data is close to uniform. A 4KB window
+     *    with nearly every byte value present and no repeated run is not plaintext.
+     */
+    private fun looksEncrypted(dir: File): Boolean {
+        if (!File(dir, "PARAM.PFD").isFile) return false
+
+        val candidates = dir.listFiles()
+            ?.filter { it.isFile && it.length() >= 4096 && it.name.uppercase() !in SKIP_ENTROPY }
+            ?: return false
+
+        return candidates.any { file ->
+            runCatching {
+                val buf = ByteArray(4096)
+                val read = file.inputStream().use { it.read(buf) }
+                if (read < 4096) return@runCatching false
+
+                val seen = BooleanArray(256)
+                var distinct = 0
+                var longestRun = 0
+                var run = 0
+
+                for (i in 0 until read) {
+                    val b = buf[i].toInt() and 0xff
+                    if (!seen[b]) { seen[b] = true; distinct++ }
+                    run = if (i > 0 && buf[i] == buf[i - 1]) run + 1 else 1
+                    if (run > longestRun) longestRun = run
+                }
+
+                distinct >= 250 && longestRun < 5
+            }.getOrDefault(false)
+        }
+    }
+
+    /** Media and metadata: compressed images are high-entropy too and would false-positive. */
+    private val SKIP_ENTROPY = setOf("ICON0.PNG", "ICON1.PAM", "PIC1.PNG", "SND0.AT3", "PARAM.SFO", "PARAM.PFD")
+
+    /**
+     * Merges loose save files into a save that already exists.
+     *
+     * A save decrypter hands back the data files alone -- no PARAM.SFO, no folder we can name --
+     * so there is nothing in them that says which save they belong to. Guessing wrong overwrites
+     * the wrong game's progress, so this only proceeds when the answer is forced, by one of two
+     * signals, and refuses with an explanation otherwise:
+     *
+     *  - The staged folder's own name matches an existing save directory. This is the deliberate
+     *    path: put the files in a folder named after the save and import that folder.
+     *  - Failing that, exactly ONE existing save already contains a file with that name. One match
+     *    is an answer; two is a coin flip, and a coin flip here costs a save file.
+     *
+     * The replaced file is kept alongside as `.old-import` until the whole merge succeeds, so a
+     * failure part way through does not leave the save short of a file it had before.
+     */
+    private fun mergeLoose(savedataRoot: File, loose: List<File>): Outcome {
+        val saves = savedataRoot.listFiles().orEmpty()
+            .filter { it.isDirectory && File(it, "PARAM.SFO").isFile }
+
+        if (saves.isEmpty()) {
+            return Outcome(false, error = "There are no saves here yet to merge these files into.")
+        }
+
+        val byFolderName = loose.mapNotNull { it.parentFile?.name }.distinct()
+            .firstNotNullOfOrNull { n -> saves.firstOrNull { it.name.equals(n, true) } }
+
+        val target = byFolderName ?: run {
+            val names = loose.map { it.name }
+            val hits = saves.filter { save ->
+                names.any { n -> File(save, n).isFile }
+            }
+            when (hits.size) {
+                1 -> hits.first()
+                0 -> return Outcome(
+                    false,
+                    error = "No existing save contains ${loose.joinToString(", ") { it.name }}. " +
+                        "Put the file in a folder named after the save and import that folder.",
+                )
+                else -> return Outcome(
+                    false,
+                    error = "${hits.size} saves contain a file by that name, so this would be a " +
+                        "guess. Put the file in a folder named after the save you want " +
+                        "(${hits.joinToString(", ") { it.name }}) and import that folder.",
+                )
+            }
+        }
+
+        val backups = mutableListOf<Pair<File, File>>()
+        val names = mutableListOf<String>()
+
+        for (file in loose) {
+            val dest = File(target, file.name)
+            if (dest.exists()) {
+                val backup = File(target, "${file.name}.old-import")
+                backup.delete()
+                if (!dest.renameTo(backup)) {
+                    backups.forEach { (b, d) -> b.renameTo(d) }
+                    return Outcome(false, error = "Could not replace ${file.name} in ${target.name}")
+                }
+                backups += backup to dest
+            }
+            if (!file.renameTo(dest)) {
+                backups.forEach { (b, d) -> b.renameTo(d) }
+                return Outcome(false, error = "Could not write ${file.name} into ${target.name}")
+            }
+            names += file.name
+        }
+
+        backups.forEach { (b, _) -> b.delete() }
+        return Outcome(true, merged = listOf(target.name to names))
+    }
+
     private fun discover(staging: File): List<Pair<File, String>> {
         val out = mutableListOf<Pair<File, String>>()
         fun walk(dir: File, depth: Int) {
@@ -431,7 +604,7 @@ object SaveDataImporter {
      * then would be a confusing rule to explain. Answers null only when there is no user directory
      * at all, which is a genuinely fresh install.
      */
-    private fun savedataRoot(): File? {
+    internal fun savedataRoot(): File? {
         val home = File(RPCSX.getHdd0Dir(), "home")
         val preferred = runCatching { RPCSX.instance.getUser() }.getOrNull()
             ?.takeIf { it.isNotBlank() }

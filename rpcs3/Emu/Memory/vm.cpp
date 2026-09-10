@@ -401,10 +401,22 @@ namespace vm
 					return;
 				}
 
+				// Wait on the word rather than yielding blind.
+				//
+				// The old form span 100 times and then yielded for a whole scheduler quantum,
+				// which on a machine where SPUs take this lock thousands of times a frame means
+				// sleeping through the very gaps being waited for. ~writer_lock now notifies on
+				// the transition to zero, so this wakes when the word is actually clear. The
+				// timeout is a safety net, not the mechanism -- guessed sleep durations are what
+				// made three earlier backoff attempts on this branch produce 2179ms frames.
 				if (i < 100)
+				{
 					busy_wait(200);
-				else
-					std::this_thread::yield();
+				}
+				else if (const u64 bits = get_range_lock_bits(true))
+				{
+					get_range_lock_bits(true).wait(bits, atomic_wait_timeout{50'000});
+				}
 
 				if (cpu_flag::wait - cpu.state)
 				{
@@ -633,7 +645,35 @@ namespace vm
 								ptr->id, ptr->get_name(), +ptr->state, addr, size);
 						}
 
+#if defined(ARCH_ARM64)
+						// utils::pause() is ISB on arm64 -- an instruction synchronisation
+						// barrier, i.e. a pipeline flush. It stands in for x86's PAUSE, and the
+						// spin counts around it were written for PAUSE at roughly thirty cycles;
+						// a flush costs far more than that and does real work rather than just
+						// delaying.
+						//
+						// This loop is the worst place in the emulator to pay it. It runs once per
+						// registered PPU thread on EVERY reservation commit that takes the
+						// barrier, and a SPURS-heavy title issues those at over a million a
+						// second: Soulcalibur V measured 16M barrier-taking stores per ten seconds,
+						// and simpleperf put 28% of all time inside vm::writer_lock on this
+						// loop's ISB. The same title runs flawlessly on six year old x86, where
+						// this is a PAUSE.
+						//
+						// YIELD is arm64's actual spin-wait hint. Keep an occasional ISB so the
+						// backoff still has weight on cores where YIELD retires as a nop, and so
+						// the loop cannot become a tight unhinted spin.
+						if ((spins & 15) == 15)
+						{
+							utils::pause();
+						}
+						else
+						{
+							__asm__ volatile("yield" ::: "memory");
+						}
+#else
 						utils::pause();
+#endif
 					}
 				}
 			}

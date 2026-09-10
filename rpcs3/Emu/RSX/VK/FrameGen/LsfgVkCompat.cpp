@@ -15,7 +15,7 @@
 
 LOG_CHANNEL(framegen_log, "FRAMEGEN");
 #include "../vkutils/device.h"
-#include "Emu/RSX/rsx_utils.h"
+#include "Emu/RSX/Utils/rsx_utils.h"
 
 namespace Vulkan
 {

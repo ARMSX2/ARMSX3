@@ -76,6 +76,22 @@ namespace rsx
 		void backend_ctrl(u32 request_code, void* args);
 
 		// Synchronization
+		// Whether the offloader is actually running and able to drain its queue.
+		//
+		// current_thread_ is set by the thread itself once it starts, so this is false both when
+		// the thread was never created and before it has begun. Callers that would otherwise
+		// enqueue work must check it: a packet pushed to a queue nobody drains is never completed,
+		// and whoever waits for it waits forever.
+		bool is_offloader_running() const;
+
+		// Whether work may be handed to the offloader at all.
+		//
+		// The setting alone is not enough: it says what the user asked for, not whether the thread
+		// exists to honour it. Every deferral decision must use this, because the cost of getting
+		// it wrong is not a slow path but a permanent one -- sync() waits for a drain that cannot
+		// come, and it is called from the flip.
+		bool can_offload() const;
+
 		bool is_current_thread() const;
 		bool sync() const;
 		void join();

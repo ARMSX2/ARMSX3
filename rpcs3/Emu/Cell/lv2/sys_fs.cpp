@@ -19,6 +19,7 @@
 
 LOG_CHANNEL(sys_fs);
 
+
 lv2_fs_mount_point g_mp_sys_dev_usb{"/dev_usb", "CELL_FS_FAT", "CELL_FS_IOS:USB_MASS_STORAGE", 512, 0x100, 4096, lv2_mp_flag::no_uid_gid};
 lv2_fs_mount_point g_mp_sys_dev_dvd{"/dev_ps2disc", "CELL_FS_ISO9660", "CELL_FS_IOS:PATA1_BDVD_DRIVE", 2048, 0x100, 32768, lv2_mp_flag::read_only + lv2_mp_flag::no_uid_gid, &g_mp_sys_dev_usb};
 lv2_fs_mount_point g_mp_sys_dev_bdvd{"/dev_bdvd", "CELL_FS_ISO9660", "CELL_FS_IOS:PATA0_BDVD_DRIVE", 2048, 0x4D955, 2048, lv2_mp_flag::read_only + lv2_mp_flag::no_uid_gid, &g_mp_sys_dev_dvd};

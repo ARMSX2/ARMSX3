@@ -84,7 +84,7 @@ private const val TILE_GRID_HEIGHT_DP = 338
  *
  * Load mode also surfaces the two persistence toggles the old UI had:
  * auto-save-on-exit and auto-load-last-state-on-boot (backed by the
- * `autoSaveOnExit` / `autoLoadOnBoot` prefs honoured in MainActivityRuntime).
+ * written only by an explicit Save State & Exit; nothing saves automatically).
  */
 @Composable
 fun SaveStatePickerScreen(mode: SaveMode, onBack: () -> Unit) {
@@ -186,10 +186,6 @@ fun SaveStatePickerScreen(mode: SaveMode, onBack: () -> Unit) {
             Column(
                 Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
             ) {
-                if (mode == SaveMode.Load) {
-                    AutoOptions(Modifier.fillMaxWidth().padding(horizontal = 8.dp))
-                    Spacer(Modifier.height(10.dp))
-                }
                 LazyHorizontalGrid(
                     rows = GridCells.Fixed(2),
                     // Two comfortable rows of TILE_WIDTH_DP-wide tiles. Fixed, not
@@ -302,57 +298,17 @@ fun SaveStatePickerScreen(mode: SaveMode, onBack: () -> Unit) {
     }
 }
 
-/** Auto-save-on-exit + auto-load-last-state-on-boot persistence toggles, and the
- *  interval autosave that writes the same slot while you play. */
-@Composable
-private fun AutoOptions(modifier: Modifier = Modifier) {
-    val prefs = MainActivityRuntime.prefs
-    var autoSave by remember { mutableStateOf(prefs.getBoolean("autoSaveOnExit", false)) }
-    var autoLoad by remember { mutableStateOf(prefs.getBoolean("autoLoadOnBoot", false)) }
-    var interval by remember {
-        mutableIntStateOf(prefs.getInt(MainActivityRuntime.KEY_AUTOSAVE_INTERVAL_MIN, 0))
-    }
-    // str() is @Composable; valueFormatter is a plain lambda, so resolve up-front.
-    val offLabel = str("savestate.autoSaveInterval.off")
-    val everyLabel = str("savestate.autoSaveInterval.every")
-    GlassPanel(modifier = modifier, contentPadding = 12.dp) {
-        Column {
-            ToggleRow("save.opt.autoSave", str("savestate.autoSaveOnExit"), autoSave) { value ->
-                autoSave = value
-                prefs.edit().putBoolean("autoSaveOnExit", value).apply()
-            }
-            Spacer(Modifier.height(6.dp))
-            ToggleRow("save.opt.autoLoad", str("savestate.autoLoadOnBoot"), autoLoad) { value ->
-                autoLoad = value
-                prefs.edit().putBoolean("autoLoadOnBoot", value).apply()
-            }
-            Spacer(Modifier.height(6.dp))
-            // Writes the SAME autosave slot the two toggles above use, so a crash and a
-            // clean exit leave the state in one predictable place and the numbered slots
-            // stay yours.
-            IntSliderRow(
-                label = str("savestate.autoSaveInterval.label"),
-                value = interval,
-                min = 0,
-                max = AUTOSAVE_INTERVAL_MAX_MIN,
-                description = str("savestate.autoSaveInterval.description"),
-                valueFormatter = { if (it == 0) offLabel else everyLabel.format(it) },
-                onReset = if (interval == 0) null else ({
-                    interval = 0
-                    prefs.edit().putInt(MainActivityRuntime.KEY_AUTOSAVE_INTERVAL_MIN, 0).apply()
-                }),
-                onChange = { value ->
-                    interval = value
-                    prefs.edit().putInt(MainActivityRuntime.KEY_AUTOSAVE_INTERVAL_MIN, value).apply()
-                },
-            )
-        }
-    }
-}
-
-/** Longest interval offered. Beyond half an hour the feature stops being a safety net and
- *  the slider stops being walkable on a d-pad. */
-private const val AUTOSAVE_INTERVAL_MAX_MIN = 30
+/* The automatic-save options that used to sit here (auto-save on exit, auto-load on
+ * boot, and an every-N-minutes interval autosave) are gone. Saving a state is not a
+ * background operation on this core: RPCS3 stops the emulator to serialise it, so the app
+ * has to reboot the state to carry on. On a timer that reads as the game freezing and
+ * recompiling itself at random intervals, and when the stop overran its timeout the app
+ * booted on top of a core that had not finished stopping -- dropping the player back in the
+ * library with the previous game still running and still making sound.
+ *
+ * The dedicated slot they shared is still written, but only by an explicit Save State &
+ * Exit, and the tile above still restores it. Nothing writes a state the user did not ask
+ * for. */
 
 @Composable
 private fun ToggleRow(controllerId: String, label: String, checked: Boolean, onChange: (Boolean) -> Unit) {

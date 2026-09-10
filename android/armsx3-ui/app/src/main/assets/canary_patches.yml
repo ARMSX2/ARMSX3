@@ -91,3 +91,194 @@ SPU-42bae8e5d6a9304068ba1c6bbfdc18d656e287a1:
       # LS 0x3208 is the first instruction of the overlay routine (il r5,0).
       # Offsets are LS addresses: apply_modification subtracts p_vaddr (0x3000).
       - [ be32, 0x3208, 0x35000000 ] # bi lr -- return immediately
+
+# RATCHET & CLANK FUTURE: A CRACK IN TIME -- hangs starting a New Game.
+#
+# The engine waits for the RSX to drain its command ring, but reads GET once before
+# the loop rather than inside it:
+#
+#       lwz  r29,4(r12)        ; GET, read ONCE
+#   0x5cb1bc:
+#       lwz  r9,0(r11)         ; PUT
+#       cmpw cr6,r9,r29
+#       bne  cr6,0x5cb1bc      ; branches back AFTER the read
+#
+# That only terminates if GET has already reached PUT at the instant it is sampled.
+# On hardware the RSX has essentially always caught up by then, so the loop exits
+# immediately. Catch it one command short and it compares PUT against a value GET has
+# since moved past, and it spins forever.
+#
+# Captured with the stall watchdog: PUT = GET = 0x161af6c with the snapshot holding
+# 0x161af64, unchanged across eight samples 40 seconds apart, every other guest thread
+# blocked and the ring drained. The game does its own FIFO management -- it imports no
+# cellGcmFlush or cellGcmFinish -- so there is no HLE call to fix this behind.
+#
+# Moving the branch target back one instruction re-reads GET each pass, which is what
+# the loop means. It exits as soon as GET reaches PUT, and is a no-op in every case
+# where the original would already have exited, so it cannot change a working boot.
+#
+# Ps3PatchRepo.BUNDLED must list this, or it is imported but never enabled.
+
+# RATCHET & CLANK, the whole family. Every one of these games freezes without its fix, and
+# the fixes are Juhn's, from the community patch database -- reproduced here so a fresh
+# install is not one download away from a game that hangs. Ps3PatchRepo.BUNDLED must list
+# every (hash, name, serial) below or the patch is imported and never enabled.
+#
+# A Crack in Time (BCUS98124) REPLACES an ARMSX3 patch of our own, "FIFO drain wait fix",
+# which wrote the same word at 0x005cb1c4 with 0x409AFFF4 against Juhn's 0x409EFFF4. Both
+# retarget the branch to -12; ours also moved the condition from cr7 to cr6, which is one
+# bit of a guess against a fix the whole RPCS3 community runs. They cannot coexist -- in a
+# tester's log both applied to the same instruction and the last one won -- so ours is
+# retired rather than left to race.
+
+PPU-c4e26433d1eed9166eb0c67b6f66b2268f3704e2:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Tools of Destruction":
+        BCES00052: [ All ]
+    Author: "Juhn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x005056f0, 0x409efff0 ]
+
+PPU-ec77eaf73a4f55d1c4ece532c3be6db0011e49ca:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Tools of Destruction":
+        NPEA00452: [ All ]
+    Author: "Juhn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x00539ee8, 0x409efff4 ]
+
+PPU-f67f3e99077ba256728ffa16800c75e006661158: # 1.00 game version
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Tools of Destruction (1.0)":
+        BCUS98127: [ 01.00 ]
+    Author: "Juhn, Alexis"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x005056d0, 0x409efff0 ]
+
+PPU-c14042df6304d3e420a9917e6f8e5fc05cc38b4c: # 2.00 game version
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Tools of Destruction (2.0)":
+        BCUS98127: [ 01.00 ]
+    Author: "Juhn, Epicalman"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x00505948, 0x409efff0 ]
+
+PPU-16506d9d5bf692d615645accd24bca1ee1f8f9a6:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Tools of Destruction":
+        NPUA80965: [ All ]
+    Author: "Juhn, Epicalman"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x0053a208, 0x409efff4 ]
+
+PPU-4c819c69904784a56685c31df12f5d492bc0ed64:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank: All 4 One":
+        BCAS20200: [ 01.03 ]
+        BCES01141: [ 01.03 ]
+        BCES01142: [ 01.03 ]
+        BCUS98175: [ 01.03 ]
+    Author: "Juhn, Hasster"
+    Notes: "Fixes game crashes/freezes"
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x006910f8, 0x4082fff4 ]
+      - [ be32, 0x006910fc, 0x42800018 ]
+
+PPU-ed460e668a491f5e39f6547f3a24c2f20e2cb39b:
+  "Freeze fix":
+    Games:
+      "Ratchet & Clank: Nexus":
+        BCES01908: [ 01.00 ]
+        BCES01949: [ 01.00 ]
+    Author: "Juhn, Joenn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x005f7128, 0x4082fff4 ]
+
+PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08:
+  "Freeze fix":
+    Games:
+      "Ratchet & Clank: Into the Nexus":
+        BCUS99245: [ 01.01 ]
+        NPUA80908: [ 01.01 ]
+      "Ratchet & Clank: Nexus":
+        BCES01908: [ 01.01 ]
+        BCES01949: [ 01.01 ]
+        NPEA00457: [ 01.01 ]
+    Author: "Juhn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x005f8ca8, 0x4082fff4 ]
+
+PPU-f07f7086588a4ea86a28bd768f0cbe710f5b813b:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Quest for Booty":
+        BCAS20052: [ All ]
+        BCES00301: [ All ]
+        NPEA00088: [ All ]
+        NPEA00106: [ All ]
+    Author: "Juhn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x003eb8b0, 0x409efff0 ]
+
+PPU-1d9e99e1f091cfbdf1714d04e690d9cd816e2971:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: Quest for Booty":
+        NPUA80145: [ All ]
+    Author: "Juhn"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x003eb730, 0x409efff0 ]
+
+PPU-0997e35d2b6738f5cecfda1d76380acca0828365:
+  "Freeze Fix":
+    Games:
+      "Ratchet & Clank Future: A Crack in Time":
+        BCUS98124: [ 01.00 ]
+    Author: "Juhn, Jonathan44062"
+    Notes: "Fixes game crashes/freezes."
+    Patch Version: 1.2
+    Patch:
+      - [ be32, 0x005cb1c4, 0x409efff4 ]
+
+# Unlike the entries above, this one IS in the official feed -- it is bundled anyway
+# because it has to default to ON, and a fresh install that has never downloaded the
+# database would otherwise not have it at all. Merging is by hash + name, so it
+# collapses onto the official entry once that database is fetched.
+#
+# This is the PPU "Disable MLAA", NOT the generic "Disable SPU MLAA". The address is
+# specific to BLUS30736 v01.00 -- do not widen the version list.
+PPU-aa798f32a1fda1c23a20066edb1c623c486d53cc:
+  "Disable MLAA":
+    Games:
+      "SoulCalibur V":
+        BLUS30736: [ 01.00 ]
+    Author: "illusion"
+    Notes: "Disables the game's morphological AA pass. Without it the title sits at ~1 fps and wedges."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00304770, 0x38000001 ]

@@ -862,7 +862,11 @@ object ControllerMappings {
     // Physical buttons bound to app actions, NOT forwarded to the PS2. Handled in
     // MainActivityRuntime.dispatchKeyEvent (so they can catch KEYCODE_BACK / back-paddle keys the
     // back dispatcher would otherwise swallow). KEYCODE_UNKNOWN = unbound.
-    enum class SysHotkey(val prefKey: String, val label: String) {
+    /** [supported] false = the action exists only so the enum's ORDINALS do not move.
+     *  Bindings are persisted by ordinal (see hotkeyForStickCode), so deleting a constant
+     *  silently re-points every existing binding onto its neighbour. Unsupported entries are
+     *  filtered out of the binding UI instead, and their handlers do nothing. */
+    enum class SysHotkey(val prefKey: String, val label: String, val supported: Boolean = true) {
         MENU("pad.menu.keycode", "Menu / Pause"),
         SAVE_STATE("pad.savestate.keycode", "Quick Save State"),
         LOAD_STATE("pad.loadstate.keycode", "Quick Load State"),
@@ -874,13 +878,16 @@ object ControllerMappings {
         // Toggles the whole on-screen performance overlay (FPS/CPU/GPU/etc.) via
         // the same path as the on-screen OSD button, so the two stay in sync.
         TOGGLE_OSD("pad.toggleosd.keycode", "Cycle Perf Stats (OSD)"),
-        FAST_FORWARD("pad.fastforward.keycode", "Fast Forward (hold)"),
-        FAST_FORWARD_TOGGLE("pad.fastforwardtoggle.keycode", "Fast Forward (toggle)"),
+        // Speed control is PCSX2's: NativeApp.speedhackLimitermode is an Unsupported shim on
+        // this core, so these three never did anything but latch a flag and toast about it.
+        // Kept as constants purely to hold their ordinals; hidden from the binding UI.
+        FAST_FORWARD("pad.fastforward.keycode", "Fast Forward (hold)", supported = false),
+        FAST_FORWARD_TOGGLE("pad.fastforwardtoggle.keycode", "Fast Forward (toggle)", supported = false),
         // Slow motion toggle (50% speed, native LimiterModeType::Slomo). DISABLED
         // while RetroAchievements hardcore is active — slowdown is a banned
         // advantage in hardcore, matching desktop PCSX2 (the handler shows an OSD
         // notice instead of engaging).
-        SLOW_DOWN("pad.slowdown.keycode", "Slow Down (toggle)"),
+        SLOW_DOWN("pad.slowdown.keycode", "Slow Down (toggle)", supported = false),
         RES_UP("pad.resup.keycode", "Increase Resolution"),
         RES_DOWN("pad.resdown.keycode", "Decrease Resolution"),
         // ACHIEVEMENTS removed: RetroAchievements has no PS3 support.

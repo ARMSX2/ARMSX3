@@ -7,8 +7,11 @@
 #include "vkutils/image_helpers.h"
 
 #include "../Common/texture_cache.h"
+#include "Emu/RSX/Common/BufferUtils.h"   // copy_data_swap_u32 for the deferred readback byteswap
 #include "../Common/tiled_dma_copy.hpp"
+#include "../Utils/image_utils.hpp"
 
+#include <bit>
 #include <memory>
 #include <vector>
 
@@ -37,8 +40,12 @@ namespace vk
 
 		std::unique_ptr<vk::viewable_image> managed_texture = nullptr;
 
-		//DMA relevant data
+		// DMA relevant data
 		std::unique_ptr<vk::event> dma_fence;
+
+		// Set by dma_transfer when the readback byteswap was deferred to the CPU instead of run as
+		// a compute dispatch. Zero means the GPU already did it (or none was needed).
+		u8 deferred_cpu_byteswap_element_size = 0;
 		vk::render_device* m_device = nullptr;
 		vk::viewable_image* vram_texture = nullptr;
 
@@ -97,6 +104,26 @@ namespace vk
 
 			// Notify baseclass
 			baseclass::on_section_resources_created();
+		}
+
+		void create(u16 w, u16 h, u16 depth, u16 mipmaps, vk::image* image, u32 rsx_pitch, bool managed, const vk::render_target* surface)
+		{
+			u32 gcm_format;
+			bool swap_bytes;
+
+			if (surface->is_depth_surface())
+			{
+				gcm_format = (surface->get_surface_depth_format() != rsx::surface_depth_format::z16) ? CELL_GCM_TEXTURE_DEPTH16 : CELL_GCM_TEXTURE_DEPTH24_D8;
+				swap_bytes = true;
+			}
+			else
+			{
+				auto info = get_compatible_gcm_format(surface->get_surface_color_format());
+				gcm_format = info.first;
+				swap_bytes = info.second;
+			}
+
+			create(w, h, depth, mipmaps, image, rsx_pitch, managed, gcm_format, swap_bytes);
 		}
 
 		void release_dma_resources()
@@ -296,6 +323,43 @@ namespace vk
 
 			vk::flush_dma(range.start, flush_length);
 
+			// Byteswap on the CPU rather than with a compute dispatch.
+			//
+			// The GPU path ran cs_shuffle_16/32 over the readback buffer between the image->buffer
+			// copy and the DMA out. That is a graphics->compute engine switch, and on an Adreno 830
+			// under Turnip those wedge the GPU: bisecting them out (ARMSX3_NO_COMPUTE=1) is the one
+			// change that stopped both Minecraft and Batman: Arkham City hanging, the latter
+			// clearing the batsuit drop and suit-up scene it had never passed.
+			//
+			// Doing it here costs CPU time on a NEON-accelerated path and removes the switch.
+			// Only the plain linear case is taken: tiled and swizzled regions keep the GPU path
+			// because their layout is rearranged below and by the tiling shader, and getting the
+			// element order wrong there would corrupt guest memory rather than merely look wrong.
+			if (deferred_cpu_byteswap_element_size)
+			{
+				auto* const dst = static_cast<u8*>(get_ptr(range.start));
+
+				if (deferred_cpu_byteswap_element_size == 4)
+				{
+					// Bounded to the texture's own bytes rather than the whole flushed range: a
+					// tiled flush can cover tile padding belonging to other resident data. The
+					// swizzle path below takes the same care for the same reason.
+					const u32 own_bytes = std::min<u32>(flush_length, rsx_pitch * height);
+					auto* const words = reinterpret_cast<u32*>(dst);
+					copy_data_swap_u32(words, words, own_bytes / 4);
+				}
+				else
+				{
+					auto* const halves = reinterpret_cast<u16*>(dst);
+					for (u32 i = 0, n = flush_length / 2; i < n; i++)
+					{
+						halves[i] = static_cast<u16>((halves[i] >> 8) | (halves[i] << 8));
+					}
+				}
+
+				deferred_cpu_byteswap_element_size = 0;
+			}
+
 #if DEBUG_DMA_TILING
 			// Are we a tiled region?
 			if (const auto tiled_region = rsx::get_current_renderer()->get_tiled_memory_region(range))
@@ -323,20 +387,100 @@ namespace vk
 				// If this is happening, usually it means it was not a planned readback (e.g shared pages situation)
 				rsx_log.trace("[Performance warning] CPU readback of swizzled data");
 
-				// Read-modify-write to avoid corrupting already resident memory outside texture region
+				// Read-modify-write to avoid corrupting already resident memory outside texture region.
+				//
+				// The output has to be buffered too, not just the input. convert_linear_swizzle
+				// derives its masks from ceil_log2(width)/ceil_log2(height), so it scatters writes
+				// across the POT-rounded extent, and its own comment says plainly that "it is
+				// possible for tiled pixels to fall outside of their linear memory region".
+				// Passing guest memory straight in as the destination therefore writes past the
+				// end of this section. get_ptr is the sudo alias, which vm maps rw and never
+				// reprotects, so those writes are not caught -- they reach reserved-but-unmapped
+				// address space and fault SEGV_ACCERR.
+				//
+				// Reproduced three times in Ratchet & Clank (BCUS98124) on an Adreno 830, every
+				// fault address page-aligned, which is what running off the end of a mapping looks
+				// like. Captures in scratchpad/gpu-investigation-2026-09-07.
 				void* data = get_ptr(range.start);
-				rsx::simple_array<u8> tmp_data(rsx_pitch * height);
-				std::memcpy(tmp_data.data(), data, tmp_data.size());
+				const u32 linear_size = rsx_pitch * height;
+
+				// Seeded from the current contents so pixels the swizzle never touches keep their
+				// resident value, which is what makes this a read-modify-write rather than a
+				// partial overwrite. Only this section's own bytes are copied back.
+				// Derive the true extents by replaying the exact offset sequence the swizzle
+				// will walk, rather than deriving a closed form for it.
+				//
+				// Three closed forms were tried and all three were wrong: width*height rounded
+				// per-axis, then the POT rectangle, then the POT square of the larger side. The
+				// reason is that offs_x0 advances by limit_mask every time offs_y wraps, so the
+				// reachable extent depends on how pitch, both dimensions and the mask width
+				// interact -- not on either dimension alone. Each wrong guess moved the same
+				// SEGV_ACCERR somewhere new instead of removing it.
+				//
+				// This walk is integer-only, costs no memory traffic, and runs on a path already
+				// marked a performance warning, so paying it to be exactly right is cheap.
+				const auto swizzle_bounded = [&](u32 element_size)
+				{
+					const u32 log2w = (width  <= 1) ? 0u : std::bit_width<u32>(width  - 1u);
+					const u32 log2h = (height <= 1) ? 0u : std::bit_width<u32>(height - 1u);
+					const u32 limit = 1u << (std::min(log2w, log2h) << 1);
+					const u32 x_mask = 0x55555555u | ~(limit - 1u);
+					const u32 y_mask = 0xAAAAAAAAu & (limit - 1u);
+					const u32 pitch_in_blocks = rsx_pitch / element_size;
+
+					u32 offs_y = 0, offs_x0 = 0, row_offset = 0;
+					u32 max_dst = 0, max_src = 0;
+
+					for (u32 y = 0; y < height; ++y, row_offset += pitch_in_blocks)
+					{
+						u32 offs_x = offs_x0;
+						for (u32 x = 0; x < width; ++x)
+						{
+							max_dst = std::max(max_dst, offs_y + offs_x);
+							max_src = std::max(max_src, row_offset + x);
+							offs_x = (offs_x - x_mask) & x_mask;
+						}
+						offs_y = (offs_y - y_mask) & y_mask;
+						if (offs_y == 0)
+						{
+							offs_x0 += limit;
+						}
+					}
+
+					const u32 src_bytes = (max_src + 1) * element_size;
+					const u32 dst_bytes = (max_dst + 1) * element_size;
+
+					// The source is zero-filled past the section rather than read further into
+					// guest memory: the swizzle can index beyond what this section owns, and
+					// reading that is how the original faulted in the first place.
+					rsx::simple_array<u8> src(std::max<u32>(src_bytes, linear_size));
+					std::memset(src.data(), 0, src.size());
+					std::memcpy(src.data(), data, linear_size);
+
+					rsx::simple_array<u8> out(std::max<u32>(dst_bytes, linear_size));
+					std::memcpy(out.data(), src.data(), linear_size);
+
+					if (element_size == 4)
+					{
+						rsx::convert_linear_swizzle<u32, false>(src.data(), out.data(), width, height, rsx_pitch);
+					}
+					else
+					{
+						rsx::convert_linear_swizzle<u16, false>(src.data(), out.data(), width, height, rsx_pitch);
+					}
+
+					std::memcpy(data, out.data(), linear_size);
+				};
 
 				switch (gcm_format)
 				{
 				case CELL_GCM_TEXTURE_A8R8G8B8:
 				case CELL_GCM_TEXTURE_DEPTH24_D8:
-					rsx::convert_linear_swizzle<u32, false>(tmp_data.data(), data, width, height, rsx_pitch);
+					swizzle_bounded(4);
 					break;
 				case CELL_GCM_TEXTURE_R5G6B5:
 				case CELL_GCM_TEXTURE_DEPTH16:
-					rsx::convert_linear_swizzle<u16, false>(tmp_data.data(), data, width, height, rsx_pitch);
+					swizzle_bounded(2);
 					break;
 				default:
 					rsx_log.error("Unexpected swizzled texture format 0x%x", gcm_format);

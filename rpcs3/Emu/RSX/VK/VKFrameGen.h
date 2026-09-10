@@ -41,9 +41,10 @@ namespace vk::frame_gen
 
 	// Bring framegen up on the adapter we are rendering with.
 	//
-	// device_uuid comes from VkPhysicalDeviceIDProperties. framegen creates its OWN VkDevice on
-	// that adapter rather than sharing ours, which is why images have to be handed over as
-	// AHardwareBuffer rather than VkImage.
+	// device_uuid comes from VkPhysicalDeviceIDProperties and still selects the adapter for the
+	// dlopen'd library, which is now used only as a shader-blob container (initialize /
+	// import_shaders / get_shader). The interpolation passes themselves run on the renderer's own
+	// VkDevice and exchange plain VkImages -- there is no second device and no AHardwareBuffer.
 	//
 	// shader_for returns the SPIR-V for a named shader, or an empty vector if it has none.
 	// framegen does not read Lossless.dll -- extracting the shaders from the user's own copy is
@@ -176,11 +177,11 @@ namespace vk::frame_gen
 	// for the rest of the session rather than retrying every frame, because the causes (no
 	// shaders, no device support, a context that would not create) do not fix themselves.
 	//
-	// This reads and writes AHardwareBuffers on framegen's device and returns only once that device
-	// is idle again, so the caller must not have a submission in flight that touches any of them.
-	// In practice that means: call it BEFORE submitting the command buffer that carries this frame's
-	// capture, since that capture overwrites one of the two images being read. Doing it the other
-	// way round is the race the caller used to pay a full frame-completion wait to avoid.
+	// This reads and writes the shared capture images on OUR device, so the caller must not have a
+	// submission in flight that touches any of them. In practice that means: call it BEFORE
+	// submitting the command buffer that carries this frame's capture, since that capture
+	// overwrites one of the two images being read. Doing it the other way round is the race the
+	// caller used to pay a full frame-completion wait to avoid.
 	u32 generate(const vk::render_device& dev);
 
 	// Handle of generated image i, for blitting into a swapchain image.

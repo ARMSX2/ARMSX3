@@ -169,3 +169,5 @@ android/**/cpp/libadrenotools/
 
 # Kotlin incremental-compile scratch dir
 android/armsx3-ui/.kotlin/
+# claude
+CLAUDE.md

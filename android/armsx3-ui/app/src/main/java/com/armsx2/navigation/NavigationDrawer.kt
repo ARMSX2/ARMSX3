@@ -304,7 +304,13 @@ private fun DrawerSection(
     )
     items.forEachIndexed { index, item ->
         DrawerRow(
-            controllerId = "drawer.${item.destination?.let { it::class.simpleName } ?: item.titleKey}",
+            // Keyed by titleKey, NOT by the destination class: SettingsControllerNav keys both
+            // register() and setPosition() by this id, so two rows sharing one id collapse into a
+            // single entry at whichever row composed last -- and the other becomes unreachable by
+            // controller while still clickable by touch. Settings and Patches are both
+            // AppRoute.Settings, which is exactly how the Settings row went missing from pad nav
+            // (it jumped Trophies -> All Core Settings). titleKeys are unique per row.
+            controllerId = "drawer.${item.titleKey}",
             title = str(item.titleKey),
             glyph = item.glyph,
             iconRes = item.iconRes,

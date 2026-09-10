@@ -15,6 +15,14 @@ namespace rsx
 {
 	namespace nv406e
 	{
+		// Address of a semaphore an acquire has given up on, and how many acquires have done so.
+		// Read by semaphore_release below to answer the one question a timeout cannot answer on its
+		// own: whether the awaited value is written by the guest, or by a FIFO command sitting AFTER
+		// the acquire that is blocking -- in which case the wait is unsatisfiable by construction and
+		// no timeout length would ever have helped.
+		static atomic_t<u32> g_stuck_sema_addr{0};
+		static atomic_t<u32> g_stuck_sema_count{0};
+
 		void set_reference(context* ctx, u32 /*reg*/, u32 arg)
 		{
 			RSX(ctx)->sync();
@@ -54,6 +62,7 @@ namespace rsx
 
 			u64 start = get_system_time();
 			u64 last_check_val = start;
+			bool warned_slow = false;
 
 			// Kept for the timeout log: lets a report distinguish a semaphore that
 			// changed after we started waiting from one that never moved at all.
@@ -106,14 +115,56 @@ namespace rsx
 
 					last_check_val = current;
 
-					if ((current - start) > tdr)
+					// Giving up here is not a recovery, it is a desync.
+					//
+					// This label is a producer/consumer handshake with the guest: the producer writes
+					// CC0=N when frame N is ready, the RSX acquires it, and a later FIFO command releases
+					// the producer to prepare N+1. Proceeding as though satisfied writes that release,
+					// moves on to await N+1, and the producer then delivers N to nobody -- from then on
+					// the RSX is permanently one increment ahead, every acquire is a genuine deadlock,
+					// and this timeout becomes the frame clock.
+					//
+					// This budget was once tdr * 10, on the theory that the first slip is a guest hitch
+					// longer than the driver timeout and the writer merely needs longer. Measured on
+					// device, that premise is false: in Soul Calibur V the observed value does not move
+					// ONCE during the wait (first_observed == last_observed across the whole budget) and
+					// only advances after the RSX gives up -- the producer is waiting on us. Extending the
+					// wait cannot satisfy a value nobody is going to write while we hold here; it just
+					// multiplies the stall, and took that title's frames from ~1s to ~5s.
+					//
+					// So the budget is the driver timeout again, as upstream has it. The warning below is
+					// kept, and first/last observed with it, because that pair is what distinguishes a
+					// slow writer from a deadlocked one -- and it is what falsified the extension.
+					const u64 budget = tdr;
+
+					if ((current - start) > tdr / 2 && !warned_slow)
+					{
+						warned_slow = true;
+						rsx_log.warning("nv406e::semaphore_acquire is past the driver timeout, still waiting. semaphore_address=0x%X, awaited=0x%X, observed=0x%X", addr, arg, static_cast<u32>(observed));
+					}
+
+					if ((current - start) > budget)
 					{
 						// If longer than driver timeout force exit. first/last observed
 						// let a report distinguish a value that changed during the wait
 						// (first != last, or last != first-known-stuck) from one that
 						// never moved; a transient hit of the awaited value between
 						// observations remains invisible by nature.
-						rsx_log.error("nv406e::semaphore_acquire has timed out. semaphore_address=0x%X, awaited=0x%X, first_observed=0x%X, last_observed=0x%X", addr, arg, first_observed, static_cast<u32>(observed));
+						g_stuck_sema_addr = addr;
+						g_stuck_sema_count++;
+
+						// How long we actually waited, and the FIFO state at the moment we gave up.
+						//
+						// first/last observed distinguish a value that moved during the wait from one
+						// that never moved. get vs internal says whether the RSX is parked holding
+						// progress it never announced -- if they differ, a guest agent gating on "GET
+						// has passed X" is waiting on something we consumed and did not publish. Both
+						// pairs were what finally separated a slow producer from a deadlocked one.
+						const auto* fc = RSX(ctx)->fifo_ctrl.get();
+
+						rsx_log.error("nv406e::semaphore_acquire has timed out. semaphore_address=0x%X, awaited=0x%X, first_observed=0x%X, last_observed=0x%X, waited=%uus, %s",
+							addr, arg, first_observed, static_cast<u32>(observed), static_cast<u32>(current - start),
+							fc ? fc->debug_snapshot() : std::string("fifo: <none>"));
 						break;
 					}
 				}
@@ -127,7 +178,7 @@ namespace rsx
 
 				RSX(ctx)->on_semaphore_acquire_wait();
 
-				RSX_PROF_SCOPE(idle);
+				RSX_PROF_SCOPE(idle_sema);
 
 #if defined(ARCH_ARM64)
 				// The armed one-shot wait below does not park on every core: on Oryon
@@ -215,6 +266,15 @@ namespace rsx
 			{
 				// HW flip synchronization related, 1 is not written without display queue command (TODO: make it behave as real hw)
 				arg = 1;
+			}
+
+			if (const u32 stuck = g_stuck_sema_addr; stuck && addr == stuck)
+			{
+				// The RSX is writing, from its own FIFO, the very label an acquire gave up waiting for.
+				// That makes the handshake self-referential: the command that would satisfy the wait
+				// cannot run until the wait ends, so the acquire is unsatisfiable rather than slow, and
+				// the timeout is the only thing advancing the frame.
+				rsx_log.success("nv406e::semaphore_release writes the label an acquire timed out on. semaphore_address=0x%X, value=0x%X, timeouts_so_far=%u", addr, arg, +g_stuck_sema_count);
 			}
 
 			util::write_gcm_label<false, true>(ctx, reg, addr, arg);

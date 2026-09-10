@@ -51,14 +51,59 @@ object ConfigDatabase {
      *
      * Keep this to settings with EVIDENCE, not suspicion. Every entry should name what broke.
      */
-    private val UNSAFE_ON_ANDROID = setOf<String>(
-        // Empty on purpose. "Multithreaded RSX" was listed here on the belief that it froze
+    private val UNSAFE_ON_ANDROID = setOf(
+        // Max SPURS Threads: a workaround for LOW-CORE-COUNT DESKTOPS, which no Android device is.
+        //
+        // Its own tooltip says it "may improve performance ... especially on systems with limited
+        // number of hardware threads". Every ARMSX3 device has 8 cores -- armv8.1-a is the compile
+        // floor, so nothing weaker can run this at all -- and capping SPURS below that starves the
+        // job chain instead of helping it.
+        //
+        // Measured on Sonic Unleashed (BLUS30244), Snapdragon 8 Elite: the database forces 3, and
+        // uncapping to 6 took the problem hub area from 11.1 to 19.1 fps, with useful SPU work
+        // rising 27% -> 37%. Nothing else in the entry mattered; this one value was serialising
+        // the primary SPURS chain.
+        //
+        // 19 of the database's 2194 titles set this (12 at 3, 7 at 4), so the blast radius is
+        // small and it is wrong for all of them on this platform for the same structural reason.
+        // Only Unleashed was measured, and the tooltip does warn the cap is sometimes load-bearing
+        // against crashes -- if a title in that list regresses, this is the entry to revisit.
+        "Max SPURS Threads",
+
+        // "Multithreaded RSX" was listed here on the belief that it froze
         // Minecraft. It did not: the freeze was Accurate SPU DMA plus Accurate Cache Line
         // Stores turning every SPU DMA into an atomic reservation store, and it reproduced
         // with Multithreaded RSX off and an empty database. Multithreaded RSX is a real
         // upstream feature backed by the RSXOffload thread, not a desktop-only path, so
         // there was never evidence against it. Use the enable toggle to A/B the database
         // rather than denying a setting on suspicion.
+    )
+
+    /**
+     * Settings that are fine in general but have specific VALUES that are wrong on a handheld.
+     *
+     * Separate from UNSAFE_ON_ANDROID because denying the whole setting would throw away the
+     * useful values with the harmful one. Matched on name AND value; anything not listed is kept.
+     */
+    private val UNSAFE_VALUES_ON_ANDROID = mapOf(
+        // Frame limit "Off" and "Infinite" both uncap the presented frame rate entirely.
+        //
+        // RSXThread.cpp resolves both to limit = 0., which skips the pacing block outright:
+        // "Off" via `case frame_limit_type::none` (only when Max CPU Preempt Count is 0, which is
+        // the default and the shipped value), and "Infinite" via `case frame_limit_type::infinite`.
+        //
+        // Measured on Minecraft: PlayStation(R)3 Edition (BLUS31426), Snapdragon 8 Elite: the
+        // database sets "Off" and the game ran at roughly 1000 fps. On a desktop that is a
+        // reasonable thing to recommend. On a handheld it is a hot SoC, a flat battery, and the
+        // "games running too fast" reports.
+        //
+        // 11 of the database's 2195 titles are affected (5 "Off", 6 "Infinite"). Dropping the line
+        // falls back to the global Frame limit, which is Auto -> vblank_rate -> 60.
+        //
+        // "PS3 Native" also resolves to limit = 0. but is NOT listed: it has its own pacing path
+        // further down the same function and is the only mode that honours the game's own
+        // cellGcmSetFlipMode(VSYNC) request, which titles that pace themselves to 30 fps need.
+        "Frame limit" to setOf("Off", "Infinite"),
     )
 
     /**
@@ -113,7 +158,12 @@ object ConfigDatabase {
         config.lineSequence()
             .filterNot { line ->
                 val name = line.substringBefore(':').trim().removePrefix("- ")
-                name in UNSAFE_ON_ANDROID
+                if (name in UNSAFE_ON_ANDROID) return@filterNot true
+
+                // Value-based entries: only drop the line when the value is one of the bad ones,
+                // so a title that legitimately asks for "30" keeps it.
+                val bad = UNSAFE_VALUES_ON_ANDROID[name] ?: return@filterNot false
+                line.contains(':') && line.substringAfter(':').trim() in bad
             }
             .joinToString("\n")
 

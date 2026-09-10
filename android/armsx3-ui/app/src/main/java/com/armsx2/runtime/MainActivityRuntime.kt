@@ -646,6 +646,29 @@ open class MainActivityRuntime : ComponentActivity() {
                 try {
                     eState.value = EmuState.RUNNING
                     println("@@ANDROID_START_VM@@ kind=game path=${m_szGamefile.take(240)}")
+
+                    // Push the curated settings before the VM reads them.
+                    //
+                    // applyTo() was only ever called from UI actions -- a settings screen, the
+                    // in-game overlay, the texture manager. Nothing pushed at LAUNCH, so
+                    // config.yml was authoritative at boot and, once it diverged from the store,
+                    // stayed diverged forever: nothing rewrites a node the user is not actively
+                    // changing.
+                    //
+                    // That is not theoretical. A stale "PPU Decoder: Interpreter (static)" sat in
+                    // config.yml while the settings screen and the store both read Recompiler
+                    // (LLVM), so every game ran interpreted -- black screen, OSD fine, one PPU
+                    // thread pegged, no PPU compile, and identical behaviour on a build with none
+                    // of our commits. A day went into bisecting code for it.
+                    //
+                    // Cheap: applyTo batches its ~165 keys, and this runs once per launch.
+                    try {
+                        com.armsx2.config.ConfigStore
+                            .resolveForGame(currentGame.value?.settingsKey)
+                            .applyTo()
+                    } catch (t: Throwable) {
+                        android.util.Log.w("ARMSX2", "launch: failed to apply settings", t)
+                    }
                     // Local co-op: re-pair controllers each session (first pad = P1,
                     // next = P2) so player slots are deterministic per boot.
                     com.armsx2.input.PadRouter.reset()
@@ -657,11 +680,25 @@ open class MainActivityRuntime : ComponentActivity() {
                     // which the app cannot do any other way — HOME never reaches us (#425).
                     instance?.let { com.armsx2.ui.ScreenPinning.start(it) }
                     applyRendererPrefs()
+                    // Learn this title's real serial for next time.
+                    //
+                    // The library only gets a serial by regex over the filename, so a disc that
+                    // does not spell out its title id resolves per-game settings under its
+                    // filename while the core boots it as the serial and reads there. The core
+                    // reports the serial about a second into boot, which is too late for the
+                    // settings just pushed above -- but recording it now means every later boot
+                    // resolves under the right key. See ConfigStore.rememberSerial.
+                    runCatching {
+                        com.armsx2.config.ConfigStore.rememberSerial(
+                            currentGame.value?.settingsKey,
+                            com.armsx3.NativeApp.getGameSerial())
+                    }
                     // Both of these are consumed by native when the VM boots, so they must be
                     // pushed BEFORE runVMThread (which blocks until the VM exits). One resolve,
                     // per-game ∘ global.
                     val bootCfg = com.armsx2.config.ConfigStore
-                        .resolveForGame(currentGame.value?.settingsKey)
+                        .resolveForGame(
+                            com.armsx2.config.ConfigStore.effectiveKey(currentGame.value?.settingsKey))
                     // Read by VMManager::SetEmuThreadAffinities during boot.
                     runCatching { NativeApp.setAffinityMode(bootCfg.affinityMode) }
                     // The hold itself waits for the VM to come up. BIOS boots skip it.
@@ -778,7 +815,8 @@ open class MainActivityRuntime : ComponentActivity() {
             // Resolve via settingsKey (serial for discs, filename stem for
             // serial-less ELF/homebrew) so ELF per-game settings survive a reboot
             // instead of falling back to global (issue #253).
-            var resolved = com.armsx2.config.ConfigStore.resolveForGame(currentGame.value?.settingsKey)
+            var resolved = com.armsx2.config.ConfigStore.resolveForGame(
+                com.armsx2.config.ConfigStore.effectiveKey(currentGame.value?.settingsKey))
             // Build immutable input maps before the VM starts so the first ABXY
             // edge never pays SharedPreferences parsing on the UI thread.
             ControllerMappings.warmRuntimeCaches()
@@ -944,10 +982,6 @@ open class MainActivityRuntime : ComponentActivity() {
             }
             currentGame.value = info
             launchedExternally = external
-            // Arm a one-shot auto-load of the autosave state for this boot (fired by
-            // onVmRunning once the game's CRC is set). Set here — not in start() — so
-            // a manual Reset Game (which re-enters start() directly) doesn't re-load.
-            pendingAutoLoadOnBoot = prefs.getBoolean("autoLoadOnBoot", false)
             m_szGamefile = uri
             synchronized(vmLifecycleLock) {
                 if (eState.value != EmuState.STOPPED || vmStopInProgress || vmRunLoopActive) {
@@ -1169,12 +1203,16 @@ open class MainActivityRuntime : ComponentActivity() {
 
             WindowImpl.overlayVisible.value = false
             WindowImpl.showLibrary.value = false
-            // Auto-save-on-exit: any normal close (not a reset/restart) writes the
-            // autosave state when the user has the toggle on, so the next boot can
-            // auto-load it. An explicit Save-and-Exit still forces it via saveAutosave.
-            val doAutosave = saveAutosave ||
-                (!restartAfterStop &&
-                    runCatching { prefs.getBoolean("autoSaveOnExit", false) }.getOrDefault(false))
+            // ONLY an explicit Save State & Exit writes a state on the way out.
+            //
+            // The automatic variants (on-exit, on-boot, and an every-N-minutes interval) are
+            // gone. Writing a savestate is not a background operation here: RPCS3 has to stop
+            // the emulator to serialise it, so the app then reboots the state to carry on.
+            // Players read that as the game freezing and recompiling itself at random, and
+            // when the stop missed its timeout the app booted on top of a core that was still
+            // running -- which dropped them back in the library with the old game still
+            // making sound. A save the user did not ask for is not worth that.
+            val doAutosave = saveAutosave
             vmStopControl.execute {
                 println("@@ANDROID_STOP_JAVA@@ begin saveAutosave=$doAutosave forced=$saveAutosave restart=$restartAfterStop")
                 if (doAutosave)
@@ -1290,12 +1328,6 @@ open class MainActivityRuntime : ComponentActivity() {
             runCatching { NativeApp.emulog("@@ANGLE@@ $msg") }
         }
 
-        // Armed per-launch in launchGame when "Auto-load last state on boot" is on;
-        // consumed once by onVmRunning. Set in launchGame (NOT start) so a manual
-        // Reset Game — which re-enters start() directly — never re-loads the state.
-        @Volatile
-        var pendingAutoLoadOnBoot = false
-
         @Volatile
         private var pendingSlotLoadOnBoot: Int? = null
 
@@ -1314,7 +1346,6 @@ open class MainActivityRuntime : ComponentActivity() {
             }
             if (launchPath.isBlank()) return false
             pendingSlotLoadOnBoot = slot
-            pendingAutoLoadOnBoot = false
             launchGame(launchPath, game)
             return true
         }
@@ -1332,58 +1363,6 @@ open class MainActivityRuntime : ComponentActivity() {
          * The core knows the serial once the disc is read, which is the same key the save
          * path uses — so build the missing GameInfo from it and the two agree again.
          */
-        /** Minutes between interval autosaves. 0 = off, which is the default: writing a
-         *  savestate costs a visible hitch, so it is never turned on for you. */
-        const val KEY_AUTOSAVE_INTERVAL_MIN = "autoSaveIntervalMin"
-
-        /** How often the job below wakes to check. Well under the shortest interval (1
-         *  minute), so a freshly-lowered setting takes effect promptly without the job
-         *  spinning. */
-        private const val AUTOSAVE_POLL_MS = 15_000L
-
-        private var autosaveIntervalJob: kotlinx.coroutines.Job? = null
-
-        /**
-         * Interval autosave: while a game is actually RUNNING, write the autosave slot
-         * every N minutes so a crash or a flat battery costs at most that much progress.
-         *
-         * Writes the SAME dedicated `.autosave.p2s` that auto-save-on-exit uses, so the
-         * numbered slots 0-9 stay entirely the user's and auto-load-on-boot picks this up
-         * with no extra plumbing.
-         *
-         * Started once and self-gating rather than hooked to VM start/stop: the state it
-         * cares about (running, not covered by a menu, interval > 0) is all readable here,
-         * and a single long-lived job can't be leaked by a boot path that forgets to stop
-         * it. It deliberately does NOT fire while paused or while the pause menu / a
-         * manager screen is up — the game isn't advancing, so a save then costs a hitch
-         * and buys nothing.
-         */
-        private fun startAutosaveIntervalJob() {
-            autosaveIntervalJob?.cancel()
-            autosaveIntervalJob = instance?.lifecycleScope?.launch {
-                var lastSaveAt = 0L
-                while (true) {
-                    kotlinx.coroutines.delay(AUTOSAVE_POLL_MS)
-                    val minutes = runCatching { prefs.getInt(KEY_AUTOSAVE_INTERVAL_MIN, 0) }.getOrDefault(0)
-                    if (minutes <= 0 || eState.value != EmuState.RUNNING || WindowImpl.frontendCovers) {
-                        // Reset the clock while it can't fire, so re-entering a game doesn't
-                        // immediately dump a save from time that accrued in a menu.
-                        lastSaveAt = 0L
-                        continue
-                    }
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    if (lastSaveAt == 0L) {
-                        lastSaveAt = now
-                        continue
-                    }
-                    if (now - lastSaveAt < minutes * 60_000L) continue
-                    runCatching { NativeApp.saveAutosaveState() }
-                    // Stamped AFTER the write: a savestate takes real time, and starting
-                    // the next interval from before it would make saves creep earlier.
-                    lastSaveAt = android.os.SystemClock.elapsedRealtime()
-                }
-            }
-        }
 
         private fun adoptExternalGameIdentity() {
             if (!launchedExternally || currentGame.value != null) return
@@ -1427,11 +1406,8 @@ open class MainActivityRuntime : ComponentActivity() {
         @JvmStatic
         fun onVmRunning() {
             adoptExternalGameIdentity()
-            val requestedSlot = pendingSlotLoadOnBoot
-            val loadAutosave = pendingAutoLoadOnBoot && requestedSlot == null
-            if (requestedSlot == null && !loadAutosave) return
+            val requestedSlot = pendingSlotLoadOnBoot ?: return
             pendingSlotLoadOnBoot = null
-            pendingAutoLoadOnBoot = false
             val handler = android.os.Handler(android.os.Looper.getMainLooper())
             val tryLoad = object : Runnable {
                 var attempts = 0
@@ -1456,8 +1432,7 @@ open class MainActivityRuntime : ComponentActivity() {
                         return
                     }
                     val loaded = runCatching {
-                        if (requestedSlot != null) NativeApp.loadStateFromSlot(requestedSlot)
-                        else NativeApp.loadAutosaveState()
+                        NativeApp.loadStateFromSlot(requestedSlot)
                     }.getOrDefault(false)
                     if (!loaded && ++attempts < 60)
                         handler.postDelayed(this, 250)
@@ -1797,24 +1772,47 @@ open class MainActivityRuntime : ComponentActivity() {
         // format version, module hash, the settings that affect codegen, and the CPU target -- so a
         // build that changes any of that simply does not match them, and one that does not change
         // it has no reason to discard them.
-        runCatching {
-            val prevVc = prefs.getInt("lastRunVersionCode", 0)
-            val curVc = BuildConfig.VERSION_CODE
-            if (prevVc != 0 && prevVc != curVc) {
-                val root = File(assetCopyRoot(applicationContext), "cache")
-                var cleared = 0
-                // Depth-first over the cache root, removing only directories named shaders_cache
-                // (RPCS3 puts one beside each title's compiled modules). walkBottomUp so a match is
-                // deleted whole without the walk then descending into a directory that is gone.
-                root.walkBottomUp()
-                    .filter { it.isDirectory && it.name == "shaders_cache" }
-                    .forEach { if (it.deleteRecursively()) cleared++ }
-                android.util.Log.i(
-                    "ARMSX2",
-                    "Update $prevVc -> $curVc: cleared $cleared shader cache(s); compiled modules kept",
-                )
-            }
-            if (prevVc != curVc) prefs.edit { putInt("lastRunVersionCode", curVc) }
+        //
+        // OFF THE MAIN THREAD. kickoffEmucoreInit runs from onCreate, and this walk covers the
+        // WHOLE cache root -- which holds every compiled PPU module and reaches tens of GB on a
+        // full library. Walking that on the UI thread blocks it for seconds and Android kills the
+        // app as unresponsive, which users report as "crashes during the logo animation after
+        // updating" (#94, seen on Retroid Pocket 6 and AYN Thor).
+        //
+        // It also explains why re-launching eventually works: lastRunVersionCode is only written
+        // once the walk finishes, so a kill part-way through means the next launch retries, each
+        // attempt deleting a few more directories until the walk is finally short enough to
+        // survive. A clean install has no cache to walk, which is why reinstalling "fixes" it.
+        //
+        // Nothing below depends on this having finished -- the caches are regenerable and the core
+        // rebuilds them on demand -- so it is safe to let it run behind startup.
+        val prevVc = prefs.getInt("lastRunVersionCode", 0)
+        val curVc = BuildConfig.VERSION_CODE
+
+        if (prevVc != 0 && prevVc != curVc) {
+            Thread {
+                runCatching {
+                    val root = File(assetCopyRoot(applicationContext), "cache")
+                    var cleared = 0
+                    // Depth-first over the cache root, removing only directories named
+                    // shaders_cache (RPCS3 puts one beside each title's compiled modules).
+                    // walkBottomUp so a match is deleted whole without the walk then descending
+                    // into a directory that is gone.
+                    root.walkBottomUp()
+                        .filter { it.isDirectory && it.name == "shaders_cache" }
+                        .forEach { if (it.deleteRecursively()) cleared++ }
+                    android.util.Log.i(
+                        "ARMSX2",
+                        "Update $prevVc -> $curVc: cleared $cleared shader cache(s); compiled modules kept",
+                    )
+                }
+                // Recorded only after the sweep actually completes, so an interrupted run repeats
+                // rather than silently leaving a build's stale pipeline blobs behind.
+                runCatching { prefs.edit { putInt("lastRunVersionCode", curVc) } }
+            }.apply { isDaemon = true; name = "shader-cache-sweep"; priority = Thread.MIN_PRIORITY }
+                .start()
+        } else if (prevVc != curVc) {
+            runCatching { prefs.edit { putInt("lastRunVersionCode", curVc) } }
         }
 
         // Point the ANGLE EGL env vars at the bundled libs (or clear them) before the
@@ -2124,6 +2122,13 @@ open class MainActivityRuntime : ComponentActivity() {
         com.armsx2.HiddenGames.load()
         com.armsx2.LibraryTitles.load()
         com.armsx2.LibraryRecentShelf.load()
+        // Player-slot pins, so a controller the user assigned by hand is on its slot
+        // before the first button press rather than after it.
+        com.armsx2.input.PadRouter.loadPins()
+        // Direct USB rumble for a PlayStation pad. Asks for USB permission only when one is
+        // actually attached, so nobody sees a prompt for a controller they do not own.
+        com.armsx2.input.UsbRumble.loadTakeover()
+        com.armsx2.input.UsbRumble.start(this)
         // Discord needs an Activity to launch its sign-in browser and has no other way to obtain
         // one. Handing it over costs nothing when the user has not opted in — start() returns
         // immediately unless the feature is enabled AND a token is stored.
@@ -2154,7 +2159,6 @@ open class MainActivityRuntime : ComponentActivity() {
         com.armsx2.SecondScreen.attach(applicationContext)
         com.armsx2.BatteryWatcher.load()
         com.armsx2.BatteryWatcher.start(applicationContext)
-        startAutosaveIntervalJob()
         // Restore the saved rumble master toggle into the native gate (NativeApp.onPadRumble).
         NativeApp.sRumbleEnabled = ControllerMappings.rumbleEnabled()
         NativeApp.sPhoneRumbleEnabled = ControllerMappings.phoneRumbleEnabled()
@@ -3218,28 +3222,12 @@ open class MainActivityRuntime : ComponentActivity() {
                     }
                     return true
                 }
-                ControllerMappings.SysHotkey.FAST_FORWARD -> {
-                    // Hold to fast-forward (Turbo), release to return to the user's
-                    // current limiter mode (Nominal if frame-limit is on, else Unlimited)
-                    // — not blindly Nominal, which would re-enable a disabled limiter.
-                    if (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) {
-                        if (event.repeatCount == 0) {
-                            // Holding FF supersedes any latched FF-toggle.
-                            if (down) fastForwardToggleActive = false
-                            runCatching { NativeApp.speedhackLimitermode(if (down) ffLimiterMode() else baseLimiterMode()) }
-                        }
-                    }
-                    return true
-                }
-                ControllerMappings.SysHotkey.FAST_FORWARD_TOGGLE -> {
-                    // Press once to lock fast-forward (Turbo) on, press again to return
-                    // to the user's current limiter mode. Shared with the on-screen
-                    // fast-forward touch button (FastForwardWidget).
-                    if (down && event.repeatCount == 0) toggleFastForward()
-                    return true
-                }
+                ControllerMappings.SysHotkey.FAST_FORWARD,
+                ControllerMappings.SysHotkey.FAST_FORWARD_TOGGLE,
                 ControllerMappings.SysHotkey.SLOW_DOWN -> {
-                    if (down && event.repeatCount == 0) toggleSlowDown()
+                    // Unsupported on this core (SysHotkey.supported = false), so these do
+                    // nothing at all. Still swallowed rather than passed along: a binding left
+                    // over from an older build must not reach the game as a stray button press.
                     return true
                 }
                 ControllerMappings.SysHotkey.RES_UP -> {
@@ -3416,31 +3404,19 @@ open class MainActivityRuntime : ComponentActivity() {
         hotkeyToast("Motion recentered")
     }
 
-    fun toggleFastForward() {
-        fastForwardToggleActive = !fastForwardToggleActive
-        val on = fastForwardToggleActive
-        // Fast-forward supersedes an active slow-down latch (mutually exclusive).
-        if (on) slowDownToggleActive = false
-        runCatching { NativeApp.speedhackLimitermode(if (on) ffLimiterMode() else baseLimiterMode()) }
-        hotkeyToast(if (on) "Fast Forward ON" else "Fast Forward OFF")
-    }
+    /** No-op. Speed control is a PCSX2 feature: NativeApp.speedhackLimitermode is an
+     *  Unsupported shim on this core, so every one of these only ever flipped a flag and
+     *  showed a toast that lied. Worse, it latched -- a tester reported fast-forward
+     *  "turning on and never turning off", which is exactly a toggle whose ON state nothing
+     *  can act on and nothing clears. Left as an empty function rather than deleted because
+     *  the touch overlay, the second screen and the pause menu all call it. */
+    fun toggleFastForward() = Unit
 
     /** Toggle slow motion (native LimiterModeType::Slomo, ~50% speed). BLOCKED in
      *  RetroAchievements hardcore — slow-mo is a banned advantage there (matching
      *  desktop PCSX2's hardcore restrictions); shows a notice instead of engaging. */
-    fun toggleSlowDown() {
-        if (InGameOverlay.hardcoreOn.value) {
-            slowDownToggleActive = false
-            hotkeyToast("Slow Down is disabled in RetroAchievements Hardcore mode")
-            return
-        }
-        slowDownToggleActive = !slowDownToggleActive
-        val on = slowDownToggleActive
-        // Slow-down supersedes an active fast-forward latch (mutually exclusive).
-        if (on) fastForwardToggleActive = false
-        runCatching { NativeApp.speedhackLimitermode(if (on) 2 else baseLimiterMode()) }
-        hotkeyToast(if (on) "Slow Down ON (50%)" else "Slow Down OFF")
-    }
+    /** No-op, for the same reason as [toggleFastForward]. */
+    fun toggleSlowDown() = Unit
 
     // Hotkey pop-up toasts (Fast-Forward, etc.). Android Toasts QUEUE, so toggling a
     // hotkey rapidly stacks a long backlog that blocks the screen — cancel the previous
@@ -4587,12 +4563,6 @@ open class MainActivityRuntime : ComponentActivity() {
             }
             ControllerMappings.SysHotkey.CYCLE_SLOT -> cycleSaveSlot()
                 // TEXTURE_DUMP hotkey removed: PCSX2 texture dumping.
-            ControllerMappings.SysHotkey.FAST_FORWARD_TOGGLE -> {
-                fastForwardToggleActive = !fastForwardToggleActive
-                val on = fastForwardToggleActive
-                runCatching { NativeApp.speedhackLimitermode(if (on) ffLimiterMode() else baseLimiterMode()) }
-                hotkeyToast(if (on) "Fast Forward ON" else "Fast Forward OFF")
-            }
             ControllerMappings.SysHotkey.GYRO_TOGGLE -> toggleGyro()
             // GYRO_HOLD needs key up/down edges, which this edge-triggered path (stick
             // directions / combos) doesn't provide — behave as a toggle here rather than
@@ -4607,11 +4577,13 @@ open class MainActivityRuntime : ComponentActivity() {
             }
             ControllerMappings.SysHotkey.SAVE_AND_EXIT -> closeGame(saveAutosave = true)
             ControllerMappings.SysHotkey.RESET_GAME -> restart()
-            ControllerMappings.SysHotkey.SLOW_DOWN -> toggleSlowDown()
             ControllerMappings.SysHotkey.TOGGLE_OSD -> hotkeyToast(InGameOverlay.cycleOsd())
             ControllerMappings.SysHotkey.TOGGLE_KEYBOARD -> toggleSoftKeyboard()
-            // Hold-type hotkeys have no one-shot stick-edge meaning.
+            // Hold-type hotkeys have no one-shot stick-edge meaning, and the speed actions
+            // are unsupported on this core (SysHotkey.supported = false).
             ControllerMappings.SysHotkey.FAST_FORWARD,
+            ControllerMappings.SysHotkey.FAST_FORWARD_TOGGLE,
+            ControllerMappings.SysHotkey.SLOW_DOWN,
             ControllerMappings.SysHotkey.PRESSURE_MOD -> {}
         }
     }

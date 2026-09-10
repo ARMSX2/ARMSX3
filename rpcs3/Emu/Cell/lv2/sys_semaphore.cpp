@@ -1,5 +1,7 @@
 #include "stdafx.h"
 #include "sys_semaphore.h"
+#include "Emu/Cell/timers.hpp"
+#include "Emu/RSX/rsx_profiler.h"
 
 #include "Emu/IdManager.h"
 
@@ -7,6 +9,7 @@
 #include "Emu/Cell/PPUThread.h"
 
 #include "util/asm.hpp"
+#include "util/tsc.hpp"
 
 LOG_CHANNEL(sys_semaphore);
 
@@ -113,9 +116,59 @@ error_code sys_semaphore_destroy(ppu_thread& ppu, u32 sem_id)
 	return CELL_OK;
 }
 
+// How long main_thread actually blocks here, and how often.
+//
+// It spends 61% of its wall time in this call while the SPUs it waits for run under 10% of the
+// time -- so the machine is idle and the frame is a chain of handoffs. That is only actionable
+// once the shape is known: a handful of long waits means it is genuinely waiting for work to
+// finish and the producer is the target, while many short ones mean the wakeups themselves are
+// the cost and the scheduler path is. The two want opposite fixes and the percentage alone
+// cannot tell them apart.
+atomic_t<u64> g_sema_wait_us{0};
+atomic_t<u64> g_sema_wait_count{0};
+atomic_t<u64> g_sema_wait_max_us{0};
+
+// Distribution, because the mean hides the shape. If the long tail clusters near one
+// vblank period (16.67ms at 60Hz) then these waits are quantised to the frame clock --
+// main_thread missing a wakeup and paying a whole period for it -- and the fix is in the
+// wakeup chain. If the tail is smooth, it is genuinely waiting for variable work.
+atomic_t<u64> g_sema_hist[6]{};
+
 error_code sys_semaphore_wait(ppu_thread& ppu, u32 sem_id, u64 timeout)
 {
 	ppu.state += cpu_flag::wait;
+
+	// Instrumentation, and gated as such.
+	//
+	// This is a per-wait timer on a syscall a game makes millions of times in a session, and it
+	// reads the ARM system counter twice per call. Ungated it is exactly the kind of always-on
+	// measurement that was removed from the guest atomic and DMA paths this cycle for costing more
+	// than it reported. Nothing reads these counters unless the RSX profiler is on, so nothing
+	// should pay for them unless it is.
+	const bool is_main = ppu.id == 0x1000000 && rsx::prof::enabled();
+	const u64 wait_start = is_main ? utils::get_tsc() : 0;
+
+	struct sema_timer
+	{
+		const u64 start;
+
+		~sema_timer() noexcept
+		{
+			if (!start)
+			{
+				return;
+			}
+
+			const u64 freq = utils::get_tsc_freq();
+			const u64 us = freq ? ((utils::get_tsc() - start) * 1000000ull) / freq : 0;
+			g_sema_wait_us += us;
+			g_sema_wait_count++;
+			g_sema_wait_max_us.fetch_op([us](u64& v) { if (us > v) { v = us; return true; } return false; });
+
+			const u32 bucket = us < 1000 ? 0 : us < 4000 ? 1 : us < 10000 ? 2 : us < 14000 ? 3 : us < 20000 ? 4 : 5;
+			g_sema_hist[bucket]++;
+		}
+	} sema_timer_v{wait_start};
 
 	sys_semaphore.trace("sys_semaphore_wait(sem_id=0x%x, timeout=0x%llx)", sem_id, timeout);
 
@@ -284,6 +337,11 @@ error_code sys_semaphore_post(ppu_thread& ppu, u32 sem_id, s32 count)
 	{
 		return CELL_EINVAL;
 	}
+
+	sem->dbg_last_post_us = get_system_time();
+	sem->dbg_last_poster = ppu.id;
+	sem->dbg_last_post_lr = static_cast<u32>(ppu.lr);
+	sem->dbg_post_count++;
 
 	lv2_obj::notify_all_t notify;
 

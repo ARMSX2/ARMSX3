@@ -151,6 +151,8 @@ namespace vk
 		}
 
 	public:
+		bool is_rendering_pass() const override { return true; }
+
 		~librashader_upscale_pass() override
 		{
 			destroy_chain();

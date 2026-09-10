@@ -30,6 +30,18 @@ struct lv2_sema final : lv2_obj
 
 	shared_mutex mutex;
 	atomic_t<s32> val;
+
+	// Who last posted this semaphore, and when. A blocked waiter names the object it is parked
+	// on, but not the party that was supposed to release it -- and on a hang that is the question.
+	// Recording the poster turns "VSync is waiting on 0x96009c00 forever" into "and thread X
+	// posted it every frame until 125 seconds ago", which names the half that stopped.
+	atomic_t<u64> dbg_last_post_us{0};
+	atomic_t<u32> dbg_last_poster{0};
+	atomic_t<u64> dbg_post_count{0};
+	// Return address of the last post, i.e. the CALL SITE in guest code. cia during a syscall is
+	// only the `sc` in the library wrapper and says nothing about who invoked it; lr is the caller.
+	// On a producer that stops posting, this is what names the code path that used to run.
+	atomic_t<u32> dbg_last_post_lr{0};
 	ppu_thread* sq{};
 
 	lv2_sema(u32 protocol, u64 key, u64 name, s32 max, s32 value) noexcept

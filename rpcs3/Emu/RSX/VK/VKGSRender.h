@@ -205,9 +205,14 @@ private:
 	// before the presentation engine has finished with it -- undefined, and on Adreno it shows as
 	// smearing during motion that no interpolation setting can change, because the interpolation
 	// was never the thing at fault.
-	std::vector<VkSemaphore> m_framegen_acquire_sems;
 	std::vector<VkSemaphore> m_framegen_present_sems;
 	u32 m_framegen_sem_index = 0;
+	// Frame generation acquires with this rather than a semaphore; see present_generated_frame.
+	VkFence m_framegen_acquire_fence = VK_NULL_HANDLE;
+
+	// Consecutive failed swapchain rebuilds in the acquire path. Reset on any success; once it
+	// passes the threshold the swapchain is treated as unrecoverable rather than retried forever.
+	u32 m_consecutive_swapchain_rebuild_failures = 0;
 
 	// The command buffers the previous frame's generated images were blitted with. framegen writes
 	// the same output images every generation, so those blits have to have retired before the next
@@ -319,6 +324,10 @@ public:
 
 	// External callback in case we need to suddenly submit a commandlist unexpectedly, e.g in a violation handler
 	void emergency_query_cleanup(vk::command_buffer* commands);
+
+	// Retire finished work so the data heaps can reclaim. Narrow public entry point for
+	// vk::reclaim_ring_memory(); flush_command_queue itself stays private.
+	void retire_completed_work();
 
 	// External callback to handle out of video memory problems
 	bool on_vram_exhausted(rsx::problem_severity severity);

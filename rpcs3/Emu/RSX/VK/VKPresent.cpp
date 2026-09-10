@@ -45,6 +45,23 @@ namespace
 
 bool VKGSRender::reinitialize_swapchain()
 {
+	// Never rebuild a swapchain on a lost device.
+	//
+	// Guarded at the function rather than at its three call sites, because enumerating call sites
+	// is how the previous two attempts at this missed one.
+	//
+	// Measured on the Odin 3: with the waits latched but this unguarded, the latch fired, flip()
+	// carried on, vkAcquireNextImageKHR returned VK_ERROR_OUT_OF_DATE_KHR, and the recreate path
+	// ran against the dead device. libvulkan logged "getting images for non-active swapchain
+	// 0x6f1dfaf8d0" twice and scudo then aborted the process with "corrupted chunk header at
+	// address 0x200006f1dfaf8d0" -- the same swapchain pointer -- inside rsx::thread. So the
+	// recreate attempt is not merely futile here, it corrupts the heap and turns a recoverable
+	// stop into SIGABRT.
+	if (g_gpu_device_lost)
+	{
+		return false;
+	}
+
 	if (m_surface_lost)
 	{
 		// handle() blocks until the app hands us a live native window again, so
@@ -61,6 +78,17 @@ bool VKGSRender::reinitialize_swapchain()
 			wsi->destroy_swapchain_only();
 			wsi->replace_surface(m_instance.recreate_surface(m_frame->handle()));
 		}
+
+		// A NEW surface is new state, so the SUBOPTIMAL latch from the old one must not carry
+		// over. m_suboptimal_handled_at is set once when a rebuild is attempted at a given width
+		// and was never cleared anywhere, so after the window was destroyed and recreated -- which
+		// Android does routinely -- the recovery stayed disarmed at that width for the rest of the
+		// process. The swapchain then sat SUBOPTIMAL forever and the picture never came back,
+		// which is why rotating the device "fixed" it: rotating changes the width.
+		//
+		// Cleared here and not in the general rebuild path below, because the latch still has to
+		// stop a rebuild that changes nothing from repeating every frame.
+		m_suboptimal_handled_at = 0;
 
 		m_surface_lost = false;
 	}
@@ -186,17 +214,24 @@ bool VKGSRender::reinitialize_swapchain()
 	m_current_queue_index = 0;
 	m_current_frame = &m_frame_context_storage[0];
 
-	// Prepare new swapchain images for use
-	for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
+	// Prepare new swapchain images for use.
+	//
+	// Headless only -- see the identical block in VKGSRender::on_init_thread for why touching
+	// un-acquired WSI images is a spec violation. flip() starts every acquired image at
+	// UNDEFINED, so nothing downstream needs these images pre-transitioned.
+	if (m_swapchain->is_headless())
 	{
-		const auto target_layout = m_swapchain->get_optimal_present_layout();
-		const auto target_image = m_swapchain->get_image(i);
-		VkClearColorValue clear_color{};
-		VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+		for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
+		{
+			const auto target_layout = m_swapchain->get_optimal_present_layout();
+			const auto target_image = m_swapchain->get_image(i);
+			VkClearColorValue clear_color{};
+			VkImageSubresourceRange range = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-		vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, range);
-		vkCmdClearColorImage(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
-		vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, target_layout, range);
+			vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, range);
+			vkCmdClearColorImage(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
+			vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, target_layout, range);
+		}
 	}
 
 	// Will have to block until rendering is completed
@@ -231,48 +266,86 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 		return nullptr;
 	}
 
-	// One acquire/present semaphore pair per swapchain image, rotated.
-	if (m_framegen_acquire_sems.size() < m_swapchain->get_swap_image_count())
+	// One present semaphore per swapchain image, rotated. There is no acquire semaphore any
+	// more -- the acquire is waited for on the CPU with a fence, for the reason below.
+	if (m_framegen_present_sems.size() < m_swapchain->get_swap_image_count())
 	{
 		VkSemaphoreCreateInfo sem_info = {};
 		sem_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 
-		while (m_framegen_acquire_sems.size() < m_swapchain->get_swap_image_count())
+		while (m_framegen_present_sems.size() < m_swapchain->get_swap_image_count())
 		{
-			VkSemaphore acquire = VK_NULL_HANDLE;
 			VkSemaphore present = VK_NULL_HANDLE;
 
-			if (vkCreateSemaphore(*m_device, &sem_info, nullptr, &acquire) != VK_SUCCESS ||
-				vkCreateSemaphore(*m_device, &sem_info, nullptr, &present) != VK_SUCCESS)
+			if (vkCreateSemaphore(*m_device, &sem_info, nullptr, &present) != VK_SUCCESS)
 			{
 				rsx_log.error("Could not create frame generation present semaphores.");
 				return nullptr;
 			}
 
-			m_framegen_acquire_sems.push_back(acquire);
 			m_framegen_present_sems.push_back(present);
 		}
 	}
 
-	const u32 sem_slot = m_framegen_sem_index++ % ::size32(m_framegen_acquire_sems);
-	const VkSemaphore acquire_sem = m_framegen_acquire_sems[sem_slot];
+	const u32 sem_slot = m_framegen_sem_index++ % ::size32(m_framegen_present_sems);
 	const VkSemaphore present_sem = m_framegen_present_sems[sem_slot];
 
 	u32 image = umax;
 
-	// Acquire WITH a semaphore, and make the blit below wait on it.
+	// Acquire with a FENCE and block on it, rather than chaining a semaphore into the submit.
 	//
-	// This passed VK_NULL_HANDLE and then blitted into the image immediately: nothing established
-	// that the presentation engine had finished with it, which is a use-before-ready and undefined.
-	// On Adreno it shows as smearing during motion that no interpolation setting changes, because
-	// the interpolation was never at fault. ARMSX2 acquires with a fence and blocks on it before
-	// submitting; waiting on the GPU is the same guarantee without the CPU stall.
+	// Something must establish that the presentation engine has finished with this image before
+	// the blit writes it; passing VK_NULL_HANDLE and blitting immediately is a use-before-ready,
+	// which showed on Adreno as smearing during motion that no interpolation setting changed.
+	// A semaphore looks like the cheaper way to say that, and it is what this did -- but frame
+	// generation exists to present MORE frames than the game renders, so one flip performs two
+	// or more acquires, and Turnip segfaults inside vkQueueSubmit when it is asked to wait on a
+	// semaphore that came from a second vkAcquireNextImageKHR in the same frame. Stock Qualcomm
+	// tolerates it. That is the crash reported as "the emulator closes with LSFG on", and it
+	// disappears with frame generation off because the second acquire goes with it.
+	//
+	// A fence carries the same guarantee at the cost of a short CPU wait, which is the trade
+	// ARMSX2 made for the same driver.
 	//
 	// Zero timeout still: if no image is free the display is keeping up, and waiting for one would
 	// make frame generation cost latency instead of adding smoothness.
-	if (m_swapchain->acquire_next_swapchain_image(acquire_sem, 0ull, &image) != VK_SUCCESS ||
+	if (m_framegen_acquire_fence == VK_NULL_HANDLE)
+	{
+		VkFenceCreateInfo fence_info{};
+		fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+		if (vkCreateFence(*m_device, &fence_info, nullptr, &m_framegen_acquire_fence) != VK_SUCCESS)
+		{
+			return nullptr;
+		}
+	}
+	else
+	{
+		// Legal on an unsignalled fence, which is what an acquire that failed below leaves behind.
+		vkResetFences(*m_device, 1, &m_framegen_acquire_fence);
+	}
+
+	if (m_swapchain->acquire_next_swapchain_image(VK_NULL_HANDLE, 0ull, &image, m_framegen_acquire_fence) != VK_SUCCESS ||
 		image == umax)
 	{
+		return nullptr;
+	}
+
+	// The acquire returned SUCCESS against a zero timeout, so an image was already free and this
+	// resolves immediately in practice.
+	//
+	// Bounded anyway. "Resolves immediately in practice" holds only while the device is healthy:
+	// on a lost device the fence is never signalled and UINT64_MAX parks the RSX thread inside
+	// flip() forever, with no log line and no way out -- the app is simply frozen. That is the one
+	// failure shape with no diagnostic at all, so it is worth a timeout even though the wait is
+	// expected to be instant.
+	if (const VkResult wait_result = vkWaitForFences(*m_device, 1, &m_framegen_acquire_fence, VK_TRUE, 1000000000ull);
+		wait_result != VK_SUCCESS)
+	{
+		// Drop this generated frame rather than presenting from an image whose acquire never
+		// completed. The caller treats nullptr as "no generated frame this flip" and carries on.
+		rsx_log.error("Frame generation: acquire fence did not signal within 1s (%s). Skipping this frame.",
+			wait_result == VK_TIMEOUT ? "timeout" : "error");
 		return nullptr;
 	}
 
@@ -313,10 +386,8 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	vk::queue_submit_t submit_info{};
 	submit_info.queue = m_device->get_graphics_queue();
 
-	// Wait for the acquire, signal the present. Without the wait the blit races the display;
-	// without the signal the present races the blit.
-	submit_info.wait_semaphores[submit_info.wait_semaphores_count] = acquire_sem;
-	submit_info.wait_stages[submit_info.wait_semaphores_count++] = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	// Nothing to wait on: the acquire fence was already waited for on the CPU above. Still signal
+	// the present, or the present races the blit.
 	submit_info.signal_semaphores[submit_info.signal_semaphores_count++] = present_sem;
 
 	cmd->submit(submit_info);
@@ -396,6 +467,25 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 			// rebuilt before the swapchain can be.
 			swapchain_unavailable = true;
 			m_surface_lost = true;
+			break;
+		case VK_ERROR_DEVICE_LOST:
+			// Terminal. Not something a new swapchain can fix.
+			//
+			// This used to fall into the default below and be treated as a 3rd-party-injector
+			// problem worth recovering from, so a lost device was answered by building a swapchain
+			// on it. Every call after the loss is undefined, so what actually followed was a burst
+			// of "CB chain has run out of free entries!" and then a fatal DEVICE_LOST from
+			// wait_for_event ten milliseconds later -- at a site with no connection to the present
+			// that really lost the device. That misattribution sent a long investigation after the
+			// command buffer chain, which was only ever a symptom of driving a dead device.
+			//
+			// Reported here instead, where the loss is actually observed. The acquire path already
+			// does this by falling through to die_with_error; this makes present agree with it.
+			//
+			// Latching rather than dying: die_with_error here killed the RSX thread mid-present,
+			// which skips rsx::thread::on_exit() and is why a lost device left the app frozen with
+			// audio still playing. The frame is abandoned either way.
+			rsx::request_device_lost_shutdown("presenting a frame");
 			break;
 		default:
 			// Other errors not part of rpcs3. This can be caused by 3rd party injectors with bad code, of which we have no control over.
@@ -616,8 +706,10 @@ void VKGSRender::queue_swap_request()
 
 	// The capture recorded during flip() is only now a write that has happened.
 	//
-	// Nothing may interpolate from it before this point, and framegen has no way to find out on its
-	// own: it is a second VkDevice reading the same AHardwareBuffer, with no semaphore between them.
+	// Nothing may interpolate from it before this point. The capture becomes readable when the
+	// command buffer carrying it is submitted, and queue submission order -- not a cross-device
+	// handshake -- is what orders the interpolation after it. (See the note ~20 lines below: the
+	// passes run on OUR device and OUR graphics queue.)
 	vk::frame_gen::commit_capture();
 
 	if (framegen_frames && !m_framegen_pipelined)
@@ -819,7 +911,7 @@ void VKGSRender::frame_context_cleanup(vk::frame_context_t *ctx)
 			m_last_heap_sync_time = ctx->last_frame_sync_time;
 
 			// Heap cleanup; deallocates memory consumed by the frame if it is still held
-			vk::data_heap_manager::restore_snapshot(ctx->heap_snapshot);
+			vk::data_heap_manager::restore_snapshot(ctx->heap_snapshot, ctx->heap_snapshot_id);
 		}
 	}
 
@@ -988,9 +1080,13 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			for (u32 i = 0; i < vk::gpu_timer::region_count; i++)
 			{
 				if (ms[i] <= 0.0) continue;
-				fmt::append(report, "\n\t%-14s %7.3f ms/frame  %5.1f events/frame",
+				// Worst single frame alongside the mean. A mean of 14ms is equally consistent
+				// with a steady 14 and with 250 cheap frames plus 44 expensive ones; only the
+				// second is a churn, and only this column separates them.
+				fmt::append(report, "\n\t%-14s %7.3f ms/frame  %5.1f events/frame  worst %7.3f ms",
 					vk::gpu_timer::name_of(static_cast<vk::gpu_timer::region>(i)), ms[i],
-					static_cast<double>(counts[i]) / static_cast<double>(timer.collected_frames()));
+					static_cast<double>(counts[i]) / static_cast<double>(timer.collected_frames()),
+					timer.worst_ms(static_cast<vk::gpu_timer::region>(i)));
 			}
 
 			// Per-pass, so the draw total stops being a single number that only says "inside
@@ -1215,6 +1311,12 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	// whole present path -- overlays, blit, submit -- as swapchain wait.
 	{
 	rsx::prof::scope acquire_scope{rsx::prof::bucket::present_wait};
+	// Bounds THIS flip's acquire loop. m_consecutive_swapchain_rebuild_failures only counts
+	// rebuilds that FAIL, and the OUT_OF_DATE arm resets it to 0 and continues whenever a rebuild
+	// SUCCEEDS -- so a swapchain that rebuilds cleanly and then immediately reports out-of-date
+	// again spins here forever inside one flip(). Measured: 30939 identical acquire warnings in a
+	// single capture, which is also enough log volume to stall the emulator on its own.
+	u32 acquire_attempts = 0;
 	while (VkResult status = m_swapchain->acquire_next_swapchain_image(m_current_frame->acquire_signal_semaphore, timeout, &m_current_frame->present_image))
 	{
 		switch (status)
@@ -1238,11 +1340,50 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			should_reinitialize_swapchain = true;
 			break;
 		case VK_ERROR_OUT_OF_DATE_KHR:
+		{
+			// Bounded, and the rebuild's result is not ignored.
+			//
+			// This used to warn, call reinitialize_swapchain() without looking at what it
+			// returned, and `continue` -- an unbounded retry inside one flip(). Measured on the
+			// Odin 3 after a GPU hang: acquire returned OUT_OF_DATE forever and this spun,
+			// emitting thousands of identical warnings within a single millisecond, with the RSX
+			// thread pinned. The device was gone, so no rebuild was ever going to succeed.
+			//
+			// VK_ERROR_SURFACE_LOST_KHR immediately below already had the right shape: check the
+			// rebuild, and drop the frame rather than spin. This matches it.
+			if (++acquire_attempts > 8)
+			{
+				rsx_log.error("vkAcquireNextImageKHR kept returning VK_ERROR_OUT_OF_DATE_KHR across %u rebuilds in one flip. Dropping the frame.", acquire_attempts);
+				swapchain_unavailable = true;
+				m_frame->flip(m_context);
+				rsx::thread::flip(info);
+				return;
+			}
+
 			rsx_log.warning("vkAcquireNextImageKHR failed with VK_ERROR_OUT_OF_DATE_KHR. Flip request ignored until surface is recreated.");
 			swapchain_unavailable = true;
-			reinitialize_swapchain();
+
+			if (!reinitialize_swapchain())
+			{
+				// A swapchain that cannot be rebuilt is not a transient resize. Give it a few
+				// flips in case the window is genuinely mid-change, then treat it as terminal --
+				// otherwise the game runs on with no picture and no way out, which is the same
+				// frozen-app-with-audio this whole path exists to avoid.
+				if (++m_consecutive_swapchain_rebuild_failures >= 8)
+				{
+					rsx::request_device_lost_shutdown("the swapchain could not be rebuilt");
+				}
+
+				// Drop this frame; the next flip retries. Never spin here.
+				m_frame->flip(m_context);
+				rsx::thread::flip(info);
+				return;
+			}
+
+			m_consecutive_swapchain_rebuild_failures = 0;
 			ensure(m_current_frame, "Could not reinitialize swapchain after VK_ERROR_OUT_OF_DATE_KHR signal!");
 			continue;
+		}
 		case VK_ERROR_SURFACE_LOST_KHR:
 		{
 			// Recoverable, and on Android routine: the ANativeWindow is destroyed
@@ -1265,6 +1406,13 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			continue;
 		}
 		default:
+			if (status == VK_ERROR_DEVICE_LOST)
+			{
+				// Same reason as the present arm below: dying here skips on_exit().
+				rsx::request_device_lost_shutdown("acquiring a swapchain image");
+				return;
+			}
+
 			vk::die_with_error(status);
 		}
 
@@ -1296,7 +1444,22 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	const auto present_layout = m_swapchain->get_optimal_present_layout();
 
 	const VkImageSubresourceRange subresource_range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-	VkImageLayout target_layout = present_layout;
+
+	// The contents of a just-acquired presentable image are UNDEFINED by spec, and declaring
+	// PRESENT_SRC_KHR here only asked the driver to preserve pixels we are about to overwrite.
+	// It is also what forced every swapchain image to be transitioned into PRESENT_SRC_KHR
+	// before it had ever been acquired; that pre-init is now headless-only.
+	//
+	// This makes full coverage of the target load-bearing, so the clear-to-black branch below
+	// no longer tests the top-left inset alone -- it tests coverage explicitly, because
+	// x1 == 0 && y1 == 0 does NOT imply the blit fills the surface. Read the comment there
+	// before changing either.
+	//
+	// The native/headless swapchain is not acquired from a presentation engine and end_frame()
+	// DMAs out of its images, so it keeps the tracked layout it has always used.
+	VkImageLayout target_layout = m_swapchain->is_headless()
+		? present_layout
+		: VK_IMAGE_LAYOUT_UNDEFINED;
 
 	VkRenderPass single_target_pass = VK_NULL_HANDLE;
 	vk::framebuffer_holder* direct_fbo = nullptr;
@@ -1415,11 +1578,41 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		}
 	}
 
-	if (!image_to_flip || aspect_ratio.x1 || aspect_ratio.y1)
+	// Coverage, not just inset.
+	//
+	// target_layout is now UNDEFINED on the WSI path, so any pixel the blit does not write is
+	// genuine driver garbage rather than the previous frame -- and on a UBWC-capable tiler an
+	// UNDEFINED transition can reset compression metadata for the whole image, so the leftover
+	// strip is noise, not stale pixels. x1/y1 alone do not prove full coverage:
+	// convert_aspect_ratio_impl (rsx_utils.cpp) computes width = output.width * ratio with a
+	// truncating cast and then x1 = (output.width - width) / 2 with INTEGER division, so a
+	// one-pixel shortfall lands entirely on x2/y2 with x1/y1 still 0. 1366x768 at 16:9 yields
+	// exactly (0,0,1365,768). aspect_convert_region reproduces the same shape for any
+	// non-integral stretch, and returns a degenerate areau{}, which this also catches.
+	//
+	// Compared against the swapchain's real extent rather than m_swapchain_dims, because
+	// vkCmdClearColorImage clears the whole VkImage regardless, and this also covers the transient
+	// window where m_swapchain_dims lags the actual image size (Android rotation, a WSI
+	// currentExtent override). Exact-fit and stretch_to_display_area cases are unaffected, so the
+	// extra clear costs nothing in the normal path.
+	if (!image_to_flip || aspect_ratio.x1 || aspect_ratio.y1 ||
+		u32(aspect_ratio.x2) < m_swapchain->get_width() ||
+		u32(aspect_ratio.y2) < m_swapchain->get_height())
 	{
 		// Clear the window background to black
 		VkClearColorValue clear_black {};
-		vk::change_image_layout(*m_current_command_buffer, target_image, present_layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, subresource_range);
+		vk::change_image_layout(*m_current_command_buffer, target_image, target_layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, subresource_range);
+
+		// Assign BEFORE the WAW barrier below, not after it.
+		//
+		// The barrier orders the clear against the writes that follow, both of them in
+		// TRANSFER_DST_OPTIMAL. It was passing target_layout, which at this point still held
+		// present_layout -- so it declared a PRESENT_SRC_KHR -> PRESENT_SRC_KHR transition on an
+		// image the line above had already moved to TRANSFER_DST_OPTIMAL. That is an oldLayout
+		// that does not match the image's real layout, and on any driver that honours the
+		// declaration it is a full-surface re-tile/decompress on every letterboxed frame.
+		target_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
 		vkCmdClearColorImage(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_black, 1, &subresource_range);
 
 		// Prevent WAW on transfer writes
@@ -1434,8 +1627,6 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			VK_ACCESS_TRANSFER_WRITE_BIT,
 			subresource_range
 		);
-
-		target_layout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 	}
 
 	const output_scaling_mode output_scaling = g_cfg.video.output_scaling.get();
@@ -1443,6 +1634,20 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	if (!m_upscaler || m_output_scaling != output_scaling)
 	{
 		m_output_scaling = output_scaling;
+
+		// Hand the outgoing upscaler to the GC instead of letting the assignment below delete it.
+		//
+		// This runs on the flip path, so it fires the moment the setting changes -- with the frame
+		// that was just submitted still in flight. Destroying it here destroys pipelines, samplers
+		// and descriptor sets that command buffers on the GPU still reference, which is undefined
+		// and surfaces as a fault inside the driver rather than in our code: switching output
+		// scaling to SGSR mid-game crashed at 0xe1 inside vulkan.ad08xx.so, one frame after the
+		// switch. The GC already exists for exactly this and releases the pointer, so the branches
+		// below still assign into an empty unique_ptr.
+		if (m_upscaler)
+		{
+			vk::get_resource_manager()->dispose(m_upscaler);
+		}
 
 		if (m_output_scaling == output_scaling_mode::nearest)
 		{
@@ -1537,6 +1742,22 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			// render into it rather than blitting need the real one; see upscaler::set_present_format.
 			m_upscaler->set_present_format(m_swapchain->get_surface_format());
 			m_upscaler->scale_output(*m_current_command_buffer, image_to_flip, target_image, target_layout, rgn, UPSCALE_AND_COMMIT | UPSCALE_DEFAULT_VIEW);
+
+			// Flush a pass that RENDERS into the swapchain image, before anything waits on it.
+			//
+			// Same hazard the frame generator hit: queue_submit defers to the offloader thread when
+			// multithreaded RSX is on, so work recorded here has not been submitted when the present
+			// path goes on to wait for it. The blit upscalers survive that because vkCmdBlitImage
+			// leaves nothing for the present to synchronise against; a chain that renders its own
+			// passes does, and the wait never completes -- the RSX ends up spinning in
+			// fence::wait_flush for a submit that is still sitting in the offloader queue.
+			//
+			// Reported as RetroArch shaders hanging the emulator, with the game then refusing to
+			// restart because the RSX thread could not be joined.
+			if (m_upscaler->is_rendering_pass() && g_cfg.video.multithreaded_rsx)
+			{
+				m_current_command_buffer->flush();
+			}
 		}
 	}
 
@@ -1646,9 +1867,9 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	// interpolating a progress dialog produced exactly the flicker that moving the capture was
 	// meant to remove.
 	//
-	// A swapchain image is not something framegen's separate VkDevice can see, so this copies into
-	// AHardwareBuffer-backed storage both devices share. Returns false and costs nothing when the
-	// feature is off, which is the default.
+	// A swapchain image is not usable as a pass input, so this copies it into a plain device-local
+	// VkImage on our own device (vk::frame_gen::shared_image). There is no second device and no
+	// AHardwareBuffer. Returns false and costs nothing when the feature is off, which is the default.
 	if (image_to_flip)
 	{
 		vk::frame_gen::capture_presented_frame(*m_current_command_buffer, *m_device,

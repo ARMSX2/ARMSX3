@@ -87,6 +87,28 @@ static void set_rsx_dmactl(rsx::thread* render, u64 get_put)
 	}
 }
 
+// RSX -> guest event delivery, reported by the stall watchdog.
+//
+// Nothing anywhere reports this path, and it is the one that decides whether the guest's gcm
+// interrupt thread ever runs. When it stops delivering, _gcm_intr_thread parks in
+// sys_event_queue_receive, the engine's VSync thread parks on a semaphore that handler was
+// supposed to post, and the RSX idles with an empty FIFO -- which looks like a renderer or a
+// SPU problem from every other counter we have.
+atomic_t<u64> g_rsx_ev_attempt{0};   // sends attempted
+atomic_t<u64> g_rsx_ev_dropped{0};   // vblank discarded onto a full queue
+atomic_t<u64> g_rsx_ev_busy_spin{0}; // retry iterations while the queue stayed full
+atomic_t<u64> g_rsx_ev_again{0};     // aborted send
+
+// State of the queue the RSX actually sends into, sampled after each send. This is the piece no
+// other counter can supply: the guest's _gcm_intr_thread reports itself blocked in
+// sys_event_queue_receive while events are apparently being delivered, and those two facts cannot
+// both be true of the SAME queue. Either the port lost its queue, or the queue is full (so the
+// receiver is not draining), or there is no PPU registered on it at all -- meaning the thread is
+// waiting on a DIFFERENT queue and our events go to nobody.
+atomic_t<u32> g_rsx_q_id{0};       // queue this port is connected to, 0 = none, ~0 = port gone
+atomic_t<u32> g_rsx_q_pending{0};  // events sitting undelivered in it
+atomic_t<u32> g_rsx_q_waiter{0};   // 1 if a PPU is registered as waiting on it
+
 bool rsx::thread::send_event(u64 data1, u64 event_flags, u64 data3)
 {
 	// Filter event bits, send them only if they are masked by gcm
@@ -99,7 +121,62 @@ bool rsx::thread::send_event(u64 data1, u64 event_flags, u64 data3)
 		return true;
 	}
 
+	g_rsx_ev_attempt++;
+
 	auto error = sys_event_port_send(rsx_event_port, data1, event_flags, data3);
+
+	if (const auto port = idm::check_unlocked<lv2_obj, lv2_event_port>(rsx_event_port))
+	{
+		if (const auto q = port->queue.get())
+		{
+			std::lock_guard lock(q->mutex);
+			g_rsx_q_id = q->id;
+			g_rsx_q_pending = static_cast<u32>(q->events.size());
+			g_rsx_q_waiter = q->pq ? 1u : 0u;
+		}
+		else
+		{
+			g_rsx_q_id = 0;
+		}
+	}
+	else
+	{
+		g_rsx_q_id = 0xffffffffu;
+	}
+
+	// A vblank is a periodic tick, so do not block the thread that produces them to deliver a
+	// stale one.
+	//
+	// This loop retries every 100us for as long as the queue is full, which strands the VBlank
+	// thread completely: it stops generating vblanks at all, and the whole display pipeline goes
+	// with it. Portal 2 reaches that state whenever _gcm_intr_thread cannot drain the queue --
+	// it polls sys_mutex_trylock for a mutex main_thread took once and has not released
+	// (acq=1 rel=0 across dump samples 15s apart, with ~1750 failed trylocks a second). The queue
+	// holds 32 events and 60Hz fills it in half a second, so any pause that long in the interrupt
+	// thread wedges everything, and the VBlank thread's own spinning then guarantees no vblank
+	// ever arrives to break it.
+	//
+	// Dropping is safe for exactly this event: the EAGAIN path below already excludes
+	// SYS_RSX_EVENT_VBLANK and its second-head variants from the "must not be lost" assertion,
+	// i.e. duplicates and losses are allowed by design. Anything else still spins, because those
+	// events are not reproducible.
+	static constexpr u64 vblank_bits =
+		SYS_RSX_EVENT_VBLANK | SYS_RSX_EVENT_SECOND_VBLANK_BASE | (SYS_RSX_EVENT_SECOND_VBLANK_BASE * 2);
+
+	if (error + 0u == CELL_EBUSY && (event_flags & ~vblank_bits) == 0)
+	{
+		g_rsx_ev_dropped++;
+
+		static atomic_t<u64> s_dropped{0};
+
+		if ((++s_dropped & 0x3ff) == 0)
+		{
+			rsx_log.warning("Dropped %u vblank events into a full queue -- the guest is not draining it.",
+				static_cast<u32>(s_dropped));
+		}
+
+		return false;
+	}
 
 	while (error + 0u == CELL_EBUSY)
 	{
@@ -110,6 +187,8 @@ bool rsx::thread::send_event(u64 data1, u64 event_flags, u64 data3)
 			// Deschedule
 			lv2_obj::sleep(*cpu, 100);
 		}
+
+		g_rsx_ev_busy_spin++;
 
 		// Wait a bit before resending event
 		thread_ctrl::wait_for(100);
@@ -128,8 +207,25 @@ bool rsx::thread::send_event(u64 data1, u64 event_flags, u64 data3)
 
 	if (error + 0u == CELL_EAGAIN)
 	{
-		// Thread has aborted when sending event (VBLANK duplicates are allowed)
-		ensure((unsent_gcm_events.fetch_or(event_flags) & event_flags & ~(SYS_RSX_EVENT_VBLANK | SYS_RSX_EVENT_SECOND_VBLANK_BASE | SYS_RSX_EVENT_SECOND_VBLANK_BASE * 2)) == 0);
+		g_rsx_ev_again++;
+
+		// Thread has aborted when sending event.
+		//
+		// Record only what actually has to be resent. VBLANK losses are allowed by design --
+		// the EBUSY path a few lines up drops them on purpose for exactly that reason -- but
+		// this recorded the whole mask, vblank bits included. That is not a bookkeeping detail:
+		// the vblank thread loops on !unsent_gcm_events, so a single lost vblank set the flag
+		// and the vblank source terminated itself, with nothing anywhere to restart it. Every
+		// later frame then had no interrupt: the guest's gcm interrupt thread never woke again,
+		// its VSync thread stayed parked in sys_semaphore_wait, and the engine spun forever on
+		// a flag its own handler was supposed to set, RSX idle with an empty FIFO.
+		const u64 must_resend = event_flags & ~vblank_bits;
+
+		if (must_resend)
+		{
+			ensure((unsent_gcm_events.fetch_or(must_resend) & must_resend) == 0);
+		}
+
 		return false;
 	}
 

@@ -6,6 +6,9 @@
 #include "../VKHelpers.h"
 #include "../VKResourceManager.h"
 #include "Emu/IdManager.h"
+#include "Emu/RSX/Overlays/overlay_message.h"
+#include "Emu/System.h"
+#include "util/sysinfo.hpp"
 
 #include <memory>
 
@@ -98,8 +101,78 @@ namespace vk
 	bool data_heap::grow(usz size)
 	{
 		// Create new heap. All sizes are aligned up by 64M, upto 1GiB
-		const usz size_limit = (m_flags & heap_pool_fixed_size) ? initial_size : 1024 * 0x100000;
+		usz size_limit = (m_flags & heap_pool_fixed_size) ? initial_size : 1024 * 0x100000;
+
+		// ...but never past what the device can actually hand over.
+		//
+		// The 1GiB ceiling is a desktop figure and is unrelated to whether the allocation can
+		// succeed. On a phone the GPU shares system RAM, so a heap that has already reached
+		// 512MB asks for 576MB, the driver refuses, and the allocation failure is FATAL -- the
+		// RSX thread is terminated, rendering stops, and the game hangs with audio still playing
+		// because every other thread is fine. Sonic '06 dies this way, Ratchet & Clank dies at
+		// 144MB in this same function, and neither failure names the heap without the growth log
+		// below.
+		//
+		// Growing into a size the device cannot satisfy is never right: the allocation is
+		// guaranteed to fail, and the swap-out path below is the correct answer instead. Bound
+		// the ceiling by free memory so that decision gets made before the fatal allocation
+		// rather than after it. A quarter of what is free leaves room for the copy, since the
+		// old heap is still resident while the new one is created.
+#ifdef __ANDROID__
+		// A hard ceiling, because free memory is not the constraint that matters.
+		//
+		// The first attempt bounded this by utils::get_avail_memory()/4 and did nothing: that
+		// reads MemAvailable, which counts reclaimable page cache, so it reported ~2.5GB while
+		// the driver would not grant a single 576MB device allocation. "Memory the kernel could
+		// reclaim" and "memory the GPU can have in one contiguous block" are different numbers.
+		//
+		// So bound it by what the ring can plausibly need instead. Sonic '06 climbs
+		// 192->256->320->384->448->512->576MB in seven seconds while its LARGEST request in that
+		// span is 217K -- three orders of magnitude smaller. A ring that has reached 256MB is
+		// already far past serving its traffic and is growing for some other reason; letting it
+		// keep going only decides how long before an allocation fails.
+		//
+		// Reaching the limit is not fatal: the branch below swaps the heap out instead, which is
+		// the behaviour we want and never got to because the allocation died first.
+		//
+		// Empirical, and deliberately generous -- retention self-disengages if the ring cannot
+		// hold several frames, so this is set far above peak frame traffic rather than close to it.
+		if (!(m_flags & heap_pool_fixed_size))
+		{
+			size_limit = std::min<usz>(size_limit, 256 * 0x100000);
+		}
+#endif
+
 		usz aligned_new_size = utils::align(m_size + size, 64 * 0x100000);
+
+		// At the ceiling, reclaim rather than swap or die.
+		//
+		// Ring memory is only returned when a frame RETIRES (frame_context_cleanup, via
+		// check_present_status), and frames only queue around presents -- so a game that draws
+		// without presenting can never give space back. Every long load does this: Sonic '06
+		// loads a level for sixteen seconds, correctly presents nothing, and its attrib ring
+		// climbed 64M to 576M on requests no larger than 217K until the allocation killed the
+		// renderer. Ratchet & Clank drives its index buffer 16M to 256M in 290ms the same way.
+		//
+		// Deliberately ONLY at the ceiling. Reclaiming means a hard sync, which stalls both
+		// sides; doing it on every exhausted ring turned the lockup into a slideshow -- 707
+		// reclaims against a single grow, five hard syncs a second. Growing is cheap and now
+		// bounded, so grow first and pay for the sync only when there is no room left to take.
+		// Strictly greater: at 192M a 64M step computes exactly the 256M ceiling, and >= sent
+		// that down the reclaim path instead of letting the ring take its last allowed step. The
+		// heap then sat at 192M hard-syncing twice a second while 64M of its own budget went
+		// unused.
+		if (aligned_new_size > size_limit && vk::reclaim_ring_memory())
+		{
+			// Conservative: grow() cannot see the alignment its caller will apply, so claim
+			// success only with a 4K margin. Being wrong hands out memory still in flight.
+			if (can_alloc_impl(utils::align(m_put_pos, 4096), size + 4096))
+			{
+				rsx_log.notice("[%s] Reclaimed at the ceiling instead of swapping (heap %uM, requested %uK).",
+					m_name, static_cast<u32>(m_size / 0x100000), static_cast<u32>(size / 1024));
+				return true;
+			}
+		}
 
 		if (aligned_new_size >= size_limit)
 		{
@@ -148,6 +221,37 @@ namespace vk
 
 		VkFlags memory_flags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
 		auto memory_index = m_prefer_writethrough ? memory_map.device_bar : memory_map.host_visible_coherent;
+
+		// Refuse a growth the device cannot satisfy, and SAY SO, instead of walking into an
+		// unrecoverable Vulkan assert.
+		//
+		// vk::die_with_error kills the RSX thread outright. Every other thread survives, so the
+		// game does not crash -- it hangs with audio still playing, VBlank still ticking and CPU
+		// near idle, which reads as a guest deadlock and not as the renderer having died. That
+		// cost most of an evening to recognise on Sonic '06.
+		//
+		// This is a symptom, not the disease: the ring only reclaims in restore_snapshot(),
+		// which is called from the present path alone, so a game that stops flipping can never
+		// give space back and its heap climbs until an allocation fails. Nothing here fixes
+		// that. What it does is turn a silent lockup into a stated reason.
+		if (!can_allocate_heap(memory_index, aligned_new_size, 95))
+		{
+			rsx_log.fatal("[%s] Cannot grow to %uM: the device will not allocate it. The heap only "
+				"reclaims when a frame is presented, so this means no frame has completed.",
+				m_name, static_cast<u32>(aligned_new_size / 0x100000));
+
+			rsx::overlays::queue_message(
+				fmt::format("Out of video memory: the '%s' buffer needed %uM and could not get it.\n"
+					"No frame has completed, so the renderer cannot reclaim what it already holds.",
+					m_name, static_cast<u32>(aligned_new_size / 0x100000)),
+				30'000'000);
+
+			// Stop rather than die mid-frame. Emu.Pause leaves the session inspectable and the
+			// log intact, where the assert took the RSX thread down and left everything else
+			// running as if nothing had happened.
+			Emu.Pause(true);
+			return false;
+		}
 
 		// Update heap information and reset the allocator
 		rsx::data_heap::init(aligned_new_size, m_name, m_min_guard_size);

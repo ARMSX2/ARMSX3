@@ -82,6 +82,13 @@ namespace vk
 		}
 		g_overlay_passes.clear();
 
+		// Pairs with descriptors::init() in initialize_pipe_compatibility_queries.
+		//
+		// This clears dispatch_manager's registry of live descriptor_set pointers. It had no caller
+		// at all, so the list survived teardown holding pointers to sets whose owners were gone --
+		// harmless only for as long as nothing walked it on the next boot.
+		vk::descriptors::destroy();
+
 		// This must be the last item destroyed
 		vk::get_resource_manager()->destroy();
 
@@ -335,6 +342,21 @@ namespace vk
 	bool is_uninterruptible()
 	{
 		return test_status_interrupt(runtime_state::uninterruptible);
+	}
+
+	bool reclaim_ring_memory()
+	{
+		auto renderer = dynamic_cast<VKGSRender*>(rsx::get_current_renderer());
+
+		if (!renderer || is_uninterruptible())
+		{
+			return false;
+		}
+
+		// Hard sync: this must actually retire frames, not merely submit. check_present_status()
+		// inside flush_command_queue is what returns each retired frame's ring memory.
+		renderer->retire_completed_work();
+		return true;
 	}
 
 	void advance_completed_frame_counter()

@@ -70,6 +70,13 @@ namespace rsx
 			m_ctrl->get.release(m_published_get = m_internal_get);
 		}
 
+		std::string FIFO_control::debug_snapshot() const
+		{
+			return fmt::format("fifo: get=0x%06x put=0x%06x internal=0x%06x published=0x%06x remaining=%u cmd=0x%08x memwatch=0x%06x",
+				m_ctrl ? +m_ctrl->get : 0u, m_ctrl ? +m_ctrl->put : 0u,
+				m_internal_get, m_published_get, m_remaining_commands, m_cmd, m_memwatch_addr);
+		}
+
 		void FIFO_control::restore_state(u32 cmd, u32 count)
 		{
 			m_cmd = cmd;
@@ -238,7 +245,7 @@ namespace rsx
 						}
 
 						{
-							RSX_PROF_SCOPE(idle);
+							RSX_PROF_SCOPE(idle_pause);
 							m_thread->cpu_wait({});
 						}
 
@@ -706,7 +713,12 @@ namespace rsx
 
 	void thread::run_FIFO()
 	{
-		FIFO::register_pair command;
+		// Explicitly empty rather than default-initialised. read() can return without assigning:
+		// when a packet is still in flight it forwards to read_unsafe, which bails out leaving
+		// `data` untouched if the producer has not written the next word yet. The reg was then
+		// read uninitialised -- in practice whatever the previous iteration left in the same
+		// stack slot, so a stale command could be re-executed instead of the ring reading empty.
+		FIFO::register_pair command{FIFO::FIFO_EMPTY, 0};
 		fifo_ctrl->read(command);
 		const auto cmd = command.reg;
 
@@ -797,7 +809,7 @@ namespace rsx
 					//
 					// The pre-spin is not optional: ouroboros420/rpcsx parked bare here (e31ef44ef) and
 					// had to walk it back (832c23078) when the wake latency cost frametime smoothness.
-					RSX_PROF_SCOPE(idle);
+					RSX_PROF_SCOPE(idle_fifo);
 
 #if defined(ARCH_ARM64)
 					if (s_fifo_idle_spins < 8)
@@ -1049,6 +1061,11 @@ namespace rsx
 
 			if (auto method = methods[reg])
 			{
+				{
+					const u32 slot = rsx::prof::g_fifo_ring_pos++ % rsx::prof::fifo_ring_size;
+					rsx::prof::g_fifo_ring[slot] = { reg, value };
+				}
+
 				// Splits the handler bodies out of fifo_decode, which is the enclosing scope of
 				// the whole loop and therefore holds both. Arkham City spends 38.5 ms a frame in
 				// there at 164 ns a dispatch against Sonic's 45 ns on the same machinery, so the

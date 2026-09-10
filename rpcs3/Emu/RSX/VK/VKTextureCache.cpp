@@ -170,6 +170,74 @@ namespace vk
 					shuffle_kernel = nullptr;
 				}
 
+				// Defer the byteswap to the CPU where the layout is plain linear.
+				//
+				// This dispatch is a graphics->compute engine switch, and those wedge the GPU on
+				// Adreno 830 under Turnip -- removing them is what stopped both Minecraft and
+				// Batman: Arkham City hanging. imp_flush() does the swap with the NEON
+				// copy_data_swap_u32 after flush_dma instead.
+				//
+				// Tiled and swizzled regions keep the GPU path: their bytes are rearranged after
+				// this point, so a flat swap over the flushed range would be wrong rather than
+				// merely slower.
+				// Tiled regions are eligible too, for 32-bit elements only.
+				//
+				// A byteswap is element-wise and tiling is a permutation of whole u32 texels
+				// (rsx::tile_texel_data<u32>, tiled_dma_copy.hpp), so the two commute: swapping
+				// after the tiler gives the same bytes as swapping before it. That is what lets
+				// the swap move to the CPU while the tiling job stays on the GPU.
+				//
+				// elem_size 4 only, because the tiler is u32-based -- a 16-bit swap over
+				// u32-permuted data would not commute. Swizzled regions also keep the GPU path:
+				// convert_linear_swizzle rewrites the layout afterwards and is not a whole-element
+				// permutation.
+				const bool tiling_commutes = !require_tiling || elem_size == 4;
+
+				// OFF by default: this deferral corrupts guest memory.
+				//
+				// The GPU kernel swaps the readback BUFFER, which holds only the packed image, and
+				// flush_dma then writes it out a row at a time at rsx_pitch stride. Deferring the
+				// swap to after the DMA moves it onto GUEST memory, where a flat run over
+				// rsx_pitch * height also covers the padding between rows -- bytes this flush never
+				// wrote. Minecraft does over a thousand of these flushes in thirteen seconds, and
+				// the damage accumulated into visible texture corruption that faded as you
+				// approached a surface. Confirmed on device: forcing this path back to the GPU
+				// kernel fixes it outright.
+				//
+				// A correct version has to walk rows and swap only the real_pitch bytes per row,
+				// the way the swizzle path in imp_flush already does. That needs the sub-range
+				// cases worked through properly, so it is not enabled on a hunch --
+				// ARMSX3_CPU_READBACK_SWAP=1 opts back in for whoever does that work.
+				static const bool s_cpu_readback_swap = []()
+				{
+					const char* v = std::getenv("ARMSX3_CPU_READBACK_SWAP");
+					const bool on = v && v[0] == '1';
+					if (on) rsx_log.error("ARMSX3_CPU_READBACK_SWAP=1: deferring the readback byteswap"
+						" to the CPU. This is known to corrupt guest memory when real_pitch != rsx_pitch.");
+					return on;
+				}();
+
+				if (s_cpu_readback_swap && shuffle_kernel && tiling_commutes && !is_swizzled())
+				{
+					static u64 s_deferred_count = 0;
+					if (const u64 n = ++s_deferred_count;
+						n == 1 || n == 100 || n == 1000 || n == 10000 || (n % 100000) == 0) [[unlikely]]
+					{
+						rsx_log.warning("CPU readback byteswap x%d (elem=%u, tiled=%d)",
+							n, elem_size, require_tiling ? 1 : 0);
+					}
+
+					deferred_cpu_byteswap_element_size = static_cast<u8>(elem_size);
+					shuffle_kernel = nullptr;
+
+					// Only drop the barrier when nothing writes this buffer afterwards. The tiling
+					// job below still runs and still needs it.
+					if (!require_tiling)
+					{
+						require_rw_barrier = false;
+					}
+				}
+
 				if (shuffle_kernel)
 				{
 					vk::insert_buffer_memory_barrier(cmd, working_buffer->value, 0, task_length,
@@ -251,8 +319,10 @@ namespace vk
 				};
 
 				// Execute
-				const auto job = vk::get_compute_task<vk::cs_tile_memcpy<RSX_detiler_op::encode>>();
-				job->run(cmd, config);
+				{
+					const auto job = vk::get_compute_task<vk::cs_tile_memcpy<RSX_detiler_op::encode>>();
+					job->run(cmd, config);
+				}
 
 				// Update internal variables
 				result_offset = task_length;
@@ -521,18 +591,45 @@ namespace vk
 				}
 
 				src_image = vk::get_typeless_helper(dst->format(), dst->format_class(), convert_x + convert_w, src_y + src_h);
-				src_image->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+				// GENERAL for the same reason as the output helper below: this is the SAME shared
+				// scratch image on every section, so flipping it TRANSFER_DST -> TRANSFER_SRC per
+				// section serialises the GPU once per flip.
+				//
+				// Measured on an Adreno 830 snapshot: fixing only the output side took one command
+				// buffer from CP_WAIT_FOR_IDLE x68 / CP_BLIT x40 down to x26 / x19. This is the
+				// other half of the same pattern. The ensure() below already accepts GENERAL.
+				if (!vk::typeless_helper_general())
+				{
+					src_image->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+				}
+				else if (src_image->current_layout != VK_IMAGE_LAYOUT_GENERAL)
+				{
+					src_image->change_layout(cmd, VK_IMAGE_LAYOUT_GENERAL);
+				}
 
 				const areai src_rect = coordi{{ src_x, src_y }, { src_w, src_h }};
 				const areai dst_rect = coordi{{ 0, 0 }, { convert_w, src_h }};
 				vk::copy_image_typeless(cmd, section.src, src_image, src_rect, dst_rect);
-				src_image->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+				if (!vk::typeless_helper_general())
+				{
+					src_image->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+				}
 
 				src_x = 0;
 				src_y = 0;
 				src_w = convert_w;
 			}
 
+			// A/B against the pre-14:16 layout handling.
+			//
+			// Holding the shared typeless helper in GENERAL removed a per-section pipeline drain,
+			// but change_layout() early-returns when the layout already matches, so a later
+			// push_layout(GENERAL) -- which copy_scaled_image issues on its write-to-self path,
+			// and get_typeless_helper does hand back the same image for both ends -- stopped
+			// emitting a barrier at all. ARMSX3_TYPELESS_GENERAL=0 restores the original
+			// TRANSFER_DST/TRANSFER_SRC ping-pong so the two can be compared on device.
 			ensure(src_image->current_layout == VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL || src_image->current_layout == VK_IMAGE_LAYOUT_GENERAL);
 			ensure(transform == rsx::surface_transform::identity);
 
@@ -551,7 +648,31 @@ namespace vk
 					const u32 requested_width = dst->width();
 					const u32 requested_height = src_y + src_h + section.dst_h; // Accounts for possible typeless ref on the same helper on src
 					_dst = vk::get_typeless_helper(src_image->format(), src_image->format_class(), requested_width, requested_height);
-					_dst->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+					// GENERAL, and only when it is not already there.
+					//
+					// get_typeless_helper returns a SHARED scratch image, so every section that
+					// needs a bitcast was flipping the same image TRANSFER_DST -> TRANSFER_SRC and
+					// back, once per section. Same image, so the driver cannot overlap them: each
+					// flip is a full pipeline drain.
+					//
+					// Read out of an Adreno 830 GPU snapshot taken at a hang: one command buffer
+					// held CP_BLIT x40, CP_WAIT_FOR_IDLE x68, and the same nine registers re-emitted
+					// forty times -- the GPU serialised itself sixty-eight times in a single
+					// submit. The ringbuffer stopped inside CP_INDIRECT_BUFFER_PFE for that buffer.
+					//
+					// GENERAL is valid for both ends of a copy and for blit source and destination,
+					// so holding the helper there for the whole loop removes the ping-pong entirely.
+					// This is the same trick already used on the source images above, for the same
+					// reason.
+					if (!vk::typeless_helper_general())
+					{
+						_dst->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+					}
+					else if (_dst->current_layout != VK_IMAGE_LAYOUT_GENERAL)
+					{
+						_dst->change_layout(cmd, VK_IMAGE_LAYOUT_GENERAL);
+					}
 				}
 
 				auto dst_rect = coord3i{ { section.dst_x, section.dst_y, 0 }, { section.dst_w, section.dst_h, 1 } };
@@ -585,7 +706,12 @@ namespace vk
 				{
 					// Casting comes after the scaling!
 					const auto copy_rgn = get_output_region(section, dst_rect.position.x, dst_rect.position.y, section.dst_w, section.dst_h, _dst);
-					_dst->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+					if (!vk::typeless_helper_general())
+					{
+						_dst->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+					}
+
 					vkCmdCopyImage(cmd, _dst->value, _dst->current_layout, dst->value, dst->current_layout, 1, &copy_rgn);
 				}
 			}
@@ -1393,11 +1519,11 @@ namespace vk
 			//TODO
 			warn_once("Format incompatibility detected, reporting failure to force data copy (VK_FORMAT=0x%X, GCM_FORMAT=0x%X)", static_cast<u32>(vk_format), gcm_format);
 			return false;
-#ifndef __APPLE__
+#if !defined(__APPLE__) || !defined(ARCH_X64)
 		case CELL_GCM_TEXTURE_R5G6B5:
 			return (vk_format == VK_FORMAT_R5G6B5_UNORM_PACK16);
 #else
-		// R5G6B5 is not supported by Metal
+		// R5G6B5 is not supported by Metal on non-Apple GPUs
 		case CELL_GCM_TEXTURE_R5G6B5:
 			return (vk_format == VK_FORMAT_B8G8R8A8_UNORM);
 #endif

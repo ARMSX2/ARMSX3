@@ -7,6 +7,8 @@
 #include "shared.h"
 
 #include "Emu/Cell/timers.hpp"
+#include "Emu/system.h"
+#include "Utilities/Thread.h"
 #include "Emu/RSX/rsx_profiler.h"
 
 #include <chrono>
@@ -14,6 +16,10 @@
 
 #include "util/sysinfo.hpp"
 #include "util/asm.hpp"
+
+// Forward-declared rather than including Emu/RSX/RSXThread.h: this is a low-level vkutils
+// translation unit and pulling the RSX thread header in here would invert the dependency.
+namespace rsx { void request_device_lost_shutdown(const char* reason); }
 
 namespace vk
 {
@@ -181,9 +187,35 @@ namespace vk
 
 	void fence::wait_flush()
 	{
+		// Bounded and abortable, because this spins rather than sleeps.
+		//
+		// `flushed` is set by queue_submit_impl after vkQueueSubmit. Under multithreaded RSX that
+		// submit is handed to the offloader thread, so anything waiting here is waiting on another
+		// thread to run -- and if that never happens, this spins at 100% forever with no way out.
+		// It is reached from command_buffer::begin(), so it takes the RSX thread with it: Emu.Kill()
+		// cannot join, the game will not close, and the emulator stays alive with no window.
+		//
+		// Seen with a librashader chain: 100% of RSX samples in wait_for_fence, an Emulation Join
+		// thread parked behind it, and a process that had to be killed.
+		u64 spins = 0;
+
 		while (!flushed)
 		{
 			utils::pause();
+
+			// Cheap: the check runs about once every 64k pauses, which is nothing against a spin
+			// that is already pathological by the time it matters.
+			if ((++spins & 0xffff) != 0)
+			{
+				continue;
+			}
+
+			if (thread_ctrl::state() == thread_state::aborting || Emu.IsStopped())
+			{
+				rsx_log.error("Abandoning a fence flush wait because emulation is stopping. "
+					"A queued submit was never flushed -- this would otherwise hang shutdown.");
+				return;
+			}
 		}
 	}
 
@@ -604,6 +636,17 @@ namespace vk
 
 				if (status != VK_NOT_READY)
 				{
+					if (status == VK_ERROR_DEVICE_LOST)
+					{
+						// Measured: with only the present/event/query sites latched, the loss was
+						// latched correctly and then this fence poll killed the RSX thread 4 ms
+						// later anyway, so on_exit() was still skipped and the savestate aborted
+						// with "Aborting unsaveable state". Every wait in the RSX loop has to
+						// return rather than die, not just the ones that observe the loss first.
+						rsx::request_device_lost_shutdown("waiting on a fence");
+						return status;
+					}
+
 					die_with_error(status);
 					return status;
 				}
@@ -611,7 +654,42 @@ namespace vk
 				utils::pause();
 			}
 
-			return vkWaitForFences(*g_render_device, 1, &pFence->handle, VK_FALSE, UINT64_MAX);
+			// Bounded slices rather than UINT64_MAX, so this stays interruptible.
+			//
+			// An unbounded wait cannot be abandoned. If the GPU never signals -- a wedged
+			// submission, a shader chain the driver never finishes -- the RSX thread parks here
+			// permanently: Emu.Kill() cannot join it, the game will not close, the emulator keeps
+			// running with no window, and nothing short of killing the process recovers it. The
+			// hang itself is bad; being unable to leave it is what turns it into a dead app.
+			//
+			// Reported with a librashader bezel preset: 88 seconds in this function with work
+			// still queued, then a game that would not restart.
+			//
+			// A second of granularity is nothing against a wait already long enough to reach the
+			// unbounded path, and it costs one extra vkWaitForFences per second of hang.
+			for (u64 slice = 0;; slice++)
+			{
+				const VkResult status = vkWaitForFences(*g_render_device, 1, &pFence->handle, VK_FALSE, 1'000'000'000ull);
+
+				if (status != VK_TIMEOUT)
+				{
+					return status;
+				}
+
+				// Say so, once, rather than looking identical to a freeze.
+				if (slice == 2)
+				{
+					rsx_log.error("GPU has not signalled a fence in 3s. If this persists the driver "
+						"is not completing submitted work; closing the game is still possible.");
+				}
+
+				if (thread_ctrl::state() == thread_state::aborting || Emu.IsStopped())
+				{
+					// Leaving a fence unwaited is not clean, but the alternative is never leaving.
+					rsx_log.error("Abandoning a GPU fence wait after %us because emulation is stopping.", slice + 1);
+					return VK_TIMEOUT;
+				}
+			}
 		}
 	}
 
@@ -652,6 +730,15 @@ namespace vk
 			case VK_EVENT_RESET:
 				break;
 			default:
+				if (status == VK_ERROR_DEVICE_LOST)
+				{
+					// Do not die here. Killing the RSX thread from inside a wait skips
+					// rsx::thread::on_exit() and leaves the app frozen with audio playing.
+					// Latch instead and return; the RSX loop will see the stop request.
+					rsx::request_device_lost_shutdown("waiting on an event");
+					return status;
+				}
+
 				die_with_error(status);
 				return status;
 			}

@@ -6,7 +6,7 @@
 #include "VulkanAPI.h"
 #include "Utilities/geometry.h"
 #include "Emu/RSX/Common/TextureUtils.h"
-#include "Emu/RSX/rsx_utils.h"
+#include "Emu/RSX/Utils/rsx_utils.h"
 
 #define OCCLUSION_MAX_POOL_SIZE   DESCRIPTOR_MAX_DRAW_CALLS
 
@@ -132,6 +132,12 @@ namespace vk
 	void enter_uninterruptible();
 	void leave_uninterruptible();
 	bool is_uninterruptible();
+
+	// Ask the renderer to retire finished work so the data heaps can reclaim.
+	//
+	// Ring memory is returned by frame_context_cleanup, reached through check_present_status(),
+	// which flush_command_queue() calls. A heap that is full has no other way to ask for that.
+	bool reclaim_ring_memory();
 
 	// Set only while the allocator is making its final attempt before ending the RSX thread.
 	// on_vram_exhausted normally refuses the hard sync while uninterruptible, which is correct

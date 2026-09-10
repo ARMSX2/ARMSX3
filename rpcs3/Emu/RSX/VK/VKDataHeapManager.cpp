@@ -39,8 +39,24 @@ namespace vk::data_heap_manager
 		return result;
 	}
 
-	void restore_snapshot(const managed_heap_snapshot_t& snapshot)
+	static atomic_t<u64> g_snapshot_counter{0};
+	static atomic_t<u64> g_last_applied_snapshot{0};
+
+	u64 next_snapshot_id()
 	{
+		return ++g_snapshot_counter;
+	}
+
+	void restore_snapshot(const managed_heap_snapshot_t& snapshot, u64 id)
+	{
+		// Ignore anything not newer than what has already been applied.
+		if (!id || id <= g_last_applied_snapshot)
+		{
+			return;
+		}
+
+		g_last_applied_snapshot = id;
+
 		for (auto& heap : g_managed_heaps)
 		{
 			const auto found = snapshot.find(heap);

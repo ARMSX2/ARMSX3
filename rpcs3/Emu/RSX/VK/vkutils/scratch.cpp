@@ -2,6 +2,8 @@
 #include "buffer_object.h"
 #include "image.h"
 
+#include <cstdlib>
+
 #include "../VKResourceManager.h"
 
 #include <util/asm.hpp>
@@ -10,6 +12,7 @@ namespace vk
 {
 	std::unordered_map<VkImageViewType, std::unique_ptr<viewable_image>> g_null_image_views;
 	std::unordered_map<u32, std::unique_ptr<image>> g_typeless_textures;
+	std::unordered_map<u32, std::unique_ptr<viewable_image>> g_shuffle_textures;
 	VkSampler g_null_sampler = nullptr;
 
 	// Scratch memory handling. Use double-buffered resource to significantly cut down on GPU stalls
@@ -119,6 +122,20 @@ namespace vk
 		return tex->get_view(rsx::default_remap_vector.with_encoding(VK_REMAP_IDENTITY));
 	}
 
+	bool typeless_helper_general()
+	{
+		static const bool s_general = []()
+		{
+			const char* v = std::getenv("ARMSX3_TYPELESS_GENERAL");
+			const bool off = v && v[0] == '0';
+			if (off) rsx_log.error("ARMSX3_TYPELESS_GENERAL=0: typeless helper uses the original"
+				" TRANSFER_DST/TRANSFER_SRC transitions.");
+			return !off;
+		}();
+
+		return s_general;
+	}
+
 	vk::image* get_typeless_helper(VkFormat format, rsx::format_class format_class, u32 requested_width, u32 requested_height)
 	{
 		auto create_texture = [&]()
@@ -146,6 +163,37 @@ namespace vk
 
 			ptr.reset(create_texture());
 			ptr->set_debug_name(fmt::format("Scratch: Format=0x%x", static_cast<u32>(format)));
+		}
+
+		return ptr.get();
+	}
+
+	viewable_image* get_shuffle_helper(u32 index, VkFormat format, u32 requested_width, u32 requested_height)
+	{
+		auto& ptr = g_shuffle_textures[index];
+
+		// Format is part of the identity, not just the size: these slots are handed out to
+		// different passes and a stale image of the wrong format would be silently reinterpreted.
+		if (!ptr || ptr->format() != format ||
+			ptr->width() < requested_width || ptr->height() < requested_height)
+		{
+			if (ptr)
+			{
+				requested_width = std::max(requested_width, ptr->width());
+				requested_height = std::max(requested_height, ptr->height());
+				get_resource_manager()->dispose(ptr);
+			}
+
+			const u32 new_width = utils::align(requested_width, 256u);
+			const u32 new_height = utils::align(requested_height, 256u);
+
+			ptr = std::make_unique<viewable_image>(*g_render_device, g_render_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				VK_IMAGE_TYPE_2D, format, new_width, new_height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_TILING_OPTIMAL,
+				VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+				0, VMM_ALLOCATION_POOL_SCRATCH, RSX_FORMAT_CLASS_COLOR);
+
+			ptr->set_debug_name(fmt::format("Scratch: gfx helper %u (fmt 0x%x)", index, static_cast<u32>(format)));
 		}
 
 		return ptr.get();
@@ -207,6 +255,7 @@ namespace vk
 		g_scratch_buffers_pool.clear();
 
 		g_typeless_textures.clear();
+		g_shuffle_textures.clear();
 
 		if (g_null_sampler)
 		{

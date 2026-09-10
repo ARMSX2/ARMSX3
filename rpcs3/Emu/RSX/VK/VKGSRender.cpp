@@ -40,7 +40,7 @@ namespace vk
 
 		switch (color_format)
 		{
-#ifndef __APPLE__
+#if !defined(__APPLE__) || !defined(ARCH_X64)
 		case rsx::surface_color_format::r5g6b5:
 			return std::make_pair(VK_FORMAT_R5G6B5_UNORM_PACK16, vk::default_component_map);
 
@@ -50,7 +50,7 @@ namespace vk
 		case rsx::surface_color_format::x1r5g5b5_z1r5g5b5:
 			return std::make_pair(VK_FORMAT_A1R5G5B5_UNORM_PACK16, z_rgb);
 #else
-		// assign B8G8R8A8_UNORM to formats that are not supported by Metal
+		// assign B8G8R8A8_UNORM to formats that are not supported by Metal on non-Apple GPUs
 		case rsx::surface_color_format::r5g6b5:
 			return std::make_pair(VK_FORMAT_B8G8R8A8_UNORM, vk::default_component_map);
 
@@ -638,20 +638,64 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	// extension between two runs of the same game, and reading a normalized entry back without
 	// it would build pipelines with culling off and the depth test disabled -- silently, since
 	// nothing in the entry says which convention wrote it.
-	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan",
-		m_device->get_extended_dynamic_state_support() ? "v1.96-eds" : "v1.96");
-
-	for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
+	//
+	// "-nofbl" is a WEAKER argument than "-eds", and deliberately narrower. pipeline_props
+	// carries renderpass_key, which encodes each attachment's VkImageLayout -- including
+	// VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT, which is not a legal VkImageLayout
+	// at all unless VK_EXT_attachment_feedback_loop_layout was enabled on THIS device. The bytes
+	// mean the same thing everywhere; the entry is simply UNUSABLE, because renderpass_key is
+	// part of pipeline_key, so a key this device can never produce can never match at draw time
+	// and the pipeline gets recompiled live mid-frame instead. Observed on an Adreno 830: Turnip
+	// exposes the extension, the stock Qualcomm blob (512.800.72) does not, and a cache written
+	// under one and replayed under the other fed vkCreateRenderPass a layout the device never
+	// agreed to (~40 validation errors, all accepted by the driver).
+	//
+	// Android-only, and suffixed on the ABSENCE of the extension, because only Android lets the
+	// driver change under a running install (adrenotools). A desktop driver update only ever
+	// GAINS this extension, which produces dead entries, never invalid ones, and get_renderpass
+	// already clamps the layout on any device that lacks it -- so MoltenVK, pre-2023
+	// NVIDIA/AMD/Intel and older Mesa keep the directory they are using instead of eating a
+	// live mid-gameplay rebuild of the whole pipeline cache.
+	std::string shader_cache_version = m_device->get_extended_dynamic_state_support() ? "v1.96-eds" : "v1.96";
+#ifdef __ANDROID__
+	if (!m_device->get_framebuffer_loops_support())
 	{
-		const auto target_layout = m_swapchain->get_optimal_present_layout();
-		const auto target_image = m_swapchain->get_image(i);
-		VkClearColorValue clear_color{};
-		VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+		shader_cache_version += "-nofbl";
+	}
+#endif
 
-		vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, range);
-		vkCmdClearColorImage(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
-		vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, target_layout, range);
+	m_shaders_cache = std::make_unique<vk::shader_cache>(*m_prog_buffer, "vulkan", shader_cache_version);
 
+	// Pre-initialising swapchain images is only legal for a swapchain WE own.
+	//
+	// On a WSI swapchain these images belong to the presentation engine until
+	// vkAcquireNextImageKHR hands one over, and that includes their layout. Barriering and
+	// clearing all of them here is "vkQueueSubmit(): pSubmits[0] performs a layout transition
+	// on presentable VkImage ..., but the image has not been acquired from VkSwapchainKHR",
+	// which the validation layers report once per image on every swapchain build. The command
+	// buffer this is recorded into is also submitted with no wait semaphore, so there is not
+	// even an implicit dependency on the presentation engine being finished with them.
+	//
+	// The loop existed only to bootstrap flip()'s assumption that an acquired image is already
+	// in PRESENT_SRC_KHR. flip() no longer assumes that: it starts each acquired image at
+	// VK_IMAGE_LAYOUT_UNDEFINED and explicitly tests that the blit covers the whole surface,
+	// clearing it when it does not. See VKPresent.cpp.
+	//
+	// The native/headless swapchain owns its images outright and is never acquired from a
+	// presentation engine, so it keeps the old behaviour verbatim.
+	if (m_swapchain->is_headless())
+	{
+		for (u32 i = 0; i < m_swapchain->get_swap_image_count(); ++i)
+		{
+			const auto target_layout = m_swapchain->get_optimal_present_layout();
+			const auto target_image = m_swapchain->get_image(i);
+			VkClearColorValue clear_color{};
+			VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+			vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, range);
+			vkCmdClearColorImage(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_color, 1, &range);
+			vk::change_image_layout(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, target_layout, range);
+		}
 	}
 
 	m_texture_cache.initialize((*m_device), m_device->get_graphics_queue(),
@@ -752,11 +796,6 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 		}
 		break;
 #endif
-	case vk::driver_vendor::MVK:
-		// Async compute crashes immediately on Apple GPUs
-		rsx_log.error("Apple GPUs are incompatible with the current implementation of asynchronous texture decoding.");
-		backend_config.supports_asynchronous_compute = false;
-		break;
 	case vk::driver_vendor::INTEL:
 		// As expected host allocations won't work on INTEL despite the extension being present
 		if (backend_config.supports_passthrough_dma)
@@ -941,6 +980,24 @@ VKGSRender::~VKGSRender()
 	m_command_buffer_pool.destroy();
 	m_secondary_command_buffer_pool.destroy();
 
+	// Frame generation's present semaphores and acquire fence.
+	//
+	// Created lazily in present_generated_frame (VKPresent.cpp) and never destroyed, so every
+	// emulator restart within one process leaked one fence plus one semaphore per swapchain image.
+	// Destroyed here rather than there because they are sized to the swapchain and outlive
+	// individual flips; the device is still alive at this point in the destructor.
+	for (VkSemaphore sem : m_framegen_present_sems)
+	{
+		vkDestroySemaphore(*m_device, sem, nullptr);
+	}
+	m_framegen_present_sems.clear();
+
+	if (m_framegen_acquire_fence != VK_NULL_HANDLE)
+	{
+		vkDestroyFence(*m_device, m_framegen_acquire_fence, nullptr);
+		m_framegen_acquire_fence = VK_NULL_HANDLE;
+	}
+
 	// Descriptors
 	vk::descriptors::flush();
 
@@ -961,10 +1018,31 @@ bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 {
 	RSX_PROF_SCOPE(texcache_lookup);
 
+	// Timed separately from the bucket above, because this runs on whichever GUEST thread touched
+	// protected memory -- and RSX_PROF_SCOPE only accumulates for the RSX thread, so on a guest
+	// thread it records nothing at all. That blind spot matters here: the upstream blit refactor
+	// now locks every blit target with protection::no "regardless of WCB/RCB settings", and this
+	// device went from 0.1 mprotect and 0.0 faults per frame to 15.0 and 5.0. Whether that costs
+	// frame time is exactly the question the RSX-side numbers cannot answer.
+	const u64 av_start = rsx::prof::enabled() ? utils::get_tsc() : 0;
+
 	if (rsx::prof::enabled()) [[unlikely]]
 	{
 		rsx::prof::g_access_violations++;
 	}
+
+	struct av_timer
+	{
+		const u64 start;
+
+		~av_timer() noexcept
+		{
+			if (start)
+			{
+				rsx::prof::g_access_violation_tsc.fetch_add(utils::get_tsc() - start, std::memory_order_relaxed);
+			}
+		}
+	} av_timer_v{av_start};
 
 	rsx::mm_flush(address);
 
@@ -1634,6 +1712,14 @@ void VKGSRender::clear_surface(u32 mask)
 		begin_render_pass();
 		vkCmdClearAttachments(*m_current_command_buffer, ::size32(clear_descriptors), clear_descriptors.data(), 1, &region);
 	}
+}
+
+void VKGSRender::retire_completed_work()
+{
+	// Hard sync: the point is that frames actually RETIRE. check_present_status() inside
+	// flush_command_queue is what returns each retired frame's ring memory, and a heap that has
+	// run out has no other way to ask for it.
+	flush_command_queue(true);
 }
 
 void VKGSRender::flush_command_queue(bool hard_sync, bool do_not_switch)
@@ -2622,8 +2708,7 @@ void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)
 		m_framebuffer_layout.target, m_framebuffer_layout.aa_mode, m_framebuffer_layout.raster_type,
 		m_framebuffer_layout.color_addresses, m_framebuffer_layout.zeta_address,
 		m_framebuffer_layout.actual_color_pitch, m_framebuffer_layout.actual_zeta_pitch,
-		resolution_scaling_config,
-		(*m_device), *m_current_command_buffer);
+		resolution_scaling_config);
 
 	// Reset framebuffer information
 	const auto color_bpp = get_format_block_size_in_bytes(m_framebuffer_layout.color_format);
@@ -2714,9 +2799,6 @@ void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)
 
 	if (!m_rtts.orphaned_surfaces.empty())
 	{
-		u32 gcm_format;
-		bool swap_bytes;
-
 		for (auto& [base_addr, surface] : m_rtts.orphaned_surfaces)
 		{
 			bool lock = surface->is_depth_surface() ? !!g_cfg.video.write_depth_buffer :
@@ -2742,28 +2824,15 @@ void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)
 				continue;
 			}
 
-			if (surface->is_depth_surface())
-			{
-				gcm_format = (surface->get_surface_depth_format() != rsx::surface_depth_format::z16) ? CELL_GCM_TEXTURE_DEPTH16 : CELL_GCM_TEXTURE_DEPTH24_D8;
-				swap_bytes = true;
-			}
-			else
-			{
-				auto info = get_compatible_gcm_format(surface->get_surface_color_format());
-				gcm_format = info.first;
-				swap_bytes = info.second;
-			}
-
 			m_texture_cache.lock_memory_region(
 				*m_current_command_buffer, surface, surface->get_memory_range(), false,
 				surface->get_surface_width<rsx::surface_metrics::pixels>(), surface->get_surface_height<rsx::surface_metrics::pixels>(), surface->get_rsx_pitch(),
-				gcm_format, swap_bytes);
+				surface);
 		}
 
 		m_rtts.orphaned_surfaces.clear();
 	}
 
-	const auto color_fmt_info = get_compatible_gcm_format(m_framebuffer_layout.color_format);
 	for (u8 index : m_draw_buffers)
 	{
 		if (!m_surface_info[index].address || !m_surface_info[index].pitch) continue;
@@ -2774,7 +2843,7 @@ void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)
 			m_texture_cache.lock_memory_region(
 				*m_current_command_buffer, m_rtts.m_bound_render_targets[index].second, surface_range, true,
 				m_surface_info[index].width, m_surface_info[index].height, m_framebuffer_layout.actual_color_pitch[index],
-				color_fmt_info.first, color_fmt_info.second);
+				m_rtts.m_bound_render_targets[index].second);
 		}
 		else
 		{
@@ -2787,10 +2856,10 @@ void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)
 		const utils::address_range32 surface_range = m_depth_surface_info.get_memory_range();
 		if (g_cfg.video.write_depth_buffer)
 		{
-			const u32 gcm_format = (m_depth_surface_info.depth_format == rsx::surface_depth_format::z16) ? CELL_GCM_TEXTURE_DEPTH16 : CELL_GCM_TEXTURE_DEPTH24_D8;
 			m_texture_cache.lock_memory_region(
 				*m_current_command_buffer, m_rtts.m_bound_depth_stencil.second, surface_range, true,
-				m_depth_surface_info.width, m_depth_surface_info.height, m_framebuffer_layout.actual_zeta_pitch, gcm_format, true);
+				m_depth_surface_info.width, m_depth_surface_info.height, m_framebuffer_layout.actual_zeta_pitch,
+				m_rtts.m_bound_depth_stencil.second);
 		}
 		else
 		{

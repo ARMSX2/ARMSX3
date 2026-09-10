@@ -1789,7 +1789,38 @@ public:
 			sha1_finish(&ctx, output);
 
 			m_hash.clear();
-			fmt::append(m_hash, "__spu-0x%05x-%s", func.entry_point, fmt::base57(output));
+			// The 'a' is a codegen generation tag, not decoration.
+			//
+			// This name keys the on-disk object cache and is built purely from the GUEST
+			// function's bytes, so it is identical before and after any change to how we compile
+			// that function. Reverting a codegen bug therefore changes nothing for anyone who
+			// already has the bad object cached -- the fix silently does not apply, and the
+			// obvious conclusion is that it did not work.
+			//
+			// The PPU side already learned this and versions its objects (v8-kusa -> v9-kusa
+			// after the XER fix). Bump this letter whenever ARM64 SPU codegen changes semantics.
+			fmt::append(m_hash, "__spu-a-0x%05x-%s", func.entry_point, fmt::base57(output));
+
+#ifdef ARCH_ARM64
+			// The ARM64 retry recompiles the SAME guest function with different codegen -- it
+			// drops tbl2, then fma, to get past the register scavenger. Those attempts produce
+			// different machine code from identical guest bytes, so without this they would all
+			// claim one cache entry and a later run could load the wrong variant. Only the
+			// non-default combinations are tagged, so the common case keeps its name and existing
+			// caches stay valid.
+			if (g_spu_llvm_compile_context)
+			{
+				if (!g_spu_llvm_compile_context->use_tbl2)
+				{
+					m_hash += "-notbl2";
+				}
+
+				if (!g_spu_llvm_compile_context->use_fma)
+				{
+					m_hash += "-nofma";
+				}
+			}
+#endif
 
 			be_t<u64> hash_start;
 			std::memcpy(&hash_start, output, sizeof(hash_start));
@@ -4038,6 +4069,34 @@ public:
 				{
 					// Testing only
 					added = m_jit.try_add(std::move(_module), m_spurt->get_cache_path() + "llvm/", llvm_error);
+				}
+				else if (const std::string& obj_cache = m_spurt->get_obj_cache_path(); !obj_cache.empty())
+				{
+					// DISABLED: cached SPU objects are not safe to reuse across processes on ARM64.
+					//
+					// This branch used to call the cache-less try_add overload, so ARM64 never wrote
+					// SPU objects at all and recompiled every session. Passing obj_cache here made it
+					// write them, which cut a cold boot from minutes to seconds -- and started
+					// crashing at roughly twelve seconds into boot, in CellSpursKernel0, always at
+					// the same host address:
+					//
+					//     insn=0xb940012b  ->  ldr w11, [x9]     x9 = 0x78ba91f798
+					//
+					// x9 is built by movz/movk immediates in the cached object itself, and
+					// readelf shows NO relocation covering those instructions. The relocations that
+					// are there -- .rodata.cst16 page-relative, CALL26 to spu_escape/spu_dispatch --
+					// all resolve on load; this one cannot, because nothing marks it as an address.
+					// So the object carries an absolute host pointer captured when it was compiled,
+					// which is why the fault address is byte-identical in every process while the
+					// mappings around it move with ASLR, and why it lands in whatever unrelated
+					// mapping now occupies that spot.
+					//
+					// Fixing the one constant would not make this safe. Any address the recompiler
+					// bakes into IR has the same problem -- g_timebase_offs is baked the same way in
+					// two more places -- so the cache is only sound once every such site goes through
+					// a relocatable symbol instead of IntToPtr(getInt64(...)). Until then, correctness
+					// over the boot time: recompile per session, as ARM64 always did before.
+					added = m_jit.try_add(std::move(_module), llvm_error);
 				}
 				else
 				{
@@ -7665,7 +7724,10 @@ public:
 		const auto known_idx = get_known_bits(c);
 		const bool perm_only = known_idx.Zero[7];
 		const bool perm_or_zero_only = known_idx.Zero[6];
-		[[maybe_unused]] const bool idx_selects_single = known_idx.extractBits(1, 4).isConstant();
+		const bool consts_only = known_idx.One[7];
+		const bool consts_never_msb = known_idx.Zero[5];
+		const bool consts_never_allones = known_idx.One[5];
+		const bool idx_selects_single = known_idx.extractBits(1, 4).isConstant();
 
 		const auto a = get_vr<u8[16]>(op.ra);
 		const auto b = get_vr<u8[16]>(op.rb);
@@ -7746,7 +7808,11 @@ public:
 		// NOTE: LLVM doesn't emit BCAX	(llvm-project/issues/200699)
 		//		 Verify if `(x ^ 0x0F) & 0x?F` is reassociated when upstreamed
 
-		if (single_src)
+		if (consts_only)
+		{
+			// NOP to avoid doing any shuffles
+		}
+		else if (single_src)
 		{
 			const auto only_src = single_src.value();
 
@@ -7758,8 +7824,7 @@ public:
 
 			if (only_src_is_splat)
 			{
-				const auto lut = build<u8[16]>(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x80, 0x80, 0x80, 0x80);
-				set_vr(op.rt4, tbx(only_src, lut, (c >> 3) ^ 0x10));
+				set_vr(op.rt4, tbl(splat_lut, (c >> 4)));
 				return;
 			}
 
@@ -7769,15 +7834,8 @@ public:
 				set_vr(op.rt4, tbl(only_src, cm));
 				return;
 			}
-
-			const auto x = tbl(build<u8[16]>(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x80, 0x80), (c >> 4));
-			const auto xv = perm_or_zero_only ? eval(splat<u8[16]>(0)) : x;
-			const auto cm = eval(cv & 0x8f);
-			set_vr(op.rt4, tbx(xv, only_src, cm));
-			return;
 		}
-
-		if (a_is_splat && b_is_splat)
+		else if (a_is_splat && b_is_splat)
 		{
 			if (perm_only)
 			{
@@ -7796,10 +7854,39 @@ public:
 			return;
 		}
 
-		const auto x = tbl(build<u8[16]>(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x80, 0x80), (c >> 4));
-		const auto xv = perm_or_zero_only ? eval(splat<u8[16]>(0)) : x;
+		// Calculate special index constants
+
+		value_t<u8[16]> idx_consts;
+		if (perm_or_zero_only)
+		{
+			idx_consts = eval(splat<u8[16]>(0));
+		}
+		else if (consts_never_msb)
+		{
+			idx_consts = eval(noncast<u8[16]>(sext<s8[16]>(c >= 0xc0)));
+		}
+		else
+		{
+			idx_consts = tbl(build<u8[16]>(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x80, 0x80), (c >> 4));
+		}
+
+		if (consts_only)
+		{
+			set_vr(op.rt4, idx_consts);
+			return;
+		}
+
+		// Combine shuffle and special index constants
+
+		if (single_src)
+		{
+			const auto cm = eval(cv & 0x8f);
+			set_vr(op.rt4, tbx(idx_consts, single_src.value(), cm));
+			return;
+		}
+
 		const auto cm = eval(cv & 0x9f);
-		set_vr(op.rt4, tbx2(xv, av, bv, cm));
+		set_vr(op.rt4, tbx2(idx_consts, av, bv, cm));
 		return;
 #else
 
@@ -7808,7 +7895,12 @@ public:
 		bool or_combine_safe = false;
 
 		value_t<u8[16]> ab_shuf;
-		if (single_src)
+		if (consts_only)
+		{
+			// NOP to avoid doing any shuffles
+			ab_shuf = value_t<u8[16]>();
+		}
+		else if (single_src)
 		{
 			if (only_src_is_splat)
 			{
@@ -7863,6 +7955,18 @@ public:
 		{
 			idx_consts = eval(splat<u8[16]>(0));
 		}
+		else if (consts_never_msb)
+		{
+			// Saves on a constant + prevents pessimation where kmask implementation has worse latency than GFNI
+			if (or_combine_safe)
+				idx_consts = eval(bitcast<u8[16]>(sext<s8[16]>(c >= 0xc0)));
+			else
+				idx_consts = eval(bitcast<u8[16]>(noncast<s8[16]>(c + c) >> 7));
+		}
+		else if (consts_never_allones)
+		{
+			idx_consts = eval(sub_sat(c, splat<u8[16]>(0x60)) & 0x80);
+		}
 		else if (m_use_gfni)
 		{
 			// TODO: Due to vpblendvb, the pshufb OR combine path is one fewer micro-ops post Rocket Lake. Check if it is faster.
@@ -7876,6 +7980,12 @@ public:
 		{
 			const auto pshufb_lut = build<u8[16]>(0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0x80, 0x80);
 			idx_consts = eval(pshufb(pshufb_lut, (c >> 4)));
+		}
+
+		if (consts_only)
+		{
+			set_vr(op.rt4, idx_consts);
+			return;
 		}
 
 		// Combine shuffle and special index constants

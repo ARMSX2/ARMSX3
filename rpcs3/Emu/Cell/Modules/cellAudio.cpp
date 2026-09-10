@@ -160,7 +160,19 @@ audio_ringbuffer::audio_ringbuffer(cell_audio_config& _cfg)
 	{
 		if (cfg.buffering_enabled)
 		{
-			return cfg.desired_buffer_duration / 1'000'000.0 + 0.02; // Add 20ms to buffer to keep buffering algorithm happy
+			// Headroom above the target, for bursts.
+			//
+			// 20ms leaves ~3.2 blocks of slack over a 36.7ms target, and commit_data below
+			// pushes with force=false, so a block that does not fit is discarded WHOLE -- 5.33ms
+			// of audio vanishing mid-waveform, which is a click. That is not a rare edge: a
+			// frame stall drains the ring, the guest then refills at up to twice nominal (the
+			// controller's minimum period is half nominal), and the overshoot lands past the
+			// limit. Measured on device at queued=49.3ms against a 54.0ms capacity.
+			//
+			// Widening the headroom costs nothing in steady state -- the controller still tracks
+			// the same target and the ring still drains back to it -- it only allows a transient
+			// burst to be held instead of thrown away.
+			return cfg.desired_buffer_duration / 1'000'000.0 + 0.06;
 		}
 
 		return cfg.audio_min_buffer_duration;
@@ -311,7 +323,19 @@ void audio_ringbuffer::commit_data(f32* buf, u32 sample_cnt)
 		AudioBackend::convert_to_s16(sample_cnt_out, buf, buf);
 	}
 
-	cb_ringbuf.push(buf, sample_cnt_out * cfg.audio_sample_size);
+	// A dropped block is audible, so it should not be invisible. push() returns 0 when the block
+	// does not fit and force is false; ignoring that return is why whole blocks could disappear
+	// with underruns=0 and nothing in the log to explain the crunch.
+	const u64 want = sample_cnt_out * cfg.audio_sample_size;
+
+	if (cb_ringbuf.push(buf, want) != want)
+	{
+		if ((m_dropped_blocks++ & 0x3f) == 0)
+		{
+			cellAudio.warning("Audio: dropped %u blocks that did not fit the ring (%.1f ms queued)",
+				m_dropped_blocks.load(), get_enqueued_playtime() / 1000.0);
+		}
+	}
 }
 
 void audio_ringbuffer::play()
