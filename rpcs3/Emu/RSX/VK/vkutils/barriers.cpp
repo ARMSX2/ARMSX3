@@ -14,7 +14,8 @@ namespace vk
 		VkPipelineStageFlags src_stage, VkPipelineStageFlags dst_stage,
 		VkAccessFlags src_mask, VkAccessFlags dst_mask,
 		const VkImageSubresourceRange& range,
-		bool preserve_renderpass)
+		bool preserve_renderpass,
+		VkFlags flags)
 	{
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
@@ -36,7 +37,7 @@ namespace vk
 		barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		barrier.subresourceRange = range;
 
-		vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+		vkCmdPipelineBarrier(cmd, src_stage, dst_stage, flags, 0, nullptr, 0, nullptr, 1, &barrier);
 	}
 
 	void insert_buffer_memory_barrier(
@@ -49,7 +50,7 @@ namespace vk
 	{
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
-			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[11]++; vk::end_renderpass(cmd);
+			vk::end_renderpass(cmd);
 		}
 
 		VkBufferMemoryBarrier barrier = {};
@@ -73,7 +74,7 @@ namespace vk
 	{
 		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
-			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[12]++; vk::end_renderpass(cmd);
+			vk::end_renderpass(cmd);
 		}
 
 		VkMemoryBarrier barrier = {};
@@ -94,29 +95,9 @@ namespace vk
 		// Transition to GENERAL if this resource is both input and output
 		// TODO: This implicitly makes the target incompatible with the renderpass declaration; investigate a proper workaround
 		// TODO: This likely throws out hw optimizations on the rest of the renderpass, manage carefully
-		bool in_pass = false;
-		if (vk::is_renderpass_open(cmd))
+		if (!preserve_renderpass && vk::is_renderpass_open(cmd))
 		{
-			if (!preserve_renderpass)
-			{
-				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[13]++; vk::end_renderpass(cmd);
-			}
-			else if (current_layout != new_layout)
-			{
-				// A barrier issued inside a render pass instance may not change the image
-				// layout (VUID-vkCmdPipelineBarrier-oldLayout-01181). Nothing is lost by ending
-				// the pass for it: the layout is part of the render pass key, so the pass has to
-				// be re-created for the new layout before the next draw in any case.
-				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_rp_sites[18]++; vk::end_renderpass(cmd);
-			}
-			else
-			{
-				// Kept the pass open, so the barrier lands inside it. On Turnip that is a colour
-				// cache clean plus an L2 invalidate, not a tile resolve; the count is here so the
-				// cost can be measured rather than assumed.
-				in_pass = true;
-				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_pass_barrier(true);
-			}
+			vk::end_renderpass(cmd);
 		}
 
 		VkAccessFlags src_access, dst_access;
@@ -136,22 +117,7 @@ namespace vk
 			dst_stage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
 		}
 
-		if (preserve_renderpass)
-		{
-			// Issued inside the pass, so it must match the by-region self-dependency the
-			// render pass declares, and that permits framebuffer-local stages only. The
-			// vertex stage is not one, and naming it here would make the barrier invalid.
-			//
-			// Correct for what this is used for: the feedback case is a fragment shader
-			// sampling the attachment its own fragments write. A vertex shader sampling a
-			// live render target would need the pass ended anyway, which is what the caller
-			// gets by leaving preserve_renderpass false.
-			dst_stage |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-		}
-		else
-		{
-			dst_stage |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
-		}
+		dst_stage |= VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT;
 
 		VkImageMemoryBarrier barrier = {};
 		barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -164,11 +130,7 @@ namespace vk
 		barrier.srcAccessMask = src_access;
 		barrier.dstAccessMask = dst_access;
 
-		// Inside the pass this must match the self-dependency the render pass declares, and
-		// that one is by-region (VUID-vkCmdPipelineBarrier-None-07889): a barrier without the
-		// bit asks for a framebuffer-global dependency the pass never declared.
-		const VkDependencyFlags dependency_flags = in_pass ? VK_DEPENDENCY_BY_REGION_BIT : 0;
-		vkCmdPipelineBarrier(cmd, src_stage, dst_stage, dependency_flags, 0, nullptr, 0, nullptr, 1, &barrier);
+		vkCmdPipelineBarrier(cmd, src_stage, dst_stage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 	}
 
 	void insert_texture_barrier(const vk::command_buffer& cmd, vk::image* image, VkImageLayout new_layout, bool preserve_renderpass)

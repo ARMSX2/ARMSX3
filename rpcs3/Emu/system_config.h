@@ -226,6 +226,7 @@ struct cfg_root : cfg::node
 		cfg::string shader_preset_path{ this, "Shader Preset Path", "", true };
 #endif
 		cfg::_bool record_with_overlays{ this, "Record With Overlays", true, true };
+		cfg::_bool disable_hardware_blending{ this, "Disable Hardware Blending", false, true };
 		cfg::_bool disable_hardware_texel_remapping{ this, "Disable Hardware ColorSpace Remapping", false, true };
 		cfg::uint<0, 100> rcas_sharpening_intensity{ this, "FidelityFX CAS Sharpening Intensity", 50, true };
 		// SGSR's own, because it wants a range the FSR one cannot express. Qualcomm's
