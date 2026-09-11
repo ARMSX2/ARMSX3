@@ -705,6 +705,10 @@ void Emulator::Init()
 	make_path_verbose(fs::get_cache_dir() + "spu_progs/", false);
 	make_path_verbose(fs::get_cache_dir() + "ppu_progs/", false);
 	make_path_verbose(fs::get_parent_dir(get_savestate_file("NO_ID", "/NO_FILE", -1, -1)), false);
+
+	// Reclaim savestate temps stranded by a process killed mid-write. Startup is the only point at
+	// which none can be in flight.
+	clean_orphaned_savestate_temps();
 	make_path_verbose(fs::get_config_dir() + "captures/", false);
 	make_path_verbose(fs::get_config_dir() + "sounds/", false);
 	make_path_verbose(patch_engine::get_patches_path(), false);

@@ -47,3 +47,4 @@ std::vector<version_entry> read_used_savestate_versions();
 std::string get_savestate_file(std::string_view title_id, std::string_view boot_path, s64 rel_id, u64 aggregate_file_size = umax);
 bool boot_current_game_savestate(bool testing, u32 index);
 void clean_savestates(std::string_view title_id, std::string_view boot_path, usz max_files, usz max_files_size);
+void clean_orphaned_savestate_temps();

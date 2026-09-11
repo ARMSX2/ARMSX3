@@ -553,6 +553,81 @@ void clean_savestates(std::string_view title_id, std::string_view boot_path, usz
 	}
 }
 
+void clean_orphaned_savestate_temps()
+{
+	// fs::pending_file streams a savestate into a neighbouring temp named with a fullwidth-dollar
+	// prefix and a .tmp suffix, then renames it on commit; its destructor removes that temp, so a
+	// savestate that merely fails leaves nothing behind. A savestate requires a full emulation stop
+	// though, and a process killed inside that window never runs the destructor -- the low-memory
+	// killer, a missed stop timeout, a crash. Windows covers exactly this by marking the temp
+	// delete-on-close at open time (FILE_DISPOSITION_INFO in pending_file::open); POSIX has no
+	// equivalent that survives the later rename, so the orphans have to be swept instead.
+	//
+	// Nothing else can see them: clean_savestates matches only the three finished suffixes and the
+	// manager UI lists .SAVESTAT files, while a half-written stream is neither -- and is far larger
+	// than the state it would have become. Issue #123 reached 3 GB across three games this way, with
+	// the emulator correctly reporting that it had no savestates at all.
+	//
+	// Called once at startup, the only point at which no savestate can be in flight.
+	constexpr std::string_view temp_prefix = "\xEF\xBC\x84"; // U+FF04, as written by generate_neighboring_path
+
+	const std::string root = fs::get_config_dir() + "savestates/";
+
+	const auto sweep = [&](const std::string& dir_path)
+	{
+		fs::dir dir_view{dir_path};
+
+		if (!dir_view)
+		{
+			return;
+		}
+
+		for (const auto& entry : dir_view)
+		{
+			if (entry.is_directory ||
+				!entry.name.starts_with(temp_prefix) ||
+				!entry.name.ends_with(".tmp") ||
+				entry.name.find(".SAVESTAT") == umax)
+			{
+				continue;
+			}
+
+			const std::string path = dir_path + entry.name;
+			const usz size = entry.size;
+
+			if (fs::remove_file(path))
+			{
+				sys_log.success("Removed orphaned savestate temporary '%s' (%d bytes).", path, size);
+			}
+			else
+			{
+				sys_log.error("Failed to remove orphaned savestate temporary '%s'! (error: %s)", path, fs::g_tls_error);
+			}
+		}
+	};
+
+	fs::dir root_view{root};
+
+	if (!root_view)
+	{
+		return;
+	}
+
+	// savestates/<TITLE>/ holds the core's rolling states and savestates/<TITLE>/armsx3_slots/ the
+	// numbered ones; a temp can strand in either, since the slot copy is written the same way.
+	for (const auto& entry : root_view)
+	{
+		if (!entry.is_directory || entry.name == "." || entry.name == "..")
+		{
+			continue;
+		}
+
+		const std::string title_dir = root + entry.name + "/";
+		sweep(title_dir);
+		sweep(title_dir + "armsx3_slots/");
+	}
+}
+
 bool load_and_check_reserved(utils::serial& ar, usz size)
 {
 	u8 bytes[4096];

@@ -161,7 +161,7 @@ class SaveManagerViewModel(application: Application) : AndroidViewModel(applicat
             .map { File(MainActivityRuntime.assetCopyRoot(getApplication()), it) }
         val discovered = roots.flatMap { root ->
             if (!root.isDirectory) emptyList()
-            else root.walkTopDown().filter { it.isFile && it.extension.equals("p2s", true) }.toList()
+            else root.walkTopDown().filter { it.isFile && isSaveState(it) }.toList()
         }
         val allFiles = (activePaths + discovered)
             .distinctBy { it.absolutePath.lowercase() }
@@ -200,15 +200,39 @@ class SaveManagerViewModel(application: Application) : AndroidViewModel(applicat
         })
     }
 
+    // The core writes <TITLE>_<digits>.SAVESTAT and compresses it, so the last extension is "zst"
+    // or "gz" rather than a fixed savestate extension -- File.extension cannot identify one. This
+    // scanned for "p2s", the PCSX2 extension, which is an ARMSX2 leftover: the walk below matched
+    // nothing on any device, so the manager only ever listed the running game's numbered slots and
+    // reported "no savestates" from the library. Issue #123.
+    private fun isSaveState(file: File): Boolean {
+        val name = file.name
+        return SAVESTATE_SUFFIXES.any { name.endsWith(it, ignoreCase = true) }
+    }
+
     private fun slotFrom(file: File): Int? = SLOT_PATTERN.find(file.name)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
-    private fun serialFrom(file: File): String = file.name.substringBefore(" (").ifBlank {
-        file.nameWithoutExtension.substringBeforeLast('.')
+    // Both layouts put the title id in the directory, never in the file name: the core's rolling
+    // states live in savestates/<TITLE>/ and the numbered slots in savestates/<TITLE>/armsx3_slots/.
+    // Reading it from there beats parsing the name, which is what the old " (" split was doing for
+    // PCSX2's "SLUS-12345 (Title).00.p2s" convention and which no ARMSX3 file has ever matched.
+    private fun serialFrom(file: File): String {
+        val parent = file.parentFile
+        val dir = if (parent?.name.equals(SLOT_DIR, true)) parent?.parentFile else parent
+        return dir?.name.orEmpty().ifBlank {
+            file.name.substringBefore(".SAVESTAT").substringBeforeLast('_')
+        }
     }
 
     private companion object {
         const val SLOT_COUNT = 10
-        val SLOT_PATTERN = Regex("\\.([0-9]{2})\\.p2s$", RegexOption.IGNORE_CASE)
+        const val SLOT_DIR = "armsx3_slots"
+
+        // Ordered longest-first so ".SAVESTAT" cannot shadow the compressed forms.
+        val SAVESTATE_SUFFIXES = listOf(".SAVESTAT.zst", ".SAVESTAT.gz", ".SAVESTAT")
+
+        // armsx3_slot_find writes slot<N>.SAVESTAT with whichever extension the core produced.
+        val SLOT_PATTERN = Regex("^slot([0-9]+)\\.SAVESTAT", RegexOption.IGNORE_CASE)
     }
 }
 
