@@ -400,7 +400,17 @@ namespace vk
 	// bswap32 followed by bswap16 is just a halfword rotate, which is why the shader is one line.
 	struct gfx_shuffle_pass : overlay_pass
 	{
-		gfx_shuffle_pass()
+		// Which byteswap the fragment shader performs. rotate_16 is bswap32 composed with bswap16,
+		// which collapses to a halfword rotate; bswap_32 is the plain 32-bit swap and is the twin of
+		// vk::cs_shuffle_32. Both are element-wise over a u32, so they share every bit of the
+		// staging and copy machinery and differ only in this one line.
+		enum class mode
+		{
+			rotate_16,
+			bswap_32,
+		};
+
+		explicit gfx_shuffle_pass(mode swap_mode)
 		{
 			vs_src =
 				"#version 450\n"
@@ -411,6 +421,10 @@ namespace vk
 				"	gl_Position = vec4(p, 0., 1.);\n"
 				"}\n";
 
+			const std::string swap = swap_mode == mode::rotate_16
+				? "	v = (v >> 16) | (v << 16);\n"
+				: "	v = ((v >> 24) & 0xFFu) | ((v >> 8) & 0xFF00u) | ((v << 8) & 0xFF0000u) | (v << 24);\n";
+
 			fs_src =
 				"#version 450\n"
 				"layout(set=0, binding=1) uniform usampler2D fs0;\n"
@@ -418,7 +432,8 @@ namespace vk
 				"void main()\n"
 				"{\n"
 				"	uint v = texelFetch(fs0, ivec2(gl_FragCoord.xy), 0).x;\n"
-				"	ocol = uvec4((v >> 16) | (v << 16), 0u, 0u, 0u);\n"
+				+ swap +
+				"	ocol = uvec4(v, 0u, 0u, 0u);\n"
 				"}\n";
 
 			m_num_usable_samplers = 1;
@@ -497,6 +512,14 @@ namespace vk
 	// Both return false when the graphics path could not be used, so the caller can fall back to
 	// the compute kernel rather than silently skipping the conversion.
 	bool gfx_shuffle_32_16(const vk::command_buffer& cmd, vk::buffer* data, u32 data_length);
+
+	// The plain 32-bit byteswap on the graphics pipe, twin of vk::cs_shuffle_32. Watch Dogs reaches
+	// it from a different direction than Arkham City reached cs_shuffle_32_16: the game runs clean
+	// for two and a half minutes with zero compute dispatches, then this kernel fires a hundred
+	// times in under a second while a level loads and the GPU is lost eight seconds later. Skipping
+	// this one kernel alone (ARMSX3_SKIP_COMPUTE=cs_shuffle_32E) carries the load past the point it
+	// died at.
+	bool gfx_shuffle_32(const vk::command_buffer& cmd, vk::buffer* data, u32 data_offset, u32 data_length);
 
 	bool gfx_gather_d24x8(const vk::command_buffer& cmd, const vk::buffer* data, u32 data_offset,
 		u32 z_offset, u32 s_offset, u32 width, u32 height, bool swap_bytes);

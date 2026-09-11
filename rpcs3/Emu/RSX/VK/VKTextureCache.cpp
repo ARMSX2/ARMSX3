@@ -4,6 +4,7 @@
 #include "VKTextureCache.h"
 #include "vkutils/gpu_timer.h"
 #include "VKCompute.h"
+#include "VKResolveHelper.h"
 #include "VKAsyncScheduler.h"
 #include "vkutils/data_heap.h"
 
@@ -232,6 +233,21 @@ namespace vk
 
 					// Only drop the barrier when nothing writes this buffer afterwards. The tiling
 					// job below still runs and still needs it.
+					if (!require_tiling)
+					{
+						require_rw_barrier = false;
+					}
+				}
+
+				// Graphics-pipe twin first, for the same reason the upload side takes it: this
+				// dispatch is a graphics->compute engine switch and those wedge the GPU on Adreno
+				// 830. gfx_shuffle_32 barriers its own result into both transfer and compute
+				// readers, so the tiling job below still sees it.
+				if (shuffle_kernel && elem_size == 4 &&
+					vk::gfx_shuffle_32(cmd, working_buffer, 0, task_length))
+				{
+					shuffle_kernel = nullptr;
+
 					if (!require_tiling)
 					{
 						require_rw_barrier = false;
