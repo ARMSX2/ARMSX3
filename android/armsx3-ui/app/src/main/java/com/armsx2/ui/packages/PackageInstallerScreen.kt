@@ -413,6 +413,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var tab by remember { mutableStateOf(0) }
     var showBrowser by remember { mutableStateOf(false) }
     var progressId by remember { mutableStateOf<Long?>(null) }
     var installed by remember { mutableStateOf(readInstalled()) }
@@ -780,6 +781,26 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurface,
             )
 
+            // Two jobs on one screen: install a package you already have, or go and get a title update.
+            // The updates tab lives here rather than on the info tab because the reason to want a patch
+            // is usually that a game misbehaves, and this is the screen that puts things into the
+            // emulator. Issue #54.
+            androidx.compose.material3.TabRow(selectedTabIndex = tab) {
+                androidx.compose.material3.Tab(
+                    selected = tab == 0,
+                    onClick = { tab = 0 },
+                    text = { Text(str("packages.tab.install")) },
+                )
+                androidx.compose.material3.Tab(
+                    selected = tab == 1,
+                    onClick = { tab = 1 },
+                    text = { Text(str("packages.tab.updates")) },
+                )
+            }
+
+            if (tab == 1) {
+                GameUpdatesTab(busy = busy, onInstall = { files -> install(files) })
+            } else {
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -1003,6 +1024,8 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                         }
                     }
                 }
+            }
+
             }
 
             TextButton(onClick = onBack) { Text(str("action.back")) }
