@@ -479,6 +479,8 @@ val EN: Map<String, String> = mapOf(
     "packages.updates.rowAvailable" to "update %s available · %s",
     "packages.updates.rowUpgrade" to "%s → %s available · %s",
     "packages.updates.rowFailed" to "could not check",
+    "packages.updates.chainStopped" to "Stopped at version %s — see the message above.",
+    "packages.updates.rowChain" to "%s → %s · %d packages · %s",
     "packages.updates.check" to "Check",
     "packages.updates.fromLibrary" to "From library",
     "packages.updates.checking" to "Checking…",

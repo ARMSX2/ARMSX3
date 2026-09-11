@@ -558,8 +558,13 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
         }
     }
 
-    fun install(files: List<java.io.File>) {
-        if (files.isEmpty()) return
+    /**
+     * [onDone] reports whether the install succeeded, once it has. The updates tab needs it: a
+     * title can publish a CHAIN of packages that each patch the previous version, and those have
+     * to go on one at a time and in order, so the next cannot start until this one has landed.
+     */
+    fun install(files: List<java.io.File>, onDone: ((Boolean) -> Unit)? = null) {
+        if (files.isEmpty()) { onDone?.invoke(false); return }
         showBrowser = false
         busy = true
         message = null
@@ -645,6 +650,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                 // guesses, and used to be all the user ever saw.
                 nativeFailure?.takeIf { it.isNotBlank() } ?: I18n.get("packages.install.failed")
             }
+            onDone?.invoke(ok)
         }
     }
 
@@ -799,7 +805,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
             }
 
             if (tab == 1) {
-                GameUpdatesTab(busy = busy, onInstall = { files -> install(files) })
+                GameUpdatesTab(busy = busy, onInstall = { files, done -> install(files, done) })
             } else {
             Surface(
                 shape = RoundedCornerShape(16.dp),

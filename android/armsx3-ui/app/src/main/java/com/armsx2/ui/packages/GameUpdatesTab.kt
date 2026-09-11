@@ -32,6 +32,7 @@ import com.armsx2.data.library.GameLibraryRepository
 import com.armsx2.i18n.I18n
 import com.armsx2.ui.settings.controllerFocusable
 import com.armsx2.updates.Ps3UpdateService
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -75,7 +76,24 @@ private data class UpdateRow(
     val installed: String?,
     val newest: Ps3UpdateService.Ps3Update?,
     val stage: Stage,
-)
+    /** Every package the service published, in publication order. See [pending]. */
+    val published: List<Ps3UpdateService.Ps3Update> = emptyList(),
+) {
+    /**
+     * The packages that still have to be applied, in the order a PS3 would apply them.
+     *
+     * Not just the newest one. Sony's packages are USUALLY cumulative -- Watch Dogs publishes a
+     * single 01.04 that installs over a bare disc -- but they are not always: Minecraft publishes
+     * seven, and its 01.84 is an incremental patch that refuses to install without 01.83 already
+     * present ("A target app version is required (01.83), but no PARAM.SFO was found"). Taking
+     * only the newest silently failed on every title that patches in steps.
+     *
+     * Applying a cumulative title's single package is the same operation either way, so this needs
+     * no per-title knowledge of which kind it is.
+     */
+    val pending: List<Ps3UpdateService.Ps3Update>
+        get() = published.filter { installed == null || compareVersions(it.version, installed) > 0 }
+}
 
 /**
  * Find and install official title updates.
@@ -93,7 +111,7 @@ private data class UpdateRow(
 @Composable
 fun GameUpdatesTab(
     busy: Boolean,
-    onInstall: (List<File>) -> Unit,
+    onInstall: (List<File>, (Boolean) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -153,7 +171,7 @@ fun GameUpdatesTab(
                     when (val result = Ps3UpdateService.find(row.serial)) {
                         is Ps3UpdateService.Lookup.Found -> {
                             val newest = result.updates.maxWithOrNull { a, b -> compareVersions(a.version, b.version) }
-                            row.copy(newest = newest, stage = stageFor(row.installed, newest))
+                            row.copy(newest = newest, stage = stageFor(row.installed, newest), published = result.updates)
                         }
                         Ps3UpdateService.Lookup.None -> row.copy(stage = Stage.NonePublished)
                         is Ps3UpdateService.Lookup.Failed -> row.copy(stage = Stage.Failed)
@@ -168,22 +186,48 @@ fun GameUpdatesTab(
         scanning = false
     }
 
-    fun download(update: Ps3UpdateService.Ps3Update) {
-        downloading = update.version
-        progress = 0f
+    /**
+     * Download and install every package this title still needs, in order, stopping at the first
+     * failure. One at a time, waiting for each install to land, because a later package can require
+     * the version an earlier one produces.
+     */
+    fun installChain(row: UpdateRow) {
+        val queue = row.pending
+        if (queue.isEmpty()) return
+
         status = null
         scope.launch {
-            // Into cacheDir: if the install succeeds the package is dead weight, and if the app is
-            // killed mid-download the system reclaims it rather than leaving a part-file the user
-            // has to find. Same reason the savestate temps needed sweeping.
-            val dest = File(context.cacheDir, "updates/${update.titleId}-${update.version}.pkg")
-            val result = Ps3UpdateService.download(update, dest) { progress = it }
+            for ((index, update) in queue.withIndex()) {
+                downloading = if (queue.size == 1) update.version
+                else "${update.version} (${index + 1}/${queue.size})"
+                progress = 0f
+
+                // Into cacheDir: if the install succeeds the package is dead weight, and if the app
+                // is killed mid-download the system reclaims it rather than leaving a part-file the
+                // user has to find. Same reason the savestate temps needed sweeping.
+                val dest = File(context.cacheDir, "updates/${update.titleId}-${update.version}.pkg")
+                val downloaded = Ps3UpdateService.download(update, dest) { progress = it }
+
+                val file = downloaded.getOrElse {
+                    status = str("packages.updates.downloadFailed").format(it.message ?: "download failed")
+                    downloading = null
+                    return@launch
+                }
+
+                val done = CompletableDeferred<Boolean>()
+                onInstall(listOf(file)) { ok -> done.complete(ok) }
+
+                if (!done.await()) {
+                    // The parent already shows the native reason, which names the real problem.
+                    status = str("packages.updates.chainStopped").format(update.version)
+                    downloading = null
+                    return@launch
+                }
+            }
 
             downloading = null
-            result.fold(
-                onSuccess = { onInstall(listOf(it)) },
-                onFailure = { status = str("packages.updates.downloadFailed").format(it.message ?: "download failed") },
-            )
+            // Re-read rather than assume: the installed version is now whatever is on disk.
+            refreshToken++
         }
     }
 
@@ -196,7 +240,7 @@ fun GameUpdatesTab(
             val row = when (val result = Ps3UpdateService.find(serial)) {
                 is Ps3UpdateService.Lookup.Found -> {
                     val newest = result.updates.maxWithOrNull { a, b -> compareVersions(a.version, b.version) }
-                    UpdateRow(serial, serial, installed, newest, stageFor(installed, newest))
+                    UpdateRow(serial, serial, installed, newest, stageFor(installed, newest), result.updates)
                 }
                 Ps3UpdateService.Lookup.None -> UpdateRow(serial, serial, installed, null, Stage.NonePublished)
                 is Ps3UpdateService.Lookup.Failed -> UpdateRow(serial, serial, installed, null, Stage.Failed)
@@ -325,25 +369,25 @@ fun GameUpdatesTab(
 
                     if (row.stage == Stage.Available) {
                         Button(
-                            onClick = { row.newest?.let(::download) },
+                            onClick = { installChain(row) },
                             enabled = downloading == null && !busy,
                             modifier = Modifier.controllerFocusable(
                                 "packages.updates.install.${row.serial}",
                                 RoundedCornerShape(20.dp),
                                 onConfirm = {
-                                    if (downloading == null && !busy) row.newest?.let(::download)
+                                    if (downloading == null && !busy) installChain(row)
                                 },
                             ),
                         ) { Text(str("packages.updates.install")) }
                     } else if (row.stage == Stage.UpToDate && row.newest != null) {
                         OutlinedButton(
-                            onClick = { row.newest.let(::download) },
+                            onClick = { installChain(row.copy(installed = null)) },
                             enabled = downloading == null && !busy,
                             modifier = Modifier.controllerFocusable(
                                 "packages.updates.reinstall.${row.serial}",
                                 RoundedCornerShape(20.dp),
                                 onConfirm = {
-                                    if (downloading == null && !busy) row.newest.let(::download)
+                                    if (downloading == null && !busy) installChain(row.copy(installed = null))
                                 },
                             ),
                         ) { Text(str("packages.updates.reinstall")) }
