@@ -216,7 +216,7 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // BIOS Location: both answer "where are my files".
         DrawerItem("games.overflow.setup", "📂",
             onAction = { MainActivityRuntime.reopenSetup(); onDismiss() }),
-        DrawerItem("setup.step.bios.title", "📀", AppRoute.BiosManager()),
+        DrawerItem("setup.step.bios.title", "📀", AppRoute.BiosManager),
         // Install .pkg games/updates/DLC. The native installer was always there; this
         // is the entry point it never had.
         DrawerItem("packages.title", "📦", AppRoute.PackageInstaller),

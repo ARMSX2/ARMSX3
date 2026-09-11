@@ -1417,7 +1417,6 @@ val EN: Map<String, String> = mapOf(
     "setup.step.bios.description" to "Select the official PS3UPDAT.PUP firmware file. It is installed into dev_flash, which games need in order to boot. Download it from Sony's support site — it is not included.",
     "setup.step.bios.title" to "PS3 Firmware",
     "bios.boot.title" to "Boot XMB",
-    "bios.perGame.menu" to "Per-game BIOS",
     "setup.step.rom.description" to "Pick one or more folders where you keep your PS3 games. Supports extracted game folders (with a PS3_GAME directory), .iso disc images, and .pkg installers.",
     "setup.step.rom.title" to "Games Folder",
     "setup.storageChooser.customShort" to "Custom folder",

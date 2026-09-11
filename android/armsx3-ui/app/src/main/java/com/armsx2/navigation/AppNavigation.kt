@@ -91,7 +91,7 @@ fun AppNavigation() {
                     onBack = UiNavigator::home,
                     onOpenAbout = { UiNavigator.navigate(AppRoute.About) },
                 )
-                is AppRoute.BiosManager -> BiosManagerScreen(onBack = UiNavigator::home, game = destination.game)
+                AppRoute.BiosManager -> BiosManagerScreen(onBack = UiNavigator::home)
                 AppRoute.PackageInstaller ->
                     com.armsx2.ui.packages.PackageInstallerScreen(onBack = UiNavigator::home)
                 // The drawer route is the global one: it is opened from the library, where no

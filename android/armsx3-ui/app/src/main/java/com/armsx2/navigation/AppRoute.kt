@@ -12,7 +12,10 @@ sealed interface AppRoute {
     // Carries an optional game so the per-game BIOS picker can key on it directly
     // (from the library long-press) without the game being loaded; null = global,
     // opened from the drawer (falls back to the currently loaded game if any).
-    data class BiosManager(val game: GameInfo? = null) : AppRoute
+    // No per-game firmware exists on PS3 -- one PS3UPDAT.PUP is installed for the whole
+    // emulator -- so this route carries nothing. It used to take a GameInfo that
+    // BiosManagerScreen accepted and ignored.
+    data object BiosManager : AppRoute
     data object PackageInstaller : AppRoute
     data object CoreSettings : AppRoute
     data object SaveManager : AppRoute

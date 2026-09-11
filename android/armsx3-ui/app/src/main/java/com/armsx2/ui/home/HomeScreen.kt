@@ -902,12 +902,6 @@ fun HomeScreen(
                     menuGame = null
                     onOpenGameSettings(game)
                 }
-                // Per-game BIOS: open the BIOS manager scoped to THIS game (no need to load it),
-                // since the BIOS manager isn't reachable from the in-game menu.
-                GameMenuAction("📀", str("bios.perGame.menu")) {
-                    menuGame = null
-                    com.armsx2.navigation.UiNavigator.navigate(com.armsx2.navigation.AppRoute.BiosManager(game))
-                }
                 // Pin to the launcher (issue #242). The action was lost when this menu was
                 // rebuilt, leaving HomeShortcuts with no call site at all (issue #335).
                 // pin() returns false only when the launcher can't pin — surface that.
