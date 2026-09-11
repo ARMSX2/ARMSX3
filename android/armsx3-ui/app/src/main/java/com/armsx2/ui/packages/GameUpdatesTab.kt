@@ -1,17 +1,10 @@
 package com.armsx2.ui.packages
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
@@ -23,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -33,11 +27,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.armsx2.Ps3Sfo
 import com.armsx2.data.library.GameLibraryRepository
 import com.armsx2.i18n.I18n
-import com.armsx2.runtime.MainActivityRuntime
+import com.armsx2.ui.settings.controllerFocusable
 import com.armsx2.updates.Ps3UpdateService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 private fun str(key: String) = I18n.get(key)
@@ -67,13 +66,29 @@ private fun formatSize(bytes: Long): String = when {
     else -> "—"
 }
 
+/** Where a title stands. [Pending] is the state a row is born in, before the service has answered. */
+private enum class Stage { Pending, Checking, NonePublished, UpToDate, Available, Failed }
+
+private data class UpdateRow(
+    val serial: String,
+    val title: String,
+    val installed: String?,
+    val newest: Ps3UpdateService.Ps3Update?,
+    val stage: Stage,
+)
+
 /**
- * Find and install a title's official updates.
+ * Find and install official title updates.
  *
- * Sits beside the file picker rather than on the info tab: the reason to want a patch is usually
- * that a game misbehaves, and "install something into the emulator" is what this screen is for.
- * Installing goes through [onInstall], the same path a hand-picked .pkg takes, so a downloaded
- * package gets the same extractor, progress and failure reporting as any other.
+ * Opens on the library rather than an empty text box, and every row carries its own answer -- what
+ * is installed, and whether anything newer exists -- without being clicked. The two halves arrive
+ * at different speeds and are treated differently because of it: the INSTALLED version is a local
+ * PARAM.SFO read, so the whole list has it before the first frame, while AVAILABLE means one
+ * request per title against Sony's service. Those run a few at a time in the background and each
+ * row resolves itself as its answer lands, so the list is useful immediately instead of blocking
+ * on the slowest lookup.
+ *
+ * Manual entry stays underneath for a title that is not in the library yet.
  */
 @Composable
 fun GameUpdatesTab(
@@ -83,60 +98,74 @@ fun GameUpdatesTab(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    var titleId by remember { mutableStateOf("") }
-    var checking by remember { mutableStateOf(false) }
+    var rows by remember { mutableStateOf<List<UpdateRow>>(emptyList()) }
+    var scanning by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
-    var found by remember { mutableStateOf<List<Ps3UpdateService.Ps3Update>>(emptyList()) }
     var downloading by remember { mutableStateOf<String?>(null) }
     var progress by remember { mutableStateOf(0f) }
-    var showLibrary by remember { mutableStateOf(false) }
+    var manualId by remember { mutableStateOf("") }
+    var refreshToken by remember { mutableIntStateOf(0) }
 
-    // What is already on disk for the title in the field. Without this the tab offered an update
-    // the user had just installed, with no way to tell from here that it had worked -- the only
-    // confirmation was to leave, long-press the game, and open its info tab.
-    var installedVersion by remember { mutableStateOf<String?>(null) }
+    fun readInstalled(serial: String): String? =
+        Ps3Sfo.installedUpdateVersion(serial)?.takeIf { it.isNotBlank() }
 
-    fun refreshInstalled() {
-        installedVersion = titleId.takeIf { it.isNotBlank() }
-            ?.let { com.armsx2.Ps3Sfo.installedUpdateVersion(it) }
-            ?.takeIf { it.isNotBlank() }
+    fun stageFor(installed: String?, newest: Ps3UpdateService.Ps3Update?): Stage = when {
+        newest == null -> Stage.NonePublished
+        installed != null && compareVersions(installed, newest.version) >= 0 -> Stage.UpToDate
+        else -> Stage.Available
     }
 
-    // The install runs in the parent and reports through busy, so the end of one is busy going
-    // false again -- that is the moment the on-disk version has changed and this has to re-read.
-    LaunchedEffect(busy) {
-        if (!busy) refreshInstalled()
-    }
+    // Local state first, then the network fills in behind it.
+    //
+    // Keyed on refreshToken so the button re-runs it, and on busy so the list re-reads itself the
+    // moment an install finishes -- that is when a row's installed version has actually changed,
+    // and re-reading beats assuming the install did what we asked.
+    LaunchedEffect(refreshToken, busy) {
+        if (busy) return@LaunchedEffect
 
-    // The cache, not a scan: this is a picker, and anything worth patching is already listed.
-    val library = remember {
-        runCatching {
-            GameLibraryRepository(context).loadCached().games
-                .filter { !it.serial.isNullOrBlank() }
-                .distinctBy { it.serial!!.uppercase() }
-                .sortedBy { it.title.lowercase() }
-        }.getOrDefault(emptyList())
-    }
-
-    fun check(id: String) {
-        titleId = id.uppercase()
-        found = emptyList()
+        scanning = true
         status = null
-        checking = true
-        scope.launch {
-            refreshInstalled()
-            when (val result = Ps3UpdateService.find(titleId)) {
-                is Ps3UpdateService.Lookup.Found -> {
-                    found = result.updates
-                    status = null
-                }
-                Ps3UpdateService.Lookup.None ->
-                    status = str("packages.updates.none")
-                is Ps3UpdateService.Lookup.Failed ->
-                    status = str("packages.updates.failed").format(result.reason)
-            }
-            checking = false
+
+        val library = withContext(Dispatchers.IO) {
+            runCatching {
+                GameLibraryRepository(context).loadCached().games
+                    .filter { !it.serial.isNullOrBlank() }
+                    .distinctBy { it.serial!!.uppercase() }
+                    .sortedBy { it.title.lowercase() }
+                    .map { UpdateRow(it.serial!!.uppercase(), it.title, readInstalled(it.serial!!), null, Stage.Pending) }
+            }.getOrDefault(emptyList())
         }
+
+        rows = library
+
+        if (library.isEmpty()) {
+            scanning = false
+            return@LaunchedEffect
+        }
+
+        // Four at a time. One request per title serialised would take a minute on a large library;
+        // all of them at once is a burst at someone else's server and a thundering herd on a phone
+        // radio. Chunked rather than a semaphore because the batch boundaries also give the list
+        // visible progress.
+        library.chunked(4).forEach { chunk ->
+            val resolved = chunk.map { row ->
+                async(Dispatchers.IO) {
+                    when (val result = Ps3UpdateService.find(row.serial)) {
+                        is Ps3UpdateService.Lookup.Found -> {
+                            val newest = result.updates.maxWithOrNull { a, b -> compareVersions(a.version, b.version) }
+                            row.copy(newest = newest, stage = stageFor(row.installed, newest))
+                        }
+                        Ps3UpdateService.Lookup.None -> row.copy(stage = Stage.NonePublished)
+                        is Ps3UpdateService.Lookup.Failed -> row.copy(stage = Stage.Failed)
+                    }
+                }
+            }.awaitAll()
+
+            val byId = resolved.associateBy { it.serial }
+            rows = rows.map { byId[it.serial] ?: it }
+        }
+
+        scanning = false
     }
 
     fun download(update: Ps3UpdateService.Ps3Update) {
@@ -158,7 +187,27 @@ fun GameUpdatesTab(
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    fun checkManual(id: String) {
+        val serial = id.trim().uppercase()
+        if (serial.isBlank()) return
+        scope.launch {
+            status = str("packages.updates.checking")
+            val installed = withContext(Dispatchers.IO) { readInstalled(serial) }
+            val row = when (val result = Ps3UpdateService.find(serial)) {
+                is Ps3UpdateService.Lookup.Found -> {
+                    val newest = result.updates.maxWithOrNull { a, b -> compareVersions(a.version, b.version) }
+                    UpdateRow(serial, serial, installed, newest, stageFor(installed, newest))
+                }
+                Ps3UpdateService.Lookup.None -> UpdateRow(serial, serial, installed, null, Stage.NonePublished)
+                is Ps3UpdateService.Lookup.Failed -> UpdateRow(serial, serial, installed, null, Stage.Failed)
+            }
+            status = null
+            // Replace an existing row for the same title rather than showing it twice.
+            rows = listOf(row) + rows.filterNot { it.serial == serial }
+        }
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -172,80 +221,27 @@ fun GameUpdatesTab(
             )
         }
 
-        OutlinedTextField(
-            value = titleId,
-            onValueChange = { titleId = it.trim().uppercase() },
-            label = { Text(str("packages.updates.titleId")) },
-            placeholder = { Text("BLUS30443") },
-            singleLine = true,
-            enabled = !checking && downloading == null && !busy,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                onClick = { refreshToken++ },
+                enabled = !scanning && downloading == null && !busy,
+                modifier = Modifier.controllerFocusable(
+                    "packages.updates.refresh",
+                    RoundedCornerShape(20.dp),
+                    onConfirm = { if (!scanning && downloading == null && !busy) refreshToken++ },
+                ),
+            ) { Text(str("packages.updates.refresh")) }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = { check(titleId) },
-                enabled = titleId.isNotBlank() && !checking && downloading == null && !busy,
-            ) { Text(str("packages.updates.check")) }
-
-            if (library.isNotEmpty()) {
-                OutlinedButton(
-                    onClick = { showLibrary = !showLibrary },
-                    enabled = !checking && downloading == null && !busy,
-                ) { Text(str("packages.updates.fromLibrary")) }
+            if (scanning) {
+                Text(
+                    str("packages.updates.scanning").format(rows.count { it.stage != Stage.Pending }, rows.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-        }
-
-        // Saves typing a serial the user would otherwise have to go and look up.
-        if (showLibrary) {
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().heightIn(max = 240.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                items(library, key = { it.serial!! }) { game ->
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                showLibrary = false
-                                check(game.serial!!)
-                            },
-                    ) {
-                        Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
-                            Text(
-                                game.title,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                game.serial!!,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        if (checking) {
-            Text(str("packages.updates.checking"), style = MaterialTheme.typography.bodyMedium)
-        }
-
-        // Answers "did that work?" without leaving the screen. Re-read after every install, so it
-        // is the state on disk rather than what we believe we did.
-        if (!checking && titleId.isNotBlank() && (found.isNotEmpty() || installedVersion != null)) {
-            Text(
-                installedVersion
-                    ?.let { str("packages.updates.installedNow").format(it) }
-                    ?: str("packages.updates.installedNone"),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
         }
 
         downloading?.let { version ->
@@ -254,28 +250,36 @@ fun GameUpdatesTab(
                     str("packages.updates.downloading").format(version, (progress * 100).toInt()),
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                LinearProgressIndicator(
-                    progress = { progress },
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
             }
         }
 
         status?.let {
+            Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+
+        if (rows.isEmpty() && !scanning) {
             Text(
-                it,
+                str("packages.updates.noLibrary"),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
-        // Newest last, the order the service publishes them. Sony's packages are cumulative, so
-        // the bottom entry is normally the only one worth taking -- but they are all shown rather
-        // than one being picked on the user's behalf.
-        found.forEach { update ->
+        // Titles with something to install first, then the rest. A list sorted purely by name
+        // buries the one row the user came here to act on.
+        val ordered = rows.sortedWith(
+            compareBy<UpdateRow> { if (it.stage == Stage.Available) 0 else 1 }.thenBy { it.title.lowercase() },
+        )
+
+        // Not a LazyColumn: this sits inside the screen's own verticalScroll, and nesting a lazy
+        // list in a scrollable parent gives it an unbounded height constraint and crashes.
+        ordered.forEach { row ->
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(
+                    alpha = if (row.stage == Stage.Available) 0.65f else 0.35f,
+                ),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Row(
@@ -284,46 +288,100 @@ fun GameUpdatesTab(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            str("packages.updates.version").format(update.version),
+                            row.title,
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         Text(
-                            buildList {
-                                add(formatSize(update.sizeBytes))
-                                update.systemVersion.takeIf { it.isNotBlank() }
-                                    ?.let { add(str("packages.updates.firmware").format(it)) }
-                            }.joinToString("  ·  "),
+                            buildString {
+                                append(row.serial)
+                                append("  ·  ")
+                                append(
+                                    when (row.stage) {
+                                        Stage.Pending, Stage.Checking -> str("packages.updates.checking")
+                                        Stage.Failed -> str("packages.updates.rowFailed")
+                                        Stage.NonePublished -> str("packages.updates.none")
+                                        Stage.UpToDate ->
+                                            str("packages.updates.rowUpToDate").format(row.installed.orEmpty())
+                                        Stage.Available -> {
+                                            val v = row.newest!!
+                                            if (row.installed == null)
+                                                str("packages.updates.rowAvailable")
+                                                    .format(v.version, formatSize(v.sizeBytes))
+                                            else
+                                                str("packages.updates.rowUpgrade")
+                                                    .format(row.installed, v.version, formatSize(v.sizeBytes))
+                                        }
+                                    },
+                                )
+                            },
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (row.stage == Stage.Available) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    // Installed is version-compared, not equality: a cumulative package newer
-                    // than this one also means this one is already covered, so re-offering it as
-                    // an action would be wrong rather than merely redundant.
-                    val have = installedVersion
-                        ?.let { compareVersions(it, update.version) >= 0 } == true
 
-                    if (have) {
-                        Text(
-                            str("packages.updates.alreadyHave"),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(end = 8.dp),
-                        )
-                        OutlinedButton(
-                            onClick = { download(update) },
-                            enabled = downloading == null && !busy,
-                        ) { Text(str("packages.updates.reinstall")) }
-                    } else {
+                    if (row.stage == Stage.Available) {
                         Button(
-                            onClick = { download(update) },
+                            onClick = { row.newest?.let(::download) },
                             enabled = downloading == null && !busy,
+                            modifier = Modifier.controllerFocusable(
+                                "packages.updates.install.${row.serial}",
+                                RoundedCornerShape(20.dp),
+                                onConfirm = {
+                                    if (downloading == null && !busy) row.newest?.let(::download)
+                                },
+                            ),
                         ) { Text(str("packages.updates.install")) }
+                    } else if (row.stage == Stage.UpToDate && row.newest != null) {
+                        OutlinedButton(
+                            onClick = { row.newest.let(::download) },
+                            enabled = downloading == null && !busy,
+                            modifier = Modifier.controllerFocusable(
+                                "packages.updates.reinstall.${row.serial}",
+                                RoundedCornerShape(20.dp),
+                                onConfirm = {
+                                    if (downloading == null && !busy) row.newest.let(::download)
+                                },
+                            ),
+                        ) { Text(str("packages.updates.reinstall")) }
                     }
                 }
             }
+        }
+
+        // For a title that is not in the library -- checking before installing the base game, or a
+        // disc the scanner has not picked up.
+        Text(
+            str("packages.updates.manual"),
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = manualId,
+                onValueChange = { manualId = it.trim().uppercase() },
+                label = { Text(str("packages.updates.titleId")) },
+                placeholder = { Text("BLUS30443") },
+                singleLine = true,
+                enabled = downloading == null && !busy,
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = { checkManual(manualId) },
+                enabled = manualId.isNotBlank() && downloading == null && !busy,
+                modifier = Modifier.controllerFocusable(
+                    "packages.updates.checkManual",
+                    RoundedCornerShape(20.dp),
+                    onConfirm = { if (manualId.isNotBlank() && downloading == null && !busy) checkManual(manualId) },
+                ),
+            ) { Text(str("packages.updates.check")) }
         }
     }
 }
