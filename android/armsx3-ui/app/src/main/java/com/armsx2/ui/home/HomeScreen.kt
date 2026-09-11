@@ -923,18 +923,16 @@ fun HomeScreen(
                 val cacheEmpty = str("games.clearCache.empty")
                 val cacheDone = str("perf.clearCache.done")
 
-                // Both rows share this: refuse while anything is running, because the live VM
+                // All three share this: refuse while anything is running, because the live VM
                 // holds these files open and is still writing to them.
-                val clearGameCache = { shadersOnly: Boolean ->
+                val clearGameCache = { clear: (java.io.File) -> Pair<Int, Long> ->
                     val dir = com.armsx2.cache.titleCacheDir(context, game.serial)
                     val message = when {
                         MainActivityRuntime.eState.value != EmuState.STOPPED -> cacheStopFirst
                         dir == null -> cacheNoSerial
                         !dir.isDirectory -> cacheEmpty
                         else -> {
-                            val (count, bytes) =
-                                if (shadersOnly) com.armsx2.cache.clearGameShaderCache(dir)
-                                else com.armsx2.cache.clearRecompilerCache(dir, spuOnly = false)
+                            val (count, bytes) = clear(dir)
                             if (count > 0) cacheDone.format(count, com.armsx2.cache.formatBytes(bytes))
                             else cacheEmpty
                         }
@@ -942,13 +940,14 @@ fun HomeScreen(
                     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
                 }
 
+                // One action, because for a single title the three caches are one thing on disk:
+                // shaders_cache/ and the SPU caches live INSIDE ppu-<hash>-EBOOT.BIN, so clearing
+                // this game's PPU necessarily takes its SPU and shaders with it. Splitting them
+                // here would offer two buttons that cannot do what their names imply. The settings
+                // screen keeps its separate PPU/SPU rows, where the scope is every game at once.
                 GameMenuAction("\uD83E\uDDF9", str("games.clearCache")) {
                     menuGame = null
-                    clearGameCache(false)
-                }
-                GameMenuAction("\u2728", str("games.clearShaders")) {
-                    menuGame = null
-                    clearGameCache(true)
+                    clearGameCache { com.armsx2.cache.clearRecompilerCache(it, spuOnly = false) }
                 }
                 val addToHomeFailed = str("games.addToHome.unsupported")
                 GameMenuAction("📌", str("games.addToHome")) {

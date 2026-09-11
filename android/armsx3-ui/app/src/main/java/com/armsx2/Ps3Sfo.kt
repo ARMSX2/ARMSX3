@@ -85,4 +85,49 @@ object Ps3Sfo {
         val sfo = File(RPCSX.rootDirectory, "config/dev_hdd0/game/$id/PARAM.SFO")
         return read(sfo)["APP_VER"]?.takeIf { it.isNotBlank() }
     }
+
+    /**
+     * How many add-ons are installed for this title, counted from two places.
+     *
+     * There is no single "DLC installed" flag to read. A package unpacks into
+     * dev_hdd0/game/<its own install dir>/, and for most PS3 add-ons that directory is the base
+     * game's own title id -- the same directory a title update lands in -- so add-on files merge
+     * into the update's tree and directory presence alone cannot tell the two apart. That is why
+     * this does not simply look for a folder.
+     *
+     * What it counts instead:
+     *  - licence files in home/<user>/exdata/. Each paid add-on installs one .rap or .edat named
+     *    by its content id, and a content id embeds the title's serial
+     *    (UP0001-BLUS30443_00-SOMEDLCID000001.rap), so these are countable and unambiguous.
+     *  - any OTHER directory under dev_hdd0/game/ whose PARAM.SFO names this serial as its
+     *    TITLE_ID, which catches add-ons that do install somewhere of their own.
+     *
+     * The known gap is free add-ons that need no licence and unpack into the game's own folder:
+     * they leave nothing this can distinguish from the update, and are undercounted. A count that
+     * is right for paid content and silent about the rest beats a badge that guesses.
+     */
+    fun installedDlcCount(serial: String?): Int {
+        val id = serial?.takeIf { it.isNotBlank() } ?: return 0
+        val root = File(RPCSX.rootDirectory, "config/dev_hdd0")
+
+        val licences = File(root, "home").listFiles()
+            ?.filter { it.isDirectory }
+            ?.sumOf { user ->
+                File(user, "exdata").listFiles()
+                    ?.count { f ->
+                        f.isFile &&
+                            (f.extension.equals("rap", true) || f.extension.equals("edat", true)) &&
+                            f.name.contains(id, ignoreCase = true)
+                    } ?: 0
+            } ?: 0
+
+        val contentDirs = File(root, "game").listFiles()
+            ?.count { dir ->
+                dir.isDirectory &&
+                    !dir.name.equals(id, ignoreCase = true) &&
+                    read(File(dir, "PARAM.SFO"))["TITLE_ID"]?.equals(id, ignoreCase = true) == true
+            } ?: 0
+
+        return licences + contentDirs
+    }
 }

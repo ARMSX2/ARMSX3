@@ -1,5 +1,8 @@
 package com.armsx2.ui.settings
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.BorderStroke
 import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
@@ -203,6 +206,7 @@ fun AppTab() {
             com.armsx2.update.UpdaterEntry()
         }
         ConfigDatabaseRow()
+        GameFoldersRow()
         Surface(
             onClick = { UiNavigator.navigate(AppRoute.Language) },
             modifier = Modifier.fillMaxWidth()
@@ -911,6 +915,100 @@ private fun ClearCacheRow() {
  *  the "start clean" button. Per-game overrides are deliberately left alone: they belong to
  *  individual games, are invisible from here, and wiping them from a global page would be a
  *  surprise. Controller binds live in ControllerMappings and keep their own reset. */
+@Composable
+private fun GameFoldersRow() {
+    val context = LocalContext.current
+    val dirs = MainActivityRuntime.romsDirs.value
+
+    // The picker, the list and the remove action all go through setRomsDirs, which is the
+    // same entry point first-run setup uses. Nothing here is new plumbing: romsDirs has
+    // always been a List<String> persisted as a JSON array, and HomeScreen re-scans on
+    // LaunchedEffect(directories, ...), so adding a folder refreshes the library by itself.
+    // The only thing that was missing was a way to reach it once setup had completed.
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+
+        // Persist the grant before storing the path. A SAF uri that outlives its permission
+        // reads as an empty folder rather than an error, which looks like the folder was
+        // added and silently contains nothing.
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        MainActivityRuntime.setRomsDirs((dirs + uri.toString()).distinct())
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.46f)),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(str("app.gameFolders"), style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (dirs.isEmpty()) str("app.gameFolders.none")
+                else I18n.get("app.gameFolders.count").format(dirs.size),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            dirs.forEach { raw ->
+                // Reachability is per folder, not global. romsAccessible() answers "can we
+                // start at all" with .any{}, which is the wrong question here: with two
+                // locations a revoked grant (an unmounted card, typically) would otherwise
+                // just show half a library with no explanation.
+                val ok = remember(raw) {
+                    runCatching {
+                        context.contentResolver.persistedUriPermissions.any {
+                            it.uri.toString() == raw && it.isReadPermission
+                        }
+                    }.getOrDefault(false)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            Uri.decode(raw).substringAfterLast('/').ifEmpty { raw },
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (!ok) {
+                            Text(
+                                str("app.gameFolders.unavailable"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                    TextButton(onClick = { MainActivityRuntime.setRomsDirs(dirs - raw) }) {
+                        Text(str("app.gameFolders.remove"))
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+            OutlinedButton(onClick = { runCatching { picker.launch(null) } }, modifier = Modifier.fillMaxWidth()) {
+                Text(str("app.gameFolders.add"))
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                str("app.gameFolders.hint"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun ResetAllSettingsRow() {
     var confirming by remember { mutableStateOf(false) }

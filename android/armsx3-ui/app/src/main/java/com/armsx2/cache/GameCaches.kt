@@ -104,29 +104,3 @@ internal fun clearRecompilerCache(root: File, spuOnly: Boolean): Pair<Int, Long>
  */
 internal fun titleCacheDir(context: Context, serial: String?): File? =
     serial?.takeIf { it.isNotBlank() }?.let { File(recompilerCacheRoot(context), it) }
-
-/**
- * Delete just the on-disk shader cache for one title, leaving the compiled PPU and SPU code alone.
- *
- * This is the one worth having separately. `shaders_cache/` sits inside the `ppu-*` directory, so
- * clearing PPU already takes the shaders with it -- but not the reverse, and a PPU compile can run
- * for the better part of an hour on a large title. Someone chasing shader corruption after a driver
- * change wants the shaders gone and the compile kept.
- */
-internal fun clearGameShaderCache(titleDir: File): Pair<Int, Long> {
-    var count = 0
-    var bytes = 0L
-
-    ppuCacheDirs(titleDir).forEach { dir ->
-        val shaders = File(dir, "shaders_cache")
-        if (!shaders.isDirectory) return@forEach
-        val size = shaders.sizeRecursive()
-        if (runCatching { shaders.deleteRecursively() }.getOrDefault(false)) {
-            count++
-            bytes += size
-        }
-    }
-
-    return count to bytes
-}
-
