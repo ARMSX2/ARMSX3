@@ -112,6 +112,7 @@ import coil.size.Precision
 import com.armsx2.CustomCovers
 import com.armsx2.GameInfo
 import com.armsx2.i18n.str
+import com.armsx2.EmuState
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.common.ArmsBackdrop
 import com.armsx2.ui.common.CoverFallbackChain
@@ -917,6 +918,43 @@ fun HomeScreen(
                         categoriesGame = game
                         menuGame = null
                     }
+                }
+                // Per-game cache clears. The settings screen only offers "clear everything",
+                // which is the wrong tool when one title is misbehaving and another has an hour of
+                // PPU compilation banked. Shaders are offered separately because shaders_cache/
+                // sits INSIDE the ppu-* directory: clearing PPU already takes the shaders, but not
+                // the reverse, and a driver change usually only invalidates the shaders.
+                val cacheStopFirst = str("perf.clearCache.stopFirst")
+                val cacheNoSerial = str("games.clearCache.noSerial")
+                val cacheEmpty = str("games.clearCache.empty")
+                val cacheDone = str("perf.clearCache.done")
+
+                // Both rows share this: refuse while anything is running, because the live VM
+                // holds these files open and is still writing to them.
+                val clearGameCache = { shadersOnly: Boolean ->
+                    val dir = com.armsx2.cache.titleCacheDir(context, game.serial)
+                    val message = when {
+                        MainActivityRuntime.eState.value != EmuState.STOPPED -> cacheStopFirst
+                        dir == null -> cacheNoSerial
+                        !dir.isDirectory -> cacheEmpty
+                        else -> {
+                            val (count, bytes) =
+                                if (shadersOnly) com.armsx2.cache.clearGameShaderCache(dir)
+                                else com.armsx2.cache.clearRecompilerCache(dir, spuOnly = false)
+                            if (count > 0) cacheDone.format(count, com.armsx2.cache.formatBytes(bytes))
+                            else cacheEmpty
+                        }
+                    }
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                }
+
+                GameMenuAction("\uD83E\uDDF9", str("games.clearCache")) {
+                    menuGame = null
+                    clearGameCache(false)
+                }
+                GameMenuAction("\u2728", str("games.clearShaders")) {
+                    menuGame = null
+                    clearGameCache(true)
                 }
                 val addToHomeFailed = str("games.addToHome.unsupported")
                 GameMenuAction("📌", str("games.addToHome")) {
