@@ -1,5 +1,6 @@
 package com.armsx2
 
+import com.armsx2.runtime.MainActivityRuntime
 import net.rpcsx.RPCSX
 import java.io.File
 
@@ -80,10 +81,36 @@ object Ps3Sfo {
     }.getOrDefault(emptyMap())
 
     /** `APP_VER` of the installed title update for [serial], or null when none is installed. */
+    /**
+     * Every plausible emulator root, best first.
+     *
+     * RPCSX.rootDirectory alone is not safe to rely on here. It is empty until
+     * Rpcs3Bridge.initialize runs, and that only happens when the NATIVE CORE initialises -- so
+     * anything asking this question before a game has been booted resolved "config/dev_hdd0/..."
+     * as a RELATIVE path, found nothing, and reported every title as having no update installed.
+     * Open the app and go straight to the package screen or a game's info tab and that is exactly
+     * what happened: Batman and Watch Dogs both had 01.04 on disk and both read as out of date.
+     *
+     * systemDirPosix() is the configured root and needs no native init, which is why it comes
+     * second rather than not at all. The external files dir is the fallback for an install that
+     * never had a custom root set.
+     */
+    private fun hdd0Roots(): List<File> = buildList {
+        RPCSX.rootDirectory.takeIf { it.isNotBlank() }?.let { add(File(it)) }
+        runCatching { MainActivityRuntime.systemDirPosix() }.getOrNull()?.let { add(File(it)) }
+        runCatching {
+            MainActivityRuntime.instance?.applicationContext?.getExternalFilesDir(null)
+        }.getOrNull()?.let { add(it) }
+    }.distinctBy { it.absolutePath }
+
+    /** The game directory for [id] under whichever root actually holds it, or null. */
+    private fun gameDir(id: String): File? =
+        hdd0Roots().map { File(it, "config/dev_hdd0/game/$id") }.firstOrNull { it.isDirectory }
+
     fun installedUpdateVersion(serial: String?): String? {
         val id = serial?.takeIf { it.isNotBlank() } ?: return null
-        val sfo = File(RPCSX.rootDirectory, "config/dev_hdd0/game/$id/PARAM.SFO")
-        return read(sfo)["APP_VER"]?.takeIf { it.isNotBlank() }
+        val dir = gameDir(id) ?: return null
+        return read(File(dir, "PARAM.SFO"))["APP_VER"]?.takeIf { it.isNotBlank() }
     }
 
     /**
@@ -108,7 +135,10 @@ object Ps3Sfo {
      */
     fun installedDlcCount(serial: String?): Int {
         val id = serial?.takeIf { it.isNotBlank() } ?: return 0
-        val root = File(RPCSX.rootDirectory, "config/dev_hdd0")
+        val root = hdd0Roots()
+            .map { File(it, "config/dev_hdd0") }
+            .firstOrNull { it.isDirectory }
+            ?: return 0
 
         val licences = File(root, "home").listFiles()
             ?.filter { it.isDirectory }
