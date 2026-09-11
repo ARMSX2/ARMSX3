@@ -63,8 +63,27 @@ object Ps3UpdateService {
         }.socketFactory
     }
 
+    /**
+     * Upgrade a PlayStation URL to https.
+     *
+     * The package urls inside ver.xml are plain http, and Android has refused cleartext by default
+     * since API 28 -- the download failed with "Cleartext HTTP traffic not permitted" before a byte
+     * moved. The obvious fix is a cleartext exception for the domain in network_security_config,
+     * but it is not needed: these hosts serve the same object over https. Rewriting the scheme
+     * keeps the app's no-cleartext-anywhere posture intact and encrypts the transfer, and the
+     * connection then takes the same relaxed-verification path as the metadata lookup, since the
+     * certificate does not validate on either host.
+     *
+     * Only for hosts we already relax, so this can never silently upgrade somewhere else and fail.
+     */
+    private fun preferHttps(url: String): String {
+        if (!url.startsWith("http://", ignoreCase = true)) return url
+        val host = runCatching { URL(url).host }.getOrNull()
+        return if (isRelaxedHost(host)) "https://" + url.substring("http://".length) else url
+    }
+
     private fun open(url: String): HttpURLConnection {
-        val connection = URL(url).openConnection() as HttpURLConnection
+        val connection = URL(preferHttps(url)).openConnection() as HttpURLConnection
         connection.connectTimeout = 15_000
         connection.readTimeout = 30_000
         connection.instanceFollowRedirects = true

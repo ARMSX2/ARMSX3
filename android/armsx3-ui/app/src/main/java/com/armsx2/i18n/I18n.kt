@@ -476,6 +476,7 @@ val EN: Map<String, String> = mapOf(
     "packages.updates.checking" to "Checking…",
     "packages.updates.none" to "No updates published for this title.",
     "packages.updates.failed" to "Could not check: %s",
+    "packages.updates.downloadFailed" to "Download failed: %s",
     "packages.updates.downloading" to "Downloading %s — %d%%",
     "packages.updates.version" to "Version %s",
     "packages.updates.firmware" to "needs firmware %s",

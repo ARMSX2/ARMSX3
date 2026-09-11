@@ -116,7 +116,7 @@ fun GameUpdatesTab(
             downloading = null
             result.fold(
                 onSuccess = { onInstall(listOf(it)) },
-                onFailure = { status = str("packages.updates.failed").format(it.message ?: "download failed") },
+                onFailure = { status = str("packages.updates.downloadFailed").format(it.message ?: "download failed") },
             )
         }
     }
