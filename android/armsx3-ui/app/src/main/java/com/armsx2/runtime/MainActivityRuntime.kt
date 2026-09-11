@@ -3,6 +3,7 @@ package com.armsx2.runtime
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import com.armsx2.data.library.GameLibraryRepository
 import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.content.pm.ActivityInfo
@@ -4994,6 +4995,33 @@ open class MainActivityRuntime : ComponentActivity() {
         for (key in listOf("path", "game", "rom", "uri", "android.intent.extra.STREAM")) {
             val value = intent.getStringExtra(key)?.takeIf { it.isNotBlank() } ?: continue
             return value.toUri()
+        }
+
+        // Launch by title id, for external frontends (issue #13).
+        //
+        // Every key above names something the frontend already holds a path to. A game installed
+        // from a .pkg has no path the frontend can know: it lives inside our own storage under a
+        // name derived from the package, so ES-DE and friends can see that the game exists and
+        // still have nothing to pass us. The title id is the one identifier they do have.
+        //
+        // Resolved against the library CACHE rather than a scan: this runs on the launch path,
+        // a scan can take seconds on a large folder, and any title a frontend knows about is by
+        // definition one we have already listed. Unknown ids return null and fall through to the
+        // library exactly as a bad path does.
+        for (key in listOf("title_id", "titleId", "serial")) {
+            val id = intent.getStringExtra(key)?.takeIf { it.isNotBlank() }?.trim() ?: continue
+            val match = runCatching {
+                GameLibraryRepository(this).loadCached().games
+                    .firstOrNull { it.serial?.equals(id, ignoreCase = true) == true }
+            }.getOrNull()
+
+            if (match == null) {
+                android.util.Log.w("ARMSX2", "launch by title id: '$id' is not in the library cache")
+                return null
+            }
+
+            android.util.Log.i("ARMSX2", "launch by title id: '$id' -> ${match.uri}")
+            return match.uri
         }
 
         return null
