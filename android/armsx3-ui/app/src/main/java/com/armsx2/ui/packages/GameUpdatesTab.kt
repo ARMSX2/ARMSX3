@@ -21,6 +21,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,6 +41,24 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 private fun str(key: String) = I18n.get(key)
+
+/**
+ * Compare two PS3 version strings ("01.04", "1.10") numerically, field by field.
+ *
+ * Not a string compare. Sony zero-pads to two digits, so "01.10" vs "01.04" happens to come out
+ * right lexically -- but that holds only while both sides are padded the same. The installed
+ * version is read out of a PARAM.SFO written by whoever built the package, and against an
+ * unpadded "1.4" a lexical compare puts "1.10" first and reports a newer update as older.
+ */
+private fun compareVersions(a: String, b: String): Int {
+    val left = a.split('.').mapNotNull { it.trim().toIntOrNull() }
+    val right = b.split('.').mapNotNull { it.trim().toIntOrNull() }
+    for (i in 0 until maxOf(left.size, right.size)) {
+        val d = (left.getOrNull(i) ?: 0).compareTo(right.getOrNull(i) ?: 0)
+        if (d != 0) return d
+    }
+    return 0
+}
 
 private fun formatSize(bytes: Long): String = when {
     bytes >= 1024L * 1024 * 1024 -> "%.2f GB".format(bytes / (1024.0 * 1024 * 1024))
@@ -72,6 +91,23 @@ fun GameUpdatesTab(
     var progress by remember { mutableStateOf(0f) }
     var showLibrary by remember { mutableStateOf(false) }
 
+    // What is already on disk for the title in the field. Without this the tab offered an update
+    // the user had just installed, with no way to tell from here that it had worked -- the only
+    // confirmation was to leave, long-press the game, and open its info tab.
+    var installedVersion by remember { mutableStateOf<String?>(null) }
+
+    fun refreshInstalled() {
+        installedVersion = titleId.takeIf { it.isNotBlank() }
+            ?.let { com.armsx2.Ps3Sfo.installedUpdateVersion(it) }
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    // The install runs in the parent and reports through busy, so the end of one is busy going
+    // false again -- that is the moment the on-disk version has changed and this has to re-read.
+    LaunchedEffect(busy) {
+        if (!busy) refreshInstalled()
+    }
+
     // The cache, not a scan: this is a picker, and anything worth patching is already listed.
     val library = remember {
         runCatching {
@@ -88,6 +124,7 @@ fun GameUpdatesTab(
         status = null
         checking = true
         scope.launch {
+            refreshInstalled()
             when (val result = Ps3UpdateService.find(titleId)) {
                 is Ps3UpdateService.Lookup.Found -> {
                     found = result.updates
@@ -198,6 +235,19 @@ fun GameUpdatesTab(
             Text(str("packages.updates.checking"), style = MaterialTheme.typography.bodyMedium)
         }
 
+        // Answers "did that work?" without leaving the screen. Re-read after every install, so it
+        // is the state on disk rather than what we believe we did.
+        if (!checking && titleId.isNotBlank() && (found.isNotEmpty() || installedVersion != null)) {
+            Text(
+                installedVersion
+                    ?.let { str("packages.updates.installedNow").format(it) }
+                    ?: str("packages.updates.installedNone"),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+
         downloading?.let { version ->
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(
@@ -248,10 +298,30 @@ fun GameUpdatesTab(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Button(
-                        onClick = { download(update) },
-                        enabled = downloading == null && !busy,
-                    ) { Text(str("packages.updates.install")) }
+                    // Installed is version-compared, not equality: a cumulative package newer
+                    // than this one also means this one is already covered, so re-offering it as
+                    // an action would be wrong rather than merely redundant.
+                    val have = installedVersion
+                        ?.let { compareVersions(it, update.version) >= 0 } == true
+
+                    if (have) {
+                        Text(
+                            str("packages.updates.alreadyHave"),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(end = 8.dp),
+                        )
+                        OutlinedButton(
+                            onClick = { download(update) },
+                            enabled = downloading == null && !busy,
+                        ) { Text(str("packages.updates.reinstall")) }
+                    } else {
+                        Button(
+                            onClick = { download(update) },
+                            enabled = downloading == null && !busy,
+                        ) { Text(str("packages.updates.install")) }
+                    }
                 }
             }
         }
