@@ -1,5 +1,6 @@
 package com.armsx2.ui.packages
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -124,6 +125,9 @@ fun GameUpdatesTab(
     var progress by remember { mutableStateOf(0f) }
     var manualId by remember { mutableStateOf("") }
     var refreshToken by remember { mutableIntStateOf(0) }
+    var expanded by remember { mutableStateOf<String?>(null) }
+    // Serial whose Remove button is armed. A second tap does it; tapping anything else disarms.
+    var confirmRemove by remember { mutableStateOf<String?>(null) }
 
     fun readInstalled(serial: String): String? =
         Ps3Sfo.installedUpdateVersion(serial)?.takeIf { it.isNotBlank() }
@@ -208,8 +212,27 @@ fun GameUpdatesTab(
      * failure. One at a time, waiting for each install to land, because a later package can require
      * the version an earlier one produces.
      */
-    fun installChain(row: UpdateRow) {
-        val queue = row.pending
+    fun installUpTo(row: UpdateRow, target: Ps3UpdateService.Ps3Update?) {
+        val ceiling = target ?: row.newest
+
+        // Going backwards is not a patch, it is a different state: an older package will not apply
+        // over a newer one, so the update comes off first and the chain is rebuilt from the disc.
+        val startFrom = if (ceiling != null && row.installed != null &&
+            compareVersions(ceiling.version, row.installed) <= 0
+        ) {
+            if (!Ps3Sfo.removeInstalledUpdate(row.serial)) {
+                status = str("packages.updates.removeFailed")
+                return
+            }
+            null
+        } else {
+            row.installed
+        }
+
+        val queue = row.published.filter { p ->
+            (startFrom == null || compareVersions(p.version, startFrom) > 0) &&
+                (ceiling == null || compareVersions(p.version, ceiling.version) <= 0)
+        }
         if (queue.isEmpty()) return
 
         status = null
@@ -357,7 +380,20 @@ fun GameUpdatesTab(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(
                     alpha = if (row.stage == Stage.Available) 0.65f else 0.35f,
                 ),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        confirmRemove = null
+                        expanded = if (expanded == row.serial) null else row.serial
+                    }
+                    .controllerFocusable(
+                        "packages.updates.row.${row.serial}",
+                        RoundedCornerShape(12.dp),
+                        onConfirm = {
+                            confirmRemove = null
+                            expanded = if (expanded == row.serial) null else row.serial
+                        },
+                    ),
             ) {
                 Row(
                     modifier = Modifier.padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
@@ -402,28 +438,114 @@ fun GameUpdatesTab(
 
                     if (row.stage == Stage.Available) {
                         Button(
-                            onClick = { installChain(row) },
+                            onClick = { installUpTo(row, null) },
                             enabled = downloading == null && !busy,
                             modifier = Modifier.controllerFocusable(
                                 "packages.updates.install.${row.serial}",
                                 RoundedCornerShape(20.dp),
                                 onConfirm = {
-                                    if (downloading == null && !busy) installChain(row)
+                                    if (downloading == null && !busy) installUpTo(row, null)
                                 },
                             ),
                         ) { Text(str("packages.updates.install")) }
                     } else if (row.stage == Stage.UpToDate && row.newest != null) {
                         OutlinedButton(
-                            onClick = { installChain(row.copy(installed = null)) },
+                            onClick = { installUpTo(row.copy(installed = null), null) },
                             enabled = downloading == null && !busy,
                             modifier = Modifier.controllerFocusable(
                                 "packages.updates.reinstall.${row.serial}",
                                 RoundedCornerShape(20.dp),
                                 onConfirm = {
-                                    if (downloading == null && !busy) installChain(row.copy(installed = null))
+                                    if (downloading == null && !busy) installUpTo(row.copy(installed = null), null)
                                 },
                             ),
                         ) { Text(str("packages.updates.reinstall")) }
+                    }
+                }
+            }
+
+            // Every published version, so a title that patches in steps can be taken to a specific
+            // one -- "01.04 broke it, put me on 01.03" is the whole reason this is here.
+            if (expanded == row.serial && row.published.isNotEmpty()) {
+                Column(
+                    modifier = Modifier.padding(start = 18.dp, end = 4.dp, bottom = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        str("packages.updates.versions"),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+
+                    row.published.forEach { pkg ->
+                        val isCurrent = row.installed != null &&
+                            compareVersions(row.installed, pkg.version) == 0
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "${pkg.version}  ·  ${formatSize(pkg.sizeBytes)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (isCurrent) {
+                                Text(
+                                    str("packages.updates.current"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(end = 10.dp),
+                                )
+                            } else {
+                                OutlinedButton(
+                                    onClick = { installUpTo(row, pkg) },
+                                    enabled = downloading == null && !busy,
+                                    modifier = Modifier.controllerFocusable(
+                                        "packages.updates.ver.${row.serial}.${pkg.version}",
+                                        RoundedCornerShape(20.dp),
+                                        onConfirm = {
+                                            if (downloading == null && !busy) installUpTo(row, pkg)
+                                        },
+                                    ),
+                                ) { Text(str("packages.updates.installThis")) }
+                            }
+                        }
+                    }
+
+                    if (row.installed != null) {
+                        Text(
+                            str("packages.updates.downgradeNote"),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+
+                    // Only for a directory CATEGORY says is game data. A title that lives only on
+                    // the HDD is somebody's purchase, not a patch, and is never offered here.
+                    if (row.installed != null && Ps3Sfo.installedIsUpdate(row.serial)) {
+                        OutlinedButton(
+                            onClick = {
+                                if (confirmRemove == row.serial) {
+                                    confirmRemove = null
+                                    status = if (Ps3Sfo.removeInstalledUpdate(row.serial))
+                                        str("packages.updates.removed")
+                                    else str("packages.updates.removeFailed")
+                                    refreshInstalledOnly()
+                                } else {
+                                    confirmRemove = row.serial
+                                }
+                            },
+                            enabled = downloading == null && !busy,
+                            modifier = Modifier.controllerFocusable(
+                                "packages.updates.remove.${row.serial}",
+                                RoundedCornerShape(20.dp),
+                            ),
+                        ) {
+                            Text(
+                                if (confirmRemove == row.serial) str("packages.updates.removeConfirm")
+                                else str("packages.updates.removeUpdate"),
+                            )
+                        }
                     }
                 }
             }

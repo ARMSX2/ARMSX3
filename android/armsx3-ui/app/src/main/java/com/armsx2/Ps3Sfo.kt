@@ -114,6 +114,35 @@ object Ps3Sfo {
     }
 
     /**
+     * Whether [serial]'s dev_hdd0 entry is a title UPDATE rather than the game itself.
+     *
+     * The distinction decides whether removing that directory is reversible. For a disc game it
+     * holds only the patch, and deleting it puts the title back to the version on the disc. For a
+     * game installed from a .pkg it IS the game, and deleting it uninstalls what someone bought.
+     *
+     * CATEGORY tells them apart: "GD" is game data, "HG" an HDD-installed game. Anything that is
+     * not clearly GD is treated as not-an-update, so an unreadable PARAM.SFO refuses the delete
+     * rather than guessing at it.
+     */
+    fun installedIsUpdate(serial: String?): Boolean {
+        val id = serial?.takeIf { it.isNotBlank() } ?: return false
+        val dir = gameDir(id) ?: return false
+        return read(File(dir, "PARAM.SFO"))["CATEGORY"]?.trim().equals("GD", ignoreCase = true)
+    }
+
+    /**
+     * Remove an installed title update, putting the game back to its disc version.
+     *
+     * Refuses anything [installedIsUpdate] does not vouch for, so this cannot be talked into
+     * deleting a title that only exists on the HDD.
+     */
+    fun removeInstalledUpdate(serial: String?): Boolean {
+        if (!installedIsUpdate(serial)) return false
+        val dir = gameDir(serial!!) ?: return false
+        return runCatching { dir.deleteRecursively() }.getOrDefault(false)
+    }
+
+    /**
      * How many add-ons are installed for this title, counted from two places.
      *
      * There is no single "DLC installed" flag to read. A package unpacks into
