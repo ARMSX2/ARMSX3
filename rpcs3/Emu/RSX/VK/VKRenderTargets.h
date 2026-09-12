@@ -183,27 +183,6 @@ namespace vk
 			// If we have driver support for FBO loops, set the usage flag for it.
 			if (vk::get_current_renderer()->get_framebuffer_loops_support())
 			{
-				switch (vk::get_driver_vendor())
-				{
-				case driver_vendor::ADRENO:
-				case driver_vendor::TURNIP:
-				case driver_vendor::ARM_MALI:
-				case driver_vendor::PANVK:
-				case driver_vendor::POWERVR:
-				case driver_vendor::XCLIPSE:
-				case driver_vendor::BROADCOM:
-				case driver_vendor::VERISILICON:
-					// Tilers: the feedback-loop usage bit is the entire mechanism here.
-					// MUTABLE_FORMAT is a decompression workaround for desktop drivers, and we
-					// hand it over without a VkImageFormatListCreateInfo, so the driver has to
-					// assume every format-compatible view is possible. That costs framebuffer
-					// compression on every colour and depth target, and on Adreno 830 it moves
-					// the GMEM resolve onto a path that hangs the GPU.
-					return { usage_flags | VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT, 0 };
-				default:
-					break;
-				}
-
 				return { usage_flags | VK_IMAGE_USAGE_ATTACHMENT_FEEDBACK_LOOP_BIT_EXT, VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT };
 			}
 
