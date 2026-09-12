@@ -563,7 +563,11 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
      * title can publish a CHAIN of packages that each patch the previous version, and those have
      * to go on one at a time and in order, so the next cannot start until this one has landed.
      */
-    fun install(files: List<java.io.File>, onDone: ((Boolean) -> Unit)? = null) {
+    fun install(
+        files: List<java.io.File>,
+        onDone: ((Boolean) -> Unit)? = null,
+        refreshLibrary: Boolean = true,
+    ) {
         if (files.isEmpty()) { onDone?.invoke(false); return }
         showBrowser = false
         busy = true
@@ -640,9 +644,14 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
             message = if (ok) {
                 // Force the library to re-read storage; the folder set is unchanged
                 // so nothing else would prompt a rescan.
-                GameLibraryRepository(context).invalidateCache()
-                installed = readInstalled()
-                licences = readLicences()
+                // A new title has to appear in the library, which costs a full storage rescan.
+                // An UPDATE to a title already listed changes nothing the library shows, so a
+                // chain of packages skips it for all but its last and pays once, not seven times.
+                if (refreshLibrary) {
+                    GameLibraryRepository(context).invalidateCache()
+                    installed = readInstalled()
+                    licences = readLicences()
+                }
                 I18n.get("packages.install.done")
             } else {
                 // The native reason names the actual problem ("Game is broken: PARAM.SFO not
@@ -805,7 +814,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
             }
 
             if (tab == 1) {
-                GameUpdatesTab(busy = busy, onInstall = { files, done -> install(files, done) })
+                GameUpdatesTab(busy = busy, onInstall = { files, last, done -> install(files, done, refreshLibrary = last) })
             } else {
             Surface(
                 shape = RoundedCornerShape(16.dp),

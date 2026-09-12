@@ -111,7 +111,8 @@ private data class UpdateRow(
 @Composable
 fun GameUpdatesTab(
     busy: Boolean,
-    onInstall: (List<File>, (Boolean) -> Unit) -> Unit,
+    /** files, isLastOfChain, completion. The flag lets a chain pay for one library rescan. */
+    onInstall: (List<File>, Boolean, (Boolean) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -133,13 +134,29 @@ fun GameUpdatesTab(
         else -> Stage.Available
     }
 
-    // Local state first, then the network fills in behind it.
-    //
-    // Keyed on refreshToken so the button re-runs it, and on busy so the list re-reads itself the
-    // moment an install finishes -- that is when a row's installed version has actually changed,
-    // and re-reading beats assuming the install did what we asked.
-    LaunchedEffect(refreshToken, busy) {
-        if (busy) return@LaunchedEffect
+    /**
+     * Re-read what is installed, locally, without asking the service anything.
+     *
+     * What a title has published does not change because we installed something, so a full rescan
+     * after an install is all cost and no information. It used to be keyed on `busy` as well, which
+     * meant a seven-package chain re-queried every game in the library seven times WHILE it was
+     * still running -- the reason batch updating crawled.
+     */
+    fun refreshInstalledOnly() {
+        scope.launch {
+            val reread = withContext(Dispatchers.IO) {
+                rows.map { row ->
+                    val installed = readInstalled(row.serial)
+                    row.copy(installed = installed, stage = stageFor(installed, row.newest))
+                }
+            }
+            rows = reread
+        }
+    }
+
+    // Local state first, then the network fills in behind it. Keyed only on refreshToken: the
+    // button re-runs it, and an install refreshes locally instead of paying for this again.
+    LaunchedEffect(refreshToken) {
 
         scanning = true
         status = null
@@ -197,16 +214,28 @@ fun GameUpdatesTab(
 
         status = null
         scope.launch {
+            fun dest(u: Ps3UpdateService.Ps3Update) =
+                File(context.cacheDir, "updates/${u.titleId}-${u.version}.pkg")
+
+            // The next package downloads while this one installs. They are independent -- only the
+            // INSTALLS have to stay ordered -- and a chain otherwise alternates network-idle and
+            // disk-idle for its whole length.
+            var ahead = scope.async(Dispatchers.IO) {
+                Ps3UpdateService.download(queue[0], dest(queue[0])) { progress = it }
+            }
+
             for ((index, update) in queue.withIndex()) {
                 downloading = if (queue.size == 1) update.version
                 else "${update.version} (${index + 1}/${queue.size})"
-                progress = 0f
 
-                // Into cacheDir: if the install succeeds the package is dead weight, and if the app
-                // is killed mid-download the system reclaims it rather than leaving a part-file the
-                // user has to find. Same reason the savestate temps needed sweeping.
-                val dest = File(context.cacheDir, "updates/${update.titleId}-${update.version}.pkg")
-                val downloaded = Ps3UpdateService.download(update, dest) { progress = it }
+                val downloaded = ahead.await()
+
+                if (index + 1 < queue.size) {
+                    val next = queue[index + 1]
+                    ahead = scope.async(Dispatchers.IO) {
+                        Ps3UpdateService.download(next, dest(next)) { }
+                    }
+                }
 
                 val file = downloaded.getOrElse {
                     status = str("packages.updates.downloadFailed").format(it.message ?: "download failed")
@@ -215,7 +244,7 @@ fun GameUpdatesTab(
                 }
 
                 val done = CompletableDeferred<Boolean>()
-                onInstall(listOf(file)) { ok -> done.complete(ok) }
+                onInstall(listOf(file), index == queue.lastIndex) { ok -> done.complete(ok) }
 
                 if (!done.await()) {
                     // The parent already shows the native reason, which names the real problem.
@@ -223,11 +252,15 @@ fun GameUpdatesTab(
                     downloading = null
                     return@launch
                 }
+
+                // Done with it either way; a chain of seven is otherwise gigabytes of dead cache.
+                runCatching { file.delete() }
             }
 
             downloading = null
-            // Re-read rather than assume: the installed version is now whatever is on disk.
-            refreshToken++
+            // Re-read rather than assume: the installed version is now whatever is on disk. Local
+            // only -- nothing the service told us has changed.
+            refreshInstalledOnly()
         }
     }
 
