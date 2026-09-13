@@ -33,6 +33,7 @@
 // patch_engine, needed by the precompile path before ppu_load_exec.
 #include "Utilities/bin_patch.h"
 #include "Emu/localized_string_id.h"
+#include "Emu/emu_callbacks.h"
 #include "Emu/system_config.h"
 #include "Emu/NP/rpcn_client.h"
 #include "Emu/NP/rpcn_config.h"
@@ -1397,14 +1398,14 @@ static void sendGameInfo(JNIEnv *env, jlong progressId,
   objects.reserve(infos.size());
 
   for (const auto &info : infos) {
-    auto path = Emu.GetCallbacks().resolve_path(info.path);
+    auto path = g_emu_callbacks.resolve_path(info.path);
     if (path.ends_with('/')) {
       path.resize(path.size() - 1);
     }
 
     objects.push_back(env->NewObject(
         gameClass, gameConstructor, wrap(env, path), wrap(env, info.name),
-        wrap(env, Emu.GetCallbacks().resolve_path(info.iconPath)),
+        wrap(env, g_emu_callbacks.resolve_path(info.iconPath)),
         jint(info.flags)));
   }
 
@@ -2299,7 +2300,7 @@ static std::atomic<bool> g_disc_insert_enabled{false};
 
 
 static void setupCallbacks() {
-  Emu.SetCallbacks({
+  g_emu_callbacks = emu_callbacks{
       .call_from_main_thread =
           [](std::function<void()> cb, atomic_t<u32> *wake_up) {
             if (wake_up) {
@@ -2637,7 +2638,7 @@ static void setupCallbacks() {
       .display_sleep_control_supported = [](auto...) { return false; },
       .enable_display_sleep = [](auto...) {},
       .check_microphone_permissions = [](auto...) {},
-  });
+  };
 }
 
 static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {

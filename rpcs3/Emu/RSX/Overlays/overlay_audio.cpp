@@ -1,6 +1,6 @@
 #include "stdafx.h"
 #include "overlay_audio.h"
-#include "Emu/System.h"
+#include "Emu/emu_callbacks.h"
 
 namespace rsx
 {
@@ -21,7 +21,7 @@ namespace rsx
 			// SND0.AT3 boot sound -- which is every folder-format game, since for an .iso
 			// the fs::is_file check in rsx::thread::thread looks inside the mounted
 			// virtual device and never finds one. Boot music simply does not play.
-			m_video_source = Emu.GetCallbacks().make_video_source();
+			m_video_source = g_emu_callbacks.make_video_source();
 
 			if (!m_video_source)
 			{
