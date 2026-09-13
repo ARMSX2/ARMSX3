@@ -222,17 +222,31 @@ class GameLibraryRepository(private val context: Context) {
         //
         // So drop the whole colliding group from the seed and let the scan settle it. Deliberately
         // narrow -- a collision is rare, and this is the one case worth paying a re-probe for.
-        val collidingSerials = cachedGames
+        val duplicated = cachedGames
             .mapNotNull { it.serial?.takeIf { s -> s.isNotBlank() } }
             .groupingBy { it }
             .eachCount()
             .filterValues { it > 1 }
             .keys
 
-        if (collidingSerials.isNotEmpty()) {
+        // One attempt per process, and only with the core idle -- see collisionRepairSpent.
+        val mayRepair = duplicated.isNotEmpty() &&
+            !collisionRepairSpent &&
+            MainActivityRuntime.eState.value == com.armsx2.EmuState.STOPPED
+
+        val collidingSerials = if (mayRepair) duplicated else emptySet()
+
+        if (duplicated.isNotEmpty()) {
+            collisionRepairSpent = true
             android.util.Log.w(
                 ScanTag,
-                "re-probing: ${collidingSerials.size} serial(s) claimed by more than one game: $collidingSerials",
+                if (mayRepair) {
+                    "re-probing: ${duplicated.size} serial(s) claimed by more than one game: $duplicated"
+                } else {
+                    "${duplicated.size} serial(s) claimed by more than one game: $duplicated -- " +
+                        "not re-probing (already attempted this session, or a core is loaded); " +
+                        "restart the app to repair"
+                },
             )
         }
 
@@ -798,6 +812,18 @@ class GameLibraryRepository(private val context: Context) {
     data class CachedLibrary(val key: String?, val games: List<GameInfo>)
 
     private companion object {
+        /** Whether the colliding-serial repair below may still run in this process.
+         *
+         *  It re-probes, and probing an ISO mounts it process-wide. Doing that after a game has
+         *  been booted is the crash the seeding exists to prevent: a tester hit it by closing a
+         *  game and returning to the library, which corrupted the entries a second time and then
+         *  took the app down. Checking EmuState is NOT enough -- IsStopped() reads true while the
+         *  core is still STOPPING, so a post-game scan can see STOPPED mid-teardown.
+         *
+         *  So the repair gets exactly one attempt per process, at a scan that happens before
+         *  anything has been booted. A library that still needs repairing gets it on the next
+         *  cold start, which costs the user nothing and cannot mount an ISO under a live core. */
+        @Volatile private var collisionRepairSpent = false
         /** v2: PS3 title ID + title + ICON0.PNG read from the disc's PARAM.SFO.
          *  v5: folder-format games (JB folder / installed game folder).
          *  v6: PARAM.SFO CATEGORY read, to drop game-data installs.
