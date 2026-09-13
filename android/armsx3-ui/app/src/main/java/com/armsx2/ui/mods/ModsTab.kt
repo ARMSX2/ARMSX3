@@ -58,6 +58,7 @@ fun ModsTab(serial: String) {
     var pendingFile by remember { mutableStateOf<android.net.Uri?>(null) }
     var pendingPath by remember { mutableStateOf("") }
     var pendingMatches by remember { mutableStateOf<List<String>>(emptyList()) }
+    var pendingRemoval by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
     val modsRoot = remember(serial, refreshToken) { ModManager.modsRoot(serial) }
@@ -176,6 +177,31 @@ fun ModsTab(serial: String) {
             Spacer(Modifier.height(10.dp))
         }
 
+        pendingRemoval?.let { modName ->
+            AlertDialog(
+                onDismissRequest = { pendingRemoval = null },
+                title = { Text(str("mods.remove.title")) },
+                text = { Text(str("mods.remove.body").format(modName)) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        pendingRemoval = null
+                        busy = true
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                ModManager.delete(serial, modName)
+                            }
+                            if (result is ModManager.Result.Failed) message = result.reason
+                            busy = false
+                            refreshToken++
+                        }
+                    }) { Text(str("mods.remove")) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingRemoval = null }) { Text(str("action.cancel")) }
+                },
+            )
+        }
+
         // ABOVE the empty-list early return, not below it.
         //
         // A game with no mods yet is exactly the game someone is importing their first mod into,
@@ -231,6 +257,16 @@ fun ModsTab(serial: String) {
                     busy = false
                     refreshToken++
                 }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(
+                    onClick = { if (!busy) pendingRemoval = mod.name },
+                    enabled = !busy,
+                    modifier = Modifier.controllerFocusable(
+                        "mods.remove.${mod.name}",
+                        onConfirm = { if (!busy) pendingRemoval = mod.name },
+                    ),
+                ) { Text(str("mods.remove")) }
             }
         }
     }

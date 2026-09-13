@@ -159,6 +159,29 @@ object ModManager {
         return Result.Ok
     }
 
+    /**
+     * Delete an imported mod and its enabled state.
+     *
+     * Only ever touches the mod store. Nothing was copied into the game to undo, which is the
+     * point of mounting: removing a mod is deleting the files it brought and forgetting it was
+     * on, and the game is untouched either way.
+     */
+    fun delete(serial: String, modName: String): Result {
+        val root = modsRoot(serial) ?: return Result.Failed("No storage available yet")
+        val dir = File(root, modName)
+
+        // The state file goes first. If the delete fails halfway, a mod that is off with some
+        // files missing is recoverable; one still marked enabled would try to mount them.
+        stateFile(serial, modName)?.delete()
+
+        if (dir.isDirectory && !dir.deleteRecursively()) {
+            return Result.Failed("Could not remove '$modName'")
+        }
+
+        android.util.Log.i(TAG, "removed '$modName' from $serial")
+        return Result.Ok
+    }
+
     private fun stateFile(serial: String, modName: String): File? =
         modsRoot(serial)?.let { File(File(it, STATE_DIR), "$modName.json") }
 }
