@@ -107,6 +107,9 @@ object Ps3PatchRepo {
     /**
      * The Artemis collection, a second source of patches.
      *
+     * Maintained by @chidreams at github.com/chidreams/Artemis-Patch-Collection-RPCS3. All this
+     * does is download their work; the cheats, the testing and the upkeep are theirs.
+     *
      * Community cheats, MIT licensed, and already in RPCS3's own patch format: PPU hash keyed,
      * with `[ be32, addr, value ]` entries. No conversion step, so it goes through
      * patchesImport like everything else and merges into patches/patch.yml beside the rpcs3.net
