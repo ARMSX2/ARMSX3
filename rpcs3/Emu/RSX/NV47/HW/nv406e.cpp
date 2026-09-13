@@ -6,6 +6,7 @@
 #include "Emu/RSX/rsx_profiler.h"
 #include "util/sysinfo.hpp"
 
+#include "Emu/system_config.h"
 #include <chrono>
 #include <thread>
 

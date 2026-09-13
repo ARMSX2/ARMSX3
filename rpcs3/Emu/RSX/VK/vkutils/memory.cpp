@@ -3,6 +3,7 @@
 #include "Emu/system_config.h"
 
 #include "Emu/RSX/Utils/algorithm.hpp"
+#include "Emu/system_config.h"
 
 namespace vk
 {

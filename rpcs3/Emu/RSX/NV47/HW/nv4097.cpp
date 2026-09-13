@@ -6,6 +6,7 @@
 #include "Emu/RSX/Common/BufferUtils.h"
 #include "Emu/RSX/Host/MM.h"
 #include "Emu/RSX/rsx_profiler.h"
+#include "Emu/system_config.h"
 
 #define RSX(ctx) ctx->rsxthr
 #define REGS(ctx) (&rsx::method_registers)
