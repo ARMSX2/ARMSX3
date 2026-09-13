@@ -59,9 +59,9 @@ fun ModLibraryScreen(onBack: () -> Unit) {
             GameLibraryRepository(context).loadCached().games
                 .mapNotNull { game ->
                     val serial = game.serial?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
-                    // The install directory IS the test for moddability: it exists for a .pkg
-                    // install and a JB game folder, and never for a disc image.
-                    if (ModManager.installDirFor(serial) == null) return@mapNotNull null
+                    // Tested on the ENTRY, not the serial: a disc game with an update
+                    // installed has a dev_hdd0 folder too, and would otherwise be listed.
+                    if (!ModManager.isModdable(game.extension, serial)) return@mapNotNull null
                     val mods = ModManager.list(serial)
                     Row(game, serial, mods.size, mods.count { it.enabled })
                 }
@@ -106,7 +106,9 @@ private data class Row(
 @Composable
 private fun GameRow(row: Row) {
     val open = {
-        UiNavigator.navigate(AppRoute.Settings(SettingsCategory.Mods, row.game))
+        UiNavigator.navigate(
+            AppRoute.Settings(SettingsCategory.Mods, row.game, returnTo = AppRoute.ModLibrary),
+        )
     }
     Surface(
         onClick = open,

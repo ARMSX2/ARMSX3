@@ -8,6 +8,10 @@ sealed interface AppRoute {
     data class Settings(
         val category: SettingsCategory = SettingsCategory.General,
         val game: GameInfo? = null,
+        /** Where back should land. Null means the library, which is right for the long press
+         *  that opens a game's settings from there. A screen that opens settings itself sets
+         *  this so backing out returns to it instead of dumping the user at the library. */
+        val returnTo: AppRoute? = null,
     ) : AppRoute
     // Carries an optional game so the per-game BIOS picker can key on it directly
     // (from the library long-press) without the game being loaded; null = global,
@@ -77,6 +81,13 @@ object UiNavigator {
             }
             AppRoute.About -> {
                 route.value = AppRoute.Settings(SettingsCategory.General)
+                return true
+            }
+            // A settings screen opened from another screen goes back to that screen. Reached
+            // by long-pressing a game in the library there is no origin to record, returnTo is
+            // null, and the library is the right destination.
+            is AppRoute.Settings -> {
+                route.value = (route.value as AppRoute.Settings).returnTo ?: AppRoute.Home
                 return true
             }
             AppRoute.Home -> Unit

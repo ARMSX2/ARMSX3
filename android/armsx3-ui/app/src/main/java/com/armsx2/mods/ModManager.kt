@@ -11,17 +11,25 @@ import java.io.File
  * Loose-file game mods, applied to an installed title.
  *
  * A PS3 mod is almost always a handful of files that replace things under the game's own
- * directory -- textures, audio, a rebuilt archive. Doing that by hand means finding the install
+ * directory: textures, audio, a rebuilt archive. Doing that by hand means finding the install
  * folder, remembering what you overwrote, and hoping you can put it back. This keeps the same
  * mechanism and takes the bookkeeping off the user.
  *
- * ## Why files are copied rather than layered
+ * ## Why files are copied
  *
- * The obvious design is to mount the mod folder over the game's and never touch the install at
- * all. The VFS cannot do it: `vfs::mount` maps one virtual path to exactly one host path, with
- * no overlay, priority or fallback, so mounting a mod directory over USRDIR would REPLACE it --
- * the game would see only the mod's files and nothing else. Until the VFS grows a layered mount,
- * copying is the only way to apply a partial set of files.
+ * Because it needs nothing from the core. Enabling a mod is a file copy that can happen with
+ * the emulator idle, so there is no boot hook, no lifecycle, and nothing to unwind if a launch
+ * fails.
+ *
+ * It is NOT because the VFS cannot layer. It can: `vfs::get` walks the mount list in reverse
+ * and takes the first entry carrying a host path (VFS.cpp, "Save latest valid mount path"), so
+ * the deepest mount wins and a host path mounted INSIDE an already-mounted tree shadows what
+ * that tree holds at the same virtual path. Mounting a whole directory over USRDIR would still
+ * replace it wholesale, but mounting one vpath per mod file would shadow file by file without
+ * touching the install at all.
+ *
+ * That is the better design and it is the one to move to. It needs mounts placed at boot and
+ * removed on stop, which is core work this does not do yet.
  *
  * ## What that costs, and what is kept
  *
@@ -29,11 +37,11 @@ import java.io.File
  * textures costs three textures' worth of backup, not the size of the install. Files the mod
  * merely ADDS are recorded by name and deleted again on disable, with nothing stored.
  *
- * ## Disc images cannot be modded
+ * ## Disc images are not supported YET
  *
- * There is nowhere to put the files. You cannot write into an .iso, and with no overlay mount
- * there is no layer to put in front of it. [installDirFor] returns null for those and the UI
- * says so rather than offering a toggle that could not work.
+ * Not because it is impossible, per the mount behaviour above, but because this implementation
+ * copies, and there is nowhere to copy to inside an .iso. Per-file mounts would lift the
+ * restriction. Until then [isModdable] excludes them and the UI says so.
  */
 object ModManager {
 
@@ -73,6 +81,23 @@ object ModManager {
     /** The install directory a mod would be applied to, or null when there isn't one. */
     fun installDirFor(serial: String): File? =
         serial.trim().uppercase().takeIf { it.isNotEmpty() }?.let { Ps3Sfo.installDir(it) }
+
+    /**
+     * Whether a library entry can take mods, which is NOT the same question as whether a folder
+     * exists under its serial.
+     *
+     * Installing an update or a DLC for a DISC game creates dev_hdd0/game/<serial>/, so
+     * [installDirFor] answers yes for a title whose library entry is an .iso. Copying mod files
+     * into that folder would put them beside the update rather than in front of the disc, where
+     * the game never reads them: the mod would appear to apply and do nothing.
+     *
+     * The entry's own extension is the real test. "folder" is a .pkg install or a JB game
+     * folder; anything else in the library is a disc image.
+     */
+    fun isModdable(extension: String, serial: String?): Boolean =
+        extension.equals("folder", ignoreCase = true) &&
+            !serial.isNullOrBlank() &&
+            installDirFor(serial) != null
 
     /**
      * Mods present for [serial], enabled state included.

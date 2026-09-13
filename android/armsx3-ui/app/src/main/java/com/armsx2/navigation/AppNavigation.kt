@@ -88,7 +88,9 @@ fun AppNavigation() {
                 is AppRoute.Settings -> SettingsScreen(
                     initialCategory = destination.category,
                     game = destination.game,
-                    onBack = UiNavigator::home,
+                    // Not UiNavigator::home: the arrow and the system back gesture must land in
+                    // the same place, and that place is wherever this screen was opened from.
+                    onBack = { UiNavigator.navigate(destination.returnTo ?: AppRoute.Home) },
                     onOpenAbout = { UiNavigator.navigate(AppRoute.About) },
                 )
                 AppRoute.BiosManager -> BiosManagerScreen(onBack = UiNavigator::home)
