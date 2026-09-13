@@ -1,13 +1,18 @@
 package com.armsx2.ui.mods
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -19,11 +24,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.armsx2.i18n.str
+import com.armsx2.mods.ModImporter
 import com.armsx2.mods.ModManager
 import com.armsx2.ui.settings.SettingsDivider
+import com.armsx2.ui.settings.controllerFocusable
 import com.armsx2.ui.settings.ToggleRow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -45,8 +53,38 @@ fun ModsTab(serial: String) {
     var message by remember { mutableStateOf<String?>(null) }
     var mods by remember { mutableStateOf<List<ModManager.Mod>>(emptyList()) }
 
+    val context = LocalContext.current
     val installDir = remember(serial, refreshToken) { ModManager.installDirFor(serial) }
     val modsRoot = remember(serial, refreshToken) { ModManager.modsRoot(serial) }
+
+    val importedFormat = str("mods.imported")
+
+    fun handle(result: ModImporter.Result) {
+        message = when (result) {
+            is ModImporter.Result.Ok -> importedFormat.format(result.modName, result.fileCount)
+            is ModImporter.Result.Failed -> result.reason
+        }
+        busy = false
+        refreshToken++
+    }
+
+    // Two pickers because people have mods in both shapes: a .zip straight off a mod site, or a
+    // folder they already unpacked. Neither can be dropped into the store by hand -- Android
+    // closes this app's data directory to file managers -- so these are the only way in.
+    val zipPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        scope.launch {
+            handle(withContext(Dispatchers.IO) { ModImporter.importZip(context, serial, uri) })
+        }
+    }
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        scope.launch {
+            handle(withContext(Dispatchers.IO) { ModImporter.importFolder(context, serial, uri) })
+        }
+    }
 
     LaunchedEffect(serial, refreshToken) {
         mods = withContext(Dispatchers.IO) { ModManager.list(serial) }
@@ -79,6 +117,20 @@ fun ModsTab(serial: String) {
                 modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
             )
         }
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = { if (!busy) zipPicker.launch(arrayOf("*/*")) },
+                modifier = Modifier.weight(1f).controllerFocusable("mods.import.zip"),
+                enabled = !busy,
+            ) { Text(str("mods.import.zip")) }
+            OutlinedButton(
+                onClick = { if (!busy) folderPicker.launch(null) },
+                modifier = Modifier.weight(1f).controllerFocusable("mods.import.folder"),
+                enabled = !busy,
+            ) { Text(str("mods.import.folder")) }
+        }
+        Spacer(Modifier.height(10.dp))
 
         message?.let {
             InfoCard(it)
