@@ -227,6 +227,9 @@ struct cfg_root : cfg::node
 #endif
 		cfg::_bool record_with_overlays{ this, "Record With Overlays", true, true };
 		cfg::_bool disable_hardware_blending{ this, "Disable Hardware Blending", false, true };
+		// The other direction. "Disable Hardware Blending" forces the shader path on; this forces
+		// it off, which is what every build before the programmable blending series did.
+		cfg::_bool disable_programmable_blending{ this, "Disable Programmable Blending", false, true };
 		cfg::_bool disable_hardware_texel_remapping{ this, "Disable Hardware ColorSpace Remapping", false, true };
 		cfg::uint<0, 100> rcas_sharpening_intensity{ this, "FidelityFX CAS Sharpening Intensity", 50, true };
 		// SGSR's own, because it wants a range the FSR one cannot express. Qualcomm's

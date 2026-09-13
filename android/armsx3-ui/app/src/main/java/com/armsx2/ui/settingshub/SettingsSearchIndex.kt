@@ -84,6 +84,7 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("renderer.disableZcull.label", true, SettingsCategory.Graphics),
     SettingsSearchEntry("renderer.relaxedZcull.label", true, SettingsCategory.Graphics),
     SettingsSearchEntry("renderer.shaderMode.label", true, SettingsCategory.Graphics),
+    SettingsSearchEntry("renderer.blendingMode.label", true, SettingsCategory.Graphics),
     SettingsSearchEntry("renderer.msaa.label", true, SettingsCategory.Graphics),
     SettingsSearchEntry("renderer.vramLimit.label", true, SettingsCategory.Graphics),
     SettingsSearchEntry("renderer.asyncTexStream.label", true, SettingsCategory.Graphics),

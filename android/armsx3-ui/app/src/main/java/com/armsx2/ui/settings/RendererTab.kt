@@ -475,6 +475,19 @@ fun RendererTab(state: MutableState<Settings>) {
             )
             SettingsDivider()
             SegmentedGridRow(
+                label = str("renderer.blendingMode.label"),
+                options = listOf(
+                    str("renderer.blendingMode.auto"),
+                    str("renderer.blendingMode.shader"),
+                    str("renderer.blendingMode.hardware"),
+                ),
+                selectedIndex = s.ps3.blendingMode.coerceIn(0, 2),
+                columns = 3,
+                description = str("renderer.blendingMode.description"),
+                onChange = { apply(s.copy(ps3 = s.ps3.copy(blendingMode = it))) },
+            )
+            SettingsDivider()
+            SegmentedGridRow(
                 label = str("renderer.msaa.label"),
                 options = listOf(str("common.off"), str("common.auto")),
                 selectedIndex = s.ps3.msaaMode.coerceIn(0, 1),

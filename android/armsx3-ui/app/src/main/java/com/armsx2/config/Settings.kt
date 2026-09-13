@@ -126,6 +126,16 @@ data class Ps3Settings(
      * wait for their real shader instead of running through the interpreter.
      */
     val shaderMode: Int = 1,
+    /**
+     * How blending is carried out: 0 auto, 1 shader, 2 hardware.
+     *
+     * "Auto" is what the core does on its own -- it reaches for the shader path only on the blend
+     * states the GPU's fixed-function unit cannot express (signed equations, and the xRGB/xBGR
+     * surfaces where alpha feeds the RGB factors). "Shader" takes that path on every blended draw.
+     * "Hardware" never takes it, which is how every build before 0.9.8 rendered: cheaper where it
+     * applies, at the cost of the blending those states got wrong.
+     */
+    val blendingMode: Int = 0,
     /** Lossless Scaling frame generation: 0 Off, 1 x2, 2 x3, 3 x4. Off unless the user has
      *  supplied shaders from their own copy -- nothing is bundled. */
     val frameGeneration: Int = 0,
@@ -1114,6 +1124,10 @@ data class Settings(
         put("PS3/Overlay", "Title Background (hex)", "string", argbToRgba(ps3.overlayTitleBg))
         put("PS3/Video", "MSAA", "enum", ps3.msaaMode.toString())
         put("PS3/Video", "Shader Mode", "enum", ps3.shaderMode.toString())
+        // One control, two core switches that pull in opposite directions. Both are written on
+        // every apply so neither can be left stale by a mode change that only touched the other.
+        put("PS3/Video", "Disable Hardware Blending", "bool", (ps3.blendingMode == 1).toString())
+        put("PS3/Video", "Disable Programmable Blending", "bool", (ps3.blendingMode == 2).toString())
         put("PS3/Video", "Frame Generation", "enum", ps3.frameGeneration.toString())
         put("PS3/Video", "Frame Generation Performance Mode", "bool", ps3.frameGenPerformance.toString())
         put("PS3/Video", "Frame Generation Flow Scale", "int", ps3.frameGenFlowScale.toString())
@@ -2100,6 +2114,7 @@ data class Settings(
         put("ps3MsaaMode", ps3.msaaMode)
         put("ps3AudioCubebBackend", ps3.audioCubebBackend)
         put("ps3ShaderMode", ps3.shaderMode)
+        put("ps3BlendingMode", ps3.blendingMode)
         put("ps3FrameGeneration", ps3.frameGeneration)
         put("ps3FrameGenPerformance", ps3.frameGenPerformance)
         put("ps3FrameGenFlowScale", ps3.frameGenFlowScale)
@@ -2457,6 +2472,7 @@ data class Settings(
                     msaaMode = json.optInt("ps3MsaaMode", def.ps3.msaaMode),
                     audioCubebBackend = json.optInt("ps3AudioCubebBackend", def.ps3.audioCubebBackend),
                     shaderMode = json.optInt("ps3ShaderMode", def.ps3.shaderMode),
+                    blendingMode = json.optInt("ps3BlendingMode", def.ps3.blendingMode),
                     frameGeneration = json.optInt("ps3FrameGeneration", def.ps3.frameGeneration),
                     frameGenPerformance = json.optBoolean("ps3FrameGenPerformance", def.ps3.frameGenPerformance),
                     frameGenFlowScale = json.optInt("ps3FrameGenFlowScale", def.ps3.frameGenFlowScale),
@@ -2799,6 +2815,7 @@ data class Settings(
             if (current.ps3.msaaMode != base.ps3.msaaMode) j.put("ps3MsaaMode", current.ps3.msaaMode)
             if (current.ps3.audioCubebBackend != base.ps3.audioCubebBackend) j.put("ps3AudioCubebBackend", current.ps3.audioCubebBackend)
             if (current.ps3.shaderMode != base.ps3.shaderMode) j.put("ps3ShaderMode", current.ps3.shaderMode)
+            if (current.ps3.blendingMode != base.ps3.blendingMode) j.put("ps3BlendingMode", current.ps3.blendingMode)
             if (current.ps3.frameGeneration != base.ps3.frameGeneration) j.put("ps3FrameGeneration", current.ps3.frameGeneration)
             if (current.ps3.frameGenPerformance != base.ps3.frameGenPerformance) j.put("ps3FrameGenPerformance", current.ps3.frameGenPerformance)
             if (current.ps3.frameGenFlowScale != base.ps3.frameGenFlowScale) j.put("ps3FrameGenFlowScale", current.ps3.frameGenFlowScale)
@@ -3117,6 +3134,7 @@ data class Settings(
                     msaaMode = if (overrides.has("ps3MsaaMode")) overrides.getInt("ps3MsaaMode") else base.ps3.msaaMode,
                     audioCubebBackend = if (overrides.has("ps3AudioCubebBackend")) overrides.getInt("ps3AudioCubebBackend") else base.ps3.audioCubebBackend,
                     shaderMode = if (overrides.has("ps3ShaderMode")) overrides.getInt("ps3ShaderMode") else base.ps3.shaderMode,
+                    blendingMode = if (overrides.has("ps3BlendingMode")) overrides.getInt("ps3BlendingMode") else base.ps3.blendingMode,
                     frameGeneration = if (overrides.has("ps3FrameGeneration")) overrides.getInt("ps3FrameGeneration") else base.ps3.frameGeneration,
                     frameGenPerformance = if (overrides.has("ps3FrameGenPerformance")) overrides.getBoolean("ps3FrameGenPerformance") else base.ps3.frameGenPerformance,
                     frameGenFlowScale = if (overrides.has("ps3FrameGenFlowScale")) overrides.getInt("ps3FrameGenFlowScale") else base.ps3.frameGenFlowScale,

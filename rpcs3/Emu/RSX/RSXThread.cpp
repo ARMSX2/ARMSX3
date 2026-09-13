@@ -328,6 +328,16 @@ namespace rsx
 			return true;
 		}
 
+		// Fixed-function only, on request. Nothing downstream is new: every backend site gates
+		// on the ctrl bit, and leaving it clear is the path taken by every build that predates
+		// programmable blending. Costs the accuracy that series was written to buy, which is
+		// the trade this setting exists to offer.
+		if (g_cfg.video.disable_programmable_blending)
+		{
+			fragment_ctrl &= ~RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING;
+			return programmable_blend_active;
+		}
+
 		if (g_cfg.video.disable_hardware_blending)
 		{
 			fragment_ctrl |= RSX_SHADER_CONTROL_PROGRAMMABLE_BLENDING;

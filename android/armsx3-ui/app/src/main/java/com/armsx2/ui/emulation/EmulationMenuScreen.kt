@@ -865,6 +865,19 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
             onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(shaderMode = v)) } },
         )
         Spacer(Modifier.height(6.dp))
+        // Mid-session because it is the one RSX lever whose cost is game-specific: the shader
+        // path only engages on blend states the fixed-function unit cannot express, so whether
+        // it costs anything at all depends on what is on screen right now.
+        HorizontalOptions(
+            title = str("renderer.blendingMode.label"),
+            options = listOf(
+                str("renderer.blendingMode.auto"), str("renderer.blendingMode.shader"),
+                str("renderer.blendingMode.hardware"),
+            ).mapIndexed { index, label -> index to label },
+            selected = settings.ps3.blendingMode,
+            onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(blendingMode = v)) } },
+        )
+        Spacer(Modifier.height(6.dp))
         HorizontalOptions(
             title = str("renderer.outputScaling.label"),
             options = listOf(
