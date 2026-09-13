@@ -20,6 +20,7 @@ sealed interface AppRoute {
     data object CoreSettings : AppRoute
     data object SaveManager : AppRoute
     data object ControllerManager : AppRoute
+    data object ModLibrary : AppRoute
     data object TextureManager : AppRoute
     data object Achievements : AppRoute
     // PS3 trophies, read from the emulator's own dev_hdd0 trophy folders. Distinct from

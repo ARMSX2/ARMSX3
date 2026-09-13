@@ -227,6 +227,11 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // global list; per-game patches are reached from the game's own settings,
         // where the serial filters the list.
         DrawerItem("tab.patches", "\u2726", AppRoute.Settings(SettingsCategory.Patches)),
+        // Mods: the library filtered to titles that can take them. Unlike Patches there is no
+        // global mod list to show, so this is a front door rather than a second view of the
+        // same data. The per-game tab is the last chip in a scrolling strip behind a long
+        // press, which is no way to find out a feature exists.
+        DrawerItem("mods.library.title", "\u25A3", AppRoute.ModLibrary),
         // ARMSX3: texture packs removed. PCSX2 replaces GS textures by hash;
         // RPCS3 has no texture-replacement system, so the screen managed nothing.
         // RetroArch shader chains cover this ground and live in Renderer settings.
@@ -377,6 +382,7 @@ private fun sameDestination(current: AppRoute, target: AppRoute): Boolean = when
     AppRoute.PackageInstaller -> current is AppRoute.PackageInstaller
     AppRoute.CoreSettings -> current is AppRoute.CoreSettings
     AppRoute.SaveManager -> current is AppRoute.SaveManager
+    AppRoute.ModLibrary -> current is AppRoute.ModLibrary
     AppRoute.ControllerManager -> current is AppRoute.ControllerManager
     AppRoute.TextureManager -> current is AppRoute.TextureManager
     AppRoute.Achievements -> current is AppRoute.Achievements

@@ -42,8 +42,8 @@ import kotlinx.coroutines.withContext
  *
  * Everything the user does here is a file operation on their install, so the screen leads with
  * where to put mods and what state the game is in, rather than presenting a toggle whose effect
- * is invisible. The two cases that cannot work -- a disc image, and a game with no mods dropped
- * in yet -- say so instead of showing an empty list that looks broken.
+ * is invisible. The two cases that cannot work, a disc image and a game with no mods dropped in
+ * yet, say so instead of showing an empty list that looks broken.
  */
 @Composable
 fun ModsTab(serial: String) {
@@ -69,8 +69,8 @@ fun ModsTab(serial: String) {
     }
 
     // Two pickers because people have mods in both shapes: a .zip straight off a mod site, or a
-    // folder they already unpacked. Neither can be dropped into the store by hand -- Android
-    // closes this app's data directory to file managers -- so these are the only way in.
+    // folder they already unpacked. Neither can be dropped into the store by hand, because
+    // Android closes this app's data directory to file managers, so these are the only way in.
     val zipPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         busy = true
@@ -96,8 +96,13 @@ fun ModsTab(serial: String) {
             return@Column
         }
 
-        // A disc image has nowhere to put the files, and no overlay mount exists to fake one.
-        // Saying that plainly beats a list of toggles that would all fail.
+        // Stated up front for every game, not only the ones it rules out. Someone whose game
+        // IS moddable still needs to know the rule before they go looking for a mod, and a
+        // message that only appears on failure teaches nobody anything.
+        InfoCard(str("mods.requirement"))
+        Spacer(Modifier.height(10.dp))
+
+        // And when this particular game is the case it rules out, say so as well.
         if (installDir == null) {
             InfoCard(str("mods.discOnly"))
             Spacer(Modifier.height(10.dp))
@@ -122,12 +127,12 @@ fun ModsTab(serial: String) {
             OutlinedButton(
                 onClick = { if (!busy) zipPicker.launch(arrayOf("*/*")) },
                 modifier = Modifier.weight(1f).controllerFocusable("mods.import.zip"),
-                enabled = !busy,
+                enabled = !busy && installDir != null,
             ) { Text(str("mods.import.zip")) }
             OutlinedButton(
                 onClick = { if (!busy) folderPicker.launch(null) },
                 modifier = Modifier.weight(1f).controllerFocusable("mods.import.folder"),
-                enabled = !busy,
+                enabled = !busy && installDir != null,
             ) { Text(str("mods.import.folder")) }
         }
         Spacer(Modifier.height(10.dp))
