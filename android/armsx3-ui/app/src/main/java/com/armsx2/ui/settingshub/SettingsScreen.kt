@@ -185,7 +185,8 @@ fun SettingsScreen(
             val tabs = settingsSections().map { it.category }.filterNot {
                 it == SettingsCategory.About ||
                     (gameSpecific && it == SettingsCategory.General) ||
-                    (!gameSpecific && it == SettingsCategory.Info)
+                    (!gameSpecific && it == SettingsCategory.Info) ||
+                    (!gameSpecific && it == SettingsCategory.Mods)
             }
             val current = tabs.indexOf(displayedCategory)
             if (current >= 0 && tabs.isNotEmpty()) {
@@ -363,6 +364,9 @@ private fun SettingsCategoryBar(
         // sense for a specific game, so hide it in the global settings.
         (gameSpecific && it.category == SettingsCategory.General) ||
             (!gameSpecific && it.category == SettingsCategory.Info) ||
+            // Mods are applied into one title's install folder, so the tab has nothing to
+            // act on without a game -- same reasoning as Info.
+            (!gameSpecific && it.category == SettingsCategory.Mods) ||
             (gameSpecific && it.category == SettingsCategory.About)
     }
     Box(Modifier.fillMaxWidth()) {
