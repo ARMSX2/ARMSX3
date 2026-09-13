@@ -11,8 +11,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -51,13 +54,21 @@ fun ModsTab(serial: String) {
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var mods by remember { mutableStateOf<List<ModManager.Mod>>(emptyList()) }
+    // A loose file that still needs somewhere to go. See the dialog at the end of this file.
+    var pendingFile by remember { mutableStateOf<android.net.Uri?>(null) }
+    var pendingPath by remember { mutableStateOf("") }
 
     val context = LocalContext.current
     val modsRoot = remember(serial, refreshToken) { ModManager.modsRoot(serial) }
 
     val importedFormat = str("mods.imported")
 
-    fun handle(result: ModImporter.Result) {
+    fun handle(result: ModImporter.Result?) {
+        if (result == null) {
+            // Waiting on the destination dialog; not a failure and not a success yet.
+            busy = false
+            return
+        }
         message = when (result) {
             is ModImporter.Result.Ok -> importedFormat.format(result.modName, result.fileCount)
             is ModImporter.Result.Failed -> result.reason
@@ -79,11 +90,18 @@ fun ModsTab(serial: String) {
                     // asking the user about: the file says so. A .pkg is unpacked into the mod
                     // store rather than installed, so it stays something that can be turned off.
                     val name = androidx.documentfile.provider.DocumentFile
-                        .fromSingleUri(context, uri)?.name.orEmpty().lowercase()
-                    if (name.endsWith(".pkg")) {
-                        ModImporter.importPkg(context, serial, uri)
-                    } else {
-                        ModImporter.importZip(context, serial, uri)
+                        .fromSingleUri(context, uri)?.name.orEmpty()
+                    val lower = name.lowercase()
+                    when {
+                        lower.endsWith(".pkg") -> ModImporter.importPkg(context, serial, uri)
+                        lower.endsWith(".zip") -> ModImporter.importZip(context, serial, uri)
+                        // A bare file carries no layout: nothing in patch.ff says it belongs in
+                        // USRDIR/english. Ask, rather than fail with something unhelpful.
+                        else -> {
+                            pendingFile = uri
+                            pendingPath = "USRDIR/"
+                            null
+                        }
                     }
                 },
             )
@@ -152,6 +170,29 @@ fun ModsTab(serial: String) {
             return@Column
         }
 
+        pendingFile?.let { uri ->
+            val fileName = androidx.documentfile.provider.DocumentFile
+                .fromSingleUri(context, uri)?.name.orEmpty()
+            DestinationDialog(
+                fileName = fileName,
+                path = pendingPath,
+                onPathChange = { pendingPath = it },
+                onDismiss = { pendingFile = null },
+                onConfirm = {
+                    val chosen = pendingPath
+                    pendingFile = null
+                    busy = true
+                    scope.launch {
+                        handle(
+                            withContext(Dispatchers.IO) {
+                                ModImporter.importFile(context, serial, uri, chosen)
+                            },
+                        )
+                    }
+                },
+            )
+        }
+
         mods.forEachIndexed { index, mod ->
             if (index > 0) SettingsDivider()
             ToggleRow(
@@ -173,6 +214,34 @@ fun ModsTab(serial: String) {
             }
         }
     }
+}
+
+@Composable
+private fun DestinationDialog(
+    fileName: String,
+    path: String,
+    onPathChange: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(str("mods.where.title")) },
+        text = {
+            Column {
+                Text(str("mods.where.body").format(fileName))
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = path,
+                    onValueChange = onPathChange,
+                    singleLine = true,
+                    label = { Text(str("mods.where.label")) },
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onConfirm) { Text(str("action.ok")) } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(str("action.cancel")) } },
+    )
 }
 
 @Composable

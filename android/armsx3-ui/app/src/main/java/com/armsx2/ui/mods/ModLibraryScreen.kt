@@ -8,8 +8,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -76,22 +76,31 @@ fun ModLibraryScreen(onBack: () -> Unit) {
             leading = { RoundAction("←", str("action.back"), onBack) },
         )
 
-        LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+        // A plain scrolling Column, NOT a LazyColumn, and that is not laziness about laziness.
+        // Every row is controllerFocusable, which registers itself for pad navigation on compose
+        // and unregisters on dispose, and asks to be scrolled into view whenever it is selected.
+        // A lazy list disposes rows as they leave the viewport, so off-screen games drop out of
+        // pad navigation entirely, and a row recomposing while selected drags the list back under
+        // the user's finger. The settings tab strip hit the same thing and solved it the same way.
+        // The list is as long as a game library, which is tens of rows, so composing them all is
+        // not a cost worth the bug.
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            item {
-                Spacer(Modifier.height(4.dp))
-                Card(str("mods.requirement"))
-            }
+            Spacer(Modifier.height(4.dp))
+            Card(str("mods.requirement"))
 
             if (rows.isEmpty()) {
-                item { Card(str("mods.library.empty")) }
+                Card(str("mods.library.empty"))
             } else {
-                items(rows, key = { it.serial }) { row -> GameRow(row) }
+                rows.forEach { row -> GameRow(row) }
             }
 
-            item { Spacer(Modifier.height(12.dp)) }
+            Spacer(Modifier.height(12.dp))
         }
     }
 }

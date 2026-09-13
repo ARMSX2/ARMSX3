@@ -85,7 +85,10 @@ object ModImporter {
             return fail(staging, "Could not read that archive")
         }
         if (written == 0) {
-            return fail(staging, "That archive has nothing in it")
+            // Reached by a .7z or .rar as well as a genuinely empty zip: ZipInputStream reports
+            // no entries rather than failing, so "empty" is what every unreadable archive looks
+            // like from here. Name the likely cause instead of the symptom.
+            return fail(staging, "Nothing could be read from that file. Only .zip archives are supported, so unpack a .7z or .rar first and import the folder.")
         }
 
         return commit(staging, File(destRoot, modName), modName, written)
@@ -144,6 +147,49 @@ object ModImporter {
         if (written == 0) return fail(staging, "That package has no files in it")
 
         return commit(staging, File(destRoot, modName), modName, written)
+    }
+
+    /**
+     * Import one loose file, placed at [relativePath] inside the game.
+     *
+     * The common shape a small mod is distributed in: a single replacement file and a readme
+     * saying which folder to drop it in. There is nothing in the file itself that says where it
+     * belongs, so the path has to come from the user, which is why this takes one rather than
+     * guessing from the extension.
+     *
+     * Without this, a bare file fell through to the archive reader and came back as "that
+     * archive has nothing in it", which is true and completely unhelpful.
+     */
+    fun importFile(context: Context, serial: String, uri: Uri, relativePath: String): Result {
+        val destRoot = modsRootOrFail(serial) ?: return Result.Failed("No storage available yet")
+        val rawName = DocumentFile.fromSingleUri(context, uri)?.name ?: "Mod"
+
+        val rel = safeRelativePath(relativePath.trim())
+            ?: return Result.Failed("That path is not valid")
+        if (rel.isEmpty()) return Result.Failed("Enter where the file goes inside the game")
+
+        // A path ending in a separator names the folder, so keep the file's own name.
+        val target = if (relativePath.trim().endsWith("/")) "$rel/$rawName" else rel
+
+        val modName = uniqueName(destRoot, sanitize(rawName.substringBeforeLast('.')))
+        val staging = File(destRoot, ".import-$modName")
+        staging.deleteRecursively()
+        staging.mkdirs()
+
+        val out = File(staging, target)
+        if (!out.canonicalPath.startsWith(staging.canonicalPath)) {
+            return fail(staging, "That path is not valid")
+        }
+
+        val copied = runCatching {
+            out.parentFile?.mkdirs()
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(out).use { fos -> input.copyTo(fos, 64 * 1024) }
+            } != null
+        }.getOrDefault(false)
+
+        if (!copied || out.length() == 0L) return fail(staging, "Could not read that file")
+        return commit(staging, File(destRoot, modName), modName, 1)
     }
 
     fun importFolder(context: Context, serial: String, treeUri: Uri): Result {
