@@ -97,6 +97,10 @@ object ControllerMappings {
     private fun playerPrefix(player: Int) =
         if (player <= 0) "" else "p${player + 1}."
 
+    /** Clamp a pad port to a real tier. Guards the runtime arrays against a port outside
+     *  0..MAX_PADS-1; an out-of-range pad plays on P1's bindings rather than crashing. */
+    private fun tierFor(player: Int) = player.coerceIn(0, PadRouter.MAX_PADS - 1)
+
     // ---- Per-game scope (issue #246) --------------------------------------
     // The INPUT-MAPPING layer — button binds, stick modes, custom stick codes —
 	// may be overridden PER GAME, mirroring how renderer/touch already go
@@ -836,7 +840,7 @@ object ControllerMappings {
         // Unbound actions store KEYCODE_UNKNOWN; never let a stray UNKNOWN event match
         // one (it would otherwise map to the first unbound action's PS2 button).
         if (physicalKeyCode == KeyEvent.KEYCODE_UNKNOWN) return null
-        return runtimeBindings().targets[if (player == P2) P2 else P1][physicalKeyCode]
+        return runtimeBindings().targets[tierFor(player)][physicalKeyCode]
     }
 
     // ---- Turbo / rapid-fire (per PS2 button, per player) -------------------
@@ -855,7 +859,7 @@ object ControllerMappings {
 
     /** True when a physical button's PS2 target [targetKeyCode] is turbo-flagged. */
     fun isTurboTarget(targetKeyCode: Int, player: Int = 0): Boolean {
-        return targetKeyCode in runtimeBindings().turboTargets[if (player == P2) P2 else P1]
+        return targetKeyCode in runtimeBindings().turboTargets[tierFor(player)]
     }
 
     // ---- System hotkeys (menu / quick save / quick load) -----------------
@@ -936,7 +940,13 @@ object ControllerMappings {
     /**
      * Immutable snapshot used by the gameplay input path. Building it may read
      * SharedPreferences, but key/motion events only perform map/set lookups.
-     * Slot 1 has P2 mappings; every other unified slot intentionally reuses P1.
+     *
+     * One tier per PS3 port. This used to hold two and fold ports 3-7 onto P1, which was
+     * the PS2 lineage showing through -- there, slots 2-7 only existed behind a multitap
+     * and shared P1's config. The PS3 has seven real ports, the remap UI offers all seven
+     * (ControllerManagerScreen / PadTab both iterate 0 until MAX_PADS) and playerPrefix
+     * already writes p3..p7, so a bind made for player 4 saved correctly and was then
+     * never read back.
      */
     private data class RuntimeBindings(
         val serial: String?,
@@ -950,7 +960,7 @@ object ControllerMappings {
     private var runtimeCacheListener: SharedPreferences.OnSharedPreferenceChangeListener? = null
 
     private fun buildRuntimeBindings(serial: String?): RuntimeBindings {
-        val targets = Array(2) { player ->
+        val targets = Array(PadRouter.MAX_PADS) { player ->
             buildMap {
                 // Preserve actions.firstOrNull semantics when duplicate physical
                 // bindings exist: the first action in display order wins.
@@ -961,7 +971,7 @@ object ControllerMappings {
                 }
             }
         }
-        val turboTargets = Array(2) { player ->
+        val turboTargets = Array(PadRouter.MAX_PADS) { player ->
             actions.asSequence()
                 .filter { isTurboAction(it, player) }
                 .map { it.targetKeyCode }
@@ -998,6 +1008,26 @@ object ControllerMappings {
         com.armsx2.ui.touch.TouchControls.warmRuntimeMacroCache()
     }
 
+    /** Player tier prefix on a pref key: "p2." through "p7." (P1 carries no prefix). */
+    private val PLAYER_TIER = Regex("^p[0-9]+\\.")
+
+    /**
+     * True for any pad-mapping pref key, in any scope and any player tier.
+     *
+     * Keys are shaped "[game.<serial>.][p<N>.]pad.<kind>...", so both optional prefixes come
+     * off before the check. Written as a strip rather than the alternation it replaces,
+     * because that alternation named p2 and nothing else: a bind made for players 3-7
+     * updated prefs without ever invalidating the runtime cache, so it did not take effect
+     * until the next launch. Serials carry no dot, which is what makes the scope strip safe.
+     */
+    private fun isPadMappingKey(key: String): Boolean {
+        var rest = key
+        if (rest.startsWith("game.")) rest = rest.substringAfter('.').substringAfter('.')
+        rest = PLAYER_TIER.replace(rest, "")
+        return rest.startsWith("pad.map.") || rest.startsWith("pad.turbo.") ||
+            rest == KEY_DPAD_AS_LSTICK
+    }
+
     /**
      * Register once after MainActivityRuntime.prefs is initialized. Only binding
      * keys invalidate the snapshot, so unrelated preferences such as play-time
@@ -1007,14 +1037,7 @@ object ControllerMappings {
         if (runtimeCacheListener != null) return
         val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             val changedKey = key ?: ""
-            val padMappingChanged =
-                changedKey.startsWith("pad.map.") ||
-                    changedKey.startsWith("p2.pad.map.") ||
-                    (changedKey.startsWith("game.") && changedKey.contains(".pad.map.")) ||
-                    changedKey.startsWith("pad.turbo.") ||
-                    changedKey.startsWith("p2.pad.turbo.") ||
-                    changedKey == KEY_DPAD_AS_LSTICK ||
-                    (changedKey.startsWith("game.") && changedKey.endsWith(".$KEY_DPAD_AS_LSTICK"))
+            val padMappingChanged = isPadMappingKey(changedKey)
             val hotkeyChanged = SysHotkey.values().any {
                 changedKey == it.prefKey || changedKey == it.prefKey + MOD_SUFFIX
             }
