@@ -112,7 +112,10 @@ fun SaveManagerScreen(onBack: () -> Unit, viewModel: SaveManagerViewModel = view
         }
     }
 
-    (state.error ?: state.message)?.let { message ->
+    // Top level, NOT inside the message block below. Nested in it, this dialog could only be
+    // composed while a message was already on screen: the trash can set confirmWipe and nothing
+    // appeared, and the flag then stayed set until the next delete produced a message, at which
+    // point both dialogs rendered on top of each other.
     if (confirmWipe) {
         AlertDialog(
             onDismissRequest = { confirmWipe = false },
@@ -130,6 +133,7 @@ fun SaveManagerScreen(onBack: () -> Unit, viewModel: SaveManagerViewModel = view
         )
     }
 
+    (state.error ?: state.message)?.let { message ->
         AlertDialog(
             onDismissRequest = viewModel::dismissMessage,
             title = { Text(str("savestate.title.loadManage")) },
