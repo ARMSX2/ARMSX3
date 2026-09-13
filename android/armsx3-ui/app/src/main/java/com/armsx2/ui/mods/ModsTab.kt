@@ -41,9 +41,8 @@ import kotlinx.coroutines.withContext
  * Per-game mod list.
  *
  * Everything the user does here is a file operation on their install, so the screen leads with
- * where to put mods and what state the game is in, rather than presenting a toggle whose effect
- * is invisible. The two cases that cannot work, a disc image and a game with no mods dropped in
- * yet, say so instead of showing an empty list that looks broken.
+ * Leads with where mods go and when a change takes effect, because a switch whose result only
+ * appears on the next launch is otherwise a switch that looks broken.
  */
 @Composable
 fun ModsTab(serial: String) {
@@ -54,7 +53,6 @@ fun ModsTab(serial: String) {
     var mods by remember { mutableStateOf<List<ModManager.Mod>>(emptyList()) }
 
     val context = LocalContext.current
-    val installDir = remember(serial, refreshToken) { ModManager.installDirFor(serial) }
     val modsRoot = remember(serial, refreshToken) { ModManager.modsRoot(serial) }
 
     val importedFormat = str("mods.imported")
@@ -102,12 +100,6 @@ fun ModsTab(serial: String) {
         InfoCard(str("mods.requirement"))
         Spacer(Modifier.height(10.dp))
 
-        // And when this particular game is the case it rules out, say so as well.
-        if (installDir == null) {
-            InfoCard(str("mods.discOnly"))
-            Spacer(Modifier.height(10.dp))
-        }
-
         modsRoot?.let { root ->
             Text(
                 text = str("mods.folder"),
@@ -127,12 +119,12 @@ fun ModsTab(serial: String) {
             OutlinedButton(
                 onClick = { if (!busy) zipPicker.launch(arrayOf("*/*")) },
                 modifier = Modifier.weight(1f).controllerFocusable("mods.import.zip"),
-                enabled = !busy && installDir != null,
+                enabled = !busy,
             ) { Text(str("mods.import.zip")) }
             OutlinedButton(
                 onClick = { if (!busy) folderPicker.launch(null) },
                 modifier = Modifier.weight(1f).controllerFocusable("mods.import.folder"),
-                enabled = !busy && installDir != null,
+                enabled = !busy,
             ) { Text(str("mods.import.folder")) }
         }
         Spacer(Modifier.height(10.dp))
@@ -154,7 +146,7 @@ fun ModsTab(serial: String) {
                 value = mod.enabled,
                 description = str("mods.fileCount").format(mod.fileCount),
             ) { wanted ->
-                if (busy || installDir == null) return@ToggleRow
+                if (busy) return@ToggleRow
                 busy = true
                 message = null
                 scope.launch {

@@ -8,51 +8,42 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Loose-file game mods, applied to an installed title.
+ * Loose-file game mods, applied by mounting them over the game's own files.
  *
  * A PS3 mod is almost always a handful of files that replace things under the game's own
  * directory: textures, audio, a rebuilt archive. Doing that by hand means finding the install
- * folder, remembering what you overwrote, and hoping you can put it back. This keeps the same
- * mechanism and takes the bookkeeping off the user.
+ * folder, remembering what you overwrote, and hoping you can put it back.
  *
- * ## Why files are copied
+ * ## Nothing is copied
  *
- * Because it needs nothing from the core. Enabling a mod is a file copy that can happen with
- * the emulator idle, so there is no boot hook, no lifecycle, and nothing to unwind if a launch
- * fails.
+ * Enabling a mod writes a state file and nothing else. The core reads those at boot and mounts
+ * each of the mod's files over the matching path inside the game, because vfs::get walks the
+ * mount list in reverse and takes the first entry carrying a host path, so the deepest mount
+ * wins. See apply_game_mods in System.cpp.
  *
- * It is NOT because the VFS cannot layer. It can: `vfs::get` walks the mount list in reverse
- * and takes the first entry carrying a host path (VFS.cpp, "Save latest valid mount path"), so
- * the deepest mount wins and a host path mounted INSIDE an already-mounted tree shadows what
- * that tree holds at the same virtual path. Mounting a whole directory over USRDIR would still
- * replace it wholesale, but mounting one vpath per mod file would shadow file by file without
- * touching the install at all.
+ * Three things follow, and they are the whole reason for doing it this way:
  *
- * That is the better design and it is the one to move to. It needs mounts placed at boot and
- * removed on stop, which is core work this does not do yet.
+ *  - The install is never written to, so a mod cannot damage a game and there is nothing to
+ *    back up or restore. Storage cost is the mod itself and nothing more.
+ *  - Disc images work. There is no folder inside an .iso to copy into, but there is a virtual
+ *    path to mount over.
+ *  - Turning a mod off is deleting one small file.
  *
- * ## What that costs, and what is kept
+ * Per FILE, not per directory. Mounting a mod's folder over USRDIR would replace the whole
+ * directory and the game would see only the mod's files.
  *
- * Only files a mod actually REPLACES are backed up, never the game. A mod that swaps three
- * textures costs three textures' worth of backup, not the size of the install. Files the mod
- * merely ADDS are recorded by name and deleted again on disable, with nothing stored.
+ * ## When it takes effect
  *
- * ## Disc images are not supported YET
- *
- * Not because it is impossible, per the mount behaviour above, but because this implementation
- * copies, and there is nowhere to copy to inside an .iso. Per-file mounts would lift the
- * restriction. Until then [isModdable] excludes them and the UI says so.
+ * Mounts are placed while a game boots, so toggling one changes what the game loads the next
+ * time it starts. Nothing is applied underneath a running title, which is also why none of this
+ * can corrupt a game mid-session.
  */
 object ModManager {
 
     private const val TAG = "ARMSX3-Mods"
 
-    /** Written into the mod store, not the game, so a wiped game folder cannot orphan it. */
+    /** Read by apply_game_mods in the core. Its presence is what "enabled" means. */
     private const val STATE_DIR = ".state"
-    private const val BACKUP_DIR = ".originals"
-
-    /** One file a mod placed in the game directory. [replaced] decides how it is undone. */
-    private data class AppliedFile(val relativePath: String, val replaced: Boolean)
 
     data class Mod(
         val name: String,
@@ -69,8 +60,9 @@ object ModManager {
 
     /**
      * Where a game's mods live: `<root>/mods/<serial>/<mod name>/`, mirroring the layout inside
-     * the game directory. Deliberately outside `config/dev_hdd0` so that reinstalling a title,
-     * or the backup manager restoring one, cannot take a user's mods with it.
+     * the game. Deliberately outside `config/dev_hdd0` so that reinstalling a title, or the
+     * backup manager restoring one, cannot take a user's mods with it. The core builds the same
+     * path from get_emu_dir(), so the two must stay in step.
      */
     fun modsRoot(serial: String): File? {
         val id = serial.trim().uppercase().takeIf { it.isNotEmpty() } ?: return null
@@ -78,33 +70,25 @@ object ModManager {
         return File(File(root, "mods"), id)
     }
 
-    /** The install directory a mod would be applied to, or null when there isn't one. */
+    /** The install directory, when the title has one. Informational only now that mods mount. */
     fun installDirFor(serial: String): File? =
         serial.trim().uppercase().takeIf { it.isNotEmpty() }?.let { Ps3Sfo.installDir(it) }
 
     /**
-     * Whether a library entry can take mods, which is NOT the same question as whether a folder
-     * exists under its serial.
+     * Whether a library entry can take mods.
      *
-     * Installing an update or a DLC for a DISC game creates dev_hdd0/game/<serial>/, so
-     * [installDirFor] answers yes for a title whose library entry is an .iso. Copying mod files
-     * into that folder would put them beside the update rather than in front of the disc, where
-     * the game never reads them: the mod would appear to apply and do nothing.
-     *
-     * The entry's own extension is the real test. "folder" is a .pkg install or a JB game
-     * folder; anything else in the library is a disc image.
+     * Any title with a serial can: mounting works over a disc image and an installed folder
+     * alike, since both boot with a virtual root to mount into. This used to also require an
+     * install directory, from back when enabling a mod meant copying files into one.
      */
-    fun isModdable(extension: String, serial: String?): Boolean =
-        extension.equals("folder", ignoreCase = true) &&
-            !serial.isNullOrBlank() &&
-            installDirFor(serial) != null
+    fun isModdable(@Suppress("UNUSED_PARAMETER") extension: String, serial: String?): Boolean =
+        !serial.isNullOrBlank()
 
     /**
      * Mods present for [serial], enabled state included.
      *
-     * Directories only, and dot-directories are skipped: [STATE_DIR] and [BACKUP_DIR] are our own
-     * bookkeeping sitting in the same folder, and listing them as mods would let a user toggle
-     * the record of what a mod did.
+     * Dot-directories are skipped: [STATE_DIR] is our own bookkeeping sitting in the same
+     * folder, and listing it as a mod would let a user toggle the record of what is on.
      */
     fun list(serial: String): List<Mod> {
         val root = modsRoot(serial) ?: return emptyList()
@@ -123,122 +107,27 @@ object ModManager {
     }
 
     fun setEnabled(serial: String, modName: String, enable: Boolean): Result {
-        // A mod rewrites files the running title has open. Applying one underneath a live core
-        // is how you get a half-read archive and a crash that looks like an emulator bug.
-        if (MainActivityRuntime.eState.value != EmuState.STOPPED) {
-            return Result.Failed("Close the game first")
-        }
-        return if (enable) enable(serial, modName) else disable(serial, modName)
-    }
+        val state = stateFile(serial, modName) ?: return Result.Failed("No storage available yet")
 
-    private fun enable(serial: String, modName: String): Result {
-        val install = installDirFor(serial)
-            ?: return Result.Failed("This game is not installed as a folder, so it cannot be modded")
+        if (!enable) {
+            state.delete()
+            android.util.Log.i(TAG, "disabled '$modName' for $serial")
+            return Result.Ok
+        }
+
         val modDir = modsRoot(serial)?.let { File(it, modName) }?.takeIf { it.isDirectory }
             ?: return Result.Failed("Mod folder is missing")
-        if (stateFile(serial, modName)?.isFile == true) return Result.Ok
+        val files = modDir.walkTopDown().count { it.isFile }
+        if (files == 0) return Result.Failed("That mod has no files in it")
 
-        val backupRoot = File(File(modsRoot(serial), BACKUP_DIR), modName)
-        val applied = mutableListOf<AppliedFile>()
+        state.parentFile?.mkdirs()
+        val ok = runCatching { state.writeText("{}") }.isSuccess
+        if (!ok) return Result.Failed("Could not save the mod state")
 
-        val installPath = install.canonicalPath
-        val files = modDir.walkTopDown().filter { it.isFile }.toList()
-
-        for (source in files) {
-            val relative = source.relativeTo(modDir).path
-            val target = File(install, relative)
-
-            // A mod is untrusted input: a "../.." in a path would otherwise write outside the
-            // game directory entirely. Resolve first and refuse anything that escapes.
-            val targetPath = runCatching { target.canonicalFile.path }.getOrNull()
-            if (targetPath == null || !(targetPath == installPath || targetPath.startsWith("$installPath/"))) {
-                android.util.Log.w(TAG, "refusing '$relative': resolves outside the game directory")
-                rollback(install, backupRoot, applied)
-                return Result.Failed("Mod contains an unsafe path and was not applied")
-            }
-
-            val replaced = target.isFile
-            val ok = runCatching {
-                if (replaced) {
-                    val backup = File(backupRoot, relative)
-                    backup.parentFile?.mkdirs()
-                    target.copyTo(backup, overwrite = true)
-                }
-                target.parentFile?.mkdirs()
-                source.copyTo(target, overwrite = true)
-            }.isSuccess
-
-            if (!ok) {
-                android.util.Log.e(TAG, "failed to apply '$relative'; rolling back")
-                rollback(install, backupRoot, applied)
-                return Result.Failed("Could not write '$relative'")
-            }
-
-            applied += AppliedFile(relative, replaced)
-        }
-
-        writeState(serial, modName, applied)
-        android.util.Log.i(TAG, "enabled '$modName' for $serial: ${applied.size} file(s), " +
-            "${applied.count { it.replaced }} replaced")
+        android.util.Log.i(TAG, "enabled '$modName' for $serial: $files file(s) will be mounted")
         return Result.Ok
-    }
-
-    private fun disable(serial: String, modName: String): Result {
-        val install = installDirFor(serial) ?: return Result.Failed("Game folder is missing")
-        val state = stateFile(serial, modName)?.takeIf { it.isFile } ?: return Result.Ok
-        val backupRoot = File(File(modsRoot(serial), BACKUP_DIR), modName)
-
-        val applied = readState(state)
-        rollback(install, backupRoot, applied)
-
-        state.delete()
-        backupRoot.deleteRecursively()
-        android.util.Log.i(TAG, "disabled '$modName' for $serial: ${applied.size} file(s) reverted")
-        return Result.Ok
-    }
-
-    /**
-     * Undo [applied], newest first.
-     *
-     * Also used when applying fails partway, which is the reason it takes the list rather than
-     * reading the state file: a half-applied mod has no state file yet, and leaving those files
-     * behind would be the worst outcome of the lot -- a game modified by a mod the UI reports as
-     * off, with nothing recording what changed.
-     */
-    private fun rollback(install: File, backupRoot: File, applied: List<AppliedFile>) {
-        applied.asReversed().forEach { entry ->
-            val target = File(install, entry.relativePath)
-            runCatching {
-                if (entry.replaced) {
-                    val backup = File(backupRoot, entry.relativePath)
-                    if (backup.isFile) backup.copyTo(target, overwrite = true)
-                } else {
-                    target.delete()
-                }
-            }.onFailure {
-                android.util.Log.e(TAG, "could not revert '${entry.relativePath}': ${it.message}")
-            }
-        }
     }
 
     private fun stateFile(serial: String, modName: String): File? =
         modsRoot(serial)?.let { File(File(it, STATE_DIR), "$modName.json") }
-
-    private fun writeState(serial: String, modName: String, applied: List<AppliedFile>) {
-        val file = stateFile(serial, modName) ?: return
-        file.parentFile?.mkdirs()
-        val array = JSONArray()
-        applied.forEach {
-            array.put(JSONObject().put("path", it.relativePath).put("replaced", it.replaced))
-        }
-        runCatching { file.writeText(JSONObject().put("files", array).toString()) }
-    }
-
-    private fun readState(file: File): List<AppliedFile> = runCatching {
-        val array = JSONObject(file.readText()).optJSONArray("files") ?: return emptyList()
-        List(array.length()) { i ->
-            val o = array.getJSONObject(i)
-            AppliedFile(o.optString("path"), o.optBoolean("replaced"))
-        }
-    }.getOrDefault(emptyList())
 }

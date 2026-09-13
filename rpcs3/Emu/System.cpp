@@ -283,6 +283,99 @@ void init_fxo_for_exec(utils::serial* ar, bool full = false)
 }
 
 // Some settings are not allowed with certain conditions
+// Mount an enabled mod's files over the game's own, one virtual path per file.
+//
+// Nothing is copied and the install is never written to, which is what lets this work on a disc
+// image as well as an HDD title: vfs::get walks the mount list in reverse and takes the first
+// entry carrying a host path, so the deepest mount wins. The boot path already leans on that
+// two lines apart, mounting /dev_bdvd/PS3_GAME inside /dev_bdvd.
+//
+// Per FILE, deliberately. Mounting a mod's directory over USRDIR would replace the whole
+// directory and the game would see only the mod's files, which is the opposite of what a mod
+// changing three textures wants.
+//
+// game_dir is the title's own virtual root (m_dir), so one code path serves a disc game at
+// /dev_bdvd/PS3_GAME/ and an installed one at /dev_hdd0/game/<id>/ without knowing which it has.
+//
+// Mods live beside the config directory rather than inside dev_hdd0, so reinstalling a title
+// cannot take them with it. A mod counts as enabled when the UI has written its state file.
+// Nothing is unmounted afterwards because g_fxo->reset() drops the whole table on the next boot.
+static void apply_game_mods(const std::string& title_id, const std::string& game_dir)
+{
+	if (title_id.empty() || game_dir.empty())
+	{
+		return;
+	}
+
+	const std::string mods_dir = rpcs3::utils::get_emu_dir() + "mods/" + title_id + "/";
+	const std::string state_dir = mods_dir + ".state/";
+
+	if (!fs::is_dir(state_dir))
+	{
+		return;
+	}
+
+	// A guard, not a policy. A mod is loose game files; anything near this is a mistake, and
+	// the cost of being wrong is a mount table with one entry per file in it.
+	constexpr usz max_mounts = 20000;
+	usz mounted = 0;
+
+	for (const auto& state : fs::dir(state_dir))
+	{
+		if (state.is_directory || !state.name.ends_with(".json"))
+		{
+			continue;
+		}
+
+		const std::string mod_name = state.name.substr(0, state.name.size() - 5);
+		const std::string mod_root = mods_dir + mod_name + "/";
+
+		if (!fs::is_dir(mod_root))
+		{
+			sys_log.warning("Mod '%s' is enabled but its folder is gone", mod_name);
+			continue;
+		}
+
+		// Iterative rather than recursive: the layout is user-supplied, and a pathological tree
+		// should cost a bounded walk rather than the stack.
+		std::vector<std::string> pending{""};
+		usz files = 0;
+
+		while (!pending.empty())
+		{
+			const std::string rel = std::move(pending.back());
+			pending.pop_back();
+
+			for (const auto& entry : fs::dir(mod_root + rel))
+			{
+				if (entry.name == "." || entry.name == "..")
+				{
+					continue;
+				}
+
+				const std::string child = rel + entry.name;
+
+				if (entry.is_directory)
+				{
+					pending.push_back(child + "/");
+					continue;
+				}
+
+				if (++mounted > max_mounts)
+				{
+					sys_log.error("Mod '%s': too many files, stopped at %d mounts", mod_name, max_mounts);
+					return;
+				}
+
+				vfs::mount(game_dir + child, mod_root + child, false);
+				files++;
+			}
+		}
+
+		sys_log.success("Mod '%s' applied: %d file(s) mounted over %s", mod_name, files, game_dir);
+	}
+}
+
 static void fixup_settings(const psf::registry* _psf)
 {
 	// Disable some incompatible settings in headless mode
@@ -3045,6 +3138,9 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			{
 				sys_log.error("Booting HG category outside of HDD0!");
 			}
+
+			// m_dir is final by here and the game has read nothing yet.
+			apply_game_mods(GetTitleID(), m_dir);
 
 			const auto _main = ensure(g_fxo->init<main_ppu_module<lv2_obj>>());
 
