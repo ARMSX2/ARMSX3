@@ -206,8 +206,39 @@ class GameLibraryRepository(private val context: Context) {
         // So gate the skip on the icon as well, for the games that have one. Re-probing costs
         // one mount, once, and only for a game actually missing it; a game whose icon is on
         // disk still never mounts again, which is what the reasoning above is protecting.
-        loadCached().games.forEach { game ->
+        val cachedGames = loadCached().games
+
+        // A serial is an identity: two different games cannot hold the same one. When two cached
+        // entries do, at least one of them is wrong.
+        //
+        // That is what a failed disc probe used to produce. ISO.cpp copied out of its shared
+        // sector buffer before checking the read had succeeded, so a disc that failed to probe was
+        // handed the PREVIOUS disc's PARAM.SFO and recorded under its serial -- the good disc
+        // listed twice, the failing one absent, and both launching the good one. The read is
+        // checked now, but the wrong identity already written to the cache would outlive the fix,
+        // because an ISO is otherwise never re-probed: seeding it here makes every later scan skip
+        // the probe that would correct it. Renaming the file was the only way out, and only by
+        // accident, since a new path misses the seed.
+        //
+        // So drop the whole colliding group from the seed and let the scan settle it. Deliberately
+        // narrow -- a collision is rare, and this is the one case worth paying a re-probe for.
+        val collidingSerials = cachedGames
+            .mapNotNull { it.serial?.takeIf { s -> s.isNotBlank() } }
+            .groupingBy { it }
+            .eachCount()
+            .filterValues { it > 1 }
+            .keys
+
+        if (collidingSerials.isNotEmpty()) {
+            android.util.Log.w(
+                ScanTag,
+                "re-probing: ${collidingSerials.size} serial(s) claimed by more than one game: $collidingSerials",
+            )
+        }
+
+        cachedGames.forEach { game ->
             val serial = game.serial?.takeIf { it.isNotBlank() } ?: return@forEach
+            if (serial in collidingSerials) return@forEach
             val path = runCatching { game.uri.path }.getOrNull() ?: return@forEach
             // Folders only, and that is not a convenience: re-probing an ISO means load_iso ->
             // vfs::mount, which is the process-wide mount this whole seeding exists to avoid, and

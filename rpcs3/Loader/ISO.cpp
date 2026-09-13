@@ -707,6 +707,19 @@ u64 iso_file_encrypted::read_at(u64 offset, void* buffer, u64 size)
 
 	u64 total_read = m_file.read_at(first_sec.address_aligned, &reinterpret_cast<u8*>(aligned_buf)[first_sec.offset_aligned], first_sec.size_aligned);
 
+	// Check before decrypting and copying, not after. aligned_buf is ONE thread_local buffer
+	// shared by every ISO read on this thread, so a short read leaves the PREVIOUS disc's sector
+	// in it -- which then gets decrypted as though it were this disc's and copied out. The check
+	// at the end of this function already named that ("decoding also failed due to use of
+	// partially initialized buffer"); it just ran too late to prevent it.
+	if (total_read != first_sec.size_aligned)
+	{
+		iso_log.error("read_at: %s: Error reading from file - O: %llu (%llu), S: %llu/%llu/%llu (%llu), TR: %llu", m_meta.name,
+			offset, first_sec.address_aligned, first_sec.size_aligned, max_size, size, total_size, total_read);
+
+		return 0;
+	}
+
 	m_dec->decrypt(first_sec.address_aligned, &reinterpret_cast<u8*>(aligned_buf)[first_sec.offset_aligned], first_sec.size_aligned, m_meta.name);
 	std::memcpy(buffer, &reinterpret_cast<u8*>(aligned_buf)[first_sec.offset], first_sec.size);
 
@@ -714,14 +727,6 @@ u64 iso_file_encrypted::read_at(u64 offset, void* buffer, u64 size)
 
 	if (sector_count < 2) // If no more sector(s)
 	{
-		if (total_read != first_sec.size_aligned)
-		{
-			iso_log.error("read_at: %s: Error reading from file - O: %llu (%llu), S: %llu/%llu/%llu (%llu), TR: %llu", m_meta.name,
-				offset, first_sec.address_aligned, first_sec.size_aligned, max_size, size, total_size, total_read);
-
-			return 0;
-		}
-
 		// If present, read the remaining chunk of data on next extent
 		if (size > max_size && (offset + max_size) < total_size)
 		{
@@ -742,7 +747,18 @@ u64 iso_file_encrypted::read_at(u64 offset, void* buffer, u64 size)
 		{
 			const u64 inner_sector_size = (sector_count - 2) * ISO_SECTOR_SIZE;
 
-			total_read += m_file.read_at(first_sec.lba_address + ISO_SECTOR_SIZE, &reinterpret_cast<u8*>(buffer)[first_sec.size], inner_sector_size);
+			const u64 inner_read = m_file.read_at(first_sec.lba_address + ISO_SECTOR_SIZE, &reinterpret_cast<u8*>(buffer)[first_sec.size], inner_sector_size);
+			total_read += inner_read;
+
+			// This one reads straight into the caller's buffer, so a short read leaves whatever
+			// the caller had there and decrypts it in place.
+			if (inner_read != inner_sector_size)
+			{
+				iso_log.error("read_at: %s: Error reading inner sectors - O: %llu, TR: %llu/%llu", m_meta.name,
+					offset, inner_read, inner_sector_size);
+
+				return 0;
+			}
 
 			m_dec->decrypt(first_sec.lba_address + ISO_SECTOR_SIZE, &reinterpret_cast<u8*>(buffer)[first_sec.size], inner_sector_size, m_meta.name);
 		}
@@ -752,7 +768,16 @@ u64 iso_file_encrypted::read_at(u64 offset, void* buffer, u64 size)
 
 			for (u64 i = 0; i < sector_count - 2; i++, inner_sector_offset += ISO_SECTOR_SIZE)
 			{
-				total_read += m_file.read_at(first_sec.lba_address + ISO_SECTOR_SIZE + inner_sector_offset, aligned_buf, ISO_SECTOR_SIZE);
+				const u64 inner_read = m_file.read_at(first_sec.lba_address + ISO_SECTOR_SIZE + inner_sector_offset, aligned_buf, ISO_SECTOR_SIZE);
+				total_read += inner_read;
+
+				if (inner_read != ISO_SECTOR_SIZE)
+				{
+					iso_log.error("read_at: %s: Error reading inner sector %llu - O: %llu, TR: %llu", m_meta.name,
+						i, offset, inner_read);
+
+					return 0;
+				}
 
 				m_dec->decrypt(first_sec.lba_address + ISO_SECTOR_SIZE + inner_sector_offset, aligned_buf, ISO_SECTOR_SIZE, m_meta.name);
 				std::memcpy(&reinterpret_cast<u8*>(buffer)[first_sec.size + inner_sector_offset], aligned_buf, ISO_SECTOR_SIZE);
@@ -775,7 +800,16 @@ u64 iso_file_encrypted::read_at(u64 offset, void* buffer, u64 size)
 		last_sec.size_aligned = ISO_SECTOR_SIZE;
 	}
 
-	total_read += m_file.read_at(last_sec.address_aligned, aligned_buf, last_sec.size_aligned);
+	const u64 last_read = m_file.read_at(last_sec.address_aligned, aligned_buf, last_sec.size_aligned);
+	total_read += last_read;
+
+	if (last_read != last_sec.size_aligned)
+	{
+		iso_log.error("read_at: %s: Error reading last sector - O: %llu (%llu), TR: %llu/%llu", m_meta.name,
+			offset, last_sec.address_aligned, last_read, last_sec.size_aligned);
+
+		return 0;
+	}
 
 	m_dec->decrypt(last_sec.address_aligned, aligned_buf, last_sec.size_aligned, m_meta.name);
 	std::memcpy(&reinterpret_cast<u8*>(buffer)[max_size - last_sec.size], aligned_buf, last_sec.size);
@@ -1382,20 +1416,29 @@ u64 iso_file::read_at(u64 offset, void* buffer, u64 size)
 
 	u64 total_read = m_file.read_at(first_sec.lba_address, aligned_buf, ISO_SECTOR_SIZE);
 
+	// Check before copying, not after.
+	//
+	// aligned_buf is ONE thread_local buffer shared by every ISO read on this thread, so a short
+	// read leaves the PREVIOUS disc's sector sitting in it. The error check used to live at the
+	// end of the function, after every memcpy had already run, so a failed read still filled the
+	// caller's buffer with another disc's bytes and only then returned 0. A caller that trusts
+	// its output buffer over the return value then reads one game's PARAM.SFO as another's --
+	// which is how a disc whose probe failed showed up in the library under a different disc's
+	// identity, with the good disc listed twice and the failing one missing entirely.
+	if (total_read != ISO_SECTOR_SIZE)
+	{
+		iso_log.error("read_at: %s: Error reading from file - O: %llu (%llu), S: %llu/%llu/%llu (%llu), TR: %llu", m_meta.name,
+			offset, first_sec.lba_address, ISO_SECTOR_SIZE, max_size, size, total_size, total_read);
+
+		return 0;
+	}
+
 	std::memcpy(buffer, &reinterpret_cast<u8*>(aligned_buf)[first_sec.offset], first_sec.size);
 
 	const u64 sector_count = (last_sec.lba_address - first_sec.lba_address) / ISO_SECTOR_SIZE + 1;
 
 	if (sector_count < 2) // If no more sector(s)
 	{
-		if (total_read != ISO_SECTOR_SIZE)
-		{
-			iso_log.error("read_at: %s: Error reading from file - O: %llu (%llu), S: %llu/%llu/%llu (%llu), TR: %llu", m_meta.name,
-				offset, first_sec.lba_address, ISO_SECTOR_SIZE, max_size, size, total_size, total_read);
-
-			return 0;
-		}
-
 		// If present, read the remaining chunk of data on next extent
 		if (size > max_size && (offset + max_size) < total_size)
 		{
@@ -1416,7 +1459,17 @@ u64 iso_file::read_at(u64 offset, void* buffer, u64 size)
 
 		for (u64 i = 0; i < sector_count - 2; i++, sector_offset += ISO_SECTOR_SIZE)
 		{
-			total_read += m_file.read_at(first_sec.lba_address + ISO_SECTOR_SIZE + sector_offset, aligned_buf, ISO_SECTOR_SIZE);
+			const u64 inner_read = m_file.read_at(first_sec.lba_address + ISO_SECTOR_SIZE + sector_offset, aligned_buf, ISO_SECTOR_SIZE);
+			total_read += inner_read;
+
+			// Same reason as the first sector: a short read here would copy the last disc's bytes.
+			if (inner_read != ISO_SECTOR_SIZE)
+			{
+				iso_log.error("read_at: %s: Error reading inner sector %llu - O: %llu, TR: %llu", m_meta.name,
+					i, offset, inner_read);
+
+				return 0;
+			}
 
 			std::memcpy(&reinterpret_cast<u8*>(buffer)[first_sec.size + sector_offset], aligned_buf, ISO_SECTOR_SIZE);
 		}
@@ -1426,7 +1479,17 @@ u64 iso_file::read_at(u64 offset, void* buffer, u64 size)
 	// Last sector
 	//
 
-	total_read += m_file.read_at(last_sec.address_aligned, aligned_buf, ISO_SECTOR_SIZE);
+	const u64 last_read = m_file.read_at(last_sec.address_aligned, aligned_buf, ISO_SECTOR_SIZE);
+	total_read += last_read;
+
+	// Same reason as the first sector.
+	if (last_read != ISO_SECTOR_SIZE)
+	{
+		iso_log.error("read_at: %s: Error reading last sector - O: %llu (%llu), TR: %llu", m_meta.name,
+			offset, last_sec.address_aligned, last_read);
+
+		return 0;
+	}
 
 	std::memcpy(&reinterpret_cast<u8*>(buffer)[max_size - last_sec.size], aligned_buf, last_sec.size);
 
