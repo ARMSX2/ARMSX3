@@ -307,13 +307,33 @@ static void apply_game_mods(const std::string& title_id, const std::string& game
 		return;
 	}
 
-	const std::string mods_dir = rpcs3::utils::get_emu_dir() + "mods/" + title_id + "/";
+	// Mods sit BESIDE the config directory, not inside it, so that reinstalling a title or
+	// restoring a backup cannot take them with it. get_config_dir() is <root>/config/ here, one
+	// level too deep, so walk up to <root>. The UI builds the same path from its own root and
+	// the two have to agree: get this wrong and every mod is simply never found, with no error
+	// anywhere, which is exactly what the first version of this did.
+	std::string root = fs::get_config_dir();
+	while (!root.empty() && root.back() == '/')
+	{
+		root.pop_back();
+	}
+	if (const usz slash = root.find_last_of('/'); slash != umax)
+	{
+		root.resize(slash);
+	}
+
+	const std::string mods_dir = root + "/mods/" + title_id + "/";
 	const std::string state_dir = mods_dir + ".state/";
 
 	if (!fs::is_dir(state_dir))
 	{
+		// Said out loud because a silent return here is indistinguishable from a mod that did
+		// not apply, and the path is the thing worth seeing when that happens.
+		sys_log.notice("No enabled mods for %s (looked in %s)", title_id, mods_dir);
 		return;
 	}
+
+	sys_log.notice("Applying mods for %s from %s", title_id, mods_dir);
 
 	// A guard, not a policy. A mod is loose game files; anything near this is a mistake, and
 	// the cost of being wrong is a mount table with one entry per file in it.
@@ -334,6 +354,23 @@ static void apply_game_mods(const std::string& title_id, const std::string& game
 		{
 			sys_log.warning("Mod '%s' is enabled but its folder is gone", mod_name);
 			continue;
+		}
+
+		// Every root the game reads from, not just the one it booted from.
+		//
+		// A disc title with an update installed reads from BOTH: the update at
+		// /dev_hdd0/game/<id>/ and the disc at /dev_bdvd/PS3_GAME/. game_dir is only the first
+		// of those, so a mod could replace an update file and never a disc file. Call of Duty:
+		// World at War is the case that showed it -- a mod's patch.ff applied correctly from
+		// the update while the nazi_zombie_*_patch.ff beside it on the disc was unreachable.
+		//
+		// Mounting the same relative path under both is safe: they are distinct virtual paths,
+		// the game asks for whichever one it wants, and a mount nothing asks for costs an entry
+		// in a table.
+		std::vector<std::string> roots{game_dir};
+		if (game_dir != "/dev_bdvd/PS3_GAME/" && !vfs::get("/dev_bdvd/PS3_GAME").empty())
+		{
+			roots.emplace_back("/dev_bdvd/PS3_GAME/");
 		}
 
 		// Iterative rather than recursive: the layout is user-supplied, and a pathological tree
@@ -367,12 +404,16 @@ static void apply_game_mods(const std::string& title_id, const std::string& game
 					return;
 				}
 
-				vfs::mount(game_dir + child, mod_root + child, false);
+				for (const std::string& root : roots)
+				{
+					vfs::mount(root + child, mod_root + child, false);
+				}
 				files++;
 			}
 		}
 
-		sys_log.success("Mod '%s' applied: %d file(s) mounted over %s", mod_name, files, game_dir);
+		sys_log.success("Mod '%s' applied: %d file(s) over %s%s", mod_name, files, game_dir,
+			roots.size() > 1 ? " and /dev_bdvd/PS3_GAME/" : "");
 	}
 }
 
