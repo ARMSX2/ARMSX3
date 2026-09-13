@@ -28,6 +28,10 @@ object Ps3PatchRepo {
      * upstream bumps the constant: patch_engine::load rejects any file whose
      * Version header does not match, so the two have to move together.
      */
+    /** Asked for the current release rather than a pinned asset url, which would rot. */
+    private const val ARTEMIS_LATEST_RELEASE =
+        "https://api.github.com/repos/chidreams/Artemis-Patch-Collection-RPCS3/releases/latest"
+
     private fun patchUrl(version: String) =
         "https://rpcs3.net/compatibility?patch&api=v1&v=$version"
 
@@ -95,6 +99,69 @@ object Ps3PatchRepo {
         // what the server hashed does not get imported.
         val expected = envelope.optString("sha256")
         if (!expected.equals(sha256(yaml), ignoreCase = true)) return Result.Checksum
+
+        val n = runCatching { RPCSX.instance.patchesImport(yaml) }.getOrDefault(-1)
+        return if (n >= 0) Result.Ok(n) else Result.Parse
+    }
+
+    /**
+     * The Artemis collection, a second source of patches.
+     *
+     * Community cheats, MIT licensed, and already in RPCS3's own patch format: PPU hash keyed,
+     * with `[ be32, addr, value ]` entries. No conversion step, so it goes through
+     * patchesImport like everything else and merges into patches/patch.yml beside the rpcs3.net
+     * database rather than replacing it.
+     *
+     * The release ASSET is asked for rather than hardcoded. It ships as a zip attached to a
+     * GitHub release and the tag moves, so a pinned url would rot the first time they publish.
+     * Asking the API which asset is current costs one small request and survives that.
+     *
+     * No checksum to verify: unlike rpcs3.net there is no published digest to compare against.
+     * The transport is https and the core parses the result, so a corrupt file is rejected
+     * rather than half applied, which is the same guarantee [importLocal] gives.
+     */
+    fun downloadArtemis(): Result {
+        val meta = runCatching {
+            com.armsx3.HttpClient.doRequest(ARTEMIS_LATEST_RELEASE, userAgent = "ARMSX3")
+        }.getOrNull() ?: return Result.Network
+
+        if (meta.statusCode != 200 || meta.data.isEmpty()) {
+            return if (meta.statusCode > 0) Result.Server(meta.statusCode) else Result.Network
+        }
+
+        val assetUrl = runCatching {
+            val assets = org.json.JSONObject(String(meta.data, Charsets.UTF_8))
+                .getJSONArray("assets")
+            (0 until assets.length())
+                .map { assets.getJSONObject(it) }
+                .firstOrNull { it.optString("name").endsWith(".zip", ignoreCase = true) }
+                ?.optString("browser_download_url")
+        }.getOrNull()?.takeIf { it.isNotBlank() } ?: return Result.Parse
+
+        // Longer than the default: this is a whole collection, not one game's patches, and it
+        // arrives over a link the user did not choose the speed of.
+        val archive = runCatching {
+            com.armsx3.HttpClient.doRequest(assetUrl, userAgent = "ARMSX3", timeoutMs = 60_000)
+        }.getOrNull() ?: return Result.Network
+
+        if (archive.statusCode != 200 || archive.data.isEmpty()) {
+            return if (archive.statusCode > 0) Result.Server(archive.statusCode) else Result.Network
+        }
+
+        val yaml = runCatching {
+            java.util.zip.ZipInputStream(archive.data.inputStream()).use { zip ->
+                var found: String? = null
+                while (found == null) {
+                    val entry = zip.nextEntry ?: break
+                    if (!entry.isDirectory && entry.name.endsWith(".yml", ignoreCase = true)) {
+                        found = zip.readBytes().toString(Charsets.UTF_8)
+                    }
+                }
+                found
+            }
+        }.getOrNull()
+
+        if (yaml.isNullOrBlank()) return Result.Parse
 
         val n = runCatching { RPCSX.instance.patchesImport(yaml) }.getOrDefault(-1)
         return if (n >= 0) Result.Ok(n) else Result.Parse

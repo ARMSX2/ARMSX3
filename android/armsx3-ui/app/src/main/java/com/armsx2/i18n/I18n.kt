@@ -249,7 +249,7 @@ val EN: Map<String, String> = mapOf(
     "tab.hotkeys" to "Hotkeys",
     "tab.network" to "Network",
     "tab.overlay" to "On-Screen",
-    "tab.patches" to "Patches",
+    "tab.patches" to "Patches & Cheats",
     "tab.recompiler" to "Recompiler",
     "tab.skins" to "Skins",
     // --- App tab / language ---
@@ -1063,6 +1063,7 @@ val EN: Map<String, String> = mapOf(
     "pad.touchHaptics.description" to "Vibrate briefly when you press an on-screen button (like PPSSPP / Azahar). Separate from controller rumble.",
     "pad.touchHaptics.label" to "Touch Haptics",
     "patches.dialog.patchesAndCheats" to "Patches & cheats",
+    "patches.ps3.downloadArtemis" to "Download Artemis cheats",
     "patches.hardcoreNoticeCheatsDisabled" to "Cheats are disabled while RetroAchievements Hardcore mode is active. Patches still apply.",
     "perf.displayFpsCap.label" to "Display FPS Cap",
     "perf.displayFpsCap.ps3" to "PS3",

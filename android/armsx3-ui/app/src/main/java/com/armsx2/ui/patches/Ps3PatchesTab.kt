@@ -146,6 +146,37 @@ fun Ps3PatchesTab(serial: String = "") {
             Text(str("patches.ps3.download"))
         }
 
+        // A second source, not a replacement: Artemis is community cheats and rpcs3.net is the
+        // curated database, both in the same format, and patchesImport merges rather than
+        // overwrites, so having both is having more patches.
+        OutlinedButton(
+            onClick = {
+                if (busy) return@OutlinedButton
+                busy = true
+                message = null
+                scope.launch {
+                    val r = withContext(Dispatchers.IO) { Ps3PatchRepo.downloadArtemis() }
+                    busy = false
+                    message = when (r) {
+                        is Ps3PatchRepo.Result.Ok -> {
+                            reload()
+                            "${r.count} " + str2("patches.ps3.imported")
+                        }
+                        Ps3PatchRepo.Result.Network -> str2("patches.ps3.downloadFailed")
+                        is Ps3PatchRepo.Result.Server ->
+                            str2("patches.ps3.serverError") + " (${r.code})"
+                        Ps3PatchRepo.Result.Parse -> str2("patches.ps3.parseFailed")
+                        Ps3PatchRepo.Result.Checksum -> str2("patches.ps3.checksumFailed")
+                    }
+                }
+            },
+            modifier = Modifier
+                .fillMaxWidth()
+                .controllerFocusable("patches.download.artemis", RoundedCornerShape(13.dp)),
+        ) {
+            Text(str("patches.ps3.downloadArtemis"))
+        }
+
         // Local import sits next to the download because the two produce the same
         // result -- patchesImport merges either source into patches/patch.yml.
         OutlinedButton(
