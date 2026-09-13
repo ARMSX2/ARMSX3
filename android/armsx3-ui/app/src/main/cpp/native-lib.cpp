@@ -54,6 +54,7 @@ struct RPCSXApi {
   bool (*isInstallableFile)(jint fd);
   jstring (*getDirInstallPath)(JNIEnv *env, jint fd);
   bool (*install)(JNIEnv *env, int fd, long progressId);
+  bool (*extractPkgTo)(JNIEnv *env, int fd, long progressId, const char *dest);
   bool (*installKey)(JNIEnv *env, int fd, long progressId,
                      std::string_view gamePath);
   std::string (*systemInfo)();
@@ -174,6 +175,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.isInstallableFile = reinterpret_cast<decltype(isInstallableFile)>(dlsym(handle, "_rpcsx_isInstallableFile"));
     result.getDirInstallPath = reinterpret_cast<decltype(getDirInstallPath)>(dlsym(handle, "_rpcsx_getDirInstallPath"));
     result.install = reinterpret_cast<decltype(install)>(dlsym(handle, "_rpcsx_install"));
+    result.extractPkgTo = reinterpret_cast<decltype(extractPkgTo)>(dlsym(handle, "_rpcsx_extractPkgTo"));
     result.installKey = reinterpret_cast<decltype(installKey)>(dlsym(handle, "_rpcsx_installKey"));
     result.systemInfo = reinterpret_cast<decltype(systemInfo)>(dlsym(handle, "_rpcsx_systemInfo"));
     result.loginUser = reinterpret_cast<decltype(loginUser)>(dlsym(handle, "_rpcsx_loginUser"));
@@ -606,6 +608,23 @@ Java_net_rpcsx_RPCSX_install(JNIEnv *env, jobject, jint fd, jlong progressId) {
   }
 
   return rpcsxLib.install(env, fd, progressId);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_extractPkgTo(JNIEnv *env, jobject, jint fd, jlong progressId,
+                                  jstring dest) {
+  if (rpcsxLib.extractPkgTo == nullptr || dest == nullptr) {
+    return false;
+  }
+
+  const char *destChars = env->GetStringUTFChars(dest, nullptr);
+  if (destChars == nullptr) {
+    return false;
+  }
+
+  const bool ok = rpcsxLib.extractPkgTo(env, fd, progressId, destChars);
+  env->ReleaseStringUTFChars(dest, destChars);
+  return ok;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_installKey(

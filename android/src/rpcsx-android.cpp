@@ -5292,6 +5292,29 @@ extern "C" bool _rpcsx_uninstallGame(std::string_view path) {
   return fs::remove_all(dir);
 }
 
+// Extract a .pkg into a directory instead of installing it.
+//
+// Same machinery as an install, pointed somewhere else: a mod shipped as a package holds the
+// same game-relative files a loose mod does, so dropping them into the mod store turns it into
+// something that can be switched off rather than a permanent overwrite of the title.
+//
+// The override is cleared unconditionally on the way out, including on failure. Leaving it set
+// would silently redirect the NEXT ordinary install into a mod folder, which is about the worst
+// failure this could have.
+extern "C" bool _rpcsx_extractPkgTo(JNIEnv *env, int fd, long progressId,
+                                    const char *dest) {
+  if (dest == nullptr || *dest == '\0') {
+    return false;
+  }
+
+  package_reader::set_install_root_override(dest);
+  AtExit clearOverride{[] { package_reader::set_install_root_override({}); }};
+
+  std::vector<fs::file> files;
+  files.push_back(fs::file::from_native_handle(fd));
+  return installPkg(env, std::move(files), progressId);
+}
+
 extern "C" bool _rpcsx_install(JNIEnv *env, int fd, long progressId) {
   auto file = fs::file::from_native_handle(fd);
   AtExit atExit{[&] { file.release_handle(); }};

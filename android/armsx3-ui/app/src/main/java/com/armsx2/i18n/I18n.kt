@@ -1256,7 +1256,7 @@ val EN: Map<String, String> = mapOf(
     "mods.library.empty" to "No games yet. Anything in your library can take mods, including disc images.",
     "mods.library.count" to "%d mod(s), %d on",
     "mods.library.none" to "No mods yet",
-    "mods.import.zip" to "Import .zip",
+    "mods.import.file" to "Import file",
     "mods.import.folder" to "Import folder",
     "mods.imported" to "Imported \"%s\" (%d files). Turn it on below.",
     "renderer.blendingMode.label" to "Blending",

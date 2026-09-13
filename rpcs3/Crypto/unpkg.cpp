@@ -813,6 +813,16 @@ package_install_result package_reader::check_target_app_version() const
 	};
 }
 
+// Empty unless a caller is extracting outside dev_hdd0. Installs are serialised behind one
+// worker thread, so a plain global is enough and an extra lock would only describe a race that
+// cannot happen.
+static std::string s_install_root_override;
+
+void package_reader::set_install_root_override(std::string root)
+{
+	s_install_root_override = std::move(root);
+}
+
 bool package_reader::set_install_path()
 {
 	if (!m_is_valid)
@@ -823,6 +833,23 @@ bool package_reader::set_install_path()
 	m_install_path.clear();
 
 	// Get full path
+	// An override skips the dev_hdd0 layout entirely: the caller has already decided exactly
+	// where this should land, and the game/<id> shaping below is the thing it is avoiding.
+	if (!s_install_root_override.empty())
+	{
+		m_install_path = s_install_root_override;
+		if (!m_install_path.empty() && m_install_path.back() != '/')
+		{
+			m_install_path += '/';
+		}
+		if (!fs::create_path(m_install_path))
+		{
+			pkg_log.error("Could not create the extraction directory %s (error=%s)", m_install_path, fs::g_tls_error);
+			return false;
+		}
+		return true;
+	}
+
 	std::string dir = rpcs3::utils::get_hdd0_dir();
 
 	// Based on https://www.psdevwiki.com/ps3/PKG_files#ContentType

@@ -226,7 +226,7 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // Patches: RPCS3's own hash-addressed patch.yml, not PNACH. Goes to the
         // global list; per-game patches are reached from the game's own settings,
         // where the serial filters the list.
-        DrawerItem("tab.patches", "\uD83E\uDE79", AppRoute.Settings(SettingsCategory.Patches)),
+        DrawerItem("tab.patches", "\u2728", AppRoute.Settings(SettingsCategory.Patches)),
         // Mods: the library filtered to titles that can take them. Unlike Patches there is no
         // global mod list to show, so this is a front door rather than a second view of the
         // same data. The per-game tab is the last chip in a scrolling strip behind a long

@@ -4,6 +4,8 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import net.rpcsx.ProgressRepository
+import net.rpcsx.RPCSX
 import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
@@ -85,6 +87,61 @@ object ModImporter {
         if (written == 0) {
             return fail(staging, "That archive has nothing in it")
         }
+
+        return commit(staging, File(destRoot, modName), modName, written)
+    }
+
+    /**
+     * Extract a .pkg into the mod store instead of installing it.
+     *
+     * Plenty of PS3 mods ship as packages, and installing one writes its files permanently into
+     * the title with no record of what it overwrote. A package's contents are already laid out
+     * relative to the game, which is the same shape a loose mod has, so unpacking it here turns
+     * it into something that can be switched off again.
+     *
+     * Copied to a real file first. The core seeks around a package while reading it and a SAF
+     * descriptor is not always seekable, which the package installer handles with the same
+     * fallback; going straight to a local file makes the seekable case the only case.
+     */
+    fun importPkg(context: Context, serial: String, uri: Uri): Result {
+        val destRoot = modsRootOrFail(serial) ?: return Result.Failed("No storage available yet")
+        val rawName = DocumentFile.fromSingleUri(context, uri)?.name ?: "Mod"
+        val modName = uniqueName(destRoot, sanitize(rawName.substringBeforeLast('.')))
+
+        val staging = File(destRoot, ".import-$modName")
+        staging.deleteRecursively()
+        staging.mkdirs()
+
+        val scratch = File(destRoot, ".import-$modName.pkg")
+        val copied = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                scratch.outputStream().use { out -> input.copyTo(out, 1 shl 20) }
+            } != null
+        }.getOrDefault(false)
+
+        if (!copied || scratch.length() == 0L) {
+            scratch.delete()
+            return fail(staging, "Could not read that package")
+        }
+
+        val ok = runCatching {
+            val progress = ProgressRepository.create(context, "Extracting $modName", silent = true)
+            android.os.ParcelFileDescriptor.open(
+                scratch, android.os.ParcelFileDescriptor.MODE_READ_ONLY,
+            ).use { pfd ->
+                RPCSX.instance.extractPkgTo(pfd.fd, progress, staging.absolutePath)
+            }
+        }.getOrElse {
+            Log.w(TAG, "pkg extract threw: ${it.message}")
+            false
+        }
+
+        scratch.delete()
+
+        if (!ok) return fail(staging, "That package could not be extracted")
+
+        val written = staging.walkTopDown().count { it.isFile }
+        if (written == 0) return fail(staging, "That package has no files in it")
 
         return commit(staging, File(destRoot, modName), modName, written)
     }

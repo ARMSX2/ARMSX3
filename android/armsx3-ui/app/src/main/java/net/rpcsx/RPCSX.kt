@@ -89,6 +89,9 @@ class RPCSX {
     external fun initialize(rootDir: String, user: String, socInfo: String): Boolean
     external fun installFw(fd: Int, progressId: Long): Boolean
     external fun install(fd: Int, progressId: Long): Boolean
+
+    /** Extract a .pkg into [dest] instead of installing it into dev_hdd0. */
+    external fun extractPkgTo(fd: Int, progressId: Long, dest: String): Boolean
     /** Install several .pkg parts of one split package together, in order. */
     external fun installSplitPkg(fds: IntArray, progressId: Long): Boolean
     /** Delete an installed title's directory. Refused for paths outside dev_hdd0/game. */

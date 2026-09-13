@@ -378,6 +378,17 @@ public:
 	bool is_valid() const { return m_is_valid; }
 	const PKGHeader& get_header() const { return m_header; }
 	const PKGMetaData& get_metadata() const { return m_metadata; }
+	// Extract somewhere other than dev_hdd0.
+	//
+	// A mod distributed as a .pkg is the same shape as one distributed as loose files: its
+	// contents are already laid out relative to the game. Installing it writes those files
+	// permanently into the title with no record of what was overwritten; extracting it into the
+	// mod store instead leaves it as something that can be switched off again.
+	//
+	// Set for the duration of one extraction and cleared afterwards. Empty means the normal
+	// destination, which is every other caller.
+	static void set_install_root_override(std::string root);
+
 	package_install_result check_target_app_version() const;
 	static package_install_result extract_data(std::deque<package_reader>& readers, std::deque<std::string>& bootable_paths, bool from_optical_drive);
 	const psf::registry& get_psf() const { return m_psf; }

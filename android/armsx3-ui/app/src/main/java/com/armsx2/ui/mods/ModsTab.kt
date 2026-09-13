@@ -69,11 +69,24 @@ fun ModsTab(serial: String) {
     // Two pickers because people have mods in both shapes: a .zip straight off a mod site, or a
     // folder they already unpacked. Neither can be dropped into the store by hand, because
     // Android closes this app's data directory to file managers, so these are the only way in.
-    val zipPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         busy = true
         scope.launch {
-            handle(withContext(Dispatchers.IO) { ModImporter.importZip(context, serial, uri) })
+            handle(
+                withContext(Dispatchers.IO) {
+                    // A mod arrives as an archive or as a package, and which one is not worth
+                    // asking the user about: the file says so. A .pkg is unpacked into the mod
+                    // store rather than installed, so it stays something that can be turned off.
+                    val name = androidx.documentfile.provider.DocumentFile
+                        .fromSingleUri(context, uri)?.name.orEmpty().lowercase()
+                    if (name.endsWith(".pkg")) {
+                        ModImporter.importPkg(context, serial, uri)
+                    } else {
+                        ModImporter.importZip(context, serial, uri)
+                    }
+                },
+            )
         }
     }
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -117,10 +130,10 @@ fun ModsTab(serial: String) {
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
-                onClick = { if (!busy) zipPicker.launch(arrayOf("*/*")) },
-                modifier = Modifier.weight(1f).controllerFocusable("mods.import.zip"),
+                onClick = { if (!busy) filePicker.launch(arrayOf("*/*")) },
+                modifier = Modifier.weight(1f).controllerFocusable("mods.import.file"),
                 enabled = !busy,
-            ) { Text(str("mods.import.zip")) }
+            ) { Text(str("mods.import.file")) }
             OutlinedButton(
                 onClick = { if (!busy) folderPicker.launch(null) },
                 modifier = Modifier.weight(1f).controllerFocusable("mods.import.folder"),
