@@ -1260,6 +1260,7 @@ val EN: Map<String, String> = mapOf(
     "mods.where.title" to "Where does this go?",
     "mods.where.body" to "\"%s\" is a single file, so it does not say where it belongs. Enter the folder inside the game, the way the mod's instructions write it. For example USRDIR/english/",
     "mods.where.label" to "Path inside the game",
+    "mods.where.found" to "The game already has a file called \"%s\". Pick the one this mod replaces, or type a different path.",
     "mods.import.folder" to "Import folder",
     "mods.imported" to "Imported \"%s\" (%d files). Turn it on below.",
     "renderer.blendingMode.label" to "Blending",

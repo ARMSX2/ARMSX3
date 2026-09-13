@@ -85,6 +85,37 @@ object ModManager {
         !serial.isNullOrBlank()
 
     /**
+     * Places inside the game already holding a file called [fileName].
+     *
+     * A loose mod file carries no location: patch.ff does not know it is a Call of Duty file,
+     * let alone that it belongs in USRDIR/english. But the GAME knows, because the file the mod
+     * replaces is sitting there under the same name. Searching for it turns "type the path from
+     * the readme" into "pick the one you meant", and catches the typo that would otherwise leave
+     * a mod mounted somewhere nothing reads.
+     *
+     * Often more than one answer, and that is the point rather than a flaw: Call of Duty keeps a
+     * patch.ff per language, and which one is a decision only the user can make.
+     *
+     * Returns empty for a disc image, which has no install directory to walk. The core could
+     * enumerate one, but not from here.
+     */
+    fun matchingPaths(serial: String, fileName: String): List<String> {
+        val name = fileName.trim().lowercase().takeIf { it.isNotEmpty() } ?: return emptyList()
+        val install = installDirFor(serial) ?: return emptyList()
+        val root = install.absolutePath.trimEnd('/')
+
+        // Bounded: a game folder is normally small, but a mistyped root should not walk a card.
+        var seen = 0
+        return install.walkTopDown()
+            .onEach { seen++ }
+            .takeWhile { seen < 60_000 }
+            .filter { it.isFile && it.name.lowercase() == name }
+            .map { it.absolutePath.removePrefix(root).trimStart('/') }
+            .take(12)
+            .toList()
+    }
+
+    /**
      * Mods present for [serial], enabled state included.
      *
      * Dot-directories are skipped: [STATE_DIR] is our own bookkeeping sitting in the same

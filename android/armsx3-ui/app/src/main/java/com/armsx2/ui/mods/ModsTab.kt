@@ -57,6 +57,7 @@ fun ModsTab(serial: String) {
     // A loose file that still needs somewhere to go. See the dialog at the end of this file.
     var pendingFile by remember { mutableStateOf<android.net.Uri?>(null) }
     var pendingPath by remember { mutableStateOf("") }
+    var pendingMatches by remember { mutableStateOf<List<String>>(emptyList()) }
 
     val context = LocalContext.current
     val modsRoot = remember(serial, refreshToken) { ModManager.modsRoot(serial) }
@@ -98,8 +99,14 @@ fun ModsTab(serial: String) {
                         // A bare file carries no layout: nothing in patch.ff says it belongs in
                         // USRDIR/english. Ask, rather than fail with something unhelpful.
                         else -> {
+                            // Ask the game where this belongs before asking the user. One answer
+                            // and there is nothing to decide; several and the choice is real
+                            // (Call of Duty keeps a patch.ff per language); none and it is the
+                            // free-text case this started as.
+                            val matches = ModManager.matchingPaths(serial, name)
                             pendingFile = uri
-                            pendingPath = "USRDIR/"
+                            pendingMatches = matches
+                            pendingPath = matches.singleOrNull() ?: "USRDIR/"
                             null
                         }
                     }
@@ -178,6 +185,7 @@ fun ModsTab(serial: String) {
                 .fromSingleUri(context, uri)?.name.orEmpty()
             DestinationDialog(
                 fileName = fileName,
+                matches = pendingMatches,
                 path = pendingPath,
                 onPathChange = { pendingPath = it },
                 onDismiss = { pendingFile = null },
@@ -227,6 +235,7 @@ fun ModsTab(serial: String) {
 @Composable
 private fun DestinationDialog(
     fileName: String,
+    matches: List<String>,
     path: String,
     onPathChange: (String) -> Unit,
     onConfirm: () -> Unit,
@@ -237,8 +246,39 @@ private fun DestinationDialog(
         title = { Text(str("mods.where.title")) },
         text = {
             Column {
-                Text(str("mods.where.body").format(fileName))
+                Text(
+                    if (matches.isEmpty()) {
+                        str("mods.where.body").format(fileName)
+                    } else {
+                        str("mods.where.found").format(fileName)
+                    },
+                )
                 Spacer(Modifier.height(10.dp))
+
+                // Tappable, because the whole point is to save typing a path that has to be
+                // exact. The field stays editable underneath for anything not listed.
+                matches.forEach { candidate ->
+                    Surface(
+                        onClick = { onPathChange(candidate) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 6.dp)
+                            .controllerFocusable("mods.where.$candidate", onConfirm = { onPathChange(candidate) }),
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (candidate == path) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        },
+                    ) {
+                        Text(
+                            text = candidate,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                        )
+                    }
+                }
                 OutlinedTextField(
                     value = path,
                     onValueChange = onPathChange,
