@@ -4256,11 +4256,48 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
   return result;
 }
 
-extern "C" std::string _rpcsx_patchesList(std::string_view serial) {
-  patch_engine::patch_map db;
+// The parsed patch database, reloaded only when patch.yml actually changes.
+//
+// Both calls below used to parse the whole file on every invocation, so a single toggle in the
+// UI parsed it twice: once to validate the patch exists, once to rebuild the list afterwards.
+// That is over a megabyte of YAML for the rpcs3.net database alone, and half as much again with
+// a community collection merged in, which is the point the delay became visible when flipping a
+// switch.
+//
+// Keyed on the file's size and mtime rather than an invalidate-me flag, so an import through any
+// path invalidates it, including one that writes the file without telling us.
+static const patch_engine::patch_map &cached_patch_db()
+{
+  static std::mutex mutex;
+  static patch_engine::patch_map db;
+  static u64 cached_size = 0;
+  static s64 cached_mtime = 0;
+  static bool loaded = false;
+
+  std::lock_guard lock(mutex);
+
+  const std::string path = patch_engine::get_patches_path() + "patch.yml";
+
+  fs::stat_t info{};
+  const bool exists = fs::get_stat(path, info);
+
+  if (loaded && exists && info.size == cached_size && info.mtime == cached_mtime)
+  {
+    return db;
+  }
+
+  db.clear();
   std::stringstream log;
-  patch_engine::load(db, patch_engine::get_patches_path() + "patch.yml", {},
-                     false, &log);
+  patch_engine::load(db, path, {}, false, &log);
+
+  cached_size = exists ? info.size : 0;
+  cached_mtime = exists ? info.mtime : 0;
+  loaded = true;
+  return db;
+}
+
+extern "C" std::string _rpcsx_patchesList(std::string_view serial) {
+  const patch_engine::patch_map &db = cached_patch_db();
 
   const patch_engine::patch_map enabled = patch_engine::load_config();
 
@@ -4344,10 +4381,7 @@ extern "C" bool _rpcsx_patchSetEnabled(std::string_view hash,
                                        std::string_view serial,
                                        std::string_view appVersion,
                                        bool enabled) {
-  patch_engine::patch_map db;
-  std::stringstream log;
-  patch_engine::load(db, patch_engine::get_patches_path() + "patch.yml", {},
-                     false, &log);
+  const patch_engine::patch_map &db = cached_patch_db();
 
   patch_engine::patch_map config = patch_engine::load_config();
 
