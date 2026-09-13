@@ -165,11 +165,14 @@ fun ModsTab(serial: String) {
             Spacer(Modifier.height(10.dp))
         }
 
-        if (mods.isEmpty()) {
-            InfoCard(str("mods.empty"))
-            return@Column
-        }
-
+        // ABOVE the empty-list early return, not below it.
+        //
+        // A game with no mods yet is exactly the game someone is importing their first mod into,
+        // and the early return below meant the dialog could never compose for it: picking a file
+        // set the state and nothing appeared. Same shape as the savestate wipe confirmation,
+        // which was nested inside a message block and could only show while a message was
+        // already up. A dialog belongs at the top level of the composable, gated on its own
+        // state and nothing else.
         pendingFile?.let { uri ->
             val fileName = androidx.documentfile.provider.DocumentFile
                 .fromSingleUri(context, uri)?.name.orEmpty()
@@ -191,6 +194,11 @@ fun ModsTab(serial: String) {
                     }
                 },
             )
+        }
+
+        if (mods.isEmpty()) {
+            InfoCard(str("mods.empty"))
+            return@Column
         }
 
         mods.forEachIndexed { index, mod ->
