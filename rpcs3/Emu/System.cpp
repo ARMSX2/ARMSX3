@@ -398,6 +398,23 @@ static void apply_game_mods(const std::string& title_id, const std::string& game
 					continue;
 				}
 
+				// PARAM.SFO is the title's identity, not its content: title id, version,
+				// category, the things the emulator decides what it is booting from. A package
+				// mod carries one because every package does, and mounting it makes the game
+				// claim to be whatever the mod was built from.
+				//
+				// Seen immediately: a Minecraft mod built for the PSN release (NPUB31419 v1.32)
+				// imported onto the disc release (BLUS31426 v1.84) replaced the title's own SFO
+				// and the game stopped booting with "failed to load and cannot continue".
+				//
+				// A mod may legitimately want to change an icon or the background music, so
+				// only this one file is refused rather than the whole metadata set.
+				if (rel.empty() && entry.name == "PARAM.SFO")
+				{
+					sys_log.warning("Mod '%s': not mounting PARAM.SFO, a mod cannot redefine the title", mod_name);
+					continue;
+				}
+
 				if (++mounted > max_mounts)
 				{
 					sys_log.error("Mod '%s': too many files, stopped at %d mounts", mod_name, max_mounts);

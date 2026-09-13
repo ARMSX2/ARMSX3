@@ -71,7 +71,9 @@ fun ModsTab(serial: String) {
             return
         }
         message = when (result) {
-            is ModImporter.Result.Ok -> importedFormat.format(result.modName, result.fileCount)
+            is ModImporter.Result.Ok ->
+                importedFormat.format(result.modName, result.fileCount) +
+                    (result.warning?.let { "\n\n$it" } ?: "")
             is ModImporter.Result.Failed -> result.reason
         }
         busy = false

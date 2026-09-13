@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import com.armsx2.Ps3Sfo
 import net.rpcsx.ProgressRepository
 import net.rpcsx.RPCSX
 import java.io.File
@@ -35,7 +36,12 @@ object ModImporter {
     private const val MAX_ENTRIES = 20_000
 
     sealed interface Result {
-        data class Ok(val modName: String, val fileCount: Int) : Result
+        data class Ok(
+            val modName: String,
+            val fileCount: Int,
+            /** Set when the mod says which game it was built for and it is not this one. */
+            val warning: String? = null,
+        ) : Result
         data class Failed(val reason: String) : Result
     }
 
@@ -91,7 +97,7 @@ object ModImporter {
             return fail(staging, "Nothing could be read from that file. Only .zip archives are supported, so unpack a .7z or .rar first and import the folder.")
         }
 
-        return commit(staging, File(destRoot, modName), modName, written)
+        return commit(staging, File(destRoot, modName), modName, written, serial)
     }
 
     /**
@@ -146,7 +152,7 @@ object ModImporter {
         val written = staging.walkTopDown().count { it.isFile }
         if (written == 0) return fail(staging, "That package has no files in it")
 
-        return commit(staging, File(destRoot, modName), modName, written)
+        return commit(staging, File(destRoot, modName), modName, written, serial)
     }
 
     /**
@@ -189,7 +195,7 @@ object ModImporter {
         }.getOrDefault(false)
 
         if (!copied || out.length() == 0L) return fail(staging, "Could not read that file")
-        return commit(staging, File(destRoot, modName), modName, 1)
+        return commit(staging, File(destRoot, modName), modName, 1, serial)
     }
 
     fun importFolder(context: Context, serial: String, treeUri: Uri): Result {
@@ -208,7 +214,7 @@ object ModImporter {
         }
 
         if (written == 0) return fail(staging, "That folder has no files in it")
-        return commit(staging, File(destRoot, modName), modName, written)
+        return commit(staging, File(destRoot, modName), modName, written, serial)
     }
 
     // ---- internals ---------------------------------------------------------------------
@@ -237,7 +243,39 @@ object ModImporter {
         return written
     }
 
-    private fun commit(staging: File, target: File, modName: String, written: Int): Result {
+    /**
+     * A mod that carries a PARAM.SFO says which game it was built for. Check it.
+     *
+     * Packaged mods always have one, and it is the only reliable statement of intent a mod
+     * makes. A Minecraft "Elite Edition" built for the PSN release (NPUB31419 v1.32) imported
+     * onto the disc release (BLUS31426 v1.84) is not a mod for this game at all, and the
+     * failure it produces says nothing about why.
+     *
+     * A warning rather than a refusal: the check is a heuristic, plenty of mods are fine across
+     * versions, and refusing an import on it would be wrong more often than it was right.
+     */
+    private fun compatibilityWarning(target: File, serial: String): String? {
+        val sfo = File(target, "PARAM.SFO").takeIf { it.isFile } ?: return null
+        val values = runCatching { Ps3Sfo.read(sfo) }.getOrNull() ?: return null
+
+        val modTitle = values["TITLE_ID"]?.trim().orEmpty()
+        val modVersion = values["APP_VER"]?.trim().orEmpty()
+        if (modTitle.isEmpty()) return null
+
+        if (!modTitle.equals(serial.trim(), ignoreCase = true)) {
+            return "This mod was built for $modTitle" +
+                (if (modVersion.isNotEmpty()) " v$modVersion" else "") +
+                ", not $serial. It will probably not work, and may stop the game booting."
+        }
+
+        val gameVersion = Ps3Sfo.installedUpdateVersion(serial).orEmpty()
+        if (modVersion.isNotEmpty() && gameVersion.isNotEmpty() && modVersion != gameVersion) {
+            return "This mod was built for v$modVersion and the game is v$gameVersion. It may not work."
+        }
+        return null
+    }
+
+    private fun commit(staging: File, target: File, modName: String, written: Int, serial: String): Result {
         target.deleteRecursively()
         if (!staging.renameTo(target)) {
             // Same filesystem, so a rename should never fail -- fall back rather than lose the
@@ -246,8 +284,9 @@ object ModImporter {
             staging.deleteRecursively()
             if (!copied) return Result.Failed("Could not place the mod")
         }
-        Log.i(TAG, "imported '$modName': $written file(s)")
-        return Result.Ok(modName, written)
+        val warning = compatibilityWarning(target, serial)
+        Log.i(TAG, "imported '$modName': $written file(s)" + (warning?.let { "; $it" } ?: ""))
+        return Result.Ok(modName, written, warning)
     }
 
     private fun fail(staging: File, reason: String): Result.Failed {
