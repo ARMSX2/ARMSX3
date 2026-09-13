@@ -25,6 +25,8 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
@@ -48,6 +50,7 @@ import com.armsx2.ui.settings.controllerFocusable
 @Composable
 fun SaveManagerScreen(onBack: () -> Unit, viewModel: SaveManagerViewModel = viewModel()) {
     val state = viewModel.state.value
+    var confirmWipe by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     LaunchedEffect(Unit) { viewModel.refresh() }
     // Import an external save-state file (AetherSX2 / NetherSX2 / another install's .p2s) into the
     // active game's next free slot. OpenDocument with "*/*" because save states have no single MIME
@@ -71,6 +74,10 @@ fun SaveManagerScreen(onBack: () -> Unit, viewModel: SaveManagerViewModel = view
                         if (state.saves.isNotEmpty()) {
                             RoundAction("▣", str("savestate.backup"), viewModel::backupAll)
                         }
+                        // Deliberately NOT gated on the list being non-empty. The whole reason this
+                        // exists is a folder full of files the manager cannot list, where the list
+                        // reads as empty and every per-entry delete is therefore unreachable.
+                        RoundAction("\uD83D\uDDD1", str("savestate.wipe"), onClick = { confirmWipe = true })
                         RoundAction("↻", str("games.card.refresh"), viewModel::refresh)
                     },
                     horizontalPadding = 0.dp,
@@ -106,6 +113,23 @@ fun SaveManagerScreen(onBack: () -> Unit, viewModel: SaveManagerViewModel = view
     }
 
     (state.error ?: state.message)?.let { message ->
+    if (confirmWipe) {
+        AlertDialog(
+            onDismissRequest = { confirmWipe = false },
+            title = { Text(str("savestate.wipe.confirm.title")) },
+            text = { Text(str("savestate.wipe.confirm.body")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmWipe = false
+                    viewModel.wipeAll()
+                }) { Text(str("savestate.wipe")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmWipe = false }) { Text(str("action.cancel")) }
+            },
+        )
+    }
+
         AlertDialog(
             onDismissRequest = viewModel::dismissMessage,
             title = { Text(str("savestate.title.loadManage")) },

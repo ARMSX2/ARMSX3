@@ -124,6 +124,55 @@ class SaveManagerViewModel(application: Application) : AndroidViewModel(applicat
      * global manager with nothing running it reports that. Slots are chosen automatically (first
      * free of 0..9) so it never silently overwrites an existing save.
      */
+    /**
+     * Delete everything under the savestate directories, recognised or not.
+     *
+     * The per-entry delete can only remove what the list shows, and the list can only show files it
+     * recognises. That is no help to someone whose directory is full of things it does not: a
+     * savestate interrupted part-way leaves a file that is neither a finished state nor anything the
+     * manager will offer, and #30 reported gigabytes of them after an autosave crashed repeatedly.
+     * The startup sweep clears the one shape we know about; this clears the rest.
+     *
+     * Every removed name is logged. We still do not know what that reporter's files were called --
+     * the sweep did not match them and neither does the scan -- so the next person to run this tells
+     * us, instead of us guessing at a pattern again.
+     */
+    fun wipeAll() {
+        viewModelScope.launch {
+            val (count, bytes, failed) = withContext(Dispatchers.IO) {
+                var n = 0
+                var size = 0L
+                var bad = 0
+
+                savestateRoots().filter { it.isDirectory }.forEach { root ->
+                    root.walkBottomUp().forEach { f ->
+                        if (f == root) return@forEach
+                        val len = if (f.isFile) f.length() else 0L
+                        if (runCatching { f.delete() }.getOrDefault(false)) {
+                            if (f.isFile || len > 0) {
+                                n++
+                                size += len
+                            }
+                            android.util.Log.i("ARMSX3", "wipeAll: removed ${f.name} ($len bytes)")
+                        } else if (f.isFile) {
+                            bad++
+                            android.util.Log.w("ARMSX3", "wipeAll: could NOT remove ${f.absolutePath}")
+                        }
+                    }
+                }
+                Triple(n, size, bad)
+            }
+
+            state.value = state.value.copy(
+                message = if (failed > 0)
+                    I18n.get("savestate.wipe.partial").format(count, formatBytes(bytes), failed)
+                else
+                    I18n.get("savestate.wipe.done").format(count, formatBytes(bytes)),
+            )
+            refresh()
+        }
+    }
+
     fun importState(uri: android.net.Uri) {
         viewModelScope.launch {
             val slot = withContext(Dispatchers.IO) { importSaveStateToNextFreeSlot(getApplication(), uri) }
@@ -157,8 +206,7 @@ class SaveManagerViewModel(application: Application) : AndroidViewModel(applicat
                 ?.takeIf(File::exists)
         }
 
-        val roots = listOf("sstates", "savestates")
-            .map { File(MainActivityRuntime.assetCopyRoot(getApplication()), it) }
+        val roots = savestateRoots()
         val discovered = roots.flatMap { root ->
             if (!root.isDirectory) emptyList()
             else root.walkTopDown().filter { it.isFile && isSaveState(it) }.toList()
@@ -186,6 +234,24 @@ class SaveManagerViewModel(application: Application) : AndroidViewModel(applicat
             gameTitle = active?.title,
             saves = saves,
         )
+    }
+
+    /**
+     * Where savestates can live. "sstates" is the ARMSX2 name and is kept so an install carried over
+     * from it is not left with an unreachable directory; the core writes "savestates".
+     */
+    private fun savestateRoots(): List<File> {
+        val root = MainActivityRuntime.assetCopyRoot(getApplication())
+        return listOf("config/savestates", "savestates", "sstates")
+            .map { File(root, it) }
+            .distinctBy { it.absolutePath }
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes >= 1024L * 1024 * 1024 -> "%.2f GB".format(bytes / (1024.0 * 1024 * 1024))
+        bytes >= 1024L * 1024 -> "%.0f MB".format(bytes / (1024.0 * 1024))
+        bytes > 0 -> "%.0f KB".format(bytes / 1024.0)
+        else -> "0 KB"
     }
 
     private fun decodePreview(file: File): Bitmap? {
