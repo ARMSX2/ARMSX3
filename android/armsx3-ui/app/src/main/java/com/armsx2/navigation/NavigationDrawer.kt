@@ -226,12 +226,12 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // Patches: RPCS3's own hash-addressed patch.yml, not PNACH. Goes to the
         // global list; per-game patches are reached from the game's own settings,
         // where the serial filters the list.
-        DrawerItem("tab.patches", "\u2726", AppRoute.Settings(SettingsCategory.Patches)),
+        DrawerItem("tab.patches", "\uD83E\uDE79", AppRoute.Settings(SettingsCategory.Patches)),
         // Mods: the library filtered to titles that can take them. Unlike Patches there is no
         // global mod list to show, so this is a front door rather than a second view of the
         // same data. The per-game tab is the last chip in a scrolling strip behind a long
         // press, which is no way to find out a feature exists.
-        DrawerItem("mods.library.title", "\u25A3", AppRoute.ModLibrary),
+        DrawerItem("mods.library.title", "\uD83D\uDEE0\uFE0F", AppRoute.ModLibrary),
         // ARMSX3: texture packs removed. PCSX2 replaces GS textures by hash;
         // RPCS3 has no texture-replacement system, so the screen managed nothing.
         // RetroArch shader chains cover this ground and live in Renderer settings.
