@@ -33,12 +33,28 @@ static void* get_aligned_buf()
 
 		aligned_buf() noexcept
 		{
-			// IMPORTANT NOTE: It must be aligned (probably enough on multiple of 4) to support raw device, otherwise any read from file will fail
+			// Aligned on the sector size to support a raw device, otherwise any read from it fails. An
+			// optical medium always uses ISO_SECTOR_SIZE, so a sector aligned on itself is enough.
+			//
+			// It has to be aligned on ISO_SECTOR_SIZE and NOT on a larger multiple, because
+			// aligned_alloc requires the size to be an integral multiple of the alignment. Asking for
+			// 2048 bytes aligned to 4096 is undefined, and Bionic answers it with NULL -- which then
+			// reached pread() as its destination buffer and came back EFAULT, so every encrypted ISO
+			// failed to scan or boot on Android with "Verification failed (object: 0x0) ... errno=14"
+			// pointing at File.cpp rather than at anything to do with alignment. Reported as #30.
 #if defined(_WIN32)
-			buf = _aligned_malloc(ISO_SECTOR_SIZE, ISO_SECTOR_SIZE * 2);
+			buf = _aligned_malloc(ISO_SECTOR_SIZE, ISO_SECTOR_SIZE);
 #else
-			buf = std::aligned_alloc(ISO_SECTOR_SIZE * 2, ISO_SECTOR_SIZE);
+			buf = std::aligned_alloc(ISO_SECTOR_SIZE, ISO_SECTOR_SIZE);
 #endif
+
+			// Say so here rather than let a null buffer travel into a read syscall, where it arrives
+			// as EFAULT from a function that has no idea the allocation is what failed.
+			if (!buf)
+			{
+				iso_log.error("Failed to allocate the %u byte sector buffer (aligned on %u).",
+					ISO_SECTOR_SIZE, ISO_SECTOR_SIZE);
+			}
 		}
 
 		~aligned_buf() noexcept
