@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.armsx2.Ps3Sfo
+import com.armsx2.runtime.MainActivityRuntime
 import net.rpcsx.ProgressRepository
 import net.rpcsx.RPCSX
 import java.io.File
@@ -97,6 +98,20 @@ object ModImporter {
             return fail(staging, "Nothing could be read from that file. Only .zip archives are supported, so unpack a .7z or .rar first and import the folder.")
         }
 
+        // A zip holding nothing but a package is a package, and should be treated as one.
+        //
+        // People zip a .pkg to get it somewhere, or a site serves it that way. Extracting the
+        // zip faithfully then leaves a single .pkg sitting at the mod root, which mounts over
+        // the game as a file it never reads: the import reports success, the switch turns on,
+        // and nothing happens. Seen within minutes of the zip path existing.
+        val lone = staging.walkTopDown().filter { it.isFile }.toList().singleOrNull()
+        if (lone != null && lone.name.lowercase().endsWith(".pkg")) {
+            Log.i(TAG, "zip holds one package; extracting '${lone.name}' rather than importing it as a file")
+            val unwrapped = importPkgFile(lone, destRoot, serial)
+            staging.deleteRecursively()
+            return unwrapped
+        }
+
         return commit(staging, File(destRoot, modName), modName, written, serial)
     }
 
@@ -133,10 +148,30 @@ object ModImporter {
             return fail(staging, "Could not read that package")
         }
 
+        val result = importPkgFile(scratch, destRoot, serial)
+        scratch.delete()
+        staging.deleteRecursively()
+        return result
+    }
+
+    /**
+     * Extract a package already sitting on local storage.
+     *
+     * Shared by the picked-a-.pkg case and the unwrapped-from-a-zip one, so both produce the
+     * same tree and the same compatibility check rather than two paths that drift.
+     */
+    private fun importPkgFile(pkg: File, destRoot: File, serial: String): Result {
+        val modName = uniqueName(destRoot, sanitize(pkg.name.substringBeforeLast('.')))
+        val staging = File(destRoot, ".extract-$modName")
+        staging.deleteRecursively()
+        staging.mkdirs()
+
         val ok = runCatching {
+            val context = MainActivityRuntime.instance?.applicationContext
+                ?: return fail(staging, "No storage available yet")
             val progress = ProgressRepository.create(context, "Extracting $modName", silent = true)
             android.os.ParcelFileDescriptor.open(
-                scratch, android.os.ParcelFileDescriptor.MODE_READ_ONLY,
+                pkg, android.os.ParcelFileDescriptor.MODE_READ_ONLY,
             ).use { pfd ->
                 RPCSX.instance.extractPkgTo(pfd.fd, progress, staging.absolutePath)
             }
@@ -144,8 +179,6 @@ object ModImporter {
             Log.w(TAG, "pkg extract threw: ${it.message}")
             false
         }
-
-        scratch.delete()
 
         if (!ok) return fail(staging, "That package could not be extracted")
 
