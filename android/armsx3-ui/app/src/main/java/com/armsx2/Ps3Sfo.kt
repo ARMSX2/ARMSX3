@@ -103,6 +103,15 @@ object Ps3Sfo {
         }.getOrNull()?.let { add(it) }
     }.distinctBy { it.absolutePath }
 
+    /** The root that actually holds installed titles, for callers that need to place files
+     *  of their own beside them (the mod store). Null before the core has a usable root. */
+    fun storageRoot(): File? = hdd0Roots().firstOrNull { File(it, "config/dev_hdd0").isDirectory }
+        ?: hdd0Roots().firstOrNull()
+
+    /** The install directory for [id] -- the folder holding PARAM.SFO and USRDIR -- or null
+     *  when the title is not installed in folder form (a disc image has none). */
+    fun installDir(id: String): File? = gameDir(id)
+
     /** The game directory for [id] under whichever root actually holds it, or null. */
     private fun gameDir(id: String): File? =
         hdd0Roots().map { File(it, "config/dev_hdd0/game/$id") }.firstOrNull { it.isDirectory }

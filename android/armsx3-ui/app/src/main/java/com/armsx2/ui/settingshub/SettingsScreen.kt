@@ -437,6 +437,7 @@ private fun settingsSections() = listOf(
     SettingsSection(SettingsCategory.OnScreen, "tab.overlay", "⊕"),
     SettingsSection(SettingsCategory.Advanced, "tab.fixes", "⌘"),
     SettingsSection(SettingsCategory.Patches, "tab.patches", "\u2726"),
+    SettingsSection(SettingsCategory.Mods, "tab.mods", "\u25A3"),
 )
 
 @Composable
@@ -458,6 +459,11 @@ private fun CategoryContent(category: SettingsCategory, viewModel: SettingsViewM
         SettingsCategory.Patches -> com.armsx2.ui.patches.Ps3PatchesTab(
             viewModel.uiState.value.game?.serial.orEmpty()
         )
+        // Serial-scoped like Patches: mods are applied into one title's install folder,
+        // so the whole screen is meaningless without knowing which game.
+        SettingsCategory.Mods -> com.armsx2.ui.mods.ModsTab(
+            viewModel.uiState.value.game?.serial.orEmpty()
+        )
         SettingsCategory.About -> Unit
     }
 }
@@ -476,5 +482,6 @@ internal fun categoryTitle(category: SettingsCategory): String = when (category)
     SettingsCategory.Skins -> str("tab.skins")
     SettingsCategory.Advanced -> str("tab.fixes")
     SettingsCategory.Patches -> str("patches.dialog.patchesAndCheats")
+    SettingsCategory.Mods -> str("tab.mods")
     SettingsCategory.About -> str("about.title")
 }

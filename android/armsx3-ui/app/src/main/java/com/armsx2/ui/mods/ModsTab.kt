@@ -1,0 +1,131 @@
+package com.armsx2.ui.mods
+
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import com.armsx2.i18n.str
+import com.armsx2.mods.ModManager
+import com.armsx2.ui.settings.SettingsDivider
+import com.armsx2.ui.settings.ToggleRow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * Per-game mod list.
+ *
+ * Everything the user does here is a file operation on their install, so the screen leads with
+ * where to put mods and what state the game is in, rather than presenting a toggle whose effect
+ * is invisible. The two cases that cannot work -- a disc image, and a game with no mods dropped
+ * in yet -- say so instead of showing an empty list that looks broken.
+ */
+@Composable
+fun ModsTab(serial: String) {
+    val scope = rememberCoroutineScope()
+    var refreshToken by remember { mutableIntStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var mods by remember { mutableStateOf<List<ModManager.Mod>>(emptyList()) }
+
+    val installDir = remember(serial, refreshToken) { ModManager.installDirFor(serial) }
+    val modsRoot = remember(serial, refreshToken) { ModManager.modsRoot(serial) }
+
+    LaunchedEffect(serial, refreshToken) {
+        mods = withContext(Dispatchers.IO) { ModManager.list(serial) }
+    }
+
+    Column(Modifier.fillMaxWidth()) {
+        if (serial.isBlank()) {
+            InfoCard(str("mods.noGame"))
+            return@Column
+        }
+
+        // A disc image has nowhere to put the files, and no overlay mount exists to fake one.
+        // Saying that plainly beats a list of toggles that would all fail.
+        if (installDir == null) {
+            InfoCard(str("mods.discOnly"))
+            Spacer(Modifier.height(10.dp))
+        }
+
+        modsRoot?.let { root ->
+            Text(
+                text = str("mods.folder"),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = root.absolutePath,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp, bottom = 10.dp),
+            )
+        }
+
+        message?.let {
+            InfoCard(it)
+            Spacer(Modifier.height(10.dp))
+        }
+
+        if (mods.isEmpty()) {
+            InfoCard(str("mods.empty"))
+            return@Column
+        }
+
+        mods.forEachIndexed { index, mod ->
+            if (index > 0) SettingsDivider()
+            ToggleRow(
+                label = mod.name,
+                value = mod.enabled,
+                description = str("mods.fileCount").format(mod.fileCount),
+            ) { wanted ->
+                if (busy || installDir == null) return@ToggleRow
+                busy = true
+                message = null
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) {
+                        ModManager.setEnabled(serial, mod.name, wanted)
+                    }
+                    if (result is ModManager.Result.Failed) message = result.reason
+                    busy = false
+                    refreshToken++
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoCard(text: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+        )
+    }
+}

@@ -44,6 +44,7 @@ enum class SettingsCategory {
     Skins,
     Advanced,
     Patches,
+    Mods,
     About,
 }
 
