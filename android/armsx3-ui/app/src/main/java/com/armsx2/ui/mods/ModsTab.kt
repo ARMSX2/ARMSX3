@@ -136,6 +136,8 @@ fun ModsTab(serial: String) {
         // IS moddable still needs to know the rule before they go looking for a mod, and a
         // message that only appears on failure teaches nobody anything.
         InfoCard(str("mods.requirement"))
+        Spacer(Modifier.height(8.dp))
+        InfoCard(str("mods.backup"))
         Spacer(Modifier.height(10.dp))
 
         modsRoot?.let { root ->

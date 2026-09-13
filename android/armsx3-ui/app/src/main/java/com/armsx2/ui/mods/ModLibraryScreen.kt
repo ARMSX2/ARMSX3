@@ -93,6 +93,7 @@ fun ModLibraryScreen(onBack: () -> Unit) {
         ) {
             Spacer(Modifier.height(4.dp))
             Card(str("mods.requirement"))
+            Card(str("mods.backup"))
 
             if (rows.isEmpty()) {
                 Card(str("mods.library.empty"))

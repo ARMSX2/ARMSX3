@@ -1249,6 +1249,7 @@ val EN: Map<String, String> = mapOf(
     "tab.mods" to "Mods",
     "mods.noGame" to "Open this from a game to manage its mods.",
     "mods.requirement" to "Mods are layered over the game as it starts, so your game files are never modified. Turning one on or off applies the next time you launch the game.",
+    "mods.backup" to "Back up your save data before using mods. Nothing here writes to your game, but a mod changes what the game loads, and that can corrupt a save or break a playthrough in ways turning it off again will not undo. If you also replace game files by hand, keep your own copies of those.",
     "mods.folder" to "Put mods here",
     "mods.empty" to "No mods yet. Import one with the buttons above, or make a folder inside the path shown, one folder per mod, with the files laid out the way they sit inside the game. Each mod then appears here with a switch.",
     "mods.fileCount" to "%d file(s)",
