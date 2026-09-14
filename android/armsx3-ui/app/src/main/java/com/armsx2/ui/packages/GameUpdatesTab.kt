@@ -122,7 +122,10 @@ fun GameUpdatesTab(
     var scanning by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var downloading by remember { mutableStateOf<String?>(null) }
-    var progress by remember { mutableStateOf(0f) }
+    // What is coming down the wire, and how far along. Not the same package as the one
+    // being installed: the chain fetches the next one while the current one installs.
+    var fetching by remember { mutableStateOf<Pair<String, Float>?>(null) }
+    var installing by remember { mutableStateOf<String?>(null) }
     var manualId by remember { mutableStateOf("") }
     var refreshToken by remember { mutableIntStateOf(0) }
     var expanded by remember { mutableStateOf<String?>(null) }
@@ -243,9 +246,19 @@ fun GameUpdatesTab(
             // The next package downloads while this one installs. They are independent -- only the
             // INSTALLS have to stay ordered -- and a chain otherwise alternates network-idle and
             // disk-idle for its whole length.
-            var ahead = scope.async(Dispatchers.IO) {
-                Ps3UpdateService.download(queue[0], dest(queue[0])) { progress = it }
+            // Every package reports its progress, including the prefetched ones. They used to
+            // pass an empty callback, so the bar stopped moving the moment the first package
+            // finished and sat at 100% for the rest of the chain. Nothing was wrong, but a
+            // seven package title spent most of its time looking frozen, which is what it was
+            // reported as.
+            fun track(u: Ps3UpdateService.Ps3Update): (Float) -> Unit =
+                { value -> fetching = u.version to value }
+
+            fun fetch(u: Ps3UpdateService.Ps3Update) = scope.async(Dispatchers.IO) {
+                Ps3UpdateService.download(u, dest(u), track(u))
             }
+
+            var ahead = fetch(queue[0])
 
             for ((index, update) in queue.withIndex()) {
                 downloading = if (queue.size == 1) update.version
@@ -254,25 +267,30 @@ fun GameUpdatesTab(
                 val downloaded = ahead.await()
 
                 if (index + 1 < queue.size) {
-                    val next = queue[index + 1]
-                    ahead = scope.async(Dispatchers.IO) {
-                        Ps3UpdateService.download(next, dest(next)) { }
-                    }
+                    ahead = fetch(queue[index + 1])
+                } else {
+                    fetching = null
                 }
 
                 val file = downloaded.getOrElse {
                     status = str("packages.updates.downloadFailed").format(it.message ?: "download failed")
                     downloading = null
+                    fetching = null
                     return@launch
                 }
 
                 val done = CompletableDeferred<Boolean>()
+                installing = update.version
                 onInstall(listOf(file), index == queue.lastIndex) { ok -> done.complete(ok) }
 
-                if (!done.await()) {
+                val ok = done.await()
+                installing = null
+
+                if (!ok) {
                     // The parent already shows the native reason, which names the real problem.
                     status = str("packages.updates.chainStopped").format(update.version)
                     downloading = null
+                    fetching = null
                     return@launch
                 }
 
@@ -281,6 +299,7 @@ fun GameUpdatesTab(
             }
 
             downloading = null
+            fetching = null
             // Re-read rather than assume: the installed version is now whatever is on disk. Local
             // only -- nothing the service told us has changed.
             refreshInstalledOnly()
@@ -346,11 +365,32 @@ fun GameUpdatesTab(
 
         downloading?.let { version ->
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                val wire = fetching
+                val busyWith = installing
+
+                // A determinate bar only where there is something to be determinate about.
+                // Installing reports nothing back, so it gets a bar that moves on its own
+                // rather than one parked at whatever the last download left behind.
+                if (wire != null) {
+                    Text(
+                        str("packages.updates.downloading").format(wire.first, (wire.second * 100).toInt()),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    LinearProgressIndicator(progress = { wire.second }, modifier = Modifier.fillMaxWidth())
+                } else {
+                    Text(
+                        str("packages.updates.installingOne").format(busyWith ?: version),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+
+                // The queue position, which is the part that says a chain is making headway.
                 Text(
-                    str("packages.updates.downloading").format(version, (progress * 100).toInt()),
-                    style = MaterialTheme.typography.bodyMedium,
+                    version,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
             }
         }
 
