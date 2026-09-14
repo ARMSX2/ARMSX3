@@ -58,14 +58,13 @@ data class DiscordFriend(
      *
      * Derived from the serial here rather than read out of their presence assets: Discord may hand
      * back a proxied form of an image URL, and re-deriving keeps a friend's row looking exactly like
-     * the same game does on the home screen — including honouring the 2D/3D preference, which is
-     * this device's choice to make, not theirs.
+     * the same game does on the home screen.
+     *
+     * Same repository the library uses. This pointed at xlenore's ps2-covers, which has no PS3
+     * art in it at all, so every friend's cover here was a 404.
      */
     val coverUrl: String? get() = serial.takeIf { it.isNotBlank() }?.let { s ->
-        if (CoverArtStyle.use3d.value)
-            "https://raw.githubusercontent.com/xlenore/ps2-covers/main/covers/3d/$s.png"
-        else
-            "https://raw.githubusercontent.com/xlenore/ps2-covers/main/covers/default/$s.jpg"
+        "https://raw.githubusercontent.com/aldostools/Resources/main/COV/$s.JPG"
     }
 }
 

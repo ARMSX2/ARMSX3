@@ -2116,7 +2116,6 @@ open class MainActivityRuntime : ComponentActivity() {
         ControllerMappings.installRuntimeCacheInvalidation()
         com.armsx2.i18n.I18n.init(applicationContext)
         applyEmulationOrientation()
-        com.armsx2.CoverArtStyle.load()
         com.armsx2.GridLabels.load()
         com.armsx2.EnglishTitles.load()
         com.armsx2.CustomNames.load()
@@ -2151,10 +2150,6 @@ open class MainActivityRuntime : ComponentActivity() {
         // Low-battery / high-temperature banners. Registers for the sticky battery broadcast, so
         // there is no polling; the toggle lives in App settings.
         com.armsx2.OverlayRepo.load()
-        com.armsx2.CoverRegionIndex.load()
-        // Only parses the 2.6MB GameDB when a non-default cover region is actually in use.
-        if (com.armsx2.CoverRegionIndex.region.intValue != 0)
-            com.armsx2.CoverRegionIndex.ensureBuilt(applicationContext)
         // Second-display utility panel (Ayn Thor / Retroid dual screen). No-op with one display.
         com.armsx2.SecondScreen.load()
         com.armsx2.SecondScreen.attach(applicationContext)

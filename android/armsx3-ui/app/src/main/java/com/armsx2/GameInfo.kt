@@ -9,22 +9,6 @@ import androidx.compose.runtime.mutableStateOf
 import java.io.File
 
 /**
- * Box-art style for the library: 2D flat scans (the "default" mirror, JPG) or
- * 3D rendered cases (the "3d" mirror, PNG). Both come from the same xlenore
- * repos. Persisted in MainActivityRuntime.prefs and read by [GameInfo.coverUrl], so flipping
- * it recomposes the grid and re-downloads covers in the chosen style.
- */
-object CoverArtStyle {
-    private const val KEY = "library.coverArt3d"
-    val use3d = mutableStateOf(false)
-    fun load() { use3d.value = MainActivityRuntime.prefs.getBoolean(KEY, false) }
-    fun set(value: Boolean) {
-        use3d.value = value
-        MainActivityRuntime.prefs.edit().putBoolean(KEY, value).apply()
-    }
-}
-
-/**
  * Show the romanised title for games whose real title isn't English (issue #338).
  *
  * Default OFF = show each game under its own name, which for a Japanese release is the
@@ -422,17 +406,7 @@ data class GameInfo(
      */
     val coverModel: Any? get() = coverUrl ?: discIconFile
 
-    val coverUrl: String? get() = serial?.let { rawSerial ->
-        // Cover Region: swap in the equivalent release's serial when the user asked for another
-        // region's artwork. Falls back to this disc's own serial whenever there's no counterpart,
-        // so an unmatched game looks exactly as it does today.
-        coverUrlFor(CoverRegionIndex.coverSerialFor(rawSerial) ?: rawSerial)
-    }
-
-    /** This disc's OWN cover, ignoring the Cover Region choice. The card falls back to it when the
-     *  regional cover 404s — not every game has art for every region in the cover repo, and losing
-     *  a cover you previously had is worse than simply not getting the regional one. */
-    val discCoverUrl: String? get() = serial?.let { coverUrlFor(it) }
+    val coverUrl: String? get() = serial?.let { coverUrlFor(it) }
 
     /**
      * PS3 cover art comes off the DISC, not a repo.
@@ -450,9 +424,8 @@ data class GameInfo(
 
     private fun coverUrlFor(s: String): String {
         // PS3 art comes from aldostools/Resources, which is flat: COV/<TITLE_ID>.JPG
-        // keyed by exactly the id PARAM.SFO gives us. Extension is UPPER-case there
-        // -- the lower-case URL 404s. No 3D/spine set exists, so the 3D toggle has
-        // nothing to switch to and this ignores it.
+        // keyed by exactly the id PARAM.SFO gives us. Extension is UPPER-case there,
+        // the lower-case URL 404s.
         if (platform == GamePlatform.PS3) {
             return "https://raw.githubusercontent.com/aldostools/Resources/main/COV/$s.JPG"
         }
@@ -461,13 +434,7 @@ data class GameInfo(
             GamePlatform.PS1 -> "psx-covers"
             GamePlatform.PS3 -> "ps2-covers"  // handled above
         }
-        // 3D cases live under covers/3d/*.png; flat 2D scans under
-        // covers/default/*.jpg. Coil decodes by content, so the extension
-        // mismatch on the cached file is fine.
-        return if (CoverArtStyle.use3d.value)
-            "https://raw.githubusercontent.com/xlenore/$repo/main/covers/3d/$s.png"
-        else
-            "https://raw.githubusercontent.com/xlenore/$repo/main/covers/default/$s.jpg"
+        return "https://raw.githubusercontent.com/xlenore/$repo/main/covers/default/$s.jpg"
     }
 
     /** Human-readable region (USA / Europe / Japan / India / China / …). Prefers the
