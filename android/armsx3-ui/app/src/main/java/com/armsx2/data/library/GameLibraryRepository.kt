@@ -253,7 +253,11 @@ class GameLibraryRepository(private val context: Context) {
         cachedGames.forEach { game ->
             val serial = game.serial?.takeIf { it.isNotBlank() } ?: return@forEach
             if (serial in collidingSerials) return@forEach
-            val path = runCatching { game.uri.path }.getOrNull() ?: return@forEach
+            // The same key probeDisc stores under, which for a game in a picked folder is its
+            // device path and not the document URI's. A mismatch here would not look like a
+            // cache miss: it would re-probe every scan, and re-probing an ISO is the mount
+            // that has taken the app down.
+            val path = discCacheKey(game) ?: return@forEach
             // Folders only, and that is not a convenience: re-probing an ISO means load_iso ->
             // vfs::mount, which is the process-wide mount this whole seeding exists to avoid, and
             // it has crashed the app for real -- twice in one day, faulting in
@@ -430,13 +434,18 @@ class GameLibraryRepository(private val context: Context) {
         val children = runCatching { directory.listFiles() }.getOrNull() ?: return
         children.forEach { file ->
             if (file.isDirectory) {
-                // Same leaf rule as the raw scan. No SFO probe here: the core opens
-                // by path and a content:// tree has none to give, so the title comes
-                // from the folder name -- as it already does for a SAF-listed .iso.
+                // Same leaf rule as the raw scan, and now the same SFO probe too. This used
+                // to pass null and take the title from the folder name, because the core
+                // opens by path and a document tree had none to give. It has one now, so a
+                // game in a picked folder gets its real title, its serial and its ICON0.PNG
+                // like any other. Without the serial there is also no cover, no per-game
+                // config and no compatibility entry, so this was most of what "the games are
+                // there but wrong" meant on a build with no filesystem access.
                 if (runCatching { isPs3GameDocument(file) }.getOrDefault(false)) {
+                    val name = file.name ?: ""
                     output.putIfAbsent(
                         file.uri.toString(),
-                        createGame(file.uri, file.name ?: "", "folder", null),
+                        createGame(file.uri, name, "folder", null, probeDevicePath(file.uri, name)),
                     )
                     return@forEach
                 }
@@ -446,8 +455,16 @@ class GameLibraryRepository(private val context: Context) {
             val name = file.name ?: return@forEach
             val extension = name.substringAfterLast('.', "").lowercase()
             if (extension !in gameExtensions) return@forEach
-            val probe = if (extension in probeExtensions) probeDocument(file.uri) else null
-            output.putIfAbsent(file.uri.toString(), createGame(file.uri, name, extension, probe))
+            val disc = if (extension in probeExtensions) probeDevicePath(file.uri, name) else null
+            // probeDocument reads a PS2 SYSTEM.CNF, so it only ever answers for the handful of
+            // shapes the disc probe cannot read. Asking it first would spend an open on every
+            // PS3 game to be told nothing.
+            val probe = if (disc == null && extension in probeExtensions) {
+                probeDocument(file.uri)
+            } else {
+                null
+            }
+            output.putIfAbsent(file.uri.toString(), createGame(file.uri, name, extension, probe, disc))
         }
     }
 
@@ -712,6 +729,26 @@ class GameLibraryRepository(private val context: Context) {
         return value.substring(separator + 1) to GamePlatform.fromKey(value.substring(0, separator))
     }
 
+    /**
+     * Probe a document through the SAF device, which is the only way the core can read one.
+     *
+     * Null when the document is not inside a registered folder. That is not a failure worth
+     * reporting: it is what a build that reads the filesystem directly always gets here,
+     * because it never took this path in the first place.
+     */
+    /** Where [probeDisc] filed this game, so the seeding above and the probe agree. */
+    private fun discCacheKey(game: GameInfo): String? =
+        if (game.uri.scheme == "content") {
+            com.armsx2.storage.ContentUri.devicePathForDocument(game.uri)
+        } else {
+            runCatching { game.uri.path }.getOrNull()
+        }
+
+    private fun probeDevicePath(uri: Uri, label: String): DiscInfo? {
+        val path = com.armsx2.storage.ContentUri.devicePathForDocument(uri) ?: return null
+        return probeDisc(path, label)
+    }
+
     private fun probeDocument(uri: Uri): String? = runCatching {
         val descriptor = context.contentResolver.openFileDescriptor(uri, "r") ?: return null
         NativeApp.getGameSerialFromFd(descriptor.detachFd())
@@ -730,21 +767,25 @@ class GameLibraryRepository(private val context: Context) {
      * no cover. This asks the core to mount the ISO and read PS3_GAME/PARAM.SFO,
      * extracting PS3_GAME/ICON0.PNG alongside it.
      *
-     * Only for POSIX paths: the core opens the image by path, so a content:// URI
-     * has nothing to hand it. That is not a real gap here -- the raw scan path is
-     * the one that runs whenever all-files access is granted, which is required
-     * for the emulator to read the disc at boot anyway.
+     * Takes a path rather than a File because a game in a picked folder has one too now: a
+     * path under the SAF device, which the core opens through the same grant the scan is
+     * reading with. Before that existed this ran only on the raw scan, which is why a Play
+     * build listed games with no artwork and no serial.
      */
-    private fun probeDisc(file: File): DiscInfo? {
+    private fun probeDisc(file: File): DiscInfo? = probeDisc(file.absolutePath, file.name)
+
+    private fun probeDisc(path: String, label: String): DiscInfo? {
+        if (path.isEmpty()) return null
+
         // One extraction per game: re-reading a 7 GB image on every rescan to
         // recover a PNG we already have would make each scan take minutes.
-        val existing = discInfoCache[file.absolutePath]
+        val existing = discInfoCache[path]
         if (existing != null) return existing
 
         val raw = runCatching {
-            RPCSX.instance.probeDiscInfo(file.absolutePath, DiscIcons.fileFor(PendingIcon).absolutePath)
+            RPCSX.instance.probeDiscInfo(path, DiscIcons.fileFor(PendingIcon).absolutePath)
         }.getOrNull()
-        android.util.Log.i(ScanTag, "  probeDiscInfo('${file.name}') -> $raw")
+        android.util.Log.i(ScanTag, "  probeDiscInfo('$label') -> $raw")
         if (raw == null) return null
 
         val info = runCatching {
@@ -776,8 +817,8 @@ class GameLibraryRepository(private val context: Context) {
             DiscInfo(id, o.optString("title"))
         }.getOrNull() ?: return null
 
-        discInfoCache[file.absolutePath] = info
-        android.util.Log.i(ScanTag, "  disc probe: ${file.name} -> ${info.titleId} '${info.title}'")
+        discInfoCache[path] = info
+        android.util.Log.i(ScanTag, "  disc probe: $label -> ${info.titleId} '${info.title}'")
         return info
     }
 
