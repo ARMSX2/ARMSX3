@@ -2055,7 +2055,7 @@ fs::file::file(const std::string& path, bs_t<open_mode> mode)
 		return;
 	}
 
-	if (info.dwFileAttributes & FILE_ATTRIBUTE_SYSTEM)
+	if ((mode & fs::write) && (info.dwFileAttributes & FILE_ATTRIBUTE_SYSTEM))
 	{
 		CloseHandle(handle);
 		g_tls_error = fs::error::acces;
