@@ -126,7 +126,16 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
         }
     }
     val onCustomStorage: () -> Unit = {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
+        // STORAGE_ALL_FILES is false on the Play build, where MANAGE_EXTERNAL_STORAGE is not in
+        // the manifest at all. Sending someone to the all-files settings screen there hands them
+        // a switch Android greys out, with no way forward and nothing explaining why. Reported by
+        // testers on the first Play build: the toggle simply would not move.
+        //
+        // Checking the flavour rather than the launch result, because launching SUCCEEDS: the
+        // screen opens, it is the permission inside it that cannot be granted, so a catch around
+        // launch() never fires.
+        if (com.armsx2.BuildConfig.STORAGE_ALL_FILES &&
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
             !android.os.Environment.isExternalStorageManager()
         ) {
             val manageIntent = android.content.Intent(
@@ -806,7 +815,11 @@ private fun openFirmwarePicker(
         return
     }
 
-    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+    // Same reason as onCustomStorage: on a build without the permission declared, this screen
+    // opens onto a switch that cannot be moved. SAF is the supported path there, not a fallback.
+    if (com.armsx2.BuildConfig.STORAGE_ALL_FILES &&
+        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
+    ) {
         val intent = android.content.Intent(
             android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
             android.net.Uri.parse("package:${context.packageName}"),
