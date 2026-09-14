@@ -53,6 +53,7 @@ struct RPCSXApi {
   bool (*installFw)(JNIEnv *env, int fd, long progressId);
   bool (*isInstallableFile)(jint fd);
   jstring (*getDirInstallPath)(JNIEnv *env, jint fd);
+  jstring (*probePkgInfo)(JNIEnv *env, jint fd);
   bool (*install)(JNIEnv *env, int fd, long progressId);
   bool (*extractPkgTo)(JNIEnv *env, int fd, long progressId, const char *dest);
   void (*installStorageBridge)(JNIEnv *env);
@@ -175,6 +176,9 @@ struct RPCSXLibrary : RPCSXApi {
     result.installFw = reinterpret_cast<decltype(installFw)>(dlsym(handle, "_rpcsx_installFw"));
     result.isInstallableFile = reinterpret_cast<decltype(isInstallableFile)>(dlsym(handle, "_rpcsx_isInstallableFile"));
     result.getDirInstallPath = reinterpret_cast<decltype(getDirInstallPath)>(dlsym(handle, "_rpcsx_getDirInstallPath"));
+    // Optional: a core predating the library listing uninstalled packages has no such
+    // symbol, and the scan then skips .pkg files exactly as it always did.
+    result.probePkgInfo = reinterpret_cast<decltype(probePkgInfo)>(dlsym(handle, "_rpcsx_probePkgInfo"));
     result.install = reinterpret_cast<decltype(install)>(dlsym(handle, "_rpcsx_install"));
     result.extractPkgTo = reinterpret_cast<decltype(extractPkgTo)>(dlsym(handle, "_rpcsx_extractPkgTo"));
     // Optional: a core built before the storage bridge simply has no such symbol, and
@@ -612,6 +616,15 @@ Java_net_rpcsx_RPCSX_install(JNIEnv *env, jobject, jint fd, jlong progressId) {
   }
 
   return rpcsxLib.install(env, fd, progressId);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_probePkgInfo(JNIEnv *env, jobject, jint fd) {
+  if (rpcsxLib.probePkgInfo == nullptr) {
+    return nullptr;
+  }
+
+  return rpcsxLib.probePkgInfo(env, fd);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

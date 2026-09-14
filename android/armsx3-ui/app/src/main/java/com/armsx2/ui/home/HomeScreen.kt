@@ -860,6 +860,53 @@ fun HomeScreen(
         )
     }
 
+    // A package tile was tapped. Installing is not undoable without a manual uninstall, and a
+    // library tap is an easy thing to do by accident, so it asks. ConfirmOverlay rather than a
+    // Compose Dialog for the same reason as the licence prompt: a dialog window eats the D-pad.
+    viewModel.pendingInstall.value?.let { game ->
+        var deleteSource by remember(game.uri) { mutableStateOf(false) }
+        val running = viewModel.installing.value
+
+        com.armsx2.ui.common.ConfirmOverlay(
+            title = str("library.install.title"),
+            message = viewModel.installMessage.value
+                ?: if (running) str("library.install.running")
+                else str("library.install.message")
+                    .format(game.displayTitle(EnglishTitles.enabled.value)),
+            confirmLabel = if (running) str("library.install.running.short")
+            else str("packages.updates.installThis"),
+            idPrefix = "install-package",
+            confirmEnabled = !running,
+            extra = { layer ->
+                // Offered, never assumed: the .pkg is the user's file and it is the only copy
+                // they have if the install ever needs repeating.
+                val toggle = { if (!running) deleteSource = !deleteSource }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .controllerFocusable(
+                            controllerId = "$layer.deleteSource",
+                            layer = layer,
+                            onConfirm = toggle,
+                        )
+                        .clickable(enabled = !running, onClick = toggle)
+                        .padding(vertical = 4.dp),
+                ) {
+                    Checkbox(checked = deleteSource, onCheckedChange = { toggle() }, enabled = !running)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        str("library.install.deleteSource"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            onConfirm = { viewModel.confirmInstall(game, deleteSource) },
+            onDismiss = { viewModel.dismissInstall() },
+        )
+    }
+
     menuGame?.let { game ->
         // Tri-state on purpose: null while identifying, blank when the image cannot be identified.
         // produceState alone cannot tell those apart — both are null — so an unidentifiable game
@@ -1689,6 +1736,29 @@ private fun GameCover(
         if (showBadges && game.locked) {
             LockedBadge(Modifier.align(Alignment.TopEnd).padding(5.dp))
         }
+        // A package is a game the user has and cannot play yet, and its tile is otherwise
+        // indistinguishable from one that boots. Bottom start, so it does not collide with
+        // the locked badge on a title that is both.
+        if (showBadges && game.extension.equals("PKG", ignoreCase = true)) {
+            PackageBadge(Modifier.align(Alignment.BottomStart).padding(5.dp))
+        }
+    }
+}
+
+/** Says "this installs, it does not boot". Deliberately not the gold of the locked badge:
+ *  that one is a warning, and this is just a state the title is passing through. */
+@Composable
+private fun PackageBadge(modifier: Modifier = Modifier) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        modifier = modifier,
+    ) {
+        Text(
+            "📦",
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            fontSize = 11.sp,
+        )
     }
 }
 

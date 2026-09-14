@@ -5251,6 +5251,54 @@ extern "C" bool _rpcsx_isInstallableFile(jint fd) {
          type != FileType::Rap; // FIXME: implement rap preinstallation
 }
 
+// ---------------------------------------------------------------------------
+// What a .pkg is, without installing it
+//
+// A package carries its own PARAM.SFO, and package_reader parses it while opening
+// the archive. So the title, the id and the category are readable up front, which
+// is what lets the library show an uninstalled package as the game it will become
+// rather than as a filename.
+//
+// CATEGORY is the part that matters. "GD" is an update, "AC" is downloadable
+// content, and neither is a game: an update refuses to install without the base
+// game it patches (unpkg.cpp draws the same line at the same string). Reported
+// here rather than filtered, so the caller decides.
+// ---------------------------------------------------------------------------
+extern "C" jstring _rpcsx_probePkgInfo(JNIEnv *env, jint fd) {
+  auto file = fs::file::from_native_handle(fd);
+  AtExit atExit{[&] { file.release_handle(); }};
+
+  package_reader reader("probe.pkg", std::move(file));
+
+  // Registered BEFORE the validity check, not after. The reader owns the handle from
+  // construction on, so an early return that skipped this would leave it to close a
+  // descriptor the Java side is also going to close, and a double close is a fault in
+  // whatever unrelated thing happens to be handed that number next.
+  AtExit releaseReader{[&] { reader.file().release_handle(); }};
+
+  if (!reader.is_valid()) {
+    return nullptr;
+  }
+
+  const psf::registry &psf = reader.get_psf();
+
+  const auto titleId = std::string(psf::get_string(psf, "TITLE_ID", ""));
+  const auto title = std::string(psf::get_string(psf, "TITLE", ""));
+  const auto category = std::string(psf::get_string(psf, "CATEGORY", ""));
+  const auto appVersion = std::string(psf::get_string(psf, "APP_VER", ""));
+
+  if (titleId.empty()) {
+    return nullptr;
+  }
+
+  // Escaped: a title is arbitrary text off the disc and has no obligation to be valid
+  // inside a JSON string.
+  return wrap(env, fmt::format(
+      R"({"titleId":"%s","title":"%s","category":"%s","appVersion":"%s"})",
+      json_escape(titleId), json_escape(title), json_escape(category),
+      json_escape(appVersion)));
+}
+
 extern "C" jstring _rpcsx_getDirInstallPath(JNIEnv *env, jint fd) {
   auto file = fs::file::from_native_handle(fd);
   AtExit atExit{[&] { file.release_handle(); }};

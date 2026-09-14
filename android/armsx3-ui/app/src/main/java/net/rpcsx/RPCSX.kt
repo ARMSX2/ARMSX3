@@ -252,6 +252,15 @@ class RPCSX {
     ): Boolean
     external fun isInstallableFile(fd: Int) : Boolean
     external fun getDirInstallPath(sfoFd: Int) : String?
+
+    /**
+     * What a .pkg says it is, read from the package's own PARAM.SFO without installing it.
+     *
+     * JSON with titleId, title, category and appVersion, or null when the file is not a
+     * readable package. CATEGORY is the useful part: "GD" is an update and "AC" is
+     * downloadable content, neither of which is a game.
+     */
+    external fun probePkgInfo(fd: Int): String?
     external fun getVersion(): String
     external fun setCustomDriver(path: String, libraryName: String, hookDir: String): Boolean
 

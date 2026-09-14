@@ -12,6 +12,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import androidx.core.content.edit
+import androidx.compose.runtime.mutableStateOf
+import com.armsx2.i18n.I18n
+import com.armsx2.packages.QuickInstall
 
 enum class HomeSort { Title, RecentlyPlayed, Compatibility }
 
@@ -153,7 +156,61 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectedGame(): GameInfo? = state.value.visibleGames.getOrNull(state.value.selectedIndex)
 
+    /**
+     * The package this library tile would install, waiting on the user to say yes.
+     *
+     * A .pkg in a games folder is listed as the game it will become, so tapping it is the
+     * one library tap that does not start a game. It is also not undoable without a manual
+     * uninstall, which is why it asks first.
+     */
+    val pendingInstall = mutableStateOf<GameInfo?>(null)
+
+    /** Progress of that install, so the tile's dialog can say something while it runs. */
+    val installing = mutableStateOf(false)
+    val installMessage = mutableStateOf<String?>(null)
+
+    fun dismissInstall() {
+        if (installing.value) return
+        pendingInstall.value = null
+        installMessage.value = null
+    }
+
+    fun confirmInstall(game: GameInfo, deleteSource: Boolean) {
+        if (installing.value) return
+        installing.value = true
+        installMessage.value = null
+
+        scope.launch {
+            val result = QuickInstall.install(
+                getApplication(), game.uri, game.displayTitle(false),
+            )
+            installing.value = false
+
+            when (result) {
+                is QuickInstall.Result.Ok -> {
+                    if (deleteSource) {
+                        QuickInstall.deleteSource(getApplication(), game.uri)
+                    }
+                    pendingInstall.value = null
+                    refresh()
+                }
+                is QuickInstall.Result.Failed -> {
+                    installMessage.value = result.reason
+                        ?: I18n.get("packages.install.failed")
+                }
+            }
+        }
+    }
+
     fun launch(game: GameInfo) {
+        // A package is not a game yet. Tapping its tile installs it, which is a different
+        // question from "start this", so it is asked rather than done.
+        if (game.extension.equals("pkg", ignoreCase = true)) {
+            pendingInstall.value = game
+            installMessage.value = null
+            return
+        }
+
         // A licence-locked game cannot boot: BootGame fails with DecryptionError, the app hides
         // the library, spins up a VM, tears it back down and returns here. Ask for the key up
         // front rather than spending a whole boot to tell the user what the scan already knows.

@@ -18,6 +18,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.armsx2.CustomCovers
 import com.armsx2.DiscIcons
+import com.armsx2.Ps3Sfo
 import com.armsx3.NativeApp
 import net.rpcsx.GameFlag
 import net.rpcsx.RPCSX
@@ -29,7 +30,20 @@ import java.io.File
 class GameLibraryRepository(private val context: Context) {
     private val gameExtensions = setOf(
         "iso", "chd", "cso", "zso", "gz", "bin", "mdf", "img", "nrg", "dump", "elf",
+        // Not a game yet, which is the point of listing it. A package sitting in a games
+        // folder is a game the user has and cannot play, and nothing in the app said so.
+        "pkg",
     )
+
+    /**
+     * Package categories that are not a game on their own.
+     *
+     * "GD" is a title update and "AC" is downloadable content: both refuse to install
+     * without the base game, and neither is something to show as a tile. The rest are
+     * themes, save data and the like. Stated as an exclusion rather than a whitelist so an
+     * unusual but genuine game package is still listed.
+     */
+    private val nonGameCategories = setOf("GD", "AC", "SD", "HM", "MS")
 
     // Recent-games export runs off the launch/UI thread; exportLock serialises the file
     // write so a quick play-then-remove can't interleave two writers on the same file.
@@ -455,6 +469,14 @@ class GameLibraryRepository(private val context: Context) {
             val name = file.name ?: return@forEach
             val extension = name.substringAfterLast('.', "").lowercase()
             if (extension !in gameExtensions) return@forEach
+            if (extension == "pkg") {
+                val pkg = probePkg {
+                    context.contentResolver.openFileDescriptor(file.uri, "r")
+                } ?: return@forEach
+                output.putIfAbsent(file.uri.toString(), createPackage(file.uri, name, pkg))
+                return@forEach
+            }
+
             val disc = if (extension in probeExtensions) probeDevicePath(file.uri, name) else null
             // probeDocument reads a PS2 SYSTEM.CNF, so it only ever answers for the handful of
             // shapes the disc probe cannot read. Asking it first would spend an open on every
@@ -584,6 +606,15 @@ class GameLibraryRepository(private val context: Context) {
             android.util.Log.i(ScanTag, "  raw file '${file.name}' ext=$extension accepted=${extension in gameExtensions}")
             if (extension !in gameExtensions) return@forEach
             val uri = Uri.fromFile(file)
+
+            if (extension == "pkg") {
+                val pkg = probePkg {
+                    ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+                } ?: return@forEach
+                output.putIfAbsent(uri.toString(), createPackage(uri, file.name, pkg))
+                return@forEach
+            }
+
             val disc = if (extension in probeExtensions) probeDisc(file) else null
             val probe = if (disc == null && extension in probeExtensions) probeRaw(file) else null
             output.putIfAbsent(uri.toString(), createGame(uri, file.name, extension, probe, disc))
@@ -708,6 +739,39 @@ class GameLibraryRepository(private val context: Context) {
         )
     }
 
+    /**
+     * A library entry for a package that is not installed yet.
+     *
+     * Identity comes from the package's own PARAM.SFO, so the tile carries the title id the
+     * game will have once installed. That is what lets its cover, its compatibility rating
+     * and later its per-game settings all line up with the installed title rather than
+     * starting over. The extension stays PKG, which is how the rest of the app knows this one
+     * installs rather than boots.
+     */
+    private fun createPackage(uri: Uri, name: String, pkg: PkgInfo): GameInfo {
+        val serial = normalizeSerial(pkg.titleId)
+        val db = dbTitles(serial)
+        val compatibility = runCatching { NativeApp.getCompatibilityForSerial(serial) }
+            .getOrDefault(0)
+            .minus(1)
+            .coerceIn(0, 5)
+
+        android.util.Log.i(ScanTag, "  package '$name' -> ${pkg.titleId} '${pkg.title}' (${pkg.category})")
+
+        return GameInfo(
+            uri = uri,
+            title = pkg.title.takeIf { it.isNotBlank() }
+                ?: db?.name?.takeIf { it.isNotEmpty() }
+                ?: FilenameParser.parse(name).first,
+            serial = serial,
+            compatibility = compatibility,
+            extension = "PKG",
+            platform = GamePlatform.PS3,
+            titleSort = db?.sort.orEmpty(),
+            titleEn = db?.en.orEmpty(),
+        )
+    }
+
     private data class DbTitles(val name: String, val sort: String, val en: String)
 
     /** GameDB's three titles for [serial], or null when it isn't in the database. */
@@ -736,6 +800,41 @@ class GameLibraryRepository(private val context: Context) {
      * reporting: it is what a build that reads the filesystem directly always gets here,
      * because it never took this path in the first place.
      */
+    private data class PkgInfo(val titleId: String, val title: String, val category: String)
+
+    /**
+     * What an uninstalled .pkg is, read from the package's own PARAM.SFO.
+     *
+     * Null for anything that should not become a tile: an unreadable package, an update, a
+     * DLC, or a title that is already installed. The last one is what keeps the library from
+     * showing a package beside the game it already produced.
+     */
+    private fun probePkg(open: () -> ParcelFileDescriptor?): PkgInfo? {
+        val raw = runCatching {
+            val descriptor = open() ?: return null
+            RPCSX.instance.probePkgInfo(descriptor.detachFd())
+        }.getOrNull() ?: return null
+
+        val info = runCatching {
+            val o = JSONObject(raw)
+            val id = o.optString("titleId").trim().uppercase()
+            if (id.isEmpty()) return@runCatching null
+            PkgInfo(id, o.optString("title").trim(), o.optString("category").trim().uppercase())
+        }.getOrNull() ?: return null
+
+        if (info.category in nonGameCategories) {
+            android.util.Log.i(ScanTag, "  pkg ${info.titleId} is ${info.category}, not a game")
+            return null
+        }
+
+        if (Ps3Sfo.installDir(info.titleId) != null) {
+            android.util.Log.i(ScanTag, "  pkg ${info.titleId} is already installed")
+            return null
+        }
+
+        return info
+    }
+
     /** Where [probeDisc] filed this game, so the seeding above and the probe agree. */
     private fun discCacheKey(game: GameInfo): String? =
         if (game.uri.scheme == "content") {
