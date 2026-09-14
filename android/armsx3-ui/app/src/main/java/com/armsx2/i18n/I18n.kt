@@ -1247,6 +1247,7 @@ val EN: Map<String, String> = mapOf(
     "renderer.shaderMode.async" to "Async",
     "renderer.shaderMode.asyncInterp" to "Async + Interp",
     "renderer.shaderMode.interpOnly" to "Interpreter",
+    "setup.games.appFolderOnly" to "Put your games in ARMSX3's own games folder. Open the Files app, choose ARMSX3 in the sidebar, and copy them into config/games. They are picked up automatically. If your data folder is on the SD card, moving games there from elsewhere on the same card does not need a second copy.",
     "tab.mods" to "Mods",
     "mods.noGame" to "Open this from a game to manage its mods.",
     "mods.requirement" to "Mods are layered over the game as it starts, so your game files are never modified. Turning one on or off applies the next time you launch the game.",
