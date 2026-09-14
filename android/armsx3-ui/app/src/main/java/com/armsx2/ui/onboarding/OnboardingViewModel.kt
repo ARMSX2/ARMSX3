@@ -397,12 +397,20 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
         }
+        // Give the folder a key now, while the grant is fresh. That key is what the core's
+        // paths into this folder are built from, so a game scanned today has to find the same
+        // folder behind the same key on every later launch.
+        com.armsx2.storage.ContentUri.attach(context)
+        com.armsx2.storage.ContentUri.keyForTree(uri)
         val updated = (state.value.gameFolders + uri.toString()).distinct()
         MainActivityRuntime.setRomsDirs(updated)
         state.value = state.value.copy(gameFolders = updated, error = null)
     }
 
     fun removeGameFolder(uri: String) {
+        runCatching {
+            com.armsx2.storage.ContentUri.forgetTree(Uri.parse(uri))
+        }
         val updated = state.value.gameFolders - uri
         MainActivityRuntime.setRomsDirs(updated)
         state.value = state.value.copy(gameFolders = updated)

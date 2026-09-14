@@ -146,6 +146,12 @@ object Rpcs3Bridge {
 
         initialize(root)
 
+        // After initialize(), which brings up the filesystem layer the device registers into,
+        // and from here rather than from core startup: the bridge looks up a Kotlin class, and
+        // that only resolves on a thread Java started.
+        com.armsx2.storage.ContentUri.attach(context)
+        runCatching { RPCSX.instance.installStorageBridge() }
+
         // Restore firmware state from <root>/fw.json. Without this the version
         // and status start at None on every launch, so setup would demand a PUP
         // again even though dev_flash is already populated.
@@ -242,7 +248,12 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun boot(path: String): Boolean {
-        val target = if (path.isNotEmpty()) path else {
+        // A game in a folder the user picked is recorded by document URI, because that is what
+        // the library can read its cover and its SFO through. The core opens paths, so this is
+        // where the two meet: the URI becomes a path under the SAF device, which resolves back
+        // through the same grant. Anything already a path is returned unchanged.
+        val requested = com.armsx2.storage.ContentUri.bootPathFor(path)
+        val target = if (requested.isNotEmpty()) requested else {
             val vsh = File(RPCSX.rootDirectory + "config/dev_flash/vsh/module/vsh.self")
             if (!vsh.isFile) {
                 lastBootError = "firmware not installed"

@@ -66,6 +66,7 @@
 #include "util/console.h"
 #include "util/fixed_typemap.hpp"
 #include "util/logs.hpp"
+#include "saf_device.h"
 #include "util/serialization.hpp"
 #include "util/sysinfo.hpp"
 #include <Emu/Io/pad_config.h>
@@ -5335,6 +5336,19 @@ extern "C" bool _rpcsx_uninstallGame(std::string_view path) {
 // The override is cleared unconditionally on the way out, including on failure. Leaving it set
 // would silently redirect the NEXT ordinary install into a mod folder, which is about the worst
 // failure this could have.
+// ---------------------------------------------------------------------------
+// Storage bridge
+//
+// Registers the SAF virtual device, so paths under its prefix resolve through a
+// picked folder's tree URI instead of through the filesystem. Called from Kotlin
+// rather than from core startup because the class lookup it does only works on a
+// thread Java started: a natively attached thread gets the system class loader,
+// which cannot see app classes.
+// ---------------------------------------------------------------------------
+extern "C" void _rpcsx_installStorageBridge(JNIEnv *env) {
+  armsx3::saf::install(env);
+}
+
 extern "C" bool _rpcsx_extractPkgTo(JNIEnv *env, int fd, long progressId,
                                     const char *dest) {
   if (dest == nullptr || *dest == '\0') {

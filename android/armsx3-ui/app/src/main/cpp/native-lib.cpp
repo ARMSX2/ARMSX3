@@ -55,6 +55,7 @@ struct RPCSXApi {
   jstring (*getDirInstallPath)(JNIEnv *env, jint fd);
   bool (*install)(JNIEnv *env, int fd, long progressId);
   bool (*extractPkgTo)(JNIEnv *env, int fd, long progressId, const char *dest);
+  void (*installStorageBridge)(JNIEnv *env);
   bool (*installKey)(JNIEnv *env, int fd, long progressId,
                      std::string_view gamePath);
   std::string (*systemInfo)();
@@ -176,6 +177,9 @@ struct RPCSXLibrary : RPCSXApi {
     result.getDirInstallPath = reinterpret_cast<decltype(getDirInstallPath)>(dlsym(handle, "_rpcsx_getDirInstallPath"));
     result.install = reinterpret_cast<decltype(install)>(dlsym(handle, "_rpcsx_install"));
     result.extractPkgTo = reinterpret_cast<decltype(extractPkgTo)>(dlsym(handle, "_rpcsx_extractPkgTo"));
+    // Optional: a core built before the storage bridge simply has no such symbol, and
+    // the Kotlin side then keeps resolving picked folders to filesystem paths.
+    result.installStorageBridge = reinterpret_cast<decltype(installStorageBridge)>(dlsym(handle, "_rpcsx_installStorageBridge"));
     result.installKey = reinterpret_cast<decltype(installKey)>(dlsym(handle, "_rpcsx_installKey"));
     result.systemInfo = reinterpret_cast<decltype(systemInfo)>(dlsym(handle, "_rpcsx_systemInfo"));
     result.loginUser = reinterpret_cast<decltype(loginUser)>(dlsym(handle, "_rpcsx_loginUser"));
@@ -608,6 +612,16 @@ Java_net_rpcsx_RPCSX_install(JNIEnv *env, jobject, jint fd, jlong progressId) {
   }
 
   return rpcsxLib.install(env, fd, progressId);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_installStorageBridge(JNIEnv *env, jobject) {
+  if (rpcsxLib.installStorageBridge == nullptr) {
+    return false;
+  }
+
+  rpcsxLib.installStorageBridge(env);
+  return true;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

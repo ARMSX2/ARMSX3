@@ -666,43 +666,8 @@ private fun GamesPage(state: OnboardingUiState, onAdd: () -> Unit, onRemove: (St
                     }
                 }
             }
-            // A folder picked here is kept as a content:// tree, and the core boots by opening
-            // a filesystem path. On a build that can read the filesystem the two are reconciled
-            // by resolving the tree to a path; on this one there is no path to resolve to, so a
-            // picked folder produces games that list without covers and drop back to the library
-            // when launched. Reported by testers who had done nothing wrong.
-            //
-            // So it says where games go instead of offering a picker that cannot lead anywhere.
-            // That folder is scanned by path, probed for its SFO, and bootable, and the documents
-            // provider puts it in Files so it can be reached.
-            if (com.armsx2.BuildConfig.STORAGE_ALL_FILES) {
-                OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
-                    Text(if (state.gameFolders.isEmpty()) str("setup.button.pickRomsFolder") else str("setup.button.addAnotherFolder"))
-                }
-            } else {
-                val gamesDir = remember {
-                    runCatching {
-                        java.io.File(net.rpcsx.RPCSX.rootDirectory, "config/games").absolutePath
-                    }.getOrDefault("")
-                }
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
-                ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text(str("setup.games.appFolderOnly"))
-                        if (gamesDir.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                gamesDir,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
+            OutlinedButton(onClick = onAdd, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) {
+                Text(if (state.gameFolders.isEmpty()) str("setup.button.pickRomsFolder") else str("setup.button.addAnotherFolder"))
             }
         }
     }

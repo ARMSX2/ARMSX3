@@ -92,6 +92,14 @@ class RPCSX {
 
     /** Extract a .pkg into [dest] instead of installing it into dev_hdd0. */
     external fun extractPkgTo(fd: Int, progressId: Long, dest: String): Boolean
+
+    /**
+     * Register the SAF storage device in the core.
+     *
+     * False when the core predates it, in which case a picked folder is still resolved to a
+     * filesystem path and still fails on a build without permission to read one.
+     */
+    external fun installStorageBridge(): Boolean
     /** Install several .pkg parts of one split package together, in order. */
     external fun installSplitPkg(fds: IntArray, progressId: Long): Boolean
     /** Delete an installed title's directory. Refused for paths outside dev_hdd0/game. */
