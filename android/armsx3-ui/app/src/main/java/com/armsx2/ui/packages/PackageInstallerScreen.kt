@@ -862,16 +862,32 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     } else {
-                        Button(onClick = { showBrowser = true }) {
-                            Text(str("packages.select.action"))
-                        }
-                        // Reaches storage the in-app browser cannot open by path: USB-OTG,
-                        // and SD cards on devices that only expose them through SAF.
-                        Button(
-                            onClick = { safPicker.launch(arrayOf("*/*")) },
-                            modifier = Modifier.padding(top = 8.dp),
-                        ) {
-                            Text(str("packages.select.external"))
+                        // Which of these is the useful one depends on the build.
+                        //
+                        // The in-app browser reads the filesystem directly, which the play build
+                        // has no permission to do: it can see the app's own folders and nothing
+                        // else, so a user looking for a .pkg in Downloads is shown an empty tree
+                        // with no hint why. Reported by a tester who pressed the obvious button.
+                        //
+                        // So the document picker leads there and the raw browser is not offered
+                        // at all, while the github build keeps the browser first, where being
+                        // able to walk the real filesystem is the nicer experience.
+                        if (com.armsx2.BuildConfig.STORAGE_ALL_FILES) {
+                            Button(onClick = { showBrowser = true }) {
+                                Text(str("packages.select.action"))
+                            }
+                            // Reaches storage the in-app browser cannot open by path: USB-OTG,
+                            // and SD cards on devices that only expose them through SAF.
+                            Button(
+                                onClick = { safPicker.launch(arrayOf("*/*")) },
+                                modifier = Modifier.padding(top = 8.dp),
+                            ) {
+                                Text(str("packages.select.external"))
+                            }
+                        } else {
+                            Button(onClick = { safPicker.launch(arrayOf("*/*")) }) {
+                                Text(str("packages.select.action"))
+                            }
                         }
                     }
 

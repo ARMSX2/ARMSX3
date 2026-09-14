@@ -97,6 +97,27 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
     // (Internal / SD only). Flow: grant all-files access if needed → pick a folder →
     // resolve the tree URI to a POSIX path the native core can write to directly.
     val context = androidx.compose.ui.platform.LocalContext.current
+    // Pick the PUP itself rather than the folder holding it.
+    //
+    // The folder route only ever looked at the chosen folder's immediate children, so firmware
+    // one level down reported "no .PUP firmware was found in that folder" and the user had no
+    // way to know why. A tester got there and worked it out by moving the file. The step already
+    // says "select the firmware file", and on the github build that is exactly what the in-app
+    // browser does; this gives the same thing to builds without filesystem access.
+    val biosFilePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri?.let { picked ->
+            val doc = androidx.documentfile.provider.DocumentFile.fromSingleUri(context, picked)
+            viewModel.installFirmware(
+                FirmwareCandidate(
+                    doc?.name ?: "PS3UPDAT.PUP",
+                    picked,
+                    doc?.length() ?: 0L,
+                ),
+            )
+        }
+    }
     val customFolderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let { u ->
             runCatching {
@@ -221,7 +242,7 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
                                 WizardPage(page, state, viewModel, biosPicker = {
                                     openFirmwarePicker(
                                         context, { showFirmwareBrowser = true },
-                                        firmwarePermLauncher, biosPicker,
+                                        firmwarePermLauncher, biosPicker, biosFilePicker,
                                     )
                                 }, folderPicker = { folderPicker.launch(null) }, onCustomStorage = onCustomStorage)
                             }
@@ -264,7 +285,7 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
                             WizardPage(page, state, viewModel, biosPicker = {
                                 openFirmwarePicker(
                                     context, { showFirmwareBrowser = true },
-                                    firmwarePermLauncher, biosPicker,
+                                    firmwarePermLauncher, biosPicker, biosFilePicker,
                                 )
                             }, folderPicker = { folderPicker.launch(null) }, onCustomStorage = onCustomStorage)
                         }
@@ -809,6 +830,7 @@ private fun openFirmwarePicker(
     showBrowser: () -> Unit,
     permLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>,
     safPicker: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
+    filePicker: androidx.activity.result.ActivityResultLauncher<Array<String>>,
 ) {
     if (com.armsx2.ui.common.canBrowse()) {
         showBrowser()
@@ -817,6 +839,13 @@ private fun openFirmwarePicker(
 
     // Same reason as onCustomStorage: on a build without the permission declared, this screen
     // opens onto a switch that cannot be moved. SAF is the supported path there, not a fallback.
+    if (!com.armsx2.BuildConfig.STORAGE_ALL_FILES) {
+        // Straight to the file picker. Nothing here can browse the filesystem, and asking for a
+        // folder then scanning one level of it is how "no firmware found" happened.
+        filePicker.launch(arrayOf("*/*"))
+        return
+    }
+
     if (com.armsx2.BuildConfig.STORAGE_ALL_FILES &&
         android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
     ) {
