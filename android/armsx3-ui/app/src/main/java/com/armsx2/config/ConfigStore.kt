@@ -124,7 +124,15 @@ object ConfigStore {
     // upgrading has one of these in their data folder and nothing else, so it stays readable
     // forever -- it is the only copy of their settings after a reinstall.
     private const val LEGACY_BACKUP_FILENAME = "armsx2-settings.json"
-    private fun keyForGame(serial: String) = "config.game.$serial"
+    /**
+     * Where a title's overrides live.
+     *
+     * Normalised through [effectiveKey], so every reader and writer lands on the same entry
+     * without each call site having to remember to ask. That was the shape of the bug this
+     * store keeps having: the launch path resolved one key while the settings screen wrote
+     * another, and a per-game setting that had plainly been saved simply never applied.
+     */
+    private fun keyForGame(serial: String) = "config.game.${effectiveKey(serial) ?: serial}"
 
     // Serial aliases, so per-game settings land under the key the core actually uses.
     //
@@ -149,6 +157,37 @@ object ConfigStore {
         if (stem == real) return
         if (MainActivityRuntime.prefs.getString(aliasKey(stem), null) == real) return
         MainActivityRuntime.prefs.edit { putString(aliasKey(stem), real) }
+    }
+
+    /**
+     * Take over settings saved under a key this title no longer answers to.
+     *
+     * [GameInfo.settingsKey] is the serial when the library has one and the filename stem
+     * when it does not, so a title that gains a serial changes key, and everything the user
+     * set for it stays behind under the old one. That is not hypothetical: games in a picked
+     * folder had no serial at all until the scan learned to read a package's PARAM.SFO, so
+     * every per-game setting made before that is filed under a filename.
+     *
+     * Only ever moves settings INTO a key that has none of its own, so a title that has been
+     * configured under its serial cannot be overwritten by something older.
+     */
+    fun adoptLegacyOverrides(current: String?, legacy: String?) {
+        val to = current?.takeIf { it.isNotBlank() } ?: return
+        val from = legacy?.takeIf { it.isNotBlank() } ?: return
+        // Compare NORMALISED keys. Every load and save below resolves through the alias
+        // table, so once an alias from -> to exists both names already address the same
+        // entry: not bailing out here would read that entry, write it back, and then delete
+        // it as if it were the old one.
+        if (effectiveKey(from) == effectiveKey(to)) return
+        if (loadOverrides(to) != null) return
+
+        val moved = loadOverrides(from) ?: return
+        saveOverrides(to, moved)
+        // Before the alias is recorded, while `from` still addresses its own entry.
+        clearOverrides(from)
+        // So anything still holding the old key resolves here rather than to global.
+        rememberSerial(from, to)
+        android.util.Log.i("ARMSX3-Config", "adopted per-game settings from '$from' to '$to'")
     }
 
     /** The key per-game settings should actually be stored and resolved under. */

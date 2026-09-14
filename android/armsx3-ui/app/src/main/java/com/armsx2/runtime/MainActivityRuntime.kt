@@ -664,6 +664,14 @@ open class MainActivityRuntime : ComponentActivity() {
                     //
                     // Cheap: applyTo batches its ~165 keys, and this runs once per launch.
                     try {
+                        // A title that gained a serial changed key, leaving everything the user
+                        // set for it under the old one. Bring it forward before anything reads,
+                        // or the first thing this launch does is apply global over it.
+                        currentGame.value?.let { game ->
+                            com.armsx2.config.ConfigStore.adoptLegacyOverrides(
+                                game.settingsKey, game.fileStemKey,
+                            )
+                        }
                         com.armsx2.config.ConfigStore
                             .resolveForGame(currentGame.value?.settingsKey)
                             .applyTo()

@@ -23,6 +23,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val settings get() = InGameOverlay.settingsState
 
     fun load(category: SettingsCategory, game: GameInfo?) {
+        // Before the first read, so this screen shows the settings the game actually has
+        // rather than global, and then saves over the top of them.
+        game?.let { ConfigStore.adoptLegacyOverrides(it.settingsKey, it.fileStemKey) }
         val serial = game?.settingsKey
         InGameOverlay.currentSerial.value = serial
         InGameOverlay.settingsScope.value = if (serial == null) SettingsScope.Global else SettingsScope.Game

@@ -465,9 +465,15 @@ data class GameInfo(
      *  path so the boot path and the in-game overlay resolve the SAME key (the
      *  bug was the overlay saving under one key while boot read another). Stem
      *  keys can collide if two ELFs share a filename; acceptable for homebrew. */
-    val settingsKey: String? get() = serial?.takeIf { it.isNotBlank() }
-        ?: uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':')
-            ?.substringBeforeLast('.')?.trim()?.takeIf { it.isNotEmpty() }
+    val settingsKey: String? get() = serial?.takeIf { it.isNotBlank() } ?: fileStemKey
+
+    /** The key this title WOULD have had with no serial, which for a long time was the key it
+     *  actually had. A game in a picked folder had no serial until the scan learned to read a
+     *  package's PARAM.SFO, so anything configured before that is filed under this. Used by
+     *  ConfigStore.adoptLegacyOverrides to bring those settings forward. */
+    val fileStemKey: String? get() = uri.lastPathSegment
+        ?.substringAfterLast('/')?.substringAfterLast(':')
+        ?.substringBeforeLast('.')?.trim()?.takeIf { it.isNotEmpty() }
 }
 
 /**
