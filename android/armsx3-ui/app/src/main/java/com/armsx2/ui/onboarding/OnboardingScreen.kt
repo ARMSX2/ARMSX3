@@ -651,7 +651,7 @@ private fun GamesPage(state: OnboardingUiState, onAdd: () -> Unit, onRemove: (St
     SetupPage(str("setup.page.roms.title"), str("setup.step.rom.description")) {
         Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
             state.gameFolders.forEach { raw ->
-                val label = Uri.parse(raw).lastPathSegment?.substringAfterLast(':')?.ifBlank { null } ?: raw
+                val label = com.armsx2.storage.StorageLabel.forFolder(androidx.compose.ui.platform.LocalContext.current, raw)
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),

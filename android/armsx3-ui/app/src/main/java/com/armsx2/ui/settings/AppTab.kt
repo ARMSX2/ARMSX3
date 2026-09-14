@@ -976,7 +976,7 @@ private fun GameFoldersRow() {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            Uri.decode(raw).substringAfterLast('/').ifEmpty { raw },
+                            com.armsx2.storage.StorageLabel.forFolder(context, raw),
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,

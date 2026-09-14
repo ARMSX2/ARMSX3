@@ -281,6 +281,8 @@ val EN: Map<String, String> = mapOf(
     "app.credits.music" to "Music: \"Calm Ambient 1 (Synthwave 4k)\" — The Cynic Project / cynicmusic.com / pixelsphere.org (CC0)",
     "app.credits.sfx" to "Menu sounds: \"Interface SFX Pack 1\" — obsydianx.itch.io (CC0)",
     "app.language" to "Language",
+    "storage.volume.internal" to "Internal storage",
+    "storage.volume.card" to "SD card",
     "app.gameFolders" to "Game Folders",
     "app.gameFolders.count" to "%d folder(s)",
     "app.gameFolders.none" to "No folders added",
