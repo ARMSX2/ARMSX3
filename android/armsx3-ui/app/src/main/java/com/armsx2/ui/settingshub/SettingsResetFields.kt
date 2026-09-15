@@ -43,7 +43,7 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
         "customAspectRatio", "customDriverId", "deinterlaceMode", "displayBilinear",
         "displayFitMode", "dumpReplaceableTextures", "fmvAspectRatio", "forceMaliFbFetch",
         "fxaa", "gpuProfile", "gsBackThreadMode", "hardwareDownloadMode", "hwAa1",
-        "hwAccurateAlphaTest", "landscapeRenderTop", "loadTextureReplacements",
+        "hwAccurateAlphaTest", "loadTextureReplacements",
         "loadTextureReplacementsAsync", "maxAnisotropy", "orientation",
         "osdShowTextureReplacements", "portraitRenderTop", "precacheTextureReplacements",
         "ps3AnisoFilter", "ps3AsyncTexStream", "ps3DisableZcull", "ps3DisplayAspect",
@@ -76,7 +76,7 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
     ),
     // OverlayTab.kt
     SettingsCategory.OnScreen to listOf(
-        "osdColor", "osdScale", "osdShowCpu", "osdShowFps", "osdShowFrameTimes", "osdShowGpu",
+        "osdColor", "osdShowCpu", "osdShowFps", "osdShowFrameTimes", "osdShowGpu",
         "osdShowGpuStats", "osdShowGsStats", "osdShowHardwareInfo", "osdShowInputs",
         "osdShowMessages", "osdShowResolution", "osdShowSettings", "osdShowSpeed",
         "osdShowVersion", "osdShowVps", "ps3OverlayBodyBg", "ps3OverlayBodyColor",

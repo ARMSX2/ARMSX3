@@ -87,16 +87,19 @@ fun OverlayTab(state: MutableState<Settings>) {
 
         // All three size sliders sit together at the top. The first scales the emulator's OSD
         // (the perf/stat readout drawn over the game); the two below scale the app's own menus.
-        // They used to be split across the tab AND shared one label key, so this slider read as
-        // "UI Size (borders)" while actually driving osdScale — two settings, one name.
+        //
+        // This slot used to hold an "OSD Size" percentage driving `osdScale`, which was PCSX2's
+        // EmuCore/GS/OsdScale plus a NativeApp.osdSetScale() stub -- so it did nothing, while the
+        // row that DOES size the overlay sat further down the tab where nobody looked. Same shape
+        // of bug as the colour row below. One control now, in the place people reach for it.
         IntSliderRow(
-            label = str("overlay.osdSize.label"),
-            value = s.osdScale,
-            min = 50,
-            max = 250,
-            description = str("overlay.osdSize.description"),
-            valueFormatter = { "$it%" },
-            onChange = { apply(s.copy(osdScale = it)) },
+            label = str("overlay.fontSize.label"),
+            value = s.ps3.overlayFontSize.coerceIn(4, 36),
+            min = 4,
+            max = 36,
+            description = str("overlay.fontSize.description"),
+            valueFormatter = { "$it px" },
+            onChange = { apply(s.copy(ps3 = s.ps3.copy(overlayFontSize = it))) },
         )
         SettingsDivider()
 
@@ -181,16 +184,6 @@ fun OverlayTab(state: MutableState<Settings>) {
             selectedIndex = s.ps3.overlayPosition.coerceIn(0, 3),
             description = str("overlay.position.description"),
             onChange = { apply(s.copy(ps3 = s.ps3.copy(overlayPosition = it))) },
-        )
-        SettingsDivider()
-        IntSliderRow(
-            label = str("overlay.fontSize.label"),
-            value = s.ps3.overlayFontSize.coerceIn(4, 36),
-            min = 4,
-            max = 36,
-            description = str("overlay.fontSize.description"),
-            valueFormatter = { "$it px" },
-            onChange = { apply(s.copy(ps3 = s.ps3.copy(overlayFontSize = it))) },
         )
         SettingsDivider()
         IntSliderRow(

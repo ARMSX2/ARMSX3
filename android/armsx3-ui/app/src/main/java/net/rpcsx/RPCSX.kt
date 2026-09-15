@@ -133,7 +133,7 @@ class RPCSX {
      * API for SoC temperatures -- so the core is only ever told the answer.
      */
     external fun setThermals(cpu: Float, gpu: Float, battery: Float, show: Boolean)
-    external fun setRenderPosition(portraitTop: Boolean, landscapeTop: Boolean, topInset: Int)
+    external fun setRenderPosition(portraitTop: Boolean, topInset: Int)
     external fun usbDeviceEvent(fd: Int, vendorId: Int, productId: Int, event: Int): Boolean
     external fun processCompilationQueue(): Boolean
     external fun startMainThreadProcessor(): Boolean

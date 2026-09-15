@@ -49,7 +49,7 @@ struct RPCSXApi {
   void (*setPadSensor)(int port, int x, int y, int z, int g);
   int (*getPadRumble)(int port);
   void (*setThermals)(float cpu, float gpu, float battery, bool show);
-  void (*setRenderPosition)(bool portraitTop, bool landscapeTop, int topInset);
+  void (*setRenderPosition)(bool portraitTop, int topInset);
   bool (*usbDeviceEvent)(int fd, int vendorId, int productId, int event);
   bool (*installFw)(JNIEnv *env, int fd, long progressId);
   bool (*isInstallableFile)(jint fd);
@@ -560,12 +560,12 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setThermals(
 }
 
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setRenderPosition(
-    JNIEnv *, jobject, jboolean portraitTop, jboolean landscapeTop, jint topInset) {
+    JNIEnv *, jobject, jboolean portraitTop, jint topInset) {
   if (rpcsxLib.setRenderPosition == nullptr) {
     return;
   }
 
-  rpcsxLib.setRenderPosition(portraitTop == JNI_TRUE, landscapeTop == JNI_TRUE, topInset);
+  rpcsxLib.setRenderPosition(portraitTop == JNI_TRUE, topInset);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_surfaceSizeChanged(

@@ -248,14 +248,11 @@ namespace rsx
 	}
 
 	atomic_t<u32> g_render_top_portrait{0};
-	atomic_t<u32> g_render_top_landscape{0};
 	atomic_t<u32> g_render_top_inset{0};
 
 	areau apply_render_position(const areau& region, const size2u& output_dimensions)
 	{
-		const bool portrait = output_dimensions.height > output_dimensions.width;
-
-		if (!(portrait ? g_render_top_portrait : g_render_top_landscape))
+		if (output_dimensions.height <= output_dimensions.width || !g_render_top_portrait)
 		{
 			return region;
 		}

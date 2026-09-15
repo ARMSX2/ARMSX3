@@ -4721,14 +4721,10 @@ extern "C" void _rpcsx_setThermals(float cpu, float gpu, float battery, bool sho
   rsx::overlays::thermals::g_show = show;
 }
 
-// Where the letterboxed image sits in the window, per orientation. The UI holds these as
-// two independent settings because a device can be used both ways and the right answer
-// differs: portrait wants the picture up out of the touch controls, landscape usually wants
-// it centred. See rsx::apply_render_position.
-extern "C" void _rpcsx_setRenderPosition(bool portraitTop, bool landscapeTop,
-                                         int topInset) {
+// Where the letterboxed image sits in a portrait window, plus the cutout inset to clear once
+// it is at the top. See rsx::apply_render_position, which ignores landscape windows.
+extern "C" void _rpcsx_setRenderPosition(bool portraitTop, int topInset) {
   rsx::g_render_top_portrait = portraitTop ? 1 : 0;
-  rsx::g_render_top_landscape = landscapeTop ? 1 : 0;
   rsx::g_render_top_inset = topInset > 0 ? static_cast<u32>(topInset) : 0;
 }
 

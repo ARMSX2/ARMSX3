@@ -52,7 +52,6 @@ object ConfigStore {
     private const val KEY_ADRENO_FBFETCH_MIGRATED = "config.migrated.adrenoFbFetchOn"
     // One-time flip of existing all-on OSD saves to the new default-off.
     private const val KEY_OSD_OFF_MIGRATED = "config.migrated.osdDefaultOff"
-    private const val KEY_OSD_SCALE_MIGRATED = "config.migrated.osdScale65"
     /** One-time removal of the Frame limit core override that made the FPS cap inert. */
     private const val KEY_FRAME_LIMIT_UNPINNED = "config.migrated.frameLimitUnpinned"
     // One-time reconcile for the fresh-install + reused-data-folder case (people who
@@ -843,18 +842,6 @@ object ConfigStore {
         }
         if (!MainActivityRuntime.prefs.getBoolean(KEY_OSD_OFF_MIGRATED, false)) {
             MainActivityRuntime.prefs.edit { putBoolean(KEY_OSD_OFF_MIGRATED, true) }
-        }
-
-        // OSD text now defaults to 65% (was 100%) to match NetherSX2 — at 100 the stats block eats
-        // a handheld screen. Only saves sitting on the exact old default are moved; anyone who
-        // picked their own size keeps it.
-        if (raw != null && !MainActivityRuntime.prefs.getBoolean(KEY_OSD_SCALE_MIGRATED, false) &&
-            parsed.osdScale == 100) {
-            parsed = parsed.copy(osdScale = 65)
-            dirty = true
-        }
-        if (!MainActivityRuntime.prefs.getBoolean(KEY_OSD_SCALE_MIGRATED, false)) {
-            MainActivityRuntime.prefs.edit { putBoolean(KEY_OSD_SCALE_MIGRATED, true) }
         }
 
         if (dirty) saveGlobal(parsed)

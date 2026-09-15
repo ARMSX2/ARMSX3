@@ -304,17 +304,6 @@ fun RendererTab(state: MutableState<Settings>) {
                 onChange = { apply(s.copy(portraitRenderTop = it == 0)) },
             )
             SettingsDivider()
-            // Where the render sits in a LANDSCAPE window. Center is the default; Top suits
-            // foldables and clamshell controllers, whose screens open downward so a centred
-            // image reads as sitting too low. Live via NativeApp.setLandscapeRenderTop.
-            SegmentedRow(
-                label = str("renderer.landscapePosition.label"),
-                options = listOf(str("renderer.landscapePosition.center"), str("renderer.landscapePosition.top")),
-                selectedIndex = if (s.landscapeRenderTop) 1 else 0,
-                description = str("renderer.landscapePosition.description"),
-                onChange = { apply(s.copy(landscapeRenderTop = it == 1)) },
-            )
-            SettingsDivider()
             // Auto Progressive Scan — holds Triangle+Cross through boot, the combo some titles
             // probe to offer 480p progressive. Takes effect on the next boot (it is a boot-time
             // pad hold, not a live setting), and only does anything on games that implement it.
