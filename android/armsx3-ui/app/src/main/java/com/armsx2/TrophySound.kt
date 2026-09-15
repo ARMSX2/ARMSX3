@@ -68,10 +68,27 @@ object TrophySound {
         MainActivityRuntime.prefs.edit().putInt(VolumeKey, p).apply()
     }
 
-    /** The directory the core reads its sounds from, or null before a data root exists. */
-    private fun soundsDir(): File? =
-        MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() }
-            ?.let { File(File(it, "config"), "sounds") }
+    /**
+     * The directory the core reads its sounds from.
+     *
+     * currentInitDataRoot is what NativeApp.initialize() was actually handed, so it wins: if the
+     * user changes storage location mid-session the core is still reading the old root, and a
+     * sound written to the new one would not be found.
+     *
+     * But it is a RECORD of that call, not a resolver, and it is null until the call happens --
+     * which is later in onCreate than this object loads, and later still if the setup wizard is
+     * showing. Reading it alone meant load() could not see an existing sound (so the app forgot
+     * the user's choice on every cold start) and import() had nowhere to put one. assetCopyRoot
+     * resolves the same path the core will be handed, so it is the right answer before the pin.
+     */
+    private fun soundsDir(): File? {
+        val pinned = MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() }
+        val root = pinned
+            ?: MainActivityRuntime.instance?.applicationContext
+                ?.let { MainActivityRuntime.assetCopyRoot(it) }?.takeIf { it.isNotBlank() }
+            ?: return null
+        return File(File(root, "config"), "sounds")
+    }
 
     /** The sound file currently in place, whichever extension it has. */
     private fun current(): File? = soundsDir()?.let { dir ->
