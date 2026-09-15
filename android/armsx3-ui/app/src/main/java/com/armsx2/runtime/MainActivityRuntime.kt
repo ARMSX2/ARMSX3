@@ -1034,13 +1034,49 @@ open class MainActivityRuntime : ComponentActivity() {
         }
 
         /**
-         * Minimal [GameInfo] for a URI arriving from outside the app. The serial is probed
-         * off the image the same way the library scan does (SYSTEM.CNF via
-         * NativeApp.getGameSerialFromFd) so per-game settings stored under the serial are
-         * found. A failed probe is fine and expected for ELF/homebrew — settingsKey then
-         * falls back to the filename stem, matching issue #253's behaviour.
+         * Minimal [GameInfo] for a URI arriving from outside the app and NOT in the library.
+         *
+         * The serial probe here is getGameSerialFromFd, which reads a PS2 SYSTEM.CNF and so
+         * answers nothing for a PS3 disc. That is why this is the fallback and not the first
+         * move: for anything the library has scanned, [libraryGameFor] supplies the real
+         * serial. A failed probe is still fine for ELF/homebrew, where settingsKey falls back
+         * to the filename stem, matching issue #253's behaviour.
          */
+        /**
+         * The library's own entry for an incoming launch, matched by path.
+         *
+         * This is what makes a shortcut launch the SAME game as a library launch rather than a
+         * lookalike. The library entry carries the serial read from PARAM.SFO, and the serial is
+         * what per-game settings are keyed by, so without it a frontend or a home-screen
+         * shortcut resolved its config under the FILENAME and quietly ran the title with a
+         * second, empty configuration. Reported as ARMSX3 #130, where settings edited during a
+         * shortcut launch were remembered for that launch method and no other.
+         *
+         * It brings the title, cover, compatibility rating and licence state across too, all of
+         * which the synthesised entry below has to do without.
+         *
+         * Matched on the canonical path because the launcher hands us whatever it was given: a
+         * bare path, a file:// URI, or a content:// document. Reads the cached scan rather than
+         * rescanning, so this costs one small file read on the launch path.
+         */
+        private fun libraryGameFor(uriString: String): GameInfo? = runCatching {
+            val ctx = instance?.applicationContext ?: return null
+            fun canonical(value: String?): String? = value
+                ?.let { runCatching { java.io.File(it).canonicalPath }.getOrDefault(it) }
+
+            val incoming = runCatching { uriString.toUri() }.getOrNull()
+            val incomingPath = canonical(incoming?.path ?: uriString)
+
+            com.armsx2.data.library.GameLibraryRepository(ctx).loadCached().games.firstOrNull { game ->
+                game.uri.toString() == uriString ||
+                    (incomingPath != null && canonical(game.uri.path) == incomingPath)
+            }
+        }.getOrNull()
+
         private fun externalGameInfo(uriString: String): GameInfo? = runCatching {
+            // The library first: a game we already know is not worth re-deriving badly.
+            libraryGameFor(uriString)?.let { return@runCatching it }
+
             val uri = uriString.toUri()
             val name = uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':').orEmpty()
             val stem = name.substringBeforeLast('.').ifBlank { name }
