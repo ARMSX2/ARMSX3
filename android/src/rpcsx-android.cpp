@@ -2350,8 +2350,40 @@ static void setupCallbacks() {
               return {};
             }
 
-            rpcsx_android.notice("using database config for %s", title_id);
-            return config.to_string();
+            std::string yaml = config.to_string();
+
+            // At success level, which reaches logcat, where notice does not. This is the only
+            // record that a title booted with settings the user never chose, and without it a
+            // bad database entry is indistinguishable from an emulator regression: it is
+            // per-title, so it breaks exactly the game it was meant to help. Naming the keys
+            // makes the first question on any "this got slower" report answerable by grep.
+            std::string keys;
+            usz listed = 0;
+
+            for (usz pos = 0; pos < yaml.size() && listed < 24;) {
+              const usz eol = yaml.find('\n', pos);
+              const std::string_view line(yaml.data() + pos,
+                                          (eol == umax ? yaml.size() : eol) - pos);
+              pos = (eol == umax ? yaml.size() : eol + 1);
+
+              const usz start = line.find_first_not_of(" \t-");
+              const usz colon = line.find(':');
+
+              if (start == umax || colon == umax || colon <= start || line[start] == '#') {
+                continue;
+              }
+
+              if (!keys.empty()) {
+                keys += ", ";
+              }
+
+              keys += std::string(line.substr(start, colon - start));
+              listed++;
+            }
+
+            rpcsx_android.success("database config applied to %s: %s", title_id,
+                                  keys.empty() ? "(empty)" : keys.c_str());
+            return yaml;
           },
       .get_photo_path = [](std::string_view) { return std::string{}; },
       .try_to_quit = [](bool, std::function<void()> on_exit) {

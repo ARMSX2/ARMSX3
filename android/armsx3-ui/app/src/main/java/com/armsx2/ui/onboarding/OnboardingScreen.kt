@@ -38,6 +38,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -327,7 +328,7 @@ private fun WizardPage(
         1 -> StoragePage(state, compact = true, viewModel::selectStorage, onCustomStorage)
         2 -> FirmwarePage(state, onPick = biosPicker, onInstall = viewModel::installFirmware)
         3 -> GamesPage(state, folderPicker, viewModel::removeGameFolder)
-        else -> ReadyPage(state, compact = true)
+        else -> ReadyPage(state, compact = true, onConfigDatabase = viewModel::setConfigDatabase)
     }
 }
 
@@ -674,7 +675,11 @@ private fun GamesPage(state: OnboardingUiState, onAdd: () -> Unit, onRemove: (St
 }
 
 @Composable
-private fun ReadyPage(state: OnboardingUiState, compact: Boolean) {
+private fun ReadyPage(
+    state: OnboardingUiState,
+    compact: Boolean,
+    onConfigDatabase: (Boolean) -> Unit,
+) {
     SetupPage(str("setup.button.applyFinish"), str("games.scanningRoms")) {
         if (compact) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -687,6 +692,30 @@ private fun ReadyPage(state: OnboardingUiState, compact: Boolean) {
                 SummaryCard(str("setup.step.appData.title"), when (state.systemLocation) { StorageLocation.Internal -> str("setup.storageChooser.internalShort"); StorageLocation.SdCard -> str("setup.systemDir.sdCard"); StorageLocation.Custom -> str("setup.storageChooser.customShort") }, Modifier.weight(1f))
                 SummaryCard(str("setup.step.bios.title"), state.firmwareVersion ?: str("setup.status.notSelected"), Modifier.weight(1f))
                 SummaryCard(str("setup.step.rom.title"), state.gameFolders.size.toString(), Modifier.weight(1f))
+            }
+        }
+
+        // The one request this app makes on its own initiative, so it is described before it
+        // happens rather than explained afterwards.
+        Spacer(Modifier.height(16.dp))
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+        ) {
+            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(str("setup.configDb.title"), style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        str("setup.configDb.body"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = state.configDatabase, onCheckedChange = onConfigDatabase)
             }
         }
     }

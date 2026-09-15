@@ -27,6 +27,10 @@ data class BiosCandidate(val name: String, val path: String, val info: BiosInfo)
 
 data class OnboardingUiState(
     val page: Int = 0,
+    /** Whether to fetch RPCS3's per-title recommended settings when setup finishes. On by
+     *  default: the entries are mostly what makes an otherwise dead game boot, and they are
+     *  layered UNDER anything the user sets themselves. */
+    val configDatabase: Boolean = true,
     val systemLocation: StorageLocation = StorageLocation.Internal,
     val biosName: String? = null,
     val biosInfo: BiosInfo? = null,
@@ -426,8 +430,34 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         else -> state.value.firmwareInstalled && state.value.gameFolders.isNotEmpty()
     }
 
+    /**
+     * Fetch the recommended settings database when setup finishes.
+     *
+     * Here rather than on first launch, so the one network request this app makes on its own
+     * happens after the user has read what it is for and can decline it. Setup only runs on a
+     * fresh install, which is also what keeps this from changing behaviour under someone whose
+     * games already work.
+     *
+     * Failure is deliberately silent. The database is an improvement, not a requirement, and a
+     * device that is offline during setup should finish setup.
+     */
+    fun setConfigDatabase(enabled: Boolean) {
+        state.value = state.value.copy(configDatabase = enabled)
+    }
+
+    private fun fetchConfigDatabaseIfWanted() {
+        if (!state.value.configDatabase) {
+            com.armsx2.config.ConfigDatabase.setEnabled(false)
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { com.armsx2.config.ConfigDatabase.refresh() }
+        }
+    }
+
     fun finish() {
         if (!canContinue()) return
+        fetchConfigDatabaseIfWanted()
         // Setup is over; drop the resume marker so re-entering via the cog later
         // starts from the storage page rather than the last page of a past run.
         runCatching { MainActivityRuntime.prefs.edit().remove(pageKey).apply() }

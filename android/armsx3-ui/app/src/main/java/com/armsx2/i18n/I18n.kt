@@ -281,6 +281,8 @@ val EN: Map<String, String> = mapOf(
     "app.credits.music" to "Music: \"Calm Ambient 1 (Synthwave 4k)\" — The Cynic Project / cynicmusic.com / pixelsphere.org (CC0)",
     "app.credits.sfx" to "Menu sounds: \"Interface SFX Pack 1\" — obsydianx.itch.io (CC0)",
     "app.language" to "Language",
+    "setup.configDb.title" to "Recommended game settings",
+    "setup.configDb.body" to "Some games need a specific setting before they will boot at all. RPCS3 keeps a list of those, one entry per game, and ARMSX3 can apply them for you. Downloading it takes a moment and needs the internet once. Your own settings always win over it, and you can turn this off later under App settings.",
     "storage.volume.internal" to "Internal storage",
     "storage.volume.card" to "SD card",
     "app.gameFolders" to "Game Folders",
