@@ -3943,6 +3943,19 @@ static void armsx3_slot_capture(unsigned int slot, const std::string& title,
   rpcsx_android.success("saveState: slot %u <- '%s'", slot, newest);
 }
 
+// Whether the core intends to come back up by itself.
+//
+// Saving a state is a full stop followed by a restart from the state just written, armed in
+// after_kill_callback. The app's run loop waits on "state != Stopped" and would otherwise
+// return the moment the kill lands, drop to the library and leave the core to resume behind
+// it: audio still playing, and the next launch booting a second VM on top of a live one.
+//
+// Read WITHOUT resetting. The flag is the core's own signal to itself and consuming it here
+// would disarm the restart it describes.
+extern "C" bool _rpcsx_isRestartPending() {
+  return Emu.ContinuousModeEnabled(false);
+}
+
 extern "C" bool _rpcsx_saveStateToSlot(unsigned int slot) {
   if (!Emu.IsRunning() && !Emu.IsPaused()) {
     rpcsx_android.error("saveState: no game is running");

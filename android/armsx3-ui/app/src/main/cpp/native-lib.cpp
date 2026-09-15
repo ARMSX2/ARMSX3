@@ -54,6 +54,7 @@ struct RPCSXApi {
   bool (*isInstallableFile)(jint fd);
   jstring (*getDirInstallPath)(JNIEnv *env, jint fd);
   jstring (*probePkgInfo)(JNIEnv *env, jint fd);
+  bool (*isRestartPending)();
   bool (*install)(JNIEnv *env, int fd, long progressId);
   bool (*extractPkgTo)(JNIEnv *env, int fd, long progressId, const char *dest);
   void (*installStorageBridge)(JNIEnv *env);
@@ -179,6 +180,9 @@ struct RPCSXLibrary : RPCSXApi {
     // Optional: a core predating the library listing uninstalled packages has no such
     // symbol, and the scan then skips .pkg files exactly as it always did.
     result.probePkgInfo = reinterpret_cast<decltype(probePkgInfo)>(dlsym(handle, "_rpcsx_probePkgInfo"));
+    // Optional: a core without it simply never reports a pending restart, which is
+    // the behaviour the run loop had before this existed.
+    result.isRestartPending = reinterpret_cast<decltype(isRestartPending)>(dlsym(handle, "_rpcsx_isRestartPending"));
     result.install = reinterpret_cast<decltype(install)>(dlsym(handle, "_rpcsx_install"));
     result.extractPkgTo = reinterpret_cast<decltype(extractPkgTo)>(dlsym(handle, "_rpcsx_extractPkgTo"));
     // Optional: a core built before the storage bridge simply has no such symbol, and
@@ -616,6 +620,11 @@ Java_net_rpcsx_RPCSX_install(JNIEnv *env, jobject, jint fd, jlong progressId) {
   }
 
   return rpcsxLib.install(env, fd, progressId);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_isRestartPending(JNIEnv *, jobject) {
+  return rpcsxLib.isRestartPending != nullptr && rpcsxLib.isRestartPending();
 }
 
 extern "C" JNIEXPORT jstring JNICALL

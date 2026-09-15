@@ -261,6 +261,14 @@ class RPCSX {
      * downloadable content, neither of which is a game.
      */
     external fun probePkgInfo(fd: Int): String?
+
+    /**
+     * Whether the core has armed a restart and will come back up on its own.
+     *
+     * True between the kill a save state performs and the restart that follows it. False on a
+     * core that predates this, which is the behaviour the run loop had before.
+     */
+    external fun isRestartPending(): Boolean
     external fun getVersion(): String
     external fun setCustomDriver(path: String, libraryName: String, hookDir: String): Boolean
 

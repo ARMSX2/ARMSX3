@@ -334,8 +334,38 @@ object Rpcs3Bridge {
         startSixaxis()
 
         try {
-            while (!stopRequested && RPCSX.getState() != EmulatorState.Stopped) {
-                Thread.sleep(POLL_INTERVAL_MS)
+            while (!stopRequested) {
+                if (RPCSX.getState() != EmulatorState.Stopped) {
+                    Thread.sleep(POLL_INTERVAL_MS)
+                    continue
+                }
+
+                // Stopped is not always the end. Saving a state kills the VM and restarts it
+                // from the state just written, so returning here dropped the user to the
+                // library mid-save: the core came back up behind the UI, audio kept playing,
+                // and the next tap booted a second VM on top of a live one. The core says so
+                // itself through the continuous-mode flag it arms alongside the restart.
+                if (!restartPending()) break
+
+                // Bounded, because a restart that never arrives must not wedge the caller the
+                // way waiting purely on state once did. Generous, because this covers a full
+                // teardown and reload of a PS3 title and a savestate cycle has been measured
+                // at over a minute on a large game.
+                var waited = 0L
+                while (!stopRequested && RPCSX.getState() == EmulatorState.Stopped &&
+                    waited < RESTART_SETTLE_TIMEOUT_MS
+                ) {
+                    Thread.sleep(POLL_INTERVAL_MS)
+                    waited += POLL_INTERVAL_MS
+                }
+
+                if (RPCSX.getState() == EmulatorState.Stopped) {
+                    android.util.Log.w(
+                        "ARMSX3",
+                        "restart was armed but the core is still stopped after ${waited}ms",
+                    )
+                    break
+                }
             }
         } finally {
             // finally, not after the loop: the abnormal-teardown path above leaves via
@@ -347,6 +377,16 @@ object Rpcs3Bridge {
 
         return true
     }
+
+    private fun restartPending(): Boolean =
+        runCatching { RPCSX.instance.isRestartPending() }.getOrDefault(false)
+
+    /**
+     * How long to wait for a save-state restart to bring the emulator back up. A savestate
+     * cycle is a full teardown and reload, measured at over a minute on a large title, so this
+     * is far longer than the boot settle above rather than a tidier round number.
+     */
+    private const val RESTART_SETTLE_TIMEOUT_MS = 180_000L
 
     /**
      * How long to wait for the emulator to leave Stopped after a successful boot.

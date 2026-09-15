@@ -726,9 +726,18 @@ open class MainActivityRuntime : ComponentActivity() {
                         // (HomeViewModel.launch), so reaching here means the lock state was
                         // stale — a licence deleted outside the app, say. Point at the per-game
                         // action that fixes it, which a rescan will also surface as a badge.
-                        val hint = if (reason == "DecryptionError")
-                            " — it needs a .rap licence. Long-press the game and choose Install licence."
-                        else ""
+                        // Name the fix, not just the fault. A bare enum name reads as a crash
+                        // for a failure the user can act on in one step.
+                        val hint = when (reason) {
+                            "DecryptionError" ->
+                                ". It needs a .rap licence. Long-press the game and choose Install licence."
+                            // The savestate format changed with the emulator, and an old save
+                            // cannot be read. Nothing is broken and nothing else was lost, so say
+                            // that rather than leaving an enum name to be interpreted.
+                            "SavestateVersionUnsupported" ->
+                                ". That save state was made by an older version of ARMSX3 and can no longer be loaded. Start the game normally and make a new one."
+                            else -> ""
+                        }
                         instance?.let { act ->
                             act.runOnUiThread {
                                 android.widget.Toast.makeText(
