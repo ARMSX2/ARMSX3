@@ -327,6 +327,11 @@ static constexpr u32 kThumbMaxEdge = 320;
 // that a game which is not drawing does not visibly delay the save.
 static constexpr int kThumbWaitMs = 250;
 
+// The same wait, on the way into a pause. Shorter because it sits between the user's tap and
+// the menu appearing, and a missed preview costs a picture where a longer hitch costs every
+// pause. Four frames at 30fps.
+static constexpr int kPauseThumbWaitMs = 140;
+
 static shared_mutex g_thumb_mutex;
 static std::vector<u8> g_thumb_rgba; // tightly packed RGBA8
 static u32 g_thumb_width = 0;
@@ -3775,8 +3780,29 @@ extern "C" void _rpcsx_resume() { Emu.Resume(); }
 // The frame this captures is the game as it looked when paused, which is the right image for
 // a save made from that menu anyway.
 extern "C" void _rpcsx_pause() {
+  // Capture BEFORE pausing, and finish the capture before the pause begins.
+  //
+  // The frame is wanted because a paused emulator never flips, so a save made from the pause
+  // menu has nothing to preview. The first version of this set the flag and paused straight
+  // away, which left the RSX thread allocating a host-visible buffer and reading the swapchain
+  // back WHILE Emu.Pause() tore the frame down underneath it. That is a segfault inside the
+  // Vulkan driver on rsx::thread, and it is racy, so it survived testing and crashed later.
+  //
+  // Waiting is the whole fix: the screenshot then happens on an ordinary flip of a running
+  // emulator, which is the same path a save from a running game has always used safely, and
+  // the pause does not start until it has landed.
   if (Emu.IsRunning()) {
+    const u64 before = g_thumb_generation;
     g_user_asked_for_screenshot = true;
+
+    for (int waited = 0; waited < kPauseThumbWaitMs && g_thumb_generation == before;
+         waited += 5) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    // Do not leave it armed. A request that outlives this call would be serviced by the next
+    // flip, which is the one after the pause ends, and that is the race again.
+    g_user_asked_for_screenshot = false;
   }
 
   Emu.Pause();
