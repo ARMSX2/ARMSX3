@@ -270,6 +270,7 @@ val EN: Map<String, String> = mapOf(
     "app.trophySound" to "Trophy Sound",
     "app.trophySound.desc" to "Played when you unlock a trophy. There is no built-in sound, so pick an audio file to use one. Any wav, ogg or mp3 works, and a short clip suits it best.",
     "app.trophySound.choose" to "Choose Sound\u2026",
+    "app.trophySound.volume" to "Trophy Sound Volume",
     "app.trophySound.test" to "Test",
     "app.trophySound.clear" to "Remove",
     "app.trophySound.current" to "Using: %s",

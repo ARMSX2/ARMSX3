@@ -25,6 +25,12 @@ import java.io.File
 object TrophySound {
 
     private const val NameKey = "ui.trophySound.name"
+    private const val VolumeKey = "ui.trophySound.volume"
+
+    /** Louder than the menu blips, which sit at 15%. Those fire on every button press and have
+     *  to stay under the UI; a trophy fires a handful of times in a session and is the point of
+     *  the moment, so it should be heard over the game. */
+    private const val DefaultVolumePercent = 70
 
     /** What the core asks for, from rsx::overlays::get_sound_filepath. */
     private const val CORE_NAME = "snd_trophy"
@@ -36,9 +42,30 @@ object TrophySound {
     /** Display name of the chosen file, or null when no sound is set. */
     val fileName = mutableStateOf<String?>(null)
 
+    val volumePercent = mutableStateOf(DefaultVolumePercent)
+
+    /**
+     * Playback level for this sound, 0..1.
+     *
+     * Separate from the menu level for the same reason the file is: sharing that slider meant a
+     * user who had turned the interface blips down to a background tick also silenced their
+     * trophy, from a control that never mentioned trophies.
+     */
+    fun gain(): Float = volumePercent.value.coerceIn(0, 100) / 100f
+
+    fun isSet(): Boolean = current() != null
+
     fun load() {
+        volumePercent.value = MainActivityRuntime.prefs.getInt(VolumeKey, DefaultVolumePercent)
         fileName.value = MainActivityRuntime.prefs.getString(NameKey, null)
             ?.takeIf { current() != null }
+        ensurePlayback()
+    }
+
+    fun setVolume(percent: Int) {
+        val p = percent.coerceIn(0, 100)
+        volumePercent.value = p
+        MainActivityRuntime.prefs.edit().putInt(VolumeKey, p).apply()
     }
 
     /** The directory the core reads its sounds from, or null before a data root exists. */
@@ -51,6 +78,20 @@ object TrophySound {
         ACCEPTED.firstNotNullOfOrNull { ext ->
             File(dir, "$CORE_NAME.$ext").takeIf { it.isFile && it.length() > 0L }
         }
+    }
+
+    /** Whether [path] is this sound. By stem, since the file keeps whatever extension the user
+     *  picked and the core always asks for the .wav spelling. */
+    fun owns(path: String): Boolean =
+        File(path).nameWithoutExtension.equals(CORE_NAME, ignoreCase = true)
+
+    /**
+     * Playback runs through [MenuSfx]'s pool, which is otherwise only built when the launcher's
+     * own sounds are on. Bring it up so a trophy is audible for a user who has those off.
+     */
+    private fun ensurePlayback() {
+        if (!isSet()) return
+        MainActivityRuntime.instance?.applicationContext?.let { MenuSfx.ensurePool(it) }
     }
 
     /**
@@ -80,6 +121,7 @@ object TrophySound {
         fileName.value = name
         MainActivityRuntime.prefs.edit().putString(NameKey, name).apply()
         MenuSfx.forgetCachedFile(File(dir, "$CORE_NAME.$ext").absolutePath)
+        MenuSfx.ensurePool(context)
         return true
     }
 
@@ -100,8 +142,10 @@ object TrophySound {
         }
     }
 
-    /** Play whatever is set, so the settings row can preview it. */
+    /** Play whatever is set, so the settings row can preview it. Negative volume so it comes
+     *  out at the level a real trophy would, which is the point of a test button. */
     fun preview() {
+        ensurePlayback()
         current()?.let { MenuSfx.playFile(it.absolutePath, -1f) }
     }
 }

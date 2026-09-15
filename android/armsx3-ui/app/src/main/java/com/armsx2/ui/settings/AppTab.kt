@@ -821,6 +821,19 @@ fun AppTab() {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 4.dp, top = 2.dp),
             )
+            // Only once there is a sound to set a level for. Its own slider rather than the menu
+            // one above: this plays over a game, those play over a menu, so they do not want the
+            // same level.
+            if (chosen != null) {
+                IntSliderRow(
+                    label = str("app.trophySound.volume"),
+                    value = com.armsx2.TrophySound.volumePercent.value,
+                    min = 0,
+                    max = 100,
+                    valueFormatter = { "$it%" },
+                    onChange = { com.armsx2.TrophySound.setVolume(it) },
+                )
+            }
             Row(
                 Modifier.fillMaxWidth().padding(top = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),

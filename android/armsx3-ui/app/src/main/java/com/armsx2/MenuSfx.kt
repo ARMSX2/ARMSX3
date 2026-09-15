@@ -96,7 +96,16 @@ object MenuSfx {
     fun set(context: Context, value: Boolean) {
         enabled.value = value
         MainActivityRuntime.prefs.edit { putBoolean(EnabledKey, value) }
-        if (value) rebuildPool(context) else releasePool()
+        // Turning the launcher blips off does not tear the pool down while the emulator still
+        // has a sound to play through it. See [playFile].
+        if (value) rebuildPool(context)
+        else if (!TrophySound.isSet()) releasePool()
+    }
+
+    /** Bring the pool up if it is down. For sounds that are not the launcher's own and so are
+     *  not covered by [enabled] -- currently the trophy, which has its own setting. */
+    fun ensurePool(context: Context) {
+        if (pool == null) rebuildPool(context)
     }
 
     fun setVolume(percent: Int) {
@@ -176,7 +185,9 @@ object MenuSfx {
 
     @JvmStatic
     fun playFile(path: String, volume: Float) {
-        if (!enabled.value) return
+        // No [enabled] check. That toggle is the launcher's own interface blips; these come from
+        // the emulator. A user who turned the menu ticks off did not thereby ask for silent
+        // trophies, and the trophy has its own setting to turn off.
         val sp = pool ?: return
         // The core always asks for .wav. An imported pack may have supplied ogg or mp3, which
         // SoundPool plays just as happily, so fall back to a sibling with the same stem rather
@@ -197,8 +208,14 @@ object MenuSfx {
         if (id == 0) return
 
         // The core passes a volume only where it means to override; otherwise it sends a
-        // negative and the user's own UI level applies.
-        val gain = (if (volume >= 0f) volume else gain()).coerceIn(0f, 1f)
+        // negative and a user level applies -- the trophy's own where this is the trophy, and
+        // the UI level for the core sounds that have no control of their own (dialogs, the
+        // on-screen keyboard).
+        val gain = when {
+            volume >= 0f -> volume
+            TrophySound.owns(key) -> TrophySound.gain()
+            else -> gain()
+        }.coerceIn(0f, 1f)
         sp.play(id, gain, gain, 1, 0, 1f)
     }
 
