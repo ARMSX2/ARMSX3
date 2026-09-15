@@ -151,6 +151,7 @@ object Rpcs3Bridge {
         // that only resolves on a thread Java started.
         com.armsx2.storage.ContentUri.attach(context)
         runCatching { RPCSX.instance.installStorageBridge() }
+        runCatching { RPCSX.instance.installSoundBridge() }
 
         // Restore firmware state from <root>/fw.json. Without this the version
         // and status start at None on every launch, so setup would demand a PUP

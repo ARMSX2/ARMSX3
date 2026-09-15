@@ -2237,6 +2237,10 @@ static struct main_thread_dispatcher {
     }
   }
 } g_mainThreadDispatcher;
+// Defined further down, next to the JNI bridge it needs. Declared here because the callback
+// table below is assembled before it.
+static void armsx3_play_sound(const std::string &path, std::optional<f32> volume);
+
 
 static void setupCallbacks() {
   Emu.SetCallbacks({
@@ -2502,7 +2506,7 @@ static void setupCallbacks() {
         return substitute_arg<char32_t>(entry->second, arg);
       },
       .get_localized_setting = [](auto...) { return ""; },
-      .play_sound = [](auto...) {},
+      .play_sound = armsx3_play_sound,
       .get_image_info = [](auto...) { return false; },
       .get_scaled_image = [](auto...) { return false; },
       .resolve_path =
@@ -5520,6 +5524,84 @@ extern "C" bool _rpcsx_uninstallGame(std::string_view path) {
 // thread Java started: a natively attached thread gets the system class loader,
 // which cannot see app classes.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Overlay sounds
+//
+// The core asks for these all the time: a trophy popping, a dialog opening, the on-screen
+// keyboard. Every request went to an empty lambda, so none of them has ever made a noise
+// here. overlays.cpp resolves each one to <config>/sounds/<name>.wav, the same paths desktop
+// uses, and desktop ships no sounds either: it plays whatever the user has put there.
+//
+// Cached the same way the storage bridge is, and for the same reason: FindClass from a
+// natively attached thread gets the system class loader, which cannot see app classes.
+// ---------------------------------------------------------------------------
+static jclass g_sfx_class = nullptr;
+static jmethodID g_sfx_play = nullptr;
+
+static void armsx3_play_sound(const std::string &path, std::optional<f32> volume) {
+  JavaVM *vm = g_java_vm.load(std::memory_order_acquire);
+
+  if (!vm || !g_sfx_class || !g_sfx_play || path.empty()) {
+    return;
+  }
+
+  JNIEnv *env = nullptr;
+
+  if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
+    // Overlay sounds come off the RSX thread, which Java did not start.
+    if (vm->AttachCurrentThreadAsDaemon(&env, nullptr) != JNI_OK || !env) {
+      return;
+    }
+  }
+
+  jstring arg = env->NewStringUTF(path.c_str());
+
+  if (!arg) {
+    env->ExceptionClear();
+    return;
+  }
+
+  // Negative means "no override", so the user's own UI sound level applies.
+  env->CallStaticVoidMethod(g_sfx_class, g_sfx_play, arg,
+                            static_cast<jfloat>(volume.value_or(-1.f)));
+
+  if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+  }
+
+  env->DeleteLocalRef(arg);
+}
+
+extern "C" void _rpcsx_installSoundBridge(JNIEnv *env) {
+  if (!env || g_sfx_class) {
+    return;
+  }
+
+  jclass found = env->FindClass("com/armsx2/MenuSfx");
+
+  if (!found || env->ExceptionCheck()) {
+    env->ExceptionClear();
+    return;
+  }
+
+  jclass global = static_cast<jclass>(env->NewGlobalRef(found));
+  env->DeleteLocalRef(found);
+
+  if (!global) {
+    return;
+  }
+
+  g_sfx_play = env->GetStaticMethodID(global, "playFile", "(Ljava/lang/String;F)V");
+
+  if (env->ExceptionCheck() || !g_sfx_play) {
+    env->ExceptionClear();
+    env->DeleteGlobalRef(global);
+    return;
+  }
+
+  g_sfx_class = global;
+}
+
 extern "C" void _rpcsx_installStorageBridge(JNIEnv *env) {
   armsx3::saf::install(env);
 }

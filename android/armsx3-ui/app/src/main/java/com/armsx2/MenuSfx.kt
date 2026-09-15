@@ -147,6 +147,45 @@ object MenuSfx {
 
     /** Fire an event's sound, if enabled. Cheap no-op otherwise — safe to call from any UI
      *  callback. Throttled per event so a fast slider drag ticks rather than buzzes. */
+    /**
+     * Play a sound the emulator core asked for, by absolute path.
+     *
+     * The core has always requested these: a trophy popping, a dialog opening, the on-screen
+     * keyboard. Every one went to `.play_sound = [](auto...) {}`, an empty lambda, so none of
+     * them has ever made a noise on Android. See overlays.cpp, which resolves them all to
+     * <config>/sounds/<name>.wav.
+     *
+     * Deliberately routed through THIS pool rather than a player of its own: the attributes
+     * above keep UI audio off the emulator's Oboe path, and a trophy that contended with SPU2
+     * output would be a worse bug than a trophy that made no sound.
+     *
+     * Samples are cached by path. A trophy run in a game that pops several in a row would
+     * otherwise decode the same file each time, and SoundPool ids leak if you never reuse them.
+     *
+     * Silent when the file is absent, which matches desktop: RPCS3 ships no sounds either, it
+     * plays whatever the user has placed in that folder.
+     */
+    private val pathSampleIds = HashMap<String, Int>()
+
+    @JvmStatic
+    fun playFile(path: String, volume: Float) {
+        if (!enabled.value) return
+        val sp = pool ?: return
+        val file = runCatching { File(path) }.getOrNull() ?: return
+        if (!file.isFile || file.length() == 0L) return
+
+        val id = pathSampleIds[path] ?: runCatching { sp.load(path, 1) }
+            .getOrDefault(0)
+            .also { if (it != 0) pathSampleIds[path] = it }
+
+        if (id == 0) return
+
+        // The core passes a volume only where it means to override; otherwise it sends a
+        // negative and the user's own UI level applies.
+        val gain = (if (volume >= 0f) volume else gain()).coerceIn(0f, 1f)
+        sp.play(id, gain, gain, 1, 0, 1f)
+    }
+
     fun play(event: Event) {
         if (!enabled.value) return
         val p = pool ?: return

@@ -100,6 +100,10 @@ class RPCSX {
      * filesystem path and still fails on a build without permission to read one.
      */
     external fun installStorageBridge(): Boolean
+
+    /** Let the core play its overlay sounds (trophy, dialogs, on-screen keyboard) through the
+     *  app's own sound pool. False on a core that predates this, which stays silent. */
+    external fun installSoundBridge(): Boolean
     /** Install several .pkg parts of one split package together, in order. */
     external fun installSplitPkg(fds: IntArray, progressId: Long): Boolean
     /** Delete an installed title's directory. Refused for paths outside dev_hdd0/game. */
