@@ -3562,12 +3562,21 @@ open class MainActivityRuntime : ComponentActivity() {
     /** So a tester can settle this in one log line instead of describing what they feel. */
     private var loggedTouchScale = ""
 
-    private fun logTouchScaleOnce(decorW: Int, decorH: Int, digitizer: Pair<Float, Float>?) {
+    /** [sx]/[sy] are what is ACTUALLY applied, so a pasted log line says whether the correction
+     *  engaged rather than only what it would be worth. Those differ by design: the scale is
+     *  known from the digitizer immediately, but nothing is applied until a touch proves the OS
+     *  is not already mapping input into the window. */
+    private fun logTouchScaleOnce(
+        decorW: Int,
+        decorH: Int,
+        digitizer: Pair<Float, Float>?,
+        escaped: Boolean,
+        sx: Float,
+        sy: Float,
+    ) {
         val line = "window=${decorW}x$decorH digitizer=" +
             (digitizer?.let { "${it.first.toInt()}x${it.second.toInt()}" } ?: "unavailable") +
-            " scale=" + (digitizer?.let {
-                "%.4f,%.4f".format(decorW / it.first, decorH / it.second)
-            } ?: "learned")
+            " escaped=$escaped applied=%.4f,%.4f".format(sx, sy)
         if (line == loggedTouchScale) return
         loggedTouchScale = line
         android.util.Log.i("ARMSX3-Touch", line)
@@ -3660,26 +3669,46 @@ open class MainActivityRuntime : ComponentActivity() {
                 if (ev.getX(i) > touchPeakX) touchPeakX = minOf(ev.getX(i), capX)
                 if (ev.getY(i) > touchPeakY) touchPeakY = minOf(ev.getY(i), capY)
             }
-            // Preferred: the digitizer says how big its own space is, so no touch has to escape
-            // anything for this to be known and both axes are scaled together.
             val digitizer = digitizerExtent(ev)
-            logTouchScaleOnce(decorW, decorH, digitizer)
+
+            // THE GATE: has a touch ever landed outside the window?
+            //
+            // A digitizer larger than the window is NOT on its own a reason to rescale. Android
+            // normally maps touch into the window for you, and it does so in split screen, in
+            // freeform, and under an `adb shell wm size` override. In all of those the digitizer
+            // is legitimately bigger and the coordinates are already correct, so scaling them
+            // again lands every touch short. Measured: a 720x1280 override on a 1080x1920 panel
+            // reported scale 0.667 and would have moved every touch a third of the way to the
+            // origin.
+            //
+            // A coordinate BEYOND the window is the one thing that cannot happen when the OS is
+            // mapping touch for you, so it is the proof that it is not. Either axis is enough:
+            // the downscale is a property of the display, not of one direction, which is what
+            // the old per-axis gating got wrong. Holding the left stick pinned x low and drove y
+            // high, so only y ever engaged and the second finger's x was left uncorrected, which
+            // is the multi-touch half of ARMSX3 #132.
+            val escaped = touchPeakX > decorW + slop || touchPeakY > decorH + slop
 
             var sx = 1f
             var sy = 1f
 
-            if (digitizer != null && digitizer.first > decorW + slop && digitizer.second > decorH + slop) {
-                sx = (decorW / digitizer.first).coerceIn(0.5f, 1f)
-                sy = (decorH / digitizer.second).coerceIn(0.5f, 1f)
-            } else if (digitizer == null) {
-                // Fallback for devices that publish no usable ranges: the old learned extent.
-                // Kept only for that case, since its gate is what missed the smaller downscales.
-                val real = realPanelMetrics()
-                val spaceW = maxOf(touchPeakX, (real?.widthPixels ?: 0).let { if (it > decorW) it.toFloat() else 0f })
-                val spaceH = maxOf(touchPeakY, (real?.heightPixels ?: 0).let { if (it > decorH) it.toFloat() else 0f })
-                sx = if (touchPeakX > decorW + slop) (decorW / spaceW).coerceIn(0.5f, 1f) else 1f
-                sy = if (touchPeakY > decorH + slop) (decorH / spaceH).coerceIn(0.5f, 1f) else 1f
+            if (escaped) {
+                if (digitizer != null) {
+                    // Exact, and known in full from the first escaping touch rather than
+                    // converged towards over several.
+                    sx = (decorW / digitizer.first).coerceIn(0.5f, 1f)
+                    sy = (decorH / digitizer.second).coerceIn(0.5f, 1f)
+                } else {
+                    // No usable ranges: fall back to the extent learned from the touches.
+                    val real = realPanelMetrics()
+                    val spaceW = maxOf(touchPeakX, (real?.widthPixels ?: 0).let { if (it > decorW) it.toFloat() else 0f })
+                    val spaceH = maxOf(touchPeakY, (real?.heightPixels ?: 0).let { if (it > decorH) it.toFloat() else 0f })
+                    sx = (decorW / maxOf(spaceW, decorW.toFloat())).coerceIn(0.5f, 1f)
+                    sy = (decorH / maxOf(spaceH, decorH.toFloat())).coerceIn(0.5f, 1f)
+                }
             }
+
+            logTouchScaleOnce(decorW, decorH, digitizer, escaped, sx, sy)
 
             if (sx != 1f || sy != 1f) {
                 ev.transform(android.graphics.Matrix().apply { setScale(sx, sy) })
