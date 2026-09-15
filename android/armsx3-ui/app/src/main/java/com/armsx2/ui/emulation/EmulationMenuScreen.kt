@@ -853,6 +853,29 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
             },
         )
         Spacer(Modifier.height(6.dp))
+        // Where the picture sits in the window. In-game for the same reason as screen aspect:
+        // you are looking at the thing you are moving, and on a handheld this is something you
+        // adjust once you can see the touch controls over the game. Two rows because a handheld
+        // gets used both ways and the right answer differs -- portrait wants the picture up out
+        // of the controls, landscape usually wants it centred.
+        HorizontalOptions(
+            title = str("renderer.portraitPosition.label"),
+            options = listOf(
+                str("renderer.portraitPosition.top"), str("renderer.portraitPosition.center"),
+            ).mapIndexed { index, label -> index to label },
+            selected = if (settings.portraitRenderTop) 0 else 1,
+            onSelect = { v -> viewModel.updateSettings { it.copy(portraitRenderTop = v == 0) } },
+        )
+        Spacer(Modifier.height(6.dp))
+        HorizontalOptions(
+            title = str("renderer.landscapePosition.label"),
+            options = listOf(
+                str("renderer.landscapePosition.center"), str("renderer.landscapePosition.top"),
+            ).mapIndexed { index, label -> index to label },
+            selected = if (settings.landscapeRenderTop) 1 else 0,
+            onSelect = { v -> viewModel.updateSettings { it.copy(landscapeRenderTop = v == 1) } },
+        )
+        Spacer(Modifier.height(6.dp))
         // RSX accuracy -- the levers that actually matter on this core, and the
         // reason the PS2 GS rows above had to go rather than just be hidden.
         HorizontalOptions(
