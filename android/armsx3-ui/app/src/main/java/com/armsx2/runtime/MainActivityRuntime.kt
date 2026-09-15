@@ -3523,6 +3523,20 @@ open class MainActivityRuntime : ComponentActivity() {
     private var lastDecorW = 0
     private var lastDecorH = 0
 
+    /** So a tester can settle this in one log line instead of describing what they feel. */
+    private var loggedTouchScale = ""
+
+    private fun logTouchScaleOnce(decorW: Int, decorH: Int, digitizer: Pair<Float, Float>?) {
+        val line = "window=${decorW}x$decorH digitizer=" +
+            (digitizer?.let { "${it.first.toInt()}x${it.second.toInt()}" } ?: "unavailable") +
+            " scale=" + (digitizer?.let {
+                "%.4f,%.4f".format(decorW / it.first, decorH / it.second)
+            } ?: "learned")
+        if (line == loggedTouchScale) return
+        loggedTouchScale = line
+        android.util.Log.i("ARMSX3-Touch", line)
+    }
+
     /** Un-scaled physical display size in the current rotation. Only a SEED for the touch-space
      *  estimate below, never trusted alone: Samsung's QHD game-downscale reports this DOWNSCALED too
      *  (observed 1080 at QHD+), so the observed touch extent is the ground truth. */
@@ -3536,19 +3550,59 @@ open class MainActivityRuntime : ComponentActivity() {
     }.getOrNull()
 
     /**
-     * Correct the Samsung QHD touch-offset bug (#Nomad, S24 Ultra @ QHD+) — self-contained, trusting
-     * NO resolution API. On that device at QHD every one of them (decorView, maximumWindowMetrics,
-     * getRealMetrics) reports the DOWNSCALED ~1080 while the digitizer still delivers touch in the
-     * physical ~1440 space, so the on-screen controls (laid out in the ~1080 window) sit up-and-left
-     * of where the finger must press, the error growing with distance (a pure ≈1.33 scale). It works
-     * at FHD+ (everything is a consistent 1080) and breaks only at QHD.
+     * The digitizer's own extent, straight off the input device, or null.
      *
-     * Ground truth is the touches themselves: in this broken state a press near a far control lands
-     * OUTSIDE the window. That never happens on a normal device or in split-screen/multi-window (the
-     * OS descales touch to fit the window there), so this is self-gating — a strict no-op except the
-     * exact bug. We learn the true touch extent from where fingers actually reach (seeded by
-     * getRealMetrics when it happens to read larger) and rescale pointers back into the window:
-     * precise from the first far press when the seed is right, else converging within a touch or two.
+     * This is the one size in Android that is not derived from the window. A vendor "high
+     * resolution mode" downscales the DISPLAY the app is laid out in; the touchscreen keeps
+     * reporting in its physical space, and its InputDevice motion ranges describe that space.
+     * Every display API (decorView, maximumWindowMetrics, getRealMetrics) reports the
+     * downscaled size and so cannot see the discrepancy at all.
+     *
+     * Null when the device does not publish ranges, or publishes ones that are not a plausible
+     * screen, in which case the learned fallback below takes over.
+     */
+    private fun digitizerExtent(ev: MotionEvent): Pair<Float, Float>? = runCatching {
+        val device = ev.device ?: return null
+        val rx = device.getMotionRange(MotionEvent.AXIS_X, ev.source) ?: return null
+        val ry = device.getMotionRange(MotionEvent.AXIS_Y, ev.source) ?: return null
+        // Inclusive range: a 1920-wide digitizer reports 0..1919, so the count is max-min+1.
+        // Without this the Odin read 1919x1079 against a 1920x1080 window and computed a scale
+        // of 1.0005, which is harmless here only because it clamps, and would be quietly wrong
+        // by a pixel on a device that does need correcting.
+        val w = rx.max - rx.min + 1f
+        val h = ry.max - ry.min + 1f
+        if (w < 1f || h < 1f) return null
+        w to h
+    }.getOrNull()
+
+    /**
+     * Correct the touch offset on devices whose "high resolution mode" downscales the app.
+     *
+     * Reported on Samsung QHD+ (S24 Ultra, ≈1.33 scale) and on Honor's 1.5K mode (Magic6,
+     * 2800x1264 vs a 2450x1106 window, ≈1.14). The window is laid out in the downscaled space
+     * while the digitizer still delivers touch in the physical one, so on-screen controls sit
+     * up-and-left of where the finger must press, the error growing with distance from the
+     * origin. Standard resolution is a consistent single space and is unaffected.
+     *
+     * The digitizer's own extent is the ground truth, so the scale is exact from the first
+     * event and needs no learning. Where the device publishes no usable ranges, fall back to
+     * the old behaviour of learning the extent from where fingers actually reach.
+     *
+     * ## Why the learned version was not enough
+     *
+     * It engaged only once a touch had escaped the WINDOW, with the two axes gated
+     * independently. At 33% that happens readily. At 14% almost nothing escapes: a control at
+     * 80% across a 2450-wide window reports about 2200, which is offset by 275px and still
+     * inside. So the gate never fired on that axis.
+     *
+     * That is why multi-touch failed while single touch looked fine, which is ARMSX3 #132.
+     * Holding the left stick keeps x small and drives y large, so the y gate fires and the x
+     * gate does not; the second finger then taps a face button whose x is never corrected. A
+     * lone tap appears to work because it updates the peak on its own event before the scale
+     * is computed, which a held finger prevents.
+     *
+     * Self-gating either way: on a device with no downscale the digitizer and the window
+     * describe the same space, the scale is 1 and nothing is touched.
      */
     private fun maybeCorrectTouchScale(ev: MotionEvent) {
         runCatching {
@@ -3570,15 +3624,27 @@ open class MainActivityRuntime : ComponentActivity() {
                 if (ev.getX(i) > touchPeakX) touchPeakX = minOf(ev.getX(i), capX)
                 if (ev.getY(i) > touchPeakY) touchPeakY = minOf(ev.getY(i), capY)
             }
-            // Engage ONLY once a touch has escaped the window (proof the touch space exceeds the
-            // layout space). True extent = the larger of the observed peak and a physical-panel
-            // reading that ALSO exceeds the window; scale the window back onto it (clamped so a stray
-            // reading can't invert the axis or shrink past 2x).
-            val real = realPanelMetrics()
-            val spaceW = maxOf(touchPeakX, (real?.widthPixels ?: 0).let { if (it > decorW) it.toFloat() else 0f })
-            val spaceH = maxOf(touchPeakY, (real?.heightPixels ?: 0).let { if (it > decorH) it.toFloat() else 0f })
-            val sx = if (touchPeakX > decorW + slop) (decorW / spaceW).coerceIn(0.5f, 1f) else 1f
-            val sy = if (touchPeakY > decorH + slop) (decorH / spaceH).coerceIn(0.5f, 1f) else 1f
+            // Preferred: the digitizer says how big its own space is, so no touch has to escape
+            // anything for this to be known and both axes are scaled together.
+            val digitizer = digitizerExtent(ev)
+            logTouchScaleOnce(decorW, decorH, digitizer)
+
+            var sx = 1f
+            var sy = 1f
+
+            if (digitizer != null && digitizer.first > decorW + slop && digitizer.second > decorH + slop) {
+                sx = (decorW / digitizer.first).coerceIn(0.5f, 1f)
+                sy = (decorH / digitizer.second).coerceIn(0.5f, 1f)
+            } else if (digitizer == null) {
+                // Fallback for devices that publish no usable ranges: the old learned extent.
+                // Kept only for that case, since its gate is what missed the smaller downscales.
+                val real = realPanelMetrics()
+                val spaceW = maxOf(touchPeakX, (real?.widthPixels ?: 0).let { if (it > decorW) it.toFloat() else 0f })
+                val spaceH = maxOf(touchPeakY, (real?.heightPixels ?: 0).let { if (it > decorH) it.toFloat() else 0f })
+                sx = if (touchPeakX > decorW + slop) (decorW / spaceW).coerceIn(0.5f, 1f) else 1f
+                sy = if (touchPeakY > decorH + slop) (decorH / spaceH).coerceIn(0.5f, 1f) else 1f
+            }
+
             if (sx != 1f || sy != 1f) {
                 ev.transform(android.graphics.Matrix().apply { setScale(sx, sy) })
             }
