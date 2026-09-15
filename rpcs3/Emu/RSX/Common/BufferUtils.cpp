@@ -11,6 +11,8 @@
 
 #if defined(ARCH_X64)
 #include "BufferUtils_avx512.h"
+#elif defined(ARCH_ARM64)
+#include "BufferUtils_neon.h"
 #endif
 
 #if !defined(_MSC_VER)
@@ -104,69 +106,6 @@ namespace
 			return static_cast<bool>(result);
 		}
 	}
-
-#if defined(ARCH_ARM64)
-	// Four u32 per iteration instead of one.
-	//
-	// The SIMD builds of these two are assembled by asmjit under ARCH_X64 only, so every
-	// ARM64 build fell through to the scalar loop above -- reached through a function
-	// pointer, which cannot be inlined, and LTO is disabled project-wide (see the note in
-	// the root CMakeLists), so nothing recovered it later either.
-	//
-	// It is on a hot path: transform constants, transform programs and vertex data all
-	// upload through here, and a profile of Sonic '06 on a Snapdragon 8 Gen 2 put 82.5% of
-	// the RSX thread in FIFO decode with thousands of these blocks per frame.
-	//
-	// vrev32q_u8 reverses the bytes within each 32-bit lane, which is exactly the swap the
-	// scalar path performs per element. The compare variant accumulates differences with
-	// or/xor and reduces once at the end, so it keeps the "did anything actually change"
-	// answer without branching per element.
-	template <bool Compare>
-	auto copy_data_swap_u32_neon(u32* dst, const u32* src, u32 count)
-	{
-		u32 result = 0;
-		u32 i = 0;
-
-		uint32x4_t diff = vdupq_n_u32(0);
-
-		for (; i + 4 <= count; i += 4)
-		{
-			const uint32x4_t data = vreinterpretq_u32_u8(
-				vrev32q_u8(vreinterpretq_u8_u32(vld1q_u32(src + i))));
-
-			if constexpr (Compare)
-			{
-				diff = vorrq_u32(diff, veorq_u32(data, vld1q_u32(dst + i)));
-			}
-
-			vst1q_u32(dst + i, data);
-		}
-
-		if constexpr (Compare)
-		{
-			result |= vmaxvq_u32(diff);
-		}
-
-		// Tail. Counts here are small and frequently not a multiple of four (a constant
-		// block is capped at 32 words but is routinely shorter), so this runs often.
-		for (; i < count; i++)
-		{
-			const u32 data = stx::se_storage<u32>::swap(src[i]);
-
-			if constexpr (Compare)
-			{
-				result |= data ^ dst[i];
-			}
-
-			dst[i] = data;
-		}
-
-		if constexpr (Compare)
-		{
-			return static_cast<bool>(result);
-		}
-	}
-#endif
 
 #if defined(ARCH_X64)
 	template <bool Compare>
@@ -368,10 +307,9 @@ namespace
 				r = upload_xi16(src.data(), dst.data(), count);
 			else
 				r = upload_xi32(src.data(), dst.data(), count);
+#elif defined(ARCH_ARM64)
+			r = upload_untouched_neon<T, false>(src.data(), dst.data(), count);
 #else
-			// No hand-written ARM64 path here on purpose: this loop has no conditional
-			// min/max, so clang auto-vectorizes it (unlike the restart variant below,
-			// which needs the explicit NEON port).
 			r = upload_untouched_naive(src.data(), dst.data(), count);
 #endif
 
@@ -398,111 +336,6 @@ namespace
 
 			return (u64{max_index} << 32) | u64{min_index};
 		}
-
-#if defined(ARCH_ARM64)
-		// Eight u16 (four u32) per iteration instead of one.
-		//
-		// The SIMD build of this loop is assembled by asmjit under ARCH_X64 only, so ARM64
-		// fell through to the scalar loop above -- and unlike the non-restart loop, clang
-		// cannot auto-vectorize this one ("value that could not be identified as reduction
-		// is used outside the loop"): the min/max updates are themselves conditional on the
-		// restart compare. Measured on a Snapdragon 8 Elite, Virtua Tennis 4 routes its
-		// entire indexed-draw traffic through here -- a median of ~159k indices per frame
-		// in a match -- at 16 scalar instructions per index.
-		//
-		// Same lane algebra as the x86 asmjit builder below: the restart-equal mask ORs
-		// the lane to all-ones for the min accumulator and the store (all-ones is
-		// index_limit, exactly what the scalar loop writes), and BICs it to zero for the
-		// max accumulator, so restart lanes can never win either reduction. Horizontal
-		// UMINV/UMAXV once at the end. Tail stays scalar.
-		//
-		// CONTRACT: src and dst must not overlap. The vector body reads a full lane
-		// group before writing it back, so a partial overlap diverges from the scalar
-		// loop's element-wise order. Both callers (VK/GL vertex upload) pass disjoint
-		// allocations: src is guest memory (or the immediate-mode push buffer), dst a
-		// freshly mapped ring-buffer span (or, when the driver quirk forces restart
-		// emulation, a fresh heap staging block).
-		static inline u64 upload_untouched_neon(const be_t<u16>* src, u16* dst, u32 count, u16 restart_index)
-		{
-			u32 i = 0;
-			u16 min_index = index_limit<u16>();
-			u16 max_index = 0;
-
-			if (count >= 8)
-			{
-				// ORR with the compare mask writes all-ones into restart lanes; that only
-				// matches the tail's index_limit store while index_limit is all bits set.
-				static_assert(index_limit<u16>() == 0xffff);
-
-				const uint16x8_t vrestart = vdupq_n_u16(restart_index);
-				uint16x8_t vmin = vdupq_n_u16(0xffff);
-				uint16x8_t vmax = vdupq_n_u16(0);
-
-				for (; i + 8 <= count; i += 8)
-				{
-					const uint16x8_t v = vreinterpretq_u16_u8(vrev16q_u8(vreinterpretq_u8_u16(
-						vld1q_u16(reinterpret_cast<const u16*>(src) + i))));
-					const uint16x8_t eq = vceqq_u16(v, vrestart);
-					const uint16x8_t v_or_ones = vorrq_u16(v, eq);
-
-					vmin = vminq_u16(vmin, v_or_ones);
-					vmax = vmaxq_u16(vmax, vbicq_u16(v, eq));
-					vst1q_u16(dst + i, v_or_ones);
-				}
-
-				min_index = vminvq_u16(vmin);
-				max_index = vmaxvq_u16(vmax);
-			}
-
-			for (; i < count; ++i)
-			{
-				const u16 index = src[i].value();
-				dst[i] = index == restart_index ? index_limit<u16>() : min_max(min_index, max_index, index);
-			}
-
-			return (u64{max_index} << 32) | u64{min_index};
-		}
-
-		static inline u64 upload_untouched_neon(const be_t<u32>* src, u32* dst, u32 count, u32 restart_index)
-		{
-			u32 i = 0;
-			u32 min_index = index_limit<u32>();
-			u32 max_index = 0;
-
-			if (count >= 4)
-			{
-				// Same all-ones requirement as the u16 overload above.
-				static_assert(index_limit<u32>() == 0xffffffffu);
-
-				const uint32x4_t vrestart = vdupq_n_u32(restart_index);
-				uint32x4_t vmin = vdupq_n_u32(0xffffffffu);
-				uint32x4_t vmax = vdupq_n_u32(0);
-
-				for (; i + 4 <= count; i += 4)
-				{
-					const uint32x4_t v = vreinterpretq_u32_u8(vrev32q_u8(vreinterpretq_u8_u32(
-						vld1q_u32(reinterpret_cast<const u32*>(src) + i))));
-					const uint32x4_t eq = vceqq_u32(v, vrestart);
-					const uint32x4_t v_or_ones = vorrq_u32(v, eq);
-
-					vmin = vminq_u32(vmin, v_or_ones);
-					vmax = vmaxq_u32(vmax, vbicq_u32(v, eq));
-					vst1q_u32(dst + i, v_or_ones);
-				}
-
-				min_index = vminvq_u32(vmin);
-				max_index = vmaxvq_u32(vmax);
-			}
-
-			for (; i < count; ++i)
-			{
-				const u32 index = src[i].value();
-				dst[i] = index == restart_index ? index_limit<u32>() : min_max(min_index, max_index, index);
-			}
-
-			return (u64{max_index} << 32) | u64{min_index};
-		}
-#endif
 
 #ifdef ARCH_X64
 		template <typename T>
@@ -583,7 +416,7 @@ namespace
 			else
 				r = upload_xi32(src.data(), dst.data(), count, restart_index);
 #elif defined(ARCH_ARM64)
-			r = upload_untouched_neon(src.data(), dst.data(), count, restart_index);
+			r = upload_untouched_neon<T, true>(src.data(), dst.data(), count, restart_index);
 #else
 			r = upload_untouched_naive(src.data(), dst.data(), count, restart_index);
 #endif
@@ -878,10 +711,13 @@ void iota16(u16* dst, u32 count)
 		iota16_avx2(dst, count);
 		return;
 	}
+#elif defined(ARCH_ARM64)
+	iota16_neon(dst, count);
+	return;
 #endif
 
 	u32 i = 0;
-#if defined(ARCH_X64) || defined(ARCH_ARM64)
+#if defined(ARCH_X64)
 	// Force 16-byte alignment
 	const uptr mem_addr = reinterpret_cast<uptr>(dst);
 	const u32 head = std::min<u32>(count, ((0 - mem_addr) & 15) / sizeof(u16));
