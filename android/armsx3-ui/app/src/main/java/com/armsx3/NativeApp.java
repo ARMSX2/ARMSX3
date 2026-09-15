@@ -121,6 +121,7 @@ public final class NativeApp {
 
     /** [MAPPED] Slot preview, captured by the core at save time. Null if the slot has none. */
     public static byte[] getImageSlot(int slot) { return Rpcs3Bridge.thumbnailForSlot(slot); }
+    public static long getSlotSavedAt(int slot) { return Rpcs3Bridge.slotSavedAt(slot); }
 
     /** [TODO] */
     public static byte[] getSaveStateImage(String path) { Unsupported.note("getSaveStateImage"); return null; }

@@ -896,6 +896,19 @@ object Rpcs3Bridge {
      * which title's slots to answer for.
      */
     /**
+     * When this slot was written, as epoch millis, or 0 when it holds nothing.
+     *
+     * The state file's own timestamp rather than anything recorded inside it: the core stamps
+     * a creation time into the savestate, but reading it back means decompressing a header
+     * for every one of ten tiles each time the picker opens.
+     */
+    @JvmStatic
+    fun slotSavedAt(slot: Int): Long = runCatching {
+        val path = slotFilePath(slot) ?: return 0L
+        java.io.File(path).takeIf { it.isFile }?.lastModified() ?: 0L
+    }.getOrDefault(0L)
+
+    /**
      * Slot preview as PNG bytes, or null.
      *
      * The core writes "AX3T" + u32 width + u32 height + RGBA8 beside the state when it saves.

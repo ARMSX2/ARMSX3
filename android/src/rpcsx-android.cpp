@@ -322,10 +322,20 @@ extern atomic_t<bool> g_user_asked_for_screenshot;
 
 static constexpr u32 kThumbMaxEdge = 320;
 
+// How long a save waits for the renderer to hand over a frame for the slot preview. Two
+// frames at 30fps plus slack: long enough that a drawing game always lands one, short enough
+// that a game which is not drawing does not visibly delay the save.
+static constexpr int kThumbWaitMs = 250;
+
 static shared_mutex g_thumb_mutex;
 static std::vector<u8> g_thumb_rgba; // tightly packed RGBA8
 static u32 g_thumb_width = 0;
 static u32 g_thumb_height = 0;
+
+// Bumped every time a frame lands. The save path waits on this rather than assuming one
+// arrived, because asking for a screenshot only marks the NEXT rendered frame and the kill
+// that follows can beat it there.
+static atomic_t<u64> g_thumb_generation{0};
 
 static void armsx3_store_thumbnail(const std::vector<u8> &src, u32 width,
                                    u32 height, bool is_bgra) {
@@ -359,10 +369,14 @@ static void armsx3_store_thumbnail(const std::vector<u8> &src, u32 width,
     }
   }
 
-  std::lock_guard lock(g_thumb_mutex);
-  g_thumb_rgba = std::move(out);
-  g_thumb_width = out_w;
-  g_thumb_height = out_h;
+  {
+    std::lock_guard lock(g_thumb_mutex);
+    g_thumb_rgba = std::move(out);
+    g_thumb_width = out_w;
+    g_thumb_height = out_h;
+  }
+
+  g_thumb_generation++;
 }
 
 // "AX3T", u32 width, u32 height, then width*height RGBA8. A private format on purpose:
@@ -3974,7 +3988,22 @@ extern "C" bool _rpcsx_saveStateToSlot(unsigned int slot) {
 
   // Ask for a frame now, while there is still a renderer to draw one. It arrives at
   // take_screenshot and is written out by armsx3_slot_capture once the state is on disk.
-  g_user_asked_for_screenshot = true;
+  //
+  // Then WAIT for it. The request only marks the next rendered frame, and the kill queued
+  // below was racing it: whichever won decided whether the slot got a picture, so saving
+  // twice in a row gave one tile a thumbnail and the next none. Reported on slots 1 and 2.
+  //
+  // Bounded and best effort. A game that is not drawing (mid-compile, or paused with nothing
+  // to present) will never satisfy this, and a save is worth more than a preview of it.
+  const u64 before = g_thumb_generation;
+
+  for (int waited = 0; waited < kThumbWaitMs && g_thumb_generation == before; waited += 10) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  if (g_thumb_generation == before) {
+    rpcsx_android.notice("saveState: slot %u, no frame arrived in %dms", slot, kThumbWaitMs);
+  }
 
   Emu.CallFromMainThread([slot, title, boot]() {
     // Outside suspend mode the game comes straight back up from the state it just
