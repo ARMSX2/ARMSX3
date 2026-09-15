@@ -3951,7 +3951,7 @@ static void armsx3_slot_capture(unsigned int slot, const std::string& title,
   // Best effort. A slot with no picture still loads, so a missing frame must not turn a
   // successful save into a failed one.
   if (!armsx3_write_thumbnail(dir + "slot" + std::to_string(slot) + ".thumb")) {
-    rpcsx_android.notice("saveState: slot %u has no frame to preview", slot);
+    rpcsx_android.warning("saveState: slot %u has no frame to preview", slot);
   }
 
   rpcsx_android.success("saveState: slot %u <- '%s'", slot, newest);
@@ -4002,7 +4002,9 @@ extern "C" bool _rpcsx_saveStateToSlot(unsigned int slot) {
   }
 
   if (g_thumb_generation == before) {
-    rpcsx_android.notice("saveState: slot %u, no frame arrived in %dms", slot, kThumbWaitMs);
+    // warning, not notice: notice is below the logcat cutoff, so the one line that explains
+    // a slot with no preview would never be seen by anyone able to act on it.
+    rpcsx_android.warning("saveState: slot %u, no frame arrived in %dms", slot, kThumbWaitMs);
   }
 
   Emu.CallFromMainThread([slot, title, boot]() {
