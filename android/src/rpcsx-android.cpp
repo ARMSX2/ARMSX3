@@ -3760,7 +3760,27 @@ extern "C" void _rpcsx_resume() { Emu.Resume(); }
 // and _rpcsx_surfaceEvent has always called it on surface loss. That is why BACKGROUNDING the app
 // was the only thing that actually paused, while the in-game pause menu left the emulator running
 // underneath it, and why pause/resume were asymmetric: resume() reached the core, pause() did not.
-extern "C" void _rpcsx_pause() { Emu.Pause(); }
+// Ask for a slot preview on the way into the pause.
+//
+// A paused emulator does not flip, so the screenshot path in VKPresent never runs and nothing
+// ever reaches take_screenshot. Saving a state from the pause menu therefore had NO frame to
+// preview and the tile stayed blank, while a save made from a running game got one. That is
+// the whole difference between the slot that had a thumbnail and the slot that did not.
+//
+// Requested here, before the pause, and deliberately not waited on: Pause() signals the guest
+// threads rather than stopping them instantly, so the RSX almost always flips once more on the
+// way down, and the user then spends seconds in the menu before choosing a slot. Blocking the
+// caller to guarantee it would put a stall on every pause to improve a picture.
+//
+// The frame this captures is the game as it looked when paused, which is the right image for
+// a save made from that menu anyway.
+extern "C" void _rpcsx_pause() {
+  if (Emu.IsRunning()) {
+    g_user_asked_for_screenshot = true;
+  }
+
+  Emu.Pause();
+}
 
 extern "C" void _rpcsx_openHomeMenu() { open_home_menu_async(); }
 
@@ -3995,16 +4015,21 @@ extern "C" bool _rpcsx_saveStateToSlot(unsigned int slot) {
   //
   // Bounded and best effort. A game that is not drawing (mid-compile, or paused with nothing
   // to present) will never satisfy this, and a save is worth more than a preview of it.
-  const u64 before = g_thumb_generation;
+  // Only worth waiting on while the game is actually drawing. Paused, no flip will come and
+  // this would stall every save by the full timeout to learn nothing; the frame captured on
+  // the way into the pause is what gets used instead.
+  if (Emu.IsRunning()) {
+    const u64 before = g_thumb_generation;
 
-  for (int waited = 0; waited < kThumbWaitMs && g_thumb_generation == before; waited += 10) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
+    for (int waited = 0; waited < kThumbWaitMs && g_thumb_generation == before; waited += 10) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 
-  if (g_thumb_generation == before) {
-    // warning, not notice: notice is below the logcat cutoff, so the one line that explains
-    // a slot with no preview would never be seen by anyone able to act on it.
-    rpcsx_android.warning("saveState: slot %u, no frame arrived in %dms", slot, kThumbWaitMs);
+    if (g_thumb_generation == before) {
+      // warning, not notice: notice is below the logcat cutoff, so the one line that explains
+      // a slot with no preview would never be seen by anyone able to act on it.
+      rpcsx_android.warning("saveState: slot %u, no frame arrived in %dms", slot, kThumbWaitMs);
+    }
   }
 
   Emu.CallFromMainThread([slot, title, boot]() {
