@@ -49,6 +49,7 @@ struct RPCSXApi {
   void (*setPadSensor)(int port, int x, int y, int z, int g);
   int (*getPadRumble)(int port);
   void (*setThermals)(float cpu, float gpu, float battery, bool show);
+  void (*setRenderPosition)(bool portraitTop, bool landscapeTop, int topInset);
   bool (*usbDeviceEvent)(int fd, int vendorId, int productId, int event);
   bool (*installFw)(JNIEnv *env, int fd, long progressId);
   bool (*isInstallableFile)(jint fd);
@@ -174,6 +175,8 @@ struct RPCSXLibrary : RPCSXApi {
     result.setPadSensor = reinterpret_cast<decltype(setPadSensor)>(dlsym(handle, "_rpcsx_setPadSensor"));
     result.getPadRumble = reinterpret_cast<decltype(getPadRumble)>(dlsym(handle, "_rpcsx_getPadRumble"));
     result.setThermals = reinterpret_cast<decltype(setThermals)>(dlsym(handle, "_rpcsx_setThermals"));
+    // Optional: a core built before this simply centres the image, as it always did.
+    result.setRenderPosition = reinterpret_cast<decltype(setRenderPosition)>(dlsym(handle, "_rpcsx_setRenderPosition"));
     result.usbDeviceEvent = reinterpret_cast<decltype(usbDeviceEvent)>(dlsym(handle, "_rpcsx_usbDeviceEvent"));
     result.installFw = reinterpret_cast<decltype(installFw)>(dlsym(handle, "_rpcsx_installFw"));
     result.isInstallableFile = reinterpret_cast<decltype(isInstallableFile)>(dlsym(handle, "_rpcsx_isInstallableFile"));
@@ -554,6 +557,15 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setThermals(
   }
 
   rpcsxLib.setThermals(cpu, gpu, battery, show == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setRenderPosition(
+    JNIEnv *, jobject, jboolean portraitTop, jboolean landscapeTop, jint topInset) {
+  if (rpcsxLib.setRenderPosition == nullptr) {
+    return;
+  }
+
+  rpcsxLib.setRenderPosition(portraitTop == JNI_TRUE, landscapeTop == JNI_TRUE, topInset);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_surfaceSizeChanged(

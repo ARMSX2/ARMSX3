@@ -619,7 +619,7 @@ data class Settings(
     // game can render its output smaller while the library and lighter games stay
     // sharp. Were global-only prefs until #-Duda reported that changing them in Game
     // scope also moved Global — there was no per-game copy to write.
-    val hwScaler: Int = 0,                       // 0 = screen, else 448*n short side
+    val hwScaler: Int = 0,                       // 0 = screen, else target short side in pixels
     val screenResOverride: String = "auto",      // "auto" | "2560x1440" | "1920x1080" | "1280x720"
     /** EmuCore/GS/autoflush_sw — software-renderer auto-flush. PCSX2 default on. */
     val autoFlushSw: Boolean = true,

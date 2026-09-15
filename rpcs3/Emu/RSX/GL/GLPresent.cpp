@@ -265,7 +265,8 @@ void GLGSRender::flip(const rsx::display_flip_info_t& info)
 	if (!g_cfg.video.stretch_to_display_area)
 	{
 		const sizeu csize(width, height);
-		const auto converted = avconfig.aspect_convert_region(size2u{ buffer_width, buffer_height }, csize);
+		const auto converted = rsx::apply_render_position(
+			avconfig.aspect_convert_region(size2u{ buffer_width, buffer_height }, csize), csize);
 		aspect_ratio = static_cast<areai>(converted);
 	}
 	else

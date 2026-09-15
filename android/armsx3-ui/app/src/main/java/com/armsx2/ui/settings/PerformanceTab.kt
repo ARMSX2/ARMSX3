@@ -123,7 +123,11 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 // surface, so it works regardless of core -- but 448*n was the PS2's
                 // native height and meant nothing for a 720p console.
                 options = listOf(str("perf.displayResolution.screen"), "1080p", "720p", "540p"),
-                selectedIndex = when (s.hwScaler) { 3 -> 1; 2 -> 2; 1 -> 3; else -> 0 },
+                // Pixels, matching what onChange writes and what EmulationSurface reads. These
+                // were 1/2/3 back when the value was a multiple of the PS2's 448-line height;
+                // the read half was left behind when it became a short side in pixels, so every
+                // pick scored no match, fell to else, and snapped the control back to Screen.
+                selectedIndex = when (s.hwScaler) { 1080 -> 1; 720 -> 2; 540 -> 3; else -> 0 },
                 description = str("perf.displayResolution.description"),
                 onChange = {
                     apply(s.copy(hwScaler = when (it) { 1 -> 1080; 2 -> 720; 3 -> 540; else -> 0 }))

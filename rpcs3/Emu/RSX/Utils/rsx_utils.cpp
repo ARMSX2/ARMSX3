@@ -247,6 +247,33 @@ namespace rsx
 		return static_cast<areau>(static_cast<aread>(area1) * size2d { stretch_x, stretch_y }) + size2u{ area2.x1, area2.y1 };
 	}
 
+	atomic_t<u32> g_render_top_portrait{0};
+	atomic_t<u32> g_render_top_landscape{0};
+	atomic_t<u32> g_render_top_inset{0};
+
+	areau apply_render_position(const areau& region, const size2u& output_dimensions)
+	{
+		const bool portrait = output_dimensions.height > output_dimensions.width;
+
+		if (!(portrait ? g_render_top_portrait : g_render_top_landscape))
+		{
+			return region;
+		}
+
+		// Only the letterbox bar is ours to reclaim. An image already flush to the top has
+		// nowhere to go, and one at least as tall as the window is not letterboxed at all --
+		// moving either would push picture off the screen rather than shift a border.
+		if (region.y1 == 0 || region.height() >= output_dimensions.height)
+		{
+			return region;
+		}
+
+		// Clear the camera cutout, but never by more than the bar being reclaimed: pushing past
+		// where the image already sat would move it DOWN, which is the opposite of the request.
+		const u32 top = std::min<u32>(g_render_top_inset, region.y1);
+		return areau{ region.x1, top, region.x2, top + region.height() };
+	}
+
 #ifdef TEXTURE_CACHE_DEBUG
 	tex_cache_checker_t tex_cache_checker = {};
 #endif

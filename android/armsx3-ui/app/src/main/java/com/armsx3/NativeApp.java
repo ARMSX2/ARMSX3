@@ -401,9 +401,37 @@ public final class NativeApp {
         float hz = ntsc > 0 ? ntsc : pal;
         if (hz > 0) Rpcs3Settings.INSTANCE.setVblankRate(Math.round(hz));
     }
-    public static void setLandscapeRenderTop(boolean top) { Unsupported.note("setLandscapeRenderTop"); }
-    public static void setPortraitRenderTop(boolean top) { Unsupported.note("setPortraitRenderTop"); }
-    public static void setPortraitRenderTopInset(int px) { Unsupported.note("setPortraitRenderTopInset"); }
+    // Where the letterboxed image sits in the window. Three setters because they arrive from
+    // three places at three times -- the two preferences from applyTo, the cutout inset from
+    // the surface on every rotation -- but the core holds one position, so each remembers its
+    // own value and re-sends the whole set. Defaults match Settings.kt: portrait top, landscape
+    // centred. These were stubs inherited from the PCSX2 shim layer, so the settings saved and
+    // did nothing.
+    private static boolean sPortraitRenderTop = true;
+    private static boolean sLandscapeRenderTop = false;
+    private static int sPortraitRenderTopInset = 0;
+
+    private static void pushRenderPosition() {
+        try {
+            net.rpcsx.RPCSX.Companion.getInstance()
+                .setRenderPosition(sPortraitRenderTop, sLandscapeRenderTop, sPortraitRenderTopInset);
+        } catch (Throwable ignored) {
+            // A core without the symbol centres the image, which is what it did before this.
+        }
+    }
+
+    public static void setLandscapeRenderTop(boolean top) {
+        sLandscapeRenderTop = top;
+        pushRenderPosition();
+    }
+    public static void setPortraitRenderTop(boolean top) {
+        sPortraitRenderTop = top;
+        pushRenderPosition();
+    }
+    public static void setPortraitRenderTopInset(int px) {
+        sPortraitRenderTopInset = Math.max(px, 0);
+        pushRenderPosition();
+    }
 
     // ===== Audio =====
 
