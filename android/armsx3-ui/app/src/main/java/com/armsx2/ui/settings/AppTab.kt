@@ -784,6 +784,67 @@ fun AppTab() {
             }
         }
 
+        // Its own setting rather than part of the pack above. That one is the launcher's menu
+        // blips and ships a built-in set; this belongs to the emulator, is a single file, and
+        // has no default at all. Folding it in meant "import a folder of clips" silently
+        // governed the trophy sound too, which nobody would guess from the control.
+        Text(
+            str("app.trophySound"),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 10.dp),
+        )
+        run {
+            val trophyPicker = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocument()
+            ) { uri ->
+                if (uri != null) {
+                    val ok = com.armsx2.TrophySound.import(appContext, uri)
+                    Toast.makeText(
+                        appContext,
+                        I18n.get(if (ok) "app.trophySound.set" else "app.trophySound.failed"),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    if (ok) com.armsx2.TrophySound.preview()
+                }
+            }
+            Text(
+                str("app.trophySound.desc"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+            )
+            val chosen = com.armsx2.TrophySound.fileName.value
+            Text(
+                if (chosen != null) str("app.trophySound.current").format(chosen)
+                else str("app.trophySound.none"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+            )
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val pick = { trophyPicker.launch(arrayOf("audio/*")) }
+                OutlinedButton(
+                    onClick = pick,
+                    modifier = Modifier.controllerFocusable("app.trophySound.choose", onConfirm = pick),
+                ) { Text(str("app.trophySound.choose")) }
+                if (chosen != null) {
+                    val test = { com.armsx2.TrophySound.preview() }
+                    OutlinedButton(
+                        onClick = test,
+                        modifier = Modifier.controllerFocusable("app.trophySound.test", onConfirm = test),
+                    ) { Text(str("app.trophySound.test")) }
+                    val clear = { com.armsx2.TrophySound.clear() }
+                    OutlinedButton(
+                        onClick = clear,
+                        modifier = Modifier.controllerFocusable("app.trophySound.clear", onConfirm = clear),
+                    ) { Text(str("app.trophySound.clear")) }
+                }
+            }
+        }
+
         SegmentedRow(
             label = str("app.toolbarPosition"),
             options = listOf(str("app.toolbarPosition.top"), str("app.toolbarPosition.bottom")),

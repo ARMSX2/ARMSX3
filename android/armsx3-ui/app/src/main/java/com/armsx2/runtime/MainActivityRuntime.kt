@@ -1495,6 +1495,50 @@ open class MainActivityRuntime : ComponentActivity() {
             handler.postDelayed(tryLoad, 250)
         }
 
+        /**
+         * Treat an install that is ALREADY set up as set up, without making anyone walk the
+         * wizard to say so.
+         *
+         * Two cases, and they are the same case. A launcher that installs ARMSX3, unpacks
+         * firmware and places games has done everything setup asks for, and then setup asks
+         * again (ARMSX3 #114). And a user who reinstalls and points at their existing data
+         * folder gets the wizard for a folder that already has everything in it.
+         *
+         * Checked against the filesystem rather than against any flag a caller could set, so
+         * there is nothing to misuse: if the firmware and the games are genuinely there, the
+         * wizard has nothing left to collect. If placement failed, setup runs and the user can
+         * fix it, which is the failure a skip flag would have hidden.
+         *
+         * Persisted once decided, matching finishSetup, so this is not re-derived on every
+         * launch and a later change to the folder does not put a working install back into
+         * setup.
+         */
+        private fun adoptPreparedSetup() {
+            if (setupComplete.value) return
+
+            val root = currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return
+            val config = File(root, "config")
+
+            // The same file boot checks before starting the XMB, so "firmware is installed"
+            // means the same thing here as it does there.
+            if (!File(config, "dev_flash/vsh/module/vsh.self").isFile) return
+
+            // A game anywhere the library would find one: a folder the user (or a launcher)
+            // configured, the drop-in games directory, or an installed title in dev_hdd0.
+            val hasGames = romsDirs.value.isNotEmpty() ||
+                (File(config, "games").listFiles()?.any { it.isDirectory || it.isFile } == true) ||
+                (File(config, "dev_hdd0/game").listFiles()?.any { it.isDirectory } == true)
+
+            if (!hasGames) return
+
+            android.util.Log.i(
+                "ARMSX3",
+                "setup: firmware and games are already in place, skipping the wizard",
+            )
+            prefs.edit(commit = true) { putBoolean("setupComplete", true) }
+            setupComplete.value = true
+        }
+
         fun finishSetup() {
             // commit = true for the same reason as setRomsDirs: losing this means
             // the wizard runs again from scratch.
@@ -2244,6 +2288,8 @@ open class MainActivityRuntime : ComponentActivity() {
                 if (legacy != null) listOf(legacy) else emptyList()
             }
         }
+        adoptPreparedSetup()
+        runCatching { com.armsx2.TrophySound.load() }
         // Setup recovery. Auto Backup can restore our prefs (incl. setupComplete + the
         // ROMs URIs) on reinstall, but SAF/all-files PERMISSIONS are never backed up — so
         // a restored setup can point at a folder we can no longer read, which would strand

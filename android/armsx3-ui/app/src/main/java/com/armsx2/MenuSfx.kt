@@ -120,26 +120,7 @@ object MenuSfx {
         var copied = 0
         val dir = sfxDir(context)
         tree.listFiles().forEach { doc ->
-            val name = doc.name ?: return@forEach
-
-            // The core's own sounds live somewhere else and are named by IT, not by us. A clip
-            // called "trophy" goes to config/sounds/, which is where overlays.cpp looks, so the
-            // one importer covers both the app's sounds and the emulator's.
-            coreSoundTarget(name)?.let { target ->
-                val ok = runCatching {
-                    target.parentFile?.mkdirs()
-                    context.contentResolver.openInputStream(doc.uri)?.use { ins ->
-                        target.outputStream().use { ins.copyTo(it) }
-                    } != null
-                }.getOrDefault(false)
-                if (ok) {
-                    copied++
-                    pathSampleIds.remove(target.absolutePath)
-                }
-                return@forEach
-            }
-
-            val event = eventForFilename(name) ?: return@forEach
+            val event = doc.name?.let(::eventForFilename) ?: return@forEach
             val ok = runCatching {
                 context.contentResolver.openInputStream(doc.uri)?.use { ins ->
                     File(dir, event.fileName).outputStream().use { ins.copyTo(it) }
@@ -156,47 +137,11 @@ object MenuSfx {
         return copied
     }
 
-    /**
-     * Clips in an imported pack that belong to the EMULATOR rather than to the launcher.
-     *
-     * The core asks for these by absolute path (see overlays.cpp), so they have to be written
-     * where it looks instead of into our own sound directory. Named the way a user would think
-     * of them on the left, the way the core spells them on the right.
-     */
-    private val coreSoundNames = mapOf(
-        "trophy" to "snd_trophy",
-        "dialog_ok" to "snd_system_ok",
-        "dialog_error" to "snd_system_ng",
-    )
-
-    /** Where a pack clip should land if the core owns that sound, or null if we do. */
-    private fun coreSoundTarget(fileName: String): File? {
-        val stem = fileName.substringBeforeLast('.').lowercase()
-        val core = coreSoundNames[stem] ?: return null
-        val root = MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() }
-            ?: return null
-        // Keep the source extension. playFile resolves whichever one is present, so a pack can
-        // ship ogg or mp3 here like it can for every other clip.
-        val ext = fileName.substringAfterLast('.', "wav")
-        return File(File(File(root, "config"), "sounds"), "$core.$ext")
-    }
-
-    /** Drop the imported pack and go back to the bundled defaults. */
+    /** Drop the imported pack and go back to the bundled defaults. The trophy sound is NOT
+     *  touched: it has its own setting, and clearing a menu pack should not silently remove
+     *  a sound the user chose somewhere else. */
     fun clear(context: Context) {
         Event.entries.forEach { runCatching { clipFile(context, it).delete() } }
-        // The emulator's clips too, or "Use Built-in" would leave a trophy sound behind that
-        // nothing in the UI now claims to have imported.
-        runCatching {
-            MainActivityRuntime.currentInitDataRoot()?.takeIf { it.isNotBlank() }?.let { root ->
-                val dir = File(File(root, "config"), "sounds")
-                coreSoundNames.values.forEach { core ->
-                    listOf("wav", "ogg", "mp3").forEach { ext ->
-                        File(dir, "$core.$ext").takeIf { it.isFile }?.delete()
-                    }
-                }
-            }
-        }
-        pathSampleIds.clear()
         packName.value = null
         MainActivityRuntime.prefs.edit { remove(PackNameKey) }
         if (enabled.value) rebuildPool(context) else releasePool()
@@ -223,6 +168,11 @@ object MenuSfx {
      * plays whatever the user has placed in that folder.
      */
     private val pathSampleIds = HashMap<String, Int>()
+
+    /** Drop a cached sample so a replaced file is re-read instead of the old one replaying. */
+    fun forgetCachedFile(path: String) {
+        pathSampleIds.remove(path)
+    }
 
     @JvmStatic
     fun playFile(path: String, volume: Float) {
