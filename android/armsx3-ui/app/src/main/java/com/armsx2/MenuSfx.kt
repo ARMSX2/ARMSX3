@@ -6,6 +6,7 @@ import android.media.SoundPool
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
+import androidx.annotation.Keep
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.edit
 import androidx.documentfile.provider.DocumentFile
@@ -213,6 +214,17 @@ object MenuSfx {
         pathSampleIds.remove(path)
     }
 
+    // @Keep is load-bearing, not tidiness. Release builds run R8, which renames
+    // com.armsx2.MenuSfx and this method, and the core reaches both by their ORIGINAL names
+    // through FindClass/GetStaticMethodID. Without it the bridge silently fails to install and
+    // every sound the emulator asks for is dropped before it ever reaches Kotlin -- trophies,
+    // dialogs, the on-screen keyboard. The androidx consumer rule
+    // `-keepclasseswithmembers class * { @Keep <methods>; }` keeps the CLASS name too, which is
+    // why annotating the method is enough and why storage/ContentUri has always worked.
+    //
+    // Calls from Kotlin are unaffected either way, since R8 renames both sides together. That
+    // is exactly why the settings Test button worked while an actual trophy was silent.
+    @Keep
     @JvmStatic
     fun playFile(path: String, volume: Float) {
         // No [enabled] check. That toggle is the launcher's own interface blips; these come from
