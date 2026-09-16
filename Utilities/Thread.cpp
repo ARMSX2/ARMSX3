@@ -2202,7 +2202,13 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 		{
 			if (g_tls_access_violation_recovered != addr)
 			{
-				vm_log.notice("\n%s", dump_useful_thread_info());
+				// error, not notice: Android's logcat sink drops anything below warning, so
+				// this dump -- the guest registers and callstack, the only thing that says
+				// WHICH pointer was null and what the game was holding -- was built on every
+				// fault and then discarded on the one platform that cannot attach a debugger
+				// to read it another way. The fault line beside it is fatal and survives, so
+				// every Android guest crash report has arrived with the answer stripped out.
+				vm_log.error("\n%s", dump_useful_thread_info());
 
 				// Name a guest halt for what it is.
 				//
@@ -2320,7 +2326,8 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 	// Do not log any further access violations in this case.
 	if (g_tls_access_violation_recovered != addr)
 	{
-		vm_log.notice("\n%s", dump_useful_thread_info());
+		// error, not notice -- see the SPU path above. Dropped by the logcat cutoff otherwise.
+		vm_log.error("\n%s", dump_useful_thread_info());
 		vm_log.fatal("Access violation %s location 0x%x (%s)", is_writing ? "writing" : (is_exec ? "executing" : "reading"), addr, (is_writing && vm::check_addr(addr)) ? "read-only memory" : "unmapped memory");
 
 		// The host stack, which is the half that was missing.
