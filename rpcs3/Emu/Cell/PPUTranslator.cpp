@@ -4651,6 +4651,30 @@ void PPUTranslator::FMULS(ppu_opcode_t op)
 	SetFPRF(result, op.rc != 0);
 }
 
+// Negate a multiply-add result without letting LLVM fold the negation into the FMA.
+//
+// CreateFNeg lets LLVM apply -(a*c + d) == (-a)*c + (-d). That identity is exact for finite
+// values and WRONG for signed zeros: fnmsub(0,0,0) is -((0*0) - 0) == -0.0 on hardware, but
+// after the fold it evaluates as (-0*0) + 0 == +0.0. Measured on an Odin 3, fneg(fma(0,0,-0))
+// really does give 8000000000000000, so the emitted arithmetic was right and the optimiser
+// was changing it.
+//
+// Flipping the sign bit through an integer bitcast is the same operation and cannot be
+// reassociated, and it preserves a NaN payload exactly.
+//
+// PowerPC does not negate a NaN here at all -- hardware answers 7FF8000000000000 for
+// fnmadd on a NaN operand where an unconditional negate gives FFF8000000000000 -- so a NaN
+// is passed through untouched. FNEG and FNABS are deliberately not routed through this: those
+// are sign-manipulation instructions and do flip a NaN's sign.
+template <typename Builder>
+static llvm::Value* ppu_negate_result(Builder* ir, llvm::Value* v)
+{
+	const auto i = ir->CreateBitCast(v, llvm::Type::getInt64Ty(ir->getContext()));
+	const auto flipped = ir->CreateBitCast(
+		ir->CreateXor(i, ir->getInt64(0x8000000000000000ULL)), v->getType());
+	return ir->CreateSelect(ir->CreateFCmpUNO(v, v), v, flipped);
+}
+
 void PPUTranslator::FMADDS(ppu_opcode_t op)
 {
 	const auto a = GetFpr(op.fra);
@@ -4723,7 +4747,7 @@ void PPUTranslator::FNMSUBS(ppu_opcode_t op)
 		result = m_ir->CreateFSub(m_ir->CreateFMul(a, c), b);
 	}
 
-	SetFpr(op.frd, m_ir->CreateFPTrunc(m_ir->CreateFNeg(result), GetType<f32>()));
+	SetFpr(op.frd, m_ir->CreateFPTrunc(ppu_negate_result(m_ir, result), GetType<f32>()));
 
 	//SetFPSCR_FR(Call(GetType<bool>(), m_pure_attr, "__fmadds_get_fr", a, b, c)); // TODO ???
 	//SetFPSCR_FI(Call(GetType<bool>(), m_pure_attr, "__fmadds_get_fi", a, b, c));
@@ -4751,7 +4775,7 @@ void PPUTranslator::FNMADDS(ppu_opcode_t op)
 		result = m_ir->CreateFAdd(m_ir->CreateFMul(a, c), b);
 	}
 
-	SetFpr(op.frd, m_ir->CreateFPTrunc(m_ir->CreateFNeg(result), GetType<f32>()));
+	SetFpr(op.frd, m_ir->CreateFPTrunc(ppu_negate_result(m_ir, result), GetType<f32>()));
 
 	//SetFPSCR_FR(Call(GetType<bool>(), m_pure_attr, "__fmadds_get_fr", a, b, c)); // TODO ???
 	//SetFPSCR_FI(Call(GetType<bool>(), m_pure_attr, "__fmadds_get_fi", a, b, c));
@@ -5100,7 +5124,7 @@ void PPUTranslator::FNMSUB(ppu_opcode_t op)
 		result = m_ir->CreateFSub(m_ir->CreateFMul(a, c), b);
 	}
 
-	SetFpr(op.frd, m_ir->CreateFNeg(result));
+	SetFpr(op.frd, ppu_negate_result(m_ir, result));
 
 	//SetFPSCR_FR(Call(GetType<bool>(), m_pure_attr, "__fmadd_get_fr", a, b, c)); // TODO ???
 	//SetFPSCR_FI(Call(GetType<bool>(), m_pure_attr, "__fmadd_get_fi", a, b, c));
@@ -5128,7 +5152,7 @@ void PPUTranslator::FNMADD(ppu_opcode_t op)
 		result = m_ir->CreateFAdd(m_ir->CreateFMul(a, c), b);
 	}
 
-	SetFpr(op.frd, m_ir->CreateFNeg(result));
+	SetFpr(op.frd, ppu_negate_result(m_ir, result));
 
 	//SetFPSCR_FR(Call(GetType<bool>(), m_pure_attr, "__fmadd_get_fr", a, b, c)); // TODO ???
 	//SetFPSCR_FI(Call(GetType<bool>(), m_pure_attr, "__fmadd_get_fi", a, b, c));
