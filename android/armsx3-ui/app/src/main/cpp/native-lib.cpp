@@ -50,6 +50,7 @@ struct RPCSXApi {
   int (*getPadRumble)(int port);
   void (*setThermals)(float cpu, float gpu, float battery, bool show);
   void (*setRenderPosition)(bool portraitTop, int topInset);
+  void (*setPadDeviceClasses)(const int *classes, int count);
   bool (*usbDeviceEvent)(int fd, int vendorId, int productId, int event);
   bool (*installFw)(JNIEnv *env, int fd, long progressId);
   bool (*isInstallableFile)(jint fd);
@@ -177,6 +178,8 @@ struct RPCSXLibrary : RPCSXApi {
     result.setThermals = reinterpret_cast<decltype(setThermals)>(dlsym(handle, "_rpcsx_setThermals"));
     // Optional: a core built before this simply centres the image, as it always did.
     result.setRenderPosition = reinterpret_cast<decltype(setRenderPosition)>(dlsym(handle, "_rpcsx_setRenderPosition"));
+    // Optional: a core without it reports every port as a standard pad, as it always did.
+    result.setPadDeviceClasses = reinterpret_cast<decltype(setPadDeviceClasses)>(dlsym(handle, "_rpcsx_setPadDeviceClasses"));
     result.usbDeviceEvent = reinterpret_cast<decltype(usbDeviceEvent)>(dlsym(handle, "_rpcsx_usbDeviceEvent"));
     result.installFw = reinterpret_cast<decltype(installFw)>(dlsym(handle, "_rpcsx_installFw"));
     result.isInstallableFile = reinterpret_cast<decltype(isInstallableFile)>(dlsym(handle, "_rpcsx_isInstallableFile"));
@@ -566,6 +569,23 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setRenderPosition(
   }
 
   rpcsxLib.setRenderPosition(portraitTop == JNI_TRUE, topInset);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setPadDeviceClasses(
+    JNIEnv *env, jobject, jintArray classes) {
+  if (rpcsxLib.setPadDeviceClasses == nullptr || classes == nullptr) {
+    return;
+  }
+
+  const jsize count = env->GetArrayLength(classes);
+
+  if (count <= 0) {
+    return;
+  }
+
+  std::vector<int> values(static_cast<size_t>(count));
+  env->GetIntArrayRegion(classes, 0, count, values.data());
+  rpcsxLib.setPadDeviceClasses(values.data(), static_cast<int>(count));
 }
 
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_surfaceSizeChanged(

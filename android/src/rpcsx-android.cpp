@@ -43,6 +43,7 @@
 #include "Input/dualsense_pad_handler.h"
 #include "Input/hid_pad_handler.h"
 #include "Input/pad_thread.h"
+#include "Input/product_info.h"
 #include "Input/virtual_keyboard_handler.h"
 #include "Input/virtual_pad_handler.h"
 #include "Loader/ISO.h"
@@ -2540,6 +2541,44 @@ static void setupCallbacks() {
 static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {
   u32 pclass_profile = 0;
 
+  // What KIND of controller this claims to be.
+  //
+  // This was hardcoded to STANDARD, so every port always answered "ordinary pad" to
+  // cellPadPeriphGetInfo. Instrument titles ask exactly that question and will not start
+  // without the right answer, which put the whole genre -- Guitar Hero, Rock Band, DJ Hero,
+  // dance mats -- out of reach with no way for a user to say otherwise. The value has always
+  // existed per port in the input config; nothing here read it.
+  u32 class_type = CELL_PAD_PCLASS_TYPE_STANDARD;
+  u16 vendor_id = 0;
+  u16 product_id = 0;
+  u32 capabilities = CELL_PAD_CAPABILITY_PS3_CONFORMITY |
+                     CELL_PAD_CAPABILITY_PRESS_MODE |
+                     CELL_PAD_CAPABILITY_HP_ANALOG_STICK |
+                     CELL_PAD_CAPABILITY_ACTUATOR | CELL_PAD_CAPABILITY_SENSOR_MODE;
+
+  if (pad->m_player_id < g_cfg_input.player.size()) {
+    if (const cfg_player *player_config = g_cfg_input.player[pad->m_player_id]) {
+      class_type = player_config->config.device_class_type;
+
+      // A class alone is not enough: these games identify the instrument by vendor and
+      // product, so reporting a guitar with no identity answers half the question. Upstream
+      // matches a configured vendor/product pair against the class list; a virtual pad has
+      // no such pair, so adopt the first real product of the chosen class and report its
+      // profile and capabilities with it.
+      if (class_type != CELL_PAD_PCLASS_TYPE_STANDARD) {
+        const std::vector<input::product_info> products =
+            input::get_products_by_class(class_type);
+
+        if (!products.empty()) {
+          pclass_profile = products.front().pclass_profile;
+          capabilities = products.front().capabilites;
+          vendor_id = products.front().vendor_id;
+          product_id = products.front().product_id;
+        }
+      }
+    }
+  }
+
   // Only player 1 starts CONNECTED. Ports 2-7 exist but report nothing plugged in until a device
   // actually drives them (see the hot-plug in _rpcsx_overlayPadData).
   //
@@ -2551,13 +2590,8 @@ static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {
   const u32 initial_status =
       pad->m_player_id == 0 ? CELL_PAD_STATUS_CONNECTED : 0;
 
-  pad->Init(initial_status,
-            CELL_PAD_CAPABILITY_PS3_CONFORMITY |
-                CELL_PAD_CAPABILITY_PRESS_MODE |
-                CELL_PAD_CAPABILITY_HP_ANALOG_STICK |
-                CELL_PAD_CAPABILITY_ACTUATOR | CELL_PAD_CAPABILITY_SENSOR_MODE,
-            CELL_PAD_DEV_TYPE_STANDARD, CELL_PAD_PCLASS_TYPE_STANDARD,
-            pclass_profile, 0, 0, 50);
+  pad->Init(initial_status, capabilities, CELL_PAD_DEV_TYPE_STANDARD, class_type,
+            pclass_profile, vendor_id, product_id, 50);
 
   pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL1, std::vector<std::set<u32>>{},
                               CELL_PAD_CTRL_UP);
@@ -4726,6 +4760,52 @@ extern "C" void _rpcsx_setThermals(float cpu, float gpu, float battery, bool sho
 extern "C" void _rpcsx_setRenderPosition(bool portraitTop, int topInset) {
   rsx::g_render_top_portrait = portraitTop ? 1 : 0;
   rsx::g_render_top_inset = topInset > 0 ? static_cast<u32>(topInset) : 0;
+}
+
+// Set every port's controller class at once, and make it take effect now.
+//
+// All seven together rather than one at a time because each change has to be followed by a
+// pad reset, and resetting seven times in a row at startup would tear the pad thread down and
+// rebuild it for every port in turn.
+//
+// The app owns this value, not the config file. initApp saves g_cfg_input at startup BEFORE
+// pad_thread::Init has loaded it, so anything previously written to Default.yml is overwritten
+// with defaults on every launch. The app therefore re-asserts the full set once the core is up,
+// and again whenever the user changes one.
+//
+// pad::reset is what makes it live: the class is read when a pad is CREATED, so without it the
+// change would wait for the next boot and an in-game control would look broken.
+extern "C" void _rpcsx_setPadDeviceClasses(const int *classes, int count) {
+  if (classes == nullptr || count <= 0) {
+    return;
+  }
+
+  bool changed = false;
+
+  for (int port = 0; port < count && static_cast<usz>(port) < g_cfg_input.player.size();
+       port++) {
+    cfg_player *player_config = g_cfg_input.player[port];
+
+    if (!player_config) {
+      continue;
+    }
+
+    const u32 wanted = static_cast<u32>(classes[port]);
+
+    if (player_config->config.device_class_type.get() == wanted) {
+      continue;
+    }
+
+    player_config->config.device_class_type.set(wanted);
+    changed = true;
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  g_cfg_input.save("", g_cfg_input_configs.default_config);
+  pad::reset(Emu.GetTitleID());
 }
 
 extern "C" int _rpcsx_getPadRumble(int port) {

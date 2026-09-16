@@ -1821,6 +1821,11 @@ open class MainActivityRuntime : ComponentActivity() {
         // detected and trigger a restart instead of silently not taking effect.
         lastInitDataRoot = assetCopyRoot(applicationContext)
 
+        // Re-assert the pad device classes. The core saves g_cfg_input here before anything has
+        // loaded it, so a class written to Default.yml last run is about to be overwritten with
+        // the default; the app's own copy is the one that survives.
+        runCatching { com.armsx2.PadDeviceClass.push() }
+
         // #9: one-time recovery for a fresh install that reuses an old data folder — restore
         // settings from the in-folder mirror, or seed from the folder's old PCSX2-Android.ini,
         // BEFORE the core loads/rewrites it. No-op (guarded) for anyone already on the new UI.
@@ -2243,6 +2248,7 @@ open class MainActivityRuntime : ComponentActivity() {
         com.armsx2.LibraryMusic.load()
         com.armsx2.PauseMusic.load()
         com.armsx2.MenuSfx.load(applicationContext)
+        com.armsx2.PadDeviceClass.load()
         com.armsx2.ControllerSkinStore.load(applicationContext)
         // Low-battery / high-temperature banners. Registers for the sticky battery broadcast, so
         // there is no polling; the toggle lives in App settings.

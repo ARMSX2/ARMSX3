@@ -250,6 +250,18 @@ fun PadTab(state: MutableState<Settings>) {
                     refreshToken.intValue++
                 },
             )
+            // What the port reports itself AS, which is separate from which controller drives
+            // it. Instrument titles ask through cellPadPeriphGetInfo and refuse to start on a
+            // standard pad, so this is the difference between a Guitar Hero booting and sitting
+            // on its title screen forever. Per port, and applied live: the core rebuilds its
+            // pads when this changes.
+            SegmentedRow(
+                label = str("pad.deviceClass.label"),
+                options = com.armsx2.PadDeviceClass.LABEL_KEYS.map { str(it) },
+                selectedIndex = com.armsx2.PadDeviceClass.get(editPlayer.intValue),
+                description = str("pad.deviceClass.description"),
+                onChange = { com.armsx2.PadDeviceClass.set(editPlayer.intValue, it) },
+            )
             // Which physical controller is which player.
             //
             // Slots are otherwise claimed first-to-press, which cannot express "the DualSense is

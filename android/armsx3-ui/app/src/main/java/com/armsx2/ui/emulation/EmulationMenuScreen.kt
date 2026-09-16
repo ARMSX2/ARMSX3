@@ -1305,6 +1305,18 @@ private fun ControlsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
         // The four swipe/double-tap ASSIGNMENTS stay in All Settings — six button pickers would
         // swamp this pane, and you set them once rather than mid-session.
     }
+    // Player 1 only here. This is the port an instrument game actually checks, and a picker per
+    // port would swamp the pane; the other six live in the Pad tab. In-game because a game that
+    // rejects a standard pad does it at its title screen, which is exactly where you are when
+    // you need this, and the core rebuilds its pads so it takes effect without a reboot.
+    HorizontalOptions(
+        title = str("pad.deviceClass.label"),
+        options = com.armsx2.PadDeviceClass.LABEL_KEYS
+            .mapIndexed { index, key -> index to str(key) },
+        selected = com.armsx2.PadDeviceClass.get(0),
+        onSelect = { com.armsx2.PadDeviceClass.set(0, it) },
+    )
+    Spacer(Modifier.height(6.dp))
     CompactAction(str("pad.controllerMapping"), "⌁", Modifier.fillMaxWidth(), viewModel::openControlsManager)
     Spacer(Modifier.height(6.dp))
     CompactAction(str("pad.editTouchLayout"), "✥", Modifier.fillMaxWidth(), viewModel::editTouchControls)
