@@ -4867,9 +4867,18 @@ void PPUTranslator::FCTIW(ppu_opcode_t op)
 	// fix result saturation (0x80000000 -> 0x7fffffff)
 	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s32>(), "llvm.x86.sse2.cvtsd2si", m_ir->CreateInsertElement(GetUndef<f64[2]>(), b, u64{0}))));
 #elif defined(ARCH_ARM64)
-	// No correction: FCVTNS/FCVTZS already saturate positive overflow the way
-	// PowerPC does, and the x86 fixup would XOR a saturated-high value low again.
-	SetFpr(op.frd, Call(GetType<s32>(), "llvm.aarch64.neon.fcvtns.i32.f64", b));
+	// FCVTNS/FCVTZS already saturate positive overflow the way PowerPC does, so the x86 fixup
+	// is correctly absent here -- it would XOR a saturated-high value low again.
+	//
+	// NaN is the case that fixup also covered by accident and this did not. AArch64 returns
+	// ZERO for a NaN input; x86's cvtsd2si returns 0x80000000 and its FCmpOGE guard is false
+	// for NaN so the value stands, which is also what PowerPC specifies. Zero is far worse than
+	// a wrong large number: an out-of-range index is rejected by the guest's own bounds check,
+	// while zero sails through it and silently selects element 0. The interpreter's ARM64 path
+	// has always guarded this (`!(b == b) ? INT32_MIN`, PPUInterpreter.cpp), so the two decoders
+	// disagreed on the same opcode.
+	SetFpr(op.frd, m_ir->CreateSelect(m_ir->CreateFCmpUNO(b, b), m_ir->getInt32(INT32_MIN),
+		Call(GetType<s32>(), "llvm.aarch64.neon.fcvtns.i32.f64", b)));
 #endif
 
 	//SetFPSCR_FR(Call(GetType<bool>(), m_pure_attr, "__fctiw_get_fr", b));
@@ -4890,9 +4899,18 @@ void PPUTranslator::FCTIWZ(ppu_opcode_t op)
 	// fix result saturation (0x80000000 -> 0x7fffffff)
 	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s32>(), "llvm.x86.sse2.cvttsd2si", m_ir->CreateInsertElement(GetUndef<f64[2]>(), b, u64{0}))));
 #elif defined(ARCH_ARM64)
-	// No correction: FCVTNS/FCVTZS already saturate positive overflow the way
-	// PowerPC does, and the x86 fixup would XOR a saturated-high value low again.
-	SetFpr(op.frd, Call(GetType<s32>(), "llvm.aarch64.neon.fcvtzs.i32.f64", b));
+	// FCVTNS/FCVTZS already saturate positive overflow the way PowerPC does, so the x86 fixup
+	// is correctly absent here -- it would XOR a saturated-high value low again.
+	//
+	// NaN is the case that fixup also covered by accident and this did not. AArch64 returns
+	// ZERO for a NaN input; x86's cvtsd2si returns 0x80000000 and its FCmpOGE guard is false
+	// for NaN so the value stands, which is also what PowerPC specifies. Zero is far worse than
+	// a wrong large number: an out-of-range index is rejected by the guest's own bounds check,
+	// while zero sails through it and silently selects element 0. The interpreter's ARM64 path
+	// has always guarded this (`!(b == b) ? INT32_MIN`, PPUInterpreter.cpp), so the two decoders
+	// disagreed on the same opcode.
+	SetFpr(op.frd, m_ir->CreateSelect(m_ir->CreateFCmpUNO(b, b), m_ir->getInt32(INT32_MIN),
+		Call(GetType<s32>(), "llvm.aarch64.neon.fcvtzs.i32.f64", b)));
 #endif
 }
 
@@ -5175,9 +5193,18 @@ void PPUTranslator::FCTID(ppu_opcode_t op)
 	// fix result saturation (0x8000000000000000 -> 0x7fffffffffffffff)
 	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s64>(), "llvm.x86.sse2.cvtsd2si64", m_ir->CreateInsertElement(GetUndef<f64[2]>(), b, u64{0}))));
 #elif defined(ARCH_ARM64)
-	// No correction: FCVTNS/FCVTZS already saturate positive overflow the way
-	// PowerPC does, and the x86 fixup would XOR a saturated-high value low again.
-	SetFpr(op.frd, Call(GetType<s64>(), "llvm.aarch64.neon.fcvtns.i64.f64", b));
+	// FCVTNS/FCVTZS already saturate positive overflow the way PowerPC does, so the x86 fixup
+	// is correctly absent here -- it would XOR a saturated-high value low again.
+	//
+	// NaN is the case that fixup also covered by accident and this did not. AArch64 returns
+	// ZERO for a NaN input; x86's cvtsd2si returns 0x80000000 and its FCmpOGE guard is false
+	// for NaN so the value stands, which is also what PowerPC specifies. Zero is far worse than
+	// a wrong large number: an out-of-range index is rejected by the guest's own bounds check,
+	// while zero sails through it and silently selects element 0. The interpreter's ARM64 path
+	// has always guarded this (`!(b == b) ? INT32_MIN`, PPUInterpreter.cpp), so the two decoders
+	// disagreed on the same opcode.
+	SetFpr(op.frd, m_ir->CreateSelect(m_ir->CreateFCmpUNO(b, b), m_ir->getInt64(INT64_MIN),
+		Call(GetType<s64>(), "llvm.aarch64.neon.fcvtns.i64.f64", b)));
 #endif
 
 
@@ -5199,9 +5226,18 @@ void PPUTranslator::FCTIDZ(ppu_opcode_t op)
 	// fix result saturation (0x8000000000000000 -> 0x7fffffffffffffff)
 	SetFpr(op.frd, m_ir->CreateXor(xormask, Call(GetType<s64>(), "llvm.x86.sse2.cvttsd2si64", m_ir->CreateInsertElement(GetUndef<f64[2]>(), b, u64{0}))));
 #elif defined(ARCH_ARM64)
-	// No correction: FCVTNS/FCVTZS already saturate positive overflow the way
-	// PowerPC does, and the x86 fixup would XOR a saturated-high value low again.
-	SetFpr(op.frd, Call(GetType<s64>(), "llvm.aarch64.neon.fcvtzs.i64.f64", b));
+	// FCVTNS/FCVTZS already saturate positive overflow the way PowerPC does, so the x86 fixup
+	// is correctly absent here -- it would XOR a saturated-high value low again.
+	//
+	// NaN is the case that fixup also covered by accident and this did not. AArch64 returns
+	// ZERO for a NaN input; x86's cvtsd2si returns 0x80000000 and its FCmpOGE guard is false
+	// for NaN so the value stands, which is also what PowerPC specifies. Zero is far worse than
+	// a wrong large number: an out-of-range index is rejected by the guest's own bounds check,
+	// while zero sails through it and silently selects element 0. The interpreter's ARM64 path
+	// has always guarded this (`!(b == b) ? INT32_MIN`, PPUInterpreter.cpp), so the two decoders
+	// disagreed on the same opcode.
+	SetFpr(op.frd, m_ir->CreateSelect(m_ir->CreateFCmpUNO(b, b), m_ir->getInt64(INT64_MIN),
+		Call(GetType<s64>(), "llvm.aarch64.neon.fcvtzs.i64.f64", b)));
 #endif
 }
 
