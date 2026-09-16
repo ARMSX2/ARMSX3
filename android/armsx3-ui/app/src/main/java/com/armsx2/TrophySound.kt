@@ -99,6 +99,9 @@ object TrophySound {
 
     /** Whether [path] is this sound. By stem, since the file keeps whatever extension the user
      *  picked and the core always asks for the .wav spelling. */
+    /** Absolute path of the sound in place, for [MenuSfx.preload]. Null when none is set. */
+    fun corePath(): String? = current()?.absolutePath
+
     fun owns(path: String): Boolean =
         File(path).nameWithoutExtension.equals(CORE_NAME, ignoreCase = true)
 
@@ -139,6 +142,7 @@ object TrophySound {
         MainActivityRuntime.prefs.edit().putString(NameKey, name).apply()
         MenuSfx.forgetCachedFile(File(dir, "$CORE_NAME.$ext").absolutePath)
         MenuSfx.ensurePool(context)
+        MenuSfx.preload(File(dir, "$CORE_NAME.$ext").absolutePath)
         return true
     }
 

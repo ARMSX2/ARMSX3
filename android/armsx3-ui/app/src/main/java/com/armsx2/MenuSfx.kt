@@ -90,7 +90,10 @@ object MenuSfx {
         enabled.value = MainActivityRuntime.prefs.getBoolean(EnabledKey, true)
         volumePercent.value = MainActivityRuntime.prefs.getInt(VolumeKey, DefaultVolumePercent)
         packName.value = MainActivityRuntime.prefs.getString(PackNameKey, null)
-        if (enabled.value) rebuildPool(context)
+        // Also when the launcher's own blips are off but the emulator still has a sound to
+        // play through this pool. set() already had this; load() did not, so a user with menu
+        // sounds disabled got no pool at startup and a silent trophy.
+        if (enabled.value || TrophySound.isSet()) rebuildPool(context)
     }
 
     fun set(context: Context, value: Boolean) {
@@ -178,6 +181,33 @@ object MenuSfx {
      */
     private val pathSampleIds = HashMap<String, Int>()
 
+    /** Sample ids SoundPool has finished decoding. See the note in [playFile]. */
+    private val loadedSamples = java.util.Collections.synchronizedSet(HashSet<Int>())
+
+    /**
+     * Decode a core sound now rather than on the frame it is first needed.
+     *
+     * Called when the pool comes up and when a sound is imported, so the trophy is ready long
+     * before a game unlocks one.
+     */
+    fun preload(path: String) {
+        val sp = pool ?: return
+        val asked = runCatching { File(path) }.getOrNull() ?: return
+        val file = asked.takeIf { it.isFile && it.length() > 0L }
+            ?: listOf("ogg", "mp3").firstNotNullOfOrNull { ext ->
+                File(asked.parentFile, asked.nameWithoutExtension + "." + ext)
+                    .takeIf { it.isFile && it.length() > 0L }
+            }
+            ?: return
+        val key = file.absolutePath
+        if (pathSampleIds.containsKey(key)) return
+        sp.setOnLoadCompleteListener { _, sampleId, status ->
+            if (status == 0) loadedSamples.add(sampleId)
+        }
+        runCatching { sp.load(key, 1) }.getOrDefault(0)
+            .also { if (it != 0) pathSampleIds[key] = it }
+    }
+
     /** Drop a cached sample so a replaced file is re-read instead of the old one replaying. */
     fun forgetCachedFile(path: String) {
         pathSampleIds.remove(path)
@@ -206,6 +236,24 @@ object MenuSfx {
             .also { if (it != 0) pathSampleIds[key] = it }
 
         if (id == 0) return
+
+        // SoundPool.load is ASYNCHRONOUS. It hands back an id immediately and decodes on its
+        // own thread, so playing on the next line does nothing at all the first time -- and a
+        // trophy fires exactly once, which is why this was silent in a game while the settings
+        // Test button worked (press it twice and the second one is loaded). preload() below
+        // gets the sample in early; this is the fallback for the first play of anything that
+        // was not preloaded, and it is better to be a touch late than silent.
+        if (!loadedSamples.contains(id)) {
+            sp.setOnLoadCompleteListener { p, sampleId, status ->
+                if (status == 0) {
+                    loadedSamples.add(sampleId)
+                    val g = if (volume >= 0f) volume else
+                        (if (TrophySound.owns(key)) TrophySound.gain() else gain())
+                    runCatching { p.play(sampleId, g, g, 1, 0, 1f) }
+                }
+            }
+            return
+        }
 
         // The core passes a volume only where it means to override; otherwise it sends a
         // negative and a user level applies -- the trophy's own where this is the trophy, and
@@ -268,10 +316,16 @@ object MenuSfx {
             }.onFailure { Log.w(TAG, "load failed for ${ev.fileName}", it) }
         }
         pool = sp
+
+        // Get the emulator's own sounds decoded now. A trophy plays once, at a moment we do
+        // not control, so discovering the sample is not ready yet at that point means silence.
+        TrophySound.corePath()?.let { preload(it) }
     }
 
     private fun releasePool() {
         sampleIds.clear()
+        pathSampleIds.clear()
+        loadedSamples.clear()
         altSampleIds.clear()
         lastPlayMs.clear()
         pool?.let { runCatching { it.release() } }
