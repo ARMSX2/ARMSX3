@@ -5629,6 +5629,8 @@ static void armsx3_play_sound(const std::string &path, std::optional<f32> volume
   JavaVM *vm = g_java_vm.load(std::memory_order_acquire);
 
   if (!vm || !g_sfx_class || !g_sfx_play || path.empty()) {
+    rpcsx_android.warning("play_sound: DROPPED %s (vm=%d class=%d method=%d)", path,
+                          vm != nullptr, g_sfx_class != nullptr, g_sfx_play != nullptr);
     return;
   }
 
@@ -5640,6 +5642,11 @@ static void armsx3_play_sound(const std::string &path, std::optional<f32> volume
       return;
     }
   }
+
+  // warning, not notice: the logcat sink drops anything below it, and this line exists to
+  // settle "did the core even ask" without another round of guessing.
+  rpcsx_android.warning("play_sound: core asked for %s (vol=%.2f)", path,
+                        volume.value_or(-1.f));
 
   jstring arg = env->NewStringUTF(path.c_str());
 

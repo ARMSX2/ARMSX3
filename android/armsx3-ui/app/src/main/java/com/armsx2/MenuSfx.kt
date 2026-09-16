@@ -184,6 +184,9 @@ object MenuSfx {
     /** Sample ids SoundPool has finished decoding. See the note in [playFile]. */
     private val loadedSamples = java.util.Collections.synchronizedSet(HashSet<Int>())
 
+    /** Gain to use for a sample that was asked for before it finished decoding. */
+    private val pendingPlays = java.util.Collections.synchronizedMap(HashMap<Int, Float>())
+
     /**
      * Decode a core sound now rather than on the frame it is first needed.
      *
@@ -201,9 +204,6 @@ object MenuSfx {
             ?: return
         val key = file.absolutePath
         if (pathSampleIds.containsKey(key)) return
-        sp.setOnLoadCompleteListener { _, sampleId, status ->
-            if (status == 0) loadedSamples.add(sampleId)
-        }
         runCatching { sp.load(key, 1) }.getOrDefault(0)
             .also { if (it != 0) pathSampleIds[key] = it }
     }
@@ -218,7 +218,7 @@ object MenuSfx {
         // No [enabled] check. That toggle is the launcher's own interface blips; these come from
         // the emulator. A user who turned the menu ticks off did not thereby ask for silent
         // trophies, and the trophy has its own setting to turn off.
-        val sp = pool ?: return
+        val sp = pool ?: run { Log.i(TAG, "playFile: NO POOL, path=$path"); return }
         // The core always asks for .wav. An imported pack may have supplied ogg or mp3, which
         // SoundPool plays just as happily, so fall back to a sibling with the same stem rather
         // than making the user convert.
@@ -228,30 +228,34 @@ object MenuSfx {
                 File(asked.parentFile, asked.nameWithoutExtension + "." + ext)
                     .takeIf { it.isFile && it.length() > 0L }
             }
-            ?: return
+            ?: run { Log.i(TAG, "playFile: NO FILE at $path (nor .ogg/.mp3)"); return }
 
         val key = file.absolutePath
+        Log.i(TAG, "playFile: resolved -> $key")
         val id = pathSampleIds[key] ?: runCatching { sp.load(key, 1) }
             .getOrDefault(0)
             .also { if (it != 0) pathSampleIds[key] = it }
 
         if (id == 0) return
 
-        // SoundPool.load is ASYNCHRONOUS. It hands back an id immediately and decodes on its
-        // own thread, so playing on the next line does nothing at all the first time -- and a
-        // trophy fires exactly once, which is why this was silent in a game while the settings
-        // Test button worked (press it twice and the second one is loaded). preload() below
-        // gets the sample in early; this is the fallback for the first play of anything that
-        // was not preloaded, and it is better to be a touch late than silent.
+        // SoundPool.load is ASYNCHRONOUS: it hands back an id immediately and decodes on its
+        // own thread, so playing on the next line does nothing the first time. A trophy fires
+        // exactly once, which is why this was silent in a game while the settings Test button
+        // worked, since pressing that twice finds the sample decoded.
+        //
+        // If it is not ready yet, record the gain and let the pool's listener play it when the
+        // decode lands. The listener is installed ONCE in rebuildPool and never replaced:
+        // SoundPool has a single listener slot and only notifies loads that finish AFTER it is
+        // set, so installing one here would both silence whatever was waiting on the previous
+        // one and, for a sample that had already finished, wait forever for a callback that
+        // can never come.
         if (!loadedSamples.contains(id)) {
-            sp.setOnLoadCompleteListener { p, sampleId, status ->
-                if (status == 0) {
-                    loadedSamples.add(sampleId)
-                    val g = if (volume >= 0f) volume else
-                        (if (TrophySound.owns(key)) TrophySound.gain() else gain())
-                    runCatching { p.play(sampleId, g, g, 1, 0, 1f) }
-                }
-            }
+            pendingPlays[id] = when {
+                volume >= 0f -> volume
+                TrophySound.owns(key) -> TrophySound.gain()
+                else -> gain()
+            }.coerceIn(0f, 1f)
+            Log.i(TAG, "playFile: sample $id not decoded yet, queued")
             return
         }
 
@@ -304,6 +308,17 @@ object MenuSfx {
                     .build()
             )
             .build()
+
+        // One listener for the life of the pool. It records what has finished decoding and
+        // plays anything that was asked for while the decode was still in flight.
+        sp.setOnLoadCompleteListener { p, sampleId, status ->
+            if (status != 0) return@setOnLoadCompleteListener
+            loadedSamples.add(sampleId)
+            pendingPlays.remove(sampleId)?.let { g ->
+                runCatching { p.play(sampleId, g, g, 1, 0, 1f) }
+            }
+        }
+
         Event.entries.forEach { ev ->
             runCatching {
                 val custom = clipFile(context, ev)
@@ -326,6 +341,7 @@ object MenuSfx {
         sampleIds.clear()
         pathSampleIds.clear()
         loadedSamples.clear()
+        pendingPlays.clear()
         altSampleIds.clear()
         lastPlayMs.clear()
         pool?.let { runCatching { it.release() } }
