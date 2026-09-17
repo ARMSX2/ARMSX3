@@ -1628,6 +1628,45 @@ static void dump_guest_code_at_fault(cpu_thread* cpu)
 		window("Code at caller", ret, 0x60, 0x10);
 	}
 
+	// A lever for disassembling somewhere the fault does not reach.
+	//
+	// The windows above follow cia and the call stack. That is the right default, and it cannot
+	// answer a question about a function that has already returned. Burnout Paradise is the case:
+	// the crash is a store through a null audio buffer pointer, the pointer is null because the
+	// guest allocator at 0x14160 returned zero, and by the time anything faults that allocator is
+	// long gone from the stack. Nothing in a fault dump can reach it, and on Android there is no
+	// debugger to go and look.
+	//
+	// Put ARMSX3_DISASM_AT=0x14160 in driver_env.txt and the next fault prints it, with
+	// ARMSX3_DISASM_LEN to say how much. Costs one getenv when unset, which is how it should stay
+	// unless somebody is actually chasing something.
+	if (const char* at_env = std::getenv("ARMSX3_DISASM_AT"))
+	{
+		const u32 at = static_cast<u32>(std::strtoul(at_env, nullptr, 0)) & ~3u;
+
+		u32 len = 0x200;
+
+		if (const char* len_env = std::getenv("ARMSX3_DISASM_LEN"))
+		{
+			if (const u32 parsed = static_cast<u32>(std::strtoul(len_env, nullptr, 0)))
+			{
+				len = std::min<u32>(parsed, 0x2000);
+			}
+		}
+
+		// Said out loud when it is wrong: a silent nothing here is indistinguishable from a
+		// fault that never fired, and the whole point of the lever is that someone is waiting
+		// on its output.
+		if (at && vm::check_addr(at, vm::page_executable))
+		{
+			window("Code at ARMSX3_DISASM_AT", at, 0, len);
+		}
+		else
+		{
+			fmt::append(code, "\nARMSX3_DISASM_AT 0x%08x is not executable guest memory\n", at);
+		}
+	}
+
 	vm_log.always()("Guest code around the fault:%s", code);
 }
 
