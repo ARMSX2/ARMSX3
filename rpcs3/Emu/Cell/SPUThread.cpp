@@ -2165,12 +2165,31 @@ static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id, const char* kind = "PUT
 // An atomic 128-byte store, which is how an SPU updates a line it shares with the PPU. Neither
 // of these goes anywhere near do_dma_transfer, so hooking transfers alone reports that nothing
 // writes a field that is in fact written constantly.
-static void ppu_watch_putll(u32 eal, u32 spu_id, const char* kind)
+static void ppu_watch_putll(const spu_thread& spu, u32 eal, const char* kind)
 {
-	if (const u32 w = g_ppu_watch_addr.load(); w && eal < w + 4 && eal + 128 > w)
+	const u32 w = g_ppu_watch_addr.load();
+
+	if (!w || eal >= w + 4 || eal + 128 <= w)
 	{
-		ppu_watch_dma(eal, 128, spu_id, kind);
+		return;
 	}
+
+	static atomic_t<u32> s_reports{0};
+
+	if (s_reports.fetch_add(1) >= 64)
+	{
+		return;
+	}
+
+	// The two ways this store fails before it writes anything: the line is not the one this SPU
+	// reserved, or the reservation was taken away since. Printing both says whether a retrying
+	// store is losing a race or was never going to win, which are different bugs.
+	const u32 line = eal & -128;
+	const u64 res = vm::reservation_acquire(line);
+
+	spu_log.error("WATCH: 0x%x covered by an SPU %s (eal=0x%x) from SPU 0x%x: raddr=0x%x rtime=0x%llx res=0x%llx%s%s",
+		w, kind, eal, spu.id, spu.raddr, spu.rtime, res,
+		spu.raddr != line ? " WRONG-LINE" : "", (spu.raddr == line && spu.rtime != (res & -128)) ? " LOST" : "");
 }
 
 void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8* ls)
@@ -3762,7 +3781,7 @@ std::string spu_putllc_barrier_sites()
 
 bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 {
-	ppu_watch_putll(args.eal, id, "PUTLLC");
+	ppu_watch_putll(*this, args.eal, "PUTLLC");
 
 	perf_meter<"PUTLLC-"_u64> perf0(nullptr);
 	perf_meter<"PUTLLC+"_u64> perf1 = perf0;
@@ -4198,7 +4217,7 @@ void do_cell_atomic_128_store(u32 addr, const void* to_write)
 
 void spu_thread::do_putlluc(const spu_mfc_cmd& args)
 {
-	ppu_watch_putll(args.eal, id, "PUTLLUC");
+	ppu_watch_putll(*this, args.eal, "PUTLLUC");
 
 	perf_meter<"PUTLLUC"_u64> perf0;
 
