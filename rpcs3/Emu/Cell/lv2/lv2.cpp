@@ -1239,6 +1239,61 @@ stx::reset_lock acquire_reset_lock(stx::init_mutex& mtx, ppu_thread* ppu)
 	}, ppu);
 }
 
+// Dump every PPU thread on request, for hangs that never reach a fatal error.
+//
+// A game stuck in a loop in its own code makes no syscalls and faults nowhere, so nothing ever
+// prints the thread context a crash would. Creating <config dir>/dump_threads (adb shell touch)
+// makes the next tick of the syscall usage thread pause each PPU thread, log its registers and
+// call stack, and let it go. Pausing first matters: compiled code only writes CIA and flushes
+// registers to the thread context when it leaves the block, and the pause check on a loop's
+// back edge is what makes a spinning thread do that, so its dump names the loop it was in.
+static void ppu_dump_threads_on_request()
+{
+	const std::string trigger = fs::get_config_dir() + "dump_threads";
+
+	if (!fs::is_file(trigger))
+	{
+		return;
+	}
+
+	fs::remove_file(trigger);
+
+	std::vector<shared_ptr<named_thread<ppu_thread>>> threads;
+
+	idm::select<named_thread<ppu_thread>>([&](u32 id, named_thread<ppu_thread>&)
+	{
+		if (auto ppu = idm::get_unlocked<named_thread<ppu_thread>>(id))
+		{
+			threads.emplace_back(std::move(ppu));
+		}
+	});
+
+	for (const auto& ppu : threads)
+	{
+		ppu->state += cpu_flag::dbg_global_pause;
+	}
+
+	// A loop reaches its pause check within microseconds; a thread asleep in a syscall is
+	// already stopped. This is only the upper bound for the slow ones.
+	std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+	std::string out;
+
+	for (const auto& ppu : threads)
+	{
+		fmt::append(out, "\n%s's thread context (state %s):\n", ppu->get_name(), +ppu->state);
+		ppu->dump_all(out);
+	}
+
+	for (const auto& ppu : threads)
+	{
+		ppu->state -= cpu_flag::dbg_global_pause;
+		ppu->state.notify_one();
+	}
+
+	ppu_log.warning("Thread dump requested, %u PPU threads:%s", threads.size(), out);
+}
+
 class ppu_syscall_usage
 {
 	// Internal buffer
@@ -1289,6 +1344,11 @@ public:
 			// point: a hang where the RSX spins inside a method handler starves the stall check
 			// that lives on it. Cheap -- two atomic loads and a clock read unless it fires.
 			const bool is_paused = Emu.IsPaused();
+
+			if (!is_paused)
+			{
+				ppu_dump_threads_on_request();
+			}
 
 			// Force-print all if paused
 			const bool force_print = is_paused && !was_paused;
