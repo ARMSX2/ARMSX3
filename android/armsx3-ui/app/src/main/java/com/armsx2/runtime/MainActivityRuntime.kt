@@ -1821,10 +1821,6 @@ open class MainActivityRuntime : ComponentActivity() {
         // detected and trigger a restart instead of silently not taking effect.
         lastInitDataRoot = assetCopyRoot(applicationContext)
 
-        // Re-assert the pad device classes. The core saves g_cfg_input here before anything has
-        // loaded it, so a class written to Default.yml last run is about to be overwritten with
-        // the default; the app's own copy is the one that survives.
-        runCatching { com.armsx2.PadDeviceClass.push() }
 
         // #9: one-time recovery for a fresh install that reuses an old data folder — restore
         // settings from the in-folder mirror, or seed from the folder's old PCSX2-Android.ini,
@@ -1950,6 +1946,22 @@ open class MainActivityRuntime : ComponentActivity() {
 
         invoke {
             NativeApp.initializeOnce(applicationContext)
+
+            // Re-assert the pad device classes, AFTER the core is open and not before.
+            //
+            // The core saves g_cfg_input during init, before anything has loaded it, so a class
+            // written to Default.yml last run is overwritten with the default and the app's copy
+            // is the one that survives. That part was right. What was wrong is where it ran: this
+            // used to sit at the top of kickoffEmucoreInit, 125 lines before initializeOnce, and
+            // the JNI bridge resolves every _rpcsx_ entry point from a library that openLibrary
+            // has not dlopen()ed yet. Every wrapper in native-lib.cpp null checks its function
+            // pointer and returns quietly, so the call succeeded at doing nothing, with no
+            // throw for runCatching to catch and no log line anywhere.
+            //
+            // The symptom was Guitar Hero 5 asking for a microphone with the port set to guitar:
+            // choosing an instrument mid-session worked, because the core was up by then, and
+            // every relaunch silently reverted to STANDARD.
+            runCatching { com.armsx2.PadDeviceClass.push() }
             nativeReady.value = true
 
             // One-time repair of globally-armed patches. Older builds filled the global
