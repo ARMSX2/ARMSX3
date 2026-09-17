@@ -282,3 +282,46 @@ PPU-aa798f32a1fda1c23a20066edb1c623c486d53cc:
     Patch Version: 1.0
     Patch:
       - [ be32, 0x00304770, 0x38000001 ]
+
+# BURNOUT PARADISE, BLUS30061 v01.00 -- ours, not from the community database.
+#
+# The game hangs the audio thread on a null buffer a few seconds after the junkyard
+# interstitial in the intro, every run, on every device and build tried.
+#
+# Two independent faults, both from the same root. The routine that refills an audio voice
+# asks the heap for a buffer of the size at r31+0x17c. That word is written at 0x6317a8 as
+# the low 32 bits of an fctidz conversion and comes out 0x6387194f, about 1.67GB, where every
+# other voice buffer in the same table is 0x900. The heap walks its free list, finds nothing
+# that large and correctly returns null, and the game stores that null without checking it.
+# Clamping the request to 0x7fff, which the allocator rounds to 32KB, is enough: the only
+# copy ever observed into that buffer is 0x7ff8 bytes at offset 4.
+#
+# Past that, a lookup at 0x45df68 returns null when it finds nothing, and the caller checks
+# for null and then branches to code that dereferences it anyway. That path cannot run on real
+# hardware because the lookup always finds something there. It is retargeted to 0x45e468, the
+# skip target the very next instruction already uses.
+#
+# The remaining three writes are a guard: if the allocation fails anyway, return instead of
+# storing a null. Safe because r9 == r29 in every dump taken, so the r9 rebuild they replace
+# is dead, and 0x458c2c is the function's own epilogue.
+#
+# Verified on an Odin 3: deterministic crash before, and after it reaches the open world with
+# zero access violations. The float arithmetic is NOT at fault here and was measured, not
+# assumed: fmuls and fctidz are both byte-exact against real hardware, and every integer suite
+# passes, so the bad value arrives already wrong.
+PPU-56101fbdbac186fddef72207145015fd314a0be5:
+  "ARMSX3 Junkyard crash fix":
+    Games:
+      "Burnout Paradise":
+        BLUS30061: [ 01.00 ]
+    Author: "jpolo1224"
+    Notes: "Fixes the crash at the junkyard in the intro."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00459028, 0x38807fff ]
+      - [ be32, 0x0045e304, 0x41920164 ]
+      - [ be32, 0x00459040, 0x2f030000 ]
+      - [ be32, 0x0045904c, 0x419afbe0 ]
+      - [ be32, 0x00459054, 0x60000000 ]
+      - [ be32, 0x0045905c, 0x60000000 ]
+      - [ be32, 0x00459064, 0x90690010 ]

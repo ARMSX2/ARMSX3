@@ -256,6 +256,18 @@ object Ps3PatchRepo {
     )
 
     private val BUNDLED = listOf(
+        // BURNOUT PARADISE, BLUS30061 v01.00 -- ours. The audio voice refill asks the heap
+        // for a 1.67GB buffer and gets a correct refusal, then writes through the null; and a
+        // lookup miss further on takes a null-check branch that dereferences the null anyway.
+        // Deterministic crash in the intro before, reaches the open world after. See
+        // canary_patches.yml.
+        Bundled(
+            hash = "PPU-56101fbdbac186fddef72207145015fd314a0be5",
+            name = "ARMSX3 Junkyard crash fix",
+            serial = "BLUS30061",
+            appVersion = "01.00",
+            sinceRevision = 6,
+        ),
         // SOULCALIBUR V, BLUS30736 v01.00 -- illusion's "Disable MLAA". Without it the
         // title runs at ~1 fps and wedges; with it, ~56-60 fps at the menu. This is a
         // WORKAROUND: the underlying SPU synchronisation defect is still undiagnosed, and
