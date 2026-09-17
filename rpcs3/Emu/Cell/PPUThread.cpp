@@ -668,6 +668,14 @@ void ppu_watch_arm(const ppu_thread& ppu)
 	if (const u32 addr = static_cast<u32>(ppu.gpr[cfg.second]); addr >= 0x10000)
 	{
 		g_ppu_watch[0].release(addr);
+
+		// The word 12 bytes below is the field that decides whether this wait happens at all:
+		// the caller loads it as the dependency index and treats -1 as "nothing to wait for".
+		// It has read 0 at every hang, so what writes it matters as much as what writes the flag.
+		if (addr >= 0x1000c)
+		{
+			g_ppu_watch[3].release(addr - 12);
+		}
 	}
 }
 
@@ -683,7 +691,9 @@ void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size)
 	const bool stcx = (size & 0x80) != 0;
 	auto& counter = stcx ? g_ppu_watch_stats[slot].ppu_stcx : g_ppu_watch_stats[slot].ppu_store;
 
-	if (ppu_watch_should_log(++counter))
+	// A write of zero is a reset and there are thousands; a write of anything else is the event
+	// this whole search is for, so it is never decimated away.
+	if (ppu_watch_should_log(++counter) || value)
 	{
 		ppu_log.error("WATCH[%d] 0x%x <- 0x%llx (%u bytes%s) from 0x%x on '%s'",
 			slot, addr, value, size & 0x7f, stcx ? ", stcx" : "", ppu.cia, ppu.get_name());

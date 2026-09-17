@@ -2204,10 +2204,13 @@ static void ppu_watch_putll(const spu_thread& spu, u32 eal, const char* kind)
 
 	if (!wrong_line && !lost)
 	{
-		if (ppu_watch_should_log(++st.spu_ll_ok))
+		// Same rule as the PPU side: a store that leaves the word set is always worth a line.
+		const u32 after = vm::read32(w);
+
+		if (ppu_watch_should_log(++st.spu_ll_ok) || after)
 		{
 			spu_log.error("WATCH[%d] 0x%x: SPU %s took from SPU 0x%x, word now 0x%x",
-				slot, w, kind, spu.id, vm::read32(w));
+				slot, w, kind, spu.id, after);
 		}
 
 		return;
