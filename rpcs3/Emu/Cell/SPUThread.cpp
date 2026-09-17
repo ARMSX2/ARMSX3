@@ -2148,6 +2148,20 @@ void spu_thread::push_snr(u32 number, u32 value)
 	});
 }
 
+extern atomic_t<u32> g_ppu_watch_addr;
+
+// Logged rather than routed through ppu_watch_store: there is no ppu_thread here, and what
+// identifies the write is the SPU and the transfer, not an instruction address.
+static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id)
+{
+	static atomic_t<u32> s_reports{0};
+
+	if (s_reports.fetch_add(1) < 24)
+	{
+		spu_log.error("WATCH: 0x%x covered by an SPU PUT (eal=0x%x size=0x%x) from SPU 0x%x", g_ppu_watch_addr.load(), eal, size, spu_id);
+	}
+}
+
 void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8* ls)
 {
 	// Per DMA transfer; only the destructor reads it, and only under perf_report.
@@ -2157,6 +2171,17 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 
 	u32 eal = args.eal;
 	u32 lsa = args.lsa & 0x3ffff;
+
+	// The SPU half of the PPU store watch. A SPURS job signals completion by writing a flag in
+	// main memory, which reaches it as a PUT and through none of the paths a PPU store takes,
+	// so a field with no PPU writer is expected to turn up here.
+	if (!is_get) [[likely]]
+	{
+		if (const u32 w = g_ppu_watch_addr.load(); w && eal < w + 4 && eal + args.size > w) [[unlikely]]
+		{
+			ppu_watch_dma(eal, args.size, _this ? _this->id : 0);
+		}
+	}
 
 	// Code-sized transfers, which is how a SPURS workload would arrive.
 	//
