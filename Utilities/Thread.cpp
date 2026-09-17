@@ -1595,7 +1595,27 @@ static void dump_guest_code_at_fault(cpu_thread* cpu)
 	PPUDisAsm dis_asm(cpu_disasm_mode::dump, vm::g_sudo_addr);
 	std::string code;
 
-	const auto window = [&](const char* what, u32 pc, u32 back, u32 span)
+	// Follow calls, so one fault answers what used to take one run per level.
+	//
+	// A window at cia says what faulted. It never says what the thing it called did, and on
+	// Android there is no debugger to step into it. Burnout Paradise cost six separate crashes
+	// to walk by hand: a PLT stub, a forwarding thunk, a request builder, a descriptor loop, a
+	// lock wrapper, and finally the heap that was refusing the allocation. Every one of those
+	// addresses was only discoverable from the dump before it, so each hop meant another run.
+	//
+	// ARMSX3_DISASM_DEPTH=N disassembles the target of every bl found in a window, N levels
+	// deep, deduplicated and capped. Default 0 is the old behaviour.
+	u32 follow_depth = 0;
+
+	if (const char* depth_env = std::getenv("ARMSX3_DISASM_DEPTH"))
+	{
+		follow_depth = std::min<u32>(static_cast<u32>(std::strtoul(depth_env, nullptr, 0)), 4);
+	}
+
+	std::vector<u32> seen;
+	std::vector<std::pair<u32, u32>> pending;
+
+	const auto window = [&](const char* what, u32 pc, u32 back, u32 span, u32 depth = 0)
 	{
 		fmt::append(code, "\n%s 0x%08x:\n", what, pc);
 
@@ -1609,6 +1629,29 @@ static void dump_guest_code_at_fault(cpu_thread* cpu)
 			dis_asm.disasm(at);
 			code += (at == pc ? "  >>" : "    ");
 			code += dis_asm.last_opcode;
+
+			if (depth >= follow_depth)
+			{
+				continue;
+			}
+
+			// bl: primary opcode 18, AA clear, LK set. Relative, so the target is computed
+			// from the instruction's own address.
+			const u32 op = vm::read32(at);
+
+			if ((op & 0xfc000003) != 0x48000001)
+			{
+				continue;
+			}
+
+			s32 disp = static_cast<s32>(op & 0x03fffffc);
+
+			if (disp & 0x02000000)
+			{
+				disp -= 0x04000000;
+			}
+
+			pending.emplace_back(at + static_cast<u32>(disp), depth + 1);
 		}
 	};
 
@@ -1626,6 +1669,31 @@ static void dump_guest_code_at_fault(cpu_thread* cpu)
 		// Back further than forward: the call is BEHIND the return address, and what fills
 		// the arguments sits behind that.
 		window("Code at caller", ret, 0x60, 0x10);
+	}
+
+	// Drain whatever those windows called, breadth first so the immediate callees land
+	// before anything they in turn call. Capped, because a single window can name a dozen
+	// targets and four levels of that is a log nobody reads.
+	for (usz i = 0; i < pending.size() && seen.size() < 24; i++)
+	{
+		const auto [target, depth] = pending[i];
+
+		if (!vm::check_addr(target, vm::page_executable))
+		{
+			continue;
+		}
+
+		if (std::find(seen.begin(), seen.end(), target) != seen.end())
+		{
+			continue;
+		}
+
+		seen.push_back(target);
+
+		// Short windows: what matters about a callee is how it starts and what it calls,
+		// and the one that actually fails is reached by following those, not by reading
+		// any single one to its end.
+		window("Code at a call target", target, 0, 0x60, depth);
 	}
 
 	// A lever for disassembling somewhere the fault does not reach.
