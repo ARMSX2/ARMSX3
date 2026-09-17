@@ -8,6 +8,7 @@
 #include "Emu/Cell/PPUFunction.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
+#include "Emu/Cell/PPUDisAsm.h"
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/Cell/ErrorCodes.h"
 #include "sys_sync.h"
@@ -1298,10 +1299,34 @@ static void ppu_dump_threads_on_request()
 
 	std::string out;
 
+	PPUDisAsm dis_asm(cpu_disasm_mode::dump, vm::g_sudo_addr);
+
 	for (const auto& ppu : threads)
 	{
 		fmt::append(out, "\n%s's thread context (state %s):\n", ppu->get_name(), +ppu->state);
 		ppu->dump_all(out);
+
+		// The registers say what a thread waits ON; they do not say what it waits FOR. A poll
+		// loop is a few instructions either side of CIA reading one address, so print them: that
+		// plus the base register the loop indexes is the whole condition, and a thread parked in
+		// a syscall shows its call site for free.
+		const u32 cia = ppu->cia;
+
+		if (cia >= 0x10000 && vm::check_addr(cia))
+		{
+			fmt::append(out, "Code at CIA:\n");
+
+			for (u32 pc = cia - 0x20; pc <= cia + 0x20; pc += 4)
+			{
+				if (!vm::check_addr(pc))
+				{
+					continue;
+				}
+
+				dis_asm.disasm(pc);
+				fmt::append(out, "%s%s", pc == cia ? "->" : "  ", dis_asm.last_opcode);
+			}
+		}
 	}
 
 	for (const auto& spu : spus)
