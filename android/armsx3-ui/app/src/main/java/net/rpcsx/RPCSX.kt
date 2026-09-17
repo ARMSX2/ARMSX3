@@ -135,6 +135,10 @@ class RPCSX {
     external fun setThermals(cpu: Float, gpu: Float, battery: Float, show: Boolean)
     external fun setRenderPosition(portraitTop: Boolean, topInset: Int)
     external fun setPadDeviceClasses(classes: IntArray)
+
+    /** Write a line into the emulator's own log, the file testers actually send.
+     *  Silently does nothing until the core is open. */
+    external fun logAndroid(message: String)
     external fun usbDeviceEvent(fd: Int, vendorId: Int, productId: Int, event: Int): Boolean
     external fun processCompilationQueue(): Boolean
     external fun startMainThreadProcessor(): Boolean

@@ -65,6 +65,7 @@ struct RPCSXApi {
                      std::string_view gamePath);
   std::string (*systemInfo)();
   void (*loginUser)(std::string_view userId);
+  void (*logAndroid)(const char *message);
   std::string (*getUser)();
   std::string (*settingsGet)(std::string_view path);
   bool (*settingsSet)(std::string_view path, std::string_view valueString);
@@ -200,6 +201,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.installKey = reinterpret_cast<decltype(installKey)>(dlsym(handle, "_rpcsx_installKey"));
     result.systemInfo = reinterpret_cast<decltype(systemInfo)>(dlsym(handle, "_rpcsx_systemInfo"));
     result.loginUser = reinterpret_cast<decltype(loginUser)>(dlsym(handle, "_rpcsx_loginUser"));
+    result.logAndroid = reinterpret_cast<decltype(logAndroid)>(dlsym(handle, "_rpcsx_logAndroid"));
     result.getUser = reinterpret_cast<decltype(getUser)>(dlsym(handle, "_rpcsx_getUser"));
     result.settingsGet = reinterpret_cast<decltype(settingsGet)>(dlsym(handle, "_rpcsx_settingsGet"));
     // Optional like the frame-gen group above: a core predating RPCN support simply has no
@@ -730,6 +732,17 @@ Java_net_rpcsx_RPCSX_systemInfo(JNIEnv *env, jobject) {
   }
 
   return wrap(env, rpcsxLib.systemInfo());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_logAndroid(JNIEnv *env, jobject, jstring message) {
+  // Silent when the core is not open yet, like every other entry point here. A diagnostic that
+  // crashed the app for being early would be worse than one that is missing.
+  if (rpcsxLib.logAndroid == nullptr || message == nullptr) {
+    return;
+  }
+
+  rpcsxLib.logAndroid(unwrap(env, message).c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL

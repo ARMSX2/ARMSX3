@@ -3644,6 +3644,9 @@ open class MainActivityRuntime : ComponentActivity() {
         if (line == loggedTouchScale) return
         loggedTouchScale = line
         android.util.Log.i("ARMSX3-Touch", line)
+        // And into the emulator's log, which is the file testers send. logcat alone is why
+        // this diagnostic has never appeared in a single report about #132.
+        runCatching { net.rpcsx.RPCSX.instance.logAndroid("touch scale: $line") }
     }
 
     /** Un-scaled physical display size in the current rotation. Only a SEED for the touch-space

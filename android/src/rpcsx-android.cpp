@@ -5898,6 +5898,26 @@ static cfg::_base *find_cfg_node(cfg::_base *root, std::string_view path) {
   return root;
 }
 
+// Let the app write into the emulator's log.
+//
+// The app had no way to do this, so every diagnostic it produced went to android.util.Log and
+// therefore to logcat, which testers do not capture. They send ARMSX3.log. The touch scale line
+// is the case that proved it: a well built diagnostic that names the window size, the digitizer
+// extent and the scale actually applied, present since the QHD work, and appearing in exactly
+// zero of the logs anyone has ever sent us. Issue #132 has been reopened twice by reporters on
+// devices we do not have, and the numbers that would settle it were being written somewhere
+// nobody looks.
+//
+// warning, because Android's logcat sink drops anything lower, so this reaches both the file
+// and logcat from one call.
+extern "C" void _rpcsx_logAndroid(const char *message) {
+  if (message == nullptr) {
+    return;
+  }
+
+  rpcsx_android.warning("%s", message);
+}
+
 extern "C" void _rpcsx_loginUser(std::string_view userId) {
   Emu.SetUsr(std::string(userId));
 }
