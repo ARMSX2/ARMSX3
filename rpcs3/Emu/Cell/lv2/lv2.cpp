@@ -1429,6 +1429,13 @@ static void ppu_dump_threads_on_request()
 		rsx->dump_all(out);
 	}
 
+	// Everything the write watch has seen, so a dump says whether a word was written a lot, a
+	// little or never, without needing the log that led up to it.
+	{
+		extern std::string ppu_watch_summary();
+		out += ppu_watch_summary();
+	}
+
 	// Windows of guest code and memory chosen from outside, so following a hang up its call chain
 	// does not cost a build each time: ARMSX3_DUMP_CODE=start-end[,..] and ARMSX3_DUMP_MEM=..
 	// in driver_env.txt. The frame that sets up a poll loop sits a few calls above it, and the

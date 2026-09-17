@@ -557,15 +557,83 @@ void ppu_recompiler_fallback(ppu_thread& ppu)
 // reached from <cia>, and the first writes to that address are logged with the instruction that
 // made them. Run it on the PPU interpreter, where every guest store is visible: an address that
 // no PPU store touches is filled by an SPU, or by nothing at all, and those are different bugs.
-atomic_t<u32> g_ppu_watch_addr{0};
+// Up to four watched words, and everything that can reach them.
+//
+// One slot is armed from a spin loop (ARMSX3_WATCH_SPIN), the rest from fixed addresses
+// (ARMSX3_WATCH_ADDR), because the interesting address is sometimes a heap field a thread
+// happens to be waiting on and sometimes a structure whose address never changes.
+//
+// Every writer reports here: guest PPU stores of any width, conditional stores, SPU transfers
+// and SPU atomic stores. The first few of each are always printed and the rest are decimated,
+// so a writer that fires twice is as visible as one that fires constantly. Getting that wrong
+// is what made a field that is written every frame look like it had no writer at all.
+atomic_t<u32> g_ppu_watch[4]{};
 
-static atomic_t<u32> g_ppu_watch_reports{0};
-static atomic_t<u32> g_ppu_watch_zero_writes{0};
+struct ppu_watch_stat_t
+{
+	atomic_t<u32> ppu_store{0};
+	atomic_t<u32> ppu_stcx{0};
+	atomic_t<u32> spu_put{0};
+	atomic_t<u32> spu_ll_ok{0};
+	atomic_t<u32> spu_ll_fail{0};
+};
+
+ppu_watch_stat_t g_ppu_watch_stats[4]{};
+
+int ppu_watch_slot(u32 addr, u32 size)
+{
+	for (int i = 0; i < 4; i++)
+	{
+		const u32 w = g_ppu_watch[i].load();
+
+		if (w && addr < w + 4 && addr + size > w)
+		{
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+bool ppu_watch_should_log(u32 count)
+{
+	return count <= 8 || count % 256 == 0;
+}
+
+static void ppu_watch_parse_fixed()
+{
+	const char* env = std::getenv("ARMSX3_WATCH_ADDR");
+
+	if (!env || !*env)
+	{
+		return;
+	}
+
+	std::string_view rest{env};
+	int slot = 1;
+
+	while (!rest.empty() && slot < 4)
+	{
+		const usz comma = rest.find(',');
+		const std::string_view item = rest.substr(0, comma);
+		rest = comma == umax ? std::string_view{} : rest.substr(comma + 1);
+
+		u32 addr = 0;
+
+		if (std::from_chars(item.data(), item.data() + item.size(), addr, 16).ec == std::errc() && addr >= 0x10000)
+		{
+			g_ppu_watch[slot++].release(addr);
+			ppu_log.warning("ARMSX3_WATCH_ADDR: watching 0x%x", addr);
+		}
+	}
+}
 
 void ppu_watch_arm(const ppu_thread& ppu)
 {
 	static const std::pair<u32, u32> cfg = []() -> std::pair<u32, u32>
 	{
+		ppu_watch_parse_fixed();
+
 		const char* env = std::getenv("ARMSX3_WATCH_SPIN");
 
 		if (!env || !*env)
@@ -599,29 +667,51 @@ void ppu_watch_arm(const ppu_thread& ppu)
 
 	if (const u32 addr = static_cast<u32>(ppu.gpr[cfg.second]); addr >= 0x10000)
 	{
-		g_ppu_watch_addr.release(addr);
+		g_ppu_watch[0].release(addr);
 	}
 }
 
 void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size)
 {
-	// Zero is the reset of a completion flag, not the completion, and there are two of those
-	// per use. A few are worth seeing for the sequence; after that they are only a way for the
-	// writer that matters to be pushed out of a capped log by the writers that do not.
-	// Only a plain word write of zero is the reset. A wider store that happens to lead with
-	// zeroes may still be putting something on the word, so it is never filtered.
-	if (!value && (size & 0x7f) == 4 && g_ppu_watch_zero_writes++ >= 6)
+	const int slot = ppu_watch_slot(addr, size & 0x7f);
+
+	if (slot < 0)
 	{
 		return;
 	}
 
-	if (g_ppu_watch_reports.fetch_add(1) >= 48)
+	const bool stcx = (size & 0x80) != 0;
+	auto& counter = stcx ? g_ppu_watch_stats[slot].ppu_stcx : g_ppu_watch_stats[slot].ppu_store;
+
+	if (ppu_watch_should_log(++counter))
 	{
-		return;
+		ppu_log.error("WATCH[%d] 0x%x <- 0x%llx (%u bytes%s) from 0x%x on '%s'",
+			slot, addr, value, size & 0x7f, stcx ? ", stcx" : "", ppu.cia, ppu.get_name());
+	}
+}
+
+// Everything the watch has seen, for the end of a thread dump.
+std::string ppu_watch_summary()
+{
+	std::string out;
+
+	for (int i = 0; i < 4; i++)
+	{
+		const u32 w = g_ppu_watch[i].load();
+
+		if (!w)
+		{
+			continue;
+		}
+
+		auto& st = g_ppu_watch_stats[i];
+
+		fmt::append(out, "\nWATCH[%d] 0x%x = 0x%x: %u PPU stores, %u conditional, %u SPU transfers, %u SPU atomics took, %u would have failed",
+			i, w, vm::check_addr(w) ? +vm::read32(w) : 0u,
+			st.ppu_store.load(), st.ppu_stcx.load(), st.spu_put.load(), st.spu_ll_ok.load(), st.spu_ll_fail.load());
 	}
 
-	ppu_log.error("WATCH: 0x%x <- 0x%llx (%u bytes%s) from 0x%x on '%s' (after %u zero writes)",
-		addr, value, size & 0x7f, (size & 0x80) ? ", stcx" : "", ppu.cia, ppu.get_name(), g_ppu_watch_zero_writes.load());
+	return out;
 }
 
 void ppu_reservation_fallback(ppu_thread& ppu)
@@ -3643,7 +3733,7 @@ extern u64 ppu_ldarx(ppu_thread& ppu, u32 addr)
 	return ppu_load_acquire_reservation<u64>(ppu, addr);
 }
 
-extern atomic_t<u32> g_ppu_watch_addr;
+int ppu_watch_slot(u32 addr, u32 size);
 void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size);
 
 template <typename T>
@@ -3664,7 +3754,7 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 	// write path, so a flag set with stwcx. is invisible to the plain watch. Log the attempt:
 	// this loop retries on failure, so repeats are failures, and a store that keeps failing
 	// while a thread waits on the word is the thing worth finding.
-	if (const u32 w = g_ppu_watch_addr.load(); w && addr < w + 4 && addr + sizeof(T) > w) [[unlikely]]
+	if (ppu_watch_slot(addr, sizeof(T)) >= 0) [[unlikely]]
 	{
 		ppu_watch_store(ppu, addr, static_cast<u64>(reg_value), sizeof(T) | 0x80);
 	}

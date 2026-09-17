@@ -2148,66 +2148,76 @@ void spu_thread::push_snr(u32 number, u32 value)
 	});
 }
 
-extern atomic_t<u32> g_ppu_watch_addr;
+extern int ppu_watch_slot(u32 addr, u32 size);
+extern bool ppu_watch_should_log(u32 count);
 
-// Logged rather than routed through ppu_watch_store: there is no ppu_thread here, and what
-// identifies the write is the SPU and the transfer, not an instruction address.
-static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id, const char* kind = "PUT")
+struct ppu_watch_stat_t
 {
-	static atomic_t<u32> s_reports{0};
+	atomic_t<u32> ppu_store;
+	atomic_t<u32> ppu_stcx;
+	atomic_t<u32> spu_put;
+	atomic_t<u32> spu_ll_ok;
+	atomic_t<u32> spu_ll_fail;
+};
 
-	if (s_reports.fetch_add(1) < 24)
-	{
-		spu_log.error("WATCH: 0x%x covered by an SPU %s (eal=0x%x size=0x%x) from SPU 0x%x", g_ppu_watch_addr.load(), kind, eal, size, spu_id);
-	}
-}
+extern ppu_watch_stat_t g_ppu_watch_stats[4];
+extern atomic_t<u32> g_ppu_watch[4];
 
-// An atomic 128-byte store, which is how an SPU updates a line it shares with the PPU. Neither
-// of these goes anywhere near do_dma_transfer, so hooking transfers alone reports that nothing
-// writes a field that is in fact written constantly.
-static void ppu_watch_putll(const spu_thread& spu, u32 eal, const char* kind)
+// A plain transfer over a watched word.
+static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id)
 {
-	const u32 w = g_ppu_watch_addr.load();
+	const int slot = ppu_watch_slot(eal, size);
 
-	if (!w || eal >= w + 4 || eal + 128 <= w)
+	if (slot < 0)
 	{
 		return;
 	}
 
-	// The two ways this store fails before writing anything: the line is not the one this SPU
-	// reserved, or the reservation was taken away since. Only those are worth a line of log.
-	// A store that is going to succeed happens constantly and will eat any cap long before the
-	// hang it is meant to explain, which is exactly what the first version of this did.
+	if (ppu_watch_should_log(++g_ppu_watch_stats[slot].spu_put))
+	{
+		spu_log.error("WATCH[%d] 0x%x covered by an SPU PUT (eal=0x%x size=0x%x) from SPU 0x%x",
+			slot, g_ppu_watch[slot].load(), eal, size, spu_id);
+	}
+}
+
+// An atomic 128-byte store, which is how an SPU updates a line it shares with the PPU, and how
+// this game's jobs report completion. Neither of these goes near do_dma_transfer.
+//
+// Whether it would take is the whole question: a store that keeps failing is a race nobody wins,
+// one that keeps taking while the word stays zero is a job writing the wrong thing, and no store
+// at all is work that was never queued. All three look identical from the waiting side.
+static void ppu_watch_putll(const spu_thread& spu, u32 eal, const char* kind)
+{
+	const int slot = ppu_watch_slot(eal, 128);
+
+	if (slot < 0)
+	{
+		return;
+	}
+
+	const u32 w = g_ppu_watch[slot].load();
 	const u32 line = eal & -128;
 	const u64 res = vm::reservation_acquire(line);
 	const bool wrong_line = spu.raddr != line;
 	const bool lost = !wrong_line && spu.rtime != (res & -128);
-
-	static atomic_t<u32> s_ok{0};
+	auto& st = g_ppu_watch_stats[slot];
 
 	if (!wrong_line && !lost)
 	{
-		// A heartbeat rather than every one. Silence has two meanings that need separating:
-		// stores that stopped happening, and stores that keep happening and keep landing while
-		// the word inside the line they write stays zero.
-		if (const u32 n = ++s_ok; n % 256 == 0)
+		if (ppu_watch_should_log(++st.spu_ll_ok))
 		{
-			spu_log.error("WATCH: 0x%x, %u %s over it have taken, latest value there 0x%x",
-				w, n, kind, vm::read32(w));
+			spu_log.error("WATCH[%d] 0x%x: SPU %s took from SPU 0x%x, word now 0x%x",
+				slot, w, kind, spu.id, vm::read32(w));
 		}
 
 		return;
 	}
 
-	static atomic_t<u32> s_reports{0};
-
-	if (s_reports.fetch_add(1) >= 64)
+	if (ppu_watch_should_log(++st.spu_ll_fail))
 	{
-		return;
+		spu_log.error("WATCH[%d] 0x%x: SPU %s would fail from SPU 0x%x: raddr=0x%x rtime=0x%llx res=0x%llx %s",
+			slot, w, kind, spu.id, spu.raddr, spu.rtime, res, wrong_line ? "WRONG-LINE" : "LOST");
 	}
-
-	spu_log.error("WATCH: 0x%x %s would fail from SPU 0x%x: raddr=0x%x rtime=0x%llx res=0x%llx %s (after %u that took)",
-		w, kind, spu.id, spu.raddr, spu.rtime, res, wrong_line ? "WRONG-LINE" : "LOST", s_ok.load());
 }
 
 void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8* ls)
@@ -2225,10 +2235,7 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 	// so a field with no PPU writer is expected to turn up here.
 	if (!is_get) [[likely]]
 	{
-		if (const u32 w = g_ppu_watch_addr.load(); w && eal < w + 4 && eal + args.size > w) [[unlikely]]
-		{
-			ppu_watch_dma(eal, args.size, _this ? _this->id : 0);
-		}
+		ppu_watch_dma(eal, args.size, _this ? _this->id : 0);
 	}
 
 	// Code-sized transfers, which is how a SPURS workload would arrive.

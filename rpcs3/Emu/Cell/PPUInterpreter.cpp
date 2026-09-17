@@ -53,7 +53,7 @@ void ppubreak(ppu_thread& ppu)
 
 // See ppu_watch_arm in PPUThread.cpp. Disarmed this is one relaxed load against a register,
 // which the interpreter can afford; it is the only build where every guest store is visible.
-extern atomic_t<u32> g_ppu_watch_addr;
+extern int ppu_watch_slot(u32 addr, u32 size);
 extern void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size);
 
 template <typename T>
@@ -62,7 +62,7 @@ static FORCE_INLINE void ppu_write_watched(ppu_thread& ppu, u32 addr, const T& v
 	// Overlap, not equality. The word is four bytes and a store need not start at its first:
 	// on big endian a byte store to the LAST byte is the cheapest way to make a flag non-zero,
 	// and matching the address exactly cannot see it, which reads as "nothing writes this".
-	if (const u32 w = g_ppu_watch_addr.load(); w && addr < w + 4 && addr + sizeof(T) > w) [[unlikely]]
+	if (ppu_watch_slot(addr, sizeof(T)) >= 0) [[unlikely]]
 	{
 		// Vector and float stores are not integers and are wider than the word; copying the
 		// leading bytes is enough to say what landed on it.
