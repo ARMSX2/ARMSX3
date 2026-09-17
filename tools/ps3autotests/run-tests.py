@@ -61,9 +61,11 @@ def adb(*args, binary=False, check=True):
     return proc.stdout if binary else proc.stdout.decode(errors="replace")
 
 
-def tty_size(tty):
-    out = adb("exec-out", f"wc -c < {tty} 2>/dev/null || echo 0").strip()
-    return int(out.split()[0]) if out.split() else 0
+def tty_size(path):
+    # stat, not "wc -c < path": a missing file makes the shell itself print the error, which the
+    # 2>/dev/null on wc never sees, and exec-out hands that text back where a number belongs.
+    out = adb("exec-out", f"stat -c %s {path} 2>/dev/null || echo 0").strip()
+    return int(out.split()[0]) if out.split() and out.split()[0].isdigit() else 0
 
 
 def tty_candidates():
@@ -148,6 +150,10 @@ def run_one(name, dirpath, elf, expected_path, args):
     adb("shell", f"am force-stop {PKG}", check=False)
     time.sleep(1.5)
 
+    # A suite that writes a file leaves an output.txt behind, and reading last run's file as this
+    # run's result would report an old build's numbers without a word. Clear it first.
+    adb("shell", f"rm -f {remote_dir}/output.txt", check=False)
+
     snapshot = tty_candidates()
     adb(
         "shell",
@@ -164,24 +170,28 @@ def run_one(name, dirpath, elf, expected_path, args):
     # reads from the middle of a fresh file -- which produced a torn first line and 29k of 108k
     # lines, silently, and looked like a spectacular test failure rather than a harness bug. If the
     # size is ever seen below where it started, the log was reset and the whole file is ours.
+    #
+    # output.txt counts as output too. A suite that writes the file leaves TTY empty, and when only
+    # TTY was watched such a suite sat out the whole --boot-wait after it had already finished.
     start = time.time()
-    last_size, last_change = before, time.time()
+    last_progress, last_change = 0, time.time()
     offset = before
     while True:
         time.sleep(2)
         size = tty_size(tty)
         if size < offset:
             offset = 0
-        if size != last_size:
-            last_size, last_change = size, time.time()
-            print(f"  ... {size - offset} bytes", end="\r", flush=True)
+        progress = max(size - offset, 0) + tty_size(f"{remote_dir}/output.txt")
+        if progress != last_progress:
+            last_progress, last_change = progress, time.time()
+            print(f"  ... {progress} bytes", end="\r", flush=True)
         elapsed_quiet = time.time() - last_change
-        if size > offset and elapsed_quiet >= args.idle:
+        if progress > 0 and elapsed_quiet >= args.idle:
             break
         if time.time() - start > args.timeout:
             print(f"  timed out after {args.timeout}s", flush=True)
             break
-        if size == offset and time.time() - start > args.boot_wait:
+        if progress == 0 and time.time() - start > args.boot_wait:
             print(f"  no output after {args.boot_wait}s -- did it boot?", flush=True)
             break
 
@@ -195,14 +205,12 @@ def run_one(name, dirpath, elf, expected_path, args):
     # The SPU suites reach TTY through spu_printf and the lv2 ones print to it directly, but the
     # PPU suites fopen "/app_home/output.txt" and write there -- /app_home being the directory the
     # test was launched from, i.e. the one pushed above. Six PPU tests were reported as "NO OUTPUT"
-    # for a whole run while their results sat on the device, so check the file whenever TTY is
-    # empty rather than assuming a silent test failed to boot.
-    if not got:
-        from_file = adb("exec-out", f"cat {remote_dir}/output.txt 2>/dev/null", binary=True)
-
-        if from_file:
-            print(f"  (output.txt, {len(from_file)} bytes -- this suite writes a file, not TTY)")
-            got = normalise(from_file.decode("utf-8", errors="replace"))
+    # for a whole run while their results sat on the device. The file is cleared before launch, so
+    # if it exists now this run wrote it, and it wins over anything the suite also printed.
+    from_file = adb("exec-out", f"cat {remote_dir}/output.txt 2>/dev/null", binary=True)
+    if from_file:
+        print(f"  (output.txt, {len(from_file)} bytes, this suite writes a file, not TTY)")
+        got = normalise(from_file.decode("utf-8", errors="replace"))
     with open(expected_path, "r", encoding="utf-8", errors="replace") as fh:
         want = normalise(fh.read())
 
