@@ -177,6 +177,95 @@ object ConfigDatabase {
             }
             .joinToString("\n")
 
+    // ---- What the database sets for one title, and what the user took back ----
+
+    /**
+     * The settings a title's database entry applies, as "Section@@Key" to value, in file order.
+     *
+     * The last occurrence of a key wins, matching how the core applies them, so a
+     * [LOCAL_OVERRIDES] entry appended to the end reads back as the effective value here too.
+     * Two spaces per level, which is what the database ships and what RPCS3 writes.
+     */
+    fun entriesFor(serial: String?): List<Pair<String, String>> {
+        val title = serial?.trim().orEmpty()
+        if (title.isEmpty()) return emptyList()
+        val file = File(directory(), "$title.yml")
+        if (!file.isFile) return emptyList()
+
+        val out = LinkedHashMap<String, String>()
+        val path = ArrayList<String>()
+
+        runCatching {
+            for (raw in file.readLines()) {
+                val line = raw.trimEnd()
+                val first = line.indexOfFirst { it != ' ' }
+                if (first < 0 || line[first] == '#') continue
+                val colon = line.indexOf(':', first)
+                if (colon < 0) continue
+
+                val indent = first / 2
+                while (path.size > indent) path.removeAt(path.size - 1)
+                path.add(line.substring(first, colon).trim())
+
+                val value = line.substring(colon + 1).trim()
+                // A header opens a section instead of setting anything.
+                if (value.isNotEmpty()) out[path.joinToString("@@")] = value
+            }
+        }
+
+        return out.toList()
+    }
+
+    /** Keys of a title's database entry the user switched off. */
+    fun ignoredFor(serial: String?): Set<String> {
+        val title = serial?.trim().orEmpty()
+        if (title.isEmpty()) return emptySet()
+        val raw = MainActivityRuntime.prefs.getString(ignoreKey(title), null) ?: return emptySet()
+        return runCatching {
+            val arr = org.json.JSONArray(raw)
+            buildSet { for (i in 0 until arr.length()) add(arr.getString(i)) }
+        }.getOrDefault(emptySet())
+    }
+
+    fun setIgnored(serial: String, path: String, ignored: Boolean) {
+        val current = ignoredFor(serial).toMutableSet()
+        if (ignored) current.add(path) else current.remove(path)
+        val arr = org.json.JSONArray()
+        current.forEach { arr.put(it) }
+        MainActivityRuntime.prefs.edit { putString(ignoreKey(serial), arr.toString()) }
+    }
+
+    private fun ignoreKey(serial: String) = "configDb.ignore.$serial"
+
+    /**
+     * Tell the core which keys of this title's database entry not to apply.
+     *
+     * The core layers the database over the user's config, so a per-game choice loses to a
+     * database entry for the same key unless the key is withheld here. Written before boot and
+     * read by get_database_config; the file is removed when nothing is withheld, so a title
+     * that never needed one does not accumulate an empty file.
+     */
+    fun writeUserKeys(serial: String?, ownedPaths: Set<String>) {
+        val title = serial?.trim().orEmpty()
+        if (title.isEmpty()) return
+
+        val dir = File(RPCSX.rootDirectory, "config/config_db_user")
+        val file = File(dir, "$title.keys")
+        // Only keys this title's entry actually sets: withholding a key it never had would be a
+        // line of noise in the file and in the log.
+        val settable = entriesFor(title).map { it.first }.toSet()
+        val keys = (ownedPaths + ignoredFor(title)).filter { it in settable }.sorted()
+
+        runCatching {
+            if (keys.isEmpty()) {
+                file.delete()
+                return
+            }
+            dir.mkdirs()
+            file.writeText(keys.joinToString("\n", postfix = "\n"))
+        }
+    }
+
     /**
      * Where the native side looks. get_database_config reads config/config_db/<TITLE>.yml
      * on the boot path, so this exact name is what makes the database live.

@@ -161,6 +161,9 @@ fun str(key: String): String {
  */
 val EN: Map<String, String> = mapOf(
     "about.title" to "About app",
+    "perf.configDb.title" to "RPCS3 database settings for this game",
+    "perf.configDb.help" to "RPCS3 keeps a list of settings that specific games need, and ARMSX3 applies it automatically. These apply on top of your own settings for this game. Turn one off to use your setting instead.",
+    "perf.configDb.off" to "Off: your own setting is used",
     "friends.title" to "Friends",
     "friends.explain" to "Link Discord to show what you're playing and see which friends are in ARMSX3. Uses your existing Discord friends — ARMSX3 keeps no account and runs no server. Only while the app is open.",
     "friends.connect" to "Connect Discord",

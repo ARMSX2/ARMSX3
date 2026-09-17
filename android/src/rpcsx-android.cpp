@@ -2283,6 +2283,10 @@ static struct main_thread_dispatcher {
 static void armsx3_play_sound(const std::string &path, std::optional<f32> volume);
 
 
+// Defined below, next to the rest of the config helpers.
+static std::string rpcsx_strip_config_keys(const std::string &yaml, const std::vector<std::string> &keys, std::string &skipped);
+
+
 static void setupCallbacks() {
   Emu.SetCallbacks({
       .call_from_main_thread =
@@ -2396,6 +2400,9 @@ static void setupCallbacks() {
       // QJsonDocument, neither of which exists in this build. The app fetches and splits
       // the database instead (see ConfigDatabase.kt), leaving one YAML per title on disk,
       // so all that is needed here is to read it back.
+      // Drop the keys the user owns for this title from a database entry, so what is left can
+      // be applied without overwriting a setting they chose themselves. Keys arrive as
+      // "Section@@Key" and cover the block they name, matching the app's own path format.
       .get_database_config =
           [](const std::string &title_id) -> std::string {
             if (title_id.empty()) {
@@ -2415,6 +2422,50 @@ static void setupCallbacks() {
             }
 
             std::string yaml = config.to_string();
+
+            // Settings this title's own configuration owns, one "Section@@Key" per line,
+            // written by the app before boot.
+            //
+            // The core applies a database entry OVER the user's config (Emulator::Load only
+            // skips it for a custom config FILE, which this port does not write), so without
+            // this a per-game choice could never win against a database entry for the same
+            // key. Reported as Helldivers running on the PPU interpreter with the settings
+            // screen showing the recompiler: the database sets the decoder, and nothing said so.
+            std::vector<std::string> owned;
+
+            if (fs::file keys{fs::get_config_dir(true) + "config_db_user/" + title_id + ".keys"})
+            {
+              std::string text = keys.to_string();
+
+              for (usz pos = 0; pos < text.size();)
+              {
+                const usz eol = text.find('\n', pos);
+                std::string line = text.substr(pos, (eol == umax ? text.size() : eol) - pos);
+                pos = (eol == umax ? text.size() : eol + 1);
+
+                while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+                {
+                  line.pop_back();
+                }
+
+                if (!line.empty())
+                {
+                  owned.push_back(std::move(line));
+                }
+              }
+            }
+
+            if (!owned.empty())
+            {
+              std::string skipped;
+              yaml = rpcsx_strip_config_keys(yaml, owned, skipped);
+
+              if (!skipped.empty())
+              {
+                rpcsx_android.success("database config for %s: skipped %s (set for this game)",
+                                      title_id, skipped);
+              }
+            }
 
             // At success level, which reaches logcat, where notice does not. This is the only
             // record that a title booted with settings the user never chose, and without it a
@@ -2724,6 +2775,102 @@ static void open_home_menu_async() {
       padThread->open_home_menu();
     }
   }).detach();
+}
+
+// Remove named keys, and any block they open, from a config YAML.
+//
+// Two spaces per level, which is what both RPCS3 writes and the database ships. A key's path is
+// its section names and its own name joined with "@@", the same spelling the app uses for a
+// config node, so the two sides need no translation table. Section headers left with nothing
+// under them are dropped too: the core reports a section that is no longer a map as an error.
+static std::string rpcsx_strip_config_keys(const std::string &yaml,
+                                           const std::vector<std::string> &keys,
+                                           std::string &skipped) {
+  std::vector<std::string> lines;
+  std::vector<std::string> path;
+  int skip_indent = -1;
+
+  for (usz pos = 0; pos < yaml.size();) {
+    const usz eol = yaml.find('\n', pos);
+    std::string line = yaml.substr(pos, (eol == umax ? yaml.size() : eol) - pos);
+    pos = (eol == umax ? yaml.size() : eol + 1);
+
+    const usz first = line.find_first_not_of(' ');
+    const bool blank = first == umax || line[first] == '#';
+    const int indent = blank ? 0 : static_cast<int>(first / 2);
+
+    if (skip_indent >= 0) {
+      if (blank || indent > skip_indent) {
+        continue;
+      }
+
+      skip_indent = -1;
+    }
+
+    if (!blank) {
+      const usz colon = line.find(':', first);
+
+      if (colon != umax) {
+        path.resize(std::min<usz>(path.size(), static_cast<usz>(indent)));
+        path.push_back(line.substr(first, colon - first));
+
+        std::string full;
+
+        for (const auto &part : path) {
+          if (!full.empty()) {
+            full += "@@";
+          }
+
+          full += part;
+        }
+
+        if (std::find(keys.begin(), keys.end(), full) != keys.end()) {
+          if (!skipped.empty()) {
+            skipped += ", ";
+          }
+
+          skipped += full;
+          skip_indent = indent;
+          continue;
+        }
+      }
+    }
+
+    lines.push_back(std::move(line));
+  }
+
+  std::string out;
+
+  for (usz i = 0; i < lines.size(); i++) {
+    const std::string &line = lines[i];
+    const usz first = line.find_first_not_of(' ');
+    const bool header = first != umax && line.back() == ':';
+
+    if (header) {
+      const int indent = static_cast<int>(first / 2);
+      bool has_children = false;
+
+      for (usz j = i + 1; j < lines.size(); j++) {
+        const usz next = lines[j].find_first_not_of(' ');
+
+        if (next == umax) {
+          continue;
+        }
+
+        has_children = static_cast<int>(next / 2) > indent;
+        break;
+      }
+
+      if (!has_children) {
+        continue;
+      }
+    }
+
+    out += line;
+    out += '\n';
+  }
+
+  return out;
 }
 
 extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,

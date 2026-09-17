@@ -1448,6 +1448,14 @@ data class Settings(
         runCatching {
             CoreSettingOverrides.replay(MainActivityRuntime.currentGame.value?.settingsKey)
         }
+        // What this title's own configuration owns, withheld from RPCS3's config database before
+        // the core applies it. The database lands AFTER everything above (Emulator::Load layers
+        // it over the user's config), so without this a per-game core edit for a key the database
+        // also sets is written and then immediately overwritten, with nothing on screen to say so.
+        runCatching {
+            val key = MainActivityRuntime.currentGame.value?.settingsKey
+            ConfigDatabase.writeUserKeys(key, CoreSettingOverrides.load(SettingsScope.Game, key).keys)
+        }
         NativeApp.commitSettings()
     }
 

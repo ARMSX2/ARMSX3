@@ -74,6 +74,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
         modifier = Modifier
             .fillMaxWidth(),
     ) {
+        DatabaseSettingsSection()
         // Prominent latency preset: zero queued GS frames keeps the emulated CPU
         // from running ahead of presentation, and the Surface requests a matching
         // high-refresh display mode. Settings scope is supplied by InGameOverlay,
@@ -604,4 +605,49 @@ private fun FrameGenShaderRow() {
             modifier = Modifier.controllerFocusable("perf.framegen.import", onConfirm = pick),
         ) { Text(str("perf.framegen.import")) }
     }
+}
+
+/**
+ * What RPCS3's config database applies to THIS game, and a switch to stop each one.
+ *
+ * The database is a per-title set of settings maintained by the RPCS3 project, downloaded and
+ * applied automatically. The core applies it over the user's own configuration, so its values
+ * win, and nothing on this screen used to say so: a title the database runs on the PPU
+ * interpreter (108 of the database's 2195 do) showed the recompiler in the row above while
+ * running on the interpreter, and picking the recompiler here changed nothing. Switching an
+ * entry off withholds that key from the core, leaving the setting to this screen.
+ *
+ * Only in per-game scope, and only when the database has something for the title: with no game
+ * there is nothing to show, and most titles have no entry at all.
+ */
+@Composable
+private fun DatabaseSettingsSection() {
+    val serial = InGameOverlay.currentSerial.value?.takeIf { it.isNotBlank() } ?: return
+    if (InGameOverlay.settingsScope.value != com.armsx2.config.SettingsScope.Game) return
+
+    val entries = remember(serial) { com.armsx2.config.ConfigDatabase.entriesFor(serial) }
+    if (entries.isEmpty()) return
+
+    var ignored by remember(serial) {
+        mutableStateOf(com.armsx2.config.ConfigDatabase.ignoredFor(serial))
+    }
+
+    CollapsibleSection(str("perf.configDb.title"), initiallyExpanded = false) {
+        HelpText(str("perf.configDb.help"))
+        for ((path, value) in entries) {
+            // The section name is part of the identity, not decoration: "Core@@PPU Decoder" and a
+            // video key of the same name would otherwise read as one row.
+            val label = path.replace("@@", " / ")
+            ToggleRow(
+                label = "$label: $value",
+                value = path !in ignored,
+                description = if (path in ignored) str("perf.configDb.off") else null,
+                onChange = { applyThis ->
+                    com.armsx2.config.ConfigDatabase.setIgnored(serial, path, !applyThis)
+                    ignored = com.armsx2.config.ConfigDatabase.ignoredFor(serial)
+                },
+            )
+        }
+    }
+    SettingsDivider()
 }
