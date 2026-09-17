@@ -1891,7 +1891,7 @@ object Rpcs3Bridge {
     }
 
     /**
-     * Feed the phone's orientation to the pad's motion sensors.
+     * Write one motion sample to a pad's SIXAXIS registers.
      *
      * [ax]/[ay]/[az] are gravity-relative acceleration in g, [gyro] a yaw rate in
      * rad/s. The PS3 reports each axis 0..1023 with 512 at rest and roughly 113 units

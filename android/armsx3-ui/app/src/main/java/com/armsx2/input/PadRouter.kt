@@ -243,6 +243,16 @@ object PadRouter {
         syntheticDeviceId = 0
     }
 
+    /**
+     * The port [deviceId] already holds, or -1. Never claims one, unlike [portForDevice]: a
+     * controller's sensor stream is not a player pressing a button.
+     */
+    fun claimedPort(deviceId: Int): Int {
+        if (deviceId != 0 && deviceId == syntheticDeviceId) return syntheticPort
+        for (i in slots.indices) if (slots[i] == deviceId) return i
+        return -1
+    }
+
     fun portForDevice(deviceId: Int): Int {
         if (deviceId != 0 && deviceId == syntheticDeviceId) return syntheticPort
         if (deviceId < 0) return 0
