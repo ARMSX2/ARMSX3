@@ -5015,6 +5015,71 @@ extern void ppu_initialize()
 	}
 }
 
+// Run chosen guest functions through the interpreter while everything else stays compiled.
+//
+// The games on RPCS3 issue #5831 all work with the PPU interpreter and break with LLVM, so the bug
+// is in some function the recompiler gets wrong. ARMSX3_PPU_INTERP=start-end[,start-end...] (hex
+// guest addresses, end exclusive; a lone address means just the function starting there) keeps
+// the functions whose entry falls in a range out of compilation. Calls to them go through the jump
+// table to ppu_recompiler_fallback, the same way patched functions do. Halving a range until the
+// bug comes back names the function. Set it in driver_env.txt.
+static bool ppu_interp_requested(u32 addr)
+{
+	static const std::vector<std::pair<u32, u32>> ranges = []()
+	{
+		std::vector<std::pair<u32, u32>> out;
+		const char* env = std::getenv("ARMSX3_PPU_INTERP");
+
+		if (!env || !*env)
+		{
+			return out;
+		}
+
+		const auto parse_hex = [](std::string_view text, u32& value)
+		{
+			while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
+			while (!text.empty() && text.back() == ' ') text.remove_suffix(1);
+			if (text.starts_with("0x") || text.starts_with("0X")) text.remove_prefix(2);
+			const auto res = std::from_chars(text.data(), text.data() + text.size(), value, 16);
+			return !text.empty() && res.ec == std::errc() && res.ptr == text.data() + text.size();
+		};
+
+		std::string_view rest{env};
+
+		while (!rest.empty())
+		{
+			const usz comma = rest.find(',');
+			const std::string_view item = rest.substr(0, comma);
+			rest = comma == umax ? std::string_view{} : rest.substr(comma + 1);
+
+			u32 start = 0, end = 0;
+			const usz dash = item.find('-');
+
+			if (dash == umax ? (parse_hex(item, start) && (end = start + 1)) : (parse_hex(item.substr(0, dash), start) && parse_hex(item.substr(dash + 1), end) && end > start))
+			{
+				out.emplace_back(start, end);
+				ppu_log.warning("ARMSX3_PPU_INTERP: interpreting functions in [0x%x, 0x%x)", start, end);
+			}
+			else if (!item.empty())
+			{
+				ppu_log.error("ARMSX3_PPU_INTERP: could not read '%s', expected start-end in hex", std::string(item));
+			}
+		}
+
+		return out;
+	}();
+
+	for (const auto& [start, end] : ranges)
+	{
+		if (addr >= start && addr < end)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
 bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_size)
 {
 	ppu_log.notice("Entering ppu_initialize(const ppu_module&..)");
@@ -5518,6 +5583,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 		// Overall block size in bytes
 		usz bsize = 0;
 		usz bcount = 0;
+		usz interp_funcs = 0;
 
 		while (fpos < info.get_funcs().size())
 		{
@@ -5562,6 +5628,15 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				}
 			}
 
+			if (ppu_interp_requested(func.addr))
+			{
+				// No continue: it still counts toward this module's size below, so the partition,
+				// and with it every other module's hash, stays where it was. Only modules whose
+				// selection changed recompile between bisect steps.
+				part.excluded_funcs.emplace_back(func.addr);
+				interp_funcs++;
+			}
+
 			local_jit_bounds->first = std::min<u32>(local_jit_bounds->first, func.addr);
 			local_jit_bounds->second = std::max<u32>(local_jit_bounds->second, func.addr + func.size);
 
@@ -5572,6 +5647,11 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 
 			fpos++;
 			bcount++;
+		}
+
+		if (interp_funcs)
+		{
+			ppu_log.warning("ARMSX3_PPU_INTERP: %u functions in 0x%x..0x%x left to the interpreter", interp_funcs, part.local_bounds.first, part.local_bounds.second);
 		}
 
 		// Compute module hash to generate (hopefully) unique object name
@@ -5695,6 +5775,14 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 					if (g_fxo->is_init<ppu_far_jumps_t>() && !g_fxo->get<ppu_far_jumps_t>().get_targets(func.addr, func.size).empty())
 					{
 						// Filter out functions with patches
+						part.excluded_funcs.emplace_back(func.addr);
+						continue;
+					}
+
+					if (ppu_interp_requested(func.addr))
+					{
+						// The resolver must not install it either, or the table would point back at
+						// compiled code that was never built.
 						part.excluded_funcs.emplace_back(func.addr);
 						continue;
 					}
