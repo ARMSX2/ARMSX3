@@ -290,6 +290,9 @@ public:
 	// Set XER.OV bit, and update XER.SO bit (|=)
 	void SetOverflow(llvm::Value*);
 
+	// Signed overflow of an add (or ~RA + RB subtract) that produced result
+	llvm::Value* AddOverflow(llvm::Value* x, llvm::Value* y, llvm::Value* result);
+
 	// Check condition for trap instructions
 	llvm::Value* CheckTrapCondition(u32 to, llvm::Value* left, llvm::Value* right);
 
