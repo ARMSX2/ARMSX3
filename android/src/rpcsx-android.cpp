@@ -536,6 +536,40 @@ struct GraphicsFrame : GSFrameBase {
   }
 
   void flip(draw_context_t ctx, bool skip_frame = false) override {
+    // Count frames here, because nothing else does.
+    //
+    // The overlay draws a framerate and testers send LOGS, so the one number a performance
+    // report turns on has never been in one, ours or theirs. Across two Guitar Hero logs from
+    // a reporter and three of our own, every match for "fps" is the window title format string
+    // in the config dump or a coincidental substring in an SPU function hash.
+    //
+    // flip() is the guest's own present, so this is the rate the GAME is achieving, which is
+    // the question. Guitar Hero 5 (#120) desyncs with the audio getting ahead while the notes
+    // lag, and healthy audio plus a slow guest is exactly that shape; the audio side is already
+    // visible in the buffer line and looks fine, so the guest rate is the missing half.
+    //
+    // The range goes with the average because a title holding 60 and one averaging 60 by
+    // alternating 50 and 70 are different problems, and for a rhythm game very different ones.
+    {
+      const u64 now = get_system_time();
+
+      m_frames_since_log++;
+
+      if (!m_fps_window_start) {
+        m_fps_window_start = now;
+      } else if (now - m_fps_window_start >= 5'000'000) {
+        const double secs = (now - m_fps_window_start) / 1'000'000.0;
+        const double fps = m_frames_since_log / secs;
+
+        // warning, so Android's logcat sink keeps it.
+        rpcsx_android.warning("Framerate: %.1f fps (%u frames in %.1fs)", fps,
+                              m_frames_since_log, secs);
+
+        m_fps_window_start = now;
+        m_frames_since_log = 0;
+      }
+    }
+
 #ifdef RSX_GLES
     if (!usingGlRenderer()) {
       return;
@@ -546,6 +580,12 @@ struct GraphicsFrame : GSFrameBase {
     }
 #endif
   }
+
+private:
+  u64 m_fps_window_start = 0;
+  u32 m_frames_since_log = 0;
+
+public:
   // These two drive the resize check in VKGSRender::flip, so a stale value here does not
   // make the picture late, it makes it wrong: the swapchain keeps the extent it had and
   // the present framebuffer is built to match, whatever shape the window is now.
@@ -594,8 +634,8 @@ struct GraphicsFrame : GSFrameBase {
                        u32 sshot_height, bool is_bgra) override {
     armsx3_store_thumbnail(sshot_data, sshot_width, sshot_height, is_bgra);
   }
-  // Added upstream after RPCSX forked. The Android UI draws its own FPS via
-  // the perf overlay, so there is no host window title to update.
+  // Added upstream after RPCSX forked. Never called here: the only caller is the Qt
+  // gs_frame, and rpcs3qt is not built for Android. Framerate is counted in flip() instead.
   void update_title(double fps = 0.0) override {}
 };
 
