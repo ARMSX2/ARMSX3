@@ -1667,6 +1667,81 @@ static void dump_guest_code_at_fault(cpu_thread* cpu)
 		}
 	}
 
+	// Follow a pointer chain from a register, and disassemble wherever it lands.
+	//
+	// ARMSX3_DISASM_AT answers "what is at this address". It cannot answer "what does this call
+	// actually reach" when the target is behind a vtable, because that address only exists at
+	// runtime. Burnout Paradise needs exactly that: the audio allocator it calls turns out to be
+	// a forwarding thunk that loads r3->[0x14], then that object's vtable, then a slot in it, and
+	// calls through ctr. Five dereferences, not one of them a fixed address.
+	//
+	// ARMSX3_CHAIN=r31,4,0x14,0,0xc,0 starts at r31 and walks those offsets. Every step is
+	// printed, because a chain that takes a wrong turn still produces a plausible looking number
+	// and silently disassembling whatever it lands on is worse than saying nothing. The end of
+	// the chain is disassembled when it points at executable memory.
+	if (const char* chain_env = std::getenv("ARMSX3_CHAIN"))
+	{
+		const auto& gpr = static_cast<ppu_thread*>(cpu)->gpr;
+
+		std::string spec = chain_env;
+		std::string trace;
+		u32 cur = 0;
+		bool ok = true;
+
+		usz pos = spec.find(',');
+		const std::string first = spec.substr(0, pos);
+
+		if (first.size() > 1 && (first[0] == 'r' || first[0] == 'R'))
+		{
+			if (const u32 idx = static_cast<u32>(std::strtoul(first.c_str() + 1, nullptr, 10)); idx < 32)
+			{
+				cur = static_cast<u32>(gpr[idx]);
+				fmt::append(trace, "\n  %s = 0x%08x", first, cur);
+			}
+			else
+			{
+				fmt::append(trace, "\n  '%s' is not a register", first);
+				ok = false;
+			}
+		}
+		else
+		{
+			cur = static_cast<u32>(std::strtoul(first.c_str(), nullptr, 0));
+			fmt::append(trace, "\n  start = 0x%08x", cur);
+		}
+
+		while (ok && pos != std::string::npos)
+		{
+			const usz next = spec.find(',', pos + 1);
+			const std::string tok = spec.substr(pos + 1, next == std::string::npos ? next : next - pos - 1);
+			pos = next;
+
+			const u32 off = static_cast<u32>(std::strtoul(tok.c_str(), nullptr, 0));
+
+			if (!vm::check_addr(cur + off, vm::page_readable, 4))
+			{
+				fmt::append(trace, "\n  [0x%08x + 0x%x] is not readable, chain stops here", cur, off);
+				ok = false;
+				break;
+			}
+
+			const u32 val = vm::read32(cur + off);
+			fmt::append(trace, "\n  [0x%08x + 0x%x] = 0x%08x", cur, off, val);
+			cur = val;
+		}
+
+		fmt::append(code, "\nARMSX3_CHAIN %s:%s\n", spec, trace);
+
+		if (ok && cur && vm::check_addr(cur, vm::page_executable))
+		{
+			window("Code at the end of ARMSX3_CHAIN", cur, 0, 0x200);
+		}
+		else if (ok)
+		{
+			fmt::append(code, "  end of chain 0x%08x is not executable, not disassembling\n", cur);
+		}
+	}
+
 	vm_log.always()("Guest code around the fault:%s", code);
 }
 
