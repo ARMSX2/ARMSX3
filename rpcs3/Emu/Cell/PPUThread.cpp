@@ -4471,7 +4471,26 @@ extern void ppu_precompile(std::vector<std::string>& dir_queue, std::vector<ppu_
 	// The growth in memory requirements of LLVM is not linear with file size of course
 	// But these estimates should hopefully protect RPCS3 in the coming years
 	// Especially when thread count is on the rise with each CPU generation
-	atomic_t<u32> file_size_limit = static_cast<u32>(std::clamp<u64>(utils::aligned_div<u64>(utils::get_total_memory(), 2000), 65536, u32{umax}));
+	//
+	// Budget from the memory the OS will actually hand out, not from how much is installed.
+	// Android never gives the app the whole machine: on an 11 GB device the system and other
+	// apps held 3.8 GB, so a limit sized against all 11 GB let a full rebuild of Black Flag
+	// reach 6.4 GB resident and die on a 64 KB commit, losing every module still in flight.
+	// MemAvailable is the kernel's own answer to how much is obtainable, and it already nets
+	// off what this process holds, so the queue narrows as the guest grows rather than racing
+	// it. A quarter is kept back because everything that is not LLVM has to fit in the same
+	// budget, and because being killed costs the whole cache rather than one module.
+	//
+	// Lowering this cannot stall a module that is larger than the whole budget: the take is
+	// saturating, so an oversized file still claims the queue, it just runs on its own.
+	const u64 total_memory = utils::get_total_memory();
+	const u64 avail_memory = utils::get_avail_memory();
+	const u64 memory_budget = avail_memory ? std::min<u64>(avail_memory, total_memory) / 4 * 3 : total_memory;
+
+	atomic_t<u32> file_size_limit = static_cast<u32>(std::clamp<u64>(utils::aligned_div<u64>(memory_budget, 2000), 65536, u32{umax}));
+
+	ppu_log.notice("Module compile budget: %u KB in flight, from %u MB available of %u MB",
+		file_size_limit / 1024, avail_memory >> 20, total_memory >> 20);
 
 	const u32 software_thread_limit = std::min<u32>(g_cfg.core.llvm_threads ? g_cfg.core.llvm_threads : u32{umax}, ::size32(file_queue));
 	const u32 cpu_thread_limit = utils::get_thread_count() > 8u ? std::max<u32>(utils::get_thread_count(), 2) - 1 : utils::get_thread_count(); // One LLVM thread less
