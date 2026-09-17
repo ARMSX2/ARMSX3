@@ -2152,13 +2152,24 @@ extern atomic_t<u32> g_ppu_watch_addr;
 
 // Logged rather than routed through ppu_watch_store: there is no ppu_thread here, and what
 // identifies the write is the SPU and the transfer, not an instruction address.
-static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id)
+static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id, const char* kind = "PUT")
 {
 	static atomic_t<u32> s_reports{0};
 
 	if (s_reports.fetch_add(1) < 24)
 	{
-		spu_log.error("WATCH: 0x%x covered by an SPU PUT (eal=0x%x size=0x%x) from SPU 0x%x", g_ppu_watch_addr.load(), eal, size, spu_id);
+		spu_log.error("WATCH: 0x%x covered by an SPU %s (eal=0x%x size=0x%x) from SPU 0x%x", g_ppu_watch_addr.load(), kind, eal, size, spu_id);
+	}
+}
+
+// An atomic 128-byte store, which is how an SPU updates a line it shares with the PPU. Neither
+// of these goes anywhere near do_dma_transfer, so hooking transfers alone reports that nothing
+// writes a field that is in fact written constantly.
+static void ppu_watch_putll(u32 eal, u32 spu_id, const char* kind)
+{
+	if (const u32 w = g_ppu_watch_addr.load(); w && eal < w + 4 && eal + 128 > w)
+	{
+		ppu_watch_dma(eal, 128, spu_id, kind);
 	}
 }
 
@@ -3751,6 +3762,8 @@ std::string spu_putllc_barrier_sites()
 
 bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 {
+	ppu_watch_putll(args.eal, id, "PUTLLC");
+
 	perf_meter<"PUTLLC-"_u64> perf0(nullptr);
 	perf_meter<"PUTLLC+"_u64> perf1 = perf0;
 
@@ -4185,6 +4198,8 @@ void do_cell_atomic_128_store(u32 addr, const void* to_write)
 
 void spu_thread::do_putlluc(const spu_mfc_cmd& args)
 {
+	ppu_watch_putll(args.eal, id, "PUTLLUC");
+
 	perf_meter<"PUTLLUC"_u64> perf0;
 
 	const u32 addr = args.eal & -128;
