@@ -422,7 +422,7 @@
  "packages.multiHint": "여러 파일을 탭하여 모두 선택한 다음 분할 게임의 일부 또는 .rap 라이선스가 포함된 게임을 확인하세요.",
  "packages.select.action": "파일 선택",
  "packages.select.title": ".pkg 또는 .rap 파일을 선택하세요.",
- "packages.title": "패키지 설치",
+ "packages.title": "PKG/데이터 관리자",
  "packages.uninstall": "제거",
  "packages.uninstall.alsoCache": "캐시된 셰이더 및 컴파일된 코드(%s)도 제거합니다.",
  "packages.uninstall.confirmBody": "%s 및 이와 함께 설치된 모든 항목이 삭제됩니다. 별도로 저장된 세이브 데이터는 건드리지 않습니다. 이 작업은 취소할 수 없습니다.",

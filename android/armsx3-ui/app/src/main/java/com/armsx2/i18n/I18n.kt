@@ -483,7 +483,7 @@ val EN: Map<String, String> = mapOf(
     "trophies.viewTrophies" to "View trophies",
     "trophies.none.title" to "No trophies for this game",
     "trophies.none.body" to "This game either has no trophy set, or has not opened it yet — many games only do that once you reach a menu or start playing. Check again later in the session.",
-    "packages.title" to "Install Package",
+    "packages.title" to "PKG/Data Manager",
     "packages.tab.install" to "Install",
     "packages.tab.updates" to "Game updates",
     "packages.updates.description" to "Your library, with each game's update status. Installing a title update is what fixes most games that boot to a black screen or crash early. The base game must already be installed.",

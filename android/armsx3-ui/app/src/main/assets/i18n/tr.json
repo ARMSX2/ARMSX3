@@ -422,7 +422,7 @@
  "packages.multiHint": "Hepsini seçmek için birkaç dosyaya dokunun ve ardından onaylayın: bölünmüş bir oyunun parçaları veya .rap lisansıyla birlikte bir oyun.",
  "packages.select.action": "Dosya seç",
  "packages.select.title": "Bir .pkg veya .rap dosyası seçin",
- "packages.title": "Paketi Yükle",
+ "packages.title": "PKG/Veri Yöneticisi",
  "packages.uninstall": "Kaldır",
  "packages.uninstall.alsoCache": "Ayrıca önbelleğe alınmış gölgelendiricileri ve derlenmiş kodu da kaldırın (%s)",
  "packages.uninstall.confirmBody": "Bu, %s ve onunla birlikte yüklenen her şeyi siler. Ayrı olarak saklanan verileri kaydetmeye dokunulmaz. Bu geri alınamaz.",

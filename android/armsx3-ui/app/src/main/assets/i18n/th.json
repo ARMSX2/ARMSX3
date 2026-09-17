@@ -422,7 +422,7 @@
  "packages.multiHint": "แตะหลายไฟล์เพื่อเลือกทั้งหมด จากนั้นยืนยัน: ส่วนของเกมแยก หรือเกมพร้อมกับลิขสิทธิ์ .rap",
  "packages.select.action": "เลือกไฟล์",
  "packages.select.title": "เลือกไฟล์ .pkg หรือ .rap",
- "packages.title": "ติดตั้งแพ็คเกจ",
+ "packages.title": "PKG/ตัวจัดการข้อมูล",
  "packages.uninstall": "ถอนการติดตั้ง",
  "packages.uninstall.alsoCache": "ลบเชเดอร์ที่แคชไว้และโค้ดที่คอมไพล์แล้ว (%s) ออกด้วย",
  "packages.uninstall.confirmBody": "การดำเนินการนี้จะลบ %s และทุกอย่างที่ติดตั้งด้วย บันทึกข้อมูลที่เก็บไว้แยกกันไม่ได้ถูกแตะต้อง สิ่งนี้ไม่สามารถยกเลิกได้",

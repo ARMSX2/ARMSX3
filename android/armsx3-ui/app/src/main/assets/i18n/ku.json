@@ -422,7 +422,7 @@
  "packages.multiHint": "Gelek pelan bikirtînin da ku hemî wan hilbijêrin, dûv re piştrast bikin: beşên lîstikek dabeşkirî, an lîstikek bi lîsansa wê ya .rap re.",
  "packages.select.action": "Pelê hilbijêre",
  "packages.select.title": "Pelek .pkg an .rap hilbijêre",
- "packages.title": "Pakêtê saz bikin",
+ "packages.title": "PKG/Rêveberê Daneyan",
  "packages.uninstall": "Rakirin",
  "packages.uninstall.alsoCache": "Her weha şaderên cache û koda berhevkirî (%s) jêbirin",
  "packages.uninstall.confirmBody": "Ev %s û her tiştê ku pê re hatiye saz kirin jê dike. Daneyên ku ji hev cuda hatine hilanîn hilînin nayên destgirtin. Ev nayê betalkirin.",

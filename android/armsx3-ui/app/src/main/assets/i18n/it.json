@@ -422,7 +422,7 @@
  "packages.multiHint": "Tocca diversi file per selezionarli tutti, quindi conferma: le parti di un gioco diviso o un gioco insieme alla sua licenza .rap.",
  "packages.select.action": "Scegli file",
  "packages.select.title": "Seleziona un file .pkg o .rap",
- "packages.title": "Installa pacchetto",
+ "packages.title": "PKG/Gestione dati",
  "packages.uninstall": "Disinstallare",
  "packages.uninstall.alsoCache": "Rimuovi anche gli shader memorizzati nella cache e il codice compilato (%s)",
  "packages.uninstall.confirmBody": "Questo elimina %s e tutto ciò che è installato con esso. I dati di salvataggio archiviati separatamente non vengono toccati. Questa operazione non può essere annullata.",

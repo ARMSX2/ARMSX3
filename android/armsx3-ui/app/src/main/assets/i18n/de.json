@@ -422,7 +422,7 @@
  "packages.multiHint": "Tippen Sie auf mehrere Dateien, um sie alle auszuwählen, und bestätigen Sie dann: die Teile eines geteilten Spiels oder ein Spiel zusammen mit seiner .rap-Lizenz.",
  "packages.select.action": "Datei auswählen",
  "packages.select.title": "Wählen Sie eine .pkg- oder .rap-Datei aus",
- "packages.title": "Paket installieren",
+ "packages.title": "PKG/Datenverwaltung",
  "packages.uninstall": "Deinstallieren",
  "packages.uninstall.alsoCache": "Entfernen Sie außerdem zwischengespeicherte Shader und kompilierten Code (%s).",
  "packages.uninstall.confirmBody": "Dadurch wird %s und alles, was damit installiert ist, gelöscht. Getrennt gespeicherte Daten werden nicht berührt. Dies kann nicht rückgängig gemacht werden.",

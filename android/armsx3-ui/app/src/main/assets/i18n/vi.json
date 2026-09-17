@@ -422,7 +422,7 @@
  "packages.multiHint": "Nhấn vào một số tệp để chọn tất cả, sau đó xác nhận: các phần của trò chơi được chia nhỏ hoặc trò chơi cùng với giấy phép .rap của trò chơi đó.",
  "packages.select.action": "Chọn tập tin",
  "packages.select.title": "Chọn tệp .pkg hoặc .rap",
- "packages.title": "Gói cài đặt",
+ "packages.title": "PKG/Trình quản lý dữ liệu",
  "packages.uninstall": "Gỡ cài đặt",
  "packages.uninstall.alsoCache": "Đồng thời xóa các trình đổ bóng được lưu trong bộ nhớ đệm và mã được biên dịch (%s)",
  "packages.uninstall.confirmBody": "Việc này sẽ xóa %s và mọi thứ được cài đặt cùng với nó. Lưu dữ liệu được lưu trữ riêng biệt không được chạm vào. Điều này không thể hoàn tác được.",

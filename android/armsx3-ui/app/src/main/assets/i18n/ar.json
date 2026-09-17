@@ -422,7 +422,7 @@
  "packages.multiHint": "انقر فوق عدة ملفات لتحديدها جميعًا، ثم قم بتأكيد: أجزاء اللعبة المقسمة، أو اللعبة مع ترخيص .rap الخاص بها.",
  "packages.select.action": "اختر الملف",
  "packages.select.title": "حدد ملف .pkg أو .rap",
- "packages.title": "تثبيت الحزمة",
+ "packages.title": "PKG/مدير البيانات",
  "packages.uninstall": "إلغاء التثبيت",
  "packages.uninstall.alsoCache": "قم أيضًا بإزالة التظليلات المخزنة مؤقتًا والتعليمات البرمجية المجمعة (%s)",
  "packages.uninstall.confirmBody": "يؤدي هذا إلى حذف %s وكل شيء مثبت معه. لا يتم لمس حفظ البيانات المخزنة بشكل منفصل. لا يمكن التراجع عن هذا.",

@@ -427,7 +427,7 @@
  "packages.select.action": "Escolha o arquivo",
  "packages.select.external": "Escolher no USB ou cartão SD",
  "packages.select.title": "Selecione um arquivo .pkg ou .rap",
- "packages.title": "Instalar pacote",
+ "packages.title": "PKG/Gerenciador de dados",
  "packages.uninstall": "Desinstalar",
  "packages.uninstall.alsoCache": "Remova também shaders em cache e código compilado (%s)",
  "packages.uninstall.confirmBody": "Isso exclui %s e tudo que está instalado com ele. Salvar dados armazenados separadamente não é tocado. Isto não pode ser desfeito.",

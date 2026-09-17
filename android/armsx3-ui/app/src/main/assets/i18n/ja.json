@@ -422,7 +422,7 @@
  "packages.multiHint": "複数のファイルをタップしてすべてを選択し、分割されたゲームの一部、または .rap ライセンスを含むゲームを確認します。",
  "packages.select.action": "ファイルを選択してください",
  "packages.select.title": ".pkg または .rap ファイルを選択します",
- "packages.title": "パッケージのインストール",
+ "packages.title": "PKG/データ管理",
  "packages.uninstall": "アンインストール",
  "packages.uninstall.alsoCache": "キャッシュされたシェーダとコンパイルされたコード (%s) も削除します",
  "packages.uninstall.confirmBody": "これにより、%s とそれとともにインストールされたすべてのものが削除されます。別途保存されているセーブデータには触れません。これを元に戻すことはできません。",

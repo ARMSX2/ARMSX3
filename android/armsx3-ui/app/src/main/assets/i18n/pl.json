@@ -422,7 +422,7 @@
  "packages.multiHint": "Stuknij kilka plików, aby zaznaczyć je wszystkie, a następnie potwierdź: części podzielonej gry lub grę wraz z licencją .rap.",
  "packages.select.action": "Wybierz plik",
  "packages.select.title": "Wybierz plik .pkg lub .rap",
- "packages.title": "Zainstaluj pakiet",
+ "packages.title": "PKG/Menedżer danych",
  "packages.uninstall": "Odinstaluj",
  "packages.uninstall.alsoCache": "Usuń także buforowane shadery i skompilowany kod (%s)",
  "packages.uninstall.confirmBody": "Spowoduje to usunięcie %s i wszystkiego, co zostało z nim zainstalowane. Zapisz dane przechowywane oddzielnie nie są dotykane. Tego nie można cofnąć.",

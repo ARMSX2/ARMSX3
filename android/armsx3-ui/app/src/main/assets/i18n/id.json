@@ -422,7 +422,7 @@
  "packages.multiHint": "Ketuk beberapa file untuk memilih semuanya, lalu konfirmasikan: bagian dari game terpisah, atau game beserta lisensi .rap-nya.",
  "packages.select.action": "Pilih berkas",
  "packages.select.title": "Pilih file .pkg atau .rap",
- "packages.title": "Instal Paket",
+ "packages.title": "PKG/Pengelola Data",
  "packages.uninstall": "Copot pemasangan",
  "packages.uninstall.alsoCache": "Hapus juga shader cache dan kode yang dikompilasi (%s)",
  "packages.uninstall.confirmBody": "Ini akan menghapus %s dan semua yang terpasang di dalamnya. Simpan data yang disimpan secara terpisah tidak disentuh. Hal ini tidak dapat dibatalkan.",

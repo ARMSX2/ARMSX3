@@ -422,7 +422,7 @@
  "packages.multiHint": "Toca varios archivos para seleccionarlos todos y luego confirma: las partes de un juego dividido o un juego junto con su licencia .rap.",
  "packages.select.action": "Elige el archivo",
  "packages.select.title": "Seleccione un archivo .pkg o .rap",
- "packages.title": "Instalar paquete",
+ "packages.title": "PKG/Gestor de datos",
  "packages.uninstall": "Desinstalar",
  "packages.uninstall.alsoCache": "También elimine los sombreadores en caché y el código compilado (%s)",
  "packages.uninstall.confirmBody": "Esto elimina %s y todo lo que está instalado con él. Los datos guardados almacenados por separado no se tocan. Esto no se puede deshacer.",

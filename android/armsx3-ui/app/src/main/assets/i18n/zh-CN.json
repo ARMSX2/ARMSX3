@@ -422,7 +422,7 @@
  "packages.multiHint": "点击多个文件以将其全部选中，然后确认：拆分游戏的各个部分，或游戏及其 .rap 许可证。",
  "packages.select.action": "选择文件",
  "packages.select.title": "选择 .pkg 或 .rap 文件",
- "packages.title": "安装包",
+ "packages.title": "PKG/数据管理",
  "packages.uninstall": "卸载",
  "packages.uninstall.alsoCache": "同时删除缓存的着色器和编译的代码 (%s)",
  "packages.uninstall.confirmBody": "这将删除 %s 以及随其安装的所有内容。单独存储的保存数据不会受到影响。此操作无法撤消。",
