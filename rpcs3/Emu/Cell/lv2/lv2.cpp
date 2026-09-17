@@ -9,6 +9,8 @@
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/Cell/PPUDisAsm.h"
+
+#include <charconv>
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/Cell/ErrorCodes.h"
 #include "sys_sync.h"
@@ -1241,6 +1243,52 @@ stx::reset_lock acquire_reset_lock(stx::init_mutex& mtx, ppu_thread* ppu)
 	}, ppu);
 }
 
+// Hex ranges from an env var, in the same "start-end[,start-end]" form as ARMSX3_PPU_INTERP.
+// End is exclusive, and a lone address means just that one.
+static std::vector<std::pair<u32, u32>> ppu_dump_env_ranges(const char* name)
+{
+	std::vector<std::pair<u32, u32>> out;
+	const char* env = std::getenv(name);
+
+	if (!env || !*env)
+	{
+		return out;
+	}
+
+	const auto parse_hex = [](std::string_view text, u32& value)
+	{
+		while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
+		while (!text.empty() && text.back() == ' ') text.remove_suffix(1);
+		if (text.starts_with("0x") || text.starts_with("0X")) text.remove_prefix(2);
+		const auto res = std::from_chars(text.data(), text.data() + text.size(), value, 16);
+		return !text.empty() && res.ec == std::errc() && res.ptr == text.data() + text.size();
+	};
+
+	std::string_view rest{env};
+
+	while (!rest.empty())
+	{
+		const usz comma = rest.find(',');
+		const std::string_view item = rest.substr(0, comma);
+		rest = comma == umax ? std::string_view{} : rest.substr(comma + 1);
+
+		u32 start = 0, end = 0;
+		const usz dash = item.find('-');
+
+		if (dash == umax ? (parse_hex(item, start) && (end = start + 4)) : (parse_hex(item.substr(0, dash), start) && parse_hex(item.substr(dash + 1), end) && end > start))
+		{
+			// A typo in a hex range should cost a page of log, not the session.
+			out.emplace_back(start, std::min<u32>(end, start + 0x2000));
+		}
+		else if (!item.empty())
+		{
+			ppu_log.error("%s: could not read '%s', expected start-end in hex", name, std::string(item));
+		}
+	}
+
+	return out;
+}
+
 // Dump every PPU thread on request, for hangs that never reach a fatal error.
 //
 // A game stuck in a loop in its own code makes no syscalls and faults nowhere, so nothing ever
@@ -1341,6 +1389,44 @@ static void ppu_dump_threads_on_request()
 		// to read its state is a good way to turn a hang into a black screen.
 		fmt::append(out, "\n%s's thread context (state %s):\n", rsx->get_name(), +rsx->state);
 		rsx->dump_all(out);
+	}
+
+	// Windows of guest code and memory chosen from outside, so following a hang up its call chain
+	// does not cost a build each time: ARMSX3_DUMP_CODE=start-end[,..] and ARMSX3_DUMP_MEM=..
+	// in driver_env.txt. The frame that sets up a poll loop sits a few calls above it, and the
+	// object it polls is what says who was supposed to write the flag.
+	for (const auto& [start, end] : ppu_dump_env_ranges("ARMSX3_DUMP_CODE"))
+	{
+		fmt::append(out, "\nCode 0x%x..0x%x:\n", start, end);
+
+		for (u32 pc = start & ~3u; pc < end; pc += 4)
+		{
+			if (!vm::check_addr(pc))
+			{
+				fmt::append(out, "\t%08x:\t<unmapped>\n", pc);
+				continue;
+			}
+
+			dis_asm.disasm(pc);
+			fmt::append(out, "%s", dis_asm.last_opcode);
+		}
+	}
+
+	for (const auto& [start, end] : ppu_dump_env_ranges("ARMSX3_DUMP_MEM"))
+	{
+		fmt::append(out, "\nMemory 0x%x..0x%x:\n", start, end);
+
+		for (u32 addr = start & ~15u; addr < end; addr += 16)
+		{
+			if (!vm::check_addr(addr, vm::page_readable, 16))
+			{
+				fmt::append(out, "\t%08x:\t<unmapped>\n", addr);
+				continue;
+			}
+
+			fmt::append(out, "\t%08x:\t%08x %08x %08x %08x\n", addr,
+				vm::read32(addr + 0), vm::read32(addr + 4), vm::read32(addr + 8), vm::read32(addr + 12));
+		}
 	}
 
 	for (const auto& spu : spus)
