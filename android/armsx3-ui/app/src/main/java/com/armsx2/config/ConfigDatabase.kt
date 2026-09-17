@@ -130,6 +130,13 @@ object ConfigDatabase {
         // here once someone has confirmed the mode helps on that game.
         "BLUS31213" to "Video:\n  Frame limit: PS3 Native\n",
         "BLES01935" to "Video:\n  Frame limit: PS3 Native\n",
+
+        // Helldivers: the database forces the PPU interpreter because the recompiler hung it on a
+        // black screen (RPCS3 issue #5831). The hang was LuaJIT's integer arithmetic on
+        // mullwo./subfo. and bso, whose overflow flag the recompiler never set correctly; fixed in
+        // the translator, after which the game goes in-game on the recompiler at 60 fps against
+        // 36 on the interpreter (Odin 3, 2026-09-17).
+        "NPUA80930" to "Core:\n  PPU Decoder: Recompiler (LLVM)\n",
     )
 
     /**
@@ -147,7 +154,10 @@ object ConfigDatabase {
             runCatching {
                 val file = File(dir, "$serial.yml")
                 val existing = if (file.isFile) file.readText() else ""
-                if (existing.contains("Frame limit:")) return@runCatching
+                // Already applied. Checking for the override itself rather than for the setting's
+                // name, which skipped an override whenever the database set the same key, the one
+                // case it exists for.
+                if (existing.contains(yaml.trimEnd())) return@runCatching
                 file.writeText(if (existing.isBlank()) yaml else existing.trimEnd() + "\n" + yaml)
             }
         }
