@@ -608,7 +608,9 @@ void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size)
 	// Zero is the reset of a completion flag, not the completion, and there are two of those
 	// per use. A few are worth seeing for the sequence; after that they are only a way for the
 	// writer that matters to be pushed out of a capped log by the writers that do not.
-	if (!value && g_ppu_watch_zero_writes++ >= 6)
+	// Only a plain word write of zero is the reset. A wider store that happens to lead with
+	// zeroes may still be putting something on the word, so it is never filtered.
+	if (!value && (size & 0x7f) == 4 && g_ppu_watch_zero_writes++ >= 6)
 	{
 		return;
 	}
@@ -618,8 +620,8 @@ void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size)
 		return;
 	}
 
-	ppu_log.error("WATCH: 0x%x <- 0x%llx (%u bytes) from 0x%x on '%s' (after %u zero writes)",
-		addr, value, size, ppu.cia, ppu.get_name(), g_ppu_watch_zero_writes.load());
+	ppu_log.error("WATCH: 0x%x <- 0x%llx (%u bytes%s) from 0x%x on '%s' (after %u zero writes)",
+		addr, value, size & 0x7f, (size & 0x80) ? ", stcx" : "", ppu.cia, ppu.get_name(), g_ppu_watch_zero_writes.load());
 }
 
 void ppu_reservation_fallback(ppu_thread& ppu)
@@ -3641,6 +3643,9 @@ extern u64 ppu_ldarx(ppu_thread& ppu, u32 addr)
 	return ppu_load_acquire_reservation<u64>(ppu, addr);
 }
 
+extern atomic_t<u32> g_ppu_watch_addr;
+void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size);
+
 template <typename T>
 static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 {
@@ -3654,6 +3659,15 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 
 	// Notify breakpoint handler
 	vm::write<void>(addr, T{0}, &ppu);
+
+	// A conditional store reaches memory through here rather than through the interpreter's
+	// write path, so a flag set with stwcx. is invisible to the plain watch. Log the attempt:
+	// this loop retries on failure, so repeats are failures, and a store that keeps failing
+	// while a thread waits on the word is the thing worth finding.
+	if (const u32 w = g_ppu_watch_addr.load(); w && addr < w + 4 && addr + sizeof(T) > w) [[unlikely]]
+	{
+		ppu_watch_store(ppu, addr, static_cast<u64>(reg_value), sizeof(T) | 0x80);
+	}
 
 	auto& data = const_cast<atomic_be_t<u64>&>(vm::_ref<atomic_be_t<u64>>(addr & -8));
 	auto& res = vm::reservation_acquire(addr);

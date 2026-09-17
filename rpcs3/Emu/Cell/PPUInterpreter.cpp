@@ -44,7 +44,7 @@ void ppubreak(ppu_thread& ppu)
 #define PPU_WRITE_32(addr, value) vm::write32(addr, value, &ppu);
 #define PPU_WRITE_64(addr, value) vm::write64(addr, value, &ppu);
 #else
-#define PPU_WRITE(type, addr, value) vm::write<type>(addr, value);
+#define PPU_WRITE(type, addr, value) ppu_write_watched<type>(ppu, addr, value);
 #define PPU_WRITE_8(addr, value) ppu_write_watched<u8>(ppu, addr, value);
 #define PPU_WRITE_16(addr, value) ppu_write_watched<u16>(ppu, addr, value);
 #define PPU_WRITE_32(addr, value) ppu_write_watched<u32>(ppu, addr, value);
@@ -57,14 +57,18 @@ extern atomic_t<u32> g_ppu_watch_addr;
 extern void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size);
 
 template <typename T>
-static FORCE_INLINE void ppu_write_watched(ppu_thread& ppu, u32 addr, T value)
+static FORCE_INLINE void ppu_write_watched(ppu_thread& ppu, u32 addr, const T& value)
 {
 	// Overlap, not equality. The word is four bytes and a store need not start at its first:
 	// on big endian a byte store to the LAST byte is the cheapest way to make a flag non-zero,
 	// and matching the address exactly cannot see it, which reads as "nothing writes this".
 	if (const u32 w = g_ppu_watch_addr.load(); w && addr < w + 4 && addr + sizeof(T) > w) [[unlikely]]
 	{
-		ppu_watch_store(ppu, addr, static_cast<u64>(value), sizeof(T));
+		// Vector and float stores are not integers and are wider than the word; copying the
+		// leading bytes is enough to say what landed on it.
+		u64 as_int = 0;
+		std::memcpy(&as_int, &value, std::min<usz>(sizeof(T), sizeof(u64)));
+		ppu_watch_store(ppu, addr, as_int, sizeof(T));
 	}
 
 	vm::write<T>(addr, value);
