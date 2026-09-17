@@ -137,6 +137,11 @@ object ConfigDatabase {
         // the translator, after which the game goes in-game on the recompiler at 60 fps against
         // 36 on the interpreter (Odin 3, 2026-09-17).
         "NPUA80930" to "Core:\n  PPU Decoder: Recompiler (LLVM)\n",
+
+        // Don't Starve: Giant Edition, forced to the interpreter for the same reason and fixed by
+        // the same overflow flag work. Goes in-game on the recompiler at its 30 fps cap
+        // (Odin 3, 2026-09-17).
+        "NPUB31590" to "Core:\n  PPU Decoder: Recompiler (LLVM)\n",
     )
 
     /**
