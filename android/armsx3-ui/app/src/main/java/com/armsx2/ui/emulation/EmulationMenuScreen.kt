@@ -1679,9 +1679,16 @@ private fun DatabaseSection() {
     val entries = remember(serial) { com.armsx2.config.ConfigDatabase.entriesFor(serial) }
     if (entries.isEmpty()) return
 
+    // A key can be withheld from the core two ways and only one of them is this card's switch:
+    // the core also skips any key you have set for this game yourself, so a row could read "on"
+    // while the core kept skipping it and nothing on screen said why. Fold both into one switch.
+    fun ownValues() = com.armsx2.config.CoreSettingOverrides
+        .load(com.armsx2.config.SettingsScope.Game, serial).keys
+
     var ignored by remember(serial) {
         mutableStateOf(com.armsx2.config.ConfigDatabase.ignoredFor(serial))
     }
+    var yours by remember(serial) { mutableStateOf(ownValues()) }
 
     SectionCard(str("perf.configDb.title")) {
         Text(
@@ -1691,15 +1698,32 @@ private fun DatabaseSection() {
         )
         Spacer(Modifier.height(6.dp))
         for ((path, value) in entries) {
+            val withheld = path in ignored || path in yours
             // The section name is part of the identity, not decoration: "Core@@PPU Decoder" and a
             // video key of the same name would otherwise read as one row.
             MenuSwitchRow(
                 title = "${path.replace("@@", " / ")}: $value",
-                checked = path !in ignored,
-                description = if (path in ignored) str("perf.configDb.off") else null,
+                checked = !withheld,
+                description = when {
+                    path in yours -> str("perf.configDb.yours")
+                    withheld -> str("perf.configDb.off")
+                    else -> null
+                },
             ) { applyThis ->
                 com.armsx2.config.ConfigDatabase.setIgnored(serial, path, !applyThis)
+
+                // On means "use the database value", which cannot be true while your own value
+                // for the same key is still on file: the core gives yours priority.
+                if (applyThis) {
+                    com.armsx2.config.CoreSettingOverrides
+                        .forget(com.armsx2.config.SettingsScope.Game, serial, path)
+                }
+
                 ignored = com.armsx2.config.ConfigDatabase.ignoredFor(serial)
+                yours = ownValues()
+                // Rewrite the file the core reads now, rather than waiting for the next time
+                // something happens to save settings for this title.
+                com.armsx2.config.ConfigDatabase.writeUserKeys(serial, yours)
             }
         }
     }
