@@ -2187,7 +2187,15 @@ static void ppu_watch_putll(const spu_thread& spu, u32 eal, const char* kind)
 
 	if (!wrong_line && !lost)
 	{
-		s_ok++;
+		// A heartbeat rather than every one. Silence has two meanings that need separating:
+		// stores that stopped happening, and stores that keep happening and keep landing while
+		// the word inside the line they write stays zero.
+		if (const u32 n = ++s_ok; n % 256 == 0)
+		{
+			spu_log.error("WATCH: 0x%x, %u %s over it have taken, latest value there 0x%x",
+				w, n, kind, vm::read32(w));
+		}
+
 		return;
 	}
 
