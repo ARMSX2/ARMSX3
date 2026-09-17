@@ -246,12 +246,39 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 	MemoryManager1(std::function<u64(const std::string&)> symbols_cement = {}) noexcept
 		: m_symbols_cement(std::move(symbols_cement))
 	{
+	}
+
+	// Reserve on first use, not on construction.
+	//
+	// 768 MiB of address space per instance, and the destructor deliberately keeps the
+	// reservation (see below). An SPU thread builds one of these whether or not it ever
+	// compiles anything (SPUThread.cpp makes a recompiler per thread), so a SPURS title that
+	// cycles through thread groups burns the space a few hundred times over. A 64 bit Android
+	// process has 512 GiB of it, against 128 TiB on desktop, so what is harmless upstream ran
+	// Assassin's Creed IV out of ADDRESS SPACE, not memory: commits failed with ENOMEM while
+	// the device still had 6 GB free and the process held 1.4 GB.
+	void reserve_once()
+	{
+		if (m_code_mems)
+		{
+			return;
+		}
+
 		auto ptr = reinterpret_cast<u8*>(utils::memory_reserve(c_max_size * 3, true));
 		m_code_mems = ptr;
 		// ptr += c_max_size;
 		// m_data_ro_mems = ptr;
 		 ptr += c_max_size;
 		m_data_rw_mems = ptr;
+
+		// Every 64 instances, because the ceiling is the thing worth seeing coming: this is what
+		// ran out on Assassin's Creed IV, and the number says how close a long session is.
+		static atomic_t<u64> s_reserved_count{0};
+
+		if (const u64 n = ++s_reserved_count; n % 64 == 0)
+		{
+			jit_log.notice("JIT: %u instances hold %u GiB of reserved address space", n, n * c_max_size * 3 / (1024 * 1024 * 1024));
+		}
 	}
 
 	MemoryManager1(const MemoryManager1&) = delete;
@@ -260,6 +287,12 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 
 	~MemoryManager1() override
 	{
+		if (!m_code_mems)
+		{
+			// Never compiled anything, so nothing was ever reserved.
+			return;
+		}
+
 		// Hack: don't release to prevent reuse of address space, see jit_announce
 		// constexpr auto how_much = [](u64 pos) { return utils::align(pos, pos < c_page_size ? c_page_size / 4 : c_page_size); };
 		// utils::memory_decommit(m_code_mems, how_much(code_ptr));
@@ -290,8 +323,11 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 		return {addr, llvm::JITSymbolFlags::Exported};
 	}
 
-	u8* allocate(u64& alloc_pos, void* block, uptr size, u64 align, utils::protection prot)
+	u8* allocate(u64& alloc_pos, void*& block, uptr size, u64 align, utils::protection prot)
 	{
+		// block is a reference to the member this instance allocates from, so reserving here
+		// gives the caller the address it was passed a reference to.
+		reserve_once();
 		align = align ? align : 16;
  
 		const u64 sizea = utils::align(size, align);
