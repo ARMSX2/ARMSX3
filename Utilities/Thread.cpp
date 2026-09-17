@@ -1585,7 +1585,7 @@ namespace rsx
 // fault would be the worst possible trade.
 //
 // Called from BOTH access violation paths, for the reason given on the memory dump below.
-static void dump_guest_code_at_fault(cpu_thread* cpu, u32 fault_addr)
+static void dump_guest_code_at_fault(cpu_thread* cpu, u32 fault_addr, bool is_writing)
 {
 	if (!cpu || cpu->get_class() != thread_class::ppu)
 	{
@@ -1650,17 +1650,51 @@ static void dump_guest_code_at_fault(cpu_thread* cpu, u32 fault_addr)
 
 				bool hit = false;
 
+				// Only instructions that touch memory, and only in the direction that faulted.
+				//
+				// Both filters are load bearing. Primary 31 is not just indexed loads and stores,
+				// it is also every arithmetic and logical form, so matching it wholesale flags an
+				// `add` whose two registers happen to sum to the fault address. With a fault at 0
+				// that is most of the window, and the real access is buried in the noise.
+				const auto store_d = [](u32 op)
+				{
+					return (op >= 36 && op <= 39) || op == 44 || op == 45 || op == 47
+						|| (op >= 52 && op <= 55);
+				};
+
 				if (primary >= 32 && primary <= 55)
 				{
-					hit = static_cast<u32>(base + static_cast<s16>(iop & 0xffff)) == fault_addr;
+					hit = store_d(primary) == is_writing
+						&& static_cast<u32>(base + static_cast<s16>(iop & 0xffff)) == fault_addr;
 				}
 				else if (primary == 58 || primary == 62)
 				{
-					hit = static_cast<u32>(base + (static_cast<s16>(iop & 0xfffc))) == fault_addr;
+					hit = (primary == 62) == is_writing
+						&& static_cast<u32>(base + (static_cast<s16>(iop & 0xfffc))) == fault_addr;
 				}
 				else if (primary == 31)
 				{
-					hit = static_cast<u32>(base + gpr_ref[(iop >> 11) & 0x1f]) == fault_addr;
+					// Indexed memory forms only, by extended opcode.
+					switch ((iop >> 1) & 0x3ff)
+					{
+					case 21: case 23: case 53: case 55: case 87: case 119:
+					case 279: case 311: case 341: case 343: case 373: case 375:
+					case 534: case 535: case 567: case 597: case 599: case 631:
+					{
+						hit = !is_writing;
+						break;
+					}
+					case 149: case 151: case 181: case 183: case 215: case 247:
+					case 407: case 439: case 662: case 663: case 695: case 725:
+					case 727: case 759: case 918:
+					{
+						hit = is_writing;
+						break;
+					}
+					default: { hit = false; break; }
+					}
+
+					hit = hit && static_cast<u32>(base + gpr_ref[(iop >> 11) & 0x1f]) == fault_addr;
 				}
 
 				if (hit)
@@ -1848,6 +1882,63 @@ static void dump_guest_code_at_fault(cpu_thread* cpu, u32 fault_addr)
 		{
 			fmt::append(code, "  end of chain 0x%08x is not executable, not disassembling\n", cur);
 		}
+	}
+
+	// Find every instruction matching a bit pattern, anywhere in guest code.
+	//
+	// Some questions are not "what is at this address" but "who writes this field", and a
+	// fault dump cannot answer that by following anything: the writer already ran, possibly
+	// minutes ago, and is not on the stack. On desktop that is a write watchpoint. On Android
+	// there is none, so the next best thing is that the instruction which does it has a fixed
+	// encoding and can simply be looked for.
+	//
+	// Burnout Paradise is the case. One field of an otherwise intact audio structure,
+	// r31+0x17c, holds 0x6387194f where a buffer size belongs, so the game asks the heap for
+	// 1.67GB, the allocation fails, and every pointer that should have come from it stays
+	// null. Every crash after that is downstream of the one bad word, and the only thing left
+	// to learn is who put it there. `stw rX,0x17c(rY)` is 0x9000017c under mask 0xfc00ffff.
+	//
+	// ARMSX3_SCAN=<value>/<mask>, both hex. Pages are checked before they are read and
+	// unmapped ones skipped, so the default range can be generous without caring what is
+	// actually mapped. ARMSX3_SCAN_FROM and ARMSX3_SCAN_TO narrow it.
+	if (const char* scan_env = std::getenv("ARMSX3_SCAN"))
+	{
+		const u32 want = static_cast<u32>(std::strtoul(scan_env, nullptr, 16));
+		const char* slash = std::strchr(scan_env, '/');
+		const u32 mask = slash ? static_cast<u32>(std::strtoul(slash + 1, nullptr, 16)) : 0xffffffffu;
+
+		u32 from = 0x10000;
+		u32 to = 0x10000000;
+
+		if (const char* e = std::getenv("ARMSX3_SCAN_FROM")) from = static_cast<u32>(std::strtoul(e, nullptr, 0)) & ~3u;
+		if (const char* e = std::getenv("ARMSX3_SCAN_TO")) to = static_cast<u32>(std::strtoul(e, nullptr, 0)) & ~3u;
+
+		std::string found;
+		u32 hits = 0;
+
+		for (u32 page = from & ~0xfffu; page < to && hits < 64; page += 0x1000)
+		{
+			if (!vm::check_addr(page, vm::page_executable, 0x1000))
+			{
+				continue;
+			}
+
+			for (u32 at = std::max(page, from); at < page + 0x1000 && at < to && hits < 64; at += 4)
+			{
+				if ((vm::read32(at) & mask) != want)
+				{
+					continue;
+				}
+
+				hits++;
+				dis_asm.disasm(at);
+				found += "    ";
+				found += dis_asm.last_opcode;
+			}
+		}
+
+		fmt::append(code, "\nARMSX3_SCAN %08x/%08x over 0x%08x..0x%08x, %u %s:\n%s",
+			want, mask, from, to, hits, hits == 64 ? "matches (CAPPED)" : "matches", found);
 	}
 
 	vm_log.always()("Guest code around the fault:%s", code);
@@ -2654,7 +2745,7 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 					// Every address is checked before it is read: cia and the stack are taken from
 					// a thread that just faulted, so both can be garbage, and faulting inside the
 					// diagnostic that explains a fault would be the worst possible trade.
-					dump_guest_code_at_fault(cpu, addr);
+					dump_guest_code_at_fault(cpu, addr, is_writing);
 					dump_guest_memory_at_registers(cpu);
 				}
 			}
@@ -2695,7 +2786,7 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 		vm_log.error("\n%s", dump_useful_thread_info());
 		vm_log.fatal("Access violation %s location 0x%x (%s)", is_writing ? "writing" : (is_exec ? "executing" : "reading"), addr, (is_writing && vm::check_addr(addr)) ? "read-only memory" : "unmapped memory");
 
-		dump_guest_code_at_fault(cpu, addr);
+		dump_guest_code_at_fault(cpu, addr, is_writing);
 		dump_guest_memory_at_registers(cpu);
 
 		// The host stack, which is the half that was missing.
