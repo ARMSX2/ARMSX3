@@ -17,8 +17,9 @@ Notes:
   - The app is force-stopped between tests, and each test is booted through the VIEW intent the
     manifest already accepts. That means this DRIVES the device: do not run it while someone is
     using the app for something else.
-  - TTY.log cannot be truncated from adb (it lives under Android/data, which shell may read but
-    not write). The harness notes its size first, then watches: the app resets the log when it
+  - TTY.log cannot be truncated from adb (shell may read it but not write it), and it lives under
+    the app's data root, which can be moved to an SD card. The harness looks for it; see
+    find_live_tty. The harness notes its size first, then watches: the app resets the log when it
     boots, so a size DROP means the whole file belongs to this test. Assuming the pre-launch size
     was a prefix silently produced a 29k-of-108k-line capture that read as a huge test failure.
   - A test is considered finished when TTY.log stops growing for --idle seconds. There is no
@@ -34,7 +35,15 @@ from collections import Counter
 
 PKG = "com.armsx3"
 ACTIVITY = f"{PKG}/com.armsx2.Main"
-TTY = f"/sdcard/Android/data/{PKG}/files/cache/TTY.log"
+# Every place TTY.log can live. The emulator writes it under the app's data root, and the user can
+# move that root (to an SD card, for one). A fixed Android/data path kept reading an empty file
+# while the real log filled up on the card, so every suite that prints to the console came back
+# NO OUTPUT and six suites were never compared at all.
+TTY_CANDIDATES = [
+    "/storage/*/ARMSX3/cache/TTY.log",
+    "/sdcard/ARMSX3/cache/TTY.log",
+    f"/sdcard/Android/data/{PKG}/files/cache/TTY.log",
+]
 DEVICE_DIR = "/sdcard/ARMSX3-autotests"
 
 REPO_DEFAULT = os.path.join(
@@ -52,9 +61,39 @@ def adb(*args, binary=False, check=True):
     return proc.stdout if binary else proc.stdout.decode(errors="replace")
 
 
-def tty_size():
-    out = adb("exec-out", f"wc -c < {TTY} 2>/dev/null || echo 0").strip()
+def tty_size(tty):
+    out = adb("exec-out", f"wc -c < {tty} 2>/dev/null || echo 0").strip()
     return int(out.split()[0]) if out.split() else 0
+
+
+def tty_candidates():
+    """(mtime, size, path) for every TTY.log that exists right now, newest first."""
+    out = adb("exec-out", "stat -c '%Y %s %n' " + " ".join(TTY_CANDIDATES) + " 2>/dev/null", check=False)
+    found = []
+    for line in out.splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+            found.append((int(parts[0]), int(parts[1]), parts[2]))
+    return sorted(found, reverse=True)
+
+
+def find_live_tty(snapshot, wait):
+    """The TTY.log this launch writes to, plus its size from before the launch.
+
+    Emu::Init opens TTY.log with fs::rewrite once per process, so after a force-stop the live log
+    is whichever candidate changes (or appears) once the app starts. If nothing changes in time,
+    fall back to the newest one, which is where the last launch wrote.
+    """
+    before = {path: (mtime, size) for mtime, size, path in snapshot}
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        for mtime, _size, path in tty_candidates():
+            if path not in before or mtime > before[path][0]:
+                return path, before.get(path, (0, 0))[1]
+        time.sleep(1)
+    if snapshot:
+        return snapshot[0][2], snapshot[0][1]
+    return TTY_CANDIDATES[-1], 0
 
 
 def discover(tests_root):
@@ -106,12 +145,14 @@ def run_one(name, dirpath, elf, expected_path, args):
     adb("shell", f"am force-stop {PKG}", check=False)
     time.sleep(1.5)
 
-    before = tty_size()
+    snapshot = tty_candidates()
     adb(
         "shell",
         f"am start -a android.intent.action.VIEW -d file://{remote_dir}/{elf} -n {ACTIVITY}",
         check=False,
     )
+    tty, before = find_live_tty(snapshot, min(args.boot_wait, 30))
+    print(f"  TTY: {tty}", flush=True)
 
     # Grown-then-quiet, because there is no end-of-test marker to wait for.
     #
@@ -125,7 +166,7 @@ def run_one(name, dirpath, elf, expected_path, args):
     offset = before
     while True:
         time.sleep(2)
-        size = tty_size()
+        size = tty_size(tty)
         if size < offset:
             offset = 0
         if size != last_size:
@@ -141,7 +182,7 @@ def run_one(name, dirpath, elf, expected_path, args):
             print(f"  no output after {args.boot_wait}s -- did it boot?", flush=True)
             break
 
-    raw = adb("exec-out", f"cat {TTY}", binary=True)
+    raw = adb("exec-out", f"cat {tty}", binary=True)
     adb("shell", f"am force-stop {PKG}", check=False)
 
     got = normalise(raw[offset:].decode("utf-8", errors="replace"))
