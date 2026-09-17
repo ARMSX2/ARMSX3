@@ -646,6 +646,10 @@ private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuVie
         selected = state.selectedAction,
         onSelect = viewModel::selectAction,
     )
+    // First card under the actions, ahead of the on-screen card, because it explains why a
+    // setting you picked yourself is not the one the game is running on. It only appears for
+    // titles the database has an entry for, so most sessions never see it.
+    DatabaseSection()
     // On-screen display — a single universal on/off (old-UI style); the per-stat
     // toggles live in All Settings. Plus a frame-limit switch so fast-forward is one
     // tap away.
@@ -1655,6 +1659,47 @@ private fun ActionGrid(actions: List<MenuAction>, selected: Int, onSelect: (Int)
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The RPCS3 compatibility database entries for the running title, each one switchable.
+ *
+ * The database is downloaded per title and applied by the core over the top of your own config,
+ * so a title it pins to the PPU interpreter (108 of the database's 2195 are) runs on the
+ * interpreter no matter what the decoder row in All Settings says. Switching an entry off here
+ * withholds that key from the core and hands the setting back to you. A game with no database
+ * entry renders nothing at all.
+ */
+@Composable
+private fun DatabaseSection() {
+    val serial = com.armsx2.ui.InGameOverlay.currentSerial.value?.takeIf { it.isNotBlank() } ?: return
+    val entries = remember(serial) { com.armsx2.config.ConfigDatabase.entriesFor(serial) }
+    if (entries.isEmpty()) return
+
+    var ignored by remember(serial) {
+        mutableStateOf(com.armsx2.config.ConfigDatabase.ignoredFor(serial))
+    }
+
+    SectionCard(str("perf.configDb.title")) {
+        Text(
+            str("perf.configDb.help"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
+        for ((path, value) in entries) {
+            // The section name is part of the identity, not decoration: "Core@@PPU Decoder" and a
+            // video key of the same name would otherwise read as one row.
+            MenuSwitchRow(
+                title = "${path.replace("@@", " / ")}: $value",
+                checked = path !in ignored,
+                description = if (path in ignored) str("perf.configDb.off") else null,
+            ) { applyThis ->
+                com.armsx2.config.ConfigDatabase.setIgnored(serial, path, !applyThis)
+                ignored = com.armsx2.config.ConfigDatabase.ignoredFor(serial)
             }
         }
     }
