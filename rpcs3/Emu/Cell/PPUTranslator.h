@@ -182,6 +182,9 @@ public:
 	// Set fpr
 	void SetFpr(u32 r, llvm::Value* val);
 
+	// Sign of an exact zero from fnmadd/fnmsub (see the definition)
+	llvm::Value* FixNegatedFmaZero(llvm::Value* result, llvm::Value* a, llvm::Value* b, llvm::Value* c, bool subtract);
+
 	// Vector register type
 	enum class VrType
 	{

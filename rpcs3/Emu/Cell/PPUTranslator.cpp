@@ -4675,6 +4675,44 @@ static llvm::Value* ppu_negate_result(Builder* ir, llvm::Value* v)
 	return ir->CreateSelect(ir->CreateFCmpUNO(v, v), v, flipped);
 }
 
+// fnmadd and fnmsub zeros. LLVM folds the negate above into the fused multiply-add, and the fused
+// (-b) - a*c gives +0.0 where the hardware's -(a*c + b) gives -0.0 (a = +0, c = -0, b = +0 for
+// one). Only results that are exactly zero differ, so anything else, NaNs included, keeps the
+// fused answer, and a zero gets its sign back from the operands:
+//   a or c is zero: the product is a signed zero, the sum is -0.0 only when the product and the
+//   addend are both -0.0, and the result is the negation of that
+//   otherwise the addend cancelled the product: the sum is +0.0 and the result is -0.0
+// A sum can also round to zero without being zero, but only when |b| is under 2^-969. Zeros there,
+// and a product that underflowed with a zero addend, keep the fused sign, which is right for them.
+// On ps3autotests cpu/ppu_fpu this fixes 496 of the 504 zero lines and changes no other line.
+// The work sits behind an unlikely branch, so a nonzero result pays for one compare.
+llvm::Value* PPUTranslator::FixNegatedFmaZero(llvm::Value* result, llvm::Value* a, llvm::Value* b, llvm::Value* c, bool subtract)
+{
+	const auto zero = ConstantFP::get(GetType<f64>(), 0.0);
+	const auto entry = m_ir->GetInsertBlock();
+	const auto fix = BasicBlock::Create(m_context, "__fnm_zero", m_function);
+	const auto next = BasicBlock::Create(m_context, "__fnm_next", m_function);
+	m_ir->CreateCondBr(m_ir->CreateFCmpOEQ(result, zero), fix, next, m_md_unlikely);
+
+	m_ir->SetInsertPoint(fix);
+	const auto bits = [&](Value* v) { return m_ir->CreateBitCast(v, GetType<u64>()); };
+	const auto product_zero = m_ir->CreateOr(m_ir->CreateFCmpOEQ(a, zero), m_ir->CreateFCmpOEQ(c, zero));
+	const auto product_neg = m_ir->CreateICmpSLT(m_ir->CreateXor(bits(a), bits(c)), m_ir->getInt64(0));
+	const auto addend_neg = subtract ? m_ir->CreateICmpSGE(bits(b), m_ir->getInt64(0)) : m_ir->CreateICmpSLT(bits(b), m_ir->getInt64(0));
+	const auto cancelled = m_ir->CreateICmpUGE(m_ir->CreateAnd(bits(b), m_ir->getInt64(0x7fffffffffffffffull)), m_ir->getInt64(0x0360000000000000ull));
+	const auto zeros_negative = m_ir->CreateAnd(product_zero, m_ir->CreateAnd(product_neg, addend_neg));
+	const auto signed_zero = m_ir->CreateSelect(zeros_negative, zero, ConstantFP::get(GetType<f64>(), -0.0));
+	const auto fixed = m_ir->CreateSelect(m_ir->CreateOr(product_zero, cancelled), signed_zero, result);
+	const auto fix_end = m_ir->GetInsertBlock();
+	m_ir->CreateBr(next);
+
+	m_ir->SetInsertPoint(next);
+	const auto merged = m_ir->CreatePHI(GetType<f64>(), 2);
+	merged->addIncoming(result, entry);
+	merged->addIncoming(fixed, fix_end);
+	return merged;
+}
+
 void PPUTranslator::FMADDS(ppu_opcode_t op)
 {
 	const auto a = GetFpr(op.fra);
@@ -4747,7 +4785,7 @@ void PPUTranslator::FNMSUBS(ppu_opcode_t op)
 		result = m_ir->CreateFSub(m_ir->CreateFMul(a, c), b);
 	}
 
-	SetFpr(op.frd, m_ir->CreateFPTrunc(ppu_negate_result(m_ir, result), GetType<f32>()));
+	SetFpr(op.frd, m_ir->CreateFPTrunc(FixNegatedFmaZero(ppu_negate_result(m_ir, result), a, b, c, true), GetType<f32>()));
 
 	//SetFPSCR_FR(Call(GetType<bool>(), m_pure_attr, "__fmadds_get_fr", a, b, c)); // TODO ???
 	//SetFPSCR_FI(Call(GetType<bool>(), m_pure_attr, "__fmadds_get_fi", a, b, c));
@@ -4775,7 +4813,7 @@ void PPUTranslator::FNMADDS(ppu_opcode_t op)
 		result = m_ir->CreateFAdd(m_ir->CreateFMul(a, c), b);
 	}
 
-	SetFpr(op.frd, m_ir->CreateFPTrunc(ppu_negate_result(m_ir, result), GetType<f32>()));
+	SetFpr(op.frd, m_ir->CreateFPTrunc(FixNegatedFmaZero(ppu_negate_result(m_ir, result), a, b, c, false), GetType<f32>()));
 
 	//SetFPSCR_FR(Call(GetType<bool>(), m_pure_attr, "__fmadds_get_fr", a, b, c)); // TODO ???
 	//SetFPSCR_FI(Call(GetType<bool>(), m_pure_attr, "__fmadds_get_fi", a, b, c));
@@ -5124,7 +5162,7 @@ void PPUTranslator::FNMSUB(ppu_opcode_t op)
 		result = m_ir->CreateFSub(m_ir->CreateFMul(a, c), b);
 	}
 
-	SetFpr(op.frd, ppu_negate_result(m_ir, result));
+	SetFpr(op.frd, FixNegatedFmaZero(ppu_negate_result(m_ir, result), a, b, c, true));
 
 	//SetFPSCR_FR(Call(GetType<bool>(), m_pure_attr, "__fmadd_get_fr", a, b, c)); // TODO ???
 	//SetFPSCR_FI(Call(GetType<bool>(), m_pure_attr, "__fmadd_get_fi", a, b, c));
@@ -5152,7 +5190,7 @@ void PPUTranslator::FNMADD(ppu_opcode_t op)
 		result = m_ir->CreateFAdd(m_ir->CreateFMul(a, c), b);
 	}
 
-	SetFpr(op.frd, ppu_negate_result(m_ir, result));
+	SetFpr(op.frd, FixNegatedFmaZero(ppu_negate_result(m_ir, result), a, b, c, false));
 
 	//SetFPSCR_FR(Call(GetType<bool>(), m_pure_attr, "__fmadd_get_fr", a, b, c)); // TODO ???
 	//SetFPSCR_FI(Call(GetType<bool>(), m_pure_attr, "__fmadd_get_fi", a, b, c));
