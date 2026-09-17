@@ -1375,6 +1375,32 @@ static void ppu_dump_threads_on_request()
 				fmt::append(out, "%s%s", pc == cia ? "->" : "  ", dis_asm.last_opcode);
 			}
 		}
+
+		// The eight bytes dump_regs prints per register name the object a thread is working on
+		// but not what is in it, and a wait is usually explained by the structure around the
+		// word being waited on rather than by the word. Opt in with ARMSX3_DUMP_REGMEM=1,
+		// because this is several hundred lines per dump.
+		if (const char* env = std::getenv("ARMSX3_DUMP_REGMEM"); env && *env && *env != '0')
+		{
+			for (u32 i = 0; i < 32; i++)
+			{
+				const u32 addr = static_cast<u32>(ppu->gpr[i]);
+
+				if (addr < 0x10000 || !vm::check_addr(addr, vm::page_readable, 64))
+				{
+					continue;
+				}
+
+				fmt::append(out, "r%u at 0x%x:\n", i, addr);
+
+				for (u32 off = 0; off < 64; off += 16)
+				{
+					fmt::append(out, "\t%08x:\t%08x %08x %08x %08x\n", addr + off,
+						vm::read32(addr + off + 0), vm::read32(addr + off + 4),
+						vm::read32(addr + off + 8), vm::read32(addr + off + 12));
+				}
+			}
+		}
 	}
 
 	for (const auto& spu : spus)
