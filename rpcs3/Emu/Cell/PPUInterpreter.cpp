@@ -59,7 +59,10 @@ extern void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size
 template <typename T>
 static FORCE_INLINE void ppu_write_watched(ppu_thread& ppu, u32 addr, T value)
 {
-	if (g_ppu_watch_addr.load() == addr) [[unlikely]]
+	// Overlap, not equality. The word is four bytes and a store need not start at its first:
+	// on big endian a byte store to the LAST byte is the cheapest way to make a flag non-zero,
+	// and matching the address exactly cannot see it, which reads as "nothing writes this".
+	if (const u32 w = g_ppu_watch_addr.load(); w && addr < w + 4 && addr + sizeof(T) > w) [[unlikely]]
 	{
 		ppu_watch_store(ppu, addr, static_cast<u64>(value), sizeof(T));
 	}

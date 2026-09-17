@@ -560,6 +560,7 @@ void ppu_recompiler_fallback(ppu_thread& ppu)
 atomic_t<u32> g_ppu_watch_addr{0};
 
 static atomic_t<u32> g_ppu_watch_reports{0};
+static atomic_t<u32> g_ppu_watch_zero_writes{0};
 
 void ppu_watch_arm(const ppu_thread& ppu)
 {
@@ -604,13 +605,21 @@ void ppu_watch_arm(const ppu_thread& ppu)
 
 void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size)
 {
-	// Capped: a field written every frame would otherwise bury the dump that follows it.
-	if (g_ppu_watch_reports.fetch_add(1) >= 24)
+	// Zero is the reset of a completion flag, not the completion, and there are two of those
+	// per use. A few are worth seeing for the sequence; after that they are only a way for the
+	// writer that matters to be pushed out of a capped log by the writers that do not.
+	if (!value && g_ppu_watch_zero_writes++ >= 6)
 	{
 		return;
 	}
 
-	ppu_log.error("WATCH: 0x%x <- 0x%llx (%u bytes) from 0x%x on '%s'", addr, value, size, ppu.cia, ppu.get_name());
+	if (g_ppu_watch_reports.fetch_add(1) >= 48)
+	{
+		return;
+	}
+
+	ppu_log.error("WATCH: 0x%x <- 0x%llx (%u bytes) from 0x%x on '%s' (after %u zero writes)",
+		addr, value, size, ppu.cia, ppu.get_name(), g_ppu_watch_zero_writes.load());
 }
 
 void ppu_reservation_fallback(ppu_thread& ppu)
