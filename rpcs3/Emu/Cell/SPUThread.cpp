@@ -2174,6 +2174,23 @@ static void ppu_watch_putll(const spu_thread& spu, u32 eal, const char* kind)
 		return;
 	}
 
+	// The two ways this store fails before writing anything: the line is not the one this SPU
+	// reserved, or the reservation was taken away since. Only those are worth a line of log.
+	// A store that is going to succeed happens constantly and will eat any cap long before the
+	// hang it is meant to explain, which is exactly what the first version of this did.
+	const u32 line = eal & -128;
+	const u64 res = vm::reservation_acquire(line);
+	const bool wrong_line = spu.raddr != line;
+	const bool lost = !wrong_line && spu.rtime != (res & -128);
+
+	static atomic_t<u32> s_ok{0};
+
+	if (!wrong_line && !lost)
+	{
+		s_ok++;
+		return;
+	}
+
 	static atomic_t<u32> s_reports{0};
 
 	if (s_reports.fetch_add(1) >= 64)
@@ -2181,15 +2198,8 @@ static void ppu_watch_putll(const spu_thread& spu, u32 eal, const char* kind)
 		return;
 	}
 
-	// The two ways this store fails before it writes anything: the line is not the one this SPU
-	// reserved, or the reservation was taken away since. Printing both says whether a retrying
-	// store is losing a race or was never going to win, which are different bugs.
-	const u32 line = eal & -128;
-	const u64 res = vm::reservation_acquire(line);
-
-	spu_log.error("WATCH: 0x%x covered by an SPU %s (eal=0x%x) from SPU 0x%x: raddr=0x%x rtime=0x%llx res=0x%llx%s%s",
-		w, kind, eal, spu.id, spu.raddr, spu.rtime, res,
-		spu.raddr != line ? " WRONG-LINE" : "", (spu.raddr == line && spu.rtime != (res & -128)) ? " LOST" : "");
+	spu_log.error("WATCH: 0x%x %s would fail from SPU 0x%x: raddr=0x%x rtime=0x%llx res=0x%llx %s (after %u that took)",
+		w, kind, spu.id, spu.raddr, spu.rtime, res, wrong_line ? "WRONG-LINE" : "LOST", s_ok.load());
 }
 
 void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8* ls)
