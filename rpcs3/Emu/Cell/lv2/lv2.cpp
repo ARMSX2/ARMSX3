@@ -8,6 +8,7 @@
 #include "Emu/Cell/PPUFunction.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
+#include "Emu/RSX/RSXThread.h"
 #include "Emu/Cell/ErrorCodes.h"
 #include "sys_sync.h"
 #include "sys_lwmutex.h"
@@ -1259,6 +1260,7 @@ static void ppu_dump_threads_on_request()
 	fs::remove_file(trigger);
 
 	std::vector<shared_ptr<named_thread<ppu_thread>>> threads;
+	std::vector<shared_ptr<named_thread<spu_thread>>> spus;
 
 	idm::select<named_thread<ppu_thread>>([&](u32 id, named_thread<ppu_thread>&)
 	{
@@ -1268,9 +1270,26 @@ static void ppu_dump_threads_on_request()
 		}
 	});
 
+	// SPUs too: a hang where every PPU thread waits is usually one of these, either stuck in its
+	// own code or waiting on a channel nobody writes, and the PPU side alone cannot tell which.
+	idm::select<named_thread<spu_thread>>([&](u32 id, named_thread<spu_thread>&)
+	{
+		if (auto spu = idm::get_unlocked<named_thread<spu_thread>>(id))
+		{
+			spus.emplace_back(std::move(spu));
+		}
+	});
+
+	const auto rsx = rsx::get_current_renderer();
+
 	for (const auto& ppu : threads)
 	{
 		ppu->state += cpu_flag::dbg_global_pause;
+	}
+
+	for (const auto& spu : spus)
+	{
+		spu->state += cpu_flag::dbg_global_pause;
 	}
 
 	// A loop reaches its pause check within microseconds; a thread asleep in a syscall is
@@ -1285,13 +1304,33 @@ static void ppu_dump_threads_on_request()
 		ppu->dump_all(out);
 	}
 
+	for (const auto& spu : spus)
+	{
+		fmt::append(out, "\n%s's thread context (state %s):\n", spu->get_name(), +spu->state);
+		spu->dump_all(out);
+	}
+
+	if (rsx)
+	{
+		// Not paused: the renderer is what keeps presenting during a guest hang, and stopping it
+		// to read its state is a good way to turn a hang into a black screen.
+		fmt::append(out, "\n%s's thread context (state %s):\n", rsx->get_name(), +rsx->state);
+		rsx->dump_all(out);
+	}
+
+	for (const auto& spu : spus)
+	{
+		spu->state -= cpu_flag::dbg_global_pause;
+		spu->state.notify_one();
+	}
+
 	for (const auto& ppu : threads)
 	{
 		ppu->state -= cpu_flag::dbg_global_pause;
 		ppu->state.notify_one();
 	}
 
-	ppu_log.warning("Thread dump requested, %u PPU threads:%s", threads.size(), out);
+	ppu_log.warning("Thread dump requested, %u PPU and %u SPU threads:%s", threads.size(), spus.size(), out);
 }
 
 class ppu_syscall_usage
