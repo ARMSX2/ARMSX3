@@ -78,18 +78,21 @@ def tty_candidates():
 
 
 def find_live_tty(snapshot, wait):
-    """The TTY.log this launch writes to, plus its size from before the launch.
+    """The TTY.log this launch writes to, and the offset its output starts at.
 
     Emu::Init opens TTY.log with fs::rewrite once per process, so after a force-stop the live log
-    is whichever candidate changes (or appears) once the app starts. If nothing changes in time,
-    fall back to the newest one, which is where the last launch wrote.
+    is whichever candidate changes (or appears) once the app starts, and a changed file starts at
+    offset 0. Do not hand back the old size: a suite that prints straight away (ppu_vpu, from a
+    warm PPU cache) grows past it before the first poll, the size drop is never seen, and the
+    capture silently loses its first 32k lines. If nothing changes in time, fall back to the
+    newest candidate at its old size, which is where the last launch wrote.
     """
     before = {path: (mtime, size) for mtime, size, path in snapshot}
     deadline = time.time() + wait
     while time.time() < deadline:
         for mtime, _size, path in tty_candidates():
             if path not in before or mtime > before[path][0]:
-                return path, before.get(path, (0, 0))[1]
+                return path, 0
         time.sleep(1)
     if snapshot:
         return snapshot[0][2], snapshot[0][1]
