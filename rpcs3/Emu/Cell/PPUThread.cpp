@@ -5746,6 +5746,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				arm64_codegen_v7,
 				arm64_codegen_v8,
 				arm64_codegen_v9,
+				arm64_codegen_v10,
 
 				__bitset_enum_max
 			};
@@ -5766,7 +5767,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			// Add a new value (arm64_codegen_v3, ...) and set that instead whenever ARM64 PPU
 			// codegen changes. Never re-toggle an old one -- that would collide with hashes already
 			// on disk from an earlier build.
-			settings += ppu_settings::arm64_codegen_v9;
+			settings += ppu_settings::arm64_codegen_v10;
 #endif
 			if (g_cfg.core.use_accurate_dfma)
 				settings += ppu_settings::accurate_dfma;
