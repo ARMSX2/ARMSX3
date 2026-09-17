@@ -4712,7 +4712,7 @@ void PPUTranslator::FMSUBS(ppu_opcode_t op)
 	llvm::Value* result;
 	if (g_cfg.core.use_accurate_dfma)
 	{
-		result = m_ir->CreateCall(get_intrinsic<f64>(llvm::Intrinsic::fma), {a, c, m_ir->CreateFNeg(b)});
+		result = m_ir->CreateCall(get_intrinsic<f64>(llvm::Intrinsic::fma), {a, c, ppu_negate_result(m_ir, b)});
 	}
 	else
 	{
@@ -4740,7 +4740,7 @@ void PPUTranslator::FNMSUBS(ppu_opcode_t op)
 	llvm::Value* result;
 	if (g_cfg.core.use_accurate_dfma)
 	{
-		result = m_ir->CreateCall(get_intrinsic<f64>(llvm::Intrinsic::fma), {a, c, m_ir->CreateFNeg(b)});
+		result = m_ir->CreateCall(get_intrinsic<f64>(llvm::Intrinsic::fma), {a, c, ppu_negate_result(m_ir, b)});
 	}
 	else
 	{
@@ -5061,7 +5061,7 @@ void PPUTranslator::FMSUB(ppu_opcode_t op)
 	llvm::Value* result;
 	if (g_cfg.core.use_accurate_dfma)
 	{
-		result = m_ir->CreateCall(get_intrinsic<f64>(llvm::Intrinsic::fma), {a, c, m_ir->CreateFNeg(b)});
+		result = m_ir->CreateCall(get_intrinsic<f64>(llvm::Intrinsic::fma), {a, c, ppu_negate_result(m_ir, b)});
 	}
 	else
 	{
@@ -5117,7 +5117,7 @@ void PPUTranslator::FNMSUB(ppu_opcode_t op)
 	llvm::Value* result;
 	if (g_cfg.core.use_accurate_dfma)
 	{
-		result = m_ir->CreateCall(get_intrinsic<f64>(llvm::Intrinsic::fma), {a, c, m_ir->CreateFNeg(b)});
+		result = m_ir->CreateCall(get_intrinsic<f64>(llvm::Intrinsic::fma), {a, c, ppu_negate_result(m_ir, b)});
 	}
 	else
 	{
@@ -5305,7 +5305,25 @@ Value* PPUTranslator::GetFpr(u32 r, u32 bits, bool as_int)
 	}
 	else if (!as_int && bits == 32)
 	{
-		return m_ir->CreateFPTrunc(value, GetType<f32>());
+		// TRUNCATE the mantissa, do not round it.
+		//
+		// Only the four store-single forms reach here (stfs, stfsu, stfsx, stfsux), and PowerPC
+		// defines their conversion as a bit extraction: sign, exponent, and the top 23 mantissa
+		// bits. Rounding to single belongs to the arithmetic instructions, fadds and friends, not
+		// to a store. CreateFPTrunc rounds to nearest even, so a value whose discarded bits sit
+		// above half came out one ULP high.
+		//
+		// ps3autotests cpu/ppu_float_store, storing 0x3F80123456789ABC: the discarded 29 bits are
+		// 0x16789ABC against a half of 0x10000000, so nearest-even rounds up to 3C0091A3 while a
+		// real PS3 answers 3C0091A2. Fourteen lines, every one this.
+		//
+		// Masking the low 29 bits off first leaves the narrowing nothing to round, which is exact
+		// for normalised values and leaves the special cases to FPTrunc as before: zero and
+		// infinity have no mantissa bits to lose, and a NaN keeps its quiet bit at 51 so it stays
+		// a NaN. Doing it as an integer AND also means LLVM cannot fold the rounding back in.
+		const auto bits64 = m_ir->CreateBitCast(value, GetType<u64>());
+		const auto truncated = m_ir->CreateAnd(bits64, m_ir->getInt64(~0x1fffffffull));
+		return m_ir->CreateFPTrunc(m_ir->CreateBitCast(truncated, GetType<f64>()), GetType<f32>());
 	}
 	else
 	{
