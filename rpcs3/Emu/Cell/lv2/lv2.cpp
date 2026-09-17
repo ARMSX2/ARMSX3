@@ -11,6 +11,7 @@
 #include "Emu/Cell/PPUDisAsm.h"
 
 #include <charconv>
+#include <cstring>
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/Cell/ErrorCodes.h"
 #include "sys_sync.h"
@@ -1391,13 +1392,24 @@ static void ppu_dump_threads_on_request()
 					continue;
 				}
 
+				// Both sides of the pointer. A register usually points at a field rather than
+				// at the head of its structure, and the fields that explain a wait -- the index
+				// it is waiting on, the count it belongs to -- sit above it as often as below.
+				const u32 base = (addr >= 0x10040) ? addr - 0x40 : addr;
+
 				fmt::append(out, "r%u at 0x%x:\n", i, addr);
 
-				for (u32 off = 0; off < 64; off += 16)
+				for (u32 off = 0; off < 0x80; off += 16)
 				{
-					fmt::append(out, "\t%08x:\t%08x %08x %08x %08x\n", addr + off,
-						vm::read32(addr + off + 0), vm::read32(addr + off + 4),
-						vm::read32(addr + off + 8), vm::read32(addr + off + 12));
+					if (!vm::check_addr(base + off, vm::page_readable, 16))
+					{
+						continue;
+					}
+
+					fmt::append(out, "\t%08x:%s\t%08x %08x %08x %08x\n", base + off,
+						base + off == addr ? " ->" : "",
+						vm::read32(base + off + 0), vm::read32(base + off + 4),
+						vm::read32(base + off + 8), vm::read32(base + off + 12));
 				}
 			}
 		}
@@ -1435,6 +1447,52 @@ static void ppu_dump_threads_on_request()
 
 			dis_asm.disasm(pc);
 			fmt::append(out, "%s", dis_asm.last_opcode);
+		}
+	}
+
+	// Which instructions could write a given structure field. A thread waiting on a field whose
+	// writer appears in no call stack leaves nothing to follow; ARMSX3_SCAN_STORE=540 lists every
+	// stb/sth/stw in mapped executable memory with that displacement, and those are the callers
+	// worth disassembling next. An indexed store carries no displacement, so an empty result
+	// does not prove the field is written some other way.
+	if (const char* env = std::getenv("ARMSX3_SCAN_STORE"); env && *env)
+	{
+		u32 disp = 0;
+
+		if (std::from_chars(env, env + std::strlen(env), disp, 16).ec == std::errc() && disp <= 0xffff)
+		{
+			fmt::append(out, "\nStores with displacement 0x%x:\n", disp);
+
+			u32 found = 0;
+
+			for (u32 page = 0x10000; page < 0x4000000 && found < 96; page += 0x1000)
+			{
+				if (!vm::check_addr(page, vm::page_executable, 0x1000))
+				{
+					continue;
+				}
+
+				for (u32 pc = page; pc < page + 0x1000 && found < 96; pc += 4)
+				{
+					const u32 op = vm::read32(pc);
+
+					// stb, stw, sth: D-form, displacement in the low half
+					switch (op >> 26)
+					{
+					case 36: case 38: case 44: break;
+					default: continue;
+					}
+
+					if ((op & 0xffff) == disp)
+					{
+						dis_asm.disasm(pc);
+						fmt::append(out, "%s", dis_asm.last_opcode);
+						found++;
+					}
+				}
+			}
+
+			fmt::append(out, "(%u found)\n", found);
 		}
 	}
 
