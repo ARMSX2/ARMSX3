@@ -1585,13 +1585,14 @@ namespace rsx
 // fault would be the worst possible trade.
 //
 // Called from BOTH access violation paths, for the reason given on the memory dump below.
-static void dump_guest_code_at_fault(cpu_thread* cpu)
+static void dump_guest_code_at_fault(cpu_thread* cpu, u32 fault_addr)
 {
 	if (!cpu || cpu->get_class() != thread_class::ppu)
 	{
 		return;
 	}
 
+	const auto& gpr_ref = static_cast<ppu_thread*>(cpu)->gpr;
 	PPUDisAsm dis_asm(cpu_disasm_mode::dump, vm::g_sudo_addr);
 	std::string code;
 
@@ -1629,6 +1630,45 @@ static void dump_guest_code_at_fault(cpu_thread* cpu)
 			dis_asm.disasm(at);
 			code += (at == pc ? "  >>" : "    ");
 			code += dis_asm.last_opcode;
+
+			// Name the instruction that actually faulted.
+			//
+			// The >> marker follows cia, and the recompiler reports cia per BLOCK, so on the
+			// fatal path it routinely points at an instruction that cannot have faulted. Burnout
+			// marked `lwz r9,0(r3)` with r3 = 0x86014100 for a fault at address 0, and that gap
+			// is why every dump read like a fresh mystery.
+			//
+			// The dump already holds the fault address and every register, so it can just work
+			// out which memory operand lands on it: D form (rA + simm), DS form (rA + ds*4) and
+			// X form (rA + rB). rA of 0 means literal zero on PowerPC, not r0, which is exactly
+			// the case that produces a small faulting address out of nowhere.
+			{
+				const u32 iop = vm::read32(at);
+				const u32 primary = iop >> 26;
+				const u32 ra = (iop >> 16) & 0x1f;
+				const u64 base = ra ? gpr_ref[ra] : 0;
+
+				bool hit = false;
+
+				if (primary >= 32 && primary <= 55)
+				{
+					hit = static_cast<u32>(base + static_cast<s16>(iop & 0xffff)) == fault_addr;
+				}
+				else if (primary == 58 || primary == 62)
+				{
+					hit = static_cast<u32>(base + (static_cast<s16>(iop & 0xfffc))) == fault_addr;
+				}
+				else if (primary == 31)
+				{
+					hit = static_cast<u32>(base + gpr_ref[(iop >> 11) & 0x1f]) == fault_addr;
+				}
+
+				if (hit)
+				{
+					code.pop_back();
+					fmt::append(code, "   <== THIS ONE: r%u + offset = 0x%x, the faulting address\n", ra, fault_addr);
+				}
+			}
 
 			if (depth >= follow_depth)
 			{
@@ -2614,7 +2654,7 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 					// Every address is checked before it is read: cia and the stack are taken from
 					// a thread that just faulted, so both can be garbage, and faulting inside the
 					// diagnostic that explains a fault would be the worst possible trade.
-					dump_guest_code_at_fault(cpu);
+					dump_guest_code_at_fault(cpu, addr);
 					dump_guest_memory_at_registers(cpu);
 				}
 			}
@@ -2655,7 +2695,7 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 		vm_log.error("\n%s", dump_useful_thread_info());
 		vm_log.fatal("Access violation %s location 0x%x (%s)", is_writing ? "writing" : (is_exec ? "executing" : "reading"), addr, (is_writing && vm::check_addr(addr)) ? "read-only memory" : "unmapped memory");
 
-		dump_guest_code_at_fault(cpu);
+		dump_guest_code_at_fault(cpu, addr);
 		dump_guest_memory_at_registers(cpu);
 
 		// The host stack, which is the half that was missing.
