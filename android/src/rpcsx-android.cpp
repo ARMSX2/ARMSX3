@@ -2590,6 +2590,16 @@ static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {
   const u32 initial_status =
       pad->m_player_id == 0 ? CELL_PAD_STATUS_CONNECTED : 0;
 
+  // Say what this port is about to claim to be.
+  //
+  // warning, not notice: Android's logcat sink drops anything below it, and this is exactly
+  // the line someone needs when an instrument title still will not start. There is no other
+  // way to tell whether the class reached the core: the value the app stores, the value in
+  // Default.yml and the value a pad reports can all disagree, and only the last one matters.
+  rpcsx_android.warning(
+      "pad: port %u reports class %u (vendor %04x product %04x profile %u)",
+      pad->m_player_id, class_type, vendor_id, product_id, u32{pclass_profile});
+
   pad->Init(initial_status, capabilities, CELL_PAD_DEV_TYPE_STANDARD, class_type,
             pclass_profile, vendor_id, product_id, 50);
 
@@ -4799,6 +4809,19 @@ extern "C" void _rpcsx_setPadDeviceClasses(const int *classes, int count) {
     player_config->config.device_class_type.set(wanted);
     changed = true;
   }
+
+  // Report the request either way. "Nothing changed" and "it worked" look identical from
+  // the outside, and this path has no other output at all.
+  std::string requested;
+  for (int port = 0; port < count; port++) {
+    if (!requested.empty()) {
+      requested += ',';
+    }
+    fmt::append(requested, "%d", classes[port]);
+  }
+
+  rpcsx_android.warning("pad: device classes requested [%s], changed=%s", requested,
+                        changed ? "yes" : "no");
 
   if (!changed) {
     return;
