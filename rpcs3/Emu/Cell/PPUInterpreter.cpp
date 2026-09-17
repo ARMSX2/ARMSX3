@@ -45,11 +45,27 @@ void ppubreak(ppu_thread& ppu)
 #define PPU_WRITE_64(addr, value) vm::write64(addr, value, &ppu);
 #else
 #define PPU_WRITE(type, addr, value) vm::write<type>(addr, value);
-#define PPU_WRITE_8(addr, value) vm::write8(addr, value);
-#define PPU_WRITE_16(addr, value) vm::write16(addr, value);
-#define PPU_WRITE_32(addr, value) vm::write32(addr, value);
-#define PPU_WRITE_64(addr, value) vm::write64(addr, value);
+#define PPU_WRITE_8(addr, value) ppu_write_watched<u8>(ppu, addr, value);
+#define PPU_WRITE_16(addr, value) ppu_write_watched<u16>(ppu, addr, value);
+#define PPU_WRITE_32(addr, value) ppu_write_watched<u32>(ppu, addr, value);
+#define PPU_WRITE_64(addr, value) ppu_write_watched<u64>(ppu, addr, value);
 #endif
+
+// See ppu_watch_arm in PPUThread.cpp. Disarmed this is one relaxed load against a register,
+// which the interpreter can afford; it is the only build where every guest store is visible.
+extern atomic_t<u32> g_ppu_watch_addr;
+extern void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size);
+
+template <typename T>
+static FORCE_INLINE void ppu_write_watched(ppu_thread& ppu, u32 addr, T value)
+{
+	if (g_ppu_watch_addr.load() == addr) [[unlikely]]
+	{
+		ppu_watch_store(ppu, addr, static_cast<u64>(value), sizeof(T));
+	}
+
+	vm::write<T>(addr, value);
+}
 
 extern bool is_debugger_present();
 

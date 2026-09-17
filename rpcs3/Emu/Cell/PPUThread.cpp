@@ -549,6 +549,70 @@ void ppu_recompiler_fallback(ppu_thread& ppu)
 	}
 }
 
+// The writer of a field a thread is spinning on.
+//
+// A poll loop names the address it reads and nothing names what fills it, and a producer that
+// never ran appears in no call stack, so there is nothing to follow. ARMSX3_WATCH_SPIN=<cia>[:<reg>]
+// arms a watch on the address held in <reg> (r31 by default) every time sys_timer_usleep is
+// reached from <cia>, and the first writes to that address are logged with the instruction that
+// made them. Run it on the PPU interpreter, where every guest store is visible: an address that
+// no PPU store touches is filled by an SPU, or by nothing at all, and those are different bugs.
+atomic_t<u32> g_ppu_watch_addr{0};
+
+static atomic_t<u32> g_ppu_watch_reports{0};
+
+void ppu_watch_arm(const ppu_thread& ppu)
+{
+	static const std::pair<u32, u32> cfg = []() -> std::pair<u32, u32>
+	{
+		const char* env = std::getenv("ARMSX3_WATCH_SPIN");
+
+		if (!env || !*env)
+		{
+			return {0, 31};
+		}
+
+		const std::string_view text{env};
+		const usz colon = text.find(':');
+
+		u32 cia = 0, reg = 31;
+		std::from_chars(text.data(), text.data() + (colon == umax ? text.size() : colon), cia, 16);
+
+		if (colon != umax)
+		{
+			std::from_chars(text.data() + colon + 1, text.data() + text.size(), reg, 10);
+		}
+
+		if (cia)
+		{
+			ppu_log.warning("ARMSX3_WATCH_SPIN: watching the address in r%u whenever usleep is called from 0x%x", reg, cia);
+		}
+
+		return {cia, std::min<u32>(reg, 31)};
+	}();
+
+	if (!cfg.first || ppu.cia != cfg.first)
+	{
+		return;
+	}
+
+	if (const u32 addr = static_cast<u32>(ppu.gpr[cfg.second]); addr >= 0x10000)
+	{
+		g_ppu_watch_addr.release(addr);
+	}
+}
+
+void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size)
+{
+	// Capped: a field written every frame would otherwise bury the dump that follows it.
+	if (g_ppu_watch_reports.fetch_add(1) >= 24)
+	{
+		return;
+	}
+
+	ppu_log.error("WATCH: 0x%x <- 0x%llx (%u bytes) from 0x%x on '%s'", addr, value, size, ppu.cia, ppu.get_name());
+}
+
 void ppu_reservation_fallback(ppu_thread& ppu)
 {
 	perf_meter<"PPUFALL2"_u64> perf0;
