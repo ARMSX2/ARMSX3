@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "转向（倾斜）",
  "pad.gyro.section": "运动/陀螺仪",
  "pad.gyro.sensitivity.label": "陀螺仪灵敏度",
+ "pad.gyro.sixaxisNote": "SIXAXIS 体感始终会自动传给游戏。这些设置只是把动作转换成摇杆移动，用于不支持 SIXAXIS 的游戏。在支持 SIXAXIS 的游戏中请保持关闭。",
  "pad.gyro.smoothing.label": "陀螺仪平滑",
  "pad.gyro.tiltFallback.aim": "没有陀螺仪——使用加速度计。瞄准是基于倾斜的：扭转向左/向右看，倾斜向上/向下看。居中设置中性位置。",
  "pad.gyro.tiltFallback.steering": "没有陀螺仪——使用加速度计。倾斜通常用于转向。居中设置中性位置。",

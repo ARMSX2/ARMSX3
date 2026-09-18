@@ -1005,6 +1005,7 @@ val EN: Map<String, String> = mapOf(
     "pad.gesture.doubleTapMode.hold" to "Hold",
     "pad.gesture.doubleTapMode.description" to "Tap: a quick press, for something one-shot like NFS nitro. Hold: the button stays down until you double-tap again, for something you want to keep on like an ARPG camera lock.",
     "pad.gyro.section" to "Motion / Gyroscope",
+    "pad.gyro.sixaxisNote" to "SIXAXIS motion always goes to the game on its own. These settings only turn motion into stick movement, for games that don't use SIXAXIS. In a game that does, leave this off.",
     "pad.gyro.mode.label" to "Gyroscope control",
     "pad.gyro.mode.off" to "Off",
     "pad.gyro.mode.aim" to "Aim (look)",

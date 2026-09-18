@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "轉向（傾斜）",
  "pad.gyro.section": "運動/陀螺儀",
  "pad.gyro.sensitivity.label": "陀螺儀靈敏度",
+ "pad.gyro.sixaxisNote": "SIXAXIS 體感一律會自動傳給遊戲。這些設定只是把動作轉換成搖桿移動，用於不支援 SIXAXIS 的遊戲。在支援 SIXAXIS 的遊戲中請保持關閉。",
  "pad.gyro.smoothing.label": "陀螺儀平滑",
  "pad.gyro.tiltFallback.aim": "沒有陀螺儀－使用加速度計。瞄準是基於傾斜的：扭轉向左/向右看，傾斜向上/向下看。居中設定中性位置。",
  "pad.gyro.tiltFallback.steering": "沒有陀螺儀－使用加速度計。傾斜通常用於轉向。居中設定中性位置。",

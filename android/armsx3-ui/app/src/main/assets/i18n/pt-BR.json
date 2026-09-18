@@ -519,6 +519,7 @@
  "pad.gyro.mode.steering": "Direção (inclinação)",
  "pad.gyro.section": "Movimento / Giroscópio",
  "pad.gyro.sensitivity.label": "Sensibilidade do giroscópio",
+ "pad.gyro.sixaxisNote": "O movimento SIXAXIS sempre vai para o jogo por conta própria. Estas opções só transformam movimento em movimento do analógico, para jogos que não usam SIXAXIS. Em um jogo que usa, deixe desligado.",
  "pad.gyro.smoothing.label": "Suavização giroscópica",
  "pad.gyro.tiltFallback.aim": "Sem giroscópio – usando o acelerômetro. A mira é baseada na inclinação: gire para olhar para a esquerda/direita, vire para olhar para cima/para baixo. Centralizar para definir a posição neutra.",
  "pad.gyro.tiltFallback.steering": "Sem giroscópio – usando o acelerômetro. A inclinação funciona normalmente para direção. Centralizar para definir a posição neutra.",

@@ -1185,6 +1185,13 @@ internal fun GyroSection(
     CollapsibleSection(str("pad.gyro.section"), initiallyExpanded = false) {
         @Suppress("UNUSED_EXPRESSION")
         refreshToken.intValue
+        // SIXAXIS has no switch of its own (see Rpcs3Bridge.startSixaxis), so people looking for one
+        // found only this section and took it for SIXAXIS. Say what each is.
+        Text(
+            str("pad.gyro.sixaxisNote"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         val gyroMode = ControllerMappings.gyroModeScope(editSerial)
         SegmentedRow(
             label = str("pad.gyro.mode.label"),

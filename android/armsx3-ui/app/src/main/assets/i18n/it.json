@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "Sterzo (inclinazione)",
  "pad.gyro.section": "Movimento/Giroscopio",
  "pad.gyro.sensitivity.label": "Sensibilità giroscopica",
+ "pad.gyro.sixaxisNote": "Il movimento SIXAXIS arriva sempre al gioco da solo. Queste impostazioni convertono solo il movimento in movimento dello stick, per i giochi che non usano SIXAXIS. In un gioco che lo usa, lasciale disattivate.",
  "pad.gyro.smoothing.label": "Levigatura giroscopica",
  "pad.gyro.tiltFallback.aim": "Nessun giroscopio: utilizzo dell'accelerometro. La mira è basata sull'inclinazione: ruota per guardare a sinistra/destra, punta per guardare in alto/in basso. Ricentrare per impostare la posizione neutra.",
  "pad.gyro.tiltFallback.steering": "Nessun giroscopio: utilizzo dell'accelerometro. L'inclinazione funziona normalmente per lo sterzo. Ricentrare per impostare la posizione neutra.",

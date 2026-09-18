@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "스티어링(틸트)",
  "pad.gyro.section": "모션/자이로스코프",
  "pad.gyro.sensitivity.label": "자이로 감도",
+ "pad.gyro.sixaxisNote": "SIXAXIS 모션은 항상 자동으로 게임에 전달됩니다. 이 설정은 모션을 스틱 움직임으로 바꿀 뿐이며, SIXAXIS를 쓰지 않는 게임용입니다. SIXAXIS를 쓰는 게임에서는 꺼 두세요.",
  "pad.gyro.smoothing.label": "자이로 스무딩",
  "pad.gyro.tiltFallback.aim": "자이로스코프 없음 - 가속도계를 사용합니다. 조준은 기울기 기반입니다. 돌리면 왼쪽/오른쪽으로 보이고, 팁을 사용하면 위/아래로 보입니다. 중립 위치를 설정하려면 다시 중앙으로 이동하세요.",
  "pad.gyro.tiltFallback.steering": "자이로스코프 없음 - 가속도계를 사용합니다. 틸트는 스티어링을 위해 정상적으로 작동합니다. 중립 위치를 설정하려면 다시 중앙으로 이동하세요.",

@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "Direksiyon (eğim)",
  "pad.gyro.section": "Hareket / Jiroskop",
  "pad.gyro.sensitivity.label": "Jiroskop hassasiyeti",
+ "pad.gyro.sixaxisNote": "SIXAXIS hareketi her zaman oyuna kendiliğinden gider. Bu ayarlar yalnızca hareketi çubuk hareketine çevirir, SIXAXIS kullanmayan oyunlar için. SIXAXIS kullanan bir oyunda bunu kapalı bırak.",
  "pad.gyro.smoothing.label": "Jiroskop yumuşatma",
  "pad.gyro.tiltFallback.aim": "Jiroskop yok - ivmeölçer kullanılıyor. Nişan alma, eğime dayalıdır: sola/sağa bakmak için döndürün, yukarı/aşağı bakmak için ucu çevirin. Nötr konumu ayarlamak için ortalayıcı.",
  "pad.gyro.tiltFallback.steering": "Jiroskop yok - ivmeölçer kullanılıyor. Eğim, direksiyon için normal şekilde çalışır. Nötr konumu ayarlamak için ortalayıcı.",

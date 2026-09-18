@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "ステアリング（チルト）",
  "pad.gyro.section": "モーション / ジャイロスコープ",
  "pad.gyro.sensitivity.label": "ジャイロ感度",
+ "pad.gyro.sixaxisNote": "SIXAXIS のモーションは常に自動でゲームに送られます。この設定はモーションをスティック操作に変えるだけのもので、SIXAXIS を使わないゲーム向けです。SIXAXIS を使うゲームではオフのままにしてください。",
  "pad.gyro.smoothing.label": "ジャイロスムージング",
  "pad.gyro.tiltFallback.aim": "ジャイロスコープは使用せず、加速度センサーを使用します。照準は傾きに基づいて行われます。ひねると左/右、先端で上/下を見ることができます。中心を再設定してニュートラル位置を設定します。",
  "pad.gyro.tiltFallback.steering": "ジャイロスコープは使用せず、加速度センサーを使用します。チルトはステアリングとして正常に機能します。中心を再設定してニュートラル位置を設定します。",

@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "Lenkung (Neigung)",
  "pad.gyro.section": "Bewegung / Gyroskop",
  "pad.gyro.sensitivity.label": "Gyro-Empfindlichkeit",
+ "pad.gyro.sixaxisNote": "SIXAXIS-Bewegung geht immer von selbst an das Spiel. Diese Einstellungen wandeln Bewegung nur in Stick-Bewegung um, für Spiele ohne SIXAXIS. In einem Spiel mit SIXAXIS lass das hier aus.",
  "pad.gyro.smoothing.label": "Gyro-Glättung",
  "pad.gyro.tiltFallback.aim": "Kein Gyroskop – Verwendung des Beschleunigungsmessers. Das Ziel basiert auf der Neigung: Drehen, um nach links/rechts zu schauen, Kippen, um nach oben/unten zu schauen. Neu zentrieren, um die neutrale Position festzulegen.",
  "pad.gyro.tiltFallback.steering": "Kein Gyroskop – Verwendung des Beschleunigungsmessers. Die Neigung funktioniert normal zum Lenken. Neu zentrieren, um die neutrale Position festzulegen.",

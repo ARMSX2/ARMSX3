@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "Chỉ đạo (nghiêng)",
  "pad.gyro.section": "Chuyển động / Con quay hồi chuyển",
  "pad.gyro.sensitivity.label": "Độ nhạy con quay hồi chuyển",
+ "pad.gyro.sixaxisNote": "Chuyển động SIXAXIS luôn tự gửi tới trò chơi. Các cài đặt này chỉ đổi chuyển động thành chuyển động cần analog, dành cho trò chơi không dùng SIXAXIS. Với trò chơi có dùng, hãy để tắt.",
  "pad.gyro.smoothing.label": "Làm mịn con quay hồi chuyển",
  "pad.gyro.tiltFallback.aim": "Không có con quay hồi chuyển - sử dụng gia tốc kế. Mục tiêu dựa trên độ nghiêng: vặn để nhìn sang trái/phải, nghiêng đầu để nhìn lên/xuống. Gần đây hơn để đặt vị trí trung lập.",
  "pad.gyro.tiltFallback.steering": "Không có con quay hồi chuyển - sử dụng gia tốc kế. Nghiêng hoạt động bình thường khi lái. Gần đây hơn để đặt vị trí trung lập.",

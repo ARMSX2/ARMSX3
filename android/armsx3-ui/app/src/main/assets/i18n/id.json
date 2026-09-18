@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "Kemudi (miring)",
  "pad.gyro.section": "Gerak / Giroskop",
  "pad.gyro.sensitivity.label": "Sensitivitas gyro",
+ "pad.gyro.sixaxisNote": "Gerakan SIXAXIS selalu dikirim ke game dengan sendirinya. Pengaturan ini hanya mengubah gerakan menjadi gerakan stik, untuk game yang tidak memakai SIXAXIS. Di game yang memakainya, biarkan mati.",
  "pad.gyro.smoothing.label": "Perataan gyro",
  "pad.gyro.tiltFallback.aim": "Tanpa giroskop — menggunakan akselerometer. Bidikannya berdasarkan kemiringan: memutar untuk melihat ke kiri/kanan, mengarahkan untuk melihat ke atas/bawah. Recenter untuk mengatur posisi netral.",
  "pad.gyro.tiltFallback.steering": "Tanpa giroskop — menggunakan akselerometer. Kemiringan berfungsi normal untuk kemudi. Recenter untuk mengatur posisi netral.",

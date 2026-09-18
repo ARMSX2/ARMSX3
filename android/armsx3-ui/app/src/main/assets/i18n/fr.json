@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "Direction (inclinaison)",
  "pad.gyro.section": "Mouvement / Gyroscope",
  "pad.gyro.sensitivity.label": "Sensibilité gyroscopique",
+ "pad.gyro.sixaxisNote": "Le mouvement SIXAXIS est toujours transmis au jeu de lui-même. Ces réglages ne font que convertir le mouvement en mouvement du stick, pour les jeux qui n'utilisent pas SIXAXIS. Dans un jeu qui l'utilise, laissez-les désactivés.",
  "pad.gyro.smoothing.label": "Lissage gyroscopique",
  "pad.gyro.tiltFallback.aim": "Pas de gyroscope – en utilisant l'accéléromètre. La visée est basée sur l'inclinaison : tournez pour regarder à gauche/droite, pointe pour regarder vers le haut/bas. Recentrer pour régler la position neutre.",
  "pad.gyro.tiltFallback.steering": "Pas de gyroscope – en utilisant l'accéléromètre. L'inclinaison fonctionne normalement pour la direction. Recentrer pour régler la position neutre.",

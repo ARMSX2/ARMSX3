@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "Sterowanie (przechylenie)",
  "pad.gyro.section": "Ruch / żyroskop",
  "pad.gyro.sensitivity.label": "Czułość żyroskopu",
+ "pad.gyro.sixaxisNote": "Ruch SIXAXIS zawsze trafia do gry sam. Te ustawienia tylko zamieniają ruch na ruch gałki, dla gier bez SIXAXIS. W grze, która go używa, zostaw je wyłączone.",
  "pad.gyro.smoothing.label": "Wygładzanie żyroskopowe",
  "pad.gyro.tiltFallback.aim": "Brak żyroskopu — użycie akcelerometru. Celowanie opiera się na pochyleniu: przekręć, aby spojrzeć w lewo/prawo, przechyl, aby spojrzeć w górę/w dół. Wyśrodkuj, aby ustawić pozycję neutralną.",
  "pad.gyro.tiltFallback.steering": "Brak żyroskopu — użycie akcelerometru. Pochylenie działa normalnie przy sterowaniu. Wyśrodkuj, aby ustawić pozycję neutralną.",

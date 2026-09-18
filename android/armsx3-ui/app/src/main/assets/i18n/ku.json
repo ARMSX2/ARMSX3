@@ -514,6 +514,7 @@
  "pad.gyro.mode.steering": "Rêvekirin (teqandin)",
  "pad.gyro.section": "Tevger / Gîroskop",
  "pad.gyro.sensitivity.label": "hestiyariya Gyro",
+ "pad.gyro.sixaxisNote": "Tevgera SIXAXIS her tim bi serê xwe diçe lîstikê. Ev mîheng tenê tevgerê dikin tevgera çîpê, ji bo lîstikên ku SIXAXIS bi kar naynin. Di lîstikeke ku wê bi kar tîne de, vê girtî bihêle.",
  "pad.gyro.smoothing.label": "Gyro smoothing",
  "pad.gyro.tiltFallback.aim": "Ne gyroscope - bi karanîna lezêmeterê. Armanc li ser bingeha tiltê ye: bizivirîne ku li çepê/rastê binêre, tîpek ji bo lênihêrîna jor/xwarê. Vê nû bikin ku pozîsyona bêalî saz bikin.",
  "pad.gyro.tiltFallback.steering": "Ne gyroscope - bi karanîna lezêmeterê. Tilt ji bo rêvekirinê bi gelemperî dixebite. Vê nû bikin ku pozîsyona bêalî saz bikin.",
