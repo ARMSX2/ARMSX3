@@ -116,7 +116,15 @@ object TouchControls {
      *  No-op if the VM isn't paused. */
     fun exitEditMode() {
         editMode.value = false
-        if (MainActivityRuntime.eState.value == EmuState.PAUSED) MainActivityRuntime.resume()
+        // Resume on RUNNING as well as PAUSED, as InGameOverlay.closeAndResume does. Nothing in
+        // this app ever sets eState to PAUSED: the core does not report its pauses back, so eState
+        // reads RUNNING the whole time the quick menu holds the game. Gated on PAUSED alone, Save
+        // and Discard left the game frozen until the menu was opened and closed again. resume() is
+        // a no-op on a VM that is really running; from the library (STOPPED) nothing resumes.
+        val st = MainActivityRuntime.eState.value
+        if ((st == EmuState.PAUSED || st == EmuState.RUNNING) && !com.armsx2.ui.WindowImpl.showLibrary.value) {
+            MainActivityRuntime.resume()
+        }
     }
 
     /** Currently-selected widget in edit mode. When non-null, the edit
