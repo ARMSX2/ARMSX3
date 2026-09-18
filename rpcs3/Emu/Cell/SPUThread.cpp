@@ -1,4 +1,6 @@
 #include "stdafx.h"
+#include <charconv>
+#include <cstring>
 #include "Utilities/JIT.h"
 #include "Utilities/date_time.h"
 #include "Emu/Memory/vm.h"
@@ -1896,7 +1898,26 @@ void spu_thread::init_spu_decoder()
 #if !defined(ARCH_X64) && !defined(ARCH_ARM64)
 #error "Unimplemented"
 #else
-	const spu_decoder_type spu_decoder = g_cfg.core.spu_decoder;
+	// ARMSX3_SPU_INTERP=1 forces the SPU interpreter regardless of the stored setting.
+	//
+	// SPU codegen is the last component in Black Flag's hang that has never been cleanly tested,
+	// and testing it has been blocked on the decoder living behind a settings screen. Forcing it
+	// here keeps the control independent of whatever a device has saved, which matters after a
+	// stale experimental setting on this one sat unnoticed through an entire investigation.
+	static const bool s_force_spu_interp = []()
+	{
+		const char* env = std::getenv("ARMSX3_SPU_INTERP");
+		const bool on = env && *env && *env != '0';
+
+		if (on)
+		{
+			spu_log.success("ARMSX3_SPU_INTERP: forcing the SPU interpreter");
+		}
+
+		return on;
+	}();
+
+	const spu_decoder_type spu_decoder = s_force_spu_interp ? spu_decoder_type::_static : g_cfg.core.spu_decoder.get();
 
 #if defined(ARCH_X64)
 	if (spu_decoder == spu_decoder_type::asmjit)
@@ -6328,7 +6349,19 @@ s64 spu_thread::get_ch_value(u32 ch)
 		{
 			bool value = false;
 
-			if (is_LR_wait && g_cfg.core.spu_reservation_busy_waiting_enabled)
+			// EXPERIMENT (ARMSX3_NO_SPU_BUSY_WAIT=1): never busy-wait on a reservation.
+			//
+			// Six SPURS kernels spinning at full rate on one 128-byte line, with the PPU
+			// signalling through the same line, is the contention Black Flag hangs in: half of
+			// every SPU conditional store fails and the claim sequence never completes. Upstream
+			// defaults this off; this device has it on at 100%.
+			static const bool s_no_busy_wait = []()
+			{
+				const char* env = std::getenv("ARMSX3_NO_SPU_BUSY_WAIT");
+				return env && *env && *env != '0';
+			}();
+
+			if (is_LR_wait && g_cfg.core.spu_reservation_busy_waiting_enabled && !s_no_busy_wait)
 			{
 				// Make single-threaded groups inclined for busy-waiting
 				value = evaluate_spin_optimization({ history.data(), history.size() }, eventstat_evaluate_time, g_cfg.core.spu_reservation_busy_waiting_percentage, group && group->max_num == 1) != 0;
@@ -6463,7 +6496,27 @@ s64 spu_thread::get_ch_value(u32 ch)
 
 			if (raddr && (mask1 & ~SPU_EVENT_TM) == SPU_EVENT_LR)
 			{
-				if (u32 max_threads = std::min<u32>(g_cfg.core.max_spurs_threads, group ? group->max_num : u32{umax}); group && group->max_run != max_threads)
+				// ARMSX3_MAX_SPURS=<n> overrides the setting, so the thread count can be tested
+				// without a settings screen. Six kernels collide on the control line 44% of the
+				// time and the workload is dropped when contention reaches zero; fewer of them
+				// is a smaller window for that, which is why upstream keeps this as a hack.
+				static const u32 s_max_spurs_env = []() -> u32
+				{
+					const char* env = std::getenv("ARMSX3_MAX_SPURS");
+					u32 n = 0;
+
+					if (env && *env && std::from_chars(env, env + std::strlen(env), n, 10).ec == std::errc() && n >= 1 && n <= 6)
+					{
+						spu_log.success("ARMSX3_MAX_SPURS: limiting SPURS to %u threads", n);
+						return n;
+					}
+
+					return 0;
+				}();
+
+				const u32 spurs_cap = s_max_spurs_env ? s_max_spurs_env : +g_cfg.core.max_spurs_threads;
+
+				if (u32 max_threads = std::min<u32>(spurs_cap, group ? group->max_num : u32{umax}); group && group->max_run != max_threads)
 				{
 					constexpr std::string_view spurs_suffix = "CellSpursKernelGroup"sv;
 

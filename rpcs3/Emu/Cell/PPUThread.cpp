@@ -610,6 +610,18 @@ void ppu_watch_record(int slot, u32 addr, u32 value, u32 who, u16 size, u16 kind
 		return;
 	}
 
+	// Only transitions.
+	//
+	// The SPURS idle loop writes these words back unchanged millions of times, so a ring that
+	// records every write holds nothing but the last few microseconds of noise and the moment
+	// the value actually moved is long gone. What is wanted is the history of changes.
+	static atomic_t<u32> s_last[4]{};
+
+	if (s_last[slot].exchange(value) == value)
+	{
+		return;
+	}
+
 	const u32 i = g_ppu_watch_ring_pos[slot]++ % 32;
 	g_ppu_watch_ring[slot][i] = {addr, value, who, size, kind};
 }
