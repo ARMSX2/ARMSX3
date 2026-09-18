@@ -3923,7 +3923,21 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			return false;
 		}
 
-		if (!g_cfg.core.spu_accurate_reservations)
+		// EXPERIMENT (ARMSX3_NO_SPURS_SHORTCUT=1): take the normal path for the SPURS block.
+		//
+		// This shortcut writes the control block and reports success without checking the
+		// reservation, so a store built on a stale copy of the line silently overwrites whatever
+		// happened meanwhile. And res advances by 64 rather than 128, half a step, so a waiter
+		// comparing rtime against (res & -128) cannot see a single one of these writes: exactly
+		// what Black Flag's hang looks like, with every SPU asleep reading "still current" on a
+		// line that was being written.
+		static const bool s_no_spurs_shortcut = []()
+		{
+			const char* env = std::getenv("ARMSX3_NO_SPURS_SHORTCUT");
+			return env && *env && *env != '0';
+		}();
+
+		if (!g_cfg.core.spu_accurate_reservations && !s_no_spurs_shortcut)
 		{
 			if (addr - spurs_addr <= 0x80)
 			{
