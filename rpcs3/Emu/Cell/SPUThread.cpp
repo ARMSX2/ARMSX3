@@ -2187,48 +2187,52 @@ static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id)
 // Whether it would take is the whole question: a store that keeps failing is a race nobody wins,
 // one that keeps taking while the word stays zero is a job writing the wrong thing, and no store
 // at all is work that was never queued. All three look identical from the waiting side.
-// Report after the store, not before it.
-//
-// Called at entry, this read the word as it was BEFORE the conditional store landed, and so
-// reported "word now 0" for every store including the ones that set it. Destruction runs at
-// function exit, by which point the store has either taken or not.
+// Whether the store would take has to be read before it runs; what it left behind has to be
+// read after. Capture the first in the constructor, print the second from the destructor.
 struct ppu_watch_putll_report
 {
 	const spu_thread& spu;
-	u32 eal;
 	const char* kind;
-	int slot;
-	bool wrong_line;
-	bool lost;
-	u64 res;
+	int slot = -1;
+	bool wrong_line = false;
+	bool lost = false;
+	u64 res = 0;
 
-	~ppu_watch_putll_report();
-};
-
-static void ppu_watch_putll(const spu_thread& spu, u32 eal, const char* kind)
-{
-	const int slot = ppu_watch_slot(eal, 128);
-
-	if (slot < 0)
+	ppu_watch_putll_report(const spu_thread& spu, u32 eal, const char* kind)
+		: spu(spu), kind(kind), slot(ppu_watch_slot(eal, 128))
 	{
-		return;
+		if (slot < 0)
+		{
+			return;
+		}
+
+		const u32 line = eal & -128;
+		res = vm::reservation_acquire(line);
+		wrong_line = spu.raddr != line;
+		lost = !wrong_line && spu.rtime != (res & -128);
 	}
 
-	const u32 line = eal & -128;
-	const u64 res = vm::reservation_acquire(line);
-	const bool wrong_line = spu.raddr != line;
-	const bool lost = !wrong_line && spu.rtime != (res & -128);
-
-	ppu_watch_putll_report{spu, eal, kind, slot, wrong_line, lost, res};
-}
-
-ppu_watch_putll_report::~ppu_watch_putll_report()
-{
-	const u32 w = g_ppu_watch[slot].load();
-	auto& st = g_ppu_watch_stats[slot];
-
-	if (!wrong_line && !lost)
+	~ppu_watch_putll_report()
 	{
+		if (slot < 0)
+		{
+			return;
+		}
+
+		const u32 w = g_ppu_watch[slot].load();
+		auto& st = g_ppu_watch_stats[slot];
+
+		if (wrong_line || lost)
+		{
+			if (ppu_watch_should_log(++st.spu_ll_fail))
+			{
+				spu_log.error("WATCH[%d] 0x%x: SPU %s could not take from SPU 0x%x: rtime=0x%llx res=0x%llx %s",
+					slot, w, kind, spu.id, spu.rtime, res, wrong_line ? "WRONG-LINE" : "LOST");
+			}
+
+			return;
+		}
+
 		const u32 after = vm::read32(w);
 		const bool became_set = after && !st.last_value.exchange(after);
 
@@ -2237,16 +2241,9 @@ ppu_watch_putll_report::~ppu_watch_putll_report()
 			spu_log.error("WATCH[%d] 0x%x: SPU %s took from SPU 0x%x, word now 0x%x%s",
 				slot, w, kind, spu.id, after, became_set ? "  <-- SET" : "");
 		}
-
-		return;
 	}
+};
 
-	if (ppu_watch_should_log(++st.spu_ll_fail))
-	{
-		spu_log.error("WATCH[%d] 0x%x: SPU %s would fail from SPU 0x%x: raddr=0x%x rtime=0x%llx res=0x%llx %s",
-			slot, w, kind, spu.id, spu.raddr, spu.rtime, res, wrong_line ? "WRONG-LINE" : "LOST");
-	}
-}
 
 void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8* ls)
 {
@@ -3840,8 +3837,7 @@ std::string spu_putllc_barrier_sites()
 
 bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 {
-	const auto watch_report_ = [&]{ ppu_watch_putll(*this, args.eal, "PUTLLC"); };
-	struct scope_ { decltype(watch_report_)& f; ~scope_() { f(); } } watch_scope_{watch_report_};
+	const ppu_watch_putll_report watch_report_{*this, args.eal, "PUTLLC"};
 
 	perf_meter<"PUTLLC-"_u64> perf0(nullptr);
 	perf_meter<"PUTLLC+"_u64> perf1 = perf0;
@@ -4277,8 +4273,7 @@ void do_cell_atomic_128_store(u32 addr, const void* to_write)
 
 void spu_thread::do_putlluc(const spu_mfc_cmd& args)
 {
-	const auto watch_report_ = [&]{ ppu_watch_putll(*this, args.eal, "PUTLLUC"); };
-	struct scope_ { decltype(watch_report_)& f; ~scope_() { f(); } } watch_scope_{watch_report_};
+	const ppu_watch_putll_report watch_report_{*this, args.eal, "PUTLLUC"};
 
 	perf_meter<"PUTLLUC"_u64> perf0;
 
