@@ -283,6 +283,7 @@
  "friends.title": "друзі",
  "friends.unavailable": "Цю збірку створено без Discord SDK.",
  "games.addToHome": "Додати на головний екран",
+ "games.loadState": "Завантажити збережений стан",
  "games.addToHome.unsupported": "Ця панель запуску не підтримує додавання ярликів на головний екран.",
  "games.background.choose": "Виберіть фонове зображення…",
  "games.background.clear": "Чіткий фон",

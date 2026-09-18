@@ -282,6 +282,7 @@
  "friends.title": "Amigos",
  "friends.unavailable": "Esta compilação foi feita sem o Discord SDK.",
  "games.addToHome": "Adicionar à tela inicial",
+ "games.loadState": "Carregar estado salvo",
  "games.addToHome.unsupported": "Este iniciador não suporta a adição de atalhos à tela inicial.",
  "games.background.choose": "Escolha a imagem de fundo…",
  "games.background.clear": "Limpar fundo",

@@ -283,6 +283,7 @@
  "friends.title": "朋友",
  "friends.unavailable": "這個版本是在沒有 Discord SDK 的情況下進行的。",
  "games.addToHome": "新增到主螢幕",
+ "games.loadState": "載入即時存檔",
  "games.addToHome.unsupported": "此啟動器不支援向主螢幕新增捷徑。",
  "games.background.choose": "選擇背景圖片...",
  "games.background.clear": "清晰的背景",

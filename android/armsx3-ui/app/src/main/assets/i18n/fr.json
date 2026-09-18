@@ -283,6 +283,7 @@
  "friends.title": "Amis",
  "friends.unavailable": "Cette version a été réalisée sans le SDK Discord.",
  "games.addToHome": "Ajouter à l'écran d'accueil",
+ "games.loadState": "Charger un état sauvegardé",
  "games.addToHome.unsupported": "Ce lanceur ne prend pas en charge l'ajout de raccourcis sur l'écran d'accueil.",
  "games.background.choose": "Choisissez l’image d’arrière-plan…",
  "games.background.clear": "Fond clair",

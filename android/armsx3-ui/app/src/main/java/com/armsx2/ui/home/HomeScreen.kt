@@ -944,6 +944,21 @@ fun HomeScreen(
                     menuGame = null
                     viewModel.launch(game)
                 }
+                // Straight into a save state. Loading one in game reboots from the state file, so
+                // starting the game first and loading over it compiled everything twice; the list
+                // this opens boots the state itself. Offered only when the game has one, since a
+                // row that opens onto nothing is worse than no row.
+                val hasStates by androidx.compose.runtime.produceState(false, game.serial) {
+                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.armsx2.ui.saves.slotStatesFor(context, game.serial).isNotEmpty()
+                    }
+                }
+                if (hasStates && !game.extension.equals("pkg", ignoreCase = true)) {
+                    GameMenuAction("💾", str("games.loadState")) {
+                        menuGame = null
+                        com.armsx2.navigation.UiNavigator.navigate(com.armsx2.navigation.AppRoute.SaveManager(game))
+                    }
+                }
                 GameMenuAction("⚙", str("action.settings")) {
                     menuGame = null
                     onOpenGameSettings(game)

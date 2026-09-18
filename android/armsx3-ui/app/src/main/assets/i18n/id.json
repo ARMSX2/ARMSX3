@@ -283,6 +283,7 @@
  "friends.title": "Teman",
  "friends.unavailable": "Build ini dibuat tanpa Discord SDK.",
  "games.addToHome": "Tambahkan ke layar beranda",
+ "games.loadState": "Muat save state",
  "games.addToHome.unsupported": "Peluncur ini tidak mendukung penambahan pintasan ke layar beranda.",
  "games.background.choose": "Pilih gambar latar belakang…",
  "games.background.clear": "Hapus latar belakang",

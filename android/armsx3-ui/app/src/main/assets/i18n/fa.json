@@ -283,6 +283,7 @@
  "friends.title": "دوستان",
  "friends.unavailable": "این ساخت بدون Discord SDK ساخته شده است.",
  "games.addToHome": "به صفحه اصلی اضافه کنید",
+ "games.loadState": "بارگذاری وضعیت ذخیره‌شده",
  "games.addToHome.unsupported": "این لانچر از افزودن میانبر به صفحه اصلی پشتیبانی نمی کند.",
  "games.background.choose": "انتخاب تصویر پس زمینه…",
  "games.background.clear": "پاک کردن پس زمینه",

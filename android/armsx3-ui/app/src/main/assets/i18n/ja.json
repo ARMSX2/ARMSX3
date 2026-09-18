@@ -283,6 +283,7 @@
  "friends.title": "友達",
  "friends.unavailable": "このビルドは Discord SDK を使用せずに作成されました。",
  "games.addToHome": "ホーム画面に追加",
+ "games.loadState": "セーブステートをロード",
  "games.addToHome.unsupported": "このランチャーは、ホーム画面へのショートカットの追加をサポートしていません。",
  "games.background.choose": "背景画像を選択してください…",
  "games.background.clear": "クリアな背景",

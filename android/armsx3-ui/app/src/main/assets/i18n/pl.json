@@ -283,6 +283,7 @@
  "friends.title": "Przyjaciele",
  "friends.unavailable": "Ta kompilacja została wykonana bez pakietu SDK Discord.",
  "games.addToHome": "Dodaj do ekranu głównego",
+ "games.loadState": "Wczytaj zapisany stan",
  "games.addToHome.unsupported": "Ten program uruchamiający nie obsługuje dodawania skrótów do ekranu głównego.",
  "games.background.choose": "Wybierz obraz tła…",
  "games.background.clear": "Wyczyść tło",

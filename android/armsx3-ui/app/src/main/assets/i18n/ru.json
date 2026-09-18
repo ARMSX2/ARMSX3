@@ -283,6 +283,7 @@
  "friends.title": "Друзья",
  "friends.unavailable": "Эта сборка была сделана без Discord SDK.",
  "games.addToHome": "Добавить на главный экран",
+ "games.loadState": "Загрузить сохранённое состояние",
  "games.addToHome.unsupported": "Этот лаунчер не поддерживает добавление ярлыков на главный экран.",
  "games.background.choose": "Выберите фоновое изображение…",
  "games.background.clear": "Очистить фон",

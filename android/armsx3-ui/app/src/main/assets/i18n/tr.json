@@ -283,6 +283,7 @@
  "friends.title": "Arkadaşlar",
  "friends.unavailable": "Bu yapı Discord SDK'sı olmadan yapıldı.",
  "games.addToHome": "Ana ekrana ekle",
+ "games.loadState": "Kayıtlı durumu yükle",
  "games.addToHome.unsupported": "Bu başlatıcı, ana ekrana kısayol eklenmesini desteklemiyor.",
  "games.background.choose": "Arka plan resmini seçin…",
  "games.background.clear": "Arka planı temizle",

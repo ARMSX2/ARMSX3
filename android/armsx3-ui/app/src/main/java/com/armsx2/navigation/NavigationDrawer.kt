@@ -224,7 +224,7 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // is the entry point it never had.
         DrawerItem("packages.title", "📦", AppRoute.PackageInstaller),
         // ARMSX3: PS2 memory cards removed - PS3 uses HDD save data instead.
-        DrawerItem("savestate.title.loadManage", "📥", AppRoute.SaveManager),
+        DrawerItem("savestate.title.loadManage", "📥", AppRoute.SaveManager()),
         DrawerItem("tab.controls", "🕹️", AppRoute.ControllerManager),
         // Patches: RPCS3's own hash-addressed patch.yml, not PNACH. Goes to the
         // global list; per-game patches are reached from the game's own settings,
@@ -384,7 +384,7 @@ private fun sameDestination(current: AppRoute, target: AppRoute): Boolean = when
     is AppRoute.BiosManager -> current is AppRoute.BiosManager
     AppRoute.PackageInstaller -> current is AppRoute.PackageInstaller
     AppRoute.CoreSettings -> current is AppRoute.CoreSettings
-    AppRoute.SaveManager -> current is AppRoute.SaveManager
+    is AppRoute.SaveManager -> current is AppRoute.SaveManager
     AppRoute.ModLibrary -> current is AppRoute.ModLibrary
     AppRoute.ControllerManager -> current is AppRoute.ControllerManager
     AppRoute.TextureManager -> current is AppRoute.TextureManager

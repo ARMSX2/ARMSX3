@@ -283,6 +283,7 @@
  "friends.title": "Bạn bè",
  "friends.unavailable": "Bản dựng này được tạo mà không có SDK Discord.",
  "games.addToHome": "Thêm vào màn hình chính",
+ "games.loadState": "Tải trạng thái đã lưu",
  "games.addToHome.unsupported": "Trình khởi chạy này không hỗ trợ thêm phím tắt vào màn hình chính.",
  "games.background.choose": "Chọn hình nền…",
  "games.background.clear": "Xóa nền",

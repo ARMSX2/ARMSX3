@@ -283,6 +283,7 @@
  "friends.title": "Amigos",
  "friends.unavailable": "Esta compilación se realizó sin el SDK de Discord.",
  "games.addToHome": "Agregar a la pantalla de inicio",
+ "games.loadState": "Cargar estado guardado",
  "games.addToHome.unsupported": "Este iniciador no admite agregar accesos directos a la pantalla de inicio.",
  "games.background.choose": "Elige la imagen de fondo…",
  "games.background.clear": "fondo claro",

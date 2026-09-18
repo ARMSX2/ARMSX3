@@ -22,7 +22,9 @@ sealed interface AppRoute {
     data object BiosManager : AppRoute
     data object PackageInstaller : AppRoute
     data object CoreSettings : AppRoute
-    data object SaveManager : AppRoute
+    // A game when opened from its long-press in the library: the list is that game's slots and
+    // loading one boots straight into it. Null from the drawer, where it lists every game's.
+    data class SaveManager(val game: GameInfo? = null) : AppRoute
     data object ControllerManager : AppRoute
     data object ModLibrary : AppRoute
     data object TextureManager : AppRoute

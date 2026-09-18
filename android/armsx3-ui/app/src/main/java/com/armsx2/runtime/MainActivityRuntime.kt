@@ -713,7 +713,10 @@ open class MainActivityRuntime : ComponentActivity() {
                     // The hold itself waits for the VM to come up. BIOS boots skip it.
                     if (bootCfg.autoProgressiveScan)
                         startAutoProgressiveScanHold()
-                    val booted = NativeApp.runVMThread(m_szGamefile)
+                    val bootTarget = takeBootTarget(m_szGamefile)
+                    if (bootTarget != m_szGamefile)
+                        println("@@ANDROID_START_VM@@ from state=${bootTarget.take(240)}")
+                    val booted = NativeApp.runVMThread(bootTarget)
                     // A failed boot used to be indistinguishable from an instant game exit:
                     // runVMThread's result was dropped, so the app bounced back to the
                     // library with no message and no log. Surface the BootResult the bridge
@@ -1500,23 +1503,66 @@ open class MainActivityRuntime : ComponentActivity() {
             runCatching { NativeApp.emulog("@@ANGLE@@ $msg") }
         }
 
+        /** A state to boot in place of the game at this launch path, once. See [launchGameFromState]. */
         @Volatile
-        private var pendingSlotLoadOnBoot: Int? = null
+        private var pendingStateBoot: Pair<String, String>? = null
 
-        // The last game we booted, retained across exit-to-library so the Save Manager can
-        // re-launch + load a save AFTER the game was exited. Kept SEPARATE from currentGame
-        // (which stop() nulls for settings-scope) so it can't resurrect per-game scope in the
-        // library. GitHub #374 — "exit, press Load → nothing boots" because currentGame was null.
+        // The last game we booted, retained across exit-to-library. Kept SEPARATE from
+        // currentGame (which stop() nulls for settings-scope) so it can't resurrect per-game
+        // scope in the library. GitHub #374.
         val contextGame = mutableStateOf<GameInfo?>(null)
 
-        fun launchCurrentGameFromSaveSlot(slot: Int): Boolean {
-            val game = currentGame.value ?: contextGame.value ?: return false
-            val launchPath = game.launchPath
-            if (launchPath.isBlank()) return false
-            pendingSlotLoadOnBoot = slot
+        /**
+         * Boot [game] straight into the save state [state].
+         *
+         * Loading a state in RPCS3 is a full reboot from the state file, so booting the game and
+         * then loading the state over it, which is what the Save Manager used to do with nothing
+         * running, paid for the boot twice: every module compiled for the first boot, then again
+         * for the second. Handing the state to the core as the boot target does it once. It is the
+         * same BootGame call the in-game load makes, minus the boot it throws away.
+         *
+         * The game's own path stays the launch path, so Restart starts the game from the
+         * beginning, exactly as it does after an in-game load. A null [game] boots with global
+         * settings: the state records which game it belongs to even when the library does not.
+         */
+        fun launchGameFromState(game: GameInfo?, state: java.io.File): Boolean {
+            if (!state.isFile) return false
+            // Asked here, not left to launchGame, which would refuse after the state was queued
+            // and leave it to hijack this game's next ordinary launch.
+            if (game?.locked == true) {
+                com.armsx2.LicencePrompt.ask(game)
+                return false
+            }
+            val launchPath = game?.launchPath?.takeIf { it.isNotBlank() } ?: state.absolutePath
+            // A second game on a disc image boots from the same image as the first, and the core
+            // picks between them by the game folder it is told, so carry that along as usual.
+            pendingStateBoot = launchPath to com.armsx2.DiscGames.join(state.absolutePath, game?.discGameDir)
+            instance?.applicationContext?.let { ctx ->
+                game?.let { com.armsx2.data.library.GameLibraryRepository(ctx).markPlayed(it) }
+            }
             launchGame(launchPath, game)
             return true
         }
+
+        /** The boot target for [launchPath]: a queued state when there is one for it, else the path. */
+        private fun takeBootTarget(launchPath: String): String {
+            val queued = pendingStateBoot
+            pendingStateBoot = null
+            return queued?.takeIf { it.first == launchPath }?.second ?: launchPath
+        }
+
+        /**
+         * The library's entry for a title id, from the cached scan, so a state booted from the
+         * Save Manager gets its game's settings. Packages are skipped because a PKG tile's path is
+         * the installer, not the game, and a playlist only when a real disc has the same id.
+         */
+        fun libraryGameForSerial(serial: String?): GameInfo? = runCatching {
+            if (serial.isNullOrBlank()) return null
+            val ctx = instance?.applicationContext ?: return null
+            com.armsx2.data.library.GameLibraryRepository(ctx).loadCached().games
+                .filter { it.serial.equals(serial, ignoreCase = true) && !it.extension.equals("pkg", ignoreCase = true) }
+                .minByOrNull { if (it.extension.equals("m3u", ignoreCase = true)) 1 else 0 }
+        }.getOrNull()
 
         /**
          * Give an externally-launched game the same identity a library-launched one has.
@@ -1566,47 +1612,11 @@ open class MainActivityRuntime : ComponentActivity() {
             })
         }
 
-        /** Fired when the VM reaches RUNNING (from NativeApp.vmSetPaused). If the
-         *  user enabled auto-load-on-boot, restore the autosave state once — but only
-         *  after the renderer is actually presenting frames (polls getPresentedFrameCount),
-         *  because restoring before the present loop is flowing leaves a black screen.
-         *  Polls every 250ms, giving up after ~15s if the game never starts presenting. */
+        /** Fired when the VM reaches RUNNING (from NativeApp.vmSetPaused). A state chosen from the
+         *  library is not loaded here any more: it is the boot target itself, see launchGameFromState. */
         @JvmStatic
         fun onVmRunning() {
             adoptExternalGameIdentity()
-            val requestedSlot = pendingSlotLoadOnBoot ?: return
-            pendingSlotLoadOnBoot = null
-            val handler = android.os.Handler(android.os.Looper.getMainLooper())
-            val tryLoad = object : Runnable {
-                var attempts = 0
-                var lastFrame = -1
-                var advancingPolls = 0
-                override fun run() {
-                    if (vmStopInProgress || eState.value == EmuState.STOPPED) return
-                    // Wait until the renderer is actually PRESENTING frames before restoring the
-                    // state. A boot-time load that fires as soon as the disc CRC is known — before
-                    // the present loop is flowing — leaves the restored frame undisplayed (a black
-                    // screen); loading the same state manually works only because the game is
-                    // already rendering by then. The present counter can read stale-high across a
-                    // re-launch (the GS may not fully reset between games), so gate on SUSTAINED
-                    // advancement rather than an absolute value: require frames to have grown
-                    // across a few consecutive polls (~0.75s of continuous presenting). (Native
-                    // then forces one present of the restored frame so it shows immediately.)
-                    val frame = runCatching { NativeApp.getPresentedFrameCount() }.getOrDefault(0)
-                    advancingPolls = if (lastFrame in 0 until frame) advancingPolls + 1 else 0
-                    lastFrame = frame
-                    if (advancingPolls < 3) {
-                        if (++attempts < 60) handler.postDelayed(this, 250)
-                        return
-                    }
-                    val loaded = runCatching {
-                        NativeApp.loadStateFromSlot(requestedSlot)
-                    }.getOrDefault(false)
-                    if (!loaded && ++attempts < 60)
-                        handler.postDelayed(this, 250)
-                }
-            }
-            handler.postDelayed(tryLoad, 250)
         }
 
         /**
@@ -5246,8 +5256,8 @@ open class MainActivityRuntime : ComponentActivity() {
         // A file:// URI has to be reduced to its path before the core sees it. Handed the string
         // form, the core takes "file:///sdcard/x/y.elf" as a filesystem path: it mounts /app_home
         // at "/file:/sdcard/x/" and then reports "Failed to open executable". content:// is passed
-        // through untouched, since the core opens those by fd. This is the same conversion
-        // launchCurrentGameFromSaveSlot already does, and it was simply missing on the external
+        // through untouched, since the core opens those by fd. This is the same conversion a
+        // library launch already does, and it was simply missing on the external
         // path -- so anything launching us with file:// (a file manager, a front-end, adb) failed.
         // DiscGames.launchPath also keeps a second game on a disc image (a "#PS3_GM01" fragment,
         // as recent_games.json exports it) from booting the first.

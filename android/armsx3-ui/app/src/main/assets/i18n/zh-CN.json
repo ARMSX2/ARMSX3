@@ -283,6 +283,7 @@
  "friends.title": "朋友",
  "friends.unavailable": "此版本是在没有 Discord SDK 的情况下进行的。",
  "games.addToHome": "添加到主屏幕",
+ "games.loadState": "加载即时存档",
  "games.addToHome.unsupported": "此启动器不支持向主屏幕添加快捷方式。",
  "games.background.choose": "选择背景图片...",
  "games.background.clear": "清晰的背景",

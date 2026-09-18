@@ -283,6 +283,7 @@
  "friends.title": "Freunde",
  "friends.unavailable": "Dieser Build wurde ohne das Discord SDK erstellt.",
  "games.addToHome": "Zum Startbildschirm hinzufügen",
+ "games.loadState": "Speicherstand laden",
  "games.addToHome.unsupported": "Dieser Launcher unterstützt das Hinzufügen von Verknüpfungen zum Startbildschirm nicht.",
  "games.background.choose": "Hintergrundbild auswählen…",
  "games.background.clear": "Klarer Hintergrund",

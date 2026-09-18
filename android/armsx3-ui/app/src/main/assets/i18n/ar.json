@@ -283,6 +283,7 @@
  "friends.title": "الأصدقاء",
  "friends.unavailable": "تم إنشاء هذا الإصدار بدون Discord SDK.",
  "games.addToHome": "أضف إلى الشاشة الرئيسية",
+ "games.loadState": "تحميل حالة محفوظة",
  "games.addToHome.unsupported": "لا يدعم هذا المشغل إضافة اختصارات إلى الشاشة الرئيسية.",
  "games.background.choose": "اختر صورة الخلفية...",
  "games.background.clear": "خلفية واضحة",

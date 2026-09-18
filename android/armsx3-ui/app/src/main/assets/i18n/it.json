@@ -283,6 +283,7 @@
  "friends.title": "Amici",
  "friends.unavailable": "Questa build è stata realizzata senza Discord SDK.",
  "games.addToHome": "Aggiungi alla schermata iniziale",
+ "games.loadState": "Carica stato salvato",
  "games.addToHome.unsupported": "Questo launcher non supporta l'aggiunta di scorciatoie alla schermata principale.",
  "games.background.choose": "Scegli l'immagine di sfondo...",
  "games.background.clear": "Sfondo chiaro",

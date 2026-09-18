@@ -879,6 +879,7 @@ val EN: Map<String, String> = mapOf(
     "games.overflow.gridNames" to "Game names in grid",
     "games.overflow.showHidden" to "Show hidden games",
     "games.addToHome" to "Add to home screen",
+    "games.loadState" to "Load save state",
     "games.clearCache" to "Clear PPU/SPU/shader cache",
     "games.clearCache.noSerial" to "This game has no serial, so it has no cache of its own.",
     "games.clearCache.empty" to "Nothing cached for this game.",

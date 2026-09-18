@@ -283,6 +283,7 @@
  "friends.title": "เพื่อน",
  "friends.unavailable": "โครงสร้างนี้สร้างขึ้นโดยไม่มี Discord SDK",
  "games.addToHome": "เพิ่มไปที่หน้าจอหลัก",
+ "games.loadState": "โหลดสถานะที่บันทึกไว้",
  "games.addToHome.unsupported": "Launcher นี้ไม่รองรับการเพิ่มทางลัดไปยังหน้าจอหลัก",
  "games.background.choose": "เลือกภาพพื้นหลัง...",
  "games.background.clear": "พื้นหลังที่ชัดเจน",

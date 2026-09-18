@@ -890,7 +890,7 @@ object Rpcs3Bridge {
      * Nothing bounds a slot number on either side of the JNI, so they reuse the numbered-slot
      * path that works rather than growing a second mechanism, and the user's ten stay theirs.
      */
-    private const val AUTOSAVE_SLOT = 10
+    const val AUTOSAVE_SLOT = 10
 
     @JvmStatic
     fun hasAutosaveState(): Boolean = hasState(AUTOSAVE_SLOT)
@@ -965,7 +965,24 @@ object Rpcs3Bridge {
             ?: com.armsx2.runtime.MainActivityRuntime.instance
                 ?.applicationContext?.getExternalFilesDir(null)?.absolutePath
             ?: return null
-        val file = java.io.File(root, "config/savestates/$title/armsx3_slots/slot$slot.thumb")
+        val bitmap = thumbnailBitmap(java.io.File(root, "config/savestates/$title/armsx3_slots/slot$slot.thumb"))
+            ?: return null
+
+        java.io.ByteArrayOutputStream().use { out ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            bitmap.recycle()
+            out.toByteArray()
+        }
+    }.getOrNull()
+
+    /**
+     * A slot preview file ("AX3T" + u32 width + u32 height + RGBA8) as a bitmap, or null.
+     *
+     * By file rather than by slot so the Save Manager can show one for a game that is not
+     * running: [thumbnailForSlot] resolves the slot against the running title.
+     */
+    @JvmStatic
+    fun thumbnailBitmap(file: java.io.File): android.graphics.Bitmap? = runCatching {
         if (!file.isFile) return null
 
         val raw = file.readBytes()
@@ -982,15 +999,8 @@ object Rpcs3Bridge {
         if (width !in 1..4096 || height !in 1..4096) return null
         if (raw.size < header + width * height * 4) return null
 
-        val bitmap = android.graphics.Bitmap.createBitmap(
-            width, height, android.graphics.Bitmap.Config.ARGB_8888
-        )
-        bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(raw, header, width * height * 4))
-
-        java.io.ByteArrayOutputStream().use { out ->
-            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-            bitmap.recycle()
-            out.toByteArray()
+        android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888).apply {
+            copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(raw, header, width * height * 4))
         }
     }.getOrNull()
 

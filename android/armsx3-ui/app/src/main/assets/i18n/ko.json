@@ -283,6 +283,7 @@
  "friends.title": "친구",
  "friends.unavailable": "이 빌드는 Discord SDK 없이 제작되었습니다.",
  "games.addToHome": "홈 화면에 추가",
+ "games.loadState": "저장된 상태 불러오기",
  "games.addToHome.unsupported": "이 런처는 홈 화면에 바로가기 추가를 지원하지 않습니다.",
  "games.background.choose": "배경 이미지 선택…",
  "games.background.clear": "배경 지우기",
