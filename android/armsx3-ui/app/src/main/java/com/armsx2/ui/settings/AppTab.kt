@@ -581,6 +581,9 @@ fun AppTab() {
             description = str("app.bootLogo.desc"),
             onChange = { BootLogoPreferences.set(it) },
         )
+        if (BootLogoPreferences.enabled.value) {
+            BootIntroRows()
+        }
 
         BackupRestoreRows()
 
@@ -1144,6 +1147,87 @@ private fun ResetAllSettingsRow() {
             },
             onDismiss = { confirming = false },
         )
+    }
+}
+
+/** Custom boot intro: a video the user picked plays at launch in place of the bundled one. See
+ *  [com.armsx2.BootIntro]. The copy runs on IO, since a video can be hundreds of MB. */
+@Composable
+private fun BootIntroRows() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    // Shown inline rather than as a Toast: Android 12+ cuts a toast at two lines, which ate
+    // the half of the message that says what to pick instead. Held as a key so it follows a
+    // language change.
+    var problem by remember { mutableStateOf<String?>(null) }
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        problem = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { com.armsx2.BootIntro.importVideo(context, uri) }
+            busy = false
+            problem = when (result) {
+                com.armsx2.BootIntro.ImportResult.Ok -> null
+                com.armsx2.BootIntro.ImportResult.TooLarge -> "app.bootLogo.tooLarge"
+                com.armsx2.BootIntro.ImportResult.NotVideo -> "app.bootLogo.notVideo"
+                com.armsx2.BootIntro.ImportResult.Unreadable -> "app.bootLogo.unreadable"
+            }
+        }
+    }
+
+    val custom = com.armsx2.BootIntro.customName.value
+    Text(
+        when {
+            busy -> str("app.bootLogo.importing")
+            custom != null -> str("app.bootLogo.current").format(custom)
+            else -> str("app.bootLogo.default")
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+    )
+    problem?.let { key ->
+        Text(
+            str(key),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(start = 4.dp),
+        )
+    }
+    FlowRow(
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val pick = { if (!busy) picker.launch(arrayOf("video/*")) }
+        OutlinedButton(
+            onClick = pick,
+            enabled = !busy,
+            modifier = Modifier.controllerFocusable("app.bootLogo.choose", onConfirm = pick),
+        ) { Text(str("app.bootLogo.choose")) }
+        val preview = { if (!busy) com.armsx2.BootIntro.preview(context) }
+        OutlinedButton(
+            onClick = preview,
+            enabled = !busy,
+            modifier = Modifier.controllerFocusable("app.bootLogo.preview", onConfirm = preview),
+        ) { Text(str("app.bootLogo.preview")) }
+        if (custom != null) {
+            val reset = {
+                if (!busy) {
+                    problem = null
+                    com.armsx2.BootIntro.clear(context)
+                }
+            }
+            OutlinedButton(
+                onClick = reset,
+                enabled = !busy,
+                modifier = Modifier.controllerFocusable("app.bootLogo.reset", onConfirm = reset),
+            ) { Text(str("app.bootLogo.reset")) }
+        }
     }
 }
 
