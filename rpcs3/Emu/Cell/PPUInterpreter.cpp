@@ -54,6 +54,21 @@ void ppubreak(ppu_thread& ppu)
 // See ppu_watch_arm in PPUThread.cpp. Disarmed this is one relaxed load against a register,
 // which the interpreter can afford; it is the only build where every guest store is visible.
 extern int ppu_watch_slot(u32 addr, u32 size);
+
+// Arming from the sleep in a poll loop only ever sees waits that had to wait. A wait that is
+// satisfied on entry never sleeps, so the writer that satisfied it is never watched, and the
+// watch ends up pinned to the one slot that is stuck. Arm from the load at the top of the loop
+// instead, which runs on every call, healthy ones included.
+extern u32 g_ppu_watch_load_cia;
+extern void ppu_watch_arm_addr(u32 addr);
+
+static FORCE_INLINE void ppu_watch_arm_load(const ppu_thread& ppu, u32 addr)
+{
+	if (g_ppu_watch_load_cia && ppu.cia == g_ppu_watch_load_cia) [[unlikely]]
+	{
+		ppu_watch_arm_addr(addr);
+	}
+}
 extern void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size);
 
 template <typename T>
@@ -5796,6 +5811,7 @@ auto LWZ()
 
 	static const auto exec = [](ppu_thread& ppu, ppu_opcode_t op) {
 	const u64 addr = op.ra || 1 ? ppu.gpr[op.ra] + op.simm16 : op.simm16;
+	ppu_watch_arm_load(ppu, static_cast<u32>(addr));
 	ppu.gpr[op.rd] = ppu_feed_data<u32, Flags...>(ppu, addr);
 	};
 	RETURN_(ppu, op);

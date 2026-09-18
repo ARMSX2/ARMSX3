@@ -581,6 +581,31 @@ struct ppu_watch_stat_t
 
 ppu_watch_stat_t g_ppu_watch_stats[4]{};
 
+u32 g_ppu_watch_load_cia = 0;
+
+// Arm slot 0 (and the word below it) at a chosen address, resetting the per-slot state so a
+// new slot does not inherit the last one's "already set" memory.
+void ppu_watch_arm_addr(u32 addr)
+{
+	// Once, and then never again.
+	//
+	// Following the address means following whichever slot is being waited on right now, which
+	// during a hang is the one slot that is dead, and its whole history is resets. What has
+	// never been observed is a slot's healthy life: set, consumed, cleared, set again. Latching
+	// the first slot seen -- the load at the top of the wait runs on every call, so the first
+	// one is early and healthy -- and holding it gives exactly that, and the producer with it.
+	static atomic_t<u32> s_armed{0};
+
+	if (addr < 0x1000c || !s_armed.compare_and_swap_test(0, addr))
+	{
+		return;
+	}
+
+	g_ppu_watch[0].release(addr);
+	g_ppu_watch[3].release(addr - 12);
+	ppu_log.warning("ARMSX3_WATCH_LOAD: latched on 0x%x", addr);
+}
+
 int ppu_watch_slot(u32 addr, u32 size)
 {
 	for (int i = 0; i < 4; i++)
@@ -634,6 +659,17 @@ void ppu_watch_arm(const ppu_thread& ppu)
 	static const std::pair<u32, u32> cfg = []() -> std::pair<u32, u32>
 	{
 		ppu_watch_parse_fixed();
+
+		if (const char* load = std::getenv("ARMSX3_WATCH_LOAD"); load && *load)
+		{
+			u32 cia = 0;
+
+			if (std::from_chars(load, load + std::strlen(load), cia, 16).ec == std::errc())
+			{
+				g_ppu_watch_load_cia = cia;
+				ppu_log.warning("ARMSX3_WATCH_LOAD: arming on the load at 0x%x", cia);
+			}
+		}
 
 		const char* env = std::getenv("ARMSX3_WATCH_SPIN");
 
