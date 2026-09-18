@@ -2158,6 +2158,7 @@ struct ppu_watch_stat_t
 	atomic_t<u32> spu_put;
 	atomic_t<u32> spu_ll_ok;
 	atomic_t<u32> spu_ll_fail;
+	atomic_t<u32> last_value;
 };
 
 extern ppu_watch_stat_t g_ppu_watch_stats[4];
@@ -2204,10 +2205,11 @@ static void ppu_watch_putll(const spu_thread& spu, u32 eal, const char* kind)
 
 	if (!wrong_line && !lost)
 	{
-		// Same rule as the PPU side: a store that leaves the word set is always worth a line.
+		// Same rule as the PPU side: the transition to set, not every write that leaves it set.
 		const u32 after = vm::read32(w);
+		const bool became_set = after && !st.last_value.exchange(after);
 
-		if (ppu_watch_should_log(++st.spu_ll_ok) || after)
+		if (ppu_watch_should_log(++st.spu_ll_ok) || became_set)
 		{
 			spu_log.error("WATCH[%d] 0x%x: SPU %s took from SPU 0x%x, word now 0x%x",
 				slot, w, kind, spu.id, after);

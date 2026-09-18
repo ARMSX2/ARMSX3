@@ -576,6 +576,7 @@ struct ppu_watch_stat_t
 	atomic_t<u32> spu_put{0};
 	atomic_t<u32> spu_ll_ok{0};
 	atomic_t<u32> spu_ll_fail{0};
+	atomic_t<u32> last_value{0};
 };
 
 ppu_watch_stat_t g_ppu_watch_stats[4]{};
@@ -691,9 +692,13 @@ void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size)
 	const bool stcx = (size & 0x80) != 0;
 	auto& counter = stcx ? g_ppu_watch_stats[slot].ppu_stcx : g_ppu_watch_stats[slot].ppu_store;
 
-	// A write of zero is a reset and there are thousands; a write of anything else is the event
-	// this whole search is for, so it is never decimated away.
-	if (ppu_watch_should_log(++counter) || value)
+	// The event this search exists for is the word going from clear to set, not the word being
+	// set: a word that is normally non-zero would otherwise log every write it ever gets, which
+	// floods the log and slows the emulator enough to change what is being measured.
+	const u32 now = static_cast<u32>(value);
+	const bool became_set = now && !g_ppu_watch_stats[slot].last_value.exchange(now);
+
+	if (ppu_watch_should_log(++counter) || became_set)
 	{
 		ppu_log.error("WATCH[%d] 0x%x <- 0x%llx (%u bytes%s) from 0x%x on '%s'",
 			slot, addr, value, size & 0x7f, stcx ? ", stcx" : "", ppu.cia, ppu.get_name());
