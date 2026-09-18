@@ -2164,6 +2164,7 @@ struct ppu_watch_stat_t
 extern ppu_watch_stat_t g_ppu_watch_stats[4];
 extern atomic_t<u32> g_ppu_watch[4];
 extern atomic_t<u32> g_ppu_watch_size[4];
+extern void ppu_watch_record(int slot, u32 addr, u32 value, u32 who, u16 size, u16 kind);
 
 // A plain transfer over a watched word.
 static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id)
@@ -2174,6 +2175,8 @@ static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id)
 	{
 		return;
 	}
+
+	ppu_watch_record(slot, eal, vm::read32(g_ppu_watch[slot].load()), spu_id, static_cast<u16>(size), 2);
 
 	if (ppu_watch_should_log(++g_ppu_watch_stats[slot].spu_put))
 	{
@@ -2225,7 +2228,9 @@ struct ppu_watch_putll_report
 
 		if (wrong_line || lost)
 		{
-			if (ppu_watch_should_log(++st.spu_ll_fail))
+			ppu_watch_record(slot, w, vm::read32(w), spu.id, 128, 4);
+
+		if (ppu_watch_should_log(++st.spu_ll_fail))
 			{
 				spu_log.error("WATCH[%d] 0x%x: SPU %s could not take from SPU 0x%x: rtime=0x%llx res=0x%llx %s",
 					slot, w, kind, spu.id, spu.rtime, res, wrong_line ? "WRONG-LINE" : "LOST");
@@ -2236,6 +2241,8 @@ struct ppu_watch_putll_report
 
 		const u32 after = vm::read32(w);
 		const bool became_set = after && !st.last_value.exchange(after);
+
+		ppu_watch_record(slot, w, after, spu.id, 128, 3);
 
 		if (ppu_watch_should_log(++st.spu_ll_ok) || became_set)
 		{

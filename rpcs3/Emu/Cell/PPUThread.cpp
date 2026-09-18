@@ -586,6 +586,34 @@ struct ppu_watch_stat_t
 
 ppu_watch_stat_t g_ppu_watch_stats[4]{};
 
+// The last writes to each watched word, kept whether or not they were logged.
+//
+// Decimation is what keeps a log readable and is also what throws away the only events that
+// matter at a hang: the handful just before everything went quiet. A ring costs nothing and
+// the dump can print it in order.
+struct ppu_watch_event_t
+{
+	u32 addr;
+	u32 value;
+	u32 who;
+	u16 size;
+	u16 kind; // 0 store, 1 conditional, 2 transfer, 3 atomic took, 4 atomic could not
+};
+
+ppu_watch_event_t g_ppu_watch_ring[4][32]{};
+atomic_t<u32> g_ppu_watch_ring_pos[4]{};
+
+void ppu_watch_record(int slot, u32 addr, u32 value, u32 who, u16 size, u16 kind)
+{
+	if (slot < 0 || slot >= 4)
+	{
+		return;
+	}
+
+	const u32 i = g_ppu_watch_ring_pos[slot]++ % 32;
+	g_ppu_watch_ring[slot][i] = {addr, value, who, size, kind};
+}
+
 u32 g_ppu_watch_load_cia = 0;
 
 // Arm slot 0 (and the word below it) at a chosen address, resetting the per-slot state so a
@@ -753,6 +781,8 @@ void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size)
 	const u32 now = static_cast<u32>(value);
 	const bool became_set = now && !g_ppu_watch_stats[slot].last_value.exchange(now);
 
+	ppu_watch_record(slot, addr, now, ppu.cia, static_cast<u16>(size & 0x7f), stcx ? 1 : 0);
+
 	if (ppu_watch_should_log(++counter) || became_set)
 	{
 		ppu_log.error("WATCH[%d] 0x%x <- 0x%llx (%u bytes%s) from 0x%x on '%s'",
@@ -776,9 +806,23 @@ std::string ppu_watch_summary()
 
 		auto& st = g_ppu_watch_stats[i];
 
+		static const char* const kinds[] = {"store", "conditional", "transfer", "atomic took", "atomic could not"};
+
 		fmt::append(out, "\nWATCH[%d] 0x%x+%u = 0x%x: %u PPU stores, %u conditional, %u SPU transfers, %u SPU atomics took, %u would have failed",
 			i, w, std::max<u32>(g_ppu_watch_size[i].load(), 4), vm::check_addr(w) ? +vm::read32(w) : 0u,
 			st.ppu_store.load(), st.ppu_stcx.load(), st.spu_put.load(), st.spu_ll_ok.load(), st.spu_ll_fail.load());
+
+		// Oldest first, so the bottom of the list is the last thing that happened before the
+		// silence, which is the only part of it anyone reads.
+		const u32 pos = g_ppu_watch_ring_pos[i].load();
+
+		for (u32 n = pos > 32 ? pos - 32 : 0; n < pos; n++)
+		{
+			const auto& e = g_ppu_watch_ring[i][n % 32];
+
+			fmt::append(out, "\n  #%u 0x%x <- 0x%x (%u bytes, %s) by 0x%x", n, e.addr, e.value,
+				e.size, e.kind < 5 ? kinds[e.kind] : "?", e.who);
+		}
 	}
 
 	return out;
