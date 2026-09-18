@@ -217,9 +217,14 @@ object SecondScreen {
                 MainActivityRuntime.instance?.loadState()
             }, rowLp())
             row2.addView(action(I18n.get("secondScreen.pause")) {
-                // Same toggle the on-screen pause button uses.
-                if (MainActivityRuntime.eState.value == EmuState.PAUSED) MainActivityRuntime.resume()
-                else MainActivityRuntime.pause()
+                // Toggle on the core's own state, not eState. Nothing ever sets eState to PAUSED
+                // (the core does not report pauses back), so this button used to pause again on
+                // every press and could never resume. Only an exact Paused resumes: the core's
+                // Resume() ignores Frozen. Setting eState to PAUSED instead would wake the
+                // stuck-paused backstop in MainActivityRuntime, which resumes any pause that has
+                // no menu over it — including this one.
+                val paused = net.rpcsx.RPCSX.getState() == net.rpcsx.EmulatorState.Paused
+                if (paused) MainActivityRuntime.resume() else MainActivityRuntime.pause()
             }, rowLp())
             row2.addView(action(I18n.get("touch.stateAction.screenshot")) {
                 MainActivityRuntime.instance?.applicationContext?.let { Screenshots.capture(it) }
