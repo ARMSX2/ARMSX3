@@ -72,6 +72,28 @@ namespace vk
 		unsized_array_support = device_extensions.is_supported(VK_EXT_SHADER_UNIFORM_BUFFER_UNSIZED_ARRAY_EXTENSION_NAME);
 		max_ubo_range = props.limits.maxUniformBufferRange;
 
+		// Without unsized arrays every uniform-block array is declared at max_ubo_range / element
+		// size, and the heaps bind windows of the same size. Adreno reports 64KB and gets
+		// arrays of a few thousand. PowerVR reports 128MB, which declares a 33-million-element
+		// int array among others, and its shader compiler (libusc, shared by the GL and Vulkan
+		// drivers) branches to a garbage address compiling it: the process dies right after
+		// the PPU and SPU caches finish, on either renderer. No draw indexes anywhere near 64KB
+		// of one uniform array, so both the declaration and the window are held to that, which
+		// is exactly the configuration Adreno already runs on.
+		//
+		// Gated to Imagination hardware (vendor 0x1010) so nothing else moves. Adreno already sits
+		// at 64KB, but Turnip and other drivers without the extension may report more and are
+		// working as they are; this changes no value on any device but PowerVR.
+		constexpr u32 vendor_imagination = 0x1010;
+
+		if (!unsized_array_support && props.vendorID == vendor_imagination)
+		{
+			max_ubo_range = std::min<u32>(max_ubo_range, 65536);
+			ubo_window_clamped = true;
+			rsx_log.warning("PowerVR: uniform arrays and their bound windows held to 64KB (driver reports %u)",
+				props.limits.maxUniformBufferRange);
+		}
+
 		if (device_extensions.is_supported(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME))
 		{
 			custom_border_color_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT;
