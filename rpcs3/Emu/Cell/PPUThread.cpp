@@ -690,13 +690,25 @@ static void ppu_watch_parse_fixed()
 		const std::string_view item = rest.substr(0, comma);
 		rest = comma == umax ? std::string_view{} : rest.substr(comma + 1);
 
-		u32 addr = 0;
+		// "addr" watches the whole 128-byte line it sits in; "addr:width" watches exactly that
+		// many bytes. A control block wants the line, one counter inside it wants four bytes,
+		// and watching the line when you meant the counter buries the counter in its neighbours.
+		u32 addr = 0, width = 128;
+		const usz colon = item.find(':');
 
-		if (std::from_chars(item.data(), item.data() + item.size(), addr, 16).ec == std::errc() && addr >= 0x10000)
+		if (colon != umax)
 		{
-			g_ppu_watch_size[slot].release(128);
+			std::from_chars(item.data() + colon + 1, item.data() + item.size(), width, 10);
+			width = std::clamp<u32>(width, 4, 128);
+		}
+
+		const std::string_view addr_text = item.substr(0, colon == umax ? item.size() : colon);
+
+		if (std::from_chars(addr_text.data(), addr_text.data() + addr_text.size(), addr, 16).ec == std::errc() && addr >= 0x10000)
+		{
+			g_ppu_watch_size[slot].release(width);
 			g_ppu_watch[slot++].release(addr);
-			ppu_log.warning("ARMSX3_WATCH_ADDR: watching the 128-byte line at 0x%x", addr);
+			ppu_log.warning("ARMSX3_WATCH_ADDR: watching %u bytes at 0x%x", width, addr);
 		}
 	}
 }
