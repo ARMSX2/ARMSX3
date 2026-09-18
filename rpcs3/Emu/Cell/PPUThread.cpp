@@ -595,6 +595,18 @@ void ppu_watch_arm_addr(u32 addr)
 	// the first slot seen -- the load at the top of the wait runs on every call, so the first
 	// one is early and healthy -- and holding it gives exactly that, and the producer with it.
 	static atomic_t<u32> s_armed{0};
+	static atomic_t<u32> s_seen{0};
+
+	// What this load reads is the whole question and has never been observed. A wait that is
+	// satisfied on arrival reads non-zero and returns; one that has to wait reads zero and
+	// sleeps. If a non-zero read never appears, the flag is never set at all and the first
+	// sleep is fatal, which is a different bug from a completion that arrives too late.
+	if (const u32 n = ++s_seen; n <= 64 || n % 512 == 0)
+	{
+		ppu_log.error("WATCHLOAD #%u: 0x%x reads 0x%x, index 0x%x", n, addr,
+			vm::check_addr(addr) ? +vm::read32(addr) : 0u,
+			(addr >= 0x1000c && vm::check_addr(addr - 12)) ? +vm::read32(addr - 12) : 0u);
+	}
 
 	if (addr < 0x1000c || !s_armed.compare_and_swap_test(0, addr))
 	{

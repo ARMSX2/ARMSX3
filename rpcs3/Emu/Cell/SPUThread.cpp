@@ -3606,6 +3606,12 @@ bool spu_thread::do_list_transfer(spu_mfc_cmd& args)
 				rsx_lock.unlock();
 			}
 
+			// A list transfer's optimised put writes guest memory here and returns, without
+			// ever reaching do_dma_transfer, so hooking transfers misses it entirely. This is
+			// how a SPURS job writes its results back, which made the word it sets look as
+			// though nothing in the machine ever wrote it.
+			ppu_watch_dma(addr, size, id);
+
 			u8* dst = vm::_ptr<u8>(addr);
 			const u8* src = this->ls + arg_lsa + (addr & 0xf);
 
