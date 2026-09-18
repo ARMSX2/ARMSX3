@@ -4013,7 +4013,19 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 			{
 				// Postpone notifications if there is no pending one OR if there is likely a complex operation on reservation going on
 				// Which consists of multiple used addresses
-				if (ppu.res_notify_postpone_streak <= 4)
+				// EXPERIMENT (ARMSX3_NO_POSTPONE=1): never postpone, notify immediately.
+				//
+				// A postponed wake is only delivered if no other store touched the line in the
+				// meantime, and the line SPURS keeps its control block on takes millions of
+				// atomic stores, so the timestamp has almost always moved on by the time the
+				// flush checks. Every drop is a wake that an SPU waiting on that line never got.
+				static const bool s_no_postpone = []()
+				{
+					const char* env = std::getenv("ARMSX3_NO_POSTPONE");
+					return env && *env && *env != '0';
+				}();
+
+				if (!s_no_postpone && ppu.res_notify_postpone_streak <= 4)
 				{
 					if (!notify || ((notify & -128) == (addr & -128) && new_data != old_data))
 					{

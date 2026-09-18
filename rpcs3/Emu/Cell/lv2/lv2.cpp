@@ -1419,6 +1419,18 @@ static void ppu_dump_threads_on_request()
 	{
 		fmt::append(out, "\n%s's thread context (state %s):\n", spu->get_name(), +spu->state);
 		spu->dump_all(out);
+
+		// An SPU asleep on a reservation wakes when the line is written. The dump gives the
+		// line it reserved and when, but not what that line says now, and the difference is
+		// the whole question: equal means it is waiting for a write that has not happened,
+		// different means the write happened and the wake did not arrive.
+		if (const u32 raddr = spu->raddr)
+		{
+			const u64 now = vm::reservation_acquire(raddr);
+
+			fmt::append(out, "Reservation now: 0x%llx (reserved 0x%llx)%s\n", now, spu->rtime,
+				(now & -128) != spu->rtime ? "  <-- LOST, wake was due" : "  (still current)");
+		}
 	}
 
 	if (rsx)
