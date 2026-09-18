@@ -2163,6 +2163,7 @@ struct ppu_watch_stat_t
 
 extern ppu_watch_stat_t g_ppu_watch_stats[4];
 extern atomic_t<u32> g_ppu_watch[4];
+extern atomic_t<u32> g_ppu_watch_size[4];
 
 // A plain transfer over a watched word.
 static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id)

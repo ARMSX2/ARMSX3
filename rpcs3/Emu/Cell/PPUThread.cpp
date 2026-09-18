@@ -569,6 +569,11 @@ void ppu_recompiler_fallback(ppu_thread& ppu)
 // is what made a field that is written every frame look like it had no writer at all.
 atomic_t<u32> g_ppu_watch[4]{};
 
+// How much of each slot to watch. A completion flag is one word; a structure whose writers are
+// the question -- a SPURS control block, say -- is a whole 128-byte line, and watching four
+// bytes of it reports that nothing writes it while the other 124 bytes are written constantly.
+atomic_t<u32> g_ppu_watch_size[4]{};
+
 struct ppu_watch_stat_t
 {
 	atomic_t<u32> ppu_store{0};
@@ -623,8 +628,9 @@ int ppu_watch_slot(u32 addr, u32 size)
 	for (int i = 0; i < 4; i++)
 	{
 		const u32 w = g_ppu_watch[i].load();
+		const u32 width = std::max<u32>(g_ppu_watch_size[i].load(), 4);
 
-		if (w && addr < w + 4 && addr + size > w)
+		if (w && addr < w + width && addr + size > w)
 		{
 			return i;
 		}
@@ -660,8 +666,9 @@ static void ppu_watch_parse_fixed()
 
 		if (std::from_chars(item.data(), item.data() + item.size(), addr, 16).ec == std::errc() && addr >= 0x10000)
 		{
+			g_ppu_watch_size[slot].release(128);
 			g_ppu_watch[slot++].release(addr);
-			ppu_log.warning("ARMSX3_WATCH_ADDR: watching 0x%x", addr);
+			ppu_log.warning("ARMSX3_WATCH_ADDR: watching the 128-byte line at 0x%x", addr);
 		}
 	}
 }
@@ -769,8 +776,8 @@ std::string ppu_watch_summary()
 
 		auto& st = g_ppu_watch_stats[i];
 
-		fmt::append(out, "\nWATCH[%d] 0x%x = 0x%x: %u PPU stores, %u conditional, %u SPU transfers, %u SPU atomics took, %u would have failed",
-			i, w, vm::check_addr(w) ? +vm::read32(w) : 0u,
+		fmt::append(out, "\nWATCH[%d] 0x%x+%u = 0x%x: %u PPU stores, %u conditional, %u SPU transfers, %u SPU atomics took, %u would have failed",
+			i, w, std::max<u32>(g_ppu_watch_size[i].load(), 4), vm::check_addr(w) ? +vm::read32(w) : 0u,
 			st.ppu_store.load(), st.ppu_stcx.load(), st.spu_put.load(), st.spu_ll_ok.load(), st.spu_ll_fail.load());
 	}
 
