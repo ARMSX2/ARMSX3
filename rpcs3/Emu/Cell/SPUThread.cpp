@@ -2169,6 +2169,10 @@ void spu_thread::push_snr(u32 number, u32 value)
 	});
 }
 
+#ifndef ARMSX3_WATCH_HOOKS
+#define ARMSX3_WATCH_HOOKS 0
+#endif
+
 extern int ppu_watch_slot(u32 addr, u32 size);
 extern bool ppu_watch_should_log(u32 count);
 
@@ -2190,6 +2194,10 @@ extern void ppu_watch_record(int slot, u32 addr, u32 value, u32 who, u16 size, u
 // A plain transfer over a watched word.
 static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id)
 {
+#if !ARMSX3_WATCH_HOOKS
+	static_cast<void>(eal), static_cast<void>(size), static_cast<void>(spu_id);
+	return;
+#endif
 	const int slot = ppu_watch_slot(eal, size);
 
 	if (slot < 0)
@@ -2224,7 +2232,7 @@ struct ppu_watch_putll_report
 	u64 res = 0;
 
 	ppu_watch_putll_report(const spu_thread& spu, u32 eal, const char* kind)
-		: spu(spu), kind(kind), slot(ppu_watch_slot(eal, 128))
+		: spu(spu), kind(kind), slot(ARMSX3_WATCH_HOOKS ? ppu_watch_slot(eal, 128) : -1)
 	{
 		if (slot < 0)
 		{
