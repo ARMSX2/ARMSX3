@@ -3874,6 +3874,11 @@ extern u64 ppu_ldarx(ppu_thread& ppu, u32 addr)
 int ppu_watch_slot(u32 addr, u32 size);
 void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size);
 
+// See PPUInterpreter.cpp: the write-watch hooks compile out unless someone is actively hunting.
+#ifndef ARMSX3_WATCH_HOOKS
+#define ARMSX3_WATCH_HOOKS 0
+#endif
+
 template <typename T>
 static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 {
@@ -3892,10 +3897,15 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 	// write path, so a flag set with stwcx. is invisible to the plain watch. Log the attempt:
 	// this loop retries on failure, so repeats are failures, and a store that keeps failing
 	// while a thread waits on the word is the thing worth finding.
+	//
+	// Behind the switch like the interpreter's hooks. The recompiler reaches every stwcx. and
+	// stdcx. through here too, and the slot scan is eight ordered loads per conditional store.
+#if ARMSX3_WATCH_HOOKS
 	if (ppu_watch_slot(addr, sizeof(T)) >= 0) [[unlikely]]
 	{
 		ppu_watch_store(ppu, addr, static_cast<u64>(reg_value), sizeof(T) | 0x80);
 	}
+#endif
 
 	auto& data = const_cast<atomic_be_t<u64>&>(vm::_ref<atomic_be_t<u64>>(addr & -8));
 	auto& res = vm::reservation_acquire(addr);
