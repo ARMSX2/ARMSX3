@@ -223,8 +223,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
         repository.markPlayed(game)
         state.value = buildState(state.value)
-        val launchPath = if (game.uri.scheme == "file") game.uri.path ?: game.uri.toString() else game.uri.toString()
-        MainActivityRuntime.launchGame(launchPath, game)
+        MainActivityRuntime.launchGame(game.launchPath, game)
     }
 
     /** Mark a game hidden (or un-hidden) and refresh the visible list. */

@@ -3905,6 +3905,24 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
 
   Emu.SetForceBoot(true);
   std::string path = std::string(path_);
+
+  // A second game on a multi-game disc IMAGE arrives as "<image>//PS3_GM01", the key upstream's
+  // game list files it under: the image is one file, so its path alone cannot say which game.
+  // A folder disc needs none of this, since its PS3_GMxx folder is a path of its own and
+  // GetBdvdDir walks up from it to the disc root.
+  //
+  // Set on EVERY boot, not only these. The core keeps the last value, and an ISO boot builds its
+  // EBOOT path from it before anything resets it, so a PS3_GM01 boot would otherwise leak into
+  // the next ordinary disc.
+  std::string game_dir = "PS3_GAME";
+  if (const usz at = path.rfind("//"); at != umax &&
+                                       rpcs3::utils::is_ps3_gm_dir_name(std::string_view(path).substr(at + 2))) {
+    game_dir = path.substr(at + 2);
+    path.resize(at);
+    rpcsx_android.notice("boot: game '%s' on disc '%s'", game_dir, path);
+  }
+  Emu.SetGameDir(game_dir);
+
   while (path.ends_with('/')) {
     path.pop_back();
   }
@@ -4538,6 +4556,40 @@ static std::string read_sfo_game_info(const std::string &root,
          json_quote(title) + ",\"icon\":" + (haveIcon ? "true" : "false") + "}";
 }
 
+// The other games on a multi-game disc: PS3_GM01, PS3_GM02 ... beside PS3_GAME, each with its
+// own PARAM.SFO and ICON0.PNG. Returns ',"discGames":[...]' to splice into the main game's object,
+// or "" for a single-game disc. Each icon goes to <iconOut>.<dir>, since iconOut is one staging name.
+static std::string disc_games_json(const std::string &disc_root, std::string_view iconOut) {
+  std::vector<std::string> dirs;
+
+  for (auto &&entry : fs::dir(disc_root + "/")) {
+    if (entry.is_directory && rpcs3::utils::is_ps3_gm_dir_name(entry.name)) {
+      dirs.push_back(entry.name);
+    }
+  }
+
+  std::sort(dirs.begin(), dirs.end());
+
+  std::string games;
+
+  for (const auto &dir : dirs) {
+    const std::string icon = iconOut.empty() ? std::string{} : std::string(iconOut) + "." + dir;
+    const std::string info = read_sfo_game_info(disc_root + "/" + dir, icon);
+
+    if (info == "{}") {
+      continue;
+    }
+
+    if (!games.empty()) {
+      games += ',';
+    }
+
+    games += "{\"dir\":" + json_quote(dir) + "," + info.substr(1);
+  }
+
+  return games.empty() ? std::string{} : ",\"discGames\":[" + games + "]";
+}
+
 extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
                                             std::string_view iconOut) {
   if (isoPath.empty() || !Emu.IsStopped()) {
@@ -4606,6 +4658,12 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
     load_iso(path);
     result = read_sfo_game_info(iso_device::virtual_device_name + "/PS3_GAME",
                                 iconOut);
+
+    // Folders list their other games from the library side, which reads them with no mount. An
+    // image has to be mounted for that, and it already is.
+    if (result != "{}") {
+      result.insert(result.size() - 1, disc_games_json(iso_device::virtual_device_name, iconOut));
+    }
   } catch (const std::exception &e) {
     rpcsx_android.error("probeDiscInfo('%s') failed: %s", path, e.what());
   }

@@ -376,6 +376,12 @@ data class GameInfo(
      *  a PKG install puts them and the only place the core is asked about. */
     val locked: Boolean = false,
 ) {
+    /** PS3_GM01 and on for a second game on a multi-game disc image, else null. */
+    val discGameDir: String? get() = DiscGames.gameDirOf(uri)
+
+    /** The string the core is handed to boot this entry. See [DiscGames.launchPath]. */
+    val launchPath: String get() = DiscGames.launchPath(uri)
+
     /** The title to show. Mirrors GameList.h's `GetTitle(force_en)`: the original unless
      *  English is asked for AND a separate English title exists. */
     /** A user override wins over both the parsed and the English title — it exists precisely

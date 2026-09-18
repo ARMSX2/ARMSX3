@@ -1393,11 +1393,7 @@ open class MainActivityRuntime : ComponentActivity() {
 
         fun launchCurrentGameFromSaveSlot(slot: Int): Boolean {
             val game = currentGame.value ?: contextGame.value ?: return false
-            val launchPath = if (game.uri.scheme == "file") {
-                game.uri.path ?: game.uri.toString()
-            } else {
-                game.uri.toString()
-            }
+            val launchPath = game.launchPath
             if (launchPath.isBlank()) return false
             pendingSlotLoadOnBoot = slot
             launchGame(launchPath, game)
@@ -5139,7 +5135,9 @@ open class MainActivityRuntime : ComponentActivity() {
         // through untouched, since the core opens those by fd. This is the same conversion
         // launchCurrentGameFromSaveSlot already does, and it was simply missing on the external
         // path -- so anything launching us with file:// (a file manager, a front-end, adb) failed.
-        pendingExternalLaunch.value = if (uri.scheme == "file") (uri.path ?: uri.toString()) else uri.toString()
+        // DiscGames.launchPath also keeps a second game on a disc image (a "#PS3_GM01" fragment,
+        // as recent_games.json exports it) from booting the first.
+        pendingExternalLaunch.value = com.armsx2.DiscGames.launchPath(uri)
         launchPendingExternalGameIfReady()
     }
 

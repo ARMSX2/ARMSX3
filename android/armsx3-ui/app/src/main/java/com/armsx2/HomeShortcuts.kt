@@ -43,8 +43,7 @@ object HomeShortcuts {
         // Raw file:// games hand the core the
         // bare /storage path; SAF games pass the content:// URI string. The boot path
         // (MainActivityRuntime.handleExternalLaunchIntent -> extractLaunchUri) reads the "path" extra.
-        val launchArg = if (game.uri.scheme == "file") (game.uri.path ?: game.uri.toString())
-            else game.uri.toString()
+        val launchArg = game.launchPath
         val intent = Intent(ctx, Main::class.java).apply {
             action = Intent.ACTION_VIEW
             putExtra("path", launchArg)

@@ -169,9 +169,13 @@ object ContentUri {
     /** [devicePathForDocument] for anything the launcher might be holding: a document URI
      *  becomes a device path, a plain path or an already-translated one is returned as is. */
     fun bootPathFor(raw: String): String {
-        if (!raw.startsWith("content://")) return raw
-        val uri = runCatching { raw.toUri() }.getOrNull() ?: return raw
-        return devicePathForDocument(uri) ?: raw
+        // A second game on a disc image rides along as "//PS3_GMxx" (see DiscGames). Only the
+        // part before it is a URI, and the suffix has to survive the translation.
+        val (image, gameDir) = com.armsx2.DiscGames.split(raw)
+        if (!image.startsWith("content://")) return raw
+        val uri = runCatching { image.toUri() }.getOrNull() ?: return raw
+        val path = devicePathForDocument(uri) ?: return raw
+        return com.armsx2.DiscGames.join(path, gameDir)
     }
 
     /** Forget a folder the user removed. Its key is not reused, so a stale path stays dead
