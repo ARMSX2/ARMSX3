@@ -1532,6 +1532,54 @@ static void ppu_dump_threads_on_request()
 		}
 	}
 
+	// Raw guest memory to files, for offline disassembly: ARMSX3_DUMP_BIN=start-end[,..] writes
+	// <config dir>/dump_<start>-<end>.bin, unmapped pages as zeroes. A whole text segment is
+	// megabytes, which as log lines is tens of megabytes; as a file it is one pull.
+	if (const char* env = std::getenv("ARMSX3_DUMP_BIN"); env && *env)
+	{
+		std::string_view rest{env};
+
+		while (!rest.empty())
+		{
+			const usz comma = rest.find(',');
+			const std::string_view item = rest.substr(0, comma);
+			rest = comma == umax ? std::string_view{} : rest.substr(comma + 1);
+
+			const usz dash = item.find('-');
+			u32 start = 0, end = 0;
+
+			if (dash == umax ||
+				std::from_chars(item.data(), item.data() + dash, start, 16).ec != std::errc() ||
+				std::from_chars(item.data() + dash + 1, item.data() + item.size(), end, 16).ec != std::errc() ||
+				end <= start || end - start > 0x4000000)
+			{
+				fmt::append(out, "\nDUMP_BIN: could not read '%s', expected start-end in hex\n", std::string(item));
+				continue;
+			}
+
+			const std::string path = fs::get_config_dir() + fmt::format("dump_%x-%x.bin", start, end);
+			fs::file file(path, fs::rewrite);
+
+			if (!file)
+			{
+				fmt::append(out, "\nDUMP_BIN: cannot write '%s' (%s)\n", path, fs::g_tls_error);
+				continue;
+			}
+
+			const std::vector<u8> zeroes(0x1000);
+
+			for (u32 page = start & ~0xfffu; page < end; page += 0x1000)
+			{
+				const u32 from = std::max(page, start);
+				const u32 to = std::min(page + 0x1000, end);
+
+				file.write(vm::check_addr(page, vm::page_readable, 0x1000) ? vm::base(from) : zeroes.data(), to - from);
+			}
+
+			fmt::append(out, "\nDUMP_BIN: 0x%x..0x%x to '%s'\n", start, end, path);
+		}
+	}
+
 	for (const auto& spu : spus)
 	{
 		spu->state -= cpu_flag::dbg_global_pause;
