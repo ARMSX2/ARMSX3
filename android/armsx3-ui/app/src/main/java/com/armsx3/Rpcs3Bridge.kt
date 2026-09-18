@@ -431,20 +431,9 @@ object Rpcs3Bridge {
      */
     @JvmStatic
     fun changeDisc(path: String): Int {
-        var target = com.armsx2.storage.ContentUri.bootPathFor(path)
-        if (target.startsWith("content://")) target = sharedStoragePath(target) ?: return -1
+        val target = com.armsx2.storage.ContentUri.bootPathFor(path)
+        if (target.startsWith("content://")) return -1
         return runCatching { RPCSX.instance.changeDisc(target) }.getOrDefault(-1)
-    }
-
-    /** /storage/... for a document the external storage provider owns, else null. */
-    private fun sharedStoragePath(documentUri: String): String? {
-        val uri = android.net.Uri.parse(documentUri)
-        if (uri.authority != "com.android.externalstorage.documents") return null
-        val parts = runCatching { android.provider.DocumentsContract.getDocumentId(uri) }
-            .getOrNull()?.split(":", limit = 2)
-        if (parts == null || parts.size != 2) return null
-        val (volume, relative) = parts
-        return if (volume == "primary") "/storage/emulated/0/$relative" else "/storage/$volume/$relative"
     }
 
     @JvmStatic

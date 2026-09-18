@@ -634,20 +634,33 @@ private fun MenuHeader(
 
 @Composable
 private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuViewModel) {
-    var showDiscs by remember { mutableStateOf(false) }
+    // Which disc card is open: null, change, or swap. Swap is offered only while the game can take
+    // one, which the core reports as it runs; see DiscSection.
+    var discCard by remember { mutableStateOf<Boolean?>(null) }
+    val canSwap = remember { com.armsx3.Rpcs3Bridge.discSwapState() != 0 }
+    val actions = buildList {
+        add(MenuAction(str("action.resume"), str("action.play"), "▶", Success, viewModel::resume))
+        add(MenuAction(str("memcard.restart"), str("action.reset"), "↻", null, MainActivityRuntime::restart))
+        add(MenuAction(str("action.changeDisc"), str("action.changeDisc.detail"), "⏏", null) {
+            discCard = if (discCard == false) null else false
+        })
+        if (canSwap) {
+            add(MenuAction(str("action.swapDisc"), str("action.swapDisc.detail"), "⇄", null) {
+                discCard = if (discCard == true) null else true
+            })
+        }
+        add(MenuAction(str("action.close"), MainActivityRuntime.currentGame.value?.title.orEmpty(), "■", Danger) {
+            MainActivityRuntime.closeGame()
+        })
+    }
+    // What a pad press on the grid runs: this exact list, so the two cannot drift apart.
+    androidx.compose.runtime.SideEffect { viewModel.sessionActions = actions.map { it.action } }
     ActionGrid(
-        actions = listOf(
-            MenuAction(str("action.resume"), str("action.play"), "▶", Success, viewModel::resume),
-            MenuAction(str("memcard.restart"), str("action.reset"), "↻", null, MainActivityRuntime::restart),
-            MenuAction(str("action.swapDisc"), str("action.swapDisc.detail"), "⏏", null) { showDiscs = !showDiscs },
-            MenuAction(str("action.close"), MainActivityRuntime.currentGame.value?.title.orEmpty(), "■", Danger) {
-                MainActivityRuntime.closeGame()
-            },
-        ),
+        actions = actions,
         selected = state.selectedAction,
         onSelect = viewModel::selectAction,
     )
-    if (showDiscs) DiscSwapSection(viewModel)
+    discCard?.let { swap -> DiscSection(viewModel, swap) }
     // First card under the actions, ahead of the on-screen card, because it explains why a
     // setting you picked yourself is not the one the game is running on. It only appears for
     // titles the database has an entry for, so most sessions never see it.
@@ -1732,29 +1745,27 @@ private fun DatabaseSection() {
 }
 
 /**
- * Swap Disc, opened from its action above.
+ * Change Disc and Swap Disc, the two ways to put another disc in, opened from their actions above.
  *
- * Only a game that asks for another disc can take one: it registers disc-change callbacks, and
- * very few do (SingStar is the usual one). The button used to open a file picker for every game
- * and then do nothing, because the call behind it was a stub. It says so now instead.
+ * Change Disc works for every game, and is what a disc change means on a console for nearly all of
+ * them: the game closes and the new disc starts. Swap Disc is the real thing, a disc swapped under a
+ * game that keeps running. Only a game that registered disc-change callbacks can take that (SingStar,
+ * the Dynasty Warriors Xtreme Legends games), so its action only exists while one is running.
  *
- * A game booted from an .m3u lists that playlist's discs first. Any other disc comes from the file
- * picker. Picking closes the menu, because the game has to run to let go of the old disc.
+ * Both list the discs of the playlist the game was booted from, then offer the file picker. Picking
+ * closes the menu: a swap needs the game running to let go of the old disc.
  */
 @Composable
-private fun DiscSwapSection(viewModel: EmulationMenuViewModel) {
-    val swapState = remember { com.armsx3.Rpcs3Bridge.discSwapState() }
+private fun DiscSection(viewModel: EmulationMenuViewModel, swap: Boolean) {
     val playlist = remember { com.armsx3.Rpcs3Bridge.discPlaylist() }
 
-    SectionCard(str("disc.swap.title")) {
-        if (swapState == 0) {
-            Text(
-                str("disc.swap.unsupported"),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            return@SectionCard
-        }
+    SectionCard(str(if (swap) "action.swapDisc" else "action.changeDisc")) {
+        Text(
+            str(if (swap) "disc.swap.note" else "disc.change.note"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
         Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
             playlist.discs.forEachIndexed { index, disc ->
                 val current = disc == playlist.current
@@ -1765,7 +1776,7 @@ private fun DiscSwapSection(viewModel: EmulationMenuViewModel) {
                 ) {
                     if (!current) {
                         viewModel.resume()
-                        MainActivityRuntime.swapDiscTo(disc)
+                        if (swap) MainActivityRuntime.swapDiscTo(disc) else MainActivityRuntime.bootInstead(disc)
                     }
                 }
             }
@@ -1773,7 +1784,7 @@ private fun DiscSwapSection(viewModel: EmulationMenuViewModel) {
                 title = str("disc.swap.pickFile"),
                 description = str("disc.swap.pickFile.desc"),
                 glyph = "…",
-            ) { MainActivityRuntime.promptSwapDisc() }
+            ) { MainActivityRuntime.promptDiscFile(swap) }
         }
     }
 }

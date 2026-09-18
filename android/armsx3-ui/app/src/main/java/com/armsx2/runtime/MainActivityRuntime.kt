@@ -1057,7 +1057,8 @@ open class MainActivityRuntime : ComponentActivity() {
          *
          * Matched on the canonical path because the launcher hands us whatever it was given: a
          * bare path, a file:// URI, or a content:// document. Reads the cached scan rather than
-         * rescanning, so this costs one small file read on the launch path.
+         * rescanning, so this costs one small file read on the launch path. Launch Game and
+         * Swap Disc's reboot use it too, for the same reason.
          */
         private fun libraryGameFor(uriString: String): GameInfo? = runCatching {
             val ctx = instance?.applicationContext ?: return null
@@ -1066,10 +1067,22 @@ open class MainActivityRuntime : ComponentActivity() {
 
             val incoming = runCatching { uriString.toUri() }.getOrNull()
             val incomingPath = canonical(incoming?.path ?: uriString)
+            // Where it boots from, too. A document picked on its own (Launch Game, Swap Disc) and
+            // the library's copy of the same file are different URIs and neither has a usable
+            // path, but they resolve to one boot path.
+            val incomingBoot = com.armsx2.storage.ContentUri.bootPathFor(uriString)
+            fun bootPathOf(game: GameInfo) = com.armsx2.storage.ContentUri.bootPathFor(game.launchPath)
 
             com.armsx2.data.library.GameLibraryRepository(ctx).loadCached().games.firstOrNull { game ->
-                game.uri.toString() == uriString ||
-                    (incomingPath != null && canonical(game.uri.path) == incomingPath)
+                if (game.discGameDir != null) {
+                    // A second game on a disc image shares the image's path, so only its exact boot
+                    // path counts: the image's own launch must not come back as this game.
+                    bootPathOf(game) == incomingBoot
+                } else {
+                    game.uri.toString() == uriString ||
+                        (incomingPath != null && canonical(game.uri.path) == incomingPath) ||
+                        bootPathOf(game) == incomingBoot
+                }
             }
         }.getOrNull()
 
@@ -1343,6 +1356,85 @@ open class MainActivityRuntime : ComponentActivity() {
                     android.widget.Toast.makeText(context, com.armsx2.i18n.I18n.get(key), android.widget.Toast.LENGTH_LONG).show()
                 }
             }
+        }
+
+        /**
+         * Open a file picker and boot whatever is chosen, without adding it to the library: the
+         * drawer's Launch Game, ported from ARMSX2. bootDiscAction, the result handler, came across
+         * in the port with nothing left to open it.
+         */
+        fun promptLaunchGame() {
+            val activity = instance ?: return
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            runCatching { activity.bootDiscAction.launch(intent) }
+        }
+
+        /**
+         * Close the running game and boot [path] in its place: Swap Disc for a game that does not
+         * take a disc swap while it runs, which is nearly all of them. launchGame already stops
+         * the running VM and starts the next one when handed a game mid-session.
+         */
+        fun bootInstead(path: String) {
+            println("@@ANDROID_SWAP_DISC@@ restart path=${path.take(240)}")
+            launchGame(path, libraryGameFor(path))
+        }
+
+        /** A picked document's file name, for deciding what it is. */
+        private fun pickedName(uri: String): String {
+            val activity = instance ?: return ""
+            val parsed = runCatching { android.net.Uri.parse(uri) }.getOrNull() ?: return ""
+            return runCatching {
+                androidx.documentfile.provider.DocumentFile.fromSingleUri(activity, parsed)?.name
+            }.getOrNull() ?: parsed.lastPathSegment.orEmpty().substringAfterLast('/')
+        }
+
+        /**
+         * What a file picked for Launch Game or Swap Disc boots as, or null when it is not something
+         * that starts on its own. Decided before anything closes, so a wrong pick in Swap Disc never
+         * costs the game that was running.
+         *
+         * A .pkg is refused rather than installed. Installing belongs to the PKG/Data Manager, which
+         * knows what is already installed and asks for the licence a package needs; done from here
+         * it reinstalled the package on every pick, could lay an old base package over an installed
+         * update, and booted licence-locked games straight into a decryption failure.
+         */
+        private fun bootTargetFor(uri: String, name: String): String? {
+            val lower = name.lowercase()
+            return when {
+                listOf(".iso", ".m3u", ".bin", ".elf", ".self").any(lower::endsWith) -> uri
+                // A folder dump is picked by a file inside it, and PS3_DISC.SFB is the one every
+                // disc root has. The folder itself is what boots.
+                lower == "ps3_disc.sfb" -> com.armsx2.storage.ContentUri.bootPathFor(uri)
+                    .takeIf { !it.startsWith("content://") }
+                    ?.substringBeforeLast('/')
+                else -> null
+            }
+        }
+
+        private fun refusePick(name: String) {
+            val activity = instance ?: return
+            val key = if (name.endsWith(".pkg", ignoreCase = true)) "launch.pkg" else "launch.notBootable"
+            android.widget.Toast.makeText(activity, com.armsx2.i18n.I18n.get(key), android.widget.Toast.LENGTH_LONG).show()
+        }
+
+        /** Launch Game's result: boot the pick as it is, or say why it cannot be. */
+        fun launchPicked(uri: String) {
+            val name = pickedName(uri)
+            val target = bootTargetFor(uri, name) ?: return refusePick(name)
+            launchGame(target, libraryGameFor(target))
+        }
+
+        /** Which of the two the disc picker was opened for; read back by swapDiscAction. */
+        @Volatile private var pickingForSwap = false
+
+        /** The disc file picker for Change Disc ([swap] false) or Swap Disc ([swap] true). */
+        fun promptDiscFile(swap: Boolean) {
+            pickingForSwap = swap
+            promptSwapDisc()
         }
 
         fun promptSwapDisc() {
@@ -1757,16 +1849,26 @@ open class MainActivityRuntime : ComponentActivity() {
                 val intent = result.data
                 val uri = intent?.dataString ?: ""
                 if (uri.isNotEmpty()) {
-                    // Swap the mounted disc instead of rebooting, which keeps the running game.
-                    // The menu is still up behind the picker, and the game has to run for the
-                    // swap to finish, so close it first. A plain toggle is right here: the menu's
-                    // animated close is not in flight, so nothing will toggle it back.
+                    // Swap Disc: the game keeps running and gets the new disc, and the core checks
+                    // the disc before ejecting anything. Change Disc: the game closes and the disc
+                    // boots in its place, so the pick is checked here first; a file that cannot
+                    // start is refused with the game still running.
+                    val hotSwap = pickingForSwap && com.armsx3.Rpcs3Bridge.discSwapState() != 0
+                    val name = pickedName(uri)
+                    val target = if (hotSwap) uri else bootTargetFor(uri, name)
+                    if (target == null) {
+                        refusePick(name)
+                        return@registerForActivityResult
+                    }
+                    // The menu is still up behind the picker, and the game has to run for a swap to
+                    // finish, so close it first. A plain toggle is right here: the menu's animated
+                    // close is not in flight, so nothing will toggle it back.
                     if (com.armsx2.ui.WindowImpl.overlayVisible.value) {
                         com.armsx2.ui.InGameOverlay.toggle()
                     } else {
                         resume()
                     }
-                    swapDiscTo(uri)
+                    if (hotSwap) swapDiscTo(target) else bootInstead(target)
                 }
             } catch (_: Exception) { }
         }
@@ -1780,7 +1882,7 @@ open class MainActivityRuntime : ComponentActivity() {
                 val uri = result.data?.dataString ?: ""
                 if (uri.isNotEmpty()) {
                     println("@@ANDROID_BOOT_DISC@@ uri=${uri.take(240)}")
-                    launchGame(uri, null)
+                    launchPicked(uri)
                 }
             } catch (_: Exception) { }
         }

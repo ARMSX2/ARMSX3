@@ -127,18 +127,21 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
         state.value = state.value.copy(selectedAction = next)
     }
 
+    /**
+     * The Session actions as SessionPane last drew them, so a pad press runs exactly what is on
+     * screen. Not a fixed list: Swap Disc is there only while the running game can take a swap,
+     * which moves Close along by one. A hardcoded index-to-action table here could not follow that,
+     * and the last time one drifted from the pane every press ran its neighbour's action.
+     */
+    var sessionActions: List<() -> Unit> = emptyList()
+
     fun selectAction(index: Int) {
         state.value = state.value.copy(selectedAction = index)
     }
 
     fun activateSelection() {
         when (state.value.tab) {
-            EmulationMenuTab.Session -> when (state.value.selectedAction) {
-                0 -> resume()
-                1 -> MainActivityRuntime.restart()
-                2 -> MainActivityRuntime.promptSwapDisc()
-                3 -> MainActivityRuntime.closeGame()
-            }
+            EmulationMenuTab.Session -> sessionActions.getOrNull(state.value.selectedAction)?.invoke()
             // RPCS3 has Vulkan, OpenGL and Null -- there is no PS3 software
             // rasteriser, and "auto" resolved to Vulkan anyway, so the old
             // four-entry grid had two entries doing the same thing and one
@@ -381,12 +384,11 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
     }
 
     private fun actionCount(tab: EmulationMenuTab): Int = when (tab) {
-        // MUST match SessionPane's action list length, AND activateSelection's Session branch
-        // below -- all three are indexed by the same number and nothing checks they agree.
-        // Fast-forward used to sit at index 1 in the grid but had no entry in activateSelection,
-        // so every index from 1 up dispatched to its neighbour: a pad press on Fast Forward
-        // restarted the game, and Close could not be activated at all.
-        EmulationMenuTab.Session -> 4
+        // Whatever SessionPane drew; see sessionActions. Fast-forward used to sit at index 1 in the
+        // grid with no entry in a separate dispatch table, so every index from 1 up ran its
+        // neighbour: a pad press on Fast Forward restarted the game, and Close could not be
+        // activated at all. There is one list now, so they cannot disagree.
+        EmulationMenuTab.Session -> sessionActions.size
         EmulationMenuTab.Graphics -> 2
         EmulationMenuTab.Fixes -> 0
         EmulationMenuTab.Performance -> 3

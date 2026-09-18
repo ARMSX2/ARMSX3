@@ -195,6 +195,9 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
     // (the old box-drawing characters like ▦ ◉ ⌁ ✦ were unclear per tester feedback).
     val primary = listOf(
         DrawerItem("games.section.library", "🎮", AppRoute.Home),
+        // Boot any file without adding it to the library: an ISO, a playlist, an EBOOT, or a .pkg,
+        // which installs first. Ported from ARMSX2's drawer.
+        DrawerItem("action.launchGame", "📂", onAction = { MainActivityRuntime.promptLaunchGame(); onDismiss() }),
         // Boot straight into the PS2 system BIOS with no disc — distinct from "BIOS Location"
         // below, which only points the emulator at your BIOS file.
         DrawerItem("bios.boot.title", "▶️", onAction = { MainActivityRuntime.startBios(); onDismiss() }),
