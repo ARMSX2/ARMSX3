@@ -490,6 +490,7 @@
  "pad.editTouchLayout": "Chỉnh sửa bố cục cảm ứng trên màn hình",
  "pad.editing.description": "Bạn đang chỉnh sửa ánh xạ nút và chế độ dính của người chơi nào. PS3 có bảy cổng; người chơi được đánh số theo thứ tự người điều khiển của họ nhấn nút đầu tiên trong trò chơi. Cảm giác cầm gậy và chuyển đổi d-pad-as-stick được chia sẻ bởi tất cả người chơi.",
  "pad.editing.label": "Chỉnh sửa",
+ "pad.deviceClass.perGame": "\"Device Class\" được đặt riêng cho từng game. Hãy đổi trong cài đặt của chính game đó (nhấn giữ trong thư viện) hoặc từ menu trong game.",
  "pad.gesture.doubleTap": "Nhấn đúp",
  "pad.gesture.doubleTapMode.description": "Nhấn: nhấn nhanh để thực hiện thao tác một lần như NFS nitro. Giữ: nút này sẽ không hoạt động cho đến khi bạn nhấn đúp lần nữa đối với nội dung bạn muốn tiếp tục, chẳng hạn như khóa máy ảnh ARPG.",
  "pad.gesture.doubleTapMode.hold": "Giữ",

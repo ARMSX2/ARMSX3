@@ -490,6 +490,7 @@
  "pad.editTouchLayout": "編輯螢幕觸控佈局",
  "pad.editing.description": "您正在編輯哪個玩家的按鈕映射和搖桿模式。 PS3 有七個端口；玩家按照控制器在遊戲中首次按下按鈕的順序進行編號。搖桿感覺和方向鍵作為搖桿切換由所有玩家共享。",
  "pad.editing.label": "編輯",
+ "pad.deviceClass.perGame": "「Device Class」依遊戲個別設定。請在該遊戲自己的設定中（在遊戲庫中長按）或遊戲內選單中更改。",
  "pad.gesture.doubleTap": "按兩下",
  "pad.gesture.doubleTapMode.description": "點選：快速按下，可一次使用 NFS 硝基之類的東西。按住：按鈕會保持按下狀態，直到您再次雙擊，以實現您想要保持的功能，例如 ARPG 相機鎖定。",
  "pad.gesture.doubleTapMode.hold": "保持",

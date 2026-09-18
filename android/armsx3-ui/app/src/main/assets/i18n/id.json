@@ -490,6 +490,7 @@
  "pad.editTouchLayout": "Edit Tata Letak Sentuh di Layar",
  "pad.editing.description": "Pemetaan tombol dan mode stick pemain mana yang sedang Anda edit. PS3 memiliki tujuh port; pemain diberi nomor sesuai urutan pengontrol mereka pertama kali menekan tombol dalam game. Nuansa stick dan tombol d-pad-as-stick dimiliki oleh semua pemain.",
  "pad.editing.label": "Mengedit",
+ "pad.deviceClass.perGame": "\"Device Class\" diatur per game. Ubah di pengaturan game itu sendiri (tekan lama di pustaka) atau dari menu dalam game.",
  "pad.gesture.doubleTap": "Ketuk dua kali",
  "pad.gesture.doubleTapMode.description": "Ketuk: tekan cepat, untuk sesuatu yang sekali pakai seperti NFS nitro. Tahan: tombolnya tetap di bawah sampai Anda mengetuk dua kali lagi, untuk sesuatu yang ingin Anda simpan seperti kunci kamera ARPG.",
  "pad.gesture.doubleTapMode.hold": "Tahan",

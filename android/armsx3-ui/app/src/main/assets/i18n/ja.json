@@ -490,6 +490,7 @@
  "pad.editTouchLayout": "オンスクリーンタッチレイアウトの編集",
  "pad.editing.description": "どのプレーヤーのボタン マッピングとスティック モードを編集しているか。 PS3 には 7 つのポートがあります。プレイヤーには、コントローラーがゲーム内で最初にボタンを押した順序で番号が付けられます。スティックの感触とスティックとしての方向パッドの切り替えは、すべてのプレイヤーに共有されます。",
  "pad.editing.label": "編集",
+ "pad.deviceClass.perGame": "「Device Class」はゲームごとに設定します。ゲーム自体の設定（ライブラリで長押し）またはゲーム内メニューから変更してください。",
  "pad.gesture.doubleTap": "ダブルタップ",
  "pad.gesture.doubleTapMode.description": "タップ: 素早く押して、NFS ニトロのようなワンショットの場合。ホールド: ARPG のカメラ ロックのように、ボタンをもう一度ダブルタップするまで押したままになります。",
  "pad.gesture.doubleTapMode.hold": "ホールド",

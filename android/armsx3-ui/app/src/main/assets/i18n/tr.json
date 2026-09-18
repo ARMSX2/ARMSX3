@@ -490,6 +490,7 @@
  "pad.editTouchLayout": "Ekrandaki Dokunmatik Düzeni Düzenle",
  "pad.editing.description": "Hangi oyuncunun düğme eşlemesini ve çubuk modunu düzenlediğiniz. PS3'ün yedi bağlantı noktası vardır; Oyuncular, kontrolörlerinin oyun içinde bir düğmeye ilk basış sırasına göre numaralandırılır. Çubuk hissi ve çubuk olarak yön tuşu geçişi tüm oyuncular tarafından paylaşılır.",
  "pad.editing.label": "Düzenleme",
+ "pad.deviceClass.perGame": "\"Device Class\" her oyun için ayrı ayarlanır. Oyunun kendi ayarlarından (kütüphanede basılı tutun) veya oyun içi menüden değiştirin.",
  "pad.gesture.doubleTap": "İki kez dokunun",
  "pad.gesture.doubleTapMode.description": "Dokunma: NFS nitro gibi tek seferlik bir şey için hızlı bir basış. Basılı tutun: ARPG kamera kilidi gibi açık kalmasını istediğiniz bir şey için siz tekrar iki kez dokunana kadar düğme basılı kalır.",
  "pad.gesture.doubleTapMode.hold": "Basılı tutun",

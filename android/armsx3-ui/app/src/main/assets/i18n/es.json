@@ -490,6 +490,7 @@
  "pad.editTouchLayout": "Editar diseño táctil en pantalla",
  "pad.editing.description": "Qué asignación de botones y modo de joystick del jugador estás editando. La PS3 tiene siete puertos; Los jugadores están numerados en el orden en que su controlador presiona un botón por primera vez en el juego. Todos los jugadores comparten la sensación del joystick y el cambio del pad direccional como joystick.",
  "pad.editing.label": "Edición",
+ "pad.deviceClass.perGame": "\"Device Class\" se configura por juego. Cámbialo en los ajustes del propio juego (mantén pulsado en la biblioteca) o desde el menú del juego.",
  "pad.gesture.doubleTap": "Doble toque",
  "pad.gesture.doubleTapMode.description": "Toque: una pulsación rápida, para algo de una sola vez como NFS nitro. Mantener presionado: el botón permanece presionado hasta que lo toques dos veces nuevamente, para algo que deseas mantener, como un bloqueo de cámara ARPG.",
  "pad.gesture.doubleTapMode.hold": "Espera",

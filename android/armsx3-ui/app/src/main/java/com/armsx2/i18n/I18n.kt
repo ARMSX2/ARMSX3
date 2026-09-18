@@ -979,6 +979,7 @@ val EN: Map<String, String> = mapOf(
     "pad.editing.description" to "Which player's button mapping and stick mode you are editing. The PS3 has seven ports; players are numbered in the order their controller first presses a button in-game. Stick feel and the d-pad-as-stick toggle are shared by all players.",
     "pad.deviceClass.label" to "Device Class",
     "pad.deviceClass.description" to "What kind of controller this port reports itself as. Instrument games check this and will not start without it. Leave it on Standard for everything else.",
+    "pad.deviceClass.perGame" to "Device Class is set per game. Change it in the game's own settings (long-press it in the library) or from the in-game menu.",
     "pad.deviceClass.standard" to "Standard",
     "pad.deviceClass.guitar" to "Guitar",
     "pad.deviceClass.drum" to "Drum",

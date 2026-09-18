@@ -490,6 +490,7 @@
  "pad.editTouchLayout": "Edytuj układ dotykowy na ekranie",
  "pad.editing.description": "Mapowanie przycisków gracza i tryb drążka, który edytujesz. PS3 ma siedem portów; gracze są numerowani w kolejności, w jakiej kontroler najpierw naciśnie przycisk w grze. Wyczucie drążka i przełącznik kierunkowy jako drążek są wspólne dla wszystkich graczy.",
  "pad.editing.label": "Edytowanie",
+ "pad.deviceClass.perGame": "\"Device Class\" ustawia się osobno dla każdej gry. Zmień to w ustawieniach gry (przytrzymaj ją w bibliotece) lub w menu w grze.",
  "pad.gesture.doubleTap": "Kliknij dwukrotnie",
  "pad.gesture.doubleTapMode.description": "Stuknięcie: szybkie naciśnięcie, aby uzyskać coś jednorazowego, jak NFS nitro. Przytrzymaj: przycisk pozostaje wciśnięty do momentu ponownego dwukrotnego dotknięcia, aby wybrać coś, co chcesz zachować, na przykład blokadę kamery ARPG.",
  "pad.gesture.doubleTapMode.hold": "Trzymaj",

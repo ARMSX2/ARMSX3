@@ -678,6 +678,10 @@ open class MainActivityRuntime : ComponentActivity() {
                     } catch (t: Throwable) {
                         android.util.Log.w("ARMSX2", "launch: failed to apply settings", t)
                     }
+                    // This game's Device Class (a standard pad unless it has one), in the core
+                    // before its pads are built. Per game so an instrument set for one title does
+                    // not follow the player into the next (see PadDeviceClass).
+                    com.armsx2.PadDeviceClass.forGame(currentGame.value?.settingsKey)
                     // Local co-op: re-pair controllers each session (first pad = P1,
                     // next = P2) so player slots are deterministic per boot.
                     com.armsx2.input.PadRouter.reset()
@@ -1130,6 +1134,8 @@ open class MainActivityRuntime : ComponentActivity() {
         fun startBios() {
             currentGame.value = null
             m_szGamefile = ""
+            // The system menu is not a game: a standard pad, whatever the last game used.
+            com.armsx2.PadDeviceClass.forGame(null)
             val shouldStart = synchronized(vmLifecycleLock) {
                 if (vmStopInProgress || vmRunLoopActive || eState.value != EmuState.STOPPED) {
                     vmRestartAfterStop = true

@@ -495,6 +495,7 @@
  "pad.editTouchLayout": "Editar layout de toque na tela",
  "pad.editing.description": "Qual mapeamento de botões e modo stick do jogador você está editando. O PS3 possui sete portas; os jogadores são numerados na ordem em que seu controlador pressiona um botão pela primeira vez no jogo. A sensação do stick e a alternância do d-pad como stick são compartilhadas por todos os jogadores.",
  "pad.editing.label": "Edição",
+ "pad.deviceClass.perGame": "\"Device Class\" é definido por jogo. Altere nas configurações do próprio jogo (toque e segure na biblioteca) ou no menu dentro do jogo.",
  "pad.gesture.doubleTap": "Toque duas vezes",
  "pad.gesture.doubleTapMode.description": "Toque: um toque rápido, para algo único como NFS nitro. Segure: o botão permanece pressionado até você tocar duas vezes novamente, para algo que você deseja manter, como um bloqueio de câmera ARPG.",
  "pad.gesture.doubleTapMode.hold": "Espera",

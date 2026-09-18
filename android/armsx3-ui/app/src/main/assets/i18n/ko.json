@@ -490,6 +490,7 @@
  "pad.editTouchLayout": "화면 터치 레이아웃 편집",
  "pad.editing.description": "편집 중인 플레이어의 버튼 매핑과 스틱 모드. PS3에는 7개의 포트가 있습니다. 플레이어는 컨트롤러가 게임 내에서 버튼을 처음 누르는 순서대로 번호가 매겨집니다. 스틱 느낌과 d-패드-스틱 토글은 모든 플레이어가 공유합니다.",
  "pad.editing.label": "편집",
+ "pad.deviceClass.perGame": "\"Device Class\"는 게임별로 설정됩니다. 해당 게임의 설정(라이브러리에서 길게 누르기) 또는 게임 내 메뉴에서 변경하세요.",
  "pad.gesture.doubleTap": "두 번 탭하세요.",
  "pad.gesture.doubleTapMode.description": "누르기: NFS 니트로와 같은 일회성 작업을 수행하려면 빠르게 누릅니다. 길게 누르기: ARPG 카메라 잠금처럼 계속 유지하려는 경우 다시 두 번 탭할 때까지 버튼이 계속 누르고 있습니다.",
  "pad.gesture.doubleTapMode.hold": "보류",

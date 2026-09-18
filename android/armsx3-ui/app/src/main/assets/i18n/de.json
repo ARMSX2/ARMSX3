@@ -490,6 +490,7 @@
  "pad.editTouchLayout": "Bearbeiten Sie das Touch-Layout auf dem Bildschirm",
  "pad.editing.description": "Die Tastenbelegung und der Stick-Modus des Players bearbeiten Sie. Die PS3 verfügt über sieben Anschlüsse; Die Spieler werden in der Reihenfolge nummeriert, in der ihr Controller im Spiel zum ersten Mal eine Taste drückt. Das Stick-Feeling und die D-Pad-als-Stick-Umschaltung werden von allen Spielern geteilt.",
  "pad.editing.label": "Bearbeiten",
+ "pad.deviceClass.perGame": "\"Device Class\" wird pro Spiel festgelegt. Ändere es in den Einstellungen des Spiels (in der Bibliothek lange drücken) oder im Menü im Spiel.",
  "pad.gesture.doubleTap": "Doppeltippen",
  "pad.gesture.doubleTapMode.description": "Tippen: ein kurzes Drücken, für etwas One-Shot wie NFS Nitro. Halten: Die Taste bleibt gedrückt, bis Sie erneut doppeltippen, für etwas, das Sie beibehalten möchten, z. B. eine ARPG-Kamerasperre.",
  "pad.gesture.doubleTapMode.hold": "Halt",

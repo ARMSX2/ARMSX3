@@ -490,6 +490,7 @@
  "pad.editTouchLayout": "Modifica il layout touch sullo schermo",
  "pad.editing.description": "La mappatura dei pulsanti e la modalità stick del giocatore che stai modificando. La PS3 ha sette porte; i giocatori vengono numerati nell'ordine in cui il loro controller preme per primo un pulsante nel gioco. La sensazione dello stick e l'attivazione/disattivazione del tasto direzionale come stick sono condivisi da tutti i giocatori.",
  "pad.editing.label": "Modifica",
+ "pad.deviceClass.perGame": "\"Device Class\" si imposta per gioco. Cambialo nelle impostazioni del gioco (tieni premuto nella libreria) o dal menu di gioco.",
  "pad.gesture.doubleTap": "Doppio tocco",
  "pad.gesture.doubleTapMode.description": "Tocca: una pressione veloce, per qualcosa di one-shot come NFS nitro. Tieni premuto: il pulsante rimane premuto finché non tocchi nuovamente due volte, per qualcosa che desideri mantenere, come il blocco della fotocamera ARPG.",
  "pad.gesture.doubleTapMode.hold": "Tieni",

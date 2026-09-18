@@ -490,6 +490,7 @@
  "pad.editTouchLayout": "Modifier la disposition tactile à l'écran",
  "pad.editing.description": "Le mappage des boutons et le mode stick du joueur que vous modifiez. La PS3 dispose de sept ports ; les joueurs sont numérotés dans l’ordre dans lequel leur contrôleur appuie pour la première fois sur un bouton dans le jeu. La sensation du stick et la bascule D-pad-as-stick sont partagées par tous les joueurs.",
  "pad.editing.label": "Édition",
+ "pad.deviceClass.perGame": "\"Device Class\" se règle par jeu. Modifiez-le dans les paramètres du jeu (appui long dans la bibliothèque) ou depuis le menu en jeu.",
  "pad.gesture.doubleTap": "Appuyez deux fois",
  "pad.gesture.doubleTapMode.description": "Tap : une pression rapide, pour quelque chose de one-shot comme NFS nitro. Maintenir : le bouton reste enfoncé jusqu'à ce que vous appuyiez à nouveau deux fois, pour quelque chose que vous souhaitez conserver, comme un verrouillage de caméra ARPG.",
  "pad.gesture.doubleTapMode.hold": "Tenir",
