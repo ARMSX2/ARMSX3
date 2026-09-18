@@ -188,6 +188,8 @@ class GameLibraryRepository(private val context: Context) {
                             titleSort = item.optString("titleSort"),
                             titleEn = item.optString("titleEn"),
                             locked = item.optBoolean("locked", false),
+                            contentId = item.optString("contentId"),
+                            drmFree = item.optBoolean("drmFree", false),
                         ),
                     )
                 }
@@ -318,6 +320,7 @@ class GameLibraryRepository(private val context: Context) {
         }
 
         val collected = linkedMapOf<String, GameInfo>()
+        userPlaylistDiscs.clear()
         android.util.Log.i(ScanTag, "scan start: ${directories.size} dir(s), rawStorage=${canUseRawStorage()}")
         directories.forEach { rawUri ->
             val uri = runCatching { rawUri.toUri() }.getOrNull() ?: return@forEach
@@ -361,6 +364,7 @@ class GameLibraryRepository(private val context: Context) {
             if (dir.name == "game") scanInstalledTitles(dir, collected)
             else scanRawDirectory(dir, collected, 0)
         }
+        addAutoPlaylists(collected)
         val locked = lockedGamePaths()
         android.util.Log.i(ScanTag, "scan done: ${collected.size} game(s), ${locked.size} locked")
         collected.values
@@ -890,6 +894,8 @@ class GameLibraryRepository(private val context: Context) {
             platform = GamePlatform.PS3,
             titleSort = db?.sort.orEmpty(),
             titleEn = db?.en.orEmpty(),
+            contentId = pkg.contentId,
+            drmFree = pkg.drmFree,
         )
     }
 
@@ -921,7 +927,13 @@ class GameLibraryRepository(private val context: Context) {
      * reporting: it is what a build that reads the filesystem directly always gets here,
      * because it never took this path in the first place.
      */
-    private data class PkgInfo(val titleId: String, val title: String, val category: String)
+    private data class PkgInfo(
+        val titleId: String,
+        val title: String,
+        val category: String,
+        val contentId: String,
+        val drmFree: Boolean,
+    )
 
     /**
      * What an uninstalled .pkg is, read from the package's own PARAM.SFO.
@@ -940,7 +952,14 @@ class GameLibraryRepository(private val context: Context) {
             val o = JSONObject(raw)
             val id = o.optString("titleId").trim().uppercase()
             if (id.isEmpty()) return@runCatching null
-            PkgInfo(id, o.optString("title").trim(), o.optString("category").trim().uppercase())
+            PkgInfo(
+                id,
+                o.optString("title").trim(),
+                o.optString("category").trim().uppercase(),
+                o.optString("contentId").trim(),
+                // 3 is DRM-free; see _rpcsx_probePkgInfo.
+                o.optInt("drmType", 0) == 3,
+            )
         }.getOrNull() ?: return null
 
         if (info.category in nonGameCategories) {
@@ -975,13 +994,20 @@ class GameLibraryRepository(private val context: Context) {
     /**
      * The discs an .m3u lists, resolved against its folder. The same rules as the native boot's
      * read_disc_playlist, which is what actually boots it: blank and '#' lines skipped, a path
-     * relative to the playlist unless it starts with '/', and a leading "./" dropped.
+     * relative to the playlist unless it starts with '/', a leading "./" dropped, and a bare title
+     * id meaning that installed PSN game.
      */
     private fun playlistDiscs(text: String, folder: String): List<String> =
         text.removePrefix("\uFEFF").lineSequence()
             .map { it.trim() }
             .filter { it.isNotEmpty() && !it.startsWith("#") }
-            .map { if (it.startsWith("/")) it else "$folder/" + it.removePrefix("./") }
+            .map { line ->
+                // A bare title id names an installed PSN game, as read_disc_playlist resolves it.
+                File(RPCSX.getHdd0Dir(), "game/$line")
+                    .takeIf { titleIdLine.matches(line) && it.isDirectory }
+                    ?.path
+                    ?: if (line.startsWith("/")) line else "$folder/" + line.removePrefix("./")
+            }
             .toList()
 
     /**
@@ -1000,20 +1026,105 @@ class GameLibraryRepository(private val context: Context) {
      * [path] is what the core opens, a file path or a SAF device path, so the discs resolve to the
      * same kind of path the native boot will read.
      */
-    private fun addPlaylist(uri: Uri, path: String, name: String, text: String, output: MutableMap<String, GameInfo>) {
+    private fun addPlaylist(
+        uri: Uri,
+        path: String,
+        name: String,
+        text: String,
+        output: MutableMap<String, GameInfo>,
+        title: String = name.substringBeforeLast('.'),
+        auto: Boolean = false,
+    ) {
         val discs = playlistDiscs(text, path.substringBeforeLast('/'))
         val first = discs.firstOrNull()
         if (first == null) {
             android.util.Log.w(ScanTag, "  playlist '$name' lists no discs")
             return
         }
-        android.util.Log.i(ScanTag, "  playlist '$name': ${discs.size} disc(s), first '$first'")
+        if (!auto) userPlaylistDiscs += discs
+        android.util.Log.i(ScanTag, "  ${if (auto) "auto " else ""}playlist '$name': ${discs.size} disc(s), first '$first'")
         val game = createGame(uri, name, "m3u", null, probeDisc(first, name))
-        output.putIfAbsent(
-            uri.toString(),
-            game.copy(title = name.substringBeforeLast('.'), titleSort = "", titleEn = ""),
-        )
+        output.putIfAbsent(uri.toString(), game.copy(title = title, titleSort = "", titleEn = ""))
     }
+
+    /** Every path a user's own playlist in this scan lists; an automatic one never repeats them. */
+    private val userPlaylistDiscs = HashSet<String>()
+
+    /**
+     * Playlists the library writes by itself, for sets that plainly belong together:
+     *  - disc images or folders side by side, named alike apart from "(Disc 1)", "(Disc 2)" and so on;
+     *  - installed PSN games whose titles differ only by "Part 1", "Part 2" (or Episode, Chapter,
+     *    Volume). That is how a multi-part PSN release installs: separate titles and no discs, so the
+     *    playlist lists them by title id.
+     *
+     * Written to the emulator's own playlists folder, never into a games folder the user owns, and
+     * rewritten every scan, so a set that loses a disc loses its playlist. A set that a user playlist
+     * already covers is left alone. The discs keep their own tiles, as with any playlist.
+     */
+    private fun addAutoPlaylists(collected: MutableMap<String, GameInfo>) {
+        val dir = File(RPCSX.rootDirectory, "playlists")
+        if (!com.armsx2.AutoPlaylists.enabled.value) {
+            dir.listFiles()?.filter { it.extension.equals("m3u", ignoreCase = true) }?.forEach { it.delete() }
+            return
+        }
+
+        // file name -> (tile title, playlist lines)
+        val playlists = linkedMapOf<String, Pair<String, List<String>>>()
+        fun fileNameFor(title: String) =
+            title.replace(Regex("""[\\/:*?"<>|]"""), "_").trim().ifBlank { "playlist" } + ".m3u"
+
+        data class Member(val group: String, val title: String, val number: Int, val line: String)
+
+        fun addSets(members: List<Member>) = members.groupBy { it.group }.values
+            .filter { set -> set.size >= 2 && set.map { it.number }.distinct().size == set.size }
+            .forEach { set ->
+                val title = set.first().title
+                playlists[fileNameFor(title)] = title to set.sortedBy { it.number }.map { it.line }
+            }
+
+        val games = collected.values.filter { !it.extension.equals("m3u", ignoreCase = true) }
+
+        addSets(
+            games.filter { !it.isPsn && it.discGameDir == null }.mapNotNull { game ->
+                val path = entryPath(game) ?: return@mapNotNull null
+                if (path in userPlaylistDiscs) return@mapNotNull null
+                val leaf = path.substringAfterLast('/')
+                val name = if (game.extension.equals("folder", ignoreCase = true)) leaf else leaf.substringBeforeLast('.')
+                val match = discToken.find(name) ?: return@mapNotNull null
+                val title = name.removeRange(match.range).trim()
+                Member(path.substringBeforeLast('/') + "|" + title.lowercase(), title, match.groupValues[2].toInt(), path)
+            },
+        )
+
+        val installed = File(RPCSX.getHdd0Dir(), "game").path
+        addSets(
+            games.filter { it.isPsn && it.extension.equals("folder", ignoreCase = true) }.mapNotNull { game ->
+                val serial = game.serial ?: return@mapNotNull null
+                if (entryPath(game)?.startsWith(installed) != true) return@mapNotNull null
+                val match = partToken.find(game.title) ?: return@mapNotNull null
+                val number = partNumber(match.groupValues[2]) ?: return@mapNotNull null
+                val title = game.title.removeRange(match.range).trim(' ', '-', ':', ',')
+                Member(title.lowercase(), title, number, serial)
+            },
+        )
+
+        dir.mkdirs()
+        dir.listFiles()
+            ?.filter { it.extension.equals("m3u", ignoreCase = true) && it.name !in playlists.keys }
+            ?.forEach { it.delete() }
+
+        for ((fileName, entry) in playlists) {
+            val (title, lines) = entry
+            val file = File(dir, fileName)
+            val text = lines.joinToString("\n", postfix = "\n")
+            if (runCatching { file.readText() }.getOrNull() != text) runCatching { file.writeText(text) }
+            addPlaylist(Uri.fromFile(file), file.absolutePath, fileName, text, collected, title = title, auto = true)
+        }
+    }
+
+    /** "Part 2", "Part II", "Episode 3"... -> 2, 2, 3. */
+    private fun partNumber(token: String): Int? = token.toIntOrNull()
+        ?: mapOf("i" to 1, "ii" to 2, "iii" to 3, "iv" to 4, "v" to 5, "vi" to 6, "vii" to 7, "viii" to 8, "ix" to 9, "x" to 10)[token.lowercase()]
 
     private fun probeDevicePath(uri: Uri, label: String): DiscInfo? {
         val path = com.armsx2.storage.ContentUri.devicePathForDocument(uri) ?: return null
@@ -1140,6 +1251,8 @@ class GameLibraryRepository(private val context: Context) {
                 put("titleSort", game.titleSort)
                 put("titleEn", game.titleEn)
                 put("locked", game.locked)
+                put("contentId", game.contentId)
+                put("drmFree", game.drmFree)
             })
         }
         MainActivityRuntime.prefs.edit {
@@ -1176,11 +1289,22 @@ class GameLibraryRepository(private val context: Context) {
          *      serving the cached hyphenated ids and never rescans, so the repair never
          *      reaches the libraries that need it.
          *  v9: every game on a multi-game disc (PS3_GM01...), not just PS3_GAME. Images
-         *      cached before this are probed once more to find them; see [DiscGamesSchemaVersion]. */
+         *      cached before this are probed once more to find them; see [DiscGamesSchemaVersion].
+         *  v10: a package's content id and DRM-free flag, for its licence badge. */
         /** PS3 disc ids are B***, PSN ids N***, both four letters and five digits. */
         val ps3SerialRegex = Regex("^[BN][A-Z]{3}[0-9]{5}$")
 
-        const val ScanSchemaVersion = 9
+        /** A playlist line that is a title id: four letters, five digits, same as read_disc_playlist. */
+        val titleIdLine = Regex("^[A-Z]{4}[0-9]{5}$")
+
+        /** "(Disc 1)", "[Disc 2 of 3]", "(CD 1)" in a dump's name. Brackets required: a bare "Disc"
+         *  is a word in real titles. */
+        val discToken = Regex("""\s*[(\[]\s*(disc|disk|cd)\s*(\d+)(?:\s*of\s*\d+)?\s*[)\]]""", RegexOption.IGNORE_CASE)
+
+        /** "Part 2", "Episode 3", "Chapter IV" in an installed title's name. */
+        val partToken = Regex("""\b(part|episode|chapter|volume|vol\.?)\s*(\d+|[ivx]+)\b""", RegexOption.IGNORE_CASE)
+
+        const val ScanSchemaVersion = 10
         /** The first scanner that looked for other games on a disc image. A cache from before it
          *  has never been asked, so its images are re-probed once. */
         const val DiscGamesSchemaVersion = 9

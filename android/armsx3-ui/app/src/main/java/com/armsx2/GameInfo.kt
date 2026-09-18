@@ -213,6 +213,21 @@ object GridLabels {
  * list (e.g. BIOS dumps kept in a scanned subfolder). "Show hidden" reveals them so they can be
  * unhidden again.
  */
+/**
+ * Whether the library writes playlists by itself for sets that plainly belong together (see
+ * GameLibraryRepository.addAutoPlaylists). On by default, as requested. The files go in the
+ * emulator's own playlists folder, never into a games folder the user owns.
+ */
+object AutoPlaylists {
+    private const val KEY = "library.autoPlaylists"
+    val enabled = mutableStateOf(true)
+    fun load() { enabled.value = MainActivityRuntime.prefs.getBoolean(KEY, true) }
+    fun set(value: Boolean) {
+        enabled.value = value
+        MainActivityRuntime.prefs.edit().putBoolean(KEY, value).apply()
+    }
+}
+
 object HiddenGames {
     private const val KEY = "library.hiddenGames"
     private const val SHOW_KEY = "library.showHidden"
@@ -375,12 +390,39 @@ data class GameInfo(
      *  will boot. Only ever set for games in the emulator's own storage, since that is where
      *  a PKG install puts them and the only place the core is asked about. */
     val locked: Boolean = false,
+    /** For a package tile, the content id its licence is filed under in exdata
+     *  (UP0001-NPUB30910_00-...). Empty for everything else. See [licenceState]. */
+    val contentId: String = "",
+    /** The package declares itself DRM-free, so no licence is needed. Only the package says
+     *  this; "Local" DRM is used by free and paid content alike, so its absence proves nothing. */
+    val drmFree: Boolean = false,
 ) {
+    enum class Licence { Installed, NotNeeded, NotInstalled }
+
+    /** Whether the licence this package needs is in exdata, for package tiles only. Checked live
+     *  against the file, so installing a .rap shows up without a rescan. */
+    fun licenceState(): Licence? {
+        if (!extension.equals("PKG", ignoreCase = true) || contentId.isBlank()) return null
+        val exdata = com.armsx2.data.library.Licences.exdataDir()
+        val installed = listOf("rap", "edat").any { File(exdata, "$contentId.$it").isFile }
+        return when {
+            installed -> Licence.Installed
+            drmFree -> Licence.NotNeeded
+            else -> Licence.NotInstalled
+        }
+    }
+
     /** PS3_GM01 and on for a second game on a multi-game disc image, else null. */
     val discGameDir: String? get() = DiscGames.gameDirOf(uri)
 
     /** The string the core is handed to boot this entry. See [DiscGames.launchPath]. */
     val launchPath: String get() = DiscGames.launchPath(uri)
+
+    /** Bought on PSN rather than off a disc. PSN title ids are the N-series (NPUB, NPEB, NPJB and
+     *  the rest, demos and PSone classics included) and discs are B-series; a package tile is PSN
+     *  content by definition. Everything with no id at all, homebrew mostly, counts as disc. */
+    val isPsn: Boolean get() =
+        serial?.firstOrNull()?.uppercaseChar() == 'N' || extension.equals("PKG", ignoreCase = true)
 
     /** The title to show. Mirrors GameList.h's `GetTitle(force_en)`: the original unless
      *  English is asked for AND a separate English title exists. */

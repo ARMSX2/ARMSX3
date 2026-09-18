@@ -19,6 +19,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
@@ -128,15 +129,47 @@ fun InfoTab(game: GameInfo?) {
                     ?: str("info.noUpdate"),
                 clipboard,
             )
-            // Add-ons, from licence files and separate content directories -- see
-            // Ps3Sfo.installedDlcCount for why a folder check would not answer this.
-            val dlcCount = remember(serial) { com.armsx2.Ps3Sfo.installedDlcCount(serial) }
+            // Add-ons, listed from licence files and separate content directories -- see
+            // Ps3Sfo.installedDlc for why a folder check would not answer this. A PSN game's own
+            // licence carries its serial too, so the content id its EBOOT uses is read first and
+            // left out. That reads the EBOOT, so it runs on IO and the list streams in.
+            var dlcRevision by remember { mutableStateOf(0) }
+            val dlc by androidx.compose.runtime.produceState<List<com.armsx2.Ps3Sfo.Dlc>?>(null, serial, dlcRevision) {
+                value = withContext(Dispatchers.IO) {
+                    val own = if (game.isPsn && serial != null) {
+                        com.armsx2.Ps3Sfo.installDir(serial)?.let { dir ->
+                            runCatching { net.rpcsx.RPCSX.instance.gameContentId(dir.absolutePath) }.getOrNull()
+                        }.orEmpty()
+                    } else {
+                        ""
+                    }
+                    com.armsx2.Ps3Sfo.installedDlc(serial, own)
+                }
+            }
             InfoRow(
                 str("info.dlc"),
-                if (dlcCount > 0) com.armsx2.i18n.I18n.get("info.dlc.count").format(dlcCount)
-                else str("info.dlc.none"),
+                when {
+                    dlc == null -> "…"
+                    dlc.isNullOrEmpty() -> str("info.dlc.none")
+                    else -> com.armsx2.i18n.I18n.get("info.dlc.count").format(dlc!!.size)
+                },
                 clipboard,
             )
+            dlc?.takeIf { it.isNotEmpty() }?.let { items -> com.armsx2.ui.packages.DlcRows(items) { dlcRevision++ } }
+            // A package tile's licence: whether the .rap it needs is already in exdata.
+            game.licenceState()?.let { licence ->
+                InfoRow(
+                    str("info.licence"),
+                    str(
+                        when (licence) {
+                            GameInfo.Licence.Installed -> "info.licence.installed"
+                            GameInfo.Licence.NotNeeded -> "info.licence.notNeeded"
+                            GameInfo.Licence.NotInstalled -> "info.licence.notInstalled"
+                        },
+                    ),
+                    clipboard,
+                )
+            }
             // Always present, so the row does not appear mid-identification and shove the rows
             // below it down. This is the value that goes in the PNACH filename.
             InfoRow(str("info.crc"), crc ?: "—", clipboard)

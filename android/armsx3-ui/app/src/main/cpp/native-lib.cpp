@@ -115,6 +115,7 @@ struct RPCSXApi {
   int (*changeDisc)(std::string_view path);
   int (*discSwapState)();
   std::string (*getDiscPlaylist)();
+  std::string (*gameContentId)(std::string_view gamePath);
   bool (*patchSetEnabled)(std::string_view hash, std::string_view description,
                           std::string_view serial, std::string_view appVersion,
                           bool enabled);
@@ -253,6 +254,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.changeDisc = reinterpret_cast<decltype(changeDisc)>(dlsym(handle, "_rpcsx_changeDisc"));
     result.discSwapState = reinterpret_cast<decltype(discSwapState)>(dlsym(handle, "_rpcsx_discSwapState"));
     result.getDiscPlaylist = reinterpret_cast<decltype(getDiscPlaylist)>(dlsym(handle, "_rpcsx_getDiscPlaylist"));
+    result.gameContentId = reinterpret_cast<decltype(gameContentId)>(dlsym(handle, "_rpcsx_gameContentId"));
     result.patchSetEnabled = reinterpret_cast<decltype(patchSetEnabled)>(dlsym(handle, "_rpcsx_patchSetEnabled"));
     // clang-format on
 
@@ -1217,6 +1219,14 @@ Java_net_rpcsx_RPCSX_discSwapState(JNIEnv *, jobject) {
     return 0;
   }
   return rpcsxLib.discSwapState();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_gameContentId(JNIEnv *env, jobject, jstring jpath) {
+  if (rpcsxLib.gameContentId == nullptr) {
+    return wrap(env, "");
+  }
+  return wrap(env, rpcsxLib.gameContentId(unwrap(env, jpath)));
 }
 
 extern "C" JNIEXPORT jstring JNICALL

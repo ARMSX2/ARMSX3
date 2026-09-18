@@ -912,6 +912,13 @@ fun AppTab() {
             onChange = LibraryChromePreferences::setShowRecents,
         )
 
+        ToggleRow(
+            label = str("app.library.autoPlaylists"),
+            value = com.armsx2.AutoPlaylists.enabled.value,
+            description = str("app.library.autoPlaylists.desc"),
+            onChange = com.armsx2.AutoPlaylists::set,
+        )
+
         // Moved off the library overflow menu, where it was the odd one out: every other
         // library-appearance preference already lives here beside cover size and opacity.
         ToggleRow(

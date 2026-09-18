@@ -1,5 +1,6 @@
 #include <sys/prctl.h>
 #include <fstream>
+#include <cstring>
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
 #include "Emu/Audio/Cubeb/CubebBackend.h"
@@ -3863,8 +3864,9 @@ static std::vector<std::string> g_disc_playlist;
 static std::string g_disc_current;
 
 // An .m3u lists a multi-disc set, one disc per line: a path relative to the playlist's own
-// folder unless it starts with '/'. Blank lines and '#' lines (the extended-M3U tags) are
-// skipped. The format PCSX2, DuckStation and the frontends that launch them already use.
+// folder unless it starts with '/', or the title id of an installed PSN game. Blank lines and '#'
+// lines (the extended-M3U tags) are skipped. The format PCSX2, DuckStation and the frontends that
+// launch them already use, plus the title id, which only a PS3 needs.
 static std::vector<std::string> read_disc_playlist(const std::string &m3u_path) {
   std::vector<std::string> discs;
 
@@ -3893,6 +3895,18 @@ static std::vector<std::string> read_disc_playlist(const std::string &m3u_path) 
     if (line.starts_with("./")) {
       line.erase(0, 2);
     }
+
+    // A bare title id names an installed PSN game, which lives in dev_hdd0/game rather than next
+    // to any playlist. That is how a multi-part PSN release is listed: Watchmen's two parts are
+    // two installed titles, not two files.
+    if (line.size() == 9 && std::all_of(line.begin(), line.begin() + 4, [](char c) { return c >= 'A' && c <= 'Z'; }) &&
+        std::all_of(line.begin() + 4, line.end(), [](char c) { return c >= '0' && c <= '9'; })) {
+      if (const std::string installed = rpcs3::utils::get_hdd0_dir() + "game/" + line; fs::is_dir(installed)) {
+        discs.push_back(installed);
+        continue;
+      }
+    }
+
     discs.push_back(line.starts_with('/') ? line : dir + "/" + line);
   }
 
@@ -5731,6 +5745,30 @@ static bool installEdat(JNIEnv *env, fs::file &&file, jlong progressId,
   return true;
 }
 
+// The content id an installed game's own EBOOT is licensed under, or "" for one that is not NPDRM
+// (a disc game, homebrew). Read from the SELF's NPD header, which decrypt_self reports even with no
+// licence present: installRap below relies on the same thing to name the .rap it writes. The DLC
+// list needs it to leave the game's own licence out, since it carries the same title id.
+extern "C" std::string _rpcsx_gameContentId(std::string_view gamePath) {
+  const auto ebootPath = locateEbootPath(gamePath);
+
+  if (ebootPath.empty()) {
+    return {};
+  }
+
+  SelfAdditionalInfo info;
+  decrypt_self(fs::file(ebootPath), nullptr, &info);
+
+  for (auto &supplemental : info.supplemental_hdr) {
+    if (supplemental.type == 3) {
+      const auto &id = supplemental.PS3_npdrm_header.npd.content_id;
+      return std::string(id, strnlen(id, sizeof(id)));
+    }
+  }
+
+  return {};
+}
+
 static bool installRap(JNIEnv *env, fs::file &&file, jlong progressId,
                        std::string_view rootPath) {
   Progress progress(env, progressId);
@@ -5970,12 +6008,21 @@ extern "C" jstring _rpcsx_probePkgInfo(JNIEnv *env, jint fd) {
     return nullptr;
   }
 
+  // The content id names the licence that unlocks this package: a .rap in exdata is filed under
+  // exactly this string. It lives in the package header, NUL-padded in a fixed 48-byte field.
+  const auto &header = reader.get_header();
+  const std::string contentId(header.title_id, strnlen(header.title_id, sizeof(header.title_id)));
+
+  // Metadata packet 0x1: 3 is DRM-free, the only value that says outright that no licence is
+  // needed. "Local" is used by free content as well as paid, so it cannot say the opposite.
+  const u32 drmType = reader.get_metadata().drm_type;
+
   // Escaped: a title is arbitrary text off the disc and has no obligation to be valid
   // inside a JSON string.
   return wrap(env, fmt::format(
-      R"({"titleId":"%s","title":"%s","category":"%s","appVersion":"%s"})",
+      R"({"titleId":"%s","title":"%s","category":"%s","appVersion":"%s","contentId":"%s","drmType":%u})",
       json_escape(titleId), json_escape(title), json_escape(category),
-      json_escape(appVersion)));
+      json_escape(appVersion), json_escape(contentId), drmType));
 }
 
 extern "C" jstring _rpcsx_getDirInstallPath(JNIEnv *env, jint fd) {

@@ -459,6 +459,7 @@ fun HomeScreen(
                             LibraryOverflowMenu(
                                 expanded = overflowMenu,
                                 selectedSort = state.sort,
+                                selectedSource = state.sourceFilter,
                                 showGridNames = GridLabels.show.value,
                                 customNames = com.armsx2.CustomNames.enabled.value,
                                 englishTitles = EnglishTitles.enabled.value,
@@ -468,6 +469,7 @@ fun HomeScreen(
                                 onDismiss = { overflowMenu = false },
                                 onOpenNavigation = onOpenMenu,
                                 onSort = viewModel::setSort,
+                                onSource = viewModel::setSourceFilter,
                                 onToggleGridNames = { GridLabels.set(!GridLabels.show.value) },
                                 onToggleCustomNames = { com.armsx2.CustomNames.set(!com.armsx2.CustomNames.enabled.value) },
                                 onToggleEnglishTitles = { EnglishTitles.set(!EnglishTitles.enabled.value) },
@@ -1260,6 +1262,7 @@ private fun GameMenuAction(glyph: String, label: String, onClick: () -> Unit) {
 private fun LibraryOverflowMenu(
     expanded: Boolean,
     selectedSort: HomeSort,
+    selectedSource: GameSource?,
     showGridNames: Boolean,
     customNames: Boolean,
     englishTitles: Boolean,
@@ -1268,6 +1271,7 @@ private fun LibraryOverflowMenu(
     onDismiss: () -> Unit,
     onOpenNavigation: () -> Unit,
     onSort: (HomeSort) -> Unit,
+    onSource: (GameSource?) -> Unit,
     onToggleGridNames: () -> Unit,
     onToggleCustomNames: () -> Unit,
     onToggleEnglishTitles: () -> Unit,
@@ -1312,6 +1316,18 @@ private fun LibraryOverflowMenu(
             selected = selectedSort == HomeSort.RecentlyPlayed,
         ) {
             closeThen { onSort(HomeSort.RecentlyPlayed) }
+        }
+        OverflowSeparator()
+        // Disc or PSN. Three rows rather than one that cycles: a cycling row closes the menu on
+        // every tap, so reaching the third option took two trips into it.
+        for ((source, glyph, key) in listOf(
+            Triple(null, "◎", "games.overflow.showAll"),
+            Triple(GameSource.Disc, "\uD83D\uDCBF", "games.overflow.showDisc"),
+            Triple(GameSource.Psn, "\u2B07", "games.overflow.showPsn"),
+        )) {
+            LibraryOverflowItem(glyph = glyph, label = str(key), selected = selectedSource == source) {
+                closeThen { onSource(source) }
+            }
         }
         OverflowSeparator()
         LibraryOverflowItem(
@@ -1534,6 +1550,7 @@ private fun GameMetadata(game: GameInfo) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         StatusChip(game.extension.ifBlank { game.platform.key.uppercase() })
         if (game.locked) StatusChip(str("games.locked.chip"), Color(0xFFFFC857))
+        if (game.licenceState() == GameInfo.Licence.Installed) StatusChip(str("games.licence.chip"), Color(0xFF6FCF97))
         game.regionFlag?.let { Text(it, fontSize = 13.sp) }
         if (game.compatibility > 0) {
             Text("★".repeat(game.compatibility), color = Color(0xFFFFC857), fontSize = 9.sp, maxLines = 1)
@@ -1691,6 +1708,12 @@ private fun GameCover(
         if (showBadges && game.locked) {
             LockedBadge(Modifier.align(Alignment.TopEnd).padding(5.dp))
         }
+        // A package whose licence is already in exdata will boot once installed. Only the positive
+        // is shown: a missing .rap may be a free package that needs none, and the package alone
+        // cannot always say which (see GameInfo.licenceState).
+        if (showBadges && game.licenceState() == GameInfo.Licence.Installed) {
+            LicenceBadge(Modifier.align(Alignment.TopEnd).padding(5.dp))
+        }
         // A package is a game the user has and cannot play yet, and its tile is otherwise
         // indistinguishable from one that boots. Bottom start, so it does not collide with
         // the locked badge on a title that is both.
@@ -1711,6 +1734,18 @@ private fun PackageBadge(modifier: Modifier = Modifier) {
     ) {
         Text(
             "📦",
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            fontSize = 11.sp,
+        )
+    }
+}
+
+/** Green where the locked badge is gold: the same place and shape, the opposite news. */
+@Composable
+private fun LicenceBadge(modifier: Modifier = Modifier) {
+    Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFF6FCF97), modifier = modifier) {
+        Text(
+            "\uD83D\uDD11",
             modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
             fontSize = 11.sp,
         )

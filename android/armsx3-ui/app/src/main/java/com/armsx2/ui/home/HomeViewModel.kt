@@ -34,7 +34,12 @@ data class HomeUiState(
     /** Active category filter, or null for the whole library. Only the List layout uses it;
      *  Grid and Shelf show categories as sections instead. */
     val categoryFilter: String? = null,
+    /** Disc games or PSN games only, or null for both. Unlike [categoryFilter] this is a property
+     *  of the game itself, so it applies to every layout, and it is remembered across launches. */
+    val sourceFilter: GameSource? = null,
 )
+
+enum class GameSource { Disc, Psn }
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = GameLibraryRepository(application)
@@ -76,6 +81,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     allGames = cached.games,
                     layout = layout,
                     initialized = cached.games.isNotEmpty() || !pendingInitialScan,
+                    sourceFilter = MainActivityRuntime.prefs.getString(SourcePreference, null)
+                        ?.let { saved -> GameSource.entries.firstOrNull { it.name == saved } },
                 ),
             )
             // Library-wide RetroAchievements progress. Hooked here because this is where the game
@@ -232,6 +239,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         state.value = buildState(state.value)
     }
 
+    /** Show only disc games or only PSN games, or both with null. */
+    fun setSourceFilter(source: GameSource?) {
+        MainActivityRuntime.prefs.edit { putString(SourcePreference, source?.name) }
+        state.value = buildState(state.value.copy(sourceFilter = source))
+    }
+
     /** Set (or clear, with null) the active category filter. */
     fun setCategoryFilter(name: String?) {
         state.value = buildState(state.value.copy(categoryFilter = name))
@@ -275,6 +288,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             // than nothing.
             (base.categoryFilter == null ||
                 game.settingsKey?.let { it in com.armsx2.GameCategories.membersOf(base.categoryFilter) } == true) &&
+                (base.sourceFilter == null || (base.sourceFilter == GameSource.Psn) == game.isPsn) &&
                 (com.armsx2.HiddenGames.showHidden.value || !com.armsx2.HiddenGames.isHidden(game)) &&
                 (query.isBlank() ||
                     // Match BOTH names regardless of which is displayed: someone typing
@@ -315,5 +329,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         // String-valued now (Grid/List/Shelf). New key so the old boolean pref is
         // ignored and everyone starts at Grid rather than mis-parsing "true"/"false".
         const val LayoutPreference = "library.layout.mode"
+        const val SourcePreference = "library.sourceFilter"
     }
 }

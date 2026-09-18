@@ -263,6 +263,8 @@ class RPCSX {
     external fun discSwapState(): Int
     /** {"discs":[...],"current":"..."} for the playlist the running game was booted from. */
     external fun getDiscPlaylist(): String
+    /** The content id an installed game's own EBOOT is licensed under, or "" when it has none. */
+    external fun gameContentId(gamePath: String): String
     external fun patchSetEnabled(
         hash: String, description: String, serial: String,
         appVersion: String, enabled: Boolean,

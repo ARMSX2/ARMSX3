@@ -811,10 +811,19 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                     onClick = { tab = 1 },
                     text = { Text(str("packages.tab.updates")) },
                 )
+                // Add-ons on their own, as updates are, rather than mixed into the licence and
+                // installed-title lists on the Install tab.
+                androidx.compose.material3.Tab(
+                    selected = tab == 2,
+                    onClick = { tab = 2 },
+                    text = { Text(str("packages.tab.dlc")) },
+                )
             }
 
             if (tab == 1) {
                 GameUpdatesTab(busy = busy, onInstall = { files, last, done -> install(files, done, refreshLibrary = last) })
+            } else if (tab == 2) {
+                DlcTab()
             } else {
             Surface(
                 shape = RoundedCornerShape(16.dp),
