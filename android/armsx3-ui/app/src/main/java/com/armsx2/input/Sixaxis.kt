@@ -237,8 +237,14 @@ class Sixaxis(context: Context) {
                 else -> ax to ay
             }
 
-            // Held like a pad: screen right is its right, the screen faces out of its face, and
-            // the top edge points away from the player.
+            // Held the way a handheld is held, upright and facing the player, is how a DS3 is held
+            // flat: screen right is its right, the top edge points out of its face, and the
+            // screen faces the player along its Z. Tipping the top edge away is pitching the pad
+            // nose down, and turning it like a steering wheel is rolling it.
+            //
+            // This used to treat the screen as the pad's face, so the device only read as level
+            // lying flat on its back. Held normally it reported a DS3 stood on its end, Y near 0 g
+            // and Z near 1 g, and Ratchet & Clank ToD's skydive ignored every tilt of it.
             val g = SensorManager.GRAVITY_EARTH
             val degrees = when (rotation) {
                 Surface.ROTATION_90 -> 90
@@ -246,7 +252,7 @@ class Sixaxis(context: Context) {
                 Surface.ROTATION_270 -> 270
                 else -> 0
             }
-            send(port, right / g, az / g, -up / g, yawLeft, "this device's sensors (screen at $degrees)")
+            send(port, right / g, up / g, az / g, yawLeft, "this device's sensors (screen at $degrees)")
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
