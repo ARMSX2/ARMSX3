@@ -191,7 +191,9 @@ namespace rsx::prof
 		{
 			while (thread_ctrl::state() != thread_state::aborting)
 			{
-				if (g_enabled.load())
+				const bool enabled = g_enabled.load();
+
+				if (enabled)
 				{
 					sample_guest_pc();
 
@@ -202,7 +204,12 @@ namespace rsx::prof
 
 				// 5ms: fast enough for a useful sample count over a 300-frame window, slow enough
 				// that the walk itself is not a load on a machine this contended.
-				thread_ctrl::wait_for(5'000);
+				//
+				// Only while profiling. This thread runs in every session, and with the profiler
+				// off, which is every session nobody turned it on in, there is nothing to sample:
+				// waking 200 times a second to find that out is a cost of its own on a phone. Ten
+				// times a second is enough to notice it being switched on.
+				thread_ctrl::wait_for(enabled ? 5'000 : 100'000);
 			}
 		});
 	}
