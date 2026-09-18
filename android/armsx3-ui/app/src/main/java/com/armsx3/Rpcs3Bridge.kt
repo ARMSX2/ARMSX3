@@ -400,6 +400,53 @@ object Rpcs3Bridge {
     @JvmStatic
     fun hasActiveVm(): Boolean = RPCSX.getState() != EmulatorState.Stopped
 
+    /** What Swap Disc may do right now: 0 the game takes no disc swaps, 1 a disc is in and can
+     *  be swapped, 2 the tray is empty and the game is waiting for one. */
+    @JvmStatic
+    fun discSwapState(): Int = runCatching { RPCSX.instance.discSwapState() }.getOrDefault(0)
+
+    /** The discs of the playlist the running game was booted from, and the one in the drive.
+     *  Empty for a game that was not booted from an .m3u. */
+    data class DiscPlaylist(val discs: List<String>, val current: String)
+
+    @JvmStatic
+    fun discPlaylist(): DiscPlaylist = runCatching {
+        val o = org.json.JSONObject(RPCSX.instance.getDiscPlaylist())
+        val array = o.optJSONArray("discs")
+        DiscPlaylist(
+            List(array?.length() ?: 0) { array!!.getString(it) },
+            o.optString("current"),
+        )
+    }.getOrDefault(DiscPlaylist(emptyList(), ""))
+
+    /**
+     * Swap the running game's disc. Blocks for as long as the game takes to let go of the old
+     * one, so call it off the UI thread, with the game RESUMED: the eject completes on the
+     * game's own callback, which does not run while it is paused. See _rpcsx_changeDisc for
+     * the result codes; -1 means [path] could not be turned into anything the core can open.
+     *
+     * [path] may be a document from the system file picker. One inside a picked games folder
+     * resolves through the SAF device like a boot path; a plain document on shared storage
+     * resolves to its real path, which the core can read with All files access.
+     */
+    @JvmStatic
+    fun changeDisc(path: String): Int {
+        var target = com.armsx2.storage.ContentUri.bootPathFor(path)
+        if (target.startsWith("content://")) target = sharedStoragePath(target) ?: return -1
+        return runCatching { RPCSX.instance.changeDisc(target) }.getOrDefault(-1)
+    }
+
+    /** /storage/... for a document the external storage provider owns, else null. */
+    private fun sharedStoragePath(documentUri: String): String? {
+        val uri = android.net.Uri.parse(documentUri)
+        if (uri.authority != "com.android.externalstorage.documents") return null
+        val parts = runCatching { android.provider.DocumentsContract.getDocumentId(uri) }
+            .getOrNull()?.split(":", limit = 2)
+        if (parts == null || parts.size != 2) return null
+        val (volume, relative) = parts
+        return if (volume == "primary") "/storage/emulated/0/$relative" else "/storage/$volume/$relative"
+    }
+
     @JvmStatic
     fun pause() {
         // This used to set `paused` and stop there, on the belief that RPCS3 has no explicit pause

@@ -30,6 +30,8 @@ import java.io.File
 class GameLibraryRepository(private val context: Context) {
     private val gameExtensions = setOf(
         "iso", "chd", "cso", "zso", "gz", "bin", "mdf", "img", "nrg", "dump", "elf",
+        // A multi-disc playlist, listed as a tile of its own (see addPlaylist).
+        "m3u",
         // Not a game yet, which is the point of listing it. A package sitting in a games
         // folder is a game the user has and cannot play, and nothing in the app said so.
         "pkg",
@@ -251,7 +253,10 @@ class GameLibraryRepository(private val context: Context) {
         //
         // So drop the whole colliding group from the seed and let the scan settle it. Deliberately
         // narrow -- a collision is rare, and this is the one case worth paying a re-probe for.
+        // A playlist is left out: it carries its first disc's serial on purpose, beside that disc's
+        // own tile, and counting it would re-probe that disc on every start.
         val duplicated = cachedGames
+            .filterNot { it.extension.equals("m3u", ignoreCase = true) }
             .mapNotNull { it.serial?.takeIf { s -> s.isNotBlank() } }
             .groupingBy { it }
             .eachCount()
@@ -282,6 +287,10 @@ class GameLibraryRepository(private val context: Context) {
         cachedGames.forEach { game ->
             val serial = game.serial?.takeIf { it.isNotBlank() } ?: return@forEach
             if (serial in collidingSerials) return@forEach
+            // A playlist is never probed itself, only its first disc, and that disc has its own
+            // tile to seed from. Seeding the playlist too, filed under the first disc's path,
+            // renamed that disc's tile to the playlist's name whenever it won the putIfAbsent.
+            if (game.extension.equals("m3u", ignoreCase = true)) return@forEach
             // The same key probeDisc stores under, which for a game in a picked folder is its
             // device path and not the document URI's. A mismatch here would not look like a
             // cache miss: it would re-probe every scan, and re-probing an ISO is the mount
@@ -495,6 +504,14 @@ class GameLibraryRepository(private val context: Context) {
             val name = file.name ?: return@forEach
             val extension = name.substringAfterLast('.', "").lowercase()
             if (extension !in gameExtensions) return@forEach
+            if (extension == "m3u") {
+                val path = com.armsx2.storage.ContentUri.devicePathForDocument(file.uri) ?: return@forEach
+                val text = runCatching {
+                    context.contentResolver.openInputStream(file.uri)?.use { it.readBytes().decodeToString() }
+                }.getOrNull() ?: return@forEach
+                addPlaylist(file.uri, path, name, text, output)
+                return@forEach
+            }
             if (extension == "pkg") {
                 val pkg = probePkg {
                     context.contentResolver.openFileDescriptor(file.uri, "r")
@@ -638,6 +655,12 @@ class GameLibraryRepository(private val context: Context) {
             android.util.Log.i(ScanTag, "  raw file '${file.name}' ext=$extension accepted=${extension in gameExtensions}")
             if (extension !in gameExtensions) return@forEach
             val uri = Uri.fromFile(file)
+
+            if (extension == "m3u") {
+                val text = runCatching { file.readText() }.getOrNull() ?: return@forEach
+                addPlaylist(uri, file.absolutePath, file.name, text, output)
+                return@forEach
+            }
 
             if (extension == "pkg") {
                 val pkg = probePkg {
@@ -935,14 +958,61 @@ class GameLibraryRepository(private val context: Context) {
 
     /** Where [probeDisc] filed this game, so the seeding above and the probe agree. A second
      *  game on a disc image is filed under "<image>//PS3_GMxx", like its launch path. */
-    private fun discCacheKey(game: GameInfo): String? {
+    private fun discCacheKey(game: GameInfo): String? =
+        entryPath(game)?.let { com.armsx2.DiscGames.join(it, game.discGameDir) }
+
+    /** The path the core opens for this entry, without any disc game folder: the file path, or
+     *  the SAF device path for a document in a picked folder. */
+    private fun entryPath(game: GameInfo): String? {
         val uri = game.uri.buildUpon().fragment(null).build()
-        val path = if (uri.scheme == "content") {
+        return if (uri.scheme == "content") {
             com.armsx2.storage.ContentUri.devicePathForDocument(uri)
         } else {
             runCatching { uri.path }.getOrNull()
         }
-        return path?.let { com.armsx2.DiscGames.join(it, game.discGameDir) }
+    }
+
+    /**
+     * The discs an .m3u lists, resolved against its folder. The same rules as the native boot's
+     * read_disc_playlist, which is what actually boots it: blank and '#' lines skipped, a path
+     * relative to the playlist unless it starts with '/', and a leading "./" dropped.
+     */
+    private fun playlistDiscs(text: String, folder: String): List<String> =
+        text.removePrefix("\uFEFF").lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.startsWith("#") }
+            .map { if (it.startsWith("/")) it else "$folder/" + it.removePrefix("./") }
+            .toList()
+
+    /**
+     * A multi-disc playlist as a tile of its own. Launching it boots the first disc, and Swap Disc
+     * then offers the rest in-game.
+     *
+     * The discs it lists keep their own tiles. PCSX2 and DuckStation hide them behind the playlist,
+     * but a PS3 disc in a set is a game in its own right: Dynasty Warriors 8 still boots without its
+     * Xtreme Legends disc, and each God of War Saga disc is a different game. Hidden, every disc
+     * but the first would have been unreachable.
+     *
+     * Named after the playlist, since the set is what it stands for, and identified by its first
+     * disc: that disc's title ID keys the cover, the per-game settings and the compatibility
+     * entry.
+     *
+     * [path] is what the core opens, a file path or a SAF device path, so the discs resolve to the
+     * same kind of path the native boot will read.
+     */
+    private fun addPlaylist(uri: Uri, path: String, name: String, text: String, output: MutableMap<String, GameInfo>) {
+        val discs = playlistDiscs(text, path.substringBeforeLast('/'))
+        val first = discs.firstOrNull()
+        if (first == null) {
+            android.util.Log.w(ScanTag, "  playlist '$name' lists no discs")
+            return
+        }
+        android.util.Log.i(ScanTag, "  playlist '$name': ${discs.size} disc(s), first '$first'")
+        val game = createGame(uri, name, "m3u", null, probeDisc(first, name))
+        output.putIfAbsent(
+            uri.toString(),
+            game.copy(title = name.substringBeforeLast('.'), titleSort = "", titleEn = ""),
+        )
     }
 
     private fun probeDevicePath(uri: Uri, label: String): DiscInfo? {

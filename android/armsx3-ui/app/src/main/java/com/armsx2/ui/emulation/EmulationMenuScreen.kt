@@ -634,11 +634,12 @@ private fun MenuHeader(
 
 @Composable
 private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuViewModel) {
+    var showDiscs by remember { mutableStateOf(false) }
     ActionGrid(
         actions = listOf(
             MenuAction(str("action.resume"), str("action.play"), "▶", Success, viewModel::resume),
             MenuAction(str("memcard.restart"), str("action.reset"), "↻", null, MainActivityRuntime::restart),
-            MenuAction(str("action.swapDisc"), str("action.swapDisc.detail"), "⏏", null, MainActivityRuntime::promptSwapDisc),
+            MenuAction(str("action.swapDisc"), str("action.swapDisc.detail"), "⏏", null) { showDiscs = !showDiscs },
             MenuAction(str("action.close"), MainActivityRuntime.currentGame.value?.title.orEmpty(), "■", Danger) {
                 MainActivityRuntime.closeGame()
             },
@@ -646,6 +647,7 @@ private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuVie
         selected = state.selectedAction,
         onSelect = viewModel::selectAction,
     )
+    if (showDiscs) DiscSwapSection(viewModel)
     // First card under the actions, ahead of the on-screen card, because it explains why a
     // setting you picked yourself is not the one the game is running on. It only appears for
     // titles the database has an entry for, so most sessions never see it.
@@ -1725,6 +1727,53 @@ private fun DatabaseSection() {
                 // something happens to save settings for this title.
                 com.armsx2.config.ConfigDatabase.writeUserKeys(serial, yours)
             }
+        }
+    }
+}
+
+/**
+ * Swap Disc, opened from its action above.
+ *
+ * Only a game that asks for another disc can take one: it registers disc-change callbacks, and
+ * very few do (SingStar is the usual one). The button used to open a file picker for every game
+ * and then do nothing, because the call behind it was a stub. It says so now instead.
+ *
+ * A game booted from an .m3u lists that playlist's discs first. Any other disc comes from the file
+ * picker. Picking closes the menu, because the game has to run to let go of the old disc.
+ */
+@Composable
+private fun DiscSwapSection(viewModel: EmulationMenuViewModel) {
+    val swapState = remember { com.armsx3.Rpcs3Bridge.discSwapState() }
+    val playlist = remember { com.armsx3.Rpcs3Bridge.discPlaylist() }
+
+    SectionCard(str("disc.swap.title")) {
+        if (swapState == 0) {
+            Text(
+                str("disc.swap.unsupported"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@SectionCard
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            playlist.discs.forEachIndexed { index, disc ->
+                val current = disc == playlist.current
+                MenuButtonRow(
+                    title = disc.substringAfterLast('/'),
+                    description = if (current) str("disc.swap.inDrive") else str("disc.swap.discN").format(index + 1),
+                    glyph = if (current) "●" else "⏏",
+                ) {
+                    if (!current) {
+                        viewModel.resume()
+                        MainActivityRuntime.swapDiscTo(disc)
+                    }
+                }
+            }
+            MenuButtonRow(
+                title = str("disc.swap.pickFile"),
+                description = str("disc.swap.pickFile.desc"),
+                glyph = "…",
+            ) { MainActivityRuntime.promptSwapDisc() }
         }
     }
 }

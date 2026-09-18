@@ -1319,6 +1319,32 @@ open class MainActivityRuntime : ComponentActivity() {
          *  (the in-game menu) to the Activity-scoped ActivityResult launcher; the
          *  picker + native swap were intact but had no trigger after the monorepo
          *  UI migration, so Swap Disc silently did nothing. */
+        /**
+         * Put [path] in the running game's drive, on a worker thread: the game has to let go of
+         * the old disc on its own callback first, which takes as long as it takes (see
+         * Rpcs3Bridge.changeDisc). The outcome is a toast, since the menu is gone by then.
+         *
+         * The caller closes the menu and resumes the game. This does neither: the menu's own close
+         * resumes through InGameOverlay.toggle() after its exit animation, and closing it here as
+         * well would have that late toggle open it again.
+         */
+        fun swapDiscTo(path: String) {
+            println("@@ANDROID_SWAP_DISC@@ path=${path.take(240)}")
+            kotlin.concurrent.thread(name = "DiscSwap") {
+                val key = when (com.armsx3.Rpcs3Bridge.changeDisc(path)) {
+                    0 -> "disc.swap.done"
+                    1 -> "disc.swap.unsupported.short"
+                    3 -> "disc.swap.timeout"
+                    4 -> "disc.swap.refused"
+                    else -> "disc.swap.notDisc"
+                }
+                instance?.runOnUiThread {
+                    val context = instance ?: return@runOnUiThread
+                    android.widget.Toast.makeText(context, com.armsx2.i18n.I18n.get(key), android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+
         fun promptSwapDisc() {
             val activity = instance ?: return
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -1731,31 +1757,16 @@ open class MainActivityRuntime : ComponentActivity() {
                 val intent = result.data
                 val uri = intent?.dataString ?: ""
                 if (uri.isNotEmpty()) {
-                    // Swap the mounted disc instead of rebooting. The old path
-                    // (restart()) booted the picked disc as a fresh VM, which
-                    // dropped CodeBreaker/multi-disc hand-offs and never showed
-                    // a "disc changed" notification. NativeApp.changeDisc keeps
-                    // the running VM, cycles the tray so the game detects the
-                    // new disc, and emits the on-screen "Disc changed to …" OSD.
-                    // Runs off-thread since it parks the CPU thread and blocks.
-                    println("@@ANDROID_SWAP_DISC@@ uri=${uri.take(240)}")
-                    kotlin.concurrent.thread {
-                        val ok = runCatching { NativeApp.changeDisc(uri) }.getOrDefault(false)
-                        instance?.runOnUiThread {
-                            if (ok) {
-                                // changeDisc parks the VM to swap on the CPU
-                                // thread; unpause so the game runs and detects
-                                // the new disc (otherwise the screen sits frozen
-                                // on the paused frame).
-                                resume()
-                            } else {
-                                // Swap Disc is swap-only. If native rejected
-                                // the image it already restored the old disc,
-                                // so just resume the existing session.
-                                resume()
-                            }
-                        }
+                    // Swap the mounted disc instead of rebooting, which keeps the running game.
+                    // The menu is still up behind the picker, and the game has to run for the
+                    // swap to finish, so close it first. A plain toggle is right here: the menu's
+                    // animated close is not in flight, so nothing will toggle it back.
+                    if (com.armsx2.ui.WindowImpl.overlayVisible.value) {
+                        com.armsx2.ui.InGameOverlay.toggle()
+                    } else {
+                        resume()
                     }
+                    swapDiscTo(uri)
                 }
             } catch (_: Exception) { }
         }

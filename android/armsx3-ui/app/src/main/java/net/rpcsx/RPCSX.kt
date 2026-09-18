@@ -256,6 +256,13 @@ class RPCSX {
     external fun patchesImport(content: String): Int
     external fun patchesList(serial: String): String
     external fun probeDiscInfo(isoPath: String, iconOut: String): String
+    /** Swap the running game's disc. 0 swapped, 1 the game takes no swaps, 2 not a disc,
+     *  3 the game never released its disc, 4 the core refused the new one. */
+    external fun changeDisc(path: String): Int
+    /** 0 no disc swaps, 1 a disc is in and can be swapped, 2 the tray is empty. */
+    external fun discSwapState(): Int
+    /** {"discs":[...],"current":"..."} for the playlist the running game was booted from. */
+    external fun getDiscPlaylist(): String
     external fun patchSetEnabled(
         hash: String, description: String, serial: String,
         appVersion: String, enabled: Boolean,

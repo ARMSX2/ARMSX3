@@ -112,6 +112,9 @@ struct RPCSXApi {
   int (*patchesImport)(std::string_view content);
   std::string (*patchesList)(std::string_view serial);
   std::string (*probeDiscInfo)(std::string_view isoPath, std::string_view iconOut);
+  int (*changeDisc)(std::string_view path);
+  int (*discSwapState)();
+  std::string (*getDiscPlaylist)();
   bool (*patchSetEnabled)(std::string_view hash, std::string_view description,
                           std::string_view serial, std::string_view appVersion,
                           bool enabled);
@@ -247,6 +250,9 @@ struct RPCSXLibrary : RPCSXApi {
     result.patchesImport = reinterpret_cast<decltype(patchesImport)>(dlsym(handle, "_rpcsx_patchesImport"));
     result.patchesList = reinterpret_cast<decltype(patchesList)>(dlsym(handle, "_rpcsx_patchesList"));
     result.probeDiscInfo = reinterpret_cast<decltype(probeDiscInfo)>(dlsym(handle, "_rpcsx_probeDiscInfo"));
+    result.changeDisc = reinterpret_cast<decltype(changeDisc)>(dlsym(handle, "_rpcsx_changeDisc"));
+    result.discSwapState = reinterpret_cast<decltype(discSwapState)>(dlsym(handle, "_rpcsx_discSwapState"));
+    result.getDiscPlaylist = reinterpret_cast<decltype(getDiscPlaylist)>(dlsym(handle, "_rpcsx_getDiscPlaylist"));
     result.patchSetEnabled = reinterpret_cast<decltype(patchSetEnabled)>(dlsym(handle, "_rpcsx_patchSetEnabled"));
     // clang-format on
 
@@ -1195,6 +1201,30 @@ Java_net_rpcsx_RPCSX_probeDiscInfo(JNIEnv *env, jobject, jstring jpath,
     return wrap(env, "{}");
   }
   return wrap(env, rpcsxLib.probeDiscInfo(unwrap(env, jpath), unwrap(env, jicon)));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_changeDisc(JNIEnv *env, jobject, jstring jpath) {
+  if (rpcsxLib.changeDisc == nullptr) {
+    return 1;
+  }
+  return rpcsxLib.changeDisc(unwrap(env, jpath));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_discSwapState(JNIEnv *, jobject) {
+  if (rpcsxLib.discSwapState == nullptr) {
+    return 0;
+  }
+  return rpcsxLib.discSwapState();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_getDiscPlaylist(JNIEnv *env, jobject) {
+  if (rpcsxLib.getDiscPlaylist == nullptr) {
+    return wrap(env, "{}");
+  }
+  return wrap(env, rpcsxLib.getDiscPlaylist());
 }
 
 extern "C" JNIEXPORT jstring JNICALL

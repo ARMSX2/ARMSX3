@@ -47,6 +47,7 @@
 #include "Input/virtual_keyboard_handler.h"
 #include "Input/virtual_pad_handler.h"
 #include "Loader/ISO.h"
+#include "Loader/disc.h"
 #include "Loader/PSF.h"
 #include "Loader/PUP.h"
 #include "Loader/TAR.h"
@@ -2286,6 +2287,14 @@ static void armsx3_play_sound(const std::string &path, std::optional<f32> volume
 // Defined below, next to the rest of the config helpers.
 static std::string rpcsx_strip_config_keys(const std::string &yaml, const std::vector<std::string> &keys, std::string &skipped);
 
+// Whether the running game will take a disc swap right now, exactly as the core reports it.
+// A game has to register disc-change callbacks first and very few do (SingStar is the usual
+// one), and ejecting under one that did not trips an ensure() in disc_change_manager. Eject is
+// on while a disc is in, insert while the tray is empty. Both used to be thrown away here, so
+// Swap Disc could not tell a game that swaps from one that does not. See _rpcsx_changeDisc.
+static std::atomic<bool> g_disc_eject_enabled{false};
+static std::atomic<bool> g_disc_insert_enabled{false};
+
 
 static void setupCallbacks() {
   Emu.SetCallbacks({
@@ -2346,8 +2355,8 @@ static void setupCallbacks() {
             });
           },
       .on_save_state_progress = [](auto...) {},
-      .enable_disc_eject = [](auto...) {},
-      .enable_disc_insert = [](auto...) {},
+      .enable_disc_eject = [](bool enabled) { g_disc_eject_enabled = enabled; },
+      .enable_disc_insert = [](bool enabled) { g_disc_insert_enabled = enabled; },
       .handle_taskbar_progress = [](auto...) {},
       .init_kb_handler =
           [](auto...) {
@@ -3847,6 +3856,53 @@ extern "C" bool _rpcsx_collectGameInfo(JNIEnv *env, std::string_view rootDir,
 // stopped before g_fxo teardown has finished, and a boot or kill can start right after it.
 static std::mutex g_emu_lifecycle_mutex;
 
+// The discs of the playlist the running game was booted from, and the one in the drive, as paths
+// the core can open. Swap Disc offers the playlist (see _rpcsx_getDiscPlaylist).
+static std::mutex g_disc_playlist_mutex;
+static std::vector<std::string> g_disc_playlist;
+static std::string g_disc_current;
+
+// An .m3u lists a multi-disc set, one disc per line: a path relative to the playlist's own
+// folder unless it starts with '/'. Blank lines and '#' lines (the extended-M3U tags) are
+// skipped. The format PCSX2, DuckStation and the frontends that launch them already use.
+static std::vector<std::string> read_disc_playlist(const std::string &m3u_path) {
+  std::vector<std::string> discs;
+
+  fs::file file(m3u_path);
+  if (!file) {
+    return discs;
+  }
+
+  std::string text = file.to_string();
+  if (text.starts_with("\xEF\xBB\xBF")) {
+    text.erase(0, 3);
+  }
+
+  const std::string dir = fs::get_parent_dir(m3u_path);
+
+  for (std::string line : fmt::split(text, {"\n"})) {
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+      line.pop_back();
+    }
+    const usz start = line.find_first_not_of(" \t");
+    if (start == umax || line[start] == '#') {
+      continue;
+    }
+    line.erase(0, start);
+    // "./Disc 2.iso" is common, and the SAF device resolves names segment by segment.
+    if (line.starts_with("./")) {
+      line.erase(0, 2);
+    }
+    discs.push_back(line.starts_with('/') ? line : dir + "/" + line);
+  }
+
+  return discs;
+}
+
+static bool is_disc_playlist(std::string_view path) {
+  return path.size() > 4 && fmt::to_lower(path.substr(path.size() - 4)) == ".m3u";
+}
+
 // Held so a probe cannot be inside vfs::mount while this resets g_fxo underneath it.
 extern "C" void _rpcsx_shutdown() {
   std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
@@ -3922,6 +3978,28 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
     rpcsx_android.notice("boot: game '%s' on disc '%s'", game_dir, path);
   }
   Emu.SetGameDir(game_dir);
+
+  // A multi-disc playlist boots its first disc, and Swap Disc offers the rest. Handled here rather
+  // than in the library so a frontend that hands us the .m3u itself, as ES-DE does, works too.
+  {
+    std::vector<std::string> discs;
+
+    if (is_disc_playlist(path)) {
+      discs = read_disc_playlist(path);
+
+      if (discs.empty()) {
+        rpcsx_android.error("boot: playlist '%s' lists no discs", path);
+        return static_cast<int>(game_boot_result::invalid_file_or_folder);
+      }
+
+      rpcsx_android.notice("boot: playlist '%s', %u disc(s), starting with '%s'", path, discs.size(), discs[0]);
+      path = discs[0];
+    }
+
+    std::lock_guard lock(g_disc_playlist_mutex);
+    g_disc_playlist = std::move(discs);
+    g_disc_current = path;
+  }
 
   while (path.ends_with('/')) {
     path.pop_back();
@@ -4675,6 +4753,121 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
   }
 
   return result;
+}
+
+// What Swap Disc may do right now: 0 the game takes no disc swaps, 1 a disc is in and can be
+// swapped, 2 the tray is empty and the game is waiting for one.
+extern "C" int _rpcsx_discSwapState() {
+  if (!Emu.IsRunning() && !Emu.IsPaused()) {
+    return 0;
+  }
+
+  return g_disc_eject_enabled ? 1 : g_disc_insert_enabled ? 2 : 0;
+}
+
+// {"discs":[...],"current":"..."} for the playlist the running game was booted from. "discs" is
+// empty for a game that was not booted from one.
+extern "C" std::string _rpcsx_getDiscPlaylist() {
+  std::lock_guard lock(g_disc_playlist_mutex);
+
+  std::string discs;
+
+  for (const auto &disc : g_disc_playlist) {
+    if (!discs.empty()) {
+      discs += ',';
+    }
+    discs += json_quote(disc);
+  }
+
+  return "{\"discs\":[" + discs + "],\"current\":" + json_quote(g_disc_current) + "}";
+}
+
+// Swap the running game's disc the way the console does: eject, let the game see the tray empty,
+// then insert. Only for a game that registered for it (see g_disc_eject_enabled).
+//
+// The new disc is checked BEFORE the old one leaves, so a bad pick is refused with the game
+// untouched. The eject completes on the game's own sysutil callback, so the game has to be
+// running rather than paused behind the menu, and the insert waits for it: inserting first would
+// let the late unmount take the new disc straight back out.
+//
+// An image goes through the same ISO device a boot uses. Swapping it cannot break a file the game
+// still has open on the old image, because an open iso_file carries its own handle and extents.
+//
+// Returns 0 on success, 1 when the game takes no disc swaps, 2 when the path is not a disc,
+// 3 when the game never finished ejecting, 4 when the core refused the new disc.
+extern "C" int _rpcsx_changeDisc(std::string_view path_) {
+  // Held throughout, like a boot or a probe: a Close in the middle would reset g_fxo under the
+  // disc_change_manager this is driving.
+  std::lock_guard emu_lock(g_emu_lifecycle_mutex);
+
+  std::string path(path_);
+  while (path.ends_with('/')) {
+    path.pop_back();
+  }
+
+  if (!g_disc_eject_enabled && !g_disc_insert_enabled) {
+    rpcsx_android.warning("changeDisc: the running game does not take disc swaps");
+    return 1;
+  }
+
+  // A folder dump is named by its folder or by any file inside it, which is what a document
+  // picker hands back.
+  const bool image = fs::is_file(path) && is_iso_file(path);
+  std::string folder;
+
+  if (image) {
+    if (!iso_archive(path).is_valid()) {
+      rpcsx_android.error("changeDisc: '%s' is not a readable disc image", path);
+      return 2;
+    }
+  } else {
+    folder = fs::is_dir(path) ? path : fs::get_parent_dir(path);
+    std::string disc_root, game_dir;
+
+    if (disc::get_disc_type(folder, disc_root, game_dir) == disc::disc_type::invalid) {
+      rpcsx_android.error("changeDisc: '%s' is not a disc", path);
+      return 2;
+    }
+  }
+
+  // The menu resumes the game just before this runs, and the resume is queued.
+  for (int waited = 0; !Emu.IsRunning() && waited < 3000; waited += 20) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  if (!Emu.IsRunning()) {
+    rpcsx_android.error("changeDisc: the game is not running");
+    return 3;
+  }
+
+  if (g_disc_eject_enabled) {
+    Emu.EjectDisc();
+
+    for (int waited = 0; !g_disc_insert_enabled && Emu.IsRunning() && waited < 10000; waited += 20) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    if (!g_disc_insert_enabled) {
+      rpcsx_android.error("changeDisc: the game did not finish ejecting its disc");
+      return 3;
+    }
+  }
+
+  if (image) {
+    load_iso(path);
+    folder = iso_device::virtual_device_name + "/";
+  }
+
+  if (const game_boot_result result = Emu.InsertDisc(folder); result != game_boot_result::no_errors) {
+    rpcsx_android.error("changeDisc: inserting '%s' failed (game_boot_result %d)", path, static_cast<int>(result));
+    return 4;
+  }
+
+  rpcsx_android.notice("changeDisc: '%s' is in the drive", path);
+
+  std::lock_guard lock(g_disc_playlist_mutex);
+  g_disc_current = path;
+  return 0;
 }
 
 // The parsed patch database, reloaded only when patch.yml actually changes.
