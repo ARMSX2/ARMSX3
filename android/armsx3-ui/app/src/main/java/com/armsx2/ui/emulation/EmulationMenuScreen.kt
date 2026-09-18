@@ -872,6 +872,22 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
             },
         )
         Spacer(Modifier.height(6.dp))
+        // Orientation, the Renderer tab's four choices. In-game because the moment you need it is
+        // mid-game: on "Device" the system auto-rotate decides, so tilting a handheld far enough,
+        // steering a SIXAXIS section for one, turns the game over to portrait.
+        HorizontalOptions(
+            title = str("renderer.orientation.label"),
+            options = listOf(
+                str("renderer.orientation.device"), str("renderer.orientation.landscape"),
+                str("renderer.orientation.portrait"), str("renderer.orientation.autoRotate"),
+            ).mapIndexed { index, label -> index to label },
+            selected = settings.orientation.coerceIn(0, 3),
+            onSelect = { v ->
+                viewModel.updateSettings { it.copy(orientation = v) }
+                MainActivityRuntime.instance?.applyEmulationOrientation()
+            },
+        )
+        Spacer(Modifier.height(6.dp))
         // Where the picture sits in the window. In-game for the same reason as screen aspect:
         // you are looking at the thing you are moving, and on a handheld this is something you
         // adjust once you can see the touch controls over the game. Two rows because a handheld
