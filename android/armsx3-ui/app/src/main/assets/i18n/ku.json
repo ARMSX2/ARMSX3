@@ -240,6 +240,7 @@
  "battery.low.warn": "Pîl kêm - %d%%",
  "bios.boot.title": "Boot XMB",
  "bios.firmware.failed": "Ew pel nehat saz kirin. Pêdivî ye ku ew PS3UPDAT.PUP-a fermî be, ne ji nû ve pakkirinê.",
+ "bios.firmware.failedReason": "Ew pel nehat saz kirin: %s",
  "bios.firmware.needsStorage": "Gihîştina hilanînê ji bo gera .PUP-ê hewce ye. Di mîhengên Android-ê de gihîştina hemî pelan bidin.",
  "bios.firmware.notInstalled": "No firmware sazkirî ye",
  "bios.firmware.reinstall": "Firmware ji nû ve saz bikin",

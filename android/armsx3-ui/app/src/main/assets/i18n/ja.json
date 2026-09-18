@@ -240,6 +240,7 @@
  "battery.low.warn": "バッテリー残量が少なくなっています — %d%%",
  "bios.boot.title": "XMBを起動する",
  "bios.firmware.failed": "そのファイルはインストールできませんでした。リパックではなく、公式の PS3UPDAT.PUP である必要があります。",
+ "bios.firmware.failedReason": "そのファイルはインストールできませんでした: %s",
  "bios.firmware.needsStorage": ".PUP を参照するにはストレージへのアクセスが必要です。 Android 設定ですべてのファイルへのアクセスを許可します。",
  "bios.firmware.notInstalled": "ファームウェアがインストールされていません",
  "bios.firmware.reinstall": "ファームウェアを再インストールする",

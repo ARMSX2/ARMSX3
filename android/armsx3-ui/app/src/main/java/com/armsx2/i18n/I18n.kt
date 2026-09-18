@@ -803,6 +803,7 @@ val EN: Map<String, String> = mapOf(
     "bios.firmware.notInstalled" to "No firmware installed",
     "bios.firmware.reinstall" to "Reinstall firmware",
     "bios.firmware.failed" to "That file could not be installed. It must be the official PS3UPDAT.PUP, not a repack.",
+    "bios.firmware.failedReason" to "That file could not be installed: %s",
     "bios.firmware.needsStorage" to "Storage access is needed to browse for a .PUP. Grant all-files access in Android settings.",
     "renderer.section.shaderChain" to "Shader Chain",
     "overlay.enabled.label" to "Performance Overlay",

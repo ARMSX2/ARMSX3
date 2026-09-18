@@ -240,6 +240,7 @@
  "battery.low.warn": "배터리 부족 — %d%%",
  "bios.boot.title": "XMB 부팅",
  "bios.firmware.failed": "해당 파일을 설치할 수 없습니다. 재포장이 아닌 공식 PS3UPDAT.PUP이어야 합니다.",
+ "bios.firmware.failedReason": "해당 파일을 설치할 수 없습니다: %s",
  "bios.firmware.needsStorage": ".PUP를 찾으려면 저장소 액세스가 필요합니다. Android 설정에서 모든 파일 액세스 권한을 부여하세요.",
  "bios.firmware.notInstalled": "펌웨어가 설치되지 않았습니다.",
  "bios.firmware.reinstall": "펌웨어 재설치",

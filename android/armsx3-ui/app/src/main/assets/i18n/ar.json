@@ -240,6 +240,7 @@
  "battery.low.warn": "البطارية منخفضة — %d%%",
  "bios.boot.title": "التمهيد XMB",
  "bios.firmware.failed": "لا يمكن تثبيت هذا الملف. يجب أن يكون PS3UPDAT.PUP الرسمي، وليس إعادة حزم.",
+ "bios.firmware.failedReason": "لا يمكن تثبيت هذا الملف: %s",
  "bios.firmware.needsStorage": "هناك حاجة إلى الوصول إلى مساحة التخزين لتصفح ملف .PUP. منح حق الوصول إلى جميع الملفات في إعدادات Android.",
  "bios.firmware.notInstalled": "لم يتم تثبيت البرامج الثابتة",
  "bios.firmware.reinstall": "أعد تثبيت البرامج الثابتة",

@@ -240,6 +240,7 @@
  "battery.low.warn": "電池電量低 — %d%%",
  "bios.boot.title": "啟動XMB",
  "bios.firmware.failed": "無法安裝該檔案。它必須是官方的 PS3UPDAT.PUP，而不是重新包裝。",
+ "bios.firmware.failedReason": "無法安裝該檔案：%s",
  "bios.firmware.needsStorage": "瀏覽 .PUP 需要儲存存取權限。在 Android 設定中授予所有文件存取權限。",
  "bios.firmware.notInstalled": "未安裝韌體",
  "bios.firmware.reinstall": "重新安裝韌體",

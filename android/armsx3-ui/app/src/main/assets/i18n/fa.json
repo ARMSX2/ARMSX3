@@ -240,6 +240,7 @@
  "battery.low.warn": "باتری کم — %d%%",
  "bios.boot.title": "XMB را بوت کنید",
  "bios.firmware.failed": "آن فایل نصب نشد. باید PS3UPDAT.PUP رسمی باشد نه بسته بندی مجدد.",
+ "bios.firmware.failedReason": "آن فایل نصب نشد: %s",
  "bios.firmware.needsStorage": "دسترسی به فضای ذخیره سازی برای مرور یک PUP. مورد نیاز است. در تنظیمات Android به همه فایل‌ها دسترسی بدهید.",
  "bios.firmware.notInstalled": "هیچ سیستم عاملی نصب نشده است",
  "bios.firmware.reinstall": "سیستم عامل را دوباره نصب کنید",

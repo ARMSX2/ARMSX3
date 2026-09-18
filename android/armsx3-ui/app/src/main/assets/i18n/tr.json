@@ -240,6 +240,7 @@
  "battery.low.warn": "Pil zayıf — %d%%",
  "bios.boot.title": "XMB'yi başlat",
  "bios.firmware.failed": "Bu dosya yüklenemedi. Bu bir yeniden paketleme değil, resmi PS3UPDAT.PUP olmalıdır.",
+ "bios.firmware.failedReason": "Bu dosya yüklenemedi: %s",
  "bios.firmware.needsStorage": "Bir .PUP dosyasına göz atmak için depolama erişimi gereklidir. Android ayarlarında tüm dosyalara erişim izni verin.",
  "bios.firmware.notInstalled": "Firmware yüklü değil",
  "bios.firmware.reinstall": "Firmware'i yeniden yükleyin",

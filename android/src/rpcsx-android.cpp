@@ -5523,13 +5523,21 @@ static bool installPup(JNIEnv *env, fs::file &&pup_f, jlong progressId) {
     tar_object dev_flash_tar(dev_flash_tar_f[2]);
 
     if (!dev_flash_tar.extract()) {
+      // By here the file is not the problem: it passed the PUP hash check and decrypted. What
+      // tar_object::extract fails on is the destination -- dev_flash not mounted, or a directory
+      // or file native code cannot create in the data folder (TAR.cpp logs the entry and the OS
+      // error). This used to say "TAR contents are invalid", which the firmware screens turned
+      // into "not a repack", so a user whose folder refused the write went looking for another
+      // firmware file instead (issue #146). Name the folder and the OS error.
+      const std::string dev_flash = g_cfg_vfs.get_dev_flash();
+      const std::string os_error = fmt::format("%s", fs::g_tls_error);
 
-      rpcsx_android.error("Error while installing firmware: TAR contents are "
-                          "invalid. (package=%s)",
-                          update_filename);
+      rpcsx_android.error("Error while installing firmware: could not write %s into '%s' (%s)",
+                          update_filename, dev_flash, os_error);
 
-      progress.failure(fmt::format("TAR contents are invalid (package=%s)",
-                                   update_filename));
+      progress.failure(fmt::format("Couldn't write the firmware into %s (%s). Check that ARMSX3 "
+                                   "can write to its data folder.",
+                                   dev_flash, os_error));
       return false;
     }
 

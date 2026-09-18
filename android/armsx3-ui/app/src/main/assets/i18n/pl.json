@@ -240,6 +240,7 @@
  "battery.low.warn": "Niski poziom baterii — %d%%",
  "bios.boot.title": "Uruchom XMB",
  "bios.firmware.failed": "Nie można zainstalować tego pliku. Musi to być oficjalny PS3UPDAT.PUP, a nie przepakowanie.",
+ "bios.firmware.failedReason": "Nie można zainstalować tego pliku: %s",
  "bios.firmware.needsStorage": "Aby wyszukać plik .PUP, potrzebny jest dostęp do pamięci masowej. Przyznaj dostęp do wszystkich plików w ustawieniach Androida.",
  "bios.firmware.notInstalled": "Brak zainstalowanego oprogramowania sprzętowego",
  "bios.firmware.reinstall": "Zainstaluj ponownie oprogramowanie sprzętowe",

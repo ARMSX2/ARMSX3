@@ -240,6 +240,7 @@
  "battery.low.warn": "Pin yếu — %d%%",
  "bios.boot.title": "Khởi động XMB",
  "bios.firmware.failed": "Không thể cài đặt tập tin đó. Nó phải là PS3UPDAT.PUP chính thức, không phải là bản repack.",
+ "bios.firmware.failedReason": "Không thể cài đặt tập tin đó: %s",
  "bios.firmware.needsStorage": "Cần có quyền truy cập bộ nhớ để duyệt tìm .PUP. Cấp quyền truy cập vào tất cả các tệp trong cài đặt Android.",
  "bios.firmware.notInstalled": "Chưa cài đặt chương trình cơ sở",
  "bios.firmware.reinstall": "Cài đặt lại chương trình cơ sở",

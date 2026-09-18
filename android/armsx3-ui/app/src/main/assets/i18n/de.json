@@ -240,6 +240,7 @@
  "battery.low.warn": "Batterie schwach – %d%%",
  "bios.boot.title": "Booten Sie XMB",
  "bios.firmware.failed": "Diese Datei konnte nicht installiert werden. Es muss das offizielle PS3UPDAT.PUP sein, kein Repack.",
+ "bios.firmware.failedReason": "Diese Datei konnte nicht installiert werden: %s",
  "bios.firmware.needsStorage": "Zum Suchen nach einem .PUP ist Speicherzugriff erforderlich. Gewähren Sie in den Android-Einstellungen den Zugriff auf alle Dateien.",
  "bios.firmware.notInstalled": "Keine Firmware installiert",
  "bios.firmware.reinstall": "Firmware neu installieren",

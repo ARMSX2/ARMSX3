@@ -240,6 +240,7 @@
  "battery.low.warn": "Baterai lemah — %d%%",
  "bios.boot.title": "Boot XMB",
  "bios.firmware.failed": "File itu tidak dapat diinstal. Harus PS3UPDAT.PUP resmi, bukan repack.",
+ "bios.firmware.failedReason": "File itu tidak dapat diinstal: %s",
  "bios.firmware.needsStorage": "Akses penyimpanan diperlukan untuk menelusuri .PUP. Berikan akses semua file di pengaturan Android.",
  "bios.firmware.notInstalled": "Tidak ada firmware yang terpasang",
  "bios.firmware.reinstall": "Instal ulang firmware",

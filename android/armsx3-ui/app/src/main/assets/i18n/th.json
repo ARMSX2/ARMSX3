@@ -240,6 +240,7 @@
  "battery.low.warn": "แบตเตอรี่เหลือน้อย — %d%%",
  "bios.boot.title": "บูต XMB",
  "bios.firmware.failed": "ไม่สามารถติดตั้งไฟล์นั้นได้ จะต้องเป็น PS3UPDAT.PUP อย่างเป็นทางการ ไม่ใช่การแพ็ก",
+ "bios.firmware.failedReason": "ไม่สามารถติดตั้งไฟล์นั้นได้: %s",
  "bios.firmware.needsStorage": "จำเป็นต้องเข้าถึงพื้นที่เก็บข้อมูลเพื่อเรียกดู .PUP ให้สิทธิ์การเข้าถึงไฟล์ทั้งหมดในการตั้งค่า Android",
  "bios.firmware.notInstalled": "ไม่มีการติดตั้งเฟิร์มแวร์",
  "bios.firmware.reinstall": "ติดตั้งเฟิร์มแวร์อีกครั้ง",

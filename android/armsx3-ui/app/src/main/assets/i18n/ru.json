@@ -240,6 +240,7 @@
  "battery.low.warn": "Батарея разряжена — %d%%",
  "bios.boot.title": "Загрузка XMB",
  "bios.firmware.failed": "Этот файл не удалось установить. Это должен быть официальный PS3UPDAT.PUP, а не репак.",
+ "bios.firmware.failedReason": "Этот файл не удалось установить: %s",
  "bios.firmware.needsStorage": "Для поиска .PUP необходим доступ к хранилищу. Предоставьте доступ ко всем файлам в настройках Android.",
  "bios.firmware.notInstalled": "Прошивка не установлена",
  "bios.firmware.reinstall": "Переустановить прошивку",

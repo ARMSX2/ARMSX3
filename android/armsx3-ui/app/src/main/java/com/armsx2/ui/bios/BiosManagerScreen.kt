@@ -78,9 +78,15 @@ fun BiosManagerScreen(onBack: () -> Unit) {
         busy = true
         message = null
         MainActivityRuntime.invoke {
+            // The installer's own reason, caught as it fails: the progress entry is dropped the
+            // moment it finishes, so it cannot be read back afterwards. Without it every failure
+            // showed "not a repack", including a data folder that refused the write (#146).
+            var reason: String? = null
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
-                    val id = ProgressRepository.create(context, "Installing firmware")
+                    val id = ProgressRepository.create(context, "Installing firmware") { update ->
+                        if (update.isFailed()) reason = update.message
+                    }
                     context.contentResolver
                         .openAssetFileDescriptor(uri, "r")
                         .use { afd ->
@@ -91,7 +97,11 @@ fun BiosManagerScreen(onBack: () -> Unit) {
                 }.getOrDefault(false)
             }
             busy = false
-            if (!ok) message = I18n.get("bios.firmware.failed")
+            if (!ok) {
+                message = reason?.takeIf { it.isNotBlank() }
+                    ?.let { I18n.get("bios.firmware.failedReason").format(it) }
+                    ?: I18n.get("bios.firmware.failed")
+            }
         }
     }
 
