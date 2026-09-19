@@ -235,6 +235,9 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // same data. The per-game tab is the last chip in a scrolling strip behind a long
         // press, which is no way to find out a feature exists.
         DrawerItem("mods.library.title", "\uD83D\uDEE0\uFE0F", AppRoute.ModLibrary),
+        // Its own row under Mods, not a tab inside it: both change how a game runs, but clock caps
+        // are for every game at once and have nothing to do with the moddable-titles list.
+        DrawerItem("underclock.title", "\uD83C\uDF21\uFE0F", AppRoute.Underclocking),
         // ARMSX3: texture packs removed. PCSX2 replaces GS textures by hash;
         // RPCS3 has no texture-replacement system, so the screen managed nothing.
         // RetroArch shader chains cover this ground and live in Renderer settings.
@@ -386,6 +389,7 @@ private fun sameDestination(current: AppRoute, target: AppRoute): Boolean = when
     AppRoute.CoreSettings -> current is AppRoute.CoreSettings
     is AppRoute.SaveManager -> current is AppRoute.SaveManager
     AppRoute.ModLibrary -> current is AppRoute.ModLibrary
+    AppRoute.Underclocking -> current is AppRoute.Underclocking
     AppRoute.ControllerManager -> current is AppRoute.ControllerManager
     AppRoute.TextureManager -> current is AppRoute.TextureManager
     AppRoute.Achievements -> current is AppRoute.Achievements

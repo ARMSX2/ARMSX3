@@ -27,6 +27,7 @@ sealed interface AppRoute {
     data class SaveManager(val game: GameInfo? = null) : AppRoute
     data object ControllerManager : AppRoute
     data object ModLibrary : AppRoute
+    data object Underclocking : AppRoute
     data object TextureManager : AppRoute
     data object Achievements : AppRoute
     // PS3 trophies, read from the emulator's own dev_hdd0 trophy folders. Distinct from
