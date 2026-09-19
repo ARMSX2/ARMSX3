@@ -567,6 +567,13 @@ void ppu_recompiler_fallback(ppu_thread& ppu)
 // and SPU atomic stores. The first few of each are always printed and the rest are decimated,
 // so a writer that fires twice is as visible as one that fires constantly. Getting that wrong
 // is what made a field that is written every frame look like it had no writer at all.
+//
+// The hooks that sit in the path of guest loads and stores compile out unless someone is
+// actively hunting: build with ARMSX3_WATCH_HOOKS=1 to have them (see PPUInterpreter.cpp).
+#ifndef ARMSX3_WATCH_HOOKS
+#define ARMSX3_WATCH_HOOKS 0
+#endif
+
 atomic_t<u32> g_ppu_watch[4]{};
 
 // How much of each slot to watch. A completion flag is one word; a structure whose writers are
@@ -627,6 +634,57 @@ void ppu_watch_record(int slot, u32 addr, u32 value, u32 who, u16 size, u16 kind
 }
 
 u32 g_ppu_watch_load_cia = 0;
+
+#if ARMSX3_WATCH_HOOKS
+// ARMSX3_WATCH_STORE_CIA=<hex pc>: watch the address the store at that instruction writes to.
+// Only the interpreter's store hook calls this, so it exists only in a hooks build.
+u32 g_ppu_watch_store_cia = 0;
+
+// Latch slot 2 on the address a chosen store writes to, once.
+void ppu_watch_arm_addr2(u32 addr, u32 value)
+{
+	// Several instances of the same structure pass through one instruction, and the one that
+	// matters is identified by what it points at, not by which came first. ARMSX3_WATCH_STORE_VAL
+	// = lo-hi latches only when the stored value falls in that range.
+	static const std::pair<u32, u32> range = []() -> std::pair<u32, u32>
+	{
+		const char* env = std::getenv("ARMSX3_WATCH_STORE_VAL");
+
+		if (!env || !*env)
+		{
+			return {0, 0};
+		}
+
+		const std::string_view text{env};
+		const usz dash = text.find('-');
+		u32 lo = 0, hi = 0;
+
+		if (dash != umax)
+		{
+			std::from_chars(text.data(), text.data() + dash, lo, 16);
+			std::from_chars(text.data() + dash + 1, text.data() + text.size(), hi, 16);
+			ppu_log.warning("ARMSX3_WATCH_STORE_VAL: only values in 0x%x..0x%x", lo, hi);
+		}
+
+		return {lo, hi};
+	}();
+
+	if (range.second && (value < range.first || value > range.second))
+	{
+		return;
+	}
+
+	static atomic_t<u32> s_armed{0};
+
+	if (addr < 0x10000 || !s_armed.compare_and_swap_test(0, addr))
+	{
+		return;
+	}
+
+	g_ppu_watch[2].release(addr);
+	ppu_log.warning("ARMSX3_WATCH_STORE_CIA: latched on 0x%x", addr);
+}
+#endif
 
 // Arm slot 0 (and the word below it) at a chosen address, resetting the per-slot state so a
 // new slot does not inherit the last one's "already set" memory.
@@ -730,6 +788,19 @@ void ppu_watch_arm(const ppu_thread& ppu)
 	static const std::pair<u32, u32> cfg = []() -> std::pair<u32, u32>
 	{
 		ppu_watch_parse_fixed();
+
+#if ARMSX3_WATCH_HOOKS
+		if (const char* st = std::getenv("ARMSX3_WATCH_STORE_CIA"); st && *st)
+		{
+			u32 cia = 0;
+
+			if (std::from_chars(st, st + std::strlen(st), cia, 16).ec == std::errc())
+			{
+				g_ppu_watch_store_cia = cia;
+				ppu_log.warning("ARMSX3_WATCH_STORE_CIA: arming on the store at 0x%x", cia);
+			}
+		}
+#endif
 
 		if (const char* load = std::getenv("ARMSX3_WATCH_LOAD"); load && *load)
 		{
@@ -3873,11 +3944,6 @@ extern u64 ppu_ldarx(ppu_thread& ppu, u32 addr)
 
 int ppu_watch_slot(u32 addr, u32 size);
 void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size);
-
-// See PPUInterpreter.cpp: the write-watch hooks compile out unless someone is actively hunting.
-#ifndef ARMSX3_WATCH_HOOKS
-#define ARMSX3_WATCH_HOOKS 0
-#endif
 
 template <typename T>
 static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
