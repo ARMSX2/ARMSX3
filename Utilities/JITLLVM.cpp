@@ -36,6 +36,7 @@ LOG_CHANNEL(jit_log, "JIT");
 #pragma GCC diagnostic ignored "-Wmissing-noreturn"
 #endif
 #include <llvm/Support/CodeGen.h>
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
@@ -843,6 +844,37 @@ jit_compiler::jit_compiler(const std::unordered_map<std::string, u64>& _link, st
 
 		return true;
 	}();
+
+#ifdef ARCH_ARM64
+	// Turn off InterleavedLoadCombine, an IR pass the AArch64 backend alone adds to codegen (x86
+	// never runs it). It looks for loads split into pieces and reassembled with shuffles, to merge
+	// them into one ld2/ld3/ld4, and it finds them by recursing through every shufflevector,
+	// bitcast and load behind a candidate, with no bound on the depth. PS3 vector code translates
+	// into long shuffle chains (byte swaps, permutes, splats), and on one function that search does
+	// not end: The Guided Fate Paradox's EBOOT (BLUS31312, NPUB31320; issue #149) sat in it for
+	// over ten minutes at 100% of a core, the boot never finished and Stop could not join the
+	// thread. Profiled on the Odin 3: VectorInfo::compute / computeFromSVI, allocating and freeing
+	// std::set and std::list nodes, under MCJIT::emitObject. Windows compiles the same EBOOT in
+	// seconds because it never has this pass.
+	//
+	// What it would buy is strided loads, which the translators do not emit; the later
+	// InterleavedAccess pass still handles the ordinary interleaved patterns. LLVM options are
+	// process-wide, so this is set once, before the first compile, and covers SPU codegen too.
+	[[maybe_unused]] static const bool s_llvm_options = []()
+	{
+		auto& options = llvm::cl::getRegisteredOptions();
+
+		if (const auto found = options.find("disable-interleaved-load-combine"); found != options.end())
+		{
+			static_cast<llvm::cl::opt<bool>*>(found->second)->setValue(true);
+			jit_log.notice("LLVM: InterleavedLoadCombine disabled");
+			return true;
+		}
+
+		jit_log.error("LLVM: -disable-interleaved-load-combine not found; InterleavedLoadCombine stays on");
+		return false;
+	}();
+#endif
 
 	std::string result;
 
