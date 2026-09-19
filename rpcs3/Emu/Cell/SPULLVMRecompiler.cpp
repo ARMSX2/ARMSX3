@@ -4671,7 +4671,24 @@ public:
 
 	static bool exec_check_state(spu_thread* _spu)
 	{
-		return _spu->check_state();
+		// Compiled code only calls this at a state check, after storing pc for the exact
+		// instruction it stopped at. Unless the code marked the thread unsavable around the call,
+		// every guest register is in memory too. That is all cpu_work needs to take a busy-checked
+		// interrupt (decrementer, signals, reservation loss) the way the interpreter does:
+		// srr0 = pc, jump to the handler, escape to the dispatcher, resume at srr0 on IRET.
+		// Before this, set_interrupt_status threw for any recompiler instead.
+		//
+		// An escape skips the restore below; cpu_task clears the flag at the gateway on that path.
+		const bool allow = _spu->allow_interrupts_in_cpu_work;
+
+		if (!_spu->unsavable)
+		{
+			_spu->allow_interrupts_in_cpu_work = true;
+		}
+
+		const bool result = _spu->check_state();
+		_spu->allow_interrupts_in_cpu_work = allow;
+		return result;
 	}
 
 	template <spu_intrp_func_t F>

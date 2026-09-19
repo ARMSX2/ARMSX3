@@ -752,6 +752,8 @@ public:
 	u32 ch_dec_value = 0; // written decrementer value
 	bool is_dec_frozen = false;
 	std::pair<u32, u32> read_dec() const; // Read decrementer
+	u64 dec_intr_armed = umax; // Underflow time last handed to the decrementer interrupt timer
+	void arm_dec_interrupt(); // Raise ::pending when the decrementer underflows
 
 	atomic_t<u32> run_ctrl = 0; // SPU Run Control register (only provided to get latest data written)
 	shared_mutex run_ctrl_mtx;

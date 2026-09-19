@@ -1723,7 +1723,10 @@ void spu_thread::cpu_work()
 		return;
 	}
 
-	const u32 old_iter_count = cpu_work_iteration_count++;
+	// Only calls that may take an interrupt advance the count. Compiled code alternates checks
+	// where it may (every register in memory) with checks where it may not, and counting both
+	// could park the every-16th interrupt check below on the second kind for good.
+	const u32 old_iter_count = allow_interrupts_in_cpu_work ? cpu_work_iteration_count++ : cpu_work_iteration_count;
 
 	bool work_left = false;
 
@@ -1767,10 +1770,16 @@ void spu_thread::cpu_work()
 
 	bool gen_interrupt = false;
 
+	const u32 busy_mask = ch_events.load().mask & SPU_EVENT_INTR_BUSY_CHECK;
+
+	// The decrementer has underflowed with interrupts on (spu_dec_intr_timer raised ::pending):
+	// take it at the first check that may, not the next 16th
+	const bool dec_due = interrupts_enabled && (busy_mask & SPU_EVENT_TM) && read_dec().second;
+
 	// Check interrupts every 16 iterations
-	if (!(old_iter_count % 16) && allow_interrupts_in_cpu_work)
+	if ((!(old_iter_count % 16) || dec_due) && allow_interrupts_in_cpu_work)
 	{
-		if (u32 mask = ch_events.load().mask & SPU_EVENT_INTR_BUSY_CHECK)
+		if (u32 mask = busy_mask)
 		{
 			// LR check is expensive, do it once in a while
 			if (old_iter_count /*% 256*/)
@@ -1783,6 +1792,15 @@ void spu_thread::cpu_work()
 
 		gen_interrupt = check_mfc_interrupts(pc);
 		work_left |= interrupts_enabled;
+	}
+
+	// Busy checking has to keep going while an interrupt can still be taken. Only the line above
+	// kept ::pending, and only on every 16th call, so the next call with no MFC work cleared it
+	// and the busy check stopped after one round. Reservation loss and signals are polled for as
+	// long as they are enabled; the decrementer only once it has underflowed.
+	if (interrupts_enabled && ((busy_mask & ~SPU_EVENT_TM) || dec_due))
+	{
+		work_left = true;
 	}
 
 	in_cpu_work = false;
@@ -5999,6 +6017,117 @@ void spu_thread::set_events(u32 bits)
 	}
 }
 
+// Raises ::pending on an SPU thread at the moment its decrementer underflows, so a decrementer
+// interrupt costs nothing until it is due. Polling for it instead meant ::pending was set for as
+// long as interrupts were on, and every state check in compiled SPU code went through
+// check_state() and cpu_work(): NBA 08 re-enables interrupts around every DMA wait on all five of
+// its SPURS SPUs and writes decrementer values tens of seconds long, and its SPUs spent 97% of
+// their time in that path and ~3% running the game.
+struct spu_dec_intr_timer
+{
+	shared_mutex mutex;
+	std::vector<std::pair<u64, u32>> armed; // (underflow time in timebase ticks, SPU thread id)
+
+	void arm(u64 due, u32 id)
+	{
+		{
+			std::lock_guard lock(mutex);
+
+			const auto it = std::find_if(armed.begin(), armed.end(), [&](const auto& e) { return e.second == id; });
+
+			if (it != armed.end())
+			{
+				it->first = due;
+			}
+			else
+			{
+				armed.emplace_back(due, id);
+			}
+		}
+
+		thread_ctrl::notify(g_fxo->get<named_thread<spu_dec_intr_timer>>());
+	}
+
+	void operator()()
+	{
+		u64 sleep_us = umax;
+
+		while (thread_ctrl::state() != thread_state::aborting)
+		{
+			thread_ctrl::wait_for(sleep_us);
+
+			if (thread_ctrl::state() == thread_state::aborting)
+			{
+				break;
+			}
+
+			const u64 now = get_timebased_time();
+			std::vector<u32> due_ids;
+			sleep_us = umax;
+
+			{
+				std::lock_guard lock(mutex);
+
+				for (auto it = armed.begin(); it != armed.end();)
+				{
+					if (it->first <= now)
+					{
+						due_ids.push_back(it->second);
+						it = armed.erase(it);
+						continue;
+					}
+
+					// get_timebased_time() runs at 80 MHz times clocks_scale / 100
+					const u64 us = (it->first - now) * 100 / (80 * std::max<u64>(g_cfg.core.clocks_scale, 1)) + 1;
+					sleep_us = std::min(sleep_us, us);
+					++it;
+				}
+			}
+
+			for (const u32 id : due_ids)
+			{
+				if (const auto spu = idm::get_unlocked<named_thread<spu_thread>>(id))
+				{
+					if (!spu->state.test_and_set(cpu_flag::pending))
+					{
+						spu->state.notify_one();
+					}
+				}
+			}
+		}
+	}
+
+	static constexpr auto thread_name = "SPU DEC Interrupts"sv;
+};
+
+void spu_thread::arm_dec_interrupt()
+{
+	if (is_dec_frozen)
+	{
+		return;
+	}
+
+	if (read_dec().second)
+	{
+		// Already underflowed: cpu_work() collects the event and takes the interrupt
+		if (state.none_of(cpu_flag::pending))
+		{
+			state += cpu_flag::pending;
+		}
+
+		return;
+	}
+
+	// read_dec() reports the underflow once ch_dec_value + 1 ticks have passed since the write.
+	// BIE/IRET call this at every interrupt enable, so hand the timer only a changed deadline.
+	const u64 due = ch_dec_start_timestamp + ch_dec_value + 1;
+
+	if (std::exchange(dec_intr_armed, due) != due)
+	{
+		g_fxo->get<named_thread<spu_dec_intr_timer>>().arm(due, id);
+	}
+}
+
 void spu_thread::set_interrupt_status(bool enable)
 {
 	if (enable)
@@ -6006,17 +6135,24 @@ void spu_thread::set_interrupt_status(bool enable)
 		// Detect enabling interrupts with events masked
 		if (auto mask = ch_events.load().mask; mask & SPU_EVENT_INTR_BUSY_CHECK)
 		{
-			if (g_cfg.core.spu_decoder != spu_decoder_type::_static && g_cfg.core.spu_decoder != spu_decoder_type::dynamic)
-			{
-				fmt::throw_exception("SPU Interrupts not implemented (mask=0x%x): Use [%s] SPU decoder", mask, spu_decoder_type::dynamic);
-			}
-
+			// ARMSX3: upstream refuses these on the recompilers ("SPU Interrupts not implemented",
+			// RPCS3 #18996: NBA 08, NBA 09, FIFA Street 3, NBA Street Homecourt). Compiled code
+			// now takes them at its state checks, see exec_check_state in SPULLVMRecompiler.cpp.
 			spu_log.trace("SPU Interrupts (mask=0x%x) are using CPU busy checking mode", mask);
 
-			// Process interrupts in cpu_work()
-			if (state.none_of(cpu_flag::pending))
+			if (mask & SPU_EVENT_INTR_BUSY_CHECK & ~SPU_EVENT_TM)
 			{
-				state += cpu_flag::pending;
+				// Reservation loss and signals can arrive at any moment: poll in cpu_work()
+				if (state.none_of(cpu_flag::pending))
+				{
+					state += cpu_flag::pending;
+				}
+			}
+
+			if (mask & SPU_EVENT_TM)
+			{
+				// The decrementer underflows at a known time: wake cpu_work() then
+				arm_dec_interrupt();
 			}
 		}
 	}
@@ -7145,6 +7281,13 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 		ch_dec_start_timestamp = get_timebased_time();
 		ch_dec_value = value;
 		is_dec_frozen = false;
+
+		if (interrupts_enabled && ch_events.load().mask & SPU_EVENT_TM)
+		{
+			// The underflow moved: rearm the timer that raises the interrupt
+			arm_dec_interrupt();
+		}
+
 		return true;
 	}
 
