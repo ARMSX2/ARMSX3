@@ -596,12 +596,15 @@ fun HelpText(text: String, modifier: Modifier = Modifier) {
 }
 
 /** Toggle row — label on left, status text on right. Tapping anywhere
- *  on the row flips the value via [onChange]. */
+ *  on the row flips the value via [onChange]. [controllerId] replaces the label-based nav id
+ *  where labels can repeat on one screen (All Core Settings); settings search finds rows by
+ *  the default one. */
 @Composable
 fun ToggleRow(
     label: String,
     value: Boolean,
     description: String? = null,
+    controllerId: String? = null,
     onChange: (Boolean) -> Unit,
 ) {
     // Menu SFX: a distinct on/off blip on every flip. Touch, the switch, and the controller's
@@ -617,7 +620,7 @@ fun ToggleRow(
             .fillMaxWidth()
             .padding(vertical = 5.dp)
             .controllerFocusable(
-                controllerId = "toggle:$label",
+                controllerId = controllerId ?: "toggle:$label",
                 onConfirm = { emit(!value) },
                 onLeft = { if (value) emit(false) },
                 onRight = { if (!value) emit(true) },
@@ -1073,6 +1076,7 @@ fun SegmentedGridRow(
     selectedIndex: Int,
     columns: Int = 3,
     description: String? = null,
+    controllerId: String? = null,
     onChange: (Int) -> Unit,
 ) {
     Box(
@@ -1083,7 +1087,7 @@ fun SegmentedGridRow(
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f))
             .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.46f), RoundedCornerShape(22.dp))
             .controllerFocusable(
-                controllerId = "segmented-grid:$label",
+                controllerId = controllerId ?: "segmented-grid:$label",
                 onConfirm = {
                     if (options.isNotEmpty())
                         onChange((selectedIndex + 1).floorMod(options.size))

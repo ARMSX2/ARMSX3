@@ -6,9 +6,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -17,6 +17,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -296,16 +297,25 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
                 )
             }
 
-            // weight(1f), not just fillMaxWidth: an unweighted LazyColumn in a Column takes the
-            // whole remaining height, which left the Back button below it with nothing to lay out
-            // in. The button was always here, it was simply off the bottom of the screen, and on a
+            // weight(1f), not just fillMaxWidth: an unweighted list in a Column takes the whole
+            // remaining height, which left the Back button below it with nothing to lay out in.
+            // The button was always here, it was simply off the bottom of the screen, and on a
             // touch-only device that made this the one screen with no visible way out. Weighting
             // the list makes it share the space and keeps Back on screen at every list length.
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp),
+            //
+            // A scrolling Column, not a LazyColumn, because the D-pad walks the controller nav
+            // registry and a row is only in it while it is composed. A LazyColumn composes what
+            // is on screen, two or three rows at this height, so Down from the last visible row
+            // found nothing below it and stopped: the list could not be scrolled with a controller
+            // past PPU Threads. Every other settings screen already composes all of its rows; this
+            // one has about 270, which is fine to compose once.
+            val listScroll = rememberScrollState()
+            ControllerAutoScroll(listScroll)
+            Column(
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp).verticalScroll(listScroll),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(filtered, key = { it.path }) { setting ->
+                filtered.forEach { setting -> key(setting.path) {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
@@ -344,7 +354,7 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
                             CoreSettingRow(setting) { write(setting, it) }
                         }
                     }
-                }
+                } }
             }
 
             TextButton(onClick = onBack, modifier = Modifier.padding(top = 8.dp)) {
@@ -354,13 +364,18 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
     }
 }
 
-/** Pick a widget from the node's declared type, not from a hardcoded table. */
+/** Pick a widget from the node's declared type, not from a hardcoded table.
+ *
+ *  Nav ids come from the node's path, not its name: names repeat across sections (Video and
+ *  Audio both have a Renderer), and with every row registered at once two rows sharing an id
+ *  share one registry slot, so one of them could never be reached with a controller. */
 @Composable
 private fun CoreSettingRow(setting: CoreSetting, onWrite: (String) -> Unit) {
     when {
         setting.type == "bool" -> ToggleRow(
             setting.name,
             setting.value == "true",
+            controllerId = "core:${setting.path}",
         ) { onWrite(it.toString()) }
 
         setting.variants.isNotEmpty() -> SegmentedGridRow(
@@ -368,6 +383,7 @@ private fun CoreSettingRow(setting: CoreSetting, onWrite: (String) -> Unit) {
             options = setting.variants,
             selectedIndex = setting.variants.indexOf(setting.value).coerceAtLeast(0),
             columns = 2,
+            controllerId = "core:${setting.path}",
             onChange = { onWrite(setting.variants[it]) },
         )
 
