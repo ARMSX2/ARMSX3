@@ -23,7 +23,6 @@ namespace vk
 	{
 		vk::pipeline_props m_properties{};
 		VkDevice m_device = VK_NULL_HANDLE;
-		VkPipelineCache m_pipeline_cache = VK_NULL_HANDLE;
 		VkShaderModule m_vs = VK_NULL_HANDLE;
 		VkShaderModule m_fs = VK_NULL_HANDLE;
 
@@ -52,12 +51,10 @@ namespace vk
 		async_pipe_compiler_context(
 			const vk::pipeline_props& props,
 			VkDevice device,
-			VkPipelineCache pipeline_cache,
 			VkShaderModule vs,
 			VkShaderModule fs)
 			: m_properties(props)
 			, m_device(device)
-			, m_pipeline_cache(pipeline_cache)
 			, m_vs(vs)
 			, m_fs(fs)
 		{
@@ -463,11 +460,6 @@ namespace vk
 	void shader_interpreter::init(const vk::render_device& dev)
 	{
 		m_device = dev;
-
-		// Share the device's persistent cache rather than opening a private one. The
-		// interpreter's programs are the expensive ubershaders, and a private cache threw
-		// that work away at every shutdown. Borrowed, not owned -- see destroy().
-		m_driver_pipeline_cache = dev.get_pipeline_cache();
 	}
 
 	void shader_interpreter::destroy()
@@ -476,9 +468,6 @@ namespace vk
 		m_program_cache.clear();
 		m_vs_shader_cache.clear();
 		m_fs_shader_cache.clear();
-
-		// Owned by the render_device, which saves and destroys it. Just drop the borrow.
-		m_driver_pipeline_cache = VK_NULL_HANDLE;
 	}
 
 	std::shared_ptr<glsl::program> shader_interpreter::link(const vk::pipeline_props& properties, u64 compiler_opt, bool async, async_build_fn_callback async_callback)
@@ -486,7 +475,7 @@ namespace vk
 		auto vs = build_vs(compiler_opt);
 		auto fs = build_fs(compiler_opt);
 
-		async_pipe_compiler_context context{ properties, m_device, m_driver_pipeline_cache, vs->shader.get_handle(), fs->shader.get_handle() };
+		async_pipe_compiler_context context{ properties, m_device, vs->shader.get_handle(), fs->shader.get_handle() };
 		auto create_graphics_info_fn = [=]() mutable
 		{
 			return context.compile();
@@ -726,6 +715,10 @@ namespace vk
 		std::vector<vk::pipeline_props> pipe_properties;
 		auto pdev = vk::get_current_renderer();
 
+		// Collect format information we intend to use.
+		const auto surface_format = VK_FORMAT_B8G8R8A8_UNORM;
+		const auto depth_format = pdev->get_formats_support().d24_unorm_s8 ? VK_FORMAT_D24_UNORM_S8_UINT : VK_FORMAT_D32_SFLOAT_S8_UINT;
+
 		// Base pipeline - simple color
 		vk::pipeline_props base_props{};
 		base_props.state.set_attachment_count(1);
@@ -736,22 +729,35 @@ namespace vk
 		base_props.state.enable_depth_bias(true);
 		base_props.state.enable_depth_clamp(true);
 		base_props.state.enable_depth_bounds_test(pdev->get_depth_bounds_support());
-		base_props.renderpass_key = vk::get_renderpass_key(VK_FORMAT_B8G8R8A8_UNORM);
-		pipe_properties.push_back(base_props);
-
-		// Add in some blending
-		base_props.state.enable_blend(0,
-			VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-			VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
-			VK_BLEND_OP_ADD, VK_BLEND_OP_ADD);
+		base_props.renderpass_key = vk::get_renderpass_key(surface_format);
 		pipe_properties.push_back(base_props);
 
 		// Add a depth buffer
-		const auto depth_format = pdev->get_formats_support().d24_unorm_s8 ? VK_FORMAT_D24_UNORM_S8_UINT : VK_FORMAT_D32_SFLOAT_S8_UINT;
-		base_props.renderpass_key = vk::get_renderpass_key(VK_FORMAT_B8G8R8A8_UNORM, depth_format);
+		base_props.renderpass_key = vk::get_renderpass_key(surface_format, depth_format);
 		base_props.state.enable_depth_test(VK_COMPARE_OP_LESS);
 		base_props.state.set_depth_mask(true);
 		pipe_properties.push_back(base_props);
+
+		// Add more targets. Typical G-buffers are 1-4 color targets + depth.
+		for (auto index = 1; index < 4; ++index)
+		{
+			base_props.state.set_attachment_count(index + 1);
+			base_props.state.set_color_mask(index, true, true, true, true);
+			pipe_properties.push_back(base_props);
+		}
+
+		// Add in some blending
+		if (surface_format != VK_FORMAT_R32G32B32A32_SFLOAT &&
+			surface_format != VK_FORMAT_R32_SFLOAT)
+		{
+			// Blending not supported for some F32 formats.
+			base_props.state.set_attachment_count(1);
+			base_props.state.enable_blend(0,
+				VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+				VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+				VK_BLEND_OP_ADD, VK_BLEND_OP_ADD);
+			pipe_properties.push_back(base_props);
+		}
 
 		// These are guesses at what the runtime will ask for, so they have to be spelled the same
 		// way the runtime spells it. Without this the seeds keep their cull mode and depth test
