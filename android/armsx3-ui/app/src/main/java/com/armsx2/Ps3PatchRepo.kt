@@ -316,6 +316,28 @@ object Ps3PatchRepo {
             hash = "PPU-ec77eaf73a4f55d1c4ece532c3be6db0011e49ca",
             name = "Freeze Fix",
             serial = "NPEA00452",
+        // NBA 08, BCES00112 v01.00 -- ours. The quickplay loading screen's Lua misses its one
+        // "exit after this loop" event when loading beats the screen's 6.5 s intro, which it
+        // always does here and never on a PS3; the loading thread now re-sends it every frame.
+        // See canary_patches.yml.
+        Bundled(
+            hash = "PPU-30ce8c9f0a9552914275c90e2980749630f3ea18",
+            name = "ARMSX3 quickplay loading fix",
+            serial = "BCES00112",
+            appVersion = "01.00",
+            sinceRevision = 7,
+        ),
+        // NBA 08, BCES00112 v01.00 -- ours. The intro movie's vdec callback reads a picture
+        // that cellVdecGetPicItem did not hand over (a late PICOUT on a first run, while the
+        // SPU cache compiles); the patch drops that one picture instead of reading NULL+0x44.
+        // See canary_patches.yml.
+        Bundled(
+            hash = "PPU-30ce8c9f0a9552914275c90e2980749630f3ea18",
+            name = "ARMSX3 intro movie crash fix",
+            serial = "BCES00112",
+            appVersion = "01.00",
+            sinceRevision = 6,
+        ),
             appVersion = "All",
             sinceRevision = 4,
         ),
@@ -468,7 +490,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 5
+    private const val BUNDLED_REVISION = 7
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"

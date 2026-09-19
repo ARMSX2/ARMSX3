@@ -325,3 +325,58 @@ PPU-56101fbdbac186fddef72207145015fd314a0be5:
       - [ be32, 0x00459054, 0x60000000 ]
       - [ be32, 0x0045905c, 0x60000000 ]
       - [ be32, 0x00459064, 0x90690010 ]
+
+# NBA 08, BCES00112 v01.00 -- ours, not from the community database.
+#
+# "The PS3 application has likely crashed" during the intro movies, on a first run while
+# the SPU cache is still compiling. The game's CellVdec callback at 0x3eacb4 handles a
+# PICOUT message by calling cellVdecGetPicItem and reading item->0x44 at 0x3ead3c, checking
+# neither the return code nor the item. In the crash log GetPicItem returned
+# CELL_VDEC_ERROR_SEQ with a null item: the decoder, stalled on SPU compiles while the game
+# was tearing the movie player down, delivered its PICOUT late. With a warm cache the intro
+# played through, so this is a race the game never guarded against.
+#
+# The cave redoes the load that the branch into it replaced, and when the item is null it
+# takes the callback's own return-0 exit at 0x3ead0c, which drops that one picture. cr6 is
+# free there: the bl just before clobbers every volatile field, and nothing after reads cr6.
+# Nothing branches to 0x3ead38, which matters on ARM64: a cave whose entry point is also a
+# branch target takes the whole app down in ppu_far_jump.
+#
+# The quickplay loading screen that never ends is a second race, and it only exists because we
+# load faster than a PS3. UI/Loading_New.bgf is an Anark scene driven by the disc's Lua: its
+# Intro slide (6.5 s) plays straight through into a Looping slide, and the game sends
+# "onExitNextLoop" exactly once when loading is done. Read from the heap at the hang: the Intro
+# behaviour received it (shouldExit true) but never saw its own slide stop, since the slide
+# advances by itself, while the Loop behaviour, which only registers when its slide starts, never
+# got it and replays the tip forever. A PS3 always takes longer than 6.5 s to load a match; we
+# take about 4. The loading thread (0x2236c) now keeps its end request pending and re-sends the
+# event every frame until the scene answers with onEndPresentation, and clears the request on
+# both of its exits so the next loading screen starts clean.
+PPU-30ce8c9f0a9552914275c90e2980749630f3ea18:
+  "ARMSX3 intro movie crash fix":
+    Games:
+      "NBA 08":
+        BCES00112: [ 01.00 ]
+    Author: "jpolo1224"
+    Notes: "Fixes a crash during the intro movies on the first run."
+    Patch Version: 1.0
+    Patch:
+      - [ calloc, 0x003ead38, 0x04 ]
+      - [ be32, 0x00000000, 0x80810070 ] # lwz r4,0x70(r1), the instruction the branch replaced
+      - [ be32, 0x00000000, 0x2f040000 ] # cmpwi cr6,r4,0
+      - [ be32, 0x00000000, 0x409a0008 ] # bne cr6,+8
+      - [ jump, 0x00000000, 0x003ead0c ] # null item: li r3,0 and return
+  "ARMSX3 quickplay loading fix":
+    Games:
+      "NBA 08":
+        BCES00112: [ 01.00 ]
+    Author: "jpolo1224"
+    Notes: "Fixes the loading screen that never ends before a quickplay game."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x0002245c, 0x409e0144 ] # bne cr7,0x225a0: a pending request goes straight to the send, no print
+      - [ be32, 0x000225a4, 0x60000000 ] # keep the request pending (was stb r28,0x37(r31))
+      - [ be32, 0x000225dc, 0x4bfffe84 ] # b 0x22460: check for onEndPresentation after each send
+      - [ be32, 0x000225ec, 0x9b9f0037 ] # stb r28,0x37(r31): the scene is done, clear the request
+      - [ be32, 0x000225f4, 0x9b9f0038 ] # stb r28,0x38(r31): clear the done flag (r29 is now 1)
+      - [ be32, 0x00022504, 0x9b9f0037 ] # stb r28,0x37(r31): a forced exit clears the request too
