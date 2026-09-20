@@ -65,7 +65,10 @@ void lwcond_record(u32 id, u32 thread, char kind, u32 woken)
 	g_lwcond_ring[i] = {get_system_time(), id, thread, woken, kind};
 }
 
-// 'w' entered wait, 'W' left wait, 's' signal, 'a' signal_all; woken is what the signal found.
+// 'w' queued as a waiter (recorded AFTER the enqueue, so the thread really is on the queue),
+// 'W' left the wait, 's' signal, 'a' signal_all. For a signal, woken is what it actually took off
+// the queue -- 0 means the signal found nobody. Recording it as a literal, as this did until
+// 2026-09-20, makes every signal look lost and is worse than not recording it at all.
 std::string lwcond_history()
 {
 	const u32 end = g_lwcond_pos.load();
@@ -227,8 +230,6 @@ error_code _sys_lwcond_signal(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id, u6
 
 	sys_lwcond.trace("_sys_lwcond_signal(lwcond_id=0x%x, lwmutex_id=0x%x, ppu_thread_id=0x%llx, mode=%d)", lwcond_id, lwmutex_id, ppu_thread_id, mode);
 
-	lwcond_record(lwcond_id, ppu.id, 's', 0);
-
 	// Mode 1: lwmutex was initially owned by the calling thread
 	// Mode 2: lwmutex was not owned by the calling thread and waiter hasn't been increased
 	// Mode 3: lwmutex was forcefully owned by the calling thread
@@ -359,6 +360,8 @@ error_code _sys_lwcond_signal(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id, u6
 			return 0;
 		});
 
+		lwcond_record(lwcond_id, ppu.id, 's', cond && cond.ret > 0 ? static_cast<u32>(cond.ret) : 0);
+
 		if (!finished)
 		{
 			continue;
@@ -395,8 +398,6 @@ error_code _sys_lwcond_signal_all(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id
 	ppu.state += cpu_flag::wait;
 
 	sys_lwcond.trace("_sys_lwcond_signal_all(lwcond_id=0x%x, lwmutex_id=0x%x, mode=%d)", lwcond_id, lwmutex_id, mode);
-
-	lwcond_record(lwcond_id, ppu.id, 'a', 0);
 
 	// Mode 1: lwmutex was initially owned by the calling thread
 	// Mode 2: lwmutex was not owned by the calling thread and waiter hasn't been increased
@@ -497,6 +498,8 @@ error_code _sys_lwcond_signal_all(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id
 			return 0;
 		});
 
+		lwcond_record(lwcond_id, ppu.id, 'a', cond && cond.ret > 0 ? static_cast<u32>(cond.ret) : 0);
+
 		if (!finished)
 		{
 			continue;
@@ -522,8 +525,6 @@ error_code _sys_lwcond_queue_wait(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id
 	ppu.state += cpu_flag::wait;
 
 	sys_lwcond.trace("_sys_lwcond_queue_wait(lwcond_id=0x%x, lwmutex_id=0x%x, timeout=0x%llx)", lwcond_id, lwmutex_id, timeout);
-
-	lwcond_record(lwcond_id, ppu.id, 'w', 0);
 
 	ppu.gpr[3] = CELL_OK;
 
@@ -561,6 +562,7 @@ error_code _sys_lwcond_queue_wait(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id
 		{
 			// Add a waiter
 			lv2_obj::emplace(cond.sq, &ppu);
+			lwcond_record(lwcond_id, ppu.id, 'w', 0);
 		}
 
 		if (!ppu.loaded_from_savestate && !mutex->try_unlock(false))
@@ -598,6 +600,8 @@ error_code _sys_lwcond_queue_wait(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id
 	{
 		return CELL_OK;
 	}
+
+	lwcond_record(lwcond_id, ppu.id, 'W', 0);
 
 	while (auto state = +ppu.state)
 	{
