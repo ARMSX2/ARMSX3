@@ -49,7 +49,6 @@
 #include "util/sysinfo.hpp"
 
 #include <memory>
-#include <regex>
 #include <shared_mutex>
 
 #include "Utilities/JIT.h"
@@ -284,6 +283,157 @@ void init_fxo_for_exec(utils::serial* ar, bool full = false)
 }
 
 // Some settings are not allowed with certain conditions
+// Mount an enabled mod's files over the game's own, one virtual path per file.
+//
+// Nothing is copied and the install is never written to, which is what lets this work on a disc
+// image as well as an HDD title: vfs::get walks the mount list in reverse and takes the first
+// entry carrying a host path, so the deepest mount wins. The boot path already leans on that
+// two lines apart, mounting /dev_bdvd/PS3_GAME inside /dev_bdvd.
+//
+// Per FILE, deliberately. Mounting a mod's directory over USRDIR would replace the whole
+// directory and the game would see only the mod's files, which is the opposite of what a mod
+// changing three textures wants.
+//
+// game_dir is the title's own virtual root (m_dir), so one code path serves a disc game at
+// /dev_bdvd/PS3_GAME/ and an installed one at /dev_hdd0/game/<id>/ without knowing which it has.
+//
+// Mods live beside the config directory rather than inside dev_hdd0, so reinstalling a title
+// cannot take them with it. A mod counts as enabled when the UI has written its state file.
+// Nothing is unmounted afterwards because g_fxo->reset() drops the whole table on the next boot.
+static void apply_game_mods(const std::string& title_id, const std::string& game_dir)
+{
+	if (title_id.empty() || game_dir.empty())
+	{
+		return;
+	}
+
+	// Mods sit BESIDE the config directory, not inside it, so that reinstalling a title or
+	// restoring a backup cannot take them with it. get_config_dir() is <root>/config/ here, one
+	// level too deep, so walk up to <root>. The UI builds the same path from its own root and
+	// the two have to agree: get this wrong and every mod is simply never found, with no error
+	// anywhere, which is exactly what the first version of this did.
+	std::string root = fs::get_config_dir();
+	while (!root.empty() && root.back() == '/')
+	{
+		root.pop_back();
+	}
+	if (const usz slash = root.find_last_of('/'); slash != umax)
+	{
+		root.resize(slash);
+	}
+
+	const std::string mods_dir = root + "/mods/" + title_id + "/";
+	const std::string state_dir = mods_dir + ".state/";
+
+	if (!fs::is_dir(state_dir))
+	{
+		// Said out loud because a silent return here is indistinguishable from a mod that did
+		// not apply, and the path is the thing worth seeing when that happens.
+		sys_log.notice("No enabled mods for %s (looked in %s)", title_id, mods_dir);
+		return;
+	}
+
+	sys_log.notice("Applying mods for %s from %s", title_id, mods_dir);
+
+	// A guard, not a policy. A mod is loose game files; anything near this is a mistake, and
+	// the cost of being wrong is a mount table with one entry per file in it.
+	constexpr usz max_mounts = 20000;
+	usz mounted = 0;
+
+	for (const auto& state : fs::dir(state_dir))
+	{
+		if (state.is_directory || !state.name.ends_with(".json"))
+		{
+			continue;
+		}
+
+		const std::string mod_name = state.name.substr(0, state.name.size() - 5);
+		const std::string mod_root = mods_dir + mod_name + "/";
+
+		if (!fs::is_dir(mod_root))
+		{
+			sys_log.warning("Mod '%s' is enabled but its folder is gone", mod_name);
+			continue;
+		}
+
+		// Every root the game reads from, not just the one it booted from.
+		//
+		// A disc title with an update installed reads from BOTH: the update at
+		// /dev_hdd0/game/<id>/ and the disc at /dev_bdvd/PS3_GAME/. game_dir is only the first
+		// of those, so a mod could replace an update file and never a disc file. Call of Duty:
+		// World at War is the case that showed it -- a mod's patch.ff applied correctly from
+		// the update while the nazi_zombie_*_patch.ff beside it on the disc was unreachable.
+		//
+		// Mounting the same relative path under both is safe: they are distinct virtual paths,
+		// the game asks for whichever one it wants, and a mount nothing asks for costs an entry
+		// in a table.
+		std::vector<std::string> roots{game_dir};
+		if (game_dir != "/dev_bdvd/PS3_GAME/" && !vfs::get("/dev_bdvd/PS3_GAME").empty())
+		{
+			roots.emplace_back("/dev_bdvd/PS3_GAME/");
+		}
+
+		// Iterative rather than recursive: the layout is user-supplied, and a pathological tree
+		// should cost a bounded walk rather than the stack.
+		std::vector<std::string> pending{""};
+		usz files = 0;
+
+		while (!pending.empty())
+		{
+			const std::string rel = std::move(pending.back());
+			pending.pop_back();
+
+			for (const auto& entry : fs::dir(mod_root + rel))
+			{
+				if (entry.name == "." || entry.name == "..")
+				{
+					continue;
+				}
+
+				const std::string child = rel + entry.name;
+
+				if (entry.is_directory)
+				{
+					pending.push_back(child + "/");
+					continue;
+				}
+
+				// PARAM.SFO is the title's identity, not its content: title id, version,
+				// category, the things the emulator decides what it is booting from. A package
+				// mod carries one because every package does, and mounting it makes the game
+				// claim to be whatever the mod was built from.
+				//
+				// Seen immediately: a Minecraft mod built for the PSN release (NPUB31419 v1.32)
+				// imported onto the disc release (BLUS31426 v1.84) replaced the title's own SFO
+				// and the game stopped booting with "failed to load and cannot continue".
+				//
+				// A mod may legitimately want to change an icon or the background music, so
+				// only this one file is refused rather than the whole metadata set.
+				if (rel.empty() && entry.name == "PARAM.SFO")
+				{
+					sys_log.warning("Mod '%s': not mounting PARAM.SFO, a mod cannot redefine the title", mod_name);
+					continue;
+				}
+
+				if (++mounted > max_mounts)
+				{
+					sys_log.error("Mod '%s': too many files, stopped at %d mounts", mod_name, max_mounts);
+					return;
+				}
+
+				for (const std::string& root : roots)
+				{
+					vfs::mount(root + child, mod_root + child, false);
+				}
+				files++;
+			}
+		}
+
+		sys_log.success("Mod '%s' applied: %d file(s) over %s%s", mod_name, files, game_dir,
+			roots.size() > 1 ? " and /dev_bdvd/PS3_GAME/" : "");
+	}
+}
+
 static void fixup_settings(const psf::registry* _psf)
 {
 	// Disable some incompatible settings in headless mode
@@ -705,6 +855,10 @@ void Emulator::Init()
 	make_path_verbose(fs::get_cache_dir() + "spu_progs/", false);
 	make_path_verbose(fs::get_cache_dir() + "ppu_progs/", false);
 	make_path_verbose(fs::get_parent_dir(get_savestate_file("NO_ID", "/NO_FILE", -1, -1)), false);
+
+	// Reclaim savestate temps stranded by a process killed mid-write. Startup is the only point at
+	// which none can be in flight.
+	clean_orphaned_savestate_temps();
 	make_path_verbose(fs::get_config_dir() + "captures/", false);
 	make_path_verbose(fs::get_config_dir() + "sounds/", false);
 	make_path_verbose(patch_engine::get_patches_path(), false);
@@ -946,6 +1100,7 @@ bool Emulator::BootRsxCapture(const std::string& path)
 	g_cfg.video.disable_on_disk_shader_cache.set(true);
 
 	vm::init();
+	vm::reserve_map(vm::main, 0, 0x1FFF0000, vm::page_64k_size);
 	g_fxo->init(false);
 
 	// Initialize progress dialog
@@ -1006,6 +1161,7 @@ bool Emulator::BootBigPictureMode()
 	g_cfg.video.disable_on_disk_shader_cache.set(true);
 
 	vm::init();
+	vm::reserve_map(vm::main, 0, 0x1FFF0000, vm::page_64k_size);
 	g_fxo->init(false);
 
 	// Initialize progress dialog
@@ -2256,6 +2412,7 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			GetCallbacks().on_ready();
 			ensure(g_fxo->init<main_ppu_module<lv2_obj>>());
 			vm::init();
+			vm::reserve_map(vm::main, 0, 0x1FFF0000, vm::page_64k_size);
 			m_force_boot = false;
 
 			// Force LLVM recompiler
@@ -3042,6 +3199,9 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			{
 				sys_log.error("Booting HG category outside of HDD0!");
 			}
+
+			// m_dir is final by here and the game has read nothing yet.
+			apply_game_mods(GetTitleID(), m_dir);
 
 			const auto _main = ensure(g_fxo->init<main_ppu_module<lv2_obj>>());
 
@@ -4823,16 +4983,30 @@ u32 Emulator::AddGamesFromDir(std::string path)
 
 	fmt::trim_back(path, fs::delim);
 
+	// Don't write "games.yml" on each added game: it is saved once, at the end of the scan.
+	// NOTE: this function is recursive, so the previous value is restored instead of being forced back to enabled,
+	//       otherwise a nested scan would re-enable the write for the remaining part of the outer one
+	const bool save_on_dirty = m_games_config.is_save_on_dirty();
 	m_games_config.set_save_on_dirty(false);
 
+	// A game was found on a path if it has just been added or if it was already registered
+	const auto game_found = [](game_boot_result error)
+	{
+		return error == game_boot_result::no_errors || error == game_boot_result::already_added;
+	};
+
 	// search for a game on the provided path first (game on ISO file or on folder type)
-	if (const game_boot_result error = AddGame(path); error == game_boot_result::no_errors)
+	const game_boot_result path_error = AddGame(path);
+
+	if (path_error == game_boot_result::no_errors)
 	{
 		games_added++;
 	}
 
-	// search for games on subfolders only if not nested inside a discovered game folder
-	if (games_added == 0)
+	// search for games on subfolders only if not nested inside a discovered game folder, otherwise the same title
+	// would be registered again through a different path (e.g. the root of a BD drive "E:/" is registered as a raw
+	// device, its subfolder "E:/PS3_GAME" would register it again as a disc folder)
+	if (!game_found(path_error))
 	{
 		std::vector<fs::dir_entry> entries;
 
@@ -4858,16 +5032,20 @@ u32 Emulator::AddGamesFromDir(std::string path)
 
 				const std::string dir_path = path + "/" + dir_entry.name;
 
-				if (!dir_entry.is_directory && !is_iso_file(dir_path))
+				// The outcome is handed over to "AddGame()" so that the ISO is not recognized twice: each check
+				// reads the volume descriptor, which is a physical read when the path points to an optical drive
+				const bool is_iso = !dir_entry.is_directory && is_iso_file(dir_path);
+
+				if (!dir_entry.is_directory && !is_iso)
 				{
 					continue;
 				}
 
-				if (const game_boot_result error = AddGame(dir_path); error == game_boot_result::no_errors)
+				if (const game_boot_result error = AddGame(dir_path, is_iso); error == game_boot_result::no_errors)
 				{
 					games_added++;
 				}
-				else if (g_cfg.misc.use_recursive_scan)
+				else if (!game_found(error) && g_cfg.misc.use_recursive_scan)
 				{
 					games_added += AddGamesFromDir(dir_path);
 				}
@@ -4882,9 +5060,10 @@ u32 Emulator::AddGamesFromDir(std::string path)
 		});
 	}
 
-	m_games_config.set_save_on_dirty(true);
+	m_games_config.set_save_on_dirty(save_on_dirty);
 
-	if (m_games_config.is_dirty() && !m_games_config.save())
+	// Flush the changes only when the outermost scan is done
+	if (save_on_dirty && m_games_config.is_dirty() && !m_games_config.save())
 	{
 		sys_log.error("Failed to save games.yml after adding games");
 	}
@@ -4892,14 +5071,14 @@ u32 Emulator::AddGamesFromDir(std::string path)
 	return games_added;
 }
 
-game_boot_result Emulator::AddGame(std::string path)
+game_boot_result Emulator::AddGame(std::string path, bool is_iso)
 {
 	fmt::trim_back(path, fs::delim);
 
 	// Handle files directly
 	if (!fs::is_dir(path) || fs::get_optical_raw_device(path))
 	{
-		return AddGameToYml(path);
+		return AddGameToYml(path, is_iso);
 	}
 
 	game_boot_result result = game_boot_result::nothing_to_boot;
@@ -4920,7 +5099,7 @@ game_boot_result Emulator::AddGame(std::string path)
 			continue;
 		}
 
-		if (entry.is_directory && std::regex_match(entry.name, std::regex("^PS3_GM[[:digit:]]{2}$")))
+		if (entry.is_directory && rpcs3::utils::is_ps3_gm_dir_name(entry.name))
 		{
 			const std::string elf = path + "/" + entry.name + "/USRDIR/EBOOT.BIN";
 
@@ -4941,7 +5120,7 @@ game_boot_result Emulator::AddGame(std::string path)
 	return result;
 }
 
-game_boot_result Emulator::AddGameToYml(std::string path)
+game_boot_result Emulator::AddGameToYml(std::string path, bool is_iso)
 {
 	fmt::trim_back(path, fs::delim);
 
@@ -4970,7 +5149,9 @@ game_boot_result Emulator::AddGameToYml(std::string path)
 	}
 
 	std::unique_ptr<iso_archive> archive;
-	if (is_iso_file(path))
+
+	// Skip the check if the caller already recognized the path as an ISO: it would read the volume descriptor again
+	if (is_iso || is_iso_file(path))
 	{
 		archive = std::make_unique<iso_archive>(path);
 
@@ -5237,7 +5418,7 @@ void Emulator::GetBdvdDir(std::string& bdvd_dir, std::string& sfb_dir, std::stri
 			continue;
 		}
 
-		if (dir_name == "PS3_GAME"sv || std::regex_match(dir_name.begin(), dir_name.end(), std::regex("^PS3_GM[[:digit:]]{2}$")))
+		if (dir_name == "PS3_GAME"sv || rpcs3::utils::is_ps3_gm_dir_name(dir_name))
 		{
 			if (IsValidSfb(parent_dir + "/PS3_DISC.SFB"))
 			{

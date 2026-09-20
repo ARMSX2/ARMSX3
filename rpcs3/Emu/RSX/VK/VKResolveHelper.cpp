@@ -90,6 +90,7 @@ namespace vk
 	}
 
 	std::unique_ptr<vk::gfx_shuffle_pass> g_gfx_shuffle;
+	std::unique_ptr<vk::gfx_shuffle_pass> g_gfx_shuffle_32;
 	std::unique_ptr<vk::gfx_gather_d24x8_pass> g_gfx_gather_d24x8[2];
 
 	template <typename T, typename ...Args>
@@ -240,21 +241,14 @@ namespace vk
 		}
 	}
 
-	bool gfx_shuffle_32_16(const vk::command_buffer& cmd_, vk::buffer* data, u32 data_length)
+	// Shared worker for both graphics-pipe byteswaps. The staging is identical -- pack the buffer
+	// into an R32_UINT image, draw once, copy it back -- and only the shader's swap expression and
+	// the cached pass differ, so keeping one copy stops the two from drifting apart.
+	static bool gfx_shuffle_buffer(const vk::command_buffer& cmd_, vk::buffer* data, u32 data_offset,
+		u32 data_length, std::unique_ptr<vk::gfx_shuffle_pass>& pass, vk::gfx_shuffle_pass::mode swap_mode,
+		u32 src_slot, u32 dst_slot)
 	{
-		// Opt-out lever. This replaces a path that has worked on every other GPU for years, and it
-		// can only be exercised on hardware, so leave a way to get the old behaviour back without a
-		// rebuild: ARMSX3_GFX_SHUFFLE=0 in driver_env.txt. Function-local on purpose -- at
-		// namespace scope this would initialise before driver_env.txt is parsed and read as unset.
-		static const bool s_enabled = []()
-		{
-			const char* v = std::getenv("ARMSX3_GFX_SHUFFLE");
-			const bool off = v && v[0] == '0';
-			if (off) rsx_log.error("ARMSX3_GFX_SHUFFLE=0: falling back to the compute byteswap.");
-			return !off;
-		}();
-
-		if (!s_enabled || !gfx_conversion_available() || data_length < 4 || (data_length % 4) != 0)
+		if (!gfx_conversion_available() || data_length < 4 || (data_length % 4) != 0 || (data_offset % 4) != 0)
 		{
 			return false;
 		}
@@ -268,8 +262,8 @@ namespace vk
 		const u32 remainder = words % tex_w;
 		const u32 tex_h = full_rows + (remainder ? 1 : 0);
 
-		auto src_img = vk::get_shuffle_helper(0, VK_FORMAT_R32_UINT, tex_w, tex_h);
-		auto dst_img = vk::get_shuffle_helper(1, VK_FORMAT_R32_UINT, tex_w, tex_h);
+		auto src_img = vk::get_shuffle_helper(src_slot, VK_FORMAT_R32_UINT, tex_w, tex_h);
+		auto dst_img = vk::get_shuffle_helper(dst_slot, VK_FORMAT_R32_UINT, tex_w, tex_h);
 
 		if (!src_img || !dst_img)
 		{
@@ -284,18 +278,25 @@ namespace vk
 
 		if (full_rows)
 		{
-			regions.push_back({ 0, 0, 0, layer, { 0, 0, 0 }, { tex_w, full_rows, 1 } });
+			regions.push_back({ data_offset, 0, 0, layer, { 0, 0, 0 }, { tex_w, full_rows, 1 } });
 		}
 
 		if (remainder)
 		{
-			regions.push_back({ u64(full_rows) * tex_w * 4, 0, 0, layer,
+			regions.push_back({ data_offset + u64(full_rows) * tex_w * 4, 0, 0, layer,
 				{ 0, static_cast<s32>(full_rows), 0 }, { remainder, 1, 1 } });
 		}
 
-		vk::insert_buffer_memory_barrier(cmd, data->value, 0, data_length,
-			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+		// Entry and exit barriers are deliberately wider than any one caller needs. The three sites
+		// that reach here differ in what wrote the buffer before (a readback copy, an upload copy,
+		// or an earlier kernel) and in what reads it after (a transfer read, a tiling dispatch),
+		// and a self-contained contract means none of them has to be re-reasoned when the swap
+		// moves between pipes.
+		vk::insert_buffer_memory_barrier(cmd, data->value, data_offset, data_length,
+			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT,
+			VK_ACCESS_TRANSFER_READ_BIT);
 
 		src_img->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 		vkCmdCopyBufferToImage(cmd, data->value, src_img->value, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -307,8 +308,8 @@ namespace vk
 		std::vector<vk::image*> surface = { dst_img };
 		auto renderpass = vk::get_renderpass(dev, vk::get_renderpass_key(surface));
 
-		initialize_pass(g_gfx_shuffle, dev);
-		g_gfx_shuffle->run(cmd, dst_img,
+		initialize_pass(pass, dev, swap_mode);
+		pass->run(cmd, dst_img,
 			src_img->get_view(rsx::default_remap_vector.with_encoding(VK_REMAP_IDENTITY)),
 			tex_w, tex_h, renderpass);
 
@@ -319,7 +320,50 @@ namespace vk
 		vkCmdCopyImageToBuffer(cmd, dst_img->value, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, data->value,
 			regions.size(), regions.data());
 
+		vk::insert_buffer_memory_barrier(cmd, data->value, data_offset, data_length,
+			VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT,
+			VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT);
+
 		return true;
+	}
+
+	bool gfx_shuffle_32_16(const vk::command_buffer& cmd_, vk::buffer* data, u32 data_length)
+	{
+		// Opt-out lever. This replaces a path that has worked on every other GPU for years, and it
+		// can only be exercised on hardware, so leave a way to get the old behaviour back without a
+		// rebuild: ARMSX3_GFX_SHUFFLE=0 in driver_env.txt. Function-local on purpose -- at
+		// namespace scope this would initialise before driver_env.txt is parsed and read as unset.
+		static const bool s_enabled = []()
+		{
+			const char* v = std::getenv("ARMSX3_GFX_SHUFFLE");
+			const bool off = v && v[0] == '0';
+			if (off) rsx_log.error("ARMSX3_GFX_SHUFFLE=0: falling back to the compute byteswap.");
+			return !off;
+		}();
+
+		return s_enabled &&
+			gfx_shuffle_buffer(cmd_, data, 0, data_length, g_gfx_shuffle,
+				vk::gfx_shuffle_pass::mode::rotate_16, 0, 1);
+	}
+
+	bool gfx_shuffle_32(const vk::command_buffer& cmd_, vk::buffer* data, u32 data_offset, u32 data_length)
+	{
+		// Its own lever rather than sharing ARMSX3_GFX_SHUFFLE, so that if one of the two regresses
+		// it can be turned off without taking the other -- and the 32<->16 path already has device
+		// time behind it that this one does not.
+		static const bool s_enabled = []()
+		{
+			const char* v = std::getenv("ARMSX3_GFX_SHUFFLE32");
+			const bool off = v && v[0] == '0';
+			if (off) rsx_log.error("ARMSX3_GFX_SHUFFLE32=0: falling back to the compute byteswap.");
+			return !off;
+		}();
+
+		return s_enabled &&
+			gfx_shuffle_buffer(cmd_, data, data_offset, data_length, g_gfx_shuffle_32,
+				vk::gfx_shuffle_pass::mode::bswap_32, 5, 6);
 	}
 
 	bool gfx_gather_d24x8(const vk::command_buffer& cmd_, const vk::buffer* data, u32 data_offset,

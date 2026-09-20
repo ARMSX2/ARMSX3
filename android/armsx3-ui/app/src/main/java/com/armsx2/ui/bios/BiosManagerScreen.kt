@@ -50,10 +50,9 @@ import net.rpcsx.RPCSX
  * showed the firmware you had already installed, because it was reading a BIOS
  * directory that does not exist here instead of asking FirmwareRepository.
  *
- * `game` is accepted and ignored so the existing navigation route still compiles.
  */
 @Composable
-fun BiosManagerScreen(onBack: () -> Unit, game: com.armsx2.GameInfo? = null) {
+fun BiosManagerScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val version by FirmwareRepository.version
     val status by FirmwareRepository.status

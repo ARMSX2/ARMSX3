@@ -124,6 +124,55 @@ class SaveManagerViewModel(application: Application) : AndroidViewModel(applicat
      * global manager with nothing running it reports that. Slots are chosen automatically (first
      * free of 0..9) so it never silently overwrites an existing save.
      */
+    /**
+     * Delete everything under the savestate directories, recognised or not.
+     *
+     * The per-entry delete can only remove what the list shows, and the list can only show files it
+     * recognises. That is no help to someone whose directory is full of things it does not: a
+     * savestate interrupted part-way leaves a file that is neither a finished state nor anything the
+     * manager will offer, and #30 reported gigabytes of them after an autosave crashed repeatedly.
+     * The startup sweep clears the one shape we know about; this clears the rest.
+     *
+     * Every removed name is logged. We still do not know what that reporter's files were called --
+     * the sweep did not match them and neither does the scan -- so the next person to run this tells
+     * us, instead of us guessing at a pattern again.
+     */
+    fun wipeAll() {
+        viewModelScope.launch {
+            val (count, bytes, failed) = withContext(Dispatchers.IO) {
+                var n = 0
+                var size = 0L
+                var bad = 0
+
+                savestateRoots().filter { it.isDirectory }.forEach { root ->
+                    root.walkBottomUp().forEach { f ->
+                        if (f == root) return@forEach
+                        val len = if (f.isFile) f.length() else 0L
+                        if (runCatching { f.delete() }.getOrDefault(false)) {
+                            if (f.isFile || len > 0) {
+                                n++
+                                size += len
+                            }
+                            android.util.Log.i("ARMSX3", "wipeAll: removed ${f.name} ($len bytes)")
+                        } else if (f.isFile) {
+                            bad++
+                            android.util.Log.w("ARMSX3", "wipeAll: could NOT remove ${f.absolutePath}")
+                        }
+                    }
+                }
+                Triple(n, size, bad)
+            }
+
+            state.value = state.value.copy(
+                message = if (failed > 0)
+                    I18n.get("savestate.wipe.partial").format(count, formatBytes(bytes), failed)
+                else
+                    I18n.get("savestate.wipe.done").format(count, formatBytes(bytes)),
+            )
+            refresh()
+        }
+    }
+
     fun importState(uri: android.net.Uri) {
         viewModelScope.launch {
             val slot = withContext(Dispatchers.IO) { importSaveStateToNextFreeSlot(getApplication(), uri) }
@@ -157,11 +206,10 @@ class SaveManagerViewModel(application: Application) : AndroidViewModel(applicat
                 ?.takeIf(File::exists)
         }
 
-        val roots = listOf("sstates", "savestates")
-            .map { File(MainActivityRuntime.assetCopyRoot(getApplication()), it) }
+        val roots = savestateRoots()
         val discovered = roots.flatMap { root ->
             if (!root.isDirectory) emptyList()
-            else root.walkTopDown().filter { it.isFile && it.extension.equals("p2s", true) }.toList()
+            else root.walkTopDown().filter { it.isFile && isSaveState(it) }.toList()
         }
         val allFiles = (activePaths + discovered)
             .distinctBy { it.absolutePath.lowercase() }
@@ -188,6 +236,24 @@ class SaveManagerViewModel(application: Application) : AndroidViewModel(applicat
         )
     }
 
+    /**
+     * Where savestates can live. "sstates" is the ARMSX2 name and is kept so an install carried over
+     * from it is not left with an unreachable directory; the core writes "savestates".
+     */
+    private fun savestateRoots(): List<File> {
+        val root = MainActivityRuntime.assetCopyRoot(getApplication())
+        return listOf("config/savestates", "savestates", "sstates")
+            .map { File(root, it) }
+            .distinctBy { it.absolutePath }
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes >= 1024L * 1024 * 1024 -> "%.2f GB".format(bytes / (1024.0 * 1024 * 1024))
+        bytes >= 1024L * 1024 -> "%.0f MB".format(bytes / (1024.0 * 1024))
+        bytes > 0 -> "%.0f KB".format(bytes / 1024.0)
+        else -> "0 KB"
+    }
+
     private fun decodePreview(file: File): Bitmap? {
         val bytes = runCatching { NativeApp.getSaveStateImage(file.absolutePath) }.getOrNull() ?: return null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -200,15 +266,39 @@ class SaveManagerViewModel(application: Application) : AndroidViewModel(applicat
         })
     }
 
+    // The core writes <TITLE>_<digits>.SAVESTAT and compresses it, so the last extension is "zst"
+    // or "gz" rather than a fixed savestate extension -- File.extension cannot identify one. This
+    // scanned for "p2s", the PCSX2 extension, which is an ARMSX2 leftover: the walk below matched
+    // nothing on any device, so the manager only ever listed the running game's numbered slots and
+    // reported "no savestates" from the library. Issue #123.
+    private fun isSaveState(file: File): Boolean {
+        val name = file.name
+        return SAVESTATE_SUFFIXES.any { name.endsWith(it, ignoreCase = true) }
+    }
+
     private fun slotFrom(file: File): Int? = SLOT_PATTERN.find(file.name)?.groupValues?.getOrNull(1)?.toIntOrNull()
 
-    private fun serialFrom(file: File): String = file.name.substringBefore(" (").ifBlank {
-        file.nameWithoutExtension.substringBeforeLast('.')
+    // Both layouts put the title id in the directory, never in the file name: the core's rolling
+    // states live in savestates/<TITLE>/ and the numbered slots in savestates/<TITLE>/armsx3_slots/.
+    // Reading it from there beats parsing the name, which is what the old " (" split was doing for
+    // PCSX2's "SLUS-12345 (Title).00.p2s" convention and which no ARMSX3 file has ever matched.
+    private fun serialFrom(file: File): String {
+        val parent = file.parentFile
+        val dir = if (parent?.name.equals(SLOT_DIR, true)) parent?.parentFile else parent
+        return dir?.name.orEmpty().ifBlank {
+            file.name.substringBefore(".SAVESTAT").substringBeforeLast('_')
+        }
     }
 
     private companion object {
         const val SLOT_COUNT = 10
-        val SLOT_PATTERN = Regex("\\.([0-9]{2})\\.p2s$", RegexOption.IGNORE_CASE)
+        const val SLOT_DIR = "armsx3_slots"
+
+        // Ordered longest-first so ".SAVESTAT" cannot shadow the compressed forms.
+        val SAVESTATE_SUFFIXES = listOf(".SAVESTAT.zst", ".SAVESTAT.gz", ".SAVESTAT")
+
+        // armsx3_slot_find writes slot<N>.SAVESTAT with whichever extension the core produced.
+        val SLOT_PATTERN = Regex("^slot([0-9]+)\\.SAVESTAT", RegexOption.IGNORE_CASE)
     }
 }
 

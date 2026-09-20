@@ -146,6 +146,13 @@ object Rpcs3Bridge {
 
         initialize(root)
 
+        // After initialize(), which brings up the filesystem layer the device registers into,
+        // and from here rather than from core startup: the bridge looks up a Kotlin class, and
+        // that only resolves on a thread Java started.
+        com.armsx2.storage.ContentUri.attach(context)
+        runCatching { RPCSX.instance.installStorageBridge() }
+        runCatching { RPCSX.instance.installSoundBridge() }
+
         // Restore firmware state from <root>/fw.json. Without this the version
         // and status start at None on every launch, so setup would demand a PUP
         // again even though dev_flash is already populated.
@@ -242,7 +249,12 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun boot(path: String): Boolean {
-        val target = if (path.isNotEmpty()) path else {
+        // A game in a folder the user picked is recorded by document URI, because that is what
+        // the library can read its cover and its SFO through. The core opens paths, so this is
+        // where the two meet: the URI becomes a path under the SAF device, which resolves back
+        // through the same grant. Anything already a path is returned unchanged.
+        val requested = com.armsx2.storage.ContentUri.bootPathFor(path)
+        val target = if (requested.isNotEmpty()) requested else {
             val vsh = File(RPCSX.rootDirectory + "config/dev_flash/vsh/module/vsh.self")
             if (!vsh.isFile) {
                 lastBootError = "firmware not installed"
@@ -323,8 +335,38 @@ object Rpcs3Bridge {
         startSixaxis()
 
         try {
-            while (!stopRequested && RPCSX.getState() != EmulatorState.Stopped) {
-                Thread.sleep(POLL_INTERVAL_MS)
+            while (!stopRequested) {
+                if (RPCSX.getState() != EmulatorState.Stopped) {
+                    Thread.sleep(POLL_INTERVAL_MS)
+                    continue
+                }
+
+                // Stopped is not always the end. Saving a state kills the VM and restarts it
+                // from the state just written, so returning here dropped the user to the
+                // library mid-save: the core came back up behind the UI, audio kept playing,
+                // and the next tap booted a second VM on top of a live one. The core says so
+                // itself through the continuous-mode flag it arms alongside the restart.
+                if (!restartPending()) break
+
+                // Bounded, because a restart that never arrives must not wedge the caller the
+                // way waiting purely on state once did. Generous, because this covers a full
+                // teardown and reload of a PS3 title and a savestate cycle has been measured
+                // at over a minute on a large game.
+                var waited = 0L
+                while (!stopRequested && RPCSX.getState() == EmulatorState.Stopped &&
+                    waited < RESTART_SETTLE_TIMEOUT_MS
+                ) {
+                    Thread.sleep(POLL_INTERVAL_MS)
+                    waited += POLL_INTERVAL_MS
+                }
+
+                if (RPCSX.getState() == EmulatorState.Stopped) {
+                    android.util.Log.w(
+                        "ARMSX3",
+                        "restart was armed but the core is still stopped after ${waited}ms",
+                    )
+                    break
+                }
             }
         } finally {
             // finally, not after the loop: the abnormal-teardown path above leaves via
@@ -336,6 +378,16 @@ object Rpcs3Bridge {
 
         return true
     }
+
+    private fun restartPending(): Boolean =
+        runCatching { RPCSX.instance.isRestartPending() }.getOrDefault(false)
+
+    /**
+     * How long to wait for a save-state restart to bring the emulator back up. A savestate
+     * cycle is a full teardown and reload, measured at over a minute on a large title, so this
+     * is far longer than the boot settle above rather than a tidier round number.
+     */
+    private const val RESTART_SETTLE_TIMEOUT_MS = 180_000L
 
     /**
      * How long to wait for the emulator to leave Stopped after a successful boot.
@@ -844,6 +896,19 @@ object Rpcs3Bridge {
      * Empty when no game is running, since slots are per title and the core cannot resolve
      * which title's slots to answer for.
      */
+    /**
+     * When this slot was written, as epoch millis, or 0 when it holds nothing.
+     *
+     * The state file's own timestamp rather than anything recorded inside it: the core stamps
+     * a creation time into the savestate, but reading it back means decompressing a header
+     * for every one of ten tiles each time the picker opens.
+     */
+    @JvmStatic
+    fun slotSavedAt(slot: Int): Long = runCatching {
+        val path = slotFilePath(slot) ?: return 0L
+        java.io.File(path).takeIf { it.isFile }?.lastModified() ?: 0L
+    }.getOrDefault(0L)
+
     /**
      * Slot preview as PNG bytes, or null.
      *

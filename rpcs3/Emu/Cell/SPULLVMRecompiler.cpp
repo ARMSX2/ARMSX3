@@ -734,6 +734,7 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 
 		const auto x = m_ir->CreateZExt(val, get_type<u64[4]>());
 
+#ifdef ARCH_X64
 		// Use integer operations here so LLVM can fold the masks into VPTERNLOG
 		if (m_use_avx512)
 		{
@@ -743,6 +744,7 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 			const auto e = m_ir->CreateAnd(val, 0x7f800000);
 			return uint64_as_double(m_ir->CreateSelect(m_ir->CreateIsNotNull(e), f, s));
 		}
+#endif
 
 		const auto s = m_ir->CreateShl(m_ir->CreateAnd(x, 0x80000000), 32);
 		const auto a = m_ir->CreateAnd(x, 0x7fffffff);
@@ -757,6 +759,7 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 	{
 		ensure(val && val->getType() == get_type<f64[4]>());
 
+#ifdef ARCH_X64
 		// Use integer operations here so LLVM can fold the masks into VPTERNLOG
 		if (m_use_avx512)
 		{
@@ -769,6 +772,7 @@ class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 			const auto r = m_ir->CreateOr(c, m_ir->CreateAnd(d, 0x8000000000000000));
 			return uint64_as_double(m_ir->CreateSelect(n, r, splat<u64[4]>(0).eval(m_ir)));
 		}
+#endif
 
 		const auto smax = uint64_as_double(splat<u64[4]>(0x47ffffffe0000000).eval(m_ir));
 		const auto smin = uint64_as_double(splat<u64[4]>(0x3810000000000000).eval(m_ir));
@@ -1778,6 +1782,13 @@ public:
 		if (auto& cache = g_fxo->get<spu_cache>(); cache && g_cfg.core.spu_cache && !add_loc->cached.exchange(1))
 		{
 			add_to_file = true;
+
+			if (g_cfg.core.spu_debug)
+			{
+				add_to_file = false;
+				cache.add(func);
+				spu_log.success("New SPU block detected (size=%u)", func_size);
+			}
 		}
 
 		{
@@ -1966,6 +1977,7 @@ public:
 			[[maybe_unused]] u32 elements;
 			[[maybe_unused]] u32 dwords;
 
+#ifdef ARCH_X64
 			if (m_use_avx512)
 			{
 				stride = 64;
@@ -1979,6 +1991,7 @@ public:
 				dwords = 4;
 			}
 			else
+#endif
 			{
 				stride = 16;
 				elements = 4;
@@ -5554,6 +5567,9 @@ public:
 					}
 					}
 
+					u32 stride = 16;
+
+#ifdef ARCH_X64
 					// Check if the LS address is constant and 256 bit aligned
 					u64 clsa = umax;
 
@@ -5562,13 +5578,12 @@ public:
 						clsa = ci->getZExtValue();
 					}
 
-					u32 stride = 16;
-
 					if (m_use_avx && csize >= 32 && !(clsa % 32))
 					{
 						vtype = get_type<u8[32]>();
 						stride = 32;
 					}
+#endif
 
 					if (csize > 0 && csize <= 16)
 					{
@@ -5862,7 +5877,23 @@ public:
 
 	void ABSDB(spu_opcode_t op)
 	{
+		const auto matches_compare = [&](auto val, auto MP)
+		{
+			using VT = typename decltype(MP)::type;
+			auto [ok, x] = match_expr(val, sext<VT>(match<bool[std::extent_v<VT>]>()));
+			return ok;
+		};
+
 		const auto [a, b] = get_vrs<u8[16]>(op.ra, op.rb);
+
+		if (match_vr<s8[16], s16[8], s32[4], s64[2]>(op.ra, matches_compare) ||
+			match_vr<s8[16], s16[8], s32[4], s64[2]>(op.rb, matches_compare))
+		{
+			// 0xff - x = ~x
+			set_vr(op.rt, a ^ b);
+			return;
+		}
+
 		set_vr(op.rt, absd(a, b));
 	}
 
@@ -6433,7 +6464,17 @@ public:
 	template <typename TA>
 	static auto byteswap(TA&& a)
 	{
+#ifdef ARCH_ARM64
+// The byteswap shufflevector is usually transformed into a sequence of rev64 and ext
+// This is nice for saving on constants, but llvm refuses to turn the byteswap into tbl,
+// even when it's being called dozens of times in a loop, where the extra constant needed could easily be justified
+// The easy workaround is to just use tbl ourselves until upstream llvm fixes this issue
+// https://github.com/llvm/llvm-project/issues/223597 - Whatcookie
+		const auto indices = build<u8[16]>(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
+		return llvm_calli<u8[16], TA, decltype(indices)>{"llvm.aarch64.neon.tbl1.v16i8", {std::forward<TA>(a), indices}};
+#else
 		return zshuffle(std::forward<TA>(a), 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
+#endif
 	}
 
 	static auto rotqby_reverse_base()
@@ -6494,20 +6535,24 @@ public:
 				const auto sc = rotqby_reverse_base();
 				const auto sh = sc + (splat_scalar(b) >> 3);
 
+#ifdef ARCH_X64
 				if (m_use_avx512_icl)
 				{
 					return eval(vpermb(as, sh));
 				}
+#endif
 
 				return eval(pshufb_for_x86_and_tbl_for_aarch64(as, (sh & 0xf)));
 			}
 			const auto sc = rotqby_forward_base();
 			const auto sh = sc - (splat_scalar(b) >> 3);
 
+#ifdef ARCH_X64
 			if (m_use_avx512_icl)
 			{
 				return eval(vpermb(a, sh));
 			}
+#endif
 
 			return eval(pshufb_for_x86_and_tbl_for_aarch64(a, (sh & 0xf)));
 		});
@@ -6721,11 +6766,13 @@ public:
 			const auto sc = rotqby_reverse_base();
 			const auto sh = eval(sc + splat_scalar(b));
 
+#ifdef ARCH_X64
 			if (m_use_avx512_icl)
 			{
 				set_vr(op.rt, vpermb(as, sh));
 				return;
 			}
+#endif
 
 			set_vr(op.rt, pshufb_for_x86_and_tbl_for_aarch64(as, (sh & 0xf)));
 			return;
@@ -6734,11 +6781,13 @@ public:
 		const auto sc = rotqby_forward_base();
 		const auto sh = eval(sc - splat_scalar(b));
 
+#ifdef ARCH_X64
 		if (m_use_avx512_icl)
 		{
 			set_vr(op.rt, vpermb(a, sh));
 			return;
 		}
+#endif
 
 		set_vr(op.rt, pshufb_for_x86_and_tbl_for_aarch64(a, (sh & 0xf)));
 	}
@@ -6933,6 +6982,7 @@ public:
 
 	void SUMB(spu_opcode_t op)
 	{
+#ifdef ARCH_X64
 		if (m_use_avx512)
 		{
 			const auto [a, b] = get_vrs<u8[16]>(op.ra, op.rb);
@@ -6949,6 +6999,7 @@ public:
 			set_vr(op.rt, shuffle2(ax, bx, 0, 9, 2, 11, 4, 13, 6, 15));
 			return;
 		}
+#endif
 
 #ifdef ARCH_ARM64
 		if (m_use_dotprod)
@@ -7577,6 +7628,40 @@ public:
 			case 2:
 			case 1:
 			{
+				// Match 8-bit addition/subtraction idioms
+				const bool lhs_to_lo = mask == v128::from16p(0xff00);
+				if (lhs_to_lo || mask == v128::from16p(0x00ff))
+				{
+					const auto lhs = get_vr<u16[8]>(op.ra);
+					const auto rhs = get_vr<u16[8]>(op.rb);
+
+					const auto lo_op = lhs_to_lo ? lhs : rhs;
+					const auto hi_op = lhs_to_lo ? rhs : lhs;
+
+					// Fold: selb(add16(a, b & 0xff00), add16(a, b), low16_mask) => add8(a, b)
+					if (const auto [lo_match, add_a, add_b] = match_expr(lo_op, match<u16[8]>() + match<u16[8]>()); lo_match)
+					{
+						const auto [ab_hi_match] = match_expr(hi_op, add_a + (add_b & 0xff00));
+						const auto [ba_hi_match] = match_expr(hi_op, add_b + (add_a & 0xff00));
+
+						if (ab_hi_match || ba_hi_match)
+						{
+							set_vr(op.rt4, bitcast<u8[16]>(add_a) + bitcast<u8[16]>(add_b));
+							return;
+						}
+					}
+
+					// Fold: selb(sub16(a, b & 0xff00), sub16(a, b), low16_mask) => sub8(a, b)
+					if (const auto [lo_match, sub_a, sub_b] = match_expr(lo_op, match<u16[8]>() - match<u16[8]>()); lo_match)
+					{
+						if (const auto [hi_match] = match_expr(hi_op, sub_a - (sub_b & 0xff00)); hi_match)
+						{
+							set_vr(op.rt4, bitcast<u8[16]>(sub_a) - bitcast<u8[16]>(sub_b));
+							return;
+						}
+					}
+				}
+
 				set_vr(op.rt4, select(bitcast<s8[16]>(c) != 0, get_vr<u8[16]>(op.rb), get_vr<u8[16]>(op.ra)));
 				return;
 			}
@@ -7612,6 +7697,24 @@ public:
 			if (auto [ok, i] = match_expr(c, spu_get_insertion_shuffle_mask<VT>(match<u32>())); ok)
 			{
 				set_vr(op.rt4, insert(get_vr<VT>(op.rb), i, get_scalar(get_vr<VT>(op.ra))));
+				return true;
+			}
+
+			return false;
+		}))
+		{
+			return;
+		}
+		
+		if (match_vr<s8[16], s16[8], s32[4], s64[2]>(op.rc, [&](auto c, auto MP)
+		{
+			using VT = typename decltype(MP)::type;
+
+			// Indexes come from a compare
+			if (auto [ok, i] = match_expr(c, sext<VT>(match<bool[std::extent_v<VT>]>())); ok)
+			{
+				const auto a_splat = zshuffle(get_vr<u8[16]>(op.ra), 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15);
+				set_vr(op.rt4, select(bitcast<s8[16]>(c) != 0, splat<u8[16]>(0x80), a_splat));
 				return true;
 			}
 
@@ -8135,6 +8238,7 @@ public:
 	{
 		const auto known = known_opt.value_or(get_known_fp_class<3>(v, llvm::FPClassTest::fcNan | llvm::FPClassTest::fcInf));
 
+#ifdef ARCH_X64
 		// Avoid pessimation when full clamping isn't needed
 		if (m_use_avx512 && !(known.isKnownNeverNaN() && (known.isKnownNeverPosInfinity() || known.isKnownNeverNegInfinity())))
 		{
@@ -8142,6 +8246,7 @@ public:
 			// Normally doesn't cause issues as SNaN frequently gets quieted beforehand
 			return eval(vrangeps(v, fsplat<f32[4]>(std::bit_cast<f32, u32>(0x7f7fffff)), 0x2, 0xff));
 		}
+#endif
 
 		return eval(clamp_positive_smax(clamp_negative_smax(v, known), known));
 	}
@@ -8175,6 +8280,7 @@ public:
 			const auto a_sign = (a & splat<u32[4]>(0x80000000));
 			value_t<u32[4]> final_result = eval(splat<u32[4]>(0));
 
+#ifdef ARCH_X64
 			if (m_use_avx512)
 			{
 				value_t<u32[16]> lo_lut;
@@ -8185,6 +8291,7 @@ public:
 				final_result = vperm2d128From512(lo_lut, a_fraction, hi_lut);
 			}
 			else
+#endif
 			{
 				for (u32 i = 0; i < 4; i++)
 				{
@@ -8863,6 +8970,7 @@ public:
 					return eval(select(fcmp_uno(b != fsplat<f32[4]>(0.)), normal_fma, c));
 				}
 
+#ifdef ARCH_X64
 				// Same number of operations well preventing a serial predicate chain pessimization
 				if (m_use_avx512)
 				{
@@ -8871,6 +8979,7 @@ public:
 					const auto cb = vfixupimmps(b, a, splat<u32[4]>(0x00000800u), 0, 0xff);
 					return fma32x4(ca, cb, c, a_known, b_known);
 				}
+#endif
 
 				const auto normal_fma = fma32x4(a, b, c, a_known, b_known);
 				const auto a_cmp = fcmp_uno(a != fsplat<f32[4]>(0.));
@@ -8883,6 +8992,7 @@ public:
 			}
 		});
 
+#ifdef ARCH_X64
 		if (m_use_avx512)
 		{
 			register_intrinsic("spu_re_acc", [&](llvm::CallInst* ci)
@@ -8896,6 +9006,7 @@ public:
 			});
 		}
 		else
+#endif
 		{
 			register_intrinsic("spu_re_acc", [&](llvm::CallInst* ci)
 			{
@@ -9250,6 +9361,7 @@ public:
 				const auto a_sign = (a & splat<u32[4]>(0x80000000));
 				value_t<u32[4]> b = eval(splat<u32[4]>(0));
 
+#ifdef ARCH_X64
 				if (m_use_avx512)
 				{
 					value_t<u32[16]> lo_lut;
@@ -9260,6 +9372,7 @@ public:
 					b = vperm2d128From512(lo_lut, a_fraction, hi_lut);
 				}
 				else
+#endif
 				{
 					for (u32 i = 0; i < 4; i++)
 					{
@@ -9533,6 +9646,7 @@ public:
 
 			value_t<s32[4]> r;
 
+#ifdef ARCH_X64
 			if (m_use_avx512)
 			{
 				const auto sc = eval(bitcast<f32[4]>(max(bitcast<s32[4]>(a),splat<s32[4]>(0x0))));
@@ -9540,6 +9654,7 @@ public:
 				set_vr(op.rt, r);
 				return;
 			}
+#endif
 
 			r.value = m_ir->CreateFPToUI(a.value, get_type<s32[4]>());
 			set_vr(op.rt, select(bitcast<s32[4]>(a) > splat<s32[4]>(((32 + 127) << 23) - 1), splat<s32[4]>(-1), r & ~(bitcast<s32[4]>(a) >> 31)));
@@ -10063,6 +10178,7 @@ public:
 		}
 
 
+#ifdef ARCH_X64
 		// Check sign bit instead (optimization)
 		if (match_vr<s32[4], s64[2]>(op.rt, [&](auto c, auto MP)
 		{
@@ -10084,6 +10200,7 @@ public:
 			return;
 		}
 
+#endif
 		const auto cond = eval(extract(get_vr(op.rt), 3) == 0);
 		const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
 		const auto target = add_block_indirect(op, addr);
@@ -10124,6 +10241,7 @@ public:
 		}
 
 
+#ifdef ARCH_X64
 		// Check sign bit instead (optimization)
 		if (match_vr<s32[4], s64[2]>(op.rt, [&](auto c, auto MP)
 		{
@@ -10145,6 +10263,7 @@ public:
 			return;
 		}
 
+#endif
 		const auto cond = eval(extract(get_vr(op.rt), 3) != 0);
 		const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
 		const auto target = add_block_indirect(op, addr);
@@ -10155,6 +10274,7 @@ public:
 	{
 		if (m_block) m_block->block_end = m_ir->GetInsertBlock();
 
+#ifdef ARCH_X64
 		// Check sign bits of 2 vector elements (optimization)
 		if (match_vr<s8[16], s16[8], s32[4], s64[2]>(op.rt, [&](auto c, auto MP)
 		{
@@ -10176,6 +10296,7 @@ public:
 			return;
 		}
 
+#endif
 		const auto cond = eval(extract(get_vr<u16[8]>(op.rt), 6) == 0);
 		const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
 		const auto target = add_block_indirect(op, addr);
@@ -10186,6 +10307,7 @@ public:
 	{
 		if (m_block) m_block->block_end = m_ir->GetInsertBlock();
 
+#ifdef ARCH_X64
 		// Check sign bits of 2 vector elements (optimization)
 		if (match_vr<s8[16], s16[8], s32[4], s64[2]>(op.rt, [&](auto c, auto MP)
 		{
@@ -10207,6 +10329,7 @@ public:
 			return;
 		}
 
+#endif
 		const auto cond = eval(extract(get_vr<u16[8]>(op.rt), 6) != 0);
 		const auto addr = eval(extract(get_vr(op.ra), 3) & 0x3fffc);
 		const auto target = add_block_indirect(op, addr);
@@ -10383,6 +10506,7 @@ public:
 		}
 
 
+#ifdef ARCH_X64
 		// Check sign bit instead (optimization)
 		if (match_vr<s32[4], s64[2]>(op.rt, [&](auto c, auto MP)
 		{
@@ -10406,6 +10530,7 @@ public:
 			return;
 		}
 
+#endif
 		if (target != m_pos + 4)
 		{
 			m_block->block_end = m_ir->GetInsertBlock();
@@ -10458,6 +10583,7 @@ public:
 			}
 		}
 
+#ifdef ARCH_X64
 		// Check sign bit instead (optimization)
 		if (match_vr<s32[4], s64[2]>(op.rt, [&](auto c, auto MP)
 		{
@@ -10481,6 +10607,7 @@ public:
 			return;
 		}
 
+#endif
 		if (target != m_pos + 4)
 		{
 			m_block->block_end = m_ir->GetInsertBlock();
@@ -10502,6 +10629,7 @@ public:
 
 		const u32 target = spu_branch_target(m_pos, op.i16);
 
+#ifdef ARCH_X64
 		// Check sign bits of 2 vector elements (optimization)
 		if (match_vr<s8[16], s16[8], s32[4], s64[2]>(op.rt, [&](auto c, auto MP)
 		{
@@ -10525,6 +10653,7 @@ public:
 			return;
 		}
 
+#endif
 		if (target != m_pos + 4)
 		{
 			m_block->block_end = m_ir->GetInsertBlock();
@@ -10546,6 +10675,7 @@ public:
 
 		const u32 target = spu_branch_target(m_pos, op.i16);
 
+#ifdef ARCH_X64
 		// Check sign bits of 2 vector elements (optimization)
 		if (match_vr<s8[16], s16[8], s32[4], s64[2]>(op.rt, [&](auto c, auto MP)
 		{
@@ -10569,6 +10699,7 @@ public:
 			return;
 		}
 
+#endif
 		if (target != m_pos + 4)
 		{
 			m_block->block_end = m_ir->GetInsertBlock();

@@ -77,14 +77,12 @@ fun GameCoverArt(game: GameInfo, modifier: Modifier = Modifier) {
         contentScale = ContentScale.Crop,
         loading = { GameCoverPlaceholder(game.title, game.serial) },
         error = {
-            // Cover Region can point at a release the art repo has no cover for; falling straight
-            // to the placeholder would BLANK a cover the user already had (reported for the in-game
-            // menu, which uses this component). Retry with this disc's own serial first, then with
-            // the ICON0.PNG extracted from the disc itself -- wrong shape, but it is the real
-            // game's art and beats nothing, and aldostools does not have art for every title.
+            // aldostools does not have art for every title, and falling straight to the
+            // placeholder would BLANK a cover the user already had (reported for the in-game
+            // menu, which uses this component). Fall back to the ICON0.PNG extracted from the
+            // disc itself: wrong shape, but it is the real game's art and beats nothing.
             CoverFallbackChain(
                 models = if (customCover != null) emptyList() else listOfNotNull(
-                    game.discCoverUrl?.takeIf { it != game.coverUrl },
                     game.discIconFile,
                 ),
                 contentDescription = game.title,

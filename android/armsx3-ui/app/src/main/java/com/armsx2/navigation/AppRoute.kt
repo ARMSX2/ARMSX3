@@ -8,15 +8,23 @@ sealed interface AppRoute {
     data class Settings(
         val category: SettingsCategory = SettingsCategory.General,
         val game: GameInfo? = null,
+        /** Where back should land. Null means the library, which is right for the long press
+         *  that opens a game's settings from there. A screen that opens settings itself sets
+         *  this so backing out returns to it instead of dumping the user at the library. */
+        val returnTo: AppRoute? = null,
     ) : AppRoute
     // Carries an optional game so the per-game BIOS picker can key on it directly
     // (from the library long-press) without the game being loaded; null = global,
     // opened from the drawer (falls back to the currently loaded game if any).
-    data class BiosManager(val game: GameInfo? = null) : AppRoute
+    // No per-game firmware exists on PS3 -- one PS3UPDAT.PUP is installed for the whole
+    // emulator -- so this route carries nothing. It used to take a GameInfo that
+    // BiosManagerScreen accepted and ignored.
+    data object BiosManager : AppRoute
     data object PackageInstaller : AppRoute
     data object CoreSettings : AppRoute
     data object SaveManager : AppRoute
     data object ControllerManager : AppRoute
+    data object ModLibrary : AppRoute
     data object TextureManager : AppRoute
     data object Achievements : AppRoute
     // PS3 trophies, read from the emulator's own dev_hdd0 trophy folders. Distinct from
@@ -41,6 +49,7 @@ enum class SettingsCategory {
     Skins,
     Advanced,
     Patches,
+    Mods,
     About,
 }
 
@@ -72,6 +81,13 @@ object UiNavigator {
             }
             AppRoute.About -> {
                 route.value = AppRoute.Settings(SettingsCategory.General)
+                return true
+            }
+            // A settings screen opened from another screen goes back to that screen. Reached
+            // by long-pressing a game in the library there is no origin to record, returnTo is
+            // null, and the library is the right destination.
+            is AppRoute.Settings -> {
+                route.value = (route.value as AppRoute.Settings).returnTo ?: AppRoute.Home
                 return true
             }
             AppRoute.Home -> Unit

@@ -121,6 +121,7 @@ public final class NativeApp {
 
     /** [MAPPED] Slot preview, captured by the core at save time. Null if the slot has none. */
     public static byte[] getImageSlot(int slot) { return Rpcs3Bridge.thumbnailForSlot(slot); }
+    public static long getSlotSavedAt(int slot) { return Rpcs3Bridge.slotSavedAt(slot); }
 
     /** [TODO] */
     public static byte[] getSaveStateImage(String path) { Unsupported.note("getSaveStateImage"); return null; }
@@ -400,9 +401,32 @@ public final class NativeApp {
         float hz = ntsc > 0 ? ntsc : pal;
         if (hz > 0) Rpcs3Settings.INSTANCE.setVblankRate(Math.round(hz));
     }
-    public static void setLandscapeRenderTop(boolean top) { Unsupported.note("setLandscapeRenderTop"); }
-    public static void setPortraitRenderTop(boolean top) { Unsupported.note("setPortraitRenderTop"); }
-    public static void setPortraitRenderTopInset(int px) { Unsupported.note("setPortraitRenderTopInset"); }
+    // Where the letterboxed image sits in the window. Two setters because they arrive from two
+    // places at two times -- the preference from applyTo, the cutout inset from the surface on
+    // every rotation -- but the core holds one position, so each remembers its own value and
+    // re-sends both. Portrait only: a landscape control existed and could never do anything,
+    // since a 16:9 game in a 16:9 window has no letterbox bar to move into. These were stubs
+    // inherited from the PCSX2 shim layer, so the setting saved and did nothing.
+    private static boolean sPortraitRenderTop = true;
+    private static int sPortraitRenderTopInset = 0;
+
+    private static void pushRenderPosition() {
+        try {
+            net.rpcsx.RPCSX.Companion.getInstance()
+                .setRenderPosition(sPortraitRenderTop, sPortraitRenderTopInset);
+        } catch (Throwable ignored) {
+            // A core without the symbol centres the image, which is what it did before this.
+        }
+    }
+
+    public static void setPortraitRenderTop(boolean top) {
+        sPortraitRenderTop = top;
+        pushRenderPosition();
+    }
+    public static void setPortraitRenderTopInset(int px) {
+        sPortraitRenderTopInset = Math.max(px, 0);
+        pushRenderPosition();
+    }
 
     // ===== Audio =====
 

@@ -38,6 +38,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -385,6 +386,12 @@ private fun SlotTile(
             }.getOrNull()
         }
     }
+    // When it was saved, which is the only thing that tells two slots of the same game apart.
+    val savedAt by produceState(initialValue = 0L, slot, refreshKey) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { NativeApp.getSlotSavedAt(slot) }.getOrDefault(0L)
+        }
+    }
     val empty = gamePath.isNullOrEmpty()
     // Load: empty slots disabled. Save: any slot is a valid target. Delete mode overrides both —
     // only an OCCUPIED slot can be deleted, whichever screen you came in on.
@@ -407,6 +414,16 @@ private fun SlotTile(
         BottomLabel(
             title = "${str("memcard.slot1").substringBefore(' ')} ${slot + 1}",
             subtitle = when {
+                // The date, not the title id. Every slot in this picker belongs to the game
+                // that is running, so the id was the same on all ten and said nothing; which
+                // save is which is a question about when.
+                !empty && savedAt > 0L -> android.text.format.DateUtils.formatDateTime(
+                    LocalContext.current,
+                    savedAt,
+                    android.text.format.DateUtils.FORMAT_SHOW_DATE or
+                        android.text.format.DateUtils.FORMAT_SHOW_TIME or
+                        android.text.format.DateUtils.FORMAT_ABBREV_ALL,
+                )
                 !empty -> gamePath?.substringAfterLast('/')?.substringBeforeLast('.') ?: ""
                 mode == SaveMode.Save -> str("savestate.slot.emptyTapToSave")
                 else -> null

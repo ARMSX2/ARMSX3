@@ -89,6 +89,21 @@ class RPCSX {
     external fun initialize(rootDir: String, user: String, socInfo: String): Boolean
     external fun installFw(fd: Int, progressId: Long): Boolean
     external fun install(fd: Int, progressId: Long): Boolean
+
+    /** Extract a .pkg into [dest] instead of installing it into dev_hdd0. */
+    external fun extractPkgTo(fd: Int, progressId: Long, dest: String): Boolean
+
+    /**
+     * Register the SAF storage device in the core.
+     *
+     * False when the core predates it, in which case a picked folder is still resolved to a
+     * filesystem path and still fails on a build without permission to read one.
+     */
+    external fun installStorageBridge(): Boolean
+
+    /** Let the core play its overlay sounds (trophy, dialogs, on-screen keyboard) through the
+     *  app's own sound pool. False on a core that predates this, which stays silent. */
+    external fun installSoundBridge(): Boolean
     /** Install several .pkg parts of one split package together, in order. */
     external fun installSplitPkg(fds: IntArray, progressId: Long): Boolean
     /** Delete an installed title's directory. Refused for paths outside dev_hdd0/game. */
@@ -118,6 +133,7 @@ class RPCSX {
      * API for SoC temperatures -- so the core is only ever told the answer.
      */
     external fun setThermals(cpu: Float, gpu: Float, battery: Float, show: Boolean)
+    external fun setRenderPosition(portraitTop: Boolean, topInset: Int)
     external fun usbDeviceEvent(fd: Int, vendorId: Int, productId: Int, event: Int): Boolean
     external fun processCompilationQueue(): Boolean
     external fun startMainThreadProcessor(): Boolean
@@ -241,6 +257,23 @@ class RPCSX {
     ): Boolean
     external fun isInstallableFile(fd: Int) : Boolean
     external fun getDirInstallPath(sfoFd: Int) : String?
+
+    /**
+     * What a .pkg says it is, read from the package's own PARAM.SFO without installing it.
+     *
+     * JSON with titleId, title, category and appVersion, or null when the file is not a
+     * readable package. CATEGORY is the useful part: "GD" is an update and "AC" is
+     * downloadable content, neither of which is a game.
+     */
+    external fun probePkgInfo(fd: Int): String?
+
+    /**
+     * Whether the core has armed a restart and will come back up on its own.
+     *
+     * True between the kill a save state performs and the restart that follows it. False on a
+     * core that predates this, which is the behaviour the run loop had before.
+     */
+    external fun isRestartPending(): Boolean
     external fun getVersion(): String
     external fun setCustomDriver(path: String, libraryName: String, hookDir: String): Boolean
 

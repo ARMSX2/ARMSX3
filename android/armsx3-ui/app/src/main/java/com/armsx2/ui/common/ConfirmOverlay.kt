@@ -59,6 +59,12 @@ fun ConfirmOverlay(
     destructive: Boolean = false,
     /** Distinguishes concurrent overlays' nav ids. Only matters if two can ever be composed at once. */
     idPrefix: String = "confirm",
+    /** Whether the confirm button does anything yet. Off while the action it starts is running,
+     *  so a second press cannot start it twice. */
+    confirmEnabled: Boolean = true,
+    /** Drawn between the message and the buttons. Anything focusable in here must register with
+     *  SettingsControllerNav under the layer this overlay is given, or the pad will skip it. */
+    extra: (@Composable (layer: String) -> Unit)? = null,
 ) {
     val layer = "confirm-overlay:$idPrefix"
     DisposableEffect(layer) {
@@ -125,6 +131,10 @@ fun ConfirmOverlay(
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                extra?.let { content ->
+                    Spacer(Modifier.height(14.dp))
+                    content(layer)
+                }
                 Spacer(Modifier.height(18.dp))
                 Row(
                     Modifier.fillMaxWidth(),
@@ -145,7 +155,7 @@ fun ConfirmOverlay(
                         label = confirmLabel,
                         id = "$layer.confirm",
                         layer = layer,
-                        onClick = onConfirm,
+                        onClick = { if (confirmEnabled) onConfirm() },
                         container = if (destructive) MaterialTheme.colorScheme.errorContainer
                         else MaterialTheme.colorScheme.primaryContainer,
                         content = if (destructive) MaterialTheme.colorScheme.onErrorContainer

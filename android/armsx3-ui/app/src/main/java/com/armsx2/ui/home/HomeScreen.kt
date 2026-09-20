@@ -84,7 +84,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
-import com.armsx2.CoverArtStyle
 import com.armsx2.EnglishTitles
 import com.armsx2.GridLabels
 import com.armsx2.R
@@ -112,6 +111,7 @@ import coil.size.Precision
 import com.armsx2.CustomCovers
 import com.armsx2.GameInfo
 import com.armsx2.i18n.str
+import com.armsx2.EmuState
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.common.ArmsBackdrop
 import com.armsx2.ui.common.CoverFallbackChain
@@ -155,7 +155,7 @@ fun HomeScreen(
     var deleteCategory by remember { mutableStateOf<String?>(null) }
     var showClearRecentsConfirm by remember { mutableStateOf(false) }
     // #9 custom library background — inert until the user picks an image.
-    LaunchedEffect(Unit) { LibraryBackground.ensureLoaded(); CoverArtStyle.load() }
+    LaunchedEffect(Unit) { LibraryBackground.ensureLoaded() }
     // The animated background switched itself off because the last run died with it on screen
     // (LibraryBackground.armSaver). Say so -- silently reverting a setting the user chose reads
     // as the setting being broken, and the name tells them which one to avoid.
@@ -459,7 +459,6 @@ fun HomeScreen(
                             LibraryOverflowMenu(
                                 expanded = overflowMenu,
                                 selectedSort = state.sort,
-                                use3dCovers = CoverArtStyle.use3d.value,
                                 showGridNames = GridLabels.show.value,
                                 customNames = com.armsx2.CustomNames.enabled.value,
                                 englishTitles = EnglishTitles.enabled.value,
@@ -469,7 +468,6 @@ fun HomeScreen(
                                 onDismiss = { overflowMenu = false },
                                 onOpenNavigation = onOpenMenu,
                                 onSort = viewModel::setSort,
-                                onToggleCoverStyle = { CoverArtStyle.set(!CoverArtStyle.use3d.value) },
                                 onToggleGridNames = { GridLabels.set(!GridLabels.show.value) },
                                 onToggleCustomNames = { com.armsx2.CustomNames.set(!com.armsx2.CustomNames.enabled.value) },
                                 onToggleEnglishTitles = { EnglishTitles.set(!EnglishTitles.enabled.value) },
@@ -859,6 +857,53 @@ fun HomeScreen(
         )
     }
 
+    // A package tile was tapped. Installing is not undoable without a manual uninstall, and a
+    // library tap is an easy thing to do by accident, so it asks. ConfirmOverlay rather than a
+    // Compose Dialog for the same reason as the licence prompt: a dialog window eats the D-pad.
+    viewModel.pendingInstall.value?.let { game ->
+        var deleteSource by remember(game.uri) { mutableStateOf(false) }
+        val running = viewModel.installing.value
+
+        com.armsx2.ui.common.ConfirmOverlay(
+            title = str("library.install.title"),
+            message = viewModel.installMessage.value
+                ?: if (running) str("library.install.running")
+                else str("library.install.message")
+                    .format(game.displayTitle(EnglishTitles.enabled.value)),
+            confirmLabel = if (running) str("library.install.running.short")
+            else str("packages.updates.installThis"),
+            idPrefix = "install-package",
+            confirmEnabled = !running,
+            extra = { layer ->
+                // Offered, never assumed: the .pkg is the user's file and it is the only copy
+                // they have if the install ever needs repeating.
+                val toggle = { if (!running) deleteSource = !deleteSource }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .controllerFocusable(
+                            controllerId = "$layer.deleteSource",
+                            layer = layer,
+                            onConfirm = toggle,
+                        )
+                        .clickable(enabled = !running, onClick = toggle)
+                        .padding(vertical = 4.dp),
+                ) {
+                    Checkbox(checked = deleteSource, onCheckedChange = { toggle() }, enabled = !running)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        str("library.install.deleteSource"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            onConfirm = { viewModel.confirmInstall(game, deleteSource) },
+            onDismiss = { viewModel.dismissInstall() },
+        )
+    }
+
     menuGame?.let { game ->
         // Tri-state on purpose: null while identifying, blank when the image cannot be identified.
         // produceState alone cannot tell those apart — both are null — so an unidentifiable game
@@ -901,12 +946,6 @@ fun HomeScreen(
                     menuGame = null
                     onOpenGameSettings(game)
                 }
-                // Per-game BIOS: open the BIOS manager scoped to THIS game (no need to load it),
-                // since the BIOS manager isn't reachable from the in-game menu.
-                GameMenuAction("📀", str("bios.perGame.menu")) {
-                    menuGame = null
-                    com.armsx2.navigation.UiNavigator.navigate(com.armsx2.navigation.AppRoute.BiosManager(game))
-                }
                 // Pin to the launcher (issue #242). The action was lost when this menu was
                 // rebuilt, leaving HomeShortcuts with no call site at all (issue #335).
                 // pin() returns false only when the launcher can't pin — surface that.
@@ -917,6 +956,42 @@ fun HomeScreen(
                         categoriesGame = game
                         menuGame = null
                     }
+                }
+                // Per-game cache clears. The settings screen only offers "clear everything",
+                // which is the wrong tool when one title is misbehaving and another has an hour of
+                // PPU compilation banked. Shaders are offered separately because shaders_cache/
+                // sits INSIDE the ppu-* directory: clearing PPU already takes the shaders, but not
+                // the reverse, and a driver change usually only invalidates the shaders.
+                val cacheStopFirst = str("perf.clearCache.stopFirst")
+                val cacheNoSerial = str("games.clearCache.noSerial")
+                val cacheEmpty = str("games.clearCache.empty")
+                val cacheDone = str("perf.clearCache.done")
+
+                // All three share this: refuse while anything is running, because the live VM
+                // holds these files open and is still writing to them.
+                val clearGameCache = { clear: (java.io.File) -> Pair<Int, Long> ->
+                    val dir = com.armsx2.cache.titleCacheDir(context, game.serial)
+                    val message = when {
+                        MainActivityRuntime.eState.value != EmuState.STOPPED -> cacheStopFirst
+                        dir == null -> cacheNoSerial
+                        !dir.isDirectory -> cacheEmpty
+                        else -> {
+                            val (count, bytes) = clear(dir)
+                            if (count > 0) cacheDone.format(count, com.armsx2.cache.formatBytes(bytes))
+                            else cacheEmpty
+                        }
+                    }
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                }
+
+                // One action, because for a single title the three caches are one thing on disk:
+                // shaders_cache/ and the SPU caches live INSIDE ppu-<hash>-EBOOT.BIN, so clearing
+                // this game's PPU necessarily takes its SPU and shaders with it. Splitting them
+                // here would offer two buttons that cannot do what their names imply. The settings
+                // screen keeps its separate PPU/SPU rows, where the scope is every game at once.
+                GameMenuAction("\uD83E\uDDF9", str("games.clearCache")) {
+                    menuGame = null
+                    clearGameCache { com.armsx2.cache.clearRecompilerCache(it, spuOnly = false) }
                 }
                 val addToHomeFailed = str("games.addToHome.unsupported")
                 GameMenuAction("📌", str("games.addToHome")) {
@@ -1185,7 +1260,6 @@ private fun GameMenuAction(glyph: String, label: String, onClick: () -> Unit) {
 private fun LibraryOverflowMenu(
     expanded: Boolean,
     selectedSort: HomeSort,
-    use3dCovers: Boolean,
     showGridNames: Boolean,
     customNames: Boolean,
     englishTitles: Boolean,
@@ -1194,7 +1268,6 @@ private fun LibraryOverflowMenu(
     onDismiss: () -> Unit,
     onOpenNavigation: () -> Unit,
     onSort: (HomeSort) -> Unit,
-    onToggleCoverStyle: () -> Unit,
     onToggleGridNames: () -> Unit,
     onToggleCustomNames: () -> Unit,
     onToggleEnglishTitles: () -> Unit,
@@ -1242,43 +1315,11 @@ private fun LibraryOverflowMenu(
         }
         OverflowSeparator()
         LibraryOverflowItem(
-            glyph = if (use3dCovers) "3D" else "2D",
-            label = str("games.overflow.coverStyle"),
-            trailing = if (use3dCovers) "3D" else "2D",
-        ) {
-            closeThen(onToggleCoverStyle)
-        }
-        LibraryOverflowItem(
             glyph = "Aa",
             label = str("games.overflow.customNames"),
             trailing = if (customNames) str("common.on") else str("common.off"),
         ) {
             closeThen(onToggleCustomNames)
-        }
-        // Cover region: show another region's box art. Cycles Disc -> USA -> Europe -> Japan.
-        // The lookup needs the GameDB index, so building it is kicked off the first time anyone
-        // leaves "Disc" — a user who never touches this never pays for the parse.
-        run {
-            val regionCtx = androidx.compose.ui.platform.LocalContext.current
-            val r = com.armsx2.CoverRegionIndex.region.intValue
-            LibraryOverflowItem(
-                glyph = "A/あ",
-                label = str("games.overflow.coverRegion"),
-                trailing = str(
-                    when (r) {
-                        1 -> "games.overflow.coverRegion.usa"
-                        2 -> "games.overflow.coverRegion.eur"
-                        3 -> "games.overflow.coverRegion.jpn"
-                        else -> "games.overflow.coverRegion.disc"
-                    },
-                ),
-            ) {
-                closeThen {
-                    val next = (r + 1) % 4
-                    com.armsx2.CoverRegionIndex.set(next)
-                    if (next != 0) com.armsx2.CoverRegionIndex.ensureBuilt(regionCtx)
-                }
-            }
         }
         LibraryOverflowItem(
             glyph = "A/あ",
@@ -1581,11 +1622,10 @@ private const val PS3_COVER_ASPECT = 260f / 300f
  */
 @Composable
 private fun Modifier.coverFrame(selected: Boolean, selectedWidth: Dp, selectedColor: Color): Modifier {
-    val idle = !CoverArtStyle.use3d.value
-    return when {
-        selected -> this.border(selectedWidth, selectedColor, RoundedCornerShape(12.dp))
-        idle -> this.border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.42f), RoundedCornerShape(12.dp))
-        else -> this
+    return if (selected) {
+        this.border(selectedWidth, selectedColor, RoundedCornerShape(12.dp))
+    } else {
+        this.border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.42f), RoundedCornerShape(12.dp))
     }
 }
 
@@ -1603,16 +1643,12 @@ private fun GameCover(
     showBadges: Boolean = true,
 ) {
     val context = LocalContext.current
-    // Read the 3D-cover flag explicitly (not just via game.coverUrl, which is
-    // skipped when a custom cover wins) so EVERY card — the Recently Played shelf
-    // included — is subscribed and re-resolves when the toolbar toggle flips.
-    val use3d = CoverArtStyle.use3d.value
     val customCoverMap = LocalCustomCoverMap.current
     val custom = remember(game.uri, customCoverMap) { CustomCovers.matchIn(customCoverMap, game) }
     // coverModel, not coverUrl: a PS3 game's art is the ICON0.PNG extracted from
     // its own disc, so the model is a File rather than a URL.
     val model = custom ?: game.coverModel
-    val request = remember(model, use3d) {
+    val request = remember(model) {
         ImageRequest.Builder(context)
             .data(model)
             .size(360, 500)
@@ -1635,15 +1671,12 @@ private fun GameCover(
                 contentScale = contentScale,
                 loading = { CoverPlaceholder(game.displayTitle(EnglishTitles.enabled.value), game.serial, showText = placeholderText) },
                 error = {
-                    // A regional cover that isn't in the art repo would otherwise blank a cover the
-                    // user already had — reported as "some games lose their covers when switching
-                    // regions". Retry with this disc's own serial, then with the game's own
-                    // ICON0.PNG: this chain used to stop at the URL, which is why a European PSN
-                    // title showed a text placeholder here while the in-game menu showed its
-                    // artwork, the art repo's COV set being keyed by USA title IDs.
+                    // Fall back to the game's own ICON0.PNG rather than a text placeholder. This
+                    // chain used to stop at the URL, which is why a European PSN title showed a
+                    // placeholder here while the in-game menu showed its artwork: the art repo's
+                    // COV set is keyed by USA title IDs and does not have every release.
                     CoverFallbackChain(
                         models = if (custom != null) emptyList() else listOfNotNull(
-                            game.discCoverUrl?.takeIf { it != model },
                             game.discIconFile,
                         ),
                         contentDescription = game.displayTitle(EnglishTitles.enabled.value),
@@ -1658,6 +1691,29 @@ private fun GameCover(
         if (showBadges && game.locked) {
             LockedBadge(Modifier.align(Alignment.TopEnd).padding(5.dp))
         }
+        // A package is a game the user has and cannot play yet, and its tile is otherwise
+        // indistinguishable from one that boots. Bottom start, so it does not collide with
+        // the locked badge on a title that is both.
+        if (showBadges && game.extension.equals("PKG", ignoreCase = true)) {
+            PackageBadge(Modifier.align(Alignment.BottomStart).padding(5.dp))
+        }
+    }
+}
+
+/** Says "this installs, it does not boot". Deliberately not the gold of the locked badge:
+ *  that one is a warning, and this is just a state the title is passing through. */
+@Composable
+private fun PackageBadge(modifier: Modifier = Modifier) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        modifier = modifier,
+    ) {
+        Text(
+            "📦",
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            fontSize = 11.sp,
+        )
     }
 }
 

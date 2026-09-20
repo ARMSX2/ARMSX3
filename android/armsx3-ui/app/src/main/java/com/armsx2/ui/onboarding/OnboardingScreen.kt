@@ -38,6 +38,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -97,6 +98,27 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
     // (Internal / SD only). Flow: grant all-files access if needed → pick a folder →
     // resolve the tree URI to a POSIX path the native core can write to directly.
     val context = androidx.compose.ui.platform.LocalContext.current
+    // Pick the PUP itself rather than the folder holding it.
+    //
+    // The folder route only ever looked at the chosen folder's immediate children, so firmware
+    // one level down reported "no .PUP firmware was found in that folder" and the user had no
+    // way to know why. A tester got there and worked it out by moving the file. The step already
+    // says "select the firmware file", and on the github build that is exactly what the in-app
+    // browser does; this gives the same thing to builds without filesystem access.
+    val biosFilePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        uri?.let { picked ->
+            val doc = androidx.documentfile.provider.DocumentFile.fromSingleUri(context, picked)
+            viewModel.installFirmware(
+                FirmwareCandidate(
+                    doc?.name ?: "PS3UPDAT.PUP",
+                    picked,
+                    doc?.length() ?: 0L,
+                ),
+            )
+        }
+    }
     val customFolderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let { u ->
             runCatching {
@@ -126,7 +148,16 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
         }
     }
     val onCustomStorage: () -> Unit = {
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
+        // STORAGE_ALL_FILES is false on the Play build, where MANAGE_EXTERNAL_STORAGE is not in
+        // the manifest at all. Sending someone to the all-files settings screen there hands them
+        // a switch Android greys out, with no way forward and nothing explaining why. Reported by
+        // testers on the first Play build: the toggle simply would not move.
+        //
+        // Checking the flavour rather than the launch result, because launching SUCCEEDS: the
+        // screen opens, it is the permission inside it that cannot be granted, so a catch around
+        // launch() never fires.
+        if (com.armsx2.BuildConfig.STORAGE_ALL_FILES &&
+            android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
             !android.os.Environment.isExternalStorageManager()
         ) {
             val manageIntent = android.content.Intent(
@@ -212,7 +243,7 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
                                 WizardPage(page, state, viewModel, biosPicker = {
                                     openFirmwarePicker(
                                         context, { showFirmwareBrowser = true },
-                                        firmwarePermLauncher, biosPicker,
+                                        firmwarePermLauncher, biosPicker, biosFilePicker,
                                     )
                                 }, folderPicker = { folderPicker.launch(null) }, onCustomStorage = onCustomStorage)
                             }
@@ -255,7 +286,7 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
                             WizardPage(page, state, viewModel, biosPicker = {
                                 openFirmwarePicker(
                                     context, { showFirmwareBrowser = true },
-                                    firmwarePermLauncher, biosPicker,
+                                    firmwarePermLauncher, biosPicker, biosFilePicker,
                                 )
                             }, folderPicker = { folderPicker.launch(null) }, onCustomStorage = onCustomStorage)
                         }
@@ -297,7 +328,7 @@ private fun WizardPage(
         1 -> StoragePage(state, compact = true, viewModel::selectStorage, onCustomStorage)
         2 -> FirmwarePage(state, onPick = biosPicker, onInstall = viewModel::installFirmware)
         3 -> GamesPage(state, folderPicker, viewModel::removeGameFolder)
-        else -> ReadyPage(state, compact = true)
+        else -> ReadyPage(state, compact = true, onConfigDatabase = viewModel::setConfigDatabase)
     }
 }
 
@@ -621,7 +652,7 @@ private fun GamesPage(state: OnboardingUiState, onAdd: () -> Unit, onRemove: (St
     SetupPage(str("setup.page.roms.title"), str("setup.step.rom.description")) {
         Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
             state.gameFolders.forEach { raw ->
-                val label = Uri.parse(raw).lastPathSegment?.substringAfterLast(':')?.ifBlank { null } ?: raw
+                val label = com.armsx2.storage.StorageLabel.forFolder(androidx.compose.ui.platform.LocalContext.current, raw)
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -644,7 +675,11 @@ private fun GamesPage(state: OnboardingUiState, onAdd: () -> Unit, onRemove: (St
 }
 
 @Composable
-private fun ReadyPage(state: OnboardingUiState, compact: Boolean) {
+private fun ReadyPage(
+    state: OnboardingUiState,
+    compact: Boolean,
+    onConfigDatabase: (Boolean) -> Unit,
+) {
     SetupPage(str("setup.button.applyFinish"), str("games.scanningRoms")) {
         if (compact) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -657,6 +692,30 @@ private fun ReadyPage(state: OnboardingUiState, compact: Boolean) {
                 SummaryCard(str("setup.step.appData.title"), when (state.systemLocation) { StorageLocation.Internal -> str("setup.storageChooser.internalShort"); StorageLocation.SdCard -> str("setup.systemDir.sdCard"); StorageLocation.Custom -> str("setup.storageChooser.customShort") }, Modifier.weight(1f))
                 SummaryCard(str("setup.step.bios.title"), state.firmwareVersion ?: str("setup.status.notSelected"), Modifier.weight(1f))
                 SummaryCard(str("setup.step.rom.title"), state.gameFolders.size.toString(), Modifier.weight(1f))
+            }
+        }
+
+        // The one request this app makes on its own initiative, so it is described before it
+        // happens rather than explained afterwards.
+        Spacer(Modifier.height(16.dp))
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+        ) {
+            Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(str("setup.configDb.title"), style = MaterialTheme.typography.titleSmall)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        str("setup.configDb.body"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = state.configDatabase, onCheckedChange = onConfigDatabase)
             }
         }
     }
@@ -800,13 +859,25 @@ private fun openFirmwarePicker(
     showBrowser: () -> Unit,
     permLauncher: androidx.activity.result.ActivityResultLauncher<android.content.Intent>,
     safPicker: androidx.activity.result.ActivityResultLauncher<android.net.Uri?>,
+    filePicker: androidx.activity.result.ActivityResultLauncher<Array<String>>,
 ) {
     if (com.armsx2.ui.common.canBrowse()) {
         showBrowser()
         return
     }
 
-    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+    // Same reason as onCustomStorage: on a build without the permission declared, this screen
+    // opens onto a switch that cannot be moved. SAF is the supported path there, not a fallback.
+    if (!com.armsx2.BuildConfig.STORAGE_ALL_FILES) {
+        // Straight to the file picker. Nothing here can browse the filesystem, and asking for a
+        // folder then scanning one level of it is how "no firmware found" happened.
+        filePicker.launch(arrayOf("*/*"))
+        return
+    }
+
+    if (com.armsx2.BuildConfig.STORAGE_ALL_FILES &&
+        android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
+    ) {
         val intent = android.content.Intent(
             android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
             android.net.Uri.parse("package:${context.packageName}"),

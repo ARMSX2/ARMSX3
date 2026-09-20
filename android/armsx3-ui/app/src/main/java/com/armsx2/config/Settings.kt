@@ -126,6 +126,16 @@ data class Ps3Settings(
      * wait for their real shader instead of running through the interpreter.
      */
     val shaderMode: Int = 1,
+    /**
+     * How blending is carried out: 0 auto, 1 shader, 2 hardware.
+     *
+     * "Auto" is what the core does on its own -- it reaches for the shader path only on the blend
+     * states the GPU's fixed-function unit cannot express (signed equations, and the xRGB/xBGR
+     * surfaces where alpha feeds the RGB factors). "Shader" takes that path on every blended draw.
+     * "Hardware" never takes it, which is how every build before 0.9.8 rendered: cheaper where it
+     * applies, at the cost of the blending those states got wrong.
+     */
+    val blendingMode: Int = 0,
     /** Lossless Scaling frame generation: 0 Off, 1 x2, 2 x3, 3 x4. Off unless the user has
      *  supplied shaders from their own copy -- nothing is bundled. */
     val frameGeneration: Int = 0,
@@ -609,7 +619,7 @@ data class Settings(
     // game can render its output smaller while the library and lighter games stay
     // sharp. Were global-only prefs until #-Duda reported that changing them in Game
     // scope also moved Global — there was no per-game copy to write.
-    val hwScaler: Int = 0,                       // 0 = screen, else 448*n short side
+    val hwScaler: Int = 0,                       // 0 = screen, else target short side in pixels
     val screenResOverride: String = "auto",      // "auto" | "2560x1440" | "1920x1080" | "1280x720"
     /** EmuCore/GS/autoflush_sw — software-renderer auto-flush. PCSX2 default on. */
     val autoFlushSw: Boolean = true,
@@ -653,10 +663,6 @@ data class Settings(
      *  centering (false), so the bottom is free for touch controls. Applied live via
      *  NativeApp.setPortraitRenderTop; only affects a portrait window. */
     val portraitRenderTop: Boolean = true,
-    /** In LANDSCAPE, top-align the render instead of vertical-centering (default). Foldables and
-     *  clamshell controllers (Backbone-style) open the screen downward, so a centred image sits
-     *  too low. Applied live via NativeApp.setLandscapeRenderTop; only affects a landscape window. */
-    val landscapeRenderTop: Boolean = false,
     /** Auto Progressive Scan: hold Triangle+Cross on port 1 through the boot sequence, which is
      *  the real-console combo a number of PS2 titles probe to offer 480p progressive output
      *  (Tekken 4, several Criterion games). Purely a synthetic pad hold — no core setting — so it
@@ -903,7 +909,6 @@ data class Settings(
     /** EmuCore/GS/OsdScale — size of on-screen messages/stats, percent (25–500, 100 = PCSX2's
      *  normal). Defaults to 65: at 100 the stats block dominates a handheld screen, and 65 matches
      *  the size NetherSX2 ships. Saves still on the old 100 default are migrated once (ConfigStore). */
-    val osdScale: Int = 65,
     /** EmuCore/GS/OsdColor — OSD text colour as 0xRRGGBB. 0 = default white. */
     val osdColor: Int = 0,
     /** EmuCore/GS/VsyncEnable — sync presentation to the display refresh (less
@@ -1114,6 +1119,10 @@ data class Settings(
         put("PS3/Overlay", "Title Background (hex)", "string", argbToRgba(ps3.overlayTitleBg))
         put("PS3/Video", "MSAA", "enum", ps3.msaaMode.toString())
         put("PS3/Video", "Shader Mode", "enum", ps3.shaderMode.toString())
+        // One control, two core switches that pull in opposite directions. Both are written on
+        // every apply so neither can be left stale by a mode change that only touched the other.
+        put("PS3/Video", "Disable Hardware Blending", "bool", (ps3.blendingMode == 1).toString())
+        put("PS3/Video", "Disable Programmable Blending", "bool", (ps3.blendingMode == 2).toString())
         put("PS3/Video", "Frame Generation", "enum", ps3.frameGeneration.toString())
         put("PS3/Video", "Frame Generation Performance Mode", "bool", ps3.frameGenPerformance.toString())
         put("PS3/Video", "Frame Generation Flow Scale", "int", ps3.frameGenFlowScale.toString())
@@ -1235,7 +1244,6 @@ data class Settings(
         // GS-thread global, applied live; no persisted EmuCore key needed.
         if (emitSink == null) NativeApp.setFrameSkip(frameSkip.coerceIn(0, 5))
         if (emitSink == null) NativeApp.setPortraitRenderTop(portraitRenderTop)
-        if (emitSink == null) NativeApp.setLandscapeRenderTop(landscapeRenderTop)
         // Audio (SPU2). Volume/mute are live native setters; the rest are written
         // to the base layer and applied on commit (SPU2 stream reconfigure).
         if (emitSink == null) NativeApp.setAudioVolume(audioVolume.coerceIn(0, 200))
@@ -1366,7 +1374,6 @@ data class Settings(
             shadeBoostGamma.coerceIn(1, 100),
         )
         NativeApp.osdShowFPS(osdShowFps)
-        NativeApp.osdSetScale(osdScale.toFloat())
         NativeApp.osdSetColor(osdColor)
         NativeApp.osdShowVPS(osdShowVps)
         NativeApp.osdShowSpeed(osdShowSpeed)
@@ -1667,7 +1674,6 @@ data class Settings(
             dumpReplaceableTextures = boolAt("EmuCore/GS/DumpReplaceableTextures") ?: this.dumpReplaceableTextures,
             osdShowTextureReplacements = boolAt("EmuCore/GS/OsdShowTextureReplacements") ?: this.osdShowTextureReplacements,
             osdShowFps = boolAt("EmuCore/GS/OsdShowFPS") ?: this.osdShowFps,
-            osdScale = intAt("EmuCore/GS/OsdScale") ?: this.osdScale,
             osdColor = intAt("EmuCore/GS/OsdColor") ?: this.osdColor,
             vsyncEnable = boolAt("EmuCore/GS/VsyncEnable") ?: this.vsyncEnable,
             osdShowVps = boolAt("EmuCore/GS/OsdShowVPS") ?: this.osdShowVps,
@@ -1876,7 +1882,6 @@ data class Settings(
         put("EmuCore/GS", "DumpReplaceableTextures", "bool", dumpReplaceableTextures.toString())
         put("EmuCore/GS", "OsdShowTextureReplacements", "bool", osdShowTextureReplacements.toString())
         put("EmuCore/GS", "OsdShowFPS", "bool", osdShowFps.toString())
-        put("EmuCore/GS", "OsdScale", "int", osdScale.coerceIn(25, 500).toString())
         put("EmuCore/GS", "OsdColor", "int", (osdColor and 0xFFFFFF).toString())
         put("EmuCore/GS", "VsyncEnable", "bool", vsyncEnable.toString())
         put("EmuCore/GS", "OsdShowVPS", "bool", osdShowVps.toString())
@@ -2100,6 +2105,7 @@ data class Settings(
         put("ps3MsaaMode", ps3.msaaMode)
         put("ps3AudioCubebBackend", ps3.audioCubebBackend)
         put("ps3ShaderMode", ps3.shaderMode)
+        put("ps3BlendingMode", ps3.blendingMode)
         put("ps3FrameGeneration", ps3.frameGeneration)
         put("ps3FrameGenPerformance", ps3.frameGenPerformance)
         put("ps3FrameGenFlowScale", ps3.frameGenFlowScale)
@@ -2207,7 +2213,6 @@ data class Settings(
         put("customDriverId", customDriverId)
         put("orientation", orientation)
         put("portraitRenderTop", portraitRenderTop)
-        put("landscapeRenderTop", landscapeRenderTop)
         put("autoProgressiveScan", autoProgressiveScan)
         put("affinityMode", affinityMode)
         put("framerateNtsc", framerateNtsc.toDouble())
@@ -2352,7 +2357,6 @@ data class Settings(
         put("dumpReplaceableTextures", dumpReplaceableTextures)
         put("osdShowTextureReplacements", osdShowTextureReplacements)
         put("osdShowFps", osdShowFps)
-        put("osdScale", osdScale)
         put("osdColor", osdColor)
         put("vsyncEnable", vsyncEnable)
         put("osdShowVps", osdShowVps)
@@ -2457,6 +2461,7 @@ data class Settings(
                     msaaMode = json.optInt("ps3MsaaMode", def.ps3.msaaMode),
                     audioCubebBackend = json.optInt("ps3AudioCubebBackend", def.ps3.audioCubebBackend),
                     shaderMode = json.optInt("ps3ShaderMode", def.ps3.shaderMode),
+                    blendingMode = json.optInt("ps3BlendingMode", def.ps3.blendingMode),
                     frameGeneration = json.optInt("ps3FrameGeneration", def.ps3.frameGeneration),
                     frameGenPerformance = json.optBoolean("ps3FrameGenPerformance", def.ps3.frameGenPerformance),
                     frameGenFlowScale = json.optInt("ps3FrameGenFlowScale", def.ps3.frameGenFlowScale),
@@ -2564,7 +2569,6 @@ data class Settings(
                 customDriverId = json.optString("customDriverId", def.customDriverId),
                 orientation = json.optInt("orientation", def.orientation),
                 portraitRenderTop = json.optBoolean("portraitRenderTop", def.portraitRenderTop),
-                landscapeRenderTop = json.optBoolean("landscapeRenderTop", def.landscapeRenderTop),
                 autoProgressiveScan = json.optBoolean("autoProgressiveScan", def.autoProgressiveScan),
                 affinityMode = json.optInt("affinityMode", def.affinityMode),
                 framerateNtsc = json.optDouble("framerateNtsc", def.framerateNtsc.toDouble()).toFloat(),
@@ -2720,7 +2724,6 @@ data class Settings(
                 dumpReplaceableTextures = json.optBoolean("dumpReplaceableTextures", def.dumpReplaceableTextures),
                 osdShowTextureReplacements = json.optBoolean("osdShowTextureReplacements", def.osdShowTextureReplacements),
                 osdShowFps = json.optBoolean("osdShowFps", def.osdShowFps),
-                osdScale = json.optInt("osdScale", def.osdScale),
                 osdColor = json.optInt("osdColor", def.osdColor),
                 vsyncEnable = json.optBoolean("vsyncEnable", def.vsyncEnable),
                 osdShowVps = json.optBoolean("osdShowVps", def.osdShowVps),
@@ -2799,6 +2802,7 @@ data class Settings(
             if (current.ps3.msaaMode != base.ps3.msaaMode) j.put("ps3MsaaMode", current.ps3.msaaMode)
             if (current.ps3.audioCubebBackend != base.ps3.audioCubebBackend) j.put("ps3AudioCubebBackend", current.ps3.audioCubebBackend)
             if (current.ps3.shaderMode != base.ps3.shaderMode) j.put("ps3ShaderMode", current.ps3.shaderMode)
+            if (current.ps3.blendingMode != base.ps3.blendingMode) j.put("ps3BlendingMode", current.ps3.blendingMode)
             if (current.ps3.frameGeneration != base.ps3.frameGeneration) j.put("ps3FrameGeneration", current.ps3.frameGeneration)
             if (current.ps3.frameGenPerformance != base.ps3.frameGenPerformance) j.put("ps3FrameGenPerformance", current.ps3.frameGenPerformance)
             if (current.ps3.frameGenFlowScale != base.ps3.frameGenFlowScale) j.put("ps3FrameGenFlowScale", current.ps3.frameGenFlowScale)
@@ -2900,7 +2904,6 @@ data class Settings(
             if (current.customDriverId != base.customDriverId) j.put("customDriverId", current.customDriverId)
             if (current.orientation != base.orientation) j.put("orientation", current.orientation)
             if (current.portraitRenderTop != base.portraitRenderTop) j.put("portraitRenderTop", current.portraitRenderTop)
-            if (current.landscapeRenderTop != base.landscapeRenderTop) j.put("landscapeRenderTop", current.landscapeRenderTop)
             if (current.autoProgressiveScan != base.autoProgressiveScan) j.put("autoProgressiveScan", current.autoProgressiveScan)
             if (current.affinityMode != base.affinityMode) j.put("affinityMode", current.affinityMode)
             if (current.framerateNtsc != base.framerateNtsc) j.put("framerateNtsc", current.framerateNtsc.toDouble())
@@ -3047,7 +3050,6 @@ data class Settings(
             if (current.dumpReplaceableTextures != base.dumpReplaceableTextures) j.put("dumpReplaceableTextures", current.dumpReplaceableTextures)
             if (current.osdShowTextureReplacements != base.osdShowTextureReplacements) j.put("osdShowTextureReplacements", current.osdShowTextureReplacements)
             if (current.osdShowFps != base.osdShowFps) j.put("osdShowFps", current.osdShowFps)
-            if (current.osdScale != base.osdScale) j.put("osdScale", current.osdScale)
             if (current.osdColor != base.osdColor) j.put("osdColor", current.osdColor)
             if (current.vsyncEnable != base.vsyncEnable) j.put("vsyncEnable", current.vsyncEnable)
             if (current.osdShowVps != base.osdShowVps) j.put("osdShowVps", current.osdShowVps)
@@ -3117,6 +3119,7 @@ data class Settings(
                     msaaMode = if (overrides.has("ps3MsaaMode")) overrides.getInt("ps3MsaaMode") else base.ps3.msaaMode,
                     audioCubebBackend = if (overrides.has("ps3AudioCubebBackend")) overrides.getInt("ps3AudioCubebBackend") else base.ps3.audioCubebBackend,
                     shaderMode = if (overrides.has("ps3ShaderMode")) overrides.getInt("ps3ShaderMode") else base.ps3.shaderMode,
+                    blendingMode = if (overrides.has("ps3BlendingMode")) overrides.getInt("ps3BlendingMode") else base.ps3.blendingMode,
                     frameGeneration = if (overrides.has("ps3FrameGeneration")) overrides.getInt("ps3FrameGeneration") else base.ps3.frameGeneration,
                     frameGenPerformance = if (overrides.has("ps3FrameGenPerformance")) overrides.getBoolean("ps3FrameGenPerformance") else base.ps3.frameGenPerformance,
                     frameGenFlowScale = if (overrides.has("ps3FrameGenFlowScale")) overrides.getInt("ps3FrameGenFlowScale") else base.ps3.frameGenFlowScale,
@@ -3223,7 +3226,6 @@ data class Settings(
             customDriverId = if (overrides.has("customDriverId")) overrides.getString("customDriverId") else base.customDriverId,
             orientation = if (overrides.has("orientation")) overrides.getInt("orientation") else base.orientation,
             portraitRenderTop = if (overrides.has("portraitRenderTop")) overrides.getBoolean("portraitRenderTop") else base.portraitRenderTop,
-            landscapeRenderTop = if (overrides.has("landscapeRenderTop")) overrides.getBoolean("landscapeRenderTop") else base.landscapeRenderTop,
             autoProgressiveScan = if (overrides.has("autoProgressiveScan")) overrides.getBoolean("autoProgressiveScan") else base.autoProgressiveScan,
             affinityMode = if (overrides.has("affinityMode")) overrides.getInt("affinityMode") else base.affinityMode,
             framerateNtsc = if (overrides.has("framerateNtsc")) overrides.getDouble("framerateNtsc").toFloat() else base.framerateNtsc,
@@ -3390,7 +3392,6 @@ data class Settings(
             dumpReplaceableTextures = if (overrides.has("dumpReplaceableTextures")) overrides.getBoolean("dumpReplaceableTextures") else base.dumpReplaceableTextures,
             osdShowTextureReplacements = if (overrides.has("osdShowTextureReplacements")) overrides.getBoolean("osdShowTextureReplacements") else base.osdShowTextureReplacements,
             osdShowFps = if (overrides.has("osdShowFps")) overrides.getBoolean("osdShowFps") else base.osdShowFps,
-            osdScale = if (overrides.has("osdScale")) overrides.getInt("osdScale") else base.osdScale,
             osdColor = if (overrides.has("osdColor")) overrides.getInt("osdColor") else base.osdColor,
             vsyncEnable = if (overrides.has("vsyncEnable")) overrides.getBoolean("vsyncEnable") else base.vsyncEnable,
             osdShowVps = if (overrides.has("osdShowVps")) overrides.getBoolean("osdShowVps") else base.osdShowVps,

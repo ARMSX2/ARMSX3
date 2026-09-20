@@ -1,5 +1,8 @@
 package com.armsx2.ui.settings
 
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.BorderStroke
 import android.os.Build
 import androidx.compose.foundation.layout.Arrangement
@@ -203,6 +206,7 @@ fun AppTab() {
             com.armsx2.update.UpdaterEntry()
         }
         ConfigDatabaseRow()
+        GameFoldersRow()
         Surface(
             onClick = { UiNavigator.navigate(AppRoute.Language) },
             modifier = Modifier.fillMaxWidth()
@@ -780,6 +784,80 @@ fun AppTab() {
             }
         }
 
+        // Its own setting rather than part of the pack above. That one is the launcher's menu
+        // blips and ships a built-in set; this belongs to the emulator, is a single file, and
+        // has no default at all. Folding it in meant "import a folder of clips" silently
+        // governed the trophy sound too, which nobody would guess from the control.
+        Text(
+            str("app.trophySound"),
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.padding(top = 10.dp),
+        )
+        run {
+            val trophyPicker = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocument()
+            ) { uri ->
+                if (uri != null) {
+                    val ok = com.armsx2.TrophySound.import(appContext, uri)
+                    Toast.makeText(
+                        appContext,
+                        I18n.get(if (ok) "app.trophySound.set" else "app.trophySound.failed"),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    if (ok) com.armsx2.TrophySound.preview()
+                }
+            }
+            Text(
+                str("app.trophySound.desc"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+            )
+            val chosen = com.armsx2.TrophySound.fileName.value
+            Text(
+                if (chosen != null) str("app.trophySound.current").format(chosen)
+                else str("app.trophySound.none"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+            )
+            // Only once there is a sound to set a level for. Its own slider rather than the menu
+            // one above: this plays over a game, those play over a menu, so they do not want the
+            // same level.
+            if (chosen != null) {
+                IntSliderRow(
+                    label = str("app.trophySound.volume"),
+                    value = com.armsx2.TrophySound.volumePercent.value,
+                    min = 0,
+                    max = 100,
+                    valueFormatter = { "$it%" },
+                    onChange = { com.armsx2.TrophySound.setVolume(it) },
+                )
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val pick = { trophyPicker.launch(arrayOf("audio/*")) }
+                OutlinedButton(
+                    onClick = pick,
+                    modifier = Modifier.controllerFocusable("app.trophySound.choose", onConfirm = pick),
+                ) { Text(str("app.trophySound.choose")) }
+                if (chosen != null) {
+                    val test = { com.armsx2.TrophySound.preview() }
+                    OutlinedButton(
+                        onClick = test,
+                        modifier = Modifier.controllerFocusable("app.trophySound.test", onConfirm = test),
+                    ) { Text(str("app.trophySound.test")) }
+                    val clear = { com.armsx2.TrophySound.clear() }
+                    OutlinedButton(
+                        onClick = clear,
+                        modifier = Modifier.controllerFocusable("app.trophySound.clear", onConfirm = clear),
+                    ) { Text(str("app.trophySound.clear")) }
+                }
+            }
+        }
+
         SegmentedRow(
             label = str("app.toolbarPosition"),
             options = listOf(str("app.toolbarPosition.top"), str("app.toolbarPosition.bottom")),
@@ -911,6 +989,100 @@ private fun ClearCacheRow() {
  *  the "start clean" button. Per-game overrides are deliberately left alone: they belong to
  *  individual games, are invisible from here, and wiping them from a global page would be a
  *  surprise. Controller binds live in ControllerMappings and keep their own reset. */
+@Composable
+private fun GameFoldersRow() {
+    val context = LocalContext.current
+    val dirs = MainActivityRuntime.romsDirs.value
+
+    // The picker, the list and the remove action all go through setRomsDirs, which is the
+    // same entry point first-run setup uses. Nothing here is new plumbing: romsDirs has
+    // always been a List<String> persisted as a JSON array, and HomeScreen re-scans on
+    // LaunchedEffect(directories, ...), so adding a folder refreshes the library by itself.
+    // The only thing that was missing was a way to reach it once setup had completed.
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+
+        // Persist the grant before storing the path. A SAF uri that outlives its permission
+        // reads as an empty folder rather than an error, which looks like the folder was
+        // added and silently contains nothing.
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        MainActivityRuntime.setRomsDirs((dirs + uri.toString()).distinct())
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.46f)),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(str("app.gameFolders"), style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (dirs.isEmpty()) str("app.gameFolders.none")
+                else I18n.get("app.gameFolders.count").format(dirs.size),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            dirs.forEach { raw ->
+                // Reachability is per folder, not global. romsAccessible() answers "can we
+                // start at all" with .any{}, which is the wrong question here: with two
+                // locations a revoked grant (an unmounted card, typically) would otherwise
+                // just show half a library with no explanation.
+                val ok = remember(raw) {
+                    runCatching {
+                        context.contentResolver.persistedUriPermissions.any {
+                            it.uri.toString() == raw && it.isReadPermission
+                        }
+                    }.getOrDefault(false)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            com.armsx2.storage.StorageLabel.forFolder(context, raw),
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (!ok) {
+                            Text(
+                                str("app.gameFolders.unavailable"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                    TextButton(onClick = { MainActivityRuntime.setRomsDirs(dirs - raw) }) {
+                        Text(str("app.gameFolders.remove"))
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(4.dp))
+            OutlinedButton(onClick = { runCatching { picker.launch(null) } }, modifier = Modifier.fillMaxWidth()) {
+                Text(str("app.gameFolders.add"))
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                str("app.gameFolders.hint"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun ResetAllSettingsRow() {
     var confirming by remember { mutableStateOf(false) }

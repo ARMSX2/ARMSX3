@@ -413,6 +413,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var tab by remember { mutableStateOf(0) }
     var showBrowser by remember { mutableStateOf(false) }
     var progressId by remember { mutableStateOf<Long?>(null) }
     var installed by remember { mutableStateOf(readInstalled()) }
@@ -557,8 +558,17 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
         }
     }
 
-    fun install(files: List<java.io.File>) {
-        if (files.isEmpty()) return
+    /**
+     * [onDone] reports whether the install succeeded, once it has. The updates tab needs it: a
+     * title can publish a CHAIN of packages that each patch the previous version, and those have
+     * to go on one at a time and in order, so the next cannot start until this one has landed.
+     */
+    fun install(
+        files: List<java.io.File>,
+        onDone: ((Boolean) -> Unit)? = null,
+        refreshLibrary: Boolean = true,
+    ) {
+        if (files.isEmpty()) { onDone?.invoke(false); return }
         showBrowser = false
         busy = true
         message = null
@@ -634,9 +644,14 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
             message = if (ok) {
                 // Force the library to re-read storage; the folder set is unchanged
                 // so nothing else would prompt a rescan.
-                GameLibraryRepository(context).invalidateCache()
-                installed = readInstalled()
-                licences = readLicences()
+                // A new title has to appear in the library, which costs a full storage rescan.
+                // An UPDATE to a title already listed changes nothing the library shows, so a
+                // chain of packages skips it for all but its last and pays once, not seven times.
+                if (refreshLibrary) {
+                    GameLibraryRepository(context).invalidateCache()
+                    installed = readInstalled()
+                    licences = readLicences()
+                }
                 I18n.get("packages.install.done")
             } else {
                 // The native reason names the actual problem ("Game is broken: PARAM.SFO not
@@ -644,6 +659,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                 // guesses, and used to be all the user ever saw.
                 nativeFailure?.takeIf { it.isNotBlank() } ?: I18n.get("packages.install.failed")
             }
+            onDone?.invoke(ok)
         }
     }
 
@@ -780,6 +796,26 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurface,
             )
 
+            // Two jobs on one screen: install a package you already have, or go and get a title update.
+            // The updates tab lives here rather than on the info tab because the reason to want a patch
+            // is usually that a game misbehaves, and this is the screen that puts things into the
+            // emulator. Issue #54.
+            androidx.compose.material3.TabRow(selectedTabIndex = tab) {
+                androidx.compose.material3.Tab(
+                    selected = tab == 0,
+                    onClick = { tab = 0 },
+                    text = { Text(str("packages.tab.install")) },
+                )
+                androidx.compose.material3.Tab(
+                    selected = tab == 1,
+                    onClick = { tab = 1 },
+                    text = { Text(str("packages.tab.updates")) },
+                )
+            }
+
+            if (tab == 1) {
+                GameUpdatesTab(busy = busy, onInstall = { files, last, done -> install(files, done, refreshLibrary = last) })
+            } else {
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -826,16 +862,32 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     } else {
-                        Button(onClick = { showBrowser = true }) {
-                            Text(str("packages.select.action"))
-                        }
-                        // Reaches storage the in-app browser cannot open by path: USB-OTG,
-                        // and SD cards on devices that only expose them through SAF.
-                        Button(
-                            onClick = { safPicker.launch(arrayOf("*/*")) },
-                            modifier = Modifier.padding(top = 8.dp),
-                        ) {
-                            Text(str("packages.select.external"))
+                        // Which of these is the useful one depends on the build.
+                        //
+                        // The in-app browser reads the filesystem directly, which the play build
+                        // has no permission to do: it can see the app's own folders and nothing
+                        // else, so a user looking for a .pkg in Downloads is shown an empty tree
+                        // with no hint why. Reported by a tester who pressed the obvious button.
+                        //
+                        // So the document picker leads there and the raw browser is not offered
+                        // at all, while the github build keeps the browser first, where being
+                        // able to walk the real filesystem is the nicer experience.
+                        if (com.armsx2.BuildConfig.STORAGE_ALL_FILES) {
+                            Button(onClick = { showBrowser = true }) {
+                                Text(str("packages.select.action"))
+                            }
+                            // Reaches storage the in-app browser cannot open by path: USB-OTG,
+                            // and SD cards on devices that only expose them through SAF.
+                            Button(
+                                onClick = { safPicker.launch(arrayOf("*/*")) },
+                                modifier = Modifier.padding(top = 8.dp),
+                            ) {
+                                Text(str("packages.select.external"))
+                            }
+                        } else {
+                            Button(onClick = { safPicker.launch(arrayOf("*/*")) }) {
+                                Text(str("packages.select.action"))
+                            }
                         }
                     }
 
@@ -1003,6 +1055,8 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                         }
                     }
                 }
+            }
+
             }
 
             TextButton(onClick = onBack) { Text(str("action.back")) }

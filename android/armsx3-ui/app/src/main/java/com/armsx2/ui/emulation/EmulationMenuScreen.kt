@@ -853,6 +853,20 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
             },
         )
         Spacer(Modifier.height(6.dp))
+        // Where the picture sits in the window. In-game for the same reason as screen aspect:
+        // you are looking at the thing you are moving, and on a handheld this is something you
+        // adjust once you can see the touch controls over the game. Two rows because a handheld
+        // Portrait only: landscape had the same control and it could never do anything, because
+        // a 16:9 game in a 16:9 window has no letterbox bar to move into.
+        HorizontalOptions(
+            title = str("renderer.portraitPosition.label"),
+            options = listOf(
+                str("renderer.portraitPosition.top"), str("renderer.portraitPosition.center"),
+            ).mapIndexed { index, label -> index to label },
+            selected = if (settings.portraitRenderTop) 0 else 1,
+            onSelect = { v -> viewModel.updateSettings { it.copy(portraitRenderTop = v == 0) } },
+        )
+        Spacer(Modifier.height(6.dp))
         // RSX accuracy -- the levers that actually matter on this core, and the
         // reason the PS2 GS rows above had to go rather than just be hidden.
         HorizontalOptions(
@@ -863,6 +877,19 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
             ).mapIndexed { index, label -> index to label },
             selected = settings.ps3.shaderMode,
             onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(shaderMode = v)) } },
+        )
+        Spacer(Modifier.height(6.dp))
+        // Mid-session because it is the one RSX lever whose cost is game-specific: the shader
+        // path only engages on blend states the fixed-function unit cannot express, so whether
+        // it costs anything at all depends on what is on screen right now.
+        HorizontalOptions(
+            title = str("renderer.blendingMode.label"),
+            options = listOf(
+                str("renderer.blendingMode.auto"), str("renderer.blendingMode.shader"),
+                str("renderer.blendingMode.hardware"),
+            ).mapIndexed { index, label -> index to label },
+            selected = settings.ps3.blendingMode,
+            onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(blendingMode = v)) } },
         )
         Spacer(Modifier.height(6.dp))
         HorizontalOptions(

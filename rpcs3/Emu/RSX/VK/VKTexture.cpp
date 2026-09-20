@@ -26,6 +26,13 @@ namespace vk
 	{
 		if (element_size == 4)
 		{
+			// Graphics-pipe twin first. gfx_shuffle_32 publishes its result to both transfer and
+			// compute readers itself, so nothing around this call has to change when it takes.
+			if (vk::gfx_shuffle_32(cmd, buf, data_offset, data_length))
+			{
+				return;
+			}
+
 			vk::get_compute_task<vk::cs_shuffle_32>()->run(cmd, buf, data_length, data_offset);
 		}
 		else if (element_size == 2)
@@ -497,12 +504,27 @@ namespace vk
 			const bool needs_shuffle = (src_convert.first || dst_convert.first) &&
 				(src_convert.first != dst_convert.first || src_convert.second != dst_convert.second);
 
-			// The 32<->16 case is the byteswap that Batman: Arkham City drives hardest -- over
-			// 10000 dispatches in four minutes, every one of them a graphics->compute engine
-			// switch, which is where the Adreno 830 hang was traced to. Run it on the graphics
-			// pipe instead; falls through to the compute kernel if that is unavailable.
-			if (needs_shuffle && src_convert.first && dst_convert.first &&
-				vk::gfx_shuffle_32_16(cmd, scratch_buf, src_length))
+			// Both byteswaps that land here are graphics->compute engine switches, and that
+			// transition is where the Adreno 830 hang was traced to. The 32<->16 case is the one
+			// Batman: Arkham City drives hardest -- over 10000 dispatches in four minutes -- and
+			// the plain 32-bit case is the one Watch Dogs drives while a level loads. Run whichever
+			// applies on the graphics pipe; each falls through to its compute kernel if the
+			// graphics path is unavailable.
+			bool shuffled_on_gfx = false;
+
+			if (needs_shuffle)
+			{
+				if (src_convert.first && dst_convert.first)
+				{
+					shuffled_on_gfx = vk::gfx_shuffle_32_16(cmd, scratch_buf, src_length);
+				}
+				else if ((src_convert.first ? src_convert.second : dst_convert.second) == 4)
+				{
+					shuffled_on_gfx = vk::gfx_shuffle_32(cmd, scratch_buf, 0, src_length);
+				}
+			}
+
+			if (shuffled_on_gfx)
 			{
 				vk::insert_buffer_memory_barrier(cmd, scratch_buf->value, 0, src_length,
 					VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,

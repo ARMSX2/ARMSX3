@@ -43,12 +43,13 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
         "customAspectRatio", "customDriverId", "deinterlaceMode", "displayBilinear",
         "displayFitMode", "dumpReplaceableTextures", "fmvAspectRatio", "forceMaliFbFetch",
         "fxaa", "gpuProfile", "gsBackThreadMode", "hardwareDownloadMode", "hwAa1",
-        "hwAccurateAlphaTest", "landscapeRenderTop", "loadTextureReplacements",
+        "hwAccurateAlphaTest", "loadTextureReplacements",
         "loadTextureReplacementsAsync", "maxAnisotropy", "orientation",
         "osdShowTextureReplacements", "portraitRenderTop", "precacheTextureReplacements",
         "ps3AnisoFilter", "ps3AsyncTexStream", "ps3DisableZcull", "ps3DisplayAspect",
         "ps3MsaaMode", "ps3MultithreadedRsx", "ps3ReadColorBuffers", "ps3ReadDepthBuffer",
         "ps3FrameGeneration",
+        "ps3BlendingMode",
         "ps3RelaxedZcull", "ps3Resolution", "ps3ShaderMode", "ps3StrictRendering",
         "ps3VramLimitMb", "ps3WriteColorBuffers", "ps3WriteDepthBuffer", "renderer",
         "shadeBoost", "shadeBoostBrightness", "shadeBoostContrast", "shadeBoostGamma",
@@ -75,7 +76,7 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
     ),
     // OverlayTab.kt
     SettingsCategory.OnScreen to listOf(
-        "osdColor", "osdScale", "osdShowCpu", "osdShowFps", "osdShowFrameTimes", "osdShowGpu",
+        "osdColor", "osdShowCpu", "osdShowFps", "osdShowFrameTimes", "osdShowGpu",
         "osdShowGpuStats", "osdShowGsStats", "osdShowHardwareInfo", "osdShowInputs",
         "osdShowMessages", "osdShowResolution", "osdShowSettings", "osdShowSpeed",
         "osdShowVersion", "osdShowVps", "ps3OverlayBodyBg", "ps3OverlayBodyColor",

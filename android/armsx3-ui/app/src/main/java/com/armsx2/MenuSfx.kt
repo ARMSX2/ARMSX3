@@ -96,7 +96,16 @@ object MenuSfx {
     fun set(context: Context, value: Boolean) {
         enabled.value = value
         MainActivityRuntime.prefs.edit { putBoolean(EnabledKey, value) }
-        if (value) rebuildPool(context) else releasePool()
+        // Turning the launcher blips off does not tear the pool down while the emulator still
+        // has a sound to play through it. See [playFile].
+        if (value) rebuildPool(context)
+        else if (!TrophySound.isSet()) releasePool()
+    }
+
+    /** Bring the pool up if it is down. For sounds that are not the launcher's own and so are
+     *  not covered by [enabled] -- currently the trophy, which has its own setting. */
+    fun ensurePool(context: Context) {
+        if (pool == null) rebuildPool(context)
     }
 
     fun setVolume(percent: Int) {
@@ -137,7 +146,9 @@ object MenuSfx {
         return copied
     }
 
-    /** Drop the imported pack and go back to the bundled defaults. */
+    /** Drop the imported pack and go back to the bundled defaults. The trophy sound is NOT
+     *  touched: it has its own setting, and clearing a menu pack should not silently remove
+     *  a sound the user chose somewhere else. */
     fun clear(context: Context) {
         Event.entries.forEach { runCatching { clipFile(context, it).delete() } }
         packName.value = null
@@ -147,6 +158,67 @@ object MenuSfx {
 
     /** Fire an event's sound, if enabled. Cheap no-op otherwise — safe to call from any UI
      *  callback. Throttled per event so a fast slider drag ticks rather than buzzes. */
+    /**
+     * Play a sound the emulator core asked for, by absolute path.
+     *
+     * The core has always requested these: a trophy popping, a dialog opening, the on-screen
+     * keyboard. Every one went to `.play_sound = [](auto...) {}`, an empty lambda, so none of
+     * them has ever made a noise on Android. See overlays.cpp, which resolves them all to
+     * <config>/sounds/<name>.wav.
+     *
+     * Deliberately routed through THIS pool rather than a player of its own: the attributes
+     * above keep UI audio off the emulator's Oboe path, and a trophy that contended with SPU2
+     * output would be a worse bug than a trophy that made no sound.
+     *
+     * Samples are cached by path. A trophy run in a game that pops several in a row would
+     * otherwise decode the same file each time, and SoundPool ids leak if you never reuse them.
+     *
+     * Silent when the file is absent, which matches desktop: RPCS3 ships no sounds either, it
+     * plays whatever the user has placed in that folder.
+     */
+    private val pathSampleIds = HashMap<String, Int>()
+
+    /** Drop a cached sample so a replaced file is re-read instead of the old one replaying. */
+    fun forgetCachedFile(path: String) {
+        pathSampleIds.remove(path)
+    }
+
+    @JvmStatic
+    fun playFile(path: String, volume: Float) {
+        // No [enabled] check. That toggle is the launcher's own interface blips; these come from
+        // the emulator. A user who turned the menu ticks off did not thereby ask for silent
+        // trophies, and the trophy has its own setting to turn off.
+        val sp = pool ?: return
+        // The core always asks for .wav. An imported pack may have supplied ogg or mp3, which
+        // SoundPool plays just as happily, so fall back to a sibling with the same stem rather
+        // than making the user convert.
+        val asked = runCatching { File(path) }.getOrNull() ?: return
+        val file = asked.takeIf { it.isFile && it.length() > 0L }
+            ?: listOf("ogg", "mp3").firstNotNullOfOrNull { ext ->
+                File(asked.parentFile, asked.nameWithoutExtension + "." + ext)
+                    .takeIf { it.isFile && it.length() > 0L }
+            }
+            ?: return
+
+        val key = file.absolutePath
+        val id = pathSampleIds[key] ?: runCatching { sp.load(key, 1) }
+            .getOrDefault(0)
+            .also { if (it != 0) pathSampleIds[key] = it }
+
+        if (id == 0) return
+
+        // The core passes a volume only where it means to override; otherwise it sends a
+        // negative and a user level applies -- the trophy's own where this is the trophy, and
+        // the UI level for the core sounds that have no control of their own (dialogs, the
+        // on-screen keyboard).
+        val gain = when {
+            volume >= 0f -> volume
+            TrophySound.owns(key) -> TrophySound.gain()
+            else -> gain()
+        }.coerceIn(0f, 1f)
+        sp.play(id, gain, gain, 1, 0, 1f)
+    }
+
     fun play(event: Event) {
         if (!enabled.value) return
         val p = pool ?: return

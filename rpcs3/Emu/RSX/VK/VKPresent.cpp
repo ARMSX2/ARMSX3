@@ -1431,7 +1431,8 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	areai aspect_ratio;
 	if (!g_cfg.video.stretch_to_display_area)
 	{
-		const auto converted = avconfig.aspect_convert_region({ buffer_width, buffer_height }, m_swapchain_dims);
+		const auto converted = rsx::apply_render_position(
+			avconfig.aspect_convert_region({ buffer_width, buffer_height }, m_swapchain_dims), m_swapchain_dims);
 		aspect_ratio = static_cast<areai>(converted);
 	}
 	else

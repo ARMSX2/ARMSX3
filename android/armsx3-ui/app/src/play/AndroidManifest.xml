@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Play-only additions.
+
+    The github build reaches its data folder through MANAGE_EXTERNAL_STORAGE, so a file manager
+    can already get at it and this provider would be a second way to do the same thing. The play
+    build has no such permission: its data folder is an app-specific directory, which is exactly
+    the location Android 11 stopped letting file managers browse. Publishing it as a documents
+    root is how games get in at all there.
+
+    Declared here rather than gated at runtime, and the class lives in src/play/java, so the
+    github build does not compile or ship it.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <provider
+            android:name="com.armsx2.storage.ArmsxDocumentsProvider"
+            android:authorities="${applicationId}.documents"
+            android:exported="true"
+            android:grantUriPermissions="true"
+            android:permission="android.permission.MANAGE_DOCUMENTS">
+            <intent-filter>
+                <action android:name="android.content.action.DOCUMENTS_PROVIDER" />
+            </intent-filter>
+        </provider>
+    </application>
+</manifest>

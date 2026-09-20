@@ -88,10 +88,12 @@ fun AppNavigation() {
                 is AppRoute.Settings -> SettingsScreen(
                     initialCategory = destination.category,
                     game = destination.game,
-                    onBack = UiNavigator::home,
+                    // Not UiNavigator::home: the arrow and the system back gesture must land in
+                    // the same place, and that place is wherever this screen was opened from.
+                    onBack = { UiNavigator.navigate(destination.returnTo ?: AppRoute.Home) },
                     onOpenAbout = { UiNavigator.navigate(AppRoute.About) },
                 )
-                is AppRoute.BiosManager -> BiosManagerScreen(onBack = UiNavigator::home, game = destination.game)
+                AppRoute.BiosManager -> BiosManagerScreen(onBack = UiNavigator::home)
                 AppRoute.PackageInstaller ->
                     com.armsx2.ui.packages.PackageInstallerScreen(onBack = UiNavigator::home)
                 // The drawer route is the global one: it is opened from the library, where no
@@ -105,6 +107,7 @@ fun AppNavigation() {
                     )
                 AppRoute.SaveManager -> SaveManagerScreen(onBack = UiNavigator::home)
                 AppRoute.ControllerManager -> ControllerManagerScreen(onBack = UiNavigator::home)
+                AppRoute.ModLibrary -> com.armsx2.ui.mods.ModLibraryScreen(onBack = UiNavigator::home)
                 AppRoute.TextureManager -> TextureManagerScreen(onBack = UiNavigator::home)
                 AppRoute.Achievements -> AchievementsScreen(onBack = UiNavigator::home)
                 AppRoute.Trophies -> TrophiesScreen(onBack = UiNavigator::home)

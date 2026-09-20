@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "stdafx.h"
 #include "rsx_profiler.h"
 #include "Emu/Cell/PPUThread.h"
@@ -351,7 +352,23 @@ namespace rsx::prof
 					row(0x50), (vm::read8(sa + 0x70) << 8) | vm::read8(sa + 0x71));
 			};
 
-			if (vm::check_addr(label, vm::page_readable, 4))
+			// SCV-only. 0x40300CC0 is Soulcalibur V's label; no other title has any reason to
+			// have something meaningful there. Every other game therefore samples an address
+			// that reads zero forever and emits one error per second for it -- observed on
+			// Watch Dogs at 439 consecutive seconds of "LABEL 0x40300cc0 STUCK at 0x0", which
+			// diagnosed nothing and is exactly the shipped log volume that has faked lockups
+			// on this project before.
+			//
+			// Function-local on purpose: a namespace-scope initialiser runs before
+			// rpcsx-android.cpp parses driver_env.txt and setenv()s it, so the lever would
+			// always read as unset. Same trap as the other ARMSX3_* switches.
+			static const bool s_watch_scv_label = []
+			{
+				const char* v = std::getenv("ARMSX3_SCV_LABEL");
+				return v && v[0] == '1';
+			}();
+
+			if (s_watch_scv_label && vm::check_addr(label, vm::page_readable, 4))
 			{
 				const u32 now_val = vm::_ref<atomic_t<RsxSemaphore>>(label).observe();
 				const u64 now_us = get_system_time();

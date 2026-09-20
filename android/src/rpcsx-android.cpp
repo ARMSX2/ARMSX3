@@ -66,6 +66,7 @@
 #include "util/console.h"
 #include "util/fixed_typemap.hpp"
 #include "util/logs.hpp"
+#include "saf_device.h"
 #include "util/serialization.hpp"
 #include "util/sysinfo.hpp"
 #include <Emu/Io/pad_config.h>
@@ -321,10 +322,25 @@ extern atomic_t<bool> g_user_asked_for_screenshot;
 
 static constexpr u32 kThumbMaxEdge = 320;
 
+// How long a save waits for the renderer to hand over a frame for the slot preview. Two
+// frames at 30fps plus slack: long enough that a drawing game always lands one, short enough
+// that a game which is not drawing does not visibly delay the save.
+static constexpr int kThumbWaitMs = 250;
+
+// The same wait, on the way into a pause. Shorter because it sits between the user's tap and
+// the menu appearing, and a missed preview costs a picture where a longer hitch costs every
+// pause. Four frames at 30fps.
+static constexpr int kPauseThumbWaitMs = 140;
+
 static shared_mutex g_thumb_mutex;
 static std::vector<u8> g_thumb_rgba; // tightly packed RGBA8
 static u32 g_thumb_width = 0;
 static u32 g_thumb_height = 0;
+
+// Bumped every time a frame lands. The save path waits on this rather than assuming one
+// arrived, because asking for a screenshot only marks the NEXT rendered frame and the kill
+// that follows can beat it there.
+static atomic_t<u64> g_thumb_generation{0};
 
 static void armsx3_store_thumbnail(const std::vector<u8> &src, u32 width,
                                    u32 height, bool is_bgra) {
@@ -358,10 +374,14 @@ static void armsx3_store_thumbnail(const std::vector<u8> &src, u32 width,
     }
   }
 
-  std::lock_guard lock(g_thumb_mutex);
-  g_thumb_rgba = std::move(out);
-  g_thumb_width = out_w;
-  g_thumb_height = out_h;
+  {
+    std::lock_guard lock(g_thumb_mutex);
+    g_thumb_rgba = std::move(out);
+    g_thumb_width = out_w;
+    g_thumb_height = out_h;
+  }
+
+  g_thumb_generation++;
 }
 
 // "AX3T", u32 width, u32 height, then width*height RGBA8. A private format on purpose:
@@ -2217,6 +2237,10 @@ static struct main_thread_dispatcher {
     }
   }
 } g_mainThreadDispatcher;
+// Defined further down, next to the JNI bridge it needs. Declared here because the callback
+// table below is assembled before it.
+static void armsx3_play_sound(const std::string &path, std::optional<f32> volume);
+
 
 static void setupCallbacks() {
   Emu.SetCallbacks({
@@ -2349,8 +2373,40 @@ static void setupCallbacks() {
               return {};
             }
 
-            rpcsx_android.notice("using database config for %s", title_id);
-            return config.to_string();
+            std::string yaml = config.to_string();
+
+            // At success level, which reaches logcat, where notice does not. This is the only
+            // record that a title booted with settings the user never chose, and without it a
+            // bad database entry is indistinguishable from an emulator regression: it is
+            // per-title, so it breaks exactly the game it was meant to help. Naming the keys
+            // makes the first question on any "this got slower" report answerable by grep.
+            std::string keys;
+            usz listed = 0;
+
+            for (usz pos = 0; pos < yaml.size() && listed < 24;) {
+              const usz eol = yaml.find('\n', pos);
+              const std::string_view line(yaml.data() + pos,
+                                          (eol == umax ? yaml.size() : eol) - pos);
+              pos = (eol == umax ? yaml.size() : eol + 1);
+
+              const usz start = line.find_first_not_of(" \t-");
+              const usz colon = line.find(':');
+
+              if (start == umax || colon == umax || colon <= start || line[start] == '#') {
+                continue;
+              }
+
+              if (!keys.empty()) {
+                keys += ", ";
+              }
+
+              keys += std::string(line.substr(start, colon - start));
+              listed++;
+            }
+
+            rpcsx_android.success("database config applied to %s: %s", title_id,
+                                  keys.empty() ? "(empty)" : keys.c_str());
+            return yaml;
           },
       .get_photo_path = [](std::string_view) { return std::string{}; },
       .try_to_quit = [](bool, std::function<void()> on_exit) {
@@ -2450,7 +2506,7 @@ static void setupCallbacks() {
         return substitute_arg<char32_t>(entry->second, arg);
       },
       .get_localized_setting = [](auto...) { return ""; },
-      .play_sound = [](auto...) {},
+      .play_sound = armsx3_play_sound,
       .get_image_info = [](auto...) { return false; },
       .get_scaled_image = [](auto...) { return false; },
       .resolve_path =
@@ -3713,7 +3769,48 @@ extern "C" void _rpcsx_resume() { Emu.Resume(); }
 // and _rpcsx_surfaceEvent has always called it on surface loss. That is why BACKGROUNDING the app
 // was the only thing that actually paused, while the in-game pause menu left the emulator running
 // underneath it, and why pause/resume were asymmetric: resume() reached the core, pause() did not.
-extern "C" void _rpcsx_pause() { Emu.Pause(); }
+// Ask for a slot preview on the way into the pause.
+//
+// A paused emulator does not flip, so the screenshot path in VKPresent never runs and nothing
+// ever reaches take_screenshot. Saving a state from the pause menu therefore had NO frame to
+// preview and the tile stayed blank, while a save made from a running game got one. That is
+// the whole difference between the slot that had a thumbnail and the slot that did not.
+//
+// Requested here, before the pause, and deliberately not waited on: Pause() signals the guest
+// threads rather than stopping them instantly, so the RSX almost always flips once more on the
+// way down, and the user then spends seconds in the menu before choosing a slot. Blocking the
+// caller to guarantee it would put a stall on every pause to improve a picture.
+//
+// The frame this captures is the game as it looked when paused, which is the right image for
+// a save made from that menu anyway.
+extern "C" void _rpcsx_pause() {
+  // Capture BEFORE pausing, and finish the capture before the pause begins.
+  //
+  // The frame is wanted because a paused emulator never flips, so a save made from the pause
+  // menu has nothing to preview. The first version of this set the flag and paused straight
+  // away, which left the RSX thread allocating a host-visible buffer and reading the swapchain
+  // back WHILE Emu.Pause() tore the frame down underneath it. That is a segfault inside the
+  // Vulkan driver on rsx::thread, and it is racy, so it survived testing and crashed later.
+  //
+  // Waiting is the whole fix: the screenshot then happens on an ordinary flip of a running
+  // emulator, which is the same path a save from a running game has always used safely, and
+  // the pause does not start until it has landed.
+  if (Emu.IsRunning()) {
+    const u64 before = g_thumb_generation;
+    g_user_asked_for_screenshot = true;
+
+    for (int waited = 0; waited < kPauseThumbWaitMs && g_thumb_generation == before;
+         waited += 5) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    // Do not leave it armed. A request that outlives this call would be serviced by the next
+    // flip, which is the one after the pause ends, and that is the race again.
+    g_user_asked_for_screenshot = false;
+  }
+
+  Emu.Pause();
+}
 
 extern "C" void _rpcsx_openHomeMenu() { open_home_menu_async(); }
 
@@ -3904,10 +4001,23 @@ static void armsx3_slot_capture(unsigned int slot, const std::string& title,
   // Best effort. A slot with no picture still loads, so a missing frame must not turn a
   // successful save into a failed one.
   if (!armsx3_write_thumbnail(dir + "slot" + std::to_string(slot) + ".thumb")) {
-    rpcsx_android.notice("saveState: slot %u has no frame to preview", slot);
+    rpcsx_android.warning("saveState: slot %u has no frame to preview", slot);
   }
 
   rpcsx_android.success("saveState: slot %u <- '%s'", slot, newest);
+}
+
+// Whether the core intends to come back up by itself.
+//
+// Saving a state is a full stop followed by a restart from the state just written, armed in
+// after_kill_callback. The app's run loop waits on "state != Stopped" and would otherwise
+// return the moment the kill lands, drop to the library and leave the core to resume behind
+// it: audio still playing, and the next launch booting a second VM on top of a live one.
+//
+// Read WITHOUT resetting. The flag is the core's own signal to itself and consuming it here
+// would disarm the restart it describes.
+extern "C" bool _rpcsx_isRestartPending() {
+  return Emu.ContinuousModeEnabled(false);
 }
 
 extern "C" bool _rpcsx_saveStateToSlot(unsigned int slot) {
@@ -3928,7 +4038,29 @@ extern "C" bool _rpcsx_saveStateToSlot(unsigned int slot) {
 
   // Ask for a frame now, while there is still a renderer to draw one. It arrives at
   // take_screenshot and is written out by armsx3_slot_capture once the state is on disk.
-  g_user_asked_for_screenshot = true;
+  //
+  // Then WAIT for it. The request only marks the next rendered frame, and the kill queued
+  // below was racing it: whichever won decided whether the slot got a picture, so saving
+  // twice in a row gave one tile a thumbnail and the next none. Reported on slots 1 and 2.
+  //
+  // Bounded and best effort. A game that is not drawing (mid-compile, or paused with nothing
+  // to present) will never satisfy this, and a save is worth more than a preview of it.
+  // Only worth waiting on while the game is actually drawing. Paused, no flip will come and
+  // this would stall every save by the full timeout to learn nothing; the frame captured on
+  // the way into the pause is what gets used instead.
+  if (Emu.IsRunning()) {
+    const u64 before = g_thumb_generation;
+
+    for (int waited = 0; waited < kThumbWaitMs && g_thumb_generation == before; waited += 10) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    if (g_thumb_generation == before) {
+      // warning, not notice: notice is below the logcat cutoff, so the one line that explains
+      // a slot with no preview would never be seen by anyone able to act on it.
+      rpcsx_android.warning("saveState: slot %u, no frame arrived in %dms", slot, kThumbWaitMs);
+    }
+  }
 
   Emu.CallFromMainThread([slot, title, boot]() {
     // Outside suspend mode the game comes straight back up from the state it just
@@ -4256,11 +4388,48 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
   return result;
 }
 
-extern "C" std::string _rpcsx_patchesList(std::string_view serial) {
-  patch_engine::patch_map db;
+// The parsed patch database, reloaded only when patch.yml actually changes.
+//
+// Both calls below used to parse the whole file on every invocation, so a single toggle in the
+// UI parsed it twice: once to validate the patch exists, once to rebuild the list afterwards.
+// That is over a megabyte of YAML for the rpcs3.net database alone, and half as much again with
+// a community collection merged in, which is the point the delay became visible when flipping a
+// switch.
+//
+// Keyed on the file's size and mtime rather than an invalidate-me flag, so an import through any
+// path invalidates it, including one that writes the file without telling us.
+static const patch_engine::patch_map &cached_patch_db()
+{
+  static std::mutex mutex;
+  static patch_engine::patch_map db;
+  static u64 cached_size = 0;
+  static s64 cached_mtime = 0;
+  static bool loaded = false;
+
+  std::lock_guard lock(mutex);
+
+  const std::string path = patch_engine::get_patches_path() + "patch.yml";
+
+  fs::stat_t info{};
+  const bool exists = fs::get_stat(path, info);
+
+  if (loaded && exists && info.size == cached_size && info.mtime == cached_mtime)
+  {
+    return db;
+  }
+
+  db.clear();
   std::stringstream log;
-  patch_engine::load(db, patch_engine::get_patches_path() + "patch.yml", {},
-                     false, &log);
+  patch_engine::load(db, path, {}, false, &log);
+
+  cached_size = exists ? info.size : 0;
+  cached_mtime = exists ? info.mtime : 0;
+  loaded = true;
+  return db;
+}
+
+extern "C" std::string _rpcsx_patchesList(std::string_view serial) {
+  const patch_engine::patch_map &db = cached_patch_db();
 
   const patch_engine::patch_map enabled = patch_engine::load_config();
 
@@ -4344,10 +4513,7 @@ extern "C" bool _rpcsx_patchSetEnabled(std::string_view hash,
                                        std::string_view serial,
                                        std::string_view appVersion,
                                        bool enabled) {
-  patch_engine::patch_map db;
-  std::stringstream log;
-  patch_engine::load(db, patch_engine::get_patches_path() + "patch.yml", {},
-                     false, &log);
+  const patch_engine::patch_map &db = cached_patch_db();
 
   patch_engine::patch_map config = patch_engine::load_config();
 
@@ -4553,6 +4719,13 @@ extern "C" void _rpcsx_setThermals(float cpu, float gpu, float battery, bool sho
   rsx::overlays::thermals::g_gpu = gpu;
   rsx::overlays::thermals::g_battery = battery;
   rsx::overlays::thermals::g_show = show;
+}
+
+// Where the letterboxed image sits in a portrait window, plus the cutout inset to clear once
+// it is at the top. See rsx::apply_render_position, which ignores landscape windows.
+extern "C" void _rpcsx_setRenderPosition(bool portraitTop, int topInset) {
+  rsx::g_render_top_portrait = portraitTop ? 1 : 0;
+  rsx::g_render_top_inset = topInset > 0 ? static_cast<u32>(topInset) : 0;
 }
 
 extern "C" int _rpcsx_getPadRumble(int port) {
@@ -5216,6 +5389,54 @@ extern "C" bool _rpcsx_isInstallableFile(jint fd) {
          type != FileType::Rap; // FIXME: implement rap preinstallation
 }
 
+// ---------------------------------------------------------------------------
+// What a .pkg is, without installing it
+//
+// A package carries its own PARAM.SFO, and package_reader parses it while opening
+// the archive. So the title, the id and the category are readable up front, which
+// is what lets the library show an uninstalled package as the game it will become
+// rather than as a filename.
+//
+// CATEGORY is the part that matters. "GD" is an update, "AC" is downloadable
+// content, and neither is a game: an update refuses to install without the base
+// game it patches (unpkg.cpp draws the same line at the same string). Reported
+// here rather than filtered, so the caller decides.
+// ---------------------------------------------------------------------------
+extern "C" jstring _rpcsx_probePkgInfo(JNIEnv *env, jint fd) {
+  auto file = fs::file::from_native_handle(fd);
+  AtExit atExit{[&] { file.release_handle(); }};
+
+  package_reader reader("probe.pkg", std::move(file));
+
+  // Registered BEFORE the validity check, not after. The reader owns the handle from
+  // construction on, so an early return that skipped this would leave it to close a
+  // descriptor the Java side is also going to close, and a double close is a fault in
+  // whatever unrelated thing happens to be handed that number next.
+  AtExit releaseReader{[&] { reader.file().release_handle(); }};
+
+  if (!reader.is_valid()) {
+    return nullptr;
+  }
+
+  const psf::registry &psf = reader.get_psf();
+
+  const auto titleId = std::string(psf::get_string(psf, "TITLE_ID", ""));
+  const auto title = std::string(psf::get_string(psf, "TITLE", ""));
+  const auto category = std::string(psf::get_string(psf, "CATEGORY", ""));
+  const auto appVersion = std::string(psf::get_string(psf, "APP_VER", ""));
+
+  if (titleId.empty()) {
+    return nullptr;
+  }
+
+  // Escaped: a title is arbitrary text off the disc and has no obligation to be valid
+  // inside a JSON string.
+  return wrap(env, fmt::format(
+      R"({"titleId":"%s","title":"%s","category":"%s","appVersion":"%s"})",
+      json_escape(titleId), json_escape(title), json_escape(category),
+      json_escape(appVersion)));
+}
+
 extern "C" jstring _rpcsx_getDirInstallPath(JNIEnv *env, jint fd) {
   auto file = fs::file::from_native_handle(fd);
   AtExit atExit{[&] { file.release_handle(); }};
@@ -5290,6 +5511,120 @@ extern "C" bool _rpcsx_uninstallGame(std::string_view path) {
 
   rpcsx_android.notice("uninstallGame: removing %s", dir);
   return fs::remove_all(dir);
+}
+
+// Extract a .pkg into a directory instead of installing it.
+//
+// Same machinery as an install, pointed somewhere else: a mod shipped as a package holds the
+// same game-relative files a loose mod does, so dropping them into the mod store turns it into
+// something that can be switched off rather than a permanent overwrite of the title.
+//
+// The override is cleared unconditionally on the way out, including on failure. Leaving it set
+// would silently redirect the NEXT ordinary install into a mod folder, which is about the worst
+// failure this could have.
+// ---------------------------------------------------------------------------
+// Storage bridge
+//
+// Registers the SAF virtual device, so paths under its prefix resolve through a
+// picked folder's tree URI instead of through the filesystem. Called from Kotlin
+// rather than from core startup because the class lookup it does only works on a
+// thread Java started: a natively attached thread gets the system class loader,
+// which cannot see app classes.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Overlay sounds
+//
+// The core asks for these all the time: a trophy popping, a dialog opening, the on-screen
+// keyboard. Every request went to an empty lambda, so none of them has ever made a noise
+// here. overlays.cpp resolves each one to <config>/sounds/<name>.wav, the same paths desktop
+// uses, and desktop ships no sounds either: it plays whatever the user has put there.
+//
+// Cached the same way the storage bridge is, and for the same reason: FindClass from a
+// natively attached thread gets the system class loader, which cannot see app classes.
+// ---------------------------------------------------------------------------
+static jclass g_sfx_class = nullptr;
+static jmethodID g_sfx_play = nullptr;
+
+static void armsx3_play_sound(const std::string &path, std::optional<f32> volume) {
+  JavaVM *vm = g_java_vm.load(std::memory_order_acquire);
+
+  if (!vm || !g_sfx_class || !g_sfx_play || path.empty()) {
+    return;
+  }
+
+  JNIEnv *env = nullptr;
+
+  if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
+    // Overlay sounds come off the RSX thread, which Java did not start.
+    if (vm->AttachCurrentThreadAsDaemon(&env, nullptr) != JNI_OK || !env) {
+      return;
+    }
+  }
+
+  jstring arg = env->NewStringUTF(path.c_str());
+
+  if (!arg) {
+    env->ExceptionClear();
+    return;
+  }
+
+  // Negative means "no override", so the user's own UI sound level applies.
+  env->CallStaticVoidMethod(g_sfx_class, g_sfx_play, arg,
+                            static_cast<jfloat>(volume.value_or(-1.f)));
+
+  if (env->ExceptionCheck()) {
+    env->ExceptionClear();
+  }
+
+  env->DeleteLocalRef(arg);
+}
+
+extern "C" void _rpcsx_installSoundBridge(JNIEnv *env) {
+  if (!env || g_sfx_class) {
+    return;
+  }
+
+  jclass found = env->FindClass("com/armsx2/MenuSfx");
+
+  if (!found || env->ExceptionCheck()) {
+    env->ExceptionClear();
+    return;
+  }
+
+  jclass global = static_cast<jclass>(env->NewGlobalRef(found));
+  env->DeleteLocalRef(found);
+
+  if (!global) {
+    return;
+  }
+
+  g_sfx_play = env->GetStaticMethodID(global, "playFile", "(Ljava/lang/String;F)V");
+
+  if (env->ExceptionCheck() || !g_sfx_play) {
+    env->ExceptionClear();
+    env->DeleteGlobalRef(global);
+    return;
+  }
+
+  g_sfx_class = global;
+}
+
+extern "C" void _rpcsx_installStorageBridge(JNIEnv *env) {
+  armsx3::saf::install(env);
+}
+
+extern "C" bool _rpcsx_extractPkgTo(JNIEnv *env, int fd, long progressId,
+                                    const char *dest) {
+  if (dest == nullptr || *dest == '\0') {
+    return false;
+  }
+
+  package_reader::set_install_root_override(dest);
+  AtExit clearOverride{[] { package_reader::set_install_root_override({}); }};
+
+  std::vector<fs::file> files;
+  files.push_back(fs::file::from_native_handle(fd));
+  return installPkg(env, std::move(files), progressId);
 }
 
 extern "C" bool _rpcsx_install(JNIEnv *env, int fd, long progressId) {

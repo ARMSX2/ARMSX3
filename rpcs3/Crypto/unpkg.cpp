@@ -121,9 +121,9 @@ bool package_reader::read_header()
 		return false;
 	}
 
-	if (u64{umax} / sizeof(PKGEntry) < u64(m_header.file_count))
+	if (m_header.file_count > PKG_MAX_FILE_COUNT || u64(m_header.file_count) > u64(m_header.data_size) / sizeof(PKGEntry))
 	{
-		pkg_log.error("PKG file count is too large! (0x%x)", m_header.file_count);
+		pkg_log.error("PKG file count is invalid! (count=0x%x, data_size=0x%llx)", m_header.file_count, m_header.data_size);
 		return false;
 	}
 
@@ -813,6 +813,16 @@ package_install_result package_reader::check_target_app_version() const
 	};
 }
 
+// Empty unless a caller is extracting outside dev_hdd0. Installs are serialised behind one
+// worker thread, so a plain global is enough and an extra lock would only describe a race that
+// cannot happen.
+static std::string s_install_root_override;
+
+void package_reader::set_install_root_override(std::string root)
+{
+	s_install_root_override = std::move(root);
+}
+
 bool package_reader::set_install_path()
 {
 	if (!m_is_valid)
@@ -823,6 +833,23 @@ bool package_reader::set_install_path()
 	m_install_path.clear();
 
 	// Get full path
+	// An override skips the dev_hdd0 layout entirely: the caller has already decided exactly
+	// where this should land, and the game/<id> shaping below is the thing it is avoiding.
+	if (!s_install_root_override.empty())
+	{
+		m_install_path = s_install_root_override;
+		if (!m_install_path.empty() && m_install_path.back() != '/')
+		{
+			m_install_path += '/';
+		}
+		if (!fs::create_path(m_install_path))
+		{
+			pkg_log.error("Could not create the extraction directory %s (error=%s)", m_install_path, fs::g_tls_error);
+			return false;
+		}
+		return true;
+	}
+
 	std::string dir = rpcs3::utils::get_hdd0_dir();
 
 	// Based on https://www.psdevwiki.com/ps3/PKG_files#ContentType
@@ -930,6 +957,25 @@ bool package_reader::fill_data(std::map<std::string, install_entry*>& all_instal
 			m_header.data_size / (1024 * 1024), dev.avail_free / (1024 * 1024));
 	}
 
+	std::error_code path_ec;
+	auto install_path = std::filesystem::weakly_canonical(m_install_path, path_ec);
+	if (path_ec)
+	{
+		pkg_log.warning("Failed to canonicalize installation path '%s' (%s); falling back to lexical normalization.", m_install_path, path_ec.message());
+		install_path = std::filesystem::path(m_install_path).lexically_normal();
+	}
+
+	if (install_path.empty())
+	{
+		pkg_log.error("Failed to normalize installation path for '%s'", m_install_path);
+		return false;
+	}
+
+	const auto is_inside_install_path = [&install_path](const std::filesystem::path& path)
+	{
+		return std::mismatch(install_path.begin(), install_path.end(), path.begin(), path.end()).first == install_path.end();
+	};
+
 	m_install_entries.clear();
 	m_bootable_file_path.clear();
 	m_entry_indexer = 0;
@@ -967,7 +1013,51 @@ bool package_reader::fill_data(std::map<std::string, install_entry*>& all_instal
 
 		std::string_view name = fmt::trim_back_sv(name_buf, "\0"sv);
 
+		const std::filesystem::path entry_path{name};
+		if (entry_path.is_absolute())
+		{
+			num_failures++;
+			pkg_log.error("PKG entry path is absolute: '%s'", name);
+			break;
+		}
+
+		for (const auto& component : entry_path)
+		{
+			if (component == "..")
+			{
+				fmt::throw_exception("PKG entry path contains a parent directory component: '%s'", name);
+			}
+
+			if (component == ".")
+			{
+				num_failures++;
+				pkg_log.error("PKG entry path contains a special component: '%s'", name);
+				break;
+			}
+		}
+
+		if (num_failures)
+		{
+			break;
+		}
+
 		std::string path = m_install_path + vfs::escape(name);
+		path_ec.clear();
+		auto canonical_path = std::filesystem::weakly_canonical(path, path_ec);
+		if (path_ec)
+		{
+			pkg_log.warning("Failed to canonicalize package path '%s' (%s); falling back to lexical normalization.", path, path_ec.message());
+			canonical_path = std::filesystem::path(path).lexically_normal();
+		}
+
+		if (canonical_path.empty() || !is_inside_install_path(canonical_path))
+		{
+			num_failures++;
+			pkg_log.error("PKG entry path escapes installation directory: '%s'", name);
+			break;
+		}
+
+		path = canonical_path.string();
 
 		if (entry.pad || (entry.type & ~PKG_FILE_ENTRY_KNOWN_BITS))
 		{
@@ -1004,16 +1094,9 @@ bool package_reader::fill_data(std::map<std::string, install_entry*>& all_instal
 		}
 		default:
 		{
-			// TODO: check for valid utf8 characters
-			const std::string true_path = std::filesystem::path(path).lexically_normal().string();
-			if (true_path.empty())
-			{
-				num_failures++;
-				pkg_log.error("Failed to normalize package path for '%s'", path);
-				break;
-			}
-
-			auto map_ptr = &*all_install_entries.try_emplace(true_path).first;
+			// The name reached "path" through "vfs::escape", which turns whatever the host file system cannot take
+			// into characters it can, a byte that is not valid UTF-8 included (macOS refuses a name carrying one)
+			auto map_ptr = &*all_install_entries.try_emplace(path).first;
 
 			m_install_entries.push_back({
 				.weak_reference = map_ptr,

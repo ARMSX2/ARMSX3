@@ -1,5 +1,6 @@
 package com.armsx2
 
+import com.armsx2.runtime.MainActivityRuntime
 import net.rpcsx.RPCSX
 import java.io.File
 
@@ -80,9 +81,121 @@ object Ps3Sfo {
     }.getOrDefault(emptyMap())
 
     /** `APP_VER` of the installed title update for [serial], or null when none is installed. */
+    /**
+     * Every plausible emulator root, best first.
+     *
+     * RPCSX.rootDirectory alone is not safe to rely on here. It is empty until
+     * Rpcs3Bridge.initialize runs, and that only happens when the NATIVE CORE initialises -- so
+     * anything asking this question before a game has been booted resolved "config/dev_hdd0/..."
+     * as a RELATIVE path, found nothing, and reported every title as having no update installed.
+     * Open the app and go straight to the package screen or a game's info tab and that is exactly
+     * what happened: Batman and Watch Dogs both had 01.04 on disk and both read as out of date.
+     *
+     * systemDirPosix() is the configured root and needs no native init, which is why it comes
+     * second rather than not at all. The external files dir is the fallback for an install that
+     * never had a custom root set.
+     */
+    private fun hdd0Roots(): List<File> = buildList {
+        RPCSX.rootDirectory.takeIf { it.isNotBlank() }?.let { add(File(it)) }
+        runCatching { MainActivityRuntime.systemDirPosix() }.getOrNull()?.let { add(File(it)) }
+        runCatching {
+            MainActivityRuntime.instance?.applicationContext?.getExternalFilesDir(null)
+        }.getOrNull()?.let { add(it) }
+    }.distinctBy { it.absolutePath }
+
+    /** The root that actually holds installed titles, for callers that need to place files
+     *  of their own beside them (the mod store). Null before the core has a usable root. */
+    fun storageRoot(): File? = hdd0Roots().firstOrNull { File(it, "config/dev_hdd0").isDirectory }
+        ?: hdd0Roots().firstOrNull()
+
+    /** The install directory for [id] -- the folder holding PARAM.SFO and USRDIR -- or null
+     *  when the title is not installed in folder form (a disc image has none). */
+    fun installDir(id: String): File? = gameDir(id)
+
+    /** The game directory for [id] under whichever root actually holds it, or null. */
+    private fun gameDir(id: String): File? =
+        hdd0Roots().map { File(it, "config/dev_hdd0/game/$id") }.firstOrNull { it.isDirectory }
+
     fun installedUpdateVersion(serial: String?): String? {
         val id = serial?.takeIf { it.isNotBlank() } ?: return null
-        val sfo = File(RPCSX.rootDirectory, "config/dev_hdd0/game/$id/PARAM.SFO")
-        return read(sfo)["APP_VER"]?.takeIf { it.isNotBlank() }
+        val dir = gameDir(id) ?: return null
+        return read(File(dir, "PARAM.SFO"))["APP_VER"]?.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * Whether [serial]'s dev_hdd0 entry is a title UPDATE rather than the game itself.
+     *
+     * The distinction decides whether removing that directory is reversible. For a disc game it
+     * holds only the patch, and deleting it puts the title back to the version on the disc. For a
+     * game installed from a .pkg it IS the game, and deleting it uninstalls what someone bought.
+     *
+     * CATEGORY tells them apart: "GD" is game data, "HG" an HDD-installed game. Anything that is
+     * not clearly GD is treated as not-an-update, so an unreadable PARAM.SFO refuses the delete
+     * rather than guessing at it.
+     */
+    fun installedIsUpdate(serial: String?): Boolean {
+        val id = serial?.takeIf { it.isNotBlank() } ?: return false
+        val dir = gameDir(id) ?: return false
+        return read(File(dir, "PARAM.SFO"))["CATEGORY"]?.trim().equals("GD", ignoreCase = true)
+    }
+
+    /**
+     * Remove an installed title update, putting the game back to its disc version.
+     *
+     * Refuses anything [installedIsUpdate] does not vouch for, so this cannot be talked into
+     * deleting a title that only exists on the HDD.
+     */
+    fun removeInstalledUpdate(serial: String?): Boolean {
+        if (!installedIsUpdate(serial)) return false
+        val dir = gameDir(serial!!) ?: return false
+        return runCatching { dir.deleteRecursively() }.getOrDefault(false)
+    }
+
+    /**
+     * How many add-ons are installed for this title, counted from two places.
+     *
+     * There is no single "DLC installed" flag to read. A package unpacks into
+     * dev_hdd0/game/<its own install dir>/, and for most PS3 add-ons that directory is the base
+     * game's own title id -- the same directory a title update lands in -- so add-on files merge
+     * into the update's tree and directory presence alone cannot tell the two apart. That is why
+     * this does not simply look for a folder.
+     *
+     * What it counts instead:
+     *  - licence files in home/<user>/exdata/. Each paid add-on installs one .rap or .edat named
+     *    by its content id, and a content id embeds the title's serial
+     *    (UP0001-BLUS30443_00-SOMEDLCID000001.rap), so these are countable and unambiguous.
+     *  - any OTHER directory under dev_hdd0/game/ whose PARAM.SFO names this serial as its
+     *    TITLE_ID, which catches add-ons that do install somewhere of their own.
+     *
+     * The known gap is free add-ons that need no licence and unpack into the game's own folder:
+     * they leave nothing this can distinguish from the update, and are undercounted. A count that
+     * is right for paid content and silent about the rest beats a badge that guesses.
+     */
+    fun installedDlcCount(serial: String?): Int {
+        val id = serial?.takeIf { it.isNotBlank() } ?: return 0
+        val root = hdd0Roots()
+            .map { File(it, "config/dev_hdd0") }
+            .firstOrNull { it.isDirectory }
+            ?: return 0
+
+        val licences = File(root, "home").listFiles()
+            ?.filter { it.isDirectory }
+            ?.sumOf { user ->
+                File(user, "exdata").listFiles()
+                    ?.count { f ->
+                        f.isFile &&
+                            (f.extension.equals("rap", true) || f.extension.equals("edat", true)) &&
+                            f.name.contains(id, ignoreCase = true)
+                    } ?: 0
+            } ?: 0
+
+        val contentDirs = File(root, "game").listFiles()
+            ?.count { dir ->
+                dir.isDirectory &&
+                    !dir.name.equals(id, ignoreCase = true) &&
+                    read(File(dir, "PARAM.SFO"))["TITLE_ID"]?.equals(id, ignoreCase = true) == true
+            } ?: 0
+
+        return licences + contentDirs
     }
 }

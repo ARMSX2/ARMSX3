@@ -3,6 +3,7 @@ package com.armsx2.runtime
 import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import com.armsx2.data.library.GameLibraryRepository
 import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.content.pm.ActivityInfo
@@ -663,6 +664,14 @@ open class MainActivityRuntime : ComponentActivity() {
                     //
                     // Cheap: applyTo batches its ~165 keys, and this runs once per launch.
                     try {
+                        // A title that gained a serial changed key, leaving everything the user
+                        // set for it under the old one. Bring it forward before anything reads,
+                        // or the first thing this launch does is apply global over it.
+                        currentGame.value?.let { game ->
+                            com.armsx2.config.ConfigStore.adoptLegacyOverrides(
+                                game.settingsKey, game.fileStemKey,
+                            )
+                        }
                         com.armsx2.config.ConfigStore
                             .resolveForGame(currentGame.value?.settingsKey)
                             .applyTo()
@@ -717,9 +726,18 @@ open class MainActivityRuntime : ComponentActivity() {
                         // (HomeViewModel.launch), so reaching here means the lock state was
                         // stale — a licence deleted outside the app, say. Point at the per-game
                         // action that fixes it, which a rescan will also surface as a badge.
-                        val hint = if (reason == "DecryptionError")
-                            " — it needs a .rap licence. Long-press the game and choose Install licence."
-                        else ""
+                        // Name the fix, not just the fault. A bare enum name reads as a crash
+                        // for a failure the user can act on in one step.
+                        val hint = when (reason) {
+                            "DecryptionError" ->
+                                ". It needs a .rap licence. Long-press the game and choose Install licence."
+                            // The savestate format changed with the emulator, and an old save
+                            // cannot be read. Nothing is broken and nothing else was lost, so say
+                            // that rather than leaving an enum name to be interpreted.
+                            "SavestateVersionUnsupported" ->
+                                ". That save state was made by an older version of ARMSX3 and can no longer be loaded. Start the game normally and make a new one."
+                            else -> ""
+                        }
                         instance?.let { act ->
                             act.runOnUiThread {
                                 android.widget.Toast.makeText(
@@ -1016,13 +1034,49 @@ open class MainActivityRuntime : ComponentActivity() {
         }
 
         /**
-         * Minimal [GameInfo] for a URI arriving from outside the app. The serial is probed
-         * off the image the same way the library scan does (SYSTEM.CNF via
-         * NativeApp.getGameSerialFromFd) so per-game settings stored under the serial are
-         * found. A failed probe is fine and expected for ELF/homebrew — settingsKey then
-         * falls back to the filename stem, matching issue #253's behaviour.
+         * Minimal [GameInfo] for a URI arriving from outside the app and NOT in the library.
+         *
+         * The serial probe here is getGameSerialFromFd, which reads a PS2 SYSTEM.CNF and so
+         * answers nothing for a PS3 disc. That is why this is the fallback and not the first
+         * move: for anything the library has scanned, [libraryGameFor] supplies the real
+         * serial. A failed probe is still fine for ELF/homebrew, where settingsKey falls back
+         * to the filename stem, matching issue #253's behaviour.
          */
+        /**
+         * The library's own entry for an incoming launch, matched by path.
+         *
+         * This is what makes a shortcut launch the SAME game as a library launch rather than a
+         * lookalike. The library entry carries the serial read from PARAM.SFO, and the serial is
+         * what per-game settings are keyed by, so without it a frontend or a home-screen
+         * shortcut resolved its config under the FILENAME and quietly ran the title with a
+         * second, empty configuration. Reported as ARMSX3 #130, where settings edited during a
+         * shortcut launch were remembered for that launch method and no other.
+         *
+         * It brings the title, cover, compatibility rating and licence state across too, all of
+         * which the synthesised entry below has to do without.
+         *
+         * Matched on the canonical path because the launcher hands us whatever it was given: a
+         * bare path, a file:// URI, or a content:// document. Reads the cached scan rather than
+         * rescanning, so this costs one small file read on the launch path.
+         */
+        private fun libraryGameFor(uriString: String): GameInfo? = runCatching {
+            val ctx = instance?.applicationContext ?: return null
+            fun canonical(value: String?): String? = value
+                ?.let { runCatching { java.io.File(it).canonicalPath }.getOrDefault(it) }
+
+            val incoming = runCatching { uriString.toUri() }.getOrNull()
+            val incomingPath = canonical(incoming?.path ?: uriString)
+
+            com.armsx2.data.library.GameLibraryRepository(ctx).loadCached().games.firstOrNull { game ->
+                game.uri.toString() == uriString ||
+                    (incomingPath != null && canonical(game.uri.path) == incomingPath)
+            }
+        }.getOrNull()
+
         private fun externalGameInfo(uriString: String): GameInfo? = runCatching {
+            // The library first: a game we already know is not worth re-deriving badly.
+            libraryGameFor(uriString)?.let { return@runCatching it }
+
             val uri = uriString.toUri()
             val name = uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':').orEmpty()
             val stem = name.substringBeforeLast('.').ifBlank { name }
@@ -1439,6 +1493,50 @@ open class MainActivityRuntime : ComponentActivity() {
                 }
             }
             handler.postDelayed(tryLoad, 250)
+        }
+
+        /**
+         * Treat an install that is ALREADY set up as set up, without making anyone walk the
+         * wizard to say so.
+         *
+         * Two cases, and they are the same case. A launcher that installs ARMSX3, unpacks
+         * firmware and places games has done everything setup asks for, and then setup asks
+         * again (ARMSX3 #114). And a user who reinstalls and points at their existing data
+         * folder gets the wizard for a folder that already has everything in it.
+         *
+         * Checked against the filesystem rather than against any flag a caller could set, so
+         * there is nothing to misuse: if the firmware and the games are genuinely there, the
+         * wizard has nothing left to collect. If placement failed, setup runs and the user can
+         * fix it, which is the failure a skip flag would have hidden.
+         *
+         * Persisted once decided, matching finishSetup, so this is not re-derived on every
+         * launch and a later change to the folder does not put a working install back into
+         * setup.
+         */
+        private fun adoptPreparedSetup() {
+            if (setupComplete.value) return
+
+            val root = currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return
+            val config = File(root, "config")
+
+            // The same file boot checks before starting the XMB, so "firmware is installed"
+            // means the same thing here as it does there.
+            if (!File(config, "dev_flash/vsh/module/vsh.self").isFile) return
+
+            // A game anywhere the library would find one: a folder the user (or a launcher)
+            // configured, the drop-in games directory, or an installed title in dev_hdd0.
+            val hasGames = romsDirs.value.isNotEmpty() ||
+                (File(config, "games").listFiles()?.any { it.isDirectory || it.isFile } == true) ||
+                (File(config, "dev_hdd0/game").listFiles()?.any { it.isDirectory } == true)
+
+            if (!hasGames) return
+
+            android.util.Log.i(
+                "ARMSX3",
+                "setup: firmware and games are already in place, skipping the wizard",
+            )
+            prefs.edit(commit = true) { putBoolean("setupComplete", true) }
+            setupComplete.value = true
         }
 
         fun finishSetup() {
@@ -2115,7 +2213,6 @@ open class MainActivityRuntime : ComponentActivity() {
         ControllerMappings.installRuntimeCacheInvalidation()
         com.armsx2.i18n.I18n.init(applicationContext)
         applyEmulationOrientation()
-        com.armsx2.CoverArtStyle.load()
         com.armsx2.GridLabels.load()
         com.armsx2.EnglishTitles.load()
         com.armsx2.CustomNames.load()
@@ -2150,10 +2247,6 @@ open class MainActivityRuntime : ComponentActivity() {
         // Low-battery / high-temperature banners. Registers for the sticky battery broadcast, so
         // there is no polling; the toggle lives in App settings.
         com.armsx2.OverlayRepo.load()
-        com.armsx2.CoverRegionIndex.load()
-        // Only parses the 2.6MB GameDB when a non-default cover region is actually in use.
-        if (com.armsx2.CoverRegionIndex.region.intValue != 0)
-            com.armsx2.CoverRegionIndex.ensureBuilt(applicationContext)
         // Second-display utility panel (Ayn Thor / Retroid dual screen). No-op with one display.
         com.armsx2.SecondScreen.load()
         com.armsx2.SecondScreen.attach(applicationContext)
@@ -2195,6 +2288,8 @@ open class MainActivityRuntime : ComponentActivity() {
                 if (legacy != null) listOf(legacy) else emptyList()
             }
         }
+        adoptPreparedSetup()
+        runCatching { com.armsx2.TrophySound.load() }
         // Setup recovery. Auto Backup can restore our prefs (incl. setupComplete + the
         // ROMs URIs) on reinstall, but SAF/all-files PERMISSIONS are never backed up — so
         // a restored setup can point at a folder we can no longer read, which would strand
@@ -3510,6 +3605,29 @@ open class MainActivityRuntime : ComponentActivity() {
     private var lastDecorW = 0
     private var lastDecorH = 0
 
+    /** So a tester can settle this in one log line instead of describing what they feel. */
+    private var loggedTouchScale = ""
+
+    /** [sx]/[sy] are what is ACTUALLY applied, so a pasted log line says whether the correction
+     *  engaged rather than only what it would be worth. Those differ by design: the scale is
+     *  known from the digitizer immediately, but nothing is applied until a touch proves the OS
+     *  is not already mapping input into the window. */
+    private fun logTouchScaleOnce(
+        decorW: Int,
+        decorH: Int,
+        digitizer: Pair<Float, Float>?,
+        escaped: Boolean,
+        sx: Float,
+        sy: Float,
+    ) {
+        val line = "window=${decorW}x$decorH digitizer=" +
+            (digitizer?.let { "${it.first.toInt()}x${it.second.toInt()}" } ?: "unavailable") +
+            " escaped=$escaped applied=%.4f,%.4f".format(sx, sy)
+        if (line == loggedTouchScale) return
+        loggedTouchScale = line
+        android.util.Log.i("ARMSX3-Touch", line)
+    }
+
     /** Un-scaled physical display size in the current rotation. Only a SEED for the touch-space
      *  estimate below, never trusted alone: Samsung's QHD game-downscale reports this DOWNSCALED too
      *  (observed 1080 at QHD+), so the observed touch extent is the ground truth. */
@@ -3523,19 +3641,59 @@ open class MainActivityRuntime : ComponentActivity() {
     }.getOrNull()
 
     /**
-     * Correct the Samsung QHD touch-offset bug (#Nomad, S24 Ultra @ QHD+) — self-contained, trusting
-     * NO resolution API. On that device at QHD every one of them (decorView, maximumWindowMetrics,
-     * getRealMetrics) reports the DOWNSCALED ~1080 while the digitizer still delivers touch in the
-     * physical ~1440 space, so the on-screen controls (laid out in the ~1080 window) sit up-and-left
-     * of where the finger must press, the error growing with distance (a pure ≈1.33 scale). It works
-     * at FHD+ (everything is a consistent 1080) and breaks only at QHD.
+     * The digitizer's own extent, straight off the input device, or null.
      *
-     * Ground truth is the touches themselves: in this broken state a press near a far control lands
-     * OUTSIDE the window. That never happens on a normal device or in split-screen/multi-window (the
-     * OS descales touch to fit the window there), so this is self-gating — a strict no-op except the
-     * exact bug. We learn the true touch extent from where fingers actually reach (seeded by
-     * getRealMetrics when it happens to read larger) and rescale pointers back into the window:
-     * precise from the first far press when the seed is right, else converging within a touch or two.
+     * This is the one size in Android that is not derived from the window. A vendor "high
+     * resolution mode" downscales the DISPLAY the app is laid out in; the touchscreen keeps
+     * reporting in its physical space, and its InputDevice motion ranges describe that space.
+     * Every display API (decorView, maximumWindowMetrics, getRealMetrics) reports the
+     * downscaled size and so cannot see the discrepancy at all.
+     *
+     * Null when the device does not publish ranges, or publishes ones that are not a plausible
+     * screen, in which case the learned fallback below takes over.
+     */
+    private fun digitizerExtent(ev: MotionEvent): Pair<Float, Float>? = runCatching {
+        val device = ev.device ?: return null
+        val rx = device.getMotionRange(MotionEvent.AXIS_X, ev.source) ?: return null
+        val ry = device.getMotionRange(MotionEvent.AXIS_Y, ev.source) ?: return null
+        // Inclusive range: a 1920-wide digitizer reports 0..1919, so the count is max-min+1.
+        // Without this the Odin read 1919x1079 against a 1920x1080 window and computed a scale
+        // of 1.0005, which is harmless here only because it clamps, and would be quietly wrong
+        // by a pixel on a device that does need correcting.
+        val w = rx.max - rx.min + 1f
+        val h = ry.max - ry.min + 1f
+        if (w < 1f || h < 1f) return null
+        w to h
+    }.getOrNull()
+
+    /**
+     * Correct the touch offset on devices whose "high resolution mode" downscales the app.
+     *
+     * Reported on Samsung QHD+ (S24 Ultra, ≈1.33 scale) and on Honor's 1.5K mode (Magic6,
+     * 2800x1264 vs a 2450x1106 window, ≈1.14). The window is laid out in the downscaled space
+     * while the digitizer still delivers touch in the physical one, so on-screen controls sit
+     * up-and-left of where the finger must press, the error growing with distance from the
+     * origin. Standard resolution is a consistent single space and is unaffected.
+     *
+     * The digitizer's own extent is the ground truth, so the scale is exact from the first
+     * event and needs no learning. Where the device publishes no usable ranges, fall back to
+     * the old behaviour of learning the extent from where fingers actually reach.
+     *
+     * ## Why the learned version was not enough
+     *
+     * It engaged only once a touch had escaped the WINDOW, with the two axes gated
+     * independently. At 33% that happens readily. At 14% almost nothing escapes: a control at
+     * 80% across a 2450-wide window reports about 2200, which is offset by 275px and still
+     * inside. So the gate never fired on that axis.
+     *
+     * That is why multi-touch failed while single touch looked fine, which is ARMSX3 #132.
+     * Holding the left stick keeps x small and drives y large, so the y gate fires and the x
+     * gate does not; the second finger then taps a face button whose x is never corrected. A
+     * lone tap appears to work because it updates the peak on its own event before the scale
+     * is computed, which a held finger prevents.
+     *
+     * Self-gating either way: on a device with no downscale the digitizer and the window
+     * describe the same space, the scale is 1 and nothing is touched.
      */
     private fun maybeCorrectTouchScale(ev: MotionEvent) {
         runCatching {
@@ -3557,15 +3715,47 @@ open class MainActivityRuntime : ComponentActivity() {
                 if (ev.getX(i) > touchPeakX) touchPeakX = minOf(ev.getX(i), capX)
                 if (ev.getY(i) > touchPeakY) touchPeakY = minOf(ev.getY(i), capY)
             }
-            // Engage ONLY once a touch has escaped the window (proof the touch space exceeds the
-            // layout space). True extent = the larger of the observed peak and a physical-panel
-            // reading that ALSO exceeds the window; scale the window back onto it (clamped so a stray
-            // reading can't invert the axis or shrink past 2x).
-            val real = realPanelMetrics()
-            val spaceW = maxOf(touchPeakX, (real?.widthPixels ?: 0).let { if (it > decorW) it.toFloat() else 0f })
-            val spaceH = maxOf(touchPeakY, (real?.heightPixels ?: 0).let { if (it > decorH) it.toFloat() else 0f })
-            val sx = if (touchPeakX > decorW + slop) (decorW / spaceW).coerceIn(0.5f, 1f) else 1f
-            val sy = if (touchPeakY > decorH + slop) (decorH / spaceH).coerceIn(0.5f, 1f) else 1f
+            val digitizer = digitizerExtent(ev)
+
+            // THE GATE: has a touch ever landed outside the window?
+            //
+            // A digitizer larger than the window is NOT on its own a reason to rescale. Android
+            // normally maps touch into the window for you, and it does so in split screen, in
+            // freeform, and under an `adb shell wm size` override. In all of those the digitizer
+            // is legitimately bigger and the coordinates are already correct, so scaling them
+            // again lands every touch short. Measured: a 720x1280 override on a 1080x1920 panel
+            // reported scale 0.667 and would have moved every touch a third of the way to the
+            // origin.
+            //
+            // A coordinate BEYOND the window is the one thing that cannot happen when the OS is
+            // mapping touch for you, so it is the proof that it is not. Either axis is enough:
+            // the downscale is a property of the display, not of one direction, which is what
+            // the old per-axis gating got wrong. Holding the left stick pinned x low and drove y
+            // high, so only y ever engaged and the second finger's x was left uncorrected, which
+            // is the multi-touch half of ARMSX3 #132.
+            val escaped = touchPeakX > decorW + slop || touchPeakY > decorH + slop
+
+            var sx = 1f
+            var sy = 1f
+
+            if (escaped) {
+                if (digitizer != null) {
+                    // Exact, and known in full from the first escaping touch rather than
+                    // converged towards over several.
+                    sx = (decorW / digitizer.first).coerceIn(0.5f, 1f)
+                    sy = (decorH / digitizer.second).coerceIn(0.5f, 1f)
+                } else {
+                    // No usable ranges: fall back to the extent learned from the touches.
+                    val real = realPanelMetrics()
+                    val spaceW = maxOf(touchPeakX, (real?.widthPixels ?: 0).let { if (it > decorW) it.toFloat() else 0f })
+                    val spaceH = maxOf(touchPeakY, (real?.heightPixels ?: 0).let { if (it > decorH) it.toFloat() else 0f })
+                    sx = (decorW / maxOf(spaceW, decorW.toFloat())).coerceIn(0.5f, 1f)
+                    sy = (decorH / maxOf(spaceH, decorH.toFloat())).coerceIn(0.5f, 1f)
+                }
+            }
+
+            logTouchScaleOnce(decorW, decorH, digitizer, escaped, sx, sy)
+
             if (sx != 1f || sy != 1f) {
                 ev.transform(android.graphics.Matrix().apply { setScale(sx, sy) })
             }
@@ -4994,6 +5184,33 @@ open class MainActivityRuntime : ComponentActivity() {
         for (key in listOf("path", "game", "rom", "uri", "android.intent.extra.STREAM")) {
             val value = intent.getStringExtra(key)?.takeIf { it.isNotBlank() } ?: continue
             return value.toUri()
+        }
+
+        // Launch by title id, for external frontends (issue #13).
+        //
+        // Every key above names something the frontend already holds a path to. A game installed
+        // from a .pkg has no path the frontend can know: it lives inside our own storage under a
+        // name derived from the package, so ES-DE and friends can see that the game exists and
+        // still have nothing to pass us. The title id is the one identifier they do have.
+        //
+        // Resolved against the library CACHE rather than a scan: this runs on the launch path,
+        // a scan can take seconds on a large folder, and any title a frontend knows about is by
+        // definition one we have already listed. Unknown ids return null and fall through to the
+        // library exactly as a bad path does.
+        for (key in listOf("title_id", "titleId", "serial")) {
+            val id = intent.getStringExtra(key)?.takeIf { it.isNotBlank() }?.trim() ?: continue
+            val match = runCatching {
+                GameLibraryRepository(this).loadCached().games
+                    .firstOrNull { it.serial?.equals(id, ignoreCase = true) == true }
+            }.getOrNull()
+
+            if (match == null) {
+                android.util.Log.w("ARMSX2", "launch by title id: '$id' is not in the library cache")
+                return null
+            }
+
+            android.util.Log.i("ARMSX2", "launch by title id: '$id' -> ${match.uri}")
+            return match.uri
         }
 
         return null

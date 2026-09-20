@@ -49,11 +49,17 @@ struct RPCSXApi {
   void (*setPadSensor)(int port, int x, int y, int z, int g);
   int (*getPadRumble)(int port);
   void (*setThermals)(float cpu, float gpu, float battery, bool show);
+  void (*setRenderPosition)(bool portraitTop, int topInset);
   bool (*usbDeviceEvent)(int fd, int vendorId, int productId, int event);
   bool (*installFw)(JNIEnv *env, int fd, long progressId);
   bool (*isInstallableFile)(jint fd);
   jstring (*getDirInstallPath)(JNIEnv *env, jint fd);
+  jstring (*probePkgInfo)(JNIEnv *env, jint fd);
+  bool (*isRestartPending)();
   bool (*install)(JNIEnv *env, int fd, long progressId);
+  bool (*extractPkgTo)(JNIEnv *env, int fd, long progressId, const char *dest);
+  void (*installStorageBridge)(JNIEnv *env);
+  void (*installSoundBridge)(JNIEnv *env);
   bool (*installKey)(JNIEnv *env, int fd, long progressId,
                      std::string_view gamePath);
   std::string (*systemInfo)();
@@ -169,11 +175,25 @@ struct RPCSXLibrary : RPCSXApi {
     result.setPadSensor = reinterpret_cast<decltype(setPadSensor)>(dlsym(handle, "_rpcsx_setPadSensor"));
     result.getPadRumble = reinterpret_cast<decltype(getPadRumble)>(dlsym(handle, "_rpcsx_getPadRumble"));
     result.setThermals = reinterpret_cast<decltype(setThermals)>(dlsym(handle, "_rpcsx_setThermals"));
+    // Optional: a core built before this simply centres the image, as it always did.
+    result.setRenderPosition = reinterpret_cast<decltype(setRenderPosition)>(dlsym(handle, "_rpcsx_setRenderPosition"));
     result.usbDeviceEvent = reinterpret_cast<decltype(usbDeviceEvent)>(dlsym(handle, "_rpcsx_usbDeviceEvent"));
     result.installFw = reinterpret_cast<decltype(installFw)>(dlsym(handle, "_rpcsx_installFw"));
     result.isInstallableFile = reinterpret_cast<decltype(isInstallableFile)>(dlsym(handle, "_rpcsx_isInstallableFile"));
     result.getDirInstallPath = reinterpret_cast<decltype(getDirInstallPath)>(dlsym(handle, "_rpcsx_getDirInstallPath"));
+    // Optional: a core predating the library listing uninstalled packages has no such
+    // symbol, and the scan then skips .pkg files exactly as it always did.
+    result.probePkgInfo = reinterpret_cast<decltype(probePkgInfo)>(dlsym(handle, "_rpcsx_probePkgInfo"));
+    // Optional: a core without it simply never reports a pending restart, which is
+    // the behaviour the run loop had before this existed.
+    result.isRestartPending = reinterpret_cast<decltype(isRestartPending)>(dlsym(handle, "_rpcsx_isRestartPending"));
     result.install = reinterpret_cast<decltype(install)>(dlsym(handle, "_rpcsx_install"));
+    result.extractPkgTo = reinterpret_cast<decltype(extractPkgTo)>(dlsym(handle, "_rpcsx_extractPkgTo"));
+    // Optional: a core built before the storage bridge simply has no such symbol, and
+    // the Kotlin side then keeps resolving picked folders to filesystem paths.
+    result.installStorageBridge = reinterpret_cast<decltype(installStorageBridge)>(dlsym(handle, "_rpcsx_installStorageBridge"));
+    // Optional: a core without it simply stays silent, as it always has.
+    result.installSoundBridge = reinterpret_cast<decltype(installSoundBridge)>(dlsym(handle, "_rpcsx_installSoundBridge"));
     result.installKey = reinterpret_cast<decltype(installKey)>(dlsym(handle, "_rpcsx_installKey"));
     result.systemInfo = reinterpret_cast<decltype(systemInfo)>(dlsym(handle, "_rpcsx_systemInfo"));
     result.loginUser = reinterpret_cast<decltype(loginUser)>(dlsym(handle, "_rpcsx_loginUser"));
@@ -539,6 +559,15 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setThermals(
   rpcsxLib.setThermals(cpu, gpu, battery, show == JNI_TRUE);
 }
 
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setRenderPosition(
+    JNIEnv *, jobject, jboolean portraitTop, jint topInset) {
+  if (rpcsxLib.setRenderPosition == nullptr) {
+    return;
+  }
+
+  rpcsxLib.setRenderPosition(portraitTop == JNI_TRUE, topInset);
+}
+
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_surfaceSizeChanged(
     JNIEnv *, jobject, jint width, jint height) {
   if (rpcsxLib.surfaceSizeChanged == nullptr) {
@@ -606,6 +635,57 @@ Java_net_rpcsx_RPCSX_install(JNIEnv *env, jobject, jint fd, jlong progressId) {
   }
 
   return rpcsxLib.install(env, fd, progressId);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_isRestartPending(JNIEnv *, jobject) {
+  return rpcsxLib.isRestartPending != nullptr && rpcsxLib.isRestartPending();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_probePkgInfo(JNIEnv *env, jobject, jint fd) {
+  if (rpcsxLib.probePkgInfo == nullptr) {
+    return nullptr;
+  }
+
+  return rpcsxLib.probePkgInfo(env, fd);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_installSoundBridge(JNIEnv *env, jobject) {
+  if (rpcsxLib.installSoundBridge == nullptr) {
+    return false;
+  }
+
+  rpcsxLib.installSoundBridge(env);
+  return true;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_installStorageBridge(JNIEnv *env, jobject) {
+  if (rpcsxLib.installStorageBridge == nullptr) {
+    return false;
+  }
+
+  rpcsxLib.installStorageBridge(env);
+  return true;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_extractPkgTo(JNIEnv *env, jobject, jint fd, jlong progressId,
+                                  jstring dest) {
+  if (rpcsxLib.extractPkgTo == nullptr || dest == nullptr) {
+    return false;
+  }
+
+  const char *destChars = env->GetStringUTFChars(dest, nullptr);
+  if (destChars == nullptr) {
+    return false;
+  }
+
+  const bool ok = rpcsxLib.extractPkgTo(env, fd, progressId, destChars);
+  env->ReleaseStringUTFChars(dest, destChars);
+  return ok;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_installKey(

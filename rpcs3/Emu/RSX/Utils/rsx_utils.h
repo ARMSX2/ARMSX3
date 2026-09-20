@@ -173,6 +173,25 @@ namespace rsx
 		size2u aspect_convert_dimensions(const size2u& image_dimensions) const;
 	};
 
+	// Where a letterboxed image sits inside its window. Every desktop host centres it, which is
+	// right on a monitor and wrong on a handheld held upright: the bottom of the screen is where
+	// the touch controls go, so a centred image sits under the user's thumbs. Written from the
+	// Android UI, read on the present path. Zero means centred, so a host that never sets this
+	// keeps the behaviour it has always had.
+	//
+	// Portrait only, deliberately. The landscape case has nothing to reclaim: a 16:9 game in a
+	// 16:9 window is not letterboxed, so the control existed and could never move anything.
+	extern atomic_t<u32> g_render_top_portrait;
+
+	// Display-cutout safe inset in surface pixels, so an image moved to the top edge clears the
+	// camera rather than sitting under it. Only meaningful once the image is at the top, which
+	// is why it is a separate value and not folded into the flags above.
+	extern atomic_t<u32> g_render_top_inset;
+
+	// Move a presentation region flush to the top of its window when the user asked for that.
+	// A landscape window is returned untouched.
+	areau apply_render_position(const areau& region, const size2u& output_dimensions);
+
 	struct blit_src_info
 	{
 		blit_engine::transfer_source_format format;

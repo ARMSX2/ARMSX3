@@ -128,6 +128,15 @@ fun InfoTab(game: GameInfo?) {
                     ?: str("info.noUpdate"),
                 clipboard,
             )
+            // Add-ons, from licence files and separate content directories -- see
+            // Ps3Sfo.installedDlcCount for why a folder check would not answer this.
+            val dlcCount = remember(serial) { com.armsx2.Ps3Sfo.installedDlcCount(serial) }
+            InfoRow(
+                str("info.dlc"),
+                if (dlcCount > 0) com.armsx2.i18n.I18n.get("info.dlc.count").format(dlcCount)
+                else str("info.dlc.none"),
+                clipboard,
+            )
             // Always present, so the row does not appear mid-identification and shove the rows
             // below it down. This is the value that goes in the PNACH filename.
             InfoRow(str("info.crc"), crc ?: "—", clipboard)

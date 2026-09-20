@@ -55,6 +55,9 @@ set(ARMSX3_INPUT_SOURCES
 
 add_library(rpcsx-android SHARED
     src/rpcsx-android.cpp
+    # Reaches a user-picked folder through SAF on builds with no filesystem
+    # permission, as an fs::device_base. See src/saf_device.h.
+    src/saf_device.cpp
     # Carried from RPCSX; no upstream equivalent.
     ${CMAKE_SOURCE_DIR}/rpcs3/dev/iso.cpp
     ${ARMSX3_INPUT_SOURCES}

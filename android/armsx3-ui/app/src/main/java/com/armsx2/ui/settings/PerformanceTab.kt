@@ -1,6 +1,9 @@
 package com.armsx2.ui.settings
 
 import net.rpcsx.RPCSX
+import com.armsx2.cache.clearRecompilerCache
+import com.armsx2.cache.formatBytes
+import com.armsx2.cache.recompilerCacheRoot
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Row
@@ -120,7 +123,11 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 // surface, so it works regardless of core -- but 448*n was the PS2's
                 // native height and meant nothing for a 720p console.
                 options = listOf(str("perf.displayResolution.screen"), "1080p", "720p", "540p"),
-                selectedIndex = when (s.hwScaler) { 3 -> 1; 2 -> 2; 1 -> 3; else -> 0 },
+                // Pixels, matching what onChange writes and what EmulationSurface reads. These
+                // were 1/2/3 back when the value was a multiple of the PS2's 448-line height;
+                // the read half was left behind when it became a short side in pixels, so every
+                // pick scored no match, fell to else, and snapped the control back to Screen.
+                selectedIndex = when (s.hwScaler) { 1080 -> 1; 720 -> 2; 540 -> 3; else -> 0 },
                 description = str("perf.displayResolution.description"),
                 onChange = {
                     apply(s.copy(hwScaler = when (it) { 1 -> 1080; 2 -> 720; 3 -> 540; else -> 0 }))
@@ -468,91 +475,6 @@ fun PerformanceTab(state: MutableState<Settings>) {
     }
 }
 
-/**
- * Root of RPCS3's compiled-code cache: `<files>/cache/cache/`.
- *
- * Holds `ppu-<hash>-<name>` directories for firmware modules at the top level, plus
- * `<TITLEID>/ppu-<hash>-EBOOT.BIN` per game. The SPU caches live INSIDE those directories -- a
- * `spu-*.dat` file and a `spuobj-v<n>-<key>/` directory of compiled objects -- which is why
- * clearing PPU necessarily clears SPU with it.
- */
-private fun recompilerCacheRoot(context: Context): File =
-    File(MainActivityRuntime.assetCopyRoot(context), "cache/cache")
-
-/** Every `ppu-*` directory, both the top-level firmware ones and the per-title ones. */
-private fun ppuCacheDirs(root: File): List<File> = buildList {
-    root.listFiles()?.forEach { entry ->
-        if (!entry.isDirectory) return@forEach
-        if (entry.name.startsWith("ppu-")) add(entry)
-        // A title id directory; its ppu-* dirs live one level down.
-        else entry.listFiles()?.forEach { if (it.isDirectory && it.name.startsWith("ppu-")) add(it) }
-    }
-}
-
-private fun File.sizeRecursive(): Long =
-    runCatching { walkTopDown().filter { it.isFile }.sumOf { it.length() } }.getOrDefault(0L)
-
-private fun formatBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024 * 1024 -> "%.1f GB".format(bytes / (1024.0 * 1024 * 1024))
-    bytes >= 1024L * 1024 -> "%.0f MB".format(bytes / (1024.0 * 1024))
-    bytes > 0 -> "%.0f KB".format(bytes / 1024.0)
-    else -> "0 KB"
-}
-
-/**
- * Delete the SPU cache only, or the whole PPU cache.
- *
- * SPU-only leaves the compiled PPU modules in place, so booting stays as fast as it was and
- * only the SPU programs rebuild. Clearing PPU removes the directories outright, which takes
- * the SPU caches nested inside them too.
- */
-private fun clearRecompilerCache(root: File, spuOnly: Boolean): Pair<Int, Long> {
-    var count = 0
-    var bytes = 0L
-
-    if (spuOnly) {
-        // Two things live here, not one. `spu-*.dat` is the original SPU cache; the persistent SPU
-        // LLVM object cache sits beside it in `spuobj-v<n>-<key>/` directories and is by far the
-        // larger of the two. Clearing only the .dat files handed the recompiler straight back the
-        // objects the user pressed this button to be rid of -- which is exactly what someone
-        // clearing an SPU cache to escape stale compiled code needs not to happen.
-        val objDirs = root.walkTopDown()
-            .filter { it.isDirectory && it.name.startsWith("spuobj-") }
-            .toList() // materialise before deleting, so the walk is not mutated under itself
-        val datFiles = root.walkTopDown()
-            .filter { it.isFile && it.name.startsWith("spu-") && it.extension == "dat" }
-            .toList()
-
-        objDirs.forEach { dir ->
-            val size = dir.sizeRecursive()
-            if (runCatching { dir.deleteRecursively() }.getOrDefault(false)) {
-                count++
-                bytes += size
-            }
-        }
-
-        datFiles.forEach { file ->
-            // exists() because a .dat inside one of the directories above is already gone.
-            if (!file.exists()) return@forEach
-            val size = file.length()
-            if (runCatching { file.delete() }.getOrDefault(false)) {
-                count++
-                bytes += size
-            }
-        }
-
-        return count to bytes
-    }
-
-    ppuCacheDirs(root).forEach { dir ->
-        val size = dir.sizeRecursive()
-        if (runCatching { dir.deleteRecursively() }.getOrDefault(false)) {
-            count++
-            bytes += size
-        }
-    }
-    return count to bytes
-}
 
 @Composable
 private fun ClearCacheRow(spuOnly: Boolean) {
