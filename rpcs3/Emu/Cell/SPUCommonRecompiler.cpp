@@ -1,5 +1,6 @@
 #include "stdafx.h"
 
+#include <charconv>
 #include <map>
 #include <tuple>
 #include "SPURecompiler.h"
@@ -170,6 +171,51 @@ static constexpr u32 SPU_GW_SCRATCH_SIZE = 262144;
 static bool spu_interpreter_fallback_available()
 {
 	return true;
+}
+
+// ARMSX3_SPU_INTERP_RANGE=start-end, in hex local-store addresses: interpret blocks entered inside
+// that window and compile everything else.
+//
+// ARMSX3_SPU_INTERP=1 is all or nothing, and a game that cannot boot fully interpreted (Killzone 3
+// does not get past its first loads) cannot be tested with it at all. One job interpreted while the
+// rest of the title runs compiled is both fast enough to reach the bug and narrow enough to convict
+// or clear our codegen for the code that hits it -- then halve the window and repeat.
+static std::pair<u32, u32> spu_interp_range()
+{
+	static const std::pair<u32, u32> s_range = []() -> std::pair<u32, u32>
+	{
+		const char* env = std::getenv("ARMSX3_SPU_INTERP_RANGE");
+
+		if (!env || !*env)
+		{
+			return {0, 0};
+		}
+
+		const std::string_view item{env};
+		const usz dash = item.find('-');
+		u32 start = 0, end = 0;
+
+		if (dash == umax ||
+			std::from_chars(item.data(), item.data() + dash, start, 16).ec != std::errc() ||
+			std::from_chars(item.data() + dash + 1, item.data() + item.size(), end, 16).ec != std::errc() ||
+			end <= start || end > SPU_LS_SIZE)
+		{
+			spu_log.error("ARMSX3_SPU_INTERP_RANGE: could not read '%s', expected start-end in hex", env);
+			return {0, 0};
+		}
+
+		spu_log.success("ARMSX3_SPU_INTERP_RANGE: interpreting blocks entered in 0x%05x..0x%05x", start, end);
+		return {start, end};
+	}();
+
+	return s_range;
+}
+
+static bool spu_interp_range_contains(u32 pc)
+{
+	const auto [start, end] = spu_interp_range();
+
+	return end && pc >= start && pc < end;
 }
 
 static bool spu_block_compile_failed(u32 addr)
@@ -2661,6 +2707,17 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 	}
 
 #ifdef ARCH_ARM64
+	if (spu_interpreter_fallback_available() && spu_interp_range_contains(spu.pc))
+	{
+		// The whole window as the extent, not the four bytes at pc: the interpreter releases the
+		// thread as soon as the pc leaves the range it was armed with, and arming it per
+		// instruction costs an analyse and a dispatch round trip for every one of them.
+		const auto [start, end] = spu_interp_range();
+
+		spu_run_interp_fallback(spu, start, end - start);
+		return;
+	}
+
 	if (spu_interpreter_fallback_available() && spu_block_compile_failed(spu.pc))
 	{
 		// Deliberately not logged. The flag is cleared every time the thread leaves the block, so

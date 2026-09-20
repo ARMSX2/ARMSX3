@@ -1321,6 +1321,123 @@ void spu_thread::dump_misc(std::string& ret, std::any& custom_data) const
 	fmt::append(ret, "\n[%s]", ch_mfc_cmd);
 	fmt::append(ret, "\nLocal Storage: 0x%08x..0x%08x", offset, offset + 0x3ffff);
 
+	// ARMSX3_SPU_LS_DUMP=1: the whole local store to a file, one per SPU per dump.
+	//
+	// The dump prints 128 bytes around the pc, which is enough when the code is intact and no use
+	// at all when it is the thing that broke. The image says where the policy module ends, what
+	// the bad transfer landed on, and what the descriptors around it hold. 256 KB per SPU, so it
+	// is asked for rather than always written.
+	if (const char* env = std::getenv("ARMSX3_SPU_LS_DUMP"); env && *env && *env != '0')
+	{
+		static atomic_t<u32> s_seq{0};
+
+		const std::string path = fs::get_config_dir() + fmt::format("spu_ls_%x_%u.bin", id, s_seq++);
+
+		if (fs::file out{path, fs::rewrite}; out && out.write(ls, SPU_LS_SIZE) == SPU_LS_SIZE)
+		{
+			fmt::append(ret, "\nLocal store written to '%s'", path);
+		}
+		else
+		{
+			fmt::append(ret, "\nLocal store could not be written to '%s' (%s)", path, fs::g_tls_error);
+		}
+
+		// And the guest memory ranges named by ARMSX3_DUMP_BIN, which otherwise only the
+		// dump_threads trigger writes -- useless for a crash, which is over before anyone can
+		// touch a trigger file.
+		//
+		// The question these answer: an SPU that dies following a pointer either read that
+		// pointer from guest memory, in which case the corruption happened before it and
+		// somewhere else, or computed it, in which case it is ours. The local store alone cannot
+		// tell the two apart once the buffer that carried it has been recycled.
+		//
+		// Once per crash, not once per SPU: a dump prints every thread, and five copies of the
+		// same 100 MB would be five times the wait and the same bytes.
+		static atomic_t<u64> s_last_mem_dump{0};
+
+		const u64 now = get_system_time();
+
+		if (const u64 last = s_last_mem_dump.load(); now - last > 5'000'000 && s_last_mem_dump.compare_and_swap_test(last, now))
+		{
+			const char* ranges = std::getenv("ARMSX3_DUMP_BIN");
+			std::string_view rest{ranges ? ranges : ""};
+
+			while (!rest.empty())
+			{
+				const usz comma = rest.find(',');
+				const std::string_view item = rest.substr(0, comma);
+				rest = comma == umax ? std::string_view{} : rest.substr(comma + 1);
+
+				const usz dash = item.find('-');
+				u32 start = 0, end = 0;
+
+				if (dash == umax ||
+					std::from_chars(item.data(), item.data() + dash, start, 16).ec != std::errc() ||
+					std::from_chars(item.data() + dash + 1, item.data() + item.size(), end, 16).ec != std::errc() ||
+					end <= start)
+				{
+					fmt::append(ret, "\nDUMP_BIN: could not read '%s', expected start-end in hex", std::string(item));
+					continue;
+				}
+
+				// Sequence in the name, like the local stores: a session hits several faults and
+				// the later ones used to overwrite the memory behind the first, which is the one
+				// whose local store you are reading.
+				const std::string mem_path = fs::get_config_dir() + fmt::format("crash_mem_%u_%x-%x.bin", s_seq.load(), start, end);
+				fs::file mem{mem_path, fs::rewrite};
+
+				if (!mem)
+				{
+					fmt::append(ret, "\nDUMP_BIN: cannot write '%s' (%s)", mem_path, fs::g_tls_error);
+					continue;
+				}
+
+				// Mapped pages only, each with its guest address in front of it:
+				//
+				//   "SPRS", then for every mapped page { u32 address, u32 length, length bytes }
+				//
+				// A flat image with holes for the unmapped parts only works for a range that is
+				// mostly mapped. The question these dumps answer -- is the address an SPU died on
+				// written down anywhere in the game's memory, or did we invent it -- needs EVERY
+				// region searched, and the game holds most of its data in three 256 MB areas it
+				// maps into sparsely. Flat, that is a gigabyte of mostly zeroes; this way it is
+				// the few hundred MB a PS3 can actually hold.
+				//
+				// Read through the sudo mapping, not vm::base: a page can be readable to the
+				// guest and still unreadable to us in the user mapping (locked for the RSX, under
+				// a write watch), and the first one of those made write() fail with EFAULT, which
+				// ensure() turns into a second fatal error -- killing the crash report for the
+				// fault we were trying to record. Copy the page out first for the same reason: a
+				// short read is then ours to notice rather than the kernel's to refuse.
+				std::vector<u8> page_buf(0x1000);
+				u32 pages_written = 0;
+
+				mem.write("SPRS", 4);
+
+				for (u32 page = start & ~0xfffu; page < end; page += 0x1000)
+				{
+					const u32 from = std::max(page, start);
+					const u32 to = std::min(page + 0x1000, end);
+
+					if (!vm::check_addr(page, vm::page_readable, 0x1000))
+					{
+						continue;
+					}
+
+					std::memcpy(page_buf.data(), vm::get_super_ptr<u8>(from), to - from);
+
+					const le_t<u32> header[2]{from, to - from};
+					mem.write(&header, sizeof(header));
+					mem.write(page_buf.data(), to - from);
+					pages_written++;
+				}
+
+				fmt::append(ret, "\nGuest memory 0x%x..0x%x: %u mapped pages (%u KB) written to '%s'",
+					start, end, pages_written, pages_written * 4, mem_path);
+			}
+		}
+	}
+
 	if (const u64 _time = start_time)
 	{
 		if (const auto func = current_func)
@@ -2209,6 +2326,86 @@ extern atomic_t<u32> g_ppu_watch[4];
 extern atomic_t<u32> g_ppu_watch_size[4];
 extern void ppu_watch_record(int slot, u32 addr, u32 value, u32 who, u16 size, u16 kind);
 
+// ARMSX3_WATCH_LS=start-end, in hex LS offsets: log every transfer that writes into that window
+// of a local store, with the pc that issued it and the effective address it came from.
+//
+// A crash dump says which instruction ran and what was around it. When the code itself has been
+// replaced -- Killzone 3 runs garbage at LS 0x28e0 on four SPUs within 10ms, one word of it a PPU
+// epilogue, so it arrived from main memory through a bad pointer -- the dump cannot say which
+// transfer wrote it, because that happened long before. This can.
+//
+// Kept out of the compile-time ARMSX3_WATCH_HOOKS switch above: that one guards hooks in the PPU
+// interpreter's every store, this is two loads and a compare per DMA, next to the copy itself.
+static std::pair<u32, u32> spu_ls_watch_range()
+{
+	static const std::pair<u32, u32> s_range = []() -> std::pair<u32, u32>
+	{
+		const char* env = std::getenv("ARMSX3_WATCH_LS");
+
+		if (!env || !*env)
+		{
+			return {0, 0};
+		}
+
+		const std::string_view item{env};
+		const usz dash = item.find('-');
+		u32 start = 0, end = 0;
+
+		if (dash == umax ||
+			std::from_chars(item.data(), item.data() + dash, start, 16).ec != std::errc() ||
+			std::from_chars(item.data() + dash + 1, item.data() + item.size(), end, 16).ec != std::errc() ||
+			end <= start || end > SPU_LS_SIZE)
+		{
+			spu_log.error("ARMSX3_WATCH_LS: could not read '%s', expected start-end in hex", env);
+			return {0, 0};
+		}
+
+		spu_log.success("ARMSX3_WATCH_LS: watching local store 0x%05x..0x%05x", start, end);
+		return {start, end};
+	}();
+
+	return s_range;
+}
+
+bool spu_ls_watch_enabled()
+{
+	return spu_ls_watch_range().second != 0;
+}
+
+// Called for GETs, which are the transfers that can land on code.
+static void spu_watch_ls_write(const spu_thread* spu, const spu_mfc_cmd& args, u32 lsa)
+{
+	const auto [start, end] = spu_ls_watch_range();
+
+	if (!end || lsa >= end || lsa + args.size <= start) [[likely]]
+	{
+		return;
+	}
+
+	// Every hit at first, then a sample. A job area being reloaded legitimately would otherwise
+	// fill the log in a second, and the first lines are what says whether that is the case.
+	static atomic_t<u64> s_hits{0};
+
+	const u64 n = ++s_hits;
+
+	if (n > 256 && n % 64)
+	{
+		return;
+	}
+
+	std::string head = "<unmapped>";
+
+	if (vm::check_addr(args.eal, vm::page_readable, 16))
+	{
+		head = fmt::format("%08x %08x %08x %08x", vm::read32(args.eal), vm::read32(args.eal + 4),
+			vm::read32(args.eal + 8), vm::read32(args.eal + 12));
+	}
+
+	spu_log.error("WATCH_LS[%u]: '%s' writes LS 0x%05x..0x%05x from EA 0x%08x (cmd 0x%x, tag %u) at pc 0x%05x: %s",
+		n, spu ? *spu->spu_tname.load() : "?", lsa, lsa + args.size, args.eal, +args.cmd, args.tag,
+		spu ? spu->pc : 0, head);
+}
+
 // A plain transfer over a watched word.
 static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id)
 {
@@ -2316,6 +2513,10 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 	if (!is_get) [[likely]]
 	{
 		ppu_watch_dma(eal, args.size, _this ? _this->id : 0);
+	}
+	else
+	{
+		spu_watch_ls_write(_this, args, lsa);
 	}
 
 	// Code-sized transfers, which is how a SPURS workload would arrive.
@@ -3276,7 +3477,10 @@ bool spu_thread::do_list_transfer(spu_mfc_cmd& args)
 
 	u8 optimization_compatible = transfer.cmd & (MFC_GET_CMD | MFC_PUT_CMD);
 
-	if (spu_log.trace || g_cfg.core.spu_accurate_dma || g_cfg.core.mfc_debug)
+	// The watch sits in do_dma_transfer, and the two inlined paths below never call it, so a
+	// watched run takes the unoptimized one element at a time route. Slower, and only while
+	// ARMSX3_WATCH_LS is set.
+	if (spu_log.trace || g_cfg.core.spu_accurate_dma || g_cfg.core.mfc_debug || spu_ls_watch_enabled())
 	{
 		optimization_compatible = 0;
 	}
