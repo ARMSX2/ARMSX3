@@ -2372,7 +2372,8 @@ bool spu_ls_watch_enabled()
 	return spu_ls_watch_range().second != 0;
 }
 
-// Called for GETs, which are the transfers that can land on code.
+// Called for GETs, which are the transfers that can land on code, and for the atomic reads, whose
+// 128 bytes land in local store the same way but never pass through do_dma_transfer.
 static void spu_watch_ls_write(const spu_thread* spu, const spu_mfc_cmd& args, u32 lsa)
 {
 	const auto [start, end] = spu_ls_watch_range();
@@ -5115,7 +5116,9 @@ bool spu_thread::process_mfc_cmd()
 			rtime = last_ftime;
 			raddr = last_faddr;
 			last_ftime = 0;
-			mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
+			spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
+			spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
+		mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
 
 			ch_atomic_stat.set_value(MFC_GETLLAR_SUCCESS);
 			return true;
@@ -5144,7 +5147,9 @@ bool spu_thread::process_mfc_cmd()
 
 				if (this_time % 128 == 0 && cmp_rdata(rdata, data))
 				{
-					mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
+					spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
+			spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
+		mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
 					ch_atomic_stat.set_value(MFC_GETLLAR_SUCCESS);
 
 					// Need to check twice for it to be accurate, the code is before and not after this check for:
@@ -5503,6 +5508,7 @@ bool spu_thread::process_mfc_cmd()
 
 		raddr = addr;
 		rtime = ntime;
+		spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
 		mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
 
 		ch_atomic_stat.set_value(MFC_GETLLAR_SUCCESS);

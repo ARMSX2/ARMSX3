@@ -123,23 +123,18 @@ static bool spu_shufb_check_enabled()
 
 static u32 spu_shufb_skip_mask()
 {
-	// 0x80 by default: the SHUFB->insert fold is OFF on ARM64 until the interaction below is
-	// understood. Killzone 3 faults on a pointer 16x too large after ~1800 frames of level with
-	// the fold in, and ran ~25000 frames across three sessions with it out. The fold itself is
-	// not miscomputing: ARMSX3_SHUFB_CHECK verified every folded shuffle against the real one
-	// over a whole session with zero mismatches, and merely adding those checks around it also
-	// made the fault go away. So this is a codegen interaction around the fold, not bad
-	// arithmetic, and the general path it falls back to is the reference implementation at no
-	// measured cost (24-26 fps with it out vs 24-30 with it in).
-	//
-	// Set ARMSX3_SHUFB_SKIP=0 to put the fold back and keep hunting.
+	// No default: the fold stays on. It was off here for part of 2026-09-20 on the strength of
+	// Killzone 3 running ~25000 frames clean against a fault every ~1800, but that did not hold --
+	// with the fold off the fault came back after 896 frames, worse than the baseline, and
+	// ARMSX3_SHUFB_CHECK had already shown every folded shuffle computing the correct value. The
+	// clean runs were luck. Kept as a lever, not a fix.
 	static const u32 s_mask = []() -> u32
 	{
 		const char* env = std::getenv("ARMSX3_SHUFB_SKIP");
 
 		if (!env || !*env)
 		{
-			return 0x80;
+			return 0;
 		}
 
 		u32 mask = 0;

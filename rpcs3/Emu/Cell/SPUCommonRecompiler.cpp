@@ -326,6 +326,17 @@ static void spu_run_interp_fallback(spu_thread& spu, u32 lower_bound = 0, u32 si
 
 static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler_base>& compiler, const spu_program& program)
 {
+	// ARMSX3_SPU_INTERP_RANGE also has to bite here, not only in dispatch. Most functions are
+	// built ahead of time by the SPU Worker threads straight from the cache list, and those never
+	// reach dispatch -- so a window that only guarded dispatch left the code it named compiled
+	// anyway, and quietly produced "that range is innocent" results. Refusing the compile marks
+	// the block, and the first execution then falls into the interpreter.
+	if (spu_interp_range_contains(program.entry_point))
+	{
+		spu_mark_block_compile_failed(program.entry_point, program.lower_bound, ::size32(program.data) * 4);
+		return nullptr;
+	}
+
 	if (spu_block_compile_failed(program.entry_point))
 	{
 		return nullptr;
