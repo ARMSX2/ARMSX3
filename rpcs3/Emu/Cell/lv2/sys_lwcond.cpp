@@ -601,8 +601,6 @@ error_code _sys_lwcond_queue_wait(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id
 		return CELL_OK;
 	}
 
-	lwcond_record(lwcond_id, ppu.id, 'W', 0);
-
 	while (auto state = +ppu.state)
 	{
 		if (state & cpu_flag::signal && ppu.state.test_and_reset(cpu_flag::signal))
@@ -717,6 +715,11 @@ error_code _sys_lwcond_queue_wait(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id
 			ppu.state.wait(state);
 		}
 	}
+
+	// After the loop above, which is where the thread actually blocks. Emitting this before it
+	// makes every 'w' look like it woke instantly and hides the one thing the ring is for: a
+	// waiter that entered and never came back out.
+	lwcond_record(lwcond_id, ppu.id, 'W', 0);
 
 	if (--mutex->lwcond_waiters == smin)
 	{
