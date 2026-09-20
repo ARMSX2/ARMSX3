@@ -5142,9 +5142,7 @@ bool spu_thread::process_mfc_cmd()
 			raddr = last_faddr;
 			last_ftime = 0;
 			spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
-			spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
-		mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
-
+			mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
 			ch_atomic_stat.set_value(MFC_GETLLAR_SUCCESS);
 			return true;
 		}
@@ -5173,8 +5171,7 @@ bool spu_thread::process_mfc_cmd()
 				if (this_time % 128 == 0 && cmp_rdata(rdata, data))
 				{
 					spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
-			spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
-		mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
+					mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
 					ch_atomic_stat.set_value(MFC_GETLLAR_SUCCESS);
 
 					// Need to check twice for it to be accurate, the code is before and not after this check for:
