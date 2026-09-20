@@ -504,6 +504,11 @@ struct spu_imm_table_t
 
 extern const spu_imm_table_t g_spu_imm;
 
+// True while ARMSX3_WATCH_LS names a local-store window to watch (see SPUThread.cpp). The
+// recompiler asks because its inlined DMA copies would otherwise never reach do_dma_transfer,
+// which is where the watch sits.
+bool spu_ls_watch_enabled();
+
 enum FPSCR_EX
 {
 	//Single-precision exceptions
@@ -753,6 +758,13 @@ public:
 	bool is_dec_frozen = false;
 	std::pair<u32, u32> read_dec() const; // Read decrementer
 	u64 dec_intr_armed = umax; // Underflow time last handed to the decrementer interrupt timer
+
+	// ARMSX3_SHUFB_CHECK: operands of a SHUFB that took the insert fold, left here for the
+	// checking helper, which recomputes the real shuffle and logs any disagreement.
+	v128 shufb_dbg_a{};
+	v128 shufb_dbg_b{};
+	v128 shufb_dbg_c{};
+	v128 shufb_dbg_res{};
 	void arm_dec_interrupt(); // Raise ::pending when the decrementer underflows
 
 	atomic_t<u32> run_ctrl = 0; // SPU Run Control register (only provided to get latest data written)

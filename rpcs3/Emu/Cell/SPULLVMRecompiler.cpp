@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include <charconv>
 #include "SPURecompiler.h"
 
 #include "Emu/System.h"
@@ -90,6 +91,71 @@ void spu_llvm_set_compile_context(spu_llvm_compile_context* context) noexcept
 // Defined in SPUCommonRecompiler.cpp; ranges forced to the interpreter.
 #include "Emu/Cell/SPUDisAsm.h"
 
+
+// ARMSX3_SHUFB_SKIP=<hex bits>: switch off individual ARM64 SHUFB fast paths, each falling
+// through to the general tbx2 one at the end of the block, which is always correct.
+//
+// SPU integer instructions pass ps3autotests byte-exact, so a SHUFB bug here is not the semantics
+// but one of these special cases firing on operand shapes the tests never produce -- which is
+// exactly what Borderlands 2's hang turned out to be (upstream a7fc31f32, reverted in this file).
+// Killzone 3 builds the value it later mis-uses as an address with a SHUFB, so the same class of
+// bug is the first thing to rule in or out. Bit per path:
+//   1 consts_only, 2 single+splat+perm_or_zero, 4 single+splat, 8 single+perm_only,
+//   0x10 both-splat+perm_only, 0x20 both-splat, 0x40 perm_only (tbl2)
+// ARMSX3_SHUFB_CHECK=1: verify every folded SHUFB against the real shuffle at runtime.
+static bool spu_shufb_check_enabled()
+{
+	static const bool s_on = []()
+	{
+		const char* env = std::getenv("ARMSX3_SHUFB_CHECK");
+		const bool on = env && *env && *env != '0';
+
+		if (on)
+		{
+			spu_log.success("ARMSX3_SHUFB_CHECK: checking every folded SHUFB against the real shuffle");
+		}
+
+		return on;
+	}();
+
+	return s_on;
+}
+
+static u32 spu_shufb_skip_mask()
+{
+	// 0x80 by default: the SHUFB->insert fold is OFF on ARM64 until the interaction below is
+	// understood. Killzone 3 faults on a pointer 16x too large after ~1800 frames of level with
+	// the fold in, and ran ~25000 frames across three sessions with it out. The fold itself is
+	// not miscomputing: ARMSX3_SHUFB_CHECK verified every folded shuffle against the real one
+	// over a whole session with zero mismatches, and merely adding those checks around it also
+	// made the fault go away. So this is a codegen interaction around the fold, not bad
+	// arithmetic, and the general path it falls back to is the reference implementation at no
+	// measured cost (24-26 fps with it out vs 24-30 with it in).
+	//
+	// Set ARMSX3_SHUFB_SKIP=0 to put the fold back and keep hunting.
+	static const u32 s_mask = []() -> u32
+	{
+		const char* env = std::getenv("ARMSX3_SHUFB_SKIP");
+
+		if (!env || !*env)
+		{
+			return 0x80;
+		}
+
+		u32 mask = 0;
+
+		if (std::from_chars(env, env + std::strlen(env), mask, 16).ec != std::errc())
+		{
+			spu_log.error("ARMSX3_SHUFB_SKIP: could not read '%s', expected hex bits", env);
+			return 0;
+		}
+
+		spu_log.success("ARMSX3_SHUFB_SKIP: ARM64 SHUFB fast paths disabled: 0x%x", mask);
+		return mask;
+	}();
+
+	return s_mask;
+}
 
 class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 {
@@ -4691,6 +4757,49 @@ public:
 		return result;
 	}
 
+	// ARMSX3_SHUFB_CHECK=1: recompute the shuffle the plain way and compare it with what the
+	// insert fold produced. Killzone 3 stops corrupting pointers when that fold is switched off
+	// (ARMSX3_SHUFB_SKIP=0x80), yet the fold reads correct on paper for the cdd-generated mask it
+	// fires on -- so record the operands of a disagreement rather than argue from the source.
+	static void exec_shufb_check(spu_thread* _spu)
+	{
+		const v128 a = _spu->shufb_dbg_a;
+		const v128 b = _spu->shufb_dbg_b;
+		const v128 c = _spu->shufb_dbg_c;
+
+		// Reference semantics, straight from the interpreter: ab[0] is rb, ab[1] is ra, and the
+		// index is inverted because the bytes are held in reverse order.
+		const v128 ab[2]{b, a};
+		v128 ref{};
+
+		for (u32 i = 0; i < 16; i++)
+		{
+			const u8 cb = c._u8[i];
+
+			if ((cb & 0xc0) == 0x80)
+				ref._u8[i] = 0x00;
+			else if ((cb & 0xe0) == 0xc0)
+				ref._u8[i] = 0xff;
+			else if ((cb & 0xe0) == 0xe0)
+				ref._u8[i] = 0x80;
+			else
+				ref._u8[i] = reinterpret_cast<const u8*>(ab)[(~cb) & 0x1f];
+		}
+
+		if (ref == _spu->shufb_dbg_res)
+		{
+			return;
+		}
+
+		static atomic_t<u32> s_reports{0};
+
+		if (s_reports++ < 32)
+		{
+			spu_log.error("SHUFB fold mismatch at pc 0x%05x:\n  a   = %s\n  b   = %s\n  c   = %s\n  fold= %s\n  real= %s",
+				_spu->pc, a, b, c, _spu->shufb_dbg_res, ref);
+		}
+	}
+
 	template <spu_intrp_func_t F>
 	static void exec_fall(spu_thread* _spu, spu_opcode_t op)
 	{
@@ -5415,7 +5524,9 @@ public:
 					break;
 				}
 
-				bool must_use_cpp_functions = !!g_cfg.core.spu_accurate_dma;
+				// The local-store watch lives in do_dma_transfer, and the inlined copy below
+				// would step around it, so a watched run gives up the inlining too.
+				bool must_use_cpp_functions = !!g_cfg.core.spu_accurate_dma || spu_ls_watch_enabled();
 
 				if (u64 cmdh = ci->getZExtValue() & ~(MFC_BARRIER_MASK | MFC_FENCE_MASK | MFC_RESULT_MASK); g_cfg.core.rsx_fifo_accuracy || g_cfg.video.strict_rendering_mode || /*!g_use_rtm*/ true)
 				{
@@ -6640,7 +6751,7 @@ public:
 
 	void CBX(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// Optimization with aligned stack assumption. Strange because SPU code could use CBD instead, but encountered in wild.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u8[16]>(~get_scalar(get_vr(op.rb)) & 0xf));
@@ -6653,7 +6764,7 @@ public:
 
 	void CHX(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBX.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u16[8]>(~get_scalar(get_vr(op.rb)) >> 1 & 0x7));
@@ -6666,7 +6777,7 @@ public:
 
 	void CWX(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBX.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u32[4]>(~get_scalar(get_vr(op.rb)) >> 2 & 0x3));
@@ -6679,7 +6790,7 @@ public:
 
 	void CDX(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBX.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u64[2]>(~get_scalar(get_vr(op.rb)) >> 3 & 0x1));
@@ -6876,7 +6987,7 @@ public:
 
 	void CBD(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// Known constant with aligned stack assumption (optimization).
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u8[16]>(~get_imm<u32>(op.i7) & 0xf));
@@ -6889,7 +7000,7 @@ public:
 
 	void CHD(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBD.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u16[8]>(~get_imm<u32>(op.i7) >> 1 & 0x7));
@@ -6902,7 +7013,7 @@ public:
 
 	void CWD(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBD.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u32[4]>(~get_imm<u32>(op.i7) >> 2 & 0x3));
@@ -6915,7 +7026,7 @@ public:
 
 	void CDD(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBD.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u64[2]>(~get_imm<u32>(op.i7) >> 3 & 0x1));
@@ -7711,9 +7822,24 @@ public:
 			using VT = typename decltype(MP)::type;
 
 			// If the mask comes from a constant generation instruction, replace SHUFB with insert
-			if (auto [ok, i] = match_expr(c, spu_get_insertion_shuffle_mask<VT>(match<u32>())); ok)
+			// (0x80 takes this fold out: Killzone 3's bad value is built by exactly this pattern,
+			// a cdd-generated mask feeding a shufb, and a wrong lane here puts a whole pointer
+			// where the half-sized field belongs.)
+			if (auto [ok, i] = match_expr(c, spu_get_insertion_shuffle_mask<VT>(match<u32>())); ok && !(spu_shufb_skip_mask() & 0x80))
 			{
-				set_vr(op.rt4, insert(get_vr<VT>(op.rb), i, get_scalar(get_vr<VT>(op.ra))));
+				const auto folded = eval(insert(get_vr<VT>(op.rb), i, get_scalar(get_vr<VT>(op.ra))));
+
+				if (spu_shufb_check_enabled())
+				{
+					m_ir->CreateStore(get_vr<u8[16]>(op.ra).value, spu_ptr(&spu_thread::shufb_dbg_a));
+					m_ir->CreateStore(get_vr<u8[16]>(op.rb).value, spu_ptr(&spu_thread::shufb_dbg_b));
+					m_ir->CreateStore(get_vr<u8[16]>(op.rc).value, spu_ptr(&spu_thread::shufb_dbg_c));
+					m_ir->CreateStore(eval(bitcast<u8[16]>(folded)).value, spu_ptr(&spu_thread::shufb_dbg_res));
+					update_pc();
+					call("spu_shufb_check", &exec_shufb_check, m_thread);
+				}
+
+				set_vr(op.rt4, folded);
 				return true;
 			}
 
@@ -7928,36 +8054,36 @@ public:
 		// NOTE: LLVM doesn't emit BCAX	(llvm-project/issues/200699)
 		//		 Verify if `(x ^ 0x0F) & 0x?F` is reassociated when upstreamed
 
-		if (consts_only)
+		if (consts_only && !(spu_shufb_skip_mask() & 1))
 		{
 			// NOP to avoid doing any shuffles
 		}
-		else if (single_src)
+		else if (single_src && !(spu_shufb_skip_mask() & 0xe))
 		{
 			const auto only_src = single_src.value();
 
-			if (only_src_is_splat && perm_or_zero_only)
+			if (only_src_is_splat && perm_or_zero_only && !(spu_shufb_skip_mask() & 2))
 			{
 				set_vr(op.rt4, select(noncast<s8[16]>(c) >= 0, only_src, splat<u8[16]>(0)));
 				return;
 			}
 
-			if (only_src_is_splat)
+			if (only_src_is_splat && !(spu_shufb_skip_mask() & 4))
 			{
 				set_vr(op.rt4, tbl(splat_lut, (c >> 4)));
 				return;
 			}
 
-			if (perm_only)
+			if (perm_only && !(spu_shufb_skip_mask() & 8))
 			{
 				const auto cm = eval(cv & 0x0f);
 				set_vr(op.rt4, tbl(only_src, cm));
 				return;
 			}
 		}
-		else if (a_is_splat && b_is_splat)
+		else if (a_is_splat && b_is_splat && !(spu_shufb_skip_mask() & 0x30))
 		{
-			if (perm_only)
+			if (perm_only && !(spu_shufb_skip_mask() & 0x10))
 			{
 				set_vr(op.rt4, select_by_bit4(c, av, bv));
 				return;
@@ -7967,7 +8093,7 @@ public:
 			return;
 		}
 
-		if (perm_only)
+		if (perm_only && !(spu_shufb_skip_mask() & 0x40))
 		{
 			const auto cm = eval(cv & 0x1f);
 			set_vr(op.rt4, tbl2(av, bv, cm));
