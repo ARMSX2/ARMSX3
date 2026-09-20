@@ -211,6 +211,22 @@ static std::pair<u32, u32> spu_interp_range()
 	return s_range;
 }
 
+// Proof that the window actually bit. Without it a clean run is ambiguous: the range may have
+// named code the title never enters, or the marking may have failed, and either way the result
+// reads as "that range is innocent". Counted at both sites and logged on the powers of two so a
+// long session does not spam.
+static void spu_interp_range_engaged(const char* site)
+{
+	static atomic_t<u64> s_count{0};
+
+	const u64 n = ++s_count;
+
+	if ((n & (n - 1)) == 0)
+	{
+		spu_log.success("ARMSX3_SPU_INTERP_RANGE: engaged %u time(s), latest via %s", n, site);
+	}
+}
+
 static bool spu_interp_range_contains(u32 pc)
 {
 	const auto [start, end] = spu_interp_range();
@@ -334,6 +350,7 @@ static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler
 	if (spu_interp_range_contains(program.entry_point))
 	{
 		spu_mark_block_compile_failed(program.entry_point, program.lower_bound, ::size32(program.data) * 4);
+		spu_interp_range_engaged("refused compile");
 		return nullptr;
 	}
 
@@ -2720,6 +2737,7 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 #ifdef ARCH_ARM64
 	if (spu_interpreter_fallback_available() && spu_interp_range_contains(spu.pc))
 	{
+		spu_interp_range_engaged("dispatch");
 		// The whole window as the extent, not the four bytes at pc: the interpreter releases the
 		// thread as soon as the pc leaves the range it was armed with, and arming it per
 		// instruction costs an analyse and a dispatch round trip for every one of them.
