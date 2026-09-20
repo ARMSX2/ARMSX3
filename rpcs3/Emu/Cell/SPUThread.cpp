@@ -7553,7 +7553,9 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 				return true;
 			}
 
-			return !!events.count;
+			// Same level rule: masking an event off retracts it from the channel.
+			events.count = false;
+			return false;
 		}))
 		{
 			// Check interrupts in case count is 1
@@ -7585,7 +7587,13 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 				return true;
 			}
 
-			return !!events.count;
+			// The SPU_RdEventStat count is a LEVEL function of (pending & mask), not a latch:
+			// once the acknowledged events are gone the channel has nothing to deliver and its
+			// count is 0. Leaving the old count set let rchcnt report 1 with nothing pending,
+			// and made the following rdch return 0 immediately instead of blocking -- the SPURS
+			// kernels sit in exactly that read ("MFC Events read"), so the wait stopped waiting.
+			events.count = false;
+			return false;
 		});
 
 		if (!is_dec_frozen && freeze_dec)
