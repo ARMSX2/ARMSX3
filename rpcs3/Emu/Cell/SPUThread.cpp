@@ -302,6 +302,16 @@ extern bool cmp_rdata(const spu_rdata_t& _lhs, const spu_rdata_t& _rhs)
 #endif
 }
 
+// The reservation paths read a 128-byte line and check a timestamp on either side of the read,
+// which is only sound while the loads stay between the two timestamp reads. x86-TSO forbids the
+// reordering outright; a weakly ordered machine needs the barrier spelled out, or the check can
+// pass for data that belongs to a later epoch. Always true, so it can sit in a && chain.
+static FORCE_INLINE bool rdata_fence()
+{
+	atomic_fence_acquire();
+	return true;
+}
+
 #if defined(ARCH_X64)
 static FORCE_INLINE void mov_rdata_avx(__m256i* dst, const __m256i* src)
 {
@@ -2883,6 +2893,9 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 				}
 				}
 
+				// Keep the copy above ahead of the timestamp check below
+				atomic_fence_acquire();
+
 				if (time0 != vm::reservation_acquire(eal) || (size0 == 128 && !cmp_rdata(*reinterpret_cast<spu_rdata_t*>(dst0), *reinterpret_cast<const spu_rdata_t*>(src))))
 				{
 					continue;
@@ -4143,10 +4156,16 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 
 			// Writeback of unchanged data. Only check memory change
 			// For the comparison, load twice for atomicity
-			if (cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)) && res == rtime && cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)) && res.compare_and_swap_test(rtime, rtime + 128))
+			if (cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)))
 			{
-				raddr = 0; // Disable notification
-				return true;
+				// Keep the first comparison's loads ahead of the timestamp check below
+				atomic_fence_acquire();
+
+				if (res == rtime && cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)) && res.compare_and_swap_test(rtime, rtime + 128))
+				{
+					raddr = 0; // Disable notification
+					return true;
+				}
 			}
 
 			return false;
@@ -4425,11 +4444,17 @@ void do_cell_atomic_128_store(u32 addr, const void* to_write)
 
 			if (!(at_read_time & 127))
 			{
-				if (cmp_rdata(sdata, write_data) && at_read_time ==  vm::reservation_acquire(addr) && cmp_rdata(sdata, write_data))
+				if (cmp_rdata(sdata, write_data))
 				{
-					// Write of the same data (verified atomically)
-					vm::try_reservation_update(addr);
-					return;
+					// Keep the first comparison's loads ahead of the timestamp check below
+					atomic_fence_acquire();
+
+					if (at_read_time == vm::reservation_acquire(addr) && cmp_rdata(sdata, write_data))
+					{
+						// Write of the same data (verified atomically)
+						vm::try_reservation_update(addr);
+						return;
+					}
 				}
 			}
 		}
@@ -5155,7 +5180,7 @@ bool spu_thread::process_mfc_cmd()
 					// Need to check twice for it to be accurate, the code is before and not after this check for:
 					// 1. Reduce time between reservation accesses so TSX panelty would be lowered
 					// 2. Increase the chance of change detection: if GETLLAR has been called again new data is probably wanted
-					if (this_time == res && cmp_rdata(rdata, data))
+					if (rdata_fence() && this_time == res && cmp_rdata(rdata, data))
 					{
 						if (this_time != rtime)
 						{
@@ -5359,7 +5384,7 @@ bool spu_thread::process_mfc_cmd()
 						// Quick check if there were reservation changes
 						const u64 new_time = res;
 
-						if (new_time % 128 == 0 && cmp_rdata(rdata, data) && res == new_time && cmp_rdata(rdata, data))
+						if (new_time % 128 == 0 && cmp_rdata(rdata, data) && rdata_fence() && res == new_time && cmp_rdata(rdata, data))
 						{
 							if (g_cfg.core.mfc_debug)
 							{
@@ -5484,6 +5509,12 @@ bool spu_thread::process_mfc_cmd()
 			}
 
 			mov_rdata(rdata, data);
+
+			// The snapshot is only valid if these loads are bracketed by the two timestamp
+			// reads. x86-TSO gives that for free; on a weakly ordered machine the copy above
+			// may be satisfied after the reload below, so the check would pass for data that
+			// belongs to a later epoch. The PPU LARX path already fences here.
+			atomic_fence_acquire();
 
 			if (u64 time0 = vm::reservation_acquire(addr); ntime != time0)
 			{
