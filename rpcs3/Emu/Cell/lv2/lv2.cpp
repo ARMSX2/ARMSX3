@@ -1448,6 +1448,13 @@ static void ppu_dump_threads_on_request()
 		out += ppu_watch_summary();
 	}
 
+	// And the last lwcond traffic, which is what a "everyone is asleep and nobody signals"
+	// deadlock turns on: whether the condition a thread waits on was signalled after it queued.
+	{
+		extern std::string lwcond_history();
+		out += lwcond_history();
+	}
+
 	// Windows of guest code and memory chosen from outside, so following a hang up its call chain
 	// does not cost a build each time: ARMSX3_DUMP_CODE=start-end[,..] and ARMSX3_DUMP_MEM=..
 	// in driver_env.txt. The frame that sets up a poll loop sits a few calls above it, and the

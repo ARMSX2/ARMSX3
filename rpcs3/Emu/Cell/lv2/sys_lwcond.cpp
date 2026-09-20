@@ -8,8 +8,89 @@
 #include "sys_lwmutex.h"
 
 #include "util/asm.hpp"
+#include "Emu/Cell/timers.hpp"
 
 LOG_CHANNEL(sys_lwcond);
+
+// ARMSX3: a ring of the last lwcond events, printed by the thread dump.
+//
+// Killzone 3 wedges with its main thread parked in _sys_lwcond_queue_wait for minutes while every
+// I/O worker sits idle on its own condition: a wakeup that nobody sent, or sent to nobody. The
+// trace logging that would show it cannot be switched on from a device (the app rewrites
+// config.yml from its own settings on start), and by the time the game is stuck the interesting
+// events are long past, so keep the last few hundred and print them where the stuck threads are.
+namespace
+{
+	struct lwcond_event
+	{
+		u64 time;
+		u32 id;
+		u32 thread;
+		u32 woken;
+		char kind;
+	};
+
+	std::array<lwcond_event, 512> g_lwcond_ring{};
+	atomic_t<u32> g_lwcond_pos{0};
+}
+
+// Off unless ARMSX3_WATCH_LWCOND is set: this sits in every signal and every wait, and a
+// diagnostic has no business costing anything in a build people play on.
+static bool lwcond_watch_enabled()
+{
+	static const bool s_on = []()
+	{
+		const char* env = std::getenv("ARMSX3_WATCH_LWCOND");
+		const bool on = env && *env && *env != '0';
+
+		if (on)
+		{
+			sys_lwcond.success("ARMSX3_WATCH_LWCOND: recording lwcond traffic for the thread dump");
+		}
+
+		return on;
+	}();
+
+	return s_on;
+}
+
+void lwcond_record(u32 id, u32 thread, char kind, u32 woken)
+{
+	if (!lwcond_watch_enabled())
+	{
+		return;
+	}
+
+	const u32 i = g_lwcond_pos++ % g_lwcond_ring.size();
+	g_lwcond_ring[i] = {get_system_time(), id, thread, woken, kind};
+}
+
+// 'w' entered wait, 'W' left wait, 's' signal, 'a' signal_all; woken is what the signal found.
+std::string lwcond_history()
+{
+	const u32 end = g_lwcond_pos.load();
+
+	if (!end)
+	{
+		return {};
+	}
+
+	const u32 count = std::min<u32>(end, ::size32(g_lwcond_ring));
+	const u64 now = get_system_time();
+
+	std::string out = "\nLast lwcond events (newest first, age in ms):\n";
+
+	for (u32 n = 0; n < count; n++)
+	{
+		const auto& e = g_lwcond_ring[(end - 1 - n) % g_lwcond_ring.size()];
+
+		fmt::append(out, "\t%8.1fms  %c  cond=0x%08x  ppu=0x%x%s\n",
+			(now - e.time) / 1000., e.kind, e.id, e.thread,
+			e.kind == 's' || e.kind == 'a' ? fmt::format("  woke=%u", e.woken) : "");
+	}
+
+	return out;
+}
 
 lv2_lwcond::lv2_lwcond(utils::serial& ar)
 	: name(ar.pop<be_t<u64>>())
@@ -145,6 +226,8 @@ error_code _sys_lwcond_signal(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id, u6
 	ppu.state += cpu_flag::wait;
 
 	sys_lwcond.trace("_sys_lwcond_signal(lwcond_id=0x%x, lwmutex_id=0x%x, ppu_thread_id=0x%llx, mode=%d)", lwcond_id, lwmutex_id, ppu_thread_id, mode);
+
+	lwcond_record(lwcond_id, ppu.id, 's', 0);
 
 	// Mode 1: lwmutex was initially owned by the calling thread
 	// Mode 2: lwmutex was not owned by the calling thread and waiter hasn't been increased
@@ -313,6 +396,8 @@ error_code _sys_lwcond_signal_all(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id
 
 	sys_lwcond.trace("_sys_lwcond_signal_all(lwcond_id=0x%x, lwmutex_id=0x%x, mode=%d)", lwcond_id, lwmutex_id, mode);
 
+	lwcond_record(lwcond_id, ppu.id, 'a', 0);
+
 	// Mode 1: lwmutex was initially owned by the calling thread
 	// Mode 2: lwmutex was not owned by the calling thread and waiter hasn't been increased
 
@@ -437,6 +522,8 @@ error_code _sys_lwcond_queue_wait(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id
 	ppu.state += cpu_flag::wait;
 
 	sys_lwcond.trace("_sys_lwcond_queue_wait(lwcond_id=0x%x, lwmutex_id=0x%x, timeout=0x%llx)", lwcond_id, lwmutex_id, timeout);
+
+	lwcond_record(lwcond_id, ppu.id, 'w', 0);
 
 	ppu.gpr[3] = CELL_OK;
 

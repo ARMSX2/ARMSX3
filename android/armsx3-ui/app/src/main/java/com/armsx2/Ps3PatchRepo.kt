@@ -35,6 +35,49 @@ object Ps3PatchRepo {
     private fun patchUrl(version: String) =
         "https://rpcs3.net/compatibility?patch&api=v1&v=$version"
 
+    // One file per source under config/patches (the layout is described where the core writes
+    // them, in rpcsx-android.cpp). Each download replaces its own file whole, so whatever its
+    // source renamed or withdrew is gone after the next download instead of listed beside its
+    // replacement; only the user's own imports (imported_patch.yml) accumulate.
+    private const val DB_FILE = "patch.yml"
+    private const val ARTEMIS_FILE = "artemis_patch.yml"
+    private const val BUNDLED_FILE = "armsx3_patch.yml"
+
+    /** The old merged patch.yml, kept once when the files are first split. */
+    private const val PRE_SPLIT_BACKUP = "patch.yml.pre-1.0"
+
+    private const val KEY_FILES_SPLIT = "ps3_patch_files_split"
+
+    private fun patchesDir() = java.io.File(RPCSX.rootDirectory, "config/patches")
+
+    private fun prefs(context: Context) =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    /**
+     * Get an install that still has one merged patch.yml ready to have it replaced.
+     *
+     * Until 1.0 every source was merged into patch.yml: the database, the Artemis collection,
+     * the bundled fixes and anything the user imported, with nothing recording which was which.
+     * So there is no taking the old file apart; it is replaced by the first download, which is
+     * the clean baseline the Artemis maintainer asked for. Two things are done first, once:
+     * the bundled fixes get their own file (switched on but in no file, a patch is simply not
+     * applied), and the old file is kept beside it for anyone who had imported patches of their
+     * own into it. Returns whether there was an old list to keep, which is when the user is told.
+     */
+    private fun prepareSplit(context: Context): Boolean {
+        ensureBundledPatches(context)
+        return runCatching {
+            val old = java.io.File(patchesDir(), DB_FILE)
+            val backup = java.io.File(patchesDir(), PRE_SPLIT_BACKUP)
+            if (!old.isFile) return@runCatching false
+            if (!backup.exists()) old.copyTo(backup)
+            true
+        }.getOrElse {
+            android.util.Log.w("ARMSX3", "patches: could not keep the old patch.yml", it)
+            false
+        }
+    }
+
     data class Patch(
         val hash: String,
         val name: String,
@@ -46,23 +89,24 @@ object Ps3PatchRepo {
         val enabled: Boolean,
     )
 
-    /**
-     * Download the patch database and merge it into patches/patch.yml.
-     *
-     * Returns the number of patches imported, or -1 on failure. Merging (rather
-     * than replacing) is what the core's import path does, so hand-added patches
-     * in the same file survive an update.
-     */
-    /** Distinguishes the failure modes so the UI can say which one happened. */
+    /** Distinguishes the failure modes so the UI can say which one happened. [Ok.rebuilt] is
+     *  set on the one download that replaced an old merged patch.yml (see [prepareSplit]). */
     sealed interface Result {
-        data class Ok(val count: Int) : Result
+        data class Ok(val count: Int, val rebuilt: Boolean = false) : Result
         data object Network : Result
         data class Server(val code: Int) : Result
         data object Parse : Result
         data object Checksum : Result
     }
 
-    fun download(): Result {
+    /**
+     * Download the patch database into patches/patch.yml, replacing it.
+     *
+     * Replaced rather than merged, as desktop RPCS3 does: a merge only ever adds, so a patch
+     * the database renamed or withdrew stayed listed forever. Hand-added patches are not in this
+     * file any more (they merge into imported_patch.yml), so replacing it costs nobody anything.
+     */
+    fun download(context: Context): Result {
         val engineVersion = runCatching { RPCSX.instance.patchEngineVersion() }.getOrDefault("")
         if (engineVersion.isBlank()) return Result.Parse
 
@@ -100,8 +144,13 @@ object Ps3PatchRepo {
         val expected = envelope.optString("sha256")
         if (!expected.equals(sha256(yaml), ignoreCase = true)) return Result.Checksum
 
-        val n = runCatching { RPCSX.instance.patchesImport(yaml) }.getOrDefault(-1)
-        return if (n >= 0) Result.Ok(n) else Result.Parse
+        val splitting = !prefs(context).getBoolean(KEY_FILES_SPLIT, false)
+        val keptOldList = splitting && prepareSplit(context)
+
+        val n = runCatching { RPCSX.instance.patchesWrite(DB_FILE, yaml) }.getOrDefault(-1)
+        if (n < 0) return Result.Parse
+        if (splitting) prefs(context).edit().putBoolean(KEY_FILES_SPLIT, true).apply()
+        return Result.Ok(n, rebuilt = keptOldList)
     }
 
     /**
@@ -111,19 +160,32 @@ object Ps3PatchRepo {
      * does is download their work; the cheats, the testing and the upkeep are theirs.
      *
      * Community cheats, MIT licensed, and already in RPCS3's own patch format: PPU hash keyed,
-     * with `[ be32, addr, value ]` entries. No conversion step, so it goes through
-     * patchesImport like everything else and merges into patches/patch.yml beside the rpcs3.net
-     * database rather than replacing it.
+     * with `[ be32, addr, value ]` entries. No conversion step. It gets a file of its own,
+     * patches/artemis_patch.yml, replaced whole by every download: the maintainer renames and
+     * retires patches between releases, and merged into patch.yml (as it was until 1.0) the old
+     * names stayed listed beside the new ones for good.
      *
-     * The release ASSET is asked for rather than hardcoded. It ships as a zip attached to a
-     * GitHub release and the tag moves, so a pinned url would rot the first time they publish.
-     * Asking the API which asset is current costs one small request and survives that.
+     * The release ASSET is asked for rather than hardcoded. It is attached to a GitHub release and
+     * the tag moves, so a pinned url would rot the first time they publish. Asking the API which
+     * asset is current costs one small request and survives that. Either packaging is taken: up
+     * to v1.04bfu it was a zip holding the yml, and from v2026.09.19 it is the bare
+     * imported_patch.yml. Accepting only the zip is what broke the button the day they switched.
      *
      * No checksum to verify: unlike rpcs3.net there is no published digest to compare against.
      * The transport is https and the core parses the result, so a corrupt file is rejected
      * rather than half applied, which is the same guarantee [importLocal] gives.
      */
-    fun downloadArtemis(): Result {
+    fun downloadArtemis(context: Context): Result {
+        // An install that has not been split yet may hold an older copy of the collection merged
+        // into patch.yml, and writing the new one to its own file would list every renamed patch
+        // twice. So the database is refreshed first, once, which replaces that copy.
+        var rebuilt = false
+        if (!prefs(context).getBoolean(KEY_FILES_SPLIT, false)) {
+            val db = download(context)
+            if (db !is Result.Ok) return db
+            rebuilt = db.rebuilt
+        }
+
         val meta = runCatching {
             com.armsx3.HttpClient.doRequest(ARTEMIS_LATEST_RELEASE, userAgent = "ARMSX3")
         }.getOrNull() ?: return Result.Network
@@ -132,14 +194,25 @@ object Ps3PatchRepo {
             return if (meta.statusCode > 0) Result.Server(meta.statusCode) else Result.Network
         }
 
-        val assetUrl = runCatching {
-            val assets = org.json.JSONObject(String(meta.data, Charsets.UTF_8))
-                .getJSONArray("assets")
-            (0 until assets.length())
-                .map { assets.getJSONObject(it) }
-                .firstOrNull { it.optString("name").endsWith(".zip", ignoreCase = true) }
-                ?.optString("browser_download_url")
-        }.getOrNull()?.takeIf { it.isNotBlank() } ?: return Result.Parse
+        // The yml itself if the release has one, else a zip to take it out of. Anything else (the
+        // oldest releases were rars) is not readable here; say so in the log, because the UI can
+        // only report it as a file that could not be read.
+        val assets = runCatching {
+            val list = org.json.JSONObject(String(meta.data, Charsets.UTF_8)).getJSONArray("assets")
+            (0 until list.length()).map { list.getJSONObject(it) }
+        }.getOrNull() ?: return Result.Parse
+
+        fun assetWith(vararg extensions: String) = assets
+            .firstOrNull { a -> extensions.any { a.optString("name").endsWith(it, ignoreCase = true) } }
+            ?.optString("browser_download_url")
+            ?.takeIf { it.isNotBlank() }
+
+        val ymlUrl = assetWith(".yml", ".yaml")
+        val assetUrl = ymlUrl ?: assetWith(".zip") ?: run {
+            android.util.Log.w("ARMSX3", "artemis: no .yml or .zip asset in the latest release: " +
+                assets.joinToString { it.optString("name") })
+            return Result.Parse
+        }
 
         // Longer than the default: this is a whole collection, not one game's patches, and it
         // arrives over a link the user did not choose the speed of.
@@ -151,7 +224,7 @@ object Ps3PatchRepo {
             return if (archive.statusCode > 0) Result.Server(archive.statusCode) else Result.Network
         }
 
-        val yaml = runCatching {
+        val yaml = if (ymlUrl != null) String(archive.data, Charsets.UTF_8) else runCatching {
             java.util.zip.ZipInputStream(archive.data.inputStream()).use { zip ->
                 var found: String? = null
                 while (found == null) {
@@ -166,8 +239,8 @@ object Ps3PatchRepo {
 
         if (yaml.isNullOrBlank()) return Result.Parse
 
-        val n = runCatching { RPCSX.instance.patchesImport(yaml) }.getOrDefault(-1)
-        return if (n >= 0) Result.Ok(n) else Result.Parse
+        val n = runCatching { RPCSX.instance.patchesWrite(ARTEMIS_FILE, yaml) }.getOrDefault(-1)
+        return if (n >= 0) Result.Ok(n, rebuilt) else Result.Parse
     }
 
     /**
@@ -177,8 +250,8 @@ object Ps3PatchRepo {
      * local file against, and the user choosing the file IS the trust decision. The
      * core still parses it, so a malformed file is rejected rather than half-applied.
      *
-     * Merges into patches/patch.yml like every other import, so a hand-added patch
-     * sits alongside the downloaded database instead of replacing it.
+     * Merges into patches/imported_patch.yml, RPCS3's own file for these, so hand-added
+     * patches accumulate there and no download ever replaces them.
      */
     fun importLocal(context: Context, uri: android.net.Uri): Result {
         val yaml = runCatching {
@@ -256,6 +329,28 @@ object Ps3PatchRepo {
     )
 
     private val BUNDLED = listOf(
+        // NBA 08, BCES00112 v01.00 -- ours. The quickplay loading screen's Lua misses its one
+        // "exit after this loop" event when loading beats the screen's 6.5 s intro, which it
+        // always does here and never on a PS3; the loading thread now re-sends it every frame.
+        // See canary_patches.yml.
+        Bundled(
+            hash = "PPU-30ce8c9f0a9552914275c90e2980749630f3ea18",
+            name = "ARMSX3 quickplay loading fix",
+            serial = "BCES00112",
+            appVersion = "01.00",
+            sinceRevision = 7,
+        ),
+        // NBA 08, BCES00112 v01.00 -- ours. The intro movie's vdec callback reads a picture
+        // that cellVdecGetPicItem did not hand over (a late PICOUT on a first run, while the
+        // SPU cache compiles); the patch drops that one picture instead of reading NULL+0x44.
+        // See canary_patches.yml.
+        Bundled(
+            hash = "PPU-30ce8c9f0a9552914275c90e2980749630f3ea18",
+            name = "ARMSX3 intro movie crash fix",
+            serial = "BCES00112",
+            appVersion = "01.00",
+            sinceRevision = 6,
+        ),
         // BURNOUT PARADISE, BLUS30061 v01.00 -- ours. The audio voice refill asks the heap
         // for a 1.67GB buffer and gets a correct refusal, then writes through the null; and a
         // lookup miss further on takes a null-check branch that dereferences the null anyway.
@@ -305,6 +400,46 @@ object Ps3PatchRepo {
         //
         // A Crack in Time replaces our own "FIFO drain wait fix", which wrote the same word
         // with a different condition register and could only race it. See canary_patches.yml.
+        // Killzone 3 -- RPCS3's own patch, on by default because without it the HUD flickers
+        // constantly on ARM64 and a burst of coloured noise crosses the screen now and then. The
+        // patch stops the game running MLAA on the SPUs, which is where that comes from: turning
+        // it on removed the flicker outright, and every other lever we tried (the SPU block size,
+        // transfer accuracy, our SHUFB paths) left it exactly as it was.
+        //
+        // Four entries because the database keys these per executable AND per serial, and the two
+        // discs spell the name differently: no space before the bracket on 01.00, one on 01.14.
+        // patchSetEnabled matches the name exactly, so both spellings are reproduced verbatim.
+        //
+        // It also costs nothing to have on: RPCS3's notes say it improves performance and lets
+        // resolution scaling work, at the price of some screen effects.
+        Bundled(
+            hash = "PPU-ae204e2198c9a051a44a69913c48f6591b811082",
+            name = "Disable MLAA(Post-processing On SPU)",
+            serial = "BCES01007",
+            appVersion = "01.00",
+            sinceRevision = 8,
+        ),
+        Bundled(
+            hash = "PPU-ae204e2198c9a051a44a69913c48f6591b811082",
+            name = "Disable MLAA(Post-processing On SPU)",
+            serial = "BCUS98234",
+            appVersion = "01.00",
+            sinceRevision = 8,
+        ),
+        Bundled(
+            hash = "PPU-4836b8e74c47919f50b030ee6b47d96bc7305387",
+            name = "Disable MLAA (Post-processing on SPU)",
+            serial = "BCES01007",
+            appVersion = "01.14",
+            sinceRevision = 8,
+        ),
+        Bundled(
+            hash = "PPU-4836b8e74c47919f50b030ee6b47d96bc7305387",
+            name = "Disable MLAA (Post-processing on SPU)",
+            serial = "BCUS98234",
+            appVersion = "01.14",
+            sinceRevision = 8,
+        ),
         Bundled(
             hash = "PPU-c4e26433d1eed9166eb0c67b6f66b2268f3704e2",
             name = "Freeze Fix",
@@ -316,28 +451,6 @@ object Ps3PatchRepo {
             hash = "PPU-ec77eaf73a4f55d1c4ece532c3be6db0011e49ca",
             name = "Freeze Fix",
             serial = "NPEA00452",
-        // NBA 08, BCES00112 v01.00 -- ours. The quickplay loading screen's Lua misses its one
-        // "exit after this loop" event when loading beats the screen's 6.5 s intro, which it
-        // always does here and never on a PS3; the loading thread now re-sends it every frame.
-        // See canary_patches.yml.
-        Bundled(
-            hash = "PPU-30ce8c9f0a9552914275c90e2980749630f3ea18",
-            name = "ARMSX3 quickplay loading fix",
-            serial = "BCES00112",
-            appVersion = "01.00",
-            sinceRevision = 7,
-        ),
-        // NBA 08, BCES00112 v01.00 -- ours. The intro movie's vdec callback reads a picture
-        // that cellVdecGetPicItem did not hand over (a late PICOUT on a first run, while the
-        // SPU cache compiles); the patch drops that one picture instead of reading NULL+0x44.
-        // See canary_patches.yml.
-        Bundled(
-            hash = "PPU-30ce8c9f0a9552914275c90e2980749630f3ea18",
-            name = "ARMSX3 intro movie crash fix",
-            serial = "BCES00112",
-            appVersion = "01.00",
-            sinceRevision = 6,
-        ),
             appVersion = "All",
             sinceRevision = 4,
         ),
@@ -490,7 +603,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 7
+    private const val BUNDLED_REVISION = 8
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
@@ -508,27 +621,22 @@ object Ps3PatchRepo {
      * on every launch, or on every bump, would make the toggle look broken, which is
      * the same class of bug as not having the patch at all.
      *
-     * Safe to call on every boot: it is a preference read once the revision matches,
-     * and the import itself merges rather than replaces, so a downloaded database
-     * and hand-added patches both survive.
+     * Safe to call on every boot: once the revision matches and the file is there, it is a
+     * preference read and one stat.
+     *
+     * The patches live in patches/armsx3_patch.yml, a file of the app's own that the core
+     * applies beside the downloaded ones and that no download replaces. Until 1.0 they were
+     * merged into patch.yml, which a database download now replaces whole, and a patch that is
+     * switched on but in no file is silently not applied: Burnout, Soulcalibur V, Sonic '06 and
+     * the Ratchet games would each have lost their fix with no sign of why. The file is checked
+     * on every call, not only on a revision bump, because it can go missing on its own (a new
+     * data folder, a cleared patches directory) while the stored revision says all is done.
      */
     fun ensureBundledPatches(context: Context) {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val prefs = prefs(context)
         val storedRevision = prefs.getInt(KEY_BUNDLED_REVISION, 0)
-        if (storedRevision >= BUNDLED_REVISION) return
-
-        // Anything at or below the stored revision has had its one chance to be turned
-        // on. Re-enabling it here would silently undo a user's OFF, and patch_config.yml
-        // stores "disabled" as an absent entry, so there is nothing to read back that
-        // would tell us the difference between "opted out" and "never seen".
-        val pending = BUNDLED.filter { it.sinceRevision > storedRevision }
-
-        if (pending.isEmpty()) {
-            // Nothing new to enable, so skip the import entirely rather than rewriting
-            // patches/patch.yml for no reason.
-            prefs.edit().putInt(KEY_BUNDLED_REVISION, BUNDLED_REVISION).apply()
-            return
-        }
+        val fileMissing = !java.io.File(patchesDir(), BUNDLED_FILE).isFile
+        if (storedRevision >= BUNDLED_REVISION && !fileMissing) return
 
         val yaml = runCatching {
             context.assets.open(BUNDLED_ASSET).bufferedReader().use { it.readText() }
@@ -539,11 +647,21 @@ object Ps3PatchRepo {
             return
         }
 
-        // Merges into patches/patch.yml, which is also where a downloaded database
-        // lands, so the patch shows up in the Patch Manager next to the online ones.
-        val imported = runCatching { RPCSX.instance.patchesImport(yaml) }.getOrDefault(-1)
+        val imported = runCatching { RPCSX.instance.patchesWrite(BUNDLED_FILE, yaml) }.getOrDefault(-1)
         if (imported < 0) {
-            android.util.Log.e("ARMSX3", "canary patches: import failed")
+            android.util.Log.e("ARMSX3", "canary patches: could not write $BUNDLED_FILE")
+            return
+        }
+
+        // Anything at or below the stored revision has had its one chance to be turned
+        // on. Re-enabling it here would silently undo a user's OFF, and patch_config.yml
+        // stores "disabled" as an absent entry, so there is nothing to read back that
+        // would tell us the difference between "opted out" and "never seen". So a file that
+        // was only restored enables nothing.
+        val pending = BUNDLED.filter { it.sinceRevision > storedRevision }
+
+        if (pending.isEmpty()) {
+            prefs.edit().putInt(KEY_BUNDLED_REVISION, BUNDLED_REVISION).apply()
             return
         }
 
