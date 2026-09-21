@@ -2393,15 +2393,39 @@ static void spu_watch_ls_write(const spu_thread* spu, const spu_mfc_cmd& args, u
 		return;
 	}
 
-	// Every hit at first, then a sample. A job area being reloaded legitimately would otherwise
-	// fill the log in a second, and the first lines are what says whether that is the case.
+	// Every hit at first, then a sample -- but sampled PER PC, not globally. A job area being
+	// reloaded legitimately fills the log in a second, and one global 1-in-64 sample lets that
+	// flood hide a rare transfer from a different site entirely: a cache refill that happens
+	// three times in a session competes with a stream that happens 155,000 times, and "this SPU
+	// never refilled" then reports absence that is really just decimation. Keeping a per-pc
+	// budget means a rare site is always logged in full.
 	static atomic_t<u64> s_hits{0};
 
 	const u64 n = ++s_hits;
+	const u32 site = spu ? spu->pc : 0;
 
-	if (n > 256 && n % 64)
 	{
-		return;
+		static atomic_t<u32> s_pc[16]{};
+		static atomic_t<u32> s_pc_hits[16]{};
+
+		u32 slot = 16;
+
+		for (u32 i = 0; i < 16; i++)
+		{
+			const u32 have = s_pc[i].load();
+
+			if (have == site) { slot = i; break; }
+
+			if (!have && s_pc[i].compare_and_swap_test(0, site)) { slot = i; break; }
+		}
+
+		// Known site with budget left, or a site we could not track: log it.
+		const u32 seen = slot < 16 ? ++s_pc_hits[slot] : 0;
+
+		if (slot < 16 && seen > 64 && n % 64)
+		{
+			return;
+		}
 	}
 
 	std::string head = "<unmapped>";
