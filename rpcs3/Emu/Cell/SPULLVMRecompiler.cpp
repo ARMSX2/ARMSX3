@@ -103,6 +103,58 @@ void spu_llvm_set_compile_context(spu_llvm_compile_context* context) noexcept
 //   1 consts_only, 2 single+splat+perm_or_zero, 4 single+splat, 8 single+perm_only,
 //   0x10 both-splat+perm_only, 0x20 both-splat, 0x40 perm_only (tbl2)
 // ARMSX3_SHUFB_CHECK=1: verify every folded SHUFB against the real shuffle at runtime.
+// ARMSX3_SPU_TRAP_PC=<hex LS pc>[:<gpr>]: after the instruction at that address, look at the given
+// register (default r67) and log the neighbourhood when the value it holds would become an
+// unmapped address once the job shifts it up by four bits -- which is the exact shape of Killzone
+// 3's bad pointers (0x0145bf10 -> 0x145bf100).
+//
+// Swapping in the interpreter cannot answer this: interpreting the job for real is far too slow to
+// reach the level. Checking one instruction costs a compare on the path it sits on.
+static std::pair<u32, u32> spu_trap_pc()
+{
+	static const std::pair<u32, u32> s_trap = []() -> std::pair<u32, u32>
+	{
+		const char* env = std::getenv("ARMSX3_SPU_TRAP_PC");
+
+		if (!env || !*env)
+		{
+			return {umax, 0};
+		}
+
+		const std::string_view item{env};
+		const usz colon = item.find(':');
+		u32 pc = 0, reg = 67;
+
+		if (std::from_chars(item.data(), item.data() + std::min(colon, item.size()), pc, 16).ec != std::errc() ||
+			(colon != umax && std::from_chars(item.data() + colon + 1, item.data() + item.size(), reg, 10).ec != std::errc()) ||
+			pc >= SPU_LS_SIZE || reg >= 128)
+		{
+			spu_log.error("ARMSX3_SPU_TRAP_PC: could not read '%s', expected <hex pc>[:<gpr>]", env);
+			return {umax, 0};
+		}
+
+		spu_log.success("ARMSX3_SPU_TRAP_PC: watching r%u after LS 0x%05x", reg, pc);
+		return {pc, reg};
+	}();
+
+	return s_trap;
+}
+
+// Raw mode: ARMSX3_SPU_TRAP_PC=<pc>[:<reg>]:raw logs the register every time the pc is reached,
+// with no filter. The default filter encodes one specific hypothesis (a pointer whose x16 is
+// unmapped) and silently drops everything else, which is useless for reading a value that is
+// simply a number -- an allocator's top-of-heap, say.
+static bool spu_trap_raw()
+{
+	static const bool s_raw = []()
+	{
+		const char* env = std::getenv("ARMSX3_SPU_TRAP_PC");
+		return env && std::string_view{env}.ends_with(":raw");
+	}();
+
+	return s_raw;
+}
+
 static bool spu_shufb_check_enabled()
 {
 	static const bool s_on = []()
@@ -3497,8 +3549,40 @@ public:
 					default: break;
 					}
 
+					// ARMSX3_SHUFB_CHECK: verify EVERY shuffle, not only the folded ones -- the
+					// first version of this check sat inside the insert fold, so the ARM64
+					// tbl/tbx paths were never verified at all.
+					//
+					// The operands are captured BEFORE the instruction and the result after it.
+					// Capturing all four afterwards reads the result back as the operands
+					// whenever a shuffle writes to its own source (shufb rX,rX,rX,mask, the
+					// byteswap idiom), which reported 32 mismatches that were all this mistake.
+					const bool check_shufb = g_spu_itype.decode(op) == spu_itype::SHUFB && spu_shufb_check_enabled();
+
+					if (check_shufb)
+					{
+						const spu_opcode_t sop{op};
+
+						m_ir->CreateStore(get_vr<u8[16]>(sop.ra).value, spu_ptr(&spu_thread::shufb_dbg_a));
+						m_ir->CreateStore(get_vr<u8[16]>(sop.rb).value, spu_ptr(&spu_thread::shufb_dbg_b));
+						m_ir->CreateStore(get_vr<u8[16]>(sop.rc).value, spu_ptr(&spu_thread::shufb_dbg_c));
+					}
+
 					// Execute recompiler function (TODO)
 					(this->*decode(op))({op});
+
+					if (check_shufb && !m_ir->GetInsertBlock()->getTerminator())
+					{
+						m_ir->CreateStore(get_vr<u8[16]>(spu_opcode_t{op}.rt4).value, spu_ptr(&spu_thread::shufb_dbg_res));
+						update_pc();
+						call("spu_shufb_check", &exec_shufb_check, m_thread);
+					}
+
+					if (m_pos == spu_trap_pc().first)
+					{
+						ensure_gpr_stores();
+						call("spu_trap_pc", &exec_trap_pc, m_thread);
+					}
 				}
 
 				// Finalize block with fallthrough if necessary
@@ -4750,6 +4834,61 @@ public:
 		const bool result = _spu->check_state();
 		_spu->allow_interrupts_in_cpu_work = allow;
 		return result;
+	}
+
+	// Logs only when the watched register holds something that cannot be a packed pointer, so a
+	// job that runs thousands of times a second costs one compare and prints nothing.
+	static void exec_trap_pc(spu_thread* _spu)
+	{
+		const u32 reg = spu_trap_pc().second;
+		const v128 v = _spu->gpr[reg];
+		const u32 value = v._u32[3];
+		const u32 shifted = value << 4;
+
+		if (spu_trap_raw())
+		{
+			// Every hit, no filter, one line. Bounded so a pc in a hot loop cannot flood.
+			static atomic_t<u32> s_raw_reports{0};
+
+			if (s_raw_reports++ < 256)
+			{
+				spu_log.error("TRAP_PC 0x%05x RAW: r%u = %08x %08x %08x %08x, thread '%s'",
+					spu_trap_pc().first, reg, v._u32[3], v._u32[2], v._u32[1], v._u32[0],
+					*_spu->spu_tname.load());
+			}
+
+			return;
+		}
+
+		// The signature is narrow on purpose: a value that IS a valid pointer on its own but is
+		// mapped nowhere once the job multiplies it by sixteen. Filtering only on the shifted
+		// address caught ordinary float data (0x80000010 and friends) 24 times in a session.
+		if (!vm::check_addr(value, vm::page_readable, 128) || vm::check_addr(shifted, vm::page_readable, 128))
+		{
+			return;
+		}
+
+		static atomic_t<u32> s_reports{0};
+
+		if (s_reports++ >= 24)
+		{
+			return;
+		}
+
+		// Every register, not a window: the base this job adds to the shifted value lives in
+		// r108, outside the r60-r79 window the first version printed, and the whole point is to
+		// see whether that base is zero. It fires once in a session, so the size is irrelevant.
+		std::string regs;
+
+		for (u32 i = 0; i < 128; i++)
+		{
+			fmt::append(regs, "%s r%-3u = %08x %08x %08x %08x", (i % 4 == 0 ? "\n    " : "   "),
+				i, _spu->gpr[i]._u32[3], _spu->gpr[i]._u32[2], _spu->gpr[i]._u32[1], _spu->gpr[i]._u32[0]);
+		}
+
+		spu_log.error("TRAP_PC 0x%05x: r%u = %08x %08x %08x %08x -- valid pointer, but x16 = 0x%08x is unmapped, thread '%s'%s",
+			spu_trap_pc().first, reg, v._u32[3], v._u32[2], v._u32[1], v._u32[0], shifted,
+			*_spu->spu_tname.load(), regs);
 	}
 
 	// ARMSX3_SHUFB_CHECK=1: recompute the shuffle the plain way and compare it with what the
