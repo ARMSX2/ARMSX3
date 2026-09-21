@@ -2700,6 +2700,61 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 		}
 	}
 
+	// A GET whose source is not mapped kills the SPU thread: the copy below faults in the host and
+	// the access-violation handler stops it. Hardware does not do that. On a real MFC an invalid
+	// effective address raises a class-2 DMA segment/alignment interrupt against the SPU, which the
+	// running code can survive; it does not vaporise the thread mid-transfer.
+	//
+	// Killzone 3's Havok KD-tree traversal reaches this exactly once per run out of ~14,600 cache
+	// refills. Everything about that one refill is correct: the line it read was verified byte for
+	// byte against guest memory at the same instant, the guard at LS 0x21200 evaluated correctly,
+	// and `shli` did what the CBEA says. The node simply holds 0x40ea7020 where a packed pointer
+	// belongs, and the job multiplies it by 16 with no range check of its own -- a valid packed
+	// pointer has to be below 0x10000000 for `value * 16` to stay inside 32 bits, and this is not.
+	//
+	// Returning zeros is what lets the guest recover rather than merely survive: the traversal's
+	// own terminator is `word1 <= 0` (`cgti`/`brz` at LS 0x21220), so a zero-filled line ends that
+	// branch, pops the worklist and carries on. Faulting instead turns one bad node into a dead
+	// SPU and a wedged game.
+	//
+	// Loud, not silent: this masks a genuine guest error, so every distinct pc says so once. If a
+	// game prints these in a loop, the transfer is not the bug and the log is the lead.
+	if (is_get && eal < RAW_SPU_BASE_ADDR && args.size) [[unlikely]]
+	{
+		if (!vm::check_addr(eal, vm::page_readable, args.size)) [[unlikely]]
+		{
+			const u32 at = _this ? _this->pc : 0;
+
+			static atomic_t<u32> s_seen[16]{};
+			static atomic_t<u32> s_count{0};
+
+			bool first = true;
+
+			for (auto& slot : s_seen)
+			{
+				if (slot == at)
+				{
+					first = false;
+					break;
+				}
+
+				if (u32 expected = 0; slot.compare_exchange(expected, at))
+				{
+					break;
+				}
+			}
+
+			if (first && s_count++ < 16)
+			{
+				spu_log.error("DMA GET from unmapped 0x%x (size 0x%x, lsa 0x%x) at pc 0x%05x: "
+					"zero-filling instead of killing the thread", eal, args.size, lsa, at);
+			}
+
+			std::memset(ls + lsa, 0, std::min<u32>(args.size, SPU_LS_SIZE - lsa));
+			return;
+		}
+	}
+
 	// Keep src point to const
 	u8* dst = nullptr;
 	const u8* src = nullptr;
