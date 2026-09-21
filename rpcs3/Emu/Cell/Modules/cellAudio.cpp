@@ -404,9 +404,15 @@ void audio_port::tag(s32 offset)
 	{
 		port_buf[tag_pos] = tag;
 		last_tag_value[tag_nr] = -0.0f;
+	}
 
-		// Mark the front right channel as well, see PORT_BUFFER_MARK_CHANNEL
-		port_buf[mark_position(tag_nr)] = tag;
+	// Mark the front right channel as well, see PORT_BUFFER_MARK_CHANNEL
+	if (num_channels != 2)
+	{
+		for (u32 tag_nr = 0; tag_nr < PORT_BUFFER_TAG_COUNT; tag_nr++)
+		{
+			port_buf[mark_position(tag_nr)] = tag;
+		}
 	}
 
 	prev_touched_tag_nr = -1;
@@ -503,6 +509,7 @@ std::tuple<u32, u32, u32, u32> cell_audio_thread::count_port_buffer_tags()
 			// This port reaches its surround channels, so its tags track it on their own and the marks below
 			// are never consulted for it.
 			m_periods_without_tag[port_index] = 0;
+			m_front_only_port[port_index] = false;
 		}
 
 		// Decide whether the buffer is untouched, in progress, incomplete, or complete
@@ -513,9 +520,9 @@ std::tuple<u32, u32, u32, u32> cell_audio_thread::count_port_buffer_tags()
 			// stay silent forever. The marks tell the two apart. They are only consulted once this port has
 			// gone long enough without moving a tag to rule out a game writing the buffer one channel at a
 			// time, which looks identical in between its front right and its center pass.
-			bool front_only = false;
+			bool& front_only = m_front_only_port[port_index];
 
-			if (m_periods_without_tag[port_index] > PORT_FRONT_ONLY_SETTLE_PERIODS)
+			if (!front_only && port.num_channels != 2 && m_periods_without_tag[port_index] > PORT_FRONT_ONLY_SETTLE_PERIODS)
 			{
 				for (u32 tag_nr = 0; tag_nr < PORT_BUFFER_TAG_COUNT; tag_nr++)
 				{
@@ -526,6 +533,12 @@ std::tuple<u32, u32, u32, u32> cell_audio_thread::count_port_buffer_tags()
 						front_only = true;
 						break;
 					}
+				}
+
+				if (front_only && !m_front_only_reported[port_index])
+				{
+					m_front_only_reported[port_index] = true;
+					cellAudio.notice("Port %u carries front channel audio only (num_channels=%u). Its buffer tags all sit on surround channels and can never move, so the front channel marks decide whether it is silent.", port.number, port.num_channels);
 				}
 			}
 
@@ -539,12 +552,6 @@ std::tuple<u32, u32, u32, u32> cell_audio_thread::count_port_buffer_tags()
 				// The game only ever fills the front channels of this port, so the block is as complete as it
 				// is ever going to get. Incomplete is the verdict that says so, and it still gets mixed.
 				incomplete++;
-
-				if (!m_front_only_reported[port_index])
-				{
-					m_front_only_reported[port_index] = true;
-					cellAudio.notice("Port %u carries front channel audio only (num_channels=%u). Its buffer tags all sit on surround channels and can never move, so the front channel marks decide whether it is silent.", port.number, port.num_channels);
-				}
 			}
 		}
 		else if (last_touched_tag_nr == PORT_BUFFER_TAG_COUNT - 1)
@@ -1221,6 +1228,7 @@ audio_port* cell_audio_thread::open_port()
 		{
 			m_front_only_reported[i] = false;
 			m_periods_without_tag[i] = 0;
+			m_front_only_port[i] = false;
 			return &ports[i];
 		}
 	}
