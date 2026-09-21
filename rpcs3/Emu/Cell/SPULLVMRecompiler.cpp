@@ -26,6 +26,14 @@ const extern spu_decoder<spu_itype> g_spu_itype;
 const extern spu_decoder<spu_iname> g_spu_iname;
 const extern spu_decoder<spu_iflag> g_spu_iflag;
 
+namespace vm
+{
+	// The page flag table, so an inlined DMA can ask whether its effective address is backed
+	// before it copies. vm.h only declares this inside its own inline helpers, which puts the
+	// name in namespace vm; a block-scope extern here would name ::g_pages instead.
+	extern std::array<memory_page, 0x100000000 / 4096> g_pages;
+}
+
 #ifdef LLVM_AVAILABLE
 
 #include "Emu/CPU/CPUTranslator.h"
@@ -5782,7 +5790,46 @@ public:
 					if (!must_use_cpp_functions)
 					{
 						const auto mmio = llvm::BasicBlock::Create(m_context, "", m_function);
-						m_ir->CreateCondBr(m_ir->CreateICmpUGE(eal.value, m_ir->getInt32(0xe0000000)), mmio, copy, m_md_unlikely);
+
+						// The inlined copy below has no guard of its own, so an effective address
+						// that is not backed faults in the host and the access-violation handler
+						// kills the SPU thread mid-transfer. do_dma_transfer models what hardware
+						// actually does -- a class-2 DMA interrupt the running code can survive --
+						// but only for commands that reach it, and a plain GET below 0xe0000000 is
+						// inlined right past it. Killzone 3's fatal transfer is exactly that, which
+						// is why a guard placed only in do_dma_transfer logged nothing.
+						//
+						// Send unbacked addresses down the same path as MMIO. vm::g_pages is one
+						// byte of flags per 4 KB page, so the test is an indexed load and a mask.
+						// Checking the first and last page covers the range: guest pages are
+						// allocated whole and are at least 4 KB, so a transfer that starts and ends
+						// in backed pages cannot straddle an unbacked one (MFC transfers cap at
+						// 16 KB, well under any mapping's granularity here).
+						const u8 need = (cmd & MFC_GET_CMD)
+							? (vm::page_readable | vm::page_allocated)
+							: (vm::page_writable | vm::page_allocated);
+
+						const auto pages = m_ir->CreateIntToPtr(
+							m_ir->getInt64(reinterpret_cast<u64>(vm::g_pages.data())), get_type<u8*>());
+
+						const auto flags_at = [&](llvm::Value* addr) -> llvm::Value*
+						{
+							const auto idx = m_ir->CreateLShr(m_ir->CreateZExt(addr, get_type<u64>()), 12);
+							return m_ir->CreateLoad(get_type<u8>(), m_ir->CreateGEP(get_type<u8>(), pages, idx));
+						};
+
+						const auto last = m_ir->CreateAdd(eal.value,
+							m_ir->CreateSub(m_ir->CreateZExt(size.value, get_type<u32>()), m_ir->getInt32(1)));
+
+						const auto both = m_ir->CreateAnd(flags_at(eal.value), flags_at(last));
+
+						const auto unbacked = m_ir->CreateICmpNE(
+							m_ir->CreateAnd(both, m_ir->getInt8(need)), m_ir->getInt8(need));
+
+						const auto to_cpp = m_ir->CreateOr(
+							m_ir->CreateICmpUGE(eal.value, m_ir->getInt32(0xe0000000)), unbacked);
+
+						m_ir->CreateCondBr(to_cpp, mmio, copy, m_md_unlikely);
 						m_ir->SetInsertPoint(mmio);
 					}
 
