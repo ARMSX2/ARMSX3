@@ -2405,6 +2405,44 @@ struct spu_ls_ring_entry
 static thread_local std::array<spu_ls_ring_entry, 32> t_ls_ring{};
 static thread_local u32 t_ls_ring_pos = 0;
 
+// The producer side. The LS ring above answers "what did the failing job read into its context",
+// and it read an empty descriptor {ptr0, ptr1, sentinel, count} with the two pointer words null and
+// count positive. This ring answers "who wrote that descriptor in main memory, in what order, and
+// did the consumer's GET slice in between the pointer writes and the count write". Killzone 3's
+// descriptors are filled field by field with 8-byte PUTs from more than one SPU, so a global,
+// unsampled ring of every small PUT, replayed for the addresses around the descriptor the failing
+// job read, is what shows the partial publish as it happened. Cross-SPU, so it cannot be
+// thread_local.
+struct spu_put_ring_entry
+{
+	u64 time;
+	u32 eal;
+	u32 pc;
+	u16 spu;   // low 16 bits of the SPU thread id, enough to tell producers apart
+	u16 size;
+	u8 bytes[16]; // the value written (first 16 bytes of the source local store)
+};
+
+static std::array<spu_put_ring_entry, 1024> g_put_ring{};
+static atomic_t<u32> g_put_ring_pos{0};
+
+// Record a PUT. Cheap and only armed with ARMSX3_WATCH_LS, so it never ships cost to a normal run.
+static void spu_put_ring_record(const spu_thread* spu, const spu_mfc_cmd& args, const u8* src)
+{
+	if (!spu_ls_watch_enabled() || !args.size || args.size > 0x40) [[likely]]
+	{
+		return;
+	}
+
+	auto& e = g_put_ring[g_put_ring_pos++ % g_put_ring.size()];
+	e.time = get_system_time();
+	e.eal = args.eal;
+	e.pc = spu ? spu->pc : 0;
+	e.spu = spu ? static_cast<u16>(spu->id) : 0;
+	e.size = static_cast<u16>(args.size);
+	std::memcpy(e.bytes, src, std::min<u32>(args.size, 16));
+}
+
 static void spu_ls_ring_dump(const spu_thread* spu, const char* why)
 {
 	if (!spu_ls_watch_enabled())
@@ -2452,6 +2490,54 @@ static void spu_ls_ring_dump(const spu_thread* spu, const char* why)
 	}
 
 	spu_log.error("WATCH_LS ring for '%s' at %s, oldest first:%s", spu ? *spu->spu_tname.load() : "?", why, out);
+
+	// The descriptor's main-memory address is the EA the consumer's context GET read from: the most
+	// recent LS-ring entry's source EA. Replay every PUT that landed in the 0x60 bytes around it, in
+	// time order, to show who published the descriptor and whether a pointer write is missing or
+	// arrived after the consumer had already read it.
+	u32 desc_ea = 0;
+	u64 desc_t = 0;
+
+	for (const auto& e : t_ls_ring)
+	{
+		if (e.seq && e.time >= desc_t)
+		{
+			desc_t = e.time;
+			desc_ea = e.eal;
+		}
+	}
+
+	if (!desc_ea)
+	{
+		return;
+	}
+
+	const u32 lo = desc_ea > 0x40 ? desc_ea - 0x40 : 0;
+	const u32 hi = desc_ea + 0x60;
+
+	std::vector<const spu_put_ring_entry*> hits;
+
+	for (const auto& e : g_put_ring)
+	{
+		if (e.eal && e.eal >= lo && e.eal < hi)
+		{
+			hits.push_back(&e);
+		}
+	}
+
+	std::sort(hits.begin(), hits.end(), [](auto* a, auto* b) { return a->time < b->time; });
+
+	std::string prod;
+
+	for (const auto* e : hits)
+	{
+		const int rel = static_cast<int>(e->eal) - static_cast<int>(desc_ea);
+		fmt::append(prod, "\n  -%6uus SPU %04x pc=0x%05x EA 0x%08x (desc%+d) size %2u = %s",
+			now - e->time, e->spu, e->pc, e->eal, rel, e->size, hex16(e->bytes));
+	}
+
+	spu_log.error("PUT ring for descriptor EA 0x%08x (read by the failing job), oldest first:%s",
+		desc_ea, prod.empty() ? std::string("\n  <no PUT within 0x60 of it was recorded>") : prod);
 }
 
 // Called for GETs, which are the transfers that can land on code, and for the atomic reads, whose
@@ -2641,6 +2727,7 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 	if (!is_get) [[likely]]
 	{
 		ppu_watch_dma(eal, args.size, _this ? _this->id : 0);
+		spu_put_ring_record(_this, args, ls + lsa);
 	}
 	else
 	{
