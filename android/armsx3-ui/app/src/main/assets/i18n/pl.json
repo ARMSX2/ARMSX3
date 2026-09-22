@@ -967,6 +967,7 @@
  "secondScreen.moveOsd.desc": "Gdy widoczny jest panel drugiego ekranu, ukryj nakładkę wydajności w grze i zamiast tego pokaż statystyki. Twój własny wybór OSD pozostanie niezmieniony i powróci, gdy panel tego nie zrobi.",
  "secondScreen.noGame": "Żadna gra nie jest uruchomiona — uruchom ją, aby skorzystać ze stanów zapisu, przewijania do przodu i makr.",
  "secondScreen.pause": "Wstrzymaj / Wznów",
+ "settings.notDefault": "Niedomyślne",
  "settings.scope.label": "Konfigurowanie",
  "settings.search.noResults": "Brak pasujących ustawień",
  "settings.search.placeholder": "Ustawienia wyszukiwania…",

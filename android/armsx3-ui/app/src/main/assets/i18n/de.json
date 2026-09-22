@@ -967,6 +967,7 @@
  "secondScreen.moveOsd.desc": "Während das zweite Bildschirmfenster angezeigt wird, blenden Sie die Leistungseinblendung des Spiels aus und zeigen Sie stattdessen unten die Statistiken an. Ihre eigene OSD-Auswahl bleibt unberührt und wird wieder angezeigt, wenn das Panel dies nicht tut.",
  "secondScreen.noGame": "Es läuft kein Spiel – starten Sie eines, um hier Speicherstände, Schnellvorlauf und Makros zu verwenden.",
  "secondScreen.pause": "Pause / Fortsetzen",
+ "settings.notDefault": "Nicht Standard",
  "settings.scope.label": "Konfigurieren",
  "settings.search.noResults": "Keine passenden Einstellungen",
  "settings.search.placeholder": "Sucheinstellungen…",

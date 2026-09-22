@@ -967,6 +967,7 @@
  "secondScreen.moveOsd.desc": "Saat panel layar kedua ditampilkan, sembunyikan overlay performa pada game dan tampilkan statistik di bawah sana. Pilihan OSD Anda tidak tersentuh dan muncul kembali ketika panel tidak tersentuh.",
  "secondScreen.noGame": "Tidak ada permainan yang berjalan — mulai gunakan status penyimpanan, maju cepat, dan makro di sini.",
  "secondScreen.pause": "Jeda / Lanjutkan",
+ "settings.notDefault": "Bukan bawaan",
  "settings.scope.label": "Konfigurasi",
  "settings.search.noResults": "Tidak ada pengaturan yang cocok",
  "settings.search.placeholder": "Setelan penelusuran…",

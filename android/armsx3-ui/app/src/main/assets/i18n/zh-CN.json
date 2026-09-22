@@ -967,6 +967,7 @@
  "secondScreen.moveOsd.desc": "当第二个屏幕面板显示时，隐藏游戏上的性能叠加层并在下面显示统计数据。您自己的 OSD 选择保持不变，并且当面板不受影响时返回。",
  "secondScreen.noGame": "没有正在运行的游戏 - 在这里启动一个使用保存状态、快进和宏的游戏。",
  "secondScreen.pause": "暂停/恢复",
+ "settings.notDefault": "非默认",
  "settings.scope.label": "配置",
  "settings.search.noResults": "没有匹配的设置",
  "settings.search.placeholder": "搜索设置...",

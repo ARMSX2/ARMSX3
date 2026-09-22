@@ -171,6 +171,7 @@ fun RendererTab(state: MutableState<Settings>) {
                         if (abs(s.upscaleFloat - mult) >= 0.01f) apply(s.copy(upscaleFloat = mult))
                     }
                 },
+                notDefault = s.notDefault { it.upscaleFloat },
             )
             // Custom resolution scale, as a PERCENTAGE of native — the Dolphin-style numeric
             // control people ask for when a preset step is too coarse. The GS multiplier is a
@@ -186,6 +187,7 @@ fun RendererTab(state: MutableState<Settings>) {
                     valueFormatter = { "$it%" },
                     onReset = { apply(s.copy(upscaleFloat = 1.0f)) },
                     onChange = { pct -> apply(s.copy(upscaleFloat = pct / 100f)) },
+                    notDefault = s.notDefault { it.upscaleFloat },
                 )
             }
             SettingsDivider()
@@ -205,6 +207,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 selectedIndex = when (s.aspectRatio) { 2 -> 1; 3 -> 2; else -> 0 },
                 description = str("renderer.consoleAspect.description"),
                 onChange = { apply(s.copy(aspectRatio = intArrayOf(1, 2, 3)[it])) },
+                notDefault = s.notDefault { it.aspectRatio },
             )
             SettingsDivider()
             SegmentedRow(
@@ -222,6 +225,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 selectedIndex = if (s.displayFitMode == 1) 1 else 0,
                 description = str("renderer.displayMode.description"),
                 onChange = { apply(s.copy(displayFitMode = it)) },
+                notDefault = s.notDefault { it.displayFitMode },
             )
             SettingsDivider()
             // SCREEN aspect, distinct from Console Aspect above. Console aspect is what the
@@ -246,6 +250,7 @@ fun RendererTab(state: MutableState<Settings>) {
                     val permille = SCREEN_ASPECTS.getOrNull(index) ?: CUSTOM_ASPECT_SEED
                     apply(s.copy(ps3 = s.ps3.copy(displayAspect = permille)))
                 },
+                notDefault = s.notDefault { it.ps3.displayAspect },
             )
             if (s.ps3.displayAspect !in SCREEN_ASPECTS) {
                 SettingsDivider()
@@ -257,6 +262,7 @@ fun RendererTab(state: MutableState<Settings>) {
                     description = str("renderer.screenAspect.customValue.description"),
                     valueFormatter = { String.format(java.util.Locale.US, "%.2f:1", it / 1000f) },
                     onChange = { apply(s.copy(ps3 = s.ps3.copy(displayAspect = it))) },
+                    notDefault = s.notDefault { it.ps3.displayAspect },
                 )
             }
             SettingsDivider()
@@ -269,6 +275,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 columns = 3,
                 description = str("renderer.ps3Resolution.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(resolution = it))) },
+                notDefault = s.notDefault { it.ps3.resolution },
             )
             SettingsDivider()
             // FMV Aspect Ratio override — applies only during FMVs/cutscenes; "Off" keeps
@@ -291,6 +298,7 @@ fun RendererTab(state: MutableState<Settings>) {
                     apply(s.copy(orientation = it))
                     MainActivityRuntime.instance?.applyEmulationOrientation()
                 },
+                notDefault = s.notDefault { it.orientation },
             )
             SettingsDivider()
             // GitHub #375: where the render sits in a PORTRAIT window. Top (default) frees the
@@ -302,6 +310,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 selectedIndex = if (s.portraitRenderTop) 0 else 1,
                 description = str("renderer.portraitPosition.description"),
                 onChange = { apply(s.copy(portraitRenderTop = it == 0)) },
+                notDefault = s.notDefault { it.portraitRenderTop },
             )
             SettingsDivider()
             // Auto Progressive Scan — holds Triangle+Cross through boot, the combo some titles
@@ -337,6 +346,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 columns = 2,
                 description = str("renderer.outputScaling.description"),
                 onChange = { apply(s.copy(casMode = it)) },
+                notDefault = s.notDefault { it.casMode },
             )
             SettingsDivider()
             IntSliderRow(
@@ -357,6 +367,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 description = str("renderer.casSharpness.description"),
                 valueFormatter = { "$it%" },
                 onChange = { if (s.casMode >= 3) apply(s.copy(sgsrSharpness = it)) else apply(s.copy(casSharpness = it)) },
+                notDefault = if (s.casMode >= 3) s.notDefault { it.sgsrSharpness } else s.notDefault { it.casSharpness },
             )
             SettingsDivider()
             IntSliderRow(
@@ -367,6 +378,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 description = str("renderer.aniso.description"),
                 valueFormatter = { if (it == 0) "Auto" else "${it}x" },
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(anisoFilter = it))) },
+                notDefault = s.notDefault { it.ps3.anisoFilter },
             )
         }
         SettingsDivider()
@@ -405,48 +417,56 @@ fun RendererTab(state: MutableState<Settings>) {
                 str("renderer.writeColorBuffers.label"),
                 s.ps3.writeColorBuffers,
                 description = str("renderer.writeColorBuffers.description"),
+                notDefault = s.notDefault { it.ps3.writeColorBuffers },
             ) { apply(s.copy(ps3 = s.ps3.copy(writeColorBuffers = it))) }
             SettingsDivider()
             ToggleRow(
                 str("renderer.writeDepthBuffer.label"),
                 s.ps3.writeDepthBuffer,
                 description = str("renderer.writeDepthBuffer.description"),
+                notDefault = s.notDefault { it.ps3.writeDepthBuffer },
             ) { apply(s.copy(ps3 = s.ps3.copy(writeDepthBuffer = it))) }
             SettingsDivider()
             ToggleRow(
                 str("renderer.readColorBuffers.label"),
                 s.ps3.readColorBuffers,
                 description = str("renderer.readColorBuffers.description"),
+                notDefault = s.notDefault { it.ps3.readColorBuffers },
             ) { apply(s.copy(ps3 = s.ps3.copy(readColorBuffers = it))) }
             SettingsDivider()
             ToggleRow(
                 str("renderer.readDepthBuffer.label"),
                 s.ps3.readDepthBuffer,
                 description = str("renderer.readDepthBuffer.description"),
+                notDefault = s.notDefault { it.ps3.readDepthBuffer },
             ) { apply(s.copy(ps3 = s.ps3.copy(readDepthBuffer = it))) }
             SettingsDivider()
             ToggleRow(
                 str("renderer.strictRendering.label"),
                 s.ps3.strictRendering,
                 description = str("renderer.strictRendering.description"),
+                notDefault = s.notDefault { it.ps3.strictRendering },
             ) { apply(s.copy(ps3 = s.ps3.copy(strictRendering = it))) }
             SettingsDivider()
             ToggleRow(
                 str("renderer.multithreadedRsx.label"),
                 s.ps3.multithreadedRsx,
                 description = str("renderer.multithreadedRsx.description"),
+                notDefault = s.notDefault { it.ps3.multithreadedRsx },
             ) { apply(s.copy(ps3 = s.ps3.copy(multithreadedRsx = it))) }
             SettingsDivider()
             ToggleRow(
                 str("renderer.disableZcull.label"),
                 s.ps3.disableZcull,
                 description = str("renderer.disableZcull.description"),
+                notDefault = s.notDefault { it.ps3.disableZcull },
             ) { apply(s.copy(ps3 = s.ps3.copy(disableZcull = it))) }
             SettingsDivider()
             ToggleRow(
                 str("renderer.relaxedZcull.label"),
                 s.ps3.relaxedZcull,
                 description = str("renderer.relaxedZcull.description"),
+                notDefault = s.notDefault { it.ps3.relaxedZcull },
             ) { apply(s.copy(ps3 = s.ps3.copy(relaxedZcull = it))) }
             SettingsDivider()
             SegmentedGridRow(
@@ -461,6 +481,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 columns = 2,
                 description = str("renderer.shaderMode.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(shaderMode = it))) },
+                notDefault = s.notDefault { it.ps3.shaderMode },
             )
             SettingsDivider()
             SegmentedGridRow(
@@ -474,6 +495,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 columns = 3,
                 description = str("renderer.blendingMode.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(blendingMode = it))) },
+                notDefault = s.notDefault { it.ps3.blendingMode },
             )
             SettingsDivider()
             SegmentedGridRow(
@@ -483,6 +505,7 @@ fun RendererTab(state: MutableState<Settings>) {
                 columns = 2,
                 description = str("renderer.msaa.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(msaaMode = it))) },
+                notDefault = s.notDefault { it.ps3.msaaMode },
             )
             SettingsDivider()
             IntSliderRow(
@@ -495,12 +518,14 @@ fun RendererTab(state: MutableState<Settings>) {
                 description = str("renderer.vramLimit.description"),
                 valueFormatter = { "${it * 256} MB" },
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(vramLimitMb = it * 256))) },
+                notDefault = s.notDefault { it.ps3.vramLimitMb },
             )
             SettingsDivider()
             ToggleRow(
                 str("renderer.asyncTexStream.label"),
                 s.ps3.asyncTexStream,
                 description = str("renderer.asyncTexStream.description"),
+                notDefault = s.notDefault { it.ps3.asyncTexStream },
             ) { apply(s.copy(ps3 = s.ps3.copy(asyncTexStream = it))) }
         }
     }
@@ -701,6 +726,7 @@ private fun OverlayArtSection() {
                 if (idx == 0) "" else entries.getOrNull(idx - 1)?.imagePath.orEmpty(),
             )
         },
+        notDefault = selected != 0,
     )
     if (com.armsx2.OverlayRepo.activePath.value.isNotBlank()) {
         SettingsDivider()
@@ -713,6 +739,7 @@ private fun OverlayArtSection() {
             valueFormatter = { "$it%" },
             onReset = { com.armsx2.OverlayRepo.setOpacity(1f) },
             onChange = { com.armsx2.OverlayRepo.setOpacity(it / 100f) },
+            notDefault = (com.armsx2.OverlayRepo.opacity.floatValue * 100f).roundToInt() != 100,
         )
     }
 }

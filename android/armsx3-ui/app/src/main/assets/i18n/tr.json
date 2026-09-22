@@ -967,6 +967,7 @@
  "secondScreen.moveOsd.desc": "İkinci ekran paneli gösterilirken oyundaki performans katmanını gizleyin ve bunun yerine istatistikleri orada gösterin. Kendi OSD seçiminize dokunulmaz ve panel dokunulmadığında geri gelir.",
  "secondScreen.noGame": "Oyun çalışmıyor; kaydetme durumlarını, hızlı ileri sarmayı ve makroları burada kullanmak için bir tane başlatın.",
  "secondScreen.pause": "Duraklat / Devam Et",
+ "settings.notDefault": "Varsayılan değil",
  "settings.scope.label": "Yapılandırma",
  "settings.search.noResults": "Eşleşen ayar yok",
  "settings.search.placeholder": "Arama ayarları…",

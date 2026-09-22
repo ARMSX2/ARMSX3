@@ -967,6 +967,7 @@
  "secondScreen.moveOsd.desc": "Trong khi bảng điều khiển màn hình thứ hai đang hiển thị, hãy ẩn lớp phủ hiệu suất trên trò chơi và thay vào đó hiển thị số liệu thống kê ở dưới đó. Lựa chọn OSD của riêng bạn không bị ảnh hưởng và quay trở lại khi bảng điều khiển không hoạt động.",
  "secondScreen.noGame": "Không có trò chơi nào đang chạy - bắt đầu một trò chơi để sử dụng trạng thái lưu, tua đi nhanh và macro tại đây.",
  "secondScreen.pause": "Tạm dừng / Tiếp tục",
+ "settings.notDefault": "Không mặc định",
  "settings.scope.label": "Cấu hình",
  "settings.search.noResults": "Không có cài đặt phù hợp",
  "settings.search.placeholder": "Cài đặt tìm kiếm…",

@@ -133,6 +133,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                     apply(s.copy(hwScaler = when (it) { 1 -> 1080; 2 -> 720; 3 -> 540; else -> 0 }))
                     com.armsx2.runtime.MainActivityRuntime.surface.value?.applyOutputScale()
                 },
+                notDefault = s.notDefault { it.hwScaler },
             )
         }
         SettingsDivider()
@@ -153,6 +154,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                     apply(s.copy(screenResOverride = presets[idx]))
                     com.armsx2.runtime.MainActivityRuntime.surface.value?.applyOutputScale()
                 },
+                notDefault = s.notDefault { it.screenResOverride },
             )
         }
         // ---- Sustained Performance (#128) ---------------------------------------
@@ -183,6 +185,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                         }
                     }
                 },
+                notDefault = sustained.value,
             )
         }
         // ---- CPU clock hint (ADPF) ---------------------------------------------
@@ -203,6 +206,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                     com.armsx2.runtime.MainActivityRuntime.prefs.edit { putBoolean("ui.adpf", on) }
                     runCatching { com.armsx3.NativeApp.setAdpfEnabled(on) }
                 },
+                notDefault = adpf.value,
             )
         }
         SettingsDivider()
@@ -222,6 +226,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 // rebooting the game.
                 runCatching { net.rpcsx.RPCSX.instance.setGpuTurbo(on) }
             },
+            notDefault = s.notDefault { it.ps3.gpuTurbo },
         )
         SettingsDivider()
         // ---- Silence all logs ---------------------------------------------------
@@ -238,6 +243,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
             selectedIndex = if (s.ps3.silenceAllLogs) 1 else 0,
             description = str("perf.silenceLogs.description"),
             onChange = { apply(s.copy(ps3 = s.ps3.copy(silenceAllLogs = it == 1))) },
+            notDefault = s.notDefault { it.ps3.silenceAllLogs },
         )
         SettingsDivider()
         // Affinity Control Mode — opt-in CPU pinning for the EE/VU/GS threads. Android normally
@@ -260,6 +266,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
             columns = 1,
             description = str("perf.scheduler.description"),
             onChange = { apply(s.copy(affinityMode = it)) },
+            notDefault = s.notDefault { it.affinityMode },
         )
         SettingsDivider()
         // PS3 CPU. The PS2 speedhacks that were here (EE cycle rate/skip, VU
@@ -273,6 +280,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 columns = 2,
                 description = str("perf.ppuDecoder.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(ppuDecoder = it))) },
+                notDefault = s.notDefault { it.ps3.ppuDecoder },
             )
             SettingsDivider()
             SegmentedGridRow(
@@ -287,6 +295,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 columns = 2,
                 description = str("perf.spuDecoder.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(spuDecoder = it))) },
+                notDefault = s.notDefault { it.ps3.spuDecoder },
             )
             SettingsDivider()
             SegmentedGridRow(
@@ -296,6 +305,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 columns = 3,
                 description = str("perf.spuBlockSize.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(spuBlockSize = it))) },
+                notDefault = s.notDefault { it.ps3.spuBlockSize },
             )
             SettingsDivider()
             // str() is @Composable, so it cannot be called from inside the
@@ -309,6 +319,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 description = str("perf.preferredSpuThreads.description"),
                 valueFormatter = { if (it == 0) autoLabel else "$it" },
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(preferredSpuThreads = it))) },
+                notDefault = s.notDefault { it.ps3.preferredSpuThreads },
             )
             SettingsDivider()
             IntSliderRow(
@@ -319,6 +330,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 description = str("perf.llvmThreads.description"),
                 valueFormatter = { if (it == 0) autoLabel else "$it" },
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(llvmThreads = it))) },
+                notDefault = s.notDefault { it.ps3.llvmThreads },
             )
             SettingsDivider()
             IntSliderRow(
@@ -328,6 +340,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 max = 6,
                 description = str("perf.maxSpursThreads.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(maxSpursThreads = it))) },
+                notDefault = s.notDefault { it.ps3.maxSpursThreads },
             )
             SettingsDivider()
             IntSliderRow(
@@ -338,6 +351,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 description = str("perf.clocksScale.description"),
                 valueFormatter = { "$it%" },
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(clocksScale = it))) },
+                notDefault = s.notDefault { it.ps3.clocksScale },
             )
             SettingsDivider()
             ToggleRow(
@@ -345,6 +359,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 value = s.ps3.spuCache,
                 description = str("perf.spuCache.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(spuCache = it))) },
+                notDefault = s.notDefault { it.ps3.spuCache },
             )
             SettingsDivider()
             ToggleRow(
@@ -352,6 +367,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 value = s.ps3.llvmPrecompile,
                 description = str("perf.llvmPrecompile.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(llvmPrecompile = it))) },
+                notDefault = s.notDefault { it.ps3.llvmPrecompile },
             )
             SettingsDivider()
             ToggleRow(
@@ -359,6 +375,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 value = s.ps3.spuLoopDetection,
                 description = str("perf.spuLoopDetection.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(spuLoopDetection = it))) },
+                notDefault = s.notDefault { it.ps3.spuLoopDetection },
             )
             SettingsDivider()
             ToggleRow(
@@ -366,6 +383,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 value = s.ps3.accurateSpuDma,
                 description = str("perf.accurateSpuDma.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(accurateSpuDma = it))) },
+                notDefault = s.notDefault { it.ps3.accurateSpuDma },
             )
             SettingsDivider()
             // Sits with the SPU rows because that is what it costs, not under a savestate
@@ -375,6 +393,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 value = s.ps3.savestateCompatibleMode,
                 description = str("perf.savestateCompatible.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(savestateCompatibleMode = it))) },
+                notDefault = s.notDefault { it.ps3.savestateCompatibleMode },
             )
         }
         SettingsDivider()
@@ -388,12 +407,14 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 str("adv.accurateSpuRsv.label"),
                 s.ps3.accurateSpuRsv,
                 description = str("adv.accurateSpuRsv.description"),
+                notDefault = s.notDefault { it.ps3.accurateSpuRsv },
             ) { apply(s.copy(ps3 = s.ps3.copy(accurateSpuRsv = it))) }
             SettingsDivider()
             ToggleRow(
                 str("adv.accurateCacheLine.label"),
                 s.ps3.accurateCacheLine,
                 description = str("adv.accurateCacheLine.description"),
+                notDefault = s.notDefault { it.ps3.accurateCacheLine },
             ) { apply(s.copy(ps3 = s.ps3.copy(accurateCacheLine = it))) }
             SettingsDivider()
             SegmentedGridRow(
@@ -408,6 +429,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 columns = 2,
                 description = str("adv.xfloat.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(spuXFloat = it))) },
+                notDefault = s.notDefault { it.ps3.spuXFloat },
             )
         }
         SettingsDivider()
@@ -431,12 +453,14 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 columns = 4,
                 description = str("perf.framegen.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(frameGeneration = it))) },
+                notDefault = s.notDefault { it.ps3.frameGeneration },
             )
             SettingsDivider()
             ToggleRow(
                 str("perf.framegen.performance.label"),
                 s.ps3.frameGenPerformance,
                 description = str("perf.framegen.performance.description"),
+                notDefault = s.notDefault { it.ps3.frameGenPerformance },
             ) { apply(s.copy(ps3 = s.ps3.copy(frameGenPerformance = it))) }
             SettingsDivider()
             IntSliderRow(
@@ -447,6 +471,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 description = str("perf.framegen.flowScale.description"),
                 valueFormatter = { "$it%" },
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(frameGenFlowScale = it))) },
+                notDefault = s.notDefault { it.ps3.frameGenFlowScale },
             )
             SettingsDivider()
             SettingsDivider()
@@ -460,6 +485,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                     val hz = when (idx) { 1 -> 60; 2 -> 90; 3 -> 120; else -> 0 }
                     apply(s.copy(ps3 = s.ps3.copy(frameGenTargetRate = hz)))
                 },
+                notDefault = s.notDefault { it.ps3.frameGenTargetRate },
             )
             SettingsDivider()
             FrameGenShaderRow()

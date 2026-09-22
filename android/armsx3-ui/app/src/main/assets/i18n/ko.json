@@ -967,6 +967,7 @@
  "secondScreen.moveOsd.desc": "두 번째 화면 패널이 표시되는 동안 게임에서 성능 오버레이를 숨기고 대신 아래에 통계를 표시하세요. 사용자가 선택한 OSD는 그대로 유지되며 패널이 변경되지 않으면 다시 돌아옵니다.",
  "secondScreen.noGame": "실행 중인 게임이 없습니다. 여기에서 저장 상태, 빨리 감기 및 매크로를 사용하려면 게임을 시작하세요.",
  "secondScreen.pause": "일시중지/재개",
+ "settings.notDefault": "기본값 아님",
  "settings.scope.label": "구성",
  "settings.search.noResults": "일치하는 설정이 없습니다.",
  "settings.search.placeholder": "검색 설정…",

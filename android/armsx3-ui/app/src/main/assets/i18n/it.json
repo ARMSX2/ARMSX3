@@ -967,6 +967,7 @@
  "secondScreen.moveOsd.desc": "Mentre viene visualizzato il pannello del secondo schermo, nascondi la sovrapposizione delle prestazioni sul gioco e mostra invece le statistiche laggiù. La tua selezione OSD rimane intatta e ritorna quando il pannello non lo fa.",
  "secondScreen.noGame": "Nessun gioco in esecuzione: avviane uno per utilizzare gli stati di salvataggio, l'avanzamento veloce e le macro qui.",
  "secondScreen.pause": "Pausa/Riprendi",
+ "settings.notDefault": "Non predefinito",
  "settings.scope.label": "Configurazione",
  "settings.search.noResults": "Nessuna impostazione corrispondente",
  "settings.search.placeholder": "Cerca impostazioni...",

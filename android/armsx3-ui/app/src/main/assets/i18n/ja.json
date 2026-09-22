@@ -967,6 +967,7 @@
  "secondScreen.moveOsd.desc": "セカンド スクリーン パネルが表示されている間は、ゲーム上のパフォーマンス オーバーレイを非表示にし、代わりにそこに統計情報を表示します。独自の OSD 選択は変更されずに残され、パネルが変更されなくなると元に戻ります。",
  "secondScreen.noGame": "ゲームは実行されていません。ここで状態の保存、早送り、マクロを使用するにはゲームを開始してください。",
  "secondScreen.pause": "一時停止/再開",
+ "settings.notDefault": "デフォルト以外",
  "settings.scope.label": "設定中",
  "settings.search.noResults": "一致する設定がありません",
  "settings.search.placeholder": "検索設定…",

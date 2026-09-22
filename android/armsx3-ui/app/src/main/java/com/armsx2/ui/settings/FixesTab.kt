@@ -60,36 +60,42 @@ fun FixesTab(state: MutableState<Settings>) {
                 columns = 2,
                 description = str("adv.xfloat.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(spuXFloat = it))) },
+                notDefault = s.notDefault { it.ps3.spuXFloat },
             )
             SettingsDivider()
             ToggleRow(
                 str("adv.accurateSpuRsv.label"),
                 s.ps3.accurateSpuRsv,
                 description = str("adv.accurateSpuRsv.description"),
+                notDefault = s.notDefault { it.ps3.accurateSpuRsv },
             ) { apply(s.copy(ps3 = s.ps3.copy(accurateSpuRsv = it))) }
             SettingsDivider()
             ToggleRow(
                 str("adv.accurateCacheLine.label"),
                 s.ps3.accurateCacheLine,
                 description = str("adv.accurateCacheLine.description"),
+                notDefault = s.notDefault { it.ps3.accurateCacheLine },
             ) { apply(s.copy(ps3 = s.ps3.copy(accurateCacheLine = it))) }
             SettingsDivider()
             ToggleRow(
                 str("adv.accurateRsxRsv.label"),
                 s.ps3.accurateRsxRsv,
                 description = str("adv.accurateRsxRsv.description"),
+                notDefault = s.notDefault { it.ps3.accurateRsxRsv },
             ) { apply(s.copy(ps3 = s.ps3.copy(accurateRsxRsv = it))) }
             SettingsDivider()
             ToggleRow(
                 str("adv.ppuRsvPriority.label"),
                 s.ps3.ppuRsvPriority,
                 description = str("adv.ppuRsvPriority.description"),
+                notDefault = s.notDefault { it.ps3.ppuRsvPriority },
             ) { apply(s.copy(ps3 = s.ps3.copy(ppuRsvPriority = it))) }
             SettingsDivider()
             ToggleRow(
                 str("adv.spuVerification.label"),
                 s.ps3.spuVerification,
                 description = str("adv.spuVerification.description"),
+                notDefault = s.notDefault { it.ps3.spuVerification },
             ) { apply(s.copy(ps3 = s.ps3.copy(spuVerification = it))) }
             SettingsDivider()
             // Distinct from the toggle above: that one chooses whether to verify at all, this one
@@ -99,6 +105,7 @@ fun FixesTab(state: MutableState<Settings>) {
                 str("adv.preciseSpuVerification.label"),
                 s.ps3.preciseSpuVerification,
                 description = str("adv.preciseSpuVerification.description"),
+                notDefault = s.notDefault { it.ps3.preciseSpuVerification },
             ) { apply(s.copy(ps3 = s.ps3.copy(preciseSpuVerification = it))) }
         }
 
@@ -111,18 +118,21 @@ fun FixesTab(state: MutableState<Settings>) {
                 str("adv.ppuNan.label"),
                 s.ps3.ppuNanHandling,
                 description = str("adv.ppuNan.description"),
+                notDefault = s.notDefault { it.ps3.ppuNanHandling },
             ) { apply(s.copy(ps3 = s.ps3.copy(ppuNanHandling = it))) }
             SettingsDivider()
             ToggleRow(
                 str("adv.accurateDfma.label"),
                 s.ps3.accurateDfma,
                 description = str("adv.accurateDfma.description"),
+                notDefault = s.notDefault { it.ps3.accurateDfma },
             ) { apply(s.copy(ps3 = s.ps3.copy(accurateDfma = it))) }
             SettingsDivider()
             ToggleRow(
                 str("adv.dazFtz.label"),
                 s.ps3.setDazFtz,
                 description = str("adv.dazFtz.description"),
+                notDefault = s.notDefault { it.ps3.setDazFtz },
             ) { apply(s.copy(ps3 = s.ps3.copy(setDazFtz = it))) }
         }
 
@@ -138,18 +148,21 @@ fun FixesTab(state: MutableState<Settings>) {
                 columns = 3,
                 description = str("adv.sleepTimers.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(sleepTimers = it))) },
+                notDefault = s.notDefault { it.ps3.sleepTimers },
             )
             SettingsDivider()
             ToggleRow(
                 str("adv.hleLwmutex.label"),
                 s.ps3.hleLwmutex,
                 description = str("adv.hleLwmutex.description"),
+                notDefault = s.notDefault { it.ps3.hleLwmutex },
             ) { apply(s.copy(ps3 = s.ps3.copy(hleLwmutex = it))) }
             SettingsDivider()
             ToggleRow(
                 str("adv.debugConsole.label"),
                 s.ps3.debugConsoleMode,
                 description = str("adv.debugConsole.description"),
+                notDefault = s.notDefault { it.ps3.debugConsoleMode },
             ) { apply(s.copy(ps3 = s.ps3.copy(debugConsoleMode = it))) }
         }
 
@@ -168,6 +181,7 @@ fun FixesTab(state: MutableState<Settings>) {
                 columns = 2,
                 description = str("adv.consoleLanguage.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(consoleLanguage = it))) },
+                notDefault = s.notDefault { it.ps3.consoleLanguage },
             )
             SettingsDivider()
             SegmentedGridRow(
@@ -177,6 +191,7 @@ fun FixesTab(state: MutableState<Settings>) {
                 columns = 3,
                 description = str("adv.consoleRegion.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(consoleRegion = it))) },
+                notDefault = s.notDefault { it.ps3.consoleRegion },
             )
             SettingsDivider()
             SegmentedGridRow(
@@ -186,6 +201,7 @@ fun FixesTab(state: MutableState<Settings>) {
                 columns = 1,
                 description = str("adv.keyboardType.description"),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(keyboardType = it))) },
+                notDefault = s.notDefault { it.ps3.keyboardType },
             )
             SettingsDivider()
             SegmentedGridRow(
@@ -198,6 +214,7 @@ fun FixesTab(state: MutableState<Settings>) {
                 selectedIndex = s.ps3.dateFormat.coerceIn(0, 2),
                 columns = 3,
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(dateFormat = it))) },
+                notDefault = s.notDefault { it.ps3.dateFormat },
             )
             SettingsDivider()
             SegmentedRow(
@@ -205,6 +222,7 @@ fun FixesTab(state: MutableState<Settings>) {
                 options = listOf(str("adv.timeFormat.clock12"), str("adv.timeFormat.clock24")),
                 selectedIndex = s.ps3.timeFormat.coerceIn(0, 1),
                 onChange = { apply(s.copy(ps3 = s.ps3.copy(timeFormat = it))) },
+                notDefault = s.notDefault { it.ps3.timeFormat },
             )
         }
 

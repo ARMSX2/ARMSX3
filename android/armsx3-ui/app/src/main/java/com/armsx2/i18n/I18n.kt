@@ -1182,6 +1182,7 @@ val EN: Map<String, String> = mapOf(
     "ra.server.reset.desc" to "Clears a custom/offline server override. Fixes sign-in failing with 'No response'.",
     "settings.search.placeholder" to "Search settings…",
     "settings.search.noResults" to "No matching settings",
+    "settings.notDefault" to "Not default",
     "ra.viewAchievements" to "Achievements & Options",
     "ra.hardcore.enable.title" to "Enable hardcore mode?",
     "ra.hardcore.enable.body" to "This restarts the game now and turns off save states, cheats, and speed changes. Achievements you earn will count for hardcore.",
