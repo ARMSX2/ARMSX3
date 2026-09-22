@@ -122,7 +122,7 @@
  "app.credits.sfx": "Âm thanh menu: \"Giao diện SFX Pack 1\" — obsydianx.itch.io (CC0)",
  "app.frontendExport": "Xuất sang Frontend",
  "app.frontendExport.add": "Thêm thư mục",
- "app.frontendExport.count": "Đã xuất %d trò chơi",
+ "app.frontendExport.count": "Đã xuất %d trò chơi đã cài đặt",
  "app.frontendExport.folderProblem": "Không thể ghi vào thư mục này. Hãy chọn lại thư mục.",
  "app.frontendExport.folders": "%d thư mục",
  "app.frontendExport.format": "Nội dung tệp",

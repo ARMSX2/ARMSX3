@@ -122,7 +122,7 @@
  "app.credits.sfx": "選單聲音：「Interface SFX Pack 1」 — obsydianx.itch.io (CC0)",
  "app.frontendExport": "匯出至前端",
  "app.frontendExport.add": "新增資料夾",
- "app.frontendExport.count": "已匯出 %d 個遊戲",
+ "app.frontendExport.count": "已匯出 %d 個已安裝的遊戲",
  "app.frontendExport.folderProblem": "無法寫入此資料夾。請重新選擇。",
  "app.frontendExport.folders": "%d 個資料夾",
  "app.frontendExport.format": "檔案內容",

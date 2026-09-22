@@ -122,7 +122,7 @@
  "app.credits.sfx": "Dengên pêşek: \"Interface SFX Pack 1\" - obsydianx.itch.io (CC0)",
  "app.frontendExport": "Derxistin ji bo frontendan",
  "app.frontendExport.add": "Peldankê zêde bike",
- "app.frontendExport.count": "Lîstikên hatine derxistin: %d",
+ "app.frontendExport.count": "Lîstikên sazkirî yên hatine derxistin: %d",
  "app.frontendExport.folderProblem": "Nikare li vê peldankê binivîse. Wê dîsa hilbijêre.",
  "app.frontendExport.folders": "Peldank: %d",
  "app.frontendExport.format": "Naveroka pelê",

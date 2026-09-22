@@ -122,7 +122,7 @@
  "app.credits.sfx": "Sons du menu : \"Interface SFX Pack 1\" — obsydianx.itch.io (CC0)",
  "app.frontendExport": "Export vers les frontends",
  "app.frontendExport.add": "Ajouter un dossier",
- "app.frontendExport.count": "Jeux exportés : %d",
+ "app.frontendExport.count": "Jeux installés exportés : %d",
  "app.frontendExport.folderProblem": "Impossible d'écrire dans ce dossier. Choisissez-le à nouveau.",
  "app.frontendExport.folders": "Dossiers : %d",
  "app.frontendExport.format": "Contenu du fichier",

@@ -122,7 +122,7 @@
  "app.credits.sfx": "Menütöne: „Interface SFX Pack 1“ – obsydianx.itch.io (CC0)",
  "app.frontendExport": "Frontend-Export",
  "app.frontendExport.add": "Ordner hinzufügen",
- "app.frontendExport.count": "Exportierte Spiele: %d",
+ "app.frontendExport.count": "Exportierte installierte Spiele: %d",
  "app.frontendExport.folderProblem": "In diesen Ordner kann nicht geschrieben werden. Bitte erneut auswählen.",
  "app.frontendExport.folders": "Ordner: %d",
  "app.frontendExport.format": "Dateiinhalt",

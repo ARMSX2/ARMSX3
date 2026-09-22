@@ -122,7 +122,7 @@
  "app.credits.sfx": "Suara menu: \"Antarmuka SFX Paket 1\" — obsydianx.itch.io (CC0)",
  "app.frontendExport": "Ekspor ke Frontend",
  "app.frontendExport.add": "Tambah Folder",
- "app.frontendExport.count": "%d game diekspor",
+ "app.frontendExport.count": "%d game terpasang diekspor",
  "app.frontendExport.folderProblem": "Tidak dapat menulis ke folder ini. Pilih lagi folder tersebut.",
  "app.frontendExport.folders": "%d folder",
  "app.frontendExport.format": "Isi file",

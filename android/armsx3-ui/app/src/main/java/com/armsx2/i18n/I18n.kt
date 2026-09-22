@@ -315,7 +315,7 @@ val EN: Map<String, String> = mapOf(
     "app.gameFolders.unavailable" to "Not available",
     "app.gameFolders.hint" to "Games are loaded from every folder listed here.",
     "app.frontendExport" to "Frontend Export",
-    "app.frontendExport.count" to "%d game(s) exported",
+    "app.frontendExport.count" to "%d installed game(s) exported",
     "app.frontendExport.add" to "Add Folder",
     "app.frontendExport.remove" to "Remove",
     "app.frontendExport.folders" to "%d folder(s)",
