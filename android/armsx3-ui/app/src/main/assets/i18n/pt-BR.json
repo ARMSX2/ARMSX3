@@ -637,6 +637,8 @@
  "patches.ps3.emptyGame": "Nenhum patch disponível para este jogo. Tente baixar o banco de dados acima.",
  "patches.ps3.header": "Patches comunitários e mods gráficos do RPCS3. Eles podem desbloquear taxas de quadros, alterar a resolução ou LOD, adicionar widescreen e corrigir bugs do jogo. Baixe uma vez e ative por jogo.",
  "patches.ps3.imported": "patches importados",
+ "patches.ps3.rebuilt": "A lista de patches foi reconstruída, e cada download agora substitui apenas os próprios patches. O que você importou por conta própria está salvo em patches/patch.yml.pre-1.0.",
+ "patches.ps3.rebuiltArtemis": "Se você usa a coleção Artemis, baixe-a de novo.",
  "patches.ps3.parseFailed": "O banco de dados de patches foi baixado, mas não pôde ser lido. Pode ser para um formato de patch mais recente do que o suportado por esta compilação.",
  "patches.ps3.search": "Pesquisar patches",
  "patches.ps3.serverError": "O servidor de patch do RPCS3 retornou um erro.",

@@ -122,12 +122,17 @@ fun Ps3PatchesTab(serial: String = "") {
                 busy = true
                 message = null
                 scope.launch {
-                    val r = withContext(Dispatchers.IO) { Ps3PatchRepo.download() }
+                    val r = withContext(Dispatchers.IO) { Ps3PatchRepo.download(context) }
                     busy = false
                     message = when (r) {
                         is Ps3PatchRepo.Result.Ok -> {
                             reload()
-                            "${r.count} " + str2("patches.ps3.imported")
+                            // The rebuild dropped whatever Artemis patches the old merged list
+                            // held, so say how to get them back. Not needed on the Artemis
+                            // button's own rebuild, which downloads the collection anyway.
+                            "${r.count} " + str2("patches.ps3.imported") +
+                                if (r.rebuilt) "\n" + str2("patches.ps3.rebuilt") + " " +
+                                    str2("patches.ps3.rebuiltArtemis") else ""
                         }
                         // Named separately so a server or format problem does not
                         // send people to check their wifi.
@@ -147,20 +152,21 @@ fun Ps3PatchesTab(serial: String = "") {
         }
 
         // A second source, not a replacement: Artemis is community cheats and rpcs3.net is the
-        // curated database, both in the same format, and patchesImport merges rather than
-        // overwrites, so having both is having more patches.
+        // curated database, both in the same format, each in a file of its own that its own
+        // download replaces, so having both is having more patches.
         OutlinedButton(
             onClick = {
                 if (busy) return@OutlinedButton
                 busy = true
                 message = null
                 scope.launch {
-                    val r = withContext(Dispatchers.IO) { Ps3PatchRepo.downloadArtemis() }
+                    val r = withContext(Dispatchers.IO) { Ps3PatchRepo.downloadArtemis(context) }
                     busy = false
                     message = when (r) {
                         is Ps3PatchRepo.Result.Ok -> {
                             reload()
-                            "${r.count} " + str2("patches.ps3.imported")
+                            "${r.count} " + str2("patches.ps3.imported") +
+                                if (r.rebuilt) "\n" + str2("patches.ps3.rebuilt") else ""
                         }
                         Ps3PatchRepo.Result.Network -> str2("patches.ps3.downloadFailed")
                         is Ps3PatchRepo.Result.Server ->
@@ -177,8 +183,8 @@ fun Ps3PatchesTab(serial: String = "") {
             Text(str("patches.ps3.downloadArtemis"))
         }
 
-        // Local import sits next to the download because the two produce the same
-        // result -- patchesImport merges either source into patches/patch.yml.
+        // Local import sits next to the downloads because it adds to the same list. It merges
+        // into patches/imported_patch.yml, which no download replaces.
         OutlinedButton(
             onClick = { if (!busy) patchPicker.launch(arrayOf("*/*")) },
             modifier = Modifier

@@ -633,6 +633,8 @@
  "patches.ps3.emptyGame": "Aucun correctif disponible pour ce jeu. Essayez de télécharger la base de données ci-dessus.",
  "patches.ps3.header": "Correctifs communautaires et mods graphiques de RPCS3. Ceux-ci peuvent débloquer les fréquences d'images, modifier la résolution ou le LOD, ajouter un écran large et corriger les bugs du jeu. Téléchargez une fois, puis activez par jeu.",
  "patches.ps3.imported": "correctifs importés",
+ "patches.ps3.rebuilt": "La liste des correctifs a été reconstruite et chaque téléchargement remplace désormais ses propres correctifs. Ceux que vous aviez importés vous-même sont conservés dans patches/patch.yml.pre-1.0.",
+ "patches.ps3.rebuiltArtemis": "Si vous utilisez la collection Artemis, téléchargez-la à nouveau.",
  "patches.ps3.parseFailed": "La base de données des correctifs a été téléchargée mais n'a pas pu être lue. Il peut s'agir d'un format de correctif plus récent que celui pris en charge par cette version.",
  "patches.ps3.search": "Rechercher des correctifs",
  "patches.ps3.serverError": "Le serveur de correctifs de RPCS3 a renvoyé une erreur.",

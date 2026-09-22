@@ -633,6 +633,8 @@
  "patches.ps3.emptyGame": "Ji bo vê lîstikê pêçên tune. Biceribînin ku databasa jorîn dakêşin.",
  "patches.ps3.header": "Pelên civakê û modên grafîkê yên ji RPCS3. Vana dikarin rêjeyên çarçoveyê vekin, çareseriyê an LOD-ê biguhezînin, dîmendera fireh lê zêde bikin, û xeletiyên lîstikê rast bikin. Carekê dakêşin, paşê her lîstikê çalak bikin.",
  "patches.ps3.imported": "paçên îthalkirî",
+ "patches.ps3.rebuilt": "Lîsteya paçan ji nû ve hat avakirin, û niha her daxistin tenê paçên xwe diguherîne. Paçên ku te bi xwe îthal kiribûn di patches/patch.yml.pre-1.0 de hatine parastin.",
+ "patches.ps3.rebuiltArtemis": "Heke tu koleksiyona Artemis bi kar tînî, wê dîsa dakêşe.",
  "patches.ps3.parseFailed": "Databasa patchê hat daxistin lê nehat xwendin. Dibe ku ew ji bo formatek patchê ya nûtir ji ya ku ev avahî piştgirî dike be.",
  "patches.ps3.search": "Pelên lêgerînê",
  "patches.ps3.serverError": "Pêşkêşkara patchê ya RPCS3 xeletiyek vegerand.",

@@ -1,4 +1,5 @@
 #include <sys/prctl.h>
+#include <array>
 #include <fstream>
 #include <cstring>
 #include "Crypto/unpkg.h"
@@ -4513,18 +4514,24 @@ extern "C" bool _rpcsx_deleteStateFromSlot(unsigned int slot) {
 // ---------------------------------------------------------------------------
 // Patches / graphics mods
 //
-// RPCS3 keeps two files:
-//   patches/patch.yml   - the patch DATABASE, downloaded from rpcs3.net
-//   patch_config.yml    - which patches are ENABLED, keyed
-//                         hash -> description -> title -> serial -> app_version
+// The patches, one file per source, all of them applied (append_global_patches):
+//   patches/patch.yml          - the rpcs3.net database, REPLACED by each download
+//   patches/artemis_patch.yml  - the Artemis collection, REPLACED by each download
+//   patches/armsx3_patch.yml   - the fixes bundled with the app, rewritten by it
+//   patches/imported_patch.yml - files the user picked, MERGED (RPCS3's own file for them)
+// and which are switched on:
+//   patch_config.yml           - keyed hash -> description -> title -> serial -> app_version
 //
-// Both are YAML with a fiddly nested shape, and patch_engine already parses and
-// writes them. So the app downloads the bytes and everything else happens here,
-// through RPCS3's own code -- reimplementing the format in Kotlin would be a
-// second parser to keep in sync with upstream.
+// One merged patch.yml held all four until 1.0. Merging only ever adds, so a patch renamed or
+// withdrawn at its source stayed in the list beside its replacement, which is what made the
+// Artemis maintainer ask for a way to flush. A file per source makes every download a clean
+// copy of that source, and the user's own imports are the only thing that accumulates.
+//
+// All YAML with a fiddly nested shape that patch_engine already parses and writes, so the app
+// downloads the bytes and everything else happens here, through RPCS3's own code --
+// reimplementing the format in Kotlin would be a second parser to keep in sync with upstream.
 // ---------------------------------------------------------------------------
 
-/** Import a downloaded patch.yml. Returns the number of patches merged, or -1. */
 static std::string json_quote(std::string_view v) {
   std::string out = "\"";
   for (char c : v) {
@@ -4560,11 +4567,13 @@ extern "C" std::string _rpcsx_patchEngineVersion() {
   return patch_engine_version;
 }
 
+/** Merge a file the user picked into imported_patch.yml. Returns the number of patches merged,
+ *  or -1. Downloads do not come through here any more: see _rpcsx_patchesWrite. */
 extern "C" int _rpcsx_patchesImport(std::string_view content) {
   patch_engine::patch_map patches;
   std::stringstream log;
 
-  if (!patch_engine::load(patches, "<downloaded>", std::string(content), true,
+  if (!patch_engine::load(patches, "<imported>", std::string(content), true,
                           &log)) {
     rpcsx_android.error("patchesImport: parse failed: %s", log.str());
     return -1;
@@ -4572,14 +4581,60 @@ extern "C" int _rpcsx_patchesImport(std::string_view content) {
 
   usz count = 0;
   usz total = 0;
-  if (!patch_engine::import_patches(patches, patch_engine::get_patches_path() +
-                                                 "patch.yml",
+  if (!patch_engine::import_patches(patches,
+                                    patch_engine::get_imported_patch_path(),
                                     count, total, &log)) {
     rpcsx_android.error("patchesImport: write failed: %s", log.str());
     return -1;
   }
 
   rpcsx_android.success("patchesImport: %u of %u patches", count, total);
+  return static_cast<int>(count);
+}
+
+/**
+ * Replace one of the app's own patch files with `content`, whole. Returns the number of patches
+ * in it, or -1.
+ *
+ * Only the three files a source owns outright: the user's imported_patch.yml is merged, never
+ * replaced, and nothing else under patches/ is ours to overwrite. The content is parsed first, so
+ * a truncated or malformed download is refused rather than replacing a good file, and the write
+ * goes through a pending file, so a failure midway leaves the old file as it was.
+ */
+extern "C" int _rpcsx_patchesWrite(std::string_view file, std::string_view content) {
+  if (file != "patch.yml" && file != "artemis_patch.yml" &&
+      file != "armsx3_patch.yml") {
+    rpcsx_android.error("patchesWrite: refusing to write '%s'", file);
+    return -1;
+  }
+
+  patch_engine::patch_map patches;
+  std::stringstream log;
+  if (!patch_engine::load(patches, std::string(file), std::string(content), true,
+                          &log)) {
+    rpcsx_android.error("patchesWrite: %s: parse failed: %s", file, log.str());
+    return -1;
+  }
+
+  usz count = 0;
+  for (const auto &[hash, container] : patches) {
+    count += container.patch_info_map.size();
+  }
+
+  const std::string dir = patch_engine::get_patches_path();
+  if (!fs::create_path(dir)) {
+    rpcsx_android.error("patchesWrite: cannot create %s (%s)", dir, fs::g_tls_error);
+    return -1;
+  }
+
+  fs::pending_file out(dir + std::string(file));
+  if (!out.file || out.file.write(content.data(), content.size()) != content.size() ||
+      !out.commit()) {
+    rpcsx_android.error("patchesWrite: %s: write failed (%s)", file, fs::g_tls_error);
+    return -1;
+  }
+
+  rpcsx_android.success("patchesWrite: %s: %u patches", file, count);
   return static_cast<int>(count);
 }
 
@@ -4884,7 +4939,7 @@ extern "C" int _rpcsx_changeDisc(std::string_view path_) {
   return 0;
 }
 
-// The parsed patch database, reloaded only when patch.yml actually changes.
+// The parsed patch database, reloaded only when one of its files actually changes.
 //
 // Both calls below used to parse the whole file on every invocation, so a single toggle in the
 // UI parsed it twice: once to validate the patch exists, once to rebuild the list afterwards.
@@ -4892,34 +4947,47 @@ extern "C" int _rpcsx_changeDisc(std::string_view path_) {
 // a community collection merged in, which is the point the delay became visible when flipping a
 // switch.
 //
-// Keyed on the file's size and mtime rather than an invalidate-me flag, so an import through any
-// path invalidates it, including one that writes the file without telling us.
+// Keyed on each file's size and mtime rather than an invalidate-me flag, so an import through any
+// path invalidates it, including one that writes a file without telling us.
+//
+// Every file the core applies patches from (append_global_patches), in the same order, so the
+// list shows exactly what a boot would apply: patches live in four files since 1.0, and reading
+// patch.yml alone would drop the Artemis collection, the bundled fixes and the user's imports
+// from the screen while the core still applied them.
 static const patch_engine::patch_map &cached_patch_db()
 {
   static std::mutex mutex;
   static patch_engine::patch_map db;
-  static u64 cached_size = 0;
-  static s64 cached_mtime = 0;
+  static std::array<std::pair<u64, s64>, 4> cached{};
   static bool loaded = false;
 
   std::lock_guard lock(mutex);
 
-  const std::string path = patch_engine::get_patches_path() + "patch.yml";
+  const std::string dir = patch_engine::get_patches_path();
+  const std::array<std::string, 4> paths{
+      dir + "patch.yml", patch_engine::get_imported_patch_path(),
+      dir + "artemis_patch.yml", dir + "armsx3_patch.yml"};
 
-  fs::stat_t info{};
-  const bool exists = fs::get_stat(path, info);
+  std::array<std::pair<u64, s64>, 4> now{};
+  for (usz i = 0; i < paths.size(); i++) {
+    fs::stat_t info{};
+    if (fs::get_stat(paths[i], info)) {
+      now[i] = {info.size, info.mtime};
+    }
+  }
 
-  if (loaded && exists && info.size == cached_size && info.mtime == cached_mtime)
+  if (loaded && now == cached)
   {
     return db;
   }
 
   db.clear();
   std::stringstream log;
-  patch_engine::load(db, path, {}, false, &log);
+  for (const auto &path : paths) {
+    patch_engine::load(db, path, {}, false, &log);
+  }
 
-  cached_size = exists ? info.size : 0;
-  cached_mtime = exists ? info.mtime : 0;
+  cached = now;
   loaded = true;
   return db;
 }

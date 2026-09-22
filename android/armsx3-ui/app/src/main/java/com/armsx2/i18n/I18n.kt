@@ -865,6 +865,8 @@ val EN: Map<String, String> = mapOf(
     "patches.ps3.showing" to "%1 games, %2 patches. Tap a game to see its patches, or search.",
     "patches.ps3.downloading" to "Downloading patches\u2026",
     "patches.ps3.imported" to "patches imported",
+    "patches.ps3.rebuilt" to "The patch list was rebuilt, and each download now replaces its own patches. Anything you had imported yourself is saved in patches/patch.yml.pre-1.0.",
+    "patches.ps3.rebuiltArtemis" to "If you use the Artemis collection, download it again.",
     "patches.ps3.importFile" to "Import a patch file",
     "patches.ps3.importFailed" to "Could not read that file. Pick a patch.yml exported from RPCS3.",
     "patches.ps3.downloadFailed" to "Could not download the patch database. Check your connection.",

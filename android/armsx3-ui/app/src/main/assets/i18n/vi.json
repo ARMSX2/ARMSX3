@@ -633,6 +633,8 @@
  "patches.ps3.emptyGame": "Không có bản vá nào có sẵn cho trò chơi này. Hãy thử tải xuống cơ sở dữ liệu ở trên.",
  "patches.ps3.header": "Các bản vá cộng đồng và mod đồ họa từ RPCS3. Chúng có thể mở khóa tốc độ khung hình, thay đổi độ phân giải hoặc LOD, thêm màn hình rộng và sửa lỗi trò chơi. Tải xuống một lần, sau đó kích hoạt cho mỗi trò chơi.",
  "patches.ps3.imported": "bản vá được nhập khẩu",
+ "patches.ps3.rebuilt": "Danh sách bản vá đã được tạo lại, và giờ mỗi lần tải xuống chỉ thay thế các bản vá của chính nó. Các bản vá bạn tự nhập được lưu trong patches/patch.yml.pre-1.0.",
+ "patches.ps3.rebuiltArtemis": "Nếu bạn dùng bộ sưu tập Artemis, hãy tải lại.",
  "patches.ps3.parseFailed": "Cơ sở dữ liệu bản vá được tải xuống nhưng không thể đọc được. Nó có thể dành cho định dạng bản vá mới hơn bản dựng này hỗ trợ.",
  "patches.ps3.search": "Tìm kiếm bản vá",
  "patches.ps3.serverError": "Máy chủ vá lỗi của RPCS3 đã trả về lỗi.",

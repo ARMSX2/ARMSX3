@@ -633,6 +633,8 @@
  "patches.ps3.emptyGame": "Tidak ada patch yang tersedia untuk game ini. Coba download database diatas.",
  "patches.ps3.header": "Patch komunitas dan mod grafis dari RPCS3. Ini dapat membuka kunci kecepatan bingkai, mengubah resolusi atau LOD, menambahkan layar lebar, dan memperbaiki bug game. Unduh sekali, lalu aktifkan per game.",
  "patches.ps3.imported": "tambalan diimpor",
+ "patches.ps3.rebuilt": "Daftar tambalan telah dibangun ulang, dan setiap unduhan kini hanya mengganti tambalannya sendiri. Tambalan yang Anda impor sendiri disimpan di patches/patch.yml.pre-1.0.",
+ "patches.ps3.rebuiltArtemis": "Jika Anda memakai koleksi Artemis, unduh lagi.",
  "patches.ps3.parseFailed": "Basis data patch diunduh tetapi tidak dapat dibaca. Ini mungkin untuk format patch yang lebih baru daripada yang didukung build ini.",
  "patches.ps3.search": "Cari patch",
  "patches.ps3.serverError": "Server patch RPCS3 menghasilkan kesalahan.",

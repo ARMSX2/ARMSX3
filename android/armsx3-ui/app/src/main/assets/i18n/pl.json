@@ -633,6 +633,8 @@
  "patches.ps3.emptyGame": "Brak dostępnych poprawek do tej gry. Spróbuj pobrać powyższą bazę danych.",
  "patches.ps3.header": "Poprawki społeczności i mody graficzne z RPCS3. Mogą one odblokować liczbę klatek na sekundę, zmienić rozdzielczość lub LOD, dodać obraz panoramiczny i naprawić błędy w grze. Pobierz raz, a następnie włącz dla każdej gry.",
  "patches.ps3.imported": "zaimportowane poprawki",
+ "patches.ps3.rebuilt": "Lista poprawek została zbudowana od nowa, a każde pobranie zastępuje teraz tylko własne poprawki. Poprawki zaimportowane samodzielnie zapisano w patches/patch.yml.pre-1.0.",
+ "patches.ps3.rebuiltArtemis": "Jeśli korzystasz z kolekcji Artemis, pobierz ją ponownie.",
  "patches.ps3.parseFailed": "Baza danych poprawek została pobrana, ale nie można jej odczytać. Może dotyczyć nowszego formatu poprawki niż obsługuje ta kompilacja.",
  "patches.ps3.search": "Szukaj poprawek",
  "patches.ps3.serverError": "Serwer poprawek RPCS3 zwrócił błąd.",

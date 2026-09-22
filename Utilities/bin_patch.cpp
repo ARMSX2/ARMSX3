@@ -893,6 +893,13 @@ void patch_engine::append_global_patches()
 
 	// Imported patch.yml
 	load(m_map, get_imported_patch_path());
+
+	// ARMSX3: the Artemis collection and our bundled fixes, each in a file of its own so that a
+	// download can replace its file whole. Merged into patch.yml, a patch renamed or withdrawn
+	// at the source stayed in the list for good, beside whatever replaced it. A missing file is
+	// skipped quietly, like the two above.
+	load(m_map, get_patches_path() + "artemis_patch.yml");
+	load(m_map, get_patches_path() + "armsx3_patch.yml");
 }
 
 void patch_engine::append_title_patches(std::string_view title_id)

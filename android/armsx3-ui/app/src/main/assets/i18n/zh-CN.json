@@ -633,6 +633,8 @@
  "patches.ps3.emptyGame": "该游戏没有可用的补丁。尝试下载上面的数据库。",
  "patches.ps3.header": "来自 RPCS3 的社区补丁和图形模组。这些可以解锁帧速率、更改分辨率或 LOD、添加宽屏以及修复游戏错误。下载一次，然后在每个游戏中启用。",
  "patches.ps3.imported": "导入补丁",
+ "patches.ps3.rebuilt": "补丁列表已重建，现在每次下载只替换各自的补丁。你自己导入的补丁已保存在 patches/patch.yml.pre-1.0。",
+ "patches.ps3.rebuiltArtemis": "如果你使用 Artemis 合集，请重新下载。",
  "patches.ps3.parseFailed": "补丁数据库已下载但无法读取。它可能适用于比此版本支持的更新的补丁格式。",
  "patches.ps3.search": "搜索补丁",
  "patches.ps3.serverError": "RPCS3 的补丁服务器返回错误。",

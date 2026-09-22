@@ -254,6 +254,9 @@ class RPCSX {
     external fun deleteStateFromSlot(slot: Int): Boolean
     external fun patchEngineVersion(): String
     external fun patchesImport(content: String): Int
+    /** Replace patches/[file] whole (patch.yml, artemis_patch.yml or armsx3_patch.yml only).
+     *  Patch count, or -1 when the content does not parse or the write fails. */
+    external fun patchesWrite(file: String, content: String): Int
     external fun patchesList(serial: String): String
     external fun probeDiscInfo(isoPath: String, iconOut: String): String
     /** Swap the running game's disc. 0 swapped, 1 the game takes no swaps, 2 not a disc,

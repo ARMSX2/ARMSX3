@@ -633,6 +633,8 @@
  "patches.ps3.emptyGame": "No hay parches disponibles para este juego. Intente descargar la base de datos anterior.",
  "patches.ps3.header": "Parches comunitarios y modificaciones de gráficos de RPCS3. Estos pueden desbloquear velocidades de fotogramas, cambiar la resolución o LOD, agregar pantalla panorámica y corregir errores del juego. Descargue una vez y luego habilítelo por juego.",
  "patches.ps3.imported": "parches importados",
+ "patches.ps3.rebuilt": "Se ha reconstruido la lista de parches y ahora cada descarga reemplaza solo sus propios parches. Lo que importaste tú mismo está guardado en patches/patch.yml.pre-1.0.",
+ "patches.ps3.rebuiltArtemis": "Si usas la colección Artemis, vuelve a descargarla.",
  "patches.ps3.parseFailed": "La base de datos del parche se descargó pero no se pudo leer. Puede ser para un formato de parche más nuevo que el que admite esta compilación.",
  "patches.ps3.search": "Buscar parches",
  "patches.ps3.serverError": "El servidor de parches de RPCS3 arrojó un error.",

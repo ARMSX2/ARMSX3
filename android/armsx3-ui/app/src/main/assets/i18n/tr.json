@@ -633,6 +633,8 @@
  "patches.ps3.emptyGame": "Bu oyun için yama mevcut değil. Yukarıdaki veritabanını indirmeyi deneyin.",
  "patches.ps3.header": "RPCS3'ten topluluk yamaları ve grafik modları. Bunlar kare hızlarının kilidini açabilir, çözünürlüğü veya LOD'yi değiştirebilir, geniş ekran ekleyebilir ve oyun hatalarını düzeltebilir. Bir kez indirin, ardından her oyun için etkinleştirin.",
  "patches.ps3.imported": "içe aktarılan yamalar",
+ "patches.ps3.rebuilt": "Yama listesi yeniden oluşturuldu; artık her indirme yalnızca kendi yamalarını değiştiriyor. Kendi içe aktardığınız yamalar patches/patch.yml.pre-1.0 dosyasında saklandı.",
+ "patches.ps3.rebuiltArtemis": "Artemis koleksiyonunu kullanıyorsanız yeniden indirin.",
  "patches.ps3.parseFailed": "Yama veritabanı indirildi ancak okunamadı. Bu yapının desteklediğinden daha yeni bir yama formatı için olabilir.",
  "patches.ps3.search": "Yamaları ara",
  "patches.ps3.serverError": "RPCS3'ün yama sunucusu bir hata döndürdü.",

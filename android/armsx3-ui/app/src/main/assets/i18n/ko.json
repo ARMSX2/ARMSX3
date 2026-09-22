@@ -633,6 +633,8 @@
  "patches.ps3.emptyGame": "이 게임에 사용할 수 있는 패치가 없습니다. 위의 데이터베이스를 다운로드해 보세요.",
  "patches.ps3.header": "RPCS3의 커뮤니티 패치 및 그래픽 모드. 이를 통해 프레임 속도를 잠금 해제하고, 해상도 또는 LOD를 변경하고, 와이드스크린을 추가하고, 게임 버그를 수정할 수 있습니다. 한 번 다운로드한 다음 게임별로 활성화하세요.",
  "patches.ps3.imported": "가져온 패치",
+ "patches.ps3.rebuilt": "패치 목록을 다시 만들었습니다. 이제 각 다운로드는 자기 패치만 교체합니다. 직접 가져온 패치는 patches/patch.yml.pre-1.0에 저장되어 있습니다.",
+ "patches.ps3.rebuiltArtemis": "Artemis 컬렉션을 사용한다면 다시 다운로드하세요.",
  "patches.ps3.parseFailed": "패치 데이터베이스를 다운로드했지만 읽을 수 없습니다. 이 빌드가 지원하는 것보다 최신 패치 형식일 수 있습니다.",
  "patches.ps3.search": "패치 검색",
  "patches.ps3.serverError": "RPCS3의 패치 서버가 오류를 반환했습니다.",

@@ -110,6 +110,7 @@ struct RPCSXApi {
   bool (*deleteStateFromSlot)(unsigned int slot);
   std::string (*patchEngineVersion)();
   int (*patchesImport)(std::string_view content);
+  int (*patchesWrite)(std::string_view file, std::string_view content);
   std::string (*patchesList)(std::string_view serial);
   std::string (*probeDiscInfo)(std::string_view isoPath, std::string_view iconOut);
   int (*changeDisc)(std::string_view path);
@@ -249,6 +250,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.deleteStateFromSlot = reinterpret_cast<decltype(deleteStateFromSlot)>(dlsym(handle, "_rpcsx_deleteStateFromSlot"));
     result.patchEngineVersion = reinterpret_cast<decltype(patchEngineVersion)>(dlsym(handle, "_rpcsx_patchEngineVersion"));
     result.patchesImport = reinterpret_cast<decltype(patchesImport)>(dlsym(handle, "_rpcsx_patchesImport"));
+    result.patchesWrite = reinterpret_cast<decltype(patchesWrite)>(dlsym(handle, "_rpcsx_patchesWrite"));
     result.patchesList = reinterpret_cast<decltype(patchesList)>(dlsym(handle, "_rpcsx_patchesList"));
     result.probeDiscInfo = reinterpret_cast<decltype(probeDiscInfo)>(dlsym(handle, "_rpcsx_probeDiscInfo"));
     result.changeDisc = reinterpret_cast<decltype(changeDisc)>(dlsym(handle, "_rpcsx_changeDisc"));
@@ -1194,6 +1196,16 @@ Java_net_rpcsx_RPCSX_patchesImport(JNIEnv *env, jobject, jstring jcontent) {
   }
 
   return rpcsxLib.patchesImport(unwrap(env, jcontent));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_patchesWrite(JNIEnv *env, jobject, jstring jfile,
+                                  jstring jcontent) {
+  if (rpcsxLib.patchesWrite == nullptr) {
+    return -1;
+  }
+
+  return rpcsxLib.patchesWrite(unwrap(env, jfile), unwrap(env, jcontent));
 }
 
 extern "C" JNIEXPORT jstring JNICALL
