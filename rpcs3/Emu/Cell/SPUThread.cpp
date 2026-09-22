@@ -2382,6 +2382,78 @@ bool spu_ls_watch_enabled()
 	return spu_ls_watch_range().second != 0;
 }
 
+// The last 32 transfers into the watched window on this SPU, UNSAMPLED, dumped when the unbacked-DMA
+// guard fires. The log below samples per pc, so a site that runs once per job -- a job fetching its
+// own context -- is decimated within seconds, and "the last write the log shows" is then not the
+// last write. Asking which transfer put Killzone 3's empty job context at LS 0x30580 needs every
+// one of them, in order, with the bytes that actually landed there.
+struct spu_ls_ring_entry
+{
+	u64 seq; // the n of the WATCH_LS[n] log line, whether or not that line was printed
+	u64 time;
+	u32 pc; // block address, not the issuing instruction
+	u32 lsa;
+	u32 size;
+	u32 eal;
+	u32 src; // guest address of the bytes that reached the first watched quadword
+	u8 cmd;
+	u8 tag;
+	bool mapped;
+	u8 landed[16];
+};
+
+static thread_local std::array<spu_ls_ring_entry, 32> t_ls_ring{};
+static thread_local u32 t_ls_ring_pos = 0;
+
+static void spu_ls_ring_dump(const spu_thread* spu, const char* why)
+{
+	if (!spu_ls_watch_enabled())
+	{
+		return;
+	}
+
+	static atomic_t<u32> s_dumps{0};
+
+	if (s_dumps++ >= 4)
+	{
+		return;
+	}
+
+	const auto hex16 = [](const u8* p)
+	{
+		return fmt::format("%02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x",
+			p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
+	};
+
+	const u64 now = get_system_time();
+	std::string out;
+
+	for (u32 i = 0; i < t_ls_ring.size(); i++)
+	{
+		const auto& e = t_ls_ring[(t_ls_ring_pos + i) % t_ls_ring.size()];
+
+		if (!e.seq)
+		{
+			continue;
+		}
+
+		// What memory holds at the same address now, to tell a source that was filled late from
+		// one that never was.
+		std::string later = "<unmapped>";
+
+		if (vm::check_addr(e.src, vm::page_readable, 16))
+		{
+			later = hex16(vm::_ptr<u8>(e.src));
+		}
+
+		fmt::append(out, "\n  [%u] -%6uus pc=0x%05x LS 0x%05x..0x%05x EA 0x%08x cmd 0x%02x tag %2u | landed %s | now %s",
+			e.seq, now - e.time, e.pc, e.lsa, e.lsa + e.size, e.eal, e.cmd, e.tag,
+			e.mapped ? hex16(e.landed) : std::string("<unmapped>"), later);
+	}
+
+	spu_log.error("WATCH_LS ring for '%s' at %s, oldest first:%s", spu ? *spu->spu_tname.load() : "?", why, out);
+}
+
 // Called for GETs, which are the transfers that can land on code, and for the atomic reads, whose
 // 128 bytes land in local store the same way but never pass through do_dma_transfer.
 static void spu_watch_ls_write(const spu_thread* spu, const spu_mfc_cmd& args, u32 lsa)
@@ -2403,6 +2475,27 @@ static void spu_watch_ls_write(const spu_thread* spu, const spu_mfc_cmd& args, u
 
 	const u64 n = ++s_hits;
 	const u32 site = spu ? spu->pc : 0;
+
+	{
+		auto& e = t_ls_ring[t_ls_ring_pos++ % t_ls_ring.size()];
+		const u32 first = std::max(start, lsa) & ~15u;
+
+		e.seq = n;
+		e.time = get_system_time();
+		e.pc = site;
+		e.lsa = lsa;
+		e.size = args.size;
+		e.eal = args.eal;
+		e.src = args.eal + (first - lsa);
+		e.cmd = static_cast<u8>(args.cmd);
+		e.tag = static_cast<u8>(args.tag);
+		e.mapped = vm::check_addr(e.src, vm::page_readable, 16);
+
+		if (e.mapped)
+		{
+			std::memcpy(e.landed, vm::_ptr<u8>(e.src), 16);
+		}
+	}
 
 	{
 		static atomic_t<u32> s_pc[16]{};
@@ -2849,6 +2942,8 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 					"of killing the thread", is_get ? "GET from" : "PUT to", eal, args.size, lsa, at,
 					is_get ? "zero-filling" : "dropping");
 			}
+
+			spu_ls_ring_dump(_this, "unbacked DMA");
 
 			if (is_get)
 			{
