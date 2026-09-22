@@ -306,6 +306,14 @@ extern bool cmp_rdata(const spu_rdata_t& _lhs, const spu_rdata_t& _rhs)
 // which is only sound while the loads stay between the two timestamp reads. x86-TSO forbids the
 // reordering outright; a weakly ordered machine needs the barrier spelled out, or the check can
 // pass for data that belongs to a later epoch. Always true, so it can sit in a && chain.
+//
+// The same goes for the other side of the handshake: a comparison that finds a reservation lost
+// because the line's DATA changed, with the timestamp untouched. That happens on every ordinary
+// store, and it is how a sleeping SPU learns that someone wrote to it. Without a barrier after it,
+// what the SPU reads next can still be served from before that change, so it acts on a wake-up
+// and then sees data older than the write that woke it. Killzone 3 turned that into a black
+// screen: a SPURS task woken by the PPU read a state byte of the event flag it serves as 0, failed
+// its own assertion (heqi at LS 0x1cdd0) and halted, leaving main_thread waiting forever.
 static FORCE_INLINE bool rdata_fence()
 {
 	atomic_fence_acquire();
@@ -6249,7 +6257,7 @@ bool spu_thread::reservation_check(u32 addr, const decltype(rdata)& data, u32 cu
 	if ((addr >> 28) < 2 || (addr >> 28) == 0xd)
 	{
 		// Always-allocated memory does not need strict checking (vm::main or vm::stack)
-		return !cmp_rdata(data, *vm::get_super_ptr<decltype(rdata)>(addr));
+		return !cmp_rdata(data, *vm::get_super_ptr<decltype(rdata)>(addr)) && rdata_fence();
 	}
 
 	if ((addr >> 20) == (current_eal >> 20))
@@ -6257,13 +6265,13 @@ bool spu_thread::reservation_check(u32 addr, const decltype(rdata)& data, u32 cu
 		if (vm::check_addr(addr, vm::page_1m_size))
 		{
 			// Same random-access-memory page as the current MFC command, assume allocated
-			return !cmp_rdata(data, vm::_ref<decltype(rdata)>(addr));
+			return !cmp_rdata(data, vm::_ref<decltype(rdata)>(addr)) && rdata_fence();
 		}
 
 		if ((addr >> 16) == (current_eal >> 16) && vm::check_addr(addr, vm::page_64k_size))
 		{
 			// Same random-access-memory page as the current MFC command, assume allocated
-			return !cmp_rdata(data, vm::_ref<decltype(rdata)>(addr));
+			return !cmp_rdata(data, vm::_ref<decltype(rdata)>(addr)) && rdata_fence();
 		}
 	}
 
@@ -6337,7 +6345,7 @@ bool spu_thread::reservation_check(u32 addr, const decltype(rdata)& data, u32 cu
 	const bool res = cmp_rdata(data, vm::_ref<decltype(rdata)>(addr));
 
 	range_lock->release(0);
-	return !res;
+	return !res && rdata_fence();
 }
 
 bool spu_thread::reservation_check(u32 addr, u32 hash, atomic_t<u64, 128>* range_lock)
@@ -6418,7 +6426,7 @@ bool spu_thread::reservation_check(u32 addr, u32 hash, atomic_t<u64, 128>* range
 	const bool res = compute_rdata_hash32(*vm::get_super_ptr<decltype(rdata)>(addr)) == hash;
 
 	range_lock->release(0);
-	return !res;
+	return !res && rdata_fence();
 }
 
 usz spu_thread::register_cache_line_waiter(u32 addr)
@@ -7103,7 +7111,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 				{
 					set_lr = true;
 				}
-				else if (!cmp_rdata(rdata, *resrv_mem))
+				else if (!cmp_rdata(rdata, *resrv_mem) && rdata_fence())
 				{
 					if (vm::reservation_acquire(raddr) == rtime)
 					{
@@ -7270,7 +7278,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 						// Abort notifications are handled specially for performance reasons
 						if (auto [wait_var, flag_val] = vm::reservation_notifier_begin_wait(raddr, rtime); wait_var)
 						{
-							if (!cmp_rdata(rdata, *resrv_mem))
+							if (!cmp_rdata(rdata, *resrv_mem) && rdata_fence())
 							{
 								raddr = 0;
 								set_events(SPU_EVENT_LR);
@@ -7290,7 +7298,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 #ifdef __linux__
 					if (auto [wait_var, flag_val] = vm::reservation_notifier_begin_wait(_raddr, rtime); wait_var)
 					{
-						if (!cmp_rdata(rdata, *resrv_mem))
+						if (!cmp_rdata(rdata, *resrv_mem) && rdata_fence())
 						{
 							raddr = 0;
 							set_events(SPU_EVENT_LR);
@@ -7370,7 +7378,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 
 					if (auto [wait_var, flag_val] = vm::reservation_notifier_begin_wait(_raddr, rtime); wait_var)
 					{
-						if (!cmp_rdata(rdata, *resrv_mem))
+						if (!cmp_rdata(rdata, *resrv_mem) && rdata_fence())
 						{
 							raddr = 0;
 							set_events(SPU_EVENT_LR);
