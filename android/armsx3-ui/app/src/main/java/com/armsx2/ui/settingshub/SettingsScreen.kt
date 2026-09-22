@@ -204,7 +204,7 @@ fun SettingsScreen(
                     .padding(bottom = 8.dp),
             ) {
                 ArmsTopBar(
-                    title = scopeGame?.title ?: str("action.settings"),
+                    title = scopeGame?.title ?: str("action.appSettings"),
                     subtitle = if (scopeGame == null) str("scope.global") else str("scope.game"),
                     leading = {
                         // Registered in the settings nav so a controller reaches it (up from the chips).

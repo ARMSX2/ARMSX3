@@ -43,13 +43,10 @@ import com.armsx2.ui.settings.controllerFocusable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.Calendar
-import java.util.TimeZone
 
 /**
  * In-app updater for the GitHub release channel.
@@ -66,14 +63,9 @@ import java.util.TimeZone
  * gains a Play target, that split has to come first: move this file and the permission and the
  * provider into a github flavor, because the runtime flag alone does not stop the permission
  * shipping, and the permission is what Play rejects.
- *
- * Nightly-safe: a nightly build would use versionCode = Unix seconds (> 1e6), always numerically
- * ahead of any stable, so those are short-circuited rather than being offered a downgrade.
  */
 
 private const val LATEST_URL = "https://api.github.com/repos/ARMSX2/ARMSX3/releases/latest"
-private const val RELEASES_URL = "https://api.github.com/repos/ARMSX2/ARMSX3/releases?per_page=20"
-private const val NIGHTLY_VC_THRESHOLD = 1_000_000  // stable VCs are ~1300; nightly = Unix seconds.
 
 private sealed interface UpdateState {
     data object Idle : UpdateState
@@ -110,8 +102,7 @@ fun UpdaterEntry() {
                     Text(str("update.checking"), style = MaterialTheme.typography.bodySmall)
                 }
                 is UpdateState.UpToDate -> Text(
-                    if (BuildConfig.VERSION_CODE > NIGHTLY_VC_THRESHOLD) str("update.onNightly")
-                    else str("update.upToDate"),
+                    str("update.upToDate"),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -136,10 +127,7 @@ fun UpdaterEntry() {
             val runCheck: () -> Unit = {
                 scope.launch {
                     state = UpdateState.Checking
-                    state = checkForUpdate(
-                        MainActivityRuntime.prefs.getBoolean("update.includeNightly", false),
-                        checkFailedPrefix,
-                    )
+                    state = checkForUpdate(checkFailedPrefix)
                 }
             }
             Button(
@@ -159,20 +147,6 @@ fun UpdaterEntry() {
                 onCheckedChange = {
                     checkOnLaunch = it
                     MainActivityRuntime.prefs.edit().putBoolean("update.checkOnLaunch", it).apply()
-                },
-            )
-
-            // Opt-in: also consider nightly (pre-release) builds when checking (default off).
-            var includeNightly by remember {
-                mutableStateOf(MainActivityRuntime.prefs.getBoolean("update.includeNightly", false))
-            }
-            SettingSwitchRow(
-                title = str("update.includeNightly"),
-                description = str("update.includeNightly.desc"),
-                checked = includeNightly,
-                onCheckedChange = {
-                    includeNightly = it
-                    MainActivityRuntime.prefs.edit().putBoolean("update.includeNightly", it).apply()
                 },
             )
         }
@@ -213,7 +187,7 @@ fun UpdaterEntry() {
  * Boot-time auto-check (github flavor only). Mounted once at the app root; when the "check on
  * launch" toggle is on, it runs a single silent GitHub check on start and pops the update prompt
  * ONLY if a newer release exists — no "up to date" popup, no noise on every boot. Reuses the exact
- * check/download/install path as the manual button. Nightly-safe via checkForUpdate's VC guard.
+ * check/download/install path as the manual button.
  */
 @Composable
 fun AutoUpdateGate() {
@@ -224,10 +198,7 @@ fun AutoUpdateGate() {
 
     LaunchedEffect(Unit) {
         if (MainActivityRuntime.prefs.getBoolean("update.checkOnLaunch", false)) {
-            val result = checkForUpdate(
-                MainActivityRuntime.prefs.getBoolean("update.includeNightly", false),
-                checkFailedPrefix,
-            )
+            val result = checkForUpdate(checkFailedPrefix)
             if (result is UpdateState.Available) state = result  // stay silent on up-to-date / errors
         }
     }
@@ -278,42 +249,13 @@ fun AutoUpdateGate() {
     }
 }
 
-private suspend fun checkForUpdate(includeNightly: Boolean, checkFailedPrefix: String): UpdateState = withContext(Dispatchers.IO) {
+private suspend fun checkForUpdate(checkFailedPrefix: String): UpdateState = withContext(Dispatchers.IO) {
     try {
-        if (!includeNightly) {
-            // Stable channel. A nightly build (VC = Unix seconds) is always ahead of any stable, so
-            // never prompt it — and never offer it a stable (that would be a versionCode downgrade).
-            if (BuildConfig.VERSION_CODE > NIGHTLY_VC_THRESHOLD) return@withContext UpdateState.UpToDate
-            val obj = JSONObject(httpGet(LATEST_URL))
-            val apkUrl = pickApkAsset(obj) ?: return@withContext UpdateState.UpToDate
-            val tag = obj.getString("tag_name")
-            return@withContext if (isNewer(tag, BuildConfig.VERSION_NAME))
-                UpdateState.Available(tag, obj.optString("body", ""), apkUrl)
-            else UpdateState.UpToDate
-        }
-
-        // Nightly channel: GitHub returns releases newest-first, so offer the first genuinely-newer
-        // one that has an APK. Nightlies are pre-releases tagged nightly-YYYYMMDD; stables are vX.Y.Z.
-        // Compare nightlies by day (the installed nightly's build day comes from its VC = Unix seconds);
-        // compare stables by version name. A nightly install is never offered a stable — that's a
-        // versionCode downgrade the system installer rejects anyway (reinstall stable manually).
-        val arr = JSONArray(httpGet(RELEASES_URL))
-        val installedIsNightly = BuildConfig.VERSION_CODE > NIGHTLY_VC_THRESHOLD
-        val installedDay = if (installedIsNightly) epochSecToYyyymmdd(BuildConfig.VERSION_CODE.toLong()) else 0
-        for (i in 0 until arr.length()) {
-            val rel = arr.getJSONObject(i)
-            if (rel.optBoolean("draft", false)) continue
-            val apkUrl = pickApkAsset(rel) ?: continue
-            val tag = rel.getString("tag_name")
-            val isNightlyRel = rel.optBoolean("prerelease", false) || tag.startsWith("nightly-", ignoreCase = true)
-            val newer = if (isNightlyRel) {
-                nightlyTagDay(tag) > installedDay  // stable install => installedDay 0 => any nightly is newer
-            } else {
-                !installedIsNightly && isNewer(tag, BuildConfig.VERSION_NAME)
-            }
-            if (newer) return@withContext UpdateState.Available(tag, rel.optString("body", ""), apkUrl)
-        }
-        UpdateState.UpToDate
+        val obj = JSONObject(httpGet(LATEST_URL))
+        val apkUrl = pickApkAsset(obj) ?: return@withContext UpdateState.UpToDate
+        val tag = obj.getString("tag_name")
+        if (isNewer(tag, BuildConfig.VERSION_NAME)) UpdateState.Available(tag, obj.optString("body", ""), apkUrl)
+        else UpdateState.UpToDate
     } catch (e: Exception) {
         UpdateState.Error("$checkFailedPrefix: ${e.message}")
     }
@@ -398,15 +340,6 @@ private fun pickApkAsset(release: JSONObject): String? {
     return byName.values.firstOrNull()
 }
 
-/** "nightly-YYYYMMDD" -> YYYYMMDD as an int (0 if the tag isn't a dated nightly). */
-private fun nightlyTagDay(tag: String): Int =
-    Regex("nightly-(\\d{8})", RegexOption.IGNORE_CASE).find(tag)?.groupValues?.get(1)?.toIntOrNull() ?: 0
-
-/** Unix-epoch seconds (a nightly build's versionCode) -> UTC YYYYMMDD int, matching the nightly tag. */
-private fun epochSecToYyyymmdd(epochSec: Long): Int {
-    val c = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply { timeInMillis = epochSec * 1000L }
-    return c.get(Calendar.YEAR) * 10000 + (c.get(Calendar.MONTH) + 1) * 100 + c.get(Calendar.DAY_OF_MONTH)
-}
 
 /** Semantic-version compare of the release tag vs the installed versionName. Non-numeric suffixes
  *  (e.g. the "2.6.4.3.r" tag) are dropped — only the leading dotted integers matter. */

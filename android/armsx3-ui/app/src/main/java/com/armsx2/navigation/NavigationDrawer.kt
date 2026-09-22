@@ -208,7 +208,7 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // that game's set alone). This is the across-titles browser, which was
         // Qt-only upstream and so had no Android entry point at all.
         DrawerItem("trophies.title", "🏆", AppRoute.Trophies),
-        DrawerItem("action.settings", "⚙️", AppRoute.Settings()),
+        DrawerItem("action.appSettings", "⚙️", AppRoute.Settings()),
         // Everything the core exposes, generated from its config tree rather than
         // hand-written. The curated tabs above stay small on purpose; this is the
         // escape hatch for the rest of the PS3 config.

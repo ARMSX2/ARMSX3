@@ -1509,6 +1509,14 @@ private fun BackupRestoreRows() {
         "📂", "app.savedata.importFolder", "app.savedata.importFolder.desc", "", busy,
         doSaveFolderImport,
     )
+    // Under both imports because it is the usual reason one fails: a save copied off a console is
+    // still encrypted with that console's keys, and a game handed one can crash rather than refuse.
+    Text(
+        str("app.savedata.apolloNote"),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 14.dp),
+    )
 
     // Deleting saves. The app is the ONLY thing that can: Android 11 blocks file managers from
     // Android/data, and adb can remove the files but not the directory (rmdir returns EPERM, and
