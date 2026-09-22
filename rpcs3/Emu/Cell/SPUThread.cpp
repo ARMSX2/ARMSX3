@@ -2732,6 +2732,16 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 	else
 	{
 		spu_watch_ls_write(_this, args, lsa);
+
+		// Killzone 3 builder-vs-traversal sync probe: log the SPU job's context GET (0x50 bytes into
+		// the job context slot LS 0x30580). Correlated by EA with the "KZ3 CLEAR" line from the PPU
+		// teardown to measure the GET->clear gap on ARM (x86 min is 7.6 ms). Off unless
+		// ARMSX3_KZ3_SYNC=1; kz3_sync_probe_enabled() also confirms the title is right via the paired
+		// PPU hook, but gate cheaply here on the exact shape first.
+		if (args.size == 0x50 && lsa == 0x30580 && kz3_sync_probe_enabled()) [[unlikely]]
+		{
+			spu_log.error("KZ3 GET ea=0x%08x t=%llu spu=0x%x", eal, get_system_time(), _this ? _this->id : 0);
+		}
 	}
 
 	// Code-sized transfers, which is how a SPURS workload would arrive.

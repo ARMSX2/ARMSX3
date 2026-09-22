@@ -1,6 +1,7 @@
 #ifdef LLVM_AVAILABLE
 
 #include "Emu/system_config.h"
+#include "Emu/System.h"
 #include "Emu/Cell/Common.h"
 #include "Emu/Cell/lv2/sys_sync.h"
 #include "PPUTranslator.h"
@@ -4118,6 +4119,15 @@ void PPUTranslator::LBZU(ppu_opcode_t op)
 
 void PPUTranslator::STW(ppu_opcode_t op)
 {
+	// Killzone 3 builder-vs-traversal sync probe. 0x00cdb2c8 is the Physics KdTree Building thread's
+	// store that clears a job descriptor's root word 0 (destructor 0x00cdb1f0); r30 holds the
+	// descriptor base EA. Emitted only for this exact address in this title, and the runtime helper
+	// no-ops unless ARMSX3_KZ3_SYNC=1. See ppu_kz3_desc_clear in PPUThread.cpp.
+	if (m_addr == 0xcdb2c8 && !m_reloc && Emu.GetTitleID() == "BCUS98234") [[unlikely]]
+	{
+		Call(GetType<void>(), "__kz3_desc_clear", GetGpr(op.ra));
+	}
+
 	Value* imm = m_ir->getInt64(op.simm16);
 
 	if (m_rel && (m_rel->type >= 4u && m_rel->type <= 6u))

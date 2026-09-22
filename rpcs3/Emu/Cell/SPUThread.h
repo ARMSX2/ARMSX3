@@ -509,6 +509,10 @@ extern const spu_imm_table_t g_spu_imm;
 // which is where the watch sits.
 bool spu_ls_watch_enabled();
 
+// Defined in PPUThread.cpp. Same reason as above: the recompiler must route DMA through
+// do_dma_transfer when the Killzone 3 builder-vs-traversal sync probe (ARMSX3_KZ3_SYNC) is armed.
+bool kz3_sync_probe_enabled();
+
 enum FPSCR_EX
 {
 	//Single-precision exceptions

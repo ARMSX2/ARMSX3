@@ -5666,9 +5666,9 @@ public:
 					break;
 				}
 
-				// The local-store watch lives in do_dma_transfer, and the inlined copy below
-				// would step around it, so a watched run gives up the inlining too.
-				bool must_use_cpp_functions = !!g_cfg.core.spu_accurate_dma || spu_ls_watch_enabled();
+				// The local-store watch and the KZ3 sync probe both live in do_dma_transfer, and the
+				// inlined copy below would step around them, so an instrumented run gives up inlining.
+				bool must_use_cpp_functions = !!g_cfg.core.spu_accurate_dma || spu_ls_watch_enabled() || kz3_sync_probe_enabled();
 
 				if (u64 cmdh = ci->getZExtValue() & ~(MFC_BARRIER_MASK | MFC_FENCE_MASK | MFC_RESULT_MASK); g_cfg.core.rsx_fifo_accuracy || g_cfg.video.strict_rendering_mode || /*!g_use_rtm*/ true)
 				{

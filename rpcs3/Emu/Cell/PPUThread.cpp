@@ -3760,6 +3760,42 @@ static void ppu_error(ppu_thread& ppu, u64 addr, u32 /*op*/)
 	ppu_recompiler_fallback(ppu);
 }
 
+// Whether the Killzone 3 builder-vs-traversal sync probe is armed. Off unless ARMSX3_KZ3_SYNC=1 in
+// driver_env.txt, so it costs nothing in a normal run. Function-local read so it is seen after
+// driver_env is parsed.
+bool kz3_sync_probe_enabled()
+{
+	static const bool s_on = []
+	{
+		const char* v = std::getenv("ARMSX3_KZ3_SYNC");
+		return v && v[0] == '1' && v[1] == '\0';
+	}();
+
+	return s_on;
+}
+
+// Emitted by the translator only at PPU 0x00cdb2c8 in BCUS98234: the Physics KdTree Building
+// thread's store that clears a job descriptor's root word 0 (the destructor at 0x00cdb1f0). r30
+// holds the descriptor base EA. x86 clears the same descriptor a minimum of 7.6 ms after the SPU
+// read it (looks like it waits for the job); this logs the ARM timing to compare. Correlate with
+// the "KZ3 GET" line by EA: gap = clear_time - last_get_time.
+static void ppu_kz3_desc_clear(u64 ea)
+{
+	if (!kz3_sync_probe_enabled()) [[likely]]
+	{
+		return;
+	}
+
+	static atomic_t<u32> s_n{0};
+
+	const u32 n = ++s_n;
+
+	if (n <= 20000)
+	{
+		ppu_log.error("KZ3 CLEAR ea=0x%08x t=%llu (#%u)", static_cast<u32>(ea), get_system_time(), n);
+	}
+}
+
 static void ppu_check(ppu_thread& ppu, u64 addr)
 {
 	ppu.cia = ::narrow<u32>(addr);
@@ -5569,6 +5605,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			{ "__trap", reinterpret_cast<u64>(&ppu_trap) },
 			{ "__error", reinterpret_cast<u64>(&ppu_error) },
 			{ "__check", reinterpret_cast<u64>(&ppu_check) },
+			{ "__kz3_desc_clear", reinterpret_cast<u64>(&ppu_kz3_desc_clear) },
 			{ "__trace", reinterpret_cast<u64>(&ppu_trace) },
 			{ "__syscall", reinterpret_cast<u64>(ppu_execute_syscall) },
 			{ "__get_tb", reinterpret_cast<u64>(get_timebased_time) },
