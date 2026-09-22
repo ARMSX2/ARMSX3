@@ -148,8 +148,15 @@ object ConfigDatabase {
         // on for this title since 4009bb5551, removes that pass, and the RPCS3 wiki says the
         // setting is only needed without the patch. Off skips the readback of every color buffer.
         // Tied to the patch: anyone who turns the patch off needs this back on.
-        "BCUS98234" to "Video:\n  Write Color Buffers: false\n",
-        "BCES01007" to "Video:\n  Write Color Buffers: false\n",
+        //
+        // Preferred SPU Threads pinned to 0 (Auto), issue #151. A tester running it at 3 froze at
+        // the same spot every time, as the prologue streams in the factory approach: SPU jobs read
+        // a structure the game had already freed and overwrote SPURS kernel code at LS 0x28e0.
+        // Capping how many SPU threads run at once makes jobs run late, which is what exposes that
+        // race. Back on 0 he got through, and the crash never appeared in 38 of our own runs at 0.
+        // Pinned here, per title, so a global 3 cannot bring it back.
+        "BCUS98234" to "Video:\n  Write Color Buffers: false\nCore:\n  Preferred SPU Threads: 0\n",
+        "BCES01007" to "Video:\n  Write Color Buffers: false\nCore:\n  Preferred SPU Threads: 0\n",
     )
 
     /**
