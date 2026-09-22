@@ -5468,8 +5468,10 @@ open class MainActivityRuntime : ComponentActivity() {
         // still have nothing to pass us. The title id is the one identifier they do have.
         //
         // Resolved against the library CACHE rather than a scan: this runs on the launch path,
-        // a scan can take seconds on a large folder, and any title a frontend knows about is by
-        // definition one we have already listed. Unknown ids return null and fall through to the
+        // and a scan can take seconds on a large folder. The one title a frontend can know about
+        // that the cache has not listed yet is a package installed since the last scan, because
+        // the frontend export (issue #157) writes its file straight after the install; that one
+        // is looked up in dev_hdd0 directly. Unknown ids return null and fall through to the
         // library exactly as a bad path does.
         for (key in listOf("title_id", "titleId", "serial")) {
             val id = intent.getStringExtra(key)?.takeIf { it.isNotBlank() }?.trim() ?: continue
@@ -5479,6 +5481,13 @@ open class MainActivityRuntime : ComponentActivity() {
             }.getOrNull()
 
             if (match == null) {
+                val installed = runCatching {
+                    com.armsx2.packages.FrontendExport.installedDir(this, id)
+                }.getOrNull()
+                if (installed != null) {
+                    android.util.Log.i("ARMSX2", "launch by title id: '$id' -> $installed (installed, not scanned yet)")
+                    return Uri.fromFile(installed)
+                }
                 android.util.Log.w("ARMSX2", "launch by title id: '$id' is not in the library cache")
                 return null
             }

@@ -38,6 +38,7 @@ import com.armsx2.data.library.Licences
 import com.armsx2.data.library.ParamSfo
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
+import com.armsx2.packages.FrontendExport
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.common.ArmsBackdrop
 import com.armsx2.ui.common.FileBrowserDialog
@@ -549,6 +550,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
             progressId = null
             message = if (ok) {
                 GameLibraryRepository(context).invalidateCache()
+                FrontendExport.requestSync(context)
                 installed = readInstalled()
                 licences = readLicences()
                 I18n.get("packages.install.done")
@@ -649,6 +651,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                 // chain of packages skips it for all but its last and pays once, not seven times.
                 if (refreshLibrary) {
                     GameLibraryRepository(context).invalidateCache()
+                    FrontendExport.requestSync(context)
                     installed = readInstalled()
                     licences = readLicences()
                 }
@@ -746,7 +749,10 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                         }
                         installed = readInstalled()
                         licences = readLicences()
-                        if (ok) GameLibraryRepository(context).invalidateCache()
+                        if (ok) {
+                            GameLibraryRepository(context).invalidateCache()
+                            FrontendExport.requestSync(context)
+                        }
                         message = I18n.get(
                             if (ok) "packages.uninstall.done" else "packages.uninstall.failed",
                         )

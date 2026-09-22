@@ -45,6 +45,7 @@ import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.navigation.AppRoute
 import com.armsx2.navigation.UiNavigator
+import com.armsx2.packages.FrontendExport
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.theme.BootLogoPreferences
 import com.armsx2.ui.theme.ThemeMode
@@ -207,6 +208,7 @@ fun AppTab() {
         }
         ConfigDatabaseRow()
         GameFoldersRow()
+        FrontendExportRow()
         Surface(
             onClick = { UiNavigator.navigate(AppRoute.Language) },
             modifier = Modifier.fillMaxWidth()
@@ -1086,6 +1088,110 @@ private fun GameFoldersRow() {
             Spacer(Modifier.height(6.dp))
             Text(
                 str("app.gameFolders.hint"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Issue #157: a folder that gets a .ps3 file for each installed game, for launcher frontends.
+ *
+ * Off until a folder is picked. The row says how many games the folder holds and, when the last
+ * sync could not finish, why: a revoked grant and storage that cannot be read need different
+ * fixes, and both would otherwise look like the export had quietly stopped.
+ */
+@Composable
+private fun FrontendExportRow() {
+    val context = LocalContext.current
+    remember { runCatching { FrontendExport.load() } }
+    val folder = FrontendExport.folder.value
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        // Write as well as read: the export creates and deletes files in there.
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        FrontendExport.setFolder(context, uri)
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.46f)),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(str("app.frontendExport"), style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (folder == null) str("common.off")
+                else I18n.get("app.frontendExport.count").format(FrontendExport.exported.intValue),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            if (folder != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            com.armsx2.storage.StorageLabel.forFolder(context, folder),
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        FrontendExport.problem.value?.let { problem ->
+                            Text(
+                                str(
+                                    when (problem) {
+                                        FrontendExport.Problem.Folder -> "app.frontendExport.folderProblem"
+                                        FrontendExport.Problem.Storage -> "app.frontendExport.storageProblem"
+                                    },
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        }
+                    }
+                    TextButton(onClick = { FrontendExport.setFolder(context, null) }) {
+                        Text(str("app.frontendExport.stop"))
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedButton(
+                    onClick = { runCatching { picker.launch(null) } },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(str(if (folder == null) "app.frontendExport.choose" else "app.frontendExport.change"))
+                }
+                if (folder != null) {
+                    OutlinedButton(
+                        onClick = { FrontendExport.requestSync(context, force = true) },
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(str("app.frontendExport.now"))
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                str("app.frontendExport.hint"),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

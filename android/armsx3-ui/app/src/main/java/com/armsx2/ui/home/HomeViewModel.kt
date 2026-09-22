@@ -113,6 +113,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     state.value.copy(allGames = games, scanning = false, initialized = true),
                 )
                 com.armsx2.RaLibrary.onLibraryLoaded(games)
+                // Catches what the install screens do not see: a title copied into
+                // dev_hdd0/game by hand, or one installed before a folder was picked.
+                com.armsx2.packages.FrontendExport.requestSync(getApplication())
             }.onFailure { failure ->
                 pendingInitialScan = false
                 state.value = state.value.copy(
