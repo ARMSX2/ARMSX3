@@ -479,8 +479,14 @@ object TouchControls {
      *  controls devices like the RP6 — also hides the settings cog so nothing
      *  overlaps R1); 1..10 = auto-hide after that many seconds of no touch;
      *  11 = Auto — show on screen touch, hide when a controller is used (the
-     *  default / legacy behavior). Persisted. */
+     *  default / legacy behavior); 12 = Always, never hidden automatically. Persisted.
+     *
+     *  Always exists for people who play with a controller AND the touch buttons at once:
+     *  Auto hid them on every controller input and the timer modes hid them between touches.
+     *  Nothing else needs to know about it, because only mode 11 hides on controller input
+     *  and only 1..10 run the timer. (From ARMSX2 2.7, 6597ceb945.) */
     val visibilityMode = mutableIntStateOf(11)
+    const val VISIBILITY_ALWAYS = 12
 
     /** Bumped on every touch interaction (screen tap or on-screen button press)
      *  so the auto-hide timer restarts. Not persisted. */
@@ -840,7 +846,7 @@ object TouchControls {
         analogExtraDistance.floatValue =
             MainActivityRuntime.prefs.getFloat(KEY_ANALOG_EXTRA_DIST, 0.35f).coerceIn(0.1f, 1.5f)
         gridSnap.value = MainActivityRuntime.prefs.getBoolean(KEY_GRID_SNAP, false)
-        visibilityMode.intValue = MainActivityRuntime.prefs.getInt(KEY_VIS_MODE, 11).coerceIn(0, 11)
+        visibilityMode.intValue = MainActivityRuntime.prefs.getInt(KEY_VIS_MODE, 11).coerceIn(0, VISIBILITY_ALWAYS)
         if (visibilityMode.intValue == 0) visible.value = false
         // #357: show/hide became tap-to-reveal (inverted). Seed the new pref from the old one so
         // anyone who had the button hidden keeps it hidden — now as tap-to-reveal, which still
@@ -949,7 +955,7 @@ object TouchControls {
 
     /** Set the on-screen controls visibility mode (see [visibilityMode]). */
     fun setVisibilityMode(mode: Int) {
-        visibilityMode.intValue = mode.coerceIn(0, 11)
+        visibilityMode.intValue = mode.coerceIn(0, VISIBILITY_ALWAYS)
         // Reflect immediately: Never hides; any other mode shows.
         visible.value = visibilityMode.intValue != 0
         interactionTick.intValue++

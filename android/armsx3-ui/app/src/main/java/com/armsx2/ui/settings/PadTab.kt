@@ -733,13 +733,21 @@ fun PadTab(state: MutableState<Settings>) {
             SettingsDivider()
             val visibilityOff = str("setup.toggle.off")
             val visibilityAuto = str("backend.renderer.auto")
+            val visibilityAlways = str("pad.onScreenControls.always")
             IntSliderRow(
                 label = str("pad.onScreenControls.label"),
                 value = TouchControls.visibilityMode.value,
                 min = 0,
-                max = 11,
+                max = TouchControls.VISIBILITY_ALWAYS,
                 description = str("pad.onScreenControls.description"),
-                valueFormatter = { when (it) { 0 -> visibilityOff; 11 -> visibilityAuto; else -> "${it}s" } },
+                valueFormatter = {
+                    when (it) {
+                        0 -> visibilityOff
+                        11 -> visibilityAuto
+                        TouchControls.VISIBILITY_ALWAYS -> visibilityAlways
+                        else -> "${it}s"
+                    }
+                },
                 onChange = { TouchControls.setVisibilityMode(it) },
             )
             SettingsDivider()
