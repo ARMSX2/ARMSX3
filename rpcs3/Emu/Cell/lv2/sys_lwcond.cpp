@@ -30,7 +30,7 @@ namespace
 		char kind;
 	};
 
-	std::array<lwcond_event, 512> g_lwcond_ring{};
+	std::array<lwcond_event, 1024> g_lwcond_ring{};
 	atomic_t<u32> g_lwcond_pos{0};
 }
 
@@ -562,7 +562,14 @@ error_code _sys_lwcond_queue_wait(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id
 		{
 			// Add a waiter
 			lv2_obj::emplace(cond.sq, &ppu);
-			lwcond_record(lwcond_id, ppu.id, 'w', 0);
+
+			// Untimed waits only. Killzone 3's ten sound-stream threads each take a 250 ms timed wait
+			// in a loop, which filled the ring in six seconds and flushed out the streaming threads'
+			// waits that a black screen twenty seconds old turns on. A timed wait wakes itself anyway.
+			if (!timeout)
+			{
+				lwcond_record(lwcond_id, ppu.id, 'w', 0);
+			}
 		}
 
 		if (!ppu.loaded_from_savestate && !mutex->try_unlock(false))
@@ -719,7 +726,10 @@ error_code _sys_lwcond_queue_wait(ppu_thread& ppu, u32 lwcond_id, u32 lwmutex_id
 	// After the loop above, which is where the thread actually blocks. Emitting this before it
 	// makes every 'w' look like it woke instantly and hides the one thing the ring is for: a
 	// waiter that entered and never came back out.
-	lwcond_record(lwcond_id, ppu.id, 'W', 0);
+	if (!timeout)
+	{
+		lwcond_record(lwcond_id, ppu.id, 'W', 0);
+	}
 
 	if (--mutex->lwcond_waiters == smin)
 	{

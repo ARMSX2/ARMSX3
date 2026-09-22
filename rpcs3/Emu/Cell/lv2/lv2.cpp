@@ -1453,6 +1453,8 @@ static void ppu_dump_threads_on_request()
 	{
 		extern std::string lwcond_history();
 		out += lwcond_history();
+		extern std::string eflag_history();
+		out += eflag_history();
 	}
 
 	// Windows of guest code and memory chosen from outside, so following a hang up its call chain
