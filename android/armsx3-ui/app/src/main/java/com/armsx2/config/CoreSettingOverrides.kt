@@ -100,6 +100,66 @@ object CoreSettingOverrides {
         write(key, current.filterKeys { it !in paths })
     }
 
+    /**
+     * Forget every recorded edit, the global set and every title's, and put each node they held
+     * back to the core's own default. For "Reset all settings".
+     *
+     * That reset used to leave this store alone, so an edit made here outlived it and came back at
+     * the next boot. A tester reset everything to get stock settings and still booted Killzone 3
+     * with Vblank Rate 1: one vblank a second, and the logo crawled at 2 fps. Nothing but this
+     * store can hold that value, because applyTo pushes 60 on every apply.
+     *
+     * Dropping the records alone is not enough. An edit is written into config.yml when it is
+     * made, and the store only decides whether it is written again, so a node no curated screen
+     * owns would keep the old value with nothing left on record to explain it. Hence the defaults.
+     * They come from the core's own tree, so they need the core loaded. Without it the records
+     * still go, and the push at the next launch still rewrites every node a curated screen owns,
+     * Vblank Rate and both decoders among them.
+     */
+    fun forgetAll() {
+        val keys = MainActivityRuntime.prefs.all.keys
+            .filter { it == KEY_GLOBAL || it.startsWith("config.coreOverrides.game.") }
+        if (keys.isEmpty()) return
+        val paths = keys.flatMapTo(LinkedHashSet()) { read(it).keys }
+        MainActivityRuntime.prefs.edit { keys.forEach { remove(it) } }
+
+        val defaults = runCatching { coreDefaults() }.getOrDefault(emptyMap())
+        if (defaults.isEmpty()) return
+        runCatching { RPCSX.instance.settingsBeginBatch() }
+        try {
+            for (path in paths) {
+                val value = defaults[path] ?: continue
+                val ok = runCatching { RPCSX.instance.settingsSet(path, value) }.getOrDefault(false)
+                android.util.Log.i("ARMSX3-Override", "reset $path = $value -> $ok")
+            }
+        } finally {
+            runCatching { RPCSX.instance.settingsEndBatch() }
+        }
+    }
+
+    /** Every leaf's default from the core's own tree, keyed by path and encoded the way
+     *  settingsSet takes it: the same walk and encoding the All Core Settings screen uses. */
+    private fun coreDefaults(): Map<String, String> {
+        val raw = RPCSX.instance.settingsGet("")
+        if (raw.isBlank()) return emptyMap()
+        val out = HashMap<String, String>()
+        fun walk(node: JSONObject, prefix: String) {
+            for (key in node.keys()) {
+                val child = node.optJSONObject(key) ?: continue
+                val path = if (prefix.isEmpty()) key else "$prefix@@$key"
+                when (child.optString("type", "")) {
+                    "" -> walk(child, path)
+                    "bool" -> out[path] = child.optBoolean("default").toString()
+                    "int", "uint", "float" ->
+                        child.optString("default").takeIf { it.isNotEmpty() }?.let { out[path] = it }
+                    else -> out[path] = JSONObject.quote(child.optString("default"))
+                }
+            }
+        }
+        walk(JSONObject(raw), "")
+        return out
+    }
+
     fun count(scope: SettingsScope, serial: String?): Int = load(scope, serial).size
 
     /**

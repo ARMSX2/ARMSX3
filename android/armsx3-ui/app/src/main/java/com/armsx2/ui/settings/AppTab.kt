@@ -1282,6 +1282,12 @@ private fun ResetAllSettingsRow() {
                 val defaults = com.armsx2.config.Settings()
                 com.armsx2.ui.InGameOverlay.settingsState.value = defaults
                 com.armsx2.config.ConfigStore.saveGlobal(defaults)
+                // Two stores this reset used to miss, and either can decide how a game runs. A
+                // tester pressed it for stock settings and still booted Killzone 3 on the PPU
+                // interpreter with Vblank Rate 1. A decoder can sit in a game's own settings, and
+                // a vblank rate only in All Core Settings.
+                com.armsx2.config.ConfigStore.forgetPerGameDecoders()
+                runCatching { com.armsx2.config.CoreSettingOverrides.forgetAll() }
 
                 // Push straight to the core when a game is live, the same way the per-tab reset
                 // does. Without this the UI shows defaults while the running VM keeps the old

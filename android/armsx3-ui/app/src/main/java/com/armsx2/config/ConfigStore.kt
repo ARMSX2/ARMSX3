@@ -924,6 +924,30 @@ object ConfigStore {
         writeBackupMirror()
     }
 
+    /**
+     * Take the PPU and SPU decoder out of every title's own settings, so each one follows the
+     * global choice again. For "Reset all settings", which otherwise keeps per-game settings.
+     *
+     * The decoders are the exception because a per-game interpreter looks like a broken emulator
+     * rather than a setting: the game compiles nothing and crawls, while the global screen, the
+     * one people check first, still says LLVM. A tester reset everything and still booted Killzone
+     * 3 on the PPU interpreter, so a reset that leaves this in place is not the fix it is sold as.
+     */
+    fun forgetPerGameDecoders() {
+        val prefs = MainActivityRuntime.prefs
+        var changed = false
+        for ((key, raw) in prefs.all) {
+            if (!key.startsWith("config.game.") || raw !is String) continue
+            val stored = runCatching { JSONObject(raw) }.getOrNull() ?: continue
+            if (!stored.has("ps3PpuDecoder") && !stored.has("ps3SpuDecoder")) continue
+            stored.remove("ps3PpuDecoder")
+            stored.remove("ps3SpuDecoder")
+            prefs.edit { if (stored.length() == 0) remove(key) else putString(key, stored.toString()) }
+            changed = true
+        }
+        if (changed) writeBackupMirror()
+    }
+
     fun clearOverrides(serial: String) {
         MainActivityRuntime.prefs.edit { remove(keyForGame(serial)) }
         writeBackupMirror()
