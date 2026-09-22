@@ -715,6 +715,16 @@ namespace spu
 	}
 }
 
+// The Killzone 3 releases the physics KD-tree guards apply to: US (BCUS98234) and EU (BCES01007),
+// which run the same SPU job. Asked each time rather than cached in a static: a static is set by the
+// first game to reach it in the app's lifetime, so a game booted before Killzone 3 in the same
+// session turned the guards off for it. Callers test the cheap address and opcode conditions first.
+bool spu_is_killzone3()
+{
+	const std::string& id = Emu.GetTitleID();
+	return id == "BCUS98234" || id == "BCES01007";
+}
+
 std::array<u32, 2> op_branch_targets(u32 pc, spu_opcode_t op)
 {
 	std::array<u32, 2> res{spu_branch_target(pc + 4), umax};
@@ -726,9 +736,7 @@ std::array<u32, 2> op_branch_targets(u32 pc, spu_opcode_t op)
 	// hard on the title and the exact opcode at the exact address. See A() in SPULLVMRecompiler.cpp.
 	if (pc == 0x21238 && op.opcode == 0x1806b650) [[unlikely]]
 	{
-		static const bool s_kz3 = Emu.GetTitleID() == "BCUS98234";
-
-		if (s_kz3)
+		if (spu_is_killzone3())
 		{
 			res[1] = 0x21458;
 			return res;
@@ -2955,7 +2963,7 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 			{
 				return;
 			}
-			else if (Emu.GetTitleID() != "BCUS98234")
+			else if (!spu_is_killzone3())
 			{
 				fmt::throw_exception("Invalid RawSPU MMIO offset (cmd=[%s])", args);
 			}
@@ -2984,7 +2992,7 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 				spu.push_snr(SYS_SPU_THREAD_SNR2 == offset, args.cmd != MFC_SDCRZ_CMD ? +_this->_ref<u32>(lsa) : 0);
 				return;
 			}
-			else if (Emu.GetTitleID() != "BCUS98234")
+			else if (!spu_is_killzone3())
 			{
 				fmt::throw_exception("Invalid MMIO offset (cmd=[%s])", args);
 			}

@@ -12,6 +12,8 @@
 #include "Crypto/sha1.h"
 #include "Utilities/JIT.h"
 
+bool spu_is_killzone3(); // SPUThread.cpp
+
 #include "SPUThread.h"
 #include "SPUAnalyser.h"
 #include "SPUInterpreter.h"
@@ -6406,9 +6408,11 @@ public:
 		// honestly instead of faulting. The race is rare, so this almost never fires; a valid tree
 		// address is always backed, so a legitimate traversal is unaffected. op_branch_targets adds
 		// the 0x21238->0x21458 edge so this is an ordinary two-way branch to the analyser.
-		if (static const bool s_kz3 = Emu.GetTitleID() == "BCUS98234";
-			s_kz3 && m_pos == 0x21238 && op.opcode == 0x1806b650) [[unlikely]]
+		if (m_pos == 0x21238 && op.opcode == 0x1806b650 && spu_is_killzone3()) [[unlikely]]
 		{
+			// Says the guard is in, so a log shows whether a given copy of the game got it.
+			spu_log.notice("Killzone 3: KD-tree traversal guard compiled in at LS 0x21238 (%s)", Emu.GetTitleID());
+
 			const auto ea = eval(extract(get_vr(op.rt), 3)).value;
 			const auto pages = m_ir->CreateIntToPtr(
 				m_ir->getInt64(reinterpret_cast<u64>(vm::g_pages.data())), get_type<u8*>());
