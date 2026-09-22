@@ -142,6 +142,14 @@ object ConfigDatabase {
         // the same overflow flag work. Goes in-game on the recompiler at its 30 fps cap
         // (Odin 3, 2026-09-17).
         "NPUB31590" to "Core:\n  PPU Decoder: Recompiler (LLVM)\n",
+
+        // Killzone 3: the database turns Write Color Buffers on so RPCS3's SPU MLAA pass can read
+        // each frame back from memory. The "Disable MLAA (Post-processing on SPU)" patch, bundled
+        // on for this title since 4009bb5551, removes that pass, and the RPCS3 wiki says the
+        // setting is only needed without the patch. Off skips the readback of every color buffer.
+        // Tied to the patch: anyone who turns the patch off needs this back on.
+        "BCUS98234" to "Video:\n  Write Color Buffers: false\n",
+        "BCES01007" to "Video:\n  Write Color Buffers: false\n",
     )
 
     /**
