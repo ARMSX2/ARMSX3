@@ -5,7 +5,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import android.util.Log
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.edit
 import com.armsx2.Ps3Sfo
@@ -17,11 +17,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.rpcsx.RPCSX
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
 /**
- * A `.ps3` file for every installed game, in a folder the user picks, for frontends (issue #157).
+ * A `.ps3` file for every installed game, in folders the user picks, for frontends (issue #157).
  *
  * A disc image or a game folder is something a frontend such as ES-DE finds by scanning a ROM
  * folder. A game installed from a .pkg is not: it lives inside our own storage, under
@@ -30,8 +31,11 @@ import java.io.File
  * frontends already read for Vita3K's .psvita files: one file per game, named after the game,
  * holding nothing but its title id.
  *
- * The folder is the user's and can hold anything, so nothing in it is overwritten, and the only
- * files ever deleted are ones on this export's record (the manifest) that still hold the id they
+ * More than one folder, because people keep more than one ROM folder, and each has its own file
+ * format, because two folders can be read by two different frontends.
+ *
+ * A folder is the user's and can hold anything, so nothing in it is overwritten, and the only
+ * files ever deleted are ones on that folder's record (its manifest) that still hold the id they
  * were recorded with. A file goes on the record when this writes it, or when it already holds
  * the id of a game being exported (an earlier export, or one renamed or made by hand), which is
  * taken over rather than listed twice. A name that something else uses gets the title id added.
@@ -39,9 +43,14 @@ import java.io.File
 object FrontendExport {
 
     private const val TAG = "ARMSX3-FrontendExport"
-    private const val KEY_FOLDER = "frontendExport.folder"
-    private const val KEY_MANIFEST = "frontendExport.manifest"
-    private const val KEY_FORMAT = "frontendExport.format"
+    private const val KEY_TARGETS = "frontendExport.targets"
+    private const val KEY_MANIFESTS = "frontendExport.manifests"
+
+    // The first build of this kept a single folder under its own keys; see load().
+    private const val OLD_FOLDER = "frontendExport.folder"
+    private const val OLD_FORMAT = "frontendExport.format"
+    private const val OLD_MANIFEST = "frontendExport.manifest"
+
     private const val EXTENSION = ".ps3"
 
     // octet-stream, not text/plain: a provider appends the extension it associates with the
@@ -65,25 +74,20 @@ object FrontendExport {
         Tagged("tagged", "[title_id] BLUS12345"),
     }
 
-    /** The format files are written in. Changing it rewrites the files already there. */
-    val format = mutableStateOf(Format.TitleId)
+    /** One folder to export into: a tree uri, and what its files hold. */
+    data class Target(val uri: String, val format: Format)
 
-    enum class Problem {
-        /** The folder cannot be listed or written: a revoked grant, or a card that is out. */
-        Folder,
+    /** The folders, in the order they were added. Empty while exporting is off. */
+    val targets = mutableStateOf<List<Target>>(emptyList())
 
-        /** What is installed cannot be read, so nothing was changed. */
-        Storage,
-    }
+    /** How many files each folder holds for installed games, as of the last sync, by uri. */
+    val exported = mutableStateMapOf<String, Int>()
 
-    /** The chosen folder as a tree uri, or null while exporting is off. */
-    val folder = mutableStateOf<String?>(null)
+    /** Folders the last sync could not list or write (a revoked grant, a card that is out). */
+    val folderProblem = mutableStateMapOf<String, Boolean>()
 
-    /** How many files the folder holds for installed games, as of the last sync. */
-    val exported = mutableIntStateOf(0)
-
-    /** Why the last sync could not finish, or null when it did. */
-    val problem = mutableStateOf<Problem?>(null)
+    /** What is installed could not be read, so the last sync changed nothing in any folder. */
+    val storageProblem = mutableStateOf(false)
 
     private var loaded = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -103,25 +107,70 @@ object FrontendExport {
         data object Failed : Placement
     }
 
-    /** Read the saved folder once. Everything else here assumes it has been. */
+    /** Read the saved folders once. Everything else here assumes it has been. */
     @Synchronized
     fun load() {
         if (loaded) return
-        val saved = MainActivityRuntime.prefs.getString(KEY_FOLDER, null)
-        val savedFormat = MainActivityRuntime.prefs.getString(KEY_FORMAT, null)
-        folder.value = saved
-        format.value = Format.entries.firstOrNull { it.key == savedFormat } ?: Format.TitleId
-        exported.intValue = saved?.let { readManifest(it).size } ?: 0
+        val prefs = MainActivityRuntime.prefs
+        var list = readTargets()
+        // The first build kept one folder under keys of its own. Fold it into the list. Its
+        // files need no record carried over: the first sync takes them over by the id they hold.
+        prefs.getString(OLD_FOLDER, null)?.let { old ->
+            val oldFormat = Format.entries.firstOrNull { it.key == prefs.getString(OLD_FORMAT, null) }
+            if (list.none { it.uri == old }) list = list + Target(old, oldFormat ?: Format.TitleId)
+            writeTargets(list)
+            prefs.edit {
+                remove(OLD_FOLDER)
+                remove(OLD_FORMAT)
+                remove(OLD_MANIFEST)
+            }
+        }
+        targets.value = list
+        val manifests = readManifests()
+        list.forEach { exported[it.uri] = manifests[it.uri]?.size ?: 0 }
         loaded = true
     }
 
-    /** Write files as [value] from now on, and bring the ones already written into line. */
-    fun setFormat(context: Context, value: Format) {
+    /**
+     * Start exporting into [uri] as well. Picking a folder that is already listed is how a user
+     * asks for it to be checked again, so either way it syncs in full.
+     */
+    fun addFolder(context: Context, uri: Uri) {
         load()
-        if (value == format.value) return
-        MainActivityRuntime.prefs.edit { putString(KEY_FORMAT, value.key) }
-        format.value = value
-        if (folder.value != null) requestSync(context, force = true)
+        val value = uri.toString()
+        if (targets.value.none { it.uri == value }) {
+            // A record left from an earlier time in the list would describe files this has not
+            // looked at since; start clean and let the sync take over what is still there.
+            val manifests = readManifests()
+            manifests.remove(value)
+            writeManifests(manifests)
+            setTargets(targets.value + Target(value, Format.TitleId))
+            exported[value] = 0
+        }
+        requestSync(context, force = true)
+    }
+
+    /**
+     * Stop exporting into [uri]. Its files stay where they are: they are the user's to delete,
+     * and removing them unasked would empty a launcher's list the moment a folder is dropped.
+     */
+    fun removeFolder(uri: String) {
+        load()
+        setTargets(targets.value.filterNot { it.uri == uri })
+        val manifests = readManifests()
+        manifests.remove(uri)
+        writeManifests(manifests)
+        exported.remove(uri)
+        folderProblem.remove(uri)
+    }
+
+    /** Write [uri]'s files as [format] from now on, and bring the ones already there into line. */
+    fun setFormat(context: Context, uri: String, format: Format) {
+        load()
+        val current = targets.value
+        if (current.none { it.uri == uri && it.format != format }) return
+        setTargets(current.map { if (it.uri == uri) it.copy(format = format) else it })
+        requestSync(context, force = true)
     }
 
     /**
@@ -136,39 +185,17 @@ object FrontendExport {
         return bare.takeIf { titleIdShape.matches(it) }
     }
 
-    private fun contentFor(id: String): String =
-        if (format.value == Format.Tagged) "[title_id] $id" else id
+    private fun contentFor(id: String, format: Format): String =
+        if (format == Format.Tagged) "[title_id] $id" else id
 
     /**
-     * Start exporting into [uri], or stop when it is null.
+     * Bring every folder in line with what is installed, off the calling thread.
      *
-     * Another folder starts a new record, and the old folder's files stay where they are: they
-     * are the user's to delete, and removing them unasked would empty a launcher's list the
-     * moment the folder is changed. Stopping keeps them for the same reason. Picking the same
-     * folder again is how a user asks for it to be checked, so that syncs in full.
-     */
-    fun setFolder(context: Context, uri: Uri?) {
-        load()
-        val value = uri?.toString()
-        if (value != folder.value) {
-            MainActivityRuntime.prefs.edit {
-                if (value == null) remove(KEY_FOLDER) else putString(KEY_FOLDER, value)
-                remove(KEY_MANIFEST)
-            }
-            folder.value = value
-            exported.intValue = 0
-            problem.value = null
-        }
-        if (value != null) requestSync(context, force = true)
-    }
-
-    /**
-     * Bring the folder in line with what is installed, off the calling thread.
-     *
-     * Called after every install and uninstall and after each library scan. Without [force] it
-     * returns before touching the folder when the installed set is the one already exported, so
+     * Called after every install and uninstall and after each library scan. Without [force] a
+     * folder is left untouched when the installed set is the one already exported into it, so
      * the scan hook costs a directory listing and nothing more. [force] also recreates files the
-     * user deleted by hand, which an ordinary sync does not notice.
+     * user deleted by hand, which an ordinary sync does not notice, and rewrites files whose
+     * content is not in their folder's format.
      */
     fun requestSync(context: Context, force: Boolean = false) {
         val app = context.applicationContext
@@ -180,26 +207,38 @@ object FrontendExport {
 
     private suspend fun sync(context: Context, force: Boolean) = lock.withLock {
         load()
-        val target = folder.value ?: return@withLock
-        val manifest = readManifest(target)
+        val list = targets.value
+        if (list.isEmpty()) return@withLock
+        val manifests = readManifests()
 
-        val titles = installedTitles(context, hasRecord = manifest.isNotEmpty())
-        if (titles == null) {
-            report(target, manifest.size, Problem.Storage)
-            return@withLock
+        val titles = installedTitles(context, hasRecord = list.any { manifests[it.uri].orEmpty().isNotEmpty() })
+        storageProblem.value = titles == null
+        if (titles == null) return@withLock
+
+        for (target in list) {
+            val manifest = manifests.getOrPut(target.uri) { LinkedHashMap() }
+            val ok = syncFolder(context, target, manifest, titles, force)
+            // A folder removed while this ran describes nothing on screen any more.
+            if (targets.value.none { it.uri == target.uri }) continue
+            exported[target.uri] = manifest.size
+            if (ok) folderProblem.remove(target.uri) else folderProblem[target.uri] = true
         }
+        writeManifests(manifests)
+    }
+
+    /** One folder's share of [sync]. False when the folder could not be listed or written. */
+    private fun syncFolder(
+        context: Context,
+        target: Target,
+        manifest: LinkedHashMap<String, String>,
+        titles: List<Title>,
+        force: Boolean,
+    ): Boolean {
         val wanted = titles.map { it.id }.toSet()
-        if (!force && manifest.values.toSet() == wanted) {
-            report(target, manifest.size, null)
-            return@withLock
-        }
+        if (!force && manifest.values.toSet() == wanted) return true
 
-        val tree = Uri.parse(target)
-        val children = listChildren(context, tree)
-        if (children == null) {
-            report(target, manifest.size, Problem.Folder)
-            return@withLock
-        }
+        val tree = Uri.parse(target.uri)
+        val children = listChildren(context, tree) ?: return false
 
         // The record first. A file that has gone, or no longer holds the id written into it, is
         // not ours any more: forget it and leave it alone. One whose game is no longer
@@ -214,13 +253,15 @@ object FrontendExport {
                 continue
             }
             if (id in wanted) {
-                // A forced sync also brings each file to the chosen format, which is how a
+                // A forced sync also brings each file to the folder's format, which is how a
                 // change of format reaches the files already written.
                 if (force) {
                     val content = readContent(context, child.uri)
                     if (content?.let { titleIdIn(it) } != id) {
                         records.remove()
-                    } else if (content != contentFor(id) && !write(context, child.uri, contentFor(id), truncate = true)) {
+                    } else if (content != contentFor(id, target.format) &&
+                        !write(context, child.uri, contentFor(id, target.format), truncate = true)
+                    ) {
                         failed = true
                     }
                 }
@@ -243,26 +284,25 @@ object FrontendExport {
             filesHolding(context, children, manifest, missing.map { it.id }.toSet())
 
         for (title in missing) {
+            val content = contentFor(title.id, target.format)
             val found = holding[title.id]
             if (found != null) {
                 manifest[found.name] = title.id
                 Log.i(TAG, "took over '${found.name}' for ${title.id}")
-                if (readContent(context, found.uri) != contentFor(title.id) &&
-                    !write(context, found.uri, contentFor(title.id), truncate = true)
+                if (readContent(context, found.uri) != content &&
+                    !write(context, found.uri, content, truncate = true)
                 ) {
                     failed = true
                 }
                 continue
             }
-            when (val placed = place(context, tree, children, manifest, title)) {
+            when (val placed = place(context, tree, children, manifest, title, content)) {
                 is Placement.Done -> manifest[placed.name] = title.id
                 Placement.Taken -> Unit
                 Placement.Failed -> failed = true
             }
         }
-
-        writeManifest(target, manifest)
-        report(target, manifest.size, if (failed) Problem.Folder else null)
+        return !failed
     }
 
     /**
@@ -301,12 +341,13 @@ object FrontendExport {
         children: MutableMap<String, Child>,
         manifest: Map<String, String>,
         title: Title,
+        content: String,
     ): Placement {
         val base = fileName(title.name).ifEmpty { title.id }
         for (name in listOf(base + EXTENSION, "$base [${title.id}]$EXTENSION")) {
             if (name.lowercase() in children) continue
             if (manifest.keys.any { it.equals(name, ignoreCase = true) }) continue
-            val created = create(context, tree, name, title.id) ?: return Placement.Failed
+            val created = create(context, tree, name, content) ?: return Placement.Failed
             children[created.name.lowercase()] = created
             Log.i(TAG, "wrote '${created.name}' for ${title.id}")
             return Placement.Done(created.name)
@@ -319,7 +360,7 @@ object FrontendExport {
      * Every game in dev_hdd0/game, or null when what is installed cannot be known.
      *
      * Null is not "nothing". Taking a directory that cannot be read as "no games" would delete
-     * every file in the folder the moment an SD card is out. The one exception is a directory
+     * every file in every folder the moment an SD card is out. The one exception is a directory
      * that does not exist while nothing is on record, which is someone who has never installed
      * a package: there is nothing to delete, so that reads as zero rather than as a problem.
      *
@@ -404,32 +445,51 @@ object FrontendExport {
             .take(120)
             .trimEnd('.', ' ')
 
-    private fun report(target: String, count: Int, issue: Problem?) {
-        // A sync for a folder that has since been changed describes nothing on screen.
-        if (folder.value != target) return
-        exported.intValue = count
-        problem.value = issue
+    private fun setTargets(list: List<Target>) {
+        targets.value = list
+        writeTargets(list)
     }
 
-    /** Files written into [target], name to title id. Empty when the record is another folder's. */
-    private fun readManifest(target: String): LinkedHashMap<String, String> {
-        val out = LinkedHashMap<String, String>()
-        val raw = MainActivityRuntime.prefs.getString(KEY_MANIFEST, null) ?: return out
+    private fun readTargets(): List<Target> = runCatching {
+        val array = JSONArray(MainActivityRuntime.prefs.getString(KEY_TARGETS, null) ?: return emptyList())
+        (0 until array.length()).mapNotNull { i ->
+            val item = array.optJSONObject(i) ?: return@mapNotNull null
+            val uri = item.optString("uri").takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            Target(uri, Format.entries.firstOrNull { it.key == item.optString("format") } ?: Format.TitleId)
+        }.distinctBy { it.uri }
+    }.getOrDefault(emptyList())
+
+    private fun writeTargets(list: List<Target>) {
+        val array = JSONArray()
+        list.forEach { array.put(JSONObject().put("uri", it.uri).put("format", it.format.key)) }
+        MainActivityRuntime.prefs.edit { putString(KEY_TARGETS, array.toString()) }
+    }
+
+    /** Every folder's record, uri to (file name to title id). */
+    private fun readManifests(): HashMap<String, LinkedHashMap<String, String>> {
+        val out = HashMap<String, LinkedHashMap<String, String>>()
+        val raw = MainActivityRuntime.prefs.getString(KEY_MANIFESTS, null) ?: return out
         runCatching {
             val json = JSONObject(raw)
-            if (json.optString("folder") != target) return out
-            val files = json.optJSONObject("files") ?: return out
-            files.keys().forEach { name -> out[name] = files.getString(name) }
+            json.keys().forEach { uri ->
+                val files = json.optJSONObject(uri) ?: return@forEach
+                val record = LinkedHashMap<String, String>()
+                files.keys().forEach { name -> record[name] = files.getString(name) }
+                out[uri] = record
+            }
         }
         return out
     }
 
-    private fun writeManifest(target: String, files: Map<String, String>) {
-        // The folder is part of the record so a sync still running when the folder changes
-        // cannot hand its files to the new one.
-        if (folder.value != target) return
-        val json = JSONObject().put("folder", target).put("files", JSONObject(files))
-        MainActivityRuntime.prefs.edit { putString(KEY_MANIFEST, json.toString()) }
+    /**
+     * Save the records of the folders still listed. Filtered here rather than by the callers,
+     * so a sync still running when a folder is removed cannot write that folder's record back.
+     */
+    private fun writeManifests(manifests: Map<String, Map<String, String>>) {
+        val listed = targets.value.mapTo(HashSet()) { it.uri }
+        val json = JSONObject()
+        manifests.forEach { (uri, files) -> if (uri in listed) json.put(uri, JSONObject(files)) }
+        MainActivityRuntime.prefs.edit { putString(KEY_MANIFESTS, json.toString()) }
     }
 
     /**
@@ -456,7 +516,7 @@ object FrontendExport {
         }
     }.getOrNull()
 
-    private fun create(context: Context, tree: Uri, name: String, id: String): Child? {
+    private fun create(context: Context, tree: Uri, name: String, content: String): Child? {
         val resolver = context.contentResolver
         val parent = runCatching {
             DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree))
@@ -464,7 +524,7 @@ object FrontendExport {
         val uri = runCatching { DocumentsContract.createDocument(resolver, parent, MIME, name) }
             .onFailure { Log.w(TAG, "could not create '$name': ${it.message}") }
             .getOrNull() ?: return null
-        if (!write(context, uri, contentFor(id), truncate = false)) {
+        if (!write(context, uri, content, truncate = false)) {
             delete(context, uri)
             return null
         }

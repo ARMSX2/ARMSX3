@@ -1096,17 +1096,17 @@ private fun GameFoldersRow() {
 }
 
 /**
- * Issue #157: a folder that gets a .ps3 file for each installed game, for launcher frontends.
+ * Issue #157: folders that get a .ps3 file for each installed game, for launcher frontends.
  *
- * Off until a folder is picked. The row says how many games the folder holds and, when the last
- * sync could not finish, why: a revoked grant and storage that cannot be read need different
- * fixes, and both would otherwise look like the export had quietly stopped.
+ * Laid out like Game Folders above it, because it is the same kind of list: people keep more than
+ * one ROM folder. Each folder says how many games it holds or why its last sync failed, and has
+ * its own file format, since two folders can be read by two different frontends.
  */
 @Composable
 private fun FrontendExportRow() {
     val context = LocalContext.current
     remember { runCatching { FrontendExport.load() } }
-    val folder = FrontendExport.folder.value
+    val targets = FrontendExport.targets.value
 
     val picker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -1119,7 +1119,7 @@ private fun FrontendExportRow() {
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
         }
-        FrontendExport.setFolder(context, uri)
+        FrontendExport.addFolder(context, uri)
     }
 
     Surface(
@@ -1131,44 +1131,47 @@ private fun FrontendExportRow() {
         Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
             Text(str("app.frontendExport"), style = MaterialTheme.typography.titleMedium)
             Text(
-                if (folder == null) str("common.off")
-                else I18n.get("app.frontendExport.count").format(FrontendExport.exported.intValue),
+                if (targets.isEmpty()) str("common.off")
+                else I18n.get("app.frontendExport.folders").format(targets.size),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (targets.isNotEmpty() && FrontendExport.storageProblem.value) {
+                Text(
+                    str("app.frontendExport.storageProblem"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
             Spacer(Modifier.height(8.dp))
 
-            if (folder != null) {
+            targets.forEachIndexed { index, target ->
+                val problem = FrontendExport.folderProblem[target.uri] == true
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            com.armsx2.storage.StorageLabel.forFolder(context, folder),
+                            com.armsx2.storage.StorageLabel.forFolder(context, target.uri),
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        FrontendExport.problem.value?.let { problem ->
-                            Text(
-                                str(
-                                    when (problem) {
-                                        FrontendExport.Problem.Folder -> "app.frontendExport.folderProblem"
-                                        FrontendExport.Problem.Storage -> "app.frontendExport.storageProblem"
-                                    },
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                            )
-                        }
+                        Text(
+                            if (problem) str("app.frontendExport.folderProblem")
+                            else I18n.get("app.frontendExport.count").format(FrontendExport.exported[target.uri] ?: 0),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (problem) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
-                    val stop = { FrontendExport.setFolder(context, null) }
+                    val remove = { FrontendExport.removeFolder(target.uri) }
                     TextButton(
-                        onClick = stop,
-                        modifier = Modifier.controllerFocusable("app.frontendExport.stop", onConfirm = stop),
+                        onClick = remove,
+                        modifier = Modifier.controllerFocusable("app.frontendExport.$index.remove", onConfirm = remove),
                     ) {
-                        Text(str("app.frontendExport.stop"))
+                        Text(str("app.frontendExport.remove"))
                     }
                 }
                 Text(
@@ -1177,41 +1180,40 @@ private fun FrontendExportRow() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 FlowRow(
-                    modifier = Modifier.padding(top = 4.dp),
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     FrontendExport.Format.entries.forEach { format ->
-                        val apply = { FrontendExport.setFormat(context, format) }
+                        val apply = { FrontendExport.setFormat(context, target.uri, format) }
                         FilterChip(
-                            selected = FrontendExport.format.value == format,
+                            selected = target.format == format,
                             onClick = apply,
                             // A sample of the file itself, which reads the same in every language.
                             label = { Text(format.sample) },
                             shape = RoundedCornerShape(11.dp),
                             modifier = Modifier.controllerFocusable(
-                                "app.frontendExport.format.${format.key}",
+                                "app.frontendExport.$index.format.${format.key}",
                                 RoundedCornerShape(11.dp),
                                 onConfirm = apply,
                             ),
                         )
                     }
                 }
-                Spacer(Modifier.height(4.dp))
             }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                val choose = { runCatching { picker.launch(null) }; Unit }
+                val add = { runCatching { picker.launch(null) }; Unit }
                 OutlinedButton(
-                    onClick = choose,
+                    onClick = add,
                     modifier = Modifier.weight(1f)
-                        .controllerFocusable("app.frontendExport.choose", onConfirm = choose),
+                        .controllerFocusable("app.frontendExport.add", onConfirm = add),
                 ) {
-                    Text(str(if (folder == null) "app.frontendExport.choose" else "app.frontendExport.change"))
+                    Text(str("app.frontendExport.add"))
                 }
-                if (folder != null) {
+                if (targets.isNotEmpty()) {
                     val now = { FrontendExport.requestSync(context, force = true) }
                     OutlinedButton(
                         onClick = now,
