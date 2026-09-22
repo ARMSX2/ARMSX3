@@ -484,8 +484,13 @@ class GameLibraryRepository(private val context: Context) {
     ) {
         if (depth > MaxScanDepth) return
         val children = runCatching { directory.listFiles() }.getOrNull() ?: return
+        // Asked only once a child is named like one of a data folder's own folders: listing the
+        // tree again for every directory would double the cost of scanning a large SAF folder.
+        val dataFolder by lazy { isDataFolderDocument(directory) }
         children.forEach { file ->
             if (file.isDirectory) {
+                val folderName = file.name
+                if (folderName != null && folderName in dataFolderInternals && dataFolder) return@forEach
                 // Same leaf rule as the raw scan, and now the same SFO probe too. This used
                 // to pass null and take the title from the folder name, because the core
                 // opens by path and a document tree had none to give. It has one now, so a
@@ -508,6 +513,8 @@ class GameLibraryRepository(private val context: Context) {
             val name = file.name ?: return@forEach
             val extension = name.substringAfterLast('.', "").lowercase()
             if (extension !in gameExtensions) return@forEach
+            // As in the raw scan: a compiled module, never a disc image.
+            if (name.endsWith(".obj.gz", ignoreCase = true)) return@forEach
             if (extension == "m3u") {
                 val path = com.armsx2.storage.ContentUri.devicePathForDocument(file.uri) ?: return@forEach
                 val text = runCatching {
@@ -630,6 +637,25 @@ class GameLibraryRepository(private val context: Context) {
         }
     }
 
+    /**
+     * The folders of an emulator data folder that hold the emulator's own files: config/ (the
+     * installed firmware, dev_hdd0, memory dumps) and cache/ (compiled PPU and SPU modules).
+     * Their .bin and .obj.gz files pass the extension check, so a data folder inside a games
+     * folder listed a hundred of them as games: CEHtmlApi, ps1_rom, v9-kusa-...obj. Only these
+     * two are skipped. Someone who picked one folder for both keeps their games in it, and
+     * those still have to list.
+     */
+    private val dataFolderInternals = setOf("config", "cache")
+
+    /** True for an ARMSX3 (or RPCS3) data folder, which has the installed firmware in config/dev_flash. */
+    private fun isDataFolder(directory: File): Boolean =
+        runCatching { File(directory, "config/dev_flash").isDirectory }.getOrDefault(false)
+
+    /** [isDataFolder] over a SAF tree. */
+    private fun isDataFolderDocument(directory: DocumentFile): Boolean = runCatching {
+        directory.findFile("config")?.takeIf { it.isDirectory }?.findFile("dev_flash")?.isDirectory == true
+    }.getOrDefault(false)
+
     private fun scanRawDirectory(
         directory: File,
         output: MutableMap<String, GameInfo>,
@@ -637,8 +663,13 @@ class GameLibraryRepository(private val context: Context) {
     ) {
         if (depth > MaxScanDepth) return
         val children = runCatching { directory.listFiles() }.getOrNull() ?: return
+        val dataFolder by lazy { isDataFolder(directory) }
         children.forEach { file ->
             if (file.isDirectory) {
+                if (file.name in dataFolderInternals && dataFolder) {
+                    android.util.Log.i(ScanTag, "  skipping '${file.name}' of an emulator data folder")
+                    return@forEach
+                }
                 // A game folder is a leaf: emit it and do NOT descend. Descending
                 // also used to add USRDIR/EBOOT.BIN as its own bogus entry, since
                 // "bin" is in gameExtensions.
@@ -658,6 +689,9 @@ class GameLibraryRepository(private val context: Context) {
             val extension = file.extension.lowercase()
             android.util.Log.i(ScanTag, "  raw file '${file.name}' ext=$extension accepted=${extension in gameExtensions}")
             if (extension !in gameExtensions) return@forEach
+            // A compiled module from a cache folder the check above cannot see, one copied or
+            // backed up somewhere else. "gz" is in the list for disc images, and this is not one.
+            if (file.name.endsWith(".obj.gz", ignoreCase = true)) return@forEach
             val uri = Uri.fromFile(file)
 
             if (extension == "m3u") {
@@ -1304,7 +1338,9 @@ class GameLibraryRepository(private val context: Context) {
         /** "Part 2", "Episode 3", "Chapter IV" in an installed title's name. */
         val partToken = Regex("""\b(part|episode|chapter|volume|vol\.?)\s*(\d+|[ivx]+)\b""", RegexOption.IGNORE_CASE)
 
-        const val ScanSchemaVersion = 10
+        // 11: a cache that listed a data folder's firmware and compiled modules as games has
+        // to be rescanned for them to go.
+        const val ScanSchemaVersion = 11
         /** The first scanner that looked for other games on a disc image. A cache from before it
          *  has never been asked, so its images are re-probed once. */
         const val DiscGamesSchemaVersion = 9
