@@ -1894,7 +1894,7 @@ object Rpcs3Bridge {
                 if (PadRouter.deviceIdForPort(port) >= 0)
                     "Player ${port + 1}'s controller exposes no vibration motor to Android"
                 else
-                    "No controller assigned to player ${port + 1} — assign one above"
+                    "No controller assigned to player ${port + 1}: assign one above"
             // Naming the target is the whole point of the toast: it separates "rumble is
             // broken" from "rumble went somewhere other than the pad you are holding".
             // Naming the DEVICE, not just "your controller": on a handheld that bridges an
