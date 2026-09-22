@@ -369,7 +369,18 @@ private fun MenuPage(
                     // shared Settings state (same as the rest of the overlay); its
                     // controls are SettingsControllerNav items, so the pause menu's
                     // content-pane nav drives them for free.
-                    EmulationMenuTab.Fixes -> com.armsx2.ui.settings.FixesTab(InGameOverlay.settingsState)
+                    //
+                    // The RPCS3 database card goes first, above CPU Accuracy: it is the
+                    // reason a fix set on this tab may not be the one the game runs with,
+                    // since the database's value for this title is applied over your
+                    // settings until you switch its entry off (a value you set for this
+                    // game yourself still wins). It renders nothing for a title without an
+                    // entry, so most games open straight onto CPU Accuracy. In-game only:
+                    // the settings hub's Fixes tab has no running title to read.
+                    EmulationMenuTab.Fixes -> {
+                        DatabaseSection()
+                        com.armsx2.ui.settings.FixesTab(InGameOverlay.settingsState)
+                    }
                     EmulationMenuTab.Performance -> PerformancePane(state, viewModel)
                     EmulationMenuTab.Controls -> ControlsPane(state, viewModel)
                     EmulationMenuTab.Options -> OptionsPane(state, viewModel)
@@ -661,10 +672,6 @@ private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuVie
         onSelect = viewModel::selectAction,
     )
     discCard?.let { swap -> DiscSection(viewModel, swap) }
-    // First card under the actions, ahead of the on-screen card, because it explains why a
-    // setting you picked yourself is not the one the game is running on. It only appears for
-    // titles the database has an entry for, so most sessions never see it.
-    DatabaseSection()
     // On-screen display — a single universal on/off (old-UI style); the per-stat
     // toggles live in All Settings. Plus a frame-limit switch so fast-forward is one
     // tap away.
