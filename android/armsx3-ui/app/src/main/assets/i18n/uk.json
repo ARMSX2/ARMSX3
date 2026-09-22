@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "Вибрати папку",
  "app.frontendExport.count": "Експортовано ігор: %d",
  "app.frontendExport.folderProblem": "Не вдається записати в цю папку. Виберіть її знову.",
+ "app.frontendExport.format": "Вміст файлу",
  "app.frontendExport.hint": "Додає до вибраної папки файл .ps3 для кожної встановленої гри (усього, що встановлено з .pkg), і видаляє його, коли гру видалено. Кожен файл містить ідентифікатор гри (Title ID), щоб фронтенди, як-от ES-DE, могли показувати встановлені ігри та запускати їх.",
  "app.frontendExport.now": "Експортувати зараз",
  "app.frontendExport.stop": "Вимкнути",

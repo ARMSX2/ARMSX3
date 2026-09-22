@@ -124,6 +124,7 @@
  "app.frontendExport.choose": "Escolher pasta",
  "app.frontendExport.count": "Jogos exportados: %d",
  "app.frontendExport.folderProblem": "Não é possível gravar nesta pasta. Escolha-a novamente.",
+ "app.frontendExport.format": "Conteúdo do arquivo",
  "app.frontendExport.hint": "Adiciona um arquivo .ps3 à pasta escolhida para cada jogo instalado (tudo o que foi instalado a partir de um .pkg) e o remove quando o jogo é desinstalado. Cada arquivo contém o ID do jogo (Title ID), para que frontends como o ES-DE possam listar seus jogos instalados e iniciá-los.",
  "app.frontendExport.now": "Exportar agora",
  "app.frontendExport.stop": "Desativar",

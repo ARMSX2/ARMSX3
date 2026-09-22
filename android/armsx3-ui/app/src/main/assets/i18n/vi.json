@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "Chọn thư mục",
  "app.frontendExport.count": "Đã xuất %d trò chơi",
  "app.frontendExport.folderProblem": "Không thể ghi vào thư mục này. Hãy chọn lại thư mục.",
+ "app.frontendExport.format": "Nội dung tệp",
  "app.frontendExport.hint": "Thêm một tệp .ps3 vào thư mục đã chọn cho mỗi trò chơi đã cài đặt (mọi thứ được cài từ tệp .pkg) và xóa tệp đó khi gỡ cài đặt trò chơi. Mỗi tệp chứa mã trò chơi (Title ID), để các frontend như ES-DE có thể liệt kê và khởi chạy các trò chơi đã cài đặt của bạn.",
  "app.frontendExport.now": "Xuất ngay",
  "app.frontendExport.stop": "Tắt",

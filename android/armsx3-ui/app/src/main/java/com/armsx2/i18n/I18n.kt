@@ -320,6 +320,7 @@ val EN: Map<String, String> = mapOf(
     "app.frontendExport.change" to "Change Folder",
     "app.frontendExport.stop" to "Turn Off",
     "app.frontendExport.now" to "Export Now",
+    "app.frontendExport.format" to "File contents",
     "app.frontendExport.folderProblem" to "Can't write to this folder. Choose it again.",
     "app.frontendExport.storageProblem" to "Your installed games can't be read right now, so the folder was left as it is.",
     "app.frontendExport.hint" to "Adds a .ps3 file to the chosen folder for each installed game (anything installed from a .pkg), and removes it when the game is uninstalled. Each file holds the game's title ID, so frontends such as ES-DE can list your installed games and launch them.",

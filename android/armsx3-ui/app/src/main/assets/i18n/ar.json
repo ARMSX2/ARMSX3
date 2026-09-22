@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "اختيار مجلد",
  "app.frontendExport.count": "الألعاب المُصدَّرة: %d",
  "app.frontendExport.folderProblem": "تعذّرت الكتابة في هذا المجلد. اختره مرة أخرى.",
+ "app.frontendExport.format": "محتوى الملف",
  "app.frontendExport.hint": "يضيف ملف .ps3 إلى المجلد المختار لكل لعبة مثبتة (أي شيء مثبت من ملف .pkg)، ويحذفه عند إلغاء تثبيت اللعبة. يحتوي كل ملف على معرّف اللعبة (Title ID)، لكي تتمكن الواجهات الأمامية مثل ES-DE من عرض ألعابك المثبتة وتشغيلها.",
  "app.frontendExport.now": "تصدير الآن",
  "app.frontendExport.stop": "إيقاف",

@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "フォルダーを選択",
  "app.frontendExport.count": "エクスポート済みのゲーム: %d",
  "app.frontendExport.folderProblem": "このフォルダーに書き込めません。もう一度選択してください。",
+ "app.frontendExport.format": "ファイルの内容",
  "app.frontendExport.hint": "インストール済みのゲーム（.pkg からインストールしたもの）ごとに、選択したフォルダーへ .ps3 ファイルを作成し、ゲームをアンインストールすると削除します。各ファイルにはゲームのタイトル ID が書かれているため、ES-DE などのフロントエンドでインストール済みのゲームを一覧表示して起動できます。",
  "app.frontendExport.now": "今すぐエクスポート",
  "app.frontendExport.stop": "オフにする",

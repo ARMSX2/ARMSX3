@@ -1163,8 +1163,37 @@ private fun FrontendExportRow() {
                             )
                         }
                     }
-                    TextButton(onClick = { FrontendExport.setFolder(context, null) }) {
+                    val stop = { FrontendExport.setFolder(context, null) }
+                    TextButton(
+                        onClick = stop,
+                        modifier = Modifier.controllerFocusable("app.frontendExport.stop", onConfirm = stop),
+                    ) {
                         Text(str("app.frontendExport.stop"))
+                    }
+                }
+                Text(
+                    str("app.frontendExport.format"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                FlowRow(
+                    modifier = Modifier.padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FrontendExport.Format.entries.forEach { format ->
+                        val apply = { FrontendExport.setFormat(context, format) }
+                        FilterChip(
+                            selected = FrontendExport.format.value == format,
+                            onClick = apply,
+                            // A sample of the file itself, which reads the same in every language.
+                            label = { Text(format.sample) },
+                            shape = RoundedCornerShape(11.dp),
+                            modifier = Modifier.controllerFocusable(
+                                "app.frontendExport.format.${format.key}",
+                                RoundedCornerShape(11.dp),
+                                onConfirm = apply,
+                            ),
+                        )
                     }
                 }
                 Spacer(Modifier.height(4.dp))
@@ -1174,16 +1203,20 @@ private fun FrontendExportRow() {
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                val choose = { runCatching { picker.launch(null) }; Unit }
                 OutlinedButton(
-                    onClick = { runCatching { picker.launch(null) } },
-                    modifier = Modifier.weight(1f),
+                    onClick = choose,
+                    modifier = Modifier.weight(1f)
+                        .controllerFocusable("app.frontendExport.choose", onConfirm = choose),
                 ) {
                     Text(str(if (folder == null) "app.frontendExport.choose" else "app.frontendExport.change"))
                 }
                 if (folder != null) {
+                    val now = { FrontendExport.requestSync(context, force = true) }
                     OutlinedButton(
-                        onClick = { FrontendExport.requestSync(context, force = true) },
-                        modifier = Modifier.weight(1f),
+                        onClick = now,
+                        modifier = Modifier.weight(1f)
+                            .controllerFocusable("app.frontendExport.now", onConfirm = now),
                     ) {
                         Text(str("app.frontendExport.now"))
                     }

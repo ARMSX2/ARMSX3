@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "Klasör Seç",
  "app.frontendExport.count": "Dışa aktarılan oyun: %d",
  "app.frontendExport.folderProblem": "Bu klasöre yazılamıyor. Klasörü yeniden seçin.",
+ "app.frontendExport.format": "Dosya içeriği",
  "app.frontendExport.hint": "Seçilen klasöre yüklü her oyun için (bir .pkg dosyasından yüklenen her şey) bir .ps3 dosyası ekler ve oyun kaldırıldığında bu dosyayı siler. Her dosya oyunun kimliğini (Title ID) içerir; böylece ES-DE gibi frontend'ler yüklü oyunlarınızı listeleyip başlatabilir.",
  "app.frontendExport.now": "Şimdi Dışa Aktar",
  "app.frontendExport.stop": "Kapat",

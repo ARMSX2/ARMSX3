@@ -41,6 +41,7 @@ object FrontendExport {
     private const val TAG = "ARMSX3-FrontendExport"
     private const val KEY_FOLDER = "frontendExport.folder"
     private const val KEY_MANIFEST = "frontendExport.manifest"
+    private const val KEY_FORMAT = "frontendExport.format"
     private const val EXTENSION = ".ps3"
 
     // octet-stream, not text/plain: a provider appends the extension it associates with the
@@ -49,6 +50,23 @@ object FrontendExport {
 
     /** The shape the library accepts as a title id (GameLibraryRepository.titleIdLine). */
     private val titleIdShape = Regex("^[A-Z]{4}[0-9]{5}$")
+    private val tagPrefix = Regex("^\\[title_id]", RegexOption.IGNORE_CASE)
+
+    /**
+     * What a file holds. One file cannot hold both: ES-DE's %INJECT% joins every line of the file
+     * and pastes the result into the launch command, so anything after the bare id, a second
+     * line included, becomes part of the id it passes on. Hence a choice, the bare id first.
+     */
+    enum class Format(val key: String, val sample: String) {
+        /** The .psvita / .steam convention, and what ES-DE's %INJECT% needs. */
+        TitleId("id", "BLUS12345"),
+
+        /** The tagged line issue #157 gave as its example, for a launcher that reads that. */
+        Tagged("tagged", "[title_id] BLUS12345"),
+    }
+
+    /** The format files are written in. Changing it rewrites the files already there. */
+    val format = mutableStateOf(Format.TitleId)
 
     enum class Problem {
         /** The folder cannot be listed or written: a revoked grant, or a card that is out. */
@@ -90,10 +108,36 @@ object FrontendExport {
     fun load() {
         if (loaded) return
         val saved = MainActivityRuntime.prefs.getString(KEY_FOLDER, null)
+        val savedFormat = MainActivityRuntime.prefs.getString(KEY_FORMAT, null)
         folder.value = saved
+        format.value = Format.entries.firstOrNull { it.key == savedFormat } ?: Format.TitleId
         exported.intValue = saved?.let { readManifest(it).size } ?: 0
         loaded = true
     }
+
+    /** Write files as [value] from now on, and bring the ones already written into line. */
+    fun setFormat(context: Context, value: Format) {
+        load()
+        if (value == format.value) return
+        MainActivityRuntime.prefs.edit { putString(KEY_FORMAT, value.key) }
+        format.value = value
+        if (folder.value != null) requestSync(context, force = true)
+    }
+
+    /**
+     * The title id in [text], written either way a file can hold it ("BLUS12345" or
+     * "[title_id] BLUS12345"), or null.
+     *
+     * Also what a launch by title id runs its extra through, so a frontend that passes a file's
+     * whole content on starts the game whichever format the file is in.
+     */
+    fun titleIdIn(text: String): String? {
+        val bare = text.trim().replace(tagPrefix, "").trim().replace("-", "").uppercase()
+        return bare.takeIf { titleIdShape.matches(it) }
+    }
+
+    private fun contentFor(id: String): String =
+        if (format.value == Format.Tagged) "[title_id] $id" else id
 
     /**
      * Start exporting into [uri], or stop when it is null.
@@ -160,6 +204,7 @@ object FrontendExport {
         // The record first. A file that has gone, or no longer holds the id written into it, is
         // not ours any more: forget it and leave it alone. One whose game is no longer
         // installed is deleted, and stays on the record if that fails so the next sync retries.
+        var failed = false
         val records = manifest.entries.iterator()
         while (records.hasNext()) {
             val (name, id) = records.next()
@@ -168,8 +213,20 @@ object FrontendExport {
                 records.remove()
                 continue
             }
-            if (id in wanted) continue
-            if (readId(context, child.uri)?.equals(id, ignoreCase = true) != true) {
+            if (id in wanted) {
+                // A forced sync also brings each file to the chosen format, which is how a
+                // change of format reaches the files already written.
+                if (force) {
+                    val content = readContent(context, child.uri)
+                    if (content?.let { titleIdIn(it) } != id) {
+                        records.remove()
+                    } else if (content != contentFor(id) && !write(context, child.uri, contentFor(id), truncate = true)) {
+                        failed = true
+                    }
+                }
+                continue
+            }
+            if (readContent(context, child.uri)?.let { titleIdIn(it) } != id) {
                 records.remove()
                 continue
             }
@@ -185,12 +242,16 @@ object FrontendExport {
         val holding: Map<String, Child> = if (missing.isEmpty()) emptyMap() else
             filesHolding(context, children, manifest, missing.map { it.id }.toSet())
 
-        var failed = false
         for (title in missing) {
             val found = holding[title.id]
             if (found != null) {
                 manifest[found.name] = title.id
                 Log.i(TAG, "took over '${found.name}' for ${title.id}")
+                if (readContent(context, found.uri) != contentFor(title.id) &&
+                    !write(context, found.uri, contentFor(title.id), truncate = true)
+                ) {
+                    failed = true
+                }
                 continue
             }
             when (val placed = place(context, tree, children, manifest, title)) {
@@ -221,7 +282,7 @@ object FrontendExport {
         val out = HashMap<String, Child>()
         for ((key, child) in children) {
             if (child.isDirectory || !key.endsWith(EXTENSION) || key in recorded) continue
-            val id = readId(context, child.uri)?.uppercase() ?: continue
+            val id = readContent(context, child.uri)?.let { titleIdIn(it) } ?: continue
             if (id in ids) out.putIfAbsent(id, child)
         }
         return out
@@ -283,7 +344,7 @@ object FrontendExport {
      * arrives in an intent from another app.
      */
     fun installedDir(context: Context, id: String): File? {
-        val wanted = id.trim().uppercase().takeIf { titleIdShape.matches(it) } ?: return null
+        val wanted = titleIdIn(id) ?: return null
         val games = File(root(context) ?: return null, "config/dev_hdd0/game")
         File(games, wanted).takeIf { titleOf(it)?.id == wanted }?.let { return it }
         // A folder named for something other than its PARAM.SFO's id: rare, but the file holds
@@ -403,12 +464,7 @@ object FrontendExport {
         val uri = runCatching { DocumentsContract.createDocument(resolver, parent, MIME, name) }
             .onFailure { Log.w(TAG, "could not create '$name': ${it.message}") }
             .getOrNull() ?: return null
-        // No trailing newline: a frontend passes the content on as the title id, and the id is
-        // the whole of it.
-        val written = runCatching {
-            resolver.openOutputStream(uri, "w")?.use { it.write(id.toByteArray(Charsets.US_ASCII)) } != null
-        }.getOrDefault(false)
-        if (!written) {
+        if (!write(context, uri, contentFor(id), truncate = false)) {
             delete(context, uri)
             return null
         }
@@ -417,7 +473,20 @@ object FrontendExport {
         return Child(uri, displayName(context, uri) ?: name, isDirectory = false)
     }
 
-    private fun readId(context: Context, uri: Uri): String? = runCatching {
+    /**
+     * Put [text] in the file at [uri]. [truncate] for one that already has content: "w" alone is
+     * allowed to leave the old bytes past the new end in place.
+     *
+     * No trailing newline: a frontend passes the content on as it is, and ES-DE's %INJECT% would
+     * carry a newline into the launch command.
+     */
+    private fun write(context: Context, uri: Uri, text: String, truncate: Boolean): Boolean = runCatching {
+        context.contentResolver.openOutputStream(uri, if (truncate) "wt" else "w")
+            ?.use { it.write(text.toByteArray(Charsets.UTF_8)) } != null
+    }.getOrDefault(false)
+
+    /** The file's text, trimmed, reading no more than a file of ours could hold. */
+    private fun readContent(context: Context, uri: Uri): String? = runCatching {
         context.contentResolver.openInputStream(uri)?.use { input ->
             val buffer = ByteArray(64)
             var total = 0

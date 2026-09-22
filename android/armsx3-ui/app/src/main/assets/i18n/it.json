@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "Scegli cartella",
  "app.frontendExport.count": "Giochi esportati: %d",
  "app.frontendExport.folderProblem": "Impossibile scrivere in questa cartella. Sceglila di nuovo.",
+ "app.frontendExport.format": "Contenuto del file",
  "app.frontendExport.hint": "Aggiunge un file .ps3 nella cartella scelta per ogni gioco installato (tutto ciò che è stato installato da un .pkg) e lo rimuove quando il gioco viene disinstallato. Ogni file contiene l'ID del gioco (Title ID), così i frontend come ES-DE possono elencare i giochi installati e avviarli.",
  "app.frontendExport.now": "Esporta ora",
  "app.frontendExport.stop": "Disattiva",

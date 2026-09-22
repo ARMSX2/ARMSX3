@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "选择文件夹",
  "app.frontendExport.count": "已导出 %d 个游戏",
  "app.frontendExport.folderProblem": "无法写入此文件夹。请重新选择。",
+ "app.frontendExport.format": "文件内容",
  "app.frontendExport.hint": "为每个已安装的游戏（所有通过 .pkg 安装的内容）在所选文件夹中添加一个 .ps3 文件，并在卸载游戏时将其删除。每个文件都包含游戏的标题 ID，因此 ES-DE 等前端可以列出并启动你已安装的游戏。",
  "app.frontendExport.now": "立即导出",
  "app.frontendExport.stop": "关闭",

@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "Wybierz folder",
  "app.frontendExport.count": "Wyeksportowane gry: %d",
  "app.frontendExport.folderProblem": "Nie można zapisywać w tym folderze. Wybierz go ponownie.",
+ "app.frontendExport.format": "Zawartość pliku",
  "app.frontendExport.hint": "Dodaje plik .ps3 do wybranego folderu dla każdej zainstalowanej gry (wszystkiego, co zainstalowano z pliku .pkg) i usuwa go po odinstalowaniu gry. Każdy plik zawiera identyfikator gry (Title ID), dzięki czemu frontendy takie jak ES-DE mogą wyświetlać zainstalowane gry i je uruchamiać.",
  "app.frontendExport.now": "Eksportuj teraz",
  "app.frontendExport.stop": "Wyłącz",

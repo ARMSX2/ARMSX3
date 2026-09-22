@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "Ordner wählen",
  "app.frontendExport.count": "Exportierte Spiele: %d",
  "app.frontendExport.folderProblem": "In diesen Ordner kann nicht geschrieben werden. Bitte erneut auswählen.",
+ "app.frontendExport.format": "Dateiinhalt",
  "app.frontendExport.hint": "Legt im gewählten Ordner für jedes installierte Spiel (alles, was aus einer .pkg installiert wurde) eine .ps3-Datei an und entfernt sie, wenn das Spiel deinstalliert wird. Jede Datei enthält die Title-ID des Spiels, damit Frontends wie ES-DE die installierten Spiele auflisten und starten können.",
  "app.frontendExport.now": "Jetzt exportieren",
  "app.frontendExport.stop": "Ausschalten",

@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "انتخاب پوشه",
  "app.frontendExport.count": "بازی‌های خروجی‌گرفته‌شده: %d",
  "app.frontendExport.folderProblem": "نوشتن در این پوشه ممکن نیست. دوباره آن را انتخاب کنید.",
+ "app.frontendExport.format": "محتوای فایل",
  "app.frontendExport.hint": "برای هر بازی نصب‌شده (هر چیزی که از یک فایل .pkg نصب شده) یک فایل .ps3 در پوشهٔ انتخاب‌شده می‌سازد و هنگام حذف بازی آن را پاک می‌کند. هر فایل شناسهٔ بازی (Title ID) را در خود دارد تا فرانت‌اندهایی مانند ES-DE بتوانند بازی‌های نصب‌شدهٔ شما را فهرست و اجرا کنند.",
  "app.frontendExport.now": "اکنون خروجی بگیر",
  "app.frontendExport.stop": "خاموش کردن",

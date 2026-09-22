@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "Peldankê hilbijêre",
  "app.frontendExport.count": "Lîstikên hatine derxistin: %d",
  "app.frontendExport.folderProblem": "Nikare li vê peldankê binivîse. Wê dîsa hilbijêre.",
+ "app.frontendExport.format": "Naveroka pelê",
  "app.frontendExport.hint": "Ji bo her lîstikeke sazkirî (her tiştê ku ji .pkg hatiye sazkirin) pelekî .ps3 li peldanka hilbijartî zêde dike, û dema lîstik tê rakirin wî jê dibe. Her pel nasnameya lîstikê (Title ID) dihewîne, da ku frontendên wek ES-DE karibin lîstikên te yên sazkirî rêz bikin û bidin destpêkirin.",
  "app.frontendExport.now": "Niha derxe",
  "app.frontendExport.stop": "Vemirîne",

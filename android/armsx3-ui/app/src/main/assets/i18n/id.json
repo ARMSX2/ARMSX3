@@ -125,6 +125,7 @@
  "app.frontendExport.choose": "Pilih Folder",
  "app.frontendExport.count": "%d game diekspor",
  "app.frontendExport.folderProblem": "Tidak dapat menulis ke folder ini. Pilih lagi folder tersebut.",
+ "app.frontendExport.format": "Isi file",
  "app.frontendExport.hint": "Menambahkan file .ps3 ke folder yang dipilih untuk setiap game yang terpasang (apa pun yang dipasang dari .pkg), dan menghapusnya saat game dicopot. Setiap file berisi ID judul game (Title ID), sehingga frontend seperti ES-DE dapat menampilkan dan menjalankan game yang terpasang.",
  "app.frontendExport.now": "Ekspor Sekarang",
  "app.frontendExport.stop": "Matikan",

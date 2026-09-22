@@ -5474,7 +5474,10 @@ open class MainActivityRuntime : ComponentActivity() {
         // is looked up in dev_hdd0 directly. Unknown ids return null and fall through to the
         // library exactly as a bad path does.
         for (key in listOf("title_id", "titleId", "serial")) {
-            val id = intent.getStringExtra(key)?.takeIf { it.isNotBlank() }?.trim() ?: continue
+            val raw = intent.getStringExtra(key)?.takeIf { it.isNotBlank() }?.trim() ?: continue
+            // Either form an exported file holds ("BLUS12345" or "[title_id] BLUS12345"), so a
+            // frontend that passes a file's content on as it is starts the game either way.
+            val id = com.armsx2.packages.FrontendExport.titleIdIn(raw) ?: raw
             val match = runCatching {
                 GameLibraryRepository(this).loadCached().games
                     .firstOrNull { it.serial?.equals(id, ignoreCase = true) == true }
