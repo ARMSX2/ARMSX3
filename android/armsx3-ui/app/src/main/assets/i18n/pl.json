@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "Siatka wyłączona",
  "touch.editor.gridOn": "Siatka włączona",
  "touch.editor.hide": "Ukryj",
+ "touch.editor.keepLeftStickOff": "Lewa gałka: pół ekranu",
+ "touch.editor.keepLeftStickOn": "Lewa gałka: na ekranie",
  "touch.editor.multiTouchOff": "Funkcja wielodotykowa wyłączona",
  "touch.editor.multiTouchOn": "Funkcja wielodotykowa włączona",
  "touch.editor.profiles": "Profile",

@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "Gitter aus",
  "touch.editor.gridOn": "Gitter ein",
  "touch.editor.hide": "Verstecken",
+ "touch.editor.keepLeftStickOff": "Linker Stick: Bildschirmhälfte",
+ "touch.editor.keepLeftStickOn": "Linker Stick: auf dem Bildschirm",
  "touch.editor.multiTouchOff": "Multi-Touch-Aus",
  "touch.editor.multiTouchOn": "Multi-Touch ein",
  "touch.editor.profiles": "Profile",

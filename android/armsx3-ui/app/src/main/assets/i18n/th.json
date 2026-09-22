@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "ปิดตาราง",
  "touch.editor.gridOn": "กริดออน",
  "touch.editor.hide": "ซ่อน",
+ "touch.editor.keepLeftStickOff": "อนาล็อกซ้าย: ครึ่งหน้าจอ",
+ "touch.editor.keepLeftStickOn": "อนาล็อกซ้าย: บนหน้าจอ",
  "touch.editor.multiTouchOff": "ปิดมัลติทัช",
  "touch.editor.multiTouchOn": "เปิดมัลติทัช",
  "touch.editor.profiles": "โปรไฟล์",

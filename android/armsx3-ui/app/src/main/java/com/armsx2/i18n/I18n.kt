@@ -1603,6 +1603,8 @@ val EN: Map<String, String> = mapOf(
     "touch.editor.floatingStickOn" to "Floating Stick On",
     "touch.editor.fullHalfSticksOff" to "Half-Screen Sticks Off",
     "touch.editor.fullHalfSticksOn" to "Half-Screen Sticks On",
+    "touch.editor.keepLeftStickOn" to "Left Stick: On-Screen",
+    "touch.editor.keepLeftStickOff" to "Left Stick: Half-Screen",
     "touch.editor.glideFollow" to "Glide: Follow",
     "touch.editor.glideHoldAll" to "Glide: Hold all",
     "touch.editor.glideHoldFirst" to "Glide: Hold first",

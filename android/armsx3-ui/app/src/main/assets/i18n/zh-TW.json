@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "電網關閉",
  "touch.editor.gridOn": "網格開啟",
  "touch.editor.hide": "隱藏",
+ "touch.editor.keepLeftStickOff": "左搖桿：半螢幕",
+ "touch.editor.keepLeftStickOn": "左搖桿：螢幕顯示",
  "touch.editor.multiTouchOff": "多點觸控關閉",
  "touch.editor.multiTouchOn": "多點觸控開啟",
  "touch.editor.profiles": "型材",

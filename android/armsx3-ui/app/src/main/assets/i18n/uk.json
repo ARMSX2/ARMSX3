@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "Сітку вимкнено",
  "touch.editor.gridOn": "Сітка увімкнена",
  "touch.editor.hide": "Сховати",
+ "touch.editor.keepLeftStickOff": "Лівий стік: половина екрана",
+ "touch.editor.keepLeftStickOn": "Лівий стік: на екрані",
  "touch.editor.multiTouchOff": "Multi-Touch вимкнено",
  "touch.editor.multiTouchOn": "Multi-Touch увімкнено",
  "touch.editor.profiles": "Профілі",

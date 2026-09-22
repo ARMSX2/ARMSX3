@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "グリッドオフ",
  "touch.editor.gridOn": "グリッドオン",
  "touch.editor.hide": "隠す",
+ "touch.editor.keepLeftStickOff": "左スティック: 画面半分",
+ "touch.editor.keepLeftStickOn": "左スティック: 画面上",
  "touch.editor.multiTouchOff": "マルチタッチオフ",
  "touch.editor.multiTouchOn": "マルチタッチオン",
  "touch.editor.profiles": "プロフィール",

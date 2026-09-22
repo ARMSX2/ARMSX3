@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "电网关闭",
  "touch.editor.gridOn": "网格开启",
  "touch.editor.hide": "隐藏",
+ "touch.editor.keepLeftStickOff": "左摇杆：半屏",
+ "touch.editor.keepLeftStickOn": "左摇杆：屏幕显示",
  "touch.editor.multiTouchOff": "多点触控关闭",
  "touch.editor.multiTouchOn": "多点触控开启",
  "touch.editor.profiles": "型材",

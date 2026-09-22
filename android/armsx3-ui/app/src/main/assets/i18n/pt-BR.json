@@ -1057,6 +1057,8 @@
  "touch.editor.gridOff": "Grade desligada",
  "touch.editor.gridOn": "Grade ativada",
  "touch.editor.hide": "Esconder",
+ "touch.editor.keepLeftStickOff": "Analógico esquerdo: meia tela",
+ "touch.editor.keepLeftStickOn": "Analógico esquerdo: na tela",
  "touch.editor.multiTouchOff": "Multitoque desativado",
  "touch.editor.multiTouchOn": "Multitoque ativado",
  "touch.editor.profiles": "Perfis",

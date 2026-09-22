@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "Tắt lưới",
  "touch.editor.gridOn": "Bật lưới",
  "touch.editor.hide": "Ẩn",
+ "touch.editor.keepLeftStickOff": "Cần trái: nửa màn hình",
+ "touch.editor.keepLeftStickOn": "Cần trái: trên màn hình",
  "touch.editor.multiTouchOff": "Tắt cảm ứng đa điểm",
  "touch.editor.multiTouchOn": "Bật cảm ứng đa điểm",
  "touch.editor.profiles": "Hồ sơ",

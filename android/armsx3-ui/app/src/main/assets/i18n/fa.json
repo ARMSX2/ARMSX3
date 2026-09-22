@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "شبکه خاموش",
  "touch.editor.gridOn": "شبکه روشن",
  "touch.editor.hide": "پنهان کردن",
+ "touch.editor.keepLeftStickOff": "استیک چپ: نیمه صفحه",
+ "touch.editor.keepLeftStickOn": "استیک چپ: روی صفحه",
  "touch.editor.multiTouchOff": "چند لمسی خاموش",
  "touch.editor.multiTouchOn": "چند لمسی روشن",
  "touch.editor.profiles": "پروفایل ها",

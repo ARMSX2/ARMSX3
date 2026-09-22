@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "Jaringan Mati",
  "touch.editor.gridOn": "Jaringan Aktif",
  "touch.editor.hide": "Sembunyikan",
+ "touch.editor.keepLeftStickOff": "Stik kiri: setengah layar",
+ "touch.editor.keepLeftStickOn": "Stik kiri: di layar",
  "touch.editor.multiTouchOff": "Multi-Sentuh Mati",
  "touch.editor.multiTouchOn": "Multi-Sentuh Aktif",
  "touch.editor.profiles": "Profil",

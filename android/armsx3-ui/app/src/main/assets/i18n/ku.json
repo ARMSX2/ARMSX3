@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "Grid Off",
  "touch.editor.gridOn": "Grid On",
  "touch.editor.hide": "Veşêre",
+ "touch.editor.keepLeftStickOff": "Left Stick: Half-Screen",
+ "touch.editor.keepLeftStickOn": "Left Stick: On-Screen",
  "touch.editor.multiTouchOff": "Multi-Touch Off",
  "touch.editor.multiTouchOn": "Multi-Touch On",
  "touch.editor.profiles": "Profiles",

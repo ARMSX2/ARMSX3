@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "الشبكة معطلة",
  "touch.editor.gridOn": "الشبكة قيد التشغيل",
  "touch.editor.hide": "إخفاء",
+ "touch.editor.keepLeftStickOff": "العصا اليسرى: نصف الشاشة",
+ "touch.editor.keepLeftStickOn": "العصا اليسرى: على الشاشة",
  "touch.editor.multiTouchOff": "إيقاف اللمس المتعدد",
  "touch.editor.multiTouchOn": "تشغيل اللمس المتعدد",
  "touch.editor.profiles": "الملفات الشخصية",

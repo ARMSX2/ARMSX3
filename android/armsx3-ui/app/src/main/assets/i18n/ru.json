@@ -1055,6 +1055,8 @@
  "touch.editor.gridOff": "Сетка выключена",
  "touch.editor.gridOn": "Сетка включена",
  "touch.editor.hide": "Скрыть",
+ "touch.editor.keepLeftStickOff": "Левый стик: половина экрана",
+ "touch.editor.keepLeftStickOn": "Левый стик: на экране",
  "touch.editor.multiTouchOff": "Мультитач выключен",
  "touch.editor.multiTouchOn": "Мультитач включен",
  "touch.editor.profiles": "Профили",

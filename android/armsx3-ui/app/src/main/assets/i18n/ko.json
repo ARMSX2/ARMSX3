@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "그리드 끄기",
  "touch.editor.gridOn": "그리드 온",
  "touch.editor.hide": "숨기기",
+ "touch.editor.keepLeftStickOff": "왼쪽 스틱: 절반 화면",
+ "touch.editor.keepLeftStickOn": "왼쪽 스틱: 화면에 표시",
  "touch.editor.multiTouchOff": "멀티터치 끄기",
  "touch.editor.multiTouchOn": "멀티터치 켜기",
  "touch.editor.profiles": "프로필",

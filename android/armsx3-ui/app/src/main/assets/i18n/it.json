@@ -1056,6 +1056,8 @@
  "touch.editor.gridOff": "Rete disattivata",
  "touch.editor.gridOn": "Griglia attivata",
  "touch.editor.hide": "Nasconditi",
+ "touch.editor.keepLeftStickOff": "Stick sinistro: metà schermo",
+ "touch.editor.keepLeftStickOn": "Stick sinistro: su schermo",
  "touch.editor.multiTouchOff": "Multitouch disattivato",
  "touch.editor.multiTouchOn": "Multitouch attivato",
  "touch.editor.profiles": "Profili",
