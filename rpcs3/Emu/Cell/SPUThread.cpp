@@ -719,6 +719,22 @@ std::array<u32, 2> op_branch_targets(u32 pc, spu_opcode_t op)
 {
 	std::array<u32, 2> res{spu_branch_target(pc + 4), umax};
 
+	// Killzone 3 physics KD-tree traversal guard. The recompiler turns the EA-forming `a` at LS
+	// 0x21238 (a r80,r108,r26 = 0x1806b650) into a two-way branch: fall through when the formed
+	// address is backed, or jump to the tree's own no-work terminator 0x21458 when it is not. The
+	// analyser has to see that extra edge so the terminator block and this predecessor exist. Gated
+	// hard on the title and the exact opcode at the exact address. See A() in SPULLVMRecompiler.cpp.
+	if (pc == 0x21238 && op.opcode == 0x1806b650) [[unlikely]]
+	{
+		static const bool s_kz3 = Emu.GetTitleID() == "BCUS98234";
+
+		if (s_kz3)
+		{
+			res[1] = 0x21458;
+			return res;
+		}
+	}
+
 	switch (const auto type = g_spu_itype.decode(op.opcode))
 	{
 	case spu_itype::BR:
@@ -2939,10 +2955,13 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 			{
 				return;
 			}
-			else
+			else if (Emu.GetTitleID() != "BCUS98234")
 			{
 				fmt::throw_exception("Invalid RawSPU MMIO offset (cmd=[%s])", args);
 			}
+			// else Killzone 3: a garbage EA computed during the builder-vs-traversal race reaches
+			// here; fall through so the unbacked guard below zero-fills it instead of killing the SPU
+			// thread. Pairs with the graceful-bail in A(); other titles keep the original throw.
 		}
 		else if (_this->get_type() >= spu_type::raw)
 		{
@@ -2965,10 +2984,13 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 				spu.push_snr(SYS_SPU_THREAD_SNR2 == offset, args.cmd != MFC_SDCRZ_CMD ? +_this->_ref<u32>(lsa) : 0);
 				return;
 			}
-			else
+			else if (Emu.GetTitleID() != "BCUS98234")
 			{
 				fmt::throw_exception("Invalid MMIO offset (cmd=[%s])", args);
 			}
+			// else Killzone 3: same as above, a garbage EA from the race reaches here (e.g. a 0x50
+			// descriptor refill to an MMIO-range address at pc 0x1ac40). Fall through to the unbacked
+			// guard so it is zero-filled and survived rather than throwing and killing the thread.
 		}
 		else
 		{

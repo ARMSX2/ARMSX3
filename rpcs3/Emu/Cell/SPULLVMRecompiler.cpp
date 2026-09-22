@@ -6395,6 +6395,31 @@ public:
 		}
 
 		set_vr(op.rt, get_vr(op.ra) + get_vr(op.rb));
+
+		// Killzone 3 physics KD-tree traversal guard, LS 0x21238: this instruction is
+		// `a r80,r108,r26`, forming EA = base(r108) + node.word0*16, which the game then uses as a
+		// tree-node address with no range check of its own. The PPU frees the tree out from under a
+		// live SPU traversal (a rare timing race: confirmed 27us GET->clear against x86's 7.6ms
+		// floor), so the node this walks is occasionally garbage and the EA lands unbacked. The
+		// SPU then derails and the thread dies, wedging the job scheduler. Route an unbacked EA to
+		// the tree's own no-work terminator at 0x21458: the traversal pops that node and completes
+		// honestly instead of faulting. The race is rare, so this almost never fires; a valid tree
+		// address is always backed, so a legitimate traversal is unaffected. op_branch_targets adds
+		// the 0x21238->0x21458 edge so this is an ordinary two-way branch to the analyser.
+		if (static const bool s_kz3 = Emu.GetTitleID() == "BCUS98234";
+			s_kz3 && m_pos == 0x21238 && op.opcode == 0x1806b650) [[unlikely]]
+		{
+			const auto ea = eval(extract(get_vr(op.rt), 3)).value;
+			const auto pages = m_ir->CreateIntToPtr(
+				m_ir->getInt64(reinterpret_cast<u64>(vm::g_pages.data())), get_type<u8*>());
+			const auto idx = m_ir->CreateLShr(m_ir->CreateZExt(ea, get_type<u64>()), 12);
+			const auto flags = m_ir->CreateLoad(get_type<u8>(), m_ir->CreateGEP(get_type<u8>(), pages, idx));
+			const auto backed = m_ir->CreateICmpNE(
+				m_ir->CreateAnd(flags, m_ir->getInt8(vm::page_readable)), m_ir->getInt8(0));
+
+			m_block->block_end = m_ir->GetInsertBlock();
+			m_ir->CreateCondBr(backed, add_block(m_pos + 4), add_block(0x21458), m_md_likely);
+		}
 	}
 
 	void AND(spu_opcode_t op)
