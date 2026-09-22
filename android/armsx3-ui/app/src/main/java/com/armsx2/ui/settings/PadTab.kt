@@ -362,21 +362,6 @@ fun PadTab(state: MutableState<Settings>) {
                 valueFormatter = { if (it == 0) "Off" else "${it}%" },
                 onChange = { ControllerMappings.setHapticIntensity(it); refreshToken.intValue++ },
             )
-            SettingsDivider()
-            // How hard the DS2 pressure modifier presses. There was a PRESSURE button (on-screen
-            // and bindable as "Pressure Modifier (hold)") but no way to choose the amount, so it
-            // was permanently stuck at the hardcoded 50%. Range is deliberately 5..95: 0 collides
-            // with the "full press" sentinel and 100 is just a normal press.
-            IntSliderRow(
-                label = str("pad.pressureAmount.label"),
-                value = com.armsx2.ui.touch.TouchControls.pressurePercent.intValue,
-                min = 5,
-                max = 100,
-                description = str("pad.pressureAmount.description"),
-                valueFormatter = { "${it}%" },
-                onChange = { com.armsx2.ui.touch.TouchControls.setPressurePercent(it) },
-            )
-            SettingsDivider()
             // Multitap removed: it is a PS2 accessory that splits one controller port
         // into four. The PS3 has no such thing -- RPCS3 exposes seven pad ports
         // natively (CELL_PAD_MAX_PORT_NUM = 7), so extra controllers just connect.
@@ -775,6 +760,22 @@ fun PadTab(state: MutableState<Settings>) {
                 description = str("pad.multiTouch.description"),
                 valueFormatter = { "${it}%" },
                 onChange = { TouchControls.setMultiTouchRadius(it / 100f) },
+            )
+            SettingsDivider()
+            // How hard the pressure modifier presses. There was a PRESSURE button (on-screen and
+            // bindable as "Pressure Modifier (hold)") but no way to choose the amount, so it was
+            // permanently stuck at the hardcoded 50%. Range is 5..100: 0 would collide with the
+            // "full press" sentinel. Here, next to the rest of the on-screen controls, because that
+            // is where the P button is; it sat under Player & Rumble, where nobody looking for it
+            // found it.
+            IntSliderRow(
+                label = str("pad.pressureAmount.label"),
+                value = TouchControls.pressurePercent.intValue,
+                min = 5,
+                max = 100,
+                description = str("pad.pressureAmount.description"),
+                valueFormatter = { "${it}%" },
+                onChange = { TouchControls.setPressurePercent(it) },
             )
             // D-Pad key spacing lives in the Touch Layout editor now: open the editor,
             // tap the D-Pad to select it, and use the "D-Pad spacing" slider to spread
@@ -1391,6 +1392,25 @@ internal fun MacrosSection(
                     valueFormatter = { if (it == 0) holdLabel else everyLabel.format(it) },
                     onReset = if (freq == 0) null else ({ TouchControls.setMacroFrequency(mid, 0) }),
                     onChange = { TouchControls.setMacroFrequency(mid, it) },
+                )
+            }
+            // Pressure, per macro. Two macros for the same button at different pressures is how
+            // NetherSX2 players got two map zoom levels out of Square (Cotcho); the only pressure
+            // here used to be the one global amount. Shown with any button, like Frequency above,
+            // rather than only once a pressure-sensitive one is in: hidden until then, it could not
+            // be found. The description says which buttons feel it.
+            if (buttons.isNotEmpty()) {
+                val pressure = TouchControls.macroPressure(mid)
+                val fullLabel = str("pad.macro.pressure.full")
+                IntSliderRow(
+                    label = str("pad.macro.pressure.label"),
+                    value = pressure,
+                    min = TouchControls.MACRO_PRESSURE_MIN,
+                    max = 100,
+                    description = str("pad.macro.pressure.description"),
+                    valueFormatter = { if (it >= 100) fullLabel else "$it%" },
+                    onReset = if (pressure >= 100) null else ({ TouchControls.setMacroPressure(mid, 100) }),
+                    onChange = { TouchControls.setMacroPressure(mid, it) },
                 )
             }
             SettingsDivider()
