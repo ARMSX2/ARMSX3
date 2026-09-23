@@ -127,19 +127,30 @@ object LibraryMusic {
      * True when another app is playing something the user is listening to: music, a podcast,
      * a video. Deliberately narrower than AudioManager.isMusicActive(), which is true for ANY
      * live stream on the media channel, games included: ARMSX2 left in the background with a
-     * PS2 game paused keeps its silent USAGE_GAME stream open for hours, and that alone kept
-     * the library silent all afternoon (Odin 3, 2026-09-23). Game streams never count, which
-     * also covers our own SPU output (USAGE_GAME, OboeBackend.cpp) still closing after a game
-     * exits. USAGE_UNKNOWN does count: apps that never set attributes play as media. Apps are
+     * PS2 game paused keeps its silent stream open for hours, and that alone kept the library
+     * silent all afternoon (Odin 3, 2026-09-23).
+     *
+     * The usage alone cannot tell: that stream was USAGE_GAME in one ARMSX2 build and
+     * USAGE_MEDIA in another. What media apps do and emulators do not is say what they play:
+     * music, a film, speech (Spotify, YouTube, podcast apps, and our own splash and pause-menu
+     * tracks all set it). A raw game stream leaves the content type unknown, so it never
+     * counts, and neither does our own SPU output still closing after a game exits. Apps are
      * only given the players that are live right now, so no state check is needed.
      */
     private fun otherMediaPlaying(am: AudioManager): Boolean =
         runCatching {
             am.activePlaybackConfigurations.any {
-                val usage = it.audioAttributes.usage
-                usage == AudioAttributes.USAGE_MEDIA || usage == AudioAttributes.USAGE_UNKNOWN
+                val attributes = it.audioAttributes
+                attributes.usage in MEDIA_USAGES && attributes.contentType in MEDIA_CONTENT
             }
         }.getOrElse { am.isMusicActive }
+
+    private val MEDIA_USAGES = setOf(AudioAttributes.USAGE_MEDIA, AudioAttributes.USAGE_UNKNOWN)
+    private val MEDIA_CONTENT = setOf(
+        AudioAttributes.CONTENT_TYPE_MUSIC,
+        AudioAttributes.CONTENT_TYPE_MOVIE,
+        AudioAttributes.CONTENT_TYPE_SPEECH,
+    )
 
     /**
      * Begin playing, if we should. No-ops when the setting is off, a VM is running, or
