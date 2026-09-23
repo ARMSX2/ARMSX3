@@ -124,10 +124,28 @@ object LibraryMusic {
         context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
     /**
+     * True when another app is playing something the user is listening to: music, a podcast,
+     * a video. Deliberately narrower than AudioManager.isMusicActive(), which is true for ANY
+     * live stream on the media channel, games included: ARMSX2 left in the background with a
+     * PS2 game paused keeps its silent USAGE_GAME stream open for hours, and that alone kept
+     * the library silent all afternoon (Odin 3, 2026-09-23). Game streams never count, which
+     * also covers our own SPU output (USAGE_GAME, OboeBackend.cpp) still closing after a game
+     * exits. USAGE_UNKNOWN does count: apps that never set attributes play as media. Apps are
+     * only given the players that are live right now, so no state check is needed.
+     */
+    private fun otherMediaPlaying(am: AudioManager): Boolean =
+        runCatching {
+            am.activePlaybackConfigurations.any {
+                val usage = it.audioAttributes.usage
+                usage == AudioAttributes.USAGE_MEDIA || usage == AudioAttributes.USAGE_UNKNOWN
+            }
+        }.getOrElse { am.isMusicActive }
+
+    /**
      * Begin playing, if we should. No-ops when the setting is off, a VM is running, or
-     * something else is already playing audio.
+     * another app is already playing music, a podcast or a video.
      *
-     * The isMusicActive check is the difference between a nice touch and a hostile one:
+     * The [otherMediaPlaying] check is the difference between a nice touch and a hostile one:
      * without it, opening the app over someone's podcast or Spotify starts a second
      * stream on top of theirs. Deferring to whoever is already playing costs us nothing
      * — the user can still toggle it on explicitly.
@@ -139,7 +157,7 @@ object LibraryMusic {
         val am = audioManager(context)
         // Skip the "someone else is playing" deference when forced — a user-initiated track
         // change is an explicit request to hear our music now (see restart()).
-        if (!force && am?.isMusicActive == true) {
+        if (!force && am != null && otherMediaPlaying(am)) {
             Log.i(TAG, "another app is playing audio; not starting library music")
             return
         }
