@@ -93,6 +93,8 @@
  "app.barColor": "Màu thanh thư viện",
  "app.barColor.default": "Mặc định",
  "app.barColor.desc": "Tô màu thanh trên cùng (tiêu đề tròn). Mặc định theo chủ đề của bạn. Đây là thanh - các màu bên dưới đổi màu nền hoạt hình phía sau thư viện.",
+ "app.barOpacity": "Độ mờ của thanh thư viện",
+ "app.barOpacity.desc": "Giá trị thấp hơn cho hình nền thư viện hiện xuyên qua thanh trên cùng. 100% là hoàn toàn đặc.",
  "app.batteryWarnings": "Cảnh báo về pin",
  "app.batteryWarnings.desc": "Hiển thị biểu ngữ ngắn gọn khi pin giảm xuống 20% hoặc nhiệt độ pin đạt 35°C. Mỗi cảnh báo xuất hiện một lần và tái trang bị sau khi kết quả đọc được phục hồi.",
  "app.bg.simple": "Nền hoạt hình đơn giản",

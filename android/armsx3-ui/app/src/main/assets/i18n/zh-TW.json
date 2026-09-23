@@ -93,6 +93,8 @@
  "app.barColor": "庫欄顏色",
  "app.barColor.default": "預設",
  "app.barColor.desc": "為頂部欄本身（圓形標題）著色。預設遵循您的主題。這是欄位——下面的顏色重新著色了圖書館後面的動畫背景。",
+ "app.barOpacity": "庫欄不透明度",
+ "app.barOpacity.desc": "數值越低，庫背景越能透過頂部欄顯示出來。100% 為完全不透明。",
  "app.batteryWarnings": "電池警告",
  "app.batteryWarnings.desc": "當電池電量降至 20% 或電池溫度達到 35°C 時顯示簡短橫幅。每個警告都會出現一次，並在讀數恢復後重新啟動。",
  "app.bg.simple": "簡單的動畫背景",

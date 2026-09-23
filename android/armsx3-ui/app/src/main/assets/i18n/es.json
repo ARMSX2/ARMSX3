@@ -93,6 +93,8 @@
  "app.barColor": "Color de la barra de biblioteca",
  "app.barColor.default": "Predeterminado",
  "app.barColor.desc": "Colorea la barra superior (el encabezado redondeado). El valor predeterminado sigue su tema. Esta es la barra: los colores a continuación cambian el color del fondo animado detrás de la biblioteca.",
+ "app.barOpacity": "Opacidad de la barra de biblioteca",
+ "app.barOpacity.desc": "Un valor más bajo deja ver el fondo de la biblioteca a través de la barra superior. 100 % es opaca.",
  "app.batteryWarnings": "Advertencias de batería",
  "app.batteryWarnings.desc": "Muestra un breve banner cuando la batería cae al 20 % o la temperatura de la batería alcanza los 35 °C. Cada advertencia aparece una vez y se reactiva después de que se recupera la lectura.",
  "app.bg.simple": "Fondo animado sencillo",

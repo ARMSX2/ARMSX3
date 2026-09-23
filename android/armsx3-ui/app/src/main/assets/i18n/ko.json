@@ -93,6 +93,8 @@
  "app.barColor": "라이브러리 바 색상",
  "app.barColor.default": "기본값",
  "app.barColor.desc": "상단 막대 자체(둥근 헤더)에 색상을 지정합니다. 기본값은 테마를 따릅니다. 이것이 막대입니다. 아래 색상은 라이브러리 뒤의 애니메이션 배경을 다시 칠합니다.",
+ "app.barOpacity": "라이브러리 바 불투명도",
+ "app.barOpacity.desc": "낮출수록 상단 바 너머로 라이브러리 배경이 비쳐 보입니다. 100%는 완전히 불투명합니다.",
  "app.batteryWarnings": "배터리 경고",
  "app.batteryWarnings.desc": "배터리가 20%로 떨어지거나 배터리 온도가 35°C에 도달하면 간략한 배너를 표시합니다. 각 경고는 한 번 표시되고 판독값이 복구된 후 다시 준비됩니다.",
  "app.bg.simple": "간단한 애니메이션 배경",

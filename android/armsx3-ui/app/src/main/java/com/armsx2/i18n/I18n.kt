@@ -400,6 +400,8 @@ val EN: Map<String, String> = mapOf(
     "app.barColor" to "Library Bar Color",
     "app.barColor.desc" to "Colour the top bar itself (the rounded header). Default follows your theme. This is the bar; the colours below recolour the animated background behind the library.",
     "app.barColor.default" to "Default",
+    "app.barOpacity" to "Library Bar Opacity",
+    "app.barOpacity.desc" to "Lower lets the library background show through the top bar. 100% is solid.",
     "app.bg.simple" to "Simple animated background",
     "app.bg.flurry" to "Animated background",
     "app.bg.saver" to "Animation",

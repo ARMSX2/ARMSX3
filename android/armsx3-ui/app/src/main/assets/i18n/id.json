@@ -93,6 +93,8 @@
  "app.barColor": "Warna Bilah Perpustakaan",
  "app.barColor.default": "Bawaan",
  "app.barColor.desc": "Warnai bilah bagian atas (header bulat). Defaultnya mengikuti tema Anda. Ini adalah bilahnya — warna di bawah mewarnai ulang latar belakang animasi di belakang perpustakaan.",
+ "app.barOpacity": "Opasitas Bilah Perpustakaan",
+ "app.barOpacity.desc": "Nilai lebih rendah membuat latar perpustakaan terlihat menembus bilah atas. 100% berarti pekat.",
  "app.batteryWarnings": "Peringatan baterai",
  "app.batteryWarnings.desc": "Tampilkan spanduk singkat ketika baterai turun hingga 20% atau suhu baterai mencapai 35°C. Setiap peringatan muncul satu kali dan dipersenjatai kembali setelah pembacaan pulih.",
  "app.bg.simple": "Latar belakang animasi sederhana",

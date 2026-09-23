@@ -93,6 +93,8 @@
  "app.barColor": "Kolor paska biblioteki",
  "app.barColor.default": "Domyślne",
  "app.barColor.desc": "Pokoloruj sam górny pasek (zaokrąglony nagłówek). Domyślnie podąża za Twoim motywem. To jest pasek — kolory poniżej zmieniają kolor animowanego tła za biblioteką.",
+ "app.barOpacity": "Nieprzezroczystość paska biblioteki",
+ "app.barOpacity.desc": "Niższa wartość pozwala tłu biblioteki prześwitywać przez górny pasek. 100% oznacza pełne krycie.",
  "app.batteryWarnings": "Ostrzeżenia dotyczące baterii",
  "app.batteryWarnings.desc": "Wyświetl krótki baner, gdy poziom naładowania baterii spadnie do 20% lub temperatura baterii osiągnie 35°C. Każde ostrzeżenie pojawia się raz i zostaje ponownie uzbrojone po przywróceniu odczytu.",
  "app.bg.simple": "Proste animowane tło",

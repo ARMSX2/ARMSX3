@@ -465,6 +465,16 @@ fun AppTab() {
                         ) {}
                     }
                 }
+                // How solid the bar is, for any colour including Default.
+                IntSliderRow(
+                    label = str("app.barOpacity"),
+                    value = com.armsx2.ui.theme.LibraryChromePreferences.barOpacity.value,
+                    min = 0,
+                    max = 100,
+                    description = str("app.barOpacity.desc"),
+                    valueFormatter = { "$it%" },
+                    onChange = com.armsx2.ui.theme.LibraryChromePreferences::setBarOpacity,
+                )
             }
             // Continuous RGB hue-cycle — same idea as the theme's RGB mode. While on, the fixed
             // color (presets + sliders) doesn't apply, so it's hidden.

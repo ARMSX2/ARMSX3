@@ -137,6 +137,7 @@ object LibraryChromePreferences {
     private const val RecentsKey = "ui.library.showRecents"
     private const val OpacityKey = "ui.library.opacity"
     private const val BarColorKey = "ui.library.barColor"
+    private const val BarOpacityKey = "ui.library.barOpacity"
 
     val showSearch = mutableStateOf(false)
     val showRecents = mutableStateOf(true)
@@ -161,6 +162,16 @@ object LibraryChromePreferences {
         barColor.value = argb
         MainActivityRuntime.prefs.edit { putInt(BarColorKey, argb) }
     }
+
+    /** How solid the top bar is, as a percent (0-100), whatever its colour. 100 = the solid bar
+     *  it always was; lower lets the library background show through it. */
+    val barOpacity = mutableStateOf(100)
+
+    fun setBarOpacity(value: Int) {
+        val v = value.coerceIn(0, 100)
+        barOpacity.value = v
+        MainActivityRuntime.prefs.edit { putInt(BarOpacityKey, v) }
+    }
     // Card/list translucency over the wallpaper, as a percent (20–100). 100 = the old
     // fully-opaque look; lower lets the library background show through the game rows.
     val libraryOpacity = mutableStateOf(100)
@@ -170,6 +181,7 @@ object LibraryChromePreferences {
         showRecents.value = MainActivityRuntime.prefs.getBoolean(RecentsKey, true)
         libraryOpacity.value = MainActivityRuntime.prefs.getInt(OpacityKey, 100).coerceIn(20, 100)
         barColor.value = MainActivityRuntime.prefs.getInt(BarColorKey, 0)
+        barOpacity.value = MainActivityRuntime.prefs.getInt(BarOpacityKey, 100).coerceIn(0, 100)
     }
 
     fun setShowSearch(value: Boolean) {
