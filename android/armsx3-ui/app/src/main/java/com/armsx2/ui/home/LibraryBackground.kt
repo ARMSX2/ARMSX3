@@ -4,13 +4,20 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Rect
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.compose.runtime.mutableStateOf
 import com.armsx2.runtime.MainActivityRuntime
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.security.MessageDigest
@@ -19,8 +26,9 @@ import java.security.MessageDigest
  * Optional user-chosen library background (#9). Stores a persisted content URI;
  * when unset the library falls back to the bundled default XMB-wave still image
  * (R.drawable.library_bg_xmb, drawn in HomeScreen). The user can pick a still image
- * or an animated GIF/WebP (Coil handles both), or a PS3 theme (.p3t), whose best picture is
- * imported into app storage by [importTheme]; `clear()` reverts to the default.
+ * or an animated GIF/WebP (Coil handles both), or a PS3 theme (.p3t), which [importTheme]
+ * turns into pictures in app storage: its best picture, or for a dynamic theme its slides,
+ * played by [ThemeSlideshow]. `clear()` reverts to the default.
  * (The background used to be a looping MP4 but that hurt performance, so it's a
  * static image now.)
  */
@@ -37,7 +45,17 @@ object LibraryBackground {
      * cleared when that thread exits in an orderly way. See [armSaver].
      */
     private const val PREF_ARMED = "library.saver.armed"
+    private const val PREF_SLIDESHOW = "library.background.slideshow"
     val uri = mutableStateOf<String?>(null)
+
+    /**
+     * A dynamic theme's slides, saved at import, and how to play them. [uri] points at the first
+     * slide at the same time, so anything that shows the background as a still keeps working.
+     */
+    class Slideshow(val frames: List<File>, val timing: P3tAnimation.Timing)
+
+    /** Set while the background is a dynamic theme; the library then plays it (see [ThemeSlideshow]). */
+    val slideshow = mutableStateOf<Slideshow?>(null)
 
     /**
      * Force the lightweight 2D animated background ([LibraryWaveBackground]) even on devices where
@@ -129,6 +147,10 @@ object LibraryBackground {
         if (loaded) return
         loaded = true
         uri.value = runCatching { MainActivityRuntime.prefs.getString(PREF, null) }.getOrNull()
+        // Only when it still belongs to the background: its first slide is what uri points at.
+        slideshow.value = runCatching { MainActivityRuntime.prefs.getString(PREF_SLIDESHOW, null) }.getOrNull()
+            ?.let(::slideshowFrom)
+            ?.takeIf { uri.value == Uri.fromFile(it.frames.first()).toString() }
         animated2D.value = runCatching { MainActivityRuntime.prefs.getBoolean(PREF_ANIM, false) }.getOrDefault(false)
         flurry.value = runCatching { MainActivityRuntime.prefs.getBoolean(PREF_FLURRY, false) }.getOrDefault(false)
         flurryPreset.value = runCatching { MainActivityRuntime.prefs.getInt(PREF_FLURRY_PRESET, 99) }.getOrDefault(99)
@@ -201,15 +223,24 @@ object LibraryBackground {
     //
     // A theme is not a picture, so it is not handed to Coil. The importer takes the best picture out
     // of it (see P3tTheme), saves that in app storage, and the background then points at the saved
-    // file like any other image. Unlike a picked picture, which stays where the user keeps it, this
-    // one is ours, so it is deleted when the background changes or is cleared.
+    // file like any other image. A dynamic theme whose scene is a slideshow (see P3tAnimation) has
+    // its slides saved instead, in a folder of their own, and plays them. Unlike a picked picture,
+    // which stays where the user keeps it, these are ours, so they are deleted when the background
+    // changes or is cleared.
 
     private const val IMPORTED_DIR = "library_backgrounds"
     private const val IMPORTED_PREFIX = "p3t_"
     private const val MAX_STREAMED_THEME_BYTES = 128 shl 20
+    private const val MAX_SCENE_BYTES = 256L shl 20
+    private const val SCENE_FILE = "p3t_scene.tmp"
+    private const val MAX_OVERLAYS = 4
+    private const val SLIDE_QUALITY = 90
 
-    /** The outcome of an import: the saved picture, and a message key for anything worth saying. */
-    class ThemeImport(val file: File?, val messageKey: String?)
+    /**
+     * The outcome of an import: the saved picture, the slideshow when the theme plays one, and a
+     * message key for anything worth saying.
+     */
+    class ThemeImport(val file: File?, val messageKey: String?, val slideshow: Slideshow? = null)
 
     /** True when [source] starts with the PS3 theme magic. Reads four bytes. */
     fun isTheme(context: Context, source: Uri): Boolean = runCatching {
@@ -226,12 +257,21 @@ object LibraryBackground {
     }.getOrDefault(false)
 
     /**
-     * Take the best picture out of a PS3 theme and save it for the background. Blocking: call it
-     * off the main thread, then hand the file to [setImported] on the main thread.
+     * Take the best picture out of a PS3 theme, or a dynamic theme's slides, and save them for the
+     * background. Blocking: call it off the main thread, then hand the result to [setImported] on
+     * the main thread.
      */
-    fun importTheme(context: Context, source: Uri): ThemeImport {
-        val result = runCatching { readTheme(context, source) }.getOrNull()
-            ?: return ThemeImport(null, "library.bg.readFailed")
+    fun importTheme(context: Context, source: Uri): ThemeImport =
+        runCatching { withTheme(context, source) { importFrom(context, it) } }.getOrNull()
+            ?: ThemeImport(null, "library.bg.readFailed")
+
+    private fun importFrom(context: Context, theme: P3tTheme.Bytes): ThemeImport {
+        val result = P3tTheme.read(theme)
+        val dir = File(context.filesDir, IMPORTED_DIR).apply { mkdirs() }
+        sweepImported(dir)
+        // A dynamic theme plays its slides when its scene is a slideshow; otherwise it falls through
+        // to its best picture like any other theme.
+        result.anim?.let { anim -> runCatching { importAnimation(context, theme, anim, dir) }.getOrNull()?.let { return it } }
         val picture = result.picture ?: return ThemeImport(
             null,
             when (result.failure) {
@@ -241,7 +281,6 @@ object LibraryBackground {
                 else -> "library.bg.themeDamaged"
             },
         )
-        val dir = File(context.filesDir, IMPORTED_DIR).apply { mkdirs() }
         val saved = runCatching {
             val jpeg = picture.jpeg
             if (jpeg != null) {
@@ -267,33 +306,157 @@ object LibraryBackground {
                 }
             }
         }.getOrNull() ?: return ThemeImport(null, "library.bg.readFailed")
-        // A dynamic theme only gets its preview, which has the theme's own icons drawn into it.
+        // A dynamic theme that is not a slideshow only gets its preview, which has the theme's own
+        // icons drawn into it.
         return ThemeImport(saved, if (picture.source == P3tTheme.Source.PREVIEW) "library.bg.themePreview" else null)
     }
 
-    /** Make a picture saved by [importTheme] the background. */
-    fun setImported(file: File) {
+    /**
+     * Unpack a dynamic theme's scene to a scratch file (it is tens of MB, too much to hold) and save
+     * its slides. Null when the scene is not a slideshow, so the caller falls back to a picture.
+     */
+    private fun importAnimation(context: Context, theme: P3tTheme.Bytes, anim: P3tTheme.Anim, dir: File): ThemeImport? {
+        val scratch = File(context.cacheDir, SCENE_FILE)
+        try {
+            val unpacked = scratch.outputStream().buffered().use {
+                P3tAnimation.unpack(theme, anim.offset, anim.size, it, MAX_SCENE_BYTES)
+            }
+            if (!unpacked) return null
+            return RandomAccessFile(scratch, "r").use { file ->
+                val scene = ChannelBytes(file.channel, file.length())
+                val parsed = P3tAnimation.scene(scene) ?: return null
+                val frames = bake(scene, parsed.layers, dir) ?: return null
+                // One slide is just a picture: the theme's own art, still.
+                val show = if (frames.size > 1) Slideshow(frames, parsed.timing) else null
+                ThemeImport(frames.first(), null, show)
+            }
+        } finally {
+            scratch.delete()
+        }
+    }
+
+    /**
+     * Draw each opaque layer (a slide) with the see-through layers above it, the way the PS3 draws
+     * the scene, and save the results as JPEGs in a new folder. Goes from the top layer down, so the
+     * layers above a slide are already decoded when it is reached and each texture is decoded once.
+     */
+    private fun bake(scene: P3tTheme.Bytes, layers: List<P3tAnimation.Layer>, dir: File): List<File>? {
+        val width = layers.maxOf { it.texture.width }
+        val height = layers.maxOf { it.texture.height }
+        val folder = File(dir, "$IMPORTED_PREFIX${System.currentTimeMillis().toString(16)}")
+        if (!folder.mkdirs()) return null
+        val area = Rect(0, 0, width, height)
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+        val above = ArrayList<Bitmap>() // bottom first
+        val frames = arrayOfNulls<File>(layers.size)
+        try {
+            for (i in layers.indices.reversed()) {
+                val texture = layers[i].texture
+                val pixels = P3tAnimation.decode(scene, texture) ?: continue
+                val picture = Bitmap.createBitmap(pixels, texture.width, texture.height, Bitmap.Config.ARGB_8888)
+                if (!P3tAnimation.isSlide(texture, pixels)) {
+                    if (above.size < MAX_OVERLAYS) above.add(0, picture) else picture.recycle()
+                    continue
+                }
+                val frame = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                try {
+                    Canvas(frame).apply {
+                        drawColor(Color.BLACK)
+                        drawBitmap(picture, null, area, paint)
+                        for (layer in above) drawBitmap(layer, null, area, paint)
+                    }
+                    frames[i] = File(folder, "slide_%03d.jpg".format(i)).apply {
+                        outputStream().use { frame.compress(Bitmap.CompressFormat.JPEG, SLIDE_QUALITY, it) }
+                    }
+                } finally {
+                    frame.recycle()
+                    picture.recycle()
+                }
+            }
+        } finally {
+            above.forEach { it.recycle() }
+        }
+        val saved = frames.filterNotNull()
+        if (saved.isEmpty()) folder.deleteRecursively()
+        return saved.ifEmpty { null }
+    }
+
+    /**
+     * Delete what earlier imports left behind that is not the background any more: an import the
+     * app did not live to finish leaves its slides. The current background is kept.
+     */
+    private fun sweepImported(dir: File) {
+        val current = uri.value?.takeIf { it.startsWith("file:") }?.let { Uri.parse(it).path }?.let(::File)
+        val keep = setOfNotNull(current, current?.parentFile)
+        dir.listFiles()?.forEach { if (it.name.startsWith(IMPORTED_PREFIX) && it !in keep) runCatching { it.deleteRecursively() } }
+    }
+
+    /** Make a picture saved by [importTheme] the background, playing [show] when there is one. */
+    fun setImported(file: File, show: Slideshow? = null) {
         val value = Uri.fromFile(file).toString()
         if (uri.value != value) forgetImported()
         uri.value = value
-        runCatching { MainActivityRuntime.prefs.edit().putString(PREF, value).apply() }
+        slideshow.value = show
+        runCatching {
+            val edit = MainActivityRuntime.prefs.edit().putString(PREF, value)
+            if (show != null) edit.putString(PREF_SLIDESHOW, slideshowJson(show)) else edit.remove(PREF_SLIDESHOW)
+            edit.apply()
+        }
     }
 
-    /** Delete the current background's file when it is one the importer saved. */
+    /** Delete the current background's files when they are ones the importer saved. */
     private fun forgetImported() {
+        if (slideshow.value != null) {
+            slideshow.value = null
+            runCatching { MainActivityRuntime.prefs.edit().remove(PREF_SLIDESHOW).apply() }
+        }
         val current = uri.value ?: return
         if (!current.startsWith("file:")) return
         val file = Uri.parse(current).path?.let(::File) ?: return
-        if (file.parentFile?.name == IMPORTED_DIR && file.name.startsWith(IMPORTED_PREFIX)) runCatching { file.delete() }
+        val parent = file.parentFile ?: return
+        when {
+            parent.name == IMPORTED_DIR && file.name.startsWith(IMPORTED_PREFIX) -> runCatching { file.delete() }
+            // A slideshow: the whole folder of slides.
+            parent.parentFile?.name == IMPORTED_DIR && parent.name.startsWith(IMPORTED_PREFIX) ->
+                runCatching { parent.deleteRecursively() }
+        }
     }
 
-    /** Random access when the provider allows it, so a large dynamic theme is never read whole. */
-    private fun readTheme(context: Context, source: Uri): P3tTheme.Result {
+    private fun slideshowJson(show: Slideshow): String = JSONObject()
+        .put("frames", JSONArray(show.frames.map { it.path }))
+        .put("interval", show.timing.interval.toDouble())
+        .put("fade", show.timing.fade.toDouble())
+        .put("zoom", show.timing.zoom.toDouble())
+        .put("zoomInterval", show.timing.zoomInterval.toDouble())
+        .put("zoomMove", show.timing.zoomMove.toDouble())
+        .toString()
+
+    /** The saved slideshow, when every slide is still there. */
+    private fun slideshowFrom(json: String): Slideshow? = runCatching {
+        val o = JSONObject(json)
+        val list = o.getJSONArray("frames")
+        val frames = List(list.length()) { File(list.getString(it)) }
+        if (frames.size < 2 || frames.any { !it.isFile }) return null
+        val timing = P3tAnimation.Timing(
+            o.getDouble("interval").toFloat(),
+            o.getDouble("fade").toFloat(),
+            o.optDouble("zoom", 0.0).toFloat(),
+            o.optDouble("zoomInterval", 0.0).toFloat(),
+            o.optDouble("zoomMove", 0.0).toFloat(),
+        )
+        Slideshow(frames, timing)
+    }.getOrNull()
+
+    /**
+     * Open the theme for [block]: random access when the provider allows it, so a large dynamic
+     * theme is never read whole, and otherwise read whole within a limit.
+     */
+    private fun <T> withTheme(context: Context, source: Uri, block: (P3tTheme.Bytes) -> T): T {
         context.contentResolver.openFileDescriptor(source, "r")?.let { descriptor ->
             ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
                 val channel = input.channel
                 val size = runCatching { channel.size() }.getOrDefault(0L)
-                if (size > 0) return P3tTheme.read(ChannelBytes(channel, size))
+                if (size > 0) return block(ChannelBytes(channel, size))
             }
         }
         // A provider that can only stream: read it whole, within a limit.
@@ -308,7 +471,7 @@ object LibraryBackground {
             }
             out.toByteArray()
         } ?: throw IOException("unreadable")
-        return P3tTheme.read(P3tTheme.ArrayBytes(bytes))
+        return block(P3tTheme.ArrayBytes(bytes))
     }
 
     private class ChannelBytes(private val channel: FileChannel, override val size: Long) : P3tTheme.Bytes {

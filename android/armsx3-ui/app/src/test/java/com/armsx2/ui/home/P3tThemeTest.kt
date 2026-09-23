@@ -131,6 +131,7 @@ class P3tThemeTest {
         val r = read(t.bytes())
         assertNull(r.failure)
         assertTrue(r.dynamic)
+        assertEquals(68L, r.anim!!.size) // "_RAF" and 64 bytes: handed on to P3tAnimation
         assertEquals(P3tTheme.Source.PREVIEW, r.picture!!.source)
         assertEquals(3, r.picture!!.width); assertEquals(2, r.picture!!.height)
         assertArrayEquals(pixels, r.picture!!.rgba)
@@ -140,7 +141,9 @@ class P3tThemeTest {
     fun dynamicThemeWithoutAPreviewSaysSo() {
         val t = Theme()
         t.element("bgimage", t.fileAttr("anim", "_RAF".toByteArray() + ByteArray(64)))
-        assertEquals(P3tTheme.Failure.DYNAMIC_ONLY, read(t.bytes()).failure)
+        val r = read(t.bytes())
+        assertEquals(P3tTheme.Failure.DYNAMIC_ONLY, r.failure)
+        assertNotNull(r.anim) // still worth trying as a slideshow
     }
 
     @Test

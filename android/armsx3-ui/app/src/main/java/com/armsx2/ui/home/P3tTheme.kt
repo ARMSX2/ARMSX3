@@ -22,9 +22,10 @@ import java.util.zip.Inflater
  * Where the pictures are:
  *  - bgimagetable/bgimage holds "hd" and "sd" JPEGs on a static theme, stored as-is.
  *  - A dynamic theme's bgimage holds "anim" instead: a zlib-packed RAF scene whose textures are
- *    PS3 GPU (.gtf) images. That is an animation runtime's job, so it is not decoded here.
+ *    PS3 GPU (.gtf) images. Its place in the file is reported as [Result.anim] for [P3tAnimation].
  *  - info holds "preview", a zlib-packed GIM image of the whole theme with its XMB icons drawn in.
- *    It is the only picture a dynamic theme has, so it is the fallback.
+ *    It is the only picture a dynamic theme has, so it is the fallback when the scene is not a
+ *    slideshow.
  */
 object P3tTheme {
     /** Random access to the theme, so a large one never has to be read whole. */
@@ -48,8 +49,14 @@ object P3tTheme {
 
     enum class Failure { NOT_A_THEME, DAMAGED, NO_PICTURE, DYNAMIC_ONLY }
 
-    /** [picture] is null exactly when [failure] is set. [dynamic] marks an animated theme. */
-    class Result(val picture: Picture?, val dynamic: Boolean, val failure: Failure?)
+    /** Where a dynamic theme's packed RAF scene is in the file. */
+    class Anim(val offset: Long, val size: Long)
+
+    /**
+     * [picture] is null exactly when [failure] is set. [dynamic] marks an animated theme, and [anim]
+     * is its scene when the reference to it is sound.
+     */
+    class Result(val picture: Picture?, val dynamic: Boolean, val failure: Failure?, val anim: Anim? = null)
 
     private const val MAGIC = 0x50335446L // "P3TF"
     private const val HEADER_BYTES = 56L
@@ -120,6 +127,11 @@ object P3tTheme {
         val sd = ArrayList<Candidate>()
         var preview: Pair<Long, Int>? = null
         var dynamic = false
+        var anim: Anim? = null
+        // The scene is streamed out by the importer, never read whole here, so only its bounds matter.
+        fun scene(offset: Long, size: Long): Anim? =
+            if (offset > fileTable.size || size > fileTable.size - offset || size < 8) null
+            else Anim(fileTable.offset + offset, size)
 
         var pos = 0L
         while (pos + ELEMENT_BYTES <= elements.size) {
@@ -135,12 +147,19 @@ object P3tTheme {
                 val size = be32(elements, at + 12)
                 when {
                     name == "info" && attribute == "preview" -> preview = file(offset, size, MAX_PACKED_PREVIEW_BYTES)
-                    name == "bgimage" && attribute == "anim" -> dynamic = true
+                    name == "bgimage" && attribute == "anim" -> {
+                        dynamic = true
+                        if (anim == null) anim = scene(offset, size)
+                    }
                     name == "bgimage" && (attribute == "hd" || attribute == "sd") -> {
                         val ref = file(offset, size, MAX_PICTURE_BYTES) ?: continue
                         // The frame header sits near the start; the whole file only if it does not.
                         val probe = src.read(ref.first, minOf(ref.second, PROBE_BYTES))
-                        if (isRaf(probe)) { dynamic = true; continue }
+                        if (isRaf(probe)) {
+                            dynamic = true
+                            if (anim == null) anim = scene(offset, size)
+                            continue
+                        }
                         val dims = jpegSize(probe)
                             ?: (if (ref.second > PROBE_BYTES) jpegSize(src.read(ref.first, ref.second)) else null)
                             ?: continue
@@ -157,11 +176,11 @@ object P3tTheme {
         val best = hd.maxByOrNull { it.width.toLong() * it.height } ?: sd.maxByOrNull { it.width.toLong() * it.height }
         if (best != null) {
             val jpeg = src.read(best.offset, best.size)
-            return Result(Picture(best.source, jpeg, null, best.width, best.height), dynamic, null)
+            return Result(Picture(best.source, jpeg, null, best.width, best.height), dynamic, null, anim)
         }
         val fallback = preview?.let { decodePreview(src.read(it.first, it.second)) }
-        if (fallback != null) return Result(fallback, dynamic, null)
-        return Result(null, dynamic, if (dynamic) Failure.DYNAMIC_ONLY else Failure.NO_PICTURE)
+        if (fallback != null) return Result(fallback, dynamic, null, anim)
+        return Result(null, dynamic, if (dynamic) Failure.DYNAMIC_ONLY else Failure.NO_PICTURE, anim)
     }
 
     private fun isRaf(b: ByteArray): Boolean =

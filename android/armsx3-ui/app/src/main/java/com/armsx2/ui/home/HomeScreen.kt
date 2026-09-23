@@ -194,7 +194,7 @@ fun HomeScreen(
             if (outcome == null) {
                 LibraryBackground.set(context, picked)
             } else {
-                outcome.file?.let { LibraryBackground.setImported(it) }
+                outcome.file?.let { LibraryBackground.setImported(it, outcome.slideshow) }
                 outcome.messageKey?.let { Toast.makeText(context, I18n.get(it), Toast.LENGTH_LONG).show() }
             }
         }
@@ -279,13 +279,18 @@ fun HomeScreen(
                     )
                 }
             } else {
-                // User-picked still image / GIF (Coil handles both).
-                AsyncImage(
-                    model = ImageRequest.Builder(context).data(libraryBg).crossfade(true).build(),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
+                // User-picked still image / GIF (Coil handles both), or a dynamic PS3 theme's slides.
+                val slides = LibraryBackground.slideshow.value
+                if (slides != null) {
+                    ThemeSlideshow(slides, Modifier.fillMaxSize())
+                } else {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context).data(libraryBg).crossfade(true).build(),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
             }
             // Scrim so covers and text stay readable over the backdrop. A user-picked image can
             // be any brightness, so it gets the full dark scrim. The XMB is our own controlled
