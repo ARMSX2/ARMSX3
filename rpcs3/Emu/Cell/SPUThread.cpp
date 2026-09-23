@@ -3044,7 +3044,17 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 	{
 		const u8* const guest = vm::_ptr<u8>(eal);
 
-		const bool unbacked = eal >= RAW_SPU_BASE_ADDR
+		// Raw SPU local storage is ordinary vm memory, mapped at its MMIO address for as long as
+		// that raw SPU exists -- which is why the RawSPU branch above leaves those transfers to the
+		// plain copy instead of redirecting them. So it is checked like any other address. Taking
+		// "not redirected" as "unbacked" here zero-filled Ratchet & Clank: Tools of Destruction's
+		// raw SPU 0 reading its partner's local store (GET from 0xe0124200); the SPU then chased
+		// the zeros to address 0 and died, and the game sat on a black screen after its first
+		// cutscene. A raw SPU that does not exist has nothing mapped, so it still counts as unbacked.
+		const bool raw_spu_ls = eal >= RAW_SPU_BASE_ADDR && eal < SYS_SPU_THREAD_BASE_LOW &&
+			(eal - RAW_SPU_BASE_ADDR) % RAW_SPU_OFFSET + args.size - 1 < SPU_LS_SIZE;
+
+		const bool unbacked = eal >= RAW_SPU_BASE_ADDR && !raw_spu_ls
 			? (is_get ? src == guest : dst == guest) // the MMIO block declined to redirect it
 			: !vm::check_addr(eal, is_get ? vm::page_readable : vm::page_writable, args.size);
 
