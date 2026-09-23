@@ -375,6 +375,22 @@ class P3tAnimationTest {
     }
 
     @Test
+    fun alphaSlideshowTemplateFadesWithoutAnInterpolation() {
+        // Persona 5 Slideshow's AlphaSlideshow.jsx: `duration = 8; fadeduration = 2.3;` and a timer
+        // whose callback calls slide.setColor(first, fadeduration) with just two arguments.
+        val names = listOf("duration", "fadeduration", "bgchange", "slide", "first", "IntervalTimer")
+        val o = Ops(names)
+        o.g("duration"); o.f(8f); o.assign()
+        o.g("fadeduration"); o.f(2.3f); o.assign()
+        o.function("bgchange") { g("slide"); op(0x30, 0); g("first"); g("fadeduration"); op(0x3D, 2); op(0x22) }
+        o.timer({ g("duration") }, "bgchange")
+        val timing = P3tAnimation.timing(vsmx(names, listOf("setColor"), o.list), -8f)
+        assertEquals(8f, timing.interval, 0f)
+        assertEquals(2.3f, timing.fade, 1e-6f)
+        assertEquals(0f, timing.zoom, 0f)
+    }
+
+    @Test
     fun unreadableScriptsKeepTheDefaults() {
         for (script in listOf(null, ByteArray(0), ByteArray(64) { 0x55 }, slideshowScript().copyOf(60))) {
             val timing = P3tAnimation.timing(script, -8f)
@@ -442,9 +458,21 @@ class P3tAnimationTest {
                 if (slide) slides++
                 println("  ${layer.name} ${layer.texture.width}x${layer.texture.height} z=${layer.z} clear=${"%.4f".format(P3tAnimation.clearShare(px))} ${if (slide) "slide" else "over"}")
             }
-            // The two themes this was built from: every bgNN is a slide, the rest are drawn over them.
-            val expected = mapOf("PS4_On_PS3" to 8, "JUJU7U" to 12).entries.firstOrNull { path.contains(it.key) }?.value
-            if (expected != null) assertEquals(expected, slides) else assertTrue(slides >= 1)
+            // Known samples: slides, then (interval, fade) from their scripts. Fallout NV is a scene
+            // theme (Sony's Prince of Persia Trilogy template): one slide under two layers, a still.
+            val known = listOf(
+                Triple("PS4_On_PS3", 8, 10f to 1.5f),
+                Triple("JUJU7U", 12, 7f to 1f),
+                Triple("Persona 5", 8, 8f to 2.3f),
+                Triple("Fallout NV", 1, 10f to 1.5f),
+            ).firstOrNull { path.contains(it.first) }
+            if (known != null) {
+                assertEquals(known.second, slides)
+                assertEquals(known.third.first, t.interval, 1e-4f)
+                assertEquals(known.third.second, t.fade, 1e-4f)
+            } else {
+                assertTrue(slides >= 1)
+            }
         }
     }
 }

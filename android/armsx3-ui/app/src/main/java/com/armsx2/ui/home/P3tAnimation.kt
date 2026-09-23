@@ -464,14 +464,21 @@ object P3tAnimation {
             }
         }
 
-        // receiver.method(first, time, INTERPOLATION_...) calls in a function body.
+        // receiver.method(first, time, INTERPOLATION_...) or receiver.method(first, time) calls in a
+        // function body: the time is the argument before the interpolation, or the last one. The
+        // AlphaSlideshow template (Persona 5 Slideshow) passes no interpolation at all.
         class Call(val method: String, val receiver: Int, val first: Int, val time: Float?)
+        fun number(i: Int): Float? = constant(i)?.first ?: numbers[global(i)]
         fun calls(body: IntRange): List<Call> {
             val found = ArrayList<Call>()
             for (k in body) {
-                if (op(k) != OP_CALL_METHOD || s.arg[k] != 3 || name(k - 1)?.startsWith("INTERPOLATION_") != true) continue
-                val time = constant(k - 2)?.first ?: numbers[global(k - 2)]
-                var m = k - 3
+                if (op(k) != OP_CALL_METHOD) continue
+                val time = when {
+                    s.arg[k] == 3 && name(k - 1)?.startsWith("INTERPOLATION_") == true -> number(k - 2)
+                    s.arg[k] == 2 -> number(k - 1)
+                    else -> continue
+                }
+                var m = k - 2
                 while (m >= body.first && op(m) != OP_METHOD) m--
                 if (m < body.first) continue
                 val method = s.props.getOrNull(s.arg[m]) ?: continue
