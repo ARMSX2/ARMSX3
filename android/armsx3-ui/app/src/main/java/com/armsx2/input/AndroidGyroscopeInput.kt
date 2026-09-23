@@ -81,9 +81,10 @@ class AndroidGyroscopeInput(
             for (id in InputDevice.getDeviceIds()) {
                 val dev = InputDevice.getDevice(id) ?: continue
                 if (dev.isVirtual) continue
-                if (!dev.supportsSource(InputDevice.SOURCE_GAMEPAD) &&
-                    !dev.supportsSource(InputDevice.SOURCE_JOYSTICK)
-                ) continue
+                // The sensors are often on a node of their own rather than the gamepad node, and on
+                // the Odin 3 that node shares nothing with the pad but its name; requiring a gamepad
+                // source here skipped a DualSense's gyro there entirely. See Sixaxis.gamepadNodeFor.
+                if (Sixaxis.gamepadNodeFor(dev) == null) continue
                 // Wrapped: a device can disappear between the id list and the query.
                 val sm = runCatching { dev.sensorManager }.getOrNull() ?: continue
                 val hasMotion = runCatching {

@@ -44,6 +44,48 @@ class Sixaxis(context: Context) {
     companion object {
         /** DS3 rest: flat and still, one g down its Y axis (pad_types.h DEFAULT_MOTION_Y). */
         private const val REST_Y = -1f
+
+        /**
+         * The gamepad node that claims a player slot for [dev], a node carrying a controller's
+         * motion sensors, or null when nothing pairs with it.
+         *
+         * One physical pad can enumerate as several InputDevices (a DualSense adds touchpad and
+         * motion nodes), and PadRouter only ever claims with the gamepad one. Normally they share
+         * a descriptor. The Odin 3 breaks that: it hides an external controller's own gamepad node
+         * and republishes it as a virtual pad of its own (vendor 0x2020, no unique id), so a
+         * DualSense's sensors (vendor 0x054c, its Bluetooth address) share nothing with the pad
+         * holding the player except the name, and tilting it fed nobody, wired or Bluetooth.
+         * Falls back to the name, pairing in id order when several controllers share one.
+         */
+        fun gamepadNodeFor(dev: InputDevice): InputDevice? {
+            if (dev.isPadNode()) return dev
+            val all = runCatching { InputDevice.getDeviceIds() }.getOrDefault(IntArray(0))
+                .asList().mapNotNull { id -> runCatching { InputDevice.getDevice(id) }.getOrNull() }
+
+            dev.descriptor?.let { descriptor ->
+                all.firstOrNull { it.descriptor == descriptor && it.isPadNode() }?.let { return it }
+            }
+
+            val name = dev.name ?: return null
+            val pads = all.filter { it.isPadNode() && it.name == name }.sortedBy { it.id }
+            if (pads.isEmpty()) return null
+            val sensorNodes = all.filter { !it.isPadNode() && it.name == name && it.hasMotionSensors() }
+                .sortedBy { it.id }
+            return pads.getOrElse(sensorNodes.indexOfFirst { it.id == dev.id }) { pads.first() }
+        }
+
+        private fun InputDevice.isPadNode(): Boolean =
+            (sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+                (sources and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+
+        private fun InputDevice.hasMotionSensors(): Boolean {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+            return runCatching {
+                val manager = sensorManager
+                manager.getSensorList(Sensor.TYPE_ACCELEROMETER).isNotEmpty() ||
+                    manager.getSensorList(Sensor.TYPE_GYROSCOPE).isNotEmpty()
+            }.getOrDefault(false)
+        }
     }
 
     private val appContext = context.applicationContext
@@ -150,29 +192,18 @@ class Sixaxis(context: Context) {
         for ((id, found) in wanted) {
             if (id in controllerFeeds) continue
             val (dev, manager) = found
-            val feed = ControllerFeed(padNodeFor(dev), dev.name ?: "controller", manager)
+            val pad = gamepadNodeFor(dev)
+            // Said once per controller, so a log shows whether its sensors found a player to feed.
+            runCatching {
+                net.rpcsx.RPCSX.instance.logAndroid(
+                    if (pad != null) "sixaxis: ${dev.name} motion sensors (input device ${dev.id}) pair with gamepad ${pad.id}"
+                    else "sixaxis: ${dev.name} motion sensors (input device ${dev.id}) pair with no gamepad"
+                )
+            }
+            val feed = ControllerFeed(pad?.id ?: dev.id, dev.name ?: "controller", manager)
             if (feed.start()) controllerFeeds[id] = feed
         }
     }
-
-    /**
-     * The node that claims a player slot for [dev]. One physical pad can enumerate as several
-     * InputDevices (a DualSense adds touchpad and motion nodes) and PadRouter only ever claims
-     * with the gamepad one, so the sensors are matched to it by descriptor.
-     */
-    private fun padNodeFor(dev: InputDevice): Int {
-        if (dev.isPadNode()) return dev.id
-        val descriptor = dev.descriptor ?: return dev.id
-        for (id in runCatching { InputDevice.getDeviceIds() }.getOrDefault(IntArray(0))) {
-            val other = runCatching { InputDevice.getDevice(id) }.getOrNull() ?: continue
-            if (other.descriptor == descriptor && other.isPadNode()) return other.id
-        }
-        return dev.id
-    }
-
-    private fun InputDevice.isPadNode(): Boolean =
-        (sources and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
-            (sources and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
 
     /** True when a controller reporting its own motion currently holds [port]. */
     private fun controllerOwns(port: Int): Boolean =
