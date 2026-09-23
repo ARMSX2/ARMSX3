@@ -1,6 +1,14 @@
 package com.armsx2.ui.home
 
 import android.widget.Toast
+import android.content.Context
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.compose.runtime.rememberCoroutineScope
+import com.armsx2.i18n.I18n
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -169,8 +177,27 @@ fun HomeScreen(
             ).show()
         }
     }
+    val backgroundScope = rememberCoroutineScope()
     val backgroundPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
-        picked?.let { LibraryBackground.set(context, it) }
+        if (picked == null) return@rememberLauncherForActivityResult
+        backgroundScope.launch {
+            // A PS3 theme goes through the importer, which takes a picture out of it. Anything else
+            // is used as picked, as before, provided it is a picture: .p3t files have no image type,
+            // so the picker now lists other files too.
+            val outcome = withContext(Dispatchers.IO) {
+                when {
+                    LibraryBackground.isTheme(context, picked) -> LibraryBackground.importTheme(context, picked)
+                    isPicture(context, picked) -> null
+                    else -> LibraryBackground.ThemeImport(null, "library.bg.notPicture")
+                }
+            }
+            if (outcome == null) {
+                LibraryBackground.set(context, picked)
+            } else {
+                outcome.file?.let { LibraryBackground.setImported(it) }
+                outcome.messageKey?.let { Toast.makeText(context, I18n.get(it), Toast.LENGTH_LONG).show() }
+            }
+        }
     }
     // Search: both the controller (A on the Search zone) AND a touch tap open the app's own D-pad +
     // touch keyboard (LibraryKeyboard). The search bar is no longer an editable TextField, so the
@@ -474,7 +501,7 @@ fun HomeScreen(
                                 onToggleCustomNames = { com.armsx2.CustomNames.set(!com.armsx2.CustomNames.enabled.value) },
                                 onToggleEnglishTitles = { EnglishTitles.set(!EnglishTitles.enabled.value) },
                                 onToggleShowHidden = { viewModel.setShowHidden(!com.armsx2.HiddenGames.showHidden.value) },
-                                onChooseBackground = { backgroundPicker.launch(arrayOf("image/*")) },
+                                onChooseBackground = { backgroundPicker.launch(arrayOf("image/*", "application/octet-stream")) },
                                 onClearBackground = LibraryBackground::clear,
                                 onExitApp = { showExitConfirm = true },
                             )
@@ -2171,3 +2198,14 @@ private fun ShelfGameCard(game: GameInfo, width: Dp, reflectionHeight: Dp, selec
     }
 }
 
+/** A picture Android can open: an image type, or failing that, dimensions it can read. */
+private fun isPicture(context: Context, source: Uri): Boolean {
+    if (context.contentResolver.getType(source)?.startsWith("image/") == true) return true
+    return runCatching {
+        context.contentResolver.openInputStream(source)?.use { input ->
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeStream(input, null, bounds)
+            bounds.outWidth > 0 && bounds.outHeight > 0
+        } ?: false
+    }.getOrDefault(false)
+}

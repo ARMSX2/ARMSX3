@@ -2,15 +2,25 @@ package com.armsx2.ui.home
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import androidx.compose.runtime.mutableStateOf
 import com.armsx2.runtime.MainActivityRuntime
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.security.MessageDigest
 
 /**
  * Optional user-chosen library background (#9). Stores a persisted content URI;
  * when unset the library falls back to the bundled default XMB-wave still image
  * (R.drawable.library_bg_xmb, drawn in HomeScreen). The user can pick a still image
- * or an animated GIF/WebP (Coil handles both); `clear()` reverts to the default.
+ * or an animated GIF/WebP (Coil handles both), or a PS3 theme (.p3t), whose best picture is
+ * imported into app storage by [importTheme]; `clear()` reverts to the default.
  * (The background used to be a looping MP4 but that hurt performance, so it's a
  * static image now.)
  */
@@ -176,12 +186,144 @@ object LibraryBackground {
         runCatching {
             context.contentResolver.takePersistableUriPermission(value, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+        forgetImported()
         uri.value = value.toString()
         runCatching { MainActivityRuntime.prefs.edit().putString(PREF, value.toString()).apply() }
     }
 
     fun clear() {
+        forgetImported()
         uri.value = null
         runCatching { MainActivityRuntime.prefs.edit().remove(PREF).apply() }
     }
+
+    // ---- PS3 themes (.p3t) ----
+    //
+    // A theme is not a picture, so it is not handed to Coil. The importer takes the best picture out
+    // of it (see P3tTheme), saves that in app storage, and the background then points at the saved
+    // file like any other image. Unlike a picked picture, which stays where the user keeps it, this
+    // one is ours, so it is deleted when the background changes or is cleared.
+
+    private const val IMPORTED_DIR = "library_backgrounds"
+    private const val IMPORTED_PREFIX = "p3t_"
+    private const val MAX_STREAMED_THEME_BYTES = 128 shl 20
+
+    /** The outcome of an import: the saved picture, and a message key for anything worth saying. */
+    class ThemeImport(val file: File?, val messageKey: String?)
+
+    /** True when [source] starts with the PS3 theme magic. Reads four bytes. */
+    fun isTheme(context: Context, source: Uri): Boolean = runCatching {
+        context.contentResolver.openInputStream(source)?.use { input ->
+            val head = ByteArray(4)
+            var n = 0
+            while (n < head.size) {
+                val read = input.read(head, n, head.size - n)
+                if (read < 0) break
+                n += read
+            }
+            n == head.size && P3tTheme.isTheme(head)
+        } ?: false
+    }.getOrDefault(false)
+
+    /**
+     * Take the best picture out of a PS3 theme and save it for the background. Blocking: call it
+     * off the main thread, then hand the file to [setImported] on the main thread.
+     */
+    fun importTheme(context: Context, source: Uri): ThemeImport {
+        val result = runCatching { readTheme(context, source) }.getOrNull()
+            ?: return ThemeImport(null, "library.bg.readFailed")
+        val picture = result.picture ?: return ThemeImport(
+            null,
+            when (result.failure) {
+                P3tTheme.Failure.DYNAMIC_ONLY -> "library.bg.themeDynamic"
+                P3tTheme.Failure.NO_PICTURE -> "library.bg.themeNoPicture"
+                P3tTheme.Failure.NOT_A_THEME -> "library.bg.notPicture"
+                else -> "library.bg.themeDamaged"
+            },
+        )
+        val dir = File(context.filesDir, IMPORTED_DIR).apply { mkdirs() }
+        val saved = runCatching {
+            val jpeg = picture.jpeg
+            if (jpeg != null) {
+                // Only a picture Android can decode becomes the background: Coil would show nothing.
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, bounds)
+                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return ThemeImport(null, "library.bg.themeDamaged")
+                File(dir, "$IMPORTED_PREFIX${digest(jpeg)}.jpg").apply { writeBytes(jpeg) }
+            } else {
+                val rgba = picture.rgba ?: return ThemeImport(null, "library.bg.themeDamaged")
+                val argb = IntArray(picture.width * picture.height) { i ->
+                    val p = i * 4
+                    ((rgba[p + 3].toInt() and 0xFF) shl 24) or ((rgba[p].toInt() and 0xFF) shl 16) or
+                        ((rgba[p + 1].toInt() and 0xFF) shl 8) or (rgba[p + 2].toInt() and 0xFF)
+                }
+                val bitmap = Bitmap.createBitmap(argb, picture.width, picture.height, Bitmap.Config.ARGB_8888)
+                try {
+                    File(dir, "$IMPORTED_PREFIX${digest(rgba)}.png").apply {
+                        outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                    }
+                } finally {
+                    bitmap.recycle()
+                }
+            }
+        }.getOrNull() ?: return ThemeImport(null, "library.bg.readFailed")
+        // A dynamic theme only gets its preview, which has the theme's own icons drawn into it.
+        return ThemeImport(saved, if (picture.source == P3tTheme.Source.PREVIEW) "library.bg.themePreview" else null)
+    }
+
+    /** Make a picture saved by [importTheme] the background. */
+    fun setImported(file: File) {
+        val value = Uri.fromFile(file).toString()
+        if (uri.value != value) forgetImported()
+        uri.value = value
+        runCatching { MainActivityRuntime.prefs.edit().putString(PREF, value).apply() }
+    }
+
+    /** Delete the current background's file when it is one the importer saved. */
+    private fun forgetImported() {
+        val current = uri.value ?: return
+        if (!current.startsWith("file:")) return
+        val file = Uri.parse(current).path?.let(::File) ?: return
+        if (file.parentFile?.name == IMPORTED_DIR && file.name.startsWith(IMPORTED_PREFIX)) runCatching { file.delete() }
+    }
+
+    /** Random access when the provider allows it, so a large dynamic theme is never read whole. */
+    private fun readTheme(context: Context, source: Uri): P3tTheme.Result {
+        context.contentResolver.openFileDescriptor(source, "r")?.let { descriptor ->
+            ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                val channel = input.channel
+                val size = runCatching { channel.size() }.getOrDefault(0L)
+                if (size > 0) return P3tTheme.read(ChannelBytes(channel, size))
+            }
+        }
+        // A provider that can only stream: read it whole, within a limit.
+        val bytes = context.contentResolver.openInputStream(source)?.use { input ->
+            val out = ByteArrayOutputStream()
+            val buffer = ByteArray(64 shl 10)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                out.write(buffer, 0, n)
+                if (out.size() > MAX_STREAMED_THEME_BYTES) throw IOException("theme too large")
+            }
+            out.toByteArray()
+        } ?: throw IOException("unreadable")
+        return P3tTheme.read(P3tTheme.ArrayBytes(bytes))
+    }
+
+    private class ChannelBytes(private val channel: FileChannel, override val size: Long) : P3tTheme.Bytes {
+        override fun read(offset: Long, length: Int): ByteArray {
+            val buffer = ByteBuffer.allocate(length)
+            var at = offset
+            while (buffer.hasRemaining()) {
+                val n = channel.read(buffer, at)
+                if (n < 0) throw IOException("short read")
+                at += n
+            }
+            return buffer.array()
+        }
+    }
+
+    private fun digest(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-1").digest(bytes).take(8).joinToString("") { "%02x".format(it) }
 }
