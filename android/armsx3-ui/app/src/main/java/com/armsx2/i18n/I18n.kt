@@ -552,6 +552,7 @@ val EN: Map<String, String> = mapOf(
     "packages.updates.removeFailed" to "Could not remove the update.",
     "packages.updates.downgradeNote" to "Installing an older version removes the current update first.",
     "packages.updates.rowChain" to "%s → %s · %d packages · %s",
+    "packages.updates.rowChainFromDisc" to "update %s available · %d packages · %s",
     "packages.updates.check" to "Check",
     "packages.updates.fromLibrary" to "From library",
     "packages.updates.checking" to "Checking…",

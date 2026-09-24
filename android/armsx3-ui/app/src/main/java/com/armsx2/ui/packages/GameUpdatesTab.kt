@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import android.util.Log
 import androidx.compose.ui.unit.dp
 import com.armsx2.Ps3Sfo
 import com.armsx2.data.library.GameLibraryRepository
@@ -37,11 +38,22 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 private fun str(key: String) = I18n.get(key)
+
+private const val TAG = "GameUpdates"
+
+/** Update packages downloading at once. See [GameUpdatesTab]'s installUpTo. */
+private const val PARALLEL_DOWNLOADS = 3
+
+/** Free space kept on top of a package before it starts downloading while others are ahead of it. */
+private const val SPACE_MARGIN_BYTES = 512L * 1024 * 1024
 
 /**
  * Compare two PS3 version strings ("01.04", "1.10") numerically, field by field.
@@ -243,63 +255,105 @@ fun GameUpdatesTab(
             fun dest(u: Ps3UpdateService.Ps3Update) =
                 File(context.cacheDir, "updates/${u.titleId}-${u.version}.pkg")
 
-            // The next package downloads while this one installs. They are independent -- only the
-            // INSTALLS have to stay ordered -- and a chain otherwise alternates network-idle and
-            // disk-idle for its whole length.
-            // Every package reports its progress, including the prefetched ones. They used to
-            // pass an empty callback, so the bar stopped moving the moment the first package
-            // finished and sat at 100% for the rest of the chain. Nothing was wrong, but a
-            // seven package title spent most of its time looking frozen, which is what it was
-            // reported as.
-            fun track(u: Ps3UpdateService.Ps3Update): (Float) -> Unit =
-                { value -> fetching = u.version to value }
-
-            fun fetch(u: Ps3UpdateService.Ps3Update) = scope.async(Dispatchers.IO) {
-                Ps3UpdateService.download(u, dest(u), track(u))
+            // Packages download several at a time, ahead of the installs, which stay one at a time
+            // and in order. One connection to Sony's server carries far less than the Wi-Fi can
+            // (about 7 MB/s on an Odin 3, where a Mac pulls 16 MB/s of the same package), and
+            // Gran Turismo 6 alone is 21 packages and 10 GB, so a chain that fetched one package at
+            // a time left most of the connection idle for its whole length.
+            //
+            // Every package reports its progress. The bar follows the earliest one still on the
+            // wire, which is the one the installs are waiting for. (Prefetched packages used to pass
+            // an empty callback, and the bar sat at 100% for the rest of the chain: nothing was
+            // wrong, but a seven package title looked frozen, and was reported as frozen.)
+            val wire = ConcurrentHashMap<Int, Float>()
+            fun showWire() {
+                fetching = wire.keys.minOrNull()?.let { i -> queue[i].version to (wire[i] ?: 0f) }
             }
 
-            var ahead = fetch(queue[0])
+            val results = List(queue.size) { CompletableDeferred<Result<File>>() }
+            // How many packages are on the wire at once, and how many may sit on disk ahead of the
+            // installs, the one installing included. The second keeps a long chain from filling
+            // the cache with gigabytes it has not got to yet.
+            val onWire = Semaphore(PARALLEL_DOWNLOADS)
+            val ahead = Semaphore(PARALLEL_DOWNLOADS + 1)
+            val started = System.nanoTime()
 
-            for ((index, update) in queue.withIndex()) {
-                downloading = if (queue.size == 1) update.version
-                else "${update.version} (${index + 1}/${queue.size})"
+            val downloads = launch(Dispatchers.IO) {
+                for ((i, u) in queue.withIndex()) {
+                    // Taken in queue order, so a later package can never hold the room the next
+                    // install is waiting for.
+                    ahead.acquire()
+                    // Wait for installs to free the space it needs, unless nothing else is ahead of
+                    // it: then it goes regardless, as a single download always did.
+                    while (ahead.availablePermits < PARALLEL_DOWNLOADS &&
+                        context.cacheDir.usableSpace < u.sizeBytes + SPACE_MARGIN_BYTES
+                    ) {
+                        delay(1_000)
+                    }
+                    onWire.acquire()
+                    wire[i] = 0f
+                    showWire()
+                    launch {
+                        try {
+                            results[i].complete(
+                                Ps3UpdateService.download(u, dest(u)) { value ->
+                                    wire[i] = value
+                                    showWire()
+                                }
+                            )
+                        } finally {
+                            results[i].complete(Result.failure(IllegalStateException("download cancelled")))
+                            wire.remove(i)
+                            showWire()
+                            onWire.release()
+                        }
+                    }
+                }
+            }
 
-                val downloaded = ahead.await()
+            try {
+                for ((index, update) in queue.withIndex()) {
+                    downloading = if (queue.size == 1) update.version
+                    else "${update.version} (${index + 1}/${queue.size})"
 
-                if (index + 1 < queue.size) {
-                    ahead = fetch(queue[index + 1])
-                } else {
-                    fetching = null
+                    val file = results[index].await().getOrElse {
+                        status = str("packages.updates.downloadFailed").format(it.message ?: "download failed")
+                        return@launch
+                    }
+
+                    val done = CompletableDeferred<Boolean>()
+                    installing = update.version
+                    onInstall(listOf(file), index == queue.lastIndex) { ok -> done.complete(ok) }
+
+                    val ok = done.await()
+                    installing = null
+
+                    // Done with it either way; a chain of seven is otherwise gigabytes of dead cache.
+                    runCatching { file.delete() }
+                    ahead.release()
+
+                    if (!ok) {
+                        // The parent already shows the native reason, which names the real problem.
+                        status = str("packages.updates.chainStopped").format(update.version)
+                        return@launch
+                    }
                 }
 
-                val file = downloaded.getOrElse {
-                    status = str("packages.updates.downloadFailed").format(it.message ?: "download failed")
-                    downloading = null
-                    fetching = null
-                    return@launch
-                }
-
-                val done = CompletableDeferred<Boolean>()
-                installing = update.version
-                onInstall(listOf(file), index == queue.lastIndex) { ok -> done.complete(ok) }
-
-                val ok = done.await()
+                val seconds = (System.nanoTime() - started) / 1e9
+                val megabytes = queue.sumOf { it.sizeBytes } / 1048576.0
+                Log.i(TAG, "chain of %d packages, %.0f MB, done in %.0f s (%.1f MB/s overall)".format(
+                    queue.size, megabytes, seconds, megabytes / seconds.coerceAtLeast(0.001),
+                ))
+            } finally {
+                // A chain that stops leaves nothing behind: the packages fetched ahead were for
+                // installs that are not going to happen now.
+                downloads.cancel()
+                queue.forEach { runCatching { dest(it).delete() } }
+                downloading = null
+                fetching = null
                 installing = null
-
-                if (!ok) {
-                    // The parent already shows the native reason, which names the real problem.
-                    status = str("packages.updates.chainStopped").format(update.version)
-                    downloading = null
-                    fetching = null
-                    return@launch
-                }
-
-                // Done with it either way; a chain of seven is otherwise gigabytes of dead cache.
-                runCatching { file.delete() }
             }
 
-            downloading = null
-            fetching = null
             // Re-read rather than assume: the installed version is now whatever is on disk. Local
             // only -- nothing the service told us has changed.
             refreshInstalledOnly()
@@ -460,12 +514,21 @@ fun GameUpdatesTab(
                                             str("packages.updates.rowUpToDate").format(row.installed.orEmpty())
                                         Stage.Available -> {
                                             val v = row.newest!!
-                                            if (row.installed == null)
-                                                str("packages.updates.rowAvailable")
-                                                    .format(v.version, formatSize(v.sizeBytes))
-                                            else
-                                                str("packages.updates.rowUpgrade")
-                                                    .format(row.installed, v.version, formatSize(v.sizeBytes))
+                                            // What Install will download, not the newest package's
+                                            // size: Gran Turismo 6 read "35 MB" for a chain of 21
+                                            // packages and 10 GB.
+                                            val chain = row.pending
+                                            val size = formatSize(chain.sumOf { it.sizeBytes }.takeIf { it > 0 } ?: v.sizeBytes)
+                                            when {
+                                                chain.size > 1 && row.installed == null ->
+                                                    str("packages.updates.rowChainFromDisc").format(v.version, chain.size, size)
+                                                chain.size > 1 ->
+                                                    str("packages.updates.rowChain").format(row.installed, v.version, chain.size, size)
+                                                row.installed == null ->
+                                                    str("packages.updates.rowAvailable").format(v.version, size)
+                                                else ->
+                                                    str("packages.updates.rowUpgrade").format(row.installed, v.version, size)
+                                            }
                                         }
                                     },
                                 )
