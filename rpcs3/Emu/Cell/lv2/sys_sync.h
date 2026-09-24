@@ -308,8 +308,8 @@ public:
 		return (attr.pshared == SYS_SYNC_PROCESS_SHARED ? +attr.ipc_key : 0);
 	}
 
-	template <typename T, typename F, typename... Args>
-	static error_code create(u32 pshared, u64 ipc_key, s32 flags, F&& make, bool key_not_zero = true, Args&&... args)
+	template <typename T, typename F>
+	static error_code create(u32 pshared, u64 ipc_key, s32 flags, F&& make, bool key_not_zero = true)
 	{
 		switch (pshared)
 		{
@@ -340,7 +340,8 @@ public:
 		default: return CELL_EINVAL;
 		}
 
-		CellError error{};
+		// EAGAIN for IDM IDs shortage
+		CellError error = CELL_EAGAIN;
 
 		if (!idm::import<lv2_obj, T>([&]() -> shared_ptr<T>
 		{
@@ -348,7 +349,7 @@ public:
 
 			auto finalize_construct = [&]() -> shared_ptr<T>
 			{
-				if ((error = result->on_id_create(std::forward<Args>(args)...)))
+				if ((error = result->on_id_create()))
 				{
 					result.reset();
 				}
@@ -381,11 +382,6 @@ public:
 			bool added = false;
 			std::tie(added, result) = ipc_container.add(ipc_key, finalize_construct, flags != SYS_SYNC_NEWLY_CREATED);
 
-			if (error)
-			{
-				return {};
-			}
-
 			if (!added)
 			{
 				if (flags == SYS_SYNC_NEWLY_CREATED)
@@ -405,7 +401,7 @@ public:
 			return result;
 		}))
 		{
-			return error ? error : CELL_EAGAIN;
+			return error;
 		}
 
 		return CELL_OK;

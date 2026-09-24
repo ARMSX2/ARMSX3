@@ -20,7 +20,6 @@
 #include "Emu/Cell/lv2/sys_process.h"
 #include "Emu/Cell/lv2/sys_prx.h"
 #include "Emu/Cell/lv2/sys_memory.h"
-#include "Emu/Cell/lv2/sys_mmapper.h"
 #include "Emu/Cell/lv2/sys_overlay.h"
 
 #include "Emu/Cell/Modules/StaticHLE.h"
@@ -28,7 +27,6 @@
 #include <map>
 #include <span>
 #include <set>
-#include <shared_mutex>
 #include <algorithm>
 #include "util/asm.hpp"
 
@@ -699,18 +697,7 @@ bool ppu_form_branch_to_code(u32 entry, u32 target);
 
 extern u32 ppu_get_exported_func_addr(u32 fnid, const std::string& module_name)
 {
-	auto& link = g_fxo->get<ppu_linkage_info>();
-	std::shared_lock lock(link.mutex);
-
-	const auto module = link.modules.find(module_name);
-
-	if (module == link.modules.end())
-	{
-		return 0;
-	}
-
-	const auto function = module->second.functions.find(fnid);
-	return function == module->second.functions.end() ? 0 : function->second.export_addr;
+	return g_fxo->get<ppu_linkage_info>().modules[module_name].functions[fnid].export_addr;
 }
 
 extern bool ppu_register_library_lock(std::string_view libname, bool lock_lib)
@@ -2746,11 +2733,6 @@ bool ppu_load_exec(const ppu_exec_object& elf, bool virtual_load, const std::str
 
 		void init_fxo_for_exec(utils::serial* ar, bool full);
 		init_fxo_for_exec(ar, false);
-
-		if (!ar && !Emu.IsVsh())
-		{
-			init_system_shared_memory();
-		}
 
 		liblv2_begin = 0;
 		liblv2_end = 0;
