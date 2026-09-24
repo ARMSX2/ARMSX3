@@ -95,6 +95,8 @@
  "app.barColor.desc": "Barê jorîn bixwe (sernivîsa girover) rengîn bikin. Pêşniyaz mijara we dişopîne. Ev bar e - rengên li jêr paşxaneya anîmasyonî ya li pişt pirtûkxaneyê ji nû ve reng dikin.",
  "app.barOpacity": "Nezelaliya darikê pirtûkxaneyê",
  "app.barOpacity.desc": "Nirxa kêmtir dihêle paşxaneya pirtûkxaneyê di darikê jorîn re xuya bibe. 100% bi tevahî nezelal e.",
+ "app.bgDimming": "Tarîkirina paşxaneyê",
+ "app.bgDimming.desc": "Pirtûkxane çiqas paşxaneya xwe tarî dike da ku nivîs bê xwendin. Di 0% de wek xwe tê nîşandan.",
  "app.batteryWarnings": "hişyariyên pîlê",
  "app.batteryWarnings.desc": "Dema ku pîlê dakeve %20 an jî germahiya pîlê bigihîje 35°C, pankartek kurt nîşan bide. Her hişyarî carek xuya dibe û piştî ku xwendin ji nû ve dest pê dike.",
  "app.bg.simple": "Paşnavê anîmasyonek hêsan",

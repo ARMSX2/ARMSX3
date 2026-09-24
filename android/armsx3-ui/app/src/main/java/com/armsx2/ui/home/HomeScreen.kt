@@ -236,8 +236,10 @@ fun HomeScreen(
             // backdrop (dark at the top where the content sits) and a heavy scrim just muddied
             // its blue into navy — so it gets only a whisper of dimming, letting the vivid blue
             // read through.
-            val scrimTop = if (libraryBg == null) 0.06f else 0.55f
-            val scrimBottom = if (libraryBg == null) 0.20f else 0.80f
+            // Background Dimming (App Settings) scales it, down to none.
+            val dimming = LibraryChromePreferences.backgroundDimming.value / 100f
+            val scrimTop = (if (libraryBg == null) 0.06f else 0.55f) * dimming
+            val scrimBottom = (if (libraryBg == null) 0.20f else 0.80f) * dimming
             Box(
                 Modifier.fillMaxSize().background(
                     Brush.verticalGradient(

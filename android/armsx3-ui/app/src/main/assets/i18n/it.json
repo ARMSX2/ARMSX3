@@ -95,6 +95,8 @@
  "app.barColor.desc": "Colora la barra superiore stessa (l'intestazione arrotondata). L'impostazione predefinita segue il tuo tema. Questa è la barra: i colori sottostanti ricolorano lo sfondo animato dietro la biblioteca.",
  "app.barOpacity": "Opacità della barra della libreria",
  "app.barOpacity.desc": "Un valore più basso lascia intravedere lo sfondo della libreria attraverso la barra in alto. 100% è opaca.",
+ "app.bgDimming": "Oscuramento dello sfondo",
+ "app.bgDimming.desc": "Quanto la libreria scurisce il suo sfondo per mantenere leggibile il testo. Allo 0% viene mostrato così com'è.",
  "app.batteryWarnings": "Avvisi sulla batteria",
  "app.batteryWarnings.desc": "Mostra un breve banner quando la batteria scende al 20% o la temperatura della batteria raggiunge i 35°C. Ciascun avviso appare una volta e si riattiva una volta ripristinata la lettura.",
  "app.bg.simple": "Sfondo animato semplice",

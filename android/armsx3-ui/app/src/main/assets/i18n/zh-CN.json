@@ -95,6 +95,8 @@
  "app.barColor.desc": "为顶部栏本身（圆形标题）着色。默认遵循您的主题。这是栏——下面的颜色重新着色了图书馆后面的动画背景。",
  "app.barOpacity": "库栏不透明度",
  "app.barOpacity.desc": "数值越低，库背景越能透过顶部栏显示出来。100% 为完全不透明。",
+ "app.bgDimming": "背景变暗程度",
+ "app.bgDimming.desc": "库为保持文字清晰而调暗背景的程度。0% 时按原样显示背景。",
  "app.batteryWarnings": "电池警告",
  "app.batteryWarnings.desc": "当电池电量降至 20% 或电池温度达到 35°C 时显示简短横幅。每个警告都会出现一次，并在读数恢复后重新启动。",
  "app.bg.simple": "简单的动画背景",

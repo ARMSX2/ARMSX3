@@ -402,6 +402,8 @@ val EN: Map<String, String> = mapOf(
     "app.barColor.default" to "Default",
     "app.barOpacity" to "Library Bar Opacity",
     "app.barOpacity.desc" to "Lower lets the library background show through the top bar. 100% is solid.",
+    "app.bgDimming" to "Background Dimming",
+    "app.bgDimming.desc" to "How much the library darkens its background to keep text readable. 0% shows it as it is.",
     "app.bg.simple" to "Simple animated background",
     "app.bg.flurry" to "Animated background",
     "app.bg.saver" to "Animation",

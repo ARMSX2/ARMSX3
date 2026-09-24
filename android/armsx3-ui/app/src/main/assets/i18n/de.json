@@ -95,6 +95,8 @@
  "app.barColor.desc": "Färben Sie die obere Leiste selbst (die abgerundete Kopfzeile). Die Standardeinstellung folgt Ihrem Thema. Dies ist die Leiste – die Farben unten färben den animierten Hintergrund hinter der Bibliothek neu.",
  "app.barOpacity": "Deckkraft der Bibliotheksleiste",
  "app.barOpacity.desc": "Weniger lässt den Bibliothekshintergrund durch die obere Leiste scheinen. 100 % ist deckend.",
+ "app.bgDimming": "Hintergrundabdunklung",
+ "app.bgDimming.desc": "Wie stark die Bibliothek ihren Hintergrund abdunkelt, damit Text lesbar bleibt. Bei 0 % bleibt er unverändert.",
  "app.batteryWarnings": "Batteriewarnungen",
  "app.batteryWarnings.desc": "Zeigt ein kurzes Banner an, wenn der Akku auf 20 % sinkt oder die Akkutemperatur 35 °C erreicht. Jede Warnung erscheint einmal und wird wieder aktiviert, nachdem der Messwert wiederhergestellt ist.",
  "app.bg.simple": "Einfacher animierter Hintergrund",

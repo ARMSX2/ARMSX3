@@ -95,6 +95,8 @@
  "app.barColor.desc": "Üst çubuğun kendisini (yuvarlak başlık) renklendirin. Varsayılan temanızı takip eder. Bu çubuktur; aşağıdaki renkler kütüphanenin arkasındaki hareketli arka planı yeniden renklendirmektedir.",
  "app.barOpacity": "Kütüphane Çubuğu Opaklığı",
  "app.barOpacity.desc": "Düşük değerler kütüphane arka planının üst çubuğun içinden görünmesini sağlar. %100 tamamen opaktır.",
+ "app.bgDimming": "Arka plan karartma",
+ "app.bgDimming.desc": "Kütüphanenin, yazılar okunaklı kalsın diye arka planı ne kadar kararttığı. %0'da arka plan olduğu gibi görünür.",
  "app.batteryWarnings": "Pil uyarıları",
  "app.batteryWarnings.desc": "Pil %20'ye düştüğünde veya pil sıcaklığı 35°C'ye ulaştığında kısa bir banner gösterin. Her uyarı bir kez görünür ve okuma düzeldikten sonra yeniden devreye girer.",
  "app.bg.simple": "Basit animasyonlu arka plan",

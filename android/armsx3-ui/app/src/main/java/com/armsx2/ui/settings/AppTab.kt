@@ -475,6 +475,16 @@ fun AppTab() {
                     valueFormatter = { "$it%" },
                     onChange = com.armsx2.ui.theme.LibraryChromePreferences::setBarOpacity,
                 )
+                // How far the library darkens whatever background is behind it.
+                IntSliderRow(
+                    label = str("app.bgDimming"),
+                    value = com.armsx2.ui.theme.LibraryChromePreferences.backgroundDimming.value,
+                    min = 0,
+                    max = 100,
+                    description = str("app.bgDimming.desc"),
+                    valueFormatter = { "$it%" },
+                    onChange = com.armsx2.ui.theme.LibraryChromePreferences::setBackgroundDimming,
+                )
             }
             // Continuous RGB hue-cycle — same idea as the theme's RGB mode. While on, the fixed
             // color (presets + sliders) doesn't apply, so it's hidden.

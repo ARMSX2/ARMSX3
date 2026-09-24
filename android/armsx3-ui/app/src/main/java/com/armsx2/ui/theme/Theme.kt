@@ -138,6 +138,7 @@ object LibraryChromePreferences {
     private const val OpacityKey = "ui.library.opacity"
     private const val BarColorKey = "ui.library.barColor"
     private const val BarOpacityKey = "ui.library.barOpacity"
+    private const val DimmingKey = "ui.library.backgroundDimming"
 
     val showSearch = mutableStateOf(false)
     val showRecents = mutableStateOf(true)
@@ -172,6 +173,16 @@ object LibraryChromePreferences {
         barOpacity.value = v
         MainActivityRuntime.prefs.edit { putInt(BarOpacityKey, v) }
     }
+    /** How far the library darkens its background to keep text readable over it, as a percent
+     *  (0-100) of the dimming it always had. 100 = that; 0 = the background as it is, as View
+     *  background shows it. */
+    val backgroundDimming = mutableStateOf(100)
+
+    fun setBackgroundDimming(value: Int) {
+        val v = value.coerceIn(0, 100)
+        backgroundDimming.value = v
+        MainActivityRuntime.prefs.edit { putInt(DimmingKey, v) }
+    }
     // Card/list translucency over the wallpaper, as a percent (20–100). 100 = the old
     // fully-opaque look; lower lets the library background show through the game rows.
     val libraryOpacity = mutableStateOf(100)
@@ -182,6 +193,7 @@ object LibraryChromePreferences {
         libraryOpacity.value = MainActivityRuntime.prefs.getInt(OpacityKey, 100).coerceIn(20, 100)
         barColor.value = MainActivityRuntime.prefs.getInt(BarColorKey, 0)
         barOpacity.value = MainActivityRuntime.prefs.getInt(BarOpacityKey, 100).coerceIn(0, 100)
+        backgroundDimming.value = MainActivityRuntime.prefs.getInt(DimmingKey, 100).coerceIn(0, 100)
     }
 
     fun setShowSearch(value: Boolean) {

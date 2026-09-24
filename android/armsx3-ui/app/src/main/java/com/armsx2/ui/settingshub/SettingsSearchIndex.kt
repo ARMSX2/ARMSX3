@@ -18,6 +18,8 @@ internal data class SettingsSearchEntry(val text: String, val isI18nKey: Boolean
 internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("app.bg.simple", true, SettingsCategory.General),
     SettingsSearchEntry("app.bgColor.rgb", true, SettingsCategory.General),
+    SettingsSearchEntry("app.barOpacity", true, SettingsCategory.General),
+    SettingsSearchEntry("app.bgDimming", true, SettingsCategory.General),
     SettingsSearchEntry("app.bootLogo", true, SettingsCategory.General),
     SettingsSearchEntry("app.blockHome", true, SettingsCategory.General),
     SettingsSearchEntry("secondScreen.label", true, SettingsCategory.General),
