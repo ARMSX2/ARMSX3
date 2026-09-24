@@ -186,11 +186,55 @@ class ThemeSceneTest {
         assertFalse(p.actors[3].drawable)
     }
 
+    /** The quad bent by joint 1 of a two-joint skeleton. */
+    private val skinnedQuad = RafScene.Mesh(
+        quad.positions, quad.uvs, quad.indices,
+        joints = IntArray(16), weights = FloatArray(16) { if (it % 4 == 0) 1f else 0f },
+        segments = listOf(RafScene.Segment(0, 6, intArrayOf(1))),
+    )
+
+    private val twoJoints = EdgeAnim.Skeleton(
+        intArrayOf(-1, 0),
+        floatArrayOf(0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f, 1f, 1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f, 1f, 1f),
+    )
+
+    private val identities = FloatArray(24) { if (it % 12 in intArrayOf(0, 5, 10)) 1f else 0f }
+
+    /** Joint 1 moves 4 units along x over one second. */
+    private val slide = EdgeAnim.Clip(
+        duration = 1f, frameRate = 60f, frames = 61,
+        channels = listOf(EdgeAnim.Channel(1, EdgeAnim.TRANSLATION, floatArrayOf(0f, 60f), floatArrayOf(0f, 0f, 0f, 4f, 0f, 0f))),
+    )
+
+    private fun rigged(clip: EdgeAnim.Clip?, speed: Float = 1f) = RafScene.Actor(
+        "a", skinnedQuad, RafScene.Material("basic_lighting", texture),
+        FloatArray(3), FloatArray(3), floatArrayOf(1f, 1f, 1f), floatArrayOf(1f, 1f, 1f, 1f), FloatArray(2), floatArrayOf(1f, 1f),
+        rig = RafScene.Rig(twoJoints, identities, listOf(clip)),
+        animWeights = floatArrayOf(1f), animSpeeds = floatArrayOf(speed), animTimes = floatArrayOf(0f),
+    )
+
     @Test
-    fun skinnedMeshesAreNotDrawn() {
-        val skinned = RafScene.Mesh(quad.positions, quad.uvs, quad.indices, skinned = true)
-        val p = play(listOf(actor("a", skinned))) {}
-        assertFalse(p.actors[0].drawable)
+    fun skinnedMeshesNeedASkeleton() {
+        assertFalse(play(listOf(actor("a", skinnedQuad))) {}.actors[0].drawable)
+        assertTrue(play(listOf(rigged(slide))) {}.actors[0].drawable)
+    }
+
+    @Test
+    fun skinnedActorsPlayTheirClip() {
+        val p = play(listOf(rigged(slide))) {}
+        p.run(30)
+        // Joint 1's skin matrix carries the clip's translation, halfway through the second.
+        assertEquals(2f, p.actors[0].skinMatrices()!![12 + 3], 1e-3f)
+        // Clips loop.
+        p.run(60)
+        assertEquals(2f, p.actors[0].skinMatrices()!![12 + 3], 1e-3f)
+    }
+
+    @Test
+    fun animationSpeedScalesTime() {
+        val p = play(listOf(rigged(slide, speed = 0.5f))) {}
+        p.run(30)
+        assertEquals(1f, p.actors[0].skinMatrices()!![12 + 3], 1e-3f)
     }
 
     @Test

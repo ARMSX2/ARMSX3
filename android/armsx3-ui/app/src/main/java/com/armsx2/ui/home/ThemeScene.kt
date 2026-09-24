@@ -25,6 +25,10 @@ import kotlin.math.tan
  *    `INTERPOLATION_BEZIER`.
  * A callback that fails stops its own timer; the rest of the scene keeps going. [random] is what
  * Math.random returns, for tests.
+ *
+ * Skinned actors play their model's clips (see [EdgeAnim]) on their own: each animation slot of
+ * the actor has a weight, a speed and a start time, and the clips loop. Scripts can change those
+ * through anim_weight, anim_speed and anim_time.
  */
 class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = { Math.random() }) {
 
@@ -92,15 +96,45 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
         val color = source.color.copyOf()
         val uvOffset = source.uvOffset.copyOf()
         val uvScale = source.uvScale.copyOf()
+        val animWeights = source.animWeights.copyOf(ANIM_SLOTS).also { if (source.animWeights.isEmpty()) it[0] = 1f }
+        val animSpeeds = FloatArray(ANIM_SLOTS) { source.animSpeeds.getOrElse(it) { 1f } }
+        val animTimes = source.animTimes.copyOf(ANIM_SLOTS)
         var enabled = true
             private set
 
         /**
-         * Whether there is anything to draw. Not a mesh bent by a skeleton (skeletal animation is
-         * not decoded, and the bind pose is a T-pose), and not one its author collapsed to hide it.
+         * Whether there is anything to draw: a mesh with a texture, not one its author collapsed to
+         * hide it, and when it is bent by a skeleton, the skeleton to bend it with.
          */
-        val drawable: Boolean = source.mesh != null && !source.mesh.skinned &&
+        val drawable: Boolean = source.mesh != null && (!source.mesh.skinned || source.rig != null) &&
             source.material?.texture != null && source.mesh.area() > MIN_AREA
+
+        private val pose = source.rig?.skeleton?.rest?.copyOf()
+        private val worlds = source.rig?.let { FloatArray(12 * it.skeleton.joints) }
+        private val skin = source.rig?.let { FloatArray(12 * it.skeleton.joints) }
+
+        /**
+         * Each joint's world x inverse bind matrix (3x4, row-major, 12 floats a joint) at the scene's
+         * current time, or null when the actor is not skinned. The array is reused.
+         */
+        fun skinMatrices(): FloatArray? {
+            val rig = source.rig ?: return null
+            val pose = pose ?: return null
+            rig.skeleton.rest.copyInto(pose)
+            var total = 0f
+            for (slot in 0 until minOf(ANIM_SLOTS, rig.clips.size)) {
+                val w = animWeights[slot]
+                val clip = rig.clips[slot] ?: continue
+                if (!(w > 0f)) continue
+                total += w
+                val t = time * animSpeeds[slot] + animTimes[slot]
+                val local = (t % clip.duration).let { if (it < 0) it + clip.duration else it }
+                // Blending in turn by weight / weight so far is the weighted average.
+                EdgeAnim.sample(clip, (local * clip.frameRate).toFloat(), pose, w / total)
+            }
+            EdgeAnim.worlds(rig.skeleton, pose, worlds!!)
+            return EdgeAnim.skinMatrices(worlds, rig.inverseBinds, skin!!)
+        }
 
         /** Drawn this frame: [drawable], enabled, and neither see-through nor scaled to nothing. */
         val shown: Boolean
@@ -113,6 +147,9 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             "color" -> color
             "uv_offset" -> uvOffset
             "uv_scale" -> uvScale
+            "anim_weight" -> animWeights
+            "anim_speed" -> animSpeeds
+            "anim_time" -> animTimes
             else -> null
         }
 
@@ -170,11 +207,11 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
         }
     }
 
-    /** Lights are kept for the scripts that read and move them; drawing is unlit. */
-    inner class LightState : Movable() {
-        private val position = FloatArray(3)
-        private val direction = floatArrayOf(0f, 0f, -1f)
-        private val color = floatArrayOf(1f, 1f, 1f, 1f)
+    /** A light: the scene's own values to start with, then wherever the script moves it. */
+    inner class LightState(val type: Int = RafScene.Light.POINT, from: RafScene.Light? = null) : Movable() {
+        val position = from?.position?.copyOf(3) ?: FloatArray(3)
+        val direction = from?.direction?.copyOf(3) ?: floatArrayOf(0f, 0f, -1f)
+        val color = from?.color?.copyOf(3) ?: floatArrayOf(1f, 1f, 1f)
 
         override fun vector(name: String): FloatArray? = when (name) {
             "position" -> position
@@ -209,7 +246,16 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
 
     val actors: List<ActorState> = scene.actors.map { ActorState(it) }
     val camera = CameraState()
-    private val lights = HashMap<String, LightState>()
+    private val lights = LinkedHashMap<String, LightState>().also { map ->
+        for (l in scene.lights) map[l.name] = LightState(l.type, l)
+    }
+
+    /** The scene's lights as they are now, for drawing. */
+    val lightStates: Collection<LightState> get() = lights.values
+
+    /** Seconds since the scene started. */
+    var time = 0.0
+        private set
     private val timers = ArrayList<Timer>()
     private val byName = actors.associateBy { it.source.name }
 
@@ -313,6 +359,7 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
     fun advance(seconds: Double) {
         start()
         val dt = if (seconds.isNaN()) 0.0 else seconds.coerceIn(0.0, MAX_STEP)
+        time += dt
         for (a in actors) a.step(dt)
         camera.step(dt)
         for (l in lights.values) l.step(dt)
@@ -372,6 +419,7 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
         private const val MIN_AREA = 1e-6
         private const val MIN_FOV = 0.01f
         private const val MAX_FOV = 3.1f
+        private const val ANIM_SLOTS = 8
 
         /**
          * Whether [scene]'s script moves the camera or anything drawn within [seconds]. A theme whose

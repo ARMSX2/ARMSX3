@@ -17,6 +17,12 @@ import java.util.IdentityHashMap
  * the way the theme's material asks (see [RafScene.Material]). Create, use and [release] it on the
  * thread whose context is current.
  *
+ * Skinned meshes are bent on the GPU, a segment at a time with that segment's palette of joint
+ * matrices in uniforms (Edge keeps a segment's palette small: 67 joints at most in Ape Escape).
+ * Lit materials are shaded by the scene's ambient, point and directional lights, clamped:
+ * texture x (ambient + light x N.L), which on the PS3's own preview of Ape Escape leaves the
+ * monkeys' white helmets white.
+ *
  * Textures are decoded to RGBA with premultiplied alpha, so their see-through edges filter and
  * mipmap without dark fringes, and only for actors that can be shown.
  */
@@ -26,21 +32,42 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
 
     private var program = 0
     private var uMvp = 0
+    private var uModel = 0
     private var uUv = 0
     private var uColor = 0
     private var uOpaque = 0
+    private var uSkinned = 0
+    private var uBones = 0
+    private var uLit = 0
+    private var uAmbient = 0
+    private var uLightPos = 0
+    private var uLightColor = 0
+    private var uLights = 0
     private val meshes = IdentityHashMap<RafScene.Mesh, Gpu>()
     private val textures = IdentityHashMap<P3tAnimation.Texture, Int>()
     private val model = FloatArray(16)
     private val mvp = FloatArray(16)
+    private val bones = FloatArray(12 * MAX_BONES)
+    private val lightPos = FloatArray(4 * MAX_LIGHTS)
+    private val lightColor = FloatArray(3 * MAX_LIGHTS)
+    private val ambient = FloatArray(3)
+    private var skippedPalette = false
 
     /** Build what the scene draws. Throws when GL cannot. */
     fun init() {
         program = link(VERTEX, FRAGMENT)
         uMvp = GLES30.glGetUniformLocation(program, "uMvp")
+        uModel = GLES30.glGetUniformLocation(program, "uModel")
         uUv = GLES30.glGetUniformLocation(program, "uUv")
         uColor = GLES30.glGetUniformLocation(program, "uColor")
         uOpaque = GLES30.glGetUniformLocation(program, "uOpaque")
+        uSkinned = GLES30.glGetUniformLocation(program, "uSkinned")
+        uBones = GLES30.glGetUniformLocation(program, "uBones")
+        uLit = GLES30.glGetUniformLocation(program, "uLit")
+        uAmbient = GLES30.glGetUniformLocation(program, "uAmbient")
+        uLightPos = GLES30.glGetUniformLocation(program, "uLightPos")
+        uLightColor = GLES30.glGetUniformLocation(program, "uLightColor")
+        uLights = GLES30.glGetUniformLocation(program, "uLights")
         GLES30.glUseProgram(program)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uTex"), 0)
 
@@ -81,10 +108,12 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
         )
         GLES30.glUseProgram(program)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        val lights = setLights()
         for (a in play.actors) {
             if (!a.shown) continue
             val material = a.source.material ?: continue
-            val gpu = meshes[a.source.mesh] ?: continue
+            val mesh = a.source.mesh ?: continue
+            val gpu = meshes[mesh] ?: continue
             val texture = textures[material.texture]?.takeIf { it != 0 } ?: continue
             when {
                 material.opaque -> GLES30.glDisable(GLES30.GL_BLEND)
@@ -99,17 +128,66 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
             }
             if (material.depthTest) GLES30.glEnable(GLES30.GL_DEPTH_TEST) else GLES30.glDisable(GLES30.GL_DEPTH_TEST)
             GLES30.glDepthMask(material.depthTest && material.opaque)
-            ThemeScene.multiply(viewProjection, ThemeScene.modelMatrix(a.position, a.rotation, a.scale, model), mvp)
+            ThemeScene.modelMatrix(a.position, a.rotation, a.scale, model)
+            ThemeScene.multiply(viewProjection, model, mvp)
             GLES30.glUniformMatrix4fv(uMvp, 1, false, mvp, 0)
+            GLES30.glUniformMatrix4fv(uModel, 1, false, model, 0)
             GLES30.glUniform4f(uUv, a.uvScale[0], a.uvScale[1], a.uvOffset[0], a.uvOffset[1])
             GLES30.glUniform4f(uColor, a.color[0], a.color[1], a.color[2], a.color[3])
             GLES30.glUniform1f(uOpaque, if (material.opaque) 1f else 0f)
+            // Without a light in the scene or normals in the mesh, lit reads as unlit rather than black.
+            GLES30.glUniform1f(uLit, if (material.lit && lights && mesh.normals != null) 1f else 0f)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
             GLES30.glBindVertexArray(gpu.vao)
-            GLES30.glDrawElements(GLES30.GL_TRIANGLES, gpu.count, GLES30.GL_UNSIGNED_SHORT, 0)
+            val skin = if (mesh.skinned) a.skinMatrices() else null
+            for (segment in mesh.segments) {
+                val palette = segment.palette
+                if (skin != null && palette != null) {
+                    if (palette.size > MAX_BONES) {
+                        if (!skippedPalette) Log.w(TAG, "a segment needs ${palette.size} joints, more than $MAX_BONES")
+                        skippedPalette = true
+                        continue
+                    }
+                    for (k in palette.indices) skin.copyInto(bones, 12 * k, 12 * palette[k], 12 * palette[k] + 12)
+                    GLES30.glUniform4fv(uBones, 3 * palette.size, bones, 0)
+                    GLES30.glUniform1f(uSkinned, 1f)
+                } else {
+                    GLES30.glUniform1f(uSkinned, 0f)
+                }
+                GLES30.glDrawElements(GLES30.GL_TRIANGLES, segment.indexCount, GLES30.GL_UNSIGNED_SHORT, 2 * segment.firstIndex)
+            }
         }
         GLES30.glBindVertexArray(0)
         GLES30.glDepthMask(true)
+    }
+
+    /** The scene's lights into their uniforms. False when there are none. */
+    private fun setLights(): Boolean {
+        ambient.fill(0f)
+        var n = 0
+        var any = false
+        for (l in play.lightStates) {
+            any = true
+            when (l.type) {
+                RafScene.Light.AMBIENT -> for (k in 0 until 3) ambient[k] += l.color[k]
+                else -> if (n < MAX_LIGHTS) {
+                    if (l.type == RafScene.Light.DIRECTIONAL) {
+                        for (k in 0 until 3) lightPos[4 * n + k] = -l.direction[k]
+                        lightPos[4 * n + 3] = 0f
+                    } else {
+                        for (k in 0 until 3) lightPos[4 * n + k] = l.position[k]
+                        lightPos[4 * n + 3] = 1f
+                    }
+                    for (k in 0 until 3) lightColor[3 * n + k] = l.color[k]
+                    n++
+                }
+            }
+        }
+        GLES30.glUniform3fv(uAmbient, 1, ambient, 0)
+        GLES30.glUniform4fv(uLightPos, MAX_LIGHTS, lightPos, 0)
+        GLES30.glUniform3fv(uLightColor, MAX_LIGHTS, lightColor, 0)
+        GLES30.glUniform1i(uLights, n)
+        return any
     }
 
     fun release() {
@@ -125,13 +203,22 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
         program = 0
     }
 
-    /** Positions and texture coordinates interleaved, and the triangles. */
+    /**
+     * Interleaved: position, texture coordinate and normal as floats, then four joint indexes and
+     * four weights as bytes. And the triangles.
+     */
     private fun upload(mesh: RafScene.Mesh): Gpu {
         val n = mesh.vertexCount
-        val vertices = ByteBuffer.allocateDirect(n * STRIDE).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        val vertices = ByteBuffer.allocateDirect(n * STRIDE).order(ByteOrder.nativeOrder())
+        val normals = mesh.normals
+        val joints = mesh.joints
+        val weights = mesh.weights
         for (v in 0 until n) {
-            vertices.put(mesh.positions, v * 3, 3)
-            vertices.put(mesh.uvs, v * 2, 2)
+            for (k in 0 until 3) vertices.putFloat(mesh.positions[3 * v + k])
+            for (k in 0 until 2) vertices.putFloat(mesh.uvs[2 * v + k])
+            for (k in 0 until 3) vertices.putFloat(normals?.get(3 * v + k) ?: 0f)
+            for (k in 0 until 4) vertices.put((joints?.get(4 * v + k) ?: 0).toByte())
+            for (k in 0 until 4) vertices.put(((weights?.get(4 * v + k) ?: 0f) * 255f + 0.5f).toInt().coerceIn(0, 255).toByte())
         }
         vertices.position(0)
         val indices = ByteBuffer.allocateDirect(mesh.indices.size * 2).order(ByteOrder.nativeOrder()).asShortBuffer()
@@ -147,6 +234,12 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
         GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, STRIDE, 0)
         GLES30.glEnableVertexAttribArray(1)
         GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, STRIDE, 12)
+        GLES30.glEnableVertexAttribArray(2)
+        GLES30.glVertexAttribPointer(2, 3, GLES30.GL_FLOAT, false, STRIDE, 20)
+        GLES30.glEnableVertexAttribArray(3)
+        GLES30.glVertexAttribPointer(3, 4, GLES30.GL_UNSIGNED_BYTE, false, STRIDE, 32)
+        GLES30.glEnableVertexAttribArray(4)
+        GLES30.glVertexAttribPointer(4, 4, GLES30.GL_UNSIGNED_BYTE, true, STRIDE, 36)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, buffers[1])
         GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, mesh.indices.size * 2, indices, GLES30.GL_STATIC_DRAW)
         GLES30.glBindVertexArray(0)
@@ -183,7 +276,9 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
 
     companion object {
         private const val TAG = "ThemeScene"
-        private const val STRIDE = 20
+        private const val STRIDE = 40
+        private const val MAX_BONES = 72 // 216 vec4 of the 256 GLES 3 guarantees a vertex shader
+        private const val MAX_LIGHTS = 4
         private const val MAX_SIDE = 2048
         private const val MIN_SIDE = 256
         private const val TEXTURE_BUDGET = 96L shl 20
@@ -254,6 +349,9 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
             GLES30.glAttachShader(program, f)
             GLES30.glBindAttribLocation(program, 0, "aPos")
             GLES30.glBindAttribLocation(program, 1, "aUv")
+            GLES30.glBindAttribLocation(program, 2, "aNormal")
+            GLES30.glBindAttribLocation(program, 3, "aJoints")
+            GLES30.glBindAttribLocation(program, 4, "aWeights")
             GLES30.glLinkProgram(program)
             GLES30.glDeleteShader(v)
             GLES30.glDeleteShader(f)
@@ -270,12 +368,39 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
         private const val VERTEX = """#version 300 es
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec2 aUv;
+layout(location = 2) in vec3 aNormal;
+layout(location = 3) in vec4 aJoints;
+layout(location = 4) in vec4 aWeights;
 uniform mat4 uMvp;
+uniform mat4 uModel;
 uniform vec4 uUv; // scale in xy, offset in zw
+uniform float uSkinned;
+uniform vec4 uBones[216]; // 3x4 matrices, a row each
 out vec2 vUv;
+out vec3 vWorld;
+out vec3 vNormal;
+vec3 bone(int j, vec4 p) {
+    return vec3(dot(uBones[3 * j], p), dot(uBones[3 * j + 1], p), dot(uBones[3 * j + 2], p));
+}
 void main() {
+    vec3 p = aPos;
+    vec3 n = aNormal;
+    if (uSkinned > 0.5) {
+        p = vec3(0.0);
+        n = vec3(0.0);
+        for (int k = 0; k < 4; k++) {
+            float w = aWeights[k];
+            if (w > 0.0) {
+                int j = int(aJoints[k] + 0.5);
+                p += w * bone(j, vec4(aPos, 1.0));
+                n += w * bone(j, vec4(aNormal, 0.0));
+            }
+        }
+    }
     vUv = aUv * uUv.xy + uUv.zw;
-    gl_Position = uMvp * vec4(aPos, 1.0);
+    vWorld = (uModel * vec4(p, 1.0)).xyz;
+    vNormal = mat3(uModel) * n;
+    gl_Position = uMvp * vec4(p, 1.0);
 }
 """
 
@@ -283,13 +408,31 @@ void main() {
         private const val FRAGMENT = """#version 300 es
 precision highp float;
 in vec2 vUv;
+in vec3 vWorld;
+in vec3 vNormal;
 uniform sampler2D uTex;
 uniform vec4 uColor;
 uniform float uOpaque;
+uniform float uLit;
+uniform vec3 uAmbient;
+uniform vec4 uLightPos[4]; // w 1: a point light's position; w 0: toward a directional light
+uniform vec3 uLightColor[4];
+uniform int uLights;
 out vec4 fragColor;
 void main() {
     vec4 t = texture(uTex, vUv);
-    fragColor = uOpaque > 0.5 ? vec4(t.rgb * uColor.rgb, 1.0) : t * vec4(uColor.rgb * uColor.a, uColor.a);
+    vec3 rgb = t.rgb;
+    if (uLit > 0.5) {
+        vec3 n = normalize(vNormal);
+        vec3 shade = uAmbient;
+        for (int i = 0; i < 4; i++) {
+            if (i >= uLights) break;
+            vec3 l = uLightPos[i].w > 0.5 ? normalize(uLightPos[i].xyz - vWorld) : normalize(uLightPos[i].xyz);
+            shade += uLightColor[i] * max(dot(n, l), 0.0);
+        }
+        rgb *= min(shade, vec3(1.0));
+    }
+    fragColor = uOpaque > 0.5 ? vec4(rgb * uColor.rgb, 1.0) : vec4(rgb * uColor.rgb * uColor.a, t.a * uColor.a);
 }
 """
 
