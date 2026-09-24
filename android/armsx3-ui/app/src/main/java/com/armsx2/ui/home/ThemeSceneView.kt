@@ -27,8 +27,7 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
     }
 
     override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-        val hz = display?.refreshRate ?: 60f
-        thread = RenderThread(st, w, h, scene, hz) { ok -> post { onGlStatus?.invoke(ok) } }.also {
+        thread = RenderThread(st, w, h, scene) { ok -> post { onGlStatus?.invoke(ok) } }.also {
             it.paused = windowVisibility != VISIBLE
             it.start()
         }
@@ -62,7 +61,6 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
         @Volatile private var width: Int,
         @Volatile private var height: Int,
         private val file: File,
-        private val refreshHz: Float,
         private val onStatus: (Boolean) -> Unit,
     ) : Thread("theme-scene") {
         @Volatile private var running = true
@@ -88,16 +86,16 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
                     val scene = RafScene.read(bytes) ?: return
                     val play = ThemeScene(scene)
                     if (!egl.create(surfaceTexture, width, height)) return
-                    // About 60 frames a second, what the scripts are written for, on faster panels too.
-                    egl.swapInterval((refreshHz / 55f).toInt().coerceIn(1, 4))
                     val renderer = ThemeSceneRenderer(play, bytes)
                     try {
                         renderer.init()
                         var last = System.nanoTime()
+                        var next = last
                         while (running) {
                             if (paused) {
                                 sleep(PAUSED_POLL_MS)
                                 last = System.nanoTime()
+                                next = last
                                 continue
                             }
                             val now = System.nanoTime()
@@ -109,6 +107,14 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
                                 shown = true
                                 onStatus(true)
                             }
+                            // Paced here, not by the swap interval: a TextureView takes frames as
+                            // fast as the panel shows them whatever that says, 120 a second on the
+                            // Odin 3, which kept its GPU 97% busy and its fan on. At 30, as the XMB
+                            // wave runs, the scripts still tick at 60 and catch up two a frame.
+                            next += FRAME_NANOS
+                            val wait = next - System.nanoTime()
+                            if (wait > 0) sleep(wait / 1_000_000, (wait % 1_000_000).toInt())
+                            else if (wait < -FRAME_NANOS) next = System.nanoTime() // behind: no burst to catch up
                         }
                     } finally {
                         renderer.release()
@@ -131,5 +137,6 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
         const val TAG = "ThemeScene"
         const val PAUSED_POLL_MS = 100L
         const val JOIN_MS = 500L
+        const val FRAME_NANOS = 1_000_000_000L / 30
     }
 }

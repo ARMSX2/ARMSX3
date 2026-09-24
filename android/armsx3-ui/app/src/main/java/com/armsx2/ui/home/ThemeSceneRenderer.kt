@@ -31,6 +31,8 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
     private var uOpaque = 0
     private val meshes = IdentityHashMap<RafScene.Mesh, Gpu>()
     private val textures = IdentityHashMap<P3tAnimation.Texture, Int>()
+    private val model = FloatArray(16)
+    private val mvp = FloatArray(16)
 
     /** Build what the scene draws. Throws when GL cannot. */
     fun init() {
@@ -97,7 +99,7 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
             }
             if (material.depthTest) GLES30.glEnable(GLES30.GL_DEPTH_TEST) else GLES30.glDisable(GLES30.GL_DEPTH_TEST)
             GLES30.glDepthMask(material.depthTest && material.opaque)
-            val mvp = ThemeScene.multiply(viewProjection, ThemeScene.modelMatrix(a.position, a.rotation, a.scale))
+            ThemeScene.multiply(viewProjection, ThemeScene.modelMatrix(a.position, a.rotation, a.scale, model), mvp)
             GLES30.glUniformMatrix4fv(uMvp, 1, false, mvp, 0)
             GLES30.glUniform4f(uUv, a.uvScale[0], a.uvScale[1], a.uvOffset[0], a.uvOffset[1])
             GLES30.glUniform4f(uColor, a.color[0], a.color[1], a.color[2], a.color[3])
@@ -375,11 +377,6 @@ internal class SceneEgl {
             if (EGL14.eglChooseConfig(display, attribs, 0, configs, 0, 1, count, 0) && count[0] > 0) return configs[0]
         }
         return null
-    }
-
-    /** Frames per display refresh: 2 shows every other refresh. */
-    fun swapInterval(interval: Int) {
-        EGL14.eglSwapInterval(display, interval)
     }
 
     fun swap(): Boolean = EGL14.eglSwapBuffers(display, surface)

@@ -413,19 +413,18 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
          * against PS4 On PS3, whose slide (rotation pi/2, 0, -pi, negative scale) only comes out
          * upright and unmirrored in this order.
          */
-        fun modelMatrix(p: FloatArray, r: FloatArray, s: FloatArray): FloatArray {
+        fun modelMatrix(p: FloatArray, r: FloatArray, s: FloatArray, out: FloatArray = FloatArray(16)): FloatArray {
             val cx = cos(r[0].toDouble()); val sx = sin(r[0].toDouble())
             val cy = cos(r[1].toDouble()); val sy = sin(r[1].toDouble())
             val cz = cos(r[2].toDouble()); val sz = sin(r[2].toDouble())
             val r00 = cz * cy; val r01 = cz * sy * sx - sz * cx; val r02 = cz * sy * cx + sz * sx
             val r10 = sz * cy; val r11 = sz * sy * sx + cz * cx; val r12 = sz * sy * cx - cz * sx
             val r20 = -sy; val r21 = cy * sx; val r22 = cy * cx
-            return floatArrayOf(
-                (r00 * s[0]).toFloat(), (r10 * s[0]).toFloat(), (r20 * s[0]).toFloat(), 0f,
-                (r01 * s[1]).toFloat(), (r11 * s[1]).toFloat(), (r21 * s[1]).toFloat(), 0f,
-                (r02 * s[2]).toFloat(), (r12 * s[2]).toFloat(), (r22 * s[2]).toFloat(), 0f,
-                p[0], p[1], p[2], 1f,
-            )
+            out[0] = (r00 * s[0]).toFloat(); out[1] = (r10 * s[0]).toFloat(); out[2] = (r20 * s[0]).toFloat(); out[3] = 0f
+            out[4] = (r01 * s[1]).toFloat(); out[5] = (r11 * s[1]).toFloat(); out[6] = (r21 * s[1]).toFloat(); out[7] = 0f
+            out[8] = (r02 * s[2]).toFloat(); out[9] = (r12 * s[2]).toFloat(); out[10] = (r22 * s[2]).toFloat(); out[11] = 0f
+            out[12] = p[0]; out[13] = p[1]; out[14] = p[2]; out[15] = 1f
+            return out
         }
 
         /** Looking from [eye] along [direction], as gluLookAt; column-major. */
@@ -458,9 +457,8 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             )
         }
 
-        /** a * b, both column-major 4x4. */
-        fun multiply(a: FloatArray, b: FloatArray): FloatArray {
-            val out = FloatArray(16)
+        /** a * b, both column-major 4x4, into [out], which must be neither. */
+        fun multiply(a: FloatArray, b: FloatArray, out: FloatArray = FloatArray(16)): FloatArray {
             for (c in 0 until 4) for (r in 0 until 4) {
                 var sum = 0f
                 for (k in 0 until 4) sum += a[k * 4 + r] * b[c * 4 + k]
