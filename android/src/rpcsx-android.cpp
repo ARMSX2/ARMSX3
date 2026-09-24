@@ -3918,10 +3918,23 @@ static bool is_disc_playlist(std::string_view path) {
   return path.size() > 4 && fmt::to_lower(path.substr(path.size() - 4)) == ".m3u";
 }
 
+// A stop the user asked for ends the session. Upstream says so in GracefulShutdown, which turns
+// continuous mode off ("Make sure we close the game window"); Kill() alone does not, and every stop
+// here is a Kill(). A game that restarts itself into another executable (exitspawn: Gran Turismo 6
+// does it at every boot, into EMAIN.SELF) turns continuous mode on to keep its disc mounted across
+// the restart, and nothing turned it off again. Every later Kill then skipped unload_iso(), the
+// image stayed registered, and the next ISO boot could not register its own, because
+// fs::set_virtual_device will not replace a device of the same name: booting Sonic '06 after
+// Gran Turismo 6 read Gran Turismo 6's PARAM.SFO and booted Gran Turismo 6 again.
+static void stop_session() {
+  Emu.SetContinuousMode(false);
+  Emu.Kill();
+}
+
 // Held so a probe cannot be inside vfs::mount while this resets g_fxo underneath it.
 extern "C" void _rpcsx_shutdown() {
   std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
-  Emu.Kill();
+  stop_session();
 }
 
 extern "C" int _rpcsx_boot(std::string_view path_) {
@@ -3963,7 +3976,7 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
   // thread has run to completion.
   if (!Emu.IsStopped(true)) {
     rpcsx_android.notice("boot: previous VM still running, stopping it first");
-    Emu.Kill();
+    stop_session();
 
     for (int waited = 0; !Emu.IsStopped(true) && waited < 10000; waited += 20) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -3972,6 +3985,13 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
     if (!Emu.IsStopped(true)) {
       rpcsx_android.error("boot: previous VM did not stop in time, booting anyway");
     }
+  }
+
+  // Drop whatever image the last session left mounted before this boot mounts its own. A stale
+  // one shadows the new disc (see stop_session), and until now the library's disc probe was the
+  // only thing that ever removed it, which is why the wrong game booted only some of the time.
+  if (Emu.IsStopped(true)) {
+    unload_iso();
   }
 
   Emu.SetForceBoot(true);
@@ -4102,7 +4122,7 @@ extern "C" int _rpcsx_getState() {
 }
 extern "C" void _rpcsx_kill() {
   std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
-  Emu.Kill();
+  stop_session();
 }
 extern "C" void _rpcsx_resume() { Emu.Resume(); }
 
