@@ -1,7 +1,6 @@
 package com.armsx2.ui.home
 
 import android.content.Context
-import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -23,15 +22,13 @@ import java.nio.channels.FileChannel
 import java.security.MessageDigest
 
 /**
- * Optional user-chosen library background (#9). Stores a persisted content URI;
- * when unset the library falls back to the bundled default XMB-wave still image
- * (R.drawable.library_bg_xmb, drawn in HomeScreen). The user can pick a still image
- * or an animated GIF/WebP (Coil handles both), or a PS3 theme (.p3t), which [importTheme]
- * turns into pictures in app storage: its best picture, or for a dynamic theme its slides,
- * played by [ThemeSlideshow], or its whole scene, played live by [ThemeSceneView].
- * `clear()` reverts to the default.
- * (The background used to be a looping MP4 but that hurt performance, so it's a
- * static image now.)
+ * Optional user-chosen library background (#9). When unset the library falls back to the default
+ * (the XMB wave, drawn in HomeScreen). The user can add a still image or an animated GIF/WebP
+ * (Coil handles both), or a PS3 theme (.p3t), which [importTheme] turns into pictures in app
+ * storage: its best picture, or for a dynamic theme its slides, played by [ThemeSlideshow], or its
+ * whole scene, played live by [ThemeSceneView]. Everything added is kept (see [saved]) until the
+ * user removes it, so they can switch between backgrounds without adding them again.
+ * [useDefault] reverts to the default.
  */
 object LibraryBackground {
     private const val PREF = "library.background.uri"
@@ -216,20 +213,175 @@ object LibraryBackground {
         else -> SaverSpec.Flurry(flurryPreset.value)
     }
 
-    fun set(context: Context, value: Uri) {
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(value, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        forgetImported()
-        uri.value = value.toString()
-        runCatching { MainActivityRuntime.prefs.edit().putString(PREF, value.toString()).apply() }
+    // ---- saved backgrounds ----
+    //
+    // Everything the user adds stays, each in a folder of its own under IMPORTED_DIR with a
+    // meta.json saying what it is, until they remove it, so going back to one needs no re-import:
+    // the library's menu lists them. The one on show is whichever [uri] points into.
+
+    private const val SAVED_PREFIX = "bg_"
+    private const val META_NAME = "meta.json"
+    private const val MAX_PICTURE_BYTES = 64L shl 20
+
+    /** A background the user added: its picture, and its slides or live scene when it has them. */
+    class Saved(val folder: File, val name: String, val picture: File, val slideshow: Slideshow?, val scene: File?, val added: Long)
+
+    /** Every saved background, oldest first. */
+    val saved = mutableStateOf<List<Saved>>(emptyList())
+
+    /** The saved background on show, if the background is one. Reads [uri] and [saved]. */
+    fun current(): Saved? {
+        val shown = uri.value ?: return null
+        return saved.value.firstOrNull { Uri.fromFile(it.picture).toString() == shown }
     }
 
-    fun clear() {
-        forgetImported()
-        uri.value = null
-        runCatching { MainActivityRuntime.prefs.edit().remove(PREF).apply() }
+    /** Show [entry], adding it to [saved] when it is new, or the default background for null. */
+    fun select(entry: Saved?) {
+        if (entry == null) return useDefault()
+        if (saved.value.none { it.folder == entry.folder }) saved.value = saved.value + entry
+        setImported(entry.picture, entry.slideshow, entry.scene)
     }
+
+    /** Back to the default background. Saved ones stay saved. */
+    fun useDefault() {
+        uri.value = null
+        slideshow.value = null
+        scene.value = null
+        runCatching { MainActivityRuntime.prefs.edit().remove(PREF).remove(PREF_SLIDESHOW).remove(PREF_SCENE).apply() }
+    }
+
+    /** Delete [entry]'s files; the default background comes back when it was on show. */
+    fun remove(entry: Saved) {
+        if (current()?.folder == entry.folder) useDefault()
+        saved.value = saved.value.filter { it.folder != entry.folder }
+        runCatching { entry.folder.deleteRecursively() }
+    }
+
+    /**
+     * Keep an import's [result] as a saved background called [name], its files moved into a folder
+     * of their own. Null when there is nothing to keep. Blocking: call it off the main thread, then
+     * hand the result to [select] on it.
+     */
+    fun keep(context: Context, result: ThemeImport, name: String): Saved? {
+        val file = result.file ?: return null
+        val dir = File(context.filesDir, IMPORTED_DIR)
+        val folder = newSavedFolder(dir) ?: return null
+        return try {
+            val parent = file.parentFile
+            if (parent != null && parent.parentFile == dir && parent.name.startsWith(IMPORTED_PREFIX)) {
+                // Slides or a live scene: their whole folder becomes this one.
+                folder.delete()
+                if (!parent.renameTo(folder)) throw IOException("could not move ${parent.name}")
+            } else if (!file.renameTo(File(folder, file.name))) {
+                throw IOException("could not move ${file.name}")
+            }
+            fun moved(f: File) = File(folder, f.name)
+            val entry = Saved(
+                folder, name, moved(file),
+                result.slideshow?.let { Slideshow(it.frames.map(::moved), it.timing) },
+                result.scene?.let(::moved),
+                System.currentTimeMillis(),
+            )
+            writeMeta(entry)
+            entry
+        } catch (_: Exception) {
+            folder.deleteRecursively()
+            null
+        }
+    }
+
+    /** Copy a picked picture into a saved background called [name]. Null when it cannot be read. Blocking. */
+    fun keepPicture(context: Context, source: Uri, name: String): Saved? {
+        val dir = File(context.filesDir, IMPORTED_DIR).apply { mkdirs() }
+        val folder = newSavedFolder(dir) ?: return null
+        return try {
+            val extension = when (context.contentResolver.getType(source)) {
+                "image/png" -> "png"
+                "image/gif" -> "gif"
+                "image/webp" -> "webp"
+                else -> "jpg"
+            }
+            val file = File(folder, "picture.$extension")
+            val input = context.contentResolver.openInputStream(source) ?: throw IOException("unreadable")
+            input.use { from ->
+                file.outputStream().use { to ->
+                    val buffer = ByteArray(64 shl 10)
+                    var total = 0L
+                    while (true) {
+                        val n = from.read(buffer)
+                        if (n < 0) break
+                        total += n
+                        if (total > MAX_PICTURE_BYTES) throw IOException("picture too large")
+                        to.write(buffer, 0, n)
+                    }
+                }
+            }
+            Saved(folder, name, file, null, null, System.currentTimeMillis()).also(::writeMeta)
+        } catch (_: Exception) {
+            folder.deleteRecursively()
+            null
+        }
+    }
+
+    /** The picked file's name without its extension, to name what it becomes. */
+    fun displayName(context: Context, source: Uri): String? = runCatching {
+        context.contentResolver.query(source, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    }.getOrNull()?.substringBeforeLast('.')?.trim()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * Read the saved backgrounds, and keep what an older version left as the background, which
+     * it deleted on the next change: an imported theme's files, or a picture used where the user
+     * kept it. Returns that one, to [select] on the main thread. Blocking.
+     */
+    fun loadSaved(context: Context): Saved? {
+        val dir = File(context.filesDir, IMPORTED_DIR)
+        val found = dir.listFiles()?.filter { it.isDirectory && it.name.startsWith(SAVED_PREFIX) }?.mapNotNull(::readMeta)
+            ?.sortedBy { it.added }.orEmpty()
+        saved.value = found
+        val shown = uri.value ?: return null
+        if (found.any { Uri.fromFile(it.picture).toString() == shown }) return null
+        return if (shown.startsWith("file:")) {
+            val file = Uri.parse(shown).path?.let(::File)?.takeIf { it.isFile } ?: return null
+            keep(context, ThemeImport(file, null, slideshow.value, scene.value), "PS3 theme")
+        } else {
+            val source = Uri.parse(shown)
+            keepPicture(context, source, displayName(context, source) ?: "Picture")
+        }
+    }
+
+    private fun newSavedFolder(dir: File): File? {
+        repeat(4) {
+            val folder = File(dir, SAVED_PREFIX + java.lang.Long.toHexString(System.currentTimeMillis()) + "_" + (0..0xfff).random().toString(16))
+            if (folder.mkdirs()) return folder
+        }
+        return null
+    }
+
+    private fun writeMeta(entry: Saved) {
+        val o = JSONObject()
+            .put("name", entry.name)
+            .put("added", entry.added)
+            .put("picture", entry.picture.name)
+        entry.scene?.let { o.put("scene", it.name) }
+        entry.slideshow?.let { show ->
+            o.put("slideshow", JSONObject(slideshowJson(show)).put("frames", JSONArray(show.frames.map { it.name })))
+        }
+        File(entry.folder, META_NAME).writeText(o.toString())
+    }
+
+    private fun readMeta(folder: File): Saved? = runCatching {
+        val o = JSONObject(File(folder, META_NAME).readText())
+        val picture = File(folder, o.getString("picture")).takeIf { it.isFile } ?: return null
+        val scene = o.optString("scene").takeIf { it.isNotEmpty() }?.let { File(folder, it) }?.takeIf { it.isFile }
+        val show = o.optJSONObject("slideshow")?.let { s ->
+            val names = s.getJSONArray("frames")
+            s.put("frames", JSONArray(List(names.length()) { File(folder, names.getString(it)).path }))
+            slideshowFrom(s.toString())
+        }
+        Saved(folder, o.optString("name").ifEmpty { folder.name }, picture, show, scene, o.optLong("added"))
+    }.getOrNull()
 
     // ---- PS3 themes (.p3t) ----
     //
@@ -237,9 +389,8 @@ object LibraryBackground {
     // of it (see P3tTheme), saves that in app storage, and the background then points at the saved
     // file like any other image. A dynamic theme whose scene is a slideshow (see P3tAnimation) has
     // its slides saved instead, in a folder of their own, and plays them; any other scene its script
-    // moves is kept whole in such a folder and played live (see ThemeScene). Unlike a picked picture,
-    // which stays where the user keeps it, these are ours, so they are deleted when the background
-    // changes or is cleared.
+    // moves is kept whole in such a folder and played live (see ThemeScene). Each import is then
+    // kept as a saved background (see keep), in a folder of its own, until the user removes it.
 
     private const val IMPORTED_DIR = "library_backgrounds"
     private const val IMPORTED_PREFIX = "p3t_"
@@ -256,7 +407,14 @@ object LibraryBackground {
      * The outcome of an import: the saved picture, the slideshow or live scene when the theme plays
      * one, and a message key for anything worth saying.
      */
-    class ThemeImport(val file: File?, val messageKey: String?, val slideshow: Slideshow? = null, val scene: File? = null)
+    class ThemeImport(
+        val file: File?,
+        val messageKey: String?,
+        val slideshow: Slideshow? = null,
+        val scene: File? = null,
+        /** The theme's own name, when it has one. */
+        val name: String? = null,
+    )
 
     /** True when [source] starts with the PS3 theme magic. Reads four bytes. */
     fun isTheme(context: Context, source: Uri): Boolean = runCatching {
@@ -288,7 +446,11 @@ object LibraryBackground {
         // A dynamic theme plays its slides when its scene is a slideshow, and the scene itself when
         // its script moves anything else; otherwise it falls through to its best picture like any
         // other theme.
-        result.anim?.let { anim -> runCatching { importAnimation(theme, anim, dir) }.getOrNull()?.let { return it } }
+        result.anim?.let { anim ->
+            runCatching { importAnimation(theme, anim, dir) }.getOrNull()?.let {
+                return ThemeImport(it.file, it.messageKey, it.slideshow, it.scene, result.name)
+            }
+        }
         val picture = result.picture ?: return ThemeImport(
             null,
             when (result.failure) {
@@ -325,7 +487,7 @@ object LibraryBackground {
         }.getOrNull() ?: return ThemeImport(null, "library.bg.readFailed")
         // A dynamic theme that is not a slideshow only gets its preview, which has the theme's own
         // icons drawn into it.
-        return ThemeImport(saved, if (picture.source == P3tTheme.Source.PREVIEW) "library.bg.themePreview" else null)
+        return ThemeImport(saved, if (picture.source == P3tTheme.Source.PREVIEW) "library.bg.themePreview" else null, name = result.name)
     }
 
     /**
@@ -442,9 +604,8 @@ object LibraryBackground {
      * Make a picture saved by [importTheme] the background, playing [show] or the scene [live] when
      * there is one.
      */
-    fun setImported(file: File, show: Slideshow? = null, live: File? = null) {
+    private fun setImported(file: File, show: Slideshow? = null, live: File? = null) {
         val value = Uri.fromFile(file).toString()
-        if (uri.value != value) forgetImported()
         uri.value = value
         slideshow.value = show
         scene.value = live
@@ -453,25 +614,6 @@ object LibraryBackground {
             if (show != null) edit.putString(PREF_SLIDESHOW, slideshowJson(show)) else edit.remove(PREF_SLIDESHOW)
             if (live != null) edit.putString(PREF_SCENE, live.path) else edit.remove(PREF_SCENE)
             edit.apply()
-        }
-    }
-
-    /** Delete the current background's files when they are ones the importer saved. */
-    private fun forgetImported() {
-        if (slideshow.value != null || scene.value != null) {
-            slideshow.value = null
-            scene.value = null
-            runCatching { MainActivityRuntime.prefs.edit().remove(PREF_SLIDESHOW).remove(PREF_SCENE).apply() }
-        }
-        val current = uri.value ?: return
-        if (!current.startsWith("file:")) return
-        val file = Uri.parse(current).path?.let(::File) ?: return
-        val parent = file.parentFile ?: return
-        when {
-            parent.name == IMPORTED_DIR && file.name.startsWith(IMPORTED_PREFIX) -> runCatching { file.delete() }
-            // A slideshow or live scene: the whole folder.
-            parent.parentFile?.name == IMPORTED_DIR && parent.name.startsWith(IMPORTED_PREFIX) ->
-                runCatching { parent.deleteRecursively() }
         }
     }
 

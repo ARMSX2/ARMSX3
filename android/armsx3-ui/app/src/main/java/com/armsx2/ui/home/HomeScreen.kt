@@ -165,7 +165,11 @@ fun HomeScreen(
     // The background shown on its own, full screen (BackgroundViewer).
     var viewingBackground by remember { mutableStateOf(false) }
     // #9 custom library background — inert until the user picks an image.
-    LaunchedEffect(Unit) { LibraryBackground.ensureLoaded() }
+    LaunchedEffect(Unit) {
+        LibraryBackground.ensureLoaded()
+        // The saved backgrounds, and what an older version left as the background, kept now.
+        withContext(Dispatchers.IO) { LibraryBackground.loadSaved(context) }?.let(LibraryBackground::select)
+    }
     // The animated background switched itself off because the last run died with it on screen
     // (LibraryBackground.armSaver). Say so -- silently reverting a setting the user chose reads
     // as the setting being broken, and the name tells them which one to avoid.
@@ -186,19 +190,23 @@ fun HomeScreen(
             // A PS3 theme goes through the importer, which takes a picture out of it. Anything else
             // is used as picked, as before, provided it is a picture: .p3t files have no image type,
             // so the picker now lists other files too.
-            val outcome = withContext(Dispatchers.IO) {
+            // Either way it is kept (LibraryBackground.saved), so the menu can bring it back later.
+            val kept = withContext(Dispatchers.IO) {
+                val name = LibraryBackground.displayName(context, picked)
                 when {
-                    LibraryBackground.isTheme(context, picked) -> LibraryBackground.importTheme(context, picked)
-                    isPicture(context, picked) -> null
-                    else -> LibraryBackground.ThemeImport(null, "library.bg.notPicture")
+                    LibraryBackground.isTheme(context, picked) -> LibraryBackground.importTheme(context, picked).let { outcome ->
+                        outcome.messageKey to outcome.file?.let {
+                            LibraryBackground.keep(context, outcome, outcome.name ?: name ?: "PS3 theme")
+                        }
+                    }
+                    isPicture(context, picked) -> LibraryBackground.keepPicture(context, picked, name ?: "Picture").let { saved ->
+                        (if (saved == null) "library.bg.readFailed" else null) to saved
+                    }
+                    else -> "library.bg.notPicture" to null
                 }
             }
-            if (outcome == null) {
-                LibraryBackground.set(context, picked)
-            } else {
-                outcome.file?.let { LibraryBackground.setImported(it, outcome.slideshow, outcome.scene) }
-                outcome.messageKey?.let { Toast.makeText(context, I18n.get(it), Toast.LENGTH_LONG).show() }
-            }
+            kept.second?.let(LibraryBackground::select)
+            kept.first?.let { Toast.makeText(context, I18n.get(it), Toast.LENGTH_LONG).show() }
         }
     }
     // Search: both the controller (A on the Search zone) AND a touch tap open the app's own D-pad +
@@ -228,9 +236,10 @@ fun HomeScreen(
         // that strip was the "blue bar" in landscape.
         backgroundLayer = {
             val libraryBg = LibraryBackground.uri.value
-            // Nothing live here while the full-screen viewer is up: it draws the same background
-            // itself, and two copies of a live theme would each keep the GPU busy.
-            if (viewingBackground) Box(Modifier.fillMaxSize().background(Color.Black)) else LibraryBackdrop()
+            // Nothing live here while the full-screen viewer or the screensaver is up: each draws
+            // the same background itself, and two copies of a live theme would each keep the GPU
+            // busy.
+            if (viewingBackground || LibraryScreensaver.showing.value) Box(Modifier.fillMaxSize().background(Color.Black)) else LibraryBackdrop()
             // Scrim so covers and text stay readable over the backdrop, as strong as Background
             // Dimming (App Settings) asks: none by default, since at full strength it took most of
             // a bright theme's colour. At full strength a user-picked image, which can be any
@@ -439,6 +448,9 @@ fun HomeScreen(
                                 showHidden = com.armsx2.HiddenGames.showHidden.value,
                                 onOpenCategories = { categoryPicker = true },
                                 hasCustomBackground = LibraryBackground.uri.value != null,
+                                savedBackgrounds = LibraryBackground.saved.value,
+                                currentBackground = LibraryBackground.current(),
+                                onSelectBackground = LibraryBackground::select,
                                 onDismiss = { overflowMenu = false },
                                 onOpenNavigation = onOpenMenu,
                                 onSort = viewModel::setSort,
@@ -447,9 +459,12 @@ fun HomeScreen(
                                 onToggleCustomNames = { com.armsx2.CustomNames.set(!com.armsx2.CustomNames.enabled.value) },
                                 onToggleEnglishTitles = { EnglishTitles.set(!EnglishTitles.enabled.value) },
                                 onToggleShowHidden = { viewModel.setShowHidden(!com.armsx2.HiddenGames.showHidden.value) },
-                                onChooseBackground = { backgroundPicker.launch(arrayOf("image/*", "application/octet-stream")) },
+                                onAddBackground = { backgroundPicker.launch(arrayOf("image/*", "application/octet-stream")) },
                                 onViewBackground = { viewingBackground = true },
-                                onClearBackground = LibraryBackground::clear,
+                                onRemoveBackground = {
+                                    // A picture an older version used in place, not copied in, is not ours to delete.
+                                    LibraryBackground.current()?.let(LibraryBackground::remove) ?: LibraryBackground.useDefault()
+                                },
                                 onExitApp = { showExitConfirm = true },
                             )
                             if (showExitConfirm) {
@@ -1253,7 +1268,7 @@ private fun GameMenuAction(glyph: String, label: String, onClick: () -> Unit) {
  * scene played live over its still.
  */
 @Composable
-private fun LibraryBackdrop() {
+internal fun LibraryBackdrop() {
     val context = LocalContext.current
     val libraryBg = LibraryBackground.uri.value
     if (libraryBg == null) {
@@ -1392,6 +1407,9 @@ private fun LibraryOverflowMenu(
     englishTitles: Boolean,
     showHidden: Boolean,
     hasCustomBackground: Boolean,
+    savedBackgrounds: List<LibraryBackground.Saved>,
+    currentBackground: LibraryBackground.Saved?,
+    onSelectBackground: (LibraryBackground.Saved?) -> Unit,
     onDismiss: () -> Unit,
     onOpenNavigation: () -> Unit,
     onSort: (HomeSort) -> Unit,
@@ -1401,9 +1419,9 @@ private fun LibraryOverflowMenu(
     onToggleEnglishTitles: () -> Unit,
     onToggleShowHidden: () -> Unit,
     onOpenCategories: () -> Unit,
-    onChooseBackground: () -> Unit,
+    onAddBackground: () -> Unit,
     onViewBackground: () -> Unit,
-    onClearBackground: () -> Unit,
+    onRemoveBackground: () -> Unit,
     onExitApp: () -> Unit,
 ) {
     fun closeThen(action: () -> Unit) {
@@ -1421,13 +1439,30 @@ private fun LibraryOverflowMenu(
         shadowElevation = 14.dp,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.42f)),
     ) {
-        Text(
-            text = str("games.section.library"),
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold,
-        )
+        // The background first: the default, every saved one (tap to switch, no re-import), then
+        // adding, viewing and removing.
+        OverflowHeader(str("games.background.section"))
+        LibraryOverflowItem("◌", str("games.background.default"), selected = !hasCustomBackground) {
+            closeThen { onSelectBackground(null) }
+        }
+        for (entry in savedBackgrounds) {
+            LibraryOverflowItem("▧", entry.name, selected = entry.folder == currentBackground?.folder, thumbnail = entry.picture) {
+                closeThen { onSelectBackground(entry) }
+            }
+        }
+        LibraryOverflowItem("+", str("games.background.add")) {
+            closeThen(onAddBackground)
+        }
+        LibraryOverflowItem("▣", str("games.background.view")) {
+            closeThen(onViewBackground)
+        }
+        if (hasCustomBackground) {
+            LibraryOverflowItem("×", str("games.background.remove")) {
+                closeThen(onRemoveBackground)
+            }
+        }
+        OverflowSeparator()
+        OverflowHeader(str("games.section.library"))
         LibraryOverflowItem(
             glyph = "A–Z",
             label = str("games.overflow.sortTitle"),
@@ -1483,18 +1518,6 @@ private fun LibraryOverflowMenu(
             closeThen(onOpenCategories)
         }
         OverflowSeparator()
-        LibraryOverflowItem("▧", str("games.background.choose")) {
-            closeThen(onChooseBackground)
-        }
-        LibraryOverflowItem("▣", str("games.background.view")) {
-            closeThen(onViewBackground)
-        }
-        if (hasCustomBackground) {
-            LibraryOverflowItem("×", str("games.background.clear")) {
-                closeThen(onClearBackground)
-            }
-        }
-        OverflowSeparator()
         // Exit, back where it used to live. It moved to the drawer, which put it below every other
         // destination -- so quitting, one of the most frequent things anyone does here, meant
         // opening the drawer and scrolling to the bottom every time (issue #460, and shinobumaehara
@@ -1517,6 +1540,17 @@ private fun LibraryOverflowMenu(
 }
 
 @Composable
+private fun OverflowHeader(text: String) {
+    Text(
+        text = text,
+        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.Bold,
+    )
+}
+
+@Composable
 private fun OverflowSeparator() {
     androidx.compose.material3.HorizontalDivider(
         modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
@@ -1534,6 +1568,8 @@ private fun LibraryOverflowItem(
     // in the bundled font and rendered as a tofu box. Null keeps the glyph path for every other row.
     iconRes: Int? = null,
     iconTint: Color? = null,
+    // A picture in place of the glyph: a saved background's.
+    thumbnail: java.io.File? = null,
     onClick: () -> Unit,
 ) {
     DropdownMenuItem(
@@ -1554,7 +1590,14 @@ private fun LibraryOverflowItem(
                 color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    if (iconRes != null) {
+                    if (thumbnail != null) {
+                        AsyncImage(
+                            model = thumbnail,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else if (iconRes != null) {
                         androidx.compose.material3.Icon(
                             painter = androidx.compose.ui.res.painterResource(iconRes),
                             contentDescription = null,

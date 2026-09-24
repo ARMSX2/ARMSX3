@@ -54,14 +54,16 @@ object P3tTheme {
 
     /**
      * [picture] is null exactly when [failure] is set. [dynamic] marks an animated theme, and [anim]
-     * is its scene when the reference to it is sound.
+     * is its scene when the reference to it is sound. [name] is the theme's own title, when it has
+     * one ("Fallout NV Custom Dynamic").
      */
-    class Result(val picture: Picture?, val dynamic: Boolean, val failure: Failure?, val anim: Anim? = null)
+    class Result(val picture: Picture?, val dynamic: Boolean, val failure: Failure?, val anim: Anim? = null, val name: String? = null)
 
     private const val MAGIC = 0x50335446L // "P3TF"
     private const val HEADER_BYTES = 56L
     private const val ELEMENT_BYTES = 28L
     private const val ATTRIBUTE_BYTES = 16L
+    private const val TYPE_STRING = 3L
     private const val TYPE_FILE = 6L
 
     // Bounds on what a real theme holds, so a crafted size cannot make us allocate without limit.
@@ -128,6 +130,7 @@ object P3tTheme {
         var preview: Pair<Long, Int>? = null
         var dynamic = false
         var anim: Anim? = null
+        var title: String? = null
         // The scene is streamed out by the importer, never read whole here, so only its bounds matter.
         fun scene(offset: Long, size: Long): Anim? =
             if (offset > fileTable.size || size > fileTable.size - offset || size < 8) null
@@ -141,6 +144,15 @@ object P3tTheme {
             val wanted = name == "bgimage" || name == "info"
             if (wanted) for (i in 0L until count) {
                 val at = (pos + ELEMENT_BYTES + i * ATTRIBUTE_BYTES).toInt()
+                // info's name: UTF-8 at (offset, length) in the string table.
+                if (name == "info" && be32(elements, at + 4) == TYPE_STRING && cString(strings, be32(elements, at)) == "name") {
+                    val offset = be32(elements, at + 8)
+                    val length = be32(elements, at + 12)
+                    if (offset <= strings.size && length <= minOf(strings.size - offset, MAX_NAME_BYTES.toLong())) {
+                        title = String(strings, offset.toInt(), length.toInt(), Charsets.UTF_8).trimEnd('\u0000').trim().ifEmpty { null }
+                    }
+                    continue
+                }
                 if (be32(elements, at + 4) != TYPE_FILE) continue
                 val attribute = cString(strings, be32(elements, at))
                 val offset = be32(elements, at + 8)
@@ -176,11 +188,11 @@ object P3tTheme {
         val best = hd.maxByOrNull { it.width.toLong() * it.height } ?: sd.maxByOrNull { it.width.toLong() * it.height }
         if (best != null) {
             val jpeg = src.read(best.offset, best.size)
-            return Result(Picture(best.source, jpeg, null, best.width, best.height), dynamic, null, anim)
+            return Result(Picture(best.source, jpeg, null, best.width, best.height), dynamic, null, anim, title)
         }
         val fallback = preview?.let { decodePreview(src.read(it.first, it.second)) }
-        if (fallback != null) return Result(fallback, dynamic, null, anim)
-        return Result(null, dynamic, if (dynamic) Failure.DYNAMIC_ONLY else Failure.NO_PICTURE, anim)
+        if (fallback != null) return Result(fallback, dynamic, null, anim, title)
+        return Result(null, dynamic, if (dynamic) Failure.DYNAMIC_ONLY else Failure.NO_PICTURE, anim, title)
     }
 
     private fun isRaf(b: ByteArray): Boolean =

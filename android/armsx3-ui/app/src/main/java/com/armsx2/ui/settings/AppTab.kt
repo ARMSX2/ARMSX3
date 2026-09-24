@@ -485,6 +485,25 @@ fun AppTab() {
                     valueFormatter = { "$it%" },
                     onChange = com.armsx2.ui.theme.LibraryChromePreferences::setBackgroundDimming,
                 )
+                // The screensaver: this background, full screen, after a while with no input.
+                ToggleRow(
+                    label = str("app.screensaver"),
+                    value = com.armsx2.ui.home.LibraryScreensaver.enabled.value,
+                    description = str("app.screensaver.desc"),
+                    onChange = com.armsx2.ui.home.LibraryScreensaver::setEnabled,
+                )
+                if (com.armsx2.ui.home.LibraryScreensaver.enabled.value) {
+                    val minutesText = str("app.screensaver.minutes")
+                    IntSliderRow(
+                        label = str("app.screensaver.delay"),
+                        value = com.armsx2.ui.home.LibraryScreensaver.minutes.value,
+                        min = com.armsx2.ui.home.LibraryScreensaver.MIN_MINUTES,
+                        max = com.armsx2.ui.home.LibraryScreensaver.MAX_MINUTES,
+                        description = str("app.screensaver.delay.desc"),
+                        valueFormatter = { minutesText.format(it) },
+                        onChange = com.armsx2.ui.home.LibraryScreensaver::setMinutes,
+                    )
+                }
             }
             // Continuous RGB hue-cycle — same idea as the theme's RGB mode. While on, the fixed
             // color (presets + sliders) doesn't apply, so it's hidden.

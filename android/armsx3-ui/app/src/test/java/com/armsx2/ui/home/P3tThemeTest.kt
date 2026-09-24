@@ -33,6 +33,10 @@ class P3tThemeTest {
 
         fun fileAttr(name: String, bytes: ByteArray): Attr = file(bytes).let { Attr(name, 6, it.first, it.second) }
 
+        /** A string attribute: UTF-8 at (offset, length) in the string table. */
+        fun stringAttr(name: String, value: String): Attr =
+            Attr(name, 3, name(value).toLong(), value.toByteArray(Charsets.UTF_8).size.toLong())
+
         fun element(name: String, vararg attrs: Attr, count: Long = attrs.size.toLong()) {
             val b = ByteBuffer.allocate(28 + attrs.size * 16)
             b.putInt(name(name)).putInt(count.toInt()).putInt(0).putInt(0).putInt(0).putInt(0).putInt(0)
@@ -112,6 +116,18 @@ class P3tThemeTest {
         assertEquals(1920, r.picture!!.width); assertEquals(1080, r.picture!!.height)
         assertArrayEquals(big, r.picture!!.jpeg)
         assertTrue(!r.dynamic)
+    }
+
+    @Test
+    fun themeNameIsRead() {
+        // Sony's Ape Escape theme's name, with its full-width space.
+        val title = "PlayStation®Move Ape Escape™\u3000Theme:01"
+        val t = Theme()
+        t.element("theme")
+        t.element("info", t.stringAttr("comment", "a theme"), t.stringAttr("name", title), t.stringAttr("author", "Sony Computer Entertainment Inc."))
+        t.element("bgimagetable")
+        t.element("bgimage", t.fileAttr("hd", jpeg(1920, 1080)))
+        assertEquals(title, read(t.bytes()).name)
     }
 
     @Test
