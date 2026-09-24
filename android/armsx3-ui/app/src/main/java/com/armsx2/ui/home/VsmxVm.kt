@@ -57,6 +57,9 @@ class VsmxVm(private val program: Program, private val host: Host) {
     /** What the theme engine provides: global names (Actor, Math, System, ...). */
     interface Host {
         fun global(name: String): Any?
+
+        /** Told what the script asked for that nothing here provides, such as "Array.pop". */
+        fun unsupported(what: String) {}
     }
 
     /** An object the host implements: an actor, the camera, Math, System. */
@@ -273,11 +276,11 @@ class VsmxVm(private val program: Program, private val host: Host) {
         is JsArray -> when (name) {
             "length" -> o.items.size.toDouble()
             "push" -> Native("push") { self, args -> (self as JsArray).items.addAll(args); self.items.size.toDouble() }
-            else -> Undefined
+            else -> Undefined.also { host.unsupported("Array.$name") }
         }
         is JsObject -> if (o.props.containsKey(name)) o.props[name] else Undefined
         is HostObject -> o.get(name)
-        is String -> if (name == "length") o.length.toDouble() else Undefined
+        is String -> if (name == "length") o.length.toDouble() else Undefined.also { host.unsupported("String.$name") }
         null, Undefined -> throw VsmxError("property $name of ${describe(o)}")
         else -> Undefined
     }

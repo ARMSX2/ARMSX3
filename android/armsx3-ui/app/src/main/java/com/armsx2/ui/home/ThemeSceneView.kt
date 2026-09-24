@@ -85,6 +85,8 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
                     val bytes = LibraryBackground.ChannelBytes(raf.channel, raf.length())
                     val scene = RafScene.read(bytes) ?: return
                     val play = ThemeScene(scene)
+                    val asked = HashSet<String>()
+                    play.unsupported = { if (asked.size < MAX_REPORTS && asked.add(it)) Log.i(TAG, "script asks for $it, not supported") }
                     if (!egl.create(surfaceTexture, width, height)) return
                     val renderer = ThemeSceneRenderer(play, bytes)
                     try {
@@ -138,5 +140,6 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
         const val PAUSED_POLL_MS = 100L
         const val JOIN_MS = 500L
         const val FRAME_NANOS = 1_000_000_000L / 30
+        const val MAX_REPORTS = 16
     }
 }

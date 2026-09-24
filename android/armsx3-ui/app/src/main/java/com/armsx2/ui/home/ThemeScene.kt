@@ -32,6 +32,17 @@ import kotlin.math.tan
  */
 class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = { Math.random() }) {
 
+    /**
+     * Told the name of whatever the script asks for that is not provided here, such as
+     * "Actor.setTexture" or "Math.hypot": a theme needing more than this player knows. Set before
+     * [start].
+     */
+    var unsupported: ((String) -> Unit)? = null
+
+    private fun report(what: String) {
+        unsupported?.invoke(what)
+    }
+
     /** A property on its way from [from] to [to] over [duration] seconds. */
     private class Tween(val target: FloatArray, val from: FloatArray, val to: FloatArray, val duration: Double, val eased: Boolean) {
         var elapsed = 0.0
@@ -48,15 +59,18 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
         /** The property a method such as "setPosition" moves, when it is one. */
         protected abstract fun mover(name: String): String?
 
+        /** What scripts call it: Actor, Camera, Light. */
+        protected abstract val kind: String
+
         override fun get(name: String): Any? {
             vector(name)?.let { return toArray(it) }
             if (name == "timer") return timers
-            val target = mover(name) ?: return VsmxVm.Undefined
+            val target = mover(name) ?: return VsmxVm.Undefined.also { report("$kind.$name") }
             return VsmxVm.Native(name) { _, args -> move(target, args); VsmxVm.Undefined }
         }
 
         override fun set(name: String, value: Any?) {
-            val v = vector(name) ?: return
+            val v = vector(name) ?: return report("$kind.$name =")
             tweens.remove(name)
             assign(v, value)
         }
@@ -90,6 +104,7 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
     }
 
     inner class ActorState(val source: RafScene.Actor) : Movable() {
+        override val kind get() = "Actor"
         val position = source.position.copyOf()
         val rotation = source.rotation.copyOf()
         val scale = source.scale.copyOf()
@@ -175,6 +190,7 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
     }
 
     inner class CameraState : Movable() {
+        override val kind get() = "Camera"
         val position = scene.camera.position.copyOf()
         val direction = scene.camera.direction.copyOf()
         val up = scene.camera.up.copyOf()
@@ -209,6 +225,7 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
 
     /** A light: the scene's own values to start with, then wherever the script moves it. */
     inner class LightState(val type: Int = RafScene.Light.POINT, from: RafScene.Light? = null) : Movable() {
+        override val kind get() = "Light"
         val position = from?.position?.copyOf(3) ?: FloatArray(3)
         val direction = from?.direction?.copyOf(3) ?: floatArrayOf(0f, 0f, -1f)
         val color = from?.color?.copyOf(3) ?: floatArrayOf(1f, 1f, 1f)
@@ -228,11 +245,11 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
         }
     }
 
-    private class Timer(val interval: Double, val fn: Any?, val repeat: Boolean) : VsmxVm.HostObject {
+    private inner class Timer(val interval: Double, val fn: Any?, val repeat: Boolean) : VsmxVm.HostObject {
         var due = interval
         var dead = false
-        override fun get(name: String): Any? = if (name == "interval") interval else VsmxVm.Undefined
-        override fun set(name: String, value: Any?) {}
+        override fun get(name: String): Any? = if (name == "interval") interval else VsmxVm.Undefined.also { report("Timer.$name") }
+        override fun set(name: String, value: Any?) = report("Timer.$name =")
     }
 
     /** A `timer` array: where a script keeps its timers. */
@@ -264,9 +281,9 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
         override fun get(name: String): Any? = when (name) {
             "timer" -> slots
             "interval" -> TICK
-            else -> VsmxVm.Undefined
+            else -> VsmxVm.Undefined.also { report("System.$name") }
         }
-        override fun set(name: String, value: Any?) {}
+        override fun set(name: String, value: Any?) = report("System.$name =")
     }
 
     private val math = object : VsmxVm.HostObject {
@@ -293,9 +310,9 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             "min" -> VsmxVm.Native(name) { _, args -> args.minOfOrNull { VsmxVm.num(it) } ?: Double.POSITIVE_INFINITY }
             "max" -> VsmxVm.Native(name) { _, args -> args.maxOfOrNull { VsmxVm.num(it) } ?: Double.NEGATIVE_INFINITY }
             "random" -> VsmxVm.Native(name) { _, _ -> random() }
-            else -> VsmxVm.Undefined
+            else -> VsmxVm.Undefined.also { report("Math.$name") }
         }
-        override fun set(name: String, value: Any?) {}
+        override fun set(name: String, value: Any?) = report("Math.$name =")
     }
 
     private fun timer(args: List<Any?>, repeat: Boolean): Timer {
@@ -332,8 +349,10 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             "writeln" -> VsmxVm.Native(name) { _, _ -> VsmxVm.Undefined }
             "INTERPOLATION_LINEAR" -> LINEAR
             "INTERPOLATION_BEZIER" -> BEZIER
-            else -> null
+            else -> null.also { report(name) }
         }
+
+        override fun unsupported(what: String) = report(what)
     }
 
     private val vm: VsmxVm? = scene.script?.let(VsmxVm.Program::parse)?.let { VsmxVm(it, host) }
