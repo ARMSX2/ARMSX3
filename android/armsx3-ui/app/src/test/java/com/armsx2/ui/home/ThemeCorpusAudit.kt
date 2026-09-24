@@ -98,13 +98,14 @@ class ThemeCorpusAudit {
             val live = scene?.let { play(it, name, tally, notes) } ?: false
             scene?.let { checkActors(it, raf, name, tally, notes) }
             val size = "%.1f MB".format(f.length() / 1e6)
+            // As LibraryBackground.importAnimation decides: live when the scene moves, else slides.
             when {
-                slides > 1 -> "slideshow $slides slides, $size"
                 live -> {
                     val covered = coverage(scene!!)
                     if (covered < 0.6) tally.add("live scene leaves the screen mostly empty", name, "%.0f%% covered".format(100 * covered))
                     "live ${scene.actors.size} actors, ${scene.actors.count { it.drawable() }} drawable, %.0f%% of the screen, $size".format(100 * covered)
                 }
+                slides > 1 -> "slideshow $slides slides, $size"
                 slides == 1 || scene != null -> "still ($size)"
                 result.picture != null -> "preview ($size)"
                 else -> "nothing"
@@ -205,6 +206,9 @@ class ThemeCorpusAudit {
                     val gtf = fileBytes(e.attrs["fileref"], 64 shl 20)
                     if (gtf == null || gtf.size < 48) {
                         tally.add("texture file missing", name)
+                    } else if ((gtf[0] == 0xFF.toByte() && gtf[1] == 0xD8.toByte()) || (gtf[0] == 0x89.toByte() && gtf[1] == 'P'.code.toByte())) {
+                        // A JPEG or PNG, which the player decodes with the platform's decoder.
+                        notes += "picture texture #${e.attrs["id"]?.let { cString(ids, it.a + 4) }}"
                     } else {
                         val format = gtf[24].toInt() and 0xFF
                         val base = format and 0x9F
@@ -289,8 +293,25 @@ class ThemeCorpusAudit {
             val xs = FloatArray(mesh.vertexCount)
             val ys = FloatArray(mesh.vertexCount)
             val front = BooleanArray(mesh.vertexCount)
+            // Where the renderer puts each vertex: bent by its joints first, when it has them.
+            val skin = a.skinMatrices()
+            val segmentOf = IntArray(mesh.vertexCount)
+            if (skin != null) for (s in mesh.segments) for (i in s.firstIndex until s.firstIndex + s.indexCount) segmentOf[mesh.indices[i]] = mesh.segments.indexOf(s)
             for (v in 0 until mesh.vertexCount) {
-                val x = mesh.positions[3 * v]; val y = mesh.positions[3 * v + 1]; val z = mesh.positions[3 * v + 2]
+                var x = mesh.positions[3 * v]; var y = mesh.positions[3 * v + 1]; var z = mesh.positions[3 * v + 2]
+                val palette = mesh.segments[segmentOf[v]].palette
+                if (skin != null && palette != null && mesh.joints != null && mesh.weights != null) {
+                    var sx = 0f; var sy = 0f; var sz = 0f
+                    for (k in 0 until 4) {
+                        val w = mesh.weights[4 * v + k]
+                        if (w <= 0f) continue
+                        val m = 12 * palette[mesh.joints[4 * v + k]]
+                        sx += w * (skin[m] * x + skin[m + 1] * y + skin[m + 2] * z + skin[m + 3])
+                        sy += w * (skin[m + 4] * x + skin[m + 5] * y + skin[m + 6] * z + skin[m + 7])
+                        sz += w * (skin[m + 8] * x + skin[m + 9] * y + skin[m + 10] * z + skin[m + 11])
+                    }
+                    x = sx; y = sy; z = sz
+                }
                 val cx = mvp[0] * x + mvp[4] * y + mvp[8] * z + mvp[12]
                 val cy = mvp[1] * x + mvp[5] * y + mvp[9] * z + mvp[13]
                 val cw = mvp[3] * x + mvp[7] * y + mvp[11] * z + mvp[15]
@@ -338,8 +359,8 @@ class ThemeCorpusAudit {
                 if (errors.isNotEmpty()) notes += "script stops: " + errors.joinToString(" | ")
             }
         }
-        if (scene.script != null) moves = ThemeScene.animates(scene, random = { 0.7 })
-        if (scene.script == null) tally.add("no script", name)
+        moves = ThemeScene.animates(scene, random = { 0.7 })
+        if (scene.script == null) tally.add("no script (clips only)", name)
         return moves
     }
 
@@ -438,13 +459,11 @@ class ThemeCorpusAudit {
         /** Elements that only hold others. */
         val CONTAINERS = setOf("raf", "scene", "model-table", "material-table", "texture-table", "file-table")
 
-        val KNOWN_EFFECTS = setOf(
-            "pure_texture", "pure_texture_alpha_1_depth_0", "pure_texture_alpha_1_depth_1", "color_map",
-            "basic_lighting", "basic_lighting_edge_lit", "basic_lighting_alpha_add",
-        )
+        val KNOWN_EFFECTS = setOf("pure_texture", "color_map", "basic_lighting", "basic_lighting_edge_lit", "basic_lighting_alpha_add") +
+            (0..2).flatMap { a -> (0..1).map { d -> "pure_texture_alpha_${a}_depth_$d" } }
 
         /** What VsmxVm runs. */
-        val KNOWN_OPS = (0x01..0x15).toSet() + (0x20..0x2b) + (0x2d..0x31) + setOf(0x33, 0x34, 0x36) + (0x38..0x3f) + (0x41..0x45) + setOf(0x49, 0x4a, 0x4d)
+        val KNOWN_OPS = (0x01..0x15).toSet() + (0x20..0x31) + setOf(0x33, 0x34, 0x36) + (0x38..0x3f) + (0x41..0x45) + setOf(0x49, 0x4a, 0x4d)
 
         /** CellGcm texture formats, without the linear and unnormalised flags. */
         val FORMATS = mapOf(

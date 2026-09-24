@@ -1,6 +1,7 @@
 package com.armsx2.ui.home
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.opengl.EGL14
 import android.opengl.EGLConfig
 import android.opengl.EGLContext
@@ -24,11 +25,18 @@ import java.util.IdentityHashMap
  * monkeys' white helmets white.
  *
  * Textures are decoded to RGBA with premultiplied alpha, so their see-through edges filter and
- * mipmap without dark fringes, and only for actors that can be shown.
+ * mipmap without dark fringes, and only for actors that can be shown. A scene whose textures would
+ * not fit [TEXTURE_BUDGET] that way, which is what the animated themes are (15 to 88 full-screen
+ * frames each, 107 to 167 MB as RGBA), keeps its DXT textures as the PS3 does, a quarter to an
+ * eighth of the size, and the shader decodes and filters them: full size instead of shrunk until
+ * they fit, and nothing to decode up front.
  */
 internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf: P3tTheme.Bytes) {
 
     private class Gpu(val vao: Int, val buffers: IntArray, val count: Int)
+
+    /** A texture on the GPU: RGBA, or when [dxt] is 1, 3 or 5 its DXT blocks as they are. */
+    private class GpuTexture(val name: Int, val dxt: Int, val width: Int, val height: Int)
 
     private var program = 0
     private var uMvp = 0
@@ -43,8 +51,10 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
     private var uLightPos = 0
     private var uLightColor = 0
     private var uLights = 0
+    private var uBlock = 0
+    private var uSize = 0
     private val meshes = IdentityHashMap<RafScene.Mesh, Gpu>()
-    private val textures = IdentityHashMap<P3tAnimation.Texture, Int>()
+    private val textures = IdentityHashMap<P3tAnimation.Texture, GpuTexture>()
     private val model = FloatArray(16)
     private val mvp = FloatArray(16)
     private val bones = FloatArray(12 * MAX_BONES)
@@ -68,22 +78,31 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
         uLightPos = GLES30.glGetUniformLocation(program, "uLightPos")
         uLightColor = GLES30.glGetUniformLocation(program, "uLightColor")
         uLights = GLES30.glGetUniformLocation(program, "uLights")
+        uBlock = GLES30.glGetUniformLocation(program, "uBlock")
+        uSize = GLES30.glGetUniformLocation(program, "uSize")
         GLES30.glUseProgram(program)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uTex"), 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uBlocks"), 1)
 
         val drawn = play.actors.filter { it.drawable }
         val limit = IntArray(1).also { GLES30.glGetIntegerv(GLES30.GL_MAX_TEXTURE_SIZE, it, 0) }[0]
         val unique = drawn.mapNotNull { it.source.material?.texture }.distinct()
+        var side = minOf(MAX_SIDE, limit.coerceAtLeast(MIN_SIDE))
+        // Too much as RGBA: the DXT textures stay as they are (see the class comment).
+        val asBlocks = if (unique.sumOf { bytesAt(it, side) } > TEXTURE_BUDGET) {
+            unique.filter { P3tAnimation.dxt(it) != 0 && it.width <= limit * 4 && it.height <= limit * 4 }.toHashSet()
+        } else {
+            emptySet()
+        }
         // Two in three of these scenes' pixels are backdrop the size of the screen; past that,
         // bigger textures only cost memory. Halve them again for a scene that would still need
         // more than a budget.
-        var side = minOf(MAX_SIDE, limit.coerceAtLeast(MIN_SIDE))
-        while (side > MIN_SIDE && unique.sumOf { bytesAt(it, side) } > TEXTURE_BUDGET) side /= 2
+        while (side > MIN_SIDE && unique.filter { it !in asBlocks }.sumOf { bytesAt(it, side) } > TEXTURE_BUDGET) side /= 2
         for (a in drawn) {
             val mesh = a.source.mesh ?: continue
             if (!meshes.containsKey(mesh)) meshes[mesh] = upload(mesh)
             val texture = a.source.material?.texture ?: continue
-            if (!textures.containsKey(texture)) textures[texture] = upload(texture, side)
+            if (!textures.containsKey(texture)) textures[texture] = if (texture in asBlocks) uploadBlocks(texture) else upload(texture, side)
         }
         check(GLES30.glGetError() == GLES30.GL_NO_ERROR) { "GL error building the scene" }
     }
@@ -107,14 +126,13 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
             ThemeScene.viewMatrix(camera.position, camera.direction, camera.up),
         )
         GLES30.glUseProgram(program)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         val lights = setLights()
         for (a in play.actors) {
             if (!a.shown) continue
             val material = a.source.material ?: continue
             val mesh = a.source.mesh ?: continue
             val gpu = meshes[mesh] ?: continue
-            val texture = textures[material.texture]?.takeIf { it != 0 } ?: continue
+            val texture = textures[material.texture]?.takeIf { it.name != 0 } ?: continue
             when {
                 material.opaque -> GLES30.glDisable(GLES30.GL_BLEND)
                 material.additive -> {
@@ -137,7 +155,14 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
             GLES30.glUniform1f(uOpaque, if (material.opaque) 1f else 0f)
             // Without a light in the scene or normals in the mesh, lit reads as unlit rather than black.
             GLES30.glUniform1f(uLit, if (material.lit && lights && mesh.normals != null) 1f else 0f)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture)
+            if (texture.dxt == 0) {
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+            } else {
+                GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+                GLES30.glUniform2i(uSize, texture.width, texture.height)
+            }
+            GLES30.glUniform1i(uBlock, texture.dxt)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture.name)
             GLES30.glBindVertexArray(gpu.vao)
             val skin = if (mesh.skinned) a.skinMatrices() else null
             for (segment in mesh.segments) {
@@ -196,7 +221,7 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
             GLES30.glDeleteBuffers(gpu.buffers.size, gpu.buffers, 0)
         }
         meshes.clear()
-        val names = textures.values.filter { it != 0 }.toIntArray()
+        val names = textures.values.map { it.name }.filter { it != 0 }.toIntArray()
         if (names.isNotEmpty()) GLES30.glDeleteTextures(names.size, names, 0)
         textures.clear()
         if (program != 0) GLES30.glDeleteProgram(program)
@@ -246,11 +271,24 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
         return Gpu(vao, buffers, mesh.indices.size)
     }
 
-    /** The texture, no larger than [side] either way, mipmapped and repeating. 0 when it cannot be read. */
-    private fun upload(texture: P3tAnimation.Texture, side: Int): Int {
-        var pixels = P3tAnimation.decode(raf, texture) ?: return 0
+    /** The texture, no larger than [side] either way, mipmapped and repeating. Name 0 when it cannot be read. */
+    private fun upload(texture: P3tAnimation.Texture, side: Int): GpuTexture {
         var w = texture.width
         var h = texture.height
+        var pixels = if (P3tAnimation.isPicture(texture)) {
+            // A JPEG or PNG: Android decodes those.
+            val bitmap = runCatching { raf.read(texture.offset, texture.size) }.getOrNull()
+                ?.let { BitmapFactory.decodeByteArray(it, 0, it.size) } ?: return GpuTexture(0, 0, 0, 0)
+            try {
+                w = bitmap.width
+                h = bitmap.height
+                IntArray(w * h).also { bitmap.getPixels(it, 0, w, 0, 0, w, h) }
+            } finally {
+                bitmap.recycle()
+            }
+        } else {
+            P3tAnimation.decode(raf, texture) ?: return GpuTexture(0, 0, 0, 0)
+        }
         premultiply(pixels)
         while (w > side || h > side) {
             pixels = halve(pixels, w, h)
@@ -271,7 +309,35 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_REPEAT)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_REPEAT)
-        return name
+        return GpuTexture(name, 0, w, h)
+    }
+
+    /**
+     * The texture's DXT blocks as they are, one texel a block: two 32-bit words for DXT1 (colours,
+     * indexes), four for DXT3 and DXT5 (alpha, then the same). The shader decodes them.
+     */
+    private fun uploadBlocks(texture: P3tAnimation.Texture): GpuTexture {
+        val dxt = P3tAnimation.dxt(texture)
+        val blockBytes = if (dxt == 1) 8 else 16
+        val data = runCatching { raf.read(texture.offset, texture.size) }.getOrNull() ?: return GpuTexture(0, 0, 0, 0)
+        val wide = (texture.width + 3) / 4
+        val high = (texture.height + 3) / 4
+        val blocks = ByteBuffer.allocateDirect(wide * high * blockBytes).order(ByteOrder.nativeOrder())
+        // Rows can be padded to a pitch; the words are little-endian, as this machine is.
+        for (row in 0 until high) blocks.put(data, row * texture.pitch, wide * blockBytes)
+        blocks.position(0)
+        val name = IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, name)
+        GLES30.glPixelStorei(GLES30.GL_UNPACK_ALIGNMENT, 4)
+        if (dxt == 1) {
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RG32UI, wide, high, 0, GLES30.GL_RG_INTEGER, GLES30.GL_UNSIGNED_INT, blocks)
+        } else {
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA32UI, wide, high, 0, GLES30.GL_RGBA_INTEGER, GLES30.GL_UNSIGNED_INT, blocks)
+        }
+        // Integer textures are fetched, never filtered; the shader filters.
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_NEAREST)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_NEAREST)
+        return GpuTexture(name, dxt, texture.width, texture.height)
     }
 
     companion object {
@@ -405,12 +471,18 @@ void main() {
 """
 
         // The texture is premultiplied; the actor's colour is not, so its alpha scales everything.
+        // uBlock 1, 3 or 5: the texture is DXT blocks in uBlocks, decoded and filtered here, the
+        // same as the CPU decodes them (P3tAnimation.decodeBlocks).
         private const val FRAGMENT = """#version 300 es
 precision highp float;
+precision highp int;
 in vec2 vUv;
 in vec3 vWorld;
 in vec3 vNormal;
 uniform sampler2D uTex;
+uniform highp usampler2D uBlocks;
+uniform int uBlock;
+uniform ivec2 uSize;
 uniform vec4 uColor;
 uniform float uOpaque;
 uniform float uLit;
@@ -419,8 +491,58 @@ uniform vec4 uLightPos[4]; // w 1: a point light's position; w 0: toward a direc
 uniform vec3 uLightColor[4];
 uniform int uLights;
 out vec4 fragColor;
+vec3 rgb565(uint c) {
+    return vec3(float((c >> 11) & 31u) / 31.0, float((c >> 5) & 63u) / 63.0, float(c & 31u) / 31.0);
+}
+// Texel p of the DXT texture, premultiplied. Textures repeat.
+vec4 dxtTexel(ivec2 p) {
+    p = ivec2(mod(vec2(p), vec2(uSize)));
+    uvec4 w = texelFetch(uBlocks, p >> 2, 0);
+    int k = ((p.y & 3) << 2) | (p.x & 3);
+    uint colors = uBlock == 1 ? w.x : w.z;
+    uint indexes = uBlock == 1 ? w.y : w.w;
+    uint c0 = colors & 0xFFFFu;
+    uint c1 = colors >> 16;
+    uint i = (indexes >> uint(2 * k)) & 3u;
+    vec3 e0 = rgb565(c0);
+    vec3 e1 = rgb565(c1);
+    vec4 t;
+    if (i == 0u) t = vec4(e0, 1.0);
+    else if (i == 1u) t = vec4(e1, 1.0);
+    else if (uBlock != 1 || c0 > c1) t = vec4(i == 2u ? (2.0 * e0 + e1) / 3.0 : (e0 + 2.0 * e1) / 3.0, 1.0);
+    else t = i == 2u ? vec4((e0 + e1) * 0.5, 1.0) : vec4(0.0);
+    if (uBlock == 3) {
+        t.a = float(((k < 8 ? w.x : w.y) >> uint(4 * (k & 7))) & 15u) / 15.0;
+    } else if (uBlock == 5) {
+        float a0 = float(w.x & 255u);
+        float a1 = float((w.x >> 8) & 255u);
+        // 3 bits a texel from bit 16 of the first word on, into the second.
+        uint at = uint(3 * k);
+        uint bits = at >= 16u ? w.y >> (at - 16u) : ((w.x >> 16) >> at) | (w.y << (16u - at));
+        uint j = bits & 7u;
+        float a;
+        if (j == 0u) a = a0;
+        else if (j == 1u) a = a1;
+        else if (a0 > a1) a = (float(8u - j) * a0 + float(j - 1u) * a1) / 7.0;
+        else if (j == 6u) a = 0.0;
+        else if (j == 7u) a = 255.0;
+        else a = (float(6u - j) * a0 + float(j - 1u) * a1) / 5.0;
+        t.a = a / 255.0;
+    }
+    return vec4(t.rgb * t.a, t.a);
+}
+vec4 dxtSample(vec2 uv) {
+    vec2 st = uv * vec2(uSize) - 0.5;
+    vec2 f = fract(st);
+    ivec2 p = ivec2(floor(st));
+    vec4 a = dxtTexel(p);
+    vec4 b = dxtTexel(p + ivec2(1, 0));
+    vec4 c = dxtTexel(p + ivec2(0, 1));
+    vec4 d = dxtTexel(p + ivec2(1, 1));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
 void main() {
-    vec4 t = texture(uTex, vUv);
+    vec4 t = uBlock == 0 ? texture(uTex, vUv) : dxtSample(vUv);
     vec3 rgb = t.rgb;
     if (uLit > 0.5) {
         vec3 n = normalize(vNormal);

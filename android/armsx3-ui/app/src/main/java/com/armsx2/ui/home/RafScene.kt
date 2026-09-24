@@ -63,15 +63,20 @@ object RafScene {
     }
 
     /**
-     * Effects seen in real themes: pure_texture, pure_texture_alpha_1_depth_0 / _depth_1,
+     * Effects seen in real themes: pure_texture, pure_texture_alpha_N_depth_M (N 0 to 2, M 0 or 1),
      * color_map, basic_lighting, basic_lighting_edge_lit and basic_lighting_alpha_add. Everything
-     * but the lit ones is drawn with its texture's alpha: Ape Escape's sun, shadows and butterflies
-     * are "pure_texture" sprites cut out by it, and the slideshow templates fade whole slides
-     * through their colour's alpha whatever the effect.
+     * but the lit ones and alpha_0 is drawn with its texture's alpha: Ape Escape's sun, shadows and
+     * butterflies are "pure_texture" sprites cut out by it, and the slideshow templates fade whole
+     * slides through their colour's alpha whatever the effect.
+     *
+     * alpha_0 is drawn solid. It is what the animated themes' frames use (44 of 92 themes surveyed),
+     * DXT1 pictures whose pure black the encoder stored as DXT1's one see-through colour: drawn with
+     * alpha, black showed whatever was behind. None of those themes ever fades an alpha_0 actor
+     * part way; they show and hide them whole.
      */
     class Material(val effect: String, val texture: P3tAnimation.Texture?) {
-        /** Lit and not see-through: drawn solid, and hides what is drawn behind it later. */
-        val opaque: Boolean get() = effect.startsWith("basic_lighting") && "alpha" !in effect
+        /** Drawn solid, hiding what is drawn behind it later: lit and not see-through, or alpha_0. */
+        val opaque: Boolean get() = (effect.startsWith("basic_lighting") && "alpha" !in effect) || "_alpha_0" in effect
         /** "alpha_add": added onto what is behind it, weighted by alpha. */
         val additive: Boolean get() = "alpha_add" in effect
         /** "depth_0": drawn in actor order with no depth test. */
@@ -80,8 +85,11 @@ object RafScene {
         val lit: Boolean get() = "lighting" in effect
     }
 
-    /** What moves a skinned mesh: its skeleton, the inverse of its bind pose, and its clips by slot. */
-    class Rig(val skeleton: EdgeAnim.Skeleton, val inverseBinds: FloatArray, val clips: List<EdgeAnim.Clip?>)
+    /**
+     * What moves a skinned mesh: its skeleton, the inverse of its bind pose, and its clips by slot,
+     * with the animations' ids ("zebra_anim1"), by which scripts find a slot.
+     */
+    class Rig(val skeleton: EdgeAnim.Skeleton, val inverseBinds: FloatArray, val clips: List<EdgeAnim.Clip?>, val names: List<String?> = emptyList())
 
     class Actor(
         val name: String,
@@ -187,6 +195,7 @@ object RafScene {
         val modelSkeleton = HashMap<Long, Long>()
         val modelInverseBind = HashMap<Long, Long>()
         val modelAnimations = HashMap<Long, ArrayList<Long>>()
+        val modelAnimationNames = HashMap<Long, ArrayList<String?>>()
         val textureFile = HashMap<Long, Long>()
         val fileSpan = HashMap<Long, Attr>()
 
@@ -218,7 +227,14 @@ object RafScene {
                 "geometry" -> { val m = modelAt[parent]; val f = ref("fileref"); if (m != null && f != null) modelGeometry[m] = f }
                 "skeleton" -> { val m = modelAt[parent]; val f = ref("fileref"); if (m != null && f != null) modelSkeleton[m] = f }
                 "inv-bind" -> { val m = modelAt[parent]; val f = ref("fileref"); if (m != null && f != null) modelInverseBind[m] = f }
-                "animation" -> { val m = modelAt[parent]; val f = ref("fileref"); if (m != null && f != null) modelAnimations.getOrPut(m) { ArrayList() } += f }
+                "animation" -> {
+                    val m = modelAt[parent]
+                    val f = ref("fileref")
+                    if (m != null && f != null) {
+                        modelAnimations.getOrPut(m) { ArrayList() } += f
+                        modelAnimationNames.getOrPut(m) { ArrayList() } += ref("id")?.let { cString(ids, it + 4) }
+                    }
+                }
                 "texture" -> { val id = ref("id"); val f = ref("fileref"); if (id != null && f != null) textureFile[id] = f }
                 "file" -> { val id = ref("id"); val src = attrs["src"]; if (id != null && src != null && src.type == TYPE_FILE) fileSpan[id] = src }
             }
@@ -264,7 +280,7 @@ object RafScene {
             val palette = mesh.segments.mapNotNull { it.palette }.flatMap { it.toList() }
             if (palette.any { it >= skeleton.joints }) return@getOrPut null
             val clips = modelAnimations[model].orEmpty().map { f -> fileBytes(f, MAX_RIG_BYTES)?.let { EdgeAnim.clip(it, skeleton.joints) } }
-            Rig(skeleton, inverse, clips)
+            Rig(skeleton, inverse, clips, modelAnimationNames[model].orEmpty())
         }
         val built = actors.map { a ->
             val mesh = a.model?.let { model ->
@@ -273,7 +289,7 @@ object RafScene {
             val material = a.material?.let { m ->
                 val texture = materialTexture[m]?.let { t ->
                     textures.getOrPut(t) {
-                        textureFile[t]?.let(::file)?.let { (offset, size) -> runCatching { P3tAnimation.gtf(raf, offset, size) }.getOrNull() }
+                        textureFile[t]?.let(::file)?.let { (offset, size) -> runCatching { P3tAnimation.texture(raf, offset, size) }.getOrNull() }
                     }
                 }
                 Material(materialEffect[m] ?: "", texture)

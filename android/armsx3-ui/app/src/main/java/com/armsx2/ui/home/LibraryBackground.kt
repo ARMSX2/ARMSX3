@@ -511,17 +511,22 @@ object LibraryBackground {
             if (!unpacked) return null
             val result = RandomAccessFile(raw, "r").use { file ->
                 val scene = ChannelBytes(file.channel, file.length())
+                // Played live, a theme is what the PS3 shows: its script's fades, zooms, frame
+                // animations and one-off touches, and its characters. Baked slides are the fallback
+                // for a scene the player cannot read or draw. They were tried first once, which made
+                // the animated themes (fire, rain, a character moving, at 7 to 40 frames a second)
+                // into slideshows of their frames two seconds apart.
+                val live = RafScene.read(scene)?.takeIf { ThemeScene.animates(it) }
+                val liveStill = live?.let { still(scene, it, folder) }
+                if (liveStill != null) return@use ThemeImport(liveStill, null, scene = raw)
                 val slides = P3tAnimation.scene(scene)?.let { parsed ->
                     bake(scene, parsed.layers, folder)?.let { Slideshow(it, parsed.timing) }
                 }
-                if (slides != null && slides.frames.size > 1) return@use ThemeImport(slides.frames.first(), null, slides)
-                val live = RafScene.read(scene)?.takeIf { ThemeScene.animates(it) }
-                val still = live?.let { still(scene, it, folder) } ?: slides?.frames?.first()
                 when {
-                    still == null -> null
-                    live != null -> ThemeImport(still, null, scene = raw)
+                    slides == null -> null
+                    slides.frames.size > 1 -> ThemeImport(slides.frames.first(), null, slides)
                     // One slide and nothing moving is just a picture: the theme's own art, still.
-                    else -> ThemeImport(still, null)
+                    else -> ThemeImport(slides.frames.first(), null)
                 }
             } ?: return null
             // Only a live scene keeps its unpacked file, next to its still.

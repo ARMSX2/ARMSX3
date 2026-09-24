@@ -116,6 +116,20 @@ class ThemeSceneTest {
     }
 
     @Test
+    fun aTimerRunsWithItsHolderAsThis() {
+        // a = new Actor("a"); move = function () { this.setPosition([5, 0, 0]); }
+        // a.timer[0] = new OneShotTimer(0.1, move)
+        val p = play {
+            assign("a") { global("Actor"); string("a"); new(1) }
+            function("move", 0, 1) { op(0x2C); getKeep("setPosition"); int(5); int(0); int(0); array(3); callMethod(1); pop() }
+            timer("a", 0, "OneShotTimer", "move") { float(0.1f) }
+        }
+        p.run(12)
+        assertNull(p.scriptError)
+        assertEquals(5f, p.x())
+    }
+
+    @Test
     fun aFailingCallbackStopsOnlyItsTimer() {
         val p = play {
             stepper()

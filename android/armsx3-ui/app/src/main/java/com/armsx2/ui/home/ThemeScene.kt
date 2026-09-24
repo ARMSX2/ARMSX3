@@ -51,7 +51,7 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
     /** An object whose vectors a script can set at once or move over time. */
     abstract inner class Movable : VsmxVm.HostObject {
         private val tweens = HashMap<String, Tween>(4)
-        private val timers = TimerSlots()
+        private val timers = TimerSlots(this)
 
         /** The vector property [name], or null when there is none by that name. */
         protected abstract fun vector(name: String): FloatArray?
@@ -80,12 +80,17 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             val v = vector(name) ?: return
             val to = v.copyOf()
             if (!assign(to, args.getOrNull(0))) return
-            val seconds = VsmxVm.num(args.getOrNull(1))
+            moveVector(name, to, VsmxVm.num(args.getOrNull(1)), VsmxVm.num(args.getOrNull(2)) == BEZIER)
+        }
+
+        /** Vector [name] to [to]: at once, or over [seconds]. */
+        protected fun moveVector(name: String, to: FloatArray, seconds: Double, eased: Boolean = false) {
+            val v = vector(name) ?: return
             if (seconds.isNaN() || seconds <= 0.0) {
                 tweens.remove(name)
                 to.copyInto(v)
             } else {
-                tweens[name] = Tween(v, v.copyOf(), to, seconds, VsmxVm.num(args.getOrNull(2)) == BEZIER)
+                tweens[name] = Tween(v, v.copyOf(), to, seconds, eased)
             }
         }
 
@@ -140,7 +145,7 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             for (slot in 0 until minOf(ANIM_SLOTS, rig.clips.size)) {
                 val w = animWeights[slot]
                 val clip = rig.clips[slot] ?: continue
-                if (!(w > 0f)) continue
+                if (!(w > 0f) || !(clip.duration > 0f)) continue
                 total += w
                 val t = time * animSpeeds[slot] + animTimes[slot]
                 val local = (t % clip.duration).let { if (it < 0) it + clip.duration else it }
@@ -150,6 +155,17 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             EdgeAnim.worlds(rig.skeleton, pose, worlds!!)
             return EdgeAnim.skinMatrices(worlds, rig.inverseBinds, skin!!)
         }
+
+        /**
+         * Whether a clip of its model moves it: one in a slot it plays (weight and speed), with keys
+         * that change. White Knight Chronicles' theme and the PS Buttons ones have no script: their
+         * characters only play their clips.
+         */
+        val playsClip: Boolean
+            get() = source.rig?.clips?.withIndex()?.any { (slot, clip) ->
+                clip != null && slot < ANIM_SLOTS && animWeights[slot] > 0f && animSpeeds[slot] != 0f &&
+                    clip.channels.any { it.frames.size > 1 }
+            } == true
 
         /** Drawn this frame: [drawable], enabled, and neither see-through nor scaled to nothing. */
         val shown: Boolean
@@ -181,8 +197,32 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             // Fallout NV's template turns two actors toward a point every frame. What that does to
             // an actor is not known, and both are hidden in every theme seen, so it does nothing.
             "setDirection" -> VsmxVm.Native(name) { _, _ -> VsmxVm.Undefined }
+            // Animation slots by their animation's id, as Sony's Afrika theme drives its zebras.
+            "getAnimIndex" -> VsmxVm.Native(name) { _, args ->
+                (source.rig?.names?.indexOf(VsmxVm.str(args.getOrNull(0))) ?: -1).toDouble()
+            }
+            "getAnimSpeed" -> VsmxVm.Native(name) { _, args -> slot(args)?.let { animSpeeds[it].toDouble() } ?: VsmxVm.Undefined }
+            // (slot, weight, seconds): there over that long, as setColor goes.
+            "setAnimWeight" -> VsmxVm.Native(name) { _, args ->
+                slot(args)?.let { s ->
+                    val to = animWeights.copyOf()
+                    to[s] = VsmxVm.num(args.getOrNull(1)).toFloat().takeIf { it.isFinite() } ?: return@let
+                    moveVector("anim_weight", to, VsmxVm.num(args.getOrNull(2)))
+                }
+                VsmxVm.Undefined
+            }
+            // (slot, seconds): the slot's clip is that far in now.
+            "setAnimTime" -> VsmxVm.Native(name) { _, args ->
+                slot(args)?.let { s ->
+                    val at = VsmxVm.num(args.getOrNull(1))
+                    if (at.isFinite()) animTimes[s] = (at - time * animSpeeds[s]).toFloat()
+                }
+                VsmxVm.Undefined
+            }
             else -> super.get(name)
         }
+
+        private fun slot(args: List<Any?>): Int? = VsmxVm.num(args.getOrNull(0)).takeIf { it.isFinite() }?.toInt()?.takeIf { it in 0 until ANIM_SLOTS }
 
         override fun set(name: String, value: Any?) {
             if (name == "enable") enabled = VsmxVm.truthy(value) else super.set(name, value)
@@ -211,7 +251,12 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             else -> null
         }
 
-        override fun get(name: String): Any? = if (name == "yfov") yfov.toDouble() else super.get(name)
+        override fun get(name: String): Any? = when (name) {
+            "yfov" -> yfov.toDouble()
+            // The picture's shape: the scene is always composed for 16:9, and cropped to fit.
+            "aspect" -> FRAME_ASPECT.toDouble()
+            else -> super.get(name)
+        }
 
         override fun set(name: String, value: Any?) {
             if (name == "yfov") {
@@ -248,16 +293,25 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
     private inner class Timer(val interval: Double, val fn: Any?, val repeat: Boolean) : VsmxVm.HostObject {
         var due = interval
         var dead = false
+
+        /** `this` for the callback: whoever's timer slot holds it (`moebius.timer[0] = ...`). */
+        var owner: Any? = VsmxVm.Undefined
         override fun get(name: String): Any? = if (name == "interval") interval else VsmxVm.Undefined.also { report("Timer.$name") }
         override fun set(name: String, value: Any?) = report("Timer.$name =")
     }
 
-    /** A `timer` array: where a script keeps its timers. */
-    private class TimerSlots : VsmxVm.HostObject {
+    /**
+     * A `timer` array: where a script keeps its timers. A timer put in one runs its callback with
+     * [owner] as `this`, which Xperia Z Make.Believe's callbacks use (`this.setScale(...)`).
+     */
+    private inner class TimerSlots(private val owner: Any?) : VsmxVm.HostObject {
         private val slots = HashMap<String, Any?>()
         override fun get(name: String): Any? = slots[name] ?: VsmxVm.Undefined
         override fun set(name: String, value: Any?) {
-            if (slots.size < MAX_TIMERS || name in slots) slots[name] = value
+            if (slots.size < MAX_TIMERS || name in slots) {
+                slots[name] = value
+                (value as? Timer)?.owner = owner
+            }
         }
     }
 
@@ -277,10 +331,12 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
     private val byName = actors.associateBy { it.source.name }
 
     private val system = object : VsmxVm.HostObject {
-        private val slots = TimerSlots()
+        private val slots = TimerSlots(this)
         override fun get(name: String): Any? = when (name) {
             "timer" -> slots
             "interval" -> TICK
+            // The PS3's output, which themes pick HD or SD pictures by: always HD here.
+            "resolution" -> toArray(floatArrayOf(1920f, 1080f))
             else -> VsmxVm.Undefined.also { report("System.$name") }
         }
         override fun set(name: String, value: Any?) = report("System.$name =")
@@ -349,6 +405,10 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
             "writeln" -> VsmxVm.Native(name) { _, _ -> VsmxVm.Undefined }
             "INTERPOLATION_LINEAR" -> LINEAR
             "INTERPOLATION_BEZIER" -> BEZIER
+            // JavaScript's own globals, which scripts compare against.
+            "undefined" -> VsmxVm.Undefined
+            "NaN" -> Double.NaN
+            "Infinity" -> Double.POSITIVE_INFINITY
             else -> null.also { report(name) }
         }
 
@@ -397,7 +457,7 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
                 }
                 fired++
                 if (timer.repeat) timer.due += timer.interval else timer.dead = true
-                vm?.call(timer.fn)?.let {
+                vm?.call(timer.fn, timer.owner)?.let {
                     timer.dead = true
                     scriptError = it
                 }
@@ -441,12 +501,15 @@ class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = {
         private const val ANIM_SLOTS = 8
 
         /**
-         * Whether [scene]'s script moves the camera or anything drawn within [seconds]. A theme whose
-         * script only sets things up once is as good as a picture.
+         * Whether [scene] moves: a character drawn playing its clip, or a script that moves the
+         * camera or anything drawn within [seconds]. A theme whose script only sets things up once
+         * is as good as a picture.
          */
         fun animates(scene: RafScene.Scene, seconds: Double = 30.0, random: () -> Double = { Math.random() }): Boolean {
             val play = ThemeScene(scene, random)
-            if (!play.scripted || play.actors.none { it.drawable }) return false
+            if (play.actors.none { it.drawable }) return false
+            if (play.actors.any { it.drawable && it.playsClip }) return true
+            if (!play.scripted) return false
             play.start()
             val first = play.snapshot()
             var t = 0.0

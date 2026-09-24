@@ -110,8 +110,12 @@ object EdgeAnim {
         val clipJoints = be16(b, 0x0E)
         val frames = be16(b, 0x10)
         val sets = be16(b, 0x12)
-        if (!(duration > 0f) || !(rate > 0f) || frames !in 1..MAX_FRAMES || sets !in 1..frames) return null
+        if (!(rate > 0f) || frames !in 1..MAX_FRAMES || sets !in 1..frames) return null
         val counts = IntArray(8) { be16(b, 0x16 + 2 * it) } // const R T S U, anim R T S U
+        // A clip that holds the rest pose: no channels, one frame, no length. Batman Arkham City
+        // Dynamic and Bloodborne Dynamic give every quad one.
+        if (counts.all { it == 0 }) return Clip(0f, rate, frames, emptyList())
+        if (!(duration > 0f)) return null
         if (counts.sum() > MAX_CHANNELS) throw Damaged()
         val dma = rel(b, 0x34)
         val info = rel(b, 0x38)

@@ -30,8 +30,15 @@ import java.util.zip.Inflater
  * is checked against its table before use, in 64-bit arithmetic, and sizes are capped.
  */
 object P3tAnimation {
-    /** A texture in the scene: its GCM format byte, and its pixel data at [offset] in the scene. */
+    /**
+     * A texture in the scene: its GCM format byte, and its pixel data at [offset] in the scene. Or,
+     * with [format] [PICTURE], a whole JPEG or PNG file there, which some themes use instead of a
+     * GTF (the anonymous theme's "mask.jpg"); the platform decodes those (see [isPicture]).
+     */
     class Texture(val format: Int, val width: Int, val height: Int, val pitch: Int, val offset: Long, val size: Int)
+
+    /** [Texture.format] of a texture that is a JPEG or PNG file. */
+    const val PICTURE = 0x1000
 
     /** A full-screen layer, in draw order. [z] is its depth, for the zoom below, when it has one. */
     class Layer(val name: String, val texture: Texture, val z: Float?)
@@ -255,6 +262,27 @@ object P3tAnimation {
      * a CellGcmTexture: format, mip count, dimension, cube flag, remap, width, height, depth,
      * location, pitch.
      */
+    /** A scene's texture file: a GTF, or a JPEG or PNG picture. */
+    internal fun texture(raf: P3tTheme.Bytes, offset: Long, size: Long): Texture? = gtf(raf, offset, size) ?: picture(raf, offset, size)
+
+    fun isPicture(t: Texture): Boolean = t.format == PICTURE
+
+    /** A JPEG or PNG texture file, with its size read from its header. */
+    private fun picture(raf: P3tTheme.Bytes, offset: Long, size: Long): Texture? {
+        if (size < 24 || size > MAX_TEXTURE_BYTES) return null
+        val head = raf.read(offset, minOf(size, PICTURE_PROBE_BYTES).toInt())
+        val png = head[0] == 0x89.toByte() && String(head, 1, 3, Charsets.ISO_8859_1) == "PNG"
+        val dims = if (png) {
+            be32(head, 16).toInt() to be32(head, 20).toInt()
+        } else {
+            P3tTheme.jpegSize(head) ?: (if (size > head.size) P3tTheme.jpegSize(raf.read(offset, size.toInt())) else null) ?: return null
+        }
+        if (dims.first !in 1..MAX_SIDE || dims.second !in 1..MAX_SIDE) return null
+        return Texture(PICTURE, dims.first, dims.second, 0, offset, size.toInt())
+    }
+
+    private const val PICTURE_PROBE_BYTES = 64L shl 10
+
     internal fun gtf(raf: P3tTheme.Bytes, offset: Long, size: Long): Texture? {
         if (size < GTF_HEADER_BYTES) return null
         val h = raf.read(offset, GTF_HEADER_BYTES)
@@ -276,6 +304,17 @@ object P3tAnimation {
         return Texture(format, width, height, rowPitch.toInt(), offset + data, needed.toInt())
     }
 
+    /**
+     * Which DXT a texture is, for drawing its blocks as they are (ThemeSceneRenderer decodes them
+     * in the shader): 1, 3 or 5, or 0 for a format that is not block compressed.
+     */
+    internal fun dxt(t: Texture): Int = when (t.format and FORMAT_FLAGS.inv()) {
+        DXT1 -> 1
+        DXT3 -> 3
+        DXT5 -> 5
+        else -> 0
+    }
+
     private fun blockBytes(format: Int): Int? = when (format and FORMAT_FLAGS.inv()) {
         DXT1 -> 8
         DXT3, DXT5 -> 16
@@ -295,6 +334,7 @@ object P3tAnimation {
     }
 
     internal fun decodeBlocks(data: ByteArray, t: Texture): IntArray? {
+        if (isPicture(t)) return null // the platform's to decode
         val kind = t.format and FORMAT_FLAGS.inv()
         val block = blockBytes(t.format) ?: return null
         val wide = (t.width + 3) / 4

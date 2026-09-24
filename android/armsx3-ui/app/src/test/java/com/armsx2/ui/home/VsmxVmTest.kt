@@ -125,9 +125,75 @@ class VsmxVmTest {
     }
 
     @Test
+    fun constructorsBuildOnTheirPrototype() {
+        // function Foo(x) { this.x = x; }  Foo.prototype.get = function () { return this.x; }
+        // o = new Foo(5); report(o.get()); report(o.x)
+        val (vm, out) = run {
+            function("Foo", 1, 1) { op(0x2C); local(1); set("x"); pop() }
+            global("Foo"); get("prototype")
+            val fn = op(0x2A or (1 shl 24))
+            val skip = op(0x39)
+            patch(fn, here)
+            op(0x2C); get("x"); op(0x3F)
+            patch(skip, here)
+            set("get"); pop()
+            assign("o") { global("Foo"); int(5); new(1) }
+            callGlobal("report", { global("o"); getKeep("get"); callMethod(0) })
+            callGlobal("report", { global("o"); get("x") })
+        }
+        assertNull(vm.failed)
+        assertEquals(listOf(5.0, 5.0), out)
+    }
+
+    @Test
+    fun argumentsIsLocalSlotZero() {
+        // function f() { return arguments.length; }  report(f(1, 2, 3))
+        val (vm, out) = run {
+            function("f", 0, 1) { local(0); get("length"); op(0x3F) }
+            callGlobal("report", { global("f"); int(1); int(2); int(3); call(3) })
+        }
+        assertNull(vm.failed)
+        assertEquals(listOf(3.0), out)
+    }
+
+    @Test
+    fun propertiesAndElementsCanBeIncremented() {
+        // o = {}; o.n = 1; o.n++;  a = [5]; a[0]++;  report(o.n); report(a[0])
+        val (vm, out) = run {
+            assign("o") { op(0x29) }
+            global("o"); int(1); set("n"); pop()
+            global("o"); get("n"); op(0x0C); pop()
+            assign("a") { int(5); array(1) }
+            global("a"); int(0); op(0x34); op(0x0C); pop()
+            callGlobal("report", { global("o"); get("n") })
+            callGlobal("report", { global("a"); int(0); op(0x34) })
+        }
+        assertNull(vm.failed)
+        assertEquals(listOf(2.0, 6.0), out)
+    }
+
+    @Test
+    fun arraysAndFunctionsHoldNamedProperties() {
+        // logo = []; logo.init = function () { return 7; }; report(logo.init())
+        val (vm, out) = run {
+            assign("logo") { op(0x2B) }
+            global("logo")
+            val fn = op(0x2A or (1 shl 24))
+            val skip = op(0x39)
+            patch(fn, here)
+            int(7); op(0x3F)
+            patch(skip, here)
+            set("init"); pop()
+            callGlobal("report", { global("logo"); getKeep("init"); callMethod(0) })
+        }
+        assertNull(vm.failed)
+        assertEquals(listOf(7.0), out)
+    }
+
+    @Test
     fun runawayLoopsStop() {
         val (vm, _) = run { op(0x39, 0) }
-        assertEquals("step budget", vm.failed)
+        assertTrue(vm.failed!!, vm.failed!!.startsWith("step budget"))
     }
 
     @Test

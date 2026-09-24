@@ -84,9 +84,20 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
                 RandomAccessFile(file, "r").use { raf ->
                     val bytes = LibraryBackground.ChannelBytes(raf.channel, raf.length())
                     val scene = RafScene.read(bytes) ?: return
-                    val play = ThemeScene(scene)
                     val asked = HashSet<String>()
-                    play.unsupported = { if (asked.size < MAX_REPORTS && asked.add(it)) Log.i(TAG, "script asks for $it, not supported") }
+                    fun started() = ThemeScene(scene).apply {
+                        unsupported = { if (asked.size < MAX_REPORTS && asked.add(it)) Log.i(TAG, "script asks for $it, not supported") }
+                        start()
+                    }
+                    // A script that fails as it starts gets another go with other random numbers:
+                    // Persona 5 Slideshow's does one start in eight (its first slide is
+                    // (random - 1) % 8), and then shows no slideshow at all.
+                    var play = started()
+                    var tries = 1
+                    while (play.scriptError != null && tries < START_TRIES) {
+                        play = started()
+                        tries++
+                    }
                     if (!egl.create(surfaceTexture, width, height)) return
                     val renderer = ThemeSceneRenderer(play, bytes)
                     try {
@@ -141,5 +152,6 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
         const val JOIN_MS = 500L
         const val FRAME_NANOS = 1_000_000_000L / 30
         const val MAX_REPORTS = 16
+        const val START_TRIES = 3
     }
 }

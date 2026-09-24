@@ -127,6 +127,19 @@ class EdgeAnimTest {
     }
 
     @Test
+    fun aClipWithNoChannelsHoldsTheRestPose() {
+        // Batman Arkham City Dynamic's "bg.anim": one frame, no length, nothing in it.
+        val b = ByteArray(0x90)
+        "EA03".forEachIndexed { i, c -> b[i] = c.code.toByte() }
+        val rate = 30f.toRawBits()
+        for (k in 0 until 4) b[8 + k] = (rate ushr (24 - 8 * k)).toByte()
+        b[0x0F] = 1; b[0x11] = 1; b[0x13] = 1 // joints, frames, frame sets
+        val clip = EdgeAnim.clip(b, 1)
+        assertNotNull(clip)
+        assertTrue(clip!!.channels.isEmpty())
+    }
+
+    @Test
     fun notAClipIsRefused() {
         assertNull(EdgeAnim.clip(ByteArray(0x80), 4))
         assertNull(EdgeAnim.skeleton(ByteArray(0x40)))

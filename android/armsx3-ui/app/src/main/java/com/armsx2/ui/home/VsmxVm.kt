@@ -10,6 +10,16 @@ package com.armsx2.ui.home
  * An opcode outside that set, a type error, or a runaway loop stops that run of the script -- the
  * top level, or one timer's callback -- rather than guessing; what it already moved stays put.
  *
+ * Objects work as in JavaScript as far as the themes use them: `this`, `new F(...)` on a script
+ * function (an object whose prototype is F.prototype, so methods set on it are found), and
+ * properties on functions and arrays (`logo.init = function ...`). Sony's own themes (Afrika) and
+ * some made with its tools (Bloodborne Dynamic) are written that way.
+ *
+ * A function's local slot 0 is `arguments`, its arguments as an array: Afrika passes it on whole
+ * (`new Zebra(arguments)`). Reading a property or an element (0x2f, 0x34, 0x4a) leaves a reference
+ * that later instructions read or assign, as reading a variable does: that is how `this.frame++`
+ * compiles (Bloodborne Dynamic).
+ *
  * Two details that differ from textbook JavaScript engines, both needed by real scripts:
  *  - 0x30 reads a property but keeps the object under it, for method calls (`o.f(x)`: the object
  *    is `this`) and read-modify-write (`o.p = o.p + [..]`, `o.p[i] += x`).
@@ -74,10 +84,21 @@ class VsmxVm(private val program: Program, private val host: Host) {
     /** A host constructor, for `new X(...)`. */
     class Constructor(val name: String, val make: (args: List<Any?>) -> Any?)
 
-    /** A script function: its body starts at [start]; [params] fill local slots 1..params. */
-    class Function(val start: Int, val params: Int, val locals: Int)
+    /**
+     * A script function: its body starts at [start]; [params] fill local slots 1..params. Also an
+     * object: its prototype, and whatever else a script sets on it.
+     */
+    class Function(val start: Int, val params: Int, val locals: Int) {
+        val props = HashMap<String, Any?>()
+
+        /** What `new` makes objects from: created on first use, as a script adds methods to it. */
+        val prototype: JsObject get() = props.getOrPut("prototype") { JsObject() } as? JsObject ?: JsObject()
+    }
 
     class JsArray(val items: ArrayList<Any?> = ArrayList()) {
+        /** Named properties, which arrays can have as any object can. */
+        var props: HashMap<String, Any?>? = null
+
         operator fun get(i: Int): Any? = items.getOrNull(i) ?: Undefined
         operator fun set(i: Int, v: Any?) {
             if (i < 0 || i > MAX_ARRAY) throw VsmxError("array index $i")
@@ -86,7 +107,8 @@ class VsmxVm(private val program: Program, private val host: Host) {
         }
     }
 
-    class JsObject(val props: HashMap<String, Any?> = HashMap())
+    /** An object; what it does not have itself is looked up on [proto], as JavaScript does. */
+    class JsObject(val props: HashMap<String, Any?> = HashMap(), val proto: JsObject? = null)
 
     object Undefined {
         override fun toString() = "undefined"
@@ -99,6 +121,8 @@ class VsmxVm(private val program: Program, private val host: Host) {
     private sealed class Ref {
         class Global(val name: String) : Ref()
         class Local(val frame: Array<Any?>, val slot: Int) : Ref()
+        class Property(val target: Any?, val name: String) : Ref()
+        class Element(val target: Any?, val index: Any?) : Ref()
     }
 
     private val globals = HashMap<String, Any?>()
@@ -114,8 +138,11 @@ class VsmxVm(private val program: Program, private val host: Host) {
         failed = guard { execute(0, arrayOfNulls(LOCALS), Undefined) }
     }
 
-    /** Call a script function (a timer's callback). Null when it ran to the end, else why it stopped. */
-    fun call(fn: Any?, args: List<Any?> = emptyList()): String? = guard { invoke(fn, Undefined, args) }
+    /**
+     * Call a script function (a timer's callback) with [self] as `this`. Null when it ran to the
+     * end, else why it stopped.
+     */
+    fun call(fn: Any?, self: Any? = Undefined, args: List<Any?> = emptyList()): String? = guard { invoke(fn, self, args) }
 
     private fun guard(block: () -> Unit): String? {
         budget = MAX_STEPS
@@ -138,6 +165,7 @@ class VsmxVm(private val program: Program, private val host: Host) {
             if (++depth > MAX_DEPTH) throw VsmxError("call depth")
             try {
                 val frame = arrayOfNulls<Any?>(maxOf(fn.locals, fn.params + 1, 1) + 1)
+                frame[0] = JsArray(ArrayList(args))
                 for (i in 0 until minOf(fn.params, args.size)) frame[1 + i] = args[i]
                 execute(fn.start, frame, self)
             } finally {
@@ -208,13 +236,14 @@ class VsmxVm(private val program: Program, private val host: Host) {
                     0x29 -> push(JsObject())
                     0x2a -> push(Function(a, (code ushr 8) and 0xFF, (code ushr 24) and 0xFF))
                     0x2b -> push(JsArray())
+                    0x2c -> push(self)
                     0x2d -> push(Ref.Local(frame, a).also { if (a !in frame.indices) throw VsmxError("local $a") })
                     0x2e -> push(Ref.Global(program.names.getOrNull(a) ?: throw VsmxError("name $a")))
-                    0x2f -> push(getProperty(popValue(), prop(a)))
+                    0x2f -> push(Ref.Property(popValue(), prop(a)))
                     0x30 -> { val o = popValue(); push(o); push(getProperty(o, prop(a))) }
                     0x31 -> { val v = popValue(); setProperty(popValue(), prop(a), v); push(v) }
                     0x33 -> { val v = popValue(); setProperty(deref(peek()), prop(a), v) }
-                    0x34 -> { val i = popValue(); push(index(popValue(), i)) }
+                    0x34 -> { val i = popValue(); push(Ref.Element(popValue(), i)) }
                     0x36 -> { val v = popValue(); val i = popValue(); setIndex(popValue(), i, v); push(v) }
                     0x38 -> { val v = popValue(); (deref(peek()) as? JsArray ?: throw VsmxError("push to non-array")).items.add(v) }
                     0x39 -> pc = a
@@ -230,7 +259,7 @@ class VsmxVm(private val program: Program, private val host: Host) {
                     0x44 -> {}
                     0x45 -> return Undefined
                     0x49 -> push(JsArray(ArrayList(popArgs(a))))
-                    0x4a -> push(index(popValue(), (code ushr 8).toDouble()))
+                    0x4a -> push(Ref.Element(popValue(), (code ushr 8).toDouble()))
                     0x4d -> {
                         val v = popValue()
                         val o = popValue()
@@ -245,7 +274,9 @@ class VsmxVm(private val program: Program, private val host: Host) {
                 }
             } catch (e: VsmxError) {
                 // try { } catch (e) { }: the catch block starts just after the jump that skips it.
-                if (handlers.isEmpty()) throw e
+                // Otherwise it goes up, saying where: "x of undefined @812 @40" is the instruction
+                // that failed, then the calls it was in.
+                if (handlers.isEmpty()) throw VsmxError("${e.message} @${pc - 1}")
                 pc = handlers.removeAt(handlers.size - 1) + 1
                 stack.clear()
                 push(e.message ?: "error")
@@ -256,6 +287,8 @@ class VsmxVm(private val program: Program, private val host: Host) {
     private fun deref(v: Any?): Any? = when (v) {
         is Ref.Global -> if (globals.containsKey(v.name)) globals[v.name] else host.global(v.name) ?: Undefined
         is Ref.Local -> v.frame[v.slot] ?: Undefined
+        is Ref.Property -> getProperty(v.target, v.name)
+        is Ref.Element -> index(v.target, v.index)
         else -> v
     }
 
@@ -263,39 +296,65 @@ class VsmxVm(private val program: Program, private val host: Host) {
         when (target) {
             is Ref.Global -> globals[target.name] = v
             is Ref.Local -> target.frame[target.slot] = v
+            is Ref.Property -> setProperty(target.target, target.name, v)
+            is Ref.Element -> setIndex(target.target, target.index, v)
             else -> throw VsmxError("assignment to ${describe(target)}")
         }
     }
 
     private fun construct(ctor: Any?, args: List<Any?>): Any? = when (ctor) {
         is Constructor -> ctor.make(args)
+        // An object built on the function's prototype, which the function sets up as `this`;
+        // unless it returns an object of its own, as a constructor may.
+        is Function -> {
+            val made = JsObject(proto = ctor.prototype)
+            when (val result = invoke(ctor, made, args)) {
+                is JsObject, is JsArray, is HostObject, is Function -> result
+                else -> made
+            }
+        }
         else -> throw VsmxError("not a constructor: ${describe(ctor)}")
     }
 
     private fun getProperty(o: Any?, name: String): Any? = when (o) {
-        is JsArray -> when (name) {
-            "length" -> o.items.size.toDouble()
-            "push" -> Native("push") { self, args -> (self as JsArray).items.addAll(args); self.items.size.toDouble() }
+        is JsArray -> when {
+            name == "length" -> o.items.size.toDouble()
+            name == "push" -> Native("push") { self, args -> (self as JsArray).items.addAll(args); self.items.size.toDouble() }
+            o.props?.containsKey(name) == true -> o.props!![name]
             else -> Undefined.also { host.unsupported("Array.$name") }
         }
-        is JsObject -> if (o.props.containsKey(name)) o.props[name] else Undefined
+        is JsObject -> lookup(o, name)
+        is Function -> if (name == "prototype") o.prototype else if (o.props.containsKey(name)) o.props[name] else Undefined
         is HostObject -> o.get(name)
         is String -> if (name == "length") o.length.toDouble() else Undefined.also { host.unsupported("String.$name") }
         null, Undefined -> throw VsmxError("property $name of ${describe(o)}")
         else -> Undefined
     }
 
+    /** [name] on [o] or up its prototypes. */
+    private fun lookup(o: JsObject, name: String): Any? {
+        var at: JsObject? = o
+        var hops = 0
+        while (at != null && hops++ < MAX_DEPTH) {
+            if (at.props.containsKey(name)) return at.props[name]
+            at = at.proto
+        }
+        return Undefined
+    }
+
     private fun setProperty(o: Any?, name: String, v: Any?) {
         when (o) {
             is JsObject -> o.props[name] = v
+            is Function -> o.props[name] = v
+            is JsArray -> (o.props ?: HashMap<String, Any?>().also { o.props = it })[name] = v
             is HostObject -> o.set(name, v)
             else -> throw VsmxError("set $name on ${describe(o)}")
         }
     }
 
     private fun index(o: Any?, i: Any?): Any? = when (o) {
-        is JsArray -> o[num(i).toInt()]
-        is JsObject -> o.props[str(i)] ?: Undefined
+        is JsArray -> if (i is String && i.toDoubleOrNull() == null) getProperty(o, i) else o[num(i).toInt()]
+        is JsObject -> lookup(o, str(i))
         is HostObject -> o.get(str(i))
         is String -> o.getOrNull(num(i).toInt())?.toString() ?: Undefined
         else -> throw VsmxError("index of ${describe(o)}")
