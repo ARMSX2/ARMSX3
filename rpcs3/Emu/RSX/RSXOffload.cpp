@@ -197,7 +197,7 @@ namespace rsx
 	{
 		if (auto cpu = thread_ctrl::get_current())
 		{
-			return m_thread->current_thread_ == cpu;
+			return m_thread && m_thread->current_thread_ == cpu;
 		}
 
 		return false;
@@ -205,6 +205,16 @@ namespace rsx
 
 	bool dma_manager::sync() const
 	{
+		// The offloader thread is created when the RSX thread first runs (thread::on_task), but the
+		// renderer is built while the game is still loading. A stop in between tears down a renderer
+		// whose thread never ran, and ~VKGSRender flushes through here: *m_thread was a null
+		// dereference. Seen when Gran Turismo 6 restarted itself into EMAIN.SELF (exitspawn) and was
+		// stopped while the new executable was still loading. With no thread, nothing was queued.
+		if (!m_thread) [[unlikely]]
+		{
+			return true;
+		}
+
 		auto& _thr = *m_thread;
 
 		if (_thr.m_enqueued_count.load() <= _thr.m_processed_count.load()) [[likely]]
@@ -293,6 +303,11 @@ namespace rsx
 
 	void dma_manager::join()
 	{
+		if (!m_thread)
+		{
+			return; // Never started (see sync)
+		}
+
 		sync();
 		*m_thread = thread_state::aborting;
 	}
