@@ -174,9 +174,10 @@ object LibraryChromePreferences {
         MainActivityRuntime.prefs.edit { putInt(BarOpacityKey, v) }
     }
     /** How far the library darkens its background to keep text readable over it, as a percent
-     *  (0-100) of the dimming it always had. 100 = that; 0 = the background as it is, as View
-     *  background shows it. */
-    val backgroundDimming = mutableStateOf(100)
+     *  (0-100) of the dimming it used to have. 0, the default, = the background as it is, as View
+     *  background shows it: that dimming (55-80% of the app's navy over a picture or theme)
+     *  took most of a bright theme's colour. */
+    val backgroundDimming = mutableStateOf(0)
 
     fun setBackgroundDimming(value: Int) {
         val v = value.coerceIn(0, 100)
@@ -193,7 +194,7 @@ object LibraryChromePreferences {
         libraryOpacity.value = MainActivityRuntime.prefs.getInt(OpacityKey, 100).coerceIn(20, 100)
         barColor.value = MainActivityRuntime.prefs.getInt(BarColorKey, 0)
         barOpacity.value = MainActivityRuntime.prefs.getInt(BarOpacityKey, 100).coerceIn(0, 100)
-        backgroundDimming.value = MainActivityRuntime.prefs.getInt(DimmingKey, 100).coerceIn(0, 100)
+        backgroundDimming.value = MainActivityRuntime.prefs.getInt(DimmingKey, 0).coerceIn(0, 100)
     }
 
     fun setShowSearch(value: Boolean) {

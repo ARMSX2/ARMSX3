@@ -231,12 +231,12 @@ fun HomeScreen(
             // Nothing live here while the full-screen viewer is up: it draws the same background
             // itself, and two copies of a live theme would each keep the GPU busy.
             if (viewingBackground) Box(Modifier.fillMaxSize().background(Color.Black)) else LibraryBackdrop()
-            // Scrim so covers and text stay readable over the backdrop. A user-picked image can
-            // be any brightness, so it gets the full dark scrim. The XMB is our own controlled
-            // backdrop (dark at the top where the content sits) and a heavy scrim just muddied
-            // its blue into navy — so it gets only a whisper of dimming, letting the vivid blue
-            // read through.
-            // Background Dimming (App Settings) scales it, down to none.
+            // Scrim so covers and text stay readable over the backdrop, as strong as Background
+            // Dimming (App Settings) asks: none by default, since at full strength it took most of
+            // a bright theme's colour. At full strength a user-picked image, which can be any
+            // brightness, gets a dark scrim; the XMB is our own controlled backdrop (dark at the
+            // top where the content sits) and a heavy scrim just muddied its blue into navy, so
+            // it gets only a whisper of dimming.
             val dimming = LibraryChromePreferences.backgroundDimming.value / 100f
             val scrimTop = (if (libraryBg == null) 0.06f else 0.55f) * dimming
             val scrimBottom = (if (libraryBg == null) 0.20f else 0.80f) * dimming
