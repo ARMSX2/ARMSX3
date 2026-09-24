@@ -164,6 +164,9 @@ fun HomeScreen(
     var showClearRecentsConfirm by remember { mutableStateOf(false) }
     // The background shown on its own, full screen (BackgroundViewer).
     var viewingBackground by remember { mutableStateOf(false) }
+    // The saved backgrounds to pick from (BackgroundSheet), and the one a long press asked to remove.
+    var backgroundSheet by remember { mutableStateOf(false) }
+    var removingBackground by remember { mutableStateOf<LibraryBackground.Saved?>(null) }
     // #9 custom library background — inert until the user picks an image.
     LaunchedEffect(Unit) {
         LibraryBackground.ensureLoaded()
@@ -448,9 +451,8 @@ fun HomeScreen(
                                 showHidden = com.armsx2.HiddenGames.showHidden.value,
                                 onOpenCategories = { categoryPicker = true },
                                 hasCustomBackground = LibraryBackground.uri.value != null,
-                                savedBackgrounds = LibraryBackground.saved.value,
+                                savedBackgrounds = LibraryBackground.saved.value.size,
                                 currentBackground = LibraryBackground.current(),
-                                onSelectBackground = LibraryBackground::select,
                                 onDismiss = { overflowMenu = false },
                                 onOpenNavigation = onOpenMenu,
                                 onSort = viewModel::setSort,
@@ -459,7 +461,7 @@ fun HomeScreen(
                                 onToggleCustomNames = { com.armsx2.CustomNames.set(!com.armsx2.CustomNames.enabled.value) },
                                 onToggleEnglishTitles = { EnglishTitles.set(!EnglishTitles.enabled.value) },
                                 onToggleShowHidden = { viewModel.setShowHidden(!com.armsx2.HiddenGames.showHidden.value) },
-                                onAddBackground = { backgroundPicker.launch(arrayOf("image/*", "application/octet-stream")) },
+                                onChangeBackground = { backgroundSheet = true },
                                 onViewBackground = { viewingBackground = true },
                                 onRemoveBackground = {
                                     // A picture an older version used in place, not copied in, is not ours to delete.
@@ -1099,6 +1101,36 @@ fun HomeScreen(
         }
     }
 
+    if (backgroundSheet) {
+        BackgroundSheet(
+            saved = LibraryBackground.saved.value,
+            current = LibraryBackground.current(),
+            customShown = LibraryBackground.uri.value != null,
+            onSelect = { LibraryBackground.select(it); backgroundSheet = false },
+            onAdd = {
+                backgroundSheet = false
+                backgroundPicker.launch(arrayOf("image/*", "application/octet-stream"))
+            },
+            onRemove = { removingBackground = it },
+            onDismiss = { backgroundSheet = false },
+        )
+    }
+    removingBackground?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { removingBackground = null },
+            title = { Text(entry.name) },
+            confirmButton = {
+                TextButton(onClick = {
+                    LibraryBackground.remove(entry)
+                    removingBackground = null
+                }) { Text(str("games.background.remove")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { removingBackground = null }) { Text(str("action.cancel")) }
+            },
+        )
+    }
+
     // Pick the active category. A sheet, not a DropdownMenu, so it stays controller-navigable.
     // Long-press a row to rename or delete it -- there is no separate management screen.
     if (categoryPicker) {
@@ -1407,9 +1439,8 @@ private fun LibraryOverflowMenu(
     englishTitles: Boolean,
     showHidden: Boolean,
     hasCustomBackground: Boolean,
-    savedBackgrounds: List<LibraryBackground.Saved>,
+    savedBackgrounds: Int,
     currentBackground: LibraryBackground.Saved?,
-    onSelectBackground: (LibraryBackground.Saved?) -> Unit,
     onDismiss: () -> Unit,
     onOpenNavigation: () -> Unit,
     onSort: (HomeSort) -> Unit,
@@ -1419,7 +1450,7 @@ private fun LibraryOverflowMenu(
     onToggleEnglishTitles: () -> Unit,
     onToggleShowHidden: () -> Unit,
     onOpenCategories: () -> Unit,
-    onAddBackground: () -> Unit,
+    onChangeBackground: () -> Unit,
     onViewBackground: () -> Unit,
     onRemoveBackground: () -> Unit,
     onExitApp: () -> Unit,
@@ -1439,19 +1470,16 @@ private fun LibraryOverflowMenu(
         shadowElevation = 14.dp,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.42f)),
     ) {
-        // The background first: the default, every saved one (tap to switch, no re-import), then
-        // adding, viewing and removing.
+        // The background first. Picking one is a sheet of them all (BackgroundSheet): a row each here
+        // made the menu longer with every background added.
         OverflowHeader(str("games.background.section"))
-        LibraryOverflowItem("◌", str("games.background.default"), selected = !hasCustomBackground) {
-            closeThen { onSelectBackground(null) }
-        }
-        for (entry in savedBackgrounds) {
-            LibraryOverflowItem("▧", entry.name, selected = entry.folder == currentBackground?.folder, thumbnail = entry.picture) {
-                closeThen { onSelectBackground(entry) }
-            }
-        }
-        LibraryOverflowItem("+", str("games.background.add")) {
-            closeThen(onAddBackground)
+        LibraryOverflowItem(
+            glyph = "▧",
+            label = str("games.background.change"),
+            trailing = if (savedBackgrounds > 0) "$savedBackgrounds" else null,
+            thumbnail = currentBackground?.picture,
+        ) {
+            closeThen(onChangeBackground)
         }
         LibraryOverflowItem("▣", str("games.background.view")) {
             closeThen(onViewBackground)
@@ -1536,6 +1564,108 @@ private fun LibraryOverflowMenu(
         ) {
             closeThen(onExitApp)
         }
+    }
+}
+
+/**
+ * Every background to pick from as a picture: the default first, the saved ones, and Add last. A
+ * sheet, as categories are, rather than rows in the library menu: it stays usable with a
+ * controller, and the menu no longer grows with every background. Long-press one to remove it.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BackgroundSheet(
+    saved: List<LibraryBackground.Saved>,
+    current: LibraryBackground.Saved?,
+    customShown: Boolean,
+    onSelect: (LibraryBackground.Saved?) -> Unit,
+    onAdd: () -> Unit,
+    onRemove: (LibraryBackground.Saved) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Text(
+            str("games.background.section"),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+        )
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(150.dp),
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item {
+                BackgroundTile(str("games.background.default"), selected = !customShown, onClick = { onSelect(null) }) {
+                    Image(
+                        painter = painterResource(R.drawable.library_bg_xmb),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+            items(saved, key = { it.folder.path }) { entry ->
+                BackgroundTile(
+                    entry.name,
+                    selected = entry.folder == current?.folder,
+                    onClick = { onSelect(entry) },
+                    onLongClick = { onRemove(entry) },
+                ) {
+                    AsyncImage(
+                        model = entry.picture,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+            item {
+                BackgroundTile(str("games.background.addShort"), selected = false, onClick = onAdd) {
+                    Text("+", fontSize = 34.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BackgroundTile(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    picture: @Composable () -> Unit,
+) {
+    Column(
+        Modifier.clip(RoundedCornerShape(14.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .border(
+                    if (selected) 3.dp else 1.dp,
+                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                    RoundedCornerShape(10.dp),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            picture()
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
