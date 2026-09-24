@@ -23,8 +23,8 @@ import java.util.zip.Inflater
  * The dynamic themes people share are mostly built from slideshow templates: every actor is a flat
  * quad, the full-screen ones on one plane. Opaque ones are slides, which the script fades between
  * on a timer; see-through ones are drawn over them. That is what this reads: the full-screen
- * layers, where their pixels are, and the timing. A theme with real 3D content has no full-screen
- * layer, so it gets no slideshow and keeps its preview picture.
+ * layers, where their pixels are, and the timing. A theme with real 3D content has at most one
+ * full-screen layer, so it gets no slideshow; [RafScene] and [ThemeScene] play it instead.
  *
  * All of it is user input and read as hostile, the same way as [P3tTheme]: every offset and size
  * is checked against its table before use, in 64-bit arithmetic, and sizes are capped.
@@ -68,6 +68,7 @@ object P3tAnimation {
     private const val MAX_TABLE_BYTES = 16 shl 20
     private const val MAX_TEXTURE_BYTES = 16 shl 20
     private const val MAX_SCRIPT_BYTES = 1 shl 20
+    private const val MAX_MESH_BYTES = 4L shl 20
     private const val MAX_SIDE = 4096
     private const val MAX_NAME_BYTES = 256
     private const val MAX_VECTOR = 16
@@ -154,11 +155,14 @@ object P3tAnimation {
         val floats = table(4)
         val (filesAt, filesSize) = tables[5]
 
-        // Everything is joined by id, an offset into the id table: actor -> material -> texture -> file.
-        class Actor(val id: Long, val material: Long, val z: Float?)
+        // Everything is joined by id, an offset into the id table: actor -> material -> texture -> file,
+        // and actor -> model -> geometry -> file.
+        class Actor(val id: Long, val material: Long, val model: Long?, val z: Float?)
         val actors = ArrayList<Actor>()
         val materialAt = HashMap<Long, Long>()       // material element offset -> its id
         val materialTexture = HashMap<Long, Long>()
+        val modelAt = HashMap<Long, Long>()          // model element offset -> its id
+        val modelGeometry = HashMap<Long, Long>()
         val textureFile = HashMap<Long, Long>()
         val fileSpan = HashMap<Long, Attr>()
         var script: Long? = null
@@ -180,9 +184,15 @@ object P3tAnimation {
                 "actor" -> {
                     val id = ref("id")
                     val material = ref("material")
-                    if (id != null && material != null) actors += Actor(id, material, vector(floats, attrs["position"])?.getOrNull(2))
+                    if (id != null && material != null) actors += Actor(id, material, ref("model"), vector(floats, attrs["position"])?.getOrNull(2))
                 }
                 "material" -> ref("id")?.let { materialAt[pos] = it }
+                "model" -> ref("id")?.let { modelAt[pos] = it }
+                "geometry" -> {
+                    val model = modelAt[parent]
+                    val file = ref("fileref")
+                    if (model != null && file != null) modelGeometry[model] = file
+                }
                 "_texture" -> {
                     val material = materialAt[parent]
                     val texture = ref("texref")
@@ -209,8 +219,15 @@ object P3tAnimation {
             if (span.a > filesSize || span.b > filesSize - span.a) return null
             return (filesAt + span.a) to span.b
         }
+        // A mesh that draws nothing is how theme authors hide a layer they do not want: Fallout NV
+        // Custom Dynamic keeps the Prince of Persia template's rocks that way (see RafScene.collapsed).
+        fun hidden(actor: Actor): Boolean {
+            val (offset, size) = actor.model?.let(modelGeometry::get)?.let(::file) ?: return false
+            return size in 1..MAX_MESH_BYTES && RafScene.collapsed(raf.read(offset, size.toInt()))
+        }
         val layers = ArrayList<Layer>()
         for (actor in actors) {
+            if (hidden(actor)) continue
             val texture = materialTexture[actor.material]?.let(textureFile::get)?.let(::file)
                 ?.let { (offset, size) -> gtf(raf, offset, size) } ?: continue
             val aspect = texture.width.toFloat() / texture.height
@@ -223,7 +240,7 @@ object P3tAnimation {
         return Scene(layers, timing(code, layers.first().z))
     }
 
-    private val WANTED = setOf("actor", "material", "_texture", "texture", "file", "script")
+    private val WANTED = setOf("actor", "material", "_texture", "texture", "file", "script", "model", "geometry")
 
     /** A type-5 attribute's floats, when it is one and fits the float table. */
     private fun vector(floats: ByteArray, attr: Attr?): FloatArray? {
@@ -238,7 +255,7 @@ object P3tAnimation {
      * a CellGcmTexture: format, mip count, dimension, cube flag, remap, width, height, depth,
      * location, pitch.
      */
-    private fun gtf(raf: P3tTheme.Bytes, offset: Long, size: Long): Texture? {
+    internal fun gtf(raf: P3tTheme.Bytes, offset: Long, size: Long): Texture? {
         if (size < GTF_HEADER_BYTES) return null
         val h = raf.read(offset, GTF_HEADER_BYTES)
         if (be32(h, 8) < 1) return null

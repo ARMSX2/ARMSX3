@@ -194,7 +194,7 @@ fun HomeScreen(
             if (outcome == null) {
                 LibraryBackground.set(context, picked)
             } else {
-                outcome.file?.let { LibraryBackground.setImported(it, outcome.slideshow) }
+                outcome.file?.let { LibraryBackground.setImported(it, outcome.slideshow, outcome.scene) }
                 outcome.messageKey?.let { Toast.makeText(context, I18n.get(it), Toast.LENGTH_LONG).show() }
             }
         }
@@ -290,6 +290,20 @@ fun HomeScreen(
                         modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                     )
+                    // A dynamic theme played live, over its still: the still shows until the scene
+                    // draws, and stays if it cannot. Keyed so a new theme gets a new view.
+                    LibraryBackground.scene.value?.let { live ->
+                        androidx.compose.runtime.key(live) {
+                            var sceneGl by remember { mutableStateOf<Boolean?>(null) }
+                            if (sceneGl != false) {
+                                AndroidView(
+                                    factory = { ThemeSceneView(it, live).apply { onGlStatus = { ok -> sceneGl = ok } } },
+                                    modifier = Modifier.fillMaxSize(),
+                                    onRelease = { it.stop() },
+                                )
+                            }
+                        }
+                    }
                 }
             }
             // Scrim so covers and text stay readable over the backdrop. A user-picked image can

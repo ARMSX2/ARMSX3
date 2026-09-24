@@ -57,9 +57,19 @@ class P3tAnimationTest {
             return elements.size - 1
         }
 
-        /** An actor drawing [gtf], with the material, texture and file entries it goes through. */
-        fun layer(scene: Int, root: Int, name: String, gtf: ByteArray, z: Float = -8f) {
-            element("actor", scene, own(name), ref("material", "mtrl_$name"), vector("position", 15f, 9f, z))
+        /**
+         * An actor drawing [gtf], with the material, texture and file entries it goes through, and
+         * when there is a [mesh], the model, geometry and file entries for that.
+         */
+        fun layer(scene: Int, root: Int, name: String, gtf: ByteArray, z: Float = -8f, mesh: ByteArray? = null) {
+            val attrs = arrayListOf(own(name), ref("material", "mtrl_$name"), vector("position", 15f, 9f, z))
+            if (mesh != null) {
+                attrs += ref("model", "mdl_$name")
+                val model = element("model", root, own("mdl_$name"))
+                element("geometry", model, ref("fileref", "$name.edge"))
+                element("file", root, own("$name.edge"), file("src", mesh), int("type", 3))
+            }
+            element("actor", scene, *attrs.toTypedArray())
             val material = element("material", root, own("mtrl_$name"))
             element("_texture", material, ref("texref", "_$name.gtf"))
             element("texture", root, own("_$name.gtf"), ref("fileref", "$name.gtf"))
@@ -419,6 +429,19 @@ class P3tAnimationTest {
     }
 
     @Test
+    fun layersHiddenByACollapsedMeshAreLeftOut() {
+        // Fallout NV Custom Dynamic hides the template's rocks by zeroing their meshes; their
+        // textures are still full-screen pictures.
+        val s = SceneBuilder()
+        val root = s.element("raf", -1)
+        val scene = s.element("scene", root)
+        s.layer(scene, root, "bg01", gtf(0xA6, screenW, screenH, dxt1(red, red, 0)), mesh = EdgeSamples.smokeSheet)
+        s.layer(scene, root, "rocks", gtf(0xA6, screenW, screenH, dxt1(blue, blue, 0)), mesh = EdgeSamples.collapsed)
+        s.layer(scene, root, "bg02", gtf(0xA6, screenW, screenH, dxt1(white, white, 0)))
+        assertEquals(listOf("bg01", "bg02"), P3tAnimation.scene(bytes(s.bytes()))!!.layers.map { it.name })
+    }
+
+    @Test
     fun layerWhosePixelsAreCutOffIsDropped() {
         val s = SceneBuilder()
         val root = s.element("raf", -1)
@@ -459,7 +482,8 @@ class P3tAnimationTest {
                 println("  ${layer.name} ${layer.texture.width}x${layer.texture.height} z=${layer.z} clear=${"%.4f".format(P3tAnimation.clearShare(px))} ${if (slide) "slide" else "over"}")
             }
             // Known samples: slides, then (interval, fade) from their scripts. Fallout NV is a scene
-            // theme (Sony's Prince of Persia Trilogy template): one slide under two layers, a still.
+            // theme (Sony's Prince of Persia Trilogy template): one slide, with the template's other
+            // full-screen layers collapsed away; its smoke is played live (see ThemeSceneTest).
             val known = listOf(
                 Triple("PS4_On_PS3", 8, 10f to 1.5f),
                 Triple("JUJU7U", 12, 7f to 1f),
