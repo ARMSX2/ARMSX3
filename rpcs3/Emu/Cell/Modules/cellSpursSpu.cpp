@@ -1697,17 +1697,6 @@ s32 spursTasketSaveTaskContext(spu_thread& spu)
 
 	const u32 lsBlocks = utils::popcnt128(ls_pattern._u);
 
-	// Highest set block index, for the reachability check after the save loop.
-	u32 highest_set = 0;
-
-	for (auto i = 6; i < 128; i++)
-	{
-		if (ls_pattern._u & (u128{1} << (i ^ 127)))
-		{
-			highest_set = i;
-		}
-	}
-
 	if (lsBlocks > allocLsBlocks)
 	{
 		return CELL_SPURS_TASK_ERROR_STAT;
@@ -1733,44 +1722,13 @@ s32 spursTasketSaveTaskContext(spu_thread& spu)
 	const u32 contextSaveStorage = vm::cast(taskInfo->context_save_storage_and_alloc_ls_blocks & -0x80);
 	std::memcpy(vm::base(contextSaveStorage), spu._ptr<void>(0x2C80), 0x380);
 
-	// Save LS context.
-	//
-	// The blocks are packed, one after another, in the order of the set bits -- NOT indexed by
-	// bit position. cellSpursTaskAttributeSetContextSaveSize sizes the buffer by the POPCOUNT of
-	// ls_pattern (cellSpurs.cpp: alloc_ls_blocks = (size - 0x400) >> 11, rejected when
-	// popcnt128(ls_pattern) > alloc_ls_blocks), so a sparse pattern is entitled to a buffer with
-	// room for only as many blocks as it has bits. Writing block i at offset (i - 6) * 0x800
-	// therefore runs off the end of a legally sized allocation: bits {6, 120} is a popcount of 2,
-	// a 0x1400-byte buffer, and a store 0x39400 bytes past its start -- local store sprayed over
-	// whatever guest memory follows, and garbage read back on resume.
-	//
-	// A fully contiguous pattern (the common case, and the one the "entire LS" check above takes)
-	// has slot == i - 6, so this changes nothing for it.
-	u32 slot = 0;
-
+	// Save LS context
 	for (auto i = 6; i < 128; i++)
 	{
 		if (ls_pattern._u & (u128{1} << (i ^ 127)))
 		{
 			// TODO: Combine DMA requests for consecutive blocks into a single request
-			std::memcpy(vm::base(contextSaveStorage + 0x400 + (slot << 11)), spu._ptr<void>(CELL_SPURS_TASK_TOP + ((i - 6) << 11)), 0x800);
-			slot++;
-		}
-	}
-
-	// Say so, once, when a title actually relies on the packing -- i.e. when the last block did not
-	// land where bit-position indexing would have put it. That is exactly the case the old code
-	// wrote out of bounds, so a title that never prints this was never affected by the change.
-	if (slot && slot != static_cast<u32>(highest_set - 5))
-	{
-		static atomic_t<bool> s_once{false};
-
-		if (!s_once.exchange(true))
-		{
-			spu_log.success("SPURS task context: sparse ls_pattern %016llx%016llx (%u blocks, highest %u, allocated %u)"
-				" -- packed save is load-bearing here; bit-indexed save would have written %u blocks past the buffer",
-				ls_pattern._u64[0], ls_pattern._u64[1], slot, highest_set, allocLsBlocks,
-				static_cast<u32>(highest_set - 5) - slot);
+			std::memcpy(vm::base(contextSaveStorage + 0x400 + ((i - 6) << 11)), spu._ptr<void>(CELL_SPURS_TASK_TOP + ((i - 6) << 11)), 0x800);
 		}
 	}
 
@@ -1873,16 +1831,12 @@ void spursTasksetDispatch(spu_thread& spu)
 		// Load saved context from main memory to LS
 		const u32 contextSaveStorage = vm::cast(taskInfo->context_save_storage_and_alloc_ls_blocks & -0x80);
 		std::memcpy(spu._ptr<void>(0x2C80), vm::base(contextSaveStorage), 0x380);
-		// Packed in the order of the set bits, matching the save path above.
-		u32 slot = 0;
-
 		for (auto i = 6; i < 128; i++)
 		{
 			if (ls_pattern._u & (u128{1} << (i ^ 127)))
 			{
 				// TODO: Combine DMA requests for consecutive blocks into a single request
-				std::memcpy(spu._ptr<void>(CELL_SPURS_TASK_TOP + ((i - 6) << 11)), vm::base(contextSaveStorage + 0x400 + (slot << 11)), 0x800);
-				slot++;
+				std::memcpy(spu._ptr<void>(CELL_SPURS_TASK_TOP + ((i - 6) << 11)), vm::base(contextSaveStorage + 0x400 + ((i - 6) << 11)), 0x800);
 			}
 		}
 

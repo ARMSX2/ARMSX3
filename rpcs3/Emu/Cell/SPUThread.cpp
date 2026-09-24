@@ -7763,16 +7763,6 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 			break;
 		}
 
-		// Writing this channel invalidates the tag status: per the CBEA the MFC_RdTagStat count
-		// goes to 0 and stays there until the requested condition is met. Without this, the
-		// deferred branch below left the PREVIOUS status readable, so the rdch that follows
-		// consumed it and returned at once instead of blocking -- and the SPU went on to read a
-		// buffer whose transfer had not landed yet.
-		//
-		// The branches below re-arm it whenever the condition is already satisfied, so the
-		// immediate cases are unaffected; only the case that is supposed to wait changes.
-		ch_tag_stat.set_value(0, false);
-
 		const u32 completed = get_mfc_completed();
 
 		if (!value)
@@ -7890,9 +7880,7 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 				return true;
 			}
 
-			// Same level rule: masking an event off retracts it from the channel.
-			events.count = false;
-			return false;
+			return !!events.count;
 		}))
 		{
 			// Check interrupts in case count is 1
@@ -7924,13 +7912,7 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 				return true;
 			}
 
-			// The SPU_RdEventStat count is a LEVEL function of (pending & mask), not a latch:
-			// once the acknowledged events are gone the channel has nothing to deliver and its
-			// count is 0. Leaving the old count set let rchcnt report 1 with nothing pending,
-			// and made the following rdch return 0 immediately instead of blocking -- the SPURS
-			// kernels sit in exactly that read ("MFC Events read"), so the wait stopped waiting.
-			events.count = false;
-			return false;
+			return !!events.count;
 		});
 
 		if (!is_dec_frozen && freeze_dec)
