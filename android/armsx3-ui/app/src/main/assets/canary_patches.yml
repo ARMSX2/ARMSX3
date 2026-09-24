@@ -380,3 +380,55 @@ PPU-30ce8c9f0a9552914275c90e2980749630f3ea18:
       - [ be32, 0x000225ec, 0x9b9f0037 ] # stb r28,0x37(r31): the scene is done, clear the request
       - [ be32, 0x000225f4, 0x9b9f0038 ] # stb r28,0x38(r31): clear the done flag (r29 is now 1)
       - [ be32, 0x00022504, 0x9b9f0037 ] # stb r28,0x37(r31): a forced exit clears the request too
+
+# GRAN TURISMO 6 v01.22 (BCUS99247, BCUS98296) -- illusion's patches, brought to ARMSX3 by
+# mlgprorektm8, who confirmed them on the North American and Latin American releases.
+#
+# Disable MLAA: the game reads every frame back for its MLAA pass, so it only renders correctly
+# with Write and Read Color Buffers on, and those cost a lot of frame time. The patch turns MLAA
+# off, and the core then switches both buffer settings off for the run, since nothing needs them
+# any more (patch_engine::apply, Utilities/bin_patch.cpp).
+# Disable Motion Blur: without it replays and track intros render black.
+#
+# Keyed by PPU hash, so they apply only to these two v01.22 executables. RPCS3's database knows a
+# different v01.22 executable for BCUS98296 (PPU-6ac472e1...): these patches do not touch it, and
+# neither do the buffer settings, which stay whatever that game's configuration says.
+PPU-42367707f4caac2668f10cb46498f64bde9db440:
+  "Disable MLAA":
+    Games:
+      "Gran Turismo 6":
+        BCUS99247: [ 01.22 ]
+    Author: "illusion"
+    Notes: "Turns off the game's MLAA pass, which needed Write and Read Color Buffers. ARMSX3 turns both off while this patch is on."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00ED2E88, 0x39E00001 ]
+  "Disable Motion Blur":
+    Games:
+      "Gran Turismo 6":
+        BCUS99247: [ 01.22 ]
+    Author: "illusion"
+    Notes: "Fixes the black screen in replays and track intros."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x008C2B4C, 0x38600000 ]
+
+PPU-4f1e9acd7d98961b4b742fb324a2faba6212ea67:
+  "Disable MLAA":
+    Games:
+      "Gran Turismo 6":
+        BCUS98296: [ 01.22 ]
+    Author: "illusion"
+    Notes: "Turns off the game's MLAA pass, which needed Write and Read Color Buffers. ARMSX3 turns both off while this patch is on."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00ED2E88, 0x39E00001 ]
+  "Disable Motion Blur":
+    Games:
+      "Gran Turismo 6":
+        BCUS98296: [ 01.22 ]
+    Author: "illusion"
+    Notes: "Fixes the black screen in replays and track intros."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x008C2B4C, 0x38600000 ]

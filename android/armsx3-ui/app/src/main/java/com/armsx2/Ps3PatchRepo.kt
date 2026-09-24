@@ -375,6 +375,39 @@ object Ps3PatchRepo {
             appVersion = "01.00",
             sinceRevision = 5,
         ),
+        // GRAN TURISMO 6 v01.22, BCUS99247 and BCUS98296 -- illusion's "Disable MLAA" and
+        // "Disable Motion Blur", brought to ARMSX3 by mlgprorektm8. Without the first the game
+        // needs Write and Read Color Buffers to render right, and the core turns both off while it
+        // is applied; without the second replays and track intros are black. Keyed by the two
+        // executables they were made for. See canary_patches.yml.
+        Bundled(
+            hash = "PPU-42367707f4caac2668f10cb46498f64bde9db440",
+            name = "Disable MLAA",
+            serial = "BCUS99247",
+            appVersion = "01.22",
+            sinceRevision = 9,
+        ),
+        Bundled(
+            hash = "PPU-42367707f4caac2668f10cb46498f64bde9db440",
+            name = "Disable Motion Blur",
+            serial = "BCUS99247",
+            appVersion = "01.22",
+            sinceRevision = 9,
+        ),
+        Bundled(
+            hash = "PPU-4f1e9acd7d98961b4b742fb324a2faba6212ea67",
+            name = "Disable MLAA",
+            serial = "BCUS98296",
+            appVersion = "01.22",
+            sinceRevision = 9,
+        ),
+        Bundled(
+            hash = "PPU-4f1e9acd7d98961b4b742fb324a2faba6212ea67",
+            name = "Disable Motion Blur",
+            serial = "BCUS98296",
+            appVersion = "01.22",
+            sinceRevision = 9,
+        ),
         // SONIC THE HEDGEHOG (2006), BLUS30008 v01.01 -- without this the game
         // renders only its HUD and skybox. See canary_patches.yml.
         Bundled(
@@ -603,7 +636,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 8
+    private const val BUNDLED_REVISION = 9
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
