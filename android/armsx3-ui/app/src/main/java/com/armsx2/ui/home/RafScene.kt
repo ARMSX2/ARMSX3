@@ -83,6 +83,16 @@ object RafScene {
         val depthTest: Boolean get() = "depth_0" !in effect
         /** "basic_lighting": shaded by the scene's lights. */
         val lit: Boolean get() = "lighting" in effect
+
+        /**
+         * Plain "pure_texture", with neither an alpha nor a depth part to its name, is what Sony's
+         * own models are drawn with as well as soft sprites: Afrika's zebras are solid models with
+         * cut-out hair, Ape Escape's shadows are soft blobs. Drawn in two passes: depth where the
+         * texture is at least half solid, then the colour blended over it, so a model hides its own
+         * far side (drawn blended alone, a zebra's far cheek showed through its face) and a sprite
+         * keeps its soft edge.
+         */
+        val cutout: Boolean get() = effect == "pure_texture"
     }
 
     /**

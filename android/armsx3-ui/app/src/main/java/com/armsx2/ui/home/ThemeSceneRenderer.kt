@@ -53,6 +53,7 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
     private var uLights = 0
     private var uBlock = 0
     private var uSize = 0
+    private var uAlphaCut = 0
     private val meshes = IdentityHashMap<RafScene.Mesh, Gpu>()
     private val textures = IdentityHashMap<P3tAnimation.Texture, GpuTexture>()
     private val model = FloatArray(16)
@@ -80,6 +81,7 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
         uLights = GLES30.glGetUniformLocation(program, "uLights")
         uBlock = GLES30.glGetUniformLocation(program, "uBlock")
         uSize = GLES30.glGetUniformLocation(program, "uSize")
+        uAlphaCut = GLES30.glGetUniformLocation(program, "uAlphaCut")
         GLES30.glUseProgram(program)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uTex"), 0)
         GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uBlocks"), 1)
@@ -133,19 +135,7 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
             val mesh = a.source.mesh ?: continue
             val gpu = meshes[mesh] ?: continue
             val texture = textures[material.texture]?.takeIf { it.name != 0 } ?: continue
-            when {
-                material.opaque -> GLES30.glDisable(GLES30.GL_BLEND)
-                material.additive -> {
-                    GLES30.glEnable(GLES30.GL_BLEND)
-                    GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
-                }
-                else -> {
-                    GLES30.glEnable(GLES30.GL_BLEND)
-                    GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
-                }
-            }
             if (material.depthTest) GLES30.glEnable(GLES30.GL_DEPTH_TEST) else GLES30.glDisable(GLES30.GL_DEPTH_TEST)
-            GLES30.glDepthMask(material.depthTest && material.opaque)
             ThemeScene.modelMatrix(a.position, a.rotation, a.scale, model)
             ThemeScene.multiply(viewProjection, model, mvp)
             GLES30.glUniformMatrix4fv(uMvp, 1, false, mvp, 0)
@@ -165,24 +155,50 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texture.name)
             GLES30.glBindVertexArray(gpu.vao)
             val skin = if (mesh.skinned) a.skinMatrices() else null
-            for (segment in mesh.segments) {
-                val palette = segment.palette
-                if (skin != null && palette != null) {
-                    if (palette.size > MAX_BONES) {
-                        if (!skippedPalette) Log.w(TAG, "a segment needs ${palette.size} joints, more than $MAX_BONES")
-                        skippedPalette = true
-                        continue
-                    }
-                    for (k in palette.indices) skin.copyInto(bones, 12 * k, 12 * palette[k], 12 * palette[k] + 12)
-                    GLES30.glUniform4fv(uBones, 3 * palette.size, bones, 0)
-                    GLES30.glUniform1f(uSkinned, 1f)
+            // A cut-out material's depth first, where it is solid (see RafScene.Material.cutout).
+            val passes = if (material.cutout && material.depthTest) 2 else 1
+            for (pass in 0 until passes) {
+                if (passes == 2 && pass == 0) {
+                    GLES30.glColorMask(false, false, false, false)
+                    GLES30.glDisable(GLES30.GL_BLEND)
+                    GLES30.glDepthMask(true)
+                    GLES30.glUniform1f(uAlphaCut, CUTOUT_ALPHA)
                 } else {
-                    GLES30.glUniform1f(uSkinned, 0f)
+                    GLES30.glColorMask(true, true, true, false)
+                    when {
+                        material.opaque -> GLES30.glDisable(GLES30.GL_BLEND)
+                        material.additive -> {
+                            GLES30.glEnable(GLES30.GL_BLEND)
+                            GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
+                        }
+                        else -> {
+                            GLES30.glEnable(GLES30.GL_BLEND)
+                            GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+                        }
+                    }
+                    GLES30.glDepthMask(material.depthTest && material.opaque)
+                    GLES30.glUniform1f(uAlphaCut, 0f)
                 }
-                GLES30.glDrawElements(GLES30.GL_TRIANGLES, segment.indexCount, GLES30.GL_UNSIGNED_SHORT, 2 * segment.firstIndex)
+                for (segment in mesh.segments) {
+                    val palette = segment.palette
+                    if (skin != null && palette != null) {
+                        if (palette.size > MAX_BONES) {
+                            if (!skippedPalette) Log.w(TAG, "a segment needs ${palette.size} joints, more than $MAX_BONES")
+                            skippedPalette = true
+                            continue
+                        }
+                        for (k in palette.indices) skin.copyInto(bones, 12 * k, 12 * palette[k], 12 * palette[k] + 12)
+                        GLES30.glUniform4fv(uBones, 3 * palette.size, bones, 0)
+                        GLES30.glUniform1f(uSkinned, 1f)
+                    } else {
+                        GLES30.glUniform1f(uSkinned, 0f)
+                    }
+                    GLES30.glDrawElements(GLES30.GL_TRIANGLES, segment.indexCount, GLES30.GL_UNSIGNED_SHORT, 2 * segment.firstIndex)
+                }
             }
         }
         GLES30.glBindVertexArray(0)
+        GLES30.glColorMask(true, true, true, false)
         GLES30.glDepthMask(true)
     }
 
@@ -349,6 +365,9 @@ internal class ThemeSceneRenderer(private val play: ThemeScene, private val raf:
         private const val MIN_SIDE = 256
         private const val TEXTURE_BUDGET = 96L shl 20
 
+        /** How solid a cut-out material's pixel must be to hide what is behind it. */
+        private const val CUTOUT_ALPHA = 0.5f
+
         /** GPU bytes for [t] at no more than [side] a side, with its mipmaps. */
         private fun bytesAt(t: P3tAnimation.Texture, side: Int): Long {
             var w = t.width.toLong()
@@ -483,6 +502,7 @@ uniform sampler2D uTex;
 uniform highp usampler2D uBlocks;
 uniform int uBlock;
 uniform ivec2 uSize;
+uniform float uAlphaCut; // above 0: pixels less solid than this are left out
 uniform vec4 uColor;
 uniform float uOpaque;
 uniform float uLit;
@@ -543,6 +563,7 @@ vec4 dxtSample(vec2 uv) {
 }
 void main() {
     vec4 t = uBlock == 0 ? texture(uTex, vUv) : dxtSample(vUv);
+    if (t.a * uColor.a < uAlphaCut) discard;
     vec3 rgb = t.rgb;
     if (uLit > 0.5) {
         vec3 n = normalize(vNormal);
