@@ -19,7 +19,7 @@ import kotlinx.coroutines.delay
 import kotlin.math.abs
 
 /**
- * The app's screensaver: after a stretch with no input (10 minutes unless App Settings says
+ * The Library Screensaver: after a stretch with no input (10 minutes unless App Settings says
  * otherwise, 1 to 60), the library background fills the screen as View background shows it, until
  * the next touch, key or stick push. That input only wakes it: pressing A does not also start the
  * game under the cursor.
