@@ -301,6 +301,7 @@
  "games.loadState": "加载即时存档",
  "games.addToHome.unsupported": "此启动器不支持向主屏幕添加快捷方式。",
  "games.background.choose": "选择背景图片或 PS3 主题...",
+ "games.background.view": "查看背景",
  "games.background.clear": "清晰的背景",
  "games.card.refresh": "刷新",
  "games.empty.noFolders.body": "使用“设置”齿轮添加一个或多个。",

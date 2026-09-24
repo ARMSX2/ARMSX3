@@ -301,6 +301,7 @@
  "games.loadState": "Wczytaj zapisany stan",
  "games.addToHome.unsupported": "Ten program uruchamiający nie obsługuje dodawania skrótów do ekranu głównego.",
  "games.background.choose": "Wybierz obraz tła lub motyw PS3…",
+ "games.background.view": "Pokaż tło",
  "games.background.clear": "Wyczyść tło",
  "games.card.refresh": "Odśwież",
  "games.empty.noFolders.body": "Użyj trybu Ustawienia, aby dodać jeden lub więcej.",

@@ -936,6 +936,7 @@ val EN: Map<String, String> = mapOf(
     "games.toolbar.more" to "More",
     "games.toolbar.rows" to "Rows",
     "games.background.choose" to "Choose background image or PS3 theme…",
+    "games.background.view" to "View background",
     "library.bg.readFailed" to "That file could not be read.",
     "library.bg.notPicture" to "Pick a picture or a PS3 theme (.p3t).",
     "library.bg.themeDamaged" to "This PS3 theme is damaged and could not be read.",

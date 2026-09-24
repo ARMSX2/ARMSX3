@@ -301,6 +301,7 @@
  "games.loadState": "セーブステートをロード",
  "games.addToHome.unsupported": "このランチャーは、ホーム画面へのショートカットの追加をサポートしていません。",
  "games.background.choose": "背景画像またはPS3テーマを選択…",
+ "games.background.view": "背景を表示",
  "games.background.clear": "クリアな背景",
  "games.card.refresh": "リフレッシュ",
  "games.empty.noFolders.body": "設定歯車を使用して 1 つ以上を追加します。",

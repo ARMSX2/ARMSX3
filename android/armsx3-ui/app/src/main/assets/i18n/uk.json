@@ -301,6 +301,7 @@
  "games.loadState": "Завантажити збережений стан",
  "games.addToHome.unsupported": "Ця панель запуску не підтримує додавання ярликів на головний екран.",
  "games.background.choose": "Виберіть фонове зображення або тему PS3…",
+ "games.background.view": "Показати фон",
  "games.background.clear": "Чіткий фон",
  "games.card.refresh": "Оновити",
  "games.empty.noFolders.body": "Використовуйте шестерню налаштувань, щоб додати один або кілька.",

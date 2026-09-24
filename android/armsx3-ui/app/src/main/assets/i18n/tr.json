@@ -301,6 +301,7 @@
  "games.loadState": "Kayıtlı durumu yükle",
  "games.addToHome.unsupported": "Bu başlatıcı, ana ekrana kısayol eklenmesini desteklemiyor.",
  "games.background.choose": "Arka plan resmini veya PS3 temasını seçin…",
+ "games.background.view": "Arka planı görüntüle",
  "games.background.clear": "Arka planı temizle",
  "games.card.refresh": "Yenile",
  "games.empty.noFolders.body": "Bir veya daha fazlasını eklemek için Ayarlar çarkını kullanın.",

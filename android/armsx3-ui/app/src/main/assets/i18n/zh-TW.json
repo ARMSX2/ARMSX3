@@ -301,6 +301,7 @@
  "games.loadState": "載入即時存檔",
  "games.addToHome.unsupported": "此啟動器不支援向主螢幕新增捷徑。",
  "games.background.choose": "選擇背景圖片或 PS3 主題...",
+ "games.background.view": "檢視背景",
  "games.background.clear": "清晰的背景",
  "games.card.refresh": "重新整理",
  "games.empty.noFolders.body": "使用“設定”齒輪添加一個或多個。",

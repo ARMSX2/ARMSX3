@@ -301,6 +301,7 @@
  "games.loadState": "Cargar estado guardado",
  "games.addToHome.unsupported": "Este iniciador no admite agregar accesos directos a la pantalla de inicio.",
  "games.background.choose": "Elige la imagen de fondo o un tema de PS3…",
+ "games.background.view": "Ver fondo",
  "games.background.clear": "fondo claro",
  "games.card.refresh": "Actualizar",
  "games.empty.noFolders.body": "Utilice el engranaje de Configuración para agregar uno o más.",

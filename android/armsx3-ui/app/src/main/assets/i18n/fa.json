@@ -301,6 +301,7 @@
  "games.loadState": "بارگذاری وضعیت ذخیره‌شده",
  "games.addToHome.unsupported": "این لانچر از افزودن میانبر به صفحه اصلی پشتیبانی نمی کند.",
  "games.background.choose": "انتخاب تصویر پس زمینه یا تم PS3…",
+ "games.background.view": "مشاهده پس‌زمینه",
  "games.background.clear": "پاک کردن پس زمینه",
  "games.card.refresh": "تازه کردن",
  "games.empty.noFolders.body": "از چرخ دنده تنظیمات برای اضافه کردن یک یا چند مورد استفاده کنید.",

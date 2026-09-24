@@ -301,6 +301,7 @@
  "games.loadState": "Charger un état sauvegardé",
  "games.addToHome.unsupported": "Ce lanceur ne prend pas en charge l'ajout de raccourcis sur l'écran d'accueil.",
  "games.background.choose": "Choisissez l’image d’arrière-plan ou un thème PS3…",
+ "games.background.view": "Voir l’arrière-plan",
  "games.background.clear": "Fond clair",
  "games.card.refresh": "Actualiser",
  "games.empty.noFolders.body": "Utilisez le rouage Paramètres pour en ajouter un ou plusieurs.",

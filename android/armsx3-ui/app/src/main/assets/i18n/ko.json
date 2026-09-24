@@ -301,6 +301,7 @@
  "games.loadState": "저장된 상태 불러오기",
  "games.addToHome.unsupported": "이 런처는 홈 화면에 바로가기 추가를 지원하지 않습니다.",
  "games.background.choose": "배경 이미지 또는 PS3 테마 선택…",
+ "games.background.view": "배경 보기",
  "games.background.clear": "배경 지우기",
  "games.card.refresh": "새로고침",
  "games.empty.noFolders.body": "하나 이상을 추가하려면 설정 톱니바퀴를 사용하세요.",

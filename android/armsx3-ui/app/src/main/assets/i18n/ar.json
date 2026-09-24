@@ -301,6 +301,7 @@
  "games.loadState": "تحميل حالة محفوظة",
  "games.addToHome.unsupported": "لا يدعم هذا المشغل إضافة اختصارات إلى الشاشة الرئيسية.",
  "games.background.choose": "اختر صورة الخلفية أو سمة PS3...",
+ "games.background.view": "عرض الخلفية",
  "games.background.clear": "خلفية واضحة",
  "games.card.refresh": "تحديث",
  "games.empty.noFolders.body": "استخدم ترس الإعدادات لإضافة واحد أو أكثر.",

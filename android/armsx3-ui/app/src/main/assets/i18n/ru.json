@@ -301,6 +301,7 @@
  "games.loadState": "Загрузить сохранённое состояние",
  "games.addToHome.unsupported": "Этот лаунчер не поддерживает добавление ярлыков на главный экран.",
  "games.background.choose": "Выберите фоновое изображение или тему PS3…",
+ "games.background.view": "Показать фон",
  "games.background.clear": "Очистить фон",
  "games.card.refresh": "Обновить",
  "games.empty.noFolders.body": "Используйте шестеренку «Настройки», чтобы добавить один или несколько.",

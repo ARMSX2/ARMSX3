@@ -162,6 +162,8 @@ fun HomeScreen(
     var renameCategory by remember { mutableStateOf<String?>(null) }
     var deleteCategory by remember { mutableStateOf<String?>(null) }
     var showClearRecentsConfirm by remember { mutableStateOf(false) }
+    // The background shown on its own, full screen (BackgroundViewer).
+    var viewingBackground by remember { mutableStateOf(false) }
     // #9 custom library background — inert until the user picks an image.
     LaunchedEffect(Unit) { LibraryBackground.ensureLoaded() }
     // The animated background switched itself off because the last run died with it on screen
@@ -217,6 +219,8 @@ fun HomeScreen(
         onDispose { HomeInputController.unbind(viewModel) }
     }
 
+    if (viewingBackground) BackgroundViewer(onClose = { viewingBackground = false })
+
     CompositionLocalProvider(LocalCustomCoverMap provides customCoverMap) {
     ArmsBackdrop(
         // Full-bleed wallpaper: the library image + readability scrim, drawn edge-to-edge
@@ -224,88 +228,9 @@ fun HomeScreen(
         // that strip was the "blue bar" in landscape.
         backgroundLayer = {
             val libraryBg = LibraryBackground.uri.value
-            if (libraryBg == null) {
-                // Default: the live PS3-XMB wave (XmbGlView — a GLES3 port of linkev's
-                // grid-displacement mesh, matching iOS). When GL can't init — older Mali without
-                // float-texture filtering, or any EGL failure — we fall back to LibraryWaveBackground,
-                // a procedural PPSSPP-style animated background drawn on the hardware 2D Canvas (no
-                // GLES3, runs anywhere) that reads the SAME colour prefs as the GL wave, so Mali users
-                // finally get an animated, recolourable backdrop instead of the old fixed GIF. The
-                // bundled still is the cheap floor shown during GL startup (and, once the wave is up,
-                // sits hidden behind it). Custom backgrounds below override all of this.
-                if (LibraryBackground.flurry.value) {
-                    // Flurry, in the same shell as the XMB wave: if GL cannot come up we get the
-                    // 2D backdrop rather than a hole, exactly as XmbGlView does below.
-                    // Keyed on the selection: an AndroidView factory runs once, so without this
-                    // switching saver or preset would leave the old one running.
-                    val kind = LibraryBackground.saverKind.value
-                    val preset = if (kind == 0) LibraryBackground.flurryPreset.value
-                                 else LibraryBackground.rssPreset.value
-                    androidx.compose.runtime.key(kind, preset) {
-                        var saverGl by remember { mutableStateOf<Boolean?>(null) }
-                        if (saverGl == false) {
-                            LibraryWaveBackground(Modifier.fillMaxSize())
-                        } else {
-                            AndroidView(
-                                factory = {
-                                    SaverGlView(it, LibraryBackground.currentSpec()).apply {
-                                        onGlStatus = { ok -> saverGl = ok }
-                                    }
-                                },
-                                modifier = Modifier.fillMaxSize(),
-                                onRelease = { it.stop() },
-                            )
-                        }
-                    }
-                } else if (LibraryBackground.animated2D.value) {
-                    // User opted into the lightweight 2D animated wave everywhere (#Luminz) — the same
-                    // backdrop GL-fail devices get; skip the GLES3 XmbGlView entirely.
-                    LibraryWaveBackground(Modifier.fillMaxSize())
-                } else {
-                    var xmbGlState by remember { mutableStateOf<Boolean?>(null) } // null=starting, true=up, false=failed
-                    if (xmbGlState == false) {
-                        LibraryWaveBackground(Modifier.fillMaxSize())
-                    } else {
-                        Image(
-                            painter = painterResource(R.drawable.library_bg_xmb),
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                        )
-                    }
-                    AndroidView(
-                        factory = { XmbGlView(it).apply { onGlStatus = { ok -> xmbGlState = ok } } },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-            } else {
-                // User-picked still image / GIF (Coil handles both), or a dynamic PS3 theme's slides.
-                val slides = LibraryBackground.slideshow.value
-                if (slides != null) {
-                    ThemeSlideshow(slides, Modifier.fillMaxSize())
-                } else {
-                    AsyncImage(
-                        model = ImageRequest.Builder(context).data(libraryBg).crossfade(true).build(),
-                        contentDescription = null,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop,
-                    )
-                    // A dynamic theme played live, over its still: the still shows until the scene
-                    // draws, and stays if it cannot. Keyed so a new theme gets a new view.
-                    LibraryBackground.scene.value?.let { live ->
-                        androidx.compose.runtime.key(live) {
-                            var sceneGl by remember { mutableStateOf<Boolean?>(null) }
-                            if (sceneGl != false) {
-                                AndroidView(
-                                    factory = { ThemeSceneView(it, live).apply { onGlStatus = { ok -> sceneGl = ok } } },
-                                    modifier = Modifier.fillMaxSize(),
-                                    onRelease = { it.stop() },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+            // Nothing live here while the full-screen viewer is up: it draws the same background
+            // itself, and two copies of a live theme would each keep the GPU busy.
+            if (viewingBackground) Box(Modifier.fillMaxSize().background(Color.Black)) else LibraryBackdrop()
             // Scrim so covers and text stay readable over the backdrop. A user-picked image can
             // be any brightness, so it gets the full dark scrim. The XMB is our own controlled
             // backdrop (dark at the top where the content sits) and a heavy scrim just muddied
@@ -521,6 +446,7 @@ fun HomeScreen(
                                 onToggleEnglishTitles = { EnglishTitles.set(!EnglishTitles.enabled.value) },
                                 onToggleShowHidden = { viewModel.setShowHidden(!com.armsx2.HiddenGames.showHidden.value) },
                                 onChooseBackground = { backgroundPicker.launch(arrayOf("image/*", "application/octet-stream")) },
+                                onViewBackground = { viewingBackground = true },
                                 onClearBackground = LibraryBackground::clear,
                                 onExitApp = { showExitConfirm = true },
                             )
@@ -1319,6 +1245,141 @@ private fun GameMenuAction(glyph: String, label: String, onClick: () -> Unit) {
     }
 }
 
+/**
+ * The library's background as the library draws it, under its scrim: by default the XMB wave, or
+ * Flurry or another saver; otherwise the user's picture, a PS3 theme's slideshow, or a theme's
+ * scene played live over its still.
+ */
+@Composable
+private fun LibraryBackdrop() {
+    val context = LocalContext.current
+    val libraryBg = LibraryBackground.uri.value
+    if (libraryBg == null) {
+        // Default: the live PS3-XMB wave (XmbGlView — a GLES3 port of linkev's
+        // grid-displacement mesh, matching iOS). When GL can't init — older Mali without
+        // float-texture filtering, or any EGL failure — we fall back to LibraryWaveBackground,
+        // a procedural PPSSPP-style animated background drawn on the hardware 2D Canvas (no
+        // GLES3, runs anywhere) that reads the SAME colour prefs as the GL wave, so Mali users
+        // finally get an animated, recolourable backdrop instead of the old fixed GIF. The
+        // bundled still is the cheap floor shown during GL startup (and, once the wave is up,
+        // sits hidden behind it). Custom backgrounds below override all of this.
+        if (LibraryBackground.flurry.value) {
+            // Flurry, in the same shell as the XMB wave: if GL cannot come up we get the
+            // 2D backdrop rather than a hole, exactly as XmbGlView does below.
+            // Keyed on the selection: an AndroidView factory runs once, so without this
+            // switching saver or preset would leave the old one running.
+            val kind = LibraryBackground.saverKind.value
+            val preset = if (kind == 0) LibraryBackground.flurryPreset.value
+                         else LibraryBackground.rssPreset.value
+            androidx.compose.runtime.key(kind, preset) {
+                var saverGl by remember { mutableStateOf<Boolean?>(null) }
+                if (saverGl == false) {
+                    LibraryWaveBackground(Modifier.fillMaxSize())
+                } else {
+                    AndroidView(
+                        factory = {
+                            SaverGlView(it, LibraryBackground.currentSpec()).apply {
+                                onGlStatus = { ok -> saverGl = ok }
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        onRelease = { it.stop() },
+                    )
+                }
+            }
+        } else if (LibraryBackground.animated2D.value) {
+            // User opted into the lightweight 2D animated wave everywhere (#Luminz) — the same
+            // backdrop GL-fail devices get; skip the GLES3 XmbGlView entirely.
+            LibraryWaveBackground(Modifier.fillMaxSize())
+        } else {
+            var xmbGlState by remember { mutableStateOf<Boolean?>(null) } // null=starting, true=up, false=failed
+            if (xmbGlState == false) {
+                LibraryWaveBackground(Modifier.fillMaxSize())
+            } else {
+                Image(
+                    painter = painterResource(R.drawable.library_bg_xmb),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            AndroidView(
+                factory = { XmbGlView(it).apply { onGlStatus = { ok -> xmbGlState = ok } } },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    } else {
+        // User-picked still image / GIF (Coil handles both), or a dynamic PS3 theme's slides.
+        val slides = LibraryBackground.slideshow.value
+        if (slides != null) {
+            ThemeSlideshow(slides, Modifier.fillMaxSize())
+        } else {
+            AsyncImage(
+                model = ImageRequest.Builder(context).data(libraryBg).crossfade(true).build(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+            // A dynamic theme played live, over its still: the still shows until the scene
+            // draws, and stays if it cannot. Keyed so a new theme gets a new view.
+            LibraryBackground.scene.value?.let { live ->
+                androidx.compose.runtime.key(live) {
+                    var sceneGl by remember { mutableStateOf<Boolean?>(null) }
+                    if (sceneGl != false) {
+                        AndroidView(
+                            factory = { ThemeSceneView(it, live).apply { onGlStatus = { ok -> sceneGl = ok } } },
+                            modifier = Modifier.fillMaxSize(),
+                            onRelease = { it.stop() },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The background alone, filling the screen with the system bars hidden and nothing of the library
+ * over it: for looking at a theme, or recording it to use elsewhere. A tap or Back closes it.
+ */
+@Composable
+private fun BackgroundViewer(onClose: () -> Unit) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        val window = (androidx.compose.ui.platform.LocalView.current.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+        DisposableEffect(window) {
+            window?.apply {
+                setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
+                setDimAmount(0f)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    attributes = attributes.apply {
+                        layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    }
+                }
+                androidx.core.view.WindowInsetsControllerCompat(this, decorView).apply {
+                    hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                    systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            }
+            onDispose {}
+        }
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            LibraryBackdrop()
+            // Over the background rather than on it: a live theme is an Android view, which would
+            // take the tap itself.
+            Box(
+                Modifier.fillMaxSize().clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClose,
+                ),
+            )
+        }
+    }
+}
+
 @Composable
 private fun LibraryOverflowMenu(
     expanded: Boolean,
@@ -1339,6 +1400,7 @@ private fun LibraryOverflowMenu(
     onToggleShowHidden: () -> Unit,
     onOpenCategories: () -> Unit,
     onChooseBackground: () -> Unit,
+    onViewBackground: () -> Unit,
     onClearBackground: () -> Unit,
     onExitApp: () -> Unit,
 ) {
@@ -1421,6 +1483,9 @@ private fun LibraryOverflowMenu(
         OverflowSeparator()
         LibraryOverflowItem("▧", str("games.background.choose")) {
             closeThen(onChooseBackground)
+        }
+        LibraryOverflowItem("▣", str("games.background.view")) {
+            closeThen(onViewBackground)
         }
         if (hasCustomBackground) {
             LibraryOverflowItem("×", str("games.background.clear")) {
