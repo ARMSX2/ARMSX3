@@ -5386,8 +5386,26 @@ open class MainActivityRuntime : ComponentActivity() {
     }
 
     private fun handleExternalLaunchIntent(intent: Intent?) {
-        val raw = extractLaunchUri(intent) ?: return
-        persistReadGrant(intent, raw)
+        val launched = extractLaunchUri(intent) ?: return
+        persistReadGrant(intent, launched)
+        // A .ps3 shortcut handed over as a file stands for the installed game its title id names.
+        // Frontend Export writes one per installed game (issue #157). ES-DE reads the file itself
+        // and passes the id on as title_id, but iiSU hands over the file, the way it hands over an
+        // ISO, and the shortcut was booted as if it were the game: "Game failed to start". The
+        // shortcuts aPS3e wrote failed the same way.
+        val shortcutId = shortcutTitleId(launched)
+        val raw = if (shortcutId == null) {
+            launched
+        } else {
+            gameForTitleId(shortcutId) ?: run {
+                android.widget.Toast.makeText(
+                    this,
+                    "$shortcutId is not installed, so its shortcut can't start.",
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+                return
+            }
+        }
         // Frontends (Cocoon/Daijisho/ES-DE) list the .cue, since that's the canonical disc
         // descriptor for a cue+bin rip — but the core has no cue parser and .cue isn't in its
         // disc whitelist (VMManager::IsDiscFileName), so booting one fails outright. Resolve
@@ -5422,6 +5440,32 @@ open class MainActivityRuntime : ComponentActivity() {
         if (track.isBlank()) return null
         siblingOf(cue, track)
     }.getOrNull()
+
+    /**
+     * The title id a `.ps3` shortcut holds, or null when [uri] is not one.
+     *
+     * Only a file named .ps3 is read, and only its first few KB: an ISO carries its own title id
+     * near the start, so the name is what keeps a disc image from being taken for a shortcut. A
+     * line holding the id (bare or "[title_id] "-tagged, the two forms Frontend Export writes) is
+     * taken first; otherwise the first id-shaped token anywhere in the file, which covers a
+     * shortcut that holds a path to the game's folder.
+     */
+    private fun shortcutTitleId(uri: Uri): String? = runCatching {
+        if (!displayName(uri).endsWith(".ps3", ignoreCase = true)) return null
+        val text = readBounded(uri, 4096) ?: return null
+        text.lineSequence().firstNotNullOfOrNull { com.armsx2.packages.FrontendExport.titleIdIn(it) }
+            ?: Regex("[A-Z]{4}-?[0-9]{5}").find(text.uppercase())?.value?.replace("-", "")
+    }.getOrNull()
+
+    /** A file's name as the user sees it: a content:// uri's last segment can be an opaque id. */
+    private fun displayName(uri: Uri): String = runCatching {
+        if (uri.scheme == "content") {
+            contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        } else {
+            null
+        }
+    }.getOrNull() ?: (uri.lastPathSegment ?: uri.path).orEmpty().substringAfterLast('/')
 
     /** Bounded read — cue sheets are a few hundred bytes, so never slurp an arbitrary file. */
     private fun readBounded(uri: Uri, limit: Int = 65536): String? = runCatching {
@@ -5491,28 +5535,36 @@ open class MainActivityRuntime : ComponentActivity() {
             // Either form an exported file holds ("BLUS12345" or "[title_id] BLUS12345"), so a
             // frontend that passes a file's content on as it is starts the game either way.
             val id = com.armsx2.packages.FrontendExport.titleIdIn(raw) ?: raw
-            val match = runCatching {
-                GameLibraryRepository(this).loadCached().games
-                    .firstOrNull { it.serial?.equals(id, ignoreCase = true) == true }
-            }.getOrNull()
-
-            if (match == null) {
-                val installed = runCatching {
-                    com.armsx2.packages.FrontendExport.installedDir(this, id)
-                }.getOrNull()
-                if (installed != null) {
-                    android.util.Log.i("ARMSX2", "launch by title id: '$id' -> $installed (installed, not scanned yet)")
-                    return Uri.fromFile(installed)
-                }
-                android.util.Log.w("ARMSX2", "launch by title id: '$id' is not in the library cache")
-                return null
-            }
-
-            android.util.Log.i("ARMSX2", "launch by title id: '$id' -> ${match.uri}")
-            return match.uri
+            return gameForTitleId(id)
         }
 
         return null
+    }
+
+    /**
+     * The game a title id names: the library's entry for it, or a package installed since the
+     * last scan. Null when neither has it, so the caller falls through to the library.
+     */
+    private fun gameForTitleId(id: String): Uri? {
+        val match = runCatching {
+            GameLibraryRepository(this).loadCached().games
+                .firstOrNull { it.serial?.equals(id, ignoreCase = true) == true }
+        }.getOrNull()
+
+        if (match == null) {
+            val installed = runCatching {
+                com.armsx2.packages.FrontendExport.installedDir(this, id)
+            }.getOrNull()
+            if (installed != null) {
+                android.util.Log.i("ARMSX2", "launch by title id: '$id' -> $installed (installed, not scanned yet)")
+                return Uri.fromFile(installed)
+            }
+            android.util.Log.w("ARMSX2", "launch by title id: '$id' is not in the library cache")
+            return null
+        }
+
+        android.util.Log.i("ARMSX2", "launch by title id: '$id' -> ${match.uri}")
+        return match.uri
     }
 
     private fun persistReadGrant(intent: Intent?, uri: Uri) {
