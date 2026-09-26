@@ -1232,12 +1232,17 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(
         SAVESTATE_FAILED_DUE_TO_SAVEDATA,
         "SaveState failed: Game saving is in progress, wait until finished."),
+    // Upstream's desktop advice is to switch the SPU decoder to ASMJIT, which ARM64 builds
+    // do not have (System.cpp swaps it back at boot), so it sent people after a setting that
+    // cannot help. What does help here: the SPUs were not at a point they could be paused
+    // at, and a moment later they usually are. The other one names the setting as the
+    // Performance tab shows it.
     MAKE_STRING(SAVESTATE_FAILED_DUE_TO_SPU,
-                "SaveState failed: Failed to lock SPU state, using SPU ASMJIT "
-                "will fix it."),
+                "SaveState failed: the SPUs could not be paused safely just now. "
+                "Try again in a moment."),
     MAKE_STRING(SAVESTATE_FAILED_DUE_TO_MISSING_SPU_SETTING,
-                "SaveState failed: Failed to lock SPU state, enabling "
-                "SPU-Compatible mode may fix it."),
+                "SaveState failed: turn on Allow save states in the Performance "
+                "settings, then try again."),
 };
 
 #undef MAKE_STRING
