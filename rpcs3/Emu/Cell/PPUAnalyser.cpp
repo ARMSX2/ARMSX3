@@ -3243,12 +3243,41 @@ bool ppu_module<lv2_obj>::analyse(u32 lib_toc, u32 entry, const u32 sec_end, con
 		}
 	}
 
+	// A block with no known function after it (no_size) is compiled one function per instruction,
+	// which costs a few instructions of code and a relocation or two per instruction. Normal
+	// modules have a few dozen such instructions. An executable whose functions the analysis
+	// mostly could not find has millions: the fan-made Sonic Mania port (SMAP02024) found 1793
+	// functions in ~6 MB of code, so 197,146 blocks became 1,455,448 one-instruction functions,
+	// and compiling them ran an Odin 3 out of memory mappings in the LLVM JIT linker every boot.
+	//
+	// Past a bound nothing normal comes near, compile those blocks whole instead, as the
+	// used_fallback path below already does for them: each is a straight run ending at a branch,
+	// and an entry into the middle of one still works, through the recompiler's interpreter
+	// fallback to the next block start.
+	constexpr u64 max_per_instruction_split = 65536;
+	u64 unbounded_bytes = 0;
+
+	for (const auto& [addr, block] : fmap)
+	{
+		if (block.attr & ppu_attr::no_size && block.size > 4)
+		{
+			unbounded_bytes += block.size;
+		}
+	}
+
+	const bool split_unbounded = !used_fallback && unbounded_bytes / 4 <= max_per_instruction_split;
+
+	if (!used_fallback && !split_unbounded)
+	{
+		ppu_log.warning("%u instructions in blocks after the last known function: compiling them as whole blocks, not one function per instruction", unbounded_bytes / 4);
+	}
+
 	// Convert map to vector (destructive)
 	for (auto it = fmap.begin(); it != fmap.end(); it = fmap.begin())
 	{
 		ppu_function_ext block = std::move(fmap.extract(it).mapped());
 
-		if (block.attr & ppu_attr::no_size && block.size > 4 && !used_fallback)
+		if (block.attr & ppu_attr::no_size && block.size > 4 && split_unbounded)
 		{
 			ppu_log.warning("Block 0x%x will be compiled on per-instruction basis (size=0x%x)", block.addr, block.size);
 
