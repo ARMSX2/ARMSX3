@@ -893,10 +893,13 @@ namespace vm
 		//       the RSX might try to invalidate memory that got unmapped and remapped
 		if (const auto rsxthr = g_fxo->try_get<rsx::thread>())
 		{
-			if (flags & page_1m_size && ~bflags & rsx_incomp)
-			{
-				rsxthr->on_notify_memory_mapped(addr, size);
-			}
+			// Every mapping, as before upstream 13eaa2b03, which skips mappings that are not 1MB
+			// RSX-compatible pages so ordinary allocations do not pause the RSX. With #19467 (audio
+			// shared memory, 9583a524b) in as well, that exemption made Guitar Hero World Tour lose
+			// the GPU on Turnip (Odin 3) within a minute of every song. Each change alone was fine,
+			// and so was notifying everything. Exempting only non-shareable memory still crashed, so
+			// which mapping the RSX needs to hear about is not pinned down; until it is, all of them.
+			rsxthr->on_notify_memory_mapped(addr, size);
 		}
 
 		auto prot = utils::protection::rw;
@@ -1125,10 +1128,8 @@ namespace vm
 		//       the RSX might try to call VirtualProtect on memory that is already unmapped
 		if (auto rsxthr = g_fxo->try_get<rsx::thread>())
 		{
-			if ((addr >> 28 << 28) == 0xC0000000 || (map_flags & page_1m_size && ~bflags & rsx_incomp))
-			{
-				rsxthr->on_notify_pre_memory_unmapped(addr, size, unmap_events);
-			}
+			// Every unmap too, see _page_map.
+			rsxthr->on_notify_pre_memory_unmapped(addr, size, unmap_events);
 		}
 
 		// Deregister PPU related data
