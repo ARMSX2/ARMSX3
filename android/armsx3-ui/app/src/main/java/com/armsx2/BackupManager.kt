@@ -40,6 +40,10 @@ object BackupManager {
     // restoring an old backup has to keep working.
     private const val LEGACY_MANIFEST = "armsx2-backup.json"
     private const val PREFS_DIR = "prefs/"
+
+    /** The preference file MainActivityRuntime opens, and the key in it that names the data folder. */
+    private const val PREFS_FILE = "ARMSX2.xml"
+    private const val SYSTEM_DIR_KEY = "systemDir"
     private const val FILES_DIR = "files/"
 
     /**
@@ -142,6 +146,9 @@ object BackupManager {
     fun restore(context: Context, input: InputStream): BackupResult {
         val root = File(MainActivityRuntime.assetCopyRoot(context))
         val prefsDir = prefsDir(context)
+        // The data folder this install is using, which is where the files below land. Read before
+        // the restore overwrites the preferences that name it.
+        val currentSystemDir = runCatching { MainActivityRuntime.prefs.getString(SYSTEM_DIR_KEY, null) }.getOrNull()
         var files = 0
         return runCatching {
             ZipInputStream(input.buffered()).use { zip ->
@@ -169,9 +176,38 @@ object BackupManager {
                 }
             }
             if (files == 0) BackupResult(false, "not a backup archive")
-            else BackupResult(true, "$files files")
+            else {
+                keepDataFolder(File(prefsDir, PREFS_FILE), currentSystemDir)
+                BackupResult(true, "$files files")
+            }
         }.getOrElse { BackupResult(false, it.message ?: "restore failed") }
     }
+
+    /**
+     * Point the restored preferences at the data folder the files were just restored into.
+     *
+     * The backup's own `systemDir` names the data folder of the install it was taken on. After a
+     * reinstall that folder is usually gone, since deleting it is a common reason to reinstall, or
+     * this install picked another one. Restoring it anyway put every file in one folder and then,
+     * after the restart, pointed the app at the other: a tester restored a 1.0 backup into 1.0.4
+     * and got back neither saves nor settings, all of it sitting in a folder the app no longer
+     * read. With no folder chosen yet the files go to the app's default one, and the entry is
+     * dropped so the app looks there as well.
+     */
+    private fun keepDataFolder(prefsFile: File, currentSystemDir: String?) {
+        if (!prefsFile.isFile) return
+        val xml = prefsFile.readText()
+        val withoutBackups = xml.replace(Regex("""\s*<string name="$SYSTEM_DIR_KEY">[^<]*</string>"""), "")
+        val updated = if (currentSystemDir == null) withoutBackups
+        else withoutBackups.replaceFirst(
+            "</map>",
+            "    <string name=\"$SYSTEM_DIR_KEY\">${escapeXml(currentSystemDir)}</string>\n</map>",
+        )
+        if (updated != xml) prefsFile.writeText(updated)
+    }
+
+    private fun escapeXml(text: String): String =
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
     fun suggestedName(context: Context): String =
         "ARMSX2-backup-${appVersion(context)}.zip"
