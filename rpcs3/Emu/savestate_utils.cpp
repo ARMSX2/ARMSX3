@@ -47,7 +47,7 @@ SERIALIZATION_VER(lv2_sync, 3,                                  1)
 SERIALIZATION_VER(lv2_vm, 4,                                    1)
 SERIALIZATION_VER(lv2_net, 5,                                   1, 2/*TCP Feign conection loss*/, 3/*P2PS stream_disconnected status*/)
 SERIALIZATION_VER(lv2_fs, 6,                                    1, 2/*NPDRM key saving*/)
-SERIALIZATION_VER(lv2_prx_overlay, 7,                           1)
+SERIALIZATION_VER(lv2_prx_overlay, 7,                           2)
 SERIALIZATION_VER(lv2_memory, 8,                                3, 4/*sys_mmapper strict mapping*/)
 SERIALIZATION_VER(lv2_config, 9,                                1)
 
@@ -73,7 +73,7 @@ SERIALIZATION_VER(sceNp, 11)
 #endif
 
 SERIALIZATION_VER(cellVdec, 12,                                 1)
-SERIALIZATION_VER(cellAudio, 13,                                1)
+SERIALIZATION_VER(cellAudio, 13,                                2)
 SERIALIZATION_VER(cellCamera, 14,                               1, 2/*gem_camera_shared*/)
 SERIALIZATION_VER(cellGem, 15,                                  1, 2/*calibration_status_flags*/, 3/*video_conversion*/)
 SERIALIZATION_VER(sceNpTrophy, 16,                              1)
@@ -771,4 +771,3 @@ bool hle_locks_t::try_finalize(std::function<bool()> test)
 	lock_val.notify_all();
 	return true;
 }
-
