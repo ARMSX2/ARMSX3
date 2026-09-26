@@ -234,8 +234,17 @@ namespace vk
 		VkFormat data_format = VK_FORMAT_UNDEFINED;
 
 		// Check if it is possible to actually write to the format we want.
-		// Fallback to RGBA8 is supported as well
-		std::array<VkFormat, 2> supported_formats = { VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM };
+		//
+		// RGBA8 first. The ubershader declares its output as `layout(set=0, binding=1, rgba8)
+		// writeonly image2D`, and a format layout qualifier that disagrees with the view's format
+		// makes the store undefined. Desktop drivers let BGRA8 pass, the two being the same 32-bit
+		// class, but Mali drivers advertise BGRA8 storage as well, so the search handed Mali the
+		// mismatching format. Mali is where FSR drew a black screen while EASU and RCAS dispatched
+		// every frame and nothing reported an error.
+		//
+		// RGBA8 storage support is mandatory in Vulkan, so the preferred entry can never be the
+		// missing one. BGRA8 stays only so the search still has a second entry to fall back on.
+		std::array<VkFormat, 2> supported_formats = { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM };
 		for (const auto& format : supported_formats)
 		{
 			const VkFlags all_required_bits = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
@@ -245,6 +254,13 @@ namespace vk
 				failed = false;
 				break;
 			}
+		}
+
+		if (!failed)
+		{
+			// Once per output size. Nothing else shows which format the driver was handed, and that
+			// was the missing fact in the Mali black-screen reports.
+			rsx_log.notice("FSR: %ux%u output in %s", output_w, output_h, data_format == VK_FORMAT_R8G8B8A8_UNORM ? "RGBA8" : "BGRA8");
 		}
 
 		if ((mode & UPSCALE_LEFT_VIEW) && !failed)
@@ -320,9 +336,37 @@ namespace vk
 				// Prepare for EASU pass
 				src->push_layout(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
+				// Both passes are compute shaders, and the layout helper behind push_layout and
+				// change_layout never puts the compute stage in a barrier's scope: it waits on behalf
+				// of the vertex and fragment stages for SHADER_READ_ONLY_OPTIMAL, and of the transfer
+				// and graphics stages for GENERAL. So nothing ordered EASU's read of the frame after
+				// the game's last render pass into it, nothing ordered either pass's writes after the
+				// layout transition of the image it writes, and nothing kept the next frame from
+				// drawing over the input while EASU still read it. A driver that serialises every
+				// barrier hides all of it; one that overlaps compute with fragment work, as Mali does,
+				// hands FSR a frame that is not finished yet. Every dependency below is explicit.
+				vk::insert_image_memory_barrier(cmd,
+					src->value,
+					src->current_layout, src->current_layout,
+					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+					VK_ACCESS_SHADER_READ_BIT,
+					{ src->aspect(), 0, src->mipmaps(), 0, src->layers() });
+
 				if (m_intermediate_data->current_layout != VK_IMAGE_LAYOUT_GENERAL)
 				{
-					m_intermediate_data->change_layout(cmd, VK_IMAGE_LAYOUT_GENERAL);
+					// First use, from UNDEFINED
+					vk::insert_image_memory_barrier(cmd,
+						m_intermediate_data->value,
+						m_intermediate_data->current_layout, VK_IMAGE_LAYOUT_GENERAL,
+						VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+						VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+						0,
+						VK_ACCESS_SHADER_WRITE_BIT,
+						{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 });
+
+					m_intermediate_data->current_layout = VK_IMAGE_LAYOUT_GENERAL;
 				}
 				else
 				{
@@ -340,8 +384,18 @@ namespace vk
 				// EASU
 				cs_easu_task->run(cmd, src, m_intermediate_data.get(), input_size, output_size);
 
-				// Prepare for RCAS pass
-				m_output_data->change_layout(cmd, VK_IMAGE_LAYOUT_GENERAL);
+				// Prepare for RCAS pass: after the previous frame's blit or calibration pass has read
+				// this image, and after its transition to GENERAL
+				vk::insert_image_memory_barrier(cmd,
+					m_output_data->value,
+					m_output_data->current_layout, VK_IMAGE_LAYOUT_GENERAL,
+					VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					VK_ACCESS_SHADER_WRITE_BIT,
+					VK_ACCESS_SHADER_WRITE_BIT,
+					{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 });
+
+				m_output_data->current_layout = VK_IMAGE_LAYOUT_GENERAL;
 
 				// R/W CS-CS barrier before RCAS
 				vk::insert_image_memory_barrier(cmd,
@@ -356,11 +410,38 @@ namespace vk
 				// RCAS
 				cs_rcas_task->run(cmd, m_intermediate_data.get(), m_output_data.get(), input_size, output_size);
 
-				// Cleanup
+				// Cleanup. EASU's read joins the vertex/fragment scope that the helper's barrier in
+				// pop_layout (or the next writer's own barrier) waits on before anything draws into
+				// the frame again.
+				vk::insert_image_memory_barrier(cmd,
+					src->value,
+					src->current_layout, src->current_layout,
+					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+					0,
+					0,
+					{ src->aspect(), 0, src->mipmaps(), 0, src->layers() });
+
 				src->pop_layout(cmd);
 
 				// Swap input for FSR target
 				src_image = m_output_data.get();
+
+				if (!(mode & UPSCALE_AND_COMMIT))
+				{
+					// The caller samples the result in a fragment shader (the calibration pass), and the
+					// helper's barrier out of GENERAL would wait on transfer and colour writes, not RCAS.
+					vk::insert_image_memory_barrier(cmd,
+						m_output_data->value,
+						m_output_data->current_layout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+						VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+						VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+						VK_ACCESS_SHADER_WRITE_BIT,
+						VK_ACCESS_SHADER_READ_BIT,
+						{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 });
+
+					m_output_data->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				}
 
 				// Update output parameters to match expected output
 				if (mode & UPSCALE_AND_COMMIT)
