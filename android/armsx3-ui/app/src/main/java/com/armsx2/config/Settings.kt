@@ -1157,7 +1157,11 @@ data class Settings(
         put("PS3/Net", "IP address", "string", ps3.ipAddress)
         put("PS3/Net", "Bind address", "string", ps3.bindAddress)
         put("PS3/Net", "DNS address", "string", ps3.dnsAddress)
-        put("PS3/Net", "IP swap list", "string", ps3.ipSwapList)
+        // The user's redirects, plus any the running title needs to reach a community server.
+        put(
+            "PS3/Net", "IP swap list", "string",
+            GameDefaults.withTitleRedirects(ps3.ipSwapList, MainActivityRuntime.currentGame.value?.serial),
+        )
         put("PS3/Net", "Derive MAC from PSID", "bool", ps3.deriveMacFromPsid.toString())
         put("PS3/Net", "PSN Country", "string", ps3.psnCountry)
         put("PS3/Net", "Clans Enabled", "bool", ps3.clansEnabled.toString())
