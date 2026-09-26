@@ -402,6 +402,11 @@ public:
 // the SPUs waited for the mixer, the mixer waited for the mutex, and its holder waited for the
 // SPUs. That is the Mortal Kombat Komplete freeze at the WB logo, where the game reopens a port.
 // So the bookkeeping happens under the mutex and the memory work between two holds of it.
+//
+// A closed port also keeps its memory mapped, for the next open of it. Mortal Kombat Komplete
+// Edition closes and reopens its secondary port about 55 times a second for as long as it runs;
+// mapping and unmapping each time stopped every PPU and SPU at the vm lock over a hundred times
+// a second. The block is only unmapped when a reopen needs a bigger one, or at cellAudioQuit.
 struct audio_port_mapping
 {
 	shared_ptr<lv2_memory> memory;
@@ -506,9 +511,15 @@ public:
 
 	// Under the mutex: reserve a port, and later hand it back (see audio_port_mapping).
 	audio_port* open_port();
+	bool reuse_port_memory(audio_port& port, u32 alloc_size);
+	audio_port_mapping take_kept_memory(audio_port& port);
+	void close_port(audio_port& port);
 	audio_port_mapping detach_port(audio_port& port);
 	void return_port(const audio_port_mapping& mapping);
 	u32 drop_shared_ref();
+
+	// The shared memory block a port of this many bytes gets.
+	static u32 port_alloc_size(u32 port_size);
 
 	// Without the mutex: the sys_mmapper half.
 	static error_code map_port(ppu_thread& ppu, u32 port_size, audio_port_mapping& mapping);
