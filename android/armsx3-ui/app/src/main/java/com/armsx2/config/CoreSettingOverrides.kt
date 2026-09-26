@@ -3,6 +3,7 @@ package com.armsx2.config
 import androidx.core.content.edit
 import com.armsx2.runtime.MainActivityRuntime
 import net.rpcsx.RPCSX
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -31,6 +32,9 @@ import org.json.JSONObject
  */
 object CoreSettingOverrides {
     private const val KEY_GLOBAL = "config.coreOverrides"
+
+    /** RPCS3's Firmware Libraries list; see [replay]. */
+    private const val LIBRARIES_CONTROL = "Core@@Libraries Control"
 
     /** Per-title key. Deliberately NOT under the "config.game." prefix: ConfigStore's
      *  in-folder backup mirror scans prefs for that prefix and copies each hit out as a
@@ -152,6 +156,7 @@ object CoreSettingOverrides {
                     "bool" -> out[path] = child.optBoolean("default").toString()
                     "int", "uint", "float" ->
                         child.optString("default").takeIf { it.isNotEmpty() }?.let { out[path] = it }
+                    "set" -> out[path] = (child.optJSONArray("default") ?: JSONArray()).toString()
                     else -> out[path] = JSONObject.quote(child.optString("default"))
                 }
             }
@@ -177,12 +182,21 @@ object CoreSettingOverrides {
         val global = read(KEY_GLOBAL)
         val perGame = serial?.trim()?.takeIf { it.isNotEmpty() }
             ?.let { read(keyForGame(it)) }.orEmpty()
-        if (global.isEmpty() && perGame.isEmpty()) return
 
         // Merged rather than pushed as two passes so a path held by both tiers is written once,
         // with the title's value. Insertion order keeps global's paths where they were.
         val merged = LinkedHashMap(global)
         merged.putAll(perGame)
+
+        // The firmware library list is always pushed, as the empty default when nothing is on
+        // record. Every other path here is only ever written, never unwritten, so a per-game edit
+        // stays live (and in config.yml) until something else writes that node, which for a node
+        // no curated screen owns is nothing: the next title boots with it too. For most nodes
+        // that is an old limitation. For this one it is the whole use: libraries get forced for
+        // one game, and one game's forced library is another game's crash. Nothing else in the
+        // app writes Libraries Control, so the store can simply own it. The core treats an
+        // unchanged list as a no-op, so this costs nothing on the pushes that change nothing.
+        if (LIBRARIES_CONTROL !in merged) merged[LIBRARIES_CONTROL] = "[]"
 
         runCatching { RPCSX.instance.settingsBeginBatch() }
         try {

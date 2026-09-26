@@ -496,6 +496,16 @@ val EN: Map<String, String> = mapOf(
     "core.settings.showAll" to "Show all settings",
     "core.settings.reset" to "Forget all",
     "core.settings.resetConfirm" to "Tap again to forget all",
+    "core.settings.libraries.title" to "Firmware libraries",
+    "core.settings.libraries.description" to "Switch on for LLE, the console's own firmware code, or off for HLE, the emulator's version. Leave these alone unless a game's compatibility notes name a library.",
+    "core.settings.libraries.changed" to "Changed from default",
+    "core.settings.libraries.show" to "Show",
+    "core.settings.libraries.hide" to "Hide",
+    "core.settings.libraries.search" to "Search libraries",
+    "core.settings.libraries.defaultLle" to "Default: LLE",
+    "core.settings.libraries.defaultHle" to "Default: HLE",
+    "core.settings.libraries.sysutil" to "Changing libsysutil libraries crashes games. They are here for development only",
+    "core.settings.libraries.pending" to "Saved. It takes effect the next time a game starts.",
     // PS3 trophies (TrophiesScreen). Numbered placeholders (%1/%2/%3) rather than %d, because
     // several of these take more than one number and a translator has to be able to reorder them.
     "trophies.title" to "Trophies",

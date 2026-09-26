@@ -1,5 +1,6 @@
 #include <sys/prctl.h>
 #include <array>
+#include <charconv>
 #include <fstream>
 #include <cstring>
 #include "Crypto/unpkg.h"
@@ -6530,6 +6531,11 @@ static bool cfg_is_float(const cfg::_base *node) {
 // the "Log" field, one per keystroke, with the setting silently never applying.
 //
 // Only emit what the UI can honestly edit. cfg::_float reports type::_int, so it is covered.
+//
+// cfg::set_entry is the one collection that is editable: it goes out as a JSON array and
+// comes back through the dedicated branch in _rpcsx_settingsSet, never through from_string.
+// It is how Libraries Control (RPCS3's "Firmware Libraries" list) became reachable again after
+// the #97 filter hid it along with the collections that really cannot be written.
 static bool cfg_is_editable(const cfg::_base *node) {
   switch (node->get_type()) {
   case cfg::type::node:
@@ -6539,6 +6545,7 @@ static bool cfg_is_editable(const cfg::_base *node) {
   case cfg::type::uint:
   case cfg::type::uint128:
   case cfg::type::string:
+  case cfg::type::set:
     return true;
   default:
     return false;
@@ -6551,7 +6558,84 @@ static const char *cfg_type_name(const cfg::_base *node) {
   case cfg::type::_enum: return "enum";
   case cfg::type::_int: return cfg_is_float(node) ? "float" : "int";
   case cfg::type::uint: return "uint";
+  case cfg::type::set: return "set";
   default: return "string";
+  }
+}
+
+// <firmware sprx, 1 if it is HLE unless overridden>. Defined in lv2/sys_prx.cpp; RPCS3's own
+// settings dialog builds its library lists from the same table.
+extern const std::map<std::string_view, int> g_prx_list;
+
+// The app sends a collection as a JSON array of strings, which org.json writes with every
+// '/' escaped as "\/" -- the library table has a /dev_flash path in it -- so the usual
+// escapes are decoded rather than just stripped.
+static bool parse_json_string_array(std::string_view in, std::set<std::string> &out) {
+  std::size_t i = 0;
+  const auto skip_space = [&] {
+    while (i < in.size() && std::isspace(static_cast<unsigned char>(in[i]))) ++i;
+  };
+
+  skip_space();
+  if (i >= in.size() || in[i] != '[') return false;
+  ++i;
+  skip_space();
+  if (i < in.size() && in[i] == ']') {
+    ++i;
+    skip_space();
+    return i == in.size();
+  }
+
+  while (true) {
+    skip_space();
+    if (i >= in.size() || in[i] != '"') return false;
+    ++i;
+
+    std::string item;
+    while (i < in.size() && in[i] != '"') {
+      if (in[i] == '\\' && i + 1 < in.size()) {
+        switch (const char c = in[++i]) {
+        case 'n': item += '\n'; break;
+        case 'r': item += '\r'; break;
+        case 't': item += '\t'; break;
+        case 'u':
+          // Anything outside ASCII means this is not a library name; refuse it rather than
+          // store something mangled.
+          if (i + 4 >= in.size()) return false;
+          {
+            // from_chars, not stoul: this runs inside an extern "C" entry point, where an
+            // exception from a malformed escape would take the whole app down.
+            unsigned code = 0;
+            const char *digits = in.data() + i + 1;
+            const auto [end, ec] = std::from_chars(digits, digits + 4, code, 16);
+            if (ec != std::errc{} || end != digits + 4 || code >= 0x80) return false;
+            item += static_cast<char>(code);
+          }
+          i += 4;
+          break;
+        default: item += c; break;
+        }
+      } else {
+        item += in[i];
+      }
+      ++i;
+    }
+
+    if (i >= in.size()) return false;
+    ++i;
+    out.insert(std::move(item));
+
+    skip_space();
+    if (i < in.size() && in[i] == ',') {
+      ++i;
+      continue;
+    }
+    if (i < in.size() && in[i] == ']') {
+      ++i;
+      skip_space();
+      return i == in.size();
+    }
+    return false;
   }
 }
 
@@ -6577,6 +6661,36 @@ static void emit_cfg_json(const cfg::_base *node, std::string &out) {
 
   out += "{\"type\":";
   json_append_escaped(out, cfg_type_name(node));
+
+  if (node->get_type() == cfg::type::set) {
+    out += ",\"value\":[";
+    bool first = true;
+    for (const std::string &item : node->to_list()) {
+      if (!first) out += ',';
+      first = false;
+      json_append_escaped(out, item);
+    }
+    // set_entry's default is always the empty set.
+    out += "],\"default\":[]";
+
+    // Libraries Control only means something next to the list of libraries it can name, and
+    // which way each one runs when it is not named.
+    if (node == &g_cfg.core.libraries_control) {
+      out += ",\"choices\":[";
+      first = true;
+      for (const auto &[name, hle] : g_prx_list) {
+        if (!first) out += ',';
+        first = false;
+        out += "{\"name\":";
+        json_append_escaped(out, name);
+        out += hle ? ",\"hle\":true}" : ",\"hle\":false}";
+      }
+      out += ']';
+    }
+
+    out += '}';
+    return;
+  }
 
   // Booleans go out as real JSON booleans -- the Kotlin reads them with
   // getBoolean(), which throws on a quoted string.
@@ -6695,6 +6809,41 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
   if (!cfg_is_editable(root)) {
     rpcsx_android.error("settingsSet: node %s is a collection, not an editable value", path);
     return false;
+  }
+
+  if (root->get_type() == cfg::type::set) {
+    std::set<std::string> items;
+    if (!parse_json_string_array(valueString, items)) {
+      rpcsx_android.error("settingsSet: node %s wants a JSON array of strings, got '%s'", path,
+                          valueString);
+      return false;
+    }
+
+    auto *set = static_cast<cfg::set_entry *>(root);
+
+    // The app re-pushes every remembered value on each settings change, so an unchanged list
+    // must not count as a write, or the running-game refusal below would fire on every one.
+    if (items == set->get_set()) {
+      return true;
+    }
+
+    // A bare std::set with no lock, read on the PPU thread whenever a game loads a firmware
+    // module (sys_prx consults Libraries Control there). Changing it under a running game is a
+    // data race, and RPCS3 marks the entry non-dynamic for that reason. The app has already
+    // remembered the edit, and replays it at the next boot, before anything reads the list.
+    if (!Emu.IsStopped(true)) {
+      rpcsx_android.notice("settingsSet: %s changes at the next boot, not under a running game", path);
+      return false;
+    }
+
+    set->set_set(std::move(items));
+
+    if (g_settings_batch_depth.load() > 0) {
+      g_settings_batch_dirty.store(true);
+    } else {
+      Emulator::SaveSettings(g_cfg.to_string(), "");
+    }
+    return true;
   }
 
   // Values arrive JSON-encoded: bools/numbers bare, enums and strings quoted.
