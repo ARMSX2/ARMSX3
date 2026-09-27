@@ -1394,7 +1394,7 @@ val EN: Map<String, String> = mapOf(
     "renderer.blendingMode.shader" to "Shader",
     "renderer.blendingMode.hardware" to "Hardware",
     "renderer.blendingMode.description" to "How blending is carried out. \"Auto\" is the default and the right answer for almost everyone: the GPU's own blending unit does the work, and the shader path is used only for the handful of blend modes that unit cannot express. \"Shader\" uses that path on every blended draw: the most accurate, and the most work per draw. \"Hardware\" never uses it, which is how builds before 0.9.8 rendered: the least work, at the cost of getting those few blend modes wrong.",
-    "renderer.shaderMode.description" to "How shaders are compiled. \"Async + Interp\" is the default: it interprets shaders while they compile in the background, so you get fewer freezes at the cost of some early visual glitches. \"Async\" drops frames instead of glitching. \"Legacy\" compiles on the spot and stutters hard.",
+    "renderer.shaderMode.description" to "How shaders are compiled. \"Async\" is the default: shaders compile in the background, and anything still waiting on its shader is skipped until it's ready, so effects can pop in a moment late instead of the game freezing. \"Async + Interp\" draws those with a slower interpreter in the meantime; it's upstream RPCS3's default, but on some Adreno drivers it crashes the game at boot. \"Legacy\" compiles on the spot and stutters hard. \"Interpreter\" never compiles and is the slowest.",
     "renderer.msaa.label" to "MSAA",
     "renderer.msaa.description" to "Hardware anti-aliasing. \"Auto\" follows what the game asks for. Off is faster and is often the right call on a handheld.",
     "renderer.vramLimit.label" to "VRAM Allocation Limit",
