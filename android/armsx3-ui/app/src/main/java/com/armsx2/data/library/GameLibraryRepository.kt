@@ -1360,7 +1360,9 @@ class GameLibraryRepository(private val context: Context) {
 
         // 11: a cache that listed a data folder's firmware and compiled modules as games has
         // to be rescanned for them to go.
-        const val ScanSchemaVersion = 11
+        // 12: trials are flagged (GameInfo.trial). A cache from before never asked, so every
+        // trial kept looking like the full game until something else forced a rescan.
+        const val ScanSchemaVersion = 12
         /** The first scanner that looked for other games on a disc image. A cache from before it
          *  has never been asked, so its images are re-probed once. */
         const val DiscGamesSchemaVersion = 9
