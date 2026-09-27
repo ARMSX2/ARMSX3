@@ -5818,11 +5818,25 @@ static bool installEdat(JNIEnv *env, fs::file &&file, jlong progressId,
 
     auto psf = psf::load_object(sfoPath);
     auto contentId = psf::get_string(psf, "CONTENT_ID");
+    const std::string edatId = npdHeader.get_content_id();
 
-    if (contentId != npdHeader.content_id) {
-      progress.failure(fmt::format("File cannot be used for this game. EDAT "
-                                   "content ID missmatch %s vs %s",
-                                   contentId, npdHeader.content_id));
+    // Same TITLE, not the same content id. A trial's full-game unlock key is an EDAT under its
+    // OWN content id -- the one the game later hands sceNpDrmVerifyUpgradeLicense, which looks
+    // for exdata/<that id>.edat (rpcs3::utils::verify_c00_unlock_edat) -- so it never equals the
+    // game's. Requiring equality refused every unlock key picked from a game's lock button, while
+    // the same file installed from Install, which skips this check, worked: "RAP works, but
+    // trial game keys, no" (Bomberman Ultra, 2026-09-27). A content id is
+    // XXYYYY-TITLEID00_00-LABEL, so the nine characters after the first dash are the title id;
+    // matching those still stops a key meant for another game.
+    const auto titleOf = [](std::string_view id) {
+      return id.size() > 16 && id[6] == '-' ? id.substr(7, 9) : std::string_view{};
+    };
+
+    if (contentId != edatId &&
+        (titleOf(contentId).empty() || titleOf(contentId) != titleOf(edatId))) {
+      progress.failure(fmt::format(
+          "This key is for a different game (%s), not this one (%s).", edatId,
+          contentId));
       return false;
     }
   }
@@ -5913,6 +5927,16 @@ static bool installRap(JNIEnv *env, fs::file &&file, jlong progressId,
       fmt::format("%shome/%s/exdata/%s.rap", rpcs3::utils::get_hdd0_dir(),
                   Emu.GetUsr(), npd->content_id);
 
+  // Keep the licence the game already has. The check below can only run with the new key in
+  // place, since decrypt_self finds the .rap by content id, and a failure used to delete the
+  // file outright: a wrong key picked from a game's lock button (a trial's unlock-key RAP is the
+  // easy one to pick) overwrote the game's working .rap and then threw both away.
+  std::vector<std::uint8_t> previous;
+
+  if (fs::file old{licenseFile}) {
+    previous = old.to_vector<std::uint8_t>();
+  }
+
   if (!fs::write_file(licenseFile, fs::open_mode::create + fs::open_mode::trunc,
                       bytes)) {
     progress.failure(fmt::format("Failed to write key to %s", licenseFile));
@@ -5920,8 +5944,16 @@ static bool installRap(JNIEnv *env, fs::file &&file, jlong progressId,
   }
 
   if (!decrypt_self(fs::file(ebootPath))) {
-    progress.failure("Provided key is invalid for selected game");
-    fs::remove_file(licenseFile);
+    if (!previous.empty() &&
+        fs::write_file(licenseFile, fs::open_mode::create + fs::open_mode::trunc,
+                       previous)) {
+      progress.failure("This key does not unlock this game. The game's existing "
+                       "key was kept.");
+    } else {
+      fs::remove_file(licenseFile);
+      progress.failure("Provided key is invalid for selected game");
+    }
+
     return false;
   }
 
