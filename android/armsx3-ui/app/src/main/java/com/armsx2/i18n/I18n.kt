@@ -927,6 +927,8 @@ val EN: Map<String, String> = mapOf(
     "games.categories.deleteNote" to "The games stay in your library.",
     "games.addToHome.unsupported" to "This launcher doesn't support adding shortcuts to the home screen.",
     "games.locked.chip" to "🔒 Licence",
+    "games.trial.chip" to "🏷️ Trial",
+    "games.trial.badge" to "TRIAL",
     "games.licence.chip" to "🔑 Licensed",
     "games.locked.title" to "Licence required",
     "games.locked.message" to "%s is licence-locked and cannot start without its .rap key. Install the key for this title to play it.",

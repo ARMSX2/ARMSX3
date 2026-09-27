@@ -128,20 +128,28 @@ class GameLibraryRepository(private val context: Context) {
      * /storage/emulated/0 and /data/media/0 are one directory under two names.
      *
      * Only the emulator's own storage is asked about, which is where PKG installs land.
+     *
+     * The same pass reports trials (GameFlag.Trial), which the core also has to open the
+     * EBOOT to tell apart, so both come out of one scan rather than decrypting everything
+     * twice.
      */
-    private fun lockedGamePaths(): Set<String> = runCatching {
-        if (!RPCSX.initialized) return emptySet()
+    private class CoreFlags(val locked: Set<String>, val trial: Set<String>)
+
+    private fun coreGameFlags(): CoreFlags = runCatching {
+        if (!RPCSX.initialized) return CoreFlags(emptySet(), emptySet())
         // The native repository is a scratch buffer here: nothing else in this app reads it,
         // and collectGameInfo appends into it.
         NativeGames.clear()
         internalGameDirectories().forEach { dir ->
             RPCSX.instance.collectGameInfo(dir.absolutePath, -1)
         }
-        NativeGames.list()
-            .filter { it.hasFlag(GameFlag.Locked) }
+        val games = NativeGames.list()
+        fun pathsWith(flag: GameFlag) = games
+            .filter { it.hasFlag(flag) }
             .mapNotNull { game -> runCatching { File(game.info.path).canonicalPath }.getOrNull() }
             .toSet()
-    }.getOrDefault(emptySet())
+        CoreFlags(pathsWith(GameFlag.Locked), pathsWith(GameFlag.Trial))
+    }.getOrDefault(CoreFlags(emptySet(), emptySet()))
 
     private fun internalGameDirectories(): List<File> = listOf(
         File(RPCSX.rootDirectory, "config/dev_hdd0/game"),
@@ -188,6 +196,7 @@ class GameLibraryRepository(private val context: Context) {
                             titleSort = item.optString("titleSort"),
                             titleEn = item.optString("titleEn"),
                             locked = item.optBoolean("locked", false),
+                            trial = item.optBoolean("trial", false),
                             contentId = item.optString("contentId"),
                             drmFree = item.optBoolean("drmFree", false),
                         ),
@@ -365,12 +374,22 @@ class GameLibraryRepository(private val context: Context) {
             else scanRawDirectory(dir, collected, 0)
         }
         addAutoPlaylists(collected)
-        val locked = lockedGamePaths()
-        android.util.Log.i(ScanTag, "scan done: ${collected.size} game(s), ${locked.size} locked")
+        val flags = coreGameFlags()
+        android.util.Log.i(
+            ScanTag,
+            "scan done: ${collected.size} game(s), ${flags.locked.size} locked, ${flags.trial.size} trial",
+        )
         collected.values
             .map { game ->
                 val path = runCatching { game.uri.path?.let { File(it).canonicalPath } }.getOrNull()
-                if (path != null && path in locked) game.copy(locked = true) else game
+                when {
+                    path == null -> game
+                    path in flags.locked || path in flags.trial -> game.copy(
+                        locked = game.locked || path in flags.locked,
+                        trial = game.trial || path in flags.trial,
+                    )
+                    else -> game
+                }
             }
             .sortedBy { it.title.lowercase() }
             .also {
@@ -1285,6 +1304,7 @@ class GameLibraryRepository(private val context: Context) {
                 put("titleSort", game.titleSort)
                 put("titleEn", game.titleEn)
                 put("locked", game.locked)
+                put("trial", game.trial)
                 put("contentId", game.contentId)
                 put("drmFree", game.drmFree)
             })

@@ -55,6 +55,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -1851,6 +1853,7 @@ private fun GameMetadata(game: GameInfo) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         StatusChip(game.extension.ifBlank { game.platform.key.uppercase() })
         if (game.locked) StatusChip(str("games.locked.chip"), Color(0xFFFFC857))
+        if (game.trial) StatusChip(str("games.trial.chip"), TrialColor)
         if (game.licenceState() == GameInfo.Licence.Installed) StatusChip(str("games.licence.chip"), Color(0xFF6FCF97))
         game.regionFlag?.let { Text(it, fontSize = 13.sp) }
         if (game.compatibility > 0) {
@@ -2015,6 +2018,11 @@ private fun GameCover(
         if (showBadges && game.licenceState() == GameInfo.Licence.Installed) {
             LicenceBadge(Modifier.align(Alignment.TopEnd).padding(5.dp))
         }
+        // A trial boots and plays like the full game until it stops short, so nothing else
+        // on the tile says so. Top start, clear of the lock and licence badges at top end.
+        if (showBadges && game.trial) {
+            TrialBadge(Modifier.align(Alignment.TopStart).padding(5.dp))
+        }
         // A package is a game the user has and cannot play yet, and its tile is otherwise
         // indistinguishable from one that boots. Bottom start, so it does not collide with
         // the locked badge on a title that is both.
@@ -2062,6 +2070,49 @@ private fun LockedBadge(modifier: Modifier = Modifier) {
             "🔒",
             modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
             fontSize = 11.sp,
+        )
+    }
+}
+
+// The trial tag: a yellow price tag with a darker rim, its string hole ringed in blue, and
+// the word in a pink-red that still reads on the yellow at badge size.
+private val TrialColor = Color(0xFFFFD43B)
+private val TrialEdge = Color(0xFFF2A900)
+private val TrialRing = Color(0xFF5AAAF0)
+private val TrialInk = Color(0xFFE23D63)
+
+// A price tag pointing left; its height sets how far in the point reaches.
+private val TrialTagShape = GenericShape { size, _ ->
+    val tip = size.height / 2f
+    moveTo(0f, size.height / 2f)
+    lineTo(tip, 0f)
+    lineTo(size.width, 0f)
+    lineTo(size.width, size.height)
+    lineTo(tip, size.height)
+    close()
+}
+
+/** Marks a trial, whose tile would otherwise pass for the full game. The core only flags a
+ *  trial while its upgrade EDAT is missing from exdata, which is the test RPCS3 unlocks the
+ *  game by, so installing the unlock package takes the tag off on the next library refresh. */
+@Composable
+private fun TrialBadge(modifier: Modifier = Modifier) {
+    Row(
+        modifier
+            .background(TrialColor, TrialTagShape)
+            .border(1.dp, TrialEdge, TrialTagShape)
+            .padding(start = 5.dp, end = 5.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(5.dp).border(1.5.dp, TrialRing, CircleShape))
+        Spacer(Modifier.width(3.dp))
+        Text(
+            str("games.trial.badge"),
+            color = TrialInk,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 0.5.sp,
+            lineHeight = 10.sp,
         )
     }
 }

@@ -390,6 +390,11 @@ data class GameInfo(
      *  will boot. Only ever set for games in the emulator's own storage, since that is where
      *  a PKG install puts them and the only place the core is asked about. */
     val locked: Boolean = false,
+    /** A trial that has not been upgraded: a C00 trial, or one whose free EBOOT carries the
+     *  trial's own content id while PARAM.SFO names the full game's (Bomberman ULTRA). The core
+     *  decides it the way RPCS3 unlocks one, by the upgrade EDAT in exdata. Same scope as
+     *  [locked]. */
+    val trial: Boolean = false,
     /** For a package tile, the content id its licence is filed under in exdata
      *  (UP0001-NPUB30910_00-...). Empty for everything else. See [licenceState]. */
     val contentId: String = "",
