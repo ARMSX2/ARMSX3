@@ -2018,6 +2018,17 @@ namespace vm
 			{
 				pflags |= block_size_64k;
 			}
+			else if (flags & block_size_4k)
+			{
+				// The stack block is 4K, and this used to pass no size for it at all. try_alloc
+				// reads "no size" as 1M, so every restored stack was mapped with page_1m_size
+				// between guard pages that carry page_allocated alone, and the next _page_unmap,
+				// which is closing the game, threw "Memory inconsistency found! (addr=0xd0000000,
+				// flags: 0x80 vs 0xc0)" and took the process down. Bomberman ULTRA, 2026-09-27:
+				// save a state (which reloads it), then close. alloc() passes the block's own
+				// flags, so only a restored state ever reached this. Upstream has the same code.
+				pflags |= block_size_4k;
+			}
 			else if (!(flags & (block_size_mask & ~block_size_1m)))
 			{
 				pflags |= block_size_1m;
