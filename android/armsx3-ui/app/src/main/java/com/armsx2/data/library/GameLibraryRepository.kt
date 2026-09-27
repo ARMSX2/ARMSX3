@@ -14,6 +14,8 @@ import com.armsx2.GamePlatform
 import com.armsx2.runtime.MainActivityRuntime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.armsx2.CustomCovers
@@ -26,6 +28,18 @@ import net.rpcsx.GameRepository as NativeGames
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+
+/**
+ * Bumped by every [GameLibraryRepository.invalidateCache].
+ *
+ * Invalidating only deletes the cache key, which the home screen reads on its FIRST load and
+ * never again, so the list already on screen went on showing the old library until a manual
+ * refresh: a game still shown as a package after its install, a trial still tagged after its
+ * unlock went in. HomeViewModel watches this and rescans instead.
+ */
+object LibraryInvalidations {
+    val count = MutableStateFlow(0)
+}
 
 class GameLibraryRepository(private val context: Context) {
     private val gameExtensions = setOf(
@@ -168,6 +182,7 @@ class GameLibraryRepository(private val context: Context) {
             remove("gamesCacheKey")
             remove("gamesCacheDir")
         }
+        LibraryInvalidations.count.update { it + 1 }
     }
 
     fun loadCached(): CachedLibrary {

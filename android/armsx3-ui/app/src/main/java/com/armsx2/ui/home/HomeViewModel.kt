@@ -4,12 +4,14 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import com.armsx2.GameInfo
 import com.armsx2.data.library.GameLibraryRepository
+import com.armsx2.data.library.LibraryInvalidations
 import com.armsx2.runtime.MainActivityRuntime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import androidx.core.content.edit
 import androidx.compose.runtime.mutableStateOf
@@ -52,6 +54,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     var state = androidx.compose.runtime.mutableStateOf(HomeUiState())
         private set
 
+    // An install that lands while a scan is already running: that scan may not have seen it, so
+    // one more runs when it finishes.
+    private var rescanQueued = false
+
+    init {
+        // This list reads the cache key on its first load only, so an install made from anywhere
+        // else -- the package screen, QuickInstall, a licence -- used to leave it showing the old
+        // library until a manual refresh. Every invalidateCache() bumps this counter; follow it.
+        // Not before the first load, which decides for itself whether to scan.
+        scope.launch {
+            LibraryInvalidations.count.drop(1).collect {
+                if (!loaded) return@collect
+                if (scanJob?.isActive == true) rescanQueued = true else refresh()
+            }
+        }
+    }
 
     fun load(romDirectories: List<String>, nativeReady: Boolean) {
         directories = romDirectories
@@ -123,6 +141,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     initialized = true,
                     error = failure.message ?: "Unable to scan the selected folders.",
                 )
+            }
+        }
+        // An install that landed during this scan queued one more; run it once this one is done,
+        // when refresh() will no longer see a scan in progress and skip.
+        scanJob?.invokeOnCompletion {
+            scope.launch {
+                if (rescanQueued) {
+                    rescanQueued = false
+                    refresh()
+                }
             }
         }
     }
