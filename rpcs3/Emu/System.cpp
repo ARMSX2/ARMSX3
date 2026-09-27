@@ -3680,11 +3680,19 @@ void Emulator::Resume()
 	// the calling thread rather than deferring it, so the whole kill-and-restart chain executes
 	// on the savestate thread while the UI thread is free to resume underneath it.
 	//
-	// m_emu_state_close_pending is the emulator's own marker for that window and is cleared on
-	// every failure path, so this cannot latch a game into being unresumable.
+	// m_emu_state_close_pending is the emulator's own marker for that window.
+	//
+	// Hold the request back, but do not drop it. Clearing the marker on a failed save only makes
+	// the NEXT resume work; the one that arrived in the window is gone, and it is the one the UI
+	// sent when its menu closed, so nothing else is coming. Guitar Hero World Tour, 2026-09-26:
+	// "Resume request ignored" logged 9 microseconds before "Failed to savestate", and the game
+	// sat paused behind a closed menu, which the player can only read as a lock-up. The failure
+	// paths in Kill() replay it; a save that succeeds restarts the VM, and reset_emu_state
+	// discards it there.
 	if (m_emu_state_close_pending)
 	{
-		sys_log.notice("Resume request ignored: a savestate or close is in flight.");
+		m_resume_after_failed_savestate = true;
+		sys_log.notice("Resume request held: a savestate or close is in flight. It is replayed if the savestate fails.");
 		return;
 	}
 
@@ -4017,6 +4025,19 @@ void Emulator::Kill(bool allow_autoexit, bool savestate, savestate_stage* save_s
 					}
 				} success_guard {};
 
+				// A Resume() that arrived while this save was in flight was held back (see Resume()).
+				// A failed save does not restart the VM, so hand it back, or the game stays paused
+				// behind a menu the UI has already closed. Only once the in-flight marker is clear,
+				// or Resume() would hold it back again.
+				const auto replay_held_resume = [this]()
+				{
+					if (m_resume_after_failed_savestate.exchange(false))
+					{
+						sys_log.notice("Savestate failed: replaying the resume request it held back.");
+						CallFromMainThread([this]() { Resume(); }, nullptr, false);
+					}
+				};
+
 				std::vector<std::pair<shared_ptr<named_thread<spu_thread>>, u32>> paused_spus;
 
 				if (!try_lock_spu_threads_in_a_state_compatible_with_savestates(false, &paused_spus))
@@ -4034,6 +4055,7 @@ void Emulator::Kill(bool allow_autoexit, bool savestate, savestate_stage* save_s
 					}
 
 					m_emu_state_close_pending = false;
+					replay_held_resume();
 
 					CallFromMainThread([pause = std::move(pause_thread)]()
 					{
@@ -4078,6 +4100,7 @@ void Emulator::Kill(bool allow_autoexit, bool savestate, savestate_stage* save_s
 					}
 
 					m_emu_state_close_pending = false;
+					replay_held_resume();
 
 					CallFromMainThread([pause = std::move(pause_thread)]()
 					{
@@ -4137,6 +4160,7 @@ void Emulator::Kill(bool allow_autoexit, bool savestate, savestate_stage* save_s
 		read_used_savestate_versions();
 		m_savestate_extension_flags1 = {};
 		m_emu_state_close_pending = false;
+		m_resume_after_failed_savestate = false; // the stop went through, nothing to resume
 		m_precompilation_option = {};
 	};
 

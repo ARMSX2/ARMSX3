@@ -79,6 +79,7 @@ class Emulator final
 	atomic_t<u64> m_pause_amend_time{0}; // increased when resumed
 	atomic_t<u64> m_stop_ctr{1}; // Increments when emulation is stopped
 	atomic_t<bool> m_emu_state_close_pending = false;
+	atomic_t<bool> m_resume_after_failed_savestate = false; // Resume() held back while a savestate was in flight
 	atomic_t<u64> m_restrict_emu_state_change{0};
 
 	games_config m_games_config;

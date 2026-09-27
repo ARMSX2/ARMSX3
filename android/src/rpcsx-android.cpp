@@ -1234,12 +1234,19 @@ static std::pair<std::string, std::u32string> g_strings[] = {
         "SaveState failed: Game saving is in progress, wait until finished."),
     // Upstream's desktop advice is to switch the SPU decoder to ASMJIT, which ARM64 builds
     // do not have (System.cpp swaps it back at boot), so it sent people after a setting that
-    // cannot help. What does help here: the SPUs were not at a point they could be paused
-    // at, and a moment later they usually are. The other one names the setting as the
-    // Performance tab shows it.
+    // cannot help. The other one names the setting as the Performance tab shows it.
+    //
+    // Do not promise that retrying works. An SPU is unsavable while it sits inside an atomic
+    // MFC command (GETLLAR, PUTLLC, PUTLLUC) run from compiled code, whatever Allow save
+    // states says, and the lock gives up at once when one has been parked there for five
+    // seconds. A game that keeps an SPU waiting on a line that rarely changes fails every
+    // time: Guitar Hero World Tour did, on every attempt, after this said "try again in a
+    // moment". Some games pass a second later, others never do, and the game's own save
+    // works either way.
     MAKE_STRING(SAVESTATE_FAILED_DUE_TO_SPU,
-                "SaveState failed: the SPUs could not be paused safely just now. "
-                "Try again in a moment."),
+                "SaveState failed: the game's SPUs are in a state that can't be "
+                "saved. Some games stay that way, so if it keeps failing, use the "
+                "game's own save instead."),
     MAKE_STRING(SAVESTATE_FAILED_DUE_TO_MISSING_SPU_SETTING,
                 "SaveState failed: turn on Allow save states in the Performance "
                 "settings, then try again."),
