@@ -134,7 +134,7 @@ namespace rsx
 			mutable rsx::thread* m_thread;
 			RsxDmaControl* m_ctrl = nullptr;
 			const rsx::rsx_iomap_table* m_iotable;
-			u32 m_internal_get = 0;
+			u32 m_fifo_pos = 0;
 
 			u32 m_memwatch_addr = 0;
 			u32 m_memwatch_cmp = 0;
@@ -189,7 +189,7 @@ namespace rsx
 			}
 			void invalidate_cache() { m_cache_size = 0; }
 
-			u32 get_pos() const { return m_internal_get; }
+			u32 get_pos() const { return m_fifo_pos; }
 			u32 last_cmd() const { return m_cmd; }
 			// Publishing GET is a release store into guest DMA memory, and `get` shares a
 			// 64-byte line with `put` which the guest PPU writes from another CPU cluster. At
@@ -197,6 +197,7 @@ namespace rsx
 			// lag instead, with sync_get_force on every path that can idle or block.
 			void sync_get() const;
 			void sync_get_force() const;
+			u32 reported_get() const;
 			mutable u32 m_get_sync_counter = 0;
 
 			// Last value actually stored into ctrl->get. GET is ours to write -- the guest only
@@ -216,7 +217,7 @@ namespace rsx
 			bool m_accurate_fetch = false;
 			std::span<const u32> get_current_arg_ptr(u32 length_in_words) const;
 			u32 get_remaining_args_count() const { return m_remaining_commands; }
-			void restore_state(u32 cmd, u32 count);
+			void restore_state(u32 cmd, u32 count, u32 position);
 			void inc_get(bool wait);
 
 			void set_get(u32 get, u32 spin_cmd = 0);

@@ -797,11 +797,11 @@ namespace rsx
 
 			if (g_cfg.video.strict_rendering_mode) [[ unlikely ]]
 			{
-				util::write_gcm_label<true, true>(ctx, reg, addr, arg, RSX(ctx)->fifo_ctrl->get_pos() + 4);
+				util::write_gcm_label<true, true>(ctx, reg, addr, arg);
 			}
 			else
 			{
-				util::write_gcm_label<true, false>(ctx, reg, addr, arg, RSX(ctx)->fifo_ctrl->get_pos() + 4);
+				util::write_gcm_label<true, false>(ctx, reg, addr, arg);
 			}
 		}
 
@@ -843,7 +843,7 @@ namespace rsx
 					addr, arg, val, static_cast<u32>(vm::_ref<RsxSemaphore>(addr)));
 			}
 
-			util::write_gcm_label<true, true>(ctx, reg, addr, val, RSX(ctx)->fifo_ctrl->get_pos() + 4);
+			util::write_gcm_label<true, true>(ctx, reg, addr, val);
 		}
 
 		void sync(context* ctx, u32, u32)
