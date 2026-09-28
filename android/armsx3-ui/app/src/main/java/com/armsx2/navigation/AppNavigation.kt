@@ -105,9 +105,11 @@ fun AppNavigation() {
                         scope = com.armsx2.config.SettingsScope.Global,
                         serial = null,
                     )
-                AppRoute.SaveManager -> SaveManagerScreen(onBack = UiNavigator::home)
+                is AppRoute.SaveManager -> SaveManagerScreen(onBack = UiNavigator::home, game = destination.game)
                 AppRoute.ControllerManager -> ControllerManagerScreen(onBack = UiNavigator::home)
                 AppRoute.ModLibrary -> com.armsx2.ui.mods.ModLibraryScreen(onBack = UiNavigator::home)
+                AppRoute.Underclocking ->
+                    com.armsx2.ui.underclock.UnderclockingScreen(onBack = UiNavigator::home)
                 AppRoute.TextureManager -> TextureManagerScreen(onBack = UiNavigator::home)
                 AppRoute.Achievements -> AchievementsScreen(onBack = UiNavigator::home)
                 AppRoute.Trophies -> TrophiesScreen(onBack = UiNavigator::home)

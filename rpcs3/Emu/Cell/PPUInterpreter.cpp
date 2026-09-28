@@ -44,12 +44,80 @@ void ppubreak(ppu_thread& ppu)
 #define PPU_WRITE_32(addr, value) vm::write32(addr, value, &ppu);
 #define PPU_WRITE_64(addr, value) vm::write64(addr, value, &ppu);
 #else
-#define PPU_WRITE(type, addr, value) vm::write<type>(addr, value);
-#define PPU_WRITE_8(addr, value) vm::write8(addr, value);
-#define PPU_WRITE_16(addr, value) vm::write16(addr, value);
-#define PPU_WRITE_32(addr, value) vm::write32(addr, value);
-#define PPU_WRITE_64(addr, value) vm::write64(addr, value);
+#define PPU_WRITE(type, addr, value) ppu_write_watched<type>(ppu, addr, value);
+#define PPU_WRITE_8(addr, value) ppu_write_watched<u8>(ppu, addr, value);
+#define PPU_WRITE_16(addr, value) ppu_write_watched<u16>(ppu, addr, value);
+#define PPU_WRITE_32(addr, value) ppu_write_watched<u32>(ppu, addr, value);
+#define PPU_WRITE_64(addr, value) ppu_write_watched<u64>(ppu, addr, value);
 #endif
+
+// See ppu_watch_arm in PPUThread.cpp. Disarmed this is one relaxed load against a register,
+// which the interpreter can afford; it is the only build where every guest store is visible.
+// Write-watch diagnostics. The dump-side features (code windows, register hexdumps, the watch
+// summary) are on-demand and stay; these are the ones that sit in the path of every guest store
+// and load, so they compile out unless someone is actively hunting.
+#ifndef ARMSX3_WATCH_HOOKS
+#define ARMSX3_WATCH_HOOKS 0
+#endif
+
+extern int ppu_watch_slot(u32 addr, u32 size);
+
+// Arming from the sleep in a poll loop only ever sees waits that had to wait. A wait that is
+// satisfied on entry never sleeps, so the writer that satisfied it is never watched, and the
+// watch ends up pinned to the one slot that is stuck. Arm from the load at the top of the loop
+// instead, which runs on every call, healthy ones included.
+extern u32 g_ppu_watch_load_cia;
+extern void ppu_watch_arm_addr(u32 addr);
+
+static FORCE_INLINE void ppu_watch_arm_load(const ppu_thread& ppu, u32 addr)
+{
+#if ARMSX3_WATCH_HOOKS
+	if (g_ppu_watch_load_cia && ppu.cia == g_ppu_watch_load_cia) [[unlikely]]
+	{
+		ppu_watch_arm_addr(addr);
+	}
+#else
+	static_cast<void>(ppu), static_cast<void>(addr);
+#endif
+}
+extern void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size);
+
+// Arm a watch on the address a chosen store instruction writes to. Some structures only exist
+// in a register at the moment they are used -- a queue's write pointer, say -- and there is no
+// way to name them from outside except by the instruction that touches them.
+extern u32 g_ppu_watch_store_cia;
+extern void ppu_watch_arm_addr2(u32 addr, u32 value);
+
+template <typename T>
+static FORCE_INLINE void ppu_write_watched(ppu_thread& ppu, u32 addr, const T& value)
+{
+#if ARMSX3_WATCH_HOOKS
+	if (g_ppu_watch_store_cia && ppu.cia == g_ppu_watch_store_cia) [[unlikely]]
+	{
+		// Only an integer store can carry a pointer worth latching on; a vector or float store
+		// through the same instruction is not one.
+		u32 as_int = 0;
+		std::memcpy(&as_int, &value, std::min<usz>(sizeof(T), sizeof(u32)));
+		ppu_watch_arm_addr2(addr, sizeof(T) == 4 ? as_int : 0);
+	}
+#endif
+
+	// Overlap, not equality. The word is four bytes and a store need not start at its first:
+	// on big endian a byte store to the LAST byte is the cheapest way to make a flag non-zero,
+	// and matching the address exactly cannot see it, which reads as "nothing writes this".
+#if ARMSX3_WATCH_HOOKS
+	if (ppu_watch_slot(addr, sizeof(T)) >= 0) [[unlikely]]
+	{
+		// Vector and float stores are not integers and are wider than the word; copying the
+		// leading bytes is enough to say what landed on it.
+		u64 as_int = 0;
+		std::memcpy(&as_int, &value, std::min<usz>(sizeof(T), sizeof(u64)));
+		ppu_watch_store(ppu, addr, as_int, sizeof(T));
+	}
+#endif
+
+	vm::write<T>(addr, value);
+}
 
 extern bool is_debugger_present();
 
@@ -5773,6 +5841,7 @@ auto LWZ()
 
 	static const auto exec = [](ppu_thread& ppu, ppu_opcode_t op) {
 	const u64 addr = op.ra || 1 ? ppu.gpr[op.ra] + op.simm16 : op.simm16;
+	ppu_watch_arm_load(ppu, static_cast<u32>(addr));
 	ppu.gpr[op.rd] = ppu_feed_data<u32, Flags...>(ppu, addr);
 	};
 	RETURN_(ppu, op);

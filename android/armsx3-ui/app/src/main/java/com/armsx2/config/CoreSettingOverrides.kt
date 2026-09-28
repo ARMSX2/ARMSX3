@@ -3,6 +3,7 @@ package com.armsx2.config
 import androidx.core.content.edit
 import com.armsx2.runtime.MainActivityRuntime
 import net.rpcsx.RPCSX
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -31,6 +32,9 @@ import org.json.JSONObject
  */
 object CoreSettingOverrides {
     private const val KEY_GLOBAL = "config.coreOverrides"
+
+    /** RPCS3's Firmware Libraries list; see [replay]. */
+    private const val LIBRARIES_CONTROL = "Core@@Libraries Control"
 
     /** Per-title key. Deliberately NOT under the "config.game." prefix: ConfigStore's
      *  in-folder backup mirror scans prefs for that prefix and copies each hit out as a
@@ -100,6 +104,67 @@ object CoreSettingOverrides {
         write(key, current.filterKeys { it !in paths })
     }
 
+    /**
+     * Forget every recorded edit, the global set and every title's, and put each node they held
+     * back to the core's own default. For "Reset all settings".
+     *
+     * That reset used to leave this store alone, so an edit made here outlived it and came back at
+     * the next boot. A tester reset everything to get stock settings and still booted Killzone 3
+     * with Vblank Rate 1: one vblank a second, and the logo crawled at 2 fps. Nothing but this
+     * store can hold that value, because applyTo pushes 60 on every apply.
+     *
+     * Dropping the records alone is not enough. An edit is written into config.yml when it is
+     * made, and the store only decides whether it is written again, so a node no curated screen
+     * owns would keep the old value with nothing left on record to explain it. Hence the defaults.
+     * They come from the core's own tree, so they need the core loaded. Without it the records
+     * still go, and the push at the next launch still rewrites every node a curated screen owns,
+     * Vblank Rate and both decoders among them.
+     */
+    fun forgetAll() {
+        val keys = MainActivityRuntime.prefs.all.keys
+            .filter { it == KEY_GLOBAL || it.startsWith("config.coreOverrides.game.") }
+        if (keys.isEmpty()) return
+        val paths = keys.flatMapTo(LinkedHashSet()) { read(it).keys }
+        MainActivityRuntime.prefs.edit { keys.forEach { remove(it) } }
+
+        val defaults = runCatching { coreDefaults() }.getOrDefault(emptyMap())
+        if (defaults.isEmpty()) return
+        runCatching { RPCSX.instance.settingsBeginBatch() }
+        try {
+            for (path in paths) {
+                val value = defaults[path] ?: continue
+                val ok = runCatching { RPCSX.instance.settingsSet(path, value) }.getOrDefault(false)
+                android.util.Log.i("ARMSX3-Override", "reset $path = $value -> $ok")
+            }
+        } finally {
+            runCatching { RPCSX.instance.settingsEndBatch() }
+        }
+    }
+
+    /** Every leaf's default from the core's own tree, keyed by path and encoded the way
+     *  settingsSet takes it: the same walk and encoding the All Core Settings screen uses. */
+    private fun coreDefaults(): Map<String, String> {
+        val raw = RPCSX.instance.settingsGet("")
+        if (raw.isBlank()) return emptyMap()
+        val out = HashMap<String, String>()
+        fun walk(node: JSONObject, prefix: String) {
+            for (key in node.keys()) {
+                val child = node.optJSONObject(key) ?: continue
+                val path = if (prefix.isEmpty()) key else "$prefix@@$key"
+                when (child.optString("type", "")) {
+                    "" -> walk(child, path)
+                    "bool" -> out[path] = child.optBoolean("default").toString()
+                    "int", "uint", "float" ->
+                        child.optString("default").takeIf { it.isNotEmpty() }?.let { out[path] = it }
+                    "set" -> out[path] = (child.optJSONArray("default") ?: JSONArray()).toString()
+                    else -> out[path] = JSONObject.quote(child.optString("default"))
+                }
+            }
+        }
+        walk(JSONObject(raw), "")
+        return out
+    }
+
     fun count(scope: SettingsScope, serial: String?): Int = load(scope, serial).size
 
     /**
@@ -117,12 +182,21 @@ object CoreSettingOverrides {
         val global = read(KEY_GLOBAL)
         val perGame = serial?.trim()?.takeIf { it.isNotEmpty() }
             ?.let { read(keyForGame(it)) }.orEmpty()
-        if (global.isEmpty() && perGame.isEmpty()) return
 
         // Merged rather than pushed as two passes so a path held by both tiers is written once,
         // with the title's value. Insertion order keeps global's paths where they were.
         val merged = LinkedHashMap(global)
         merged.putAll(perGame)
+
+        // The firmware library list is always pushed, as the empty default when nothing is on
+        // record. Every other path here is only ever written, never unwritten, so a per-game edit
+        // stays live (and in config.yml) until something else writes that node, which for a node
+        // no curated screen owns is nothing: the next title boots with it too. For most nodes
+        // that is an old limitation. For this one it is the whole use: libraries get forced for
+        // one game, and one game's forced library is another game's crash. Nothing else in the
+        // app writes Libraries Control, so the store can simply own it. The core treats an
+        // unchanged list as a no-op, so this costs nothing on the pushes that change nothing.
+        if (LIBRARIES_CONTROL !in merged) merged[LIBRARIES_CONTROL] = "[]"
 
         runCatching { RPCSX.instance.settingsBeginBatch() }
         try {

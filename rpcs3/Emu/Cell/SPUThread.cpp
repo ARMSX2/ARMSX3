@@ -1,4 +1,6 @@
 #include "stdafx.h"
+#include <charconv>
+#include <cstring>
 #include "Utilities/JIT.h"
 #include "Utilities/date_time.h"
 #include "Emu/Memory/vm.h"
@@ -298,6 +300,24 @@ extern bool cmp_rdata(const spu_rdata_t& _lhs, const spu_rdata_t& _rhs)
 	const v128 r = (a | b) | (c | d);
 	return gv_testz(r);
 #endif
+}
+
+// The reservation paths read a 128-byte line and check a timestamp on either side of the read,
+// which is only sound while the loads stay between the two timestamp reads. x86-TSO forbids the
+// reordering outright; a weakly ordered machine needs the barrier spelled out, or the check can
+// pass for data that belongs to a later epoch. Always true, so it can sit in a && chain.
+//
+// The same goes for the other side of the handshake: a comparison that finds a reservation lost
+// because the line's DATA changed, with the timestamp untouched. That happens on every ordinary
+// store, and it is how a sleeping SPU learns that someone wrote to it. Without a barrier after it,
+// what the SPU reads next can still be served from before that change, so it acts on a wake-up
+// and then sees data older than the write that woke it. Killzone 3 turned that into a black
+// screen: a SPURS task woken by the PPU read a state byte of the event flag it serves as 0, failed
+// its own assertion (heqi at LS 0x1cdd0) and halted, leaving main_thread waiting forever.
+static FORCE_INLINE bool rdata_fence()
+{
+	atomic_fence_acquire();
+	return true;
 }
 
 #if defined(ARCH_X64)
@@ -703,9 +723,33 @@ namespace spu
 	}
 }
 
+// The Killzone 3 releases the physics KD-tree guards apply to: US (BCUS98234) and EU (BCES01007),
+// which run the same SPU job. Asked each time rather than cached in a static: a static is set by the
+// first game to reach it in the app's lifetime, so a game booted before Killzone 3 in the same
+// session turned the guards off for it. Callers test the cheap address and opcode conditions first.
+bool spu_is_killzone3()
+{
+	const std::string& id = Emu.GetTitleID();
+	return id == "BCUS98234" || id == "BCES01007";
+}
+
 std::array<u32, 2> op_branch_targets(u32 pc, spu_opcode_t op)
 {
 	std::array<u32, 2> res{spu_branch_target(pc + 4), umax};
+
+	// Killzone 3 physics KD-tree traversal guard. The recompiler turns the EA-forming `a` at LS
+	// 0x21238 (a r80,r108,r26 = 0x1806b650) into a two-way branch: fall through when the formed
+	// address is backed, or jump to the tree's own no-work terminator 0x21458 when it is not. The
+	// analyser has to see that extra edge so the terminator block and this predecessor exist. Gated
+	// hard on the title and the exact opcode at the exact address. See A() in SPULLVMRecompiler.cpp.
+	if (pc == 0x21238 && op.opcode == 0x1806b650) [[unlikely]]
+	{
+		if (spu_is_killzone3())
+		{
+			res[1] = 0x21458;
+			return res;
+		}
+	}
 
 	switch (const auto type = g_spu_itype.decode(op.opcode))
 	{
@@ -1319,6 +1363,123 @@ void spu_thread::dump_misc(std::string& ret, std::any& custom_data) const
 	fmt::append(ret, "\n[%s]", ch_mfc_cmd);
 	fmt::append(ret, "\nLocal Storage: 0x%08x..0x%08x", offset, offset + 0x3ffff);
 
+	// ARMSX3_SPU_LS_DUMP=1: the whole local store to a file, one per SPU per dump.
+	//
+	// The dump prints 128 bytes around the pc, which is enough when the code is intact and no use
+	// at all when it is the thing that broke. The image says where the policy module ends, what
+	// the bad transfer landed on, and what the descriptors around it hold. 256 KB per SPU, so it
+	// is asked for rather than always written.
+	if (const char* env = std::getenv("ARMSX3_SPU_LS_DUMP"); env && *env && *env != '0')
+	{
+		static atomic_t<u32> s_seq{0};
+
+		const std::string path = fs::get_config_dir() + fmt::format("spu_ls_%x_%u.bin", id, s_seq++);
+
+		if (fs::file out{path, fs::rewrite}; out && out.write(ls, SPU_LS_SIZE) == SPU_LS_SIZE)
+		{
+			fmt::append(ret, "\nLocal store written to '%s'", path);
+		}
+		else
+		{
+			fmt::append(ret, "\nLocal store could not be written to '%s' (%s)", path, fs::g_tls_error);
+		}
+
+		// And the guest memory ranges named by ARMSX3_DUMP_BIN, which otherwise only the
+		// dump_threads trigger writes -- useless for a crash, which is over before anyone can
+		// touch a trigger file.
+		//
+		// The question these answer: an SPU that dies following a pointer either read that
+		// pointer from guest memory, in which case the corruption happened before it and
+		// somewhere else, or computed it, in which case it is ours. The local store alone cannot
+		// tell the two apart once the buffer that carried it has been recycled.
+		//
+		// Once per crash, not once per SPU: a dump prints every thread, and five copies of the
+		// same 100 MB would be five times the wait and the same bytes.
+		static atomic_t<u64> s_last_mem_dump{0};
+
+		const u64 now = get_system_time();
+
+		if (const u64 last = s_last_mem_dump.load(); now - last > 5'000'000 && s_last_mem_dump.compare_and_swap_test(last, now))
+		{
+			const char* ranges = std::getenv("ARMSX3_DUMP_BIN");
+			std::string_view rest{ranges ? ranges : ""};
+
+			while (!rest.empty())
+			{
+				const usz comma = rest.find(',');
+				const std::string_view item = rest.substr(0, comma);
+				rest = comma == umax ? std::string_view{} : rest.substr(comma + 1);
+
+				const usz dash = item.find('-');
+				u32 start = 0, end = 0;
+
+				if (dash == umax ||
+					std::from_chars(item.data(), item.data() + dash, start, 16).ec != std::errc() ||
+					std::from_chars(item.data() + dash + 1, item.data() + item.size(), end, 16).ec != std::errc() ||
+					end <= start)
+				{
+					fmt::append(ret, "\nDUMP_BIN: could not read '%s', expected start-end in hex", std::string(item));
+					continue;
+				}
+
+				// Sequence in the name, like the local stores: a session hits several faults and
+				// the later ones used to overwrite the memory behind the first, which is the one
+				// whose local store you are reading.
+				const std::string mem_path = fs::get_config_dir() + fmt::format("crash_mem_%u_%x-%x.bin", s_seq.load(), start, end);
+				fs::file mem{mem_path, fs::rewrite};
+
+				if (!mem)
+				{
+					fmt::append(ret, "\nDUMP_BIN: cannot write '%s' (%s)", mem_path, fs::g_tls_error);
+					continue;
+				}
+
+				// Mapped pages only, each with its guest address in front of it:
+				//
+				//   "SPRS", then for every mapped page { u32 address, u32 length, length bytes }
+				//
+				// A flat image with holes for the unmapped parts only works for a range that is
+				// mostly mapped. The question these dumps answer -- is the address an SPU died on
+				// written down anywhere in the game's memory, or did we invent it -- needs EVERY
+				// region searched, and the game holds most of its data in three 256 MB areas it
+				// maps into sparsely. Flat, that is a gigabyte of mostly zeroes; this way it is
+				// the few hundred MB a PS3 can actually hold.
+				//
+				// Read through the sudo mapping, not vm::base: a page can be readable to the
+				// guest and still unreadable to us in the user mapping (locked for the RSX, under
+				// a write watch), and the first one of those made write() fail with EFAULT, which
+				// ensure() turns into a second fatal error -- killing the crash report for the
+				// fault we were trying to record. Copy the page out first for the same reason: a
+				// short read is then ours to notice rather than the kernel's to refuse.
+				std::vector<u8> page_buf(0x1000);
+				u32 pages_written = 0;
+
+				mem.write("SPRS", 4);
+
+				for (u32 page = start & ~0xfffu; page < end; page += 0x1000)
+				{
+					const u32 from = std::max(page, start);
+					const u32 to = std::min(page + 0x1000, end);
+
+					if (!vm::check_addr(page, vm::page_readable, 0x1000))
+					{
+						continue;
+					}
+
+					std::memcpy(page_buf.data(), vm::get_super_ptr<u8>(from), to - from);
+
+					const le_t<u32> header[2]{from, to - from};
+					mem.write(&header, sizeof(header));
+					mem.write(page_buf.data(), to - from);
+					pages_written++;
+				}
+
+				fmt::append(ret, "\nGuest memory 0x%x..0x%x: %u mapped pages (%u KB) written to '%s'",
+					start, end, pages_written, pages_written * 4, mem_path);
+			}
+		}
+	}
+
 	if (const u64 _time = start_time)
 	{
 		if (const auto func = current_func)
@@ -1721,7 +1882,10 @@ void spu_thread::cpu_work()
 		return;
 	}
 
-	const u32 old_iter_count = cpu_work_iteration_count++;
+	// Only calls that may take an interrupt advance the count. Compiled code alternates checks
+	// where it may (every register in memory) with checks where it may not, and counting both
+	// could park the every-16th interrupt check below on the second kind for good.
+	const u32 old_iter_count = allow_interrupts_in_cpu_work ? cpu_work_iteration_count++ : cpu_work_iteration_count;
 
 	bool work_left = false;
 
@@ -1765,10 +1929,16 @@ void spu_thread::cpu_work()
 
 	bool gen_interrupt = false;
 
+	const u32 busy_mask = ch_events.load().mask & SPU_EVENT_INTR_BUSY_CHECK;
+
+	// The decrementer has underflowed with interrupts on (spu_dec_intr_timer raised ::pending):
+	// take it at the first check that may, not the next 16th
+	const bool dec_due = interrupts_enabled && (busy_mask & SPU_EVENT_TM) && read_dec().second;
+
 	// Check interrupts every 16 iterations
-	if (!(old_iter_count % 16) && allow_interrupts_in_cpu_work)
+	if ((!(old_iter_count % 16) || dec_due) && allow_interrupts_in_cpu_work)
 	{
-		if (u32 mask = ch_events.load().mask & SPU_EVENT_INTR_BUSY_CHECK)
+		if (u32 mask = busy_mask)
 		{
 			// LR check is expensive, do it once in a while
 			if (old_iter_count /*% 256*/)
@@ -1781,6 +1951,15 @@ void spu_thread::cpu_work()
 
 		gen_interrupt = check_mfc_interrupts(pc);
 		work_left |= interrupts_enabled;
+	}
+
+	// Busy checking has to keep going while an interrupt can still be taken. Only the line above
+	// kept ::pending, and only on every 16th call, so the next call with no MFC work cleared it
+	// and the busy check stopped after one round. Reservation loss and signals are polled for as
+	// long as they are enabled; the decrementer only once it has underflowed.
+	if (interrupts_enabled && ((busy_mask & ~SPU_EVENT_TM) || dec_due))
+	{
+		work_left = true;
 	}
 
 	in_cpu_work = false;
@@ -1896,7 +2075,26 @@ void spu_thread::init_spu_decoder()
 #if !defined(ARCH_X64) && !defined(ARCH_ARM64)
 #error "Unimplemented"
 #else
-	const spu_decoder_type spu_decoder = g_cfg.core.spu_decoder;
+	// ARMSX3_SPU_INTERP=1 forces the SPU interpreter regardless of the stored setting.
+	//
+	// SPU codegen is the last component in Black Flag's hang that has never been cleanly tested,
+	// and testing it has been blocked on the decoder living behind a settings screen. Forcing it
+	// here keeps the control independent of whatever a device has saved, which matters after a
+	// stale experimental setting on this one sat unnoticed through an entire investigation.
+	static const bool s_force_spu_interp = []()
+	{
+		const char* env = std::getenv("ARMSX3_SPU_INTERP");
+		const bool on = env && *env && *env != '0';
+
+		if (on)
+		{
+			spu_log.success("ARMSX3_SPU_INTERP: forcing the SPU interpreter");
+		}
+
+		return on;
+	}();
+
+	const spu_decoder_type spu_decoder = s_force_spu_interp ? spu_decoder_type::_static : g_cfg.core.spu_decoder.get();
 
 #if defined(ARCH_X64)
 	if (spu_decoder == spu_decoder_type::asmjit)
@@ -2148,6 +2346,403 @@ void spu_thread::push_snr(u32 number, u32 value)
 	});
 }
 
+#ifndef ARMSX3_WATCH_HOOKS
+#define ARMSX3_WATCH_HOOKS 0
+#endif
+
+extern int ppu_watch_slot(u32 addr, u32 size);
+extern bool ppu_watch_should_log(u32 count);
+
+struct ppu_watch_stat_t
+{
+	atomic_t<u32> ppu_store;
+	atomic_t<u32> ppu_stcx;
+	atomic_t<u32> spu_put;
+	atomic_t<u32> spu_ll_ok;
+	atomic_t<u32> spu_ll_fail;
+	atomic_t<u32> last_value;
+};
+
+extern ppu_watch_stat_t g_ppu_watch_stats[4];
+extern atomic_t<u32> g_ppu_watch[4];
+extern atomic_t<u32> g_ppu_watch_size[4];
+extern void ppu_watch_record(int slot, u32 addr, u32 value, u32 who, u16 size, u16 kind);
+
+// ARMSX3_WATCH_LS=start-end, in hex LS offsets: log every transfer that writes into that window
+// of a local store, with the pc that issued it and the effective address it came from.
+//
+// A crash dump says which instruction ran and what was around it. When the code itself has been
+// replaced -- Killzone 3 runs garbage at LS 0x28e0 on four SPUs within 10ms, one word of it a PPU
+// epilogue, so it arrived from main memory through a bad pointer -- the dump cannot say which
+// transfer wrote it, because that happened long before. This can.
+//
+// Kept out of the compile-time ARMSX3_WATCH_HOOKS switch above: that one guards hooks in the PPU
+// interpreter's every store, this is two loads and a compare per DMA, next to the copy itself.
+static std::pair<u32, u32> spu_ls_watch_range()
+{
+	static const std::pair<u32, u32> s_range = []() -> std::pair<u32, u32>
+	{
+		const char* env = std::getenv("ARMSX3_WATCH_LS");
+
+		if (!env || !*env)
+		{
+			return {0, 0};
+		}
+
+		const std::string_view item{env};
+		const usz dash = item.find('-');
+		u32 start = 0, end = 0;
+
+		if (dash == umax ||
+			std::from_chars(item.data(), item.data() + dash, start, 16).ec != std::errc() ||
+			std::from_chars(item.data() + dash + 1, item.data() + item.size(), end, 16).ec != std::errc() ||
+			end <= start || end > SPU_LS_SIZE)
+		{
+			spu_log.error("ARMSX3_WATCH_LS: could not read '%s', expected start-end in hex", env);
+			return {0, 0};
+		}
+
+		spu_log.success("ARMSX3_WATCH_LS: watching local store 0x%05x..0x%05x", start, end);
+		return {start, end};
+	}();
+
+	return s_range;
+}
+
+bool spu_ls_watch_enabled()
+{
+	return spu_ls_watch_range().second != 0;
+}
+
+// The last 32 transfers into the watched window on this SPU, UNSAMPLED, dumped when the unbacked-DMA
+// guard fires. The log below samples per pc, so a site that runs once per job -- a job fetching its
+// own context -- is decimated within seconds, and "the last write the log shows" is then not the
+// last write. Asking which transfer put Killzone 3's empty job context at LS 0x30580 needs every
+// one of them, in order, with the bytes that actually landed there.
+struct spu_ls_ring_entry
+{
+	u64 seq; // the n of the WATCH_LS[n] log line, whether or not that line was printed
+	u64 time;
+	u32 pc; // block address, not the issuing instruction
+	u32 lsa;
+	u32 size;
+	u32 eal;
+	u32 src; // guest address of the bytes that reached the first watched quadword
+	u8 cmd;
+	u8 tag;
+	bool mapped;
+	u8 landed[16];
+};
+
+static thread_local std::array<spu_ls_ring_entry, 32> t_ls_ring{};
+static thread_local u32 t_ls_ring_pos = 0;
+
+// The producer side. The LS ring above answers "what did the failing job read into its context",
+// and it read an empty descriptor {ptr0, ptr1, sentinel, count} with the two pointer words null and
+// count positive. This ring answers "who wrote that descriptor in main memory, in what order, and
+// did the consumer's GET slice in between the pointer writes and the count write". Killzone 3's
+// descriptors are filled field by field with 8-byte PUTs from more than one SPU, so a global,
+// unsampled ring of every small PUT, replayed for the addresses around the descriptor the failing
+// job read, is what shows the partial publish as it happened. Cross-SPU, so it cannot be
+// thread_local.
+struct spu_put_ring_entry
+{
+	u64 time;
+	u32 eal;
+	u32 pc;
+	u16 spu;   // low 16 bits of the SPU thread id, enough to tell producers apart
+	u16 size;
+	u8 bytes[16]; // the value written (first 16 bytes of the source local store)
+};
+
+static std::array<spu_put_ring_entry, 1024> g_put_ring{};
+static atomic_t<u32> g_put_ring_pos{0};
+
+// Record a PUT. Cheap and only armed with ARMSX3_WATCH_LS, so it never ships cost to a normal run.
+static void spu_put_ring_record(const spu_thread* spu, const spu_mfc_cmd& args, const u8* src)
+{
+	if (!spu_ls_watch_enabled() || !args.size || args.size > 0x40) [[likely]]
+	{
+		return;
+	}
+
+	auto& e = g_put_ring[g_put_ring_pos++ % g_put_ring.size()];
+	e.time = get_system_time();
+	e.eal = args.eal;
+	e.pc = spu ? spu->pc : 0;
+	e.spu = spu ? static_cast<u16>(spu->id) : 0;
+	e.size = static_cast<u16>(args.size);
+	std::memcpy(e.bytes, src, std::min<u32>(args.size, 16));
+}
+
+static void spu_ls_ring_dump(const spu_thread* spu, const char* why)
+{
+	if (!spu_ls_watch_enabled())
+	{
+		return;
+	}
+
+	static atomic_t<u32> s_dumps{0};
+
+	if (s_dumps++ >= 4)
+	{
+		return;
+	}
+
+	const auto hex16 = [](const u8* p)
+	{
+		return fmt::format("%02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x %02x%02x%02x%02x",
+			p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13], p[14], p[15]);
+	};
+
+	const u64 now = get_system_time();
+	std::string out;
+
+	for (u32 i = 0; i < t_ls_ring.size(); i++)
+	{
+		const auto& e = t_ls_ring[(t_ls_ring_pos + i) % t_ls_ring.size()];
+
+		if (!e.seq)
+		{
+			continue;
+		}
+
+		// What memory holds at the same address now, to tell a source that was filled late from
+		// one that never was.
+		std::string later = "<unmapped>";
+
+		if (vm::check_addr(e.src, vm::page_readable, 16))
+		{
+			later = hex16(vm::_ptr<u8>(e.src));
+		}
+
+		fmt::append(out, "\n  [%u] -%6uus pc=0x%05x LS 0x%05x..0x%05x EA 0x%08x cmd 0x%02x tag %2u | landed %s | now %s",
+			e.seq, now - e.time, e.pc, e.lsa, e.lsa + e.size, e.eal, e.cmd, e.tag,
+			e.mapped ? hex16(e.landed) : std::string("<unmapped>"), later);
+	}
+
+	spu_log.error("WATCH_LS ring for '%s' at %s, oldest first:%s", spu ? *spu->spu_tname.load() : "?", why, out);
+
+	// The descriptor's main-memory address is the EA the consumer's context GET read from: the most
+	// recent LS-ring entry's source EA. Replay every PUT that landed in the 0x60 bytes around it, in
+	// time order, to show who published the descriptor and whether a pointer write is missing or
+	// arrived after the consumer had already read it.
+	u32 desc_ea = 0;
+	u64 desc_t = 0;
+
+	for (const auto& e : t_ls_ring)
+	{
+		if (e.seq && e.time >= desc_t)
+		{
+			desc_t = e.time;
+			desc_ea = e.eal;
+		}
+	}
+
+	if (!desc_ea)
+	{
+		return;
+	}
+
+	const u32 lo = desc_ea > 0x40 ? desc_ea - 0x40 : 0;
+	const u32 hi = desc_ea + 0x60;
+
+	std::vector<const spu_put_ring_entry*> hits;
+
+	for (const auto& e : g_put_ring)
+	{
+		if (e.eal && e.eal >= lo && e.eal < hi)
+		{
+			hits.push_back(&e);
+		}
+	}
+
+	std::sort(hits.begin(), hits.end(), [](auto* a, auto* b) { return a->time < b->time; });
+
+	std::string prod;
+
+	for (const auto* e : hits)
+	{
+		const int rel = static_cast<int>(e->eal) - static_cast<int>(desc_ea);
+		fmt::append(prod, "\n  -%6uus SPU %04x pc=0x%05x EA 0x%08x (desc%+d) size %2u = %s",
+			now - e->time, e->spu, e->pc, e->eal, rel, e->size, hex16(e->bytes));
+	}
+
+	spu_log.error("PUT ring for descriptor EA 0x%08x (read by the failing job), oldest first:%s",
+		desc_ea, prod.empty() ? std::string("\n  <no PUT within 0x60 of it was recorded>") : prod);
+}
+
+// Called for GETs, which are the transfers that can land on code, and for the atomic reads, whose
+// 128 bytes land in local store the same way but never pass through do_dma_transfer.
+static void spu_watch_ls_write(const spu_thread* spu, const spu_mfc_cmd& args, u32 lsa)
+{
+	const auto [start, end] = spu_ls_watch_range();
+
+	if (!end || lsa >= end || lsa + args.size <= start) [[likely]]
+	{
+		return;
+	}
+
+	// Every hit at first, then a sample -- but sampled PER PC, not globally. A job area being
+	// reloaded legitimately fills the log in a second, and one global 1-in-64 sample lets that
+	// flood hide a rare transfer from a different site entirely: a cache refill that happens
+	// three times in a session competes with a stream that happens 155,000 times, and "this SPU
+	// never refilled" then reports absence that is really just decimation. Keeping a per-pc
+	// budget means a rare site is always logged in full.
+	static atomic_t<u64> s_hits{0};
+
+	const u64 n = ++s_hits;
+	const u32 site = spu ? spu->pc : 0;
+
+	{
+		auto& e = t_ls_ring[t_ls_ring_pos++ % t_ls_ring.size()];
+		const u32 first = std::max(start, lsa) & ~15u;
+
+		e.seq = n;
+		e.time = get_system_time();
+		e.pc = site;
+		e.lsa = lsa;
+		e.size = args.size;
+		e.eal = args.eal;
+		e.src = args.eal + (first - lsa);
+		e.cmd = static_cast<u8>(args.cmd);
+		e.tag = static_cast<u8>(args.tag);
+		e.mapped = vm::check_addr(e.src, vm::page_readable, 16);
+
+		if (e.mapped)
+		{
+			std::memcpy(e.landed, vm::_ptr<u8>(e.src), 16);
+		}
+	}
+
+	{
+		static atomic_t<u32> s_pc[16]{};
+		static atomic_t<u32> s_pc_hits[16]{};
+
+		u32 slot = 16;
+
+		for (u32 i = 0; i < 16; i++)
+		{
+			const u32 have = s_pc[i].load();
+
+			if (have == site) { slot = i; break; }
+
+			if (!have && s_pc[i].compare_and_swap_test(0, site)) { slot = i; break; }
+		}
+
+		// Known site with budget left, or a site we could not track: log it.
+		const u32 seen = slot < 16 ? ++s_pc_hits[slot] : 0;
+
+		if (slot < 16 && seen > 64 && n % 64)
+		{
+			return;
+		}
+	}
+
+	std::string head = "<unmapped>";
+
+	if (vm::check_addr(args.eal, vm::page_readable, 16))
+	{
+		head = fmt::format("%08x %08x %08x %08x", vm::read32(args.eal), vm::read32(args.eal + 4),
+			vm::read32(args.eal + 8), vm::read32(args.eal + 12));
+	}
+
+	spu_log.error("WATCH_LS[%u]: '%s' writes LS 0x%05x..0x%05x from EA 0x%08x (cmd 0x%x, tag %u) at pc 0x%05x: %s",
+		n, spu ? *spu->spu_tname.load() : "?", lsa, lsa + args.size, args.eal, +args.cmd, args.tag,
+		spu ? spu->pc : 0, head);
+}
+
+// A plain transfer over a watched word.
+static void ppu_watch_dma(u32 eal, u32 size, u32 spu_id)
+{
+#if !ARMSX3_WATCH_HOOKS
+	static_cast<void>(eal), static_cast<void>(size), static_cast<void>(spu_id);
+	return;
+#endif
+	const int slot = ppu_watch_slot(eal, size);
+
+	if (slot < 0)
+	{
+		return;
+	}
+
+	ppu_watch_record(slot, eal, vm::read32(g_ppu_watch[slot].load()), spu_id, static_cast<u16>(size), 2);
+
+	if (ppu_watch_should_log(++g_ppu_watch_stats[slot].spu_put))
+	{
+		spu_log.error("WATCH[%d] 0x%x covered by an SPU PUT (eal=0x%x size=0x%x) from SPU 0x%x",
+			slot, g_ppu_watch[slot].load(), eal, size, spu_id);
+	}
+}
+
+// An atomic 128-byte store, which is how an SPU updates a line it shares with the PPU, and how
+// this game's jobs report completion. Neither of these goes near do_dma_transfer.
+//
+// Whether it would take is the whole question: a store that keeps failing is a race nobody wins,
+// one that keeps taking while the word stays zero is a job writing the wrong thing, and no store
+// at all is work that was never queued. All three look identical from the waiting side.
+// Whether the store would take has to be read before it runs; what it left behind has to be
+// read after. Capture the first in the constructor, print the second from the destructor.
+struct ppu_watch_putll_report
+{
+	const spu_thread& spu;
+	const char* kind;
+	int slot = -1;
+	bool wrong_line = false;
+	bool lost = false;
+	u64 res = 0;
+
+	ppu_watch_putll_report(const spu_thread& spu, u32 eal, const char* kind)
+		: spu(spu), kind(kind), slot(ARMSX3_WATCH_HOOKS ? ppu_watch_slot(eal, 128) : -1)
+	{
+		if (slot < 0)
+		{
+			return;
+		}
+
+		const u32 line = eal & -128;
+		res = vm::reservation_acquire(line);
+		wrong_line = spu.raddr != line;
+		lost = !wrong_line && spu.rtime != (res & -128);
+	}
+
+	~ppu_watch_putll_report()
+	{
+		if (slot < 0)
+		{
+			return;
+		}
+
+		const u32 w = g_ppu_watch[slot].load();
+		auto& st = g_ppu_watch_stats[slot];
+
+		if (wrong_line || lost)
+		{
+			ppu_watch_record(slot, w, vm::read32(w), spu.id, 128, 4);
+
+		if (ppu_watch_should_log(++st.spu_ll_fail))
+			{
+				spu_log.error("WATCH[%d] 0x%x: SPU %s could not take from SPU 0x%x: rtime=0x%llx res=0x%llx %s",
+					slot, w, kind, spu.id, spu.rtime, res, wrong_line ? "WRONG-LINE" : "LOST");
+			}
+
+			return;
+		}
+
+		const u32 after = vm::read32(w);
+		const bool became_set = after && !st.last_value.exchange(after);
+
+		ppu_watch_record(slot, w, after, spu.id, 128, 3);
+
+		if (ppu_watch_should_log(++st.spu_ll_ok) || became_set)
+		{
+			spu_log.error("WATCH[%d] 0x%x: SPU %s took from SPU 0x%x, word now 0x%x%s",
+				slot, w, kind, spu.id, after, became_set ? "  <-- SET" : "");
+		}
+	}
+};
+
+
 void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8* ls)
 {
 	// Per DMA transfer; only the destructor reads it, and only under perf_report.
@@ -2157,6 +2752,29 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 
 	u32 eal = args.eal;
 	u32 lsa = args.lsa & 0x3ffff;
+
+	// The SPU half of the PPU store watch. A SPURS job signals completion by writing a flag in
+	// main memory, which reaches it as a PUT and through none of the paths a PPU store takes,
+	// so a field with no PPU writer is expected to turn up here.
+	if (!is_get) [[likely]]
+	{
+		ppu_watch_dma(eal, args.size, _this ? _this->id : 0);
+		spu_put_ring_record(_this, args, ls + lsa);
+	}
+	else
+	{
+		spu_watch_ls_write(_this, args, lsa);
+
+		// Killzone 3 builder-vs-traversal sync probe: log the SPU job's context GET (0x50 bytes into
+		// the job context slot LS 0x30580). Correlated by EA with the "KZ3 CLEAR" line from the PPU
+		// teardown to measure the GET->clear gap on ARM (x86 min is 7.6 ms). Off unless
+		// ARMSX3_KZ3_SYNC=1; kz3_sync_probe_enabled() also confirms the title is right via the paired
+		// PPU hook, but gate cheaply here on the exact shape first.
+		if (args.size == 0x50 && lsa == 0x30580 && kz3_sync_probe_enabled()) [[unlikely]]
+		{
+			spu_log.error("KZ3 GET ea=0x%08x t=%llu spu=0x%x", eal, get_system_time(), _this ? _this->id : 0);
+		}
+	}
 
 	// Code-sized transfers, which is how a SPURS workload would arrive.
 	//
@@ -2353,10 +2971,13 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 			{
 				return;
 			}
-			else
+			else if (!spu_is_killzone3())
 			{
 				fmt::throw_exception("Invalid RawSPU MMIO offset (cmd=[%s])", args);
 			}
+			// else Killzone 3: a garbage EA computed during the builder-vs-traversal race reaches
+			// here; fall through so the unbacked guard below zero-fills it instead of killing the SPU
+			// thread. Pairs with the graceful-bail in A(); other titles keep the original throw.
 		}
 		else if (_this->get_type() >= spu_type::raw)
 		{
@@ -2379,14 +3000,102 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 				spu.push_snr(SYS_SPU_THREAD_SNR2 == offset, args.cmd != MFC_SDCRZ_CMD ? +_this->_ref<u32>(lsa) : 0);
 				return;
 			}
-			else
+			else if (!spu_is_killzone3())
 			{
 				fmt::throw_exception("Invalid MMIO offset (cmd=[%s])", args);
 			}
+			// else Killzone 3: same as above, a garbage EA from the race reaches here (e.g. a 0x50
+			// descriptor refill to an MMIO-range address at pc 0x1ac40). Fall through to the unbacked
+			// guard so it is zero-filled and survived rather than throwing and killing the thread.
 		}
 		else
 		{
 			// Access Violation
+		}
+	}
+
+	// A transfer whose guest side is not backed by anything kills the SPU thread: the copy below
+	// faults in the host and the access-violation handler stops it mid-transfer. Hardware does not
+	// do that. On a real MFC an invalid effective address raises a class-2 DMA segment/alignment
+	// interrupt against the SPU, which the running code can survive.
+	//
+	// Killzone 3's Havok KD-tree traversal reaches this roughly once per run out of ~14,600 cache
+	// refills. Everything about that one refill is correct, and was measured rather than assumed:
+	// the line it read is byte for byte identical to guest memory captured at the same instant, in
+	// the cache set most exposed to being overwritten by other transfers; the guard at LS 0x21200
+	// evaluates correctly; `shli` does what the CBEA says. The node simply holds a value where a
+	// packed pointer belongs, and the job multiplies it by 16 with no range check of its own -- a
+	// valid packed pointer must be below 0x10000000 for `value * 16` to stay inside 32 bits.
+	//
+	// Zeros are what let the guest recover rather than merely survive: the traversal's own
+	// terminator is `word1 <= 0` (`cgti`/`brz` at LS 0x21220), so a zero-filled line ends that
+	// branch, pops the worklist and carries on.
+	//
+	// This sits AFTER the MMIO block on purpose. The bad effective addresses land on both sides of
+	// RAW_SPU_BASE_ADDR -- 0x300 below it, 0xffff9e81 above -- and the ones above reach the three
+	// "Access Violation" fall-throughs there, which leave src/dst still pointing at
+	// vm::_ptr<u8>(eal). Testing for "the MMIO path never redirected it" catches all of them
+	// without duplicating that resolution logic. An earlier version of this guard sat before the
+	// block with an `eal < RAW_SPU_BASE_ADDR` condition and missed exactly those cases.
+	//
+	// Loud, not silent: this masks a genuine guest error, so every distinct pc says so once. A game
+	// printing these in a loop means the transfer is not its problem and the log is the lead.
+	if (args.size && args.cmd != MFC_SDCRZ_CMD) [[likely]]
+	{
+		const u8* const guest = vm::_ptr<u8>(eal);
+
+		// Raw SPU local storage is ordinary vm memory, mapped at its MMIO address for as long as
+		// that raw SPU exists -- which is why the RawSPU branch above leaves those transfers to the
+		// plain copy instead of redirecting them. So it is checked like any other address. Taking
+		// "not redirected" as "unbacked" here zero-filled Ratchet & Clank: Tools of Destruction's
+		// raw SPU 0 reading its partner's local store (GET from 0xe0124200); the SPU then chased
+		// the zeros to address 0 and died, and the game sat on a black screen after its first
+		// cutscene. A raw SPU that does not exist has nothing mapped, so it still counts as unbacked.
+		const bool raw_spu_ls = eal >= RAW_SPU_BASE_ADDR && eal < SYS_SPU_THREAD_BASE_LOW &&
+			(eal - RAW_SPU_BASE_ADDR) % RAW_SPU_OFFSET + args.size - 1 < SPU_LS_SIZE;
+
+		const bool unbacked = eal >= RAW_SPU_BASE_ADDR && !raw_spu_ls
+			? (is_get ? src == guest : dst == guest) // the MMIO block declined to redirect it
+			: !vm::check_addr(eal, is_get ? vm::page_readable : vm::page_writable, args.size);
+
+		if (unbacked) [[unlikely]]
+		{
+			const u32 at = _this ? _this->pc : 0;
+
+			static atomic_t<u32> s_seen[16]{};
+			static atomic_t<u32> s_count{0};
+
+			bool first = true;
+
+			for (auto& slot : s_seen)
+			{
+				if (slot == at)
+				{
+					first = false;
+					break;
+				}
+
+				if (u32 expected = 0; slot.compare_exchange(expected, at))
+				{
+					break;
+				}
+			}
+
+			if (first && s_count++ < 16)
+			{
+				spu_log.error("DMA %s unbacked 0x%x (size 0x%x, lsa 0x%x) at pc 0x%05x: %s instead "
+					"of killing the thread", is_get ? "GET from" : "PUT to", eal, args.size, lsa, at,
+					is_get ? "zero-filling" : "dropping");
+			}
+
+			spu_ls_ring_dump(_this, "unbacked DMA");
+
+			if (is_get)
+			{
+				std::memset(ls + lsa, 0, std::min<u32>(args.size, SPU_LS_SIZE - lsa));
+			}
+
+			return;
 		}
 	}
 
@@ -2520,6 +3229,9 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 					break;
 				}
 				}
+
+				// Keep the copy above ahead of the timestamp check below
+				atomic_fence_acquire();
 
 				if (time0 != vm::reservation_acquire(eal) || (size0 == 128 && !cmp_rdata(*reinterpret_cast<spu_rdata_t*>(dst0), *reinterpret_cast<const spu_rdata_t*>(src))))
 				{
@@ -3116,7 +3828,10 @@ bool spu_thread::do_list_transfer(spu_mfc_cmd& args)
 
 	u8 optimization_compatible = transfer.cmd & (MFC_GET_CMD | MFC_PUT_CMD);
 
-	if (spu_log.trace || g_cfg.core.spu_accurate_dma || g_cfg.core.mfc_debug)
+	// The watch sits in do_dma_transfer, and the two inlined paths below never call it, so a
+	// watched run takes the unoptimized one element at a time route. Slower, and only while
+	// ARMSX3_WATCH_LS is set.
+	if (spu_log.trace || g_cfg.core.spu_accurate_dma || g_cfg.core.mfc_debug || spu_ls_watch_enabled())
 	{
 		optimization_compatible = 0;
 	}
@@ -3521,6 +4236,12 @@ bool spu_thread::do_list_transfer(spu_mfc_cmd& args)
 				rsx_lock.unlock();
 			}
 
+			// A list transfer's optimised put writes guest memory here and returns, without
+			// ever reaching do_dma_transfer, so hooking transfers misses it entirely. This is
+			// how a SPURS job writes its results back, which made the word it sets look as
+			// though nothing in the machine ever wrote it.
+			ppu_watch_dma(addr, size, id);
+
 			u8* dst = vm::_ptr<u8>(addr);
 			const u8* src = this->ls + arg_lsa + (addr & 0xf);
 
@@ -3726,6 +4447,8 @@ std::string spu_putllc_barrier_sites()
 
 bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 {
+	const ppu_watch_putll_report watch_report_{*this, args.eal, "PUTLLC"};
+
 	perf_meter<"PUTLLC-"_u64> perf0(nullptr);
 	perf_meter<"PUTLLC+"_u64> perf1 = perf0;
 
@@ -3770,10 +4493,16 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 
 			// Writeback of unchanged data. Only check memory change
 			// For the comparison, load twice for atomicity
-			if (cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)) && res == rtime && cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)) && res.compare_and_swap_test(rtime, rtime + 128))
+			if (cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)))
 			{
-				raddr = 0; // Disable notification
-				return true;
+				// Keep the first comparison's loads ahead of the timestamp check below
+				atomic_fence_acquire();
+
+				if (res == rtime && cmp_rdata(rdata, vm::_ref<spu_rdata_t>(addr)) && res.compare_and_swap_test(rtime, rtime + 128))
+				{
+					raddr = 0; // Disable notification
+					return true;
+				}
 			}
 
 			return false;
@@ -3802,7 +4531,21 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 			return false;
 		}
 
-		if (!g_cfg.core.spu_accurate_reservations)
+		// EXPERIMENT (ARMSX3_NO_SPURS_SHORTCUT=1): take the normal path for the SPURS block.
+		//
+		// This shortcut writes the control block and reports success without checking the
+		// reservation, so a store built on a stale copy of the line silently overwrites whatever
+		// happened meanwhile. And res advances by 64 rather than 128, half a step, so a waiter
+		// comparing rtime against (res & -128) cannot see a single one of these writes: exactly
+		// what Black Flag's hang looks like, with every SPU asleep reading "still current" on a
+		// line that was being written.
+		static const bool s_no_spurs_shortcut = []()
+		{
+			const char* env = std::getenv("ARMSX3_NO_SPURS_SHORTCUT");
+			return env && *env && *env != '0';
+		}();
+
+		if (!g_cfg.core.spu_accurate_reservations && !s_no_spurs_shortcut)
 		{
 			if (addr - spurs_addr <= 0x80)
 			{
@@ -4038,11 +4781,17 @@ void do_cell_atomic_128_store(u32 addr, const void* to_write)
 
 			if (!(at_read_time & 127))
 			{
-				if (cmp_rdata(sdata, write_data) && at_read_time ==  vm::reservation_acquire(addr) && cmp_rdata(sdata, write_data))
+				if (cmp_rdata(sdata, write_data))
 				{
-					// Write of the same data (verified atomically)
-					vm::try_reservation_update(addr);
-					return;
+					// Keep the first comparison's loads ahead of the timestamp check below
+					atomic_fence_acquire();
+
+					if (at_read_time == vm::reservation_acquire(addr) && cmp_rdata(sdata, write_data))
+					{
+						// Write of the same data (verified atomically)
+						vm::try_reservation_update(addr);
+						return;
+					}
 				}
 			}
 		}
@@ -4160,6 +4909,8 @@ void do_cell_atomic_128_store(u32 addr, const void* to_write)
 
 void spu_thread::do_putlluc(const spu_mfc_cmd& args)
 {
+	const ppu_watch_putll_report watch_report_{*this, args.eal, "PUTLLUC"};
+
 	perf_meter<"PUTLLUC"_u64> perf0;
 
 	const u32 addr = args.eal & -128;
@@ -4727,8 +5478,8 @@ bool spu_thread::process_mfc_cmd()
 			rtime = last_ftime;
 			raddr = last_faddr;
 			last_ftime = 0;
+			spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
 			mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
-
 			ch_atomic_stat.set_value(MFC_GETLLAR_SUCCESS);
 			return true;
 		}
@@ -4756,13 +5507,14 @@ bool spu_thread::process_mfc_cmd()
 
 				if (this_time % 128 == 0 && cmp_rdata(rdata, data))
 				{
+					spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
 					mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
 					ch_atomic_stat.set_value(MFC_GETLLAR_SUCCESS);
 
 					// Need to check twice for it to be accurate, the code is before and not after this check for:
 					// 1. Reduce time between reservation accesses so TSX panelty would be lowered
 					// 2. Increase the chance of change detection: if GETLLAR has been called again new data is probably wanted
-					if (this_time == res && cmp_rdata(rdata, data))
+					if (rdata_fence() && this_time == res && cmp_rdata(rdata, data))
 					{
 						if (this_time != rtime)
 						{
@@ -4966,7 +5718,7 @@ bool spu_thread::process_mfc_cmd()
 						// Quick check if there were reservation changes
 						const u64 new_time = res;
 
-						if (new_time % 128 == 0 && cmp_rdata(rdata, data) && res == new_time && cmp_rdata(rdata, data))
+						if (new_time % 128 == 0 && cmp_rdata(rdata, data) && rdata_fence() && res == new_time && cmp_rdata(rdata, data))
 						{
 							if (g_cfg.core.mfc_debug)
 							{
@@ -5092,6 +5844,12 @@ bool spu_thread::process_mfc_cmd()
 
 			mov_rdata(rdata, data);
 
+			// The snapshot is only valid if these loads are bracketed by the two timestamp
+			// reads. x86-TSO gives that for free; on a weakly ordered machine the copy above
+			// may be satisfied after the reload below, so the check would pass for data that
+			// belongs to a later epoch. The PPU LARX path already fences here.
+			atomic_fence_acquire();
+
 			if (u64 time0 = vm::reservation_acquire(addr); ntime != time0)
 			{
 				// Reservation data has been modified recently
@@ -5115,6 +5873,7 @@ bool spu_thread::process_mfc_cmd()
 
 		raddr = addr;
 		rtime = ntime;
+		spu_watch_ls_write(this, ch_mfc_cmd, ch_mfc_cmd.lsa & 0x3ff80);
 		mov_rdata(_ref<spu_rdata_t>(ch_mfc_cmd.lsa & 0x3ff80), rdata);
 
 		ch_atomic_stat.set_value(MFC_GETLLAR_SUCCESS);
@@ -5508,7 +6267,7 @@ bool spu_thread::reservation_check(u32 addr, const decltype(rdata)& data, u32 cu
 	if ((addr >> 28) < 2 || (addr >> 28) == 0xd)
 	{
 		// Always-allocated memory does not need strict checking (vm::main or vm::stack)
-		return !cmp_rdata(data, *vm::get_super_ptr<decltype(rdata)>(addr));
+		return !cmp_rdata(data, *vm::get_super_ptr<decltype(rdata)>(addr)) && rdata_fence();
 	}
 
 	if ((addr >> 20) == (current_eal >> 20))
@@ -5516,13 +6275,13 @@ bool spu_thread::reservation_check(u32 addr, const decltype(rdata)& data, u32 cu
 		if (vm::check_addr(addr, vm::page_1m_size))
 		{
 			// Same random-access-memory page as the current MFC command, assume allocated
-			return !cmp_rdata(data, vm::_ref<decltype(rdata)>(addr));
+			return !cmp_rdata(data, vm::_ref<decltype(rdata)>(addr)) && rdata_fence();
 		}
 
 		if ((addr >> 16) == (current_eal >> 16) && vm::check_addr(addr, vm::page_64k_size))
 		{
 			// Same random-access-memory page as the current MFC command, assume allocated
-			return !cmp_rdata(data, vm::_ref<decltype(rdata)>(addr));
+			return !cmp_rdata(data, vm::_ref<decltype(rdata)>(addr)) && rdata_fence();
 		}
 	}
 
@@ -5596,7 +6355,7 @@ bool spu_thread::reservation_check(u32 addr, const decltype(rdata)& data, u32 cu
 	const bool res = cmp_rdata(data, vm::_ref<decltype(rdata)>(addr));
 
 	range_lock->release(0);
-	return !res;
+	return !res && rdata_fence();
 }
 
 bool spu_thread::reservation_check(u32 addr, u32 hash, atomic_t<u64, 128>* range_lock)
@@ -5677,7 +6436,7 @@ bool spu_thread::reservation_check(u32 addr, u32 hash, atomic_t<u64, 128>* range
 	const bool res = compute_rdata_hash32(*vm::get_super_ptr<decltype(rdata)>(addr)) == hash;
 
 	range_lock->release(0);
-	return !res;
+	return !res && rdata_fence();
 }
 
 usz spu_thread::register_cache_line_waiter(u32 addr)
@@ -5833,6 +6592,117 @@ void spu_thread::set_events(u32 bits)
 	}
 }
 
+// Raises ::pending on an SPU thread at the moment its decrementer underflows, so a decrementer
+// interrupt costs nothing until it is due. Polling for it instead meant ::pending was set for as
+// long as interrupts were on, and every state check in compiled SPU code went through
+// check_state() and cpu_work(): NBA 08 re-enables interrupts around every DMA wait on all five of
+// its SPURS SPUs and writes decrementer values tens of seconds long, and its SPUs spent 97% of
+// their time in that path and ~3% running the game.
+struct spu_dec_intr_timer
+{
+	shared_mutex mutex;
+	std::vector<std::pair<u64, u32>> armed; // (underflow time in timebase ticks, SPU thread id)
+
+	void arm(u64 due, u32 id)
+	{
+		{
+			std::lock_guard lock(mutex);
+
+			const auto it = std::find_if(armed.begin(), armed.end(), [&](const auto& e) { return e.second == id; });
+
+			if (it != armed.end())
+			{
+				it->first = due;
+			}
+			else
+			{
+				armed.emplace_back(due, id);
+			}
+		}
+
+		thread_ctrl::notify(g_fxo->get<named_thread<spu_dec_intr_timer>>());
+	}
+
+	void operator()()
+	{
+		u64 sleep_us = umax;
+
+		while (thread_ctrl::state() != thread_state::aborting)
+		{
+			thread_ctrl::wait_for(sleep_us);
+
+			if (thread_ctrl::state() == thread_state::aborting)
+			{
+				break;
+			}
+
+			const u64 now = get_timebased_time();
+			std::vector<u32> due_ids;
+			sleep_us = umax;
+
+			{
+				std::lock_guard lock(mutex);
+
+				for (auto it = armed.begin(); it != armed.end();)
+				{
+					if (it->first <= now)
+					{
+						due_ids.push_back(it->second);
+						it = armed.erase(it);
+						continue;
+					}
+
+					// get_timebased_time() runs at 80 MHz times clocks_scale / 100
+					const u64 us = (it->first - now) * 100 / (80 * std::max<u64>(g_cfg.core.clocks_scale, 1)) + 1;
+					sleep_us = std::min(sleep_us, us);
+					++it;
+				}
+			}
+
+			for (const u32 id : due_ids)
+			{
+				if (const auto spu = idm::get_unlocked<named_thread<spu_thread>>(id))
+				{
+					if (!spu->state.test_and_set(cpu_flag::pending))
+					{
+						spu->state.notify_one();
+					}
+				}
+			}
+		}
+	}
+
+	static constexpr auto thread_name = "SPU DEC Interrupts"sv;
+};
+
+void spu_thread::arm_dec_interrupt()
+{
+	if (is_dec_frozen)
+	{
+		return;
+	}
+
+	if (read_dec().second)
+	{
+		// Already underflowed: cpu_work() collects the event and takes the interrupt
+		if (state.none_of(cpu_flag::pending))
+		{
+			state += cpu_flag::pending;
+		}
+
+		return;
+	}
+
+	// read_dec() reports the underflow once ch_dec_value + 1 ticks have passed since the write.
+	// BIE/IRET call this at every interrupt enable, so hand the timer only a changed deadline.
+	const u64 due = ch_dec_start_timestamp + ch_dec_value + 1;
+
+	if (std::exchange(dec_intr_armed, due) != due)
+	{
+		g_fxo->get<named_thread<spu_dec_intr_timer>>().arm(due, id);
+	}
+}
+
 void spu_thread::set_interrupt_status(bool enable)
 {
 	if (enable)
@@ -5840,17 +6710,24 @@ void spu_thread::set_interrupt_status(bool enable)
 		// Detect enabling interrupts with events masked
 		if (auto mask = ch_events.load().mask; mask & SPU_EVENT_INTR_BUSY_CHECK)
 		{
-			if (g_cfg.core.spu_decoder != spu_decoder_type::_static && g_cfg.core.spu_decoder != spu_decoder_type::dynamic)
-			{
-				fmt::throw_exception("SPU Interrupts not implemented (mask=0x%x): Use [%s] SPU decoder", mask, spu_decoder_type::dynamic);
-			}
-
+			// ARMSX3: upstream refuses these on the recompilers ("SPU Interrupts not implemented",
+			// RPCS3 #18996: NBA 08, NBA 09, FIFA Street 3, NBA Street Homecourt). Compiled code
+			// now takes them at its state checks, see exec_check_state in SPULLVMRecompiler.cpp.
 			spu_log.trace("SPU Interrupts (mask=0x%x) are using CPU busy checking mode", mask);
 
-			// Process interrupts in cpu_work()
-			if (state.none_of(cpu_flag::pending))
+			if (mask & SPU_EVENT_INTR_BUSY_CHECK & ~SPU_EVENT_TM)
 			{
-				state += cpu_flag::pending;
+				// Reservation loss and signals can arrive at any moment: poll in cpu_work()
+				if (state.none_of(cpu_flag::pending))
+				{
+					state += cpu_flag::pending;
+				}
+			}
+
+			if (mask & SPU_EVENT_TM)
+			{
+				// The decrementer underflows at a known time: wake cpu_work() then
+				arm_dec_interrupt();
 			}
 		}
 	}
@@ -6191,7 +7068,19 @@ s64 spu_thread::get_ch_value(u32 ch)
 		{
 			bool value = false;
 
-			if (is_LR_wait && g_cfg.core.spu_reservation_busy_waiting_enabled)
+			// EXPERIMENT (ARMSX3_NO_SPU_BUSY_WAIT=1): never busy-wait on a reservation.
+			//
+			// Six SPURS kernels spinning at full rate on one 128-byte line, with the PPU
+			// signalling through the same line, is the contention Black Flag hangs in: half of
+			// every SPU conditional store fails and the claim sequence never completes. Upstream
+			// defaults this off; this device has it on at 100%.
+			static const bool s_no_busy_wait = []()
+			{
+				const char* env = std::getenv("ARMSX3_NO_SPU_BUSY_WAIT");
+				return env && *env && *env != '0';
+			}();
+
+			if (is_LR_wait && g_cfg.core.spu_reservation_busy_waiting_enabled && !s_no_busy_wait)
 			{
 				// Make single-threaded groups inclined for busy-waiting
 				value = evaluate_spin_optimization({ history.data(), history.size() }, eventstat_evaluate_time, g_cfg.core.spu_reservation_busy_waiting_percentage, group && group->max_num == 1) != 0;
@@ -6232,7 +7121,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 				{
 					set_lr = true;
 				}
-				else if (!cmp_rdata(rdata, *resrv_mem))
+				else if (!cmp_rdata(rdata, *resrv_mem) && rdata_fence())
 				{
 					if (vm::reservation_acquire(raddr) == rtime)
 					{
@@ -6326,7 +7215,27 @@ s64 spu_thread::get_ch_value(u32 ch)
 
 			if (raddr && (mask1 & ~SPU_EVENT_TM) == SPU_EVENT_LR)
 			{
-				if (u32 max_threads = std::min<u32>(g_cfg.core.max_spurs_threads, group ? group->max_num : u32{umax}); group && group->max_run != max_threads)
+				// ARMSX3_MAX_SPURS=<n> overrides the setting, so the thread count can be tested
+				// without a settings screen. Six kernels collide on the control line 44% of the
+				// time and the workload is dropped when contention reaches zero; fewer of them
+				// is a smaller window for that, which is why upstream keeps this as a hack.
+				static const u32 s_max_spurs_env = []() -> u32
+				{
+					const char* env = std::getenv("ARMSX3_MAX_SPURS");
+					u32 n = 0;
+
+					if (env && *env && std::from_chars(env, env + std::strlen(env), n, 10).ec == std::errc() && n >= 1 && n <= 6)
+					{
+						spu_log.success("ARMSX3_MAX_SPURS: limiting SPURS to %u threads", n);
+						return n;
+					}
+
+					return 0;
+				}();
+
+				const u32 spurs_cap = s_max_spurs_env ? s_max_spurs_env : +g_cfg.core.max_spurs_threads;
+
+				if (u32 max_threads = std::min<u32>(spurs_cap, group ? group->max_num : u32{umax}); group && group->max_run != max_threads)
 				{
 					constexpr std::string_view spurs_suffix = "CellSpursKernelGroup"sv;
 
@@ -6379,7 +7288,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 						// Abort notifications are handled specially for performance reasons
 						if (auto [wait_var, flag_val] = vm::reservation_notifier_begin_wait(raddr, rtime); wait_var)
 						{
-							if (!cmp_rdata(rdata, *resrv_mem))
+							if (!cmp_rdata(rdata, *resrv_mem) && rdata_fence())
 							{
 								raddr = 0;
 								set_events(SPU_EVENT_LR);
@@ -6399,7 +7308,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 #ifdef __linux__
 					if (auto [wait_var, flag_val] = vm::reservation_notifier_begin_wait(_raddr, rtime); wait_var)
 					{
-						if (!cmp_rdata(rdata, *resrv_mem))
+						if (!cmp_rdata(rdata, *resrv_mem) && rdata_fence())
 						{
 							raddr = 0;
 							set_events(SPU_EVENT_LR);
@@ -6479,7 +7388,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 
 					if (auto [wait_var, flag_val] = vm::reservation_notifier_begin_wait(_raddr, rtime); wait_var)
 					{
-						if (!cmp_rdata(rdata, *resrv_mem))
+						if (!cmp_rdata(rdata, *resrv_mem) && rdata_fence())
 						{
 							raddr = 0;
 							set_events(SPU_EVENT_LR);
@@ -6947,6 +7856,13 @@ bool spu_thread::set_ch_value(u32 ch, u32 value)
 		ch_dec_start_timestamp = get_timebased_time();
 		ch_dec_value = value;
 		is_dec_frozen = false;
+
+		if (interrupts_enabled && ch_events.load().mask & SPU_EVENT_TM)
+		{
+			// The underflow moved: rearm the timer that raises the interrupt
+			arm_dec_interrupt();
+		}
+
 		return true;
 	}
 

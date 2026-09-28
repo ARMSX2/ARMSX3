@@ -5,11 +5,14 @@
 #include "version.h"
 #include "Emu/IdManager.h"
 #include "Emu/Memory/vm.h"
+#include "Emu/emu_callbacks.h"
 #include "Emu/System.h"
 #include "Emu/VFS.h"
+#include "Emu/system_config.h"
 
 #include "util/types.hpp"
 #include "util/asm.hpp"
+#include "util/cctype.hpp"
 
 #include <charconv>
 #include <regex>
@@ -329,7 +332,7 @@ bool patch_engine::load(patch_map& patches_map, const std::string& path, std::st
 							is_valid = false;
 							continue;
 						}
-						else if (serial.size() != 9 || !std::all_of(serial.begin(), serial.end(), [](char c) { return std::isalnum(static_cast<unsigned char>(c)); }))
+						else if (serial.size() != 9 || !std::all_of(serial.begin(), serial.end(), [](char c) { return utils::isalnum(c); }))
 						{
 							append_log_message(log_messages, fmt::format("Error: Serial '%s' invalid (patch: %s, key: %s, location: %s, file: %s)", serial, description, main_key, get_yaml_node_location(serial_node), path), &patch_log.error);
 							is_valid = false;
@@ -893,6 +896,13 @@ void patch_engine::append_global_patches()
 
 	// Imported patch.yml
 	load(m_map, get_imported_patch_path());
+
+	// ARMSX3: the Artemis collection and our bundled fixes, each in a file of its own so that a
+	// download can replace its file whole. Merged into patch.yml, a patch renamed or withdrawn
+	// at the source stayed in the list for good, beside whatever replaced it. A missing file is
+	// skipped quietly, like the two above.
+	load(m_map, get_patches_path() + "artemis_patch.yml");
+	load(m_map, get_patches_path() + "armsx3_patch.yml");
 }
 
 void patch_engine::append_title_patches(std::string_view title_id)
@@ -962,7 +972,7 @@ static usz apply_modification(std::vector<u32>& applied, patch_engine::patch_inf
 			const u32 alloc_size = utils::align(static_cast<u32>(p.value.long_value) + alloc_at % 4096, 4096);
 
 			// Allocate map if needed, if allocated flags will indicate that bit 62 is set (unique identifier)
-			auto alloc_map = vm::reserve_map(vm::any, alloc_at & -0x10000, utils::align(alloc_size, 0x10000), vm::page_size_64k | (1ull << 62));
+			auto alloc_map = vm::reserve_map(vm::any, alloc_at & -0x10000, utils::align(alloc_size, 0x10000), vm::block_size_64k | (1ull << 62));
 
 			u64 flags = vm::alloc_unwritable;
 
@@ -1386,7 +1396,7 @@ static usz apply_modification(std::vector<u32>& applied, patch_engine::patch_inf
 
 			if (exec_addr)
 			{
-				Emu.GetCallbacks().add_breakpoint(exec_addr);
+				g_emu_callbacks.add_breakpoint(exec_addr);
 			}
 
 			break;
@@ -1453,6 +1463,39 @@ static usz apply_modification(std::vector<u32>& applied, patch_engine::patch_inf
 	}
 
 	return old_applied_size;
+}
+
+// ARMSX3: settings a patch bundled in canary_patches.yml makes unnecessary, switched off for the
+// run when that patch is applied.
+//
+// Gran Turismo 6 v01.22 reads every frame back for its MLAA pass, so it only renders correctly
+// with Write and Read Color Buffers on, which cost a lot of frame time. illusion's "Disable MLAA"
+// removes the pass, after which the buffers only cost time. Tied to the patch being applied, not
+// to the version: other v01.22 executables are in circulation (RPCS3's database knows another for
+// BCUS98296), and without the patch those still need the buffers, which then stay as configured.
+static void armsx3_apply_patch_settings(const std::string& hash, const std::string& description)
+{
+	static constexpr std::string_view gt6_mlaa_hashes[] =
+	{
+		"PPU-42367707f4caac2668f10cb46498f64bde9db440", // BCUS99247 v01.22
+		"PPU-4f1e9acd7d98961b4b742fb324a2faba6212ea67", // BCUS98296 v01.22
+	};
+
+	if (description != "Disable MLAA")
+	{
+		return;
+	}
+
+	for (std::string_view gt6 : gt6_mlaa_hashes)
+	{
+		if (hash == gt6)
+		{
+			g_cfg.video.write_color_buffers.set(false);
+			g_cfg.video.read_color_buffers.set(false);
+			patch_log.success("Write and Read Color Buffers are off for this run: '%s' removes the pass that needed them", description);
+			return;
+		}
+	}
 }
 
 void patch_engine::apply(std::vector<u32>& applied_total, const std::string& name, std::function<u8*(u32, u32)> mem_translate, u32 filesz, u32 min_addr)
@@ -1603,6 +1646,8 @@ void patch_engine::apply(std::vector<u32>& applied_total, const std::string& nam
 				{
 					patch_log.success("Applied patch (hash='%s', description='%s', author='%s', patch_version='%s', file_version='%s') (<- %u)",
 						patch->hash, patch->description, patch->author, patch->patch_version, patch->version, applied_total.size() - old_size);
+
+					armsx3_apply_patch_settings(patch->hash, patch->description);
 				}
 			}
 		}

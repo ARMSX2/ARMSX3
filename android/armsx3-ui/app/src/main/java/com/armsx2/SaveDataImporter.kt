@@ -151,7 +151,7 @@ object SaveDataImporter {
     ): Outcome {
         val savedataRoot = savedataRoot() ?: return Outcome(
             false,
-            error = "No user profile yet — boot a game once, then import.",
+            error = "No user profile yet. Boot a game once, then import.",
         )
 
         // A sibling of the destination, so the commit below is a rename and not a copy across

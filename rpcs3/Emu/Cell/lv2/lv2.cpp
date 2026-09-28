@@ -8,6 +8,11 @@
 #include "Emu/Cell/PPUFunction.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/SPUThread.h"
+#include "Emu/Cell/PPUDisAsm.h"
+
+#include <charconv>
+#include <cstring>
+#include "Emu/RSX/RSXThread.h"
 #include "Emu/Cell/ErrorCodes.h"
 #include "sys_sync.h"
 #include "sys_lwmutex.h"
@@ -60,6 +65,7 @@
 #include "util/tsc.hpp"
 #include "util/sysinfo.hpp"
 #include "util/init_mutex.hpp"
+#include "util/cctype.hpp"
 
 #if defined(ARCH_X64)
 #ifdef _MSC_VER
@@ -1239,6 +1245,366 @@ stx::reset_lock acquire_reset_lock(stx::init_mutex& mtx, ppu_thread* ppu)
 	}, ppu);
 }
 
+// Hex ranges from an env var, in the same "start-end[,start-end]" form as ARMSX3_PPU_INTERP.
+// End is exclusive, and a lone address means just that one.
+static std::vector<std::pair<u32, u32>> ppu_dump_env_ranges(const char* name)
+{
+	std::vector<std::pair<u32, u32>> out;
+	const char* env = std::getenv(name);
+
+	if (!env || !*env)
+	{
+		return out;
+	}
+
+	const auto parse_hex = [](std::string_view text, u32& value)
+	{
+		while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
+		while (!text.empty() && text.back() == ' ') text.remove_suffix(1);
+		if (text.starts_with("0x") || text.starts_with("0X")) text.remove_prefix(2);
+		const auto res = std::from_chars(text.data(), text.data() + text.size(), value, 16);
+		return !text.empty() && res.ec == std::errc() && res.ptr == text.data() + text.size();
+	};
+
+	std::string_view rest{env};
+
+	while (!rest.empty())
+	{
+		const usz comma = rest.find(',');
+		const std::string_view item = rest.substr(0, comma);
+		rest = comma == umax ? std::string_view{} : rest.substr(comma + 1);
+
+		u32 start = 0, end = 0;
+		const usz dash = item.find('-');
+
+		if (dash == umax ? (parse_hex(item, start) && (end = start + 4)) : (parse_hex(item.substr(0, dash), start) && parse_hex(item.substr(dash + 1), end) && end > start))
+		{
+			// A typo in a hex range should cost a page of log, not the session.
+			out.emplace_back(start, std::min<u32>(end, start + 0x2000));
+		}
+		else if (!item.empty())
+		{
+			ppu_log.error("%s: could not read '%s', expected start-end in hex", name, std::string(item));
+		}
+	}
+
+	return out;
+}
+
+// Dump every PPU thread on request, for hangs that never reach a fatal error.
+//
+// A game stuck in a loop in its own code makes no syscalls and faults nowhere, so nothing ever
+// prints the thread context a crash would. Creating <config dir>/dump_threads (adb shell touch)
+// makes the next tick of the syscall usage thread pause each PPU thread, log its registers and
+// call stack, and let it go. Pausing first matters: compiled code only writes CIA and flushes
+// registers to the thread context when it leaves the block, and the pause check on a loop's
+// back edge is what makes a spinning thread do that, so its dump names the loop it was in.
+static void ppu_dump_threads_on_request()
+{
+	const std::string trigger = fs::get_config_dir() + "dump_threads";
+
+	if (!fs::is_file(trigger))
+	{
+		return;
+	}
+
+	fs::remove_file(trigger);
+
+	std::vector<shared_ptr<named_thread<ppu_thread>>> threads;
+	std::vector<shared_ptr<named_thread<spu_thread>>> spus;
+
+	idm::select<named_thread<ppu_thread>>([&](u32 id, named_thread<ppu_thread>&)
+	{
+		if (auto ppu = idm::get_unlocked<named_thread<ppu_thread>>(id))
+		{
+			threads.emplace_back(std::move(ppu));
+		}
+	});
+
+	// SPUs too: a hang where every PPU thread waits is usually one of these, either stuck in its
+	// own code or waiting on a channel nobody writes, and the PPU side alone cannot tell which.
+	idm::select<named_thread<spu_thread>>([&](u32 id, named_thread<spu_thread>&)
+	{
+		if (auto spu = idm::get_unlocked<named_thread<spu_thread>>(id))
+		{
+			spus.emplace_back(std::move(spu));
+		}
+	});
+
+	const auto rsx = rsx::get_current_renderer();
+
+	for (const auto& ppu : threads)
+	{
+		ppu->state += cpu_flag::dbg_global_pause;
+	}
+
+	for (const auto& spu : spus)
+	{
+		spu->state += cpu_flag::dbg_global_pause;
+	}
+
+	// A loop reaches its pause check within microseconds; a thread asleep in a syscall is
+	// already stopped. This is only the upper bound for the slow ones.
+	std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+	std::string out;
+
+	PPUDisAsm dis_asm(cpu_disasm_mode::dump, vm::g_sudo_addr);
+
+	for (const auto& ppu : threads)
+	{
+		fmt::append(out, "\n%s's thread context (state %s):\n", ppu->get_name(), +ppu->state);
+		ppu->dump_all(out);
+
+		// The registers say what a thread waits ON; they do not say what it waits FOR. A poll
+		// loop is a few instructions either side of CIA reading one address, so print them: that
+		// plus the base register the loop indexes is the whole condition, and a thread parked in
+		// a syscall shows its call site for free.
+		const u32 cia = ppu->cia;
+
+		if (cia >= 0x10000 && vm::check_addr(cia))
+		{
+			fmt::append(out, "Code at CIA:\n");
+
+			for (u32 pc = cia - 0x20; pc <= cia + 0x20; pc += 4)
+			{
+				if (!vm::check_addr(pc))
+				{
+					continue;
+				}
+
+				dis_asm.disasm(pc);
+				fmt::append(out, "%s%s", pc == cia ? "->" : "  ", dis_asm.last_opcode);
+			}
+		}
+
+		// The eight bytes dump_regs prints per register name the object a thread is working on
+		// but not what is in it, and a wait is usually explained by the structure around the
+		// word being waited on rather than by the word. Opt in with ARMSX3_DUMP_REGMEM=1,
+		// because this is several hundred lines per dump.
+		if (const char* env = std::getenv("ARMSX3_DUMP_REGMEM"); env && *env && *env != '0')
+		{
+			for (u32 i = 0; i < 32; i++)
+			{
+				const u32 addr = static_cast<u32>(ppu->gpr[i]);
+
+				if (addr < 0x10000 || !vm::check_addr(addr, vm::page_readable, 64))
+				{
+					continue;
+				}
+
+				// Both sides of the pointer. A register usually points at a field rather than
+				// at the head of its structure, and the fields that explain a wait -- the index
+				// it is waiting on, the count it belongs to -- sit above it as often as below.
+				const u32 base = (addr >= 0x10040) ? addr - 0x40 : addr;
+
+				fmt::append(out, "r%u at 0x%x:\n", i, addr);
+
+				for (u32 off = 0; off < 0x80; off += 16)
+				{
+					if (!vm::check_addr(base + off, vm::page_readable, 16))
+					{
+						continue;
+					}
+
+					fmt::append(out, "\t%08x:%s\t%08x %08x %08x %08x\n", base + off,
+						base + off == addr ? " ->" : "",
+						vm::read32(base + off + 0), vm::read32(base + off + 4),
+						vm::read32(base + off + 8), vm::read32(base + off + 12));
+				}
+			}
+		}
+	}
+
+	for (const auto& spu : spus)
+	{
+		fmt::append(out, "\n%s's thread context (state %s):\n", spu->get_name(), +spu->state);
+		spu->dump_all(out);
+
+		// An SPU asleep on a reservation wakes when the line is written. The dump gives the
+		// line it reserved and when, but not what that line says now, and the difference is
+		// the whole question: equal means it is waiting for a write that has not happened,
+		// different means the write happened and the wake did not arrive.
+		if (const u32 raddr = spu->raddr)
+		{
+			const u64 now = vm::reservation_acquire(raddr);
+
+			fmt::append(out, "Reservation now: 0x%llx (reserved 0x%llx)%s\n", now, spu->rtime,
+				(now & -128) != spu->rtime ? "  <-- LOST, wake was due" : "  (still current)");
+		}
+	}
+
+	if (rsx)
+	{
+		// Not paused: the renderer is what keeps presenting during a guest hang, and stopping it
+		// to read its state is a good way to turn a hang into a black screen.
+		fmt::append(out, "\n%s's thread context (state %s):\n", rsx->get_name(), +rsx->state);
+		rsx->dump_all(out);
+	}
+
+	// Everything the write watch has seen, so a dump says whether a word was written a lot, a
+	// little or never, without needing the log that led up to it.
+	{
+		extern std::string ppu_watch_summary();
+		out += ppu_watch_summary();
+	}
+
+	// And the last lwcond traffic, which is what a "everyone is asleep and nobody signals"
+	// deadlock turns on: whether the condition a thread waits on was signalled after it queued.
+	{
+		extern std::string lwcond_history();
+		out += lwcond_history();
+		extern std::string eflag_history();
+		out += eflag_history();
+	}
+
+	// Windows of guest code and memory chosen from outside, so following a hang up its call chain
+	// does not cost a build each time: ARMSX3_DUMP_CODE=start-end[,..] and ARMSX3_DUMP_MEM=..
+	// in driver_env.txt. The frame that sets up a poll loop sits a few calls above it, and the
+	// object it polls is what says who was supposed to write the flag.
+	for (const auto& [start, end] : ppu_dump_env_ranges("ARMSX3_DUMP_CODE"))
+	{
+		fmt::append(out, "\nCode 0x%x..0x%x:\n", start, end);
+
+		for (u32 pc = start & ~3u; pc < end; pc += 4)
+		{
+			if (!vm::check_addr(pc))
+			{
+				fmt::append(out, "\t%08x:\t<unmapped>\n", pc);
+				continue;
+			}
+
+			dis_asm.disasm(pc);
+			fmt::append(out, "%s", dis_asm.last_opcode);
+		}
+	}
+
+	// Which instructions could write a given structure field. A thread waiting on a field whose
+	// writer appears in no call stack leaves nothing to follow; ARMSX3_SCAN_STORE=540 lists every
+	// stb/sth/stw in mapped executable memory with that displacement, and those are the callers
+	// worth disassembling next. An indexed store carries no displacement, so an empty result
+	// does not prove the field is written some other way.
+	if (const char* env = std::getenv("ARMSX3_SCAN_STORE"); env && *env)
+	{
+		u32 disp = 0;
+
+		if (std::from_chars(env, env + std::strlen(env), disp, 16).ec == std::errc() && disp <= 0xffff)
+		{
+			fmt::append(out, "\nStores with displacement 0x%x:\n", disp);
+
+			u32 found = 0;
+
+			for (u32 page = 0x10000; page < 0x4000000 && found < 96; page += 0x1000)
+			{
+				if (!vm::check_addr(page, vm::page_executable, 0x1000))
+				{
+					continue;
+				}
+
+				for (u32 pc = page; pc < page + 0x1000 && found < 96; pc += 4)
+				{
+					const u32 op = vm::read32(pc);
+
+					// stb, stw, sth: D-form, displacement in the low half
+					switch (op >> 26)
+					{
+					case 36: case 38: case 44: break;
+					default: continue;
+					}
+
+					if ((op & 0xffff) == disp)
+					{
+						dis_asm.disasm(pc);
+						fmt::append(out, "%s", dis_asm.last_opcode);
+						found++;
+					}
+				}
+			}
+
+			fmt::append(out, "(%u found)\n", found);
+		}
+	}
+
+	for (const auto& [start, end] : ppu_dump_env_ranges("ARMSX3_DUMP_MEM"))
+	{
+		fmt::append(out, "\nMemory 0x%x..0x%x:\n", start, end);
+
+		for (u32 addr = start & ~15u; addr < end; addr += 16)
+		{
+			if (!vm::check_addr(addr, vm::page_readable, 16))
+			{
+				fmt::append(out, "\t%08x:\t<unmapped>\n", addr);
+				continue;
+			}
+
+			fmt::append(out, "\t%08x:\t%08x %08x %08x %08x\n", addr,
+				vm::read32(addr + 0), vm::read32(addr + 4), vm::read32(addr + 8), vm::read32(addr + 12));
+		}
+	}
+
+	// Raw guest memory to files, for offline disassembly: ARMSX3_DUMP_BIN=start-end[,..] writes
+	// <config dir>/dump_<start>-<end>.bin, unmapped pages as zeroes. A whole text segment is
+	// megabytes, which as log lines is tens of megabytes; as a file it is one pull.
+	if (const char* env = std::getenv("ARMSX3_DUMP_BIN"); env && *env)
+	{
+		std::string_view rest{env};
+
+		while (!rest.empty())
+		{
+			const usz comma = rest.find(',');
+			const std::string_view item = rest.substr(0, comma);
+			rest = comma == umax ? std::string_view{} : rest.substr(comma + 1);
+
+			const usz dash = item.find('-');
+			u32 start = 0, end = 0;
+
+			if (dash == umax ||
+				std::from_chars(item.data(), item.data() + dash, start, 16).ec != std::errc() ||
+				std::from_chars(item.data() + dash + 1, item.data() + item.size(), end, 16).ec != std::errc() ||
+				end <= start || end - start > 0x4000000)
+			{
+				fmt::append(out, "\nDUMP_BIN: could not read '%s', expected start-end in hex\n", std::string(item));
+				continue;
+			}
+
+			const std::string path = fs::get_config_dir() + fmt::format("dump_%x-%x.bin", start, end);
+			fs::file file(path, fs::rewrite);
+
+			if (!file)
+			{
+				fmt::append(out, "\nDUMP_BIN: cannot write '%s' (%s)\n", path, fs::g_tls_error);
+				continue;
+			}
+
+			const std::vector<u8> zeroes(0x1000);
+
+			for (u32 page = start & ~0xfffu; page < end; page += 0x1000)
+			{
+				const u32 from = std::max(page, start);
+				const u32 to = std::min(page + 0x1000, end);
+
+				file.write(vm::check_addr(page, vm::page_readable, 0x1000) ? vm::base(from) : zeroes.data(), to - from);
+			}
+
+			fmt::append(out, "\nDUMP_BIN: 0x%x..0x%x to '%s'\n", start, end, path);
+		}
+	}
+
+	for (const auto& spu : spus)
+	{
+		spu->state -= cpu_flag::dbg_global_pause;
+		spu->state.notify_one();
+	}
+
+	for (const auto& ppu : threads)
+	{
+		ppu->state -= cpu_flag::dbg_global_pause;
+		ppu->state.notify_one();
+	}
+
+	ppu_log.warning("Thread dump requested, %u PPU and %u SPU threads:%s", threads.size(), spus.size(), out);
+}
+
 class ppu_syscall_usage
 {
 	// Internal buffer
@@ -1289,6 +1655,11 @@ public:
 			// point: a hang where the RSX spins inside a method handler starves the stall check
 			// that lives on it. Cheap -- two atomic loads and a clock read unless it fires.
 			const bool is_paused = Emu.IsPaused();
+
+			if (!is_paused)
+			{
+				ppu_dump_threads_on_request();
+			}
 
 			// Force-print all if paused
 			const bool force_print = is_paused && !was_paused;
@@ -1383,7 +1754,7 @@ std::string lv2_obj::name64(u64 name_u64)
 	// NTS string, ignore invalid/newline characters
 	// Example: "lv2\n\0tx" will be printed as "lv2"
 	std::string str{ptr, std::find(ptr, ptr + 7, '\0')};
-	str.erase(std::remove_if(str.begin(), str.end(), [](uchar c){ return !std::isprint(c); }), str.end());
+	str.erase(std::remove_if(str.begin(), str.end(), [](uchar c){ return !utils::isprint(c); }), str.end());
 
 	return str;
 }

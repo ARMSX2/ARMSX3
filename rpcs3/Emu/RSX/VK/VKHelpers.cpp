@@ -192,6 +192,12 @@ namespace vk
 			// Adreno is the bulk of the Android install base. No FP sanitising:
 			// unlike NVIDIA it is not NaN-poisoning prone, and the pass is not
 			// free on a tiler.
+			//
+			// No strict query scopes either, and keep it that way when merging upstream.
+			// Upstream forces them on Turnip (fdffb7d5f, #19561) for a query-result hang in
+			// wipEout HD and Burnout on Linux. They end the render pass around every occlusion
+			// query, a tile store each on a tiler, and nothing on Android hangs without them.
+			// A Turnip hang report gets Strict Rendering Mode first, then a per-game switch.
 			break;
 		case driver_vendor::POWERVR:
 		case driver_vendor::XCLIPSE:

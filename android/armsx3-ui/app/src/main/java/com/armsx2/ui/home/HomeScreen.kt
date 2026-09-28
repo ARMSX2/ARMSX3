@@ -1,6 +1,14 @@
 package com.armsx2.ui.home
 
 import android.widget.Toast
+import android.content.Context
+import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.compose.runtime.rememberCoroutineScope
+import com.armsx2.i18n.I18n
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -47,6 +55,8 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.GenericShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -154,8 +164,17 @@ fun HomeScreen(
     var renameCategory by remember { mutableStateOf<String?>(null) }
     var deleteCategory by remember { mutableStateOf<String?>(null) }
     var showClearRecentsConfirm by remember { mutableStateOf(false) }
+    // The background shown on its own, full screen (BackgroundViewer).
+    var viewingBackground by remember { mutableStateOf(false) }
+    // The saved backgrounds to pick from (BackgroundSheet), and the one a long press asked to remove.
+    var backgroundSheet by remember { mutableStateOf(false) }
+    var removingBackground by remember { mutableStateOf<LibraryBackground.Saved?>(null) }
     // #9 custom library background — inert until the user picks an image.
-    LaunchedEffect(Unit) { LibraryBackground.ensureLoaded() }
+    LaunchedEffect(Unit) {
+        LibraryBackground.ensureLoaded()
+        // The saved backgrounds, and what an older version left as the background, kept now.
+        withContext(Dispatchers.IO) { LibraryBackground.loadSaved(context) }?.let(LibraryBackground::select)
+    }
     // The animated background switched itself off because the last run died with it on screen
     // (LibraryBackground.armSaver). Say so -- silently reverting a setting the user chose reads
     // as the setting being broken, and the name tells them which one to avoid.
@@ -169,8 +188,31 @@ fun HomeScreen(
             ).show()
         }
     }
+    val backgroundScope = rememberCoroutineScope()
     val backgroundPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
-        picked?.let { LibraryBackground.set(context, it) }
+        if (picked == null) return@rememberLauncherForActivityResult
+        backgroundScope.launch {
+            // A PS3 theme goes through the importer, which takes a picture out of it. Anything else
+            // is used as picked, as before, provided it is a picture: .p3t files have no image type,
+            // so the picker now lists other files too.
+            // Either way it is kept (LibraryBackground.saved), so the menu can bring it back later.
+            val kept = withContext(Dispatchers.IO) {
+                val name = LibraryBackground.displayName(context, picked)
+                when {
+                    LibraryBackground.isTheme(context, picked) -> LibraryBackground.importTheme(context, picked).let { outcome ->
+                        outcome.messageKey to outcome.file?.let {
+                            LibraryBackground.keep(context, outcome, outcome.name ?: name ?: "PS3 theme")
+                        }
+                    }
+                    isPicture(context, picked) -> LibraryBackground.keepPicture(context, picked, name ?: "Picture").let { saved ->
+                        (if (saved == null) "library.bg.readFailed" else null) to saved
+                    }
+                    else -> "library.bg.notPicture" to null
+                }
+            }
+            kept.second?.let(LibraryBackground::select)
+            kept.first?.let { Toast.makeText(context, I18n.get(it), Toast.LENGTH_LONG).show() }
+        }
     }
     // Search: both the controller (A on the Search zone) AND a touch tap open the app's own D-pad +
     // touch keyboard (LibraryKeyboard). The search bar is no longer an editable TextField, so the
@@ -190,6 +232,8 @@ fun HomeScreen(
         onDispose { HomeInputController.unbind(viewModel) }
     }
 
+    if (viewingBackground) BackgroundViewer(onClose = { viewingBackground = false })
+
     CompositionLocalProvider(LocalCustomCoverMap provides customCoverMap) {
     ArmsBackdrop(
         // Full-bleed wallpaper: the library image + readability scrim, drawn edge-to-edge
@@ -197,76 +241,19 @@ fun HomeScreen(
         // that strip was the "blue bar" in landscape.
         backgroundLayer = {
             val libraryBg = LibraryBackground.uri.value
-            if (libraryBg == null) {
-                // Default: the live PS3-XMB wave (XmbGlView — a GLES3 port of linkev's
-                // grid-displacement mesh, matching iOS). When GL can't init — older Mali without
-                // float-texture filtering, or any EGL failure — we fall back to LibraryWaveBackground,
-                // a procedural PPSSPP-style animated background drawn on the hardware 2D Canvas (no
-                // GLES3, runs anywhere) that reads the SAME colour prefs as the GL wave, so Mali users
-                // finally get an animated, recolourable backdrop instead of the old fixed GIF. The
-                // bundled still is the cheap floor shown during GL startup (and, once the wave is up,
-                // sits hidden behind it). Custom backgrounds below override all of this.
-                if (LibraryBackground.flurry.value) {
-                    // Flurry, in the same shell as the XMB wave: if GL cannot come up we get the
-                    // 2D backdrop rather than a hole, exactly as XmbGlView does below.
-                    // Keyed on the selection: an AndroidView factory runs once, so without this
-                    // switching saver or preset would leave the old one running.
-                    val kind = LibraryBackground.saverKind.value
-                    val preset = if (kind == 0) LibraryBackground.flurryPreset.value
-                                 else LibraryBackground.rssPreset.value
-                    androidx.compose.runtime.key(kind, preset) {
-                        var saverGl by remember { mutableStateOf<Boolean?>(null) }
-                        if (saverGl == false) {
-                            LibraryWaveBackground(Modifier.fillMaxSize())
-                        } else {
-                            AndroidView(
-                                factory = {
-                                    SaverGlView(it, LibraryBackground.currentSpec()).apply {
-                                        onGlStatus = { ok -> saverGl = ok }
-                                    }
-                                },
-                                modifier = Modifier.fillMaxSize(),
-                                onRelease = { it.stop() },
-                            )
-                        }
-                    }
-                } else if (LibraryBackground.animated2D.value) {
-                    // User opted into the lightweight 2D animated wave everywhere (#Luminz) — the same
-                    // backdrop GL-fail devices get; skip the GLES3 XmbGlView entirely.
-                    LibraryWaveBackground(Modifier.fillMaxSize())
-                } else {
-                    var xmbGlState by remember { mutableStateOf<Boolean?>(null) } // null=starting, true=up, false=failed
-                    if (xmbGlState == false) {
-                        LibraryWaveBackground(Modifier.fillMaxSize())
-                    } else {
-                        Image(
-                            painter = painterResource(R.drawable.library_bg_xmb),
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop,
-                        )
-                    }
-                    AndroidView(
-                        factory = { XmbGlView(it).apply { onGlStatus = { ok -> xmbGlState = ok } } },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-            } else {
-                // User-picked still image / GIF (Coil handles both).
-                AsyncImage(
-                    model = ImageRequest.Builder(context).data(libraryBg).crossfade(true).build(),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-            // Scrim so covers and text stay readable over the backdrop. A user-picked image can
-            // be any brightness, so it gets the full dark scrim. The XMB is our own controlled
-            // backdrop (dark at the top where the content sits) and a heavy scrim just muddied
-            // its blue into navy — so it gets only a whisper of dimming, letting the vivid blue
-            // read through.
-            val scrimTop = if (libraryBg == null) 0.06f else 0.55f
-            val scrimBottom = if (libraryBg == null) 0.20f else 0.80f
+            // Nothing live here while the full-screen viewer or the screensaver is up: each draws
+            // the same background itself, and two copies of a live theme would each keep the GPU
+            // busy.
+            if (viewingBackground || LibraryScreensaver.showing.value) Box(Modifier.fillMaxSize().background(Color.Black)) else LibraryBackdrop()
+            // Scrim so covers and text stay readable over the backdrop, as strong as Background
+            // Dimming (App Settings) asks: none by default, since at full strength it took most of
+            // a bright theme's colour. At full strength a user-picked image, which can be any
+            // brightness, gets a dark scrim; the XMB is our own controlled backdrop (dark at the
+            // top where the content sits) and a heavy scrim just muddied its blue into navy, so
+            // it gets only a whisper of dimming.
+            val dimming = LibraryChromePreferences.backgroundDimming.value / 100f
+            val scrimTop = (if (libraryBg == null) 0.06f else 0.55f) * dimming
+            val scrimBottom = (if (libraryBg == null) 0.20f else 0.80f) * dimming
             Box(
                 Modifier.fillMaxSize().background(
                     Brush.verticalGradient(
@@ -459,21 +446,29 @@ fun HomeScreen(
                             LibraryOverflowMenu(
                                 expanded = overflowMenu,
                                 selectedSort = state.sort,
+                                selectedSource = state.sourceFilter,
                                 showGridNames = GridLabels.show.value,
                                 customNames = com.armsx2.CustomNames.enabled.value,
                                 englishTitles = EnglishTitles.enabled.value,
                                 showHidden = com.armsx2.HiddenGames.showHidden.value,
                                 onOpenCategories = { categoryPicker = true },
                                 hasCustomBackground = LibraryBackground.uri.value != null,
+                                savedBackgrounds = LibraryBackground.saved.value.size,
+                                currentBackground = LibraryBackground.current(),
                                 onDismiss = { overflowMenu = false },
                                 onOpenNavigation = onOpenMenu,
                                 onSort = viewModel::setSort,
+                                onSource = viewModel::setSourceFilter,
                                 onToggleGridNames = { GridLabels.set(!GridLabels.show.value) },
                                 onToggleCustomNames = { com.armsx2.CustomNames.set(!com.armsx2.CustomNames.enabled.value) },
                                 onToggleEnglishTitles = { EnglishTitles.set(!EnglishTitles.enabled.value) },
                                 onToggleShowHidden = { viewModel.setShowHidden(!com.armsx2.HiddenGames.showHidden.value) },
-                                onChooseBackground = { backgroundPicker.launch(arrayOf("image/*")) },
-                                onClearBackground = LibraryBackground::clear,
+                                onChangeBackground = { backgroundSheet = true },
+                                onViewBackground = { viewingBackground = true },
+                                onRemoveBackground = {
+                                    // A picture an older version used in place, not copied in, is not ours to delete.
+                                    LibraryBackground.current()?.let(LibraryBackground::remove) ?: LibraryBackground.useDefault()
+                                },
                                 onExitApp = { showExitConfirm = true },
                             )
                             if (showExitConfirm) {
@@ -942,6 +937,21 @@ fun HomeScreen(
                     menuGame = null
                     viewModel.launch(game)
                 }
+                // Straight into a save state. Loading one in game reboots from the state file, so
+                // starting the game first and loading over it compiled everything twice; the list
+                // this opens boots the state itself. Offered only when the game has one, since a
+                // row that opens onto nothing is worse than no row.
+                val hasStates by androidx.compose.runtime.produceState(false, game.serial) {
+                    value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        com.armsx2.ui.saves.slotStatesFor(context, game.serial).isNotEmpty()
+                    }
+                }
+                if (hasStates && !game.extension.equals("pkg", ignoreCase = true)) {
+                    GameMenuAction("💾", str("games.loadState")) {
+                        menuGame = null
+                        com.armsx2.navigation.UiNavigator.navigate(com.armsx2.navigation.AppRoute.SaveManager(game))
+                    }
+                }
                 GameMenuAction("⚙", str("action.settings")) {
                     menuGame = null
                     onOpenGameSettings(game)
@@ -1091,6 +1101,36 @@ fun HomeScreen(
                 ) { Text(str("games.categories.add")) }
             }
         }
+    }
+
+    if (backgroundSheet) {
+        BackgroundSheet(
+            saved = LibraryBackground.saved.value,
+            current = LibraryBackground.current(),
+            customShown = LibraryBackground.uri.value != null,
+            onSelect = { LibraryBackground.select(it); backgroundSheet = false },
+            onAdd = {
+                backgroundSheet = false
+                backgroundPicker.launch(arrayOf("image/*", "application/octet-stream"))
+            },
+            onRemove = { removingBackground = it },
+            onDismiss = { backgroundSheet = false },
+        )
+    }
+    removingBackground?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { removingBackground = null },
+            title = { Text(entry.name) },
+            confirmButton = {
+                TextButton(onClick = {
+                    LibraryBackground.remove(entry)
+                    removingBackground = null
+                }) { Text(str("games.background.remove")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { removingBackground = null }) { Text(str("action.cancel")) }
+            },
+        )
     }
 
     // Pick the active category. A sheet, not a DropdownMenu, so it stays controller-navigable.
@@ -1256,25 +1296,165 @@ private fun GameMenuAction(glyph: String, label: String, onClick: () -> Unit) {
     }
 }
 
+/**
+ * The library's background as the library draws it, under its scrim: by default the XMB wave, or
+ * Flurry or another saver; otherwise the user's picture, a PS3 theme's slideshow, or a theme's
+ * scene played live over its still.
+ */
+@Composable
+internal fun LibraryBackdrop() {
+    val context = LocalContext.current
+    val libraryBg = LibraryBackground.uri.value
+    if (libraryBg == null) {
+        // Default: the live PS3-XMB wave (XmbGlView — a GLES3 port of linkev's
+        // grid-displacement mesh, matching iOS). When GL can't init — older Mali without
+        // float-texture filtering, or any EGL failure — we fall back to LibraryWaveBackground,
+        // a procedural PPSSPP-style animated background drawn on the hardware 2D Canvas (no
+        // GLES3, runs anywhere) that reads the SAME colour prefs as the GL wave, so Mali users
+        // finally get an animated, recolourable backdrop instead of the old fixed GIF. The
+        // bundled still is the cheap floor shown during GL startup (and, once the wave is up,
+        // sits hidden behind it). Custom backgrounds below override all of this.
+        if (LibraryBackground.flurry.value) {
+            // Flurry, in the same shell as the XMB wave: if GL cannot come up we get the
+            // 2D backdrop rather than a hole, exactly as XmbGlView does below.
+            // Keyed on the selection: an AndroidView factory runs once, so without this
+            // switching saver or preset would leave the old one running.
+            val kind = LibraryBackground.saverKind.value
+            val preset = if (kind == 0) LibraryBackground.flurryPreset.value
+                         else LibraryBackground.rssPreset.value
+            androidx.compose.runtime.key(kind, preset) {
+                var saverGl by remember { mutableStateOf<Boolean?>(null) }
+                if (saverGl == false) {
+                    LibraryWaveBackground(Modifier.fillMaxSize())
+                } else {
+                    AndroidView(
+                        factory = {
+                            SaverGlView(it, LibraryBackground.currentSpec()).apply {
+                                onGlStatus = { ok -> saverGl = ok }
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        onRelease = { it.stop() },
+                    )
+                }
+            }
+        } else if (LibraryBackground.animated2D.value) {
+            // User opted into the lightweight 2D animated wave everywhere (#Luminz) — the same
+            // backdrop GL-fail devices get; skip the GLES3 XmbGlView entirely.
+            LibraryWaveBackground(Modifier.fillMaxSize())
+        } else {
+            var xmbGlState by remember { mutableStateOf<Boolean?>(null) } // null=starting, true=up, false=failed
+            if (xmbGlState == false) {
+                LibraryWaveBackground(Modifier.fillMaxSize())
+            } else {
+                Image(
+                    painter = painterResource(R.drawable.library_bg_xmb),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
+            AndroidView(
+                factory = { XmbGlView(it).apply { onGlStatus = { ok -> xmbGlState = ok } } },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    } else {
+        // User-picked still image / GIF (Coil handles both), or a dynamic PS3 theme's slides.
+        val slides = LibraryBackground.slideshow.value
+        if (slides != null) {
+            ThemeSlideshow(slides, Modifier.fillMaxSize())
+        } else {
+            AsyncImage(
+                model = ImageRequest.Builder(context).data(libraryBg).crossfade(true).build(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+            )
+            // A dynamic theme played live, over its still: the still shows until the scene
+            // draws, and stays if it cannot. Keyed so a new theme gets a new view.
+            LibraryBackground.scene.value?.let { live ->
+                androidx.compose.runtime.key(live) {
+                    var sceneGl by remember { mutableStateOf<Boolean?>(null) }
+                    if (sceneGl != false) {
+                        AndroidView(
+                            factory = { ThemeSceneView(it, live).apply { onGlStatus = { ok -> sceneGl = ok } } },
+                            modifier = Modifier.fillMaxSize(),
+                            onRelease = { it.stop() },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The background alone, filling the screen with the system bars hidden and nothing of the library
+ * over it: for looking at a theme, or recording it to use elsewhere. A tap or Back closes it.
+ */
+@Composable
+private fun BackgroundViewer(onClose: () -> Unit) {
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onClose,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        val window = (androidx.compose.ui.platform.LocalView.current.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window
+        DisposableEffect(window) {
+            window?.apply {
+                setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
+                setDimAmount(0f)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    attributes = attributes.apply {
+                        layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                    }
+                }
+                androidx.core.view.WindowInsetsControllerCompat(this, decorView).apply {
+                    hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+                    systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            }
+            onDispose {}
+        }
+        Box(Modifier.fillMaxSize().background(Color.Black)) {
+            LibraryBackdrop()
+            // Over the background rather than on it: a live theme is an Android view, which would
+            // take the tap itself.
+            Box(
+                Modifier.fillMaxSize().clickable(
+                    interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClose,
+                ),
+            )
+        }
+    }
+}
+
 @Composable
 private fun LibraryOverflowMenu(
     expanded: Boolean,
     selectedSort: HomeSort,
+    selectedSource: GameSource?,
     showGridNames: Boolean,
     customNames: Boolean,
     englishTitles: Boolean,
     showHidden: Boolean,
     hasCustomBackground: Boolean,
+    savedBackgrounds: Int,
+    currentBackground: LibraryBackground.Saved?,
     onDismiss: () -> Unit,
     onOpenNavigation: () -> Unit,
     onSort: (HomeSort) -> Unit,
+    onSource: (GameSource?) -> Unit,
     onToggleGridNames: () -> Unit,
     onToggleCustomNames: () -> Unit,
     onToggleEnglishTitles: () -> Unit,
     onToggleShowHidden: () -> Unit,
     onOpenCategories: () -> Unit,
-    onChooseBackground: () -> Unit,
-    onClearBackground: () -> Unit,
+    onChangeBackground: () -> Unit,
+    onViewBackground: () -> Unit,
+    onRemoveBackground: () -> Unit,
     onExitApp: () -> Unit,
 ) {
     fun closeThen(action: () -> Unit) {
@@ -1292,13 +1472,27 @@ private fun LibraryOverflowMenu(
         shadowElevation = 14.dp,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.42f)),
     ) {
-        Text(
-            text = str("games.section.library"),
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            fontWeight = FontWeight.Bold,
-        )
+        // The background first. Picking one is a sheet of them all (BackgroundSheet): a row each here
+        // made the menu longer with every background added.
+        OverflowHeader(str("games.background.section"))
+        LibraryOverflowItem(
+            glyph = "▧",
+            label = str("games.background.change"),
+            trailing = if (savedBackgrounds > 0) "$savedBackgrounds" else null,
+            thumbnail = currentBackground?.picture,
+        ) {
+            closeThen(onChangeBackground)
+        }
+        LibraryOverflowItem("▣", str("games.background.view")) {
+            closeThen(onViewBackground)
+        }
+        if (hasCustomBackground) {
+            LibraryOverflowItem("×", str("games.background.remove")) {
+                closeThen(onRemoveBackground)
+            }
+        }
+        OverflowSeparator()
+        OverflowHeader(str("games.section.library"))
         LibraryOverflowItem(
             glyph = "A–Z",
             label = str("games.overflow.sortTitle"),
@@ -1312,6 +1506,18 @@ private fun LibraryOverflowMenu(
             selected = selectedSort == HomeSort.RecentlyPlayed,
         ) {
             closeThen { onSort(HomeSort.RecentlyPlayed) }
+        }
+        OverflowSeparator()
+        // Disc or PSN. Three rows rather than one that cycles: a cycling row closes the menu on
+        // every tap, so reaching the third option took two trips into it.
+        for ((source, glyph, key) in listOf(
+            Triple(null, "◎", "games.overflow.showAll"),
+            Triple(GameSource.Disc, "\uD83D\uDCBF", "games.overflow.showDisc"),
+            Triple(GameSource.Psn, "\u2B07", "games.overflow.showPsn"),
+        )) {
+            LibraryOverflowItem(glyph = glyph, label = str(key), selected = selectedSource == source) {
+                closeThen { onSource(source) }
+            }
         }
         OverflowSeparator()
         LibraryOverflowItem(
@@ -1342,15 +1548,6 @@ private fun LibraryOverflowMenu(
             closeThen(onOpenCategories)
         }
         OverflowSeparator()
-        LibraryOverflowItem("▧", str("games.background.choose")) {
-            closeThen(onChooseBackground)
-        }
-        if (hasCustomBackground) {
-            LibraryOverflowItem("×", str("games.background.clear")) {
-                closeThen(onClearBackground)
-            }
-        }
-        OverflowSeparator()
         // Exit, back where it used to live. It moved to the drawer, which put it below every other
         // destination -- so quitting, one of the most frequent things anyone does here, meant
         // opening the drawer and scrolling to the bottom every time (issue #460, and shinobumaehara
@@ -1372,6 +1569,119 @@ private fun LibraryOverflowMenu(
     }
 }
 
+/**
+ * Every background to pick from as a picture: the default first, the saved ones, and Add last. A
+ * sheet, as categories are, rather than rows in the library menu: it stays usable with a
+ * controller, and the menu no longer grows with every background. Long-press one to remove it.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BackgroundSheet(
+    saved: List<LibraryBackground.Saved>,
+    current: LibraryBackground.Saved?,
+    customShown: Boolean,
+    onSelect: (LibraryBackground.Saved?) -> Unit,
+    onAdd: () -> Unit,
+    onRemove: (LibraryBackground.Saved) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Text(
+            str("games.background.section"),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+        )
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(150.dp),
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            item {
+                BackgroundTile(str("games.background.default"), selected = !customShown, onClick = { onSelect(null) }) {
+                    Image(
+                        painter = painterResource(R.drawable.library_bg_xmb),
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+            items(saved, key = { it.folder.path }) { entry ->
+                BackgroundTile(
+                    entry.name,
+                    selected = entry.folder == current?.folder,
+                    onClick = { onSelect(entry) },
+                    onLongClick = { onRemove(entry) },
+                ) {
+                    AsyncImage(
+                        model = entry.picture,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+            item {
+                BackgroundTile(str("games.background.addShort"), selected = false, onClick = onAdd) {
+                    Text("+", fontSize = 34.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun BackgroundTile(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+    picture: @Composable () -> Unit,
+) {
+    Column(
+        Modifier.clip(RoundedCornerShape(14.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(4.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            Modifier.fillMaxWidth().aspectRatio(16f / 9f)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .border(
+                    if (selected) 3.dp else 1.dp,
+                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                    RoundedCornerShape(10.dp),
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            picture()
+        }
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun OverflowHeader(text: String) {
+    Text(
+        text = text,
+        modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.Bold,
+    )
+}
+
 @Composable
 private fun OverflowSeparator() {
     androidx.compose.material3.HorizontalDivider(
@@ -1390,6 +1700,8 @@ private fun LibraryOverflowItem(
     // in the bundled font and rendered as a tofu box. Null keeps the glyph path for every other row.
     iconRes: Int? = null,
     iconTint: Color? = null,
+    // A picture in place of the glyph: a saved background's.
+    thumbnail: java.io.File? = null,
     onClick: () -> Unit,
 ) {
     DropdownMenuItem(
@@ -1410,7 +1722,14 @@ private fun LibraryOverflowItem(
                 color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    if (iconRes != null) {
+                    if (thumbnail != null) {
+                        AsyncImage(
+                            model = thumbnail,
+                            contentDescription = null,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else if (iconRes != null) {
                         androidx.compose.material3.Icon(
                             painter = androidx.compose.ui.res.painterResource(iconRes),
                             contentDescription = null,
@@ -1534,6 +1853,8 @@ private fun GameMetadata(game: GameInfo) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
         StatusChip(game.extension.ifBlank { game.platform.key.uppercase() })
         if (game.locked) StatusChip(str("games.locked.chip"), Color(0xFFFFC857))
+        if (game.trial) StatusChip(str("games.trial.chip"), TrialColor)
+        if (game.licenceState() == GameInfo.Licence.Installed) StatusChip(str("games.licence.chip"), Color(0xFF6FCF97))
         game.regionFlag?.let { Text(it, fontSize = 13.sp) }
         if (game.compatibility > 0) {
             Text("★".repeat(game.compatibility), color = Color(0xFFFFC857), fontSize = 9.sp, maxLines = 1)
@@ -1691,6 +2012,17 @@ private fun GameCover(
         if (showBadges && game.locked) {
             LockedBadge(Modifier.align(Alignment.TopEnd).padding(5.dp))
         }
+        // A package whose licence is already in exdata will boot once installed. Only the positive
+        // is shown: a missing .rap may be a free package that needs none, and the package alone
+        // cannot always say which (see GameInfo.licenceState).
+        if (showBadges && game.licenceState() == GameInfo.Licence.Installed) {
+            LicenceBadge(Modifier.align(Alignment.TopEnd).padding(5.dp))
+        }
+        // A trial boots and plays like the full game until it stops short, so nothing else
+        // on the tile says so. Top start, clear of the lock and licence badges at top end.
+        if (showBadges && game.trial) {
+            TrialBadge(Modifier.align(Alignment.TopStart).padding(5.dp))
+        }
         // A package is a game the user has and cannot play yet, and its tile is otherwise
         // indistinguishable from one that boots. Bottom start, so it does not collide with
         // the locked badge on a title that is both.
@@ -1717,6 +2049,18 @@ private fun PackageBadge(modifier: Modifier = Modifier) {
     }
 }
 
+/** Green where the locked badge is gold: the same place and shape, the opposite news. */
+@Composable
+private fun LicenceBadge(modifier: Modifier = Modifier) {
+    Surface(shape = RoundedCornerShape(6.dp), color = Color(0xFF6FCF97), modifier = modifier) {
+        Text(
+            "\uD83D\uDD11",
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+            fontSize = 11.sp,
+        )
+    }
+}
+
 /** Gold to match the library's other "worth noticing" marks (compat stars, the HC pill),
  *  and shaped like HardcoreBadge so it reads as the same family of badge. */
 @Composable
@@ -1726,6 +2070,49 @@ private fun LockedBadge(modifier: Modifier = Modifier) {
             "🔒",
             modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
             fontSize = 11.sp,
+        )
+    }
+}
+
+// The trial tag: a yellow price tag with a darker rim, its string hole ringed in blue, and
+// the word in a pink-red that still reads on the yellow at badge size.
+private val TrialColor = Color(0xFFFFD43B)
+private val TrialEdge = Color(0xFFF2A900)
+private val TrialRing = Color(0xFF5AAAF0)
+private val TrialInk = Color(0xFFE23D63)
+
+// A price tag pointing left; its height sets how far in the point reaches.
+private val TrialTagShape = GenericShape { size, _ ->
+    val tip = size.height / 2f
+    moveTo(0f, size.height / 2f)
+    lineTo(tip, 0f)
+    lineTo(size.width, 0f)
+    lineTo(size.width, size.height)
+    lineTo(tip, size.height)
+    close()
+}
+
+/** Marks a trial, whose tile would otherwise pass for the full game. The core only flags a
+ *  trial while its upgrade EDAT is missing from exdata, which is the test RPCS3 unlocks the
+ *  game by, so installing the unlock package takes the tag off on the next library refresh. */
+@Composable
+private fun TrialBadge(modifier: Modifier = Modifier) {
+    Row(
+        modifier
+            .background(TrialColor, TrialTagShape)
+            .border(1.dp, TrialEdge, TrialTagShape)
+            .padding(start = 5.dp, end = 5.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(5.dp).border(1.5.dp, TrialRing, CircleShape))
+        Spacer(Modifier.width(3.dp))
+        Text(
+            str("games.trial.badge"),
+            color = TrialInk,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Black,
+            letterSpacing = 0.5.sp,
+            lineHeight = 10.sp,
         )
     }
 }
@@ -2121,3 +2508,14 @@ private fun ShelfGameCard(game: GameInfo, width: Dp, reflectionHeight: Dp, selec
     }
 }
 
+/** A picture Android can open: an image type, or failing that, dimensions it can read. */
+private fun isPicture(context: Context, source: Uri): Boolean {
+    if (context.contentResolver.getType(source)?.startsWith("image/") == true) return true
+    return runCatching {
+        context.contentResolver.openInputStream(source)?.use { input ->
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeStream(input, null, bounds)
+            bounds.outWidth > 0 && bounds.outHeight > 0
+        } ?: false
+    }.getOrDefault(false)
+}

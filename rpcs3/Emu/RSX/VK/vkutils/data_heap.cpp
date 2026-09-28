@@ -9,6 +9,7 @@
 #include "Emu/RSX/Overlays/overlay_message.h"
 #include "Emu/System.h"
 #include "util/sysinfo.hpp"
+#include "Emu/system_config.h"
 
 #include <memory>
 

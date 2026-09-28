@@ -38,6 +38,7 @@ import com.armsx2.data.library.Licences
 import com.armsx2.data.library.ParamSfo
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
+import com.armsx2.packages.FrontendExport
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.common.ArmsBackdrop
 import com.armsx2.ui.common.FileBrowserDialog
@@ -151,6 +152,16 @@ private data class InstalledTitle(
     val dir: java.io.File,
     val id: String,
     val name: String,
+    /**
+     * True when this folder is a disc game's update: PARAM.SFO category GD with a patched
+     * USRDIR/EBOOT.BIN. The game itself is on the disc, so "uninstall" reads as removing some
+     * extra data, but a disc game's updates live in this same folder and go with it. That cost a
+     * user all 21 Gran Turismo 6 updates (10 GB) when they only meant to redo its data install.
+     * A game data install (BLUS30464_INSTALL and the like) has no EBOOT.BIN and is not flagged.
+     */
+    val holdsUpdates: Boolean = false,
+    /** APP_VER of that update, when it has one. */
+    val updateVersion: String? = null,
 )
 
 /**
@@ -165,7 +176,16 @@ private fun installedTitleFor(dir: java.io.File): InstalledTitle {
         dir.listFiles()?.firstOrNull { it.isFile && it.name.equals("PARAM.SFO", ignoreCase = true) }
     }.getOrNull()
     val title = sfo?.let { ParamSfo.string(it, "TITLE") }?.trim().orEmpty()
-    return InstalledTitle(dir, dir.name, title.ifBlank { dir.name })
+    val category = sfo?.let { ParamSfo.string(it, "CATEGORY") }?.trim()
+    val holdsUpdates = category == "GD" &&
+        runCatching { java.io.File(dir, "USRDIR/EBOOT.BIN").isFile }.getOrDefault(false)
+    return InstalledTitle(
+        dir,
+        dir.name,
+        title.ifBlank { dir.name },
+        holdsUpdates = holdsUpdates,
+        updateVersion = if (holdsUpdates) sfo?.let { ParamSfo.string(it, "APP_VER") }?.trim()?.ifBlank { null } else null,
+    )
 }
 
 private fun readInstalled(): List<InstalledTitle> =
@@ -549,6 +569,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
             progressId = null
             message = if (ok) {
                 GameLibraryRepository(context).invalidateCache()
+                FrontendExport.requestSync(context)
                 installed = readInstalled()
                 licences = readLicences()
                 I18n.get("packages.install.done")
@@ -649,6 +670,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                 // chain of packages skips it for all but its last and pays once, not seven times.
                 if (refreshLibrary) {
                     GameLibraryRepository(context).invalidateCache()
+                    FrontendExport.requestSync(context)
                     installed = readInstalled()
                     licences = readLicences()
                 }
@@ -713,6 +735,15 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                             if (target.name == target.id) target.id else "${target.name} (${target.id})",
                         ),
                     )
+                    if (target.holdsUpdates) {
+                        Text(
+                            target.updateVersion
+                                ?.let { str("packages.uninstall.updatesWarning").format(it) }
+                                ?: str("packages.uninstall.updatesWarningNoVersion"),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                     // Hidden when there is no cache, so the row never offers to free nothing.
                     if (cacheBytes > 0) {
                         Row(
@@ -733,6 +764,10 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                     confirmRemove = null
                     val removeCache = alsoRemoveCache
                     val titleId = target.id
+                    // Deleting gigabytes from an SD card takes minutes, and the dialog closes at once:
+                    // with nothing said until the end, a working uninstall looked like one that did
+                    // nothing.
+                    message = I18n.get("packages.uninstall.working").format(target.name)
                     MainActivityRuntime.invoke {
                         val ok = withContext(Dispatchers.IO) {
                             runCatching {
@@ -746,7 +781,10 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                         }
                         installed = readInstalled()
                         licences = readLicences()
-                        if (ok) GameLibraryRepository(context).invalidateCache()
+                        if (ok) {
+                            GameLibraryRepository(context).invalidateCache()
+                            FrontendExport.requestSync(context)
+                        }
                         message = I18n.get(
                             if (ok) "packages.uninstall.done" else "packages.uninstall.failed",
                         )
@@ -811,10 +849,19 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                     onClick = { tab = 1 },
                     text = { Text(str("packages.tab.updates")) },
                 )
+                // Add-ons on their own, as updates are, rather than mixed into the licence and
+                // installed-title lists on the Install tab.
+                androidx.compose.material3.Tab(
+                    selected = tab == 2,
+                    onClick = { tab = 2 },
+                    text = { Text(str("packages.tab.dlc")) },
+                )
             }
 
             if (tab == 1) {
                 GameUpdatesTab(busy = busy, onInstall = { files, last, done -> install(files, done, refreshLibrary = last) })
+            } else if (tab == 2) {
+                DlcTab()
             } else {
             Surface(
                 shape = RoundedCornerShape(16.dp),

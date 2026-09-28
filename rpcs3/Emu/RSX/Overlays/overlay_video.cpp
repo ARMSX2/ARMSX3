@@ -1,6 +1,6 @@
 #include "stdafx.h"
 #include "overlay_video.h"
-#include "Emu/System.h"
+#include "Emu/emu_callbacks.h"
 #include "Loader/ISO.h"
 
 namespace rsx
@@ -74,7 +74,7 @@ namespace rsx
 			//
 			// The still image is what the entry actually needs; the animated ICON1.PAM is the part
 			// no backend can supply.
-			m_video_source = Emu.GetCallbacks().make_video_source();
+			m_video_source = g_emu_callbacks.make_video_source();
 
 			if (!m_video_source)
 			{

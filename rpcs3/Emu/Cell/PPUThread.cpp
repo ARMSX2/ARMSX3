@@ -55,7 +55,6 @@
 #endif
 
 #include <cfenv>
-#include <cctype>
 #include <span>
 #include <optional>
 #include <charconv>
@@ -66,6 +65,7 @@
 #include "util/simd.hpp"
 #include "util/sysinfo.hpp"
 #include "util/fnv_hash.hpp"
+#include "util/cctype.hpp"
 
 #include "Utilities/sema.h"
 
@@ -547,6 +547,380 @@ void ppu_recompiler_fallback(ppu_thread& ppu)
 			break;
 		}
 	}
+}
+
+// The writer of a field a thread is spinning on.
+//
+// A poll loop names the address it reads and nothing names what fills it, and a producer that
+// never ran appears in no call stack, so there is nothing to follow. ARMSX3_WATCH_SPIN=<cia>[:<reg>]
+// arms a watch on the address held in <reg> (r31 by default) every time sys_timer_usleep is
+// reached from <cia>, and the first writes to that address are logged with the instruction that
+// made them. Run it on the PPU interpreter, where every guest store is visible: an address that
+// no PPU store touches is filled by an SPU, or by nothing at all, and those are different bugs.
+// Up to four watched words, and everything that can reach them.
+//
+// One slot is armed from a spin loop (ARMSX3_WATCH_SPIN), the rest from fixed addresses
+// (ARMSX3_WATCH_ADDR), because the interesting address is sometimes a heap field a thread
+// happens to be waiting on and sometimes a structure whose address never changes.
+//
+// Every writer reports here: guest PPU stores of any width, conditional stores, SPU transfers
+// and SPU atomic stores. The first few of each are always printed and the rest are decimated,
+// so a writer that fires twice is as visible as one that fires constantly. Getting that wrong
+// is what made a field that is written every frame look like it had no writer at all.
+//
+// The hooks that sit in the path of guest loads and stores compile out unless someone is
+// actively hunting: build with ARMSX3_WATCH_HOOKS=1 to have them (see PPUInterpreter.cpp).
+#ifndef ARMSX3_WATCH_HOOKS
+#define ARMSX3_WATCH_HOOKS 0
+#endif
+
+atomic_t<u32> g_ppu_watch[4]{};
+
+// How much of each slot to watch. A completion flag is one word; a structure whose writers are
+// the question -- a SPURS control block, say -- is a whole 128-byte line, and watching four
+// bytes of it reports that nothing writes it while the other 124 bytes are written constantly.
+atomic_t<u32> g_ppu_watch_size[4]{};
+
+struct ppu_watch_stat_t
+{
+	atomic_t<u32> ppu_store{0};
+	atomic_t<u32> ppu_stcx{0};
+	atomic_t<u32> spu_put{0};
+	atomic_t<u32> spu_ll_ok{0};
+	atomic_t<u32> spu_ll_fail{0};
+	atomic_t<u32> last_value{0};
+};
+
+ppu_watch_stat_t g_ppu_watch_stats[4]{};
+
+// The last writes to each watched word, kept whether or not they were logged.
+//
+// Decimation is what keeps a log readable and is also what throws away the only events that
+// matter at a hang: the handful just before everything went quiet. A ring costs nothing and
+// the dump can print it in order.
+struct ppu_watch_event_t
+{
+	u32 addr;
+	u32 value;
+	u32 who;
+	u16 size;
+	u16 kind; // 0 store, 1 conditional, 2 transfer, 3 atomic took, 4 atomic could not
+};
+
+ppu_watch_event_t g_ppu_watch_ring[4][32]{};
+atomic_t<u32> g_ppu_watch_ring_pos[4]{};
+
+void ppu_watch_record(int slot, u32 addr, u32 value, u32 who, u16 size, u16 kind)
+{
+	if (slot < 0 || slot >= 4)
+	{
+		return;
+	}
+
+	// Only transitions.
+	//
+	// The SPURS idle loop writes these words back unchanged millions of times, so a ring that
+	// records every write holds nothing but the last few microseconds of noise and the moment
+	// the value actually moved is long gone. What is wanted is the history of changes.
+	static atomic_t<u32> s_last[4]{};
+
+	if (s_last[slot].exchange(value) == value)
+	{
+		return;
+	}
+
+	const u32 i = g_ppu_watch_ring_pos[slot]++ % 32;
+	g_ppu_watch_ring[slot][i] = {addr, value, who, size, kind};
+}
+
+u32 g_ppu_watch_load_cia = 0;
+
+#if ARMSX3_WATCH_HOOKS
+// ARMSX3_WATCH_STORE_CIA=<hex pc>: watch the address the store at that instruction writes to.
+// Only the interpreter's store hook calls this, so it exists only in a hooks build.
+u32 g_ppu_watch_store_cia = 0;
+
+// Latch slot 2 on the address a chosen store writes to, once.
+void ppu_watch_arm_addr2(u32 addr, u32 value)
+{
+	// Several instances of the same structure pass through one instruction, and the one that
+	// matters is identified by what it points at, not by which came first. ARMSX3_WATCH_STORE_VAL
+	// = lo-hi latches only when the stored value falls in that range.
+	static const std::pair<u32, u32> range = []() -> std::pair<u32, u32>
+	{
+		const char* env = std::getenv("ARMSX3_WATCH_STORE_VAL");
+
+		if (!env || !*env)
+		{
+			return {0, 0};
+		}
+
+		const std::string_view text{env};
+		const usz dash = text.find('-');
+		u32 lo = 0, hi = 0;
+
+		if (dash != umax)
+		{
+			std::from_chars(text.data(), text.data() + dash, lo, 16);
+			std::from_chars(text.data() + dash + 1, text.data() + text.size(), hi, 16);
+			ppu_log.warning("ARMSX3_WATCH_STORE_VAL: only values in 0x%x..0x%x", lo, hi);
+		}
+
+		return {lo, hi};
+	}();
+
+	if (range.second && (value < range.first || value > range.second))
+	{
+		return;
+	}
+
+	static atomic_t<u32> s_armed{0};
+
+	if (addr < 0x10000 || !s_armed.compare_and_swap_test(0, addr))
+	{
+		return;
+	}
+
+	g_ppu_watch[2].release(addr);
+	ppu_log.warning("ARMSX3_WATCH_STORE_CIA: latched on 0x%x", addr);
+}
+#endif
+
+// Arm slot 0 (and the word below it) at a chosen address, resetting the per-slot state so a
+// new slot does not inherit the last one's "already set" memory.
+void ppu_watch_arm_addr(u32 addr)
+{
+	// Once, and then never again.
+	//
+	// Following the address means following whichever slot is being waited on right now, which
+	// during a hang is the one slot that is dead, and its whole history is resets. What has
+	// never been observed is a slot's healthy life: set, consumed, cleared, set again. Latching
+	// the first slot seen -- the load at the top of the wait runs on every call, so the first
+	// one is early and healthy -- and holding it gives exactly that, and the producer with it.
+	static atomic_t<u32> s_armed{0};
+	static atomic_t<u32> s_seen{0};
+
+	// What this load reads is the whole question and has never been observed. A wait that is
+	// satisfied on arrival reads non-zero and returns; one that has to wait reads zero and
+	// sleeps. If a non-zero read never appears, the flag is never set at all and the first
+	// sleep is fatal, which is a different bug from a completion that arrives too late.
+	if (const u32 n = ++s_seen; n <= 64 || n % 512 == 0)
+	{
+		ppu_log.error("WATCHLOAD #%u: 0x%x reads 0x%x, index 0x%x", n, addr,
+			vm::check_addr(addr) ? +vm::read32(addr) : 0u,
+			(addr >= 0x1000c && vm::check_addr(addr - 12)) ? +vm::read32(addr - 12) : 0u);
+	}
+
+	if (addr < 0x1000c || !s_armed.compare_and_swap_test(0, addr))
+	{
+		return;
+	}
+
+	g_ppu_watch[0].release(addr);
+	g_ppu_watch[3].release(addr - 12);
+	ppu_log.warning("ARMSX3_WATCH_LOAD: latched on 0x%x", addr);
+}
+
+int ppu_watch_slot(u32 addr, u32 size)
+{
+	for (int i = 0; i < 4; i++)
+	{
+		const u32 w = g_ppu_watch[i].load();
+		const u32 width = std::max<u32>(g_ppu_watch_size[i].load(), 4);
+
+		if (w && addr < w + width && addr + size > w)
+		{
+			return i;
+		}
+	}
+
+	return -1;
+}
+
+bool ppu_watch_should_log(u32 count)
+{
+	return count <= 8 || count % 256 == 0;
+}
+
+static void ppu_watch_parse_fixed()
+{
+	const char* env = std::getenv("ARMSX3_WATCH_ADDR");
+
+	if (!env || !*env)
+	{
+		return;
+	}
+
+	std::string_view rest{env};
+	int slot = 1;
+
+	while (!rest.empty() && slot < 4)
+	{
+		const usz comma = rest.find(',');
+		const std::string_view item = rest.substr(0, comma);
+		rest = comma == umax ? std::string_view{} : rest.substr(comma + 1);
+
+		// "addr" watches the whole 128-byte line it sits in; "addr:width" watches exactly that
+		// many bytes. A control block wants the line, one counter inside it wants four bytes,
+		// and watching the line when you meant the counter buries the counter in its neighbours.
+		u32 addr = 0, width = 128;
+		const usz colon = item.find(':');
+
+		if (colon != umax)
+		{
+			std::from_chars(item.data() + colon + 1, item.data() + item.size(), width, 10);
+			width = std::clamp<u32>(width, 4, 128);
+		}
+
+		const std::string_view addr_text = item.substr(0, colon == umax ? item.size() : colon);
+
+		if (std::from_chars(addr_text.data(), addr_text.data() + addr_text.size(), addr, 16).ec == std::errc() && addr >= 0x10000)
+		{
+			g_ppu_watch_size[slot].release(width);
+			g_ppu_watch[slot++].release(addr);
+			ppu_log.warning("ARMSX3_WATCH_ADDR: watching %u bytes at 0x%x", width, addr);
+		}
+	}
+}
+
+void ppu_watch_arm(const ppu_thread& ppu)
+{
+	static const std::pair<u32, u32> cfg = []() -> std::pair<u32, u32>
+	{
+		ppu_watch_parse_fixed();
+
+#if ARMSX3_WATCH_HOOKS
+		if (const char* st = std::getenv("ARMSX3_WATCH_STORE_CIA"); st && *st)
+		{
+			u32 cia = 0;
+
+			if (std::from_chars(st, st + std::strlen(st), cia, 16).ec == std::errc())
+			{
+				g_ppu_watch_store_cia = cia;
+				ppu_log.warning("ARMSX3_WATCH_STORE_CIA: arming on the store at 0x%x", cia);
+			}
+		}
+#endif
+
+		if (const char* load = std::getenv("ARMSX3_WATCH_LOAD"); load && *load)
+		{
+			u32 cia = 0;
+
+			if (std::from_chars(load, load + std::strlen(load), cia, 16).ec == std::errc())
+			{
+				g_ppu_watch_load_cia = cia;
+				ppu_log.warning("ARMSX3_WATCH_LOAD: arming on the load at 0x%x", cia);
+			}
+		}
+
+		const char* env = std::getenv("ARMSX3_WATCH_SPIN");
+
+		if (!env || !*env)
+		{
+			return {0, 31};
+		}
+
+		const std::string_view text{env};
+		const usz colon = text.find(':');
+
+		u32 cia = 0, reg = 31;
+		std::from_chars(text.data(), text.data() + (colon == umax ? text.size() : colon), cia, 16);
+
+		if (colon != umax)
+		{
+			std::from_chars(text.data() + colon + 1, text.data() + text.size(), reg, 10);
+		}
+
+		if (cia)
+		{
+			ppu_log.warning("ARMSX3_WATCH_SPIN: watching the address in r%u whenever usleep is called from 0x%x", reg, cia);
+		}
+
+		return {cia, std::min<u32>(reg, 31)};
+	}();
+
+	if (!cfg.first || ppu.cia != cfg.first)
+	{
+		return;
+	}
+
+	if (const u32 addr = static_cast<u32>(ppu.gpr[cfg.second]); addr >= 0x10000)
+	{
+		g_ppu_watch[0].release(addr);
+
+		// The word 12 bytes below is the field that decides whether this wait happens at all:
+		// the caller loads it as the dependency index and treats -1 as "nothing to wait for".
+		// It has read 0 at every hang, so what writes it matters as much as what writes the flag.
+		if (addr >= 0x1000c)
+		{
+			g_ppu_watch[3].release(addr - 12);
+		}
+	}
+}
+
+void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size)
+{
+	const int slot = ppu_watch_slot(addr, size & 0x7f);
+
+	if (slot < 0)
+	{
+		return;
+	}
+
+	const bool stcx = (size & 0x80) != 0;
+	auto& counter = stcx ? g_ppu_watch_stats[slot].ppu_stcx : g_ppu_watch_stats[slot].ppu_store;
+
+	// The event this search exists for is the word going from clear to set, not the word being
+	// set: a word that is normally non-zero would otherwise log every write it ever gets, which
+	// floods the log and slows the emulator enough to change what is being measured.
+	const u32 now = static_cast<u32>(value);
+	const bool became_set = now && !g_ppu_watch_stats[slot].last_value.exchange(now);
+
+	ppu_watch_record(slot, addr, now, ppu.cia, static_cast<u16>(size & 0x7f), stcx ? 1 : 0);
+
+	if (ppu_watch_should_log(++counter) || became_set)
+	{
+		ppu_log.error("WATCH[%d] 0x%x <- 0x%llx (%u bytes%s) from 0x%x on '%s'",
+			slot, addr, value, size & 0x7f, stcx ? ", stcx" : "", ppu.cia, ppu.get_name());
+	}
+}
+
+// Everything the watch has seen, for the end of a thread dump.
+std::string ppu_watch_summary()
+{
+	std::string out;
+
+	for (int i = 0; i < 4; i++)
+	{
+		const u32 w = g_ppu_watch[i].load();
+
+		if (!w)
+		{
+			continue;
+		}
+
+		auto& st = g_ppu_watch_stats[i];
+
+		static const char* const kinds[] = {"store", "conditional", "transfer", "atomic took", "atomic could not"};
+
+		fmt::append(out, "\nWATCH[%d] 0x%x+%u = 0x%x: %u PPU stores, %u conditional, %u SPU transfers, %u SPU atomics took, %u would have failed",
+			i, w, std::max<u32>(g_ppu_watch_size[i].load(), 4), vm::check_addr(w) ? +vm::read32(w) : 0u,
+			st.ppu_store.load(), st.ppu_stcx.load(), st.spu_put.load(), st.spu_ll_ok.load(), st.spu_ll_fail.load());
+
+		// Oldest first, so the bottom of the list is the last thing that happened before the
+		// silence, which is the only part of it anyone reads.
+		const u32 pos = g_ppu_watch_ring_pos[i].load();
+
+		for (u32 n = pos > 32 ? pos - 32 : 0; n < pos; n++)
+		{
+			const auto& e = g_ppu_watch_ring[i][n % 32];
+
+			fmt::append(out, "\n  #%u 0x%x <- 0x%x (%u bytes, %s) by 0x%x", n, e.addr, e.value,
+				e.size, e.kind < 5 ? kinds[e.kind] : "?", e.who);
+		}
+	}
+
+	return out;
 }
 
 void ppu_reservation_fallback(ppu_thread& ppu)
@@ -1490,7 +1864,7 @@ void ppu_thread::dump_regs(std::string& ret, std::any& custom_data) const
 			// NTS: size of 3 and above is required
 			// If ends with a newline, only one character is required
 			else if ((sv.size() == buf_tmp.size() || (sv.size() >= (buf_tmp[sv.size()] == '\n' ? 1 : 3))) &&
-				std::all_of(sv.begin(), sv.end(), [](u8 c){ return std::isprint(c); }))
+				std::all_of(sv.begin(), sv.end(), [](u8 c){ return utils::isprint(c); }))
 			{
 				fmt::append(ret, " -> \"%s\"", sv);
 			}
@@ -3386,6 +3760,42 @@ static void ppu_error(ppu_thread& ppu, u64 addr, u32 /*op*/)
 	ppu_recompiler_fallback(ppu);
 }
 
+// Whether the Killzone 3 builder-vs-traversal sync probe is armed. Off unless ARMSX3_KZ3_SYNC=1 in
+// driver_env.txt, so it costs nothing in a normal run. Function-local read so it is seen after
+// driver_env is parsed.
+bool kz3_sync_probe_enabled()
+{
+	static const bool s_on = []
+	{
+		const char* v = std::getenv("ARMSX3_KZ3_SYNC");
+		return v && v[0] == '1' && v[1] == '\0';
+	}();
+
+	return s_on;
+}
+
+// Emitted by the translator only at PPU 0x00cdb2c8 in BCUS98234: the Physics KdTree Building
+// thread's store that clears a job descriptor's root word 0 (the destructor at 0x00cdb1f0). r30
+// holds the descriptor base EA. x86 clears the same descriptor a minimum of 7.6 ms after the SPU
+// read it (looks like it waits for the job); this logs the ARM timing to compare. Correlate with
+// the "KZ3 GET" line by EA: gap = clear_time - last_get_time.
+static void ppu_kz3_desc_clear(u64 ea)
+{
+	if (!kz3_sync_probe_enabled()) [[likely]]
+	{
+		return;
+	}
+
+	static atomic_t<u32> s_n{0};
+
+	const u32 n = ++s_n;
+
+	if (n <= 20000)
+	{
+		ppu_log.error("KZ3 CLEAR ea=0x%08x t=%llu (#%u)", static_cast<u32>(ea), get_system_time(), n);
+	}
+}
+
 static void ppu_check(ppu_thread& ppu, u64 addr)
 {
 	ppu.cia = ::narrow<u32>(addr);
@@ -3568,6 +3978,9 @@ extern u64 ppu_ldarx(ppu_thread& ppu, u32 addr)
 	return ppu_load_acquire_reservation<u64>(ppu, addr);
 }
 
+int ppu_watch_slot(u32 addr, u32 size);
+void ppu_watch_store(const ppu_thread& ppu, u32 addr, u64 value, u32 size);
+
 template <typename T>
 static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 {
@@ -3581,6 +3994,20 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 
 	// Notify breakpoint handler
 	vm::write<void>(addr, T{0}, &ppu);
+
+	// A conditional store reaches memory through here rather than through the interpreter's
+	// write path, so a flag set with stwcx. is invisible to the plain watch. Log the attempt:
+	// this loop retries on failure, so repeats are failures, and a store that keeps failing
+	// while a thread waits on the word is the thing worth finding.
+	//
+	// Behind the switch like the interpreter's hooks. The recompiler reaches every stwcx. and
+	// stdcx. through here too, and the slot scan is eight ordered loads per conditional store.
+#if ARMSX3_WATCH_HOOKS
+	if (ppu_watch_slot(addr, sizeof(T)) >= 0) [[unlikely]]
+	{
+		ppu_watch_store(ppu, addr, static_cast<u64>(reg_value), sizeof(T) | 0x80);
+	}
+#endif
 
 	auto& data = const_cast<atomic_be_t<u64>&>(vm::_ref<atomic_be_t<u64>>(addr & -8));
 	auto& res = vm::reservation_acquire(addr);
@@ -3766,7 +4193,19 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 			{
 				// Postpone notifications if there is no pending one OR if there is likely a complex operation on reservation going on
 				// Which consists of multiple used addresses
-				if (ppu.res_notify_postpone_streak <= 4)
+				// EXPERIMENT (ARMSX3_NO_POSTPONE=1): never postpone, notify immediately.
+				//
+				// A postponed wake is only delivered if no other store touched the line in the
+				// meantime, and the line SPURS keeps its control block on takes millions of
+				// atomic stores, so the timestamp has almost always moved on by the time the
+				// flush checks. Every drop is a wake that an SPU waiting on that line never got.
+				static const bool s_no_postpone = []()
+				{
+					const char* env = std::getenv("ARMSX3_NO_POSTPONE");
+					return env && *env && *env != '0';
+				}();
+
+				if (!s_no_postpone && ppu.res_notify_postpone_streak <= 4)
 				{
 					if (!notify || ((notify & -128) == (addr & -128) && new_data != old_data))
 					{
@@ -4471,7 +4910,26 @@ extern void ppu_precompile(std::vector<std::string>& dir_queue, std::vector<ppu_
 	// The growth in memory requirements of LLVM is not linear with file size of course
 	// But these estimates should hopefully protect RPCS3 in the coming years
 	// Especially when thread count is on the rise with each CPU generation
-	atomic_t<u32> file_size_limit = static_cast<u32>(std::clamp<u64>(utils::aligned_div<u64>(utils::get_total_memory(), 2000), 65536, u32{umax}));
+	//
+	// Budget from the memory the OS will actually hand out, not from how much is installed.
+	// Android never gives the app the whole machine: on an 11 GB device the system and other
+	// apps held 3.8 GB, so a limit sized against all 11 GB let a full rebuild of Black Flag
+	// reach 6.4 GB resident and die on a 64 KB commit, losing every module still in flight.
+	// MemAvailable is the kernel's own answer to how much is obtainable, and it already nets
+	// off what this process holds, so the queue narrows as the guest grows rather than racing
+	// it. A quarter is kept back because everything that is not LLVM has to fit in the same
+	// budget, and because being killed costs the whole cache rather than one module.
+	//
+	// Lowering this cannot stall a module that is larger than the whole budget: the take is
+	// saturating, so an oversized file still claims the queue, it just runs on its own.
+	const u64 total_memory = utils::get_total_memory();
+	const u64 avail_memory = utils::get_avail_memory();
+	const u64 memory_budget = avail_memory ? std::min<u64>(avail_memory, total_memory) / 4 * 3 : total_memory;
+
+	atomic_t<u32> file_size_limit = static_cast<u32>(std::clamp<u64>(utils::aligned_div<u64>(memory_budget, 2000), 65536, u32{umax}));
+
+	ppu_log.notice("Module compile budget: %u KB in flight, from %u MB available of %u MB",
+		file_size_limit / 1024, avail_memory >> 20, total_memory >> 20);
 
 	const u32 software_thread_limit = std::min<u32>(g_cfg.core.llvm_threads ? g_cfg.core.llvm_threads : u32{umax}, ::size32(file_queue));
 	const u32 cpu_thread_limit = utils::get_thread_count() > 8u ? std::max<u32>(utils::get_thread_count(), 2) - 1 : utils::get_thread_count(); // One LLVM thread less
@@ -5015,6 +5473,71 @@ extern void ppu_initialize()
 	}
 }
 
+// Run chosen guest functions through the interpreter while everything else stays compiled.
+//
+// The games on RPCS3 issue #5831 all work with the PPU interpreter and break with LLVM, so the bug
+// is in some function the recompiler gets wrong. ARMSX3_PPU_INTERP=start-end[,start-end...] (hex
+// guest addresses, end exclusive; a lone address means just the function starting there) keeps
+// the functions whose entry falls in a range out of compilation. Calls to them go through the jump
+// table to ppu_recompiler_fallback, the same way patched functions do. Halving a range until the
+// bug comes back names the function. Set it in driver_env.txt.
+static bool ppu_interp_requested(u32 addr)
+{
+	static const std::vector<std::pair<u32, u32>> ranges = []()
+	{
+		std::vector<std::pair<u32, u32>> out;
+		const char* env = std::getenv("ARMSX3_PPU_INTERP");
+
+		if (!env || !*env)
+		{
+			return out;
+		}
+
+		const auto parse_hex = [](std::string_view text, u32& value)
+		{
+			while (!text.empty() && text.front() == ' ') text.remove_prefix(1);
+			while (!text.empty() && text.back() == ' ') text.remove_suffix(1);
+			if (text.starts_with("0x") || text.starts_with("0X")) text.remove_prefix(2);
+			const auto res = std::from_chars(text.data(), text.data() + text.size(), value, 16);
+			return !text.empty() && res.ec == std::errc() && res.ptr == text.data() + text.size();
+		};
+
+		std::string_view rest{env};
+
+		while (!rest.empty())
+		{
+			const usz comma = rest.find(',');
+			const std::string_view item = rest.substr(0, comma);
+			rest = comma == umax ? std::string_view{} : rest.substr(comma + 1);
+
+			u32 start = 0, end = 0;
+			const usz dash = item.find('-');
+
+			if (dash == umax ? (parse_hex(item, start) && (end = start + 1)) : (parse_hex(item.substr(0, dash), start) && parse_hex(item.substr(dash + 1), end) && end > start))
+			{
+				out.emplace_back(start, end);
+				ppu_log.warning("ARMSX3_PPU_INTERP: interpreting functions in [0x%x, 0x%x)", start, end);
+			}
+			else if (!item.empty())
+			{
+				ppu_log.error("ARMSX3_PPU_INTERP: could not read '%s', expected start-end in hex", std::string(item));
+			}
+		}
+
+		return out;
+	}();
+
+	for (const auto& [start, end] : ranges)
+	{
+		if (addr >= start && addr < end)
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
 bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_size)
 {
 	ppu_log.notice("Entering ppu_initialize(const ppu_module&..)");
@@ -5082,6 +5605,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			{ "__trap", reinterpret_cast<u64>(&ppu_trap) },
 			{ "__error", reinterpret_cast<u64>(&ppu_error) },
 			{ "__check", reinterpret_cast<u64>(&ppu_check) },
+			{ "__kz3_desc_clear", reinterpret_cast<u64>(&ppu_kz3_desc_clear) },
 			{ "__trace", reinterpret_cast<u64>(&ppu_trace) },
 			{ "__syscall", reinterpret_cast<u64>(ppu_execute_syscall) },
 			{ "__get_tb", reinterpret_cast<u64>(get_timebased_time) },
@@ -5518,6 +6042,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 		// Overall block size in bytes
 		usz bsize = 0;
 		usz bcount = 0;
+		usz interp_funcs = 0;
 
 		while (fpos < info.get_funcs().size())
 		{
@@ -5562,6 +6087,15 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				}
 			}
 
+			if (ppu_interp_requested(func.addr))
+			{
+				// No continue: it still counts toward this module's size below, so the partition,
+				// and with it every other module's hash, stays where it was. Only modules whose
+				// selection changed recompile between bisect steps.
+				part.excluded_funcs.emplace_back(func.addr);
+				interp_funcs++;
+			}
+
 			local_jit_bounds->first = std::min<u32>(local_jit_bounds->first, func.addr);
 			local_jit_bounds->second = std::max<u32>(local_jit_bounds->second, func.addr + func.size);
 
@@ -5572,6 +6106,11 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 
 			fpos++;
 			bcount++;
+		}
+
+		if (interp_funcs)
+		{
+			ppu_log.warning("ARMSX3_PPU_INTERP: %u functions in 0x%x..0x%x left to the interpreter", interp_funcs, part.local_bounds.first, part.local_bounds.second);
 		}
 
 		// Compute module hash to generate (hopefully) unique object name
@@ -5699,6 +6238,14 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 						continue;
 					}
 
+					if (ppu_interp_requested(func.addr))
+					{
+						// The resolver must not install it either, or the table would point back at
+						// compiled code that was never built.
+						part.excluded_funcs.emplace_back(func.addr);
+						continue;
+					}
+
 					addrs.emplace_back(func.addr - reloc);
 				}
 
@@ -5744,6 +6291,11 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				arm64_codegen_v5,
 				arm64_codegen_v6,
 				arm64_codegen_v7,
+				arm64_codegen_v8,
+				arm64_codegen_v9,
+				arm64_codegen_v10,
+				arm64_codegen_v11,
+				arm64_codegen_v12,
 
 				__bitset_enum_max
 			};
@@ -5764,7 +6316,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			// Add a new value (arm64_codegen_v3, ...) and set that instead whenever ARM64 PPU
 			// codegen changes. Never re-toggle an old one -- that would collide with hashes already
 			// on disk from an earlier build.
-			settings += ppu_settings::arm64_codegen_v7;
+			settings += ppu_settings::arm64_codegen_v12;
 #endif
 			if (g_cfg.core.use_accurate_dfma)
 				settings += ppu_settings::accurate_dfma;

@@ -6,6 +6,7 @@ import android.media.SoundPool
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
+import androidx.annotation.Keep
 import androidx.compose.runtime.mutableStateOf
 import androidx.core.content.edit
 import androidx.documentfile.provider.DocumentFile
@@ -90,7 +91,10 @@ object MenuSfx {
         enabled.value = MainActivityRuntime.prefs.getBoolean(EnabledKey, true)
         volumePercent.value = MainActivityRuntime.prefs.getInt(VolumeKey, DefaultVolumePercent)
         packName.value = MainActivityRuntime.prefs.getString(PackNameKey, null)
-        if (enabled.value) rebuildPool(context)
+        // Also when the launcher's own blips are off but the emulator still has a sound to
+        // play through this pool. set() already had this; load() did not, so a user with menu
+        // sounds disabled got no pool at startup and a silent trophy.
+        if (enabled.value || TrophySound.isSet()) rebuildPool(context)
     }
 
     fun set(context: Context, value: Boolean) {
@@ -178,17 +182,55 @@ object MenuSfx {
      */
     private val pathSampleIds = HashMap<String, Int>()
 
+    /** Sample ids SoundPool has finished decoding. See the note in [playFile]. */
+    private val loadedSamples = java.util.Collections.synchronizedSet(HashSet<Int>())
+
+    /** Gain to use for a sample that was asked for before it finished decoding. */
+    private val pendingPlays = java.util.Collections.synchronizedMap(HashMap<Int, Float>())
+
+    /**
+     * Decode a core sound now rather than on the frame it is first needed.
+     *
+     * Called when the pool comes up and when a sound is imported, so the trophy is ready long
+     * before a game unlocks one.
+     */
+    fun preload(path: String) {
+        val sp = pool ?: return
+        val asked = runCatching { File(path) }.getOrNull() ?: return
+        val file = asked.takeIf { it.isFile && it.length() > 0L }
+            ?: listOf("ogg", "mp3").firstNotNullOfOrNull { ext ->
+                File(asked.parentFile, asked.nameWithoutExtension + "." + ext)
+                    .takeIf { it.isFile && it.length() > 0L }
+            }
+            ?: return
+        val key = file.absolutePath
+        if (pathSampleIds.containsKey(key)) return
+        runCatching { sp.load(key, 1) }.getOrDefault(0)
+            .also { if (it != 0) pathSampleIds[key] = it }
+    }
+
     /** Drop a cached sample so a replaced file is re-read instead of the old one replaying. */
     fun forgetCachedFile(path: String) {
         pathSampleIds.remove(path)
     }
 
+    // @Keep is load-bearing, not tidiness. Release builds run R8, which renames
+    // com.armsx2.MenuSfx and this method, and the core reaches both by their ORIGINAL names
+    // through FindClass/GetStaticMethodID. Without it the bridge silently fails to install and
+    // every sound the emulator asks for is dropped before it ever reaches Kotlin -- trophies,
+    // dialogs, the on-screen keyboard. The androidx consumer rule
+    // `-keepclasseswithmembers class * { @Keep <methods>; }` keeps the CLASS name too, which is
+    // why annotating the method is enough and why storage/ContentUri has always worked.
+    //
+    // Calls from Kotlin are unaffected either way, since R8 renames both sides together. That
+    // is exactly why the settings Test button worked while an actual trophy was silent.
+    @Keep
     @JvmStatic
     fun playFile(path: String, volume: Float) {
         // No [enabled] check. That toggle is the launcher's own interface blips; these come from
         // the emulator. A user who turned the menu ticks off did not thereby ask for silent
         // trophies, and the trophy has its own setting to turn off.
-        val sp = pool ?: return
+        val sp = pool ?: run { Log.i(TAG, "playFile: NO POOL, path=$path"); return }
         // The core always asks for .wav. An imported pack may have supplied ogg or mp3, which
         // SoundPool plays just as happily, so fall back to a sibling with the same stem rather
         // than making the user convert.
@@ -198,14 +240,36 @@ object MenuSfx {
                 File(asked.parentFile, asked.nameWithoutExtension + "." + ext)
                     .takeIf { it.isFile && it.length() > 0L }
             }
-            ?: return
+            ?: run { Log.i(TAG, "playFile: NO FILE at $path (nor .ogg/.mp3)"); return }
 
         val key = file.absolutePath
+        Log.i(TAG, "playFile: resolved -> $key")
         val id = pathSampleIds[key] ?: runCatching { sp.load(key, 1) }
             .getOrDefault(0)
             .also { if (it != 0) pathSampleIds[key] = it }
 
         if (id == 0) return
+
+        // SoundPool.load is ASYNCHRONOUS: it hands back an id immediately and decodes on its
+        // own thread, so playing on the next line does nothing the first time. A trophy fires
+        // exactly once, which is why this was silent in a game while the settings Test button
+        // worked, since pressing that twice finds the sample decoded.
+        //
+        // If it is not ready yet, record the gain and let the pool's listener play it when the
+        // decode lands. The listener is installed ONCE in rebuildPool and never replaced:
+        // SoundPool has a single listener slot and only notifies loads that finish AFTER it is
+        // set, so installing one here would both silence whatever was waiting on the previous
+        // one and, for a sample that had already finished, wait forever for a callback that
+        // can never come.
+        if (!loadedSamples.contains(id)) {
+            pendingPlays[id] = when {
+                volume >= 0f -> volume
+                TrophySound.owns(key) -> TrophySound.gain()
+                else -> gain()
+            }.coerceIn(0f, 1f)
+            Log.i(TAG, "playFile: sample $id not decoded yet, queued")
+            return
+        }
 
         // The core passes a volume only where it means to override; otherwise it sends a
         // negative and a user level applies -- the trophy's own where this is the trophy, and
@@ -256,6 +320,17 @@ object MenuSfx {
                     .build()
             )
             .build()
+
+        // One listener for the life of the pool. It records what has finished decoding and
+        // plays anything that was asked for while the decode was still in flight.
+        sp.setOnLoadCompleteListener { p, sampleId, status ->
+            if (status != 0) return@setOnLoadCompleteListener
+            loadedSamples.add(sampleId)
+            pendingPlays.remove(sampleId)?.let { g ->
+                runCatching { p.play(sampleId, g, g, 1, 0, 1f) }
+            }
+        }
+
         Event.entries.forEach { ev ->
             runCatching {
                 val custom = clipFile(context, ev)
@@ -268,10 +343,17 @@ object MenuSfx {
             }.onFailure { Log.w(TAG, "load failed for ${ev.fileName}", it) }
         }
         pool = sp
+
+        // Get the emulator's own sounds decoded now. A trophy plays once, at a moment we do
+        // not control, so discovering the sample is not ready yet at that point means silence.
+        TrophySound.corePath()?.let { preload(it) }
     }
 
     private fun releasePool() {
         sampleIds.clear()
+        pathSampleIds.clear()
+        loadedSamples.clear()
+        pendingPlays.clear()
         altSampleIds.clear()
         lastPlayMs.clear()
         pool?.let { runCatching { it.release() } }

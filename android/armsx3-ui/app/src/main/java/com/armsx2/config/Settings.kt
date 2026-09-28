@@ -1157,7 +1157,11 @@ data class Settings(
         put("PS3/Net", "IP address", "string", ps3.ipAddress)
         put("PS3/Net", "Bind address", "string", ps3.bindAddress)
         put("PS3/Net", "DNS address", "string", ps3.dnsAddress)
-        put("PS3/Net", "IP swap list", "string", ps3.ipSwapList)
+        // The user's redirects, plus any the running title needs to reach a community server.
+        put(
+            "PS3/Net", "IP swap list", "string",
+            GameDefaults.withTitleRedirects(ps3.ipSwapList, MainActivityRuntime.currentGame.value?.serial),
+        )
         put("PS3/Net", "Derive MAC from PSID", "bool", ps3.deriveMacFromPsid.toString())
         put("PS3/Net", "PSN Country", "string", ps3.psnCountry)
         put("PS3/Net", "Clans Enabled", "bool", ps3.clansEnabled.toString())
@@ -1447,6 +1451,14 @@ data class Settings(
         // per-game tier rather than letting the last title played leak into a BIOS boot.
         runCatching {
             CoreSettingOverrides.replay(MainActivityRuntime.currentGame.value?.settingsKey)
+        }
+        // What this title's own configuration owns, withheld from RPCS3's config database before
+        // the core applies it. The database lands AFTER everything above (Emulator::Load layers
+        // it over the user's config), so without this a per-game core edit for a key the database
+        // also sets is written and then immediately overwritten, with nothing on screen to say so.
+        runCatching {
+            val key = MainActivityRuntime.currentGame.value?.settingsKey
+            ConfigDatabase.writeUserKeys(key, CoreSettingOverrides.load(SettingsScope.Game, key).keys)
         }
         NativeApp.commitSettings()
     }

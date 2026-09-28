@@ -132,7 +132,8 @@ enum : u32
 	// tag at its initial value and looks untouched forever, which silences it while buffering is enabled.
 	// These extra marks sit on the front right channel, which any audio content writes, and are only used to
 	// tell "the game wrote nothing" apart from "the game wrote the front channels only". They carry no state:
-	// a mark counts as written when it no longer is the negative zero that tag() put there.
+	// a mark counts as written when it no longer is the negative zero that tag() put there. On a two channel
+	// port they coincide with the tags, so only wider ports carry their own.
 	PORT_BUFFER_MARK_CHANNEL = 1,
 	PORT_BUFFER_MARK_DELTA_SAMPLE = (AUDIO_BUFFER_SAMPLES - 1) / (PORT_BUFFER_TAG_COUNT - 1),
 
@@ -392,6 +393,31 @@ public:
 };
 
 
+// One port's shared memory (or the MIO block's) on its way between the audio mutex and sys_mmapper.
+//
+// sys_mmapper must never be called with the audio mutex held. Mapping and unmapping take
+// vm::writer_lock and stop in ppu_thread::check_state until every PPU and SPU stands still, and a
+// firmware thread blocked on the audio mutex in host code never shows cpu_flag::wait: the LLE
+// libmixer's _cellsurMixerMain calls straight into cellAudio. With the mutex held across the map,
+// the SPUs waited for the mixer, the mixer waited for the mutex, and its holder waited for the
+// SPUs. That is the Mortal Kombat Komplete freeze at the WB logo, where the game reopens a port.
+// So the bookkeeping happens under the mutex and the memory work between two holds of it.
+//
+// A closed port also keeps its memory mapped, for the next open of it. Mortal Kombat Komplete
+// Edition closes and reopens its secondary port about 55 times a second for as long as it runs;
+// mapping and unmapping each time stopped every PPU and SPU at the vm lock over a hundred times
+// a second. The block is only unmapped when a reopen needs a bigger one, or at cellAudioQuit.
+struct audio_port_mapping
+{
+	shared_ptr<lv2_memory> memory;
+	u32 area = 0;
+	u32 addr = 0;
+	u32 number = 0;
+	u32 server_index = 0;
+	u32 generation = 0;
+	bool mapped = false;
+};
+
 class cell_audio_thread
 {
 private:
@@ -423,6 +449,9 @@ public:
 	u32 free_port_count = 0;
 	std::array<u32, AUDIO_PORT_COUNT> free_ports{};
 	std::array<u32, AUDIO_PORT_COUNT> free_indices{};
+	// Bumped by cellAudioQuit, so a port whose close raced it is not handed to the free list the
+	// next cellAudioInit builds. Not serialized: no savestate is taken while a close is in flight.
+	u32 m_generation = 0;
 
 	u32 key_count = 0;
 	u8 event_period = 0;
@@ -467,6 +496,11 @@ public:
 	// conservative end, and settles again within a few periods.
 	std::array<u8, AUDIO_PORT_COUNT> m_periods_without_tag{};
 
+	// Whether the marks have shown that a port only ever fills its front channels; cleared when a tag moves.
+	// They only describe the current block, so without this a port fed in bursts would look untouched
+	// between its writes and stall the thread on a timeout. Not serialized: it settles again in a few periods.
+	std::array<bool, AUDIO_PORT_COUNT> m_front_only_port{};
+
 	void operator()();
 
 	SAVESTATE_INIT_POS(9);
@@ -475,10 +509,22 @@ public:
 	cell_audio_thread(utils::serial& ar);
 	void save(utils::serial& ar);
 
+	// Under the mutex: reserve a port, and later hand it back (see audio_port_mapping).
 	audio_port* open_port();
-	error_code allocate_port(ppu_thread& ppu, audio_port& port);
-	void close_port(ppu_thread& ppu, audio_port& port);
-	void release_shared_memory(ppu_thread& ppu);
+	bool reuse_port_memory(audio_port& port, u32 alloc_size);
+	audio_port_mapping take_kept_memory(audio_port& port);
+	void close_port(audio_port& port);
+	audio_port_mapping detach_port(audio_port& port);
+	void return_port(const audio_port_mapping& mapping);
+	u32 drop_shared_ref();
+
+	// The shared memory block a port of this many bytes gets.
+	static u32 port_alloc_size(u32 port_size);
+
+	// Without the mutex: the sys_mmapper half.
+	static error_code map_port(ppu_thread& ppu, u32 port_size, audio_port_mapping& mapping);
+	static void unmap_port(ppu_thread& ppu, audio_port_mapping& mapping);
+	static void unmap_shared(ppu_thread& ppu, u32 address);
 
 	static constexpr auto thread_name = "cellAudio Thread"sv;
 };

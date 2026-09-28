@@ -14,6 +14,8 @@
 
 #if defined(__APPLE__)
 #include <pthread.h>
+#elif defined(ANDROID)
+#include "util/cctype.hpp"
 #endif
 
 LOG_CHANNEL(jit_log, "JIT");
@@ -36,6 +38,7 @@ LOG_CHANNEL(jit_log, "JIT");
 #pragma GCC diagnostic ignored "-Wmissing-noreturn"
 #endif
 #include <llvm/Support/CodeGen.h>
+#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/TargetParser/Host.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
@@ -246,12 +249,39 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 	MemoryManager1(std::function<u64(const std::string&)> symbols_cement = {}) noexcept
 		: m_symbols_cement(std::move(symbols_cement))
 	{
+	}
+
+	// Reserve on first use, not on construction.
+	//
+	// 768 MiB of address space per instance, and the destructor deliberately keeps the
+	// reservation (see below). An SPU thread builds one of these whether or not it ever
+	// compiles anything (SPUThread.cpp makes a recompiler per thread), so a SPURS title that
+	// cycles through thread groups burns the space a few hundred times over. A 64 bit Android
+	// process has 512 GiB of it, against 128 TiB on desktop, so what is harmless upstream ran
+	// Assassin's Creed IV out of ADDRESS SPACE, not memory: commits failed with ENOMEM while
+	// the device still had 6 GB free and the process held 1.4 GB.
+	void reserve_once()
+	{
+		if (m_code_mems)
+		{
+			return;
+		}
+
 		auto ptr = reinterpret_cast<u8*>(utils::memory_reserve(c_max_size * 3, true));
 		m_code_mems = ptr;
 		// ptr += c_max_size;
 		// m_data_ro_mems = ptr;
 		 ptr += c_max_size;
 		m_data_rw_mems = ptr;
+
+		// Every 64 instances, because the ceiling is the thing worth seeing coming: this is what
+		// ran out on Assassin's Creed IV, and the number says how close a long session is.
+		static atomic_t<u64> s_reserved_count{0};
+
+		if (const u64 n = ++s_reserved_count; n % 64 == 0)
+		{
+			jit_log.notice("JIT: %u instances hold %u GiB of reserved address space", n, n * c_max_size * 3 / (1024 * 1024 * 1024));
+		}
 	}
 
 	MemoryManager1(const MemoryManager1&) = delete;
@@ -260,6 +290,12 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 
 	~MemoryManager1() override
 	{
+		if (!m_code_mems)
+		{
+			// Never compiled anything, so nothing was ever reserved.
+			return;
+		}
+
 		// Hack: don't release to prevent reuse of address space, see jit_announce
 		// constexpr auto how_much = [](u64 pos) { return utils::align(pos, pos < c_page_size ? c_page_size / 4 : c_page_size); };
 		// utils::memory_decommit(m_code_mems, how_much(code_ptr));
@@ -290,8 +326,11 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 		return {addr, llvm::JITSymbolFlags::Exported};
 	}
 
-	u8* allocate(u64& alloc_pos, void* block, uptr size, u64 align, utils::protection prot)
+	u8* allocate(u64& alloc_pos, void*& block, uptr size, u64 align, utils::protection prot)
 	{
+		// block is a reference to the member this instance allocates from, so reserving here
+		// gives the caller the address it was passed a reference to.
+		reserve_once();
 		align = align ? align : 16;
  
 		const u64 sizea = utils::align(size, align);
@@ -807,6 +846,37 @@ jit_compiler::jit_compiler(const std::unordered_map<std::string, u64>& _link, st
 
 		return true;
 	}();
+
+#ifdef ARCH_ARM64
+	// Turn off InterleavedLoadCombine, an IR pass the AArch64 backend alone adds to codegen (x86
+	// never runs it). It looks for loads split into pieces and reassembled with shuffles, to merge
+	// them into one ld2/ld3/ld4, and it finds them by recursing through every shufflevector,
+	// bitcast and load behind a candidate, with no bound on the depth. PS3 vector code translates
+	// into long shuffle chains (byte swaps, permutes, splats), and on one function that search does
+	// not end: The Guided Fate Paradox's EBOOT (BLUS31312, NPUB31320; issue #149) sat in it for
+	// over ten minutes at 100% of a core, the boot never finished and Stop could not join the
+	// thread. Profiled on the Odin 3: VectorInfo::compute / computeFromSVI, allocating and freeing
+	// std::set and std::list nodes, under MCJIT::emitObject. Windows compiles the same EBOOT in
+	// seconds because it never has this pass.
+	//
+	// What it would buy is strided loads, which the translators do not emit; the later
+	// InterleavedAccess pass still handles the ordinary interleaved patterns. LLVM options are
+	// process-wide, so this is set once, before the first compile, and covers SPU codegen too.
+	[[maybe_unused]] static const bool s_llvm_options = []()
+	{
+		auto& options = llvm::cl::getRegisteredOptions();
+
+		if (const auto found = options.find("disable-interleaved-load-combine"); found != options.end())
+		{
+			static_cast<llvm::cl::opt<bool>*>(found->second)->setValue(true);
+			jit_log.notice("LLVM: InterleavedLoadCombine disabled");
+			return true;
+		}
+
+		jit_log.error("LLVM: -disable-interleaved-load-combine not found; InterleavedLoadCombine stays on");
+		return false;
+	}();
+#endif
 
 	std::string result;
 

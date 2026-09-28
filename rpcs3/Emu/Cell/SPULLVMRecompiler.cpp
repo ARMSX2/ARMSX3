@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include <charconv>
 #include "SPURecompiler.h"
 
 #include "Emu/System.h"
@@ -10,6 +11,8 @@
 #include "Emu/RSX/Core/RSXReservationLock.hpp"
 #include "Crypto/sha1.h"
 #include "Utilities/JIT.h"
+
+bool spu_is_killzone3(); // SPUThread.cpp
 
 #include "SPUThread.h"
 #include "SPUAnalyser.h"
@@ -24,6 +27,14 @@
 const extern spu_decoder<spu_itype> g_spu_itype;
 const extern spu_decoder<spu_iname> g_spu_iname;
 const extern spu_decoder<spu_iflag> g_spu_iflag;
+
+namespace vm
+{
+	// The page flag table, so an inlined DMA can ask whether its effective address is backed
+	// before it copies. vm.h only declares this inside its own inline helpers, which puts the
+	// name in namespace vm; a block-scope extern here would name ::g_pages instead.
+	extern std::array<memory_page, 0x100000000 / 4096> g_pages;
+}
 
 #ifdef LLVM_AVAILABLE
 
@@ -90,6 +101,118 @@ void spu_llvm_set_compile_context(spu_llvm_compile_context* context) noexcept
 // Defined in SPUCommonRecompiler.cpp; ranges forced to the interpreter.
 #include "Emu/Cell/SPUDisAsm.h"
 
+
+// ARMSX3_SHUFB_SKIP=<hex bits>: switch off individual ARM64 SHUFB fast paths, each falling
+// through to the general tbx2 one at the end of the block, which is always correct.
+//
+// SPU integer instructions pass ps3autotests byte-exact, so a SHUFB bug here is not the semantics
+// but one of these special cases firing on operand shapes the tests never produce -- which is
+// exactly what Borderlands 2's hang turned out to be (upstream a7fc31f32, reverted in this file).
+// Killzone 3 builds the value it later mis-uses as an address with a SHUFB, so the same class of
+// bug is the first thing to rule in or out. Bit per path:
+//   1 consts_only, 2 single+splat+perm_or_zero, 4 single+splat, 8 single+perm_only,
+//   0x10 both-splat+perm_only, 0x20 both-splat, 0x40 perm_only (tbl2)
+// ARMSX3_SHUFB_CHECK=1: verify every folded SHUFB against the real shuffle at runtime.
+// ARMSX3_SPU_TRAP_PC=<hex LS pc>[:<gpr>]: after the instruction at that address, look at the given
+// register (default r67) and log the neighbourhood when the value it holds would become an
+// unmapped address once the job shifts it up by four bits -- which is the exact shape of Killzone
+// 3's bad pointers (0x0145bf10 -> 0x145bf100).
+//
+// Swapping in the interpreter cannot answer this: interpreting the job for real is far too slow to
+// reach the level. Checking one instruction costs a compare on the path it sits on.
+static std::pair<u32, u32> spu_trap_pc()
+{
+	static const std::pair<u32, u32> s_trap = []() -> std::pair<u32, u32>
+	{
+		const char* env = std::getenv("ARMSX3_SPU_TRAP_PC");
+
+		if (!env || !*env)
+		{
+			return {umax, 0};
+		}
+
+		const std::string_view item{env};
+		const usz colon = item.find(':');
+		u32 pc = 0, reg = 67;
+
+		if (std::from_chars(item.data(), item.data() + std::min(colon, item.size()), pc, 16).ec != std::errc() ||
+			(colon != umax && std::from_chars(item.data() + colon + 1, item.data() + item.size(), reg, 10).ec != std::errc()) ||
+			pc >= SPU_LS_SIZE || reg >= 128)
+		{
+			spu_log.error("ARMSX3_SPU_TRAP_PC: could not read '%s', expected <hex pc>[:<gpr>]", env);
+			return {umax, 0};
+		}
+
+		spu_log.success("ARMSX3_SPU_TRAP_PC: watching r%u after LS 0x%05x", reg, pc);
+		return {pc, reg};
+	}();
+
+	return s_trap;
+}
+
+// Raw mode: ARMSX3_SPU_TRAP_PC=<pc>[:<reg>]:raw logs the register every time the pc is reached,
+// with no filter. The default filter encodes one specific hypothesis (a pointer whose x16 is
+// unmapped) and silently drops everything else, which is useless for reading a value that is
+// simply a number -- an allocator's top-of-heap, say.
+static bool spu_trap_raw()
+{
+	static const bool s_raw = []()
+	{
+		const char* env = std::getenv("ARMSX3_SPU_TRAP_PC");
+		return env && std::string_view{env}.ends_with(":raw");
+	}();
+
+	return s_raw;
+}
+
+static bool spu_shufb_check_enabled()
+{
+	static const bool s_on = []()
+	{
+		const char* env = std::getenv("ARMSX3_SHUFB_CHECK");
+		const bool on = env && *env && *env != '0';
+
+		if (on)
+		{
+			spu_log.success("ARMSX3_SHUFB_CHECK: checking every folded SHUFB against the real shuffle");
+		}
+
+		return on;
+	}();
+
+	return s_on;
+}
+
+static u32 spu_shufb_skip_mask()
+{
+	// No default: the fold stays on. It was off here for part of 2026-09-20 on the strength of
+	// Killzone 3 running ~25000 frames clean against a fault every ~1800, but that did not hold --
+	// with the fold off the fault came back after 896 frames, worse than the baseline, and
+	// ARMSX3_SHUFB_CHECK had already shown every folded shuffle computing the correct value. The
+	// clean runs were luck. Kept as a lever, not a fix.
+	static const u32 s_mask = []() -> u32
+	{
+		const char* env = std::getenv("ARMSX3_SHUFB_SKIP");
+
+		if (!env || !*env)
+		{
+			return 0;
+		}
+
+		u32 mask = 0;
+
+		if (std::from_chars(env, env + std::strlen(env), mask, 16).ec != std::errc())
+		{
+			spu_log.error("ARMSX3_SHUFB_SKIP: could not read '%s', expected hex bits", env);
+			return 0;
+		}
+
+		spu_log.success("ARMSX3_SHUFB_SKIP: ARM64 SHUFB fast paths disabled: 0x%x", mask);
+		return mask;
+	}();
+
+	return s_mask;
+}
 
 class spu_llvm_recompiler : public spu_recompiler_base, public cpu_translator
 {
@@ -3436,8 +3559,40 @@ public:
 					default: break;
 					}
 
+					// ARMSX3_SHUFB_CHECK: verify EVERY shuffle, not only the folded ones -- the
+					// first version of this check sat inside the insert fold, so the ARM64
+					// tbl/tbx paths were never verified at all.
+					//
+					// The operands are captured BEFORE the instruction and the result after it.
+					// Capturing all four afterwards reads the result back as the operands
+					// whenever a shuffle writes to its own source (shufb rX,rX,rX,mask, the
+					// byteswap idiom), which reported 32 mismatches that were all this mistake.
+					const bool check_shufb = g_spu_itype.decode(op) == spu_itype::SHUFB && spu_shufb_check_enabled();
+
+					if (check_shufb)
+					{
+						const spu_opcode_t sop{op};
+
+						m_ir->CreateStore(get_vr<u8[16]>(sop.ra).value, spu_ptr(&spu_thread::shufb_dbg_a));
+						m_ir->CreateStore(get_vr<u8[16]>(sop.rb).value, spu_ptr(&spu_thread::shufb_dbg_b));
+						m_ir->CreateStore(get_vr<u8[16]>(sop.rc).value, spu_ptr(&spu_thread::shufb_dbg_c));
+					}
+
 					// Execute recompiler function (TODO)
 					(this->*decode(op))({op});
+
+					if (check_shufb && !m_ir->GetInsertBlock()->getTerminator())
+					{
+						m_ir->CreateStore(get_vr<u8[16]>(spu_opcode_t{op}.rt4).value, spu_ptr(&spu_thread::shufb_dbg_res));
+						update_pc();
+						call("spu_shufb_check", &exec_shufb_check, m_thread);
+					}
+
+					if (m_pos == spu_trap_pc().first)
+					{
+						ensure_gpr_stores();
+						call("spu_trap_pc", &exec_trap_pc, m_thread);
+					}
 				}
 
 				// Finalize block with fallthrough if necessary
@@ -4015,6 +4170,18 @@ public:
 		{
 			const auto f = func.second.fn ? func.second.fn : func.second.chunk;
 			fpm.run(*f, fam);
+		}
+
+		if (m_test_state->use_empty())
+		{
+			m_test_state->eraseFromParent();
+			m_test_state = nullptr;
+		}
+
+		if (m_dispatch->use_empty())
+		{
+			m_dispatch->eraseFromParent();
+			m_dispatch = nullptr;
 		}
 
 		// Clear context (TODO)
@@ -4671,7 +4838,122 @@ public:
 
 	static bool exec_check_state(spu_thread* _spu)
 	{
-		return _spu->check_state();
+		// Compiled code only calls this at a state check, after storing pc for the exact
+		// instruction it stopped at. Unless the code marked the thread unsavable around the call,
+		// every guest register is in memory too. That is all cpu_work needs to take a busy-checked
+		// interrupt (decrementer, signals, reservation loss) the way the interpreter does:
+		// srr0 = pc, jump to the handler, escape to the dispatcher, resume at srr0 on IRET.
+		// Before this, set_interrupt_status threw for any recompiler instead.
+		//
+		// An escape skips the restore below; cpu_task clears the flag at the gateway on that path.
+		const bool allow = _spu->allow_interrupts_in_cpu_work;
+
+		if (!_spu->unsavable)
+		{
+			_spu->allow_interrupts_in_cpu_work = true;
+		}
+
+		const bool result = _spu->check_state();
+		_spu->allow_interrupts_in_cpu_work = allow;
+		return result;
+	}
+
+	// Logs only when the watched register holds something that cannot be a packed pointer, so a
+	// job that runs thousands of times a second costs one compare and prints nothing.
+	static void exec_trap_pc(spu_thread* _spu)
+	{
+		const u32 reg = spu_trap_pc().second;
+		const v128 v = _spu->gpr[reg];
+		const u32 value = v._u32[3];
+		const u32 shifted = value << 4;
+
+		if (spu_trap_raw())
+		{
+			// Every hit, no filter, one line. Bounded so a pc in a hot loop cannot flood.
+			static atomic_t<u32> s_raw_reports{0};
+
+			if (s_raw_reports++ < 256)
+			{
+				spu_log.error("TRAP_PC 0x%05x RAW: r%u = %08x %08x %08x %08x, thread '%s'",
+					spu_trap_pc().first, reg, v._u32[3], v._u32[2], v._u32[1], v._u32[0],
+					*_spu->spu_tname.load());
+			}
+
+			return;
+		}
+
+		// The signature is narrow on purpose: a value that IS a valid pointer on its own but is
+		// mapped nowhere once the job multiplies it by sixteen. Filtering only on the shifted
+		// address caught ordinary float data (0x80000010 and friends) 24 times in a session.
+		if (!vm::check_addr(value, vm::page_readable, 128) || vm::check_addr(shifted, vm::page_readable, 128))
+		{
+			return;
+		}
+
+		static atomic_t<u32> s_reports{0};
+
+		if (s_reports++ >= 24)
+		{
+			return;
+		}
+
+		// Every register, not a window: the base this job adds to the shifted value lives in
+		// r108, outside the r60-r79 window the first version printed, and the whole point is to
+		// see whether that base is zero. It fires once in a session, so the size is irrelevant.
+		std::string regs;
+
+		for (u32 i = 0; i < 128; i++)
+		{
+			fmt::append(regs, "%s r%-3u = %08x %08x %08x %08x", (i % 4 == 0 ? "\n    " : "   "),
+				i, _spu->gpr[i]._u32[3], _spu->gpr[i]._u32[2], _spu->gpr[i]._u32[1], _spu->gpr[i]._u32[0]);
+		}
+
+		spu_log.error("TRAP_PC 0x%05x: r%u = %08x %08x %08x %08x -- valid pointer, but x16 = 0x%08x is unmapped, thread '%s'%s",
+			spu_trap_pc().first, reg, v._u32[3], v._u32[2], v._u32[1], v._u32[0], shifted,
+			*_spu->spu_tname.load(), regs);
+	}
+
+	// ARMSX3_SHUFB_CHECK=1: recompute the shuffle the plain way and compare it with what the
+	// insert fold produced. Killzone 3 stops corrupting pointers when that fold is switched off
+	// (ARMSX3_SHUFB_SKIP=0x80), yet the fold reads correct on paper for the cdd-generated mask it
+	// fires on -- so record the operands of a disagreement rather than argue from the source.
+	static void exec_shufb_check(spu_thread* _spu)
+	{
+		const v128 a = _spu->shufb_dbg_a;
+		const v128 b = _spu->shufb_dbg_b;
+		const v128 c = _spu->shufb_dbg_c;
+
+		// Reference semantics, straight from the interpreter: ab[0] is rb, ab[1] is ra, and the
+		// index is inverted because the bytes are held in reverse order.
+		const v128 ab[2]{b, a};
+		v128 ref{};
+
+		for (u32 i = 0; i < 16; i++)
+		{
+			const u8 cb = c._u8[i];
+
+			if ((cb & 0xc0) == 0x80)
+				ref._u8[i] = 0x00;
+			else if ((cb & 0xe0) == 0xc0)
+				ref._u8[i] = 0xff;
+			else if ((cb & 0xe0) == 0xe0)
+				ref._u8[i] = 0x80;
+			else
+				ref._u8[i] = reinterpret_cast<const u8*>(ab)[(~cb) & 0x1f];
+		}
+
+		if (ref == _spu->shufb_dbg_res)
+		{
+			return;
+		}
+
+		static atomic_t<u32> s_reports{0};
+
+		if (s_reports++ < 32)
+		{
+			spu_log.error("SHUFB fold mismatch at pc 0x%05x:\n  a   = %s\n  b   = %s\n  c   = %s\n  fold= %s\n  real= %s",
+				_spu->pc, a, b, c, _spu->shufb_dbg_res, ref);
+		}
 	}
 
 	template <spu_intrp_func_t F>
@@ -5398,7 +5680,9 @@ public:
 					break;
 				}
 
-				bool must_use_cpp_functions = !!g_cfg.core.spu_accurate_dma;
+				// The local-store watch and the KZ3 sync probe both live in do_dma_transfer, and the
+				// inlined copy below would step around them, so an instrumented run gives up inlining.
+				bool must_use_cpp_functions = !!g_cfg.core.spu_accurate_dma || spu_ls_watch_enabled() || kz3_sync_probe_enabled();
 
 				if (u64 cmdh = ci->getZExtValue() & ~(MFC_BARRIER_MASK | MFC_FENCE_MASK | MFC_RESULT_MASK); g_cfg.core.rsx_fifo_accuracy || g_cfg.video.strict_rendering_mode || /*!g_use_rtm*/ true)
 				{
@@ -5520,7 +5804,46 @@ public:
 					if (!must_use_cpp_functions)
 					{
 						const auto mmio = llvm::BasicBlock::Create(m_context, "", m_function);
-						m_ir->CreateCondBr(m_ir->CreateICmpUGE(eal.value, m_ir->getInt32(0xe0000000)), mmio, copy, m_md_unlikely);
+
+						// The inlined copy below has no guard of its own, so an effective address
+						// that is not backed faults in the host and the access-violation handler
+						// kills the SPU thread mid-transfer. do_dma_transfer models what hardware
+						// actually does -- a class-2 DMA interrupt the running code can survive --
+						// but only for commands that reach it, and a plain GET below 0xe0000000 is
+						// inlined right past it. Killzone 3's fatal transfer is exactly that, which
+						// is why a guard placed only in do_dma_transfer logged nothing.
+						//
+						// Send unbacked addresses down the same path as MMIO. vm::g_pages is one
+						// byte of flags per 4 KB page, so the test is an indexed load and a mask.
+						// Checking the first and last page covers the range: guest pages are
+						// allocated whole and are at least 4 KB, so a transfer that starts and ends
+						// in backed pages cannot straddle an unbacked one (MFC transfers cap at
+						// 16 KB, well under any mapping's granularity here).
+						const u8 need = (cmd & MFC_GET_CMD)
+							? (vm::page_readable | vm::page_allocated)
+							: (vm::page_writable | vm::page_allocated);
+
+						const auto pages = m_ir->CreateIntToPtr(
+							m_ir->getInt64(reinterpret_cast<u64>(vm::g_pages.data())), get_type<u8*>());
+
+						const auto flags_at = [&](llvm::Value* addr) -> llvm::Value*
+						{
+							const auto idx = m_ir->CreateLShr(m_ir->CreateZExt(addr, get_type<u64>()), 12);
+							return m_ir->CreateLoad(get_type<u8>(), m_ir->CreateGEP(get_type<u8>(), pages, idx));
+						};
+
+						const auto last = m_ir->CreateAdd(eal.value,
+							m_ir->CreateSub(m_ir->CreateZExt(size.value, get_type<u32>()), m_ir->getInt32(1)));
+
+						const auto both = m_ir->CreateAnd(flags_at(eal.value), flags_at(last));
+
+						const auto unbacked = m_ir->CreateICmpNE(
+							m_ir->CreateAnd(both, m_ir->getInt8(need)), m_ir->getInt8(need));
+
+						const auto to_cpp = m_ir->CreateOr(
+							m_ir->CreateICmpUGE(eal.value, m_ir->getInt32(0xe0000000)), unbacked);
+
+						m_ir->CreateCondBr(to_cpp, mmio, copy, m_md_unlikely);
 						m_ir->SetInsertPoint(mmio);
 					}
 
@@ -6086,6 +6409,33 @@ public:
 		}
 
 		set_vr(op.rt, get_vr(op.ra) + get_vr(op.rb));
+
+		// Killzone 3 physics KD-tree traversal guard, LS 0x21238: this instruction is
+		// `a r80,r108,r26`, forming EA = base(r108) + node.word0*16, which the game then uses as a
+		// tree-node address with no range check of its own. The PPU frees the tree out from under a
+		// live SPU traversal (a rare timing race: confirmed 27us GET->clear against x86's 7.6ms
+		// floor), so the node this walks is occasionally garbage and the EA lands unbacked. The
+		// SPU then derails and the thread dies, wedging the job scheduler. Route an unbacked EA to
+		// the tree's own no-work terminator at 0x21458: the traversal pops that node and completes
+		// honestly instead of faulting. The race is rare, so this almost never fires; a valid tree
+		// address is always backed, so a legitimate traversal is unaffected. op_branch_targets adds
+		// the 0x21238->0x21458 edge so this is an ordinary two-way branch to the analyser.
+		if (m_pos == 0x21238 && op.opcode == 0x1806b650 && spu_is_killzone3()) [[unlikely]]
+		{
+			// Says the guard is in, so a log shows whether a given copy of the game got it.
+			spu_log.notice("Killzone 3: KD-tree traversal guard compiled in at LS 0x21238 (%s)", Emu.GetTitleID());
+
+			const auto ea = eval(extract(get_vr(op.rt), 3)).value;
+			const auto pages = m_ir->CreateIntToPtr(
+				m_ir->getInt64(reinterpret_cast<u64>(vm::g_pages.data())), get_type<u8*>());
+			const auto idx = m_ir->CreateLShr(m_ir->CreateZExt(ea, get_type<u64>()), 12);
+			const auto flags = m_ir->CreateLoad(get_type<u8>(), m_ir->CreateGEP(get_type<u8>(), pages, idx));
+			const auto backed = m_ir->CreateICmpNE(
+				m_ir->CreateAnd(flags, m_ir->getInt8(vm::page_readable)), m_ir->getInt8(0));
+
+			m_block->block_end = m_ir->GetInsertBlock();
+			m_ir->CreateCondBr(backed, add_block(m_pos + 4), add_block(0x21458), m_md_likely);
+		}
 	}
 
 	void AND(spu_opcode_t op)
@@ -6623,7 +6973,7 @@ public:
 
 	void CBX(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// Optimization with aligned stack assumption. Strange because SPU code could use CBD instead, but encountered in wild.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u8[16]>(~get_scalar(get_vr(op.rb)) & 0xf));
@@ -6636,7 +6986,7 @@ public:
 
 	void CHX(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBX.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u16[8]>(~get_scalar(get_vr(op.rb)) >> 1 & 0x7));
@@ -6649,7 +6999,7 @@ public:
 
 	void CWX(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBX.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u32[4]>(~get_scalar(get_vr(op.rb)) >> 2 & 0x3));
@@ -6662,7 +7012,7 @@ public:
 
 	void CDX(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBX.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u64[2]>(~get_scalar(get_vr(op.rb)) >> 3 & 0x1));
@@ -6859,7 +7209,7 @@ public:
 
 	void CBD(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// Known constant with aligned stack assumption (optimization).
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u8[16]>(~get_imm<u32>(op.i7) & 0xf));
@@ -6872,7 +7222,7 @@ public:
 
 	void CHD(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBD.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u16[8]>(~get_imm<u32>(op.i7) >> 1 & 0x7));
@@ -6885,7 +7235,7 @@ public:
 
 	void CWD(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBD.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u32[4]>(~get_imm<u32>(op.i7) >> 2 & 0x3));
@@ -6898,7 +7248,7 @@ public:
 
 	void CDD(spu_opcode_t op)
 	{
-		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp)
+		if (m_finfo && m_finfo->fn && op.ra == s_reg_sp && !(spu_shufb_skip_mask() & 0x100))
 		{
 			// See CBD.
 			set_vr(op.rt, spu_get_insertion_shuffle_mask<u64[2]>(~get_imm<u32>(op.i7) >> 3 & 0x1));
@@ -7694,9 +8044,24 @@ public:
 			using VT = typename decltype(MP)::type;
 
 			// If the mask comes from a constant generation instruction, replace SHUFB with insert
-			if (auto [ok, i] = match_expr(c, spu_get_insertion_shuffle_mask<VT>(match<u32>())); ok)
+			// (0x80 takes this fold out: Killzone 3's bad value is built by exactly this pattern,
+			// a cdd-generated mask feeding a shufb, and a wrong lane here puts a whole pointer
+			// where the half-sized field belongs.)
+			if (auto [ok, i] = match_expr(c, spu_get_insertion_shuffle_mask<VT>(match<u32>())); ok && !(spu_shufb_skip_mask() & 0x80))
 			{
-				set_vr(op.rt4, insert(get_vr<VT>(op.rb), i, get_scalar(get_vr<VT>(op.ra))));
+				const auto folded = eval(insert(get_vr<VT>(op.rb), i, get_scalar(get_vr<VT>(op.ra))));
+
+				if (spu_shufb_check_enabled())
+				{
+					m_ir->CreateStore(get_vr<u8[16]>(op.ra).value, spu_ptr(&spu_thread::shufb_dbg_a));
+					m_ir->CreateStore(get_vr<u8[16]>(op.rb).value, spu_ptr(&spu_thread::shufb_dbg_b));
+					m_ir->CreateStore(get_vr<u8[16]>(op.rc).value, spu_ptr(&spu_thread::shufb_dbg_c));
+					m_ir->CreateStore(eval(bitcast<u8[16]>(folded)).value, spu_ptr(&spu_thread::shufb_dbg_res));
+					update_pc();
+					call("spu_shufb_check", &exec_shufb_check, m_thread);
+				}
+
+				set_vr(op.rt4, folded);
 				return true;
 			}
 
@@ -7911,36 +8276,36 @@ public:
 		// NOTE: LLVM doesn't emit BCAX	(llvm-project/issues/200699)
 		//		 Verify if `(x ^ 0x0F) & 0x?F` is reassociated when upstreamed
 
-		if (consts_only)
+		if (consts_only && !(spu_shufb_skip_mask() & 1))
 		{
 			// NOP to avoid doing any shuffles
 		}
-		else if (single_src)
+		else if (single_src && !(spu_shufb_skip_mask() & 0xe))
 		{
 			const auto only_src = single_src.value();
 
-			if (only_src_is_splat && perm_or_zero_only)
+			if (only_src_is_splat && perm_or_zero_only && !(spu_shufb_skip_mask() & 2))
 			{
 				set_vr(op.rt4, select(noncast<s8[16]>(c) >= 0, only_src, splat<u8[16]>(0)));
 				return;
 			}
 
-			if (only_src_is_splat)
+			if (only_src_is_splat && !(spu_shufb_skip_mask() & 4))
 			{
 				set_vr(op.rt4, tbl(splat_lut, (c >> 4)));
 				return;
 			}
 
-			if (perm_only)
+			if (perm_only && !(spu_shufb_skip_mask() & 8))
 			{
 				const auto cm = eval(cv & 0x0f);
 				set_vr(op.rt4, tbl(only_src, cm));
 				return;
 			}
 		}
-		else if (a_is_splat && b_is_splat)
+		else if (a_is_splat && b_is_splat && !(spu_shufb_skip_mask() & 0x30))
 		{
-			if (perm_only)
+			if (perm_only && !(spu_shufb_skip_mask() & 0x10))
 			{
 				set_vr(op.rt4, select_by_bit4(c, av, bv));
 				return;
@@ -7950,7 +8315,7 @@ public:
 			return;
 		}
 
-		if (perm_only)
+		if (perm_only && !(spu_shufb_skip_mask() & 0x40))
 		{
 			const auto cm = eval(cv & 0x1f);
 			set_vr(op.rt4, tbl2(av, bv, cm));

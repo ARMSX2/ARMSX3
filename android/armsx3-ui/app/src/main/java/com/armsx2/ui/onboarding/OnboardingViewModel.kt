@@ -182,11 +182,16 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         state.value = state.value.copy(busy = true, error = null, firmwareProgress = 0f)
 
         viewModelScope.launch {
+            // The installer's own reason, caught as it fails (see BiosManagerScreen): without it
+            // every failure read "not a repack", including a folder that refused the write (#146).
+            var reason: String? = null
             val ok = withContext(Dispatchers.IO) {
                 runCatching {
                     val resolver = getApplication<Application>().contentResolver
                     val progressId =
-                        ProgressRepository.create(getApplication(), "Installing firmware")
+                        ProgressRepository.create(getApplication(), "Installing firmware") { update ->
+                            if (update.isFailed()) reason = update.message
+                        }
                     resolver.openAssetFileDescriptor(candidate.uri, "r").use { afd ->
                         val fd = afd?.parcelFileDescriptor?.fd ?: return@runCatching false
                         RPCSX.instance.installFw(fd, progressId)
@@ -203,8 +208,10 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
             } else {
                 state.value.copy(
                     busy = false,
-                    error = "\"${candidate.name}\" could not be installed. " +
-                        "It must be the official PS3UPDAT.PUP, not a repack.",
+                    error = reason?.takeIf { it.isNotBlank() }
+                        ?.let { "\"${candidate.name}\" could not be installed: $it" }
+                        ?: ("\"${candidate.name}\" could not be installed. " +
+                            "It must be the official PS3UPDAT.PUP, not a repack."),
                 )
             }
         }

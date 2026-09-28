@@ -572,8 +572,8 @@ public final class NativeApp {
 
     // ===== Misc =====
 
-    /** [TODO] RPCS3 supports disc swapping. */
-    public static boolean changeDisc(String path) { Unsupported.note("changeDisc"); return false; }
+    /** [MAPPED] -> _rpcsx_changeDisc. Use Rpcs3Bridge.changeDisc for the reason it failed. */
+    public static boolean changeDisc(String path) { return Rpcs3Bridge.changeDisc(path) == 0; }
 
     /** [TODO] */
     public static void saveScreenshot(String pngPath) { Unsupported.note("saveScreenshot"); }

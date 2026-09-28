@@ -1515,7 +1515,12 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 		if (g_cfg.video.record_with_overlays && has_overlay)
 		{
-			const auto key = vk::get_renderpass_key(m_swapchain->get_surface_format());
+			// The overlays are drawn into a copy of the game's frame, so the render pass has to be
+			// in that copy's format, not the swapchain's. The two only agree by luck: a PS3 frame is
+			// usually B8G8R8A8 while Android swapchains are R8G8B8A8, and the validation layer
+			// flagged the framebuffer (VUID-VkFramebufferCreateInfo-pAttachments-00880).
+			// single_target_pass is set again, for the swapchain, before the present path uses it.
+			const auto key = vk::get_renderpass_key(image_to_flip->format());
 			single_target_pass = vk::get_renderpass(*m_device, key);
 			ensure(single_target_pass != VK_NULL_HANDLE);
 

@@ -53,6 +53,14 @@ namespace gl
 				{ "%FFX_DEFINITIONS%", config_definitions },
 				{ "%FFX_A_IMPORT%", ffx_a_contents },
 				{ "%FFX_FSR_IMPORT%", ffx_fsr_contents },
+				// Both units are fixed here, in the source. OpenGL ES does not let the API move an image
+				// uniform: loading one with glUniform1i is INVALID_OPERATION there (ES 3.2, section
+				// 7.6.1). OutputTexture therefore stayed on binding 1 while run() bound the target to
+				// GL_COMPUTE_IMAGE_SLOT(0), every store went to a unit with nothing bound, and FSR's
+				// output was never written on native GLES or ANGLE. cs_ssbo_to_color_image declares
+				// its image slot the same way.
+				{ "layout(set=0,binding=0)", fmt::format("layout(binding=%d)", GL_TEMP_IMAGE_SLOT(0)) },
+				{ "layout(set=0,binding=1,", fmt::format("layout(binding=%d,", GL_COMPUTE_IMAGE_SLOT(0)) },
 				{ "layout(set=0,", "layout(" },
 				{ "%push_block%", fmt::format("binding=%d, std140", GL_COMPUTE_BUFFER_SLOT(0)) }
 			};
@@ -85,9 +93,7 @@ namespace gl
 				ensure(compiled);
 				m_ubo.create(gl::buffer::target::uniform, push_buffer_size, nullptr, gl::buffer::memory_type::local, gl::buffer::usage::dynamic_update);
 
-				// Statically bind the image sources
-				m_program.uniforms["InputTexture"] = GL_TEMP_IMAGE_SLOT(0);
-				m_program.uniforms["OutputTexture"] = GL_COMPUTE_IMAGE_SLOT(0);
+				// The image units are declared in the shader source; see the constructor.
 			}
 
 			m_ubo.sub_data(0, push_buffer_size, m_constants_buf.data());

@@ -134,6 +134,11 @@ class RPCSX {
      */
     external fun setThermals(cpu: Float, gpu: Float, battery: Float, show: Boolean)
     external fun setRenderPosition(portraitTop: Boolean, topInset: Int)
+    external fun setPadDeviceClasses(classes: IntArray)
+
+    /** Write a line into the emulator's own log, the file testers actually send.
+     *  Silently does nothing until the core is open. */
+    external fun logAndroid(message: String)
     external fun usbDeviceEvent(fd: Int, vendorId: Int, productId: Int, event: Int): Boolean
     external fun processCompilationQueue(): Boolean
     external fun startMainThreadProcessor(): Boolean
@@ -249,8 +254,20 @@ class RPCSX {
     external fun deleteStateFromSlot(slot: Int): Boolean
     external fun patchEngineVersion(): String
     external fun patchesImport(content: String): Int
+    /** Replace patches/[file] whole (patch.yml, artemis_patch.yml or armsx3_patch.yml only).
+     *  Patch count, or -1 when the content does not parse or the write fails. */
+    external fun patchesWrite(file: String, content: String): Int
     external fun patchesList(serial: String): String
     external fun probeDiscInfo(isoPath: String, iconOut: String): String
+    /** Swap the running game's disc. 0 swapped, 1 the game takes no swaps, 2 not a disc,
+     *  3 the game never released its disc, 4 the core refused the new one. */
+    external fun changeDisc(path: String): Int
+    /** 0 no disc swaps, 1 a disc is in and can be swapped, 2 the tray is empty. */
+    external fun discSwapState(): Int
+    /** {"discs":[...],"current":"..."} for the playlist the running game was booted from. */
+    external fun getDiscPlaylist(): String
+    /** The content id an installed game's own EBOOT is licensed under, or "" when it has none. */
+    external fun gameContentId(gamePath: String): String
     external fun patchSetEnabled(
         hash: String, description: String, serial: String,
         appVersion: String, enabled: Boolean,

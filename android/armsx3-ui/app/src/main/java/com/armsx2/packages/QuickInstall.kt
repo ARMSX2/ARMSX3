@@ -59,6 +59,7 @@ object QuickInstall {
             // A package that installed is a game now, not a package, so the tile has to stop
             // being one. Nothing else would prompt a rescan: the folder set has not changed.
             GameLibraryRepository(context).invalidateCache()
+            FrontendExport.requestSync(context)
             Result.Ok
         }
 

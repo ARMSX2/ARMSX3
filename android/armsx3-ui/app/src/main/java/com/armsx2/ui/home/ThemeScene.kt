@@ -1,0 +1,611 @@
+package com.armsx2.ui.home
+
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
+import kotlin.math.tan
+
+/**
+ * A dynamic PS3 theme in motion: the scene's actors and camera as its script moves them. Pure
+ * Kotlin, driven by whoever draws it ([ThemeSceneRenderer]) through [advance].
+ *
+ * What the script is given, as the PS3's theme engine gives it (worked out from the real scripts
+ * described in [VsmxVm]):
+ *  - `new Actor(name)`, `new Camera(name)`, `new Light(name)`: the scene's own objects, with
+ *    vector properties (an actor's position, rotation, scale, color, uv_offset, uv_scale and
+ *    enable; the camera's position, direction and up) and methods that move one there over a
+ *    time: `setPosition(v)`, `setColor(v, seconds)`, `setPosition(v, seconds, INTERPOLATION_BEZIER)`.
+ *    Script vectors are the scene's own coordinates.
+ *  - `new IntervalTimer(seconds, fn)` and `new OneShotTimer(seconds, fn)`. A timer runs from when it
+ *    is made; the `timer` arrays on System and on each actor (`install.timer[1] = ...`) only hold
+ *    them. JUJU's theme stores both of its timers in System.timer[3], and replacing the first
+ *    would stop its slideshow after one picture.
+ *  - `System.interval`, one frame's time; `Math`; `Array`; `writeln`; `INTERPOLATION_LINEAR` and
+ *    `INTERPOLATION_BEZIER`.
+ * A callback that fails stops its own timer; the rest of the scene keeps going. [random] is what
+ * Math.random returns, for tests.
+ *
+ * Skinned actors play their model's clips (see [EdgeAnim]) on their own: each animation slot of
+ * the actor has a weight, a speed and a start time, and the clips loop. Scripts can change those
+ * through anim_weight, anim_speed and anim_time.
+ */
+class ThemeScene(val scene: RafScene.Scene, private val random: () -> Double = { Math.random() }) {
+
+    /**
+     * Told the name of whatever the script asks for that is not provided here, such as
+     * "Actor.setTexture" or "Math.hypot": a theme needing more than this player knows. Set before
+     * [start].
+     */
+    var unsupported: ((String) -> Unit)? = null
+
+    private fun report(what: String) {
+        unsupported?.invoke(what)
+    }
+
+    /** A property on its way from [from] to [to] over [duration] seconds. */
+    private class Tween(val target: FloatArray, val from: FloatArray, val to: FloatArray, val duration: Double, val eased: Boolean) {
+        var elapsed = 0.0
+    }
+
+    /** An object whose vectors a script can set at once or move over time. */
+    abstract inner class Movable : VsmxVm.HostObject {
+        private val tweens = HashMap<String, Tween>(4)
+        private val timers = TimerSlots(this)
+
+        /** The vector property [name], or null when there is none by that name. */
+        protected abstract fun vector(name: String): FloatArray?
+
+        /** The property a method such as "setPosition" moves, when it is one. */
+        protected abstract fun mover(name: String): String?
+
+        /** What scripts call it: Actor, Camera, Light. */
+        protected abstract val kind: String
+
+        override fun get(name: String): Any? {
+            vector(name)?.let { return toArray(it) }
+            if (name == "timer") return timers
+            val target = mover(name) ?: return VsmxVm.Undefined.also { report("$kind.$name") }
+            return VsmxVm.Native(name) { _, args -> move(target, args); VsmxVm.Undefined }
+        }
+
+        override fun set(name: String, value: Any?) {
+            val v = vector(name) ?: return report("$kind.$name =")
+            tweens.remove(name)
+            assign(v, value)
+        }
+
+        /** `setX(to, seconds, interpolation)`: at once without a time, otherwise over it. */
+        private fun move(name: String, args: List<Any?>) {
+            val v = vector(name) ?: return
+            val to = v.copyOf()
+            if (!assign(to, args.getOrNull(0))) return
+            moveVector(name, to, VsmxVm.num(args.getOrNull(1)), VsmxVm.num(args.getOrNull(2)) == BEZIER)
+        }
+
+        /** Vector [name] to [to]: at once, or over [seconds]. */
+        protected fun moveVector(name: String, to: FloatArray, seconds: Double, eased: Boolean = false) {
+            val v = vector(name) ?: return
+            if (seconds.isNaN() || seconds <= 0.0) {
+                tweens.remove(name)
+                to.copyInto(v)
+            } else {
+                tweens[name] = Tween(v, v.copyOf(), to, seconds, eased)
+            }
+        }
+
+        internal fun step(dt: Double) {
+            if (tweens.isEmpty()) return
+            val it = tweens.values.iterator()
+            while (it.hasNext()) {
+                val t = it.next()
+                t.elapsed += dt
+                val x = (t.elapsed / t.duration).coerceIn(0.0, 1.0)
+                val k = if (t.eased) x * x * (3 - 2 * x) else x
+                for (i in t.target.indices) t.target[i] = (t.from[i] + (t.to[i] - t.from[i]) * k).toFloat()
+                if (x >= 1.0) it.remove()
+            }
+        }
+    }
+
+    inner class ActorState(val source: RafScene.Actor) : Movable() {
+        override val kind get() = "Actor"
+        val position = source.position.copyOf()
+        val rotation = source.rotation.copyOf()
+        val scale = source.scale.copyOf()
+        val color = source.color.copyOf()
+        val uvOffset = source.uvOffset.copyOf()
+        val uvScale = source.uvScale.copyOf()
+        val animWeights = source.animWeights.copyOf(ANIM_SLOTS).also { if (source.animWeights.isEmpty()) it[0] = 1f }
+        val animSpeeds = FloatArray(ANIM_SLOTS) { source.animSpeeds.getOrElse(it) { 1f } }
+        val animTimes = source.animTimes.copyOf(ANIM_SLOTS)
+        var enabled = true
+            private set
+
+        /**
+         * Whether there is anything to draw: a mesh with a texture, not one its author collapsed to
+         * hide it, and when it is bent by a skeleton, the skeleton to bend it with.
+         */
+        val drawable: Boolean = source.mesh != null && (!source.mesh.skinned || source.rig != null) &&
+            source.material?.texture != null && source.mesh.area() > MIN_AREA
+
+        private val pose = source.rig?.skeleton?.rest?.copyOf()
+        private val worlds = source.rig?.let { FloatArray(12 * it.skeleton.joints) }
+        private val skin = source.rig?.let { FloatArray(12 * it.skeleton.joints) }
+
+        /**
+         * Each joint's world x inverse bind matrix (3x4, row-major, 12 floats a joint) at the scene's
+         * current time, or null when the actor is not skinned. The array is reused.
+         */
+        fun skinMatrices(): FloatArray? {
+            val rig = source.rig ?: return null
+            val pose = pose ?: return null
+            rig.skeleton.rest.copyInto(pose)
+            var total = 0f
+            for (slot in 0 until minOf(ANIM_SLOTS, rig.clips.size)) {
+                val w = animWeights[slot]
+                val clip = rig.clips[slot] ?: continue
+                if (!(w > 0f) || !(clip.duration > 0f)) continue
+                total += w
+                val t = time * animSpeeds[slot] + animTimes[slot]
+                val local = (t % clip.duration).let { if (it < 0) it + clip.duration else it }
+                // Blending in turn by weight / weight so far is the weighted average.
+                EdgeAnim.sample(clip, (local * clip.frameRate).toFloat(), pose, w / total)
+            }
+            EdgeAnim.worlds(rig.skeleton, pose, worlds!!)
+            return EdgeAnim.skinMatrices(worlds, rig.inverseBinds, skin!!)
+        }
+
+        /**
+         * Whether a clip of its model moves it: one in a slot it plays (weight and speed), with keys
+         * that change. White Knight Chronicles' theme and the PS Buttons ones have no script: their
+         * characters only play their clips.
+         */
+        val playsClip: Boolean
+            get() = source.rig?.clips?.withIndex()?.any { (slot, clip) ->
+                clip != null && slot < ANIM_SLOTS && animWeights[slot] > 0f && animSpeeds[slot] != 0f &&
+                    clip.channels.any { it.frames.size > 1 }
+            } == true
+
+        /** Drawn this frame: [drawable], enabled, and neither see-through nor scaled to nothing. */
+        val shown: Boolean
+            get() = drawable && enabled && color[3] > 0f && (scale[0] != 0f || scale[1] != 0f || scale[2] != 0f)
+
+        override fun vector(name: String): FloatArray? = when (name) {
+            "position" -> position
+            "rotation" -> rotation
+            "scale" -> scale
+            "color" -> color
+            "uv_offset" -> uvOffset
+            "uv_scale" -> uvScale
+            "anim_weight" -> animWeights
+            "anim_speed" -> animSpeeds
+            "anim_time" -> animTimes
+            else -> null
+        }
+
+        override fun mover(name: String): String? = when (name) {
+            "setPosition" -> "position"
+            "setRotation" -> "rotation"
+            "setScale" -> "scale"
+            "setColor" -> "color"
+            else -> null
+        }
+
+        override fun get(name: String): Any? = when (name) {
+            "enable" -> enabled
+            // Fallout NV's template turns two actors toward a point every frame. What that does to
+            // an actor is not known, and both are hidden in every theme seen, so it does nothing.
+            "setDirection" -> VsmxVm.Native(name) { _, _ -> VsmxVm.Undefined }
+            // Animation slots by their animation's id, as Sony's Afrika theme drives its zebras.
+            "getAnimIndex" -> VsmxVm.Native(name) { _, args ->
+                (source.rig?.names?.indexOf(VsmxVm.str(args.getOrNull(0))) ?: -1).toDouble()
+            }
+            "getAnimSpeed" -> VsmxVm.Native(name) { _, args -> slot(args)?.let { animSpeeds[it].toDouble() } ?: VsmxVm.Undefined }
+            // (slot, weight, seconds): there over that long, as setColor goes.
+            "setAnimWeight" -> VsmxVm.Native(name) { _, args ->
+                slot(args)?.let { s ->
+                    val to = animWeights.copyOf()
+                    to[s] = VsmxVm.num(args.getOrNull(1)).toFloat().takeIf { it.isFinite() } ?: return@let
+                    moveVector("anim_weight", to, VsmxVm.num(args.getOrNull(2)))
+                }
+                VsmxVm.Undefined
+            }
+            // (slot, seconds): the slot's clip is that far in now.
+            "setAnimTime" -> VsmxVm.Native(name) { _, args ->
+                slot(args)?.let { s ->
+                    val at = VsmxVm.num(args.getOrNull(1))
+                    if (at.isFinite()) animTimes[s] = (at - time * animSpeeds[s]).toFloat()
+                }
+                VsmxVm.Undefined
+            }
+            else -> super.get(name)
+        }
+
+        private fun slot(args: List<Any?>): Int? = VsmxVm.num(args.getOrNull(0)).takeIf { it.isFinite() }?.toInt()?.takeIf { it in 0 until ANIM_SLOTS }
+
+        override fun set(name: String, value: Any?) {
+            if (name == "enable") enabled = VsmxVm.truthy(value) else super.set(name, value)
+        }
+    }
+
+    inner class CameraState : Movable() {
+        override val kind get() = "Camera"
+        val position = scene.camera.position.copyOf()
+        val direction = scene.camera.direction.copyOf()
+        val up = scene.camera.up.copyOf()
+        var yfov = scene.camera.yfov
+            private set
+
+        override fun vector(name: String): FloatArray? = when (name) {
+            "position" -> position
+            "direction" -> direction
+            "up" -> up
+            else -> null
+        }
+
+        override fun mover(name: String): String? = when (name) {
+            "setPosition" -> "position"
+            "setDirection" -> "direction"
+            "setUp" -> "up"
+            else -> null
+        }
+
+        override fun get(name: String): Any? = when (name) {
+            "yfov" -> yfov.toDouble()
+            // The picture's shape: the scene is always composed for 16:9, and cropped to fit.
+            "aspect" -> FRAME_ASPECT.toDouble()
+            else -> super.get(name)
+        }
+
+        override fun set(name: String, value: Any?) {
+            if (name == "yfov") {
+                val v = VsmxVm.num(value).toFloat()
+                if (v > MIN_FOV && v < MAX_FOV) yfov = v
+            } else {
+                super.set(name, value)
+            }
+        }
+    }
+
+    /** A light: the scene's own values to start with, then wherever the script moves it. */
+    inner class LightState(val type: Int = RafScene.Light.POINT, from: RafScene.Light? = null) : Movable() {
+        override val kind get() = "Light"
+        val position = from?.position?.copyOf(3) ?: FloatArray(3)
+        val direction = from?.direction?.copyOf(3) ?: floatArrayOf(0f, 0f, -1f)
+        val color = from?.color?.copyOf(3) ?: floatArrayOf(1f, 1f, 1f)
+
+        override fun vector(name: String): FloatArray? = when (name) {
+            "position" -> position
+            "direction" -> direction
+            "color" -> color
+            else -> null
+        }
+
+        override fun mover(name: String): String? = when (name) {
+            "setPosition" -> "position"
+            "setDirection" -> "direction"
+            "setColor" -> "color"
+            else -> null
+        }
+    }
+
+    private inner class Timer(val interval: Double, val fn: Any?, val repeat: Boolean) : VsmxVm.HostObject {
+        var due = interval
+        var dead = false
+
+        /** `this` for the callback: whoever's timer slot holds it (`moebius.timer[0] = ...`). */
+        var owner: Any? = VsmxVm.Undefined
+        override fun get(name: String): Any? = if (name == "interval") interval else VsmxVm.Undefined.also { report("Timer.$name") }
+        override fun set(name: String, value: Any?) = report("Timer.$name =")
+    }
+
+    /**
+     * A `timer` array: where a script keeps its timers. A timer put in one runs its callback with
+     * [owner] as `this`, which Xperia Z Make.Believe's callbacks use (`this.setScale(...)`).
+     */
+    private inner class TimerSlots(private val owner: Any?) : VsmxVm.HostObject {
+        private val slots = HashMap<String, Any?>()
+        override fun get(name: String): Any? = slots[name] ?: VsmxVm.Undefined
+        override fun set(name: String, value: Any?) {
+            if (slots.size < MAX_TIMERS || name in slots) {
+                slots[name] = value
+                (value as? Timer)?.owner = owner
+            }
+        }
+    }
+
+    val actors: List<ActorState> = scene.actors.map { ActorState(it) }
+    val camera = CameraState()
+    private val lights = LinkedHashMap<String, LightState>().also { map ->
+        for (l in scene.lights) map[l.name] = LightState(l.type, l)
+    }
+
+    /** The scene's lights as they are now, for drawing. */
+    val lightStates: Collection<LightState> get() = lights.values
+
+    /** Seconds since the scene started. */
+    var time = 0.0
+        private set
+    private val timers = ArrayList<Timer>()
+    private val byName = actors.associateBy { it.source.name }
+
+    private val system = object : VsmxVm.HostObject {
+        private val slots = TimerSlots(this)
+        override fun get(name: String): Any? = when (name) {
+            "timer" -> slots
+            "interval" -> TICK
+            // The PS3's output, which themes pick HD or SD pictures by: always HD here.
+            "resolution" -> toArray(floatArrayOf(1920f, 1080f))
+            else -> VsmxVm.Undefined.also { report("System.$name") }
+        }
+        override fun set(name: String, value: Any?) = report("System.$name =")
+    }
+
+    private val math = object : VsmxVm.HostObject {
+        private fun f(name: String, op: (Double, Double) -> Double) =
+            VsmxVm.Native(name) { _, args -> op(VsmxVm.num(args.getOrElse(0) { Double.NaN }), VsmxVm.num(args.getOrElse(1) { Double.NaN })) }
+        override fun get(name: String): Any? = when (name) {
+            "PI" -> PI
+            "E" -> Math.E
+            "floor" -> f(name) { x, _ -> Math.floor(x) }
+            "ceil" -> f(name) { x, _ -> Math.ceil(x) }
+            "round" -> f(name) { x, _ -> Math.floor(x + 0.5) }
+            "abs" -> f(name) { x, _ -> Math.abs(x) }
+            "sin" -> f(name) { x, _ -> sin(x) }
+            "cos" -> f(name) { x, _ -> cos(x) }
+            "tan" -> f(name) { x, _ -> tan(x) }
+            "asin" -> f(name) { x, _ -> Math.asin(x) }
+            "acos" -> f(name) { x, _ -> Math.acos(x) }
+            "atan" -> f(name) { x, _ -> Math.atan(x) }
+            "atan2" -> f(name) { y, x -> Math.atan2(y, x) }
+            "sqrt" -> f(name) { x, _ -> sqrt(x) }
+            "pow" -> f(name) { x, y -> Math.pow(x, y) }
+            "exp" -> f(name) { x, _ -> Math.exp(x) }
+            "log" -> f(name) { x, _ -> Math.log(x) }
+            "min" -> VsmxVm.Native(name) { _, args -> args.minOfOrNull { VsmxVm.num(it) } ?: Double.POSITIVE_INFINITY }
+            "max" -> VsmxVm.Native(name) { _, args -> args.maxOfOrNull { VsmxVm.num(it) } ?: Double.NEGATIVE_INFINITY }
+            "random" -> VsmxVm.Native(name) { _, _ -> random() }
+            else -> VsmxVm.Undefined.also { report("Math.$name") }
+        }
+        override fun set(name: String, value: Any?) = report("Math.$name =")
+    }
+
+    private fun timer(args: List<Any?>, repeat: Boolean): Timer {
+        if (timers.size >= MAX_TIMERS) throw VsmxVm.VsmxError("too many timers")
+        val seconds = VsmxVm.num(args.getOrNull(0)).takeIf { !it.isNaN() } ?: 0.0
+        return Timer(if (repeat) seconds.coerceAtLeast(MIN_INTERVAL) else seconds.coerceAtLeast(0.0), args.getOrNull(1), repeat)
+            .also { timers += it }
+    }
+
+    private val host = object : VsmxVm.Host {
+        override fun global(name: String): Any? = when (name) {
+            "Actor" -> VsmxVm.Constructor(name) { args ->
+                val id = VsmxVm.str(args.getOrNull(0))
+                byName[id] ?: throw VsmxVm.VsmxError("no actor $id")
+            }
+            "Camera" -> VsmxVm.Constructor(name) { camera }
+            "Light" -> VsmxVm.Constructor(name) { args ->
+                val id = VsmxVm.str(args.getOrNull(0))
+                lights[id] ?: if (lights.size < MAX_LIGHTS) LightState().also { lights[id] = it } else throw VsmxVm.VsmxError("too many lights")
+            }
+            "Array" -> VsmxVm.Constructor(name) { args ->
+                val size = args.singleOrNull() as? Double
+                if (size != null) {
+                    if (size < 0 || size > MAX_ARRAY) throw VsmxVm.VsmxError("array size")
+                    VsmxVm.JsArray(ArrayList<Any?>(List(size.toInt()) { VsmxVm.Undefined }))
+                } else {
+                    VsmxVm.JsArray(ArrayList(args))
+                }
+            }
+            "IntervalTimer" -> VsmxVm.Constructor(name) { args -> timer(args, repeat = true) }
+            "OneShotTimer" -> VsmxVm.Constructor(name) { args -> timer(args, repeat = false) }
+            "System" -> system
+            "Math" -> math
+            "writeln" -> VsmxVm.Native(name) { _, _ -> VsmxVm.Undefined }
+            "INTERPOLATION_LINEAR" -> LINEAR
+            "INTERPOLATION_BEZIER" -> BEZIER
+            // JavaScript's own globals, which scripts compare against.
+            "undefined" -> VsmxVm.Undefined
+            "NaN" -> Double.NaN
+            "Infinity" -> Double.POSITIVE_INFINITY
+            else -> null.also { report(name) }
+        }
+
+        override fun unsupported(what: String) = report(what)
+    }
+
+    private val vm: VsmxVm? = scene.script?.let(VsmxVm.Program::parse)?.let { VsmxVm(it, host) }
+
+    /** Whether there is a script to run at all. */
+    val scripted: Boolean get() = vm != null
+
+    /** The last reason a part of the script stopped, for the log. */
+    var scriptError: String? = null
+        private set
+
+    private var started = false
+
+    /** Run the script's top level, once: it places things and makes its timers. */
+    fun start() {
+        if (started) return
+        started = true
+        vm?.run()
+        scriptError = vm?.failed
+    }
+
+    /** Move time on by [seconds]: moves in progress go on, then due timers fire. */
+    fun advance(seconds: Double) {
+        start()
+        val dt = if (seconds.isNaN()) 0.0 else seconds.coerceIn(0.0, MAX_STEP)
+        time += dt
+        for (a in actors) a.step(dt)
+        camera.step(dt)
+        for (l in lights.values) l.step(dt)
+        // A snapshot: timers made by these callbacks start counting next time.
+        for (timer in timers.toTypedArray()) {
+            if (timer.dead) continue
+            timer.due -= dt
+            // Up to a quarter frame early, so a timer firing every frame stays locked to frames
+            // that arrive a little early or late instead of skipping one and doubling the next.
+            val slack = SLACK * minOf(timer.interval, TICK)
+            var fired = 0
+            while (!timer.dead && timer.due <= slack) {
+                if (fired == MAX_CATCH_UP) {
+                    timer.due = timer.interval // after a stall: drop the backlog, keep the rhythm
+                    break
+                }
+                fired++
+                if (timer.repeat) timer.due += timer.interval else timer.dead = true
+                vm?.call(timer.fn, timer.owner)?.let {
+                    timer.dead = true
+                    scriptError = it
+                }
+            }
+        }
+        timers.removeAll { it.dead }
+    }
+
+    /** Everything that decides what a frame looks like, to tell whether the script moved it. */
+    private fun snapshot(): FloatArray {
+        val out = ArrayList<Float>()
+        for (a in actors) {
+            if (!a.drawable) continue
+            out += if (a.enabled) 1f else 0f
+            for (v in arrayOf(a.position, a.rotation, a.scale, a.color, a.uvOffset, a.uvScale)) v.forEach { out += it }
+        }
+        for (v in arrayOf(camera.position, camera.direction, camera.up)) v.forEach { out += it }
+        out += camera.yfov
+        return out.toFloatArray()
+    }
+
+    companion object {
+        /** A frame of the theme engine's, as scripts read it from System.interval. */
+        const val TICK = 1.0 / 60
+
+        /** The shape of the PS3's picture, which scenes are composed for. */
+        const val FRAME_ASPECT = 16f / 9f
+
+        private const val LINEAR = 0.0
+        private const val BEZIER = 1.0
+        private const val MAX_STEP = 0.25
+        private const val MAX_CATCH_UP = 8
+        private const val SLACK = 0.25
+        private const val MIN_INTERVAL = 1.0 / 240
+        private const val MAX_TIMERS = 64
+        private const val MAX_LIGHTS = 16
+        private const val MAX_ARRAY = 1 shl 16
+        private const val MIN_AREA = 1e-6
+        private const val MIN_FOV = 0.01f
+        private const val MAX_FOV = 3.1f
+        private const val ANIM_SLOTS = 8
+
+        /**
+         * Whether [scene] moves: a character drawn playing its clip, or a script that moves the
+         * camera or anything drawn within [seconds]. A theme whose script only sets things up once
+         * is as good as a picture.
+         */
+        fun animates(scene: RafScene.Scene, seconds: Double = 30.0, random: () -> Double = { Math.random() }): Boolean {
+            val play = ThemeScene(scene, random)
+            if (play.actors.none { it.drawable }) return false
+            if (play.actors.any { it.drawable && it.playsClip }) return true
+            if (!play.scripted) return false
+            play.start()
+            val first = play.snapshot()
+            var t = 0.0
+            var ticks = 0
+            while (t < seconds) {
+                play.advance(TICK)
+                t += TICK
+                if (++ticks % 15 == 0 && !play.snapshot().contentEquals(first)) return true
+            }
+            return !play.snapshot().contentEquals(first)
+        }
+
+        fun toArray(v: FloatArray) = VsmxVm.JsArray(ArrayList<Any?>(v.map { it.toDouble() }))
+
+        /**
+         * Copy a script array's numbers into [target], as many as both have: a shorter array leaves
+         * the rest as it was. False, changing nothing, when [value] is not an array of numbers.
+         */
+        fun assign(target: FloatArray, value: Any?): Boolean {
+            val items = (value as? VsmxVm.JsArray)?.items ?: return false
+            val n = minOf(target.size, items.size)
+            if (n == 0) return false
+            val v = FloatArray(n) { VsmxVm.num(items[it]).toFloat() }
+            if (v.any { !it.isFinite() }) return false
+            v.copyInto(target)
+            return true
+        }
+
+        /**
+         * T * Rz * Ry * Rx * S, column-major for GL: rotations apply X, then Y, then Z. Checked
+         * against PS4 On PS3, whose slide (rotation pi/2, 0, -pi, negative scale) only comes out
+         * upright and unmirrored in this order.
+         */
+        fun modelMatrix(p: FloatArray, r: FloatArray, s: FloatArray, out: FloatArray = FloatArray(16)): FloatArray {
+            val cx = cos(r[0].toDouble()); val sx = sin(r[0].toDouble())
+            val cy = cos(r[1].toDouble()); val sy = sin(r[1].toDouble())
+            val cz = cos(r[2].toDouble()); val sz = sin(r[2].toDouble())
+            val r00 = cz * cy; val r01 = cz * sy * sx - sz * cx; val r02 = cz * sy * cx + sz * sx
+            val r10 = sz * cy; val r11 = sz * sy * sx + cz * cx; val r12 = sz * sy * cx - cz * sx
+            val r20 = -sy; val r21 = cy * sx; val r22 = cy * cx
+            out[0] = (r00 * s[0]).toFloat(); out[1] = (r10 * s[0]).toFloat(); out[2] = (r20 * s[0]).toFloat(); out[3] = 0f
+            out[4] = (r01 * s[1]).toFloat(); out[5] = (r11 * s[1]).toFloat(); out[6] = (r21 * s[1]).toFloat(); out[7] = 0f
+            out[8] = (r02 * s[2]).toFloat(); out[9] = (r12 * s[2]).toFloat(); out[10] = (r22 * s[2]).toFloat(); out[11] = 0f
+            out[12] = p[0]; out[13] = p[1]; out[14] = p[2]; out[15] = 1f
+            return out
+        }
+
+        /** Looking from [eye] along [direction], as gluLookAt; column-major. */
+        fun viewMatrix(eye: FloatArray, direction: FloatArray, up: FloatArray): FloatArray {
+            val f = normalized(direction) ?: floatArrayOf(0f, 0f, -1f)
+            val s = normalized(cross(f, up)) ?: normalized(cross(f, floatArrayOf(0f, 0f, 1f)))
+                ?: normalized(cross(f, floatArrayOf(0f, 1f, 0f)))!!
+            val u = cross(s, f)
+            return floatArrayOf(
+                s[0], u[0], -f[0], 0f,
+                s[1], u[1], -f[1], 0f,
+                s[2], u[2], -f[2], 0f,
+                -dot(s, eye), -dot(u, eye), dot(f, eye), 1f,
+            )
+        }
+
+        /**
+         * Perspective for a view [aspect] wide. The scene is composed for a 16:9 picture with
+         * vertical field [yfov]; other shapes get that picture cropped to fill them, as a photo is,
+         * never the edges of the set beyond it.
+         */
+        fun projection(yfov: Float, aspect: Float, near: Float, far: Float): FloatArray {
+            val tanHalf = tan(yfov / 2.0) * minOf(1.0, FRAME_ASPECT / aspect.toDouble())
+            val f = (1 / tanHalf).toFloat()
+            return floatArrayOf(
+                f / aspect, 0f, 0f, 0f,
+                0f, f, 0f, 0f,
+                0f, 0f, (far + near) / (near - far), -1f,
+                0f, 0f, 2 * far * near / (near - far), 0f,
+            )
+        }
+
+        /** a * b, both column-major 4x4, into [out], which must be neither. */
+        fun multiply(a: FloatArray, b: FloatArray, out: FloatArray = FloatArray(16)): FloatArray {
+            for (c in 0 until 4) for (r in 0 until 4) {
+                var sum = 0f
+                for (k in 0 until 4) sum += a[k * 4 + r] * b[c * 4 + k]
+                out[c * 4 + r] = sum
+            }
+            return out
+        }
+
+        private fun cross(a: FloatArray, b: FloatArray) =
+            floatArrayOf(a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+        private fun dot(a: FloatArray, b: FloatArray) = a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+        private fun normalized(v: FloatArray): FloatArray? {
+            val length = sqrt(dot(v, v))
+            if (!(length > 1e-6f) || !length.isFinite()) return null
+            return floatArrayOf(v[0] / length, v[1] / length, v[2] / length)
+        }
+    }
+}

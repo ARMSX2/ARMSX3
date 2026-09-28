@@ -1,5 +1,8 @@
 #include <sys/prctl.h>
+#include <array>
+#include <charconv>
 #include <fstream>
+#include <cstring>
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
 #include "Emu/Audio/Cubeb/CubebBackend.h"
@@ -31,6 +34,7 @@
 // patch_engine, needed by the precompile path before ppu_load_exec.
 #include "Utilities/bin_patch.h"
 #include "Emu/localized_string_id.h"
+#include "Emu/emu_callbacks.h"
 #include "Emu/system_config.h"
 #include "Emu/NP/rpcn_client.h"
 #include "Emu/NP/rpcn_config.h"
@@ -43,9 +47,11 @@
 #include "Input/dualsense_pad_handler.h"
 #include "Input/hid_pad_handler.h"
 #include "Input/pad_thread.h"
+#include "Input/product_info.h"
 #include "Input/virtual_keyboard_handler.h"
 #include "Input/virtual_pad_handler.h"
 #include "Loader/ISO.h"
+#include "Loader/disc.h"
 #include "Loader/PSF.h"
 #include "Loader/PUP.h"
 #include "Loader/TAR.h"
@@ -535,6 +541,40 @@ struct GraphicsFrame : GSFrameBase {
   }
 
   void flip(draw_context_t ctx, bool skip_frame = false) override {
+    // Count frames here, because nothing else does.
+    //
+    // The overlay draws a framerate and testers send LOGS, so the one number a performance
+    // report turns on has never been in one, ours or theirs. Across two Guitar Hero logs from
+    // a reporter and three of our own, every match for "fps" is the window title format string
+    // in the config dump or a coincidental substring in an SPU function hash.
+    //
+    // flip() is the guest's own present, so this is the rate the GAME is achieving, which is
+    // the question. Guitar Hero 5 (#120) desyncs with the audio getting ahead while the notes
+    // lag, and healthy audio plus a slow guest is exactly that shape; the audio side is already
+    // visible in the buffer line and looks fine, so the guest rate is the missing half.
+    //
+    // The range goes with the average because a title holding 60 and one averaging 60 by
+    // alternating 50 and 70 are different problems, and for a rhythm game very different ones.
+    {
+      const u64 now = get_system_time();
+
+      m_frames_since_log++;
+
+      if (!m_fps_window_start) {
+        m_fps_window_start = now;
+      } else if (now - m_fps_window_start >= 5'000'000) {
+        const double secs = (now - m_fps_window_start) / 1'000'000.0;
+        const double fps = m_frames_since_log / secs;
+
+        // warning, so Android's logcat sink keeps it.
+        rpcsx_android.warning("Framerate: %.1f fps (%u frames in %.1fs)", fps,
+                              m_frames_since_log, secs);
+
+        m_fps_window_start = now;
+        m_frames_since_log = 0;
+      }
+    }
+
 #ifdef RSX_GLES
     if (!usingGlRenderer()) {
       return;
@@ -545,6 +585,12 @@ struct GraphicsFrame : GSFrameBase {
     }
 #endif
   }
+
+private:
+  u64 m_fps_window_start = 0;
+  u32 m_frames_since_log = 0;
+
+public:
   // These two drive the resize check in VKGSRender::flip, so a stale value here does not
   // make the picture late, it makes it wrong: the swapchain keeps the extent it had and
   // the present framebuffer is built to match, whatever shape the window is now.
@@ -593,8 +639,8 @@ struct GraphicsFrame : GSFrameBase {
                        u32 sshot_height, bool is_bgra) override {
     armsx3_store_thumbnail(sshot_data, sshot_width, sshot_height, is_bgra);
   }
-  // Added upstream after RPCSX forked. The Android UI draws its own FPS via
-  // the perf overlay, so there is no host window title to update.
+  // Added upstream after RPCSX forked. Never called here: the only caller is the Qt
+  // gs_frame, and rpcs3qt is not built for Android. Framerate is counted in flip() instead.
   void update_title(double fps = 0.0) override {}
 };
 
@@ -1186,12 +1232,24 @@ static std::pair<std::string, std::u32string> g_strings[] = {
     MAKE_STRING(
         SAVESTATE_FAILED_DUE_TO_SAVEDATA,
         "SaveState failed: Game saving is in progress, wait until finished."),
+    // Upstream's desktop advice is to switch the SPU decoder to ASMJIT, which ARM64 builds
+    // do not have (System.cpp swaps it back at boot), so it sent people after a setting that
+    // cannot help. The other one names the setting as the Performance tab shows it.
+    //
+    // Do not promise that retrying works. An SPU is unsavable while it sits inside an atomic
+    // MFC command (GETLLAR, PUTLLC, PUTLLUC) run from compiled code, whatever Allow save
+    // states says, and the lock gives up at once when one has been parked there for five
+    // seconds. A game that keeps an SPU waiting on a line that rarely changes fails every
+    // time: Guitar Hero World Tour did, on every attempt, after this said "try again in a
+    // moment". Some games pass a second later, others never do, and the game's own save
+    // works either way.
     MAKE_STRING(SAVESTATE_FAILED_DUE_TO_SPU,
-                "SaveState failed: Failed to lock SPU state, using SPU ASMJIT "
-                "will fix it."),
+                "SaveState failed: the game's SPUs are in a state that can't be "
+                "saved. Some games stay that way, so if it keeps failing, use the "
+                "game's own save instead."),
     MAKE_STRING(SAVESTATE_FAILED_DUE_TO_MISSING_SPU_SETTING,
-                "SaveState failed: Failed to lock SPU state, enabling "
-                "SPU-Compatible mode may fix it."),
+                "SaveState failed: turn on Allow save states in the Performance "
+                "settings, then try again."),
 };
 
 #undef MAKE_STRING
@@ -1353,14 +1411,14 @@ static void sendGameInfo(JNIEnv *env, jlong progressId,
   objects.reserve(infos.size());
 
   for (const auto &info : infos) {
-    auto path = Emu.GetCallbacks().resolve_path(info.path);
+    auto path = g_emu_callbacks.resolve_path(info.path);
     if (path.ends_with('/')) {
       path.resize(path.size() - 1);
     }
 
     objects.push_back(env->NewObject(
         gameClass, gameConstructor, wrap(env, path), wrap(env, info.name),
-        wrap(env, Emu.GetCallbacks().resolve_path(info.iconPath)),
+        wrap(env, g_emu_callbacks.resolve_path(info.iconPath)),
         jint(info.flags)));
   }
 
@@ -1384,6 +1442,24 @@ static void sendVshBootable(JNIEnv *env, jlong progressId) {
           .name = "VSH",
           .iconPath = dev_flash + "vsh/resource/explore/icon/icon_home.png",
       }}});
+}
+
+// The title id inside a content id: XXYYYY-TITLEID00_00-LABEL, so the nine characters after
+// the first dash. Empty for anything that is not shaped like one.
+static std::string_view contentIdTitle(std::string_view id) {
+  return id.size() == 36 && id[6] == '-' && id[19] == '-' ? id.substr(7, 9)
+                                                         : std::string_view{};
+}
+
+// A trial that is not a C00 trial: its EBOOT is free and carries the trial's own content id,
+// while PARAM.SFO carries the full game's licence id instead. Bomberman ULTRA: EBOOT
+// UP0555-NPUB30051_00-BMANTRIALGAME001, PARAM.SFO UP0555-NPUB30051_00-BMANLICENSEGAME1. The game
+// unlocks itself by asking sceNpDrmVerifyUpgradeLicense about the PARAM.SFO id, which RPCS3
+// answers from exdata/<that id>.edat alone (rpcs3::utils::verify_c00_unlock_edat).
+static bool isLicenceIdTrial(std::string_view ebootId, bool ebootIsFree,
+                             std::string_view sfoId) {
+  return ebootIsFree && ebootId != sfoId && !contentIdTitle(sfoId).empty() &&
+         contentIdTitle(sfoId) == contentIdTitle(ebootId);
 }
 
 static bool tryUnlockGame(const psf::registry &psf) {
@@ -1538,11 +1614,25 @@ fetchGameInfo(const psf::registry &psf,
     auto ebootPath = locateEbootPath(path);
 
     bool isLocked = false;
+    std::string ebootContentId;
+    bool ebootIsFree = false;
 
     if (!ebootPath.empty()) {
       if (fs::file eboot{ebootPath};
           eboot && eboot.size() >= 4 && eboot.read<u32>() == "SCE\0"_u32) {
-        isLocked = !decrypt_self(eboot);
+        // The NPD header comes back even when the licence is missing, which is what lets a
+        // locked game still name the content id it wants.
+        SelfAdditionalInfo selfInfo;
+        isLocked = !decrypt_self(eboot, nullptr, &selfInfo);
+
+        for (auto &supplemental : selfInfo.supplemental_hdr) {
+          if (supplemental.type == 3) {
+            const auto &npd = supplemental.PS3_npdrm_header.npd;
+            ebootContentId = npd.get_content_id();
+            ebootIsFree = npd.license == 3; // unself.cpp: 3 is a free licence
+            break;
+          }
+        }
       }
     }
 
@@ -1573,6 +1663,15 @@ fetchGameInfo(const psf::registry &psf,
           name = psf::get_string(c00Sfo, "TITLE", name);
         }
       }
+    } else if (const auto sfoId = psf::get_string(psf, "CONTENT_ID");
+               isLicenceIdTrial(ebootContentId, ebootIsFree, sfoId) &&
+               !rpcs3::utils::verify_c00_unlock_edat(sfoId, true)) {
+      // Only the C00 kind was ever flagged, so this one showed as an ordinary game with
+      // nothing to say it was a trial or what would unlock it. Unlocked means what RPCS3
+      // checks at run time: the upgrade EDAT is in exdata.
+      flags |= kGameFlagTrial;
+      rpcsx_android.warning("game %s is a trial: EBOOT %s, full game %s", path,
+                            ebootContentId, sfoId);
     }
   }
 
@@ -2242,8 +2341,20 @@ static struct main_thread_dispatcher {
 static void armsx3_play_sound(const std::string &path, std::optional<f32> volume);
 
 
+// Defined below, next to the rest of the config helpers.
+static std::string rpcsx_strip_config_keys(const std::string &yaml, const std::vector<std::string> &keys, std::string &skipped);
+
+// Whether the running game will take a disc swap right now, exactly as the core reports it.
+// A game has to register disc-change callbacks first and very few do (SingStar is the usual
+// one), and ejecting under one that did not trips an ensure() in disc_change_manager. Eject is
+// on while a disc is in, insert while the tray is empty. Both used to be thrown away here, so
+// Swap Disc could not tell a game that swaps from one that does not. See _rpcsx_changeDisc.
+static std::atomic<bool> g_disc_eject_enabled{false};
+static std::atomic<bool> g_disc_insert_enabled{false};
+
+
 static void setupCallbacks() {
-  Emu.SetCallbacks({
+  g_emu_callbacks = emu_callbacks{
       .call_from_main_thread =
           [](std::function<void()> cb, atomic_t<u32> *wake_up) {
             if (wake_up) {
@@ -2301,8 +2412,8 @@ static void setupCallbacks() {
             });
           },
       .on_save_state_progress = [](auto...) {},
-      .enable_disc_eject = [](auto...) {},
-      .enable_disc_insert = [](auto...) {},
+      .enable_disc_eject = [](bool enabled) { g_disc_eject_enabled = enabled; },
+      .enable_disc_insert = [](bool enabled) { g_disc_insert_enabled = enabled; },
       .handle_taskbar_progress = [](auto...) {},
       .init_kb_handler =
           [](auto...) {
@@ -2355,6 +2466,9 @@ static void setupCallbacks() {
       // QJsonDocument, neither of which exists in this build. The app fetches and splits
       // the database instead (see ConfigDatabase.kt), leaving one YAML per title on disk,
       // so all that is needed here is to read it back.
+      // Drop the keys the user owns for this title from a database entry, so what is left can
+      // be applied without overwriting a setting they chose themselves. Keys arrive as
+      // "Section@@Key" and cover the block they name, matching the app's own path format.
       .get_database_config =
           [](const std::string &title_id) -> std::string {
             if (title_id.empty()) {
@@ -2374,6 +2488,50 @@ static void setupCallbacks() {
             }
 
             std::string yaml = config.to_string();
+
+            // Settings this title's own configuration owns, one "Section@@Key" per line,
+            // written by the app before boot.
+            //
+            // The core applies a database entry OVER the user's config (Emulator::Load only
+            // skips it for a custom config FILE, which this port does not write), so without
+            // this a per-game choice could never win against a database entry for the same
+            // key. Reported as Helldivers running on the PPU interpreter with the settings
+            // screen showing the recompiler: the database sets the decoder, and nothing said so.
+            std::vector<std::string> owned;
+
+            if (fs::file keys{fs::get_config_dir(true) + "config_db_user/" + title_id + ".keys"})
+            {
+              std::string text = keys.to_string();
+
+              for (usz pos = 0; pos < text.size();)
+              {
+                const usz eol = text.find('\n', pos);
+                std::string line = text.substr(pos, (eol == umax ? text.size() : eol) - pos);
+                pos = (eol == umax ? text.size() : eol + 1);
+
+                while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+                {
+                  line.pop_back();
+                }
+
+                if (!line.empty())
+                {
+                  owned.push_back(std::move(line));
+                }
+              }
+            }
+
+            if (!owned.empty())
+            {
+              std::string skipped;
+              yaml = rpcsx_strip_config_keys(yaml, owned, skipped);
+
+              if (!skipped.empty())
+              {
+                rpcsx_android.success("database config for %s: skipped %s (set for this game)",
+                                      title_id, skipped);
+              }
+            }
 
             // At success level, which reaches logcat, where notice does not. This is the only
             // record that a title booted with settings the user never chose, and without it a
@@ -2534,11 +2692,49 @@ static void setupCallbacks() {
       .display_sleep_control_supported = [](auto...) { return false; },
       .enable_display_sleep = [](auto...) {},
       .check_microphone_permissions = [](auto...) {},
-  });
+  };
 }
 
 static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {
   u32 pclass_profile = 0;
+
+  // What KIND of controller this claims to be.
+  //
+  // This was hardcoded to STANDARD, so every port always answered "ordinary pad" to
+  // cellPadPeriphGetInfo. Instrument titles ask exactly that question and will not start
+  // without the right answer, which put the whole genre -- Guitar Hero, Rock Band, DJ Hero,
+  // dance mats -- out of reach with no way for a user to say otherwise. The value has always
+  // existed per port in the input config; nothing here read it.
+  u32 class_type = CELL_PAD_PCLASS_TYPE_STANDARD;
+  u16 vendor_id = 0;
+  u16 product_id = 0;
+  u32 capabilities = CELL_PAD_CAPABILITY_PS3_CONFORMITY |
+                     CELL_PAD_CAPABILITY_PRESS_MODE |
+                     CELL_PAD_CAPABILITY_HP_ANALOG_STICK |
+                     CELL_PAD_CAPABILITY_ACTUATOR | CELL_PAD_CAPABILITY_SENSOR_MODE;
+
+  if (pad->m_player_id < g_cfg_input.player.size()) {
+    if (const cfg_player *player_config = g_cfg_input.player[pad->m_player_id]) {
+      class_type = player_config->config.device_class_type;
+
+      // A class alone is not enough: these games identify the instrument by vendor and
+      // product, so reporting a guitar with no identity answers half the question. Upstream
+      // matches a configured vendor/product pair against the class list; a virtual pad has
+      // no such pair, so adopt the first real product of the chosen class and report its
+      // profile and capabilities with it.
+      if (class_type != CELL_PAD_PCLASS_TYPE_STANDARD) {
+        const std::vector<input::product_info> products =
+            input::get_products_by_class(class_type);
+
+        if (!products.empty()) {
+          pclass_profile = products.front().pclass_profile;
+          capabilities = products.front().capabilites;
+          vendor_id = products.front().vendor_id;
+          product_id = products.front().product_id;
+        }
+      }
+    }
+  }
 
   // Only player 1 starts CONNECTED. Ports 2-7 exist but report nothing plugged in until a device
   // actually drives them (see the hot-plug in _rpcsx_overlayPadData).
@@ -2551,13 +2747,18 @@ static bool initVirtualPad(const std::shared_ptr<Pad> &pad) {
   const u32 initial_status =
       pad->m_player_id == 0 ? CELL_PAD_STATUS_CONNECTED : 0;
 
-  pad->Init(initial_status,
-            CELL_PAD_CAPABILITY_PS3_CONFORMITY |
-                CELL_PAD_CAPABILITY_PRESS_MODE |
-                CELL_PAD_CAPABILITY_HP_ANALOG_STICK |
-                CELL_PAD_CAPABILITY_ACTUATOR | CELL_PAD_CAPABILITY_SENSOR_MODE,
-            CELL_PAD_DEV_TYPE_STANDARD, CELL_PAD_PCLASS_TYPE_STANDARD,
-            pclass_profile, 0, 0, 50);
+  // Say what this port is about to claim to be.
+  //
+  // warning, not notice: Android's logcat sink drops anything below it, and this is exactly
+  // the line someone needs when an instrument title still will not start. There is no other
+  // way to tell whether the class reached the core: the value the app stores, the value in
+  // Default.yml and the value a pad reports can all disagree, and only the last one matters.
+  rpcsx_android.warning(
+      "pad: port %u reports class %u (vendor %04x product %04x profile %u)",
+      pad->m_player_id, class_type, vendor_id, product_id, u32{pclass_profile});
+
+  pad->Init(initial_status, capabilities, CELL_PAD_DEV_TYPE_STANDARD, class_type,
+            pclass_profile, vendor_id, product_id, 50);
 
   pad->m_buttons.emplace_back(CELL_PAD_BTN_OFFSET_DIGITAL1, std::vector<std::set<u32>>{},
                               CELL_PAD_CTRL_UP);
@@ -2640,6 +2841,102 @@ static void open_home_menu_async() {
       padThread->open_home_menu();
     }
   }).detach();
+}
+
+// Remove named keys, and any block they open, from a config YAML.
+//
+// Two spaces per level, which is what both RPCS3 writes and the database ships. A key's path is
+// its section names and its own name joined with "@@", the same spelling the app uses for a
+// config node, so the two sides need no translation table. Section headers left with nothing
+// under them are dropped too: the core reports a section that is no longer a map as an error.
+static std::string rpcsx_strip_config_keys(const std::string &yaml,
+                                           const std::vector<std::string> &keys,
+                                           std::string &skipped) {
+  std::vector<std::string> lines;
+  std::vector<std::string> path;
+  int skip_indent = -1;
+
+  for (usz pos = 0; pos < yaml.size();) {
+    const usz eol = yaml.find('\n', pos);
+    std::string line = yaml.substr(pos, (eol == umax ? yaml.size() : eol) - pos);
+    pos = (eol == umax ? yaml.size() : eol + 1);
+
+    const usz first = line.find_first_not_of(' ');
+    const bool blank = first == umax || line[first] == '#';
+    const int indent = blank ? 0 : static_cast<int>(first / 2);
+
+    if (skip_indent >= 0) {
+      if (blank || indent > skip_indent) {
+        continue;
+      }
+
+      skip_indent = -1;
+    }
+
+    if (!blank) {
+      const usz colon = line.find(':', first);
+
+      if (colon != umax) {
+        path.resize(std::min<usz>(path.size(), static_cast<usz>(indent)));
+        path.push_back(line.substr(first, colon - first));
+
+        std::string full;
+
+        for (const auto &part : path) {
+          if (!full.empty()) {
+            full += "@@";
+          }
+
+          full += part;
+        }
+
+        if (std::find(keys.begin(), keys.end(), full) != keys.end()) {
+          if (!skipped.empty()) {
+            skipped += ", ";
+          }
+
+          skipped += full;
+          skip_indent = indent;
+          continue;
+        }
+      }
+    }
+
+    lines.push_back(std::move(line));
+  }
+
+  std::string out;
+
+  for (usz i = 0; i < lines.size(); i++) {
+    const std::string &line = lines[i];
+    const usz first = line.find_first_not_of(' ');
+    const bool header = first != umax && line.back() == ':';
+
+    if (header) {
+      const int indent = static_cast<int>(first / 2);
+      bool has_children = false;
+
+      for (usz j = i + 1; j < lines.size(); j++) {
+        const usz next = lines[j].find_first_not_of(' ');
+
+        if (next == umax) {
+          continue;
+        }
+
+        has_children = static_cast<int>(next / 2) > indent;
+        break;
+      }
+
+      if (!has_children) {
+        continue;
+      }
+    }
+
+    out += line;
+    out += '\n';
+  }
+
+  return out;
 }
 
 extern "C" bool _rpcsx_overlayPadData(int port, int digital1, int digital2,
@@ -3616,10 +3913,83 @@ extern "C" bool _rpcsx_collectGameInfo(JNIEnv *env, std::string_view rootDir,
 // stopped before g_fxo teardown has finished, and a boot or kill can start right after it.
 static std::mutex g_emu_lifecycle_mutex;
 
+// The discs of the playlist the running game was booted from, and the one in the drive, as paths
+// the core can open. Swap Disc offers the playlist (see _rpcsx_getDiscPlaylist).
+static std::mutex g_disc_playlist_mutex;
+static std::vector<std::string> g_disc_playlist;
+static std::string g_disc_current;
+
+// An .m3u lists a multi-disc set, one disc per line: a path relative to the playlist's own
+// folder unless it starts with '/', or the title id of an installed PSN game. Blank lines and '#'
+// lines (the extended-M3U tags) are skipped. The format PCSX2, DuckStation and the frontends that
+// launch them already use, plus the title id, which only a PS3 needs.
+static std::vector<std::string> read_disc_playlist(const std::string &m3u_path) {
+  std::vector<std::string> discs;
+
+  fs::file file(m3u_path);
+  if (!file) {
+    return discs;
+  }
+
+  std::string text = file.to_string();
+  if (text.starts_with("\xEF\xBB\xBF")) {
+    text.erase(0, 3);
+  }
+
+  const std::string dir = fs::get_parent_dir(m3u_path);
+
+  for (std::string line : fmt::split(text, {"\n"})) {
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) {
+      line.pop_back();
+    }
+    const usz start = line.find_first_not_of(" \t");
+    if (start == umax || line[start] == '#') {
+      continue;
+    }
+    line.erase(0, start);
+    // "./Disc 2.iso" is common, and the SAF device resolves names segment by segment.
+    if (line.starts_with("./")) {
+      line.erase(0, 2);
+    }
+
+    // A bare title id names an installed PSN game, which lives in dev_hdd0/game rather than next
+    // to any playlist. That is how a multi-part PSN release is listed: Watchmen's two parts are
+    // two installed titles, not two files.
+    if (line.size() == 9 && std::all_of(line.begin(), line.begin() + 4, [](char c) { return c >= 'A' && c <= 'Z'; }) &&
+        std::all_of(line.begin() + 4, line.end(), [](char c) { return c >= '0' && c <= '9'; })) {
+      if (const std::string installed = rpcs3::utils::get_hdd0_dir() + "game/" + line; fs::is_dir(installed)) {
+        discs.push_back(installed);
+        continue;
+      }
+    }
+
+    discs.push_back(line.starts_with('/') ? line : dir + "/" + line);
+  }
+
+  return discs;
+}
+
+static bool is_disc_playlist(std::string_view path) {
+  return path.size() > 4 && fmt::to_lower(path.substr(path.size() - 4)) == ".m3u";
+}
+
+// A stop the user asked for ends the session. Upstream says so in GracefulShutdown, which turns
+// continuous mode off ("Make sure we close the game window"); Kill() alone does not, and every stop
+// here is a Kill(). A game that restarts itself into another executable (exitspawn: Gran Turismo 6
+// does it at every boot, into EMAIN.SELF) turns continuous mode on to keep its disc mounted across
+// the restart, and nothing turned it off again. Every later Kill then skipped unload_iso(), the
+// image stayed registered, and the next ISO boot could not register its own, because
+// fs::set_virtual_device will not replace a device of the same name: booting Sonic '06 after
+// Gran Turismo 6 read Gran Turismo 6's PARAM.SFO and booted Gran Turismo 6 again.
+static void stop_session() {
+  Emu.SetContinuousMode(false);
+  Emu.Kill();
+}
+
 // Held so a probe cannot be inside vfs::mount while this resets g_fxo underneath it.
 extern "C" void _rpcsx_shutdown() {
   std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
-  Emu.Kill();
+  stop_session();
 }
 
 extern "C" int _rpcsx_boot(std::string_view path_) {
@@ -3661,7 +4031,7 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
   // thread has run to completion.
   if (!Emu.IsStopped(true)) {
     rpcsx_android.notice("boot: previous VM still running, stopping it first");
-    Emu.Kill();
+    stop_session();
 
     for (int waited = 0; !Emu.IsStopped(true) && waited < 10000; waited += 20) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -3672,8 +4042,55 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
     }
   }
 
+  // Drop whatever image the last session left mounted before this boot mounts its own. A stale
+  // one shadows the new disc (see stop_session), and until now the library's disc probe was the
+  // only thing that ever removed it, which is why the wrong game booted only some of the time.
+  if (Emu.IsStopped(true)) {
+    unload_iso();
+  }
+
   Emu.SetForceBoot(true);
   std::string path = std::string(path_);
+
+  // A second game on a multi-game disc IMAGE arrives as "<image>//PS3_GM01", the key upstream's
+  // game list files it under: the image is one file, so its path alone cannot say which game.
+  // A folder disc needs none of this, since its PS3_GMxx folder is a path of its own and
+  // GetBdvdDir walks up from it to the disc root.
+  //
+  // Set on EVERY boot, not only these. The core keeps the last value, and an ISO boot builds its
+  // EBOOT path from it before anything resets it, so a PS3_GM01 boot would otherwise leak into
+  // the next ordinary disc.
+  std::string game_dir = "PS3_GAME";
+  if (const usz at = path.rfind("//"); at != umax &&
+                                       rpcs3::utils::is_ps3_gm_dir_name(std::string_view(path).substr(at + 2))) {
+    game_dir = path.substr(at + 2);
+    path.resize(at);
+    rpcsx_android.notice("boot: game '%s' on disc '%s'", game_dir, path);
+  }
+  Emu.SetGameDir(game_dir);
+
+  // A multi-disc playlist boots its first disc, and Swap Disc offers the rest. Handled here rather
+  // than in the library so a frontend that hands us the .m3u itself, as ES-DE does, works too.
+  {
+    std::vector<std::string> discs;
+
+    if (is_disc_playlist(path)) {
+      discs = read_disc_playlist(path);
+
+      if (discs.empty()) {
+        rpcsx_android.error("boot: playlist '%s' lists no discs", path);
+        return static_cast<int>(game_boot_result::invalid_file_or_folder);
+      }
+
+      rpcsx_android.notice("boot: playlist '%s', %u disc(s), starting with '%s'", path, discs.size(), discs[0]);
+      path = discs[0];
+    }
+
+    std::lock_guard lock(g_disc_playlist_mutex);
+    g_disc_playlist = std::move(discs);
+    g_disc_current = path;
+  }
+
   while (path.ends_with('/')) {
     path.pop_back();
   }
@@ -3760,7 +4177,7 @@ extern "C" int _rpcsx_getState() {
 }
 extern "C" void _rpcsx_kill() {
   std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
-  Emu.Kill();
+  stop_session();
 }
 extern "C" void _rpcsx_resume() { Emu.Resume(); }
 
@@ -4172,18 +4589,24 @@ extern "C" bool _rpcsx_deleteStateFromSlot(unsigned int slot) {
 // ---------------------------------------------------------------------------
 // Patches / graphics mods
 //
-// RPCS3 keeps two files:
-//   patches/patch.yml   - the patch DATABASE, downloaded from rpcs3.net
-//   patch_config.yml    - which patches are ENABLED, keyed
-//                         hash -> description -> title -> serial -> app_version
+// The patches, one file per source, all of them applied (append_global_patches):
+//   patches/patch.yml          - the rpcs3.net database, REPLACED by each download
+//   patches/artemis_patch.yml  - the Artemis collection, REPLACED by each download
+//   patches/armsx3_patch.yml   - the fixes bundled with the app, rewritten by it
+//   patches/imported_patch.yml - files the user picked, MERGED (RPCS3's own file for them)
+// and which are switched on:
+//   patch_config.yml           - keyed hash -> description -> title -> serial -> app_version
 //
-// Both are YAML with a fiddly nested shape, and patch_engine already parses and
-// writes them. So the app downloads the bytes and everything else happens here,
-// through RPCS3's own code -- reimplementing the format in Kotlin would be a
-// second parser to keep in sync with upstream.
+// One merged patch.yml held all four until 1.0. Merging only ever adds, so a patch renamed or
+// withdrawn at its source stayed in the list beside its replacement, which is what made the
+// Artemis maintainer ask for a way to flush. A file per source makes every download a clean
+// copy of that source, and the user's own imports are the only thing that accumulates.
+//
+// All YAML with a fiddly nested shape that patch_engine already parses and writes, so the app
+// downloads the bytes and everything else happens here, through RPCS3's own code --
+// reimplementing the format in Kotlin would be a second parser to keep in sync with upstream.
 // ---------------------------------------------------------------------------
 
-/** Import a downloaded patch.yml. Returns the number of patches merged, or -1. */
 static std::string json_quote(std::string_view v) {
   std::string out = "\"";
   for (char c : v) {
@@ -4219,11 +4642,13 @@ extern "C" std::string _rpcsx_patchEngineVersion() {
   return patch_engine_version;
 }
 
+/** Merge a file the user picked into imported_patch.yml. Returns the number of patches merged,
+ *  or -1. Downloads do not come through here any more: see _rpcsx_patchesWrite. */
 extern "C" int _rpcsx_patchesImport(std::string_view content) {
   patch_engine::patch_map patches;
   std::stringstream log;
 
-  if (!patch_engine::load(patches, "<downloaded>", std::string(content), true,
+  if (!patch_engine::load(patches, "<imported>", std::string(content), true,
                           &log)) {
     rpcsx_android.error("patchesImport: parse failed: %s", log.str());
     return -1;
@@ -4231,14 +4656,60 @@ extern "C" int _rpcsx_patchesImport(std::string_view content) {
 
   usz count = 0;
   usz total = 0;
-  if (!patch_engine::import_patches(patches, patch_engine::get_patches_path() +
-                                                 "patch.yml",
+  if (!patch_engine::import_patches(patches,
+                                    patch_engine::get_imported_patch_path(),
                                     count, total, &log)) {
     rpcsx_android.error("patchesImport: write failed: %s", log.str());
     return -1;
   }
 
   rpcsx_android.success("patchesImport: %u of %u patches", count, total);
+  return static_cast<int>(count);
+}
+
+/**
+ * Replace one of the app's own patch files with `content`, whole. Returns the number of patches
+ * in it, or -1.
+ *
+ * Only the three files a source owns outright: the user's imported_patch.yml is merged, never
+ * replaced, and nothing else under patches/ is ours to overwrite. The content is parsed first, so
+ * a truncated or malformed download is refused rather than replacing a good file, and the write
+ * goes through a pending file, so a failure midway leaves the old file as it was.
+ */
+extern "C" int _rpcsx_patchesWrite(std::string_view file, std::string_view content) {
+  if (file != "patch.yml" && file != "artemis_patch.yml" &&
+      file != "armsx3_patch.yml") {
+    rpcsx_android.error("patchesWrite: refusing to write '%s'", file);
+    return -1;
+  }
+
+  patch_engine::patch_map patches;
+  std::stringstream log;
+  if (!patch_engine::load(patches, std::string(file), std::string(content), true,
+                          &log)) {
+    rpcsx_android.error("patchesWrite: %s: parse failed: %s", file, log.str());
+    return -1;
+  }
+
+  usz count = 0;
+  for (const auto &[hash, container] : patches) {
+    count += container.patch_info_map.size();
+  }
+
+  const std::string dir = patch_engine::get_patches_path();
+  if (!fs::create_path(dir)) {
+    rpcsx_android.error("patchesWrite: cannot create %s (%s)", dir, fs::g_tls_error);
+    return -1;
+  }
+
+  fs::pending_file out(dir + std::string(file));
+  if (!out.file || out.file.write(content.data(), content.size()) != content.size() ||
+      !out.commit()) {
+    rpcsx_android.error("patchesWrite: %s: write failed (%s)", file, fs::g_tls_error);
+    return -1;
+  }
+
+  rpcsx_android.success("patchesWrite: %s: %u patches", file, count);
   return static_cast<int>(count);
 }
 
@@ -4305,6 +4776,40 @@ static std::string read_sfo_game_info(const std::string &root,
   // json_quote() supplies the surrounding quotes itself.
   return "{\"titleId\":" + json_quote(titleId) + ",\"title\":" +
          json_quote(title) + ",\"icon\":" + (haveIcon ? "true" : "false") + "}";
+}
+
+// The other games on a multi-game disc: PS3_GM01, PS3_GM02 ... beside PS3_GAME, each with its
+// own PARAM.SFO and ICON0.PNG. Returns ',"discGames":[...]' to splice into the main game's object,
+// or "" for a single-game disc. Each icon goes to <iconOut>.<dir>, since iconOut is one staging name.
+static std::string disc_games_json(const std::string &disc_root, std::string_view iconOut) {
+  std::vector<std::string> dirs;
+
+  for (auto &&entry : fs::dir(disc_root + "/")) {
+    if (entry.is_directory && rpcs3::utils::is_ps3_gm_dir_name(entry.name)) {
+      dirs.push_back(entry.name);
+    }
+  }
+
+  std::sort(dirs.begin(), dirs.end());
+
+  std::string games;
+
+  for (const auto &dir : dirs) {
+    const std::string icon = iconOut.empty() ? std::string{} : std::string(iconOut) + "." + dir;
+    const std::string info = read_sfo_game_info(disc_root + "/" + dir, icon);
+
+    if (info == "{}") {
+      continue;
+    }
+
+    if (!games.empty()) {
+      games += ',';
+    }
+
+    games += "{\"dir\":" + json_quote(dir) + "," + info.substr(1);
+  }
+
+  return games.empty() ? std::string{} : ",\"discGames\":[" + games + "]";
 }
 
 extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
@@ -4375,6 +4880,12 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
     load_iso(path);
     result = read_sfo_game_info(iso_device::virtual_device_name + "/PS3_GAME",
                                 iconOut);
+
+    // Folders list their other games from the library side, which reads them with no mount. An
+    // image has to be mounted for that, and it already is.
+    if (result != "{}") {
+      result.insert(result.size() - 1, disc_games_json(iso_device::virtual_device_name, iconOut));
+    }
   } catch (const std::exception &e) {
     rpcsx_android.error("probeDiscInfo('%s') failed: %s", path, e.what());
   }
@@ -4388,7 +4899,122 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
   return result;
 }
 
-// The parsed patch database, reloaded only when patch.yml actually changes.
+// What Swap Disc may do right now: 0 the game takes no disc swaps, 1 a disc is in and can be
+// swapped, 2 the tray is empty and the game is waiting for one.
+extern "C" int _rpcsx_discSwapState() {
+  if (!Emu.IsRunning() && !Emu.IsPaused()) {
+    return 0;
+  }
+
+  return g_disc_eject_enabled ? 1 : g_disc_insert_enabled ? 2 : 0;
+}
+
+// {"discs":[...],"current":"..."} for the playlist the running game was booted from. "discs" is
+// empty for a game that was not booted from one.
+extern "C" std::string _rpcsx_getDiscPlaylist() {
+  std::lock_guard lock(g_disc_playlist_mutex);
+
+  std::string discs;
+
+  for (const auto &disc : g_disc_playlist) {
+    if (!discs.empty()) {
+      discs += ',';
+    }
+    discs += json_quote(disc);
+  }
+
+  return "{\"discs\":[" + discs + "],\"current\":" + json_quote(g_disc_current) + "}";
+}
+
+// Swap the running game's disc the way the console does: eject, let the game see the tray empty,
+// then insert. Only for a game that registered for it (see g_disc_eject_enabled).
+//
+// The new disc is checked BEFORE the old one leaves, so a bad pick is refused with the game
+// untouched. The eject completes on the game's own sysutil callback, so the game has to be
+// running rather than paused behind the menu, and the insert waits for it: inserting first would
+// let the late unmount take the new disc straight back out.
+//
+// An image goes through the same ISO device a boot uses. Swapping it cannot break a file the game
+// still has open on the old image, because an open iso_file carries its own handle and extents.
+//
+// Returns 0 on success, 1 when the game takes no disc swaps, 2 when the path is not a disc,
+// 3 when the game never finished ejecting, 4 when the core refused the new disc.
+extern "C" int _rpcsx_changeDisc(std::string_view path_) {
+  // Held throughout, like a boot or a probe: a Close in the middle would reset g_fxo under the
+  // disc_change_manager this is driving.
+  std::lock_guard emu_lock(g_emu_lifecycle_mutex);
+
+  std::string path(path_);
+  while (path.ends_with('/')) {
+    path.pop_back();
+  }
+
+  if (!g_disc_eject_enabled && !g_disc_insert_enabled) {
+    rpcsx_android.warning("changeDisc: the running game does not take disc swaps");
+    return 1;
+  }
+
+  // A folder dump is named by its folder or by any file inside it, which is what a document
+  // picker hands back.
+  const bool image = fs::is_file(path) && is_iso_file(path);
+  std::string folder;
+
+  if (image) {
+    if (!iso_archive(path).is_valid()) {
+      rpcsx_android.error("changeDisc: '%s' is not a readable disc image", path);
+      return 2;
+    }
+  } else {
+    folder = fs::is_dir(path) ? path : fs::get_parent_dir(path);
+    std::string disc_root, game_dir;
+
+    if (disc::get_disc_type(folder, disc_root, game_dir) == disc::disc_type::invalid) {
+      rpcsx_android.error("changeDisc: '%s' is not a disc", path);
+      return 2;
+    }
+  }
+
+  // The menu resumes the game just before this runs, and the resume is queued.
+  for (int waited = 0; !Emu.IsRunning() && waited < 3000; waited += 20) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  if (!Emu.IsRunning()) {
+    rpcsx_android.error("changeDisc: the game is not running");
+    return 3;
+  }
+
+  if (g_disc_eject_enabled) {
+    Emu.EjectDisc();
+
+    for (int waited = 0; !g_disc_insert_enabled && Emu.IsRunning() && waited < 10000; waited += 20) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    if (!g_disc_insert_enabled) {
+      rpcsx_android.error("changeDisc: the game did not finish ejecting its disc");
+      return 3;
+    }
+  }
+
+  if (image) {
+    load_iso(path);
+    folder = iso_device::virtual_device_name + "/";
+  }
+
+  if (const game_boot_result result = Emu.InsertDisc(folder); result != game_boot_result::no_errors) {
+    rpcsx_android.error("changeDisc: inserting '%s' failed (game_boot_result %d)", path, static_cast<int>(result));
+    return 4;
+  }
+
+  rpcsx_android.notice("changeDisc: '%s' is in the drive", path);
+
+  std::lock_guard lock(g_disc_playlist_mutex);
+  g_disc_current = path;
+  return 0;
+}
+
+// The parsed patch database, reloaded only when one of its files actually changes.
 //
 // Both calls below used to parse the whole file on every invocation, so a single toggle in the
 // UI parsed it twice: once to validate the patch exists, once to rebuild the list afterwards.
@@ -4396,34 +5022,47 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
 // a community collection merged in, which is the point the delay became visible when flipping a
 // switch.
 //
-// Keyed on the file's size and mtime rather than an invalidate-me flag, so an import through any
-// path invalidates it, including one that writes the file without telling us.
+// Keyed on each file's size and mtime rather than an invalidate-me flag, so an import through any
+// path invalidates it, including one that writes a file without telling us.
+//
+// Every file the core applies patches from (append_global_patches), in the same order, so the
+// list shows exactly what a boot would apply: patches live in four files since 1.0, and reading
+// patch.yml alone would drop the Artemis collection, the bundled fixes and the user's imports
+// from the screen while the core still applied them.
 static const patch_engine::patch_map &cached_patch_db()
 {
   static std::mutex mutex;
   static patch_engine::patch_map db;
-  static u64 cached_size = 0;
-  static s64 cached_mtime = 0;
+  static std::array<std::pair<u64, s64>, 4> cached{};
   static bool loaded = false;
 
   std::lock_guard lock(mutex);
 
-  const std::string path = patch_engine::get_patches_path() + "patch.yml";
+  const std::string dir = patch_engine::get_patches_path();
+  const std::array<std::string, 4> paths{
+      dir + "patch.yml", patch_engine::get_imported_patch_path(),
+      dir + "artemis_patch.yml", dir + "armsx3_patch.yml"};
 
-  fs::stat_t info{};
-  const bool exists = fs::get_stat(path, info);
+  std::array<std::pair<u64, s64>, 4> now{};
+  for (usz i = 0; i < paths.size(); i++) {
+    fs::stat_t info{};
+    if (fs::get_stat(paths[i], info)) {
+      now[i] = {info.size, info.mtime};
+    }
+  }
 
-  if (loaded && exists && info.size == cached_size && info.mtime == cached_mtime)
+  if (loaded && now == cached)
   {
     return db;
   }
 
   db.clear();
   std::stringstream log;
-  patch_engine::load(db, path, {}, false, &log);
+  for (const auto &path : paths) {
+    patch_engine::load(db, path, {}, false, &log);
+  }
 
-  cached_size = exists ? info.size : 0;
-  cached_mtime = exists ? info.mtime : 0;
+  cached = now;
   loaded = true;
   return db;
 }
@@ -4728,6 +5367,65 @@ extern "C" void _rpcsx_setRenderPosition(bool portraitTop, int topInset) {
   rsx::g_render_top_inset = topInset > 0 ? static_cast<u32>(topInset) : 0;
 }
 
+// Set every port's controller class at once, and make it take effect now.
+//
+// All seven together rather than one at a time because each change has to be followed by a
+// pad reset, and resetting seven times in a row at startup would tear the pad thread down and
+// rebuild it for every port in turn.
+//
+// The app owns this value, not the config file. initApp saves g_cfg_input at startup BEFORE
+// pad_thread::Init has loaded it, so anything previously written to Default.yml is overwritten
+// with defaults on every launch. The app therefore re-asserts the full set once the core is up,
+// and again whenever the user changes one.
+//
+// pad::reset is what makes it live: the class is read when a pad is CREATED, so without it the
+// change would wait for the next boot and an in-game control would look broken.
+extern "C" void _rpcsx_setPadDeviceClasses(const int *classes, int count) {
+  if (classes == nullptr || count <= 0) {
+    return;
+  }
+
+  bool changed = false;
+
+  for (int port = 0; port < count && static_cast<usz>(port) < g_cfg_input.player.size();
+       port++) {
+    cfg_player *player_config = g_cfg_input.player[port];
+
+    if (!player_config) {
+      continue;
+    }
+
+    const u32 wanted = static_cast<u32>(classes[port]);
+
+    if (player_config->config.device_class_type.get() == wanted) {
+      continue;
+    }
+
+    player_config->config.device_class_type.set(wanted);
+    changed = true;
+  }
+
+  // Report the request either way. "Nothing changed" and "it worked" look identical from
+  // the outside, and this path has no other output at all.
+  std::string requested;
+  for (int port = 0; port < count; port++) {
+    if (!requested.empty()) {
+      requested += ',';
+    }
+    fmt::append(requested, "%d", classes[port]);
+  }
+
+  rpcsx_android.warning("pad: device classes requested [%s], changed=%s", requested,
+                        changed ? "yes" : "no");
+
+  if (!changed) {
+    return;
+  }
+
+  g_cfg_input.save("", g_cfg_input_configs.default_config);
+  pad::reset(Emu.GetTitleID());
+}
+
 extern "C" int _rpcsx_getPadRumble(int port) {
   std::lock_guard lock(g_virtual_pad_mutex);
 
@@ -4968,13 +5666,21 @@ static bool installPup(JNIEnv *env, fs::file &&pup_f, jlong progressId) {
     tar_object dev_flash_tar(dev_flash_tar_f[2]);
 
     if (!dev_flash_tar.extract()) {
+      // By here the file is not the problem: it passed the PUP hash check and decrypted. What
+      // tar_object::extract fails on is the destination -- dev_flash not mounted, or a directory
+      // or file native code cannot create in the data folder (TAR.cpp logs the entry and the OS
+      // error). This used to say "TAR contents are invalid", which the firmware screens turned
+      // into "not a repack", so a user whose folder refused the write went looking for another
+      // firmware file instead (issue #146). Name the folder and the OS error.
+      const std::string dev_flash = g_cfg_vfs.get_dev_flash();
+      const std::string os_error = fmt::format("%s", fs::g_tls_error);
 
-      rpcsx_android.error("Error while installing firmware: TAR contents are "
-                          "invalid. (package=%s)",
-                          update_filename);
+      rpcsx_android.error("Error while installing firmware: could not write %s into '%s' (%s)",
+                          update_filename, dev_flash, os_error);
 
-      progress.failure(fmt::format("TAR contents are invalid (package=%s)",
-                                   update_filename));
+      progress.failure(fmt::format("Couldn't write the firmware into %s (%s). Check that ARMSX3 "
+                                   "can write to its data folder.",
+                                   dev_flash, os_error));
       return false;
     }
 
@@ -5153,11 +5859,22 @@ static bool installEdat(JNIEnv *env, fs::file &&file, jlong progressId,
 
     auto psf = psf::load_object(sfoPath);
     auto contentId = psf::get_string(psf, "CONTENT_ID");
+    const std::string edatId = npdHeader.get_content_id();
 
-    if (contentId != npdHeader.content_id) {
-      progress.failure(fmt::format("File cannot be used for this game. EDAT "
-                                   "content ID missmatch %s vs %s",
-                                   contentId, npdHeader.content_id));
+    // Same TITLE, not the same content id. A trial's full-game unlock key is an EDAT under its
+    // OWN content id -- the one the game later hands sceNpDrmVerifyUpgradeLicense, which looks
+    // for exdata/<that id>.edat (rpcs3::utils::verify_c00_unlock_edat) -- so it never equals the
+    // game's. Requiring equality refused every unlock key picked from a game's lock button, while
+    // the same file installed from Install, which skips this check, worked: "RAP works, but
+    // trial game keys, no" (Bomberman Ultra, 2026-09-27). A content id is
+    // XXYYYY-TITLEID00_00-LABEL, so the nine characters after the first dash are the title id;
+    // matching those still stops a key meant for another game.
+    if (contentId != edatId &&
+        (contentIdTitle(contentId).empty() ||
+         contentIdTitle(contentId) != contentIdTitle(edatId))) {
+      progress.failure(fmt::format(
+          "This key is for a different game (%s), not this one (%s).", edatId,
+          contentId));
       return false;
     }
   }
@@ -5190,6 +5907,30 @@ static bool installEdat(JNIEnv *env, fs::file &&file, jlong progressId,
   return true;
 }
 
+// The content id an installed game's own EBOOT is licensed under, or "" for one that is not NPDRM
+// (a disc game, homebrew). Read from the SELF's NPD header, which decrypt_self reports even with no
+// licence present: installRap below relies on the same thing to name the .rap it writes. The DLC
+// list needs it to leave the game's own licence out, since it carries the same title id.
+extern "C" std::string _rpcsx_gameContentId(std::string_view gamePath) {
+  const auto ebootPath = locateEbootPath(gamePath);
+
+  if (ebootPath.empty()) {
+    return {};
+  }
+
+  SelfAdditionalInfo info;
+  decrypt_self(fs::file(ebootPath), nullptr, &info);
+
+  for (auto &supplemental : info.supplemental_hdr) {
+    if (supplemental.type == 3) {
+      const auto &id = supplemental.PS3_npdrm_header.npd.content_id;
+      return std::string(id, strnlen(id, sizeof(id)));
+    }
+  }
+
+  return {};
+}
+
 static bool installRap(JNIEnv *env, fs::file &&file, jlong progressId,
                        std::string_view rootPath) {
   Progress progress(env, progressId);
@@ -5220,9 +5961,27 @@ static bool installRap(JNIEnv *env, fs::file &&file, jlong progressId,
     return false;
   }
 
+  // A trial's EBOOT carries the trial's own content id, and the licence that unlocks the full
+  // game is PARAM.SFO's instead (see isLicenceIdTrial). Naming the .rap after the EBOOT filed
+  // the full-game licence under the trial's id, where nothing looks, and reported success.
+  const std::string ebootId = npd->get_content_id();
+  const auto sfo = psf::load_object(locateParamSfoPath(rootPath));
+  const std::string sfoId{psf::get_string(sfo, "CONTENT_ID")};
+  const bool isTrial = isLicenceIdTrial(ebootId, npd->license == 3, sfoId);
+
   const auto licenseFile =
       fmt::format("%shome/%s/exdata/%s.rap", rpcs3::utils::get_hdd0_dir(),
-                  Emu.GetUsr(), npd->content_id);
+                  Emu.GetUsr(), isTrial ? sfoId : ebootId);
+
+  // Keep the licence the game already has. The check below can only run with the new key in
+  // place, since decrypt_self finds the .rap by content id, and a failure used to delete the
+  // file outright: a wrong key picked from a game's lock button (a trial's unlock-key RAP is the
+  // easy one to pick) overwrote the game's working .rap and then threw both away.
+  std::vector<std::uint8_t> previous;
+
+  if (fs::file old{licenseFile}) {
+    previous = old.to_vector<std::uint8_t>();
+  }
 
   if (!fs::write_file(licenseFile, fs::open_mode::create + fs::open_mode::trunc,
                       bytes)) {
@@ -5230,9 +5989,19 @@ static bool installRap(JNIEnv *env, fs::file &&file, jlong progressId,
     return false;
   }
 
-  if (!decrypt_self(fs::file(ebootPath))) {
-    progress.failure("Provided key is invalid for selected game");
-    fs::remove_file(licenseFile);
+  // A trial's EBOOT is free, so it decrypts with or without this key and says nothing about it.
+  // Nothing else here can check a full-game licence either; RPCS3 desktop copies it in unchecked.
+  if (!isTrial && !decrypt_self(fs::file(ebootPath))) {
+    if (!previous.empty() &&
+        fs::write_file(licenseFile, fs::open_mode::create + fs::open_mode::trunc,
+                       previous)) {
+      progress.failure("This key does not unlock this game. The game's existing "
+                       "key was kept.");
+    } else {
+      fs::remove_file(licenseFile);
+      progress.failure("Provided key is invalid for selected game");
+    }
+
     return false;
   }
 
@@ -5429,12 +6198,21 @@ extern "C" jstring _rpcsx_probePkgInfo(JNIEnv *env, jint fd) {
     return nullptr;
   }
 
+  // The content id names the licence that unlocks this package: a .rap in exdata is filed under
+  // exactly this string. It lives in the package header, NUL-padded in a fixed 48-byte field.
+  const auto &header = reader.get_header();
+  const std::string contentId(header.title_id, strnlen(header.title_id, sizeof(header.title_id)));
+
+  // Metadata packet 0x1: 3 is DRM-free, the only value that says outright that no licence is
+  // needed. "Local" is used by free content as well as paid, so it cannot say the opposite.
+  const u32 drmType = reader.get_metadata().drm_type;
+
   // Escaped: a title is arbitrary text off the disc and has no obligation to be valid
   // inside a JSON string.
   return wrap(env, fmt::format(
-      R"({"titleId":"%s","title":"%s","category":"%s","appVersion":"%s"})",
+      R"({"titleId":"%s","title":"%s","category":"%s","appVersion":"%s","contentId":"%s","drmType":%u})",
       json_escape(titleId), json_escape(title), json_escape(category),
-      json_escape(appVersion)));
+      json_escape(appVersion), json_escape(contentId), drmType));
 }
 
 extern "C" jstring _rpcsx_getDirInstallPath(JNIEnv *env, jint fd) {
@@ -5549,6 +6327,8 @@ static void armsx3_play_sound(const std::string &path, std::optional<f32> volume
   JavaVM *vm = g_java_vm.load(std::memory_order_acquire);
 
   if (!vm || !g_sfx_class || !g_sfx_play || path.empty()) {
+    rpcsx_android.warning("play_sound: DROPPED %s (vm=%d class=%d method=%d)", path,
+                          vm != nullptr, g_sfx_class != nullptr, g_sfx_play != nullptr);
     return;
   }
 
@@ -5560,6 +6340,11 @@ static void armsx3_play_sound(const std::string &path, std::optional<f32> volume
       return;
     }
   }
+
+  // warning, not notice: the logcat sink drops anything below it, and this line exists to
+  // settle "did the core even ask" without another round of guessing.
+  rpcsx_android.warning("play_sound: core asked for %s (vol=%.2f)", path,
+                        volume.value_or(-1.f));
 
   jstring arg = env->NewStringUTF(path.c_str());
 
@@ -5748,6 +6533,26 @@ static cfg::_base *find_cfg_node(cfg::_base *root, std::string_view path) {
   return root;
 }
 
+// Let the app write into the emulator's log.
+//
+// The app had no way to do this, so every diagnostic it produced went to android.util.Log and
+// therefore to logcat, which testers do not capture. They send ARMSX3.log. The touch scale line
+// is the case that proved it: a well built diagnostic that names the window size, the digitizer
+// extent and the scale actually applied, present since the QHD work, and appearing in exactly
+// zero of the logs anyone has ever sent us. Issue #132 has been reopened twice by reporters on
+// devices we do not have, and the numbers that would settle it were being written somewhere
+// nobody looks.
+//
+// warning, because Android's logcat sink drops anything lower, so this reaches both the file
+// and logcat from one call.
+extern "C" void _rpcsx_logAndroid(const char *message) {
+  if (message == nullptr) {
+    return;
+  }
+
+  rpcsx_android.warning("%s", message);
+}
+
 extern "C" void _rpcsx_loginUser(std::string_view userId) {
   Emu.SetUsr(std::string(userId));
 }
@@ -5818,6 +6623,11 @@ static bool cfg_is_float(const cfg::_base *node) {
 // the "Log" field, one per keystroke, with the setting silently never applying.
 //
 // Only emit what the UI can honestly edit. cfg::_float reports type::_int, so it is covered.
+//
+// cfg::set_entry is the one collection that is editable: it goes out as a JSON array and
+// comes back through the dedicated branch in _rpcsx_settingsSet, never through from_string.
+// It is how Libraries Control (RPCS3's "Firmware Libraries" list) became reachable again after
+// the #97 filter hid it along with the collections that really cannot be written.
 static bool cfg_is_editable(const cfg::_base *node) {
   switch (node->get_type()) {
   case cfg::type::node:
@@ -5827,6 +6637,7 @@ static bool cfg_is_editable(const cfg::_base *node) {
   case cfg::type::uint:
   case cfg::type::uint128:
   case cfg::type::string:
+  case cfg::type::set:
     return true;
   default:
     return false;
@@ -5839,7 +6650,84 @@ static const char *cfg_type_name(const cfg::_base *node) {
   case cfg::type::_enum: return "enum";
   case cfg::type::_int: return cfg_is_float(node) ? "float" : "int";
   case cfg::type::uint: return "uint";
+  case cfg::type::set: return "set";
   default: return "string";
+  }
+}
+
+// <firmware sprx, 1 if it is HLE unless overridden>. Defined in lv2/sys_prx.cpp; RPCS3's own
+// settings dialog builds its library lists from the same table.
+extern const std::map<std::string_view, int> g_prx_list;
+
+// The app sends a collection as a JSON array of strings, which org.json writes with every
+// '/' escaped as "\/" -- the library table has a /dev_flash path in it -- so the usual
+// escapes are decoded rather than just stripped.
+static bool parse_json_string_array(std::string_view in, std::set<std::string> &out) {
+  std::size_t i = 0;
+  const auto skip_space = [&] {
+    while (i < in.size() && std::isspace(static_cast<unsigned char>(in[i]))) ++i;
+  };
+
+  skip_space();
+  if (i >= in.size() || in[i] != '[') return false;
+  ++i;
+  skip_space();
+  if (i < in.size() && in[i] == ']') {
+    ++i;
+    skip_space();
+    return i == in.size();
+  }
+
+  while (true) {
+    skip_space();
+    if (i >= in.size() || in[i] != '"') return false;
+    ++i;
+
+    std::string item;
+    while (i < in.size() && in[i] != '"') {
+      if (in[i] == '\\' && i + 1 < in.size()) {
+        switch (const char c = in[++i]) {
+        case 'n': item += '\n'; break;
+        case 'r': item += '\r'; break;
+        case 't': item += '\t'; break;
+        case 'u':
+          // Anything outside ASCII means this is not a library name; refuse it rather than
+          // store something mangled.
+          if (i + 4 >= in.size()) return false;
+          {
+            // from_chars, not stoul: this runs inside an extern "C" entry point, where an
+            // exception from a malformed escape would take the whole app down.
+            unsigned code = 0;
+            const char *digits = in.data() + i + 1;
+            const auto [end, ec] = std::from_chars(digits, digits + 4, code, 16);
+            if (ec != std::errc{} || end != digits + 4 || code >= 0x80) return false;
+            item += static_cast<char>(code);
+          }
+          i += 4;
+          break;
+        default: item += c; break;
+        }
+      } else {
+        item += in[i];
+      }
+      ++i;
+    }
+
+    if (i >= in.size()) return false;
+    ++i;
+    out.insert(std::move(item));
+
+    skip_space();
+    if (i < in.size() && in[i] == ',') {
+      ++i;
+      continue;
+    }
+    if (i < in.size() && in[i] == ']') {
+      ++i;
+      skip_space();
+      return i == in.size();
+    }
+    return false;
   }
 }
 
@@ -5865,6 +6753,36 @@ static void emit_cfg_json(const cfg::_base *node, std::string &out) {
 
   out += "{\"type\":";
   json_append_escaped(out, cfg_type_name(node));
+
+  if (node->get_type() == cfg::type::set) {
+    out += ",\"value\":[";
+    bool first = true;
+    for (const std::string &item : node->to_list()) {
+      if (!first) out += ',';
+      first = false;
+      json_append_escaped(out, item);
+    }
+    // set_entry's default is always the empty set.
+    out += "],\"default\":[]";
+
+    // Libraries Control only means something next to the list of libraries it can name, and
+    // which way each one runs when it is not named.
+    if (node == &g_cfg.core.libraries_control) {
+      out += ",\"choices\":[";
+      first = true;
+      for (const auto &[name, hle] : g_prx_list) {
+        if (!first) out += ',';
+        first = false;
+        out += "{\"name\":";
+        json_append_escaped(out, name);
+        out += hle ? ",\"hle\":true}" : ",\"hle\":false}";
+      }
+      out += ']';
+    }
+
+    out += '}';
+    return;
+  }
 
   // Booleans go out as real JSON booleans -- the Kotlin reads them with
   // getBoolean(), which throws on a quoted string.
@@ -5983,6 +6901,41 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
   if (!cfg_is_editable(root)) {
     rpcsx_android.error("settingsSet: node %s is a collection, not an editable value", path);
     return false;
+  }
+
+  if (root->get_type() == cfg::type::set) {
+    std::set<std::string> items;
+    if (!parse_json_string_array(valueString, items)) {
+      rpcsx_android.error("settingsSet: node %s wants a JSON array of strings, got '%s'", path,
+                          valueString);
+      return false;
+    }
+
+    auto *set = static_cast<cfg::set_entry *>(root);
+
+    // The app re-pushes every remembered value on each settings change, so an unchanged list
+    // must not count as a write, or the running-game refusal below would fire on every one.
+    if (items == set->get_set()) {
+      return true;
+    }
+
+    // A bare std::set with no lock, read on the PPU thread whenever a game loads a firmware
+    // module (sys_prx consults Libraries Control there). Changing it under a running game is a
+    // data race, and RPCS3 marks the entry non-dynamic for that reason. The app has already
+    // remembered the edit, and replays it at the next boot, before anything reads the list.
+    if (!Emu.IsStopped(true)) {
+      rpcsx_android.notice("settingsSet: %s changes at the next boot, not under a running game", path);
+      return false;
+    }
+
+    set->set_set(std::move(items));
+
+    if (g_settings_batch_depth.load() > 0) {
+      g_settings_batch_dirty.store(true);
+    } else {
+      Emulator::SaveSettings(g_cfg.to_string(), "");
+    }
+    return true;
   }
 
   // Values arrive JSON-encoded: bools/numbers bare, enums and strings quoted.

@@ -7,8 +7,83 @@
 #include "Emu/Cell/PPUThread.h"
 
 #include "util/asm.hpp"
+#include "Emu/Cell/timers.hpp"
 
 LOG_CHANNEL(sys_event_flag);
+
+namespace
+{
+	// ARMSX3_WATCH_EFLAG: the ARMSX3_WATCH_LWCOND ring for event flags, printed in the thread dump.
+	// Killzone 3's cutscene black screen parks main_thread in sys_event_flag_wait on a bit that no
+	// thread ever sets again; this says whether the bit was set and then cleared, or never set.
+	struct eflag_event
+	{
+		u64 time;
+		u64 bits;
+		u64 extra;
+		u32 id;
+		u32 thread;
+		char kind;
+	};
+
+	std::array<eflag_event, 1024> g_eflag_ring{};
+	atomic_t<u32> g_eflag_pos{0};
+
+	// Off unless set, for the same reason as the lwcond ring: it sits in every set, clear and wait.
+	bool eflag_watch_enabled()
+	{
+		static const bool s_on = []()
+		{
+			const char* env = std::getenv("ARMSX3_WATCH_EFLAG");
+			const bool on = env && *env && *env != '0';
+
+			if (on)
+			{
+				sys_event_flag.success("ARMSX3_WATCH_EFLAG: recording event flag traffic for the thread dump");
+			}
+
+			return on;
+		}();
+
+		return s_on;
+	}
+
+	void eflag_record(u32 id, u32 thread, char kind, u64 bits, u64 extra)
+	{
+		if (!eflag_watch_enabled())
+		{
+			return;
+		}
+
+		const u32 i = g_eflag_pos++ % g_eflag_ring.size();
+		g_eflag_ring[i] = {get_system_time(), bits, extra, id, thread, kind};
+	}
+}
+
+// 'w' entered a wait (extra = its mode), 'W' left it (extra = the pattern it returned), 's' set,
+// 'c' clear (bits = the mask ANDed in), 't' trywait (extra = the pattern it saw), 'x' cancel.
+std::string eflag_history()
+{
+	const u32 end = g_eflag_pos.load();
+
+	if (!end)
+	{
+		return {};
+	}
+
+	const u32 count = std::min<u32>(end, ::size32(g_eflag_ring));
+	const u64 now = get_system_time();
+	std::string out = "\nLast event flag events (newest first, age in ms):\n";
+
+	for (u32 n = 0; n < count; n++)
+	{
+		const auto& e = g_eflag_ring[(end - 1 - n) % g_eflag_ring.size()];
+		fmt::append(out, "\t%8.1fms  %c  flag=0x%08x  ppu=0x%x  bits=0x%llx  extra=0x%llx\n",
+			(now - e.time) / 1000., e.kind, e.id, e.thread, e.bits, e.extra);
+	}
+
+	return out;
+}
 
 lv2_event_flag::lv2_event_flag(utils::serial& ar)
 	: protocol(ar)
@@ -129,6 +204,7 @@ error_code sys_event_flag_wait(ppu_thread& ppu, u32 id, u64 bitptn, u32 mode, vm
 	ppu.state += cpu_flag::wait;
 
 	sys_event_flag.trace("sys_event_flag_wait(id=0x%x, bitptn=0x%llx, mode=0x%x, result=*0x%x, timeout=0x%llx)", id, bitptn, mode, result, timeout);
+	eflag_record(id, ppu.id, 'w', bitptn, mode);
 
 	// Fix function arguments for external access
 	ppu.gpr[3] = -1;
@@ -266,6 +342,7 @@ error_code sys_event_flag_wait(ppu_thread& ppu, u32 id, u64 bitptn, u32 mode, vm
 	}
 
 	store.val = ppu.gpr[6];
+	eflag_record(id, ppu.id, 'W', bitptn, ppu.gpr[6]);
 	return not_an_error(ppu.gpr[3]);
 }
 
@@ -274,6 +351,7 @@ error_code sys_event_flag_trywait(ppu_thread& ppu, u32 id, u64 bitptn, u32 mode,
 	ppu.state += cpu_flag::wait;
 
 	sys_event_flag.trace("sys_event_flag_trywait(id=0x%x, bitptn=0x%llx, mode=0x%x, result=*0x%x)", id, bitptn, mode, result);
+	eflag_record(id, ppu.id, 't', bitptn, mode);
 
 	sys_event_store_result store{result};
 
@@ -313,6 +391,7 @@ error_code sys_event_flag_set(cpu_thread& cpu, u32 id, u64 bitptn)
 
 	// Warning: may be called from SPU thread.
 	sys_event_flag.trace("sys_event_flag_set(id=0x%x, bitptn=0x%llx)", id, bitptn);
+	eflag_record(id, cpu.id, 's', bitptn, 0);
 
 	const auto flag = idm::get_unlocked<lv2_obj, lv2_event_flag>(id);
 
@@ -464,6 +543,7 @@ error_code sys_event_flag_clear(ppu_thread& ppu, u32 id, u64 bitptn)
 	ppu.state += cpu_flag::wait;
 
 	sys_event_flag.trace("sys_event_flag_clear(id=0x%x, bitptn=0x%llx)", id, bitptn);
+	eflag_record(id, ppu.id, 'c', bitptn, 0);
 
 	const auto flag = idm::check<lv2_obj, lv2_event_flag>(id, [&](lv2_event_flag& flag)
 	{
@@ -483,6 +563,7 @@ error_code sys_event_flag_cancel(ppu_thread& ppu, u32 id, vm::ptr<u32> num)
 	ppu.state += cpu_flag::wait;
 
 	sys_event_flag.trace("sys_event_flag_cancel(id=0x%x, num=*0x%x)", id, num);
+	eflag_record(id, ppu.id, 'x', 0, 0);
 
 	if (num) *num = 0;
 

@@ -50,6 +50,7 @@ struct RPCSXApi {
   int (*getPadRumble)(int port);
   void (*setThermals)(float cpu, float gpu, float battery, bool show);
   void (*setRenderPosition)(bool portraitTop, int topInset);
+  void (*setPadDeviceClasses)(const int *classes, int count);
   bool (*usbDeviceEvent)(int fd, int vendorId, int productId, int event);
   bool (*installFw)(JNIEnv *env, int fd, long progressId);
   bool (*isInstallableFile)(jint fd);
@@ -64,6 +65,7 @@ struct RPCSXApi {
                      std::string_view gamePath);
   std::string (*systemInfo)();
   void (*loginUser)(std::string_view userId);
+  void (*logAndroid)(const char *message);
   std::string (*getUser)();
   std::string (*settingsGet)(std::string_view path);
   bool (*settingsSet)(std::string_view path, std::string_view valueString);
@@ -108,8 +110,13 @@ struct RPCSXApi {
   bool (*deleteStateFromSlot)(unsigned int slot);
   std::string (*patchEngineVersion)();
   int (*patchesImport)(std::string_view content);
+  int (*patchesWrite)(std::string_view file, std::string_view content);
   std::string (*patchesList)(std::string_view serial);
   std::string (*probeDiscInfo)(std::string_view isoPath, std::string_view iconOut);
+  int (*changeDisc)(std::string_view path);
+  int (*discSwapState)();
+  std::string (*getDiscPlaylist)();
+  std::string (*gameContentId)(std::string_view gamePath);
   bool (*patchSetEnabled)(std::string_view hash, std::string_view description,
                           std::string_view serial, std::string_view appVersion,
                           bool enabled);
@@ -177,6 +184,8 @@ struct RPCSXLibrary : RPCSXApi {
     result.setThermals = reinterpret_cast<decltype(setThermals)>(dlsym(handle, "_rpcsx_setThermals"));
     // Optional: a core built before this simply centres the image, as it always did.
     result.setRenderPosition = reinterpret_cast<decltype(setRenderPosition)>(dlsym(handle, "_rpcsx_setRenderPosition"));
+    // Optional: a core without it reports every port as a standard pad, as it always did.
+    result.setPadDeviceClasses = reinterpret_cast<decltype(setPadDeviceClasses)>(dlsym(handle, "_rpcsx_setPadDeviceClasses"));
     result.usbDeviceEvent = reinterpret_cast<decltype(usbDeviceEvent)>(dlsym(handle, "_rpcsx_usbDeviceEvent"));
     result.installFw = reinterpret_cast<decltype(installFw)>(dlsym(handle, "_rpcsx_installFw"));
     result.isInstallableFile = reinterpret_cast<decltype(isInstallableFile)>(dlsym(handle, "_rpcsx_isInstallableFile"));
@@ -197,6 +206,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.installKey = reinterpret_cast<decltype(installKey)>(dlsym(handle, "_rpcsx_installKey"));
     result.systemInfo = reinterpret_cast<decltype(systemInfo)>(dlsym(handle, "_rpcsx_systemInfo"));
     result.loginUser = reinterpret_cast<decltype(loginUser)>(dlsym(handle, "_rpcsx_loginUser"));
+    result.logAndroid = reinterpret_cast<decltype(logAndroid)>(dlsym(handle, "_rpcsx_logAndroid"));
     result.getUser = reinterpret_cast<decltype(getUser)>(dlsym(handle, "_rpcsx_getUser"));
     result.settingsGet = reinterpret_cast<decltype(settingsGet)>(dlsym(handle, "_rpcsx_settingsGet"));
     // Optional like the frame-gen group above: a core predating RPCN support simply has no
@@ -240,8 +250,13 @@ struct RPCSXLibrary : RPCSXApi {
     result.deleteStateFromSlot = reinterpret_cast<decltype(deleteStateFromSlot)>(dlsym(handle, "_rpcsx_deleteStateFromSlot"));
     result.patchEngineVersion = reinterpret_cast<decltype(patchEngineVersion)>(dlsym(handle, "_rpcsx_patchEngineVersion"));
     result.patchesImport = reinterpret_cast<decltype(patchesImport)>(dlsym(handle, "_rpcsx_patchesImport"));
+    result.patchesWrite = reinterpret_cast<decltype(patchesWrite)>(dlsym(handle, "_rpcsx_patchesWrite"));
     result.patchesList = reinterpret_cast<decltype(patchesList)>(dlsym(handle, "_rpcsx_patchesList"));
     result.probeDiscInfo = reinterpret_cast<decltype(probeDiscInfo)>(dlsym(handle, "_rpcsx_probeDiscInfo"));
+    result.changeDisc = reinterpret_cast<decltype(changeDisc)>(dlsym(handle, "_rpcsx_changeDisc"));
+    result.discSwapState = reinterpret_cast<decltype(discSwapState)>(dlsym(handle, "_rpcsx_discSwapState"));
+    result.getDiscPlaylist = reinterpret_cast<decltype(getDiscPlaylist)>(dlsym(handle, "_rpcsx_getDiscPlaylist"));
+    result.gameContentId = reinterpret_cast<decltype(gameContentId)>(dlsym(handle, "_rpcsx_gameContentId"));
     result.patchSetEnabled = reinterpret_cast<decltype(patchSetEnabled)>(dlsym(handle, "_rpcsx_patchSetEnabled"));
     // clang-format on
 
@@ -568,6 +583,23 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setRenderPosition(
   rpcsxLib.setRenderPosition(portraitTop == JNI_TRUE, topInset);
 }
 
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setPadDeviceClasses(
+    JNIEnv *env, jobject, jintArray classes) {
+  if (rpcsxLib.setPadDeviceClasses == nullptr || classes == nullptr) {
+    return;
+  }
+
+  const jsize count = env->GetArrayLength(classes);
+
+  if (count <= 0) {
+    return;
+  }
+
+  std::vector<int> values(static_cast<size_t>(count));
+  env->GetIntArrayRegion(classes, 0, count, values.data());
+  rpcsxLib.setPadDeviceClasses(values.data(), static_cast<int>(count));
+}
+
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_surfaceSizeChanged(
     JNIEnv *, jobject, jint width, jint height) {
   if (rpcsxLib.surfaceSizeChanged == nullptr) {
@@ -710,6 +742,17 @@ Java_net_rpcsx_RPCSX_systemInfo(JNIEnv *env, jobject) {
   }
 
   return wrap(env, rpcsxLib.systemInfo());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_logAndroid(JNIEnv *env, jobject, jstring message) {
+  // Silent when the core is not open yet, like every other entry point here. A diagnostic that
+  // crashed the app for being early would be worse than one that is missing.
+  if (rpcsxLib.logAndroid == nullptr || message == nullptr) {
+    return;
+  }
+
+  rpcsxLib.logAndroid(unwrap(env, message).c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1155,6 +1198,16 @@ Java_net_rpcsx_RPCSX_patchesImport(JNIEnv *env, jobject, jstring jcontent) {
   return rpcsxLib.patchesImport(unwrap(env, jcontent));
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_patchesWrite(JNIEnv *env, jobject, jstring jfile,
+                                  jstring jcontent) {
+  if (rpcsxLib.patchesWrite == nullptr) {
+    return -1;
+  }
+
+  return rpcsxLib.patchesWrite(unwrap(env, jfile), unwrap(env, jcontent));
+}
+
 extern "C" JNIEXPORT jstring JNICALL
 Java_net_rpcsx_RPCSX_probeDiscInfo(JNIEnv *env, jobject, jstring jpath,
                                    jstring jicon) {
@@ -1162,6 +1215,38 @@ Java_net_rpcsx_RPCSX_probeDiscInfo(JNIEnv *env, jobject, jstring jpath,
     return wrap(env, "{}");
   }
   return wrap(env, rpcsxLib.probeDiscInfo(unwrap(env, jpath), unwrap(env, jicon)));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_changeDisc(JNIEnv *env, jobject, jstring jpath) {
+  if (rpcsxLib.changeDisc == nullptr) {
+    return 1;
+  }
+  return rpcsxLib.changeDisc(unwrap(env, jpath));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_discSwapState(JNIEnv *, jobject) {
+  if (rpcsxLib.discSwapState == nullptr) {
+    return 0;
+  }
+  return rpcsxLib.discSwapState();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_gameContentId(JNIEnv *env, jobject, jstring jpath) {
+  if (rpcsxLib.gameContentId == nullptr) {
+    return wrap(env, "");
+  }
+  return wrap(env, rpcsxLib.gameContentId(unwrap(env, jpath)));
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_getDiscPlaylist(JNIEnv *env, jobject) {
+  if (rpcsxLib.getDiscPlaylist == nullptr) {
+    return wrap(env, "{}");
+  }
+  return wrap(env, rpcsxLib.getDiscPlaylist());
 }
 
 extern "C" JNIEXPORT jstring JNICALL

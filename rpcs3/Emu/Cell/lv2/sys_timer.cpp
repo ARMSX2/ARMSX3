@@ -447,11 +447,18 @@ error_code sys_timer_sleep(ppu_thread& ppu, u32 sleep_time)
 	return sys_timer_usleep(ppu, sleep_time * u64{1000000});
 }
 
+// See ppu_watch_arm in PPUThread.cpp. A guest poll loop sleeps between reads, so this is where
+// the address it is polling passes through kernel code, and the only place it can be picked up
+// without a hook in the interpreter's load path.
+extern void ppu_watch_arm(const ppu_thread& ppu);
+
 error_code sys_timer_usleep(ppu_thread& ppu, u64 sleep_time)
 {
 	ppu.state += cpu_flag::wait;
 
 	sys_timer.trace("sys_timer_usleep(sleep_time=0x%llx)", sleep_time);
+
+	ppu_watch_arm(ppu);
 
 	if (sleep_time)
 	{

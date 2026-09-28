@@ -203,7 +203,7 @@ namespace vk
 			return *this;
 		}
 
-		program& program::link(bool separate_objects)
+		program& program::link(VkPipelineCache pipeline_cache, bool separate_objects)
 		{
 			auto p_graphics_info = std::get_if<VkGraphicsPipelineCreateInfo>(&m_info);
 			auto p_compute_info = !p_graphics_info ? std::get_if<VkComputePipelineCreateInfo>(&m_info) : nullptr;
@@ -268,10 +268,11 @@ namespace vk
 			ensure(m_pipeline_layout);
 
 			// Hand the driver its persistent cache so a pipeline it has compiled before --
-			// in this run or a previous one -- costs a lookup instead of a compile. A cache
-			// is owned by the device that created it, so check identity rather than assuming
-			// there is only ever one. VK_NULL_HANDLE simply means "no cache" and is legal.
-			const VkPipelineCache pipeline_cache =
+			// in this run or a previous one -- costs a lookup instead of a compile. The pipe
+			// compilers pass it in (g_pipeline_cache borrows it); any other caller falls back to
+			// it here. A cache is owned by the device that created it, so check identity rather
+			// than assuming there is only ever one. VK_NULL_HANDLE simply means "no cache".
+			const VkPipelineCache cache = pipeline_cache ? pipeline_cache :
 				(g_render_device && static_cast<VkDevice>(*g_render_device) == m_device)
 					? g_render_device->get_pipeline_cache()
 					: VK_NULL_HANDLE;
@@ -280,13 +281,13 @@ namespace vk
 			{
 				VkGraphicsPipelineCreateInfo create_info = *p_graphics_info;
 				create_info.layout = m_pipeline_layout;
-				CHECK_RESULT(vkCreateGraphicsPipelines(m_device, pipeline_cache, 1, &create_info, nullptr, &m_pipeline));
+				CHECK_RESULT(vkCreateGraphicsPipelines(m_device, cache, 1, &create_info, nullptr, &m_pipeline));
 			}
 			else
 			{
 				VkComputePipelineCreateInfo create_info = *p_compute_info;
 				create_info.layout = m_pipeline_layout;
-				CHECK_RESULT(vkCreateComputePipelines(m_device, pipeline_cache, 1, &create_info, nullptr, &m_pipeline));
+				CHECK_RESULT(vkCreateComputePipelines(m_device, cache, 1, &create_info, nullptr, &m_pipeline));
 			}
 
 			m_linked = true;

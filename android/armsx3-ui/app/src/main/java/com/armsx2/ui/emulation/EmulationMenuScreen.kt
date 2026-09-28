@@ -369,7 +369,18 @@ private fun MenuPage(
                     // shared Settings state (same as the rest of the overlay); its
                     // controls are SettingsControllerNav items, so the pause menu's
                     // content-pane nav drives them for free.
-                    EmulationMenuTab.Fixes -> com.armsx2.ui.settings.FixesTab(InGameOverlay.settingsState)
+                    //
+                    // The RPCS3 database card goes first, above CPU Accuracy: it is the
+                    // reason a fix set on this tab may not be the one the game runs with,
+                    // since the database's value for this title is applied over your
+                    // settings until you switch its entry off (a value you set for this
+                    // game yourself still wins). It renders nothing for a title without an
+                    // entry, so most games open straight onto CPU Accuracy. In-game only:
+                    // the settings hub's Fixes tab has no running title to read.
+                    EmulationMenuTab.Fixes -> {
+                        DatabaseSection()
+                        com.armsx2.ui.settings.FixesTab(InGameOverlay.settingsState)
+                    }
                     EmulationMenuTab.Performance -> PerformancePane(state, viewModel)
                     EmulationMenuTab.Controls -> ControlsPane(state, viewModel)
                     EmulationMenuTab.Options -> OptionsPane(state, viewModel)
@@ -634,18 +645,33 @@ private fun MenuHeader(
 
 @Composable
 private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuViewModel) {
+    // Which disc card is open: null, change, or swap. Swap is offered only while the game can take
+    // one, which the core reports as it runs; see DiscSection.
+    var discCard by remember { mutableStateOf<Boolean?>(null) }
+    val canSwap = remember { com.armsx3.Rpcs3Bridge.discSwapState() != 0 }
+    val actions = buildList {
+        add(MenuAction(str("action.resume"), str("action.play"), "▶", Success, viewModel::resume))
+        add(MenuAction(str("memcard.restart"), str("action.reset"), "↻", null, MainActivityRuntime::restart))
+        add(MenuAction(str("action.changeDisc"), str("action.changeDisc.detail"), "⏏", null) {
+            discCard = if (discCard == false) null else false
+        })
+        if (canSwap) {
+            add(MenuAction(str("action.swapDisc"), str("action.swapDisc.detail"), "⇄", null) {
+                discCard = if (discCard == true) null else true
+            })
+        }
+        add(MenuAction(str("action.close"), MainActivityRuntime.currentGame.value?.title.orEmpty(), "■", Danger) {
+            MainActivityRuntime.closeGame()
+        })
+    }
+    // What a pad press on the grid runs: this exact list, so the two cannot drift apart.
+    androidx.compose.runtime.SideEffect { viewModel.sessionActions = actions.map { it.action } }
     ActionGrid(
-        actions = listOf(
-            MenuAction(str("action.resume"), str("action.play"), "▶", Success, viewModel::resume),
-            MenuAction(str("memcard.restart"), str("action.reset"), "↻", null, MainActivityRuntime::restart),
-            MenuAction(str("action.swapDisc"), str("action.swapDisc.detail"), "⏏", null, MainActivityRuntime::promptSwapDisc),
-            MenuAction(str("action.close"), MainActivityRuntime.currentGame.value?.title.orEmpty(), "■", Danger) {
-                MainActivityRuntime.closeGame()
-            },
-        ),
+        actions = actions,
         selected = state.selectedAction,
         onSelect = viewModel::selectAction,
     )
+    discCard?.let { swap -> DiscSection(viewModel, swap) }
     // On-screen display — a single universal on/off (old-UI style); the per-stat
     // toggles live in All Settings. Plus a frame-limit switch so fast-forward is one
     // tap away.
@@ -850,6 +876,22 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
                 viewModel.updateSettings {
                     it.copy(ps3 = it.ps3.copy(displayAspect = IN_GAME_SCREEN_ASPECTS[v]))
                 }
+            },
+        )
+        Spacer(Modifier.height(6.dp))
+        // Orientation, the Renderer tab's four choices. In-game because the moment you need it is
+        // mid-game: on "Device" the system auto-rotate decides, so tilting a handheld far enough,
+        // steering a SIXAXIS section for one, turns the game over to portrait.
+        HorizontalOptions(
+            title = str("renderer.orientation.label"),
+            options = listOf(
+                str("renderer.orientation.device"), str("renderer.orientation.landscape"),
+                str("renderer.orientation.portrait"), str("renderer.orientation.autoRotate"),
+            ).mapIndexed { index, label -> index to label },
+            selected = settings.orientation.coerceIn(0, 3),
+            onSelect = { v ->
+                viewModel.updateSettings { it.copy(orientation = v) }
+                MainActivityRuntime.instance?.applyEmulationOrientation()
             },
         )
         Spacer(Modifier.height(6.dp))
@@ -1305,6 +1347,18 @@ private fun ControlsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
         // The four swipe/double-tap ASSIGNMENTS stay in All Settings — six button pickers would
         // swamp this pane, and you set them once rather than mid-session.
     }
+    // Player 1 only here. This is the port an instrument game actually checks, and a picker per
+    // port would swamp the pane; the other six live in the Pad tab. In-game because a game that
+    // rejects a standard pad does it at its title screen, which is exactly where you are when
+    // you need this, and the core rebuilds its pads so it takes effect without a reboot.
+    HorizontalOptions(
+        title = str("pad.deviceClass.label"),
+        options = com.armsx2.PadDeviceClass.LABEL_KEYS
+            .mapIndexed { index, key -> index to str(key) },
+        selected = com.armsx2.PadDeviceClass.get(0),
+        onSelect = { com.armsx2.PadDeviceClass.set(0, it) },
+    )
+    Spacer(Modifier.height(6.dp))
     CompactAction(str("pad.controllerMapping"), "⌁", Modifier.fillMaxWidth(), viewModel::openControlsManager)
     Spacer(Modifier.height(6.dp))
     CompactAction(str("pad.editTouchLayout"), "✥", Modifier.fillMaxWidth(), viewModel::editTouchControls)
@@ -1644,6 +1698,116 @@ private fun ActionGrid(actions: List<MenuAction>, selected: Int, onSelect: (Int)
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The RPCS3 compatibility database entries for the running title, each one switchable.
+ *
+ * The database is downloaded per title and applied by the core over the top of your own config,
+ * so a title it pins to the PPU interpreter (108 of the database's 2195 are) runs on the
+ * interpreter no matter what the decoder row in All Settings says. Switching an entry off here
+ * withholds that key from the core and hands the setting back to you. A game with no database
+ * entry renders nothing at all.
+ */
+@Composable
+private fun DatabaseSection() {
+    val serial = com.armsx2.ui.InGameOverlay.currentSerial.value?.takeIf { it.isNotBlank() } ?: return
+    val entries = remember(serial) { com.armsx2.config.ConfigDatabase.entriesFor(serial) }
+    if (entries.isEmpty()) return
+
+    // A key can be withheld from the core two ways and only one of them is this card's switch:
+    // the core also skips any key you have set for this game yourself, so a row could read "on"
+    // while the core kept skipping it and nothing on screen said why. Fold both into one switch.
+    fun ownValues() = com.armsx2.config.CoreSettingOverrides
+        .load(com.armsx2.config.SettingsScope.Game, serial).keys
+
+    var ignored by remember(serial) {
+        mutableStateOf(com.armsx2.config.ConfigDatabase.ignoredFor(serial))
+    }
+    var yours by remember(serial) { mutableStateOf(ownValues()) }
+
+    SectionCard(str("perf.configDb.title")) {
+        Text(
+            str("perf.configDb.help"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
+        for ((path, value) in entries) {
+            val withheld = path in ignored || path in yours
+            // The section name is part of the identity, not decoration: "Core@@PPU Decoder" and a
+            // video key of the same name would otherwise read as one row.
+            MenuSwitchRow(
+                title = "${path.replace("@@", " / ")}: $value",
+                checked = !withheld,
+                description = when {
+                    path in yours -> str("perf.configDb.yours")
+                    withheld -> str("perf.configDb.off")
+                    else -> null
+                },
+            ) { applyThis ->
+                com.armsx2.config.ConfigDatabase.setIgnored(serial, path, !applyThis)
+
+                // On means "use the database value", which cannot be true while your own value
+                // for the same key is still on file: the core gives yours priority.
+                if (applyThis) {
+                    com.armsx2.config.CoreSettingOverrides
+                        .forget(com.armsx2.config.SettingsScope.Game, serial, path)
+                }
+
+                ignored = com.armsx2.config.ConfigDatabase.ignoredFor(serial)
+                yours = ownValues()
+                // Rewrite the file the core reads now, rather than waiting for the next time
+                // something happens to save settings for this title.
+                com.armsx2.config.ConfigDatabase.writeUserKeys(serial, yours)
+            }
+        }
+    }
+}
+
+/**
+ * Change Disc and Swap Disc, the two ways to put another disc in, opened from their actions above.
+ *
+ * Change Disc works for every game, and is what a disc change means on a console for nearly all of
+ * them: the game closes and the new disc starts. Swap Disc is the real thing, a disc swapped under a
+ * game that keeps running. Only a game that registered disc-change callbacks can take that (SingStar,
+ * the Dynasty Warriors Xtreme Legends games), so its action only exists while one is running.
+ *
+ * Both list the discs of the playlist the game was booted from, then offer the file picker. Picking
+ * closes the menu: a swap needs the game running to let go of the old disc.
+ */
+@Composable
+private fun DiscSection(viewModel: EmulationMenuViewModel, swap: Boolean) {
+    val playlist = remember { com.armsx3.Rpcs3Bridge.discPlaylist() }
+
+    SectionCard(str(if (swap) "action.swapDisc" else "action.changeDisc")) {
+        Text(
+            str(if (swap) "disc.swap.note" else "disc.change.note"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(6.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            playlist.discs.forEachIndexed { index, disc ->
+                val current = disc == playlist.current
+                MenuButtonRow(
+                    title = disc.substringAfterLast('/'),
+                    description = if (current) str("disc.swap.inDrive") else str("disc.swap.discN").format(index + 1),
+                    glyph = if (current) "●" else "⏏",
+                ) {
+                    if (!current) {
+                        viewModel.resume()
+                        if (swap) MainActivityRuntime.swapDiscTo(disc) else MainActivityRuntime.bootInstead(disc)
+                    }
+                }
+            }
+            MenuButtonRow(
+                title = str("disc.swap.pickFile"),
+                description = str("disc.swap.pickFile.desc"),
+                glyph = "…",
+            ) { MainActivityRuntime.promptDiscFile(swap) }
         }
     }
 }

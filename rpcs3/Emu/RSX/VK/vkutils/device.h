@@ -94,6 +94,9 @@ namespace vk
 		// data heaps bind a window of exactly this size and index into it, so
 		// (this / element size) IS the highest index a shader can legally see.
 		u32 max_ubo_range = 16384;
+		// Set only on PowerVR, where max_ubo_range was clamped. Everywhere else the renderer's
+		// uniform windows use the driver's own limit, exactly as before the clamp existed.
+		bool ubo_window_clamped = false;
 
 		multidraw_features multidraw_support{};
 
@@ -247,6 +250,11 @@ namespace vk
 		 * (dynamic_offset / element_size), so this is exactly the highest index
 		 * reachable -- not an estimate.
 		 */
+		// The window the heaps bind a uniform buffer through. Must agree with ubo_array_bound:
+		// the shader indexes from the start of this window, so a window wider than the declared
+		// array lets an index run past it.
+		u32 ubo_window_size(u32 driver_limit) const { return pgpu->ubo_window_clamped ? pgpu->max_ubo_range : driver_limit; }
+
 		u32 ubo_array_bound(u32 element_size) const
 		{
 			return std::max<u32>(1u, pgpu->max_ubo_range / element_size);
@@ -296,7 +304,7 @@ namespace vk
 		bool get_external_memory_host_support() const { return pgpu->optional_features_support.external_memory_host; }
 		bool get_memory_budget_support() const { return pgpu->optional_features_support.memory_budget; }
 		bool get_surface_capabilities_2_support() const { return pgpu->optional_features_support.surface_capabilities_2; }
-		bool get_debug_utils_support() const { return g_cfg.video.renderdoc_compatiblity && pgpu->optional_features_support.debug_utils; }
+		bool get_debug_utils_support() const;
 		bool get_framebuffer_loops_support() const { return pgpu->optional_features_support.framebuffer_loops; }
 		bool get_barycoords_support() const { return pgpu->optional_features_support.barycentric_coords; }
 		bool get_synchronization2_support() const { return pgpu->optional_features_support.synchronization_2; }

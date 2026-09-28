@@ -6,9 +6,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -17,6 +17,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -36,6 +37,7 @@ import com.armsx2.ui.common.ArmsBackdrop
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.rpcsx.RPCSX
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -53,6 +55,9 @@ import org.json.JSONObject
  * editable here with no app change.
  */
 
+/** One firmware library Libraries Control can name, and how it runs when it is not named. */
+private data class FirmwareLibrary(val name: String, val defaultHle: Boolean)
+
 /** One editable leaf of the core config tree. */
 private data class CoreSetting(
     val path: String,
@@ -64,6 +69,12 @@ private data class CoreSetting(
     val variants: List<String>,
     val min: Long?,
     val max: Long?,
+    // What the row is called on screen. The node name, except for Libraries Control, which
+    // RPCS3's own settings dialog calls Firmware Libraries: that is the name people search for.
+    val label: String = name,
+    // Libraries Control only: every library it can name. A "set" leaf's value and default
+    // are JSON arrays, the shape settingsSet takes for it.
+    val choices: List<FirmwareLibrary> = emptyList(),
 )
 
 /** Flatten the tree the core emits into a list of leaves, remembering each one's path. */
@@ -87,19 +98,33 @@ private fun flatten(
         val variants = child.optJSONArray("variants")?.let { array ->
             List(array.length()) { array.optString(it) }
         }.orEmpty()
+        val choices = child.optJSONArray("choices")?.let { array ->
+            List(array.length()) { array.optJSONObject(it) }.mapNotNull { choice ->
+                val name = choice?.optString("name").orEmpty()
+                if (name.isEmpty()) null else FirmwareLibrary(name, choice!!.optBoolean("hle"))
+            }
+        }.orEmpty()
         out += CoreSetting(
             path = path,
             name = key,
             section = section.ifEmpty { key },
             type = type,
-            // Bools arrive as real JSON booleans, everything else as strings.
-            value = if (type == "bool") child.optBoolean("value").toString()
-            else child.optString("value"),
-            default = if (type == "bool") child.optBoolean("default").toString()
-            else child.optString("default"),
+            // Bools arrive as real JSON booleans, sets as arrays, everything else as strings.
+            value = when (type) {
+                "bool" -> child.optBoolean("value").toString()
+                "set" -> (child.optJSONArray("value") ?: JSONArray()).toString()
+                else -> child.optString("value")
+            },
+            default = when (type) {
+                "bool" -> child.optBoolean("default").toString()
+                "set" -> (child.optJSONArray("default") ?: JSONArray()).toString()
+                else -> child.optString("default")
+            },
             variants = variants,
             min = child.optString("min").toLongOrNull(),
             max = child.optString("max").toLongOrNull(),
+            label = if (choices.isNotEmpty()) I18n.get("core.settings.libraries.title") else key,
+            choices = choices,
         )
     }
 }
@@ -160,9 +185,10 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
         overrides = runCatching { CoreSettingOverrides.load(scope, serial) }.getOrDefault(emptyMap())
     }
 
-    // settingsSet takes JSON: bools and numbers bare, enums and strings quoted.
+    // settingsSet takes JSON: bools and numbers bare, enums and strings quoted, sets as the
+    // array they already are.
     fun encode(type: String, raw: String): String = when (type) {
-        "bool", "int", "uint", "float" -> raw
+        "bool", "int", "uint", "float", "set" -> raw
         else -> JSONObject.quote(raw)
     }
 
@@ -221,7 +247,9 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
         if (query.isBlank()) base
         else base.filter {
             it.name.contains(query, ignoreCase = true) ||
-                it.section.contains(query, ignoreCase = true)
+                it.label.contains(query, ignoreCase = true) ||
+                it.section.contains(query, ignoreCase = true) ||
+                it.choices.any { library -> library.name.contains(query, ignoreCase = true) }
         }
     }
 
@@ -296,16 +324,25 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
                 )
             }
 
-            // weight(1f), not just fillMaxWidth: an unweighted LazyColumn in a Column takes the
-            // whole remaining height, which left the Back button below it with nothing to lay out
-            // in. The button was always here, it was simply off the bottom of the screen, and on a
+            // weight(1f), not just fillMaxWidth: an unweighted list in a Column takes the whole
+            // remaining height, which left the Back button below it with nothing to lay out in.
+            // The button was always here, it was simply off the bottom of the screen, and on a
             // touch-only device that made this the one screen with no visible way out. Weighting
             // the list makes it share the space and keeps Back on screen at every list length.
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp),
+            //
+            // A scrolling Column, not a LazyColumn, because the D-pad walks the controller nav
+            // registry and a row is only in it while it is composed. A LazyColumn composes what
+            // is on screen, two or three rows at this height, so Down from the last visible row
+            // found nothing below it and stopped: the list could not be scrolled with a controller
+            // past PPU Threads. Every other settings screen already composes all of its rows; this
+            // one has about 270, which is fine to compose once.
+            val listScroll = rememberScrollState()
+            ControllerAutoScroll(listScroll)
+            Column(
+                modifier = Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp).verticalScroll(listScroll),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                items(filtered, key = { it.path }) { setting ->
+                filtered.forEach { setting -> key(setting.path) {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
@@ -341,10 +378,10 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
                                     }
                                 }
                             }
-                            CoreSettingRow(setting) { write(setting, it) }
+                            CoreSettingRow(setting, overrides[setting.path], query) { write(setting, it) }
                         }
                     }
-                }
+                } }
             }
 
             TextButton(onClick = onBack, modifier = Modifier.padding(top = 8.dp)) {
@@ -354,13 +391,21 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
     }
 }
 
-/** Pick a widget from the node's declared type, not from a hardcoded table. */
+/** Pick a widget from the node's declared type, not from a hardcoded table.
+ *
+ *  Nav ids come from the node's path, not its name: names repeat across sections (Video and
+ *  Audio both have a Renderer), and with every row registered at once two rows sharing an id
+ *  share one registry slot, so one of them could never be reached with a controller. */
 @Composable
-private fun CoreSettingRow(setting: CoreSetting, onWrite: (String) -> Unit) {
+private fun CoreSettingRow(setting: CoreSetting, remembered: String?, query: String, onWrite: (String) -> Unit) {
     when {
+        setting.type == "set" && setting.choices.isNotEmpty() ->
+            FirmwareLibrariesRow(setting, remembered, query, onWrite)
+
         setting.type == "bool" -> ToggleRow(
             setting.name,
             setting.value == "true",
+            controllerId = "core:${setting.path}",
         ) { onWrite(it.toString()) }
 
         setting.variants.isNotEmpty() -> SegmentedGridRow(
@@ -368,6 +413,7 @@ private fun CoreSettingRow(setting: CoreSetting, onWrite: (String) -> Unit) {
             options = setting.variants,
             selectedIndex = setting.variants.indexOf(setting.value).coerceAtLeast(0),
             columns = 2,
+            controllerId = "core:${setting.path}",
             onChange = { onWrite(setting.variants[it]) },
         )
 
@@ -404,6 +450,118 @@ private fun CoreSettingRow(setting: CoreSetting, onWrite: (String) -> Unit) {
                         if (!state.isFocused && latest != original) onWrite(latest)
                     },
             )
+        }
+    }
+}
+
+/**
+ * RPCS3's Firmware Libraries list, for one phone-sized column.
+ *
+ * Libraries Control holds overrides, not a full list: "<library>:lle" or "<library>:hle" for each
+ * library forced away from the way it runs by default, exactly as RPCS3's settings dialog stores
+ * them. Here every library gets one switch, on for LLE (the console's own code) and off for HLE
+ * (the emulator's), starting from the default, and only the ones moved off their default are
+ * written. Moved ones sort first, like the desktop lists.
+ *
+ * Collapsed until asked for: 142 rows would bury every setting below this one.
+ *
+ * [remembered] is what this screen's tier has on record. It is shown in preference to the live
+ * value because the core will not change the list under a running game (sys_prx reads it when a
+ * game loads a module), so an edit from the in-game menu is on record but not yet live; the
+ * record is replayed at the next boot, before anything reads the list.
+ */
+@Composable
+private fun FirmwareLibrariesRow(setting: CoreSetting, remembered: String?, query: String, onWrite: (String) -> Unit) {
+    fun parse(json: String): Set<String> = runCatching {
+        val array = JSONArray(json)
+        List(array.length()) { array.optString(it) }.filter { it.isNotEmpty() }.toSet()
+    }.getOrDefault(emptySet())
+
+    val shown = remembered ?: setting.value
+    val overrides = remember(shown) { parse(shown) }
+    val pending = remembered != null && parse(remembered) != parse(setting.value)
+
+    fun isLle(library: FirmwareLibrary): Boolean = when {
+        "${library.name}:lle" in overrides -> true
+        "${library.name}:hle" in overrides -> false
+        else -> !library.defaultHle
+    }
+
+    val changed = setting.choices.count { isLle(it) == it.defaultHle }
+
+    // A search on the screen above that names a library opens the list already narrowed to it.
+    val outerMatch = query.isNotBlank() && setting.choices.any { it.name.contains(query, ignoreCase = true) }
+    // Keyed on the match so a search opens it and Hide still closes it.
+    var open by remember(outerMatch) { mutableStateOf(outerMatch) }
+    var search by remember { mutableStateOf("") }
+    val filter = search.ifBlank { if (outerMatch) query else "" }
+
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(setting.label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(
+                    "${str("core.settings.libraries.changed")}: $changed",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (changed > 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = { open = !open }) {
+                Text(if (open) str("core.settings.libraries.hide") else str("core.settings.libraries.show"))
+            }
+        }
+
+        if (pending) {
+            Text(
+                str("core.settings.libraries.pending"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
+
+        if (open) {
+            Text(
+                str("core.settings.libraries.description"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
+            )
+            OutlinedTextField(
+                value = search,
+                onValueChange = { search = it },
+                label = { Text(str("core.settings.libraries.search")) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            val rows = setting.choices
+                .filter { filter.isBlank() || it.name.contains(filter, ignoreCase = true) }
+                .sortedWith(compareBy<FirmwareLibrary> { isLle(it) != it.defaultHle }.thenBy { it.name })
+
+            rows.forEach { library -> key(library.name) {
+                val lle = isLle(library)
+                ToggleRow(
+                    label = library.name,
+                    value = lle,
+                    description = buildString {
+                        append(if (library.defaultHle) str("core.settings.libraries.defaultHle") else str("core.settings.libraries.defaultLle"))
+                        // RPCS3 says the same in its tooltip for these.
+                        if (library.name.startsWith("libsysutil")) append(". ").append(str("core.settings.libraries.sysutil"))
+                    },
+                    controllerId = "core:libs:${library.name}",
+                    notDefault = lle == library.defaultHle,
+                ) { wantLle ->
+                    val next = overrides.filterNot { it == "${library.name}:lle" || it == "${library.name}:hle" }.toMutableSet()
+                    // Only a library moved off its default is written, the way RPCS3 stores it.
+                    if (wantLle == library.defaultHle) next += "${library.name}:${if (wantLle) "lle" else "hle"}"
+                    onWrite(JSONArray(next.sorted()).toString())
+                }
+            } }
         }
     }
 }

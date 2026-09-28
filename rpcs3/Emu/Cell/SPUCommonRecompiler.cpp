@@ -1,5 +1,6 @@
 #include "stdafx.h"
 
+#include <charconv>
 #include <map>
 #include <tuple>
 #include "SPURecompiler.h"
@@ -172,6 +173,67 @@ static bool spu_interpreter_fallback_available()
 	return true;
 }
 
+// ARMSX3_SPU_INTERP_RANGE=start-end, in hex local-store addresses: interpret blocks entered inside
+// that window and compile everything else.
+//
+// ARMSX3_SPU_INTERP=1 is all or nothing, and a game that cannot boot fully interpreted (Killzone 3
+// does not get past its first loads) cannot be tested with it at all. One job interpreted while the
+// rest of the title runs compiled is both fast enough to reach the bug and narrow enough to convict
+// or clear our codegen for the code that hits it -- then halve the window and repeat.
+static std::pair<u32, u32> spu_interp_range()
+{
+	static const std::pair<u32, u32> s_range = []() -> std::pair<u32, u32>
+	{
+		const char* env = std::getenv("ARMSX3_SPU_INTERP_RANGE");
+
+		if (!env || !*env)
+		{
+			return {0, 0};
+		}
+
+		const std::string_view item{env};
+		const usz dash = item.find('-');
+		u32 start = 0, end = 0;
+
+		if (dash == umax ||
+			std::from_chars(item.data(), item.data() + dash, start, 16).ec != std::errc() ||
+			std::from_chars(item.data() + dash + 1, item.data() + item.size(), end, 16).ec != std::errc() ||
+			end <= start || end > SPU_LS_SIZE)
+		{
+			spu_log.error("ARMSX3_SPU_INTERP_RANGE: could not read '%s', expected start-end in hex", env);
+			return {0, 0};
+		}
+
+		spu_log.success("ARMSX3_SPU_INTERP_RANGE: interpreting blocks entered in 0x%05x..0x%05x", start, end);
+		return {start, end};
+	}();
+
+	return s_range;
+}
+
+// Proof that the window actually bit. Without it a clean run is ambiguous: the range may have
+// named code the title never enters, or the marking may have failed, and either way the result
+// reads as "that range is innocent". Counted at both sites and logged on the powers of two so a
+// long session does not spam.
+static void spu_interp_range_engaged(const char* site)
+{
+	static atomic_t<u64> s_count{0};
+
+	const u64 n = ++s_count;
+
+	if ((n & (n - 1)) == 0)
+	{
+		spu_log.success("ARMSX3_SPU_INTERP_RANGE: engaged %u time(s), latest via %s", n, site);
+	}
+}
+
+static bool spu_interp_range_contains(u32 pc)
+{
+	const auto [start, end] = spu_interp_range();
+
+	return end && pc >= start && pc < end;
+}
+
 static bool spu_block_compile_failed(u32 addr)
 {
 	reader_lock lock(s_spu_failed_blocks_mutex);
@@ -280,6 +342,18 @@ static void spu_run_interp_fallback(spu_thread& spu, u32 lower_bound = 0, u32 si
 
 static spu_function_t compile_spu_llvm_with_retry(std::unique_ptr<spu_recompiler_base>& compiler, const spu_program& program)
 {
+	// ARMSX3_SPU_INTERP_RANGE also has to bite here, not only in dispatch. Most functions are
+	// built ahead of time by the SPU Worker threads straight from the cache list, and those never
+	// reach dispatch -- so a window that only guarded dispatch left the code it named compiled
+	// anyway, and quietly produced "that range is innocent" results. Refusing the compile marks
+	// the block, and the first execution then falls into the interpreter.
+	if (spu_interp_range_contains(program.entry_point))
+	{
+		spu_mark_block_compile_failed(program.entry_point, program.lower_bound, ::size32(program.data) * 4);
+		spu_interp_range_engaged("refused compile");
+		return nullptr;
+	}
+
 	if (spu_block_compile_failed(program.entry_point))
 	{
 		return nullptr;
@@ -2661,6 +2735,18 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 	}
 
 #ifdef ARCH_ARM64
+	if (spu_interpreter_fallback_available() && spu_interp_range_contains(spu.pc))
+	{
+		spu_interp_range_engaged("dispatch");
+		// The whole window as the extent, not the four bytes at pc: the interpreter releases the
+		// thread as soon as the pc leaves the range it was armed with, and arming it per
+		// instruction costs an analyse and a dispatch round trip for every one of them.
+		const auto [start, end] = spu_interp_range();
+
+		spu_run_interp_fallback(spu, start, end - start);
+		return;
+	}
+
 	if (spu_interpreter_fallback_available() && spu_block_compile_failed(spu.pc))
 	{
 		// Deliberately not logged. The flag is cleared every time the thread leaves the block, so

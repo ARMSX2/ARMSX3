@@ -609,8 +609,21 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	null_buffer = std::make_unique<vk::buffer>(*m_device, 32, memory_map.device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
 	null_buffer_view = std::make_unique<vk::buffer_view>(*m_device, null_buffer->value, VK_FORMAT_R8_UINT, 0, 32);
 
+	// Initialize the shader compiler stack
+#ifdef ANDROID
+	// Not every thread on Android. The workers are pinned to thread_class::general, which is the
+	// little cluster on big.LITTLE (see decay_num_worker_threads), so a worker per SoC thread stacks
+	// several on each little core: no faster, and each extra concurrent pipeline compile is more
+	// driver memory on phones that already run close to the low-memory killer.
+	const int preferred_compiler_threads = g_cfg.video.shader_compiler_threads_count;
+#else
+	const int preferred_compiler_threads = g_cfg.video.shader_compiler_threads_count == 0
+		? utils::get_thread_count()                   // We spawn the initial pipe compiler with all threads during the boot sequence by default.
+		: g_cfg.video.shader_compiler_threads_count;  // Respect user override if set
+#endif
+
 	spirv::initialize_compiler_context();
-	vk::initialize_pipe_compiler(g_cfg.video.shader_compiler_threads_count);
+	vk::initialize_pipe_compiler(preferred_compiler_threads);
 
 	m_prog_buffer = std::make_unique<vk::program_cache>
 	(
@@ -1454,6 +1467,12 @@ void VKGSRender::on_init_thread()
 			m_shaders_cache->load(&dlg);
 		}
 	}
+
+	// Now we properly initialize the pipe compiler as per the user's configuration
+	if (!g_cfg.video.shader_compiler_threads_count)
+	{
+		vk::resize_pipe_compiler(g_cfg.video.shader_compiler_threads_count);
+	}
 }
 
 void VKGSRender::on_exit()
@@ -2225,7 +2244,7 @@ void VKGSRender::load_program_env()
 		m_vertex_env_ring_info.unmap();
 		m_vertex_env_dynamic_offset = mem;
 
-		m_vertex_env_buffer_info = m_vertex_env_ring_info.window<256>(m_vertex_env_dynamic_offset, 96, gpu_limits.maxUniformBufferRange);
+		m_vertex_env_buffer_info = m_vertex_env_ring_info.window<256>(m_vertex_env_dynamic_offset, 96, m_device->ubo_window_size(gpu_limits.maxUniformBufferRange));
 		m_vertex_env_dynamic_offset -= m_vertex_env_buffer_info.offset;
 	}
 
@@ -2273,7 +2292,7 @@ void VKGSRender::load_program_env()
 			m_transform_constants_ring_info.unmap();
 			m_xform_constants_dynamic_offset = mem_offset;
 
-			m_vertex_constants_buffer_info = m_transform_constants_ring_info.window<16>(m_xform_constants_dynamic_offset, io_buf.size(), gpu_limits.maxUniformBufferRange);
+			m_vertex_constants_buffer_info = m_transform_constants_ring_info.window<16>(m_xform_constants_dynamic_offset, io_buf.size(), m_device->ubo_window_size(gpu_limits.maxUniformBufferRange));
 			m_xform_constants_dynamic_offset -= m_vertex_constants_buffer_info.offset;
 		}
 	}
@@ -2291,7 +2310,7 @@ void VKGSRender::load_program_env()
 
 			m_fragment_constants_ring_info.unmap();
 
-			m_fragment_constants_buffer_info = m_fragment_constants_ring_info.window<16>(m_fragment_constants_dynamic_offset, fragment_constants_size, gpu_limits.maxUniformBufferRange);
+			m_fragment_constants_buffer_info = m_fragment_constants_ring_info.window<16>(m_fragment_constants_dynamic_offset, fragment_constants_size, m_device->ubo_window_size(gpu_limits.maxUniformBufferRange));
 			m_fragment_constants_dynamic_offset -= m_fragment_constants_buffer_info.offset;
 		}
 	}
@@ -2304,7 +2323,7 @@ void VKGSRender::load_program_env()
 		m_draw_processor.fill_fragment_state_buffer(buf, current_fragment_program);
 		m_fragment_env_ring_info.unmap();
 
-		m_fragment_env_buffer_info = m_fragment_env_ring_info.window<32>(m_fragment_env_dynamic_offset, 32, gpu_limits.maxUniformBufferRange);
+		m_fragment_env_buffer_info = m_fragment_env_ring_info.window<32>(m_fragment_env_dynamic_offset, 32, m_device->ubo_window_size(gpu_limits.maxUniformBufferRange));
 		m_fragment_env_dynamic_offset -= m_fragment_env_buffer_info.offset;
 	}
 
@@ -2316,7 +2335,7 @@ void VKGSRender::load_program_env()
 		current_fragment_program.texture_params.write_to(buf, current_fp_metadata.referenced_textures_mask);
 		m_fragment_texture_params_ring_info.unmap();
 
-		m_fragment_texture_params_buffer_info = m_fragment_texture_params_ring_info.window<768>(m_texture_parameters_dynamic_offset, 768, gpu_limits.maxUniformBufferRange);
+		m_fragment_texture_params_buffer_info = m_fragment_texture_params_ring_info.window<768>(m_texture_parameters_dynamic_offset, 768, m_device->ubo_window_size(gpu_limits.maxUniformBufferRange));
 		m_texture_parameters_dynamic_offset -= m_fragment_texture_params_buffer_info.offset;
 	}
 

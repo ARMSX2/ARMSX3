@@ -15,9 +15,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -45,13 +46,19 @@ import com.armsx2.ui.common.ArmsLogo
 import com.armsx2.ui.common.ArmsTopBar
 import com.armsx2.ui.common.RoundAction
 import com.armsx2.ui.common.SectionTitle
+import com.armsx2.ui.settings.ControllerAutoScroll
 import com.armsx2.ui.settings.controllerFocusable
 
+/** [game] narrows the list to that game's slots, for the library's long-press; null lists every game's. */
 @Composable
-fun SaveManagerScreen(onBack: () -> Unit, viewModel: SaveManagerViewModel = viewModel()) {
+fun SaveManagerScreen(
+    onBack: () -> Unit,
+    game: com.armsx2.GameInfo? = null,
+    viewModel: SaveManagerViewModel = viewModel(),
+) {
     val state = viewModel.state.value
     var confirmWipe by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
-    LaunchedEffect(Unit) { viewModel.refresh() }
+    LaunchedEffect(game) { viewModel.open(game) }
     // Import an external save-state file (AetherSX2 / NetherSX2 / another install's .p2s) into the
     // active game's next free slot. OpenDocument with "*/*" because save states have no single MIME
     // and formats vary; the native loader detects the format by content.
@@ -60,55 +67,56 @@ fun SaveManagerScreen(onBack: () -> Unit, viewModel: SaveManagerViewModel = view
     ) { uri -> uri?.let(viewModel::importState) }
 
     ArmsBackdrop {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+        // A scrolling Column, not a LazyColumn: each card's buttons are in the controller nav
+        // registry only while the card is composed, and a LazyColumn composes only what is on
+        // screen, so the D-pad stopped at the last visible save (the same dead end as All Core
+        // Settings). The thumbnails are decoded up front by the ViewModel either way.
+        val scroll = rememberScrollState()
+        ControllerAutoScroll(scroll)
+        Column(
+            modifier = Modifier.fillMaxSize().verticalScroll(scroll).padding(horizontal = 8.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
-            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
         ) {
-            item {
-                ArmsTopBar(
-                    title = str("savestate.title.loadManage"),
-                    leading = { RoundAction("←", str("action.back"), onBack) },
-                    actions = {
-                        RoundAction("⤓", str("savestate.import"), onClick = { importLauncher.launch(arrayOf("*/*")) })
-                        if (state.saves.isNotEmpty()) {
-                            RoundAction("▣", str("savestate.backup"), viewModel::backupAll)
-                        }
-                        // Deliberately NOT gated on the list being non-empty. The whole reason this
-                        // exists is a folder full of files the manager cannot list, where the list
-                        // reads as empty and every per-entry delete is therefore unreachable.
-                        RoundAction("\uD83D\uDDD1", str("savestate.wipe"), onClick = { confirmWipe = true })
-                        RoundAction("↻", str("games.card.refresh"), viewModel::refresh)
-                    },
-                    horizontalPadding = 0.dp,
-                )
-            }
+            ArmsTopBar(
+                title = str("savestate.title.loadManage"),
+                leading = { RoundAction("←", str("action.back"), onBack) },
+                actions = {
+                    RoundAction("⤓", str("savestate.import"), onClick = { importLauncher.launch(arrayOf("*/*")) })
+                    if (state.saves.isNotEmpty()) {
+                        RoundAction("▣", str("savestate.backup"), viewModel::backupAll)
+                    }
+                    // Deliberately NOT gated on the list being non-empty. The whole reason this
+                    // exists is a folder full of files the manager cannot list, where the list
+                    // reads as empty and every per-entry delete is therefore unreachable.
+                    RoundAction("\uD83D\uDDD1", str("savestate.wipe"), onClick = { confirmWipe = true })
+                    RoundAction("↻", str("games.card.refresh"), viewModel::refresh)
+                },
+                horizontalPadding = 0.dp,
+            )
 
             state.gameTitle?.let { title ->
-                item { SectionTitle(title, state.saves.size.toString()) }
+                SectionTitle(title, state.saves.size.toString())
             }
 
             if (state.loading && state.saves.isEmpty()) {
-                item {
-                    Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
+                Box(Modifier.fillMaxWidth().height(180.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator()
                 }
             } else if (state.saves.isEmpty()) {
-                item {
-                    SaveManagerEmptyState()
-                }
+                SaveManagerEmptyState()
             } else {
-                items(state.saves, key = { it.file.absolutePath }) { save ->
-                    SaveStateCard(
-                        save = save,
-                        onSave = { save.slot?.let(viewModel::save) },
-                        onLoad = { viewModel.load(save) },
-                        onDelete = { viewModel.delete(save) },
-                    )
+                state.saves.forEach { save ->
+                    key(save.file.absolutePath) {
+                        SaveStateCard(
+                            save = save,
+                            onSave = { save.slot?.let(viewModel::save) },
+                            onLoad = { viewModel.load(save) },
+                            onDelete = { viewModel.delete(save) },
+                        )
+                    }
                 }
             }
-            item { Spacer(Modifier.height(12.dp)) }
+            Spacer(Modifier.height(12.dp))
         }
     }
 
@@ -217,8 +225,10 @@ private fun SaveStateCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                     Spacer(Modifier.height(3.dp))
+                    // Slot 10 is the autosave (Rpcs3Bridge.AUTOSAVE_SLOT), which read as "Slot 11".
                     val slotLabel = save.slot?.let {
-                        "${str("memcard.slot1").substringBefore(' ')} ${it + 1}"
+                        if (it == com.armsx3.Rpcs3Bridge.AUTOSAVE_SLOT) str("savestate.autosave.title")
+                        else "${str("memcard.slot1").substringBefore(' ')} ${it + 1}"
                     } ?: save.serial
                     Text(
                         text = slotLabel,
@@ -226,7 +236,7 @@ private fun SaveStateCard(
                         color = MaterialTheme.colorScheme.primary,
                     )
                     Text(
-                        text = formatTimestamp(save.file.lastModified()),
+                        text = formatTimestamp(androidx.compose.ui.platform.LocalContext.current, save.file.lastModified()),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -234,6 +244,8 @@ private fun SaveStateCard(
             }
             Spacer(Modifier.height(9.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                // Saving needs the game running to take a snapshot of. Loading does not: with the
+                // game stopped it boots straight into the state (MainActivityRuntime.launchGameFromState).
                 if (save.canUseWithActiveGame && save.slot != null) {
                     OutlinedButton(
                         onClick = onSave,
@@ -243,6 +255,8 @@ private fun SaveStateCard(
                         Text(str("action.save"))
                     }
                     Spacer(Modifier.width(7.dp))
+                }
+                if (save.slot != null) {
                     OutlinedButton(
                         onClick = onLoad,
                         contentPadding = PaddingValues(horizontal = 14.dp),
@@ -293,6 +307,12 @@ private fun SavePreview(save: SaveStateItem) {
     }
 }
 
-private fun formatTimestamp(value: Long): String =
-    java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
-        .format(java.util.Date(value))
+// The same form as the in-game picker's tiles, so a save reads alike in both places.
+private fun formatTimestamp(context: android.content.Context, value: Long): String =
+    android.text.format.DateUtils.formatDateTime(
+        context,
+        value,
+        android.text.format.DateUtils.FORMAT_SHOW_DATE or
+            android.text.format.DateUtils.FORMAT_SHOW_TIME or
+            android.text.format.DateUtils.FORMAT_ABBREV_ALL,
+    )

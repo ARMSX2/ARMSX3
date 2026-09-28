@@ -282,3 +282,153 @@ PPU-aa798f32a1fda1c23a20066edb1c623c486d53cc:
     Patch Version: 1.0
     Patch:
       - [ be32, 0x00304770, 0x38000001 ]
+
+# BURNOUT PARADISE, BLUS30061 v01.00 -- ours, not from the community database.
+#
+# The game hangs the audio thread on a null buffer a few seconds after the junkyard
+# interstitial in the intro, every run, on every device and build tried.
+#
+# Two independent faults, both from the same root. The routine that refills an audio voice
+# asks the heap for a buffer of the size at r31+0x17c. That word is written at 0x6317a8 as
+# the low 32 bits of an fctidz conversion and comes out 0x6387194f, about 1.67GB, where every
+# other voice buffer in the same table is 0x900. The heap walks its free list, finds nothing
+# that large and correctly returns null, and the game stores that null without checking it.
+# Clamping the request to 0x7fff, which the allocator rounds to 32KB, is enough: the only
+# copy ever observed into that buffer is 0x7ff8 bytes at offset 4.
+#
+# Past that, a lookup at 0x45df68 returns null when it finds nothing, and the caller checks
+# for null and then branches to code that dereferences it anyway. That path cannot run on real
+# hardware because the lookup always finds something there. It is retargeted to 0x45e468, the
+# skip target the very next instruction already uses.
+#
+# The remaining three writes are a guard: if the allocation fails anyway, return instead of
+# storing a null. Safe because r9 == r29 in every dump taken, so the r9 rebuild they replace
+# is dead, and 0x458c2c is the function's own epilogue.
+#
+# Verified on an Odin 3: deterministic crash before, and after it reaches the open world with
+# zero access violations. The float arithmetic is NOT at fault here and was measured, not
+# assumed: fmuls and fctidz are both byte-exact against real hardware, and every integer suite
+# passes, so the bad value arrives already wrong.
+PPU-56101fbdbac186fddef72207145015fd314a0be5:
+  "ARMSX3 Junkyard crash fix":
+    Games:
+      "Burnout Paradise":
+        BLUS30061: [ 01.00 ]
+    Author: "jpolo1224"
+    Notes: "Fixes the crash at the junkyard in the intro."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00459028, 0x38807fff ]
+      - [ be32, 0x0045e304, 0x41920164 ]
+      - [ be32, 0x00459040, 0x2f030000 ]
+      - [ be32, 0x0045904c, 0x419afbe0 ]
+      - [ be32, 0x00459054, 0x60000000 ]
+      - [ be32, 0x0045905c, 0x60000000 ]
+      - [ be32, 0x00459064, 0x90690010 ]
+
+# NBA 08, BCES00112 v01.00 -- ours, not from the community database.
+#
+# "The PS3 application has likely crashed" during the intro movies, on a first run while
+# the SPU cache is still compiling. The game's CellVdec callback at 0x3eacb4 handles a
+# PICOUT message by calling cellVdecGetPicItem and reading item->0x44 at 0x3ead3c, checking
+# neither the return code nor the item. In the crash log GetPicItem returned
+# CELL_VDEC_ERROR_SEQ with a null item: the decoder, stalled on SPU compiles while the game
+# was tearing the movie player down, delivered its PICOUT late. With a warm cache the intro
+# played through, so this is a race the game never guarded against.
+#
+# The cave redoes the load that the branch into it replaced, and when the item is null it
+# takes the callback's own return-0 exit at 0x3ead0c, which drops that one picture. cr6 is
+# free there: the bl just before clobbers every volatile field, and nothing after reads cr6.
+# Nothing branches to 0x3ead38, which matters on ARM64: a cave whose entry point is also a
+# branch target takes the whole app down in ppu_far_jump.
+#
+# The quickplay loading screen that never ends is a second race, and it only exists because we
+# load faster than a PS3. UI/Loading_New.bgf is an Anark scene driven by the disc's Lua: its
+# Intro slide (6.5 s) plays straight through into a Looping slide, and the game sends
+# "onExitNextLoop" exactly once when loading is done. Read from the heap at the hang: the Intro
+# behaviour received it (shouldExit true) but never saw its own slide stop, since the slide
+# advances by itself, while the Loop behaviour, which only registers when its slide starts, never
+# got it and replays the tip forever. A PS3 always takes longer than 6.5 s to load a match; we
+# take about 4. The loading thread (0x2236c) now keeps its end request pending and re-sends the
+# event every frame until the scene answers with onEndPresentation, and clears the request on
+# both of its exits so the next loading screen starts clean.
+PPU-30ce8c9f0a9552914275c90e2980749630f3ea18:
+  "ARMSX3 intro movie crash fix":
+    Games:
+      "NBA 08":
+        BCES00112: [ 01.00 ]
+    Author: "jpolo1224"
+    Notes: "Fixes a crash during the intro movies on the first run."
+    Patch Version: 1.0
+    Patch:
+      - [ calloc, 0x003ead38, 0x04 ]
+      - [ be32, 0x00000000, 0x80810070 ] # lwz r4,0x70(r1), the instruction the branch replaced
+      - [ be32, 0x00000000, 0x2f040000 ] # cmpwi cr6,r4,0
+      - [ be32, 0x00000000, 0x409a0008 ] # bne cr6,+8
+      - [ jump, 0x00000000, 0x003ead0c ] # null item: li r3,0 and return
+  "ARMSX3 quickplay loading fix":
+    Games:
+      "NBA 08":
+        BCES00112: [ 01.00 ]
+    Author: "jpolo1224"
+    Notes: "Fixes the loading screen that never ends before a quickplay game."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x0002245c, 0x409e0144 ] # bne cr7,0x225a0: a pending request goes straight to the send, no print
+      - [ be32, 0x000225a4, 0x60000000 ] # keep the request pending (was stb r28,0x37(r31))
+      - [ be32, 0x000225dc, 0x4bfffe84 ] # b 0x22460: check for onEndPresentation after each send
+      - [ be32, 0x000225ec, 0x9b9f0037 ] # stb r28,0x37(r31): the scene is done, clear the request
+      - [ be32, 0x000225f4, 0x9b9f0038 ] # stb r28,0x38(r31): clear the done flag (r29 is now 1)
+      - [ be32, 0x00022504, 0x9b9f0037 ] # stb r28,0x37(r31): a forced exit clears the request too
+
+# GRAN TURISMO 6 v01.22 (BCUS99247, BCUS98296) -- illusion's patches, brought to ARMSX3 by
+# mlgprorektm8, who confirmed them on the North American and Latin American releases.
+#
+# Disable MLAA: the game reads every frame back for its MLAA pass, so it only renders correctly
+# with Write and Read Color Buffers on, and those cost a lot of frame time. The patch turns MLAA
+# off, and the core then switches both buffer settings off for the run, since nothing needs them
+# any more (patch_engine::apply, Utilities/bin_patch.cpp).
+# Disable Motion Blur: without it replays and track intros render black.
+#
+# Keyed by PPU hash, so they apply only to these two v01.22 executables. RPCS3's database knows a
+# different v01.22 executable for BCUS98296 (PPU-6ac472e1...): these patches do not touch it, and
+# neither do the buffer settings, which stay whatever that game's configuration says.
+PPU-42367707f4caac2668f10cb46498f64bde9db440:
+  "Disable MLAA":
+    Games:
+      "Gran Turismo 6":
+        BCUS99247: [ 01.22 ]
+    Author: "illusion"
+    Notes: "Turns off the game's MLAA pass, which needed Write and Read Color Buffers. ARMSX3 turns both off while this patch is on."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00ED2E88, 0x39E00001 ]
+  "Disable Motion Blur":
+    Games:
+      "Gran Turismo 6":
+        BCUS99247: [ 01.22 ]
+    Author: "illusion"
+    Notes: "Fixes the black screen in replays and track intros."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x008C2B4C, 0x38600000 ]
+
+PPU-4f1e9acd7d98961b4b742fb324a2faba6212ea67:
+  "Disable MLAA":
+    Games:
+      "Gran Turismo 6":
+        BCUS98296: [ 01.22 ]
+    Author: "illusion"
+    Notes: "Turns off the game's MLAA pass, which needed Write and Read Color Buffers. ARMSX3 turns both off while this patch is on."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00ED2E88, 0x39E00001 ]
+  "Disable Motion Blur":
+    Games:
+      "Gran Turismo 6":
+        BCUS98296: [ 01.22 ]
+    Author: "illusion"
+    Notes: "Fixes the black screen in replays and track intros."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x008C2B4C, 0x38600000 ]

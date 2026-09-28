@@ -4,12 +4,14 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import com.armsx2.GameInfo
 import com.armsx2.data.library.GameLibraryRepository
+import com.armsx2.data.library.LibraryInvalidations
 import com.armsx2.runtime.MainActivityRuntime
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import androidx.core.content.edit
 import androidx.compose.runtime.mutableStateOf
@@ -34,7 +36,12 @@ data class HomeUiState(
     /** Active category filter, or null for the whole library. Only the List layout uses it;
      *  Grid and Shelf show categories as sections instead. */
     val categoryFilter: String? = null,
+    /** Disc games or PSN games only, or null for both. Unlike [categoryFilter] this is a property
+     *  of the game itself, so it applies to every layout, and it is remembered across launches. */
+    val sourceFilter: GameSource? = null,
 )
+
+enum class GameSource { Disc, Psn }
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = GameLibraryRepository(application)
@@ -47,6 +54,22 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     var state = androidx.compose.runtime.mutableStateOf(HomeUiState())
         private set
 
+    // An install that lands while a scan is already running: that scan may not have seen it, so
+    // one more runs when it finishes.
+    private var rescanQueued = false
+
+    init {
+        // This list reads the cache key on its first load only, so an install made from anywhere
+        // else -- the package screen, QuickInstall, a licence -- used to leave it showing the old
+        // library until a manual refresh. Every invalidateCache() bumps this counter; follow it.
+        // Not before the first load, which decides for itself whether to scan.
+        scope.launch {
+            LibraryInvalidations.count.drop(1).collect {
+                if (!loaded) return@collect
+                if (scanJob?.isActive == true) rescanQueued = true else refresh()
+            }
+        }
+    }
 
     fun load(romDirectories: List<String>, nativeReady: Boolean) {
         directories = romDirectories
@@ -76,6 +99,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     allGames = cached.games,
                     layout = layout,
                     initialized = cached.games.isNotEmpty() || !pendingInitialScan,
+                    sourceFilter = MainActivityRuntime.prefs.getString(SourcePreference, null)
+                        ?.let { saved -> GameSource.entries.firstOrNull { it.name == saved } },
                 ),
             )
             // Library-wide RetroAchievements progress. Hooked here because this is where the game
@@ -106,6 +131,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     state.value.copy(allGames = games, scanning = false, initialized = true),
                 )
                 com.armsx2.RaLibrary.onLibraryLoaded(games)
+                // Catches what the install screens do not see: a title copied into
+                // dev_hdd0/game by hand, or one installed before a folder was picked.
+                com.armsx2.packages.FrontendExport.requestSync(getApplication())
             }.onFailure { failure ->
                 pendingInitialScan = false
                 state.value = state.value.copy(
@@ -113,6 +141,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                     initialized = true,
                     error = failure.message ?: "Unable to scan the selected folders.",
                 )
+            }
+        }
+        // An install that landed during this scan queued one more; run it once this one is done,
+        // when refresh() will no longer see a scan in progress and skip.
+        scanJob?.invokeOnCompletion {
+            scope.launch {
+                if (rescanQueued) {
+                    rescanQueued = false
+                    refresh()
+                }
             }
         }
     }
@@ -223,14 +261,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
         repository.markPlayed(game)
         state.value = buildState(state.value)
-        val launchPath = if (game.uri.scheme == "file") game.uri.path ?: game.uri.toString() else game.uri.toString()
-        MainActivityRuntime.launchGame(launchPath, game)
+        MainActivityRuntime.launchGame(game.launchPath, game)
     }
 
     /** Mark a game hidden (or un-hidden) and refresh the visible list. */
     fun setHidden(game: GameInfo, value: Boolean) {
         com.armsx2.HiddenGames.setHidden(game, value)
         state.value = buildState(state.value)
+    }
+
+    /** Show only disc games or only PSN games, or both with null. */
+    fun setSourceFilter(source: GameSource?) {
+        MainActivityRuntime.prefs.edit { putString(SourcePreference, source?.name) }
+        state.value = buildState(state.value.copy(sourceFilter = source))
     }
 
     /** Set (or clear, with null) the active category filter. */
@@ -276,6 +319,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             // than nothing.
             (base.categoryFilter == null ||
                 game.settingsKey?.let { it in com.armsx2.GameCategories.membersOf(base.categoryFilter) } == true) &&
+                (base.sourceFilter == null || (base.sourceFilter == GameSource.Psn) == game.isPsn) &&
                 (com.armsx2.HiddenGames.showHidden.value || !com.armsx2.HiddenGames.isHidden(game)) &&
                 (query.isBlank() ||
                     // Match BOTH names regardless of which is displayed: someone typing
@@ -316,5 +360,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         // String-valued now (Grid/List/Shelf). New key so the old boolean pref is
         // ignored and everyone starts at Grid rather than mis-parsing "true"/"false".
         const val LayoutPreference = "library.layout.mode"
+        const val SourcePreference = "library.sourceFilter"
     }
 }

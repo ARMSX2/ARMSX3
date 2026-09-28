@@ -7,6 +7,7 @@
 #include "Emu/Cell/lv2/sys_event.h"
 #include "Emu/Cell/lv2/sys_process.h"
 #include "Emu/RSX/RSXThread.h"
+#include "Emu/system_config.h"
 #include "Thread.h"
 #include <bit>
 #include <cstring>
@@ -112,6 +113,7 @@ DYNAMIC_IMPORT_RENAME("Kernel32.dll", SetThreadDescriptionImport, "SetThreadDesc
 #include "util/asm.hpp"
 #include "util/v128.hpp"
 #include "util/simd.hpp"
+#include "util/cctype.hpp"
 #include "util/sysinfo.hpp"
 #include "Emu/Memory/vm_locking.h"
 
@@ -201,9 +203,9 @@ bool IsDebuggerPresent()
 
 	for (const char* cp = status.data() + found + 10; cp <= status.data() + num_read; ++cp)
 	{
-		if (!std::isspace(*cp))
+		if (!utils::isspace(*cp))
 		{
-			return std::isdigit(*cp) != 0 && *cp != '0';
+			return utils::isdigit(*cp) != 0 && *cp != '0';
 		}
 	}
 
@@ -1562,6 +1564,500 @@ namespace rsx
 	extern std::function<bool(u32 addr, bool is_writing)> g_access_violation_handler;
 }
 
+// The guest code at the fault AND at its callers.
+//
+// Registers and a call stack come free from dump_useful_thread_info(), and for a bad pointer
+// they are only half the answer: they say WHAT the address was, never what computed it. When
+// the faulting function turns out to be something generic, Borderlands 2 faults inside a
+// memcpy handed dest=0x93aef33d and length=0xc3aaf87d, both garbage, the routine itself is
+// blameless and the whole question is which caller filled those arguments.
+//
+// So: a window at cia, then one at each of the first few return addresses. Only a few, because
+// a PPU call stack here runs fourteen frames deep and the answer is almost always in the
+// immediate caller.
+//
+// The window back from cia is wide on purpose. Sixteen instructions is enough to see what
+// faulted and not enough to see the branch that decided to run it, and the guard is what you
+// need when the plan is a patch rather than a diagnosis. Burnout Paradise is the case: the
+// null check has to go in ahead of a store 0x60 bytes behind the reported pc, and the loop
+// bookkeeping that a patch must preserve sits between them.
+//
+// Every address is checked before it is read: cia and the stack are taken from a thread that
+// just faulted, so both can be garbage, and faulting inside the diagnostic that explains a
+// fault would be the worst possible trade.
+//
+// Called from BOTH access violation paths, for the reason given on the memory dump below.
+static void dump_guest_code_at_fault(cpu_thread* cpu, u32 fault_addr, bool is_writing)
+{
+	if (!cpu || cpu->get_class() != thread_class::ppu)
+	{
+		return;
+	}
+
+	const auto& gpr_ref = static_cast<ppu_thread*>(cpu)->gpr;
+	PPUDisAsm dis_asm(cpu_disasm_mode::dump, vm::g_sudo_addr);
+	std::string code;
+
+	// Follow calls, so one fault answers what used to take one run per level.
+	//
+	// A window at cia says what faulted. It never says what the thing it called did, and on
+	// Android there is no debugger to step into it. Burnout Paradise cost six separate crashes
+	// to walk by hand: a PLT stub, a forwarding thunk, a request builder, a descriptor loop, a
+	// lock wrapper, and finally the heap that was refusing the allocation. Every one of those
+	// addresses was only discoverable from the dump before it, so each hop meant another run.
+	//
+	// ARMSX3_DISASM_DEPTH=N disassembles the target of every bl found in a window, N levels
+	// deep, deduplicated and capped. Default 0 is the old behaviour.
+	u32 follow_depth = 0;
+
+	if (const char* depth_env = std::getenv("ARMSX3_DISASM_DEPTH"))
+	{
+		follow_depth = std::min<u32>(static_cast<u32>(std::strtoul(depth_env, nullptr, 0)), 4);
+	}
+
+	std::vector<u32> seen;
+	std::vector<std::pair<u32, u32>> pending;
+
+	const auto window = [&](const char* what, u32 pc, u32 back, u32 span, u32 depth = 0)
+	{
+		fmt::append(code, "\n%s 0x%08x:\n", what, pc);
+
+		for (u32 at = pc >= back ? pc - back : 0; at <= pc + span; at += 4)
+		{
+			if (!vm::check_addr(at))
+			{
+				continue;
+			}
+
+			dis_asm.disasm(at);
+			code += (at == pc ? "  >>" : "    ");
+			code += dis_asm.last_opcode;
+
+			// Name the instruction that actually faulted.
+			//
+			// The >> marker follows cia, and the recompiler reports cia per BLOCK, so on the
+			// fatal path it routinely points at an instruction that cannot have faulted. Burnout
+			// marked `lwz r9,0(r3)` with r3 = 0x86014100 for a fault at address 0, and that gap
+			// is why every dump read like a fresh mystery.
+			//
+			// The dump already holds the fault address and every register, so it can just work
+			// out which memory operand lands on it: D form (rA + simm), DS form (rA + ds*4) and
+			// X form (rA + rB). rA of 0 means literal zero on PowerPC, not r0, which is exactly
+			// the case that produces a small faulting address out of nowhere.
+			{
+				const u32 iop = vm::read32(at);
+				const u32 primary = iop >> 26;
+				const u32 ra = (iop >> 16) & 0x1f;
+				const u64 base = ra ? gpr_ref[ra] : 0;
+
+				bool hit = false;
+
+				// Only instructions that touch memory, and only in the direction that faulted.
+				//
+				// Both filters are load bearing. Primary 31 is not just indexed loads and stores,
+				// it is also every arithmetic and logical form, so matching it wholesale flags an
+				// `add` whose two registers happen to sum to the fault address. With a fault at 0
+				// that is most of the window, and the real access is buried in the noise.
+				const auto store_d = [](u32 op)
+				{
+					return (op >= 36 && op <= 39) || op == 44 || op == 45 || op == 47
+						|| (op >= 52 && op <= 55);
+				};
+
+				if (primary >= 32 && primary <= 55)
+				{
+					hit = store_d(primary) == is_writing
+						&& static_cast<u32>(base + static_cast<s16>(iop & 0xffff)) == fault_addr;
+				}
+				else if (primary == 58 || primary == 62)
+				{
+					hit = (primary == 62) == is_writing
+						&& static_cast<u32>(base + (static_cast<s16>(iop & 0xfffc))) == fault_addr;
+				}
+				else if (primary == 31)
+				{
+					// Indexed memory forms only, by extended opcode.
+					switch ((iop >> 1) & 0x3ff)
+					{
+					case 21: case 23: case 53: case 55: case 87: case 119:
+					case 279: case 311: case 341: case 343: case 373: case 375:
+					case 534: case 535: case 567: case 597: case 599: case 631:
+					{
+						hit = !is_writing;
+						break;
+					}
+					case 149: case 151: case 181: case 183: case 215: case 247:
+					case 407: case 439: case 662: case 663: case 695: case 725:
+					case 727: case 759: case 918:
+					{
+						hit = is_writing;
+						break;
+					}
+					default: { hit = false; break; }
+					}
+
+					hit = hit && static_cast<u32>(base + gpr_ref[(iop >> 11) & 0x1f]) == fault_addr;
+				}
+
+				if (hit)
+				{
+					code.pop_back();
+					fmt::append(code, "   <== THIS ONE: r%u + offset = 0x%x, the faulting address\n", ra, fault_addr);
+				}
+			}
+
+			if (depth >= follow_depth)
+			{
+				continue;
+			}
+
+			// bl: primary opcode 18, AA clear, LK set. Relative, so the target is computed
+			// from the instruction's own address.
+			const u32 op = vm::read32(at);
+
+			if ((op & 0xfc000003) != 0x48000001)
+			{
+				continue;
+			}
+
+			s32 disp = static_cast<s32>(op & 0x03fffffc);
+
+			if (disp & 0x02000000)
+			{
+				disp -= 0x04000000;
+			}
+
+			pending.emplace_back(at + static_cast<u32>(disp), depth + 1);
+		}
+	};
+
+	window("Code at the faulting pc", static_cast<ppu_thread*>(cpu)->cia, 0x100, 0x40);
+
+	u32 shown = 0;
+
+	for (auto&& [ret, sp] : cpu->dump_callstack_list())
+	{
+		if (shown++ >= 3)
+		{
+			break;
+		}
+
+		// Back further than forward: the call is BEHIND the return address, and what fills
+		// the arguments sits behind that.
+		window("Code at caller", ret, 0x60, 0x10);
+	}
+
+	// Drain whatever those windows called, breadth first so the immediate callees land
+	// before anything they in turn call. Capped, because a single window can name a dozen
+	// targets and four levels of that is a log nobody reads.
+	for (usz i = 0; i < pending.size() && seen.size() < 24; i++)
+	{
+		const auto [target, depth] = pending[i];
+
+		if (!vm::check_addr(target, vm::page_executable))
+		{
+			continue;
+		}
+
+		if (std::find(seen.begin(), seen.end(), target) != seen.end())
+		{
+			continue;
+		}
+
+		seen.push_back(target);
+
+		// Short windows: what matters about a callee is how it starts and what it calls,
+		// and the one that actually fails is reached by following those, not by reading
+		// any single one to its end.
+		window("Code at a call target", target, 0, 0x60, depth);
+	}
+
+	// A lever for disassembling somewhere the fault does not reach.
+	//
+	// The windows above follow cia and the call stack. That is the right default, and it cannot
+	// answer a question about a function that has already returned. Burnout Paradise is the case:
+	// the crash is a store through a null audio buffer pointer, the pointer is null because the
+	// guest allocator at 0x14160 returned zero, and by the time anything faults that allocator is
+	// long gone from the stack. Nothing in a fault dump can reach it, and on Android there is no
+	// debugger to go and look.
+	//
+	// Put ARMSX3_DISASM_AT=0x14160 in driver_env.txt and the next fault prints it, with
+	// ARMSX3_DISASM_LEN to say how much. Costs one getenv when unset, which is how it should stay
+	// unless somebody is actually chasing something.
+	if (const char* at_env = std::getenv("ARMSX3_DISASM_AT"))
+	{
+		const u32 at = static_cast<u32>(std::strtoul(at_env, nullptr, 0)) & ~3u;
+
+		u32 len = 0x200;
+
+		if (const char* len_env = std::getenv("ARMSX3_DISASM_LEN"))
+		{
+			if (const u32 parsed = static_cast<u32>(std::strtoul(len_env, nullptr, 0)))
+			{
+				len = std::min<u32>(parsed, 0x2000);
+			}
+		}
+
+		// Said out loud when it is wrong: a silent nothing here is indistinguishable from a
+		// fault that never fired, and the whole point of the lever is that someone is waiting
+		// on its output.
+		if (at && vm::check_addr(at, vm::page_executable))
+		{
+			window("Code at ARMSX3_DISASM_AT", at, 0, len);
+		}
+		else
+		{
+			fmt::append(code, "\nARMSX3_DISASM_AT 0x%08x is not executable guest memory\n", at);
+		}
+	}
+
+	// Follow a pointer chain from a register, and disassemble wherever it lands.
+	//
+	// ARMSX3_DISASM_AT answers "what is at this address". It cannot answer "what does this call
+	// actually reach" when the target is behind a vtable, because that address only exists at
+	// runtime. Burnout Paradise needs exactly that: the audio allocator it calls turns out to be
+	// a forwarding thunk that loads r3->[0x14], then that object's vtable, then a slot in it, and
+	// calls through ctr. Five dereferences, not one of them a fixed address.
+	//
+	// ARMSX3_CHAIN=r31,4,0x14,0,0xc,0 starts at r31 and walks those offsets. Every step is
+	// printed, because a chain that takes a wrong turn still produces a plausible looking number
+	// and silently disassembling whatever it lands on is worse than saying nothing. The end of
+	// the chain is disassembled when it points at executable memory.
+	if (const char* chain_env = std::getenv("ARMSX3_CHAIN"))
+	{
+		const auto& gpr = static_cast<ppu_thread*>(cpu)->gpr;
+
+		std::string spec = chain_env;
+		std::string trace;
+		u32 cur = 0;
+		bool ok = true;
+
+		usz pos = spec.find(',');
+		const std::string first = spec.substr(0, pos);
+
+		if (first.size() > 1 && (first[0] == 'r' || first[0] == 'R'))
+		{
+			if (const u32 idx = static_cast<u32>(std::strtoul(first.c_str() + 1, nullptr, 10)); idx < 32)
+			{
+				cur = static_cast<u32>(gpr[idx]);
+				fmt::append(trace, "\n  %s = 0x%08x", first, cur);
+			}
+			else
+			{
+				fmt::append(trace, "\n  '%s' is not a register", first);
+				ok = false;
+			}
+		}
+		else
+		{
+			cur = static_cast<u32>(std::strtoul(first.c_str(), nullptr, 0));
+			fmt::append(trace, "\n  start = 0x%08x", cur);
+		}
+
+		while (ok && pos != std::string::npos)
+		{
+			const usz next = spec.find(',', pos + 1);
+			const std::string tok = spec.substr(pos + 1, next == std::string::npos ? next : next - pos - 1);
+			pos = next;
+
+			const u32 off = static_cast<u32>(std::strtoul(tok.c_str(), nullptr, 0));
+
+			if (!vm::check_addr(cur + off, vm::page_readable, 4))
+			{
+				fmt::append(trace, "\n  [0x%08x + 0x%x] is not readable, chain stops here", cur, off);
+				ok = false;
+				break;
+			}
+
+			const u32 val = vm::read32(cur + off);
+			fmt::append(trace, "\n  [0x%08x + 0x%x] = 0x%08x", cur, off, val);
+			cur = val;
+		}
+
+		fmt::append(code, "\nARMSX3_CHAIN %s:%s\n", spec, trace);
+
+		if (ok && cur && vm::check_addr(cur, vm::page_executable))
+		{
+			window("Code at the end of ARMSX3_CHAIN", cur, 0, 0x200);
+		}
+		else if (ok)
+		{
+			fmt::append(code, "  end of chain 0x%08x is not executable, not disassembling\n", cur);
+		}
+	}
+
+	// Find every instruction matching a bit pattern, anywhere in guest code.
+	//
+	// Some questions are not "what is at this address" but "who writes this field", and a
+	// fault dump cannot answer that by following anything: the writer already ran, possibly
+	// minutes ago, and is not on the stack. On desktop that is a write watchpoint. On Android
+	// there is none, so the next best thing is that the instruction which does it has a fixed
+	// encoding and can simply be looked for.
+	//
+	// Burnout Paradise is the case. One field of an otherwise intact audio structure,
+	// r31+0x17c, holds 0x6387194f where a buffer size belongs, so the game asks the heap for
+	// 1.67GB, the allocation fails, and every pointer that should have come from it stays
+	// null. Every crash after that is downstream of the one bad word, and the only thing left
+	// to learn is who put it there. `stw rX,0x17c(rY)` is 0x9000017c under mask 0xfc00ffff.
+	//
+	// ARMSX3_SCAN=<value>/<mask>, both hex. Pages are checked before they are read and
+	// unmapped ones skipped, so the default range can be generous without caring what is
+	// actually mapped. ARMSX3_SCAN_FROM and ARMSX3_SCAN_TO narrow it.
+	if (const char* scan_env = std::getenv("ARMSX3_SCAN"))
+	{
+		const u32 want = static_cast<u32>(std::strtoul(scan_env, nullptr, 16));
+		const char* slash = std::strchr(scan_env, '/');
+		const u32 mask = slash ? static_cast<u32>(std::strtoul(slash + 1, nullptr, 16)) : 0xffffffffu;
+
+		u32 from = 0x10000;
+		u32 to = 0x10000000;
+
+		if (const char* e = std::getenv("ARMSX3_SCAN_FROM")) from = static_cast<u32>(std::strtoul(e, nullptr, 0)) & ~3u;
+		if (const char* e = std::getenv("ARMSX3_SCAN_TO")) to = static_cast<u32>(std::strtoul(e, nullptr, 0)) & ~3u;
+
+		std::string found;
+		u32 hits = 0;
+
+		for (u32 page = from & ~0xfffu; page < to && hits < 64; page += 0x1000)
+		{
+			if (!vm::check_addr(page, vm::page_executable, 0x1000))
+			{
+				continue;
+			}
+
+			for (u32 at = std::max(page, from); at < page + 0x1000 && at < to && hits < 64; at += 4)
+			{
+				if ((vm::read32(at) & mask) != want)
+				{
+					continue;
+				}
+
+				hits++;
+				dis_asm.disasm(at);
+				found += "    ";
+				found += dis_asm.last_opcode;
+			}
+		}
+
+		fmt::append(code, "\nARMSX3_SCAN %08x/%08x over 0x%08x..0x%08x, %u %s:\n%s",
+			want, mask, from, to, hits, hits == 64 ? "matches (CAPPED)" : "matches", found);
+	}
+
+	vm_log.always()("Guest code around the fault:%s", code);
+}
+
+// The memory the guest registers point AT, not only the values they hold.
+//
+// A null pointer fault names the register that was zero and stops there. What decides the
+// bug is the structure around it. Burnout Paradise (BLUS30061) faults storing through
+// entry->[0x10] of an audio voice table at index 6, with the table base live in r28, and
+// the whole question is whether that voice was never set up or was torn down while the
+// count still included it. The neighbouring entries answer it immediately: every other
+// pointer valid means something cleared exactly one of them, a tail of zeroes means the
+// table was never filled that far. That table is live in guest memory at the moment of the
+// fault and was being thrown away.
+//
+// On desktop a write watchpoint answers this in one run. On Android there is no debugger to
+// attach, which is the same reason the register dump had to be raised to error, so the fault
+// handler is the only place this state can be read at all.
+//
+// Called from BOTH access violation paths. They are easy to confuse: the recoverable one
+// prefixes the thread name and the fatal one does not, and a diagnostic added to only the
+// first is silent for every fault that takes the second.
+//
+// One window per distinct base, so a table address held in three registers prints once, and
+// capped so the answer is not buried in hex. Every window is bounds checked over its full
+// span before any of it is read, because half of a faulted thread's registers are garbage
+// and faulting inside the diagnostic that explains a fault helps nobody.
+static void dump_guest_memory_at_registers(cpu_thread* cpu)
+{
+	if (!cpu || cpu->get_class() != thread_class::ppu)
+	{
+		return;
+	}
+
+	constexpr u32 span = 0x200;
+	constexpr u32 max_windows = 8;
+
+	// Order matters, because the cap bites on every real fault.
+	//
+	// r1, r2 and r13 are the stack, TOC and TLS pointers. They are always valid, so they win
+	// every race to fill a slot, and they are almost never the answer. Burnout Paradise is the
+	// case: r1, r2, r5, r6, r9 and r13 took all six slots and r28, the base of the audio voice
+	// table the fault is about, never got one. The callee saved registers are where a compiler
+	// parks the object a function is working on, so walk those first and leave the pointers
+	// every frame happens to hold until last.
+	static constexpr u8 order[] =
+	{
+		31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14,
+		3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+		1, 2, 13, 0,
+	};
+
+	const auto& gpr = static_cast<ppu_thread*>(cpu)->gpr;
+
+	std::string data;
+	u32 bases[max_windows]{};
+	u32 windows = 0;
+
+	for (const u8 i : order)
+	{
+		if (windows >= max_windows)
+		{
+			break;
+		}
+
+		const u32 base = static_cast<u32>(gpr[i]) & ~0xfu;
+
+		// A small value is an integer the game is carrying, not an address. Only the first row
+		// has to be readable to be worth printing: a structure that runs off the end of its
+		// mapping still says what it held up to that point, and requiring the whole span would
+		// drop exactly the windows near a boundary that tend to matter.
+		if (base < 0x10000 || !vm::check_addr(base, vm::page_readable, 0x10))
+		{
+			continue;
+		}
+
+		bool dup = false;
+
+		for (u32 j = 0; j < windows; j++)
+		{
+			dup |= bases[j] == base;
+		}
+
+		if (dup)
+		{
+			continue;
+		}
+
+		bases[windows++] = base;
+
+		fmt::append(data, "\nr%u -> 0x%08x:\n", i, base);
+
+		for (u32 row = 0; row < span; row += 0x10)
+		{
+			if (!vm::check_addr(base + row, vm::page_readable, 0x10))
+			{
+				break;
+			}
+
+			fmt::append(data, "  %08x:", base + row);
+
+			for (u32 off = 0; off < 0x10; off += 4)
+			{
+				fmt::append(data, " %08x", vm::read32(base + row + off));
+			}
+
+			data += '\n';
+		}
+	}
+
+	if (windows)
+	{
+		vm_log.always()("Guest memory at the register values:%s", data);
+	}
+}
+
 bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t* context) noexcept
 {
 	g_tls_fault_all++;
@@ -2202,7 +2698,13 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 		{
 			if (g_tls_access_violation_recovered != addr)
 			{
-				vm_log.notice("\n%s", dump_useful_thread_info());
+				// error, not notice: Android's logcat sink drops anything below warning, so
+				// this dump -- the guest registers and callstack, the only thing that says
+				// WHICH pointer was null and what the game was holding -- was built on every
+				// fault and then discarded on the one platform that cannot attach a debugger
+				// to read it another way. The fault line beside it is fatal and survives, so
+				// every Android guest crash report has arrived with the answer stripped out.
+				vm_log.error("\n%s", dump_useful_thread_info());
 
 				// Name a guest halt for what it is.
 				//
@@ -2245,46 +2747,8 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 					// Every address is checked before it is read: cia and the stack are taken from
 					// a thread that just faulted, so both can be garbage, and faulting inside the
 					// diagnostic that explains a fault would be the worst possible trade.
-					if (cpu->get_class() == thread_class::ppu)
-					{
-						PPUDisAsm dis_asm(cpu_disasm_mode::dump, vm::g_sudo_addr);
-						std::string code;
-
-						const auto window = [&](const char* what, u32 pc, u32 back, u32 span)
-						{
-							fmt::append(code, "\n%s 0x%08x:\n", what, pc);
-
-							for (u32 at = pc >= back ? pc - back : 0; at <= pc + span; at += 4)
-							{
-								if (!vm::check_addr(at))
-								{
-									continue;
-								}
-
-								dis_asm.disasm(at);
-								code += (at == pc ? "  >>" : "    ");
-								code += dis_asm.last_opcode;
-							}
-						};
-
-						window("Code at the faulting pc", static_cast<ppu_thread*>(cpu)->cia, 0x40, 0x40);
-
-						u32 shown = 0;
-
-						for (auto&& [ret, sp] : cpu->dump_callstack_list())
-						{
-							if (shown++ >= 3)
-							{
-								break;
-							}
-
-							// Back further than forward: the call is BEHIND the return address,
-							// and what fills the arguments sits behind that.
-							window("Code at caller", ret, 0x60, 0x10);
-						}
-
-						vm_log.always()("Guest code around the fault:%s", code);
-					}
+					dump_guest_code_at_fault(cpu, addr, is_writing);
+					dump_guest_memory_at_registers(cpu);
 				}
 			}
 
@@ -2320,8 +2784,12 @@ bool handle_access_violation(u32 addr, bool is_writing, bool is_exec, ucontext_t
 	// Do not log any further access violations in this case.
 	if (g_tls_access_violation_recovered != addr)
 	{
-		vm_log.notice("\n%s", dump_useful_thread_info());
+		// error, not notice -- see the SPU path above. Dropped by the logcat cutoff otherwise.
+		vm_log.error("\n%s", dump_useful_thread_info());
 		vm_log.fatal("Access violation %s location 0x%x (%s)", is_writing ? "writing" : (is_exec ? "executing" : "reading"), addr, (is_writing && vm::check_addr(addr)) ? "read-only memory" : "unmapped memory");
+
+		dump_guest_code_at_fault(cpu, addr, is_writing);
+		dump_guest_memory_at_registers(cpu);
 
 		// The host stack, which is the half that was missing.
 		//

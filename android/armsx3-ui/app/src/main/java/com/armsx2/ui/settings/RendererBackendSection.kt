@@ -40,6 +40,7 @@ fun RendererBackendSection(state: MutableState<Settings>) {
             MainActivityRuntime.renderer.value = renderer
             if (renderer != "vulkan") selectDriver(null)
         },
+        notDefault = settings.notDefault { it.renderer },
     )
 
     if (settings.renderer == "vulkan") {

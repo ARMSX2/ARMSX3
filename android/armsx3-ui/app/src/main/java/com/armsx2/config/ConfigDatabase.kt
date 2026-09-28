@@ -130,6 +130,33 @@ object ConfigDatabase {
         // here once someone has confirmed the mode helps on that game.
         "BLUS31213" to "Video:\n  Frame limit: PS3 Native\n",
         "BLES01935" to "Video:\n  Frame limit: PS3 Native\n",
+
+        // Helldivers: the database forces the PPU interpreter because the recompiler hung it on a
+        // black screen (RPCS3 issue #5831). The hang was LuaJIT's integer arithmetic on
+        // mullwo./subfo. and bso, whose overflow flag the recompiler never set correctly; fixed in
+        // the translator, after which the game goes in-game on the recompiler at 60 fps against
+        // 36 on the interpreter (Odin 3, 2026-09-17).
+        "NPUA80930" to "Core:\n  PPU Decoder: Recompiler (LLVM)\n",
+
+        // Don't Starve: Giant Edition, forced to the interpreter for the same reason and fixed by
+        // the same overflow flag work. Goes in-game on the recompiler at its 30 fps cap
+        // (Odin 3, 2026-09-17).
+        "NPUB31590" to "Core:\n  PPU Decoder: Recompiler (LLVM)\n",
+
+        // Killzone 3: the database turns Write Color Buffers on so RPCS3's SPU MLAA pass can read
+        // each frame back from memory. The "Disable MLAA (Post-processing on SPU)" patch, bundled
+        // on for this title since 4009bb5551, removes that pass, and the RPCS3 wiki says the
+        // setting is only needed without the patch. Off skips the readback of every color buffer.
+        // Tied to the patch: anyone who turns the patch off needs this back on.
+        //
+        // Preferred SPU Threads pinned to 0 (Auto), issue #151. A tester running it at 3 froze at
+        // the same spot every time, as the prologue streams in the factory approach: SPU jobs read
+        // a structure the game had already freed and overwrote SPURS kernel code at LS 0x28e0.
+        // Capping how many SPU threads run at once makes jobs run late, which is what exposes that
+        // race. Back on 0 he got through, and the crash never appeared in 38 of our own runs at 0.
+        // Pinned here, per title, so a global 3 cannot bring it back.
+        "BCUS98234" to "Video:\n  Write Color Buffers: false\nCore:\n  Preferred SPU Threads: 0\n",
+        "BCES01007" to "Video:\n  Write Color Buffers: false\nCore:\n  Preferred SPU Threads: 0\n",
     )
 
     /**
@@ -147,7 +174,10 @@ object ConfigDatabase {
             runCatching {
                 val file = File(dir, "$serial.yml")
                 val existing = if (file.isFile) file.readText() else ""
-                if (existing.contains("Frame limit:")) return@runCatching
+                // Already applied. Checking for the override itself rather than for the setting's
+                // name, which skipped an override whenever the database set the same key, the one
+                // case it exists for.
+                if (existing.contains(yaml.trimEnd())) return@runCatching
                 file.writeText(if (existing.isBlank()) yaml else existing.trimEnd() + "\n" + yaml)
             }
         }
@@ -166,6 +196,95 @@ object ConfigDatabase {
                 line.contains(':') && line.substringAfter(':').trim() in bad
             }
             .joinToString("\n")
+
+    // ---- What the database sets for one title, and what the user took back ----
+
+    /**
+     * The settings a title's database entry applies, as "Section@@Key" to value, in file order.
+     *
+     * The last occurrence of a key wins, matching how the core applies them, so a
+     * [LOCAL_OVERRIDES] entry appended to the end reads back as the effective value here too.
+     * Two spaces per level, which is what the database ships and what RPCS3 writes.
+     */
+    fun entriesFor(serial: String?): List<Pair<String, String>> {
+        val title = serial?.trim().orEmpty()
+        if (title.isEmpty()) return emptyList()
+        val file = File(directory(), "$title.yml")
+        if (!file.isFile) return emptyList()
+
+        val out = LinkedHashMap<String, String>()
+        val path = ArrayList<String>()
+
+        runCatching {
+            for (raw in file.readLines()) {
+                val line = raw.trimEnd()
+                val first = line.indexOfFirst { it != ' ' }
+                if (first < 0 || line[first] == '#') continue
+                val colon = line.indexOf(':', first)
+                if (colon < 0) continue
+
+                val indent = first / 2
+                while (path.size > indent) path.removeAt(path.size - 1)
+                path.add(line.substring(first, colon).trim())
+
+                val value = line.substring(colon + 1).trim()
+                // A header opens a section instead of setting anything.
+                if (value.isNotEmpty()) out[path.joinToString("@@")] = value
+            }
+        }
+
+        return out.toList()
+    }
+
+    /** Keys of a title's database entry the user switched off. */
+    fun ignoredFor(serial: String?): Set<String> {
+        val title = serial?.trim().orEmpty()
+        if (title.isEmpty()) return emptySet()
+        val raw = MainActivityRuntime.prefs.getString(ignoreKey(title), null) ?: return emptySet()
+        return runCatching {
+            val arr = org.json.JSONArray(raw)
+            buildSet { for (i in 0 until arr.length()) add(arr.getString(i)) }
+        }.getOrDefault(emptySet())
+    }
+
+    fun setIgnored(serial: String, path: String, ignored: Boolean) {
+        val current = ignoredFor(serial).toMutableSet()
+        if (ignored) current.add(path) else current.remove(path)
+        val arr = org.json.JSONArray()
+        current.forEach { arr.put(it) }
+        MainActivityRuntime.prefs.edit { putString(ignoreKey(serial), arr.toString()) }
+    }
+
+    private fun ignoreKey(serial: String) = "configDb.ignore.$serial"
+
+    /**
+     * Tell the core which keys of this title's database entry not to apply.
+     *
+     * The core layers the database over the user's config, so a per-game choice loses to a
+     * database entry for the same key unless the key is withheld here. Written before boot and
+     * read by get_database_config; the file is removed when nothing is withheld, so a title
+     * that never needed one does not accumulate an empty file.
+     */
+    fun writeUserKeys(serial: String?, ownedPaths: Set<String>) {
+        val title = serial?.trim().orEmpty()
+        if (title.isEmpty()) return
+
+        val dir = File(RPCSX.rootDirectory, "config/config_db_user")
+        val file = File(dir, "$title.keys")
+        // Only keys this title's entry actually sets: withholding a key it never had would be a
+        // line of noise in the file and in the log.
+        val settable = entriesFor(title).map { it.first }.toSet()
+        val keys = (ownedPaths + ignoredFor(title)).filter { it in settable }.sorted()
+
+        runCatching {
+            if (keys.isEmpty()) {
+                file.delete()
+                return
+            }
+            dir.mkdirs()
+            file.writeText(keys.joinToString("\n", postfix = "\n"))
+        }
+    }
 
     /**
      * Where the native side looks. get_database_config reads config/config_db/<TITLE>.yml

@@ -169,9 +169,27 @@ object ContentUri {
     /** [devicePathForDocument] for anything the launcher might be holding: a document URI
      *  becomes a device path, a plain path or an already-translated one is returned as is. */
     fun bootPathFor(raw: String): String {
-        if (!raw.startsWith("content://")) return raw
-        val uri = runCatching { raw.toUri() }.getOrNull() ?: return raw
-        return devicePathForDocument(uri) ?: raw
+        // A second game on a disc image rides along as "//PS3_GMxx" (see DiscGames). Only the
+        // part before it is a URI, and the suffix has to survive the translation.
+        val (image, gameDir) = com.armsx2.DiscGames.split(raw)
+        if (!image.startsWith("content://")) return raw
+        val uri = runCatching { image.toUri() }.getOrNull() ?: return raw
+        // A document inside a picked games folder resolves through the SAF device. One picked on
+        // its own from the system file picker (Launch Game, Swap Disc) has no tree to resolve
+        // through, and the core cannot open a content:// URI, so it falls back to the document's
+        // real path on shared storage, which the core can read with All files access.
+        val path = devicePathForDocument(uri) ?: sharedStoragePath(uri) ?: return raw
+        return com.armsx2.DiscGames.join(path, gameDir)
+    }
+
+    /** /storage/... for a document the external storage provider owns, else null. */
+    fun sharedStoragePath(uri: Uri): String? {
+        if (uri.authority != "com.android.externalstorage.documents") return null
+        val parts = runCatching { android.provider.DocumentsContract.getDocumentId(uri) }
+            .getOrNull()?.split(":", limit = 2)
+        if (parts == null || parts.size != 2) return null
+        val (volume, relative) = parts
+        return if (volume == "primary") "/storage/emulated/0/$relative" else "/storage/$volume/$relative"
     }
 
     /** Forget a folder the user removed. Its key is not reused, so a stale path stays dead

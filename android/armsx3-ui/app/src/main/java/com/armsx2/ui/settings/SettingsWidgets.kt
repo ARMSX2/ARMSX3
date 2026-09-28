@@ -596,12 +596,16 @@ fun HelpText(text: String, modifier: Modifier = Modifier) {
 }
 
 /** Toggle row — label on left, status text on right. Tapping anywhere
- *  on the row flips the value via [onChange]. */
+ *  on the row flips the value via [onChange]. [controllerId] replaces the label-based nav id
+ *  where labels can repeat on one screen (All Core Settings); settings search finds rows by
+ *  the default one. */
 @Composable
 fun ToggleRow(
     label: String,
     value: Boolean,
     description: String? = null,
+    controllerId: String? = null,
+    notDefault: Boolean = false,
     onChange: (Boolean) -> Unit,
 ) {
     // Menu SFX: a distinct on/off blip on every flip. Touch, the switch, and the controller's
@@ -617,7 +621,7 @@ fun ToggleRow(
             .fillMaxWidth()
             .padding(vertical = 5.dp)
             .controllerFocusable(
-                controllerId = "toggle:$label",
+                controllerId = controllerId ?: "toggle:$label",
                 onConfirm = { emit(!value) },
                 onLeft = { if (value) emit(false) },
                 onRight = { if (!value) emit(true) },
@@ -637,6 +641,7 @@ fun ToggleRow(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
             Column(modifier = Modifier.weight(1f)) {
+                if (notDefault) NotDefaultLabel()
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(label, color = MaterialTheme.colorScheme.onSurface, fontSize = 18.sp, lineHeight = 23.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                     if (description != null) InfoHint(label, description)
@@ -680,6 +685,7 @@ fun IntSliderRow(
     description: String? = null,
     valueFormatter: (Int) -> String = { it.toString() },
     onReset: (() -> Unit)? = null,
+    notDefault: Boolean = false,
     onChange: (Int) -> Unit,
 ) {
     // Include the call-site composite-key hash so two sliders that happen to share a
@@ -717,6 +723,7 @@ fun IntSliderRow(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
+                    if (notDefault) NotDefaultLabel()
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(label, color = MaterialTheme.colorScheme.onSurface, fontSize = 18.sp, lineHeight = 23.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                         if (description != null) InfoHint(label, description)
@@ -980,6 +987,7 @@ fun SegmentedRow(
     options: List<String>,
     selectedIndex: Int,
     description: String? = null,
+    notDefault: Boolean = false,
     onChange: (Int) -> Unit,
 ) {
     // Menu SFX: a select blip when the chosen option changes — covers the chip tap and the
@@ -1011,6 +1019,7 @@ fun SegmentedRow(
         contentAlignment = Alignment.CenterStart,
     ) {
         Column {
+            if (notDefault) NotDefaultLabel(Modifier.padding(horizontal = 16.dp))
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -1073,6 +1082,8 @@ fun SegmentedGridRow(
     selectedIndex: Int,
     columns: Int = 3,
     description: String? = null,
+    controllerId: String? = null,
+    notDefault: Boolean = false,
     onChange: (Int) -> Unit,
 ) {
     Box(
@@ -1083,7 +1094,7 @@ fun SegmentedGridRow(
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f))
             .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.46f), RoundedCornerShape(22.dp))
             .controllerFocusable(
-                controllerId = "segmented-grid:$label",
+                controllerId = controllerId ?: "segmented-grid:$label",
                 onConfirm = {
                     if (options.isNotEmpty())
                         onChange((selectedIndex + 1).floorMod(options.size))
@@ -1101,6 +1112,7 @@ fun SegmentedGridRow(
         contentAlignment = Alignment.CenterStart,
     ) {
         Column {
+            if (notDefault) NotDefaultLabel()
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(label, color = MaterialTheme.colorScheme.onSurface, fontSize = 18.sp, lineHeight = 23.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 if (description != null) InfoHint(label, description)
@@ -1158,6 +1170,30 @@ fun SegmentedGridRow(
             }
         }
     }
+}
+
+/** Stock values, what the "Not default" line compares against. Settings() is a plain data class
+ *  with constant defaults, so one shared instance is enough. */
+internal val StockSettings by lazy { com.armsx2.config.Settings() }
+
+/** True when [pick] reads something here other than it does in a stock Settings. Pick the stored
+ *  field, not the index a row derives from it, so the answer does not depend on the row's layout. */
+internal fun com.armsx2.config.Settings.notDefault(pick: (com.armsx2.config.Settings) -> Any?): Boolean =
+    pick(this) != pick(StockSettings)
+
+/** The red line above a row's title when its value is not the stock one. It exists so a setting
+ *  changed long ago, or by someone else, cannot hide in plain sight: a tester went looking for why
+ *  Killzone 3 crawled, and the PPU decoder on Interpreter looked like any other row. */
+@Composable
+private fun NotDefaultLabel(modifier: Modifier = Modifier) {
+    Text(
+        str("settings.notDefault"),
+        color = MaterialTheme.colorScheme.error,
+        fontSize = 12.sp,
+        lineHeight = 15.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = modifier.padding(bottom = 2.dp),
+    )
 }
 
 private fun Int.floorMod(modulus: Int): Int =

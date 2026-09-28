@@ -118,8 +118,7 @@ fun SettingsScreen(
         // bare filesystem path, not "file:///…", or the native boot rejects the path and
         // kicks straight back to the library (the flash-then-library symptom). Same
         // conversion HomeViewModel.launch / HomeShortcuts use.
-        val launchPath = if (g.uri.scheme == "file") g.uri.path ?: g.uri.toString() else g.uri.toString()
-        com.armsx2.runtime.MainActivityRuntime.launchGame(launchPath, g)
+        com.armsx2.runtime.MainActivityRuntime.launchGame(g.launchPath, g)
     }
     var showReset by remember { mutableStateOf(false) }
     // Settings-search "jump to control": holds the resolved label of the target row while the
@@ -205,7 +204,7 @@ fun SettingsScreen(
                     .padding(bottom = 8.dp),
             ) {
                 ArmsTopBar(
-                    title = scopeGame?.title ?: str("action.settings"),
+                    title = scopeGame?.title ?: str("action.appSettings"),
                     subtitle = if (scopeGame == null) str("scope.global") else str("scope.game"),
                     leading = {
                         // Registered in the settings nav so a controller reaches it (up from the chips).

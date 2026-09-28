@@ -17,8 +17,9 @@ Notes:
   - The app is force-stopped between tests, and each test is booted through the VIEW intent the
     manifest already accepts. That means this DRIVES the device: do not run it while someone is
     using the app for something else.
-  - TTY.log cannot be truncated from adb (it lives under Android/data, which shell may read but
-    not write). The harness notes its size first, then watches: the app resets the log when it
+  - TTY.log cannot be truncated from adb (shell may read it but not write it), and it lives under
+    the app's data root, which can be moved to an SD card. The harness looks for it; see
+    find_live_tty. The harness notes its size first, then watches: the app resets the log when it
     boots, so a size DROP means the whole file belongs to this test. Assuming the pre-launch size
     was a prefix silently produced a 29k-of-108k-line capture that read as a huge test failure.
   - A test is considered finished when TTY.log stops growing for --idle seconds. There is no
@@ -34,7 +35,15 @@ from collections import Counter
 
 PKG = "com.armsx3"
 ACTIVITY = f"{PKG}/com.armsx2.Main"
-TTY = f"/sdcard/Android/data/{PKG}/files/cache/TTY.log"
+# Every place TTY.log can live. The emulator writes it under the app's data root, and the user can
+# move that root (to an SD card, for one). A fixed Android/data path kept reading an empty file
+# while the real log filled up on the card, so every suite that prints to the console came back
+# NO OUTPUT and six suites were never compared at all.
+TTY_CANDIDATES = [
+    "/storage/*/ARMSX3/cache/TTY.log",
+    "/sdcard/ARMSX3/cache/TTY.log",
+    f"/sdcard/Android/data/{PKG}/files/cache/TTY.log",
+]
 DEVICE_DIR = "/sdcard/ARMSX3-autotests"
 
 REPO_DEFAULT = os.path.join(
@@ -52,9 +61,44 @@ def adb(*args, binary=False, check=True):
     return proc.stdout if binary else proc.stdout.decode(errors="replace")
 
 
-def tty_size():
-    out = adb("exec-out", f"wc -c < {TTY} 2>/dev/null || echo 0").strip()
-    return int(out.split()[0]) if out.split() else 0
+def tty_size(path):
+    # stat, not "wc -c < path": a missing file makes the shell itself print the error, which the
+    # 2>/dev/null on wc never sees, and exec-out hands that text back where a number belongs.
+    out = adb("exec-out", f"stat -c %s {path} 2>/dev/null || echo 0").strip()
+    return int(out.split()[0]) if out.split() and out.split()[0].isdigit() else 0
+
+
+def tty_candidates():
+    """(mtime, size, path) for every TTY.log that exists right now, newest first."""
+    out = adb("exec-out", "stat -c '%Y %s %n' " + " ".join(TTY_CANDIDATES) + " 2>/dev/null", check=False)
+    found = []
+    for line in out.splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
+            found.append((int(parts[0]), int(parts[1]), parts[2]))
+    return sorted(found, reverse=True)
+
+
+def find_live_tty(snapshot, wait):
+    """The TTY.log this launch writes to, and the offset its output starts at.
+
+    Emu::Init opens TTY.log with fs::rewrite once per process, so after a force-stop the live log
+    is whichever candidate changes (or appears) once the app starts, and a changed file starts at
+    offset 0. Do not hand back the old size: a suite that prints straight away (ppu_vpu, from a
+    warm PPU cache) grows past it before the first poll, the size drop is never seen, and the
+    capture silently loses its first 32k lines. If nothing changes in time, fall back to the
+    newest candidate at its old size, which is where the last launch wrote.
+    """
+    before = {path: (mtime, size) for mtime, size, path in snapshot}
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        for mtime, _size, path in tty_candidates():
+            if path not in before or mtime > before[path][0]:
+                return path, 0
+        time.sleep(1)
+    if snapshot:
+        return snapshot[0][2], snapshot[0][1]
+    return TTY_CANDIDATES[-1], 0
 
 
 def discover(tests_root):
@@ -106,12 +150,18 @@ def run_one(name, dirpath, elf, expected_path, args):
     adb("shell", f"am force-stop {PKG}", check=False)
     time.sleep(1.5)
 
-    before = tty_size()
+    # A suite that writes a file leaves an output.txt behind, and reading last run's file as this
+    # run's result would report an old build's numbers without a word. Clear it first.
+    adb("shell", f"rm -f {remote_dir}/output.txt", check=False)
+
+    snapshot = tty_candidates()
     adb(
         "shell",
         f"am start -a android.intent.action.VIEW -d file://{remote_dir}/{elf} -n {ACTIVITY}",
         check=False,
     )
+    tty, before = find_live_tty(snapshot, min(args.boot_wait, 30))
+    print(f"  TTY: {tty}", flush=True)
 
     # Grown-then-quiet, because there is no end-of-test marker to wait for.
     #
@@ -120,28 +170,32 @@ def run_one(name, dirpath, elf, expected_path, args):
     # reads from the middle of a fresh file -- which produced a torn first line and 29k of 108k
     # lines, silently, and looked like a spectacular test failure rather than a harness bug. If the
     # size is ever seen below where it started, the log was reset and the whole file is ours.
+    #
+    # output.txt counts as output too. A suite that writes the file leaves TTY empty, and when only
+    # TTY was watched such a suite sat out the whole --boot-wait after it had already finished.
     start = time.time()
-    last_size, last_change = before, time.time()
+    last_progress, last_change = 0, time.time()
     offset = before
     while True:
         time.sleep(2)
-        size = tty_size()
+        size = tty_size(tty)
         if size < offset:
             offset = 0
-        if size != last_size:
-            last_size, last_change = size, time.time()
-            print(f"  ... {size - offset} bytes", end="\r", flush=True)
+        progress = max(size - offset, 0) + tty_size(f"{remote_dir}/output.txt")
+        if progress != last_progress:
+            last_progress, last_change = progress, time.time()
+            print(f"  ... {progress} bytes", end="\r", flush=True)
         elapsed_quiet = time.time() - last_change
-        if size > offset and elapsed_quiet >= args.idle:
+        if progress > 0 and elapsed_quiet >= args.idle:
             break
         if time.time() - start > args.timeout:
             print(f"  timed out after {args.timeout}s", flush=True)
             break
-        if size == offset and time.time() - start > args.boot_wait:
+        if progress == 0 and time.time() - start > args.boot_wait:
             print(f"  no output after {args.boot_wait}s -- did it boot?", flush=True)
             break
 
-    raw = adb("exec-out", f"cat {TTY}", binary=True)
+    raw = adb("exec-out", f"cat {tty}", binary=True)
     adb("shell", f"am force-stop {PKG}", check=False)
 
     got = normalise(raw[offset:].decode("utf-8", errors="replace"))
@@ -151,14 +205,12 @@ def run_one(name, dirpath, elf, expected_path, args):
     # The SPU suites reach TTY through spu_printf and the lv2 ones print to it directly, but the
     # PPU suites fopen "/app_home/output.txt" and write there -- /app_home being the directory the
     # test was launched from, i.e. the one pushed above. Six PPU tests were reported as "NO OUTPUT"
-    # for a whole run while their results sat on the device, so check the file whenever TTY is
-    # empty rather than assuming a silent test failed to boot.
-    if not got:
-        from_file = adb("exec-out", f"cat {remote_dir}/output.txt 2>/dev/null", binary=True)
-
-        if from_file:
-            print(f"  (output.txt, {len(from_file)} bytes -- this suite writes a file, not TTY)")
-            got = normalise(from_file.decode("utf-8", errors="replace"))
+    # for a whole run while their results sat on the device. The file is cleared before launch, so
+    # if it exists now this run wrote it, and it wins over anything the suite also printed.
+    from_file = adb("exec-out", f"cat {remote_dir}/output.txt 2>/dev/null", binary=True)
+    if from_file:
+        print(f"  (output.txt, {len(from_file)} bytes, this suite writes a file, not TTY)")
+        got = normalise(from_file.decode("utf-8", errors="replace"))
     with open(expected_path, "r", encoding="utf-8", errors="replace") as fh:
         want = normalise(fh.read())
 

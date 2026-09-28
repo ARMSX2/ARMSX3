@@ -186,7 +186,12 @@ namespace vk
 		VkFormat data_format = VK_FORMAT_UNDEFINED;
 		bool failed = true;
 
-		std::array<VkFormat, 2> supported_formats = { VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM };
+		// RGBA8 first: both SGSR shaders declare their output as
+		// `layout(set = 0, binding = 1, rgba8) writeonly image2D`, and a format layout qualifier that
+		// disagrees with the view's format makes the store undefined. Same search and same mismatch
+		// as FSR1; see fsr_pass.cpp. RGBA8 storage support is mandatory in Vulkan, as the note in
+		// sgsr_pass.h says, so the preferred entry can never be the missing one.
+		std::array<VkFormat, 2> supported_formats = { VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM };
 		for (const auto& format : supported_formats)
 		{
 			const VkFlags all_required_bits = VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT;
@@ -203,6 +208,9 @@ namespace vk
 			rsx_log.error("SGSR: no writable output format is available; falling back to bilinear.");
 			return;
 		}
+
+		// Once per output size, for the same reason as FSR1's line.
+		rsx_log.notice("SGSR: %ux%u output in %s", output_w, output_h, data_format == VK_FORMAT_R8G8B8A8_UNORM ? "RGBA8" : "BGRA8");
 
 		if (mode & UPSCALE_LEFT_VIEW)
 		{
@@ -265,14 +273,58 @@ namespace vk
 				const f32 uv_offset[2] = { x0 / src_w, y0 / src_h };
 				const f32 uv_scale[2] = { input_size.width / src_w, input_size.height / src_h };
 
+				// Explicit dependencies around the compute pass, for the reason spelled out in
+				// fsr_pass.cpp: the layout helper never puts the compute stage in a barrier's scope.
 				src->push_layout(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-				m_output_data->change_layout(cmd, VK_IMAGE_LAYOUT_GENERAL);
+
+				vk::insert_image_memory_barrier(cmd,
+					src->value,
+					src->current_layout, src->current_layout,
+					VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+					VK_ACCESS_SHADER_READ_BIT,
+					{ src->aspect(), 0, src->mipmaps(), 0, src->layers() });
+
+				vk::insert_image_memory_barrier(cmd,
+					m_output_data->value,
+					m_output_data->current_layout, VK_IMAGE_LAYOUT_GENERAL,
+					VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					VK_ACCESS_SHADER_WRITE_BIT,
+					VK_ACCESS_SHADER_WRITE_BIT,
+					{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 });
+
+				m_output_data->current_layout = VK_IMAGE_LAYOUT_GENERAL;
 
 				cs_task->run(cmd, src, m_output_data.get(), input_size, output_size, uv_offset, uv_scale);
+
+				vk::insert_image_memory_barrier(cmd,
+					src->value,
+					src->current_layout, src->current_layout,
+					VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+					VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+					0,
+					0,
+					{ src->aspect(), 0, src->mipmaps(), 0, src->layers() });
 
 				src->pop_layout(cmd);
 
 				src_image = m_output_data.get();
+
+				if (!(mode & UPSCALE_AND_COMMIT))
+				{
+					vk::insert_image_memory_barrier(cmd,
+						m_output_data->value,
+						m_output_data->current_layout, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+						VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+						VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+						VK_ACCESS_SHADER_WRITE_BIT,
+						VK_ACCESS_SHADER_READ_BIT,
+						{ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 });
+
+					m_output_data->current_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				}
 
 				if (mode & UPSCALE_AND_COMMIT)
 				{

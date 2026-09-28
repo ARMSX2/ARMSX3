@@ -195,6 +195,9 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
     // (the old box-drawing characters like ▦ ◉ ⌁ ✦ were unclear per tester feedback).
     val primary = listOf(
         DrawerItem("games.section.library", "🎮", AppRoute.Home),
+        // Boot any file without adding it to the library: an ISO, a playlist, an EBOOT, or a .pkg,
+        // which installs first. Ported from ARMSX2's drawer.
+        DrawerItem("action.launchGame", "📂", onAction = { MainActivityRuntime.promptLaunchGame(); onDismiss() }),
         // Boot straight into the PS2 system BIOS with no disc — distinct from "BIOS Location"
         // below, which only points the emulator at your BIOS file.
         DrawerItem("bios.boot.title", "▶️", onAction = { MainActivityRuntime.startBios(); onDismiss() }),
@@ -205,7 +208,7 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // that game's set alone). This is the across-titles browser, which was
         // Qt-only upstream and so had no Android entry point at all.
         DrawerItem("trophies.title", "🏆", AppRoute.Trophies),
-        DrawerItem("action.settings", "⚙️", AppRoute.Settings()),
+        DrawerItem("action.appSettings", "⚙️", AppRoute.Settings()),
         // Everything the core exposes, generated from its config tree rather than
         // hand-written. The curated tabs above stay small on purpose; this is the
         // escape hatch for the rest of the PS3 config.
@@ -221,7 +224,7 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // is the entry point it never had.
         DrawerItem("packages.title", "📦", AppRoute.PackageInstaller),
         // ARMSX3: PS2 memory cards removed - PS3 uses HDD save data instead.
-        DrawerItem("savestate.title.loadManage", "📥", AppRoute.SaveManager),
+        DrawerItem("savestate.title.loadManage", "📥", AppRoute.SaveManager()),
         DrawerItem("tab.controls", "🕹️", AppRoute.ControllerManager),
         // Patches: RPCS3's own hash-addressed patch.yml, not PNACH. Goes to the
         // global list; per-game patches are reached from the game's own settings,
@@ -232,6 +235,9 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // same data. The per-game tab is the last chip in a scrolling strip behind a long
         // press, which is no way to find out a feature exists.
         DrawerItem("mods.library.title", "\uD83D\uDEE0\uFE0F", AppRoute.ModLibrary),
+        // Its own row under Mods, not a tab inside it: both change how a game runs, but clock caps
+        // are for every game at once and have nothing to do with the moddable-titles list.
+        DrawerItem("underclock.title", "\uD83C\uDF21\uFE0F", AppRoute.Underclocking),
         // ARMSX3: texture packs removed. PCSX2 replaces GS textures by hash;
         // RPCS3 has no texture-replacement system, so the screen managed nothing.
         // RetroArch shader chains cover this ground and live in Renderer settings.
@@ -381,8 +387,9 @@ private fun sameDestination(current: AppRoute, target: AppRoute): Boolean = when
     is AppRoute.BiosManager -> current is AppRoute.BiosManager
     AppRoute.PackageInstaller -> current is AppRoute.PackageInstaller
     AppRoute.CoreSettings -> current is AppRoute.CoreSettings
-    AppRoute.SaveManager -> current is AppRoute.SaveManager
+    is AppRoute.SaveManager -> current is AppRoute.SaveManager
     AppRoute.ModLibrary -> current is AppRoute.ModLibrary
+    AppRoute.Underclocking -> current is AppRoute.Underclocking
     AppRoute.ControllerManager -> current is AppRoute.ControllerManager
     AppRoute.TextureManager -> current is AppRoute.TextureManager
     AppRoute.Achievements -> current is AppRoute.Achievements

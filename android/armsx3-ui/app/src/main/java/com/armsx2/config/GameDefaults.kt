@@ -92,6 +92,46 @@ object GameDefaults {
         "Video@@Driver Wake-Up Delay" to "0",
     )
 
+    /**
+     * Hostnames a title can only reach through a community server, keyed by serial.
+     *
+     * Merged into the Hostname redirects setting by [withTitleRedirects] instead of written
+     * like [BY_SERIAL]. That node is a curated setting the user edits on the RPCN tab, and
+     * applyTo pushes it on every apply, so another title never inherits these and nothing needs
+     * a [STOCK] value to undo them; a stock value would in fact wipe the user's own redirects.
+     */
+    private val REDIRECTS_BY_SERIAL: Map<String, Map<String, String>> = run {
+        // Demon's Souls. Sony shut the official servers down in 2018 and the domains lapsed:
+        // c.demons-souls.com now resolves to a parked page, and the game waits 30 seconds on
+        // port 18000 there and gives up, with RPCN itself logged in fine. The community server
+        // is The Archstones; these are the redirects its server page gives for RPCS3
+        // (thearchstones.com/serverinfo.html). If the server moves, this address is the fix.
+        val archstones = "206.189.232.242"
+        val demonsSouls = listOf(
+            "ds-eu-c.scej-online.jp", "ds-eu-g.scej-online.jp",
+            "c.demons-souls.com", "g.demons-souls.com",
+            "cmnap.scej-online.jp", "demons-souls.scej-online.jp",
+        ).associateWith { archstones }
+        // Discs (US, EU, JP, Asia), then PSN (US, EU, JP).
+        listOf(
+            "BLUS30443", "BLES00932", "BCJS30022", "BCAS20071",
+            "NPUB30910", "NPEB01202", "NPJA00102",
+        ).associateWith { demonsSouls }
+    }
+
+    /**
+     * [userList] (host=address pairs joined by &&) with this title's community-server redirects
+     * added for every host the user has not redirected themselves. Theirs wins per host.
+     */
+    fun withTitleRedirects(userList: String, serial: String?): String {
+        val redirects = REDIRECTS_BY_SERIAL[serial?.uppercase()?.trim().orEmpty()] ?: return userList
+        val entries = userList.split("&&").map { it.trim() }.filter { it.isNotEmpty() }
+        val named = entries.map { it.substringBefore('=').trim().lowercase() }.toSet()
+        val added = redirects.filterKeys { it.lowercase() !in named }.map { (host, address) -> "$host=$address" }
+        if (added.isNotEmpty()) android.util.Log.i("ARMSX3", "game default for $serial: ${added.size} host redirects")
+        return (entries + added).joinToString("&&")
+    }
+
     fun forSerial(serial: String?): Map<String, String> =
         BY_SERIAL[serial?.uppercase()?.trim().orEmpty()].orEmpty()
 

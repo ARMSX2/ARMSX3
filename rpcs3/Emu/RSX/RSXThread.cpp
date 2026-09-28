@@ -1520,51 +1520,6 @@ namespace rsx
 		return t + timestamp_subvalue;
 	}
 
-	// Frame-stall notice. See check_frame_stall.
-	static atomic_t<u64> g_last_frame_time{0};
-	static atomic_t<bool> g_frame_stall_reported{false};
-
-	// How many guest-thread dumps this stall has produced. See check_frame_stall.
-	static atomic_t<u32> g_frame_stall_dumps{0};
-
-	// Defined below; check_frame_stall is what decides a stall has happened.
-
-	// Say when the picture has stopped, instead of leaving the last frame standing.
-	//
-	// A guest that stops progressing presents nothing further, so whatever was last drawn stays
-	// on screen indefinitely. When that frame happens to contain the boot progress bar, it reads
-	// as "stuck compiling at 1s remaining" -- and it looked exactly the same across five
-	// unrelated faults, sending every report of them to the wrong place. Nothing contradicts it
-	// either: the emulator has not crashed, so there is no error to be found.
-	//
-	// Only fires while nothing is legitimately in progress. A shader or PPU compile presents no
-	// frames for minutes at a time, and it holds a progress dialog that says as much, so an
-	// empty progress text is what separates "working, quietly" from "stopped".
-	// What the RSX thread is doing while it fails to present.
-	//
-	// The profiler can say the thread is in 'Local task' and that it has been in it for 0.00s,
-	// which together mean it is not stuck in there at all -- do_local_task has no loop and
-	// returns immediately. The FIFO loop is calling it over and over, and Borderlands 2 has the
-	// RSX thread at ~113% of a core doing that while no frame lands for 45s+. Which FIFO state
-	// it is called with separates the cases and is recorded nowhere else: 'empty' means the
-	// guest is not submitting (a guest-side stall the RSX only reflects), 'spinning' means the
-	// puller is jumping to itself waiting on a semaphore, 'lock_wait' means it is parked on a
-	// lock acquire. Counters only, dumped from the existing 5s stall report -- logging per call
-	// would be thousands of lines a second, which on Android is itself a stall.
-
-
-	// Say where every guest thread is parked once frames have stopped arriving.
-	//
-	// A hang with the RSX idle is a guest-side wait, and nothing named the thread or the place.
-	// The syscall stats report sys_timer_usleep without saying who called it, /proc shows a
-	// thread that never started as indistinguishable from one that is blocked, and the RSX
-	// profiler only covers this side of the boundary. Name, state, PC and the function each
-	// PPU is in separate all of those.
-	//
-	// idm::unlocked deliberately: this runs on the RSX thread, and taking the id lock here to
-	// diagnose a hang would add exactly the kind of dependency being diagnosed. A torn read of
-	// a diagnostic line costs nothing.
-
 	void thread::do_local_task(FIFO::state state)
 	{
 
@@ -3643,27 +3598,6 @@ namespace rsx
 
 	void thread::on_frame_end(u32 buffer, bool forced)
 	{
-		// Only a frame the GUEST produced counts as the guest making progress.
-		//
-		// 'forced' means flip() found nothing queued and synthesised a frame end -- which is what
-		// a native-UI flip is. check_frame_stall() ARMS native-UI flipping when it reports a
-		// stall, so counting those frames made the detector disarm itself permanently: the first
-		// hang of a session switched on a flip source that then refreshed this timestamp forever,
-		// and no later hang in that session could ever be detected.
-		//
-		// Seen on Tales of Xillia 2: a stall was reported at 0:29:06, the game was closed and
-		// another booted, and when THAT one hung 90 seconds later nothing fired -- guest mutex
-		// traffic sat at exactly zero for minutes while VKGSRender::flip kept running. Without
-		// this the white-screen hang produces no dump at all, which is the one case it was
-		// written for.
-		if (!forced)
-		{
-			g_last_frame_time = get_system_time();
-			g_frame_stall_reported = false;
-			// Re-arm the dumps: a real frame landed, so any later stall is a new one worth capturing.
-			g_frame_stall_dumps = 0;
-		}
-
 		prof::set_enabled(g_cfg.video.rsx_profiler.get());
 		prof::tick_frame();
 

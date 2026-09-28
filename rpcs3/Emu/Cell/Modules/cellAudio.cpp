@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Emu/emu_callbacks.h"
 #include "Emu/System.h"
 #include "Emu/system_config.h"
 #include "Emu/Audio/audio_utils.h"
@@ -63,7 +64,7 @@ void cell_audio_config::reset(bool backend_changed)
 	if (!backend || backend_changed)
 	{
 		backend.reset();
-		backend = Emu.GetCallbacks().get_audio();
+		backend = g_emu_callbacks.get_audio();
 	}
 
 	cellAudio.notice("cellAudio initializing. Backend: %s", backend->GetName());
@@ -399,9 +400,15 @@ void audio_port::tag(be_t<f32>* port_buf)
 	{
 		port_buf[tag_pos] = tag;
 		last_tag_value[tag_nr] = -0.0f;
+	}
 
-		// Mark the front right channel as well, see PORT_BUFFER_MARK_CHANNEL
-		port_buf[mark_position(tag_nr)] = tag;
+	// Mark the front right channel as well, see PORT_BUFFER_MARK_CHANNEL
+	if (num_channels != 2)
+	{
+		for (u32 tag_nr = 0; tag_nr < PORT_BUFFER_TAG_COUNT; tag_nr++)
+		{
+			port_buf[mark_position(tag_nr)] = tag;
+		}
 	}
 
 	prev_touched_tag_nr = -1;
@@ -581,6 +588,7 @@ std::tuple<u32, u32, u32, u32> cell_audio_thread::count_port_buffer_tags()
 			// This port reaches its surround channels, so its tags track it on their own and the marks below
 			// are never consulted for it.
 			m_periods_without_tag[port_index] = 0;
+			m_front_only_port[port_index] = false;
 		}
 
 		// Decide whether the buffer is untouched, in progress, incomplete, or complete
@@ -591,9 +599,9 @@ std::tuple<u32, u32, u32, u32> cell_audio_thread::count_port_buffer_tags()
 			// stay silent forever. The marks tell the two apart. They are only consulted once this port has
 			// gone long enough without moving a tag to rule out a game writing the buffer one channel at a
 			// time, which looks identical in between its front right and its center pass.
-			bool front_only = false;
+			bool& front_only = m_front_only_port[port_index];
 
-			if (m_periods_without_tag[port_index] > PORT_FRONT_ONLY_SETTLE_PERIODS)
+			if (!front_only && port.num_channels != 2 && m_periods_without_tag[port_index] > PORT_FRONT_ONLY_SETTLE_PERIODS)
 			{
 				for (u32 tag_nr = 0; tag_nr < PORT_BUFFER_TAG_COUNT; tag_nr++)
 				{
@@ -604,6 +612,12 @@ std::tuple<u32, u32, u32, u32> cell_audio_thread::count_port_buffer_tags()
 						front_only = true;
 						break;
 					}
+				}
+
+				if (front_only && !m_front_only_reported[port_index])
+				{
+					m_front_only_reported[port_index] = true;
+					cellAudio.notice("Port %u carries front channel audio only (num_channels=%u). Its buffer tags all sit on surround channels and can never move, so the front channel marks decide whether it is silent.", port.number, port.num_channels);
 				}
 			}
 
@@ -617,12 +631,6 @@ std::tuple<u32, u32, u32, u32> cell_audio_thread::count_port_buffer_tags()
 				// The game only ever fills the front channels of this port, so the block is as complete as it
 				// is ever going to get. Incomplete is the verdict that says so, and it still gets mixed.
 				incomplete++;
-
-				if (!m_front_only_reported[port_index])
-				{
-					m_front_only_reported[port_index] = true;
-					cellAudio.notice("Port %u carries front channel audio only (num_channels=%u). Its buffer tags all sit on surround channels and can never move, so the front channel marks decide whether it is silent.", port.number, port.num_channels);
-				}
 			}
 		}
 		else if (last_touched_tag_nr == PORT_BUFFER_TAG_COUNT - 1)
@@ -1313,12 +1321,18 @@ audio_port* cell_audio_thread::open_port()
 	port.state = audio_port_state::opened;
 	m_front_only_reported[port.number] = false;
 	m_periods_without_tag[port.number] = 0;
+	m_front_only_port[port.number] = false;
 	return &port;
 }
 
-error_code cell_audio_thread::allocate_port(ppu_thread& ppu, audio_port& port)
+u32 cell_audio_thread::port_alloc_size(u32 port_size)
 {
-	const u32 size = std::max<u32>(0x10000, utils::align(port.size, 0x10000));
+	return std::max<u32>(0x10000, utils::align(port_size, 0x10000));
+}
+
+error_code cell_audio_thread::map_port(ppu_thread& ppu, u32 port_size, audio_port_mapping& mapping)
+{
+	const u32 size = port_alloc_size(port_size);
 	auto* ct = g_ps3_process_info.sdk_ver > 0x21ffff ? &g_fxo->get<lv2_memory_container>() : nullptr;
 
 	for (u64 key = SYS_MMAPPER_MIO_SHM_KEY + 2;; key++)
@@ -1340,7 +1354,6 @@ error_code cell_audio_thread::allocate_port(ppu_thread& ppu, audio_port& port)
 
 		if (result)
 		{
-			close_port(ppu, port);
 			return CELL_AUDIO_ERROR_SHAREDMEMORY;
 		}
 
@@ -1348,53 +1361,124 @@ error_code cell_audio_thread::allocate_port(ppu_thread& ppu, audio_port& port)
 		const vm::var<u32> address;
 		auto memory = acquire_audio_memory(memory_id);
 
-		if (!memory || sys_mmapper_search_and_map(ppu, shared_area, memory_id, 0x40000, address))
+		if (!memory || sys_mmapper_search_and_map(ppu, mapping.area, memory_id, 0x40000, address))
 		{
 			sys_mmapper_free_shared_memory(ppu, memory_id);
 			release_audio_memory(memory);
-			close_port(ppu, port);
 			return CELL_AUDIO_ERROR_SHAREDMEMORY;
 		}
 
-		port_memories[port.number] = std::move(memory);
-		port.addr = vm::cast(*address);
-		port.mapped = true;
-		port.index = vm::cast(shared_address + port.server_index * 16);
-		std::memset(port.addr.get_ptr(), 0, size);
-		break;
+		std::memset(vm::base(*address), 0, size);
+		mapping.memory = std::move(memory);
+		mapping.addr = *address;
+		mapping.mapped = true;
+		return CELL_OK;
 	}
-
-	return CELL_OK;
 }
 
-void cell_audio_thread::close_port(ppu_thread& ppu, audio_port& port)
+audio_port_mapping cell_audio_thread::detach_port(audio_port& port)
 {
-	port.state = audio_port_state::closed;
-	const vm::var<u32> memory_id;
+	audio_port_mapping mapping;
+	mapping.memory = std::move(port_memories[port.number]);
+	mapping.addr = port.addr.addr();
+	mapping.number = port.number;
+	mapping.server_index = port.server_index;
+	mapping.generation = m_generation;
+	// Holding the memory means it is mapped, whether the port is open or only kept it on close.
+	mapping.mapped = static_cast<bool>(mapping.memory);
 
-	if (port.mapped && !sys_mmapper_unmap_shared_memory(ppu, port.addr.addr(), memory_id))
+	// Closed before it is unmapped: the audio thread only mixes started ports, and the Add*Data
+	// calls check mapped, so nothing touches the memory while unmap_port runs.
+	port.state = audio_port_state::closed;
+	port.mapped = false;
+	return mapping;
+}
+
+bool cell_audio_thread::reuse_port_memory(audio_port& port, u32 alloc_size)
+{
+	const auto& memory = port_memories[port.number];
+
+	if (!memory || memory->size < alloc_size)
 	{
-		// an extra mapping can keep the handle alive after the port closes
-		sys_mmapper_free_shared_memory(ppu, *memory_id);
+		return false;
 	}
 
+	// Still mapped at port.addr since the port's last close, see audio_port_mapping.
+	std::memset(port.addr.get_ptr(), 0, memory->size);
+	port.index = vm::cast(shared_address + port.server_index * 16);
+	port.mapped = true;
+	return true;
+}
+
+audio_port_mapping cell_audio_thread::take_kept_memory(audio_port& port)
+{
+	audio_port_mapping mapping;
+	mapping.memory = std::move(port_memories[port.number]);
+	mapping.addr = port.addr.addr();
+	mapping.mapped = static_cast<bool>(mapping.memory);
+	return mapping;
+}
+
+void cell_audio_thread::close_port(audio_port& port)
+{
+	// The memory stays mapped for the next open, see audio_port_mapping. Closed, and not mapped as
+	// far as the Add*Data calls and cellAudioPortStart are concerned, until it is reopened.
+	port.state = audio_port_state::closed;
 	port.mapped = false;
-	release_audio_memory(port_memories[port.number]);
+
 	free_ports[free_port_count] = port.number;
 	free_indices[free_port_count] = port.server_index;
 	free_port_count++;
 }
 
-void cell_audio_thread::release_shared_memory(ppu_thread& ppu)
+void cell_audio_thread::unmap_port(ppu_thread& ppu, audio_port_mapping& mapping)
+{
+	const vm::var<u32> memory_id;
+
+	if (mapping.mapped && !sys_mmapper_unmap_shared_memory(ppu, mapping.addr, memory_id))
+	{
+		// an extra mapping can keep the handle alive after the port closes
+		sys_mmapper_free_shared_memory(ppu, *memory_id);
+	}
+
+	mapping.mapped = false;
+	release_audio_memory(mapping.memory);
+}
+
+void cell_audio_thread::return_port(const audio_port_mapping& mapping)
+{
+	// A cellAudioQuit in between took every port with it, and the next cellAudioInit rebuilds
+	// the free list from scratch.
+	if (mapping.generation != m_generation)
+	{
+		return;
+	}
+
+	free_ports[free_port_count] = mapping.number;
+	free_indices[free_port_count] = mapping.server_index;
+	free_port_count++;
+}
+
+u32 cell_audio_thread::drop_shared_ref()
 {
 	if (--shared_refs || !shared_address)
+	{
+		return 0;
+	}
+
+	return shared_address;
+}
+
+void cell_audio_thread::unmap_shared(ppu_thread& ppu, u32 address)
+{
+	if (!address)
 	{
 		return;
 	}
 
 	const vm::var<u32> memory_id;
 
-	if (!sys_mmapper_unmap_shared_memory(ppu, shared_address, memory_id))
+	if (!sys_mmapper_unmap_shared_memory(ppu, address, memory_id))
 	{
 		sys_mmapper_free_shared_memory(ppu, *memory_id);
 	}
@@ -1575,67 +1659,93 @@ error_code cellAudioInit(ppu_thread& ppu)
 	}
 
 	auto& g_audio = g_fxo->get<cell_audio>();
-	std::lock_guard lock(g_audio.mutex);
 
-	if (g_audio.init)
+	// The MIO block is mapped between two holds of the mutex, never under it: see
+	// audio_port_mapping. While it is in flight init is still 0, so the rest of cellAudio answers
+	// NOT_INIT, and shared_refs is already taken, so a second cellAudioInit answers TRANS_EVENT.
+	bool first = false;
+	u32 stale_address = 0;
 	{
-		return CELL_AUDIO_ERROR_ALREADY_INIT;
+		std::lock_guard lock(g_audio.mutex);
+
+		if (g_audio.init)
+		{
+			return CELL_AUDIO_ERROR_ALREADY_INIT;
+		}
+
+		first = !g_audio.shared_refs++;
+
+		if (first)
+		{
+			g_audio.shared_address = 0;
+		}
+		else
+		{
+			stale_address = g_audio.drop_shared_ref();
+		}
 	}
 
-	if (!g_audio.shared_refs++)
+	if (!first)
 	{
-		g_audio.shared_address = 0;
-		const vm::var<u32> memory_id;
-		const auto result = sys_mmapper_allocate_shared_memory(ppu, SYS_MMAPPER_MIO_SHM_KEY, 0x10000, 0x200, memory_id);
-
-		if (result)
-		{
-			g_audio.release_shared_memory(ppu);
-
-			// mio and audio both release this on an already open handle
-			if (result + 0u == CELL_EEXIST)
-			{
-				g_audio.release_shared_memory(ppu);
-				return CELL_AUDIO_ERROR_TRANS_EVENT;
-			}
-
-			return result;
-		}
-
-		const vm::var<u32> area;
-		const vm::var<u32> address;
-		auto memory = acquire_audio_memory(*memory_id);
-
-		if (!memory)
-		{
-			g_audio.release_shared_memory(ppu);
-			return CELL_ESRCH;
-		}
-
-		auto mapping_result = sys_mmapper_get_shared_memory_area(ppu, 0x20full, +area);
-
-		if (!mapping_result)
-		{
-			mapping_result = sys_mmapper_search_and_map(ppu, *area, *memory_id, 0x40000, address);
-		}
-
-		if (mapping_result)
-		{
-			sys_mmapper_free_shared_memory(ppu, *memory_id);
-			release_audio_memory(memory);
-			g_audio.release_shared_memory(ppu);
-			return mapping_result;
-		}
-
-		g_audio.shared_memory = std::move(memory);
-		g_audio.shared_area = *area;
-		g_audio.shared_address = *address;
-	}
-	else
-	{
-		g_audio.release_shared_memory(ppu);
+		cell_audio_thread::unmap_shared(ppu, stale_address);
 		return CELL_AUDIO_ERROR_TRANS_EVENT;
 	}
+
+	// Gives back the reference taken above when the mapping fails. shared_address is still 0
+	// then, so there is nothing for unmap_shared to unmap.
+	const auto drop_ref = [&]()
+	{
+		std::lock_guard lock(g_audio.mutex);
+		return g_audio.drop_shared_ref();
+	};
+
+	const vm::var<u32> memory_id;
+	const auto result = sys_mmapper_allocate_shared_memory(ppu, SYS_MMAPPER_MIO_SHM_KEY, 0x10000, 0x200, memory_id);
+
+	if (result)
+	{
+		cell_audio_thread::unmap_shared(ppu, drop_ref());
+
+		// mio and audio both release this on an already open handle
+		if (result + 0u == CELL_EEXIST)
+		{
+			cell_audio_thread::unmap_shared(ppu, drop_ref());
+			return CELL_AUDIO_ERROR_TRANS_EVENT;
+		}
+
+		return result;
+	}
+
+	const vm::var<u32> area;
+	const vm::var<u32> address;
+	auto memory = acquire_audio_memory(*memory_id);
+
+	if (!memory)
+	{
+		cell_audio_thread::unmap_shared(ppu, drop_ref());
+		return CELL_ESRCH;
+	}
+
+	auto mapping_result = sys_mmapper_get_shared_memory_area(ppu, 0x20full, +area);
+
+	if (!mapping_result)
+	{
+		mapping_result = sys_mmapper_search_and_map(ppu, *area, *memory_id, 0x40000, address);
+	}
+
+	if (mapping_result)
+	{
+		sys_mmapper_free_shared_memory(ppu, *memory_id);
+		release_audio_memory(memory);
+		cell_audio_thread::unmap_shared(ppu, drop_ref());
+		return mapping_result;
+	}
+
+	std::lock_guard lock(g_audio.mutex);
+
+	g_audio.shared_memory = std::move(memory);
+	g_audio.shared_area = *area;
+	g_audio.shared_address = *address;
 
 	const u32 port_count = g_ps3_process_info.sdk_ver <= 0x35ffff ? CELL_AUDIO_MAX_PORT : CELL_AUDIO_MAX_PORT_2;
 	g_audio.free_port_count = port_count;
@@ -1672,25 +1782,43 @@ error_code cellAudioQuit(ppu_thread& ppu)
 	}
 
 	auto& g_audio = g_fxo->get<cell_audio>();
-	std::lock_guard lock(g_audio.mutex);
 
-	if (!g_audio.init)
+	// Everything is detached under the mutex and unmapped after it: see audio_port_mapping.
+	std::array<audio_port_mapping, AUDIO_PORT_COUNT> mappings{};
+	u32 mapping_count = 0;
+	u32 shared_address = 0;
+	shared_ptr<lv2_memory> shared_memory;
 	{
-		return CELL_AUDIO_ERROR_NOT_INIT;
-	}
+		std::lock_guard lock(g_audio.mutex);
 
-	for (auto& port : g_audio.ports)
-	{
-		if (port.state != audio_port_state::closed)
+		if (!g_audio.init)
 		{
-			g_audio.close_port(ppu, port);
+			return CELL_AUDIO_ERROR_NOT_INIT;
 		}
+
+		for (auto& port : g_audio.ports)
+		{
+			// Closed ports included: they keep their memory for the next open.
+			if (port.state != audio_port_state::closed || g_audio.port_memories[port.number])
+			{
+				mappings[mapping_count++] = g_audio.detach_port(port);
+			}
+		}
+
+		shared_address = g_audio.drop_shared_ref();
+		shared_memory = std::move(g_audio.shared_memory);
+		// NOTE: Do not clear event queues here. They are handled independently.
+		g_audio.init = 0;
+		g_audio.m_generation++;
 	}
 
-	g_audio.release_shared_memory(ppu);
-	release_audio_memory(g_audio.shared_memory);
-	// NOTE: Do not clear event queues here. They are handled independently.
-	g_audio.init = 0;
+	for (u32 i = 0; i < mapping_count; i++)
+	{
+		cell_audio_thread::unmap_port(ppu, mappings[i]);
+	}
+
+	cell_audio_thread::unmap_shared(ppu, shared_address);
+	release_audio_memory(shared_memory);
 	return CELL_OK;
 }
 
@@ -1776,48 +1904,95 @@ error_code cellAudioPortOpen(ppu_thread& ppu, vm::ptr<CellAudioPortParam> audioP
 	// Waiting for VSH and doing some more things
 	lv2_sleep(200);
 
-	std::lock_guard lock(g_audio.mutex);
-
-	if (!g_audio.init)
+	// Reserved and filled in under the mutex, mapped outside it, published under it again: see
+	// audio_port_mapping. The game has no port number until this returns, so nothing can use the
+	// port in between.
+	audio_port* port = nullptr;
+	audio_port_mapping mapping;
+	audio_port_mapping kept;
+	u32 port_size = 0;
 	{
-		return CELL_AUDIO_ERROR_NOT_INIT;
+		std::lock_guard lock(g_audio.mutex);
+
+		if (!g_audio.init)
+		{
+			return CELL_AUDIO_ERROR_NOT_INIT;
+		}
+
+		// Open audio port
+		port = g_audio.open_port();
+
+		if (!port)
+		{
+			return CELL_AUDIO_ERROR_PORT_FULL;
+		}
+
+		port->num_channels   = ::narrow<u32>(num_channels);
+		port->num_blocks     = ::narrow<u32>(num_blocks);
+		port->attr           = attr;
+		port->size           = ::narrow<u32>(std::max<u64>(1, num_channels) * num_blocks * AUDIO_BUFFER_SAMPLES * sizeof(f32));
+		port->cur_pos        = 0;
+		port->global_counter = g_audio.m_counter;
+		port->active_counter = 0;
+		port->timestamp      = get_guest_system_time(g_audio.m_last_period_end);
+
+		if (attr & CELL_AUDIO_PORTATTR_INITLEVEL)
+		{
+			port->level = audioParam->level;
+		}
+		else
+		{
+			port->level = 1.0f;
+		}
+
+		port->level_set.store({ port->level, 0.0f });
+
+		// Reopened at the same size or smaller: the memory it kept on its last close is still
+		// mapped, and there is nothing for sys_mmapper to do.
+		if (g_audio.reuse_port_memory(*port, cell_audio_thread::port_alloc_size(port->size)))
+		{
+			*portNum = port->number;
+			return CELL_OK;
+		}
+
+		// Whatever it kept is too small. Unmapped below, with the mutex released.
+		kept = g_audio.take_kept_memory(*port);
+
+		port_size = port->size;
+		mapping.area = g_audio.shared_area;
+		mapping.number = port->number;
+		mapping.server_index = port->server_index;
+		mapping.generation = g_audio.m_generation;
 	}
 
-	// Open audio port
-	audio_port* port = g_audio.open_port();
+	cell_audio_thread::unmap_port(ppu, kept);
 
-	if (!port)
+	const error_code result = cell_audio_thread::map_port(ppu, port_size, mapping);
+
 	{
-		return CELL_AUDIO_ERROR_PORT_FULL;
+		std::lock_guard lock(g_audio.mutex);
+
+		// Still ours, unless a cellAudioQuit in between took every port back.
+		if (mapping.generation == g_audio.m_generation && port->state == audio_port_state::opened)
+		{
+			if (result)
+			{
+				port->state = audio_port_state::closed;
+				g_audio.return_port(mapping);
+				return result;
+			}
+
+			g_audio.port_memories[port->number] = std::move(mapping.memory);
+			port->addr = vm::cast(mapping.addr);
+			port->index = vm::cast(g_audio.shared_address + port->server_index * 16);
+			port->mapped = true;
+			*portNum = port->number;
+			return CELL_OK;
+		}
 	}
 
-	port->num_channels   = ::narrow<u32>(num_channels);
-	port->num_blocks     = ::narrow<u32>(num_blocks);
-	port->attr           = attr;
-	port->size           = ::narrow<u32>(std::max<u64>(1, num_channels) * num_blocks * AUDIO_BUFFER_SAMPLES * sizeof(f32));
-	port->cur_pos        = 0;
-	port->global_counter = g_audio.m_counter;
-	port->active_counter = 0;
-	port->timestamp      = get_guest_system_time(g_audio.m_last_period_end);
-
-	if (attr & CELL_AUDIO_PORTATTR_INITLEVEL)
-	{
-		port->level = audioParam->level;
-	}
-	else
-	{
-		port->level = 1.0f;
-	}
-
-	port->level_set.store({ port->level, 0.0f });
-
-	if (auto result = g_audio.allocate_port(ppu, *port))
-	{
-		return result;
-	}
-
-	*portNum = port->number;
-	return CELL_OK;
+	cell_audio_thread::unmap_port(ppu, mapping);
+	return result ? result : error_code{CELL_AUDIO_ERROR_NOT_INIT};
 }
 
 error_code cellAudioGetPortConfig(u32 portNum, vm::ptr<CellAudioPortConfig> portConfig)
@@ -1898,6 +2073,12 @@ error_code cellAudioPortStart(u32 portNum)
 	case audio_port_state::closed: return CELL_AUDIO_ERROR_PORT_NOT_OPEN;
 	case audio_port_state::started: return CELL_AUDIO_ERROR_PORT_ALREADY_RUN;
 	case audio_port_state::opened:
+		// Still being mapped by a cellAudioPortOpen on another thread: see audio_port_mapping.
+		if (!port.mapped)
+		{
+			return CELL_AUDIO_ERROR_PORT_NOT_OPEN;
+		}
+
 		std::memset(port.addr.get_ptr(), 0, port.size);
 		port.state = audio_port_state::started;
 		return CELL_OK;
@@ -1938,7 +2119,8 @@ error_code cellAudioPortClose(ppu_thread& ppu, u32 portNum)
 		return CELL_AUDIO_ERROR_PORT_NOT_OPEN;
 	}
 
-	g_audio.close_port(ppu, port);
+	// Its memory stays mapped for the next open: see audio_port_mapping.
+	g_audio.close_port(port);
 	return CELL_OK;
 }
 
@@ -2335,6 +2517,12 @@ error_code cellAudioAddData(u32 portNum, vm::ptr<float> src, u32 samples, float 
 
 	const audio_port& port = g_audio.ports[portNum];
 
+	// Its shared memory is not mapped: the port is closed, or still opening on another thread.
+	if (!port.mapped)
+	{
+		return CELL_OK;
+	}
+
 	if (!port.num_channels)
 	{
 		return CELL_OK;
@@ -2371,6 +2559,12 @@ error_code cellAudioAdd2chData(u32 portNum, vm::ptr<float> src, u32 samples, flo
 	}
 
 	const audio_port& port = g_audio.ports[portNum];
+
+	// Its shared memory is not mapped: the port is closed, or still opening on another thread.
+	if (!port.mapped)
+	{
+		return CELL_OK;
+	}
 
 	const auto dst = port.get_vm_ptr();
 
@@ -2425,6 +2619,12 @@ error_code cellAudioAdd6chData(u32 portNum, vm::ptr<float> src, float volume)
 	}
 
 	const audio_port& port = g_audio.ports[portNum];
+
+	// Its shared memory is not mapped: the port is closed, or still opening on another thread.
+	if (!port.mapped)
+	{
+		return CELL_OK;
+	}
 
 	const auto dst = port.get_vm_ptr();
 

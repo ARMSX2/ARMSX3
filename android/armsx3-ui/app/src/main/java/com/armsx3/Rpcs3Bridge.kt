@@ -263,10 +263,11 @@ object Rpcs3Bridge {
             }
             vsh.absolutePath
         }
-        // Canary patches must be in patch.yml BEFORE the core reads it, which happens
-        // inside boot. Doing it here rather than at app start also means it runs after
-        // the config directory exists: patchesImport writes into it, and on a first-ever
-        // run that directory only appears once setup has picked a storage location.
+        // Canary patches must be in their file (patches/armsx3_patch.yml) BEFORE the core
+        // reads the patches, which happens inside boot. Doing it here rather than at app start
+        // also means it runs after the config directory exists: patchesWrite writes into it,
+        // and on a first-ever run that directory only appears once setup has picked a storage
+        // location.
         //
         // Cheap after the first success -- it is a single preference read once the
         // bundled revision matches.
@@ -399,6 +400,42 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun hasActiveVm(): Boolean = RPCSX.getState() != EmulatorState.Stopped
+
+    /** What Swap Disc may do right now: 0 the game takes no disc swaps, 1 a disc is in and can
+     *  be swapped, 2 the tray is empty and the game is waiting for one. */
+    @JvmStatic
+    fun discSwapState(): Int = runCatching { RPCSX.instance.discSwapState() }.getOrDefault(0)
+
+    /** The discs of the playlist the running game was booted from, and the one in the drive.
+     *  Empty for a game that was not booted from an .m3u. */
+    data class DiscPlaylist(val discs: List<String>, val current: String)
+
+    @JvmStatic
+    fun discPlaylist(): DiscPlaylist = runCatching {
+        val o = org.json.JSONObject(RPCSX.instance.getDiscPlaylist())
+        val array = o.optJSONArray("discs")
+        DiscPlaylist(
+            List(array?.length() ?: 0) { array!!.getString(it) },
+            o.optString("current"),
+        )
+    }.getOrDefault(DiscPlaylist(emptyList(), ""))
+
+    /**
+     * Swap the running game's disc. Blocks for as long as the game takes to let go of the old
+     * one, so call it off the UI thread, with the game RESUMED: the eject completes on the
+     * game's own callback, which does not run while it is paused. See _rpcsx_changeDisc for
+     * the result codes; -1 means [path] could not be turned into anything the core can open.
+     *
+     * [path] may be a document from the system file picker. One inside a picked games folder
+     * resolves through the SAF device like a boot path; a plain document on shared storage
+     * resolves to its real path, which the core can read with All files access.
+     */
+    @JvmStatic
+    fun changeDisc(path: String): Int {
+        val target = com.armsx2.storage.ContentUri.bootPathFor(path)
+        if (target.startsWith("content://")) return -1
+        return runCatching { RPCSX.instance.changeDisc(target) }.getOrDefault(-1)
+    }
 
     @JvmStatic
     fun pause() {
@@ -854,7 +891,7 @@ object Rpcs3Bridge {
      * Nothing bounds a slot number on either side of the JNI, so they reuse the numbered-slot
      * path that works rather than growing a second mechanism, and the user's ten stay theirs.
      */
-    private const val AUTOSAVE_SLOT = 10
+    const val AUTOSAVE_SLOT = 10
 
     @JvmStatic
     fun hasAutosaveState(): Boolean = hasState(AUTOSAVE_SLOT)
@@ -929,7 +966,24 @@ object Rpcs3Bridge {
             ?: com.armsx2.runtime.MainActivityRuntime.instance
                 ?.applicationContext?.getExternalFilesDir(null)?.absolutePath
             ?: return null
-        val file = java.io.File(root, "config/savestates/$title/armsx3_slots/slot$slot.thumb")
+        val bitmap = thumbnailBitmap(java.io.File(root, "config/savestates/$title/armsx3_slots/slot$slot.thumb"))
+            ?: return null
+
+        java.io.ByteArrayOutputStream().use { out ->
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            bitmap.recycle()
+            out.toByteArray()
+        }
+    }.getOrNull()
+
+    /**
+     * A slot preview file ("AX3T" + u32 width + u32 height + RGBA8) as a bitmap, or null.
+     *
+     * By file rather than by slot so the Save Manager can show one for a game that is not
+     * running: [thumbnailForSlot] resolves the slot against the running title.
+     */
+    @JvmStatic
+    fun thumbnailBitmap(file: java.io.File): android.graphics.Bitmap? = runCatching {
         if (!file.isFile) return null
 
         val raw = file.readBytes()
@@ -946,15 +1000,8 @@ object Rpcs3Bridge {
         if (width !in 1..4096 || height !in 1..4096) return null
         if (raw.size < header + width * height * 4) return null
 
-        val bitmap = android.graphics.Bitmap.createBitmap(
-            width, height, android.graphics.Bitmap.Config.ARGB_8888
-        )
-        bitmap.copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(raw, header, width * height * 4))
-
-        java.io.ByteArrayOutputStream().use { out ->
-            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-            bitmap.recycle()
-            out.toByteArray()
+        android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888).apply {
+            copyPixelsFromBuffer(java.nio.ByteBuffer.wrap(raw, header, width * height * 4))
         }
     }.getOrNull()
 
@@ -1848,7 +1895,7 @@ object Rpcs3Bridge {
                 if (PadRouter.deviceIdForPort(port) >= 0)
                     "Player ${port + 1}'s controller exposes no vibration motor to Android"
                 else
-                    "No controller assigned to player ${port + 1} — assign one above"
+                    "No controller assigned to player ${port + 1}: assign one above"
             // Naming the target is the whole point of the toast: it separates "rumble is
             // broken" from "rumble went somewhere other than the pad you are holding".
             // Naming the DEVICE, not just "your controller": on a handheld that bridges an
@@ -1891,7 +1938,7 @@ object Rpcs3Bridge {
     }
 
     /**
-     * Feed the phone's orientation to the pad's motion sensors.
+     * Write one motion sample to a pad's SIXAXIS registers.
      *
      * [ax]/[ay]/[az] are gravity-relative acceleration in g, [gyro] a yaw rate in
      * rad/s. The PS3 reports each axis 0..1023 with 512 at rest and roughly 113 units

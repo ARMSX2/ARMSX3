@@ -45,6 +45,7 @@ import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.navigation.AppRoute
 import com.armsx2.navigation.UiNavigator
+import com.armsx2.packages.FrontendExport
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.theme.BootLogoPreferences
 import com.armsx2.ui.theme.ThemeMode
@@ -207,6 +208,7 @@ fun AppTab() {
         }
         ConfigDatabaseRow()
         GameFoldersRow()
+        FrontendExportRow()
         Surface(
             onClick = { UiNavigator.navigate(AppRoute.Language) },
             modifier = Modifier.fillMaxWidth()
@@ -463,6 +465,45 @@ fun AppTab() {
                         ) {}
                     }
                 }
+                // How solid the bar is, for any colour including Default.
+                IntSliderRow(
+                    label = str("app.barOpacity"),
+                    value = com.armsx2.ui.theme.LibraryChromePreferences.barOpacity.value,
+                    min = 0,
+                    max = 100,
+                    description = str("app.barOpacity.desc"),
+                    valueFormatter = { "$it%" },
+                    onChange = com.armsx2.ui.theme.LibraryChromePreferences::setBarOpacity,
+                )
+                // How far the library darkens whatever background is behind it.
+                IntSliderRow(
+                    label = str("app.bgDimming"),
+                    value = com.armsx2.ui.theme.LibraryChromePreferences.backgroundDimming.value,
+                    min = 0,
+                    max = 100,
+                    description = str("app.bgDimming.desc"),
+                    valueFormatter = { "$it%" },
+                    onChange = com.armsx2.ui.theme.LibraryChromePreferences::setBackgroundDimming,
+                )
+                // The screensaver: this background, full screen, after a while with no input.
+                ToggleRow(
+                    label = str("app.screensaver"),
+                    value = com.armsx2.ui.home.LibraryScreensaver.enabled.value,
+                    description = str("app.screensaver.desc"),
+                    onChange = com.armsx2.ui.home.LibraryScreensaver::setEnabled,
+                )
+                if (com.armsx2.ui.home.LibraryScreensaver.enabled.value) {
+                    val minutesText = str("app.screensaver.minutes")
+                    IntSliderRow(
+                        label = str("app.screensaver.delay"),
+                        value = com.armsx2.ui.home.LibraryScreensaver.minutes.value,
+                        min = com.armsx2.ui.home.LibraryScreensaver.MIN_MINUTES,
+                        max = com.armsx2.ui.home.LibraryScreensaver.MAX_MINUTES,
+                        description = str("app.screensaver.delay.desc"),
+                        valueFormatter = { minutesText.format(it) },
+                        onChange = com.armsx2.ui.home.LibraryScreensaver::setMinutes,
+                    )
+                }
             }
             // Continuous RGB hue-cycle — same idea as the theme's RGB mode. While on, the fixed
             // color (presets + sliders) doesn't apply, so it's hidden.
@@ -581,6 +622,9 @@ fun AppTab() {
             description = str("app.bootLogo.desc"),
             onChange = { BootLogoPreferences.set(it) },
         )
+        if (BootLogoPreferences.enabled.value) {
+            BootIntroRows()
+        }
 
         BackupRestoreRows()
 
@@ -909,6 +953,13 @@ fun AppTab() {
             onChange = LibraryChromePreferences::setShowRecents,
         )
 
+        ToggleRow(
+            label = str("app.library.autoPlaylists"),
+            value = com.armsx2.AutoPlaylists.enabled.value,
+            description = str("app.library.autoPlaylists.desc"),
+            onChange = com.armsx2.AutoPlaylists::set,
+        )
+
         // Moved off the library overflow menu, where it was the odd one out: every other
         // library-appearance preference already lives here beside cover size and opacity.
         ToggleRow(
@@ -1083,6 +1134,145 @@ private fun GameFoldersRow() {
     }
 }
 
+/**
+ * Issue #157: folders that get a .ps3 file for each installed game, for launcher frontends.
+ *
+ * Laid out like Game Folders above it, because it is the same kind of list: people keep more than
+ * one ROM folder. Each folder says how many games it holds or why its last sync failed, and has
+ * its own file format, since two folders can be read by two different frontends.
+ */
+@Composable
+private fun FrontendExportRow() {
+    val context = LocalContext.current
+    remember { runCatching { FrontendExport.load() } }
+    val targets = FrontendExport.targets.value
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        // Write as well as read: the export creates and deletes files in there.
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        FrontendExport.addFolder(context, uri)
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.46f)),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp)) {
+            Text(str("app.frontendExport"), style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (targets.isEmpty()) str("common.off")
+                else I18n.get("app.frontendExport.folders").format(targets.size),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (targets.isNotEmpty() && FrontendExport.storageProblem.value) {
+                Text(
+                    str("app.frontendExport.storageProblem"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+
+            targets.forEachIndexed { index, target ->
+                val problem = FrontendExport.folderProblem[target.uri] == true
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            com.armsx2.storage.StorageLabel.forFolder(context, target.uri),
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            if (problem) str("app.frontendExport.folderProblem")
+                            else I18n.get("app.frontendExport.count").format(FrontendExport.exported[target.uri] ?: 0),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (problem) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    val remove = { FrontendExport.removeFolder(target.uri) }
+                    TextButton(
+                        onClick = remove,
+                        modifier = Modifier.controllerFocusable("app.frontendExport.$index.remove", onConfirm = remove),
+                    ) {
+                        Text(str("app.frontendExport.remove"))
+                    }
+                }
+                Text(
+                    str("app.frontendExport.format"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                FlowRow(
+                    modifier = Modifier.padding(top = 4.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    FrontendExport.Format.entries.forEach { format ->
+                        val apply = { FrontendExport.setFormat(context, target.uri, format) }
+                        FilterChip(
+                            selected = target.format == format,
+                            onClick = apply,
+                            // A sample of the file itself, which reads the same in every language.
+                            label = { Text(format.sample) },
+                            shape = RoundedCornerShape(11.dp),
+                            modifier = Modifier.controllerFocusable(
+                                "app.frontendExport.$index.format.${format.key}",
+                                RoundedCornerShape(11.dp),
+                                onConfirm = apply,
+                            ),
+                        )
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val add = { runCatching { picker.launch(null) }; Unit }
+                OutlinedButton(
+                    onClick = add,
+                    modifier = Modifier.weight(1f)
+                        .controllerFocusable("app.frontendExport.add", onConfirm = add),
+                ) {
+                    Text(str("app.frontendExport.add"))
+                }
+                if (targets.isNotEmpty()) {
+                    val now = { FrontendExport.requestSync(context, force = true) }
+                    OutlinedButton(
+                        onClick = now,
+                        modifier = Modifier.weight(1f)
+                            .controllerFocusable("app.frontendExport.now", onConfirm = now),
+                    ) {
+                        Text(str("app.frontendExport.now"))
+                    }
+                }
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                str("app.frontendExport.hint"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
 @Composable
 private fun ResetAllSettingsRow() {
     var confirming by remember { mutableStateOf(false) }
@@ -1131,6 +1321,12 @@ private fun ResetAllSettingsRow() {
                 val defaults = com.armsx2.config.Settings()
                 com.armsx2.ui.InGameOverlay.settingsState.value = defaults
                 com.armsx2.config.ConfigStore.saveGlobal(defaults)
+                // Two stores this reset used to miss, and either can decide how a game runs. A
+                // tester pressed it for stock settings and still booted Killzone 3 on the PPU
+                // interpreter with Vblank Rate 1. A decoder can sit in a game's own settings, and
+                // a vblank rate only in All Core Settings.
+                com.armsx2.config.ConfigStore.forgetPerGameDecoders()
+                runCatching { com.armsx2.config.CoreSettingOverrides.forgetAll() }
 
                 // Push straight to the core when a game is live, the same way the per-tab reset
                 // does. Without this the UI shows defaults while the running VM keeps the old
@@ -1144,6 +1340,87 @@ private fun ResetAllSettingsRow() {
             },
             onDismiss = { confirming = false },
         )
+    }
+}
+
+/** Custom boot intro: a video the user picked plays at launch in place of the bundled one. See
+ *  [com.armsx2.BootIntro]. The copy runs on IO, since a video can be hundreds of MB. */
+@Composable
+private fun BootIntroRows() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
+    // Shown inline rather than as a Toast: Android 12+ cuts a toast at two lines, which ate
+    // the half of the message that says what to pick instead. Held as a key so it follows a
+    // language change.
+    var problem by remember { mutableStateOf<String?>(null) }
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        busy = true
+        problem = null
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { com.armsx2.BootIntro.importVideo(context, uri) }
+            busy = false
+            problem = when (result) {
+                com.armsx2.BootIntro.ImportResult.Ok -> null
+                com.armsx2.BootIntro.ImportResult.TooLarge -> "app.bootLogo.tooLarge"
+                com.armsx2.BootIntro.ImportResult.NotVideo -> "app.bootLogo.notVideo"
+                com.armsx2.BootIntro.ImportResult.Unreadable -> "app.bootLogo.unreadable"
+            }
+        }
+    }
+
+    val custom = com.armsx2.BootIntro.customName.value
+    Text(
+        when {
+            busy -> str("app.bootLogo.importing")
+            custom != null -> str("app.bootLogo.current").format(custom)
+            else -> str("app.bootLogo.default")
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+    )
+    problem?.let { key ->
+        Text(
+            str(key),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.error,
+            modifier = Modifier.padding(start = 4.dp),
+        )
+    }
+    FlowRow(
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        val pick = { if (!busy) picker.launch(arrayOf("video/*")) }
+        OutlinedButton(
+            onClick = pick,
+            enabled = !busy,
+            modifier = Modifier.controllerFocusable("app.bootLogo.choose", onConfirm = pick),
+        ) { Text(str("app.bootLogo.choose")) }
+        val preview = { if (!busy) com.armsx2.BootIntro.preview(context) }
+        OutlinedButton(
+            onClick = preview,
+            enabled = !busy,
+            modifier = Modifier.controllerFocusable("app.bootLogo.preview", onConfirm = preview),
+        ) { Text(str("app.bootLogo.preview")) }
+        if (custom != null) {
+            val reset = {
+                if (!busy) {
+                    problem = null
+                    com.armsx2.BootIntro.clear(context)
+                }
+            }
+            OutlinedButton(
+                onClick = reset,
+                enabled = !busy,
+                modifier = Modifier.controllerFocusable("app.bootLogo.reset", onConfirm = reset),
+            ) { Text(str("app.bootLogo.reset")) }
+        }
     }
 }
 
@@ -1276,6 +1553,14 @@ private fun BackupRestoreRows() {
     BackupActionRow(
         "📂", "app.savedata.importFolder", "app.savedata.importFolder.desc", "", busy,
         doSaveFolderImport,
+    )
+    // Under both imports because it is the usual reason one fails: a save copied off a console is
+    // still encrypted with that console's keys, and a game handed one can crash rather than refuse.
+    Text(
+        str("app.savedata.apolloNote"),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = 14.dp),
     )
 
     // Deleting saves. The app is the ONLY thing that can: Android 11 blocks file managers from

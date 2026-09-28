@@ -16,6 +16,7 @@
 
 #include "util/sysinfo.hpp"
 #include "util/asm.hpp"
+#include "util/logs.hpp"
 
 // Forward-declared rather than including Emu/RSX/RSXThread.h: this is a low-level vkutils
 // translation unit and pulling the RSX thread header in here would invert the dependency.

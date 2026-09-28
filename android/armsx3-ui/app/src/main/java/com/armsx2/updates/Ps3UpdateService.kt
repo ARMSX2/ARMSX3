@@ -1,7 +1,9 @@
 package com.armsx2.updates
 
+import android.util.Log
 import android.util.Xml
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.xmlpull.v1.XmlPullParser
 import java.io.File
@@ -288,12 +290,17 @@ object Ps3UpdateService {
                 val digest = TrailingSha1()
                 var read = 0L
                 var lastReported = -1f
+                val started = System.nanoTime()
 
                 dest.parentFile?.mkdirs()
                 connection.inputStream.use { input ->
                     dest.outputStream().use { output ->
                         val buffer = ByteArray(256 * 1024)
                         while (true) {
+                            // A chain that stops cancels the downloads running ahead of it. The loop
+                            // is blocking I/O, so it has to look: otherwise a cancelled package kept
+                            // downloading to the end and was then thrown away.
+                            ensureActive()
                             val n = input.read(buffer)
                             if (n < 0) break
                             output.write(buffer, 0, n)
@@ -329,6 +336,10 @@ object Ps3UpdateService {
                     }
                 }
 
+                val seconds = (System.nanoTime() - started) / 1e9
+                Log.i(TAG, "downloaded %s %s: %.1f MB in %.1f s (%.1f MB/s)".format(
+                    update.titleId, update.version, read / 1048576.0, seconds, read / 1048576.0 / seconds.coerceAtLeast(0.001),
+                ))
                 onProgress(1f)
                 dest
             } finally {

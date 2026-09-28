@@ -1111,6 +1111,11 @@ error_code cellPadSetPortSetting(u32 port_no, u32 port_setting)
 	else
 		config.port_setting[port_no] &= ~CELL_PAD_SETTING_PRESS_ON;
 
+	// A motion report starts with whether the game asked for motion at all, and the trace above
+	// is in nobody's log. Only on a change, so a game re-applying its settings every frame is quiet.
+	if (((config.port_setting[port_no] ^ port_setting) & CELL_PAD_SETTING_SENSOR_ON) != 0)
+		cellPad.notice("cellPadSetPortSetting: port %d motion sensors %s", port_no, (port_setting & CELL_PAD_SETTING_SENSOR_ON) ? "on" : "off");
+
 	if (port_setting & CELL_PAD_SETTING_SENSOR_ON)
 		config.port_setting[port_no] |= CELL_PAD_SETTING_SENSOR_ON;
 	else

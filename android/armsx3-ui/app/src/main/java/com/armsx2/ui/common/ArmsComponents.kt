@@ -44,6 +44,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -165,6 +166,11 @@ fun ArmsTopBar(
             0.114 * android.graphics.Color.blue(it)) / 255.0
         if (lum > 0.6) Color(0xFF101317) else Color.White
     }
+    // Custom bar colour when set, otherwise the theme surface (unchanged default), at the bar
+    // opacity the user picked. Only the fill fades: the outline keeps the bar's shape, and the
+    // content colour is worked out from the solid colour as before.
+    val barFill = customBar?.let { Color(it) } ?: MaterialTheme.colorScheme.surface
+    val barAlpha = com.armsx2.ui.theme.LibraryChromePreferences.barOpacity.value / 100f
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -175,12 +181,12 @@ fun ArmsTopBar(
                 bottom = if (bottomEdge) navBarPadding + 8.dp else 4.dp,
             ),
         shape = RoundedCornerShape(26.dp),
-        // Custom bar colour when set, otherwise the theme surface (unchanged default).
-        color = com.armsx2.ui.theme.LibraryChromePreferences.barColor.value
-            .takeIf { it != 0 }?.let { Color(it) } ?: MaterialTheme.colorScheme.surface,
+        color = barFill.copy(alpha = barFill.alpha * barAlpha),
+        contentColor = contentColorFor(barFill),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.38f)),
         tonalElevation = 0.dp,
-        shadowElevation = 5.dp,
+        // A shadow under a see-through bar shows through it as a grey smear.
+        shadowElevation = if (barAlpha < 1f) 0.dp else 5.dp,
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
