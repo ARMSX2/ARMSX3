@@ -30,7 +30,7 @@ namespace rsx
 
 			// Write ref+get (get will be written again with the same value at command end)
 			auto& dma = *vm::_ptr<RsxDmaControl>(RSX(ctx)->dma_address);
-			dma.get.release(RSX(ctx)->fifo_ctrl->get_pos());
+			dma.get.store(RSX(ctx)->fifo_ctrl->get_pos() + 4);
 			dma.ref.store(arg);
 		}
 
@@ -278,7 +278,7 @@ namespace rsx
 				rsx_log.success("nv406e::semaphore_release writes the label an acquire timed out on. semaphore_address=0x%X, value=0x%X, timeouts_so_far=%u", addr, arg, +g_stuck_sema_count);
 			}
 
-			util::write_gcm_label<false, true>(ctx, reg, addr, arg);
+			util::write_gcm_label<false, true>(ctx, reg, addr, arg, RSX(ctx)->fifo_ctrl->get_pos() + 4);
 		}
 	}
 }
