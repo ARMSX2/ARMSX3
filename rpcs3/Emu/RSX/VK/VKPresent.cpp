@@ -414,10 +414,13 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 
 				const areau display_area = { 0, 0, static_cast<u32>(m_swapchain_dims.width), static_cast<u32>(m_swapchain_dims.height) };
 
+				// advance = false: the same overlays the real frame drew, without stepping them. The
+				// performance overlay counts a frame per step, so stepping here made its FPS read
+				// the generated rate instead of the game's.
 				for (const auto& view : m_overlay_manager->get_views())
 				{
 					const areau render_area = view->use_window_space ? display_area : areau(area);
-					ui_renderer->run(*cmd, render_area, fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get());
+					ui_renderer->run(*cmd, render_area, fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get(), false);
 				}
 			}
 

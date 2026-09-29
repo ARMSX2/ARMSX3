@@ -63,17 +63,21 @@ constexpr u32 LSFG_RECURRENCE_FRAMES = 2;
     const f32 rendered_width = static_cast<f32>(guest_extent.width);
     const f32 ratio = rendered_width / static_cast<f32>(presented_extent.width);
 
-    // Motion is measured at 60% of the game's resolution, not all of it: GameSir's GSFG 1.1
-    // publishes that as its phone setting (720p in, motion at 60% of width and height), and the
-    // motion passes are most of the cost. When the passes run on the game image itself the ratio
-    // above is 1 and this is 0.6; on the screen-sized path it is 0.6 of the game's share of it.
-    constexpr f32 AUTO_MOTION_SHARE = 0.6f;
+    // Motion is measured at 432 lines, and never at more than the game rendered. That is GameSir's
+    // published GSFG 1.1 phone setting (720p in, motion at 60% of it), taken as an absolute rather
+    // than a share: the motion passes are most of the cost, so they stay the same size whatever
+    // resolution scaling does to the game, and a game rendered below 720p keeps more of its own
+    // detail instead of dropping to 60% of it. Web of Shadows at 720p: 768x432, 0.9 ms of GPU on the
+    // Odin 3 where the screen-sized version took 3.0.
+    constexpr f32 AUTO_MOTION_LINES = 432.0f;
+    const f32 target = presented_extent.height
+        ? std::min(ratio, AUTO_MOTION_LINES / static_cast<f32>(presented_extent.height))
+        : ratio;
 
     // The epsilon keeps an exact step exact: 0.6f * 20 is 12.0000005 in single precision, and a
     // bare ceil would round that up to 13 steps (0.65).
     constexpr f32 FLOW_SCALE_STEPS = 20.0f;
-    const f32 stepped =
-        std::ceil(ratio * AUTO_MOTION_SHARE * FLOW_SCALE_STEPS - 1e-3f) / FLOW_SCALE_STEPS;
+    const f32 stepped = std::ceil(target * FLOW_SCALE_STEPS - 1e-3f) / FLOW_SCALE_STEPS;
     return std::clamp(stepped, 0.25f, 1.0f);
 }
 

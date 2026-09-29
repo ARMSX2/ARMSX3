@@ -634,7 +634,7 @@ namespace vk
 	}
 
 	void ui_overlay_renderer::run(vk::command_buffer& cmd, const areau& viewport, vk::framebuffer* target, VkRenderPass render_pass,
-			vk::data_heap& upload_heap, rsx::overlays::overlay& ui)
+			vk::data_heap& upload_heap, rsx::overlays::overlay& ui, bool advance)
 	{
 		ui.set_render_viewport(
 		    static_cast<u16>(std::min<u32>(viewport.width(), std::numeric_limits<u16>::max())),
@@ -706,7 +706,10 @@ namespace vk
 			overlay_pass::run(cmd, viewport, target, image_views, render_pass);
 		}
 
-		ui.update(get_system_time());
+		if (advance)
+		{
+			ui.update(get_system_time());
+		}
 	}
 
 	attachment_clear_pass::attachment_clear_pass()
