@@ -169,6 +169,7 @@ fun HomeScreen(
     // The saved backgrounds to pick from (BackgroundSheet), and the one a long press asked to remove.
     var backgroundSheet by remember { mutableStateOf(false) }
     var removingBackground by remember { mutableStateOf<LibraryBackground.Saved?>(null) }
+    var themeInfo by remember { mutableStateOf(false) }
     // #9 custom library background — inert until the user picks an image.
     LaunchedEffect(Unit) {
         LibraryBackground.ensureLoaded()
@@ -469,6 +470,7 @@ fun HomeScreen(
                                     // A picture an older version used in place, not copied in, is not ours to delete.
                                     LibraryBackground.current()?.let(LibraryBackground::remove) ?: LibraryBackground.useDefault()
                                 },
+                                onThemeInfo = { themeInfo = true },
                                 onExitApp = { showExitConfirm = true },
                             )
                             if (showExitConfirm) {
@@ -1132,6 +1134,16 @@ fun HomeScreen(
             },
         )
     }
+    if (themeInfo) {
+        AlertDialog(
+            onDismissRequest = { themeInfo = false },
+            title = { Text(str("games.background.themeInfo.title")) },
+            text = { Text(str("games.background.themeInfo.body")) },
+            confirmButton = {
+                TextButton(onClick = { themeInfo = false }) { Text(str("action.ok")) }
+            },
+        )
+    }
 
     // Pick the active category. A sheet, not a DropdownMenu, so it stays controller-navigable.
     // Long-press a row to rename or delete it -- there is no separate management screen.
@@ -1455,6 +1467,7 @@ private fun LibraryOverflowMenu(
     onChangeBackground: () -> Unit,
     onViewBackground: () -> Unit,
     onRemoveBackground: () -> Unit,
+    onThemeInfo: () -> Unit,
     onExitApp: () -> Unit,
 ) {
     fun closeThen(action: () -> Unit) {
@@ -1490,6 +1503,11 @@ private fun LibraryOverflowMenu(
             LibraryOverflowItem("×", str("games.background.remove")) {
                 closeThen(onRemoveBackground)
             }
+        }
+        // Always shown: nothing else in the app says a .p3t can be picked here, and the answer
+        // matters most before anyone has added one.
+        LibraryOverflowItem("ⓘ", str("games.background.themeInfo")) {
+            closeThen(onThemeInfo)
         }
         OverflowSeparator()
         OverflowHeader(str("games.section.library"))
