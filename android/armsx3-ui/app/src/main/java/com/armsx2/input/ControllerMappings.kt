@@ -924,6 +924,11 @@ object ControllerMappings {
         // Also useful for rotation-vector steering after shifting position mid-race.
         // Appended last for the same persisted-by-ordinal reason as TOGGLE_KEYBOARD above.
         GYRO_RECENTER("pad.gyrorecenter.keycode", "Motion Recenter"),
+        // The pressure modifier as a toggle (ARMSX2 #304): press once for soft presses, again for
+        // full. The hold binding needs a finger on its button for the whole gesture, and a
+        // handheld with no spare button has nothing to give it; bound to a two-button combo, this
+        // one costs no button at all. Appended last for the persisted-by-ordinal reason above.
+        PRESSURE_MOD_TOGGLE("pad.pressuremodtoggle.keycode", "Pressure Modifier (toggle)"),
     }
 
     // A hotkey is either a single button or a two-button combo. The main key is

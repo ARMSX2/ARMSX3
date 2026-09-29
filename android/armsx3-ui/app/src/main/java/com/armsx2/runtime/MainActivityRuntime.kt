@@ -924,6 +924,9 @@ open class MainActivityRuntime : ComponentActivity() {
             // dispatchKeyEvent can forward physical-keyboard keys to it. applyTo()
             // already pushed [USB1] Type + the live attach (usbSetKeyboardEnabled).
             usbKeyboardActive = resolved.usbKeyboard
+            // A pressure modifier toggled on in the previous game must not soften this one's
+            // first press.
+            com.armsx2.ui.touch.TouchControls.pressureModifierHeld.value = false
 
             // A PS2 pad block used to sit here: Pad1/Pad2 Deadzone, Pad2 Type =
             // DualShock2 when a second controller was present, and the multitap
@@ -3467,6 +3470,10 @@ open class MainActivityRuntime : ComponentActivity() {
                     if (down && event.repeatCount == 0) toggleGyro()
                     return true
                 }
+                ControllerMappings.SysHotkey.PRESSURE_MOD_TOGGLE -> {
+                    if (down && event.repeatCount == 0) togglePressureModifier()
+                    return true
+                }
                 ControllerMappings.SysHotkey.GYRO_RECENTER -> {
                     if (down && event.repeatCount == 0) recenterGyro()
                     return true
@@ -3657,6 +3664,15 @@ open class MainActivityRuntime : ComponentActivity() {
         val on = !gyroActive.value
         gyroActive.value = on
         hotkeyToast(if (on) "Gyro ON" else "Gyro OFF")
+    }
+
+    /** The PRESSURE_MOD_TOGGLE hotkey (ARMSX2 #304): flips the soft-press modifier and leaves it,
+     *  applied to buttons already held just as the hold binding does. */
+    private fun togglePressureModifier() {
+        val on = !com.armsx2.ui.touch.TouchControls.pressureModifierHeld.value
+        com.armsx2.ui.touch.TouchControls.pressureModifierHeld.value = on
+        com.armsx2.ui.touch.TouchControls.reapplyPressureToHeldButtons()
+        hotkeyToast(if (on) "Pressure modifier ON" else "Pressure modifier OFF")
     }
 
     /** Re-zero the motion neutral. Routed through [gyroRecenterHook] because the sensor
@@ -5019,6 +5035,7 @@ open class MainActivityRuntime : ComponentActivity() {
             ControllerMappings.SysHotkey.CYCLE_SLOT -> cycleSaveSlot()
                 // TEXTURE_DUMP hotkey removed: PCSX2 texture dumping.
             ControllerMappings.SysHotkey.GYRO_TOGGLE -> toggleGyro()
+            ControllerMappings.SysHotkey.PRESSURE_MOD_TOGGLE -> togglePressureModifier()
             // GYRO_HOLD needs key up/down edges, which this edge-triggered path (stick
             // directions / combos) doesn't provide — behave as a toggle here rather than
             // latching gyro on with no release.
