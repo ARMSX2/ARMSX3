@@ -95,9 +95,11 @@ object ConfigStore {
     private const val KEY_RELAXED_ZCULL_OVERRIDE_PURGED = "config.migrated.relaxedZcullOverridePurged"
     // Takes back the one per-title seed there was: Accurate SPU Reservations off for Spider-Man:
     // Web of Shadows (BLUS30218), seeded once in August because it cut vm::writer_lock time from
-    // 8.06% to 0.96% then. Off now leaves the game on a black screen: cellSpurs runs forced HLE
-    // and the game never starts its SPURS kernel threads (three boots in a row on 09-29, zero
-    // CellSpursKernel lines each). The seed is gone, so this only cleans up installs that got it.
+    // 8.06% to 0.96% then. The seed sat in the title's own settings, where All Core Settings
+    // could neither show where it came from nor take it back, and it was blamed for black screens
+    // on 09-29 that were really a broken build (a cpu_thread layout change against the PPU cache).
+    // Off is still right for this title; it lives in ConfigDatabase.LOCAL_OVERRIDES now, as a
+    // database entry with its own per-game toggle. This only cleans up installs that got the seed.
     private const val KEY_WOS_RSV_SEED_UNDONE = "config.migrated.wosRsvSeedUndone"
     // The VRAM limit is a hard heap cap, not an eviction threshold; too low fails allocations.
     private const val KEY_VRAM_LIMIT_1024 = "config.migrated.vramCap2048b"
