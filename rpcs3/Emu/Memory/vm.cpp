@@ -556,11 +556,25 @@ namespace vm
 			return !(value && value[0] == '0');
 		}();
 
+		// The fix the measurement pointed at. Web of Shadows, 112 s: the waited-on PPU spent 77% of
+		// these waits runnable but queued for a CPU, 20% running, 3% asleep, boost on throughout.
+		// The cores it is queued behind are the SPU threads, this spinning waiter among them. Past
+		// the long-wait mark the waiter yields its core to the scheduler on every check instead of
+		// spinning, so a PPU queued on it can run. Short waits spin exactly as before, and a game
+		// that never waits this long never gets here. ARMSX3_WLOCK_YIELD=0 turns it off, for an A/B.
+		const bool g_wlock_yield = []
+		{
+			const char* value = std::getenv("ARMSX3_WLOCK_YIELD");
+			return !(value && value[0] == '0');
+		}();
+
 		void report_long_waits(u64 now)
 		{
 			u64 last = g_wlock_stats.last_report.load(std::memory_order_relaxed);
 
-			if (last && now - last < 1'000'000'000ull)
+			// now <= last: another thread reported after this wait was clocked. Without the check the
+			// subtraction wraps, the report fires, and its window reads 18446744073.7 s.
+			if (last && (now <= last || now - last < 1'000'000'000ull))
 			{
 				return;
 			}
@@ -589,11 +603,11 @@ namespace vm
 
 			vm_log.notice("writer_lock: %u long PPU waits in %.1fs (~%u barriers), %.2f ms in all, longest %.2f ms"
 				" (PPU 0x%x, pc 0x%x -> 0x%x). The waited-on PPUs ran %.2f ms, queued for a CPU %.2f ms, slept %.2f ms."
-				" Boost %s.",
+				" Boost %s, yield %s.",
 				waits, (now - last) / 1e9, barriers, total_ms, max / 1e6,
 				static_cast<u32>(detail >> 32), pc0, static_cast<u32>(detail),
 				ran / 1e6, queued / 1e6, std::max(0., total_ms - ran / 1e6 - queued / 1e6),
-				g_wlock_boost ? "on" : "off");
+				g_wlock_boost ? "on" : "off", g_wlock_yield ? "on" : "off");
 		}
 
 		void note_long_wait(const cpu_thread& ppu, u64 t0, u32 tid, bool sched0, u64 run0, u64 queued0, u32 pc0)
@@ -857,6 +871,15 @@ namespace vm
 							vm_log.error("vm::writer_lock waiting for a PPU thread to reach cpu_flag::wait: id=0x%x '%s' state=0x%x, lock addr=0x%x size=0x%x",
 								ptr->id, ptr->get_name(), +ptr->state, addr, size);
 						}
+
+#ifdef ANDROID
+						// See g_wlock_yield.
+						if (g_wlock_yield && spins >= k_clocked_after_spins) [[unlikely]]
+						{
+							std::this_thread::yield();
+							continue;
+						}
+#endif
 
 #if defined(ARCH_ARM64)
 						// utils::pause() is ISB on arm64 -- an instruction synchronisation
