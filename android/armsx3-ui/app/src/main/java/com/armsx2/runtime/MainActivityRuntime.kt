@@ -3188,6 +3188,9 @@ open class MainActivityRuntime : ComponentActivity() {
         // block above on purpose: naming a preset hands input to LibraryKeyboard, and it
         // must keep it until it closes.
         if (com.armsx2.ui.common.ShaderParamsEditor.visible) {
+            // Except the phone's own volume keys, which are the system's with the editor up or
+            // not: the swallow-everything below left the volume stuck while it was open.
+            if (isVolumeKey(kc)) return false
             val editor = com.armsx2.ui.common.ShaderParamsEditor
             val down = event.action == KeyEvent.ACTION_DOWN
             when (kc) {
