@@ -482,14 +482,22 @@ namespace vm
 		// Counters are plain relaxed atomics; this is a report, not a synchronisation point.
 		//
 		// The same threshold is where the waited-on PPU is boosted and the waiter starts yielding
-		// (g_wlock_yield). 4096 in 47d53f675, which cut the seconds with a 10 ms+ wait from 47% to 12%
+		// (wlock_yield). 4096 in 47d53f675, which cut the seconds with a 10 ms+ wait from 47% to 12%
 		// in Web of Shadows; 1024 hands the core over sooner. ARMSX3_WLOCK_YIELD_SPINS=<n> sets it.
-		const u64 k_clocked_after_spins = []
+		//
+		// These switches are read on first use, not at load. driver_env.txt is applied after the core
+		// library is loaded, so an initialiser at namespace scope runs first and never sees it.
+		u64 wlock_after_spins()
 		{
-			const char* value = std::getenv("ARMSX3_WLOCK_YIELD_SPINS");
-			const u64 spins = value ? std::strtoull(value, nullptr, 10) : 0;
-			return spins ? spins : u64{1024};
-		}();
+			static const u64 spins = []
+			{
+				const char* value = std::getenv("ARMSX3_WLOCK_YIELD_SPINS");
+				const u64 n = value ? std::strtoull(value, nullptr, 10) : 0;
+				return n ? n : u64{1024};
+			}();
+
+			return spins;
+		}
 
 		// The waited-on PPU's schedstat is read for 1 long wait in 16. Reading it costs an open, a
 		// read and a close of a /proc file at each end of the wait, and the second pair runs with
@@ -565,11 +573,16 @@ namespace vm
 		// parked, that PPU gets the RSX thread's weighting (nice -8) so the scheduler runs it ahead of
 		// the spinning SPU threads, which are all at nice 0; it goes back to 0 when it parks. It is
 		// the one thread everybody is waiting on. ARMSX3_WLOCK_BOOST=0 turns it off, for an A/B.
-		const bool g_wlock_boost = []
+		bool wlock_boost()
 		{
-			const char* value = std::getenv("ARMSX3_WLOCK_BOOST");
-			return !(value && value[0] == '0');
-		}();
+			static const bool on = []
+			{
+				const char* value = std::getenv("ARMSX3_WLOCK_BOOST");
+				return !(value && value[0] == '0');
+			}();
+
+			return on;
+		}
 
 		// The fix the measurement pointed at. Web of Shadows, 112 s: the waited-on PPU spent 77% of
 		// these waits runnable but queued for a CPU, 20% running, 3% asleep, boost on throughout.
@@ -577,11 +590,16 @@ namespace vm
 		// the long-wait mark the waiter yields its core to the scheduler on every check instead of
 		// spinning, so a PPU queued on it can run. Short waits spin exactly as before, and a game
 		// that never waits this long never gets here. ARMSX3_WLOCK_YIELD=0 turns it off, for an A/B.
-		const bool g_wlock_yield = []
+		bool wlock_yield()
 		{
-			const char* value = std::getenv("ARMSX3_WLOCK_YIELD");
-			return !(value && value[0] == '0');
-		}();
+			static const bool on = []
+			{
+				const char* value = std::getenv("ARMSX3_WLOCK_YIELD");
+				return !(value && value[0] == '0');
+			}();
+
+			return on;
+		}
 
 		void report_long_waits(u64 now)
 		{
@@ -626,7 +644,7 @@ namespace vm
 				waits, (now - last) / 1e9, barriers, total_ms, max / 1e6,
 				static_cast<u32>(detail >> 32), pc0, static_cast<u32>(detail),
 				sampled_ms, ran_pct, queued_pct, sampled ? std::max(0., 100. - ran_pct - queued_pct) : 0.,
-				g_wlock_boost ? "on" : "off", g_wlock_yield ? "on" : "off", k_clocked_after_spins);
+				wlock_boost() ? "on" : "off", wlock_yield() ? "on" : "off", wlock_after_spins());
 		}
 
 		void note_long_wait(const cpu_thread& ppu, u64 t0, u32 tid, bool sched0, u64 run0, u64 queued0, u32 pc0)
@@ -849,7 +867,9 @@ namespace vm
 				if (auto ptr = +*lock)
 				{
 #ifdef ANDROID
-					// See wlock_wait_stats and g_wlock_boost.
+					// See wlock_wait_stats, wlock_boost and wlock_yield.
+					const u64 after_spins = wlock_after_spins();
+					const bool boost = wlock_boost(), yield = wlock_yield();
 					u64 wait_t0 = 0, run0 = 0, queued0 = 0;
 					u32 wait_tid = 0, wait_pc0 = 0;
 					bool sched0 = false, boosted = false;
@@ -858,7 +878,7 @@ namespace vm
 					for (u64 spins = 0; !(ptr->state & cpu_flag::wait); spins++)
 					{
 #ifdef ANDROID
-						if (spins == k_clocked_after_spins) [[unlikely]]
+						if (spins == after_spins) [[unlikely]]
 						{
 							wait_t0 = steady_ns();
 							wait_tid = native_tid_of(ptr);
@@ -871,7 +891,7 @@ namespace vm
 							// Only from the normal weighting: a PPU at another priority set it itself.
 							errno = 0;
 
-							if (g_wlock_boost && wait_tid && getpriority(PRIO_PROCESS, wait_tid) == 0 && !errno)
+							if (boost && wait_tid && getpriority(PRIO_PROCESS, wait_tid) == 0 && !errno)
 							{
 								boosted = setpriority(PRIO_PROCESS, wait_tid, -8) == 0;
 							}
@@ -896,8 +916,8 @@ namespace vm
 						}
 
 #ifdef ANDROID
-						// See g_wlock_yield.
-						if (g_wlock_yield && spins >= k_clocked_after_spins) [[unlikely]]
+						// See wlock_yield.
+						if (yield && spins >= after_spins) [[unlikely]]
 						{
 							std::this_thread::yield();
 							continue;
