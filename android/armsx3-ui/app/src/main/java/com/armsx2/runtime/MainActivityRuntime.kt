@@ -4869,10 +4869,12 @@ open class MainActivityRuntime : ComponentActivity() {
      *  from the sensor callback on the main looper. [gx],[gy] are the signed,
      *  smoothed gyro vector in [-1,1]; (0,0) on settle/stop releases it. The gyro
      *  sums with whichever physical stick shares its axis (aim -> right, or the
-     *  user-chosen left for RE4-style games; steer -> left) so coarse stick aim
-     *  and fine gyro adjustment work together instead of clobbering each other. */
+     *  user-chosen left for RE4-style games; steer -> its own choice, left by
+     *  default) so coarse stick aim and fine gyro adjustment work together
+     *  instead of clobbering each other. */
     fun onGyroAnalog(mode: Int, gx: Float, gy: Float) {
-        gyroCombineLeft = mode == 2 ||
+        gyroCombineLeft =
+            (mode == 2 && ControllerMappings.gyroSteerStick() == ControllerMappings.GYRO_STICK_LEFT) ||
             (mode == 1 && ControllerMappings.gyroAimStick() == ControllerMappings.GYRO_STICK_LEFT)
         gyroVecX = gx; gyroVecY = gy
         gyroCombineActive = gx != 0f || gy != 0f
