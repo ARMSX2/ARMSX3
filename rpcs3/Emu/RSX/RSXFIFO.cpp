@@ -522,7 +522,8 @@ namespace rsx
 
 			if (!count)
 			{
-				m_ctrl->get.release(m_published_get = (m_fifo_pos += 4));
+				m_fifo_pos += 4;
+				sync_get_force();
 				data.reg = FIFO_NOP;
 				return;
 			}
