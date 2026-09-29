@@ -480,13 +480,28 @@ namespace vm
 		//
 		// Only waits past a spin threshold are clocked, so the common short wait costs nothing extra.
 		// Counters are plain relaxed atomics; this is a report, not a synchronisation point.
-		constexpr u64 k_clocked_after_spins = 4096;
+		//
+		// The same threshold is where the waited-on PPU is boosted and the waiter starts yielding
+		// (g_wlock_yield). 4096 in 47d53f675, which cut the seconds with a 10 ms+ wait from 47% to 12%
+		// in Web of Shadows; 1024 hands the core over sooner. ARMSX3_WLOCK_YIELD_SPINS=<n> sets it.
+		const u64 k_clocked_after_spins = []
+		{
+			const char* value = std::getenv("ARMSX3_WLOCK_YIELD_SPINS");
+			const u64 spins = value ? std::strtoull(value, nullptr, 10) : 0;
+			return spins ? spins : u64{1024};
+		}();
+
+		// The waited-on PPU's schedstat is read for 1 long wait in 16. Reading it costs an open, a
+		// read and a close of a /proc file at each end of the wait, and the second pair runs with
+		// every other PPU still parked behind this barrier; one in 16 is plenty for the breakdown.
+		constexpr u32 k_schedstat_sample_mask = 15;
 
 		struct wlock_wait_stats
 		{
 			std::atomic<u64> barriers{0};
 			std::atomic<u64> waits{0};
 			std::atomic<u64> total_ns{0};
+			std::atomic<u64> sampled_ns{0}; // the total_ns of the waits whose schedstat was read
 			std::atomic<u64> ran_ns{0};
 			std::atomic<u64> queued_ns{0};
 			std::atomic<u64> max_ns{0};
@@ -587,6 +602,7 @@ namespace vm
 			const u64 barriers = g_wlock_stats.barriers.exchange(0, std::memory_order_relaxed);
 			const u64 waits = g_wlock_stats.waits.exchange(0, std::memory_order_relaxed);
 			const u64 total = g_wlock_stats.total_ns.exchange(0, std::memory_order_relaxed);
+			const u64 sampled = g_wlock_stats.sampled_ns.exchange(0, std::memory_order_relaxed);
 			const u64 ran = g_wlock_stats.ran_ns.exchange(0, std::memory_order_relaxed);
 			const u64 queued = g_wlock_stats.queued_ns.exchange(0, std::memory_order_relaxed);
 			const u64 max = g_wlock_stats.max_ns.exchange(0, std::memory_order_relaxed);
@@ -600,14 +616,17 @@ namespace vm
 			}
 
 			const f64 total_ms = total / 1e6;
+			const f64 sampled_ms = sampled / 1e6;
+			const f64 ran_pct = sampled ? 100. * ran / sampled : 0.;
+			const f64 queued_pct = sampled ? 100. * queued / sampled : 0.;
 
 			vm_log.notice("writer_lock: %u long PPU waits in %.1fs (~%u barriers), %.2f ms in all, longest %.2f ms"
-				" (PPU 0x%x, pc 0x%x -> 0x%x). The waited-on PPUs ran %.2f ms, queued for a CPU %.2f ms, slept %.2f ms."
-				" Boost %s, yield %s.",
+				" (PPU 0x%x, pc 0x%x -> 0x%x). Sampled %.2f ms: the waited-on PPU ran %.0f%%, queued for a CPU %.0f%%, slept %.0f%%."
+				" Boost %s, yield %s, after %u spins.",
 				waits, (now - last) / 1e9, barriers, total_ms, max / 1e6,
 				static_cast<u32>(detail >> 32), pc0, static_cast<u32>(detail),
-				ran / 1e6, queued / 1e6, std::max(0., total_ms - ran / 1e6 - queued / 1e6),
-				g_wlock_boost ? "on" : "off", g_wlock_yield ? "on" : "off");
+				sampled_ms, ran_pct, queued_pct, sampled ? std::max(0., 100. - ran_pct - queued_pct) : 0.,
+				g_wlock_boost ? "on" : "off", g_wlock_yield ? "on" : "off", k_clocked_after_spins);
 		}
 
 		void note_long_wait(const cpu_thread& ppu, u64 t0, u32 tid, bool sched0, u64 run0, u64 queued0, u32 pc0)
@@ -619,6 +638,7 @@ namespace vm
 
 			if (sched0 && read_schedstat(tid, run1, queued1))
 			{
+				g_wlock_stats.sampled_ns.fetch_add(dt, std::memory_order_relaxed);
 				g_wlock_stats.ran_ns.fetch_add(std::min(dt, run1 - run0), std::memory_order_relaxed);
 				g_wlock_stats.queued_ns.fetch_add(std::min(dt, queued1 - queued0), std::memory_order_relaxed);
 			}
@@ -843,7 +863,10 @@ namespace vm
 							wait_t0 = steady_ns();
 							wait_tid = native_tid_of(ptr);
 							wait_pc0 = ptr->get_pc();
-							sched0 = wait_tid && read_schedstat(wait_tid, run0, queued0);
+
+							// See k_schedstat_sample_mask.
+							thread_local u32 s_long_waits = 0;
+							sched0 = (++s_long_waits & k_schedstat_sample_mask) == 0 && wait_tid && read_schedstat(wait_tid, run0, queued0);
 
 							// Only from the normal weighting: a PPU at another priority set it itself.
 							errno = 0;
