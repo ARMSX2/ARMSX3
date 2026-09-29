@@ -29,10 +29,13 @@
 #include "Utilities/File.h"
 
 #include "util/types.hpp"
+#include "util/logs.hpp"
 
 #include "LosslessDll.h"
 #include "../vkutils/device.h"
 #include "LsfgTranslate.h"
+
+LOG_CHANNEL(framegen_log, "FRAMEGEN");
 
 namespace VideoCore::FrameGen {
 
@@ -691,9 +694,15 @@ LosslessStatus LoadShaderModules(ShaderModules& out_modules, bool allow_fp16, bo
         .flags = flags,
         .reserved = 0,
     };
+    // PORT: Eden returned CacheUnusable here, which threw away shaders that had just translated
+    // perfectly and turned frame generation off. Eden's cache lives in a folder it owns, where a
+    // write cannot fail; ours can live on an SD card whose filesystem refuses what a normal one
+    // allows (ARMSX2 #626: a Retroid Pocket Flip 2 reports flock ENOSYS there). Without a cache
+    // the translation just runs again next launch, which is slower and nothing worse, so the
+    // shaders are used either way.
     if (!WriteShaderCache(cache_path, header, out_modules)) {
         void(fs::remove_file(cache_path));
-        return LosslessStatus::CacheUnusable;
+        framegen_log.warning("Could not write the shader cache '%s'; using the shaders uncached.", cache_path);
     }
 
     return LosslessStatus::Ok;

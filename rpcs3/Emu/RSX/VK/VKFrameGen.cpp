@@ -80,6 +80,8 @@ namespace vk::frame_gen
 		// cleared. ARMSX2 memoises the same check for the same reason (GSLsfg.cpp:53-58).
 		std::atomic<bool> g_shader_probe_done{false};
 		std::atomic<int> g_shader_probe_result{0};   // the cache file has been looked for (found or not)
+		// Why the probe found no shaders: a LosslessStatus, or -1 for a load that succeeded empty.
+		std::atomic<int> g_shader_probe_status{0};
 
 		// Every shader name the shim extracts, in its order.
 		//
@@ -495,9 +497,11 @@ namespace vk::frame_gen
 		// writer, LsfgShaders, and this probe -- and any two disagreeing breaks the cache.
 		const bool fp16 = VideoCore::FrameGen::Float16Allowed();
 
-		if (VideoCore::FrameGen::LoadShaderModules(probe, fp16, fp16) !=
-			VideoCore::FrameGen::LosslessStatus::Ok || probe.empty())
+		if (const auto status = VideoCore::FrameGen::LoadShaderModules(probe, fp16, fp16);
+			status != VideoCore::FrameGen::LosslessStatus::Ok || probe.empty())
 		{
+			g_shader_probe_status.store(probe.empty() && status == VideoCore::FrameGen::LosslessStatus::Ok ? -1 : static_cast<int>(status),
+				std::memory_order_relaxed);
 			g_shader_probe_result.store(0, std::memory_order_relaxed);
 			g_shader_probe_done.store(true, std::memory_order_release);
 			return 0;
@@ -1100,19 +1104,41 @@ namespace vk::frame_gen
 			return {};
 		}
 
+		// Each failure says why on the line itself, where it used to go only to the log. A tester
+		// spent an evening on "no usable shaders" (ARMSX2 #626) because he had picked
+		// LosslessScaling.dll, the .NET app, instead of Lossless.dll; one look at a reason would
+		// have told him.
 		if (!available())
 		{
-			return "LSFG: unavailable";
+			const std::string why = unavailable_reason();
+			return why.empty() ? std::string("LSFG: unavailable") : fmt::format("LSFG: unavailable (%s)", why);
 		}
 
 		if (g_disabled)
 		{
-			return "LSFG: failed";
+			const std::string why = last_error();
+			return why.empty() ? std::string("LSFG: failed") : fmt::format("LSFG: failed (%s)", why);
 		}
 
 		if (shader_count() <= 0)
 		{
-			return "LSFG: no shaders";
+			using VideoCore::FrameGen::LosslessStatus;
+
+			const std::string_view why = [](int status) -> std::string_view
+			{
+				switch (status)
+				{
+				case static_cast<int>(LosslessStatus::NotInstalled): return "no Lossless.dll";
+				case static_cast<int>(LosslessStatus::UnreadableFile): return "Lossless.dll unreadable";
+				case static_cast<int>(LosslessStatus::NotPortableExecutable): return "not a DLL";
+				case static_cast<int>(LosslessStatus::MissingShaders): return "no usable shaders in this Lossless.dll";
+				case static_cast<int>(LosslessStatus::TranslationFailed): return "shader translation failed";
+				case -1: return "the shader cache is empty";
+				default: return "shader cache unusable";
+				}
+			}(g_shader_probe_status.load(std::memory_order_relaxed));
+
+			return fmt::format("LSFG: no shaders (%s)", why);
 		}
 
 		if (const f32 fps = g_display_fps.load(); fps > 0.f)
