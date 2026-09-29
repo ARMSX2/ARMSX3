@@ -577,6 +577,8 @@
  "pad.macro.frequency.label": "周波数",
  "pad.macro.notSet": "未設定",
  "pad.macro.pressure.description": "このマクロが感圧ボタン（方向キー、○×△□ボタン、L1/R1/L2/R2）を押す強さです。同じボタンに強さの違うマクロを2つ用意すると、たとえば2段階のズームに使えます。",
+ "pad.macro.inOrder.label": "順番に押す",
+ "pad.macro.inOrder.description": "ボタンを同時ではなく、選んだ順に 1 つずつ押します。離すときは同時です。頻度が「ホールド」のときのみ有効です。",
  "pad.macro.pressure.full": "全押し",
  "pad.macro.pressure.label": "押す強さ",
  "pad.macroConfig.intro": "このマクロが押すボタンを一緒にタップします。",

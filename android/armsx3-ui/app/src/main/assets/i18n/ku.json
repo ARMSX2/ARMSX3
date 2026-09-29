@@ -577,6 +577,8 @@
  "pad.macro.frequency.label": "Pircarînî",
  "pad.macro.notSet": "Not set",
  "pad.macro.pressure.description": "How hard this macro presses its pressure-sensitive buttons (D-pad, face buttons, L1/R1/L2/R2). Two macros for the same button at different pressures give you, say, two zoom levels.",
+ "pad.macro.inOrder.label": "Bi rêzê bitikîne",
+ "pad.macro.inOrder.description": "Bişkokan li şûna hemûyan bi hev re, yek li pey yekê û bi rêza ku te hilbijartine ditikîne. Hemû bi hev re têne berdan. Tenê dema Frekans li ser \"Bigire\" be.",
  "pad.macro.pressure.full": "Full press",
  "pad.macro.pressure.label": "Pressure",
  "pad.macroConfig.intro": "Bişkojkên ku divê ev makro bi hev re bikişîne bikirtînin.",

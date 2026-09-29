@@ -577,6 +577,8 @@
  "pad.macro.frequency.label": "Frekans",
  "pad.macro.notSet": "Ayarlanmadı",
  "pad.macro.pressure.description": "Bu makronun basınca duyarlı düğmelerine ne kadar sert bastığı (yön tuşları, eylem düğmeleri, L1/R1/L2/R2). Aynı düğme için farklı basınçlarda iki makro, örneğin iki yakınlaştırma seviyesi sağlar.",
+ "pad.macro.inOrder.label": "Sırayla bas",
+ "pad.macro.inOrder.description": "Düğmelere hepsine birden basmak yerine, seçtiğiniz sırayla tek tek basar. Hepsi birlikte bırakılır. Yalnızca Sıklık \"Basılı Tut\" iken.",
  "pad.macro.pressure.full": "Tam basış",
  "pad.macro.pressure.label": "Basınç",
  "pad.macroConfig.intro": "Bu makronun birlikte basması gereken düğmelere dokunun.",

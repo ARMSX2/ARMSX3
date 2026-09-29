@@ -577,6 +577,8 @@
  "pad.macro.frequency.label": "Częstotliwość",
  "pad.macro.notSet": "Nie ustawiono",
  "pad.macro.pressure.description": "Jak mocno to makro naciska swoje przyciski czułe na nacisk (krzyżak, przyciski akcji, L1/R1/L2/R2). Dwa makra dla tego samego przycisku z różnym naciskiem dają na przykład dwa poziomy przybliżenia.",
+ "pad.macro.inOrder.label": "Naciskaj po kolei",
+ "pad.macro.inOrder.description": "Naciska przyciski jeden po drugim, w kolejności, w jakiej je wybrano, zamiast wszystkich naraz. Puszcza je razem. Tylko gdy Częstotliwość to „Przytrzymanie”.",
  "pad.macro.pressure.full": "Pełny nacisk",
  "pad.macro.pressure.label": "Siła nacisku",
  "pad.macroConfig.intro": "Stuknij jednocześnie przyciski, które to makro powinno nacisnąć.",

@@ -1377,8 +1377,11 @@ internal fun MacrosSection(
         )
         listOf(TouchButtonId.MACRO1, TouchButtonId.MACRO2, TouchButtonId.MACRO3, TouchButtonId.MACRO4).forEach { mid ->
             val buttons = TouchControls.macroCodes(mid)
+            // Two or more real buttons: only then does an order mean anything (ARMSX2 #746).
+            val canOrder = buttons.count { it != TouchControls.MACRO_CODE_PRESSURE } >= 2
+            val inOrder = canOrder && TouchControls.macroInOrder(mid)
             val summary = if (buttons.isEmpty()) str("pad.macro.notSet")
-            else buttons.joinToString(" + ") { TouchControls.macroTargetFor(it)?.label ?: "?" }
+            else buttons.joinToString(if (inOrder) " → " else " + ") { TouchControls.macroTargetFor(it)?.label ?: "?" }
             val physCode = TouchControls.macroPhysicalCode(mid)
             val capturingThis = macroCapture?.value == mid
             Row(
@@ -1472,6 +1475,19 @@ internal fun MacrosSection(
                     onChange = { TouchControls.setMacroPressure(mid, it) },
                 )
             }
+            // Press in order (ARMSX2 #746): the buttons go down one after another, in the order
+            // they were picked in the editor, for inputs that need one held before the next arrives.
+            // Its own controller id per macro: the label-based default would be the same for M1-M4,
+            // and the D-pad would then highlight every copy and toggle whichever registered last.
+            if (canOrder) {
+                ToggleRow(
+                    label = str("pad.macro.inOrder.label"),
+                    value = inOrder,
+                    description = str("pad.macro.inOrder.description"),
+                    controllerId = "pad-macro-inorder-${mid.name}",
+                    onChange = { TouchControls.setMacroInOrder(mid, it) },
+                )
+            }
             SettingsDivider()
         }
         macroDialogFor.value?.let { mid ->
@@ -1507,8 +1523,13 @@ private fun MacroConfigDialog(
                     color = Color(0xFFBBBBBB), fontSize = 15.sp,
                 )
                 Spacer(Modifier.height(8.dp))
+                // With Press in order on, number the picked buttons, since the order is now
+                // what the macro does (ARMSX2 #746).
+                val numbered = TouchControls.macroInOrder(macroId)
+                val sequence = selected.filter { it != TouchControls.MACRO_CODE_PRESSURE }
                 TouchControls.macroAssignableTargets.forEach { t ->
                     val on = t.code in selected
+                    val step = if (numbered) sequence.indexOf(t.code) else -1
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -1523,7 +1544,10 @@ private fun MacroConfigDialog(
                             fontSize = 16.sp,
                         )
                         Spacer(Modifier.width(12.dp))
-                        Text(t.label, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp)
+                        Text(
+                            if (step >= 0) "${step + 1}. ${t.label}" else t.label,
+                            color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp,
+                        )
                     }
                 }
             }
