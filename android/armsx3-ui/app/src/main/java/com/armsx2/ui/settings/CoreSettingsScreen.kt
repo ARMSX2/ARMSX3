@@ -259,6 +259,7 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
         val reset = runCatching {
             ConfigStore.resetFieldsWriting(scope, serial, settings.map { it.path })
         }.getOrDefault(emptySet())
+        android.util.Log.i("ARMSX3-Override", "restore [$scope ${serial.orEmpty()}] ${settings.map { it.path }} -> reset fields $reset")
         if (reset.isNotEmpty()) InGameOverlay.reloadSettings()
         // Defaults first, curated second: applyTo below rewrites every node it owns, so the
         // only ones this actually decides are the nodes no curated screen touches.
@@ -296,6 +297,7 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
         // a node set from the in-game menu belongs to the title being played, not to the
         // next game that boots.
         runCatching { CoreSettingOverrides.record(scope, serial, setting.path, encoded) }
+        android.util.Log.i("ARMSX3-Override", "record [$scope ${serial.orEmpty()}] ${setting.path} = $encoded")
         revision++
     }
 

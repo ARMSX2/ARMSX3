@@ -93,20 +93,12 @@ object ConfigStore {
     // The relaxed-ZCULL default was recorded as a raw core override as well, and the OFF
     // migration above only ever corrected the curated field.
     private const val KEY_RELAXED_ZCULL_OVERRIDE_PURGED = "config.migrated.relaxedZcullOverridePurged"
-    // Per-title core settings that differ from the safe global default, seeded once into the
-    // title's own override so the global stays conservative. Keyed by serial; other regions of
-    // the same game need their own entry.
-    private const val KEY_PER_GAME_SEED = "config.migrated.perGameSeedV1"
-    private val PER_GAME_SEED: Map<String, Map<String, Any>> = mapOf(
-        // Spider-Man: Web of Shadows. Its SPURS reservation traffic serialises behind the global
-        // exclusive vm::writer_lock taken by every reservation_op, which no amount of CPU can
-        // help: measured all six SPU threads and several PPUs yielding at the same rate, 18.8% of
-        // total CPU in sched_yield. Turning accurate reservations off routes SPURS through the
-        // lock-free path in SPUThread.cpp and dropped vm::writer_lock from 8.06% to 0.96%.
-        //
-        // Deliberately per-game and not a global default. It is off-spec, upstream defaults it
-        // on, and Sonic Unleashed fails EARLIER with it off, so it is not safe to apply blindly.
-        "BLUS30218" to mapOf("ps3AccurateSpuRsv" to false),    )
+    // Takes back the one per-title seed there was: Accurate SPU Reservations off for Spider-Man:
+    // Web of Shadows (BLUS30218), seeded once in August because it cut vm::writer_lock time from
+    // 8.06% to 0.96% then. Off now leaves the game on a black screen: cellSpurs runs forced HLE
+    // and the game never starts its SPURS kernel threads (three boots in a row on 09-29, zero
+    // CellSpursKernel lines each). The seed is gone, so this only cleans up installs that got it.
+    private const val KEY_WOS_RSV_SEED_UNDONE = "config.migrated.wosRsvSeedUndone"
     // The VRAM limit is a hard heap cap, not an eviction threshold; too low fails allocations.
     private const val KEY_VRAM_LIMIT_1024 = "config.migrated.vramCap2048b"
     private const val KEY_AFFINITY_ON = "config.migrated.affinityScheduler"
@@ -311,23 +303,18 @@ object ConfigStore {
             MainActivityRuntime.prefs.edit { putBoolean(KEY_RELAXED_ZCULL_OFF, true) }
         }
 
-        // Seed the per-title core settings once. Only fields the title does not already carry
-        // are written, so a deliberate change is never overwritten.
-        if (!MainActivityRuntime.prefs.getBoolean(KEY_PER_GAME_SEED, false)) {
+        // Web of Shadows' seeded Accurate SPU Reservations off, taken back out of its per-game
+        // settings so it follows global (on). Only an off value goes; on is left alone.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_WOS_RSV_SEED_UNDONE, false)) {
             runCatching {
-                for ((serial, fields) in PER_GAME_SEED) {
-                    val existing = loadOverrides(serial) ?: JSONObject()
-                    var changed = false
-                    for ((key, value) in fields) {
-                        if (!existing.has(key)) {
-                            existing.put(key, value)
-                            changed = true
-                        }
-                    }
-                    if (changed) saveOverrides(serial, existing)
+                val serial = "BLUS30218"
+                val stored = loadOverrides(serial)
+                if (stored != null && stored.has("ps3AccurateSpuRsv") && !stored.optBoolean("ps3AccurateSpuRsv", true)) {
+                    stored.remove("ps3AccurateSpuRsv")
+                    if (stored.length() == 0) clearOverrides(serial) else saveOverrides(serial, stored)
                 }
             }
-            MainActivityRuntime.prefs.edit { putBoolean(KEY_PER_GAME_SEED, true) }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_WOS_RSV_SEED_UNDONE, true) }
         }
 
         // Bring stored VRAM caps up to 3072.
@@ -369,20 +356,18 @@ object ConfigStore {
             MainActivityRuntime.prefs.edit { putBoolean(KEY_TUNING_OVERRIDES_PURGED, true) }
         }
 
-        // Drop per-title Accurate SPU Reservations values, except the one title that needs it.
+        // Drop per-title Accurate SPU Reservations values.
         //
         // Turning it off was tried per-title as well as globally while debugging 0.5, and off is
         // off-spec: it forces the SPURS scheduler to HLE and bypasses the reservation lock, so a
         // title left that way desyncs and its SPU threads end up executing whatever they land on.
         // Batman: Arkham City carried it off this way and died with "Unknown STOP code: 0x0".
         //
-        // Web of Shadows keeps it, since it is the title the setting was measured on and it is
-        // the one that gains from it.
+        // Web of Shadows was exempt here once; KEY_WOS_RSV_SEED_UNDONE above takes its value out.
         if (!MainActivityRuntime.prefs.getBoolean(KEY_PERGAME_RSV_CLEARED, false)) {
             runCatching {
                 for (key in MainActivityRuntime.prefs.all.keys.toList()) {
                     if (!key.startsWith("config.game.")) continue
-                    if (key == keyForGame("BLUS30218")) continue
 
                     val serial = key.removePrefix("config.game.")
                     val stored = loadOverrides(serial) ?: continue
@@ -591,8 +576,7 @@ object ConfigStore {
             // marks itself done, so anything recorded afterwards survived it.
             //
             // Global scope ONLY, deliberately. This is correcting the baseline everyone inherited,
-            // not overruling a per-title decision -- Web of Shadows (BLUS30218) is kept off on
-            // purpose, and forgetEverywhere() would take that with it.
+            // not overruling a per-title decision.
             runCatching {
                 CoreSettingOverrides.forget(SettingsScope.Global, null, "Core@@Accurate SPU Reservations")
             }
