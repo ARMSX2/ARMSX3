@@ -553,15 +553,43 @@ object CustomCovers {
 
     private fun dir(context: Context): File = File(coversRoot(context), "custom")
 
-    private fun filenameStem(game: GameInfo): String? =
-        game.uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':')
-            ?.substringBeforeLast('.')?.trim()?.takeIf { it.isNotEmpty() }
+    /**
+     * The entry's own name: its file name without the extension, or its folder's name.
+     *
+     * It is the first key (see [keys]), so it must not be one that other games share, and a few
+     * PS3 entries would otherwise share one:
+     *  - Every game on a multi-game image is the same file, told apart only by the URI fragment,
+     *    and every folder disc names its extra games PS3_GM01, PS3_GM02 and so on. Both get the
+     *    disc's name in front, as "Collection_PS3_GM01"; a PS3_GAME listed on its own likewise.
+     *  - A folder has no extension to drop: "F.E.A.R." and "F.E.A.R. 2" must not both become
+     *    "F.E.A.R".
+     *  - EBOOT.BIN names nothing, so it is no key at all.
+     * The path is split whole rather than taking its last segment, since a picked folder's
+     * document URI keeps its parents in that one segment ("primary:PS3/Collection/PS3_GM01").
+     */
+    private fun filenameStem(game: GameInfo): String? {
+        val parts = game.uri.path?.split('/')
+            ?.map { it.substringAfterLast(':').trim() }?.filter { it.isNotEmpty() } ?: return null
+        val leaf = parts.lastOrNull() ?: return null
+        val stem = (if (game.extension.equals("FOLDER", ignoreCase = true)) leaf else leaf.substringBeforeLast('.'))
+            .trim().takeIf { it.isNotEmpty() && !it.equals("EBOOT", ignoreCase = true) } ?: return null
+        game.discGameDir?.let { return "${stem}_$it" }
+        val parent = parts.getOrNull(parts.size - 2)
+        return if (parent != null && (leaf == "PS3_GAME" || DiscGames.isGameDir(leaf))) "${parent}_$leaf" else stem
+    }
 
-    /** Names the user might give the cover file, highest priority first. */
-    private fun keys(game: GameInfo): List<String> = buildList {
-        game.serial?.takeIf { it.isNotBlank() }?.let { add(it) }
-        filenameStem(game)?.let { add(it) }
-        game.title.takeIf { it.isNotBlank() }?.let { add(it) }
+    /** Names the user might give the cover file, highest priority first. The entry's own name
+     *  comes first: it is the one key two versions of a game don't share. Keyed by serial, a
+     *  retail dump and a modded copy of one game showed the same cover, and setting one changed
+     *  both (ARMSX2 #517). A cover named by serial still applies to every version that has none
+     *  of its own. A package is the exception: its cover is the game's, by serial, so it is still
+     *  there once the package is installed and gone. */
+    private fun keys(game: GameInfo): List<String> {
+        val serial = game.serial?.takeIf { it.isNotBlank() }
+        val stem = filenameStem(game)
+        val title = game.title.takeIf { it.isNotBlank() }
+        return if (game.extension.equals("PKG", ignoreCase = true)) listOfNotNull(serial, stem, title)
+        else listOfNotNull(stem, serial, title)
     }
 
     /** Load all custom covers as lowercased-stem -> File, in ONE directory
@@ -590,17 +618,18 @@ object CustomCovers {
      *  (does its own listing) — used off the scroll path. */
     fun fileFor(context: Context, game: GameInfo): File? = matchIn(loadAll(context), game)
 
-    /** Path the in-app picker writes to (serial if present, else ROM filename). */
-    private fun targetFor(context: Context, game: GameInfo): File {
-        val key = game.serial?.takeIf { it.isNotBlank() }
-            ?: filenameStem(game) ?: game.title.ifBlank { "cover" }
-        return File(dir(context), sanitize(key) + ".png")
-    }
+    /** Path the in-app picker writes to: the first of [keys], so the cover belongs to this entry
+     *  alone (a package's to its game). */
+    private fun targetFor(context: Context, game: GameInfo): File =
+        File(dir(context), sanitize(keys(game).firstOrNull() ?: "cover") + ".png")
 
-    /** Copy [source] in as [game]'s cover, replacing any prior one. */
+    /** Copy [source] in as [game]'s cover, replacing its own prior one in any format. Only its
+     *  own: the cover showing may be a serial-named one that other versions of the game use. */
     fun set(context: Context, game: GameInfo, source: Uri): Boolean = runCatching {
-        remove(context, game)
         val target = targetFor(context, game)
+        dir(context).listFiles()
+            ?.filter { it.isFile && it.nameWithoutExtension.equals(target.nameWithoutExtension, ignoreCase = true) }
+            ?.forEach { it.delete() }
         target.parentFile?.mkdirs()
         context.contentResolver.openInputStream(source)?.use { ins ->
             target.outputStream().use { outs -> ins.copyTo(outs) }
