@@ -1366,6 +1366,9 @@ private fun ControlsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
     // Sits with the touch layout because it's the same job: what the on-screen pad LOOKS
     // like, right after where it's laid out. Full-screen like Controller mapping.
     CompactAction(str("tab.skins"), "◈", Modifier.fillMaxWidth(), viewModel::openSkins)
+    Spacer(Modifier.height(6.dp))
+    // Hotkeys, under Skins: All Settings' Hotkeys page, opened straight over the game.
+    CompactAction(str("tab.hotkeys"), "⌘", Modifier.fillMaxWidth(), viewModel::openHotkeys)
     // Motion / gyroscope controls in-game (mode, sensitivity, smoothing, invert). Global scope
     // to match the rumble toggle above; the per-game scope lives in All Settings › Controls.
     com.armsx2.ui.settings.GyroSection()
