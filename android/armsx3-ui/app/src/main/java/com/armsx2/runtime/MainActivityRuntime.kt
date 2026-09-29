@@ -4098,7 +4098,8 @@ open class MainActivityRuntime : ComponentActivity() {
                 KeyEvent.KEYCODE_BUTTON_R2, port, axisC = rightTriggerExtraAxis(ev.deviceId))
             // Physical STICK DIRECTIONS bound to a PS2 control via the "(send)"
             // rows — e.g. R-Stick Down bound to send Square. The analog "(send)"
-            // targets contribute to the merge layer like every other writer.
+            // targets contribute to the merge layer like every other writer. A bound
+            // direction no longer drives its own stick direction too (dispatchStick).
             dispatchStickDirBindings(ev, port)
             // Single write per analog code per event, merged across ALL writers.
             flushAnalogAxes(port)
@@ -4116,6 +4117,11 @@ open class MainActivityRuntime : ComponentActivity() {
     // merge layer), thresholded for a digital one (change-tracked per code so we
     // only write edges, like dispatchDpadCombined).
     private val stickDirDigitalHeld = Array(8) { HashSet<Int>() } // per unified pad slot (multitap)
+
+    /** Whether this physical stick direction is bound to a pad control in Button mapping. */
+    private fun stickDirBound(left: Boolean, dir: ControllerMappings.StickDir, port: Int): Boolean =
+        ControllerMappings.targetForPhysical(ControllerMappings.stickHotkeyKeyCode(left, dir), port) != null
+
     private fun dispatchStickDirBindings(ev: MotionEvent, port: Int) {
         for (left in booleanArrayOf(true, false)) {
             // Same axis correction the main dispatch applies (swap, then inverts).
@@ -4890,6 +4896,14 @@ open class MainActivityRuntime : ComponentActivity() {
         if (ControllerMappings.stickSwapXY(leftStick)) { val t = vx; vx = vy; vy = t }
         if (ControllerMappings.stickInvertX(leftStick)) vx = -vx
         if (ControllerMappings.stickInvertY(leftStick)) vy = -vy
+        // A direction bound in Button mapping (a "(send)" row) drives only that binding, in
+        // dispatchStickDirBindings. Driving the stick's own direction as well sent both at once:
+        // swapping the right stick's left and right that way put R-Left and R-Right on the same
+        // axis together, and they cancelled out (ARMSX2 #604).
+        if (vx < 0f && stickDirBound(leftStick, ControllerMappings.StickDir.LEFT, port)) vx = 0f
+        if (vx > 0f && stickDirBound(leftStick, ControllerMappings.StickDir.RIGHT, port)) vx = 0f
+        if (vy < 0f && stickDirBound(leftStick, ControllerMappings.StickDir.UP, port)) vy = 0f
+        if (vy > 0f && stickDirBound(leftStick, ControllerMappings.StickDir.DOWN, port)) vy = 0f
         when (mode) {
             ControllerMappings.StickMode.ANALOG -> {
                 // Radial shaping into the merge layer (flushAnalogAxes writes once
