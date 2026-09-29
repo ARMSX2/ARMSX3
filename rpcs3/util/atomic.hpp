@@ -69,6 +69,28 @@ namespace utils
 }
 #endif
 
+#if defined(ARCH_ARM64) && !defined(ARM_FEATURE_LSE2)
+#ifdef __linux__
+#include <sys/auxv.h>
+#endif
+
+namespace utils
+{
+	// HWCAP_USCAT (asm/hwcap.h): the kernel's name for FEAT_LSE2.
+	constexpr unsigned long arm64_hwcap_uscat = 1ul << 25;
+
+	// Whether this CPU has FEAT_LSE2, under which an aligned 16-byte LDP/STP is single-copy atomic
+	// (see atomic_storage<T, 16>). Read once as the library loads. A static initialiser that runs
+	// before it reads false, which only means the CASP path, and that is correct on every CPU.
+	__attribute__((visibility("hidden"))) inline const bool arm64_lse2 =
+#ifdef __linux__
+		(getauxval(AT_HWCAP) & arm64_hwcap_uscat) != 0;
+#else
+		false;
+#endif
+}
+#endif
+
 FORCE_INLINE void atomic_fence_consume()
 {
 #if defined(_M_X64) && defined(_MSC_VER)
@@ -1035,35 +1057,45 @@ struct atomic_storage<T, 16> : atomic_storage<T, 0>
 #endif
 	}
 #elif defined(ARCH_ARM64)
+	// ARMSX3: every one of these used to be an LDAXP/STLXP loop on Android, loads included. A load
+	// that ends in a store-exclusive writes the line, so a core that was only polling a value broke
+	// the exclusive pair of the core updating it, and that one retried over and over. Found and
+	// measured by JustWoody (RPCS3 issue #19611): 40% of rsx::thread in GTA IV sat on that retry
+	// branch. The LSE2 path never ran here: types.hpp keys it on __ARM_ARCH_8_4__ and friends, which
+	// the NDK's clang never defines, and our builds target armv8.1/8.2 anyway, since Snapdragon
+	// 865/888-class CPUs lack LSE2.
+	//
+	// So: CASP, which armv8.1 guarantees (LSE), for every read-modify-write on every CPU. And on a
+	// CPU whose kernel reports FEAT_LSE2, plain loads and stores, as upstream's LSE2 path has them.
+	// Picked at run time, so one APK, the Play Store's armv8.1 build included, serves both.
+
+	static inline bool lse2()
+	{
+#if defined(ARM_FEATURE_LSE2)
+		return true;
+#else
+		return utils::arm64_lse2;
+#endif
+	}
 
 	static inline T load(const T& dest)
 	{
-#if defined(ARM_FEATURE_LSE2)
-		u64 data[2];
-		__asm__ volatile("1:\n"
-			"ldp %x[data0], %x[data1], %[dest]\n"
-			"dmb ish\n"
-			: [data0] "=r"(data[0]), [data1] "=r"(data[1])
-			: [dest] "Q"(dest)
-			: "memory");
-		T result;
-		std::memcpy(&result, data, 16);
-		return result;
-#else
-		u32 tmp;
-		u64 data[2];
-		__asm__ volatile("1:\n"
-			"ldaxp %x[data0], %x[data1], %[dest]\n"
-			"stlxp %w[tmp], %x[data0], %x[data1], %[dest]\n"
-			"cbnz %w[tmp], 1b\n"
-			: [tmp] "=&r" (tmp), [data0] "=&r" (data[0]), [data1] "=&r" (data[1])
-			: [dest] "Q" (dest)
-			: "memory"
-		);
-		T result;
-		std::memcpy(&result, data, 16);
-		return result;
-#endif
+		if (lse2())
+		{
+			u64 data[2];
+			__asm__ volatile("ldp %x[data0], %x[data1], %[dest]\n"
+				"dmb ish\n"
+				: [data0] "=r"(data[0]), [data1] "=r"(data[1])
+				: [dest] "Q"(dest)
+				: "memory");
+			T result;
+			std::memcpy(&result, data, 16);
+			return result;
+		}
+
+		// One CASPAL that compares and swaps a register pair with itself: whatever the comparison
+		// finds, it writes back only the value already there, and returns the current value.
+		return std::bit_cast<T>(__atomic_load_n(reinterpret_cast<const u128*>(&dest), __ATOMIC_SEQ_CST));
 	}
 
 	static inline T observe(const T& dest)
@@ -1074,89 +1106,57 @@ struct atomic_storage<T, 16> : atomic_storage<T, 0>
 
 	static inline bool compare_exchange(T& dest, T& comp, T exch)
 	{
-		bool result;
-		u64 cmp[2];
-		std::memcpy(cmp, &comp, 16);
-		u64 data[2];
-		std::memcpy(data, &exch, 16);
-		u64 prev[2];
-		__asm__ volatile("1:\n"
-			"ldaxp %x[prev0], %x[prev1], %[storage]\n"
-			"cmp %x[prev0], %x[cmp0]\n"
-			"ccmp %x[prev1], %x[cmp1], #0, eq\n"
-			"b.ne 2f\n"
-			"stlxp %w[result], %x[data0], %x[data1], %[storage]\n"
-			"cbnz %w[result], 1b\n"
-			"2:\n"
-			"cset %w[result], eq\n"
-			: [result] "=&r" (result), [storage] "+Q" (dest), [prev0] "=&r" (prev[0]), [prev1] "=&r" (prev[1])
-			: [data0] "r" (data[0]), [data1] "r" (data[1]), [cmp0] "r" (cmp[0]), [cmp1] "r" (cmp[1])
-			: "cc", "memory"
-		);
+		// One CASPAL where there used to be an LDAXP/STLXP loop.
+		u128 cmp = std::bit_cast<u128>(comp);
 
-		if (result)
+		if (__atomic_compare_exchange_n(reinterpret_cast<u128*>(&dest), &cmp, std::bit_cast<u128>(exch), false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
 		{
 			return true;
 		}
 
-		std::memcpy(&comp, prev, 16);
+		comp = std::bit_cast<T>(cmp);
 		return false;
 	}
 
 	static inline T exchange(T& dest, T value)
 	{
-		u32 tmp;
-		u64 src[2];
-		u64 data[2];
-		std::memcpy(src, &value, 16);
-		__asm__ volatile("1:\n"
-			"ldaxp %x[data0], %x[data1], %[dest]\n"
-			"stlxp %w[tmp], %x[src0], %x[src1], %[dest]\n"
-			"cbnz %w[tmp], 1b\n"
-			: [tmp] "=&r" (tmp), [dest] "+Q" (dest), [data0] "=&r" (data[0]), [data1] "=&r" (data[1])
-			: [src0] "r" (src[0]), [src1] "r" (src[1])
-			: "memory"
-		);
-		T result;
-		std::memcpy(&result, data, 16);
-		return result;
+		// A CASPAL loop, which only goes round again when another core changed the value in between.
+		return std::bit_cast<T>(__atomic_exchange_n(reinterpret_cast<u128*>(&dest), std::bit_cast<u128>(value), __ATOMIC_SEQ_CST));
 	}
 
 	static inline void store(T& dest, T value)
 	{
-		// TODO
-#if defined(ARM_FEATURE_LSE2)
-		u64 src[2];
-		std::memcpy(src, &value, 16);
-		__asm__ volatile("1:\n"
-			"dmb ish\n"
-			"stp %x[data0], %x[data1], %[dest]\n"
-			"dmb ish\n"
-			: [dest] "=Q" (dest)
-			: [data0] "r" (src[0]), [data1] "r" (src[1])
-			: "memory"
-		);
-#else
+		if (lse2())
+		{
+			u64 src[2];
+			std::memcpy(src, &value, 16);
+			__asm__ volatile("dmb ish\n"
+				"stp %x[data0], %x[data1], %[dest]\n"
+				"dmb ish\n"
+				: [dest] "=Q" (dest)
+				: [data0] "r" (src[0]), [data1] "r" (src[1])
+				: "memory");
+			return;
+		}
+
 		exchange(dest, value);
-#endif
 	}
 
 	static inline void release(T& dest, T value)
 	{
-#if defined(ARM_FEATURE_LSE2)
-		u64 src[2];
-		std::memcpy(src, &value, 16);
-		__asm__ volatile("1:\n"
-			 "dmb ish\n"
-			 "stp %x[data0], %x[data1], %[dest]\n"
-			 : [dest] "=Q" (dest)
-			 : [data0] "r" (src[0]), [data1] "r" (src[1])
-			 : "memory"
-		);
-#else
-		// TODO
+		if (lse2())
+		{
+			u64 src[2];
+			std::memcpy(src, &value, 16);
+			__asm__ volatile("dmb ish\n"
+				"stp %x[data0], %x[data1], %[dest]\n"
+				: [dest] "=Q" (dest)
+				: [data0] "r" (src[0]), [data1] "r" (src[1])
+				: "memory");
+			return;
+		}
+
 		exchange(dest, value);
-#endif
 	}
 #endif
 

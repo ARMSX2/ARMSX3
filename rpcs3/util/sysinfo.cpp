@@ -603,6 +603,14 @@ std::string utils::get_system_info()
 	// Surfaced so every log records whether monitor-less WFE waits have a
 	// bounded wake on this kernel (drives the RSX wait-shape selection).
 	fmt::append(result, " | EVTSTRM-%s", has_wfe_event_stream() ? "on" : "off");
+
+	// Which 16-byte atomics this CPU gets (util/atomic.hpp): plain LDP/STP loads and stores with
+	// FEAT_LSE2, CASP for all of them without.
+#if defined(ARM_FEATURE_LSE2)
+	result += " | LSE2";
+#else
+	fmt::append(result, " | LSE2-%s", utils::arm64_lse2 ? "yes" : "no");
+#endif
 #else
 
 	if (has_avx())
