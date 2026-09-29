@@ -25,8 +25,6 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("app.bg.flux.preset", true, SettingsCategory.General),
     SettingsSearchEntry("app.barOpacity", true, SettingsCategory.General),
     SettingsSearchEntry("app.bgDimming", true, SettingsCategory.General),
-    SettingsSearchEntry("app.screensaver", true, SettingsCategory.General),
-    SettingsSearchEntry("app.screensaver.delay", true, SettingsCategory.General),
     SettingsSearchEntry("app.bgColor.rgb", true, SettingsCategory.General),
     SettingsSearchEntry("app.bootLogo", true, SettingsCategory.General),
     SettingsSearchEntry("app.blockHome", true, SettingsCategory.General),

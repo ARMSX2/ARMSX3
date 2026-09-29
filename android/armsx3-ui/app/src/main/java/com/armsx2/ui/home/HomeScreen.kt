@@ -170,6 +170,7 @@ fun HomeScreen(
     var backgroundSheet by remember { mutableStateOf(false) }
     var removingBackground by remember { mutableStateOf<LibraryBackground.Saved?>(null) }
     var themeInfo by remember { mutableStateOf(false) }
+    var screensaverDelay by remember { mutableStateOf(false) }
     // #9 custom library background — inert until the user picks an image.
     LaunchedEffect(Unit) {
         LibraryBackground.ensureLoaded()
@@ -471,6 +472,7 @@ fun HomeScreen(
                                     LibraryBackground.current()?.let(LibraryBackground::remove) ?: LibraryBackground.useDefault()
                                 },
                                 onThemeInfo = { themeInfo = true },
+                                onScreensaverDelay = { screensaverDelay = true },
                                 onExitApp = { showExitConfirm = true },
                             )
                             if (showExitConfirm) {
@@ -1144,6 +1146,26 @@ fun HomeScreen(
             },
         )
     }
+    if (screensaverDelay) {
+        val minutesText = str("app.screensaver.minutes")
+        AlertDialog(
+            onDismissRequest = { screensaverDelay = false },
+            text = {
+                com.armsx2.ui.settings.IntSliderRow(
+                    label = str("app.screensaver.delay"),
+                    value = LibraryScreensaver.minutes.value,
+                    min = LibraryScreensaver.MIN_MINUTES,
+                    max = LibraryScreensaver.MAX_MINUTES,
+                    description = str("app.screensaver.delay.desc"),
+                    valueFormatter = { minutesText.format(it) },
+                    onChange = LibraryScreensaver::setMinutes,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { screensaverDelay = false }) { Text(str("action.ok")) }
+            },
+        )
+    }
 
     // Pick the active category. A sheet, not a DropdownMenu, so it stays controller-navigable.
     // Long-press a row to rename or delete it -- there is no separate management screen.
@@ -1468,6 +1490,7 @@ private fun LibraryOverflowMenu(
     onViewBackground: () -> Unit,
     onRemoveBackground: () -> Unit,
     onThemeInfo: () -> Unit,
+    onScreensaverDelay: () -> Unit,
     onExitApp: () -> Unit,
 ) {
     fun closeThen(action: () -> Unit) {
@@ -1508,6 +1531,24 @@ private fun LibraryOverflowMenu(
         // matters most before anyone has added one.
         LibraryOverflowItem("ⓘ", str("games.background.themeInfo")) {
             closeThen(onThemeInfo)
+        }
+        // The screensaver is this background full screen, so it lives with it. The delay opens a
+        // dialog rather than a slider in here, for the same reason as the categories sheet below.
+        LibraryOverflowItem(
+            glyph = "☾",
+            label = str("app.screensaver"),
+            trailing = if (LibraryScreensaver.enabled.value) str("common.on") else str("common.off"),
+        ) {
+            closeThen { LibraryScreensaver.setEnabled(!LibraryScreensaver.enabled.value) }
+        }
+        if (LibraryScreensaver.enabled.value) {
+            LibraryOverflowItem(
+                glyph = "⏱",
+                label = str("app.screensaver.delay"),
+                trailing = str("app.screensaver.minutes").format(LibraryScreensaver.minutes.value),
+            ) {
+                closeThen(onScreensaverDelay)
+            }
         }
         OverflowSeparator()
         OverflowHeader(str("games.section.library"))
