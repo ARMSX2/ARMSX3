@@ -360,29 +360,127 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 	vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_UNDEFINED,
 		VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, range);
 
-	VkImageBlit region = {};
-	region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-	region.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-	region.srcOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
-	region.dstOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
+	// The generated image was written by the passes on this same queue, submitted before this, so
+	// it is complete by the time this runs. The opposite direction -- the next generation
+	// overwriting it while this blit is still reading it -- is guarded by the caller, which waits
+	// for this command buffer before the next generation.
+	if (vk::frame_gen::generated_at_game_resolution())
+	{
+		// Captured from the game image (vk::frame_gen::capture_game_frame): put it on screen the
+		// way flip() put the real frame, then draw the overlays on it afresh, so a generated frame
+		// looks exactly like a real one except for the interpolated game image itself.
+		const areai& area = m_framegen_present_area;
 
-	// The generated image was written by framegen's device and waited on with its device idle, so
-	// it is complete by the time we get here; no cross-device semaphore exists to use instead. The
-	// opposite direction -- framegen overwriting this image while this blit is still reading it --
-	// is guarded by the caller, which waits for this command buffer before the next generation.
-	vkCmdBlitImage(*cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-		// NEAREST: source and destination are the same size, so linear filtering buys nothing and
-		// costs a filtered sampling pass instead of the fast copy path.
-		target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_NEAREST);
+		// The acquired image is undefined, so whatever the blit leaves uncovered is cleared to
+		// black, on the same test flip() uses for the real frame.
+		if (area.x1 || area.y1 || u32(area.x2) < m_swapchain->get_width() || u32(area.y2) < m_swapchain->get_height())
+		{
+			VkClearColorValue clear_black {};
+			vkCmdClearColorImage(*cmd, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear_black, 1, &range);
 
-	vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-		VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, range);
+			vk::insert_image_memory_barrier(*cmd, target,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+				VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, range);
+		}
+
+		VkImageBlit region = {};
+		region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		region.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		region.srcOffsets[1] = { s32(vk::frame_gen::generated_width()), s32(vk::frame_gen::generated_height()), 1 };
+		region.dstOffsets[0] = { area.x1, area.y1, 0 };
+		region.dstOffsets[1] = { area.x2, area.y2, 1 };
+
+		vkCmdBlitImage(*cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, m_framegen_filter);
+
+		if (m_overlay_manager && m_overlay_manager->has_visible())
+		{
+			vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, range);
+
+			const auto key = vk::get_renderpass_key(m_swapchain->get_surface_format());
+			const VkRenderPass single_target_pass = vk::get_renderpass(*m_device, key);
+			ensure(single_target_pass != VK_NULL_HANDLE);
+
+			auto* fbo = vk::get_framebuffer(*m_device, m_swapchain_dims.width, m_swapchain_dims.height, VK_FALSE,
+				single_target_pass, m_swapchain->get_surface_format(), target);
+			fbo->add_ref();
+
+			{
+				// As flip()'s render_overlays: lock to avoid modification during the run-update chain.
+				auto ui_renderer = vk::get_overlay_pass<vk::ui_overlay_renderer>();
+				std::lock_guard lock(*m_overlay_manager);
+
+				const areau display_area = { 0, 0, static_cast<u32>(m_swapchain_dims.width), static_cast<u32>(m_swapchain_dims.height) };
+
+				for (const auto& view : m_overlay_manager->get_views())
+				{
+					const areau render_area = view->use_window_space ? display_area : areau(area);
+					ui_renderer->run(*cmd, render_area, fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get());
+				}
+			}
+
+			fbo->release();
+
+			vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, range);
+		}
+		else
+		{
+			vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, range);
+		}
+	}
+	else
+	{
+		// Captured from the finished screen: already composited, so a straight copy.
+		VkImageBlit region = {};
+		region.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		region.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		region.srcOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
+		region.dstOffsets[1] = { s32(m_swapchain_dims.width), s32(m_swapchain_dims.height), 1 };
+
+		vkCmdBlitImage(*cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			// NEAREST: source and destination are the same size, so linear filtering buys nothing and
+			// costs a filtered sampling pass instead of the fast copy path.
+			target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, VK_FILTER_NEAREST);
+
+		vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, range);
+	}
 
 	cmd->end();
 
-	// No semaphores either side. The source was already made visible by framegen's device idle,
-	// and the present below has nothing to wait on because this command buffer is the only writer
-	// of this swapchain image.
+	// The overlays drawn above uploaded into the renderer's flushable heaps. Where those are
+	// shadowed in host memory nothing reaches the GPU until they are synced, which
+	// close_and_submit_command_buffer does ahead of every real submission and a plain submit()
+	// does not. Same sync, same order: its own command buffer, submitted first on this queue.
+	if (vk::test_status_interrupt(vk::heap_dirty))
+	{
+		if (const auto dirty_list = m_flushable_data_heaps.filter(FN(x->is_dirty()));
+			!dirty_list.empty())
+		{
+			auto heap_cb = m_secondary_cb_list.next();
+			heap_cb->begin();
+
+			for (auto& heap : dirty_list)
+			{
+				heap->sync(*heap_cb);
+			}
+
+			heap_cb->end();
+
+			vk::queue_submit_t heap_submit{ m_device->get_graphics_queue(), nullptr };
+			heap_cb->submit(heap_submit, VK_FALSE);
+		}
+
+		vk::clear_status_interrupt(vk::heap_dirty);
+	}
+
+	// No semaphores either side. The source was written by the passes on this queue earlier, and
+	// the present below has nothing to wait on because this command buffer is the only writer of
+	// this swapchain image.
 	vk::queue_submit_t submit_info{};
 	submit_info.queue = m_device->get_graphics_queue();
 
@@ -759,6 +857,10 @@ void VKGSRender::queue_swap_request()
 
 	s_fg_asked += generated;
 
+	// This frame's generated presents belong to it: frame_context_cleanup waits for them before it
+	// reclaims what they drew their overlays from.
+	m_current_frame->framegen_cb_count = 0;
+
 	for (u32 i = 0; i < generated; ++i)
 	{
 		auto* cb = present_generated_frame(vk::frame_gen::generated_image(i));
@@ -770,6 +872,11 @@ void VKGSRender::queue_swap_request()
 		if (cb && m_framegen_blit_cb_count < std::size(m_framegen_blit_cb))
 		{
 			m_framegen_blit_cb[m_framegen_blit_cb_count++] = cb;
+		}
+
+		if (cb && m_current_frame->framegen_cb_count < std::size(m_current_frame->framegen_cbs))
+		{
+			m_current_frame->framegen_cbs[m_current_frame->framegen_cb_count++] = cb;
 		}
 	}
 
@@ -878,6 +985,18 @@ void VKGSRender::frame_context_cleanup(vk::frame_context_t *ctx)
 			// Lost surface/device, release swapchain
 			swapchain_unavailable = true;
 		}
+
+		// And the frame's generated presents, which read its overlay uploads and descriptors: the
+		// reclaim below would otherwise free them while the GPU is still drawing from them. They
+		// were submitted straight after the frame, so this is normally already satisfied. A buffer
+		// the ring has since reused is either not pending or later work, and waiting on either is
+		// still correct.
+		for (u32 i = 0; i < ctx->framegen_cb_count; ++i)
+		{
+			ctx->framegen_cbs[i]->wait(FRAME_PRESENT_TIMEOUT);
+		}
+
+		ctx->framegen_cb_count = 0;
 	}
 
 	// Resource cleanup.
@@ -1876,7 +1995,28 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	// A swapchain image is not usable as a pass input, so this copies it into a plain device-local
 	// VkImage on our own device (vk::frame_gen::shared_image). There is no second device and no
 	// AHardwareBuffer. Returns false and costs nothing when the feature is off, which is the default.
-	if (image_to_flip)
+	//
+	// EXCEPT on the plain path -- no calibration pass and a blit upscaler, which is the default.
+	// There a generated frame can be put on screen exactly as the real one was: the same scaled
+	// blit into the same area, then the overlays drawn on top of it rather than interpolated. So
+	// the passes run on the game image at the game's own size instead of the screen's, which costs
+	// less by the ratio of the two (720p on a 1080p screen: 2.25x fewer pixels to generate). Every
+	// other output mode renders through passes a generated frame would need a run of its own of,
+	// so those keep capturing the finished screen.
+	const bool framegen_plain_output = image_to_flip && !avconfig.stereo_enabled &&
+		g_cfg.video.full_rgb_range_output.get() && rsx::fcmp(avconfig.gamma, 1.f) &&
+		(m_output_scaling == output_scaling_mode::bilinear || m_output_scaling == output_scaling_mode::nearest);
+
+	if (framegen_plain_output)
+	{
+		if (vk::frame_gen::capture_game_frame(*m_current_command_buffer, *m_device, image_to_flip,
+			buffer_width, buffer_height, m_swapchain_dims.width, m_swapchain_dims.height))
+		{
+			m_framegen_present_area = aspect_ratio;
+			m_framegen_filter = (m_output_scaling == output_scaling_mode::nearest) ? VK_FILTER_NEAREST : VK_FILTER_LINEAR;
+		}
+	}
+	else if (image_to_flip)
 	{
 		vk::frame_gen::capture_presented_frame(*m_current_command_buffer, *m_device,
 			// present_layout, NOT target_layout.

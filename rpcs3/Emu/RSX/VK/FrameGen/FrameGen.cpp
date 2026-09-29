@@ -27,6 +27,9 @@
 
 #include "../vkutils/device.h"
 #include "FrameGenConfig.h"
+#include "util/logs.hpp"
+
+LOG_CHANNEL(framegen_log, "FRAMEGEN");
 
 namespace Vulkan {
 
@@ -60,8 +63,17 @@ constexpr u32 LSFG_RECURRENCE_FRAMES = 2;
     const f32 rendered_width = static_cast<f32>(guest_extent.width);
     const f32 ratio = rendered_width / static_cast<f32>(presented_extent.width);
 
+    // Motion is measured at 60% of the game's resolution, not all of it: GameSir's GSFG 1.1
+    // publishes that as its phone setting (720p in, motion at 60% of width and height), and the
+    // motion passes are most of the cost. When the passes run on the game image itself the ratio
+    // above is 1 and this is 0.6; on the screen-sized path it is 0.6 of the game's share of it.
+    constexpr f32 AUTO_MOTION_SHARE = 0.6f;
+
+    // The epsilon keeps an exact step exact: 0.6f * 20 is 12.0000005 in single precision, and a
+    // bare ceil would round that up to 13 steps (0.65).
     constexpr f32 FLOW_SCALE_STEPS = 20.0f;
-    const f32 stepped = std::ceil(ratio * FLOW_SCALE_STEPS) / FLOW_SCALE_STEPS;
+    const f32 stepped =
+        std::ceil(ratio * AUTO_MOTION_SHARE * FLOW_SCALE_STEPS - 1e-3f) / FLOW_SCALE_STEPS;
     return std::clamp(stepped, 0.25f, 1.0f);
 }
 
@@ -250,6 +262,10 @@ void FrameGen::Rebuild(const Device& device, VkExtent2D extent, VkFormat format,
     built_flow_scale = flow_scale;
 
     chain.emplace(device, memory_allocator, *shaders, extent, format, built_flow_scale);
+    framegen_log.notice("LSFG passes built at %ux%u, motion at %.0f%% (%ux%u)", extent.width,
+                        extent.height, built_flow_scale * 100.0f,
+                        static_cast<u32>(static_cast<f32>(extent.width) * built_flow_scale),
+                        static_cast<u32>(static_cast<f32>(extent.height) * built_flow_scale));
     built_extent = extent;
     built_format = format;
     frame_count = 0;

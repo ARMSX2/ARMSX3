@@ -220,6 +220,12 @@ private:
 	vk::command_buffer_chunk* m_framegen_blit_cb[3] = {};
 	u32 m_framegen_blit_cb_count = 0;
 
+	// How the real frame reached the screen, for generated frames captured at the game's
+	// resolution (vk::frame_gen::capture_game_frame): they are scaled into the same area with the
+	// same filter, then get the overlays drawn on them just as the real frame did.
+	areai m_framegen_present_area {};
+	VkFilter m_framegen_filter = VK_FILTER_LINEAR;
+
 	VkViewport m_viewport {};
 	VkRect2D m_scissor {};
 
