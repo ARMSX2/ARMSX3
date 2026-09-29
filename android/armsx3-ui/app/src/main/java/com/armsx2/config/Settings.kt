@@ -1129,7 +1129,7 @@ data class Settings(
         put("PS3/Video", "Frame Generation Target Rate", "int", ps3.frameGenTargetRate.toString())
         // Temporary: the value reaches the core as 0 whatever the UI is set to, and all six
         // plumbing sites read correctly. This says what the object being applied actually holds.
-        android.util.Log.i("FRAMEGEN", "applyTo: targetRate=${ps3.frameGenTargetRate} mult=${ps3.frameGeneration}")
+        if (emitSink == null) android.util.Log.i("FRAMEGEN", "applyTo: targetRate=${ps3.frameGenTargetRate} mult=${ps3.frameGeneration}")
         put("PS3/Video", "Write Color Buffers", "bool", ps3.writeColorBuffers.toString())
         put("PS3/Video", "Write Depth Buffer", "bool", ps3.writeDepthBuffer.toString())
         put("PS3/Video", "Read Color Buffers", "bool", ps3.readColorBuffers.toString())
@@ -1817,6 +1817,23 @@ data class Settings(
         NativeApp.gameIniCommitWrite()
     }
 
+    /**
+     * Every core node [applyTo] would write for these settings, path to the JSON value settingsSet
+     * takes, with nothing written. The field to node mapping is applyTo's own, run through the
+     * bridge with the writes recorded (Rpcs3Settings.recordWrites) rather than kept as a table.
+     *
+     * The persisted pushes only, as for the INI export: the live pokes after them (FPS cap, OSD
+     * flags, the forced Vblank Rate) are skipped while [emitSink] is set.
+     */
+    fun coreWrites(): Map<String, String> = com.armsx3.Rpcs3Settings.recordWrites {
+        emitSink = { section, key, type, value -> com.armsx3.Rpcs3Bridge.setSetting(section, key, type, value) }
+        try {
+            applyTo()
+        } finally {
+            emitSink = null
+        }
+    }
+
     /** Writes every EmuCore/GS key (display + renderer + hardware/upscaling
      *  fixes) into the native BASE settings layer. Pure persistence — no live
      *  pokes, no commit. Shared by [applyTo] (cold start / restart) and
@@ -2421,9 +2438,16 @@ data class Settings(
         /** When non-null, [put] routes persisted-key emits here instead of the
          *  native base layer. Set transiently by [writeGameSettingsIni] to
          *  capture the key set for the sparse per-game INI export without
-         *  touching the base layer or re-poking the running VM. */
+         *  touching the base layer or re-poking the running VM.
+         *
+         *  Per thread: [coreWrites] runs these captures from the All Core Settings screen, and a
+         *  capture on one thread must not divert a real apply running on another into its sink. */
+        private val emitSinkByThread = ThreadLocal<((String, String, String, String) -> Unit)?>()
+
         @JvmStatic
-        internal var emitSink: ((String, String, String, String) -> Unit)? = null
+        internal var emitSink: ((String, String, String, String) -> Unit)?
+            get() = emitSinkByThread.get()
+            set(value) = emitSinkByThread.set(value)
 
         /** One-tap "Low-End" performance snapshot applied on top of [base].
          *  Only cheap, safe-for-most levers that already exist as fields:

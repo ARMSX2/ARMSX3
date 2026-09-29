@@ -954,6 +954,82 @@ object ConfigStore {
     }
 
     /**
+     * Reset whichever curated fields in this tier hold any of the core nodes [paths] off the value
+     * the tier would otherwise give them: taken out of the title's overrides in Game scope, so they
+     * follow global again, or put back to stock in Global scope. Returns the keys it reset.
+     *
+     * For Forget on All Core Settings. A node can be held by two stores at once, a core edit
+     * recorded on that screen and the curated field one of the normal screens writes, and Forget
+     * only ever dropped the first. Web of Shadows had Accurate SPU Reservations off both ways:
+     * Forget dropped the core edit, the re-push after it wrote the title's own false straight back,
+     * and the switch stayed off.
+     */
+    fun resetFieldsWriting(scope: SettingsScope, serial: String?, paths: Collection<String>): Set<String> {
+        val (base, changes) = tierLayers(scope, serial) ?: return emptySet()
+        val keys = fieldsWriting(paths, base, changes)
+        if (keys.isEmpty()) return emptySet()
+        val title = serial?.trim().orEmpty()
+        if (scope == SettingsScope.Game && title.isNotEmpty()) {
+            keys.forEach { changes.remove(it) }
+            if (changes.length() == 0) clearOverrides(title) else saveOverrides(title, changes)
+        } else {
+            val stockJson = base.toJson()
+            val reset = JSONObject()
+            keys.forEach { if (stockJson.has(it)) reset.put(it, stockJson.get(it)) }
+            saveGlobal(Settings.merge(loadGlobal(), reset))
+        }
+        return keys
+    }
+
+    /**
+     * The core nodes this tier's curated fields hold off the value the tier would otherwise give
+     * them, i.e. the nodes [resetFieldsWriting] has something to reset for. All Core Settings
+     * offers Reset on these, since a value set on a normal screen has no Forget of its own there.
+     */
+    fun nodesHeldBy(scope: SettingsScope, serial: String?): Set<String> {
+        val (base, changes) = tierLayers(scope, serial) ?: return emptySet()
+        if (changes.length() == 0) return emptySet()
+        val baseline = base.coreWrites()
+        return Settings.merge(base, changes).coreWrites().filter { (path, value) -> baseline[path] != value }.keys
+    }
+
+    /** A tier as the curated fields it changes and what they sit on: the title's overrides over
+     *  global in Game scope, global's differences from stock over stock otherwise. */
+    private fun tierLayers(scope: SettingsScope, serial: String?): Pair<Settings, JSONObject>? {
+        val title = serial?.trim().orEmpty()
+        if (scope == SettingsScope.Game && title.isNotEmpty()) {
+            val overrides = loadOverrides(title) ?: return null
+            return loadGlobal() to overrides
+        }
+        val stock = Settings()
+        return stock to Settings.diff(stock, loadGlobal())
+    }
+
+    /**
+     * The keys of [changes] that decide any of [paths] when layered over [base], found by running
+     * the curated push dry ([Settings.coreWrites]) rather than from a field to node table.
+     *
+     * A key counts if taking it out moves the node, or if it alone moves the node off [base]'s
+     * value. The second is for a key another one masks: two fields that write one node, the later
+     * winning, show nothing when the masked one is taken out on its own, and leaving it in would
+     * bring its value back the moment the other goes.
+     */
+    private fun fieldsWriting(paths: Collection<String>, base: Settings, changes: JSONObject): Set<String> {
+        val keys = changes.keys().asSequence().toList()
+        if (keys.isEmpty()) return emptySet()
+        val baseline = base.coreWrites()
+        val current = Settings.merge(base, changes).coreWrites()
+        // Only the nodes this tier actually moves. Usually none, which costs two dry runs.
+        val moved = paths.filter { current[it] != baseline[it] }
+        if (moved.isEmpty()) return emptySet()
+        return keys.filterTo(LinkedHashSet()) { key ->
+            val without = Settings.merge(base, JSONObject(changes.toString()).apply { remove(key) }).coreWrites()
+            val alone = Settings.merge(base, JSONObject().put(key, changes.get(key))).coreWrites()
+            moved.any { without[it] != current[it] || alone[it] != baseline[it] }
+        }
+    }
+
+    /**
      * Resolve effective Settings for a VM launch:
      *   per-game override (if present) ∘ global ∘ defaults.
      *
