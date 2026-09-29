@@ -6,6 +6,7 @@
 #include "Utilities/Thread.h"
 #include "Utilities/address_range.h"
 #include "Emu/CPU/CPUThread.h"
+#include "Emu/Cell/PPUThread.h"
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/Cell/SPURecompiler.h"
 #include "Emu/perf_meter.hpp"
@@ -18,6 +19,16 @@
 #include "util/serialization.hpp"
 
 #include <thread>
+
+#ifdef ANDROID
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <unistd.h>
+#endif
 
 LOG_CHANNEL(vm_log, "VM");
 
@@ -454,6 +465,170 @@ namespace vm
 		}
 	}
 
+#ifdef ANDROID
+	namespace
+	{
+		// Long waits in writer_lock for a PPU thread to park: how much they cost, and why.
+		//
+		// Web of Shadows logs a few "waiting for a PPU thread to reach cpu_flag::wait" lines a minute,
+		// always on a PPU in state 0x220 -- suspend + memory, not wait: told to park, and not yet at
+		// its next check_state(). Three different things look exactly like that, and each needs a
+		// different fix: the PPU running guest code that reaches no check point, the PPU runnable but
+		// given no core while the SPU threads spin, and the PPU asleep in the kernel without the wait
+		// flag. The waited-on PPU's schedstat tells them apart: the time it ran, the time it queued
+		// for a CPU, and the rest, which it slept.
+		//
+		// Only waits past a spin threshold are clocked, so the common short wait costs nothing extra.
+		// Counters are plain relaxed atomics; this is a report, not a synchronisation point.
+		constexpr u64 k_clocked_after_spins = 4096;
+
+		struct wlock_wait_stats
+		{
+			std::atomic<u64> barriers{0};
+			std::atomic<u64> waits{0};
+			std::atomic<u64> total_ns{0};
+			std::atomic<u64> ran_ns{0};
+			std::atomic<u64> queued_ns{0};
+			std::atomic<u64> max_ns{0};
+			std::atomic<u64> max_detail{0}; // PPU id << 32 | its PC when it parked
+			std::atomic<u32> max_pc0{0};    // and its PC when the wait was first clocked
+			std::atomic<u64> last_report{0};
+		};
+
+		wlock_wait_stats g_wlock_stats;
+
+		// The waited-on PPU's Linux tid, from the thread_base it runs in. NOT stored on cpu_thread:
+		// a new cpu_thread member moves every ppu_thread member after it, and PPU code loaded from
+		// the LLVM cache has those offsets compiled in. 3821a8819 did exactly that and every game
+		// booted to a black screen.
+		u32 native_tid_of(cpu_thread* cpu)
+		{
+			if (auto ppu = cpu->try_get<ppu_thread>())
+			{
+				return thread_ctrl::get_native_tid(*static_cast<named_thread<ppu_thread>*>(ppu));
+			}
+
+			return 0;
+		}
+
+		u64 steady_ns()
+		{
+			return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count());
+		}
+
+		// On-CPU time and time spent runnable but waiting for a CPU, from the kernel's schedstat.
+		bool read_schedstat(u32 tid, u64& run_ns, u64& queued_ns)
+		{
+			char path[64];
+			std::snprintf(path, sizeof(path), "/proc/self/task/%u/schedstat", tid);
+
+			const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+
+			if (fd < 0)
+			{
+				return false;
+			}
+
+			char buf[96]{};
+			const auto n = ::read(fd, buf, sizeof(buf) - 1);
+			::close(fd);
+
+			unsigned long long run = 0, queued = 0;
+
+			if (n <= 0 || std::sscanf(buf, "%llu %llu", &run, &queued) != 2)
+			{
+				return false;
+			}
+
+			run_ns = run;
+			queued_ns = queued;
+			return true;
+		}
+
+		// The treatment for the "queued for a CPU" case: while an SPU waits on a PPU that has not
+		// parked, that PPU gets the RSX thread's weighting (nice -8) so the scheduler runs it ahead of
+		// the spinning SPU threads, which are all at nice 0; it goes back to 0 when it parks. It is
+		// the one thread everybody is waiting on. ARMSX3_WLOCK_BOOST=0 turns it off, for an A/B.
+		const bool g_wlock_boost = []
+		{
+			const char* value = std::getenv("ARMSX3_WLOCK_BOOST");
+			return !(value && value[0] == '0');
+		}();
+
+		void report_long_waits(u64 now)
+		{
+			u64 last = g_wlock_stats.last_report.load(std::memory_order_relaxed);
+
+			if (last && now - last < 1'000'000'000ull)
+			{
+				return;
+			}
+
+			if (!g_wlock_stats.last_report.compare_exchange_strong(last, now, std::memory_order_relaxed))
+			{
+				return;
+			}
+
+			const u64 barriers = g_wlock_stats.barriers.exchange(0, std::memory_order_relaxed);
+			const u64 waits = g_wlock_stats.waits.exchange(0, std::memory_order_relaxed);
+			const u64 total = g_wlock_stats.total_ns.exchange(0, std::memory_order_relaxed);
+			const u64 ran = g_wlock_stats.ran_ns.exchange(0, std::memory_order_relaxed);
+			const u64 queued = g_wlock_stats.queued_ns.exchange(0, std::memory_order_relaxed);
+			const u64 max = g_wlock_stats.max_ns.exchange(0, std::memory_order_relaxed);
+			const u64 detail = g_wlock_stats.max_detail.load(std::memory_order_relaxed);
+			const u32 pc0 = g_wlock_stats.max_pc0.load(std::memory_order_relaxed);
+
+			// The first call only opens the window.
+			if (!last)
+			{
+				return;
+			}
+
+			const f64 total_ms = total / 1e6;
+
+			vm_log.notice("writer_lock: %u long PPU waits in %.1fs (~%u barriers), %.2f ms in all, longest %.2f ms"
+				" (PPU 0x%x, pc 0x%x -> 0x%x). The waited-on PPUs ran %.2f ms, queued for a CPU %.2f ms, slept %.2f ms."
+				" Boost %s.",
+				waits, (now - last) / 1e9, barriers, total_ms, max / 1e6,
+				static_cast<u32>(detail >> 32), pc0, static_cast<u32>(detail),
+				ran / 1e6, queued / 1e6, std::max(0., total_ms - ran / 1e6 - queued / 1e6),
+				g_wlock_boost ? "on" : "off");
+		}
+
+		void note_long_wait(const cpu_thread& ppu, u64 t0, u32 tid, bool sched0, u64 run0, u64 queued0, u32 pc0)
+		{
+			const u64 t1 = steady_ns();
+			const u64 dt = t1 - t0;
+
+			u64 run1 = 0, queued1 = 0;
+
+			if (sched0 && read_schedstat(tid, run1, queued1))
+			{
+				g_wlock_stats.ran_ns.fetch_add(std::min(dt, run1 - run0), std::memory_order_relaxed);
+				g_wlock_stats.queued_ns.fetch_add(std::min(dt, queued1 - queued0), std::memory_order_relaxed);
+			}
+
+			g_wlock_stats.waits.fetch_add(1, std::memory_order_relaxed);
+			g_wlock_stats.total_ns.fetch_add(dt, std::memory_order_relaxed);
+
+			u64 max = g_wlock_stats.max_ns.load(std::memory_order_relaxed);
+
+			while (dt > max && !g_wlock_stats.max_ns.compare_exchange_weak(max, dt, std::memory_order_relaxed))
+			{
+			}
+
+			if (dt > max)
+			{
+				g_wlock_stats.max_detail.store(u64{ppu.id} << 32 | ppu.get_pc(), std::memory_order_relaxed);
+				g_wlock_stats.max_pc0.store(pc0, std::memory_order_relaxed);
+			}
+
+			report_long_waits(t1);
+		}
+	}
+#endif
+
 	writer_lock::writer_lock() noexcept
 		: writer_lock(0, nullptr, 1)
 	{
@@ -556,6 +731,19 @@ namespace vm
 		{
 			perf_meter<"SUSPEND"_u64> perf0;
 
+#ifdef ANDROID
+			// Counted in batches of 64 per thread: a SPURS title takes this path over a million times
+			// a second, and one shared counter bumped on every one would be a contended line of its own.
+			{
+				thread_local u32 s_barriers = 0;
+
+				if ((++s_barriers & 63) == 0)
+				{
+					g_wlock_stats.barriers.fetch_add(64, std::memory_order_relaxed);
+				}
+			}
+#endif
+
 			for (auto lock = g_locks.cbegin(), end = lock + g_cfg.core.ppu_threads; lock != end; lock++)
 			{
 				if (auto ptr = +*lock; ptr && ptr->state.none_of(cpu_flag::wait + cpu_flag::memory))
@@ -626,8 +814,33 @@ namespace vm
 			{
 				if (auto ptr = +*lock)
 				{
+#ifdef ANDROID
+					// See wlock_wait_stats and g_wlock_boost.
+					u64 wait_t0 = 0, run0 = 0, queued0 = 0;
+					u32 wait_tid = 0, wait_pc0 = 0;
+					bool sched0 = false, boosted = false;
+#endif
+
 					for (u64 spins = 0; !(ptr->state & cpu_flag::wait); spins++)
 					{
+#ifdef ANDROID
+						if (spins == k_clocked_after_spins) [[unlikely]]
+						{
+							wait_t0 = steady_ns();
+							wait_tid = native_tid_of(ptr);
+							wait_pc0 = ptr->get_pc();
+							sched0 = wait_tid && read_schedstat(wait_tid, run0, queued0);
+
+							// Only from the normal weighting: a PPU at another priority set it itself.
+							errno = 0;
+
+							if (g_wlock_boost && wait_tid && getpriority(PRIO_PROCESS, wait_tid) == 0 && !errno)
+							{
+								boosted = setpriority(PRIO_PROCESS, wait_tid, -8) == 0;
+							}
+						}
+#endif
+
 						// Say who we are stuck behind, once.
 						//
 						// This waits for every registered PPU thread to reach cpu_flag::wait, with
@@ -675,6 +888,18 @@ namespace vm
 						utils::pause();
 #endif
 					}
+
+#ifdef ANDROID
+					if (wait_t0) [[unlikely]]
+					{
+						if (boosted)
+						{
+							setpriority(PRIO_PROCESS, wait_tid, 0);
+						}
+
+						note_long_wait(*ptr, wait_t0, wait_tid, sched0, run0, queued0, wait_pc0);
+					}
+#endif
 				}
 			}
 		}
