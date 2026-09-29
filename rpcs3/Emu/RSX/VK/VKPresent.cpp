@@ -167,6 +167,9 @@ bool VKGSRender::reinitialize_swapchain()
 	m_deferred_present_frame = nullptr;
 	m_framegen_blit_cb_count = 0;
 
+	// Read with the same setting init() reads to pick the present mode. See m_swapchain_framegen.
+	m_swapchain_framegen = g_cfg.video.frame_generation != frame_generation_mode::off;
+
 	// Rebuild swapchain. Old swapchain destruction is handled by the init_swapchain call
 	if (!m_swapchain->init(m_swapchain_dims.width, m_swapchain_dims.height))
 	{
@@ -1271,6 +1274,16 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	}
 
 	if (m_vsync_mode != g_cfg.video.vsync)
+	{
+		swapchain_unavailable = true;
+	}
+
+	// Frame generation needs FIFO so each generated frame gets a vblank of its own (swapchain.cpp),
+	// and that is decided only when the swapchain is built. Its setting reaches the core after the
+	// first swapchain exists, and can be switched in-game, so it ran in MAILBOX: the real frame
+	// presented right after each generated one replaced it, and measured on the Odin 3 only 51 of
+	// 60 refreshes showed a new frame. Rebuild on a change, as for VSync.
+	if (m_swapchain_framegen != (g_cfg.video.frame_generation != frame_generation_mode::off))
 	{
 		swapchain_unavailable = true;
 	}

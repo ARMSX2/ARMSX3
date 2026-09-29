@@ -226,6 +226,11 @@ private:
 	areai m_framegen_present_area {};
 	VkFilter m_framegen_filter = VK_FILTER_LINEAR;
 
+	// Whether frame generation was on when the swapchain was built. The present mode depends on it
+	// (swapchain.cpp forces FIFO while it is on), so a change has to rebuild the swapchain, the same
+	// as a VSync change does.
+	bool m_swapchain_framegen = false;
+
 	VkViewport m_viewport {};
 	VkRect2D m_scissor {};
 
