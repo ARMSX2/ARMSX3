@@ -293,6 +293,7 @@ namespace rsx
 				// waiting for GET to reach PUT, Ratchet & Clank's labels) needs it before the
 				// fetched commands run.
 				sync_get_force();
+				atomic_fence_seq_cst();
 			}
 
 			const auto ret = read_from_ptr_unsafe<be_t<u32>>(+m_cache[0], addr - m_cache_addr);
