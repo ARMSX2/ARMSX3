@@ -4651,6 +4651,21 @@ bool spu_thread::do_putllc(const spu_mfc_cmd& args)
 
 		const bool success = [&]()
 		{
+			// With Accurate SPU Reservations off, a store that changes only one 16-byte chunk of the
+			// line commits with a 16-byte compare-and-swap under a range lock, not the full lock
+			// below. The full lock stops every running PPU thread until it parks, for every store;
+			// the SPURS kernel stores to its control block constantly, often to change a single
+			// counter, and in Web of Shadows those stores are most of the logged stalls. The range
+			// lock still carries the page-protection protocol, and the store goes through the
+			// always-writable super pointer. Contributed by Yahfz (RPCS3 PR #19568).
+			if (!g_cfg.core.spu_accurate_reservations && diff16_pos != umax)
+			{
+				vm::range_lock<128>(range_lock, addr, 128);
+				const bool ok = cmp_rdata(rdata, super_data) && atomic_storage<u128>::compare_exchange(*cast_as(super_data, diff16_pos), *cast_as(rdata, diff16_pos), *cast_as_const(to_write, diff16_pos));
+				range_lock->release(0);
+				return ok;
+			}
+
 			// Full lock (heavyweight)
 			// TODO: vm::check_addr
 			vm::writer_lock lock(addr, range_lock);
