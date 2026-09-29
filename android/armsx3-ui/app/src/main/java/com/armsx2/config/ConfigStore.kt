@@ -311,6 +311,7 @@ object ConfigStore {
             runCatching {
                 val serial = "BLUS30218"
                 val stored = loadOverrides(serial)
+                android.util.Log.i("ARMSX3-Config", "Web of Shadows reservations cleanup: per-game settings $stored")
                 if (stored != null && stored.has("ps3AccurateSpuRsv") && !stored.optBoolean("ps3AccurateSpuRsv", true)) {
                     stored.remove("ps3AccurateSpuRsv")
                     if (stored.length() == 0) clearOverrides(serial) else saveOverrides(serial, stored)

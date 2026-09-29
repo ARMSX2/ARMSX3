@@ -677,9 +677,14 @@ open class MainActivityRuntime : ComponentActivity() {
                                 game.settingsKey, game.fileStemKey,
                             )
                         }
-                        com.armsx2.config.ConfigStore
-                            .resolveForGame(currentGame.value?.settingsKey)
-                            .applyTo()
+                        val launchKey = currentGame.value?.settingsKey
+                        val launchSettings = com.armsx2.config.ConfigStore.resolveForGame(launchKey)
+                        android.util.Log.i(
+                            "ARMSX3-Config",
+                            "launch $launchKey: Accurate SPU Reservations ${launchSettings.ps3.accurateSpuRsv}, " +
+                                "per-game ${launchKey?.let { com.armsx2.config.ConfigStore.loadOverrides(it) }}",
+                        )
+                        launchSettings.applyTo()
                     } catch (t: Throwable) {
                         android.util.Log.w("ARMSX2", "launch: failed to apply settings", t)
                     }
