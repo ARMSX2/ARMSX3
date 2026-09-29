@@ -33,6 +33,10 @@
 LOG_CHANNEL(vm_log, "VM");
 
 void ppu_remove_hle_instructions(u32 addr, u32 size);
+
+// SPUThread.cpp: the lines that reached the writer_lock barrier and the SPU PC of the last store to
+// each, filled only while ARMSX3_PUTLLC_SITES=1.
+std::string spu_putllc_barrier_sites();
 extern bool is_memory_compatible_for_copy_from_executable_optimization(u32 addr, u32 size);
 
 namespace vm
@@ -645,6 +649,19 @@ namespace vm
 				static_cast<u32>(detail >> 32), pc0, static_cast<u32>(detail),
 				sampled_ms, ran_pct, queued_pct, sampled ? std::max(0., 100. - ran_pct - queued_pct) : 0.,
 				wlock_boost() ? "on" : "off", wlock_yield() ? "on" : "off", wlock_after_spins());
+
+			// Which SPU loops the barriers come from, every fifth report. Aims the PUTLLC16 whitelist:
+			// it is keyed by loop, and a loop that never reaches the barrier is not worth admitting.
+			// Only the RSX profiler printed this before, and that costs far more than it measures.
+			static u32 s_reports = 0;
+
+			if (++s_reports % 5 == 0)
+			{
+				if (const std::string sites = spu_putllc_barrier_sites(); !sites.empty())
+				{
+					vm_log.notice("writer_lock sources (line:count@pc):%s", sites);
+				}
+			}
 		}
 
 		void note_long_wait(const cpu_thread& ppu, u64 t0, u32 tid, bool sched0, u64 run0, u64 queued0, u32 pc0)
