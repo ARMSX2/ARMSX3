@@ -657,6 +657,9 @@ open class MainActivityRuntime : ComponentActivity() {
                 try {
                     eState.value = EmuState.RUNNING
                     println("@@ANDROID_START_VM@@ kind=game path=${m_szGamefile.take(240)}")
+                    // Nothing in this core ever called onVmRunning, so a game launched without a
+                    // library entry never got one. Start looking now; it waits for the boot.
+                    adoptExternalGameIdentity()
 
                     // Push the curated settings before the VM reads them.
                     //
@@ -1616,14 +1619,22 @@ open class MainActivityRuntime : ComponentActivity() {
                     // A library launch that lands mid-poll wins: it has the real entry.
                     if (vmStopInProgress || eState.value == EmuState.STOPPED) return
                     if (currentGame.value != null) return
+                    // The core keeps the last game's serial and title until the next boot reads
+                    // its disc, which happens while it is loading. Past that, they are this game's.
+                    val booted = when (runCatching { net.rpcsx.RPCSX.getState() }.getOrNull()) {
+                        net.rpcsx.EmulatorState.Ready, net.rpcsx.EmulatorState.Starting,
+                        net.rpcsx.EmulatorState.Running, net.rpcsx.EmulatorState.Paused,
+                        net.rpcsx.EmulatorState.Frozen -> true
+                        else -> false
+                    }
                     // "00000000" is the placeholder the core reports before the disc is
                     // read — the same value TouchControls.coreSerial() rejects.
-                    val serial = runCatching { NativeApp.getGameSerial() }.getOrNull()
+                    val serial = if (!booted) null else runCatching { NativeApp.getGameSerial() }.getOrNull()
                         ?.trim()?.uppercase()?.takeIf { it.isNotEmpty() && it != "00000000" }
                     if (serial == null) {
-                        // ~10s of looking. A serial-less boot (ELF/homebrew) just never
-                        // adopts one, and settingsKey's filename fallback still applies.
-                        if (++attempts < 40) handler.postDelayed(this, 250)
+                        // A minute of looking, for a slow load. A serial-less boot (ELF/homebrew)
+                        // just never adopts one, and settingsKey's filename fallback still applies.
+                        if (++attempts < 240) handler.postDelayed(this, 250)
                         return
                     }
                     val uri = runCatching { Uri.parse(path) }.getOrNull() ?: return
@@ -1645,8 +1656,9 @@ open class MainActivityRuntime : ComponentActivity() {
             })
         }
 
-        /** Fired when the VM reaches RUNNING (from NativeApp.vmSetPaused). A state chosen from the
-         *  library is not loaded here any more: it is the boot target itself, see launchGameFromState. */
+        /** From ARMSX2, where the VM reaching RUNNING calls it (NativeApp.vmSetPaused). Nothing in this
+         *  core does: start() looks for the identity itself. A state chosen from the library is not
+         *  loaded here any more: it is the boot target itself, see launchGameFromState. */
         @JvmStatic
         fun onVmRunning() {
             adoptExternalGameIdentity()
