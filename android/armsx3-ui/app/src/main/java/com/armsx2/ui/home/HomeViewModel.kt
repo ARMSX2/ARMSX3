@@ -13,6 +13,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.core.content.edit
 import androidx.compose.runtime.mutableStateOf
 import com.armsx2.i18n.I18n
@@ -49,6 +50,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private var scanJob: Job? = null
     private var loaded = false
     private var pendingInitialScan = false
+    private var nativeReadySeen = false
+    private var changeCheck: Job? = null
     private var directories: List<String> = emptyList()
 
     var state = androidx.compose.runtime.mutableStateOf(HomeUiState())
@@ -73,6 +76,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun load(romDirectories: List<String>, nativeReady: Boolean) {
         directories = romDirectories
+        if (nativeReady) nativeReadySeen = true
         if (!loaded) {
             loaded = true
             val cached = repository.loadCached()
@@ -107,9 +111,35 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             // list lives, and the sync needs paths to hash. No-op unless a web API key is set.
             if (nativeReady) com.armsx2.RaLibrary.onLibraryLoaded(state.value.allGames)
             if (nativeReady && pendingInitialScan) refresh()
+            if (!pendingInitialScan) checkForChanges()
         } else {
             android.util.Log.i("ARMSX3-Scan", "load(again): dirs=${romDirectories.size} nativeReady=$nativeReady pending=$pendingInitialScan")
             if (nativeReady && pendingInitialScan) refresh()
+        }
+    }
+
+    /**
+     * Rescan when the folders the library came from changed on disk since the last scan, and
+     * until that scan is done, drop the entries whose file is gone so no tile launches a deleted
+     * disc. Asked when the library loads and on every return to it. Only with no game loaded:
+     * a scan mounts disc images.
+     */
+    fun checkForChanges() {
+        if (!loaded || scanJob?.isActive == true || changeCheck?.isActive == true) return
+        if (!MainActivityRuntime.isVmIdle()) return
+        changeCheck = scope.launch {
+            val games = state.value.allGames
+            val missing = withContext(Dispatchers.IO) {
+                if (repository.changedSinceScan()) repository.missingGames(games) else null
+            } ?: return@launch
+            if (missing.isNotEmpty()) {
+                android.util.Log.i("ARMSX3-Scan", "${missing.size} game(s) no longer on disk, hidden until the rescan")
+                state.value = buildState(
+                    state.value.copy(allGames = state.value.allGames.filterNot { it.uri.toString() in missing }),
+                )
+            }
+            pendingInitialScan = true
+            if (nativeReadySeen && MainActivityRuntime.isVmIdle()) refresh()
         }
     }
 

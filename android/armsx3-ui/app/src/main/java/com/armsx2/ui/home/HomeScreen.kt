@@ -229,6 +229,11 @@ fun HomeScreen(
         }
     }
     LaunchedEffect(directories, nativeReady) { viewModel.load(directories, nativeReady) }
+    // Back from another app, say one that turned an .iso into a .chd: rescan if the library's
+    // folders changed meanwhile. load() asks the same on the first start.
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+        viewModel.checkForChanges()
+    }
     DisposableEffect(viewModel, onOpenMenu) {
         HomeInputController.bind(viewModel, onOpenMenu)
         onDispose { HomeInputController.unbind(viewModel) }

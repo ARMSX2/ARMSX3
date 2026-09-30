@@ -516,6 +516,11 @@ open class MainActivityRuntime : ComponentActivity() {
         @JvmStatic
         fun isVmStopInProgress(): Boolean = vmStopInProgress
 
+        /** Nothing booted, booting or shutting down. The library scans only then: a scan mounts disc
+         *  images, and eState alone reads STOPPED while the core is still tearing down. */
+        @JvmStatic
+        fun isVmIdle(): Boolean = eState.value == EmuState.STOPPED && !vmStopInProgress && !vmRunLoopActive
+
         /** True from game/BIOS boot until we are back in the library. This — not currentGame —
          *  decides which rotation tier applyEmulationOrientation() uses: a BIOS boot has no
          *  GameInfo yet is still emulation, so keying on currentGame made the BIOS follow the
