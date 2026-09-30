@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "동시에 많은 SPU 작업을 위해 예약된 CPU 스레드 수입니다. Auto를 사용하면 RPCS3가 일반적으로 휴대용 기기에 있는 코어 수를 기준으로 결정합니다. 너무 높게 설정하면 PPU가 부족해집니다.",
  "perf.preferredSpuThreads.label": "선호하는 SPU 스레드",
  "perf.ps3cpu.title": "PS3 CPU",
+ "perf.framegenPlay.title": "프레임 생성",
+ "perf.framegenPlay.note": "프레임 생성은 GitHub 버전의 ARMSX3에서 사용할 수 있습니다.",
  "perf.savestateCompatible.description": "저장 상태가 작동하려면 필수: 저장은 모든 SPU가 기록될 수 있는 위치에서 중지되어야 하며, 이것이 없으면 SPU 작업이 실행 중인 모든 게임에서 실패합니다. 켜져 있는 동안 SPU 성능이 저하되고 각 저장 상태는 대략 500MB~3GB이므로 그 중 일부가 스토리지를 가득 채울 것입니다.",
  "perf.savestateCompatible.label": "저장 상태 허용(호환 가능한 저장 상태 모드)",
  "perf.scheduler.description": "PPU 및 SPU 스레드가 CPU 코어에 배치되는 방식. \"운영 체제\"는 Android가 결정할 수 있도록 하며 안전한 기본값입니다. 두 개의 RPCS3 스케줄러 핀은 특정 코어에서 작동하며 OS가 스레드를 빠른 클러스터에서 계속 마이그레이션하는 big.LITTLE 핸드헬드에 도움이 될 수 있습니다. 성능이 낮지 않고 일관되지 않으면 시도해 보세요. 다음 부팅 시 적용됩니다.",

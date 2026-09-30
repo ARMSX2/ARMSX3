@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "Cuántos subprocesos de CPU están reservados para trabajos pesados de SPU simultáneos. Auto permite que RPCS3 decida según el recuento de núcleos, que suele ser el correcto en una computadora de mano. Configurarlo demasiado alto mata de hambre a la PPU.",
  "perf.preferredSpuThreads.label": "Hilos SPU preferidos",
  "perf.ps3cpu.title": "CPU de PS3",
+ "perf.framegenPlay.title": "Generación de fotogramas",
+ "perf.framegenPlay.note": "La generación de fotogramas está disponible en la versión de GitHub de ARMSX3.",
  "perf.savestateCompatible.description": "Requerido para que los estados de guardado funcionen: el guardado tiene que detener cada SPU en algún lugar donde se pueda escribir, y sin esto eso falla en cualquier juego con el trabajo de SPU ejecutándose. Cuesta el rendimiento de la SPU mientras está encendida, y cada estado de guardado es de aproximadamente 500 MB a 3 GB, por lo que algunos de ellos llenarán su almacenamiento.",
  "perf.savestateCompatible.label": "Permitir estados de guardado (modo de estado de guardado compatible)",
  "perf.scheduler.description": "Cómo se colocan los subprocesos PPU y SPU en los núcleos de la CPU. El \"Sistema operativo\" permite que Android decida y es el valor predeterminado seguro. Los dos programadores RPCS3 fijan el trabajo en núcleos específicos y pueden ayudar en dispositivos portátiles big.LITTLE donde el sistema operativo sigue migrando subprocesos fuera del clúster rápido. Pruébelos si el rendimiento es inconsistente en lugar de bajo. Se aplica en el próximo arranque.",

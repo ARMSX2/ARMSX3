@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "Çend mijarên CPU ji bo xebata giran a SPU ya hevdem têne veqetandin. Oto dihêle RPCS3 ji hejmartina weya bingehîn, ku bi gelemperî li ser destan rast e, biryar bide. Sazkirina wê pir bilind PPU birçî dihêle.",
  "perf.preferredSpuThreads.label": "Mijarên SPU yên bijartî",
  "perf.ps3cpu.title": "PS3 CPU",
+ "perf.framegenPlay.title": "Çêkirina Frameyan",
+ "perf.framegenPlay.note": "Çêkirina frameyan di guhertoya GitHub a ARMSX3 de heye.",
  "perf.savestateCompatible.description": "Ji bo ku dewletên hilanînê bi tevahî bixebitin, pêdivî ye: tomarkirin pêdivî ye ku her SPU li cîhek ku dikare were nivîsandin rawestîne, û bêyî vê yekê ku li ser her lîstikek ku xebata SPU-yê dimeşîne têk diçe. Performansa SPU-yê dema ku pêve ye lêçûn dike, û her dewletek hilanînê bi qasî 500 MB heya 3 GB ye, ji ber vê yekê çend ji wan dê hilanîna we tije bikin.",
  "perf.savestateCompatible.label": "Destûrê bide dewletên hilanînê (Moda Savestate Lihevhatî)",
  "perf.scheduler.description": "Mijarên PPU û SPU çawa li ser korikên CPU têne danîn. \"Pergala Xebatê\" destûrê dide Android-ê ku biryarê bide û pêşnumayek ewledar e. Du plansazkerên RPCS3 bi navgînên taybetî re dixebitin û dikarin bibin alîkar li ser destanên mezin. PIÇÛK ku OS li ser komê lezê xêzên koçkirinê didomîne \\u2014 wan biceribînin heke performans ne lihevhatî be û ne kêm be. Di boota paşîn de tê sepandin.",

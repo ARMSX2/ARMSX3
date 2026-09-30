@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "Có bao nhiêu luồng CPU được dành riêng cho công việc SPU nặng đồng thời. Tự động cho phép RPCS3 quyết định dựa trên số lượng lõi của bạn, thường là ngay trên thiết bị cầm tay. Đặt nó quá cao sẽ khiến PPU bị đói.",
  "perf.preferredSpuThreads.label": "Chủ đề SPU ưa thích",
  "perf.ps3cpu.title": "CPU PS3",
+ "perf.framegenPlay.title": "Tạo khung hình",
+ "perf.framegenPlay.note": "Tính năng tạo khung hình có trong phiên bản GitHub của ARMSX3.",
  "perf.savestateCompatible.description": "Bắt buộc để các trạng thái lưu hoạt động: việc lưu phải dừng mọi SPU ở một nơi nào đó mà nó có thể được ghi ra và nếu không có điều này thì bất kỳ trò chơi nào có hoạt động SPU đang chạy đều không thành công. Tiêu tốn hiệu năng của SPU khi bật và mỗi trạng thái lưu chiếm khoảng 500 MB đến 3 GB, vì vậy một số trạng thái lưu sẽ lấp đầy bộ nhớ của bạn.",
  "perf.savestateCompatible.label": "Cho phép lưu trạng thái (Chế độ Savestate tương thích)",
  "perf.scheduler.description": "Cách các luồng PPU và SPU được đặt trên lõi CPU. \"Hệ điều hành\" cho phép Android quyết định và là mặc định an toàn. Hai chân bộ lập lịch RPCS3 hoạt động với các lõi cụ thể và có thể trợ giúp trên các thiết bị cầm tay big.LITTLE trong đó hệ điều hành tiếp tục di chuyển các luồng ra khỏi cụm nhanh \\u2014 hãy thử chúng nếu hiệu suất không nhất quán thay vì chỉ ở mức thấp. Áp dụng cho lần khởi động tiếp theo.",

@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "Quanti thread della CPU sono riservati per il pesante lavoro simultaneo della SPU. Auto consente a RPCS3 di decidere in base al numero di core, che di solito è proprio su un palmare. Impostarlo troppo alto affama la PPU.",
  "perf.preferredSpuThreads.label": "Thread SPU preferiti",
  "perf.ps3cpu.title": "Processore PS3",
+ "perf.framegenPlay.title": "Generazione dei fotogrammi",
+ "perf.framegenPlay.note": "La generazione dei fotogrammi è disponibile nella versione GitHub di ARMSX3.",
  "perf.savestateCompatible.description": "Necessario affinché gli stati di salvataggio funzionino: il salvataggio deve fermare ogni SPU da qualche parte in cui può essere scritto, e senza che ciò fallisca su qualsiasi gioco con SPU in esecuzione. Costa le prestazioni della SPU mentre è attiva e ogni stato di salvataggio è compreso tra circa 500 MB e 3 GB, quindi alcuni di essi riempiranno lo spazio di archiviazione.",
  "perf.savestateCompatible.label": "Consenti stati di salvataggio (modalità di salvataggio compatibile)",
  "perf.scheduler.description": "Come vengono posizionati i thread PPU e SPU sui core della CPU. Il \"Sistema operativo\" consente ad Android di decidere ed è l'impostazione predefinita sicura. I due scheduler RPCS3 collegano il lavoro a core specifici e possono aiutare sui palmari big.LITTLE in cui il sistema operativo continua a migrare i thread dal cluster veloce; provali se le prestazioni sono incoerenti anziché semplicemente basse. Si applica al prossimo avvio.",

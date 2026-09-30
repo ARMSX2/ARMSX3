@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "Combien de threads CPU sont réservés au travail simultané intense du SPU. Auto permet à RPCS3 de décider à partir de votre nombre de cœurs, qui se trouve généralement directement sur un ordinateur de poche. Un réglage trop élevé affame le PPU.",
  "perf.preferredSpuThreads.label": "Fils de discussion SPU préférés",
  "perf.ps3cpu.title": "Processeur PS3",
+ "perf.framegenPlay.title": "Génération d'images",
+ "perf.framegenPlay.note": "La génération d'images est disponible dans la version GitHub d'ARMSX3.",
  "perf.savestateCompatible.description": "Requis pour que les états de sauvegarde fonctionnent : la sauvegarde doit arrêter chaque SPU quelque part où elle peut être écrite, et sans cela, cela échoue sur n'importe quel jeu avec le travail SPU en cours d'exécution. Coûte les performances du SPU lorsqu'il est activé, et chaque état de sauvegarde est d'environ 500 Mo à 3 Go, donc quelques-uns d'entre eux rempliront votre stockage.",
  "perf.savestateCompatible.label": "Autoriser les états de sauvegarde (mode Savestate compatible)",
  "perf.scheduler.description": "Comment les threads PPU et SPU sont placés sur les cœurs du processeur. \"Système d'exploitation\" laisse Android décider et constitue la valeur par défaut. Les deux planificateurs RPCS3 épinglent le travail sur des cœurs spécifiques et peuvent aider sur les ordinateurs de poche big.LITTLE où le système d'exploitation continue de migrer les threads hors du cluster rapide ; essayez-les si les performances sont incohérentes plutôt que simplement faibles. S'applique au prochain démarrage.",

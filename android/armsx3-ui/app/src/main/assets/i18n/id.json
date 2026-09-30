@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "Berapa banyak thread CPU yang dicadangkan untuk pekerjaan SPU simultan yang berat. Otomatis memungkinkan RPCS3 memutuskan dari jumlah inti Anda, yang biasanya tepat di perangkat genggam. Menyetelnya terlalu tinggi akan membuat PPU kelaparan.",
  "perf.preferredSpuThreads.label": "Thread SPU Pilihan",
  "perf.ps3cpu.title": "CPU PS3",
+ "perf.framegenPlay.title": "Pembuatan Frame",
+ "perf.framegenPlay.note": "Pembuatan frame tersedia di versi GitHub ARMSX3.",
  "perf.savestateCompatible.description": "Diperlukan agar status penyimpanan dapat berfungsi: penyimpanan harus menghentikan setiap SPU di suatu tempat yang dapat dituliskan, dan tanpa ini, hal tersebut akan gagal pada game mana pun yang menjalankan pekerjaan SPU. Menghabiskan kinerja SPU saat aktif, dan setiap status penyimpanan kira-kira berukuran 500 MB hingga 3 GB, sehingga beberapa di antaranya akan memenuhi penyimpanan Anda.",
  "perf.savestateCompatible.label": "Izinkan status penyimpanan (Mode Savestate yang Kompatibel)",
  "perf.scheduler.description": "Bagaimana thread PPU dan SPU ditempatkan pada inti CPU. \"Sistem Operasi\" memungkinkan Android memutuskan dan merupakan default yang aman. Kedua pin penjadwal RPCS3 berfungsi pada inti tertentu dan dapat membantu pada perangkat genggam big.LITTLE di mana OS terus memigrasikan thread dari cluster cepat \\u2014 cobalah jika kinerja tidak konsisten dan bukan hanya rendah. Berlaku pada boot berikutnya.",

@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "同時大量の SPU 作業のために予約されている CPU スレッドの数。 Auto では、RPCS3 がコア数に基づいて決定します。コア数は通常、ハンドヘルドで適切です。設定値が高すぎると、PPU が不足します。",
  "perf.preferredSpuThreads.label": "優先される SPU スレッド",
  "perf.ps3cpu.title": "PS3のCPU",
+ "perf.framegenPlay.title": "フレーム生成",
+ "perf.framegenPlay.note": "フレーム生成は GitHub 版の ARMSX3 で利用できます。",
  "perf.savestateCompatible.description": "ステートの保存が機能するためには必要です。保存では、書き出せる場所ですべての SPU を停止する必要があります。これがないと、SPU 作業が実行されているゲームは失敗します。オンの間は SPU のパフォーマンスが低下し、各保存状態はおよそ 500 MB ～ 3 GB になるため、いくつか保存するとストレージがいっぱいになってしまいます。",
  "perf.savestateCompatible.label": "状態の保存を許可する (互換性のある保存状態モード)",
  "perf.scheduler.description": "PPU および SPU スレッドが CPU コアに配置される方法。 「オペレーティング システム」は Android が決定するもので、これが安全なデフォルトです。 2 つの RPCS3 スケジューラは、作業を特定のコアに固定し、OS が高速クラスタからスレッドを移行し続ける big.LITTLE ハンドヘルドで役立ちます。パフォーマンスが低いだけでなく、一貫性がない場合は試してみてください。次回の起動時に適用されます。",

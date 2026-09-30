@@ -14,6 +14,9 @@
 #   MANAGE_EXTERNAL_STORAGE   all-files access needs a declared exemption the app does not need
 #   RECORD_AUDIO              would put "Microphone" on the listing for a capability not shipped
 #   libarmsx3_lsfg.so         frame generation is not distributed through Play
+#   "Lossless" in the dex     nor are its screens and strings, which name the product its shaders
+#                             come from; they live in src/github, since a runtime flag would still
+#                             compile them in
 #   updateprovider            the FileProvider that hands the downloaded APK to the installer
 #
 # Fails closed: if a check cannot run, that is a failure too.
@@ -159,6 +162,22 @@ else
 fi
 
 # And the things that MUST be there.
+DEXES=("$WORK"/base/dex/*.dex)
+if [ ! -f "${DEXES[0]}" ]; then
+	echo "FAIL: no dex in the bundle to check" >&2
+	fail=1
+else
+	set +e
+	LC_ALL=C grep -aqF "Lossless" "${DEXES[@]}"
+	status=$?
+	set -e
+	case $status in
+		0) echo "FAIL: the bundle's code names Lossless Scaling -- frame generation's screens and strings are github-only" >&2; fail=1 ;;
+		1) echo "  ok: no Lossless Scaling text in the bundle's code" ;;
+		*) echo "FAIL: could not scan the bundle's dex (grep status $status)" >&2; fail=1 ;;
+	esac
+fi
+
 if LC_ALL=C grep -aqF "com.armsx3.play" "$MANIFEST"; then
 	echo "  ok: applicationId is com.armsx3.play"
 else

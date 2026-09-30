@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "為繁重的並發 SPU 工作保留了多少個 CPU 執行緒。自動讓 RPCS3 根據您的核心數量來決定，這通常就在手持裝置上。將其設定得太高會使 PPU 處於飢餓狀態。",
  "perf.preferredSpuThreads.label": "首選 SPU 線程",
  "perf.ps3cpu.title": "PS3CPU",
+ "perf.framegenPlay.title": "畫格生成",
+ "perf.framegenPlay.note": "畫格生成功能可在 GitHub 版 ARMSX3 中使用。",
  "perf.savestateCompatible.description": "保存狀態正常運作所必需的：保存必須在可以寫出的地方停止每個 SPU，否則任何運行 SPU 工作的遊戲都會失敗。開啟時會消耗 SPU 效能，每個儲存狀態約為 500 MB 到 3 GB，因此其中一些會填滿您的儲存空間。",
  "perf.savestateCompatible.label": "允許保存狀態（相容的保存狀態模式）",
  "perf.scheduler.description": "PPU 和 SPU 執行緒如何放置在 CPU 核心上。 「作業系統」讓 Android 決定，並且是安全的預設值。兩個 RPCS3 調度程式針對特定核心工作，並且可以在 big.LITTLE 手持裝置上提供協助，其中作業系統不斷將執行緒從快速叢集中遷移出來，如果效能不一致而不僅僅是效能低下，請嘗試使用它們。適用於下次啟動。",

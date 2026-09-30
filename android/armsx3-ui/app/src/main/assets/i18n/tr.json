@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "Yoğun eşzamanlı SPU çalışması için kaç tane CPU iş parçacığı ayrılmıştır. Otomatik, RPCS3'ün genellikle elde taşınır cihazda bulunan çekirdek sayınıza göre karar vermesine olanak tanır. Çok yükseğe ayarlamak PPU'yu aç bırakır.",
  "perf.preferredSpuThreads.label": "Tercih Edilen SPU Konuları",
  "perf.ps3cpu.title": "PS3 CPU'su",
+ "perf.framegenPlay.title": "Kare Oluşturma",
+ "perf.framegenPlay.note": "Kare oluşturma, ARMSX3'ün GitHub sürümünde bulunur.",
  "perf.savestateCompatible.description": "Kaydetme durumlarının çalışması için gereklidir: Kaydetme, her SPU'yu yazılabileceği bir yerde durdurmalıdır ve bu olmadan, SPU çalışması çalışan herhangi bir oyunda başarısız olur. Açıkken SPU performansına mal olur ve her kaydetme durumu yaklaşık 500 MB ila 3 GB arasındadır, bu nedenle bunlardan birkaçı depolama alanınızı dolduracaktır.",
  "perf.savestateCompatible.label": "Kaydetme durumlarına izin ver (Uyumlu Kaydetme Durumu Modu)",
  "perf.scheduler.description": "PPU ve SPU iş parçacıklarının CPU çekirdeklerine nasıl yerleştirildiği. \"İşletim Sistemi\" Android'in karar vermesini sağlar ve güvenli varsayılandır. İki RPCS3 zamanlayıcı, belirli çekirdeklere çalışır ve işletim sisteminin iş parçacıklarını hızlı kümeden taşımaya devam ettiği büyük.LITTLE el bilgisayarlarında yardımcı olabilir; performans düşük olmak yerine tutarsızsa bunları deneyin. Bir sonraki önyüklemede geçerlidir.",

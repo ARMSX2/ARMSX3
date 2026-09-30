@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "Ile wątków procesora jest zarezerwowanych do jednoczesnej ciężkiej pracy SPU. Auto pozwala RPCS3 decydować na podstawie liczby rdzeni, która zwykle jest dostępna na urządzeniu przenośnym. Ustawienie zbyt wysokiego powoduje głodzenie PPU.",
  "perf.preferredSpuThreads.label": "Preferowane wątki SPU",
  "perf.ps3cpu.title": "Procesor PS3",
+ "perf.framegenPlay.title": "Generowanie klatek",
+ "perf.framegenPlay.note": "Generowanie klatek jest dostępne w wersji ARMSX3 z GitHuba.",
  "perf.savestateCompatible.description": "Wymagane, aby stany zapisu w ogóle działały: zapisywanie musi zatrzymać każdy SPU w miejscu, w którym można je zapisać, a bez tego nie powiedzie się to w żadnej grze, w której działa SPU. Kosztuje wydajność SPU, gdy jest włączony, a każdy stan zapisu zajmuje około 500 MB do 3 GB, więc kilka z nich zapełni twoją pamięć.",
  "perf.savestateCompatible.label": "Zezwalaj na stany zapisu (kompatybilny tryb stanu zapisu)",
  "perf.scheduler.description": "Sposób umieszczania wątków PPU i SPU na rdzeniach procesora. „System operacyjny” pozwala Androidowi decydować i jest bezpiecznym ustawieniem domyślnym. Dwa programy planujące RPCS3 przypinają określone rdzenie i mogą pomóc w przypadku komputerów przenośnych big.LITTLE, w których system operacyjny migruje wątki z szybkiego klastra. Wypróbuj je, jeśli wydajność jest niespójna, a nie tylko niska. Obowiązuje przy następnym uruchomieniu.",

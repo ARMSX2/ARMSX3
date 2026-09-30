@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "为繁重的并发 SPU 工作保留了多少个 CPU 线程。自动让 RPCS3 根据您的核心数量来决定，这通常就在手持设备上。将其设置得太高会使 PPU 处于饥饿状态。",
  "perf.preferredSpuThreads.label": "首选 SPU 线程",
  "perf.ps3cpu.title": "PS3CPU",
+ "perf.framegenPlay.title": "帧生成",
+ "perf.framegenPlay.note": "帧生成功能可在 GitHub 版 ARMSX3 中使用。",
  "perf.savestateCompatible.description": "保存状态正常工作所必需的：保存必须在可以写出的地方停止每个 SPU，否则任何运行 SPU 工作的游戏都会失败。开启时会消耗 SPU 性能，每个保存状态大约为 500 MB 到 3 GB，因此其中一些会填满您的存储空间。",
  "perf.savestateCompatible.label": "允许保存状态（兼容的保存状态模式）",
  "perf.scheduler.description": "PPU 和 SPU 线程如何放置在 CPU 内核上。 “操作系统”让 Android 决定，并且是安全的默认值。两个 RPCS3 调度程序针对特定内核工作，并且可以在 big.LITTLE 手持设备上提供帮助，其中操作系统不断将线程从快速集群中迁移出来，如果性能不一致而不仅仅是性能低下，请尝试使用它们。适用于下次启动。",

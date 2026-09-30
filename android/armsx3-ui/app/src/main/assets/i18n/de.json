@@ -716,6 +716,8 @@
  "perf.preferredSpuThreads.description": "Wie viele CPU-Threads sind für schwere gleichzeitige SPU-Arbeit reserviert? Auto lässt RPCS3 anhand Ihrer Kernzahl entscheiden, was normalerweise auf einem Handheld der Fall ist. Wenn Sie den Wert zu hoch einstellen, wird die PPU ausgehungert.",
  "perf.preferredSpuThreads.label": "Bevorzugte SPU-Threads",
  "perf.ps3cpu.title": "PS3-CPU",
+ "perf.framegenPlay.title": "Frame-Generierung",
+ "perf.framegenPlay.note": "Frame-Generierung gibt es in der GitHub-Version von ARMSX3.",
  "perf.savestateCompatible.description": "Erforderlich, damit Speicherzustände überhaupt funktionieren: Beim Speichern muss jede SPU irgendwo angehalten werden, wo sie ausgeschrieben werden kann, und ohne dies schlägt dies bei jedem Spiel mit laufender SPU-Arbeit fehl. Kostet SPU-Leistung, während es eingeschaltet ist, und jeder Speicherstatus beträgt ungefähr 500 MB bis 3 GB, sodass einige davon Ihren Speicher füllen.",
  "perf.savestateCompatible.label": "Speicherzustände zulassen (kompatibler Savestate-Modus)",
  "perf.scheduler.description": "Wie PPU- und SPU-Threads auf CPU-Kernen platziert werden. „Betriebssystem“ überlässt Android die Entscheidung und ist die sichere Standardeinstellung. Die beiden RPCS3-Scheduler heften die Arbeit an bestimmte Kerne und können auf big.LITTLE-Handhelds hilfreich sein, bei denen das Betriebssystem ständig Threads aus dem schnellen Cluster migriert. Probieren Sie sie aus, wenn die Leistung inkonsistent und nicht nur niedrig ist. Gilt beim nächsten Start.",
