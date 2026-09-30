@@ -1589,21 +1589,25 @@ open class MainActivityRuntime : ComponentActivity() {
         }.getOrNull()
 
         /**
-         * Give an externally-launched game the same identity a library-launched one has.
+         * Give a game launched without a library entry the same identity a library-launched one has.
          *
          * A front-end (Daijisho / Lisi / Cocoon) hands us a bare content:// with no
-         * GameInfo, so [handleExternalLaunchIntent] leaves [currentGame] null. That split
+         * GameInfo, so [handleExternalLaunchIntent] leaves [currentGame] null. So does Launch Game
+         * or Change Disc for a file the library has no entry for: one outside its folders, or one
+         * picked before the rescan that finds it has finished, and the pause menu then showed
+         * "PlayStation 3" instead of the game. That split
          * the game's identity in two: the settings hub keys its Global/Game switch off
          * currentGame, so the switch VANISHED — while the save path resolves the serial
          * from the running core and happily wrote per-game. Hence the report of settings
          * "showing as Global but saving as Per Game" only when launched from a front-end.
          *
          * The core knows the serial once the disc is read, which is the same key the save
-         * path uses — so build the missing GameInfo from it and the two agree again.
+         * path uses — so build the missing GameInfo from it and the two agree again. The title
+         * is the disc's own, as the library would have read it.
          */
 
         private fun adoptExternalGameIdentity() {
-            if (!launchedExternally || currentGame.value != null) return
+            if (currentGame.value != null) return
             val path = m_szGamefile.takeIf { it.isNotEmpty() } ?: return
             val handler = android.os.Handler(android.os.Looper.getMainLooper())
             handler.post(object : Runnable {
@@ -1625,12 +1629,17 @@ open class MainActivityRuntime : ComponentActivity() {
                     val uri = runCatching { Uri.parse(path) }.getOrNull() ?: return
                     val name = uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':')
                         ?: path.substringAfterLast('/')
-                    val (title, _) = FilenameParser.parse(name)
+                    // The file name only for a boot whose disc has no title, an ELF say.
+                    val title = com.armsx3.Rpcs3Bridge.getTitle().trim().ifEmpty { FilenameParser.parse(name).first }
+                    val folder = runCatching {
+                        java.io.File(com.armsx2.storage.ContentUri.bootPathFor(path)).isDirectory
+                    }.getOrDefault(false)
                     currentGame.value = GameInfo(
                         uri = uri,
                         title = title,
                         serial = serial,
-                        extension = name.substringAfterLast('.', "").uppercase(),
+                        extension = if (folder) "FOLDER" else name.substringAfterLast('.', "").uppercase(),
+                        platform = com.armsx2.GamePlatform.PS3,
                     )
                 }
             })

@@ -4243,6 +4243,10 @@ extern "C" void _rpcsx_captureFrame() { g_user_asked_for_frame_capture = true; }
 
 extern "C" std::string _rpcsx_getTitleId() { return Emu.GetTitleID(); }
 
+// The running game's title, from its PARAM.SFO. The app names a game it launched from outside
+// its library with this, since it has no scanned entry for it.
+extern "C" std::string _rpcsx_getTitle() { return Emu.GetTitle(); }
+
 // ADPF: what the last frame actually cost, and which OS thread presents it. The app feeds
 // these to PerformanceHintManager. Zero means 'not measured yet' -- the caller must skip.
 extern "C" u64 _rpcsx_getFramePeriodNs() { return rpcs3::utils::get_frame_period_ns(); }

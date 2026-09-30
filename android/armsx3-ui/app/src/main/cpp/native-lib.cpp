@@ -40,6 +40,7 @@ struct RPCSXApi {
   void (*openHomeMenu)();
   void (*captureFrame)();
   std::string (*getTitleId)();
+  std::string (*getTitle)();
   unsigned long long (*getFramePeriodNs)();
   unsigned long long (*getFrameWorkNs)();
   int (*getRsxThreadTid)();
@@ -173,6 +174,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.captureFrame = reinterpret_cast<decltype(captureFrame)>(dlsym(handle, "_rpcsx_captureFrame"));
     result.openHomeMenu = reinterpret_cast<decltype(openHomeMenu)>(dlsym(handle, "_rpcsx_openHomeMenu"));
     result.getTitleId = reinterpret_cast<decltype(getTitleId)>(dlsym(handle, "_rpcsx_getTitleId"));
+    result.getTitle = reinterpret_cast<decltype(getTitle)>(dlsym(handle, "_rpcsx_getTitle"));
     result.getFramePeriodNs = reinterpret_cast<decltype(getFramePeriodNs)>(dlsym(handle, "_rpcsx_getFramePeriodNs"));
     result.getFrameWorkNs = reinterpret_cast<decltype(getFrameWorkNs)>(dlsym(handle, "_rpcsx_getFrameWorkNs"));
     result.getRsxThreadTid = reinterpret_cast<decltype(getRsxThreadTid)>(dlsym(handle, "_rpcsx_getRsxThreadTid"));
@@ -515,6 +517,16 @@ Java_net_rpcsx_RPCSX_getTitleId(JNIEnv *env, jobject) {
   }
 
   return wrap(env, rpcsxLib.getTitleId());
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_getTitle(JNIEnv *env, jobject) {
+  // Same as getTitleId: the core may not be loaded yet.
+  if (rpcsxLib.getTitle == nullptr) {
+      return nullptr;
+  }
+
+  return wrap(env, rpcsxLib.getTitle());
 }
 
 extern "C" JNIEXPORT jstring JNICALL

@@ -1019,6 +1019,9 @@ object Rpcs3Bridge {
     fun getTitleId(): String = runCatching { RPCSX.instance.getTitleId() }.getOrDefault("")
 
     @JvmStatic
+    fun getTitle(): String = runCatching { RPCSX.instance.getTitle() }.getOrNull().orEmpty()
+
+    @JvmStatic
     fun getVersion(): String = runCatching { RPCSX.instance.getVersion() }.getOrDefault("")
 
     @JvmStatic
