@@ -1,6 +1,7 @@
 #include "stdafx.h"
 
 #include "ISO.h"
+#include "CHD.h"
 #include "Emu/VFS.h"
 #include "Emu/system_utils.hpp"
 #include "Crypto/utils.h"
@@ -110,6 +111,42 @@ bool is_iso_file(const std::string& path, u64* size, bool* is_raw_device)
 	if (path.empty())
 	{
 		return false;
+	}
+
+	// CHD (MAME Compressed Hunks of Data) disc images.
+	//
+	// This has to come BEFORE the ISO9660 probe below, and it cannot live in the
+	// iso_file& overload: a CHD never satisfies the CD001 test at 32768+1, because
+	// byte 0 of a CHD is the "MComprHD" magic and the rest of the file is
+	// compressed hunks -- there is no raw ISO9660 filesystem at any fixed offset
+	// to find. The probe below would therefore always return false for a CHD.
+	//
+	// That false is not harmless. System.cpp branches on this predicate at
+	// 1808/1825/2000/2114/2642/5065/5072 and android/src/rpcsx-android.cpp:3935;
+	// a false return silently routes the boot down the non-archive mount path
+	// instead of failing loudly.
+	//
+	// Detection is by magic rather than by extension: a .chd that is not really a
+	// CHD still fails here and falls through to the normal path, and a correctly
+	// formed CHD with any extension still works.
+	{
+		u64 chd_size = 0;
+		u32 chd_sector = 0;
+
+		if (chd::probe(path, &chd_size, &chd_sector))
+		{
+			if (size)
+			{
+				*size = chd_size;
+			}
+
+			if (is_raw_device)
+			{
+				*is_raw_device = false;
+			}
+
+			return true;
+		}
 	}
 
 	std::string new_path = path;
@@ -422,26 +459,62 @@ bool iso_file_decryption::init(const std::string& path, iso_archive* archive)
 	// Store the ISO region information (needed by both the "Redump" type (only on "decrypt()" method) and "3k3y" type)
 	//
 
-	iso_file iso_file(path);
+	// A CHD must be probed through chd_image, not iso_file. This function reads the raw PS3
+	// region table out of sector 0/1 to derive the encryption layout, and a CHD stores those
+	// bytes compressed -- a raw iso_file here therefore reads hunk data, fails the CD001 probe
+	// below, and aborts the archive init. The archive is already fully constructed at this
+	// point (iso_archive::iso_archive calls this last), so a decompressing reader is available.
+	//
+	// Every read below goes through the fs::file_base interface, so chd_image satisfies it
+	// unchanged -- the region table is a plain byte range at the start of the logical image.
+	//
+	// The local is deliberately NOT named `iso_file`: a local of that name shadows the class,
+	// making the class impossible to name on the following lines.
+	const bool is_chd = chd::is_chd_file(path);
 
-	if (!is_iso_file(iso_file))
+	fs::file image;
+
+	if (is_chd)
 	{
-		iso_log.error("init: Failed to recognize ISO file: '%s'", path);
-		return false;
+		// No CD001 probe on a CHD. is_iso_file() reads byte 32768+1 looking for "CD001", and
+		// in a CHD those bytes are compressed hunk data, so the probe can only ever fail. The
+		// ISO9660 filesystem was already validated by iso_archive's own descriptor walk, which
+		// read through the decompressing reader -- reaching this point means it is good.
+		image = fs::file(std::make_unique<chd_image>(path));
+
+		if (!image)
+		{
+			iso_log.error("init: Failed to open CHD image: '%s'", path);
+			return false;
+		}
+	}
+	else
+	{
+		// Plain ISO path: the probe needs a concrete iso_file, not the fs::file_base interface,
+		// so it is constructed first and converted to fs::file afterwards.
+		auto plain = std::make_unique<iso_file>(path);
+
+		if (!*plain || !is_iso_file(*plain))
+		{
+			iso_log.error("init: Failed to recognize ISO file: '%s'", path);
+			return false;
+		}
+
+		image = fs::file(std::move(plain));
 	}
 
-	// Reset the file position after it was changed by is_iso_file()
-	iso_file.seek(0, fs::seek_set);
+	// Reset the file position after it was changed by the ISO probe
+	image.seek(0, fs::seek_set);
 
 	std::array<u8, ISO_SECTOR_SIZE * 2> sec0_sec1;
 
-	if (iso_file.size() < sec0_sec1.size())
+	if (image.size() < sec0_sec1.size())
 	{
-		iso_log.error("init: Found only %llu sector(s) (minimum required is 2): '%s'", iso_file.size(), path);
+		iso_log.error("init: Found only %llu sector(s) (minimum required is 2): '%s'", image.size(), path);
 		return false;
 	}
 
-	if (iso_file.read(sec0_sec1.data(), sec0_sec1.size()) != sec0_sec1.size())
+	if (image.read(sec0_sec1.data(), sec0_sec1.size()) != sec0_sec1.size())
 	{
 		iso_log.error("init: Failed to read file: '%s'", path);
 		return false;
@@ -1068,16 +1141,45 @@ iso_archive::iso_archive(const std::string& path)
 		return;
 	}
 
-	fs::file iso_file(std::make_unique<iso_file>(m_path));
+	// A CHD carries an ISO9660 filesystem, but only after libchdr decompresses it -- the bytes
+	// on disk are compressed hunks. iso_file would therefore seek to a fixed offset inside
+	// compressed data and never find a valid volume descriptor, so a CHD has to be opened
+	// through chd_image and presented to the parser as the decompressed logical image.
+	// NOTE: this cannot be a ternary. `std::make_unique<chd_image>` and
+	// `std::make_unique<iso_file>` return *different* unique_ptr types, and the
+	// two branches of a ?: must have a common type -- there is none that fs::file
+	// can be constructed from. Both derive from fs::file_base, so the unifying
+	// conversion has to happen after the branch, not inside it.
+	//
+	// The local is named image_file, NOT iso_file. A local called `iso_file`
+	// shadows the class of the same name, and `std::make_unique<iso_file>` then
+	// resolves to make_unique<a local variable> -- a hard compile error. That was
+	// the original build failure, and it would have hit the non-CHD branch too.
+	fs::file image_file;
+
+	if (chd::is_chd_file(m_path))
+	{
+		image_file = fs::file(std::make_unique<chd_image>(m_path));
+	}
+	else
+	{
+		image_file = fs::file(std::make_unique<iso_file>(m_path));
+	}
+
+	if (!image_file)
+	{
+		iso_log.error("iso_archive: Failed to open image: '%s'", path);
+		return;
+	}
 
 	u8 descriptor_type = -2;
 	bool use_ucs2_decoding = false;
 
 	do
 	{
-		const auto descriptor_start = iso_file.pos();
+		const auto descriptor_start = image_file.pos();
 
-		descriptor_type = iso_file.read<u8>();
+		descriptor_type = image_file.read<u8>();
 
 		// 1 = primary vol descriptor, 2 = joliet SVD
 		if (descriptor_type == 1 || descriptor_type == 2)
@@ -1085,9 +1187,9 @@ iso_archive::iso_archive(const std::string& path)
 			use_ucs2_decoding = descriptor_type == 2;
 
 			// Skip the rest of descriptor's data
-			iso_file.seek(155, fs::seek_cur);
+			image_file.seek(155, fs::seek_cur);
 
-			const auto node = iso_read_directory_entry(iso_file, use_ucs2_decoding);
+			const auto node = iso_read_directory_entry(image_file, use_ucs2_decoding);
 
 			if (node)
 			{
@@ -1098,11 +1200,11 @@ iso_archive::iso_archive(const std::string& path)
 			}
 		}
 
-		iso_file.seek(descriptor_start + ISO_SECTOR_SIZE);
+		image_file.seek(descriptor_start + ISO_SECTOR_SIZE);
 	}
 	while (descriptor_type != 255);
 
-	iso_form_hierarchy(iso_file, m_root, use_ucs2_decoding);
+	iso_form_hierarchy(image_file, m_root, use_ucs2_decoding);
 
 	// Only when the archive object is fully set, we can finally initialize the decryption object needing the archive object
 	m_dec = std::make_shared<iso_file_decryption>();
@@ -1215,6 +1317,29 @@ bool iso_archive::is_file(const std::string& path)
 
 std::unique_ptr<fs::file_base> iso_archive::get_iso_file(const std::string& path, bs_t<fs::open_mode> mode, const iso_fs_node& node)
 {
+	// A CHD is a container, not a byte-addressable image: reading it through iso_file would
+	// hand the ISO9660 parser compressed hunk data (there is no PVD at any fixed offset), which
+	// is exactly the "Title: N/A" + report_fatal_error abort seen on-device.
+	//
+	// `node` MUST be forwarded. get_iso_file hands back a reader for ONE FILE inside the disc,
+	// and iso_file achieves that by remembering that file's extents and translating every
+	// file-relative offset into an image-absolute one (iso_file::file_offset). Passing no node
+	// gave every caller the WHOLE disc from byte 0, so PARAM.SFO was served the disc's leading
+	// bytes, the PSF magic check failed, and boot aborted with "File is not of PSF format" --
+	// the on-device symptom that the extent window in CHD.cpp now fixes.
+	if (chd::is_chd_file(m_path))
+	{
+		auto chd = std::make_unique<chd_image>(m_path, mode, &node);
+
+		if (!*chd)
+		{
+			iso_log.error("iso_archive: failed to open CHD image: '%s'", m_path);
+			return nullptr;
+		}
+
+		return chd;
+	}
+
 	if (m_dec->get_enc_type() == iso_encryption_type::NONE)
 	{
 		return std::make_unique<iso_file>(path, mode, node);
