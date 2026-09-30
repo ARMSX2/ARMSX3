@@ -1427,7 +1427,7 @@ open class MainActivityRuntime : ComponentActivity() {
         private fun bootTargetFor(uri: String, name: String): String? {
             val lower = name.lowercase()
             return when {
-                listOf(".iso", ".m3u", ".bin", ".elf", ".self").any(lower::endsWith) -> uri
+                listOf(".iso", ".chd", ".m3u", ".bin", ".elf", ".self").any(lower::endsWith) -> uri
                 // A folder dump is picked by a file inside it, and PS3_DISC.SFB is the one every
                 // disc root has. The folder itself is what boots.
                 lower == "ps3_disc.sfb" -> com.armsx2.storage.ContentUri.bootPathFor(uri)
