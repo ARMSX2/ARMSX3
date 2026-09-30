@@ -6,6 +6,7 @@
 #include "util/types.hpp"
 #include "Crypto/aes.h"
 
+// True for a CHD made from one too (see CHD.h).
 bool is_iso_file(const std::string& path, u64* size = nullptr, bool* is_raw_device = nullptr);
 
 void load_iso(const std::string& path);
@@ -31,6 +32,8 @@ constexpr u64 ISO_DESCRIPTORS_OFFSET = ISO_SECTOR_SIZE * 16;
 
 - Unsupported ISO encryption type:
   - Encrypted split ISO files
+
+- A .chd made from any supported type reads the same way (a Redump key named after the .chd)
 */
 
 // Struct to store ISO region information (storing addresses instead of LBA since we need to compare
@@ -61,6 +64,11 @@ enum class iso_type_status
 };
 
 class iso_archive;
+
+namespace chd
+{
+	class image;
+}
 
 // ISO file decryption class
 class iso_file_decryption
@@ -122,6 +130,10 @@ public:
 	iso_file(const std::string& path, bs_t<fs::open_mode> mode = fs::read);
 	iso_file(const std::string& path, bs_t<fs::open_mode> mode, const iso_fs_node& node);
 
+	// Read through an image that is already open, a CHD's, instead of opening a path
+	iso_file(fs::file image, const std::string& name);
+	iso_file(fs::file image, const iso_fs_node& node);
+
 	explicit operator bool() const { return m_file.operator bool(); }
 
 	fs::stat_t get_stat() override;
@@ -144,6 +156,7 @@ private:
 
 public:
 	iso_file_encrypted(const std::string& path, bs_t<fs::open_mode> mode, const iso_fs_node& node, std::shared_ptr<iso_file_decryption> dec);
+	iso_file_encrypted(fs::file image, const iso_fs_node& node, std::shared_ptr<iso_file_decryption> dec);
 
 	u64 read_at(u64 offset, void* buffer, u64 size) override;
 };
@@ -170,6 +183,9 @@ private:
 	std::string m_path;
 	iso_fs_node m_root {};
 	std::shared_ptr<iso_file_decryption> m_dec;
+	std::shared_ptr<chd::image> m_chd; // Set when the image is a CHD, which every file reads through
+
+	bool reads_decrypted();
 
 public:
 	iso_archive(const std::string& path);
@@ -191,6 +207,7 @@ public:
 	psf::registry open_psf(const std::string& path);
 
 	friend class iso_file;
+	friend class iso_file_decryption;
 };
 
 class iso_device : public fs::device_base
