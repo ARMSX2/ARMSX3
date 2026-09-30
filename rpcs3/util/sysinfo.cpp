@@ -414,6 +414,24 @@ bool utils::has_wfe_event_stream()
 	return g_value;
 }
 
+#if !defined(ARM_FEATURE_LSE2)
+bool utils::has_lse2()
+{
+	static const bool g_value = []() -> bool
+	{
+		// All Apple Silicon Macs have LSE2
+#if defined(__linux__)
+		return (getauxval(AT_HWCAP) & HWCAP_USCAT) != 0;
+#elif defined(_WIN32)
+		return IsProcessorFeaturePresent(PF_ARM_LSE2_AVAILABLE) != 0;
+#else
+		return false;
+#endif
+	}();
+	return g_value;
+}
+#endif
+
 bool utils::has_sha3()
 {
 	static const bool g_value = []() -> bool
@@ -606,11 +624,7 @@ std::string utils::get_system_info()
 
 	// Which 16-byte atomics this CPU gets (util/atomic.hpp): plain LDP/STP loads and stores with
 	// FEAT_LSE2, CASP for all of them without.
-#if defined(ARM_FEATURE_LSE2)
-	result += " | LSE2";
-#else
-	fmt::append(result, " | LSE2-%s", utils::arm64_lse2 ? "yes" : "no");
-#endif
+	fmt::append(result, " | LSE2-%s", has_lse2() ? "yes" : "no");
 #else
 
 	if (has_avx())

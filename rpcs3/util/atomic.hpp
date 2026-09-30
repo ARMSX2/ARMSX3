@@ -3,6 +3,23 @@
 #include "util/types.hpp"
 #include <functional>
 
+// Whether aligned 16-byte LDP/STP are single-copy atomic here (FEAT_LSE2), which picks the paths
+// in atomic_storage<T, 16>. Run-time detection contributed by Whatcookie (RPCS3 PR #19646). Code
+// that runs before atomic.cpp's initialiser reads false, which only means the CASP path, and that
+// is correct on every CPU.
+#if defined(ARCH_ARM64)
+namespace utils
+{
+#if defined(ARM_FEATURE_LSE2)
+	inline constexpr bool g_atomic_lse2 = true;
+#elif defined(__linux__) || defined(_WIN32)
+	extern const bool g_atomic_lse2;
+#else
+	inline constexpr bool g_atomic_lse2 = false;
+#endif
+}
+#endif
+
 #ifndef _MSC_VER
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wold-style-cast"
@@ -66,28 +83,6 @@ namespace utils
 {
 	u128 __vectorcall atomic_load16(const void*);
 	void __vectorcall atomic_store16(void*, u128);
-}
-#endif
-
-#if defined(ARCH_ARM64) && !defined(ARM_FEATURE_LSE2)
-#ifdef __linux__
-#include <sys/auxv.h>
-#endif
-
-namespace utils
-{
-	// HWCAP_USCAT (asm/hwcap.h): the kernel's name for FEAT_LSE2.
-	constexpr unsigned long arm64_hwcap_uscat = 1ul << 25;
-
-	// Whether this CPU has FEAT_LSE2, under which an aligned 16-byte LDP/STP is single-copy atomic
-	// (see atomic_storage<T, 16>). Read once as the library loads. A static initialiser that runs
-	// before it reads false, which only means the CASP path, and that is correct on every CPU.
-	__attribute__((visibility("hidden"))) inline const bool arm64_lse2 =
-#ifdef __linux__
-		(getauxval(AT_HWCAP) & arm64_hwcap_uscat) != 0;
-#else
-		false;
-#endif
 }
 #endif
 
@@ -1067,20 +1062,12 @@ struct atomic_storage<T, 16> : atomic_storage<T, 0>
 	//
 	// So: CASP, which armv8.1 guarantees (LSE), for every read-modify-write on every CPU. And on a
 	// CPU whose kernel reports FEAT_LSE2, plain loads and stores, as upstream's LSE2 path has them.
-	// Picked at run time, so one APK, the Play Store's armv8.1 build included, serves both.
-
-	static inline bool lse2()
-	{
-#if defined(ARM_FEATURE_LSE2)
-		return true;
-#else
-		return utils::arm64_lse2;
-#endif
-	}
+	// Picked at run time (utils::g_atomic_lse2, upstream's switch), so one APK, the Play Store's
+	// armv8.1 build included, serves both. Upstream keeps LDAXP/STLXP where we use CASP.
 
 	static inline T load(const T& dest)
 	{
-		if (lse2())
+		if (utils::g_atomic_lse2) [[likely]]
 		{
 			u64 data[2];
 			__asm__ volatile("ldp %x[data0], %x[data1], %[dest]\n"
@@ -1126,7 +1113,7 @@ struct atomic_storage<T, 16> : atomic_storage<T, 0>
 
 	static inline void store(T& dest, T value)
 	{
-		if (lse2())
+		if (utils::g_atomic_lse2) [[likely]]
 		{
 			u64 src[2];
 			std::memcpy(src, &value, 16);
@@ -1144,7 +1131,7 @@ struct atomic_storage<T, 16> : atomic_storage<T, 0>
 
 	static inline void release(T& dest, T value)
 	{
-		if (lse2())
+		if (utils::g_atomic_lse2) [[likely]]
 		{
 			u64 src[2];
 			std::memcpy(src, &value, 16);
