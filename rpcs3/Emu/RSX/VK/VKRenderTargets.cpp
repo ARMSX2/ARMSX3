@@ -873,6 +873,12 @@ namespace vk
 			return;
 		}
 
+		if (msaa_flags & rsx::surface_state_flags::require_unresolve)
+		{
+			// Emit an early write barrier here to commit any resolve operations
+			write_barrier(cmd);
+		}
+
 		// Keep the render pass open across this barrier on Android.
 		//
 		// This is the fragment feedback case, an attachment sampled while still bound, and it
