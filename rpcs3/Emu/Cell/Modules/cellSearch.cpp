@@ -1790,7 +1790,7 @@ error_code cellSearchGetMusicSelectionContext(CellSearchId searchId, vm::cptr<Ce
 	context.create_playlist(music_selection_context::get_next_hash());
 	*outContext = context.get();
 
-	cellSearch.success("cellSearchGetMusicSelectionContext: found selection context: %d", context.to_string());
+	cellSearch.success("cellSearchGetMusicSelectionContext: found selection context: %s", context.to_string());
 
 	return CELL_OK;
 }
