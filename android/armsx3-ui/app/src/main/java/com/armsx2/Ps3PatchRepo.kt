@@ -30,7 +30,7 @@ object Ps3PatchRepo {
      */
     /** Asked for the current release rather than a pinned asset url, which would rot. */
     private const val ARTEMIS_LATEST_RELEASE =
-        "https://api.github.com/repos/chidreams/Artemis-Patch-Collection-RPCS3/releases/latest"
+        "https://api.github.com/repos/chidreams/Artemis-Patch-Collection-Android/releases/latest"
 
     private fun patchUrl(version: String) =
         "https://rpcs3.net/compatibility?patch&api=v1&v=$version"
@@ -156,8 +156,11 @@ object Ps3PatchRepo {
     /**
      * The Artemis collection, a second source of patches.
      *
-     * Maintained by @chidreams at github.com/chidreams/Artemis-Patch-Collection-RPCS3. All this
-     * does is download their work; the cheats, the testing and the upkeep are theirs.
+     * Maintained by @chidreams. Taken from github.com/chidreams/Artemis-Patch-Collection-Android,
+     * the edition they publish for ARMSX3 and asked us to use: their workflow copies
+     * imported_patch.yml from the main branch of Artemis-Patch-Collection-RPCS3 and releases it,
+     * so it carries the same patches without waiting for that repo's own releases. All this does
+     * is download their work; the cheats, the testing and the upkeep are theirs.
      *
      * Community cheats, MIT licensed, and already in RPCS3's own patch format: PPU hash keyed,
      * with `[ be32, addr, value ]` entries. No conversion step. It gets a file of its own,
@@ -167,9 +170,10 @@ object Ps3PatchRepo {
      *
      * The release ASSET is asked for rather than hardcoded. It is attached to a GitHub release and
      * the tag moves, so a pinned url would rot the first time they publish. Asking the API which
-     * asset is current costs one small request and survives that. Either packaging is taken: up
-     * to v1.04bfu it was a zip holding the yml, and from v2026.09.19 it is the bare
-     * imported_patch.yml. Accepting only the zip is what broke the button the day they switched.
+     * asset is current costs one small request and survives that. Either packaging is taken: the
+     * RPCS3 repo released a zip holding the yml up to v1.04bfu and the bare imported_patch.yml
+     * from v2026.09.19, which is also what the Android edition releases. Accepting only the zip
+     * is what broke the button the day they switched.
      *
      * No checksum to verify: unlike rpcs3.net there is no published digest to compare against.
      * The transport is https and the core parses the result, so a corrupt file is rejected
