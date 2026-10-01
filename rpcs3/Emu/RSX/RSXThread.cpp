@@ -2076,6 +2076,7 @@ namespace rsx
 
 		auto evaluate_color_buffer_state = [&]() -> bool
 		{
+			m_framebuffer_layout.color_write_enabled = {};
 			const auto mrt_buffers = rsx::utility::get_rtt_indexes(m_framebuffer_layout.target);
 			bool any_found = false;
 
