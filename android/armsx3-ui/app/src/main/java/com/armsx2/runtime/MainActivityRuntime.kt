@@ -2014,71 +2014,13 @@ open class MainActivityRuntime : ComponentActivity() {
         copyAssetAll(applicationContext, "bios")
         copyAssetAll(applicationContext, "resources")
 
-        // On an app UPDATE (versionCode changed), drop the regenerable GPU caches. Installing a
-        // new build over an old one keeps the compiled GS shader/pipeline cache under
-        // <dataRoot>/cache, and a cache baked by a different core build can render corrupt — the
-        // "scrambled PS2 logo" and post-update graphical glitches users currently fix by
-        // reinstalling clean (#376/#385). The cache is pure derived data (rebuilt on demand),
-        // never user content, so wiping it is always safe. Skipped on first install (no prior
-        // version recorded) — there is nothing stale to clear.
-        // ONLY the GPU caches, never the compiled guest modules.
-        //
-        // This came from ARMSX2, where <dataRoot>/cache held the GS shader/pipeline cache and
-        // nothing else, so deleting the lot was free. In ARMSX3 that same directory is RPCS3's
-        // whole cache root: <dataRoot>/cache/cache/<TITLEID>/ppu-<hash>-EBOOT.BIN/ holds every
-        // compiled PPU module, and deleting it threw away work measured in tens of minutes per
-        // game -- an hour for the XMB's 390 firmware modules. Every update, on purpose, by code
-        // that believed it was clearing shaders. That is the "why do I have to recompile my games
-        // after every update" report, and it is the single worst thing about updating.
-        //
-        // The original worry stands and is preserved: a pipeline cache baked against a different
-        // core build can render corrupt (#376/#385). But that argument is about GPU pipeline blobs,
-        // not guest code. PPU objects already carry their own compatibility key in the filename --
-        // format version, module hash, the settings that affect codegen, and the CPU target -- so a
-        // build that changes any of that simply does not match them, and one that does not change
-        // it has no reason to discard them.
-        //
-        // OFF THE MAIN THREAD. kickoffEmucoreInit runs from onCreate, and this walk covers the
-        // WHOLE cache root -- which holds every compiled PPU module and reaches tens of GB on a
-        // full library. Walking that on the UI thread blocks it for seconds and Android kills the
-        // app as unresponsive, which users report as "crashes during the logo animation after
-        // updating" (#94, seen on Retroid Pocket 6 and AYN Thor).
-        //
-        // It also explains why re-launching eventually works: lastRunVersionCode is only written
-        // once the walk finishes, so a kill part-way through means the next launch retries, each
-        // attempt deleting a few more directories until the walk is finally short enough to
-        // survive. A clean install has no cache to walk, which is why reinstalling "fixes" it.
-        //
-        // Nothing below depends on this having finished -- the caches are regenerable and the core
-        // rebuilds them on demand -- so it is safe to let it run behind startup.
-        val prevVc = prefs.getInt("lastRunVersionCode", 0)
-        val curVc = BuildConfig.VERSION_CODE
-
-        if (prevVc != 0 && prevVc != curVc) {
-            Thread {
-                runCatching {
-                    val root = File(assetCopyRoot(applicationContext), "cache")
-                    var cleared = 0
-                    // Depth-first over the cache root, removing only directories named
-                    // shaders_cache (RPCS3 puts one beside each title's compiled modules).
-                    // walkBottomUp so a match is deleted whole without the walk then descending
-                    // into a directory that is gone.
-                    root.walkBottomUp()
-                        .filter { it.isDirectory && it.name == "shaders_cache" }
-                        .forEach { if (it.deleteRecursively()) cleared++ }
-                    android.util.Log.i(
-                        "ARMSX2",
-                        "Update $prevVc -> $curVc: cleared $cleared shader cache(s); compiled modules kept",
-                    )
-                }
-                // Recorded only after the sweep actually completes, so an interrupted run repeats
-                // rather than silently leaving a build's stale pipeline blobs behind.
-                runCatching { prefs.edit { putInt("lastRunVersionCode", curVc) } }
-            }.apply { isDaemon = true; name = "shader-cache-sweep"; priority = Thread.MIN_PRIORITY }
-                .start()
-        } else if (prevVc != curVc) {
-            runCatching { prefs.edit { putInt("lastRunVersionCode", curVc) } }
-        }
+        // No shader cache sweep on update. ARMSX2 deletes its GPU caches whenever the versionCode
+        // changes, because a PCSX2 GS cache built by another version can render corrupt (#376/#385),
+        // and that sweep came over with the app code. It protected nothing here: RPCS3's shaders_cache
+        // holds the games' own shader programs and pipeline state, the host shaders are rebuilt from
+        // them at every boot by the running build, and RPCS3 versions its pipeline folder itself
+        // (pipelines/vulkan/v1.96-eds). All the sweep did was make every game rebuild its GPU
+        // programs during play after each update, which is a stutter users notice.
 
         // Point the ANGLE EGL env vars at the bundled libs (or clear them) before the
         // GS thread ever opens a GL context. Re-applied per launch below too.
