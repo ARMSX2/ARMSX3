@@ -170,6 +170,17 @@ object ConfigDatabase {
         // Off is off-spec and has broken other titles (see ConfigStore KEY_PERGAME_RSV_CLEARED), so
         // it is this title only, and the per-game database toggle takes it back.
         "BLUS30218" to "Core:\n  Accurate SPU Reservations: false\n",
+
+        // Blades of Time: SPU Cache off.
+        //
+        // When the game's saved SPU list is built at startup, its JobMgr#1 thread reads a null
+        // pointer 0.1 s after it starts (guest pc 0x002af630) and the emulator freezes. That is
+        // every boot after the first, since the first one writes the list. A boot that compiles
+        // SPU code as the game runs gets past it, with the PPU cache warm too (Odin 3, Turnip,
+        // 10-02). Off keeps every boot on that path; the cost is SPU compile stutter early in each
+        // session. The EU disc is the same game and was not tested on its own.
+        "BLUS30833" to "Core:\n  SPU Cache: false\n",
+        "BLES01395" to "Core:\n  SPU Cache: false\n",
     )
 
     /**
