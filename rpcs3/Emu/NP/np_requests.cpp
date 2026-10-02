@@ -1635,9 +1635,11 @@ namespace np
 			cur_status->hasData = 1;
 			cur_status->lastChangedDate.tick = cur_pb_status.lastchangeddate();
 			string_to_npid(cur_pb_status.lastchangedauthorid(), cur_status->lastChangedAuthorId);
-			ensure(cur_pb_status.info().size() <= SCE_NP_TUS_DATA_INFO_MAX_SIZE);
-			cur_status->info.infoSize = ::narrow<u32>(cur_pb_status.info().size());
-			memcpy(cur_status->info.data, cur_pb_status.info().data(), cur_pb_status.info().size());
+			// ARMSX3: clamp rather than ensure(): an oversized info field from the server is cut to the
+			// struct, never written past it and never fatal (upstream 81cbf7ba3 aborts here instead).
+			const usz info_size = std::min<usz>(cur_pb_status.info().size(), SCE_NP_TUS_DATA_INFO_MAX_SIZE);
+			cur_status->info.infoSize = ::narrow<u32>(info_size);
+			memcpy(cur_status->info.data, cur_pb_status.info().data(), info_size);
 		}
 
 		tus_trans->result = not_an_error(resp->status_size());
@@ -1873,9 +1875,10 @@ namespace np
 			string_to_npid(pb_status.lastchangedauthorid(), data_status->lastChangedAuthorId);
 			data_status->data = tdata->data;
 			data_status->dataSize = ::narrow<u32>(pb_data->data().size());
-			ensure(pb_status.info().size() <= SCE_NP_TUS_DATA_INFO_MAX_SIZE);
-			data_status->info.infoSize = ::narrow<u32>(pb_status.info().size());
-			memcpy(data_status->info.data, pb_status.info().data(), pb_status.info().size());
+			// ARMSX3: clamp, as above. Before 81cbf7ba3 this site already truncated safely.
+			const usz info_size = std::min<usz>(pb_status.info().size(), SCE_NP_TUS_DATA_INFO_MAX_SIZE);
+			data_status->info.infoSize = ::narrow<u32>(info_size);
+			memcpy(data_status->info.data, pb_status.info().data(), info_size);
 
 			const u32 to_copy = std::min<u32>(data_status->dataSize, tdata->recvSize);
 			memcpy(data, pb_data->data().data(), to_copy);
