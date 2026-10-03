@@ -37,31 +37,27 @@ object I18n {
     const val SYSTEM_CODE = "system"
 
     /** System default first, then English (source of truth) and translations. */
-    val languages: List<AppLanguage> = listOf(
-        AppLanguage(SYSTEM_CODE, "System", "System"),
-        AppLanguage("en", "English", "English"),
-        AppLanguage("es", "Spanish", "Español"),
-        AppLanguage("pt-BR", "Portuguese (Brazil)", "Português (Brasil)"),
-        AppLanguage("fr", "French", "Français"),
-        AppLanguage("de", "German", "Deutsch"),
-        AppLanguage("it", "Italian", "Italiano"),
-        AppLanguage("ru", "Russian", "Русский"),
-        AppLanguage("uk", "Ukrainian", "Українська"),
-        AppLanguage("ku", "Kurdish", "Kurdî"),
-        AppLanguage("pl", "Polish", "Polski"),
-        AppLanguage("tr", "Turkish", "Türkçe"),
-        AppLanguage("ja", "Japanese", "日本語"),
-        AppLanguage("ko", "Korean", "한국어"),
-        AppLanguage("zh-CN", "Chinese (Simplified)", "简体中文"),
-        AppLanguage("zh-TW", "Chinese (Traditional)", "繁體中文"),
-        AppLanguage("ar", "Arabic", "العربية", rtl = true),
-        AppLanguage("id", "Indonesian", "Indonesia"),
-        AppLanguage("vi", "Vietnamese", "Tiếng Việt"),
-        AppLanguage("th", "Thai", "ไทย"),
-        AppLanguage("fa", "Persian", "فارسی", rtl = true),
-    )
+    val languages: List<AppLanguage> =
+        listOf(AppLanguage(SYSTEM_CODE, "System", "System")) + GENERATED_APP_LANGUAGES
 
     private const val PREF_KEY = "ui.language"
+
+    private val legacyCodes = mapOf(
+        "ar" to "ar-SA",
+        "de" to "de-DE",
+        "es" to "es-419",
+        "fa" to "fa-IR",
+        "fr" to "fr-FR",
+        "id" to "id-ID",
+        "it" to "it-IT",
+        "ja" to "ja-JP",
+        "ko" to "ko-KR",
+        "pl" to "pl-PL",
+        "ru" to "ru-RU",
+        "tr" to "tr-TR",
+        "uk" to "uk-UA",
+        "vi" to "vi-VN",
+    )
 
     /** Current language code, as Compose state — mutating it drives live recomposition. */
     var current by mutableStateOf("en")
@@ -77,6 +73,7 @@ object I18n {
     /** Call once at startup (after MainActivityRuntime.prefs is ready). Restores the saved language. */
     fun init(context: Context) {
         val saved = runCatching { MainActivityRuntime.prefs.getString(PREF_KEY, null) }.getOrNull()
+            ?.let { legacyCodes[it] ?: it }
         val selection = if (saved != null && languages.any { it.code == saved }) saved else SYSTEM_CODE
         applySelection(context, selection)
     }

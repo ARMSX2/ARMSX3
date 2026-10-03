@@ -1,4 +1,9 @@
 <resources>
     <string name="app_name">ARMSX3</string>
     <string name="unexpected_error">Unexpected error</string>
+    <string name="legacy_file">File</string>
+    <string name="legacy_save">Save</string>
+    <string name="legacy_load">Load</string>
+    <string name="legacy_select">Select</string>
+    <string name="legacy_start">Start</string>
 </resources>

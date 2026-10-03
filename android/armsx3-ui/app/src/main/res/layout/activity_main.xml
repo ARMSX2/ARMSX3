@@ -70,7 +70,7 @@
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="file"
+            android:text="@string/legacy_file"
             android:textColor="@color/white"
             app:rippleColor="#80cdcdcd"
             app:strokeColor="#80000000" />
@@ -80,7 +80,7 @@
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="save"
+            android:text="@string/legacy_save"
             android:textColor="@color/white"
             app:rippleColor="#80cdcdcd"
             app:strokeColor="#80000000" />
@@ -90,7 +90,7 @@
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="load"
+            android:text="@string/legacy_load"
             android:textColor="@color/white"
             app:rippleColor="#80cdcdcd"
             app:strokeColor="#80000000" />
@@ -110,7 +110,7 @@
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="select"
+            android:text="@string/legacy_select"
             android:textColor="@color/white"
             app:rippleColor="#80cdcdcd"
             app:strokeColor="#80000000" />
@@ -120,7 +120,7 @@
             style="@style/Widget.MaterialComponents.Button.OutlinedButton"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="start"
+            android:text="@string/legacy_start"
             android:textColor="@color/white"
             app:rippleColor="#80cdcdcd"
             app:strokeColor="#80000000" />
