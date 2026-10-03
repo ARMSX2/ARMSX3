@@ -64,11 +64,33 @@ bool VKGSRender::reinitialize_swapchain()
 
 	if (m_surface_lost)
 	{
+		// Not while the emulator is stopping. Leaving a game closes its screen, so Android destroys
+		// the window while the renderer is still drawing its last frames, and the surface is lost
+		// mid-stop. handle() cannot wait for a new window then and hands back the one it already
+		// had, which is the window being destroyed: building a surface on it failed with
+		// VK_ERROR_NATIVE_WINDOW_IN_USE_KHR, a fatal error, on every exit that hit this window.
+		// Seen on an Odin 3 and in issue #180 (Galaxy S25 Ultra): "surface event 2", "Stopping
+		// emulator...", then the fatal in make_WSI_surface. Nothing is shown again once stopping.
+		if (Emu.IsStopped())
+		{
+			swapchain_unavailable = true;
+			return false;
+		}
+
 		// handle() blocks until the app hands us a live native window again, so
 		// this parks here for as long as the user is away and resumes the moment
 		// they come back.
 		if (auto* wsi = dynamic_cast<vk::swapchain_WSI*>(m_swapchain.get()))
 		{
+			const display_handle_t window = m_frame->handle();
+
+			// The same case, starting while handle() waited.
+			if (Emu.IsStopped())
+			{
+				swapchain_unavailable = true;
+				return false;
+			}
+
 			rsx_log.warning("Surface was lost; rebuilding it from the current native window.");
 
 			// ORDER MATTERS. The swapchain has to be destroyed before the surface
@@ -76,7 +98,7 @@ bool VKGSRender::reinitialize_swapchain()
 			// swapchain still references, and doing it the other way round faulted
 			// inside the driver on the very next present.
 			wsi->destroy_swapchain_only();
-			wsi->replace_surface(m_instance.recreate_surface(m_frame->handle()));
+			wsi->replace_surface(m_instance.recreate_surface(window));
 		}
 
 		// A NEW surface is new state, so the SUBOPTIMAL latch from the old one must not carry
