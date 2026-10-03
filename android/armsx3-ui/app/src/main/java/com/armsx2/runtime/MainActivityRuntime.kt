@@ -324,17 +324,39 @@ open class MainActivityRuntime : ComponentActivity() {
          * advance and keep writable emulator data in app-private storage.
          */
         fun validateSystemDirWritable(posixPath: String): Boolean {
-            return try {
-                val dir = File(posixPath)
-                if (!dir.exists() && !dir.mkdirs()) return false
-                if (!dir.isDirectory) return false
-                val probe = File(dir, ".armsx3-write-probe")
+            val dir = File(posixPath)
+            // A few tries before calling a folder unwritable: shared storage can refuse a write for
+            // a moment while the app starts, and the answer decides which folder this whole launch
+            // uses (see assetCopyRoot).
+            repeat(3) { attempt ->
+                if (probeWritable(dir)) return true
+                if (attempt < 2) runCatching { Thread.sleep(100) }
+            }
+            return false
+        }
+
+        private fun probeWritable(dir: File): Boolean = try {
+            if (!dir.exists() && !dir.mkdirs()) {
+                false
+            } else if (!dir.isDirectory) {
+                false
+            } else {
+                // A probe name of its own each time. With one fixed name, a probe left behind by a
+                // process that died between create and delete made createNewFile() return false,
+                // "not writable", on every launch after that, and two threads probing at once failed
+                // one of them. Either way the app quietly ran from its own folder instead of the
+                // user's, and their saves looked gone. The old fixed name is cleared if it was left.
+                File(dir, ".armsx3-write-probe").takeIf { it.exists() }?.delete()
+                val probe = File(
+                    dir,
+                    ".armsx3-write-probe-${android.os.Process.myPid()}-${Thread.currentThread().id}-${System.nanoTime()}",
+                )
                 val ok = probe.createNewFile()
                 if (ok) probe.delete()
                 ok
-            } catch (_: Exception) {
-                false
             }
+        } catch (_: Exception) {
+            false
         }
 
         val surface = mutableStateOf<EmulationSurface?>(null)
@@ -1820,11 +1842,34 @@ open class MainActivityRuntime : ComponentActivity() {
             }
         }
 
+        /** The data root this process settled on, and the configured folder it was decided for. */
+        @Volatile private var resolvedDataRoot: Pair<String?, String>? = null
+
         fun assetCopyRoot(context: Context): String {
             val custom = systemDirPosix()
-            return custom?.takeIf { validateSystemDirWritable(it) }
-                ?: context.getExternalFilesDir(null)?.absolutePath
-                ?: context.dataDir.absolutePath
+            // Decided once per configured folder, not on every call. The core pins its root at
+            // startup from this same function, and a later call answering differently (one probe
+            // failing mid-session) sent whatever asked it next to another folder than the emulator.
+            resolvedDataRoot?.let { (decidedFor, root) -> if (decidedFor == custom) return root }
+
+            if (custom != null && validateSystemDirWritable(custom)) {
+                resolvedDataRoot = custom to custom
+                return custom
+            }
+
+            val fallback = context.getExternalFilesDir(null)?.absolutePath ?: context.dataDir.absolutePath
+            if (custom == null) {
+                // The Internal choice: nothing was probed, so the answer cannot change.
+                resolvedDataRoot = null to fallback
+            } else {
+                // Not remembered, so the next call tries the user's folder again: once setup has
+                // them grant access, it must be used, not this. And not silent: onCreate routes this
+                // case to setup before the core starts, so reaching it means something changed
+                // mid-launch. Say where data is going.
+                android.util.Log.e("ARMSX3", "data folder $custom is not writable; using $fallback")
+                println("@@ANDROID_DATA_ROOT@@ fallback custom=$custom using=$fallback")
+            }
+            return fallback
         }
 
         fun copyAssetAll(p_context: Context, srcPath: String) {
@@ -2429,6 +2474,15 @@ open class MainActivityRuntime : ComponentActivity() {
         // folder is actually reachable, drop setupComplete for this session so the wizard
         // re-runs (and re-requests the permission); finishSetup re-arms it.
         if (setupComplete.value && !romsAccessible(this, romsDirs.value)) {
+            setupComplete.value = false
+            setupRecoveryNeeded.value = true
+        }
+        // The same for a custom data folder (saves, firmware, caches). If it cannot be written,
+        // the app used to fall back to its own folder without a word, and the user's saves and
+        // firmware looked gone (issue #180). Re-run setup instead, before the core starts, so they
+        // can grant access again or pick the folder; nothing is moved or deleted.
+        if (setupComplete.value && systemDirPosix()?.let { !validateSystemDirWritable(it) } == true) {
+            println("@@ANDROID_DATA_ROOT@@ unwritable at launch: ${systemDirPosix()}, setup re-shown")
             setupComplete.value = false
             setupRecoveryNeeded.value = true
         }
