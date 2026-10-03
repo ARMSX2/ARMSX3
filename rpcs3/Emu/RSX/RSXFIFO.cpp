@@ -55,12 +55,12 @@ namespace rsx
 		u32 FIFO_control::reported_get() const
 		{
 			// GET is the RSX read pointer, not its execution pointer (RPCS3 #19606, elad335).
-			// With the atomic puller that is the end of the data fetched around the command
+			// With the atomic puller that is the end of the window fetched around the command
 			// being executed; with nothing fetched (the fast puller) it is the position itself.
-			if (m_fifo_pos - m_cache_addr <= m_cache_size)
+			if (m_fifo_pos - m_cache_addr <= m_hit_size)
 			{
 				// Atomic FIFO only path
-				return m_cache_addr + m_cache_size;
+				return m_cache_addr + m_hit_size;
 			}
 
 			return m_fifo_pos;
@@ -100,7 +100,10 @@ namespace rsx
 			m_cmd = cmd;
 			m_command_inc = ((m_cmd & RSX_METHOD_NON_INCREMENT_CMD_MASK) == RSX_METHOD_NON_INCREMENT_CMD) ? 0 : 4;
 			m_remaining_commands = count;
-			m_fifo_pos = position - 4;
+			// Saved between packets (count 0), the position is the next header and nothing is
+			// pending to re-read: resume on it. Rewinding a word there, as upstream does, decodes
+			// the last argument of the previous packet as a command on every such load.
+			m_fifo_pos = count ? position - 4 : position;
 			m_args_ptr = m_iotable->get_addr(m_fifo_pos);
 			m_command_reg = (m_cmd & 0xffff) + m_command_inc * (((m_cmd >> 18) - count) & 0x7ff) - m_command_inc;
 		}
@@ -143,7 +146,12 @@ namespace rsx
 
 		std::pair<bool, u32> FIFO_control::fetch_u32_refill(u32 addr)
 		{
-			if (addr - m_cache_addr >= m_cache_size)
+			const u32 window_addr = addr & -128;
+
+			// Refill when addr is outside the data we hold, or when the window starting at it
+			// would run past that data: upstream refills at every window, so that is where it
+			// would pick up a PUT that moved since our fetch.
+			if (addr - m_cache_addr >= m_cache_size || (window_addr - m_cache_addr) + fetch_window_size > m_cache_size)
 			{
 				const u32 put = read_put();
 
@@ -152,7 +160,8 @@ namespace rsx
 					return {false, FIFO_EMPTY};
 				}
 
-				m_cache_addr = addr & -128;
+				m_hit_size = 0;
+				m_cache_addr = window_addr;
 
 				const u32 addr1 = m_iotable->get_addr(m_cache_addr);
 
@@ -288,13 +297,15 @@ namespace rsx
 				{
 					rsx::prof::g_fifo_refill_stall_us += (get_system_time() - start_time);
 				}
-
-				// Update FIFO GET. At once, not on the packet lag: what waits on it (a guest
-				// waiting for GET to reach PUT, Ratchet & Clank's labels) needs it before the
-				// fetched commands run.
-				sync_get_force();
-				atomic_fence_seq_cst();
 			}
+
+			m_hit_size = std::min<u32>(m_cache_size, (window_addr - m_cache_addr) + fetch_window_size);
+
+			// Update FIFO GET. At once, not on the packet lag: what waits on it (a guest
+			// waiting for GET to reach PUT, Ratchet & Clank's labels) needs it before the
+			// fetched commands run. A new window inside held data moves it as a refill does.
+			sync_get_force();
+			atomic_fence_seq_cst();
 
 			const auto ret = read_from_ptr_unsafe<be_t<u32>>(+m_cache[0], addr - m_cache_addr);
 			return {true, ret};
