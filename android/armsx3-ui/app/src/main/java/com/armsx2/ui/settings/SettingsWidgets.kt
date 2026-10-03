@@ -1185,7 +1185,7 @@ internal fun com.armsx2.config.Settings.notDefault(pick: (com.armsx2.config.Sett
  *  changed long ago, or by someone else, cannot hide in plain sight: a tester went looking for why
  *  Killzone 3 crawled, and the PPU decoder on Interpreter looked like any other row. */
 @Composable
-private fun NotDefaultLabel(modifier: Modifier = Modifier) {
+internal fun NotDefaultLabel(modifier: Modifier = Modifier) {
     Text(
         str("settings.notDefault"),
         color = MaterialTheme.colorScheme.error,

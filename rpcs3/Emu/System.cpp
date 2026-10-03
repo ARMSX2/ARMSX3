@@ -53,6 +53,12 @@
 #include <memory>
 #include <shared_mutex>
 
+#ifndef _WIN32
+#include <cerrno>
+#include <cstring>
+#include <unistd.h>
+#endif
+
 #include "Utilities/JIT.h"
 
 #include "Emu/IPC_socket.h"
@@ -5607,6 +5613,46 @@ bool Emulator::IsValidSfb(const std::string& path)
 	return false;
 }
 
+// Writes the whole config and flushes it to the device. Empty on success, else what failed.
+//
+// ARMSX3: fs::file's write and sync treat any failure as fatal. Leaving the app saves the
+// settings, and with the SD card full the write got ENOSPC and took the whole app down. A config
+// that cannot be saved is not worth that: the caller logs it and the old file stays.
+static std::string write_config_file(const fs::file& file, std::string_view data)
+{
+#ifdef _WIN32
+	file.write(data.data(), data.size());
+	return {};
+#else
+	const int fd = file.get_handle();
+	usz done = 0;
+
+	while (done < data.size())
+	{
+		const auto written = ::write(fd, data.data() + done, data.size() - done);
+
+		if (written < 0 && errno == EINTR)
+		{
+			continue;
+		}
+
+		if (written <= 0)
+		{
+			return fmt::format("write failed: %s", written < 0 ? std::strerror(errno) : "nothing written");
+		}
+
+		done += written;
+	}
+
+	if (::fsync(fd) != 0)
+	{
+		return fmt::format("sync failed: %s", std::strerror(errno));
+	}
+
+	return {};
+#endif
+}
+
 void Emulator::SaveSettings(std::string_view settings, const std::string& title_id)
 {
 	std::string config_name;
@@ -5626,13 +5672,14 @@ void Emulator::SaveSettings(std::string_view settings, const std::string& title_
 	{
 		sys_log.error("Could not save config to %s (failed to create temporary file) (error=%s)", config_name, fs::g_tls_error);
 	}
-	else
+	else if (const std::string failed = write_config_file(temp.file, settings); !failed.empty())
 	{
-		temp.file.write(settings.data(), settings.size());
-		if (!temp.commit())
-		{
-			sys_log.error("Could not save config to %s (failed to commit) (error=%s)", config_name, fs::g_tls_error);
-		}
+		// Not committed, so the config on disk stays as it was. The settings still apply below.
+		sys_log.error("Could not save config to %s (%s)", config_name, failed);
+	}
+	else if (!temp.commit())
+	{
+		sys_log.error("Could not save config to %s (failed to commit) (error=%s)", config_name, fs::g_tls_error);
 	}
 
 	// Check if the running config/title is the same as the edited config/title.

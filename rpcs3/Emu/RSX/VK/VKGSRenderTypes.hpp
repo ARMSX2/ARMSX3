@@ -227,6 +227,12 @@ namespace vk
 		u32 present_image = -1;
 		command_buffer_chunk* swap_command_buffer = nullptr;
 
+		// The command buffers that put this frame's generated frames on screen. They are submitted
+		// after swap_command_buffer and draw the overlays from this frame's uploads and descriptors,
+		// so the frame is not finished, and those not reclaimable, until they are too.
+		command_buffer_chunk* framegen_cbs[3] = {};
+		u32 framegen_cb_count = 0;
+
 		data_heap_manager::managed_heap_snapshot_t heap_snapshot;
 		u64 last_frame_sync_time = 0;
 

@@ -345,6 +345,7 @@ class GameLibraryRepository(private val context: Context) {
 
         val collected = linkedMapOf<String, GameInfo>()
         userPlaylistDiscs.clear()
+        listedDirectories.clear()
         android.util.Log.i(ScanTag, "scan start: ${directories.size} dir(s), rawStorage=${canUseRawStorage()}")
         directories.forEach { rawUri ->
             val uri = runCatching { rawUri.toUri() }.getOrNull() ?: return@forEach
@@ -517,6 +518,7 @@ class GameLibraryRepository(private val context: Context) {
         depth: Int,
     ) {
         if (depth > MaxScanDepth) return
+        listedDirectories += directory.uri.toString() to runCatching { directory.lastModified() }.getOrDefault(0L)
         val children = runCatching { directory.listFiles() }.getOrNull() ?: return
         // Asked only once a child is named like one of a data folder's own folders: listing the
         // tree again for every directory would double the cost of scanning a large SAF folder.
@@ -655,6 +657,7 @@ class GameLibraryRepository(private val context: Context) {
      * still have the debris. A direct child here is a title or it is not listed.
      */
     private fun scanInstalledTitles(directory: File, output: MutableMap<String, GameInfo>) {
+        listedDirectories += directory.absolutePath to directory.lastModified()
         val children = runCatching { directory.listFiles() }.getOrNull() ?: return
         children.forEach { file ->
             if (!file.isDirectory) return@forEach
@@ -696,6 +699,7 @@ class GameLibraryRepository(private val context: Context) {
         depth: Int,
     ) {
         if (depth > MaxScanDepth) return
+        listedDirectories += directory.absolutePath to directory.lastModified()
         val children = runCatching { directory.listFiles() }.getOrNull() ?: return
         val dataFolder by lazy { isDataFolder(directory) }
         children.forEach { file ->
@@ -1306,6 +1310,55 @@ class GameLibraryRepository(private val context: Context) {
      *  mount then -- so a failed re-probe never demotes a game to a filename guess. */
     private val reprobeFallback = HashMap<String, DiscInfo>()
 
+    /**
+     * Every directory the scan listed, with its modification time, read before it was listed.
+     * Adding, removing or renaming a file changes its directory's time, so comparing these later
+     * is how the library notices a disc swapped in a folder it already knew (an .iso replaced
+     * by its .chd) without walking the folders again. The cache key only follows the folder list.
+     */
+    private val listedDirectories = mutableListOf<Pair<String, Long>>()
+
+    /**
+     * Whether anything the last scan listed has changed since: a directory's time moved, or one
+     * that was missing then (a card not yet mounted reads 0) is there now. Stats only the
+     * recorded directories, so it is cheap enough to ask on every return to the library. True
+     * for a cache saved before directories were recorded, so that one scan records them.
+     */
+    fun changedSinceScan(): Boolean {
+        val listed = MainActivityRuntime.prefs.getString(ListedDirectoriesKey, null)
+            ?.let { runCatching { JSONArray(it) }.getOrNull() }
+            ?: return true
+        for (index in 0 until listed.length()) {
+            val entry = listed.optJSONArray(index) ?: return true
+            val where = entry.optString(0)
+            val recorded = entry.optLong(1)
+            val now = if (where.startsWith("content:")) {
+                runCatching { DocumentFile.fromSingleUri(context, where.toUri())?.lastModified() }.getOrNull() ?: 0L
+            } else {
+                File(where).lastModified()
+            }
+            // Gone now. A deleted folder changed the one that held it, which says so itself, and a
+            // card that is not mounted is no reason to rescan its games out of the library.
+            if (now == 0L) continue
+            if (now != recorded) {
+                android.util.Log.i(ScanTag, "changed since the last scan: '$where'")
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * Entries whose file is gone while the folder that held it is still there: a disc deleted,
+     * or replaced by another. Only games on a path. A missing folder is more likely a card that
+     * is not mounted yet than games that were deleted, so those stay.
+     */
+    fun missingGames(games: List<GameInfo>): Set<String> = games.mapNotNull { game ->
+        if (game.uri.scheme != "file") return@mapNotNull null
+        val file = File(game.uri.path ?: return@mapNotNull null)
+        game.uri.toString().takeIf { !file.exists() && file.parentFile?.isDirectory == true }
+    }.toSet()
+
     private fun saveCache(directories: List<String>, games: List<GameInfo>) {
         val array = JSONArray()
         games.forEach { game ->
@@ -1324,9 +1377,12 @@ class GameLibraryRepository(private val context: Context) {
                 put("drmFree", game.drmFree)
             })
         }
+        val listed = JSONArray()
+        listedDirectories.forEach { (where, time) -> listed.put(JSONArray().put(where).put(time)) }
         MainActivityRuntime.prefs.edit {
             putString("gamesCacheKey", cacheKey(directories))
                 .putString("gamesCache", array.toString())
+                .putString(ListedDirectoriesKey, listed.toString())
             }
     }
 
@@ -1384,6 +1440,8 @@ class GameLibraryRepository(private val context: Context) {
         /** The scanner version whose disc-image probe has run over this library. */
         const val ProbedSchemaKey = "gamesProbedSchema"
         const val ScanTag = "ARMSX3-Scan"
+        /** The directories the last scan listed, with their times (see [changedSinceScan]). */
+        const val ListedDirectoriesKey = "gamesCacheDirs"
         /** Staging name for an extracted icon, renamed once the title ID is known. */
         const val PendingIcon = "__pending"
         const val MaxScanDepth = 12

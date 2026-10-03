@@ -157,6 +157,19 @@ object ConfigDatabase {
         // Pinned here, per title, so a global 3 cannot bring it back.
         "BCUS98234" to "Video:\n  Write Color Buffers: false\nCore:\n  Preferred SPU Threads: 0\n",
         "BCES01007" to "Video:\n  Write Color Buffers: false\nCore:\n  Preferred SPU Threads: 0\n",
+
+        // Spider-Man: Web of Shadows: Accurate SPU Reservations off.
+        //
+        // With it on, the SPURS kernel's own atomics on its control block (swap, compare-and-swap
+        // and decrement helpers at LS 0x0221c / 0x01e68 / 0x01f28, each changing one quadword)
+        // take vm::writer_lock about 550,000 times a second, and each one stops every PPU thread.
+        // Off, they take the SPURS shortcut and the one-quadword path from RPCS3 PR #19568: about
+        // 1,400 barriers a second, long writer_lock stalls down from 50-75 ms to 1.6 ms per second
+        // of play, and the game runs clearly smoother swinging through the city (Odin 3, 09-29).
+        //
+        // Off is off-spec and has broken other titles (see ConfigStore KEY_PERGAME_RSV_CLEARED), so
+        // it is this title only, and the per-game database toggle takes it back.
+        "BLUS30218" to "Core:\n  Accurate SPU Reservations: false\n",
     )
 
     /**

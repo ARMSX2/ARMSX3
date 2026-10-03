@@ -80,6 +80,8 @@ namespace vk::frame_gen
 		// cleared. ARMSX2 memoises the same check for the same reason (GSLsfg.cpp:53-58).
 		std::atomic<bool> g_shader_probe_done{false};
 		std::atomic<int> g_shader_probe_result{0};   // the cache file has been looked for (found or not)
+		// Why the probe found no shaders: a LosslessStatus, or -1 for a load that succeeded empty.
+		std::atomic<int> g_shader_probe_status{0};
 
 		// Every shader name the shim extracts, in its order.
 		//
@@ -495,9 +497,11 @@ namespace vk::frame_gen
 		// writer, LsfgShaders, and this probe -- and any two disagreeing breaks the cache.
 		const bool fp16 = VideoCore::FrameGen::Float16Allowed();
 
-		if (VideoCore::FrameGen::LoadShaderModules(probe, fp16, fp16) !=
-			VideoCore::FrameGen::LosslessStatus::Ok || probe.empty())
+		if (const auto status = VideoCore::FrameGen::LoadShaderModules(probe, fp16, fp16);
+			status != VideoCore::FrameGen::LosslessStatus::Ok || probe.empty())
 		{
+			g_shader_probe_status.store(probe.empty() && status == VideoCore::FrameGen::LosslessStatus::Ok ? -1 : static_cast<int>(status),
+				std::memory_order_relaxed);
 			g_shader_probe_result.store(0, std::memory_order_relaxed);
 			g_shader_probe_done.store(true, std::memory_order_release);
 			return 0;
@@ -736,6 +740,9 @@ namespace vk::frame_gen
 		u32 g_capture_count = 0;
 		u64 g_last_report = 0;
 
+		// Defined further down, with the images it frees. Once per frame, from commit_capture().
+		void tick_retired();
+
 		// Defined further down, with the context it tears down.
 		//
 		// Releasing the shared images has to take the context with it. framegen imported those
@@ -782,10 +789,22 @@ namespace vk::frame_gen
 			// Consecutive fence timeouts. One is a stall, not a fault.
 			u32 timeouts = 0;
 
+			// GPU time of each slot's submission: a timestamp at either end, read back once the
+			// slot's fence has signalled so reading never waits. The one number frame generation's
+			// cost can be judged by; the FPS counter only shows the rate the game renders at.
+			VkQueryPool timestamps = VK_NULL_HANDLE;
+			f64 ns_per_tick = 0.;
+			u64 tick_mask = 0;
+			bool slot_timed[SLOTS] = {};
+
 			bool valid() const { return framegen != nullptr; }
 		};
 
 		native_stack g_native;
+
+		// GPU time of frame generation's submissions since the last report, from g_native.timestamps.
+		u64 g_gpu_ns = 0;
+		u32 g_gpu_samples = 0;
 
 		bool build_native_stack(const vk::render_device& dev, u32 want);
 		void destroy_native_stack();
@@ -809,6 +828,10 @@ namespace vk::frame_gen
 
 	void commit_capture()
 	{
+		// Runs once per frame whether or not frame generation is on, which is what the retired
+		// images' clock needs.
+		tick_retired();
+
 		if (!g_recorded_capture.exchange(false))
 		{
 			return;
@@ -850,6 +873,60 @@ namespace vk::frame_gen
 		// before the next generation is started -- a wait on work a whole frame old, which is where
 		// it costs least.
 		shared_image g_shared_out[3];   // x4 is the most the setting offers, so three generated
+
+		// The game image, copied in by capture_game_frame(). Unused when capturing the screen,
+		// which passes read in place.
+		shared_image g_shared_in;
+		bool g_game_res = false;
+
+		// Images replaced while frame generation was running.
+		//
+		// Destroying them on the spot is a use-after-free on the GPU: the previous frame's passes
+		// and the blits presenting its generated frames can still be executing, a frame or two
+		// behind in a GPU-bound game. The renderer never lets the CPU run more than a few frames
+		// ahead (advance_queued_frames retires the oldest frame context, waiting for its submissions
+		// and, with frame generation, for its generated presents too), so an image retired this
+		// many frames ago cannot be referenced by anything still in flight.
+		//
+		// Counted in frames rather than captures: switching frame generation off retires everything
+		// and captures stop, and the memory still has to come back.
+		constexpr u64 k_retire_after_frames = 6;
+
+		struct retired_image
+		{
+			shared_image image;
+			u64 serial = 0;
+		};
+
+		std::vector<retired_image> g_retired;
+		u64 g_frame_serial = 0;
+
+		void retire(shared_image& image)
+		{
+			if (image.valid())
+			{
+				g_retired.push_back({ std::move(image), g_frame_serial });
+			}
+		}
+
+		void free_retired(bool all)
+		{
+			std::erase_if(g_retired, [all](const retired_image& r)
+			{
+				return all || g_frame_serial >= r.serial + k_retire_after_frames;
+			});
+		}
+
+		void tick_retired()
+		{
+			++g_frame_serial;
+
+			if (!g_retired.empty())
+			{
+				free_retired(false);
+			}
+		}
+
 		int32_t g_context = -1;
 		u32 g_context_outputs = 0;
 		bool g_disabled = false;        // a failure is permanent for the session
@@ -907,11 +984,13 @@ namespace vk::frame_gen
 				g_context = -1;
 			}
 
+			// Retired, not destroyed: see g_retired.
 			for (auto& out : g_shared_out)
 			{
-				out.destroy();
+				retire(out);
 			}
 
+			retire(g_shared_in);
 			g_context_outputs = 0;
 		}
 
@@ -932,10 +1011,15 @@ namespace vk::frame_gen
 		// next one launched without restarting the app.
 		destroy_native_stack();
 
+		// The device is idle here, so nothing needs to wait out its retirement.
 		for (auto& out : g_shared_out)
 		{
 			out.destroy();
 		}
+
+		g_shared_in.destroy();
+		free_retired(true);
+		g_game_res = false;
 
 
 		g_context = -1;
@@ -957,11 +1041,13 @@ namespace vk::frame_gen
 		framegen_log.notice("Frame generation device resources released");
 	}
 
-	bool capture_presented_frame(const vk::command_buffer& cmd, const vk::render_device& dev,
-		VkImage src, VkImageLayout src_layout, u32 width, u32 height,
-		u32 guest_width, u32 guest_height)
+	namespace
 	{
-		if (g_cfg.video.frame_generation == frame_generation_mode::off || !src || !width || !height)
+		// What both capture paths share: every reason not to capture, and the images sized to the
+		// frame the passes will run on. False means capture nothing this frame.
+		bool prepare_capture(const vk::render_device& dev, u32 width, u32 height, bool game_res)
+		{
+		if (g_cfg.video.frame_generation == frame_generation_mode::off || !width || !height)
 		{
 			return false;
 		}
@@ -995,8 +1081,14 @@ namespace vk::frame_gen
 		}
 
 		// Output images, sized to the frame. These are what the passes write and what the present
-		// path blits from; there is no longer an input copy beside them.
-		if (g_shared_w != width || g_shared_h != height || !g_shared_out[0].valid())
+		// path blits from. Capturing the screen needs no input copy beside them; capturing the game
+		// image does (g_shared_in), since that image is scaled and converted on the way in.
+		//
+		// Switching between the two, or changing the multiplier, reallocates as well: the modes'
+		// images mean different things even at the same size, and a multiplier raised mid-game
+		// used to go on presenting only as many frames as the images first allocated.
+		if (g_shared_w != width || g_shared_h != height || !g_shared_out[0].valid() ||
+			g_game_res != game_res || g_context_outputs != want || (game_res && !g_shared_in.valid()))
 		{
 			release_generation_context();
 
@@ -1010,11 +1102,19 @@ namespace vk::frame_gen
 				}
 			}
 
+			if (game_res && !g_shared_in.create(dev, width, height, VK_FORMAT_R8G8B8A8_UNORM))
+			{
+				release_generation_context();
+				disable("could not allocate the game frame image");
+				return false;
+			}
+
 			g_shared_w = width;
 			g_shared_h = height;
 			g_context_outputs = want;
-			framegen_log.success("Frame generation images ready at %ux%u, %u generated frame(s)",
-				width, height, want);
+			g_game_res = game_res;
+			framegen_log.success("Frame generation images ready at %ux%u (%s), %u generated frame(s)",
+				width, height, game_res ? "game resolution" : "screen", want);
 		}
 
 		if (!g_native.valid() && !build_native_stack(dev, want))
@@ -1023,7 +1123,14 @@ namespace vk::frame_gen
 			return false;
 		}
 
-		// Nothing is recorded into the frame's command buffer here.
+		return true;
+		}
+
+		// What both capture paths do once the frame to read is known.
+		void note_capture(VkImage src, VkImageLayout src_layout, u32 width, u32 height,
+			u32 guest_width, u32 guest_height, u64 started)
+		{
+		// Process() is NOT recorded into the frame's command buffer.
 		//
 		// Process() WAS recorded here, to avoid the capture copy. That removed the copy and put
 		// the interpolation's GPU cost inside the frame's own submission instead -- which the
@@ -1035,8 +1142,6 @@ namespace vk::frame_gen
 		g_source_layout = src_layout;
 		g_guest_w = guest_width ? guest_width : width;
 		g_guest_h = guest_height ? guest_height : height;
-
-		const u64 started = get_system_time();
 
 		// The pacer is NOT planned here any more.
 		//
@@ -1066,8 +1171,100 @@ namespace vk::frame_gen
 			g_capture_count = 0;
 			g_last_report = now;
 		}
+		}
+	}
 
+	bool capture_presented_frame(const vk::command_buffer& /*cmd*/, const vk::render_device& dev,
+		VkImage src, VkImageLayout src_layout, u32 width, u32 height,
+		u32 guest_width, u32 guest_height)
+	{
+		if (!src || !prepare_capture(dev, width, height, false))
+		{
+			return false;
+		}
+
+		// Nothing is recorded into the frame's command buffer: the passes read the swapchain image
+		// in place, from their own command buffer, after this frame's submission.
+		note_capture(src, src_layout, width, height, guest_width, guest_height, get_system_time());
 		return true;
+	}
+
+	bool capture_game_frame(const vk::command_buffer& cmd, const vk::render_device& dev,
+		vk::image* src, u32 src_width, u32 src_height, u32 max_width, u32 max_height)
+	{
+		if (!src || !src_width || !src_height || !max_width || !max_height)
+		{
+			return false;
+		}
+
+		// The size the passes run at: the game's own, shrunk to fit the screen with its aspect kept,
+		// never grown. A game rendered larger than the screen (resolution scaling past it) would
+		// otherwise cost more here than capturing the screen does.
+		const f32 fit = std::min({ 1.f, static_cast<f32>(max_width) / src_width,
+			static_cast<f32>(max_height) / src_height });
+		const u32 width = std::max(1u, static_cast<u32>(src_width * fit));
+		const u32 height = std::max(1u, static_cast<u32>(src_height * fit));
+
+		if (!prepare_capture(dev, width, height, true))
+		{
+			return false;
+		}
+
+		const u64 started = get_system_time();
+
+		// Copy the game frame in, recorded into the frame's own command buffer. A blit rather than
+		// the passes reading the game image in place, as they read the screen: it converts whatever
+		// format the game presents into the one the passes expect, and scales when the game is
+		// larger than the screen. At the game's resolution that costs less than one full-screen copy.
+		src->push_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+		const VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+		// The previous capture was read by the passes and copied into their history, both on the
+		// same queue earlier; wait for those reads before overwriting it.
+		vk::insert_image_memory_barrier(cmd, g_shared_in.handle(),
+			g_shared_in.layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, range);
+
+		VkImageBlit region = {};
+		region.srcSubresource = { src->aspect(), 0, 0, 1 };
+		region.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		region.srcOffsets[1] = { static_cast<s32>(src_width), static_cast<s32>(src_height), 1 };
+		region.dstOffsets[1] = { static_cast<s32>(width), static_cast<s32>(height), 1 };
+
+		vkCmdBlitImage(cmd, src->value, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+			g_shared_in.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region,
+			fit < 1.f ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+
+		// GENERAL, which is what generate() declares the source to be in. Its own barrier makes
+		// this transfer write visible to the passes.
+		vk::insert_image_memory_barrier(cmd, g_shared_in.handle(),
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, range);
+		g_shared_in.layout = VK_IMAGE_LAYOUT_GENERAL;
+
+		src->pop_layout(cmd);
+
+		// The flow resolution is chosen from the ratio of these two; they are the same image now.
+		note_capture(g_shared_in.handle(), VK_IMAGE_LAYOUT_GENERAL, width, height, width, height, started);
+		return true;
+	}
+
+	bool generated_at_game_resolution()
+	{
+		return g_game_res;
+	}
+
+	u32 generated_width()
+	{
+		return g_shared_w;
+	}
+
+	u32 generated_height()
+	{
+		return g_shared_h;
 	}
 
 	u32 generated_frame_count()
@@ -1100,19 +1297,41 @@ namespace vk::frame_gen
 			return {};
 		}
 
+		// Each failure says why on the line itself, where it used to go only to the log. A tester
+		// spent an evening on "no usable shaders" (ARMSX2 #626) because he had picked
+		// LosslessScaling.dll, the .NET app, instead of Lossless.dll; one look at a reason would
+		// have told him.
 		if (!available())
 		{
-			return "LSFG: unavailable";
+			const std::string why = unavailable_reason();
+			return why.empty() ? std::string("LSFG: unavailable") : fmt::format("LSFG: unavailable (%s)", why);
 		}
 
 		if (g_disabled)
 		{
-			return "LSFG: failed";
+			const std::string why = last_error();
+			return why.empty() ? std::string("LSFG: failed") : fmt::format("LSFG: failed (%s)", why);
 		}
 
 		if (shader_count() <= 0)
 		{
-			return "LSFG: no shaders";
+			using VideoCore::FrameGen::LosslessStatus;
+
+			const std::string_view why = [](int status) -> std::string_view
+			{
+				switch (status)
+				{
+				case static_cast<int>(LosslessStatus::NotInstalled): return "no Lossless.dll";
+				case static_cast<int>(LosslessStatus::UnreadableFile): return "Lossless.dll unreadable";
+				case static_cast<int>(LosslessStatus::NotPortableExecutable): return "not a DLL";
+				case static_cast<int>(LosslessStatus::MissingShaders): return "no usable shaders in this Lossless.dll";
+				case static_cast<int>(LosslessStatus::TranslationFailed): return "shader translation failed";
+				case -1: return "the shader cache is empty";
+				default: return "shader cache unusable";
+				}
+			}(g_shader_probe_status.load(std::memory_order_relaxed));
+
+			return fmt::format("LSFG: no shaders (%s)", why);
 		}
 
 		if (const f32 fps = g_display_fps.load(); fps > 0.f)
@@ -1147,6 +1366,17 @@ namespace vk::frame_gen
 			}
 
 			g_native.frame_index = 0;
+
+			if (g_native.timestamps != VK_NULL_HANDLE && vk::g_render_device)
+			{
+				vkDestroyQueryPool(*vk::g_render_device, g_native.timestamps, nullptr);
+				g_native.timestamps = VK_NULL_HANDLE;
+			}
+
+			for (bool& timed : g_native.slot_timed)
+			{
+				timed = false;
+			}
 
 			if (g_native.pool != VK_NULL_HANDLE && vk::g_render_device)
 			{
@@ -1256,6 +1486,38 @@ namespace vk::frame_gen
 				}
 			}
 
+			// Timestamps, where the queue family has them. Optional: without them frame generation
+			// runs the same and the cost line is simply not logged.
+			{
+				u32 family_count = 0;
+				vkGetPhysicalDeviceQueueFamilyProperties(dev.gpu(), &family_count, nullptr);
+				std::vector<VkQueueFamilyProperties> families(family_count);
+				vkGetPhysicalDeviceQueueFamilyProperties(dev.gpu(), &family_count, families.data());
+
+				VkPhysicalDeviceProperties props = {};
+				vkGetPhysicalDeviceProperties(dev.gpu(), &props);
+
+				const u32 valid_bits = family < family_count ? families[family].timestampValidBits : 0;
+
+				if (valid_bits && props.limits.timestampPeriod > 0.f)
+				{
+					VkQueryPoolCreateInfo qci = {};
+					qci.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
+					qci.queryType = VK_QUERY_TYPE_TIMESTAMP;
+					qci.queryCount = native_stack::SLOTS * 2;
+
+					if (vkCreateQueryPool(dev, &qci, nullptr, &g_native.timestamps) == VK_SUCCESS)
+					{
+						g_native.ns_per_tick = props.limits.timestampPeriod;
+						g_native.tick_mask = valid_bits >= 64 ? ~0ull : ((1ull << valid_bits) - 1);
+					}
+					else
+					{
+						g_native.timestamps = VK_NULL_HANDLE;
+					}
+				}
+			}
+
 			// The renderer's own graphics queue, not a fresh vkGetDeviceQueue. Same handle in
 			// practice, but taking it from the device makes the important property explicit:
 			// frame generation and the present blits share ONE queue, so submission order alone
@@ -1355,6 +1617,21 @@ namespace vk::frame_gen
 
 			g_native.timeouts = 0;
 			g_native.slot_submitted[slot] = false;
+
+			// Its submission is complete, so its timestamps are ready without waiting.
+			if (g_native.slot_timed[slot])
+			{
+				g_native.slot_timed[slot] = false;
+				u64 ticks[2] = {};
+
+				if (vkGetQueryPoolResults(dev, g_native.timestamps, slot * 2, 2, sizeof(ticks), ticks,
+					sizeof(u64), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS)
+				{
+					const u64 delta = (ticks[1] - ticks[0]) & g_native.tick_mask;
+					g_gpu_ns += static_cast<u64>(static_cast<f64>(delta) * g_native.ns_per_tick);
+					g_gpu_samples++;
+				}
+			}
 		}
 
 		vkResetCommandBuffer(g_native.cmd[slot], 0);
@@ -1367,6 +1644,16 @@ namespace vk::frame_gen
 		{
 			disable("could not begin the frame generation command buffer");
 			return 0;
+		}
+
+		if (g_native.timestamps != VK_NULL_HANDLE)
+		{
+			vkCmdResetQueryPool(g_native.cmd[slot], g_native.timestamps, slot * 2, 2);
+
+			// BOTTOM_OF_PIPE: written once everything ahead of it on the queue, the real frame
+			// included, has finished. So the span is frame generation's own work, not time spent
+			// waiting behind the frame it reads.
+			vkCmdWriteTimestamp(g_native.cmd[slot], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_native.timestamps, slot * 2);
 		}
 
 		const Vulkan::vk::CommandBuffer cmdbuf{g_native.cmd[slot]};
@@ -1464,6 +1751,11 @@ namespace vk::frame_gen
 			g_shared_out[i].layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 		}
 
+		if (g_native.timestamps != VK_NULL_HANDLE)
+		{
+			vkCmdWriteTimestamp(g_native.cmd[slot], VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_native.timestamps, slot * 2 + 1);
+		}
+
 		if (vkEndCommandBuffer(g_native.cmd[slot]) != VK_SUCCESS)
 		{
 			disable("could not end the frame generation command buffer");
@@ -1484,6 +1776,7 @@ namespace vk::frame_gen
 		}
 
 		g_native.slot_submitted[slot] = true;
+		g_native.slot_timed[slot] = g_native.timestamps != VK_NULL_HANDLE;
 		g_native.frame_index++;
 
 		{
@@ -1499,8 +1792,18 @@ namespace vk::frame_gen
 				if (s_window)
 				{
 					g_display_fps.store(static_cast<f32>(s_real + s_generated));
+
+					// What frame generation costs the GPU per real frame, and what it ran at.
+					if (g_gpu_samples)
+					{
+						framegen_log.notice("LSFG GPU: %.2f ms per frame over %u frames, %ux%u (%s), %u generated per frame",
+							(g_gpu_ns / 1'000'000.0) / g_gpu_samples, g_gpu_samples, g_shared_w, g_shared_h,
+							g_game_res ? "game resolution" : "screen", generations);
+					}
 				}
 
+				g_gpu_ns = 0;
+				g_gpu_samples = 0;
 				s_window = now;
 				s_real = 0;
 				s_generated = 0;
@@ -1510,6 +1813,10 @@ namespace vk::frame_gen
 		return generations;
 	}
 #else
+	bool capture_game_frame(const vk::command_buffer&, const vk::render_device&, vk::image*, u32, u32, u32, u32) { return false; }
+	bool generated_at_game_resolution() { return false; }
+	u32 generated_width() { return 0; }
+	u32 generated_height() { return 0; }
 	u32 generated_frame_count() { return 0; }
 	u32 generate(const vk::render_device&) { return 0; }
 	VkImage generated_image(u32) { return VK_NULL_HANDLE; }

@@ -225,6 +225,9 @@ class RPCSX {
     external fun loginUser(userId: String)
     external fun getUser(): String
     external fun getTitleId(): String
+    /** The running game's title from its PARAM.SFO. Empty when nothing is running, null before
+     *  the core is loaded. */
+    external fun getTitle(): String?
     /** The running game's trophy folder name (NPWR comm id, e.g. "NPWR05636_00").
      *
      *  Empty when no game is running, when the game has not called

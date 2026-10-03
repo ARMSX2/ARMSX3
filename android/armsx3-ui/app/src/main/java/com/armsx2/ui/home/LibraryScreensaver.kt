@@ -81,8 +81,12 @@ object LibraryScreensaver {
         reset()
     }
 
-    /** A key event. True when it woke the screensaver, or is the rest of the key that did. */
+    /** A key event. True when it woke the screensaver, or is the rest of the key that did. The
+     *  volume keys neither wake it nor stop at it: they turn the volume, of its music too. */
     fun onKey(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP || event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN ||
+            event.keyCode == KeyEvent.KEYCODE_VOLUME_MUTE
+        ) return false
         reset()
         val held = swallowKey
         if (held != null && event.keyCode == held) {

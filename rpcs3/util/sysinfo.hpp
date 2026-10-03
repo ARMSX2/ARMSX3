@@ -61,6 +61,15 @@ namespace utils
 	// (HWCAP_EVTSTRM) — the wake-latency bound for monitor-less WFE waits.
 	bool has_wfe_event_stream();
 
+#if defined(ARM_FEATURE_LSE2)
+	inline constexpr bool has_lse2()
+	{
+		return true;
+	}
+#else
+	bool has_lse2();
+#endif
+
 	bool has_sha3();
 
 	bool has_dotprod();

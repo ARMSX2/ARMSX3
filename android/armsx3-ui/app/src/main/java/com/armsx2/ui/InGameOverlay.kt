@@ -74,6 +74,13 @@ object InGameOverlay {
      *  snapping back to the top. Keyed by EmulationMenuTab.name to avoid coupling to that enum. */
     val menuTabScroll = HashMap<String, Int>()
 
+    /** Re-read [settingsState] after something other than the settings screens changed the store
+     *  (Forget on All Core Settings resets curated fields), so the next save from a menu does not
+     *  write the copy it was holding straight back over the change. */
+    fun reloadSettings() {
+        settingsState.value = ConfigStore.resolveForGame(currentSerial.value)
+    }
+
     fun saveSettings(updated: Settings) {
         val previous = settingsState.value
         settingsState.value = updated

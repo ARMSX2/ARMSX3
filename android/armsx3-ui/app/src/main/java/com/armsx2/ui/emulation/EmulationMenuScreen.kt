@@ -1121,70 +1121,8 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
     // The PS3's processors, not the PS2's. EE/IOP/VU0/VU1/Fastmem are PCSX2
     // recompiler toggles for silicon that does not exist here.
     // Frame generation first: it is the one setting here that changes the framerate rather than
-    // how fast the emulator runs, so it is what someone opening this menu mid-game is looking for.
-    // Not in the play build: libarmsx3_lsfg.so is not bundled there, so this would be inert.
-    if (com.armsx2.BuildConfig.FRAME_GENERATION) {
-        SectionCard(str("perf.framegen.title")) {
-            HorizontalOptions(
-                title = str("perf.framegen.label"),
-                options = listOf(
-                    str("perf.framegen.off"), str("perf.framegen.x2"),
-                    str("perf.framegen.x3"), str("perf.framegen.x4"),
-                ).mapIndexed { index, label -> index to label },
-                selected = settings.ps3.frameGeneration,
-                onSelect = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGeneration = v)) } },
-            )
-
-            // The rest of frame generation, which until now only existed in the main settings
-            // screen. Someone who opens this menu mid-game is here to change exactly these:
-            // the multiplier alone cannot answer "it is generating, but the picture is unsteady"
-            // (target rate) or "it is generating, but too expensive" (flow scale, performance).
-            HorizontalOptions(
-                title = str("perf.framegen.targetRate.label"),
-                options = listOf(0 to str("perf.framegen.off"), 60 to "60 Hz", 90 to "90 Hz", 120 to "120 Hz"),
-                selected = settings.ps3.frameGenTargetRate,
-                onSelect = { v ->
-                    android.util.Log.i("FRAMEGEN", "pause menu: target rate chip -> $v")
-                    viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenTargetRate = v)) }
-                },
-            )
-            // Motion detail is continuous, so it gets a slider rather than three stops -- the
-            // useful values are wherever the picture stops improving on a given game, not a set
-            // someone picked in advance. 25 is the floor the core clamps to.
-            Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp)) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        str("perf.framegen.flowScale.label"),
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                    )
-                    Text(
-                        "${settings.ps3.frameGenFlowScale}%",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
-                Slider(
-                    value = settings.ps3.frameGenFlowScale.coerceIn(25, 100).toFloat(),
-                    onValueChange = { v ->
-                        viewModel.updateSettings {
-                            it.copy(ps3 = it.ps3.copy(frameGenFlowScale = Math.round(v).coerceIn(25, 100)))
-                        }
-                    },
-                    valueRange = 25f..100f,
-                )
-            }
-            MenuSwitchRow(
-                str("perf.framegen.performance.label"),
-                settings.ps3.frameGenPerformance,
-            ) { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenPerformance = v)) } }
-        }
-        Spacer(Modifier.height(10.dp))
-    }
+    // how fast the emulator runs. Only the github build draws it.
+    FrameGenCard(settings, viewModel)
     SectionCard(str("perf.ps3cpu.title")) {
         HorizontalOptions(
             title = str("perf.ppuDecoder.label"),
@@ -1366,6 +1304,9 @@ private fun ControlsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
     // Sits with the touch layout because it's the same job: what the on-screen pad LOOKS
     // like, right after where it's laid out. Full-screen like Controller mapping.
     CompactAction(str("tab.skins"), "◈", Modifier.fillMaxWidth(), viewModel::openSkins)
+    Spacer(Modifier.height(6.dp))
+    // Hotkeys, under Skins: All Settings' Hotkeys page, opened straight over the game.
+    CompactAction(str("tab.hotkeys"), "⌘", Modifier.fillMaxWidth(), viewModel::openHotkeys)
     // Motion / gyroscope controls in-game (mode, sensitivity, smoothing, invert). Global scope
     // to match the rumble toggle above; the per-game scope lives in All Settings › Controls.
     com.armsx2.ui.settings.GyroSection()
@@ -1813,7 +1754,7 @@ private fun DiscSection(viewModel: EmulationMenuViewModel, swap: Boolean) {
 }
 
 @Composable
-private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
+internal fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(17.dp),
@@ -1829,7 +1770,7 @@ private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Un
 }
 
 @Composable
-private fun <T> HorizontalOptions(
+internal fun <T> HorizontalOptions(
     title: String,
     options: List<Pair<T, String>>,
     selected: T,
@@ -1920,7 +1861,7 @@ private fun OptionChip(label: String, selected: Boolean, controllerId: String? =
 }
 
 @Composable
-private fun MenuSwitchRow(
+internal fun MenuSwitchRow(
     title: String,
     checked: Boolean,
     enabled: Boolean = true,

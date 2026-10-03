@@ -120,8 +120,13 @@ object LibraryMusic {
         if (value) start(context) else stop(context)
     }
 
+    /** Always the application's AudioManager. Focus belongs to the AudioManager that asked for it,
+     *  and the callers pass different contexts: the activity from the runtime, the application's
+     *  from the Settings music switch and custom track. Asking through both made us a second
+     *  client, so the system took focus from the first, our own listener heard AUDIOFOCUS_LOSS and
+     *  released the track that had just started (found in ARMSX2). */
     private fun audioManager(context: Context): AudioManager? =
-        context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        context.applicationContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
     /**
      * True when another app is playing something the user is listening to: music, a podcast,

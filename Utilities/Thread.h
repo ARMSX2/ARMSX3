@@ -272,6 +272,16 @@ public:
 		return static_cast<thread_base&>(thread).get_native_id();
 	}
 
+#ifdef ANDROID
+	// The thread's Linux tid, 0 before it starts and after it exits, so another thread can read its
+	// scheduler statistics or change its priority (vm::writer_lock does, for a PPU it waits on).
+	template <typename T>
+	static u32 get_native_tid(named_thread<T>& thread)
+	{
+		return static_cast<thread_base&>(thread).m_native_tid;
+	}
+#endif
+
 	// Read current state, possibly executing some tasks
 	static thread_state state();
 

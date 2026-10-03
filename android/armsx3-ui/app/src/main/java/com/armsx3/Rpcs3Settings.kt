@@ -30,8 +30,10 @@ object Rpcs3Settings {
     // ---- value encoding -------------------------------------------------
     // settingsSet takes JSON: bools and numbers bare, enums and strings quoted.
 
-    private fun setRaw(path: String, jsonValue: String): Boolean =
-        runCatching { RPCSX.instance.settingsSet(path, jsonValue) }.getOrDefault(false)
+    private fun setRaw(path: String, jsonValue: String): Boolean {
+        recording.get()?.let { it.writes[path] = jsonValue; return true }
+        return runCatching { RPCSX.instance.settingsSet(path, jsonValue) }.getOrDefault(false)
+    }
 
     fun setBool(path: String, value: Boolean) = setRaw(path, if (value) "true" else "false")
     fun setInt(path: String, value: Int) = setRaw(path, value.toString())
@@ -40,6 +42,40 @@ object Rpcs3Settings {
         setRaw(path, "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"")
 
     fun setString(path: String, value: String) = setEnum(path, value)
+
+    // ---- dry run --------------------------------------------------------
+
+    /** What a [recordWrites] block has written so far, and its own copy of the frame limit memory. */
+    private class Recording {
+        val writes = LinkedHashMap<String, String>()
+        var fpsCap = 0
+        var wroteOff = false
+    }
+
+    private val recording = ThreadLocal<Recording?>()
+
+    /**
+     * Run [block] with every write it makes recorded instead of sent to the core, and return them:
+     * path to the JSON value settingsSet would have been given, the last write to a path winning.
+     *
+     * All Core Settings needs to know which curated field writes which node, and with what. That
+     * mapping exists only as this code path (applyTo, then Rpcs3Bridge, then the setters here), so
+     * the screen runs the path rather than keeping a second copy of it that could drift.
+     *
+     * Per thread, so a real write made elsewhere at the same moment is never swallowed. The frame
+     * limit memory further down is per recording too and starts empty, as in a fresh process: a dry
+     * run neither reads the live FPS cap nor leaves a different one behind.
+     */
+    fun recordWrites(block: () -> Unit): Map<String, String> {
+        val record = Recording()
+        recording.set(record)
+        try {
+            block()
+        } finally {
+            recording.remove()
+        }
+        return record.writes
+    }
 
     // ---- paths ----------------------------------------------------------
 
@@ -215,7 +251,15 @@ object Rpcs3Settings {
 
     /** The last rate the explicit FPS-cap control asked for. 0 = no cap set. */
     @Volatile
-    private var lastExplicitFpsCap: Int = 0
+    private var liveFpsCap: Int = 0
+
+    // The recording's own copy while one runs on this thread; see recordWrites.
+    private var lastExplicitFpsCap: Int
+        get() = recording.get()?.fpsCap ?: liveFpsCap
+        set(value) {
+            val record = recording.get()
+            if (record != null) record.fpsCap = value else liveFpsCap = value
+        }
 
     /**
      * PCSX2's "limiter on/off" toggle, which shares one RPCS3 node with the explicit FPS cap.
@@ -268,7 +312,14 @@ object Rpcs3Settings {
     /** True while the limiter toggle is responsible for the current "Off", so turning it back
      *  on restores pacing without claiming that node on launches nobody touched it. */
     @Volatile
-    private var limiterWroteOff: Boolean = false
+    private var liveWroteOff: Boolean = false
+
+    private var limiterWroteOff: Boolean
+        get() = recording.get()?.wroteOff ?: liveWroteOff
+        set(value) {
+            val record = recording.get()
+            if (record != null) record.wroteOff = value else liveWroteOff = value
+        }
 
     /** Free-form secondary cap (0 disables). Use for values the enum cannot express. */
     fun setSecondFrameLimit(fps: Float) =

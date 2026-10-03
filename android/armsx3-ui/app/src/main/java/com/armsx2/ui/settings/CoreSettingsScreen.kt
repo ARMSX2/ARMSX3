@@ -31,6 +31,7 @@ import com.armsx2.config.ConfigStore
 import com.armsx2.config.CoreSettingOverrides
 import com.armsx2.config.SettingsScope
 import com.armsx2.runtime.MainActivityRuntime
+import com.armsx2.ui.InGameOverlay
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.ui.common.ArmsBackdrop
@@ -129,6 +130,28 @@ private fun flatten(
     }
 }
 
+/** A value as settingsSet takes it (JSON) in the form the tree reports it: bools and numbers bare,
+ *  strings unquoted, sets as their array. */
+private fun decodeJson(json: String): String =
+    runCatching { JSONArray("[$json]").get(0).toString() }.getOrDefault(json)
+
+/** Whether two values of a node read the same. By number where both are one, since the curated
+ *  push writes a float as "1.0" and the tree can report the same value as "1"; by membership for a
+ *  set, which has no order. */
+private fun sameValue(type: String, a: String, b: String): Boolean {
+    if (a == b) return true
+    if (type == "set") {
+        fun members(json: String) = runCatching {
+            val array = JSONArray(json)
+            List(array.length()) { array.optString(it) }.toSet()
+        }.getOrNull()
+        return members(a)?.let { it == members(b) } ?: false
+    }
+    val x = a.toDoubleOrNull() ?: return false
+    val y = b.toDoubleOrNull() ?: return false
+    return x == y
+}
+
 /**
  * [scope] and [serial] say where an edit is REMEMBERED, not where it is applied: every write
  * goes straight into the live config tree either way, and the store is what decides whether the
@@ -167,6 +190,21 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
     // control was "Forget all". A stale override on ONE setting is the common case and cost a
     // long debugging session here, so it needs to be findable on its own.
     var onlyOverridden by remember { mutableStateOf(false) }
+    // What each node holds on a stock install, for the Not default line: the value the curated push
+    // writes there from stock Settings, where a curated field owns the node, and the core's own
+    // default everywhere else. The curated value rather than RPCS3's where the two differ, so this
+    // screen and the normal ones agree on what default means. Null until the dry run is back, and
+    // no row is marked until then rather than every curated node flashing up against RPCS3's value.
+    var curatedDefaults by remember { mutableStateOf<Map<String, String>?>(null) }
+    // Nodes this scope's own curated settings hold off their default: set on a normal screen, so
+    // there is no record here to Forget, and those rows get a Reset instead.
+    var heldByTier by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    LaunchedEffect(Unit) {
+        curatedDefaults = withContext(Dispatchers.Default) {
+            runCatching { StockSettings.coreWrites().mapValues { decodeJson(it.value) } }.getOrDefault(emptyMap())
+        }
+    }
 
     LaunchedEffect(revision) {
         val loaded = withContext(Dispatchers.IO) {
@@ -183,6 +221,7 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
         }
         loaded.onFailure { error = I18n.get("core.settings.unavailable") }
         overrides = runCatching { CoreSettingOverrides.load(scope, serial) }.getOrDefault(emptyMap())
+        heldByTier = runCatching { ConfigStore.nodesHeldBy(scope, serial) }.getOrDefault(emptySet())
     }
 
     // settingsSet takes JSON: bools and numbers bare, enums and strings quoted, sets as the
@@ -207,25 +246,47 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
         }
     }
 
+    /**
+     * Put forgotten nodes back to their defaults, which takes more than dropping the record.
+     *
+     * A curated field in this tier can hold the same node, and the re-push would write its value
+     * straight back: Forget on Web of Shadows' Accurate SPU Reservations dropped the core edit and
+     * the switch stayed off, because the title's Performance settings had it off too. So those
+     * fields go first, out of the title's overrides or back to stock (ConfigStore.resetFieldsWriting),
+     * and the menus' copy of the settings is re-read so their next save cannot restore them.
+     */
+    fun restoreDefaults(settings: List<CoreSetting>) {
+        val reset = runCatching {
+            ConfigStore.resetFieldsWriting(scope, serial, settings.map { it.path })
+        }.getOrDefault(emptySet())
+        android.util.Log.i("ARMSX3-Override", "restore [$scope ${serial.orEmpty()}] ${settings.map { it.path }} -> reset fields $reset")
+        if (reset.isNotEmpty()) InGameOverlay.reloadSettings()
+        // Defaults first, curated second: applyTo below rewrites every node it owns, so the
+        // only ones this actually decides are the nodes no curated screen touches.
+        settings.forEach {
+            runCatching { RPCSX.instance.settingsSet(it.path, encode(it.type, it.default)) }
+        }
+        reapplyCurated()
+    }
+
     fun clearOne(setting: CoreSetting) {
         runCatching { CoreSettingOverrides.forget(scope, serial, setting.path) }
-        runCatching { RPCSX.instance.settingsSet(setting.path, encode(setting.type, setting.default)) }
-        reapplyCurated()
+        restoreDefaults(listOf(setting))
         revision++
     }
 
     fun clearAll() {
         val cleared = overrides.keys.toSet()
         runCatching { CoreSettingOverrides.clear(scope, serial) }
-        // Defaults first, curated second: applyTo below rewrites every node it owns, so the
-        // only ones this actually decides are the nodes no curated screen touches.
-        all.asSequence().filter { it.path in cleared }.forEach {
-            runCatching { RPCSX.instance.settingsSet(it.path, encode(it.type, it.default)) }
-        }
-        reapplyCurated()
+        restoreDefaults(all.filter { it.path in cleared })
         confirmingReset = false
         onlyOverridden = false
         revision++
+    }
+
+    fun notDefault(setting: CoreSetting): Boolean {
+        val stock = curatedDefaults ?: return false
+        return !sameValue(setting.type, setting.value, stock[setting.path] ?: setting.default)
     }
 
     fun write(setting: CoreSetting, raw: String) {
@@ -236,6 +297,7 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
         // a node set from the in-game menu belongs to the title being played, not to the
         // next game that boots.
         runCatching { CoreSettingOverrides.record(scope, serial, setting.path, encoded) }
+        android.util.Log.i("ARMSX3-Override", "record [$scope ${serial.orEmpty()}] ${setting.path} = $encoded")
         revision++
     }
 
@@ -376,9 +438,18 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
                                             )
                                         }
                                     }
+                                } else if (setting.path in heldByTier && notDefault(setting)) {
+                                    // Off its default because of this scope's normal settings, with
+                                    // nothing recorded here: the same reset as Forget, minus the record.
+                                    TextButton(onClick = { clearOne(setting) }) {
+                                        Text(
+                                            str("action.reset"),
+                                            style = MaterialTheme.typography.labelSmall,
+                                        )
+                                    }
                                 }
                             }
-                            CoreSettingRow(setting, overrides[setting.path], query) { write(setting, it) }
+                            CoreSettingRow(setting, overrides[setting.path], query, notDefault(setting)) { write(setting, it) }
                         }
                     }
                 } }
@@ -397,8 +468,16 @@ fun CoreSettingsScreen(onBack: () -> Unit, scope: SettingsScope, serial: String?
  *  Audio both have a Renderer), and with every row registered at once two rows sharing an id
  *  share one registry slot, so one of them could never be reached with a controller. */
 @Composable
-private fun CoreSettingRow(setting: CoreSetting, remembered: String?, query: String, onWrite: (String) -> Unit) {
+private fun CoreSettingRow(
+    setting: CoreSetting,
+    remembered: String?,
+    query: String,
+    notDefault: Boolean,
+    onWrite: (String) -> Unit,
+) {
     when {
+        // Marks itself: it shows the remembered list rather than the live one, and counts moved
+        // libraries against each one's own default.
         setting.type == "set" && setting.choices.isNotEmpty() ->
             FirmwareLibrariesRow(setting, remembered, query, onWrite)
 
@@ -406,6 +485,7 @@ private fun CoreSettingRow(setting: CoreSetting, remembered: String?, query: Str
             setting.name,
             setting.value == "true",
             controllerId = "core:${setting.path}",
+            notDefault = notDefault,
         ) { onWrite(it.toString()) }
 
         setting.variants.isNotEmpty() -> SegmentedGridRow(
@@ -414,6 +494,7 @@ private fun CoreSettingRow(setting: CoreSetting, remembered: String?, query: Str
             selectedIndex = setting.variants.indexOf(setting.value).coerceAtLeast(0),
             columns = 2,
             controllerId = "core:${setting.path}",
+            notDefault = notDefault,
             onChange = { onWrite(setting.variants[it]) },
         )
 
@@ -426,10 +507,12 @@ private fun CoreSettingRow(setting: CoreSetting, remembered: String?, query: Str
             value = (setting.value.toLongOrNull() ?: setting.min).coerceIn(setting.min, setting.max).toInt(),
             min = setting.min.toInt(),
             max = setting.max.toInt(),
+            notDefault = notDefault,
             onChange = { onWrite(it.toString()) },
         )
 
         else -> {
+            if (notDefault) NotDefaultLabel(Modifier.padding(top = 6.dp))
             var text by remember(setting.path, setting.value) { mutableStateOf(setting.value) }
             // rememberUpdatedState so the focus callback -- which Compose may hold across
             // recompositions -- reads the CURRENT text rather than whatever it captured
@@ -503,6 +586,7 @@ private fun FirmwareLibrariesRow(setting: CoreSetting, remembered: String?, quer
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(Modifier.weight(1f)) {
+                if (changed > 0) NotDefaultLabel()
                 Text(setting.label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
                 Text(
                     "${str("core.settings.libraries.changed")}: $changed",

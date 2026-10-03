@@ -516,6 +516,11 @@ open class MainActivityRuntime : ComponentActivity() {
         @JvmStatic
         fun isVmStopInProgress(): Boolean = vmStopInProgress
 
+        /** Nothing booted, booting or shutting down. The library scans only then: a scan mounts disc
+         *  images, and eState alone reads STOPPED while the core is still tearing down. */
+        @JvmStatic
+        fun isVmIdle(): Boolean = eState.value == EmuState.STOPPED && !vmStopInProgress && !vmRunLoopActive
+
         /** True from game/BIOS boot until we are back in the library. This — not currentGame —
          *  decides which rotation tier applyEmulationOrientation() uses: a BIOS boot has no
          *  GameInfo yet is still emulation, so keying on currentGame made the BIOS follow the
@@ -652,6 +657,9 @@ open class MainActivityRuntime : ComponentActivity() {
                 try {
                     eState.value = EmuState.RUNNING
                     println("@@ANDROID_START_VM@@ kind=game path=${m_szGamefile.take(240)}")
+                    // Nothing in this core ever called onVmRunning, so a game launched without a
+                    // library entry never got one. Start looking now; it waits for the boot.
+                    adoptExternalGameIdentity()
 
                     // Push the curated settings before the VM reads them.
                     //
@@ -677,9 +685,14 @@ open class MainActivityRuntime : ComponentActivity() {
                                 game.settingsKey, game.fileStemKey,
                             )
                         }
-                        com.armsx2.config.ConfigStore
-                            .resolveForGame(currentGame.value?.settingsKey)
-                            .applyTo()
+                        val launchKey = currentGame.value?.settingsKey
+                        val launchSettings = com.armsx2.config.ConfigStore.resolveForGame(launchKey)
+                        android.util.Log.i(
+                            "ARMSX3-Config",
+                            "launch $launchKey: Accurate SPU Reservations ${launchSettings.ps3.accurateSpuRsv}, " +
+                                "per-game ${launchKey?.let { com.armsx2.config.ConfigStore.loadOverrides(it) }}",
+                        )
+                        launchSettings.applyTo()
                     } catch (t: Throwable) {
                         android.util.Log.w("ARMSX2", "launch: failed to apply settings", t)
                     }
@@ -904,6 +917,8 @@ open class MainActivityRuntime : ComponentActivity() {
                 if (ctx != null) pickedId?.let { id ->
                     com.armsx2.CustomDriver.listInstalled(ctx).firstOrNull { it.id == id }
                 } else null
+            // Turnip options go into the environment before the device is created.
+            com.armsx2.CustomDriver.applyDriverEnv()
             if (ctx != null) com.armsx2.CustomDriver.applyToNative(ctx, picked)
             when (renderer.value) {
                 "vulkan" -> NativeApp.renderVulkan()
@@ -924,6 +939,9 @@ open class MainActivityRuntime : ComponentActivity() {
             // dispatchKeyEvent can forward physical-keyboard keys to it. applyTo()
             // already pushed [USB1] Type + the live attach (usbSetKeyboardEnabled).
             usbKeyboardActive = resolved.usbKeyboard
+            // A pressure modifier toggled on in the previous game must not soften this one's
+            // first press.
+            com.armsx2.ui.touch.TouchControls.pressureModifierHeld.value = false
 
             // A PS2 pad block used to sit here: Pad1/Pad2 Deadzone, Pad2 Type =
             // DualShock2 when a second controller was present, and the multitap
@@ -1419,7 +1437,7 @@ open class MainActivityRuntime : ComponentActivity() {
         private fun bootTargetFor(uri: String, name: String): String? {
             val lower = name.lowercase()
             return when {
-                listOf(".iso", ".m3u", ".bin", ".elf", ".self").any(lower::endsWith) -> uri
+                listOf(".iso", ".chd", ".m3u", ".bin", ".elf", ".self").any(lower::endsWith) -> uri
                 // A folder dump is picked by a file inside it, and PS3_DISC.SFB is the one every
                 // disc root has. The folder itself is what boots.
                 lower == "ps3_disc.sfb" -> com.armsx2.storage.ContentUri.bootPathFor(uri)
@@ -1576,21 +1594,25 @@ open class MainActivityRuntime : ComponentActivity() {
         }.getOrNull()
 
         /**
-         * Give an externally-launched game the same identity a library-launched one has.
+         * Give a game launched without a library entry the same identity a library-launched one has.
          *
          * A front-end (Daijisho / Lisi / Cocoon) hands us a bare content:// with no
-         * GameInfo, so [handleExternalLaunchIntent] leaves [currentGame] null. That split
+         * GameInfo, so [handleExternalLaunchIntent] leaves [currentGame] null. So does Launch Game
+         * or Change Disc for a file the library has no entry for: one outside its folders, or one
+         * picked before the rescan that finds it has finished, and the pause menu then showed
+         * "PlayStation 3" instead of the game. That split
          * the game's identity in two: the settings hub keys its Global/Game switch off
          * currentGame, so the switch VANISHED — while the save path resolves the serial
          * from the running core and happily wrote per-game. Hence the report of settings
          * "showing as Global but saving as Per Game" only when launched from a front-end.
          *
          * The core knows the serial once the disc is read, which is the same key the save
-         * path uses — so build the missing GameInfo from it and the two agree again.
+         * path uses — so build the missing GameInfo from it and the two agree again. The title
+         * is the disc's own, as the library would have read it.
          */
 
         private fun adoptExternalGameIdentity() {
-            if (!launchedExternally || currentGame.value != null) return
+            if (currentGame.value != null) return
             val path = m_szGamefile.takeIf { it.isNotEmpty() } ?: return
             val handler = android.os.Handler(android.os.Looper.getMainLooper())
             handler.post(object : Runnable {
@@ -1599,32 +1621,46 @@ open class MainActivityRuntime : ComponentActivity() {
                     // A library launch that lands mid-poll wins: it has the real entry.
                     if (vmStopInProgress || eState.value == EmuState.STOPPED) return
                     if (currentGame.value != null) return
+                    // The core keeps the last game's serial and title until the next boot reads
+                    // its disc, which happens while it is loading. Past that, they are this game's.
+                    val booted = when (runCatching { net.rpcsx.RPCSX.getState() }.getOrNull()) {
+                        net.rpcsx.EmulatorState.Ready, net.rpcsx.EmulatorState.Starting,
+                        net.rpcsx.EmulatorState.Running, net.rpcsx.EmulatorState.Paused,
+                        net.rpcsx.EmulatorState.Frozen -> true
+                        else -> false
+                    }
                     // "00000000" is the placeholder the core reports before the disc is
                     // read — the same value TouchControls.coreSerial() rejects.
-                    val serial = runCatching { NativeApp.getGameSerial() }.getOrNull()
+                    val serial = if (!booted) null else runCatching { NativeApp.getGameSerial() }.getOrNull()
                         ?.trim()?.uppercase()?.takeIf { it.isNotEmpty() && it != "00000000" }
                     if (serial == null) {
-                        // ~10s of looking. A serial-less boot (ELF/homebrew) just never
-                        // adopts one, and settingsKey's filename fallback still applies.
-                        if (++attempts < 40) handler.postDelayed(this, 250)
+                        // A minute of looking, for a slow load. A serial-less boot (ELF/homebrew)
+                        // just never adopts one, and settingsKey's filename fallback still applies.
+                        if (++attempts < 240) handler.postDelayed(this, 250)
                         return
                     }
                     val uri = runCatching { Uri.parse(path) }.getOrNull() ?: return
                     val name = uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':')
                         ?: path.substringAfterLast('/')
-                    val (title, _) = FilenameParser.parse(name)
+                    // The file name only for a boot whose disc has no title, an ELF say.
+                    val title = com.armsx3.Rpcs3Bridge.getTitle().trim().ifEmpty { FilenameParser.parse(name).first }
+                    val folder = runCatching {
+                        java.io.File(com.armsx2.storage.ContentUri.bootPathFor(path)).isDirectory
+                    }.getOrDefault(false)
                     currentGame.value = GameInfo(
                         uri = uri,
                         title = title,
                         serial = serial,
-                        extension = name.substringAfterLast('.', "").uppercase(),
+                        extension = if (folder) "FOLDER" else name.substringAfterLast('.', "").uppercase(),
+                        platform = com.armsx2.GamePlatform.PS3,
                     )
                 }
             })
         }
 
-        /** Fired when the VM reaches RUNNING (from NativeApp.vmSetPaused). A state chosen from the
-         *  library is not loaded here any more: it is the boot target itself, see launchGameFromState. */
+        /** From ARMSX2, where the VM reaching RUNNING calls it (NativeApp.vmSetPaused). Nothing in this
+         *  core does: start() looks for the identity itself. A state chosen from the library is not
+         *  loaded here any more: it is the boot target itself, see launchGameFromState. */
         @JvmStatic
         fun onVmRunning() {
             adoptExternalGameIdentity()
@@ -3145,6 +3181,8 @@ open class MainActivityRuntime : ComponentActivity() {
         // pads that report the D-pad as KEYCODE_DPAD_*. Placed before every other
         // frontend handler so nothing leaks to the grid behind it.
         if (com.armsx2.ui.home.LibraryKeyboard.visible.value) {
+            // The phone's volume keys stay the system's, as they are with any modal up.
+            if (isVolumeKey(kc)) return false
             if (event.action == KeyEvent.ACTION_DOWN) {
                 when (kc) {
                     KeyEvent.KEYCODE_DPAD_UP -> com.armsx2.ui.home.LibraryKeyboard.move(0, -1)
@@ -3167,6 +3205,7 @@ open class MainActivityRuntime : ComponentActivity() {
         // selection, A jumps to the setting, Y re-opens the keyboard, B closes. Owns the pad so
         // nothing leaks to the settings screen behind.
         if (com.armsx2.ui.settingshub.SettingsSearch.visible.value) {
+            if (isVolumeKey(kc)) return false // the system's, as with any modal up
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 when (kc) {
                     KeyEvent.KEYCODE_DPAD_UP -> com.armsx2.ui.settingshub.SettingsSearch.move(-1)
@@ -3188,6 +3227,9 @@ open class MainActivityRuntime : ComponentActivity() {
         // block above on purpose: naming a preset hands input to LibraryKeyboard, and it
         // must keep it until it closes.
         if (com.armsx2.ui.common.ShaderParamsEditor.visible) {
+            // Except the phone's own volume keys, which are the system's with the editor up or
+            // not: the swallow-everything below left the volume stuck while it was open.
+            if (isVolumeKey(kc)) return false
             val editor = com.armsx2.ui.common.ShaderParamsEditor
             val down = event.action == KeyEvent.ACTION_DOWN
             when (kc) {
@@ -3464,6 +3506,10 @@ open class MainActivityRuntime : ComponentActivity() {
                     if (down && event.repeatCount == 0) toggleGyro()
                     return true
                 }
+                ControllerMappings.SysHotkey.PRESSURE_MOD_TOGGLE -> {
+                    if (down && event.repeatCount == 0) togglePressureModifier()
+                    return true
+                }
                 ControllerMappings.SysHotkey.GYRO_RECENTER -> {
                     if (down && event.repeatCount == 0) recenterGyro()
                     return true
@@ -3654,6 +3700,15 @@ open class MainActivityRuntime : ComponentActivity() {
         val on = !gyroActive.value
         gyroActive.value = on
         hotkeyToast(if (on) "Gyro ON" else "Gyro OFF")
+    }
+
+    /** The PRESSURE_MOD_TOGGLE hotkey (ARMSX2 #304): flips the soft-press modifier and leaves it,
+     *  applied to buttons already held just as the hold binding does. */
+    private fun togglePressureModifier() {
+        val on = !com.armsx2.ui.touch.TouchControls.pressureModifierHeld.value
+        com.armsx2.ui.touch.TouchControls.pressureModifierHeld.value = on
+        com.armsx2.ui.touch.TouchControls.reapplyPressureToHeldButtons()
+        hotkeyToast(if (on) "Pressure modifier ON" else "Pressure modifier OFF")
     }
 
     /** Re-zero the motion neutral. Routed through [gyroRecenterHook] because the sensor
@@ -4095,7 +4150,8 @@ open class MainActivityRuntime : ComponentActivity() {
                 KeyEvent.KEYCODE_BUTTON_R2, port, axisC = rightTriggerExtraAxis(ev.deviceId))
             // Physical STICK DIRECTIONS bound to a PS2 control via the "(send)"
             // rows — e.g. R-Stick Down bound to send Square. The analog "(send)"
-            // targets contribute to the merge layer like every other writer.
+            // targets contribute to the merge layer like every other writer. A bound
+            // direction no longer drives its own stick direction too (dispatchStick).
             dispatchStickDirBindings(ev, port)
             // Single write per analog code per event, merged across ALL writers.
             flushAnalogAxes(port)
@@ -4113,6 +4169,11 @@ open class MainActivityRuntime : ComponentActivity() {
     // merge layer), thresholded for a digital one (change-tracked per code so we
     // only write edges, like dispatchDpadCombined).
     private val stickDirDigitalHeld = Array(8) { HashSet<Int>() } // per unified pad slot (multitap)
+
+    /** Whether this physical stick direction is bound to a pad control in Button mapping. */
+    private fun stickDirBound(left: Boolean, dir: ControllerMappings.StickDir, port: Int): Boolean =
+        ControllerMappings.targetForPhysical(ControllerMappings.stickHotkeyKeyCode(left, dir), port) != null
+
     private fun dispatchStickDirBindings(ev: MotionEvent, port: Int) {
         for (left in booleanArrayOf(true, false)) {
             // Same axis correction the main dispatch applies (swap, then inverts).
@@ -4844,10 +4905,12 @@ open class MainActivityRuntime : ComponentActivity() {
      *  from the sensor callback on the main looper. [gx],[gy] are the signed,
      *  smoothed gyro vector in [-1,1]; (0,0) on settle/stop releases it. The gyro
      *  sums with whichever physical stick shares its axis (aim -> right, or the
-     *  user-chosen left for RE4-style games; steer -> left) so coarse stick aim
-     *  and fine gyro adjustment work together instead of clobbering each other. */
+     *  user-chosen left for RE4-style games; steer -> its own choice, left by
+     *  default) so coarse stick aim and fine gyro adjustment work together
+     *  instead of clobbering each other. */
     fun onGyroAnalog(mode: Int, gx: Float, gy: Float) {
-        gyroCombineLeft = mode == 2 ||
+        gyroCombineLeft =
+            (mode == 2 && ControllerMappings.gyroSteerStick() == ControllerMappings.GYRO_STICK_LEFT) ||
             (mode == 1 && ControllerMappings.gyroAimStick() == ControllerMappings.GYRO_STICK_LEFT)
         gyroVecX = gx; gyroVecY = gy
         gyroCombineActive = gx != 0f || gy != 0f
@@ -4887,6 +4950,14 @@ open class MainActivityRuntime : ComponentActivity() {
         if (ControllerMappings.stickSwapXY(leftStick)) { val t = vx; vx = vy; vy = t }
         if (ControllerMappings.stickInvertX(leftStick)) vx = -vx
         if (ControllerMappings.stickInvertY(leftStick)) vy = -vy
+        // A direction bound in Button mapping (a "(send)" row) drives only that binding, in
+        // dispatchStickDirBindings. Driving the stick's own direction as well sent both at once:
+        // swapping the right stick's left and right that way put R-Left and R-Right on the same
+        // axis together, and they cancelled out (ARMSX2 #604).
+        if (vx < 0f && stickDirBound(leftStick, ControllerMappings.StickDir.LEFT, port)) vx = 0f
+        if (vx > 0f && stickDirBound(leftStick, ControllerMappings.StickDir.RIGHT, port)) vx = 0f
+        if (vy < 0f && stickDirBound(leftStick, ControllerMappings.StickDir.UP, port)) vy = 0f
+        if (vy > 0f && stickDirBound(leftStick, ControllerMappings.StickDir.DOWN, port)) vy = 0f
         when (mode) {
             ControllerMappings.StickMode.ANALOG -> {
                 // Radial shaping into the merge layer (flushAnalogAxes writes once
@@ -5002,6 +5073,7 @@ open class MainActivityRuntime : ComponentActivity() {
             ControllerMappings.SysHotkey.CYCLE_SLOT -> cycleSaveSlot()
                 // TEXTURE_DUMP hotkey removed: PCSX2 texture dumping.
             ControllerMappings.SysHotkey.GYRO_TOGGLE -> toggleGyro()
+            ControllerMappings.SysHotkey.PRESSURE_MOD_TOGGLE -> togglePressureModifier()
             // GYRO_HOLD needs key up/down edges, which this edge-triggered path (stick
             // directions / combos) doesn't provide — behave as a toggle here rather than
             // latching gyro on with no release.

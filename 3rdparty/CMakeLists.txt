@@ -22,6 +22,39 @@ add_subdirectory(zlib EXCLUDE_FROM_ALL)
 # ZSTD
 add_subdirectory(zstd EXCLUDE_FROM_ALL)
 
+# libchdr, for CHD disc images (rpcs3/Loader/CHD.cpp). Built from its sources rather than its own
+# CMakeLists, which would add a second zstd and a bundled zlib (miniz) and bring its shared library
+# and test options along: this is only the decoder, over the zlib and zstd above.
+set(LIBCHDR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libchdr)
+add_library(3rdparty_chdr STATIC
+	${LIBCHDR_DIR}/src/libchdr_bitstream.c
+	${LIBCHDR_DIR}/src/libchdr_cdrom.c
+	${LIBCHDR_DIR}/src/libchdr_chd.c
+	${LIBCHDR_DIR}/src/libchdr_codec_avhuff.c
+	${LIBCHDR_DIR}/src/libchdr_codec_cdfl.c
+	${LIBCHDR_DIR}/src/libchdr_codec_cdlz.c
+	${LIBCHDR_DIR}/src/libchdr_codec_cdzl.c
+	${LIBCHDR_DIR}/src/libchdr_codec_cdzs.c
+	${LIBCHDR_DIR}/src/libchdr_codec_flac.c
+	${LIBCHDR_DIR}/src/libchdr_codec_huff.c
+	${LIBCHDR_DIR}/src/libchdr_codec_lzma.c
+	${LIBCHDR_DIR}/src/libchdr_codec_zlib.c
+	${LIBCHDR_DIR}/src/libchdr_codec_zstd.c
+	${LIBCHDR_DIR}/src/libchdr_flac.c
+	${LIBCHDR_DIR}/src/libchdr_huffman.c
+	${LIBCHDR_DIR}/deps/lzma-26.02/src/LzmaDec.c)
+target_include_directories(3rdparty_chdr PUBLIC ${LIBCHDR_DIR}/include)
+target_compile_definitions(3rdparty_chdr PRIVATE CHDR_SYSTEM_ZLIB CHDR_SYSTEM_ZSTD)
+target_link_libraries(3rdparty_chdr PRIVATE 3rdparty_zlib 3rdparty_zstd)
+
+# LZMA is how chdman compresses most of a disc image. libchdr uses the ARM64 assembly decoder only
+# when CMAKE_SYSTEM_NAME is "Linux", which leaves Android on the C one.
+if(CMAKE_SYSTEM_NAME MATCHES "^(Linux|Android)$" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+	enable_language(ASM)
+	target_sources(3rdparty_chdr PRIVATE ${LIBCHDR_DIR}/deps/lzma-26.02/Asm/arm64/LzmaDecOpt.S)
+	set_source_files_properties(${LIBCHDR_DIR}/deps/lzma-26.02/src/LzmaDec.c PROPERTIES COMPILE_DEFINITIONS Z7_LZMA_DEC_OPT)
+endif()
+
 # 7zip sdk
 add_subdirectory(7zip EXCLUDE_FROM_ALL)
 
@@ -390,6 +423,7 @@ else()
 endif()
 add_library(3rdparty::zlib ALIAS 3rdparty_zlib)
 add_library(3rdparty::zstd ALIAS 3rdparty_zstd)
+add_library(3rdparty::chdr ALIAS 3rdparty_chdr)
 add_library(3rdparty::7zip ALIAS 3rdparty_7zip)
 add_library(3rdparty::protobuf ALIAS 3rdparty_protobuf)
 add_library(3rdparty::pugixml ALIAS pugixml)

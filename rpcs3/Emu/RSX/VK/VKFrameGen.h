@@ -16,6 +16,7 @@
 #include "VulkanAPI.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 // Forward-declared rather than including device.h: this header is pulled in by the present
@@ -91,6 +92,27 @@ namespace vk::frame_gen
 		shared_image(const shared_image&) = delete;
 		shared_image& operator=(const shared_image&) = delete;
 
+		// Movable, so a replaced image can be retired and freed once the GPU is done with it
+		// rather than destroyed under work still in flight.
+		shared_image(shared_image&& other) noexcept { *this = std::move(other); }
+		shared_image& operator=(shared_image&& other) noexcept
+		{
+			if (this != &other)
+			{
+				destroy();
+				m_image = std::exchange(other.m_image, VK_NULL_HANDLE);
+				m_view = std::exchange(other.m_view, VK_NULL_HANDLE);
+				m_memory = std::exchange(other.m_memory, VK_NULL_HANDLE);
+				m_device = std::exchange(other.m_device, VK_NULL_HANDLE);
+				m_width = std::exchange(other.m_width, 0);
+				m_height = std::exchange(other.m_height, 0);
+				m_format = std::exchange(other.m_format, VK_FORMAT_UNDEFINED);
+				m_layout = std::exchange(other.m_layout, VK_IMAGE_LAYOUT_UNDEFINED);
+				layout = std::exchange(other.layout, VK_IMAGE_LAYOUT_UNDEFINED);
+			}
+			return *this;
+		}
+
 		// Allocate the buffer and import it. False leaves the object empty and logs why.
 		bool create(const vk::render_device& dev, u32 width, u32 height, VkFormat format);
 
@@ -148,6 +170,23 @@ namespace vk::frame_gen
 	bool capture_presented_frame(const vk::command_buffer& cmd, const vk::render_device& dev,
 		VkImage src, VkImageLayout src_layout, u32 width, u32 height,
 		u32 guest_width, u32 guest_height);
+
+	// Capture the GAME image instead, before any scaling or overlay, for the case where the
+	// present path is a plain scaled blit: the passes then run at the game's own resolution
+	// (shrunk to fit the screen, never grown) rather than the screen's, and the caller presents
+	// each generated frame through the same blit and draws the overlays on it afresh. That is
+	// cheaper by the ratio of the two sizes, and the overlays are never interpolated.
+	//
+	// [src] is read in whatever layout it holds and left in it. [src_width]/[src_height] is the
+	// region the real frame presents; [max_width]/[max_height] the screen.
+	bool capture_game_frame(const vk::command_buffer& cmd, const vk::render_device& dev,
+		vk::image* src, u32 src_width, u32 src_height, u32 max_width, u32 max_height);
+
+	// True when the generated images hold the game image at generated_width() x generated_height()
+	// (capture_game_frame), false when they hold the composited screen (capture_presented_frame).
+	bool generated_at_game_resolution();
+	u32 generated_width();
+	u32 generated_height();
 
 	// Promote the capture recorded this frame to one framegen is allowed to read.
 	//

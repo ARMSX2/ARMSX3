@@ -170,8 +170,11 @@ namespace vk
 
 		void emit_geometry(vk::command_buffer& cmd, glsl::program* program) override;
 
+		// [advance]: step the overlay's state after drawing it. False draws the same overlay again
+		// without that step -- for a generated frame, which must look like the real one it follows
+		// and must not be counted as a frame of its own (the performance overlay counts updates).
 		void run(vk::command_buffer& cmd, const areau& viewport, vk::framebuffer* target, VkRenderPass render_pass,
-				vk::data_heap& upload_heap, rsx::overlays::overlay& ui);
+				vk::data_heap& upload_heap, rsx::overlays::overlay& ui, bool advance = true);
 	};
 
 	struct attachment_clear_pass : public overlay_pass
