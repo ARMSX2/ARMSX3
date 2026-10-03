@@ -83,6 +83,11 @@ object InGameOverlay {
 
     fun saveSettings(updated: Settings) {
         val previous = settingsState.value
+        // What the running game is using before this change, resolved the way its boot resolved
+        // it, so the live push below can write only what the change changed.
+        val runningBefore = if (MainActivityRuntime.nativeReady.value &&
+            MainActivityRuntime.eState.value != EmuState.STOPPED
+        ) runCatching { ConfigStore.resolveForGame(currentSerial.value) }.getOrNull() else null
         settingsState.value = updated
         // `previous` matters: it's how ConfigStore tells a field the user just changed in
         // Game scope from one they never touched, so setting a per-game value that happens
@@ -104,7 +109,12 @@ object InGameOverlay {
                     MainActivityRuntime.upscale.value = updated.upscaleFloat.coerceIn(0.25f, 8.0f)
                 }
                 if (MainActivityRuntime.eState.value != EmuState.STOPPED) {
-                    updated.applyTo()
+                    // Only the keys this change changed, for the running game's resolved settings.
+                    // updated.applyTo() wrote every key of the edited scope, which reset the game's
+                    // own and database values mid-game (Settings.applyChangesSince).
+                    val runningAfter = ConfigStore.resolveForGame(currentSerial.value)
+                    if (runningBefore != null) runningAfter.applyChangesSince(runningBefore)
+                    else runningAfter.applyTo()
                     // Regenerate the native per-game INI (gamesettings/<serial>_<CRC>.ini) from the
                     // resolved settings so a stale key there can't shadow the base layer. Without this a
                     // legacy per-game key — e.g. TVShader=3 from a reused data folder — survives every

@@ -1033,8 +1033,13 @@ data class Settings(
      *  field→EmuCore-key mapping for the export — no duplicated key list. */
     private fun put(section: String, key: String, type: String, value: String) {
         val sink = emitSink
-        if (sink != null) sink(section, key, type, value)
-        else NativeApp.setSetting(section, key, type, value)
+        if (sink != null) {
+            sink(section, key, type, value)
+            return
+        }
+        // An in-game change writes only the keys it changed: see applyChangesSince.
+        if (liveBaselineByThread.get()?.get(section + '\u0000' + key) == value) return
+        NativeApp.setSetting(section, key, type, value)
     }
 
     /**
@@ -1069,6 +1074,36 @@ data class Settings(
             applyToInner()
         } finally {
             if (batched) runCatching { net.rpcsx.RPCSX.instance.settingsEndBatch() }
+        }
+    }
+
+    /**
+     * [applyTo] for a game that is already running: writes only the keys whose value differs from
+     * [before], so a change made in game leaves everything else as the game booted with it.
+     *
+     * A running game's core config is more than these settings. Its RPCS3 database entry and our
+     * local entries were layered on at boot, and none of that is in a Settings, so writing every
+     * key put the general values back over them. Changing the OSD colour in Arkham City switched
+     * the Write Color Buffers, Write Depth Buffer and Asynchronous Texture Streaming its database
+     * entry turns on back off mid-game: 30 fps fell to 16 and the audio broke up. The live calls
+     * after the persisted keys (FPS cap, volume, OSD flags and so on) still run as before.
+     *
+     * [before] and this must both be the running game's resolved settings
+     * (ConfigStore.resolveForGame), from before and after the change was saved.
+     */
+    fun applyChangesSince(before: Settings) {
+        val baseline = HashMap<String, String>()
+        emitSink = { section, key, _, value -> baseline[section + '\u0000' + key] = value }
+        try {
+            before.applyTo()
+        } finally {
+            emitSink = null
+        }
+        liveBaselineByThread.set(baseline)
+        try {
+            applyTo()
+        } finally {
+            liveBaselineByThread.set(null)
         }
     }
 
@@ -2443,6 +2478,10 @@ data class Settings(
          *  Per thread: [coreWrites] runs these captures from the All Core Settings screen, and a
          *  capture on one thread must not divert a real apply running on another into its sink. */
         private val emitSinkByThread = ThreadLocal<((String, String, String, String) -> Unit)?>()
+
+        /** While set on this thread, [put] skips every key whose value equals this map's
+         *  ("section\u0000key" to value). Per thread like [emitSink]: see [applyChangesSince]. */
+        private val liveBaselineByThread = ThreadLocal<Map<String, String>?>()
 
         @JvmStatic
         internal var emitSink: ((String, String, String, String) -> Unit)?
