@@ -100,10 +100,7 @@ namespace rsx
 			m_cmd = cmd;
 			m_command_inc = ((m_cmd & RSX_METHOD_NON_INCREMENT_CMD_MASK) == RSX_METHOD_NON_INCREMENT_CMD) ? 0 : 4;
 			m_remaining_commands = count;
-			// Saved between packets (count 0), the position is the next header and nothing is
-			// pending to re-read: resume on it. Rewinding a word there, as upstream does, decodes
-			// the last argument of the previous packet as a command on every such load.
-			m_fifo_pos = count ? position - 4 : position;
+			m_fifo_pos = position - (count ? 4 : 0);
 			m_args_ptr = m_iotable->get_addr(m_fifo_pos);
 			m_command_reg = (m_cmd & 0xffff) + m_command_inc * (((m_cmd >> 18) - count) & 0x7ff) - m_command_inc;
 		}
