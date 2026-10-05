@@ -290,12 +290,13 @@ namespace vk
 				"	uint out_offset = params[0].z >> 2;\n"
 				"	uvec4 tmp;\n";
 
-			work_kernel =
-				"		if (index >= block_length)\n"
-				"			return;\n";
-
 			if constexpr (sizeof(From) == 4)
 			{
+				// NOTE: We're halving the data on output, so our index is 2x as large
+				work_kernel =
+					"		if ((index * 2) >= block_length)\n"
+					"			return;\n";
+
 				static_assert(sizeof(To) == 2);
 				declare_f16_contraction();
 
@@ -323,6 +324,10 @@ namespace vk
 			}
 			else
 			{
+				work_kernel =
+					"		if (index >= block_length)\n"
+					"			return;\n";
+
 				static_assert(sizeof(To) == 4);
 				declare_f16_expansion();
 
