@@ -2346,6 +2346,24 @@ open class MainActivityRuntime : ComponentActivity() {
         }
     }
 
+    // Every launcher in the app ends up here, the system document pickers included. On a device
+    // with nothing that handles one (HarmonyOS without Google services, issue #186) the platform
+    // throws ActivityNotFoundException straight out of the click that launched it and the app
+    // closes. Caught here once for all of them: SystemPickers either hands over to a caller's
+    // fallback or tells the user, and the launcher is answered as a cancel so its callback and
+    // the result registry's bookkeeping still complete.
+    @Deprecated("Deprecated in Java")
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        try {
+            super.startActivityForResult(intent, requestCode, options)
+        } catch (_: android.content.ActivityNotFoundException) {
+            com.armsx2.ui.common.SystemPickers.onLaunchFailed(this, intent)
+            window.decorView.post {
+                activityResultRegistry.dispatchResult(requestCode, RESULT_CANCELED, null)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         applyEdgeToEdge()
         super.onCreate(savedInstanceState)

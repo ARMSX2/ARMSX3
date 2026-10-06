@@ -90,9 +90,12 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
     val biosPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let(viewModel::scanFirmwareFolder)
     }
-    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let(viewModel::addGameFolder)
-    }
+    // Falls back to our own browser where the device has no system folder picker (issue #186).
+    val folderPicker = com.armsx2.ui.common.rememberFolderPicker(
+        title = str("setup.page.roms.title"),
+        onTree = viewModel::addGameFolder,
+        onPath = { viewModel.addGameFolderPath(it.absolutePath) },
+    )
     // github flavor only: a third "Custom folder" data-root, with all-files access
     // (MANAGE_EXTERNAL_STORAGE) like the old UI. The Play build stays SAF-scoped
     // (Internal / SD only). Flow: grant all-files access if needed → pick a folder →
@@ -119,8 +122,9 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
             )
         }
     }
-    val customFolderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri?.let { u ->
+    val customFolderPicker = com.armsx2.ui.common.rememberFolderPicker(
+        title = str("setup.step.appData.title"),
+        onTree = { u ->
             runCatching {
                 context.contentResolver.takePersistableUriPermission(
                     u,
@@ -130,8 +134,9 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
             }
             com.armsx2.runtime.MainActivityRuntime.resolveTreeUriToPosix(u.toString())
                 ?.let(viewModel::selectCustomStorage)
-        }
-    }
+        },
+        onPath = { viewModel.selectCustomStorage(it.absolutePath) },
+    )
     // In-app browser for the firmware step. Preferred over the system picker,
     // which is a different app on top of ours and is where Android is most
     // likely to destroy this Activity.
@@ -144,7 +149,7 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R &&
             android.os.Environment.isExternalStorageManager()
         ) {
-            customFolderPicker.launch(null)
+            customFolderPicker()
         }
     }
     val onCustomStorage: () -> Unit = {
@@ -164,15 +169,15 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
                 android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                 android.net.Uri.parse("package:${context.packageName}"),
             )
-            runCatching { allFilesLauncher.launch(manageIntent) }.onFailure {
-                runCatching {
-                    allFilesLauncher.launch(
-                        android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
-                    )
-                }
+            // launchWithFallback, not runCatching: MainActivityRuntime now catches a missing screen
+            // itself, so the exception that used to bring up the general screen never arrives.
+            com.armsx2.ui.common.SystemPickers.launchWithFallback(allFilesLauncher, manageIntent) {
+                allFilesLauncher.launch(
+                    android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+                )
             }
         } else {
-            customFolderPicker.launch(null)
+            customFolderPicker()
         }
     }
 
@@ -245,7 +250,7 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
                                         context, { showFirmwareBrowser = true },
                                         firmwarePermLauncher, biosPicker, biosFilePicker,
                                     )
-                                }, folderPicker = { folderPicker.launch(null) }, onCustomStorage = onCustomStorage)
+                                }, folderPicker = folderPicker, onCustomStorage = onCustomStorage)
                             }
                         }
                         NavigationBar(
@@ -288,7 +293,7 @@ fun OnboardingScreen(viewModel: OnboardingViewModel = viewModel()) {
                                     context, { showFirmwareBrowser = true },
                                     firmwarePermLauncher, biosPicker, biosFilePicker,
                                 )
-                            }, folderPicker = { folderPicker.launch(null) }, onCustomStorage = onCustomStorage)
+                            }, folderPicker = folderPicker, onCustomStorage = onCustomStorage)
                         }
                     }
                     NavigationBar(
@@ -882,8 +887,10 @@ private fun openFirmwarePicker(
             android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
             android.net.Uri.parse("package:${context.packageName}"),
         )
-        runCatching { permLauncher.launch(intent) }.onFailure {
-            runCatching { safPicker.launch(null) }
+        // As above: the activity catches a missing screen, so the fallback has to be armed rather
+        // than waiting on an exception.
+        com.armsx2.ui.common.SystemPickers.launchWithFallback(permLauncher, intent) {
+            safPicker.launch(null)
         }
         return
     }

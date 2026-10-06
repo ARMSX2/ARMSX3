@@ -1033,22 +1033,24 @@ private fun GameFoldersRow() {
     // always been a List<String> persisted as a JSON array, and HomeScreen re-scans on
     // LaunchedEffect(directories, ...), so adding a folder refreshes the library by itself.
     // The only thing that was missing was a way to reach it once setup had completed.
-    val picker = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-
-        // Persist the grant before storing the path. A SAF uri that outlives its permission
-        // reads as an empty folder rather than an error, which looks like the folder was
-        // added and silently contains nothing.
-        runCatching {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
-        }
-        MainActivityRuntime.setRomsDirs((dirs + uri.toString()).distinct())
-    }
+    // Falls back to our own browser where the device has no system folder picker (issue #186);
+    // a folder chosen there is stored as a plain path.
+    val picker = com.armsx2.ui.common.rememberFolderPicker(
+        title = str("app.gameFolders.add"),
+        onTree = { uri ->
+            // Persist the grant before storing the path. A SAF uri that outlives its permission
+            // reads as an empty folder rather than an error, which looks like the folder was
+            // added and silently contains nothing.
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            }
+            MainActivityRuntime.setRomsDirs((dirs + uri.toString()).distinct())
+        },
+        onPath = { MainActivityRuntime.setRomsDirs((dirs + it.absolutePath).distinct()) },
+    )
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1072,11 +1074,16 @@ private fun GameFoldersRow() {
                 // locations a revoked grant (an unmounted card, typically) would otherwise
                 // just show half a library with no explanation.
                 val ok = remember(raw) {
-                    runCatching {
-                        context.contentResolver.persistedUriPermissions.any {
-                            it.uri.toString() == raw && it.isReadPermission
-                        }
-                    }.getOrDefault(false)
+                    if (raw.startsWith("/")) {
+                        // A folder from our own browser: a path, read through All files access.
+                        com.armsx2.ui.common.canBrowse() && java.io.File(raw).isDirectory
+                    } else {
+                        runCatching {
+                            context.contentResolver.persistedUriPermissions.any {
+                                it.uri.toString() == raw && it.isReadPermission
+                            }
+                        }.getOrDefault(false)
+                    }
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -1104,7 +1111,7 @@ private fun GameFoldersRow() {
             }
 
             Spacer(Modifier.height(4.dp))
-            OutlinedButton(onClick = { runCatching { picker.launch(null) } }, modifier = Modifier.fillMaxWidth()) {
+            OutlinedButton(onClick = picker, modifier = Modifier.fillMaxWidth()) {
                 Text(str("app.gameFolders.add"))
             }
             Spacer(Modifier.height(6.dp))

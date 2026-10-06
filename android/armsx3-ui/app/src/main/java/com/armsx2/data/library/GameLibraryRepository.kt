@@ -349,12 +349,18 @@ class GameLibraryRepository(private val context: Context) {
         android.util.Log.i(ScanTag, "scan start: ${directories.size} dir(s), rawStorage=${canUseRawStorage()}")
         directories.forEach { rawUri ->
             val uri = runCatching { rawUri.toUri() }.getOrNull() ?: return@forEach
-            val posix = MainActivityRuntime.resolveTreeUriToPosix(rawUri)
+            // A folder chosen in our own browser (devices without the system folder picker) is
+            // stored as a plain path rather than a tree URI.
+            val posix = MainActivityRuntime.resolveTreeUriToPosix(rawUri) ?: rawUri.takeIf { it.startsWith("/") }
             val rawRoot = if (canUseRawStorage()) posix?.let(::File) else null
             android.util.Log.i(ScanTag, "dir=$rawUri -> posix=$posix isDir=${rawRoot?.isDirectory}")
             if (rawRoot?.isDirectory == true) {
                 shieldFromMediaScanner(rawRoot)
                 scanRawDirectory(rawRoot, collected, 0)
+            } else if (rawUri.startsWith("/")) {
+                // A path has no document tree to fall back to: All files access is the only way
+                // to read it.
+                android.util.Log.w(ScanTag, "  $rawUri is a folder path and All files access is not granted; skipped")
             } else {
                 // SAF fallback. Games found this way are LISTED but the core cannot boot them:
                 // it opens games with ordinary file IO and a document tree has no path to open.
