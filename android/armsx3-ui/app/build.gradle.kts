@@ -34,7 +34,7 @@ android {
         // agree -- an APK that installs below its core's target is a dlopen failure at boot.
         minSdk = (project.findProperty("armsx3.minSdk") as String?)?.toInt() ?: 33
         targetSdk = 37
-        versionCode = 81
+        versionCode = 82
         versionName = "1.0.7"
 
         // ARMSX2's UI reads these. STORAGE_ALL_FILES gates the all-files storage path in
