@@ -107,6 +107,7 @@ object ConfigStore {
     // ...and back off it: the mask it enables confines six SPU threads to four cores.
     private const val KEY_AFFINITY_OS = "config.migrated.affinitySchedulerOff"
     private const val KEY_TIMESTRETCH_OFF = "config.migrated.audioTimeStretchOff"
+    private const val KEY_SHADER_PRECISION_LOW = "config.migrated.shaderPrecisionLow"
     // Scaling Mode row changed meaning; a stored 0 used to resolve to Bilinear, now Nearest.
     private const val KEY_CAS_MODE_BILINEAR = "config.migrated.casModeBilinear"
     // Mirror of the settings, written INTO the data folder so a later fresh install that
@@ -601,6 +602,25 @@ object ConfigStore {
                 CoreSettingOverrides.record(SettingsScope.Global, null, "Core@@Save LLVM logs", "false")
             }
             MainActivityRuntime.prefs.edit { putBoolean(KEY_LLVM_LOGS_OFF_2, true) }
+        }
+
+        // Move everyone to Shader Precision Low, once.
+        //
+        // Low is the Android default since 1.0.8: phone GPUs run fp16 at up to twice the fp32 rate,
+        // and Low is what lets the PS3's half-precision shader math use it. It used to also run
+        // math the RSX does at full precision in half (Metal Gear Solid V drew a flat sky); the
+        // fragment decompiler now keeps that in fp32, so Low is correct where it counts.
+        //
+        // A new default alone reaches nobody who already has a config.yml, since every setting
+        // is written out, High included. There is no telling a deliberate High from the old
+        // default, so everyone moves once and the core settings screen takes it back.
+        //
+        // Global tier only. A title someone set to High on purpose keeps it.
+        if (!MainActivityRuntime.prefs.getBoolean(KEY_SHADER_PRECISION_LOW, false)) {
+            runCatching {
+                CoreSettingOverrides.record(SettingsScope.Global, null, "Video@@Shader Precision", JSONObject.quote("Low"))
+            }
+            MainActivityRuntime.prefs.edit { putBoolean(KEY_SHADER_PRECISION_LOW, true) }
         }
 
         // Put Vblank Rate back to 60, which is both upstream's default and what a PS3
