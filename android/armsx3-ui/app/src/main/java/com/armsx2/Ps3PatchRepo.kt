@@ -382,8 +382,8 @@ object Ps3PatchRepo {
         // GRAN TURISMO 6 v01.22, BCUS99247 and BCUS98296 -- illusion's "Disable MLAA" and
         // "Disable Motion Blur", brought to ARMSX3 by mlgprorektm8. Without the first the game
         // needs Write and Read Color Buffers to render right, and the core turns both off while it
-        // is applied; without the second replays and track intros are black. Keyed by the two
-        // executables they were made for. See canary_patches.yml.
+        // is applied; without the second replays and track intros are black. Keyed by the
+        // executables they apply to; BCUS98296 v01.22 has two. See canary_patches.yml.
         Bundled(
             hash = "PPU-42367707f4caac2668f10cb46498f64bde9db440",
             name = "Disable MLAA",
@@ -411,6 +411,20 @@ object Ps3PatchRepo {
             serial = "BCUS98296",
             appVersion = "01.22",
             sinceRevision = 9,
+        ),
+        Bundled(
+            hash = "PPU-6ac472e1f334f54ec4753cde9e8e1515bfab4d17",
+            name = "Disable MLAA",
+            serial = "BCUS98296",
+            appVersion = "01.22",
+            sinceRevision = 10,
+        ),
+        Bundled(
+            hash = "PPU-6ac472e1f334f54ec4753cde9e8e1515bfab4d17",
+            name = "Disable Motion Blur",
+            serial = "BCUS98296",
+            appVersion = "01.22",
+            sinceRevision = 10,
         ),
         // SONIC THE HEDGEHOG (2006), BLUS30008 v01.01 -- without this the game
         // renders only its HUD and skybox. See canary_patches.yml.
@@ -640,7 +654,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 9
+    private const val BUNDLED_REVISION = 10
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"

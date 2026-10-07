@@ -1471,14 +1471,15 @@ static usz apply_modification(std::vector<u32>& applied, patch_engine::patch_inf
 // Gran Turismo 6 v01.22 reads every frame back for its MLAA pass, so it only renders correctly
 // with Write and Read Color Buffers on, which cost a lot of frame time. illusion's "Disable MLAA"
 // removes the pass, after which the buffers only cost time. Tied to the patch being applied, not
-// to the version: other v01.22 executables are in circulation (RPCS3's database knows another for
-// BCUS98296), and without the patch those still need the buffers, which then stay as configured.
+// to the version: other v01.22 executables are in circulation, and without the patch those still
+// need the buffers, which then stay as configured.
 static void armsx3_apply_patch_settings(const std::string& hash, const std::string& description)
 {
 	static constexpr std::string_view gt6_mlaa_hashes[] =
 	{
 		"PPU-42367707f4caac2668f10cb46498f64bde9db440", // BCUS99247 v01.22
 		"PPU-4f1e9acd7d98961b4b742fb324a2faba6212ea67", // BCUS98296 v01.22
+		"PPU-6ac472e1f334f54ec4753cde9e8e1515bfab4d17", // BCUS98296 v01.22, the one RPCS3's database lists
 	};
 
 	if (description != "Disable MLAA")
