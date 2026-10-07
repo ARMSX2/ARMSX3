@@ -1337,7 +1337,7 @@ error_code sys_net_bnet_poll(ppu_thread& ppu, vm::ptr<sys_net_pollfd> fds, s32 n
 #endif
 		for (s32 i = 0; i < nfds; i++)
 		{
-			if (_fds[i].revents & (POLLIN | POLLHUP))
+			if (lv2_socket::native_readable(_fds[i].revents))
 				fds_buf[i].revents |= SYS_NET_POLLIN;
 			if (_fds[i].revents & POLLOUT)
 				fds_buf[i].revents |= SYS_NET_POLLOUT;
@@ -1563,7 +1563,7 @@ error_code sys_net_bnet_select(ppu_thread& ppu, s32 nfds, vm::ptr<sys_net_fd_set
 		for (s32 i = 0; i < nfds; i++)
 		{
 			bool sig = false;
-			if ((_fds[i].revents & (POLLIN | POLLHUP | POLLERR)) && _readfds.bit(i))
+			if ((lv2_socket::native_readable(_fds[i].revents) || (_fds[i].revents & POLLERR)) && _readfds.bit(i))
 				sig = true, rread.set(i);
 			if ((_fds[i].revents & (POLLOUT | POLLERR)) && _writefds.bit(i))
 				sig = true, rwrite.set(i);
