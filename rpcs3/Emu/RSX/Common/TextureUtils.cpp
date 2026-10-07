@@ -1832,6 +1832,32 @@ namespace rsx
 		return get_format_block_size_in_bytes(format) == 2 ? 0xFFFF : 0xFFFFFF;
 	}
 
+	// Hardware behaves as if each depth bound is converted into the surface's depth encoding, clamped to the format's range.
+	// Upstream adds this with ffa4c7108 (float depth clears), which ARMSX3 has not taken because it
+	// changes generated shaders; the depth bounds fix below only needs this CPU-side decode, for the
+	// largest value a z16_float surface holds. Unsigned E4M12 with bias 16, rebiased by 2^111.
+	static f32 decode_e4m12(u32 value)
+	{
+		const u32 bits = (value << 11) & 0x07FFF800u;
+		return std::bit_cast<f32>(bits) * std::bit_cast<f32>(0x77000000u);
+	}
+
+	f32 clamp_depth_bounds_value(rsx::surface_depth_format2 format, f32 value)
+	{
+		switch (format)
+		{
+		case rsx::surface_depth_format2::z16_uint:
+		case rsx::surface_depth_format2::z24s8_uint:
+			return std::clamp(value, 0.f, 1.f);
+		case rsx::surface_depth_format2::z16_float:
+			return std::clamp(value, 0.f, decode_e4m12(0xFFFF));
+		case rsx::surface_depth_format2::z24s8_float:
+			return std::max(value, 0.f);
+		default:
+				fmt::throw_exception("Unreachable");
+		}
+	}
+
 	bool is_texcoord_wrapping_mode(rsx::texture_wrap_mode mode)
 	{
 		switch (mode)

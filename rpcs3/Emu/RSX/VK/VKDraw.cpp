@@ -11,6 +11,8 @@
 #include "vkutils/chip_class.h"
 #include <vulkan/vulkan_core.h>
 
+#include "Emu/RSX/NV47/HW/context_accessors.define.h"
+
 namespace vk
 {
 	// Defined in VKGSRender.cpp, where they feed the pipeline object. The draw path needs them
@@ -281,11 +283,12 @@ void VKGSRender::update_draw_state()
 	if (m_device->get_depth_bounds_support())
 	{
 		f32 bounds_min, bounds_max;
-		if (rsx::method_registers.depth_bounds_test_enabled())
+		if (REGS(m_ctx)->depth_bounds_test_enabled())
 		{
-			// Update depth bounds min/max
-			bounds_min = rsx::method_registers.depth_bounds_min();
-			bounds_max = rsx::method_registers.depth_bounds_max();
+			// Update depth bounds min/max, saturated into the RSX depth format's range as hardware does
+			const auto depth_format = REGS(m_ctx)->surface_depth_fmt();
+			bounds_min = rsx::clamp_depth_bounds_value(depth_format, REGS(m_ctx)->depth_bounds_min());
+			bounds_max = rsx::clamp_depth_bounds_value(depth_format, REGS(m_ctx)->depth_bounds_max());
 		}
 		else
 		{
