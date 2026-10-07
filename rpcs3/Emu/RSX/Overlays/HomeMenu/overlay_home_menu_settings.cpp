@@ -226,6 +226,7 @@ namespace rsx
 			add_checkbox(&g_cfg.misc.show_rpcn_popups, localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_RPCN_POPUPS);
 			add_checkbox(&g_cfg.misc.show_shader_compilation_hint, localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_SHADER_COMPILATION_HINT);
 			add_checkbox(&g_cfg.misc.show_ppu_compilation_hint, localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_PPU_COMPILATION_HINT);
+			add_checkbox(&g_cfg.misc.show_spu_compilation_hint, localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_SPU_COMPILATION_HINT);
 			add_checkbox(&g_cfg.misc.show_autosave_autoload_hint, localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_AUTO_SAVE_LOAD_HINT);
 			add_checkbox(&g_cfg.misc.show_pressure_intensity_toggle_hint, localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_PRESSURE_INTENSITY_TOGGLE_HINT);
 			add_checkbox(&g_cfg.misc.show_analog_limiter_toggle_hint, localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_ANALOG_LIMITER_TOGGLE_HINT);

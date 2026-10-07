@@ -26,6 +26,35 @@ namespace rsx
 				true);
 		}
 
+		void show_spu_compile_notification()
+		{
+			// Called for every SPU function built during play, which on a first run is thousands a
+			// minute from several SPU threads at once. Refresh the message at most twice a second,
+			// so the hint costs nothing next to the compile it announces.
+			static atomic_t<u64> s_last_refresh{0};
+
+			const u64 now = std::chrono::duration_cast<std::chrono::microseconds>(
+				std::chrono::steady_clock::now().time_since_epoch()).count();
+			const u64 last = s_last_refresh;
+
+			if (now - last < 500'000 || !s_last_refresh.compare_and_swap_test(last, now))
+			{
+				return;
+			}
+
+			// Creating the icon reads a file; a static local is built once, whichever SPU thread
+			// gets here first
+			static const auto s_spu_loading_icon24 = std::make_shared<loading_icon24>();
+
+			queue_message(
+				localized_string_id::RSX_OVERLAYS_COMPILING_SPU_CODE,
+				3'000'000,
+				{},
+				message_pin_location::bottom_left,
+				s_spu_loading_icon24,
+				true);
+		}
+
 		std::shared_ptr<atomic_t<u32>> show_ppu_compile_notification()
 		{
 			if (!s_ppu_loading_icon24)

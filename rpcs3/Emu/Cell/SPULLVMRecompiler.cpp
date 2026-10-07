@@ -9,6 +9,7 @@
 #include "Emu/Cell/lv2/sys_time.h"
 #include "Emu/Memory/vm_reservation.h"
 #include "Emu/RSX/Core/RSXReservationLock.hpp"
+#include "Emu/RSX/Overlays/overlay_compile_notification.h"
 #include "Crypto/sha1.h"
 #include "Utilities/JIT.h"
 
@@ -1980,6 +1981,16 @@ public:
 #endif
 
 		spu_log.notice("Building function 0x%x... (size %u, %s)", func.entry_point, func.data.size(), m_hash);
+
+		// Say so on screen when SPU code compiles during play. That happens on the SPU thread that
+		// needs the code; the boot-time precompile runs on worker threads under its own progress
+		// dialog, so it is left out. Without this a first run after a cache wipe stutters for
+		// minutes with nothing to explain it (Metal Gear Solid V built 2,000 functions a minute).
+		if (g_cfg.misc.show_spu_compilation_hint && cpu_thread::get_current<spu_thread>())
+		{
+			rsx::overlays::show_spu_compile_notification();
+		}
+
 		m_pos = func.lower_bound;
 		m_base = func.entry_point;
 		m_size = ::size32(func.data) * 4;
