@@ -382,8 +382,8 @@ object Ps3PatchRepo {
         // GRAN TURISMO 6 v01.22, BCUS99247 and BCUS98296 -- illusion's "Disable MLAA" and
         // "Disable Motion Blur", brought to ARMSX3 by mlgprorektm8. Without the first the game
         // needs Write and Read Color Buffers to render right, and the core turns both off while it
-        // is applied; without the second replays and track intros are black. Keyed by the
-        // executables they apply to; BCUS98296 v01.22 has two. See canary_patches.yml.
+        // is applied; without the second replays and track intros are black. Keyed by
+        // executable: every GT6 v01.22 executable we know of. See canary_patches.yml.
         Bundled(
             hash = "PPU-42367707f4caac2668f10cb46498f64bde9db440",
             name = "Disable MLAA",
@@ -425,6 +425,76 @@ object Ps3PatchRepo {
             serial = "BCUS98296",
             appVersion = "01.22",
             sinceRevision = 10,
+        ),
+        Bundled(
+            hash = "PPU-638ef307e2b35d593f599efec0dc0c37059a984b",
+            name = "Disable MLAA",
+            serial = "BCES01893",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-638ef307e2b35d593f599efec0dc0c37059a984b",
+            name = "Disable Motion Blur",
+            serial = "BCES01893",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-80f0d67b29d3d17ac885a309a3fc4cd8dcf50658",
+            name = "Disable MLAA",
+            serial = "NPEA00502",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-80f0d67b29d3d17ac885a309a3fc4cd8dcf50658",
+            name = "Disable Motion Blur",
+            serial = "NPEA00502",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-4213aba5ed17f7e3cd3f299fa44d9d9acef0ba18",
+            name = "Disable MLAA",
+            serial = "NPUA81049",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-4213aba5ed17f7e3cd3f299fa44d9d9acef0ba18",
+            name = "Disable Motion Blur",
+            serial = "NPUA81049",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-6a7de7fdfd7e7cbd1031bf28a7104b29c308136c",
+            name = "Disable MLAA",
+            serial = "NPHA80269",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-6a7de7fdfd7e7cbd1031bf28a7104b29c308136c",
+            name = "Disable Motion Blur",
+            serial = "NPHA80269",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-43e618448eed82aa96856338d072f1e4978c36a8",
+            name = "Disable MLAA",
+            serial = "NPJA00113",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-43e618448eed82aa96856338d072f1e4978c36a8",
+            name = "Disable Motion Blur",
+            serial = "NPJA00113",
+            appVersion = "01.22",
+            sinceRevision = 11,
         ),
         // SONIC THE HEDGEHOG (2006), BLUS30008 v01.01 -- without this the game
         // renders only its HUD and skybox. See canary_patches.yml.
@@ -654,7 +724,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 10
+    private const val BUNDLED_REVISION = 11
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"

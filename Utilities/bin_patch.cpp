@@ -1480,6 +1480,11 @@ static void armsx3_apply_patch_settings(const std::string& hash, const std::stri
 		"PPU-42367707f4caac2668f10cb46498f64bde9db440", // BCUS99247 v01.22
 		"PPU-4f1e9acd7d98961b4b742fb324a2faba6212ea67", // BCUS98296 v01.22
 		"PPU-6ac472e1f334f54ec4753cde9e8e1515bfab4d17", // BCUS98296 v01.22, the one RPCS3's database lists
+		"PPU-638ef307e2b35d593f599efec0dc0c37059a984b", // BCES01893 v01.22
+		"PPU-80f0d67b29d3d17ac885a309a3fc4cd8dcf50658", // NPEA00502 v01.22
+		"PPU-4213aba5ed17f7e3cd3f299fa44d9d9acef0ba18", // NPUA81049 v01.22
+		"PPU-6a7de7fdfd7e7cbd1031bf28a7104b29c308136c", // NPHA80269 v01.22
+		"PPU-43e618448eed82aa96856338d072f1e4978c36a8", // NPJA00113 v01.22
 	};
 
 	if (description != "Disable MLAA")
