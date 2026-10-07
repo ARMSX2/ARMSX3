@@ -18,6 +18,7 @@
 #include "Emu/Cell/lv2/sys_event_flag.h"
 #include "Emu/Cell/lv2/sys_event.h"
 #include "Emu/Cell/lv2/sys_interrupt.h"
+#include "Emu/Cell/lv2/sys_mmapper.h"
 
 #include "Emu/Cell/SPUDisAsm.h"
 #include "Emu/Cell/SPUAnalyser.h"
@@ -3058,7 +3059,38 @@ void spu_thread::do_dma_transfer(spu_thread* _this, const spu_mfc_cmd& args, u8*
 			? (is_get ? src == guest : dst == guest) // the MMIO block declined to redirect it
 			: !vm::check_addr(eal, is_get ? vm::page_readable : vm::page_writable, args.size);
 
-		if (unbacked) [[unlikely]]
+		// A game that pages its own memory (sys_mmapper_enable_page_fault_notification) expects a
+		// transfer into a page it has not mapped yet to fault: the kernel tells the game's handler
+		// thread, which maps the page, and the transfer then goes through. Dropping or zero-filling
+		// it instead loses the data. Gran Turismo 6 (BCES01893, issue #187) unpacks its save that
+		// way: an SPU job PUTs 16KB of it to 0x61200000 before that page is mapped, this guard
+		// dropped it, and the game deserialised a save with a hole in it and read a null pointer
+		// on every boot once the save held its first race. 0.9.9, before the guard, was fine.
+		// Leave those transfers to fault like any other access, as upstream does.
+		const auto game_handles_faults = [&]() -> bool
+		{
+			const auto area = vm::get(vm::any, eal);
+
+			if (!area)
+			{
+				return false;
+			}
+
+			auto& pf_entries = g_fxo->get<page_fault_notification_entries>();
+			reader_lock lock(pf_entries.mutex);
+
+			for (const auto& entry : pf_entries.entries)
+			{
+				if (entry.start_addr == area->addr)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		};
+
+		if (unbacked && !game_handles_faults()) [[unlikely]]
 		{
 			const u32 at = _this ? _this->pc : 0;
 
