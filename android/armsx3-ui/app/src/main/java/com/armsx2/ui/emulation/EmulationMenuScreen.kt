@@ -735,6 +735,24 @@ private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuVie
             }
         }
         Spacer(Modifier.height(6.dp))
+        // The compile notices, here because this is where someone turns off what is on screen.
+        // Plain switches with their own callbacks, like the rest of this card, so they cannot shift
+        // the action grid's controller dispatch above.
+        MenuSwitchRow(
+            str("overlay.shaderHint.label"),
+            state.settings.ps3.showShaderCompileHint,
+            description = str("overlay.shaderHint.desc"),
+        ) { v ->
+            viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(showShaderCompileHint = v)) }
+        }
+        MenuSwitchRow(
+            str("overlay.spuHint.label"),
+            state.settings.ps3.showSpuCompileHint,
+            description = str("overlay.spuHint.desc"),
+        ) { v ->
+            viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(showSpuCompileHint = v)) }
+        }
+        Spacer(Modifier.height(6.dp))
         // Where the overlay sits. Only the All Settings tab had this, which made it unreachable
         // at the one moment it matters -- when the stats are sitting on top of something in the
         // game you are trying to look at.

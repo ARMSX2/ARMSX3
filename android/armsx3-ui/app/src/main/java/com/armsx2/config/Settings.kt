@@ -209,6 +209,9 @@ data class Ps3Settings(
      *  log heavily, but it also destroys the only artifact a bug report can carry, so it is
      *  off by default and the UI says so plainly. */
     val silenceAllLogs: Boolean = false,
+    // On-screen notices while shaders and SPU code compile during play (core Miscellaneous).
+    val showShaderCompileHint: Boolean = true,
+    val showSpuCompileHint: Boolean = true,
     val netEnabled: Boolean = false,
     /** Net/PSN status: 0 = Disconnected, 1 = Simulated, 2 = RPCN.
      *
@@ -1141,6 +1144,8 @@ data class Settings(
         put("PS3/Video", "Stretch To Display Area", "bool", (displayFitMode == 1).toString())
         put("PS3/Video", "Display Aspect Override", "int", ps3.displayAspect.coerceIn(0, 4000).toString())
         put("PS3/Misc", "Silence All Logs", "bool", ps3.silenceAllLogs.toString())
+        put("PS3/Misc", "Show shader compilation hint", "bool", ps3.showShaderCompileHint.toString())
+        put("PS3/Misc", "Show SPU compilation hint", "bool", ps3.showSpuCompileHint.toString())
         put("PS3/Overlay", "Enabled", "bool", ps3.overlayEnabled.toString())
         put("PS3/Overlay", "Detail level", "enum", ps3.overlayDetail.toString())
         put("PS3/Overlay", "Enable Framerate Graph", "bool", ps3.overlayFramerateGraph.toString())
@@ -2177,6 +2182,8 @@ data class Settings(
         put("ps3WriteColorBuffers", ps3.writeColorBuffers)
         put("ps3GpuTurbo", ps3.gpuTurbo)
         put("ps3SilenceAllLogs", ps3.silenceAllLogs)
+        put("ps3ShowShaderCompileHint", ps3.showShaderCompileHint)
+        put("ps3ShowSpuCompileHint", ps3.showSpuCompileHint)
         put("ps3WriteDepthBuffer", ps3.writeDepthBuffer)
         put("ps3ReadColorBuffers", ps3.readColorBuffers)
         put("ps3ReadDepthBuffer", ps3.readDepthBuffer)
@@ -2544,6 +2551,8 @@ data class Settings(
                     writeColorBuffers = json.optBoolean("ps3WriteColorBuffers", def.ps3.writeColorBuffers),
                     gpuTurbo = json.optBoolean("ps3GpuTurbo", def.ps3.gpuTurbo),
                     silenceAllLogs = json.optBoolean("ps3SilenceAllLogs", def.ps3.silenceAllLogs),
+                    showShaderCompileHint = json.optBoolean("ps3ShowShaderCompileHint", def.ps3.showShaderCompileHint),
+                    showSpuCompileHint = json.optBoolean("ps3ShowSpuCompileHint", def.ps3.showSpuCompileHint),
                     writeDepthBuffer = json.optBoolean("ps3WriteDepthBuffer", def.ps3.writeDepthBuffer),
                     readColorBuffers = json.optBoolean("ps3ReadColorBuffers", def.ps3.readColorBuffers),
                     readDepthBuffer = json.optBoolean("ps3ReadDepthBuffer", def.ps3.readDepthBuffer),
@@ -2885,6 +2894,8 @@ data class Settings(
             if (current.ps3.writeColorBuffers != base.ps3.writeColorBuffers) j.put("ps3WriteColorBuffers", current.ps3.writeColorBuffers)
             if (current.ps3.gpuTurbo != base.ps3.gpuTurbo) j.put("ps3GpuTurbo", current.ps3.gpuTurbo)
             if (current.ps3.silenceAllLogs != base.ps3.silenceAllLogs) j.put("ps3SilenceAllLogs", current.ps3.silenceAllLogs)
+            if (current.ps3.showShaderCompileHint != base.ps3.showShaderCompileHint) j.put("ps3ShowShaderCompileHint", current.ps3.showShaderCompileHint)
+            if (current.ps3.showSpuCompileHint != base.ps3.showSpuCompileHint) j.put("ps3ShowSpuCompileHint", current.ps3.showSpuCompileHint)
             if (current.ps3.writeDepthBuffer != base.ps3.writeDepthBuffer) j.put("ps3WriteDepthBuffer", current.ps3.writeDepthBuffer)
             if (current.ps3.readColorBuffers != base.ps3.readColorBuffers) j.put("ps3ReadColorBuffers", current.ps3.readColorBuffers)
             if (current.ps3.readDepthBuffer != base.ps3.readDepthBuffer) j.put("ps3ReadDepthBuffer", current.ps3.readDepthBuffer)
@@ -3202,6 +3213,8 @@ data class Settings(
                     writeColorBuffers = if (overrides.has("ps3WriteColorBuffers")) overrides.getBoolean("ps3WriteColorBuffers") else base.ps3.writeColorBuffers,
                     gpuTurbo = if (overrides.has("ps3GpuTurbo")) overrides.getBoolean("ps3GpuTurbo") else base.ps3.gpuTurbo,
                     silenceAllLogs = if (overrides.has("ps3SilenceAllLogs")) overrides.getBoolean("ps3SilenceAllLogs") else base.ps3.silenceAllLogs,
+                    showShaderCompileHint = if (overrides.has("ps3ShowShaderCompileHint")) overrides.getBoolean("ps3ShowShaderCompileHint") else base.ps3.showShaderCompileHint,
+                    showSpuCompileHint = if (overrides.has("ps3ShowSpuCompileHint")) overrides.getBoolean("ps3ShowSpuCompileHint") else base.ps3.showSpuCompileHint,
                     writeDepthBuffer = if (overrides.has("ps3WriteDepthBuffer")) overrides.getBoolean("ps3WriteDepthBuffer") else base.ps3.writeDepthBuffer,
                     readColorBuffers = if (overrides.has("ps3ReadColorBuffers")) overrides.getBoolean("ps3ReadColorBuffers") else base.ps3.readColorBuffers,
                     readDepthBuffer = if (overrides.has("ps3ReadDepthBuffer")) overrides.getBoolean("ps3ReadDepthBuffer") else base.ps3.readDepthBuffer,

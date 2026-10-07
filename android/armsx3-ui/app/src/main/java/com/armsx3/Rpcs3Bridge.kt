@@ -774,6 +774,8 @@ object Rpcs3Bridge {
 
             "PS3/Misc" -> when (key) {
                 "Silence All Logs" -> Rpcs3Settings.setSilenceAllLogs(asBool(value))
+                "Show shader compilation hint" -> Rpcs3Settings.setShaderCompilationHint(asBool(value))
+                "Show SPU compilation hint" -> Rpcs3Settings.setSpuCompilationHint(asBool(value))
                 else -> return false
             }
 
