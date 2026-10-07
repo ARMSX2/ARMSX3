@@ -11,6 +11,8 @@
 #include "Crypto/unzip.h"
 
 #include <charconv>
+#include <functional>
+#include <new>
 
 #if defined(__APPLE__)
 #include <pthread.h>
@@ -61,10 +63,17 @@ namespace
 {
 	thread_local std::string* g_llvm_fatal_message = nullptr;
 
+	// Points at a flag in run_recoverable_llvm's frame while a recoverable job runs. The
+	// new_handler sets it, so it must be a plain bool: that handler runs because malloc just
+	// failed, and cannot allocate a message.
+	thread_local bool* g_llvm_out_of_memory = nullptr;
+
 	template <typename F>
 	bool run_recoverable_llvm(F&& func, std::string& error)
 	{
 		error.clear();
+
+		bool out_of_memory = false;
 
 		// Run LLVM codegen in a disposable thread. If LLVM invokes the fatal
 		// handler, only this helper thread exits.
@@ -74,9 +83,11 @@ namespace
 			pthread_jit_write_protect_np(false);
 #endif
 			g_llvm_fatal_message = &error;
+			g_llvm_out_of_memory = &out_of_memory;
 
 			std::forward<F>(func)();
 
+			g_llvm_out_of_memory = nullptr;
 			g_llvm_fatal_message = nullptr;
 #if defined(__APPLE__)
 			pthread_jit_write_protect_np(true);
@@ -88,11 +99,40 @@ namespace
 
 		if (!result && error.empty())
 		{
-			error = "LLVM crash recovery invoked";
+			error = out_of_memory ? "Out of memory (operator new)" : "LLVM crash recovery invoked";
 		}
 
 		return result;
 	}
+
+	// Out of memory inside the JIT's memory manager.
+	//
+	// fmt::throw_exception does not throw: it ends the thread through thread_ctrl::emergency_exit,
+	// which logs the reason and never hands it back. So inside run_recoverable_llvm every one of
+	// these came back as "LLVM crash recovery invoked", and the PPU compiler could not tell the
+	// device running out of memory from a codegen failure. Metal Gear Solid V: The Phantom Pain
+	// (BLUS31491) did exactly that on an Odin 3: the module was retried at once with
+	// allocator-friendly codegen, a second large compile under the same pressure, and the app died
+	// seconds later. Hand the reason back the way the LLVM fatal handler does.
+	[[noreturn]] void jit_out_of_memory(const std::string& message)
+	{
+		if (g_llvm_fatal_message)
+		{
+			*g_llvm_fatal_message = message;
+			thread_ctrl::silent_exit();
+		}
+
+		fmt::throw_exception("%s", message);
+	}
+}
+
+// Runs func on a disposable thread, the way try_add runs codegen, so that LLVM's fatal handler or
+// running out of memory ends that thread rather than the caller. False when it did not finish;
+// error then says why, starting with "Out of memory" when that was the reason. The PPU compile
+// workers run translation through this (PPUThread.cpp).
+bool jit_run_recoverable(const std::function<void()>& func, std::string& error)
+{
+	return run_recoverable_llvm(func, error);
 }
 
 const bool jit_initialize = []() -> bool
@@ -357,7 +397,7 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 			if ((newp - 1) / c_max_size > num_of_allocations)
 			{
 				// Allocating more than one region does not work for relocations, needs more robust solution
-				fmt::throw_exception("Out of memory (size=0x%x, align=0x%x)", size, align);
+				jit_out_of_memory(fmt::format("Out of memory (size=0x%x, align=0x%x)", size, align));
 			}
 		}
 
@@ -378,7 +418,7 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 			// invoked", which reads like a codegen bug and sent this diagnosis the wrong way.
 			if (!utils::try_memory_commit(reinterpret_cast<u8*>(block) + (pagea % c_max_size), psize, prot))
 			{
-				fmt::throw_exception("Out of memory (commit failed: size=0x%x, align=0x%x)", size, align);
+				jit_out_of_memory(fmt::format("Out of memory (commit failed: size=0x%x, align=0x%x)", size, align));
 			}
 
 			// Advance
@@ -393,7 +433,7 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 
 			if (!utils::try_memory_commit(reinterpret_cast<u8*>(block) + (pagea % c_max_size), psize, prot))
 			{
-				fmt::throw_exception("Out of memory (commit failed: size=0x%x, align=0x%x)", size, align);
+				jit_out_of_memory(fmt::format("Out of memory (commit failed: size=0x%x, align=0x%x)", size, align));
 			}
 		}
 
@@ -837,12 +877,40 @@ jit_compiler::jit_compiler(const std::unordered_map<std::string, u64>& _link, st
 
 			if (g_llvm_fatal_message)
 			{
-				*g_llvm_fatal_message = out;
+				// Worded so the PPU compiler recognises it as out of memory (it looks for
+				// "Out of memory"); LLVM's own text is just "Allocation failed".
+				*g_llvm_fatal_message = fmt::format("Out of memory in LLVM: %s", out);
 				thread_ctrl::silent_exit();
 			}
 
 			fmt::throw_exception("LLVM Out Of Memory: '%s'", out);
 		}, nullptr);
+
+		// operator new failing, which the LLVM handlers above never see: IR objects come straight
+		// from the C++ allocator. This core is built without exceptions, so the std::bad_alloc
+		// operator new throws can never be caught and always aborted the app. That is how Metal
+		// Gear Solid V: The Phantom Pain (BLUS31491) died 18 minutes into its first PPU compile on
+		// an Odin 3, in operator new under PPUTranslator::SetGpr.
+		//
+		// Inside a recoverable job (run_recoverable_llvm, which the PPU compiler now uses for
+		// translation as well as codegen) end that disposable thread instead and report it as out
+		// of memory; the caller waits and retries. Our libc++ is linked statically, so this handler
+		// covers this library's allocations and nothing else in the app.
+		std::set_new_handler([]
+		{
+			if (g_llvm_out_of_memory && !*g_llvm_out_of_memory)
+			{
+				// Nothing before the exit may allocate.
+				*g_llvm_out_of_memory = true;
+				thread_ctrl::silent_exit();
+			}
+
+			// Anywhere else, or if the exit itself ran out of memory and came back here: do what
+			// operator new does with no handler. Thrown rather than uninstalling the handler, so a
+			// nothrow allocation that fails elsewhere (it catches this) does not switch recovery
+			// off for the rest of the session.
+			std::__throw_bad_alloc();
+		});
 
 		return true;
 	}();
