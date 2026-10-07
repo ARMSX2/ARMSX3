@@ -286,8 +286,16 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 	std::vector<std::pair<u8*, uptr>> m_code_ranges;
 #endif
 
-	MemoryManager1(std::function<u64(const std::string&)> symbols_cement = {}) noexcept
+	// Give the address space back when destroyed. Only for an auxiliary JIT, whose code is
+	// written to the object cache and never run from this memory (see the destructor).
+	bool m_release_on_destroy = false;
+
+	// Reservations alive right now, for the note in reserve_once().
+	static inline atomic_t<u64> s_held_count{0};
+
+	MemoryManager1(std::function<u64(const std::string&)> symbols_cement = {}, bool release_on_destroy = false) noexcept
 		: m_symbols_cement(std::move(symbols_cement))
+		, m_release_on_destroy(release_on_destroy)
 	{
 	}
 
@@ -318,9 +326,11 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 		// ran out on Assassin's Creed IV, and the number says how close a long session is.
 		static atomic_t<u64> s_reserved_count{0};
 
+		const u64 held = ++s_held_count;
+
 		if (const u64 n = ++s_reserved_count; n % 64 == 0)
 		{
-			jit_log.notice("JIT: %u instances hold %u GiB of reserved address space", n, n * c_max_size * 3 / (1024 * 1024 * 1024));
+			jit_log.notice("JIT: %u reservations made, %u held now: %u GiB of address space", n, held, held * c_max_size * 3 / (1024 * 1024 * 1024));
 		}
 	}
 
@@ -333,6 +343,21 @@ struct MemoryManager1 : llvm::RTDyldMemoryManager
 		if (!m_code_mems)
 		{
 			// Never compiled anything, so nothing was ever reserved.
+			return;
+		}
+
+		// An auxiliary JIT only writes objects to the cache; the code it emitted is loaded
+		// again from disk into a long-lived JIT before anything runs it, so no pointer into
+		// this memory survives it. Keeping its reservation, as below, only spends address
+		// space, and a phone has 512 GiB of it. Metal Gear Solid V: The Phantom Pain
+		// (BLUS31491) compiles about 500 PPU modules on a cold cache, each through one of
+		// these: at 768 MiB apiece the log read "576 instances hold 432 GiB" when commits
+		// started failing with ENOMEM and 1.5 GB still free, and scudo then died unable to
+		// map anything at all, closing the app (Odin 3).
+		if (m_release_on_destroy)
+		{
+			utils::memory_release(m_code_mems, c_max_size * 3);
+			s_held_count--;
 			return;
 		}
 
@@ -958,7 +983,7 @@ jit_compiler::jit_compiler(const std::unordered_map<std::string, u64>& _link, st
 		// Auxiliary JIT (does not use custom memory manager, only writes the objects)
 		if (flags & 0x1)
 		{
-			mem = std::make_unique<MemoryManager1>(std::move(symbols_cement));
+			mem = std::make_unique<MemoryManager1>(std::move(symbols_cement), true);
 		}
 		else
 		{
