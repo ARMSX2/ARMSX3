@@ -1086,15 +1086,6 @@ open class MainActivityRuntime : ComponentActivity() {
         }
 
         /**
-         * Minimal [GameInfo] for a URI arriving from outside the app and NOT in the library.
-         *
-         * The serial probe here is getGameSerialFromFd, which reads a PS2 SYSTEM.CNF and so
-         * answers nothing for a PS3 disc. That is why this is the fallback and not the first
-         * move: for anything the library has scanned, [libraryGameFor] supplies the real
-         * serial. A failed probe is still fine for ELF/homebrew, where settingsKey falls back
-         * to the filename stem, matching issue #253's behaviour.
-         */
-        /**
          * The library's own entry for an incoming launch, matched by path.
          *
          * This is what makes a shortcut launch the SAME game as a library launch rather than a
@@ -1138,6 +1129,18 @@ open class MainActivityRuntime : ComponentActivity() {
             }
         }.getOrNull()
 
+        /**
+         * The [GameInfo] for a URI arriving from outside the app.
+         *
+         * The library's entry when the path matches one ([libraryGameFor]). Otherwise the title id
+         * comes from the disc's own PARAM.SFO, and the library's entry with that id stands in for
+         * it. This used to ask getGameSerialFromFd, ARMSX2's PS2 probe, which the PS3 core never
+         * implemented, so a launch the library could not match by path had no serial at all:
+         * per-game settings resolved under the filename, and the in-game patch list was empty, so
+         * a patch turned on from it was filed under no game. Frontends such as Beacon hand over
+         * their own form of a path, so for them that was most launches. With no title id, ELF and
+         * homebrew still key off the filename stem, as issue #253 has it.
+         */
         private fun externalGameInfo(uriString: String): GameInfo? = runCatching {
             // The library first: a game we already know is not worth re-deriving badly.
             libraryGameFor(uriString)?.let { return@runCatching it }
@@ -1145,29 +1148,49 @@ open class MainActivityRuntime : ComponentActivity() {
             val uri = uriString.toUri()
             val name = uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':').orEmpty()
             val stem = name.substringBeforeLast('.').ifBlank { name }
-            val serial = runCatching {
-                val ctx = instance ?: return@runCatching null
-                // detachFd() hands ownership of the fd to native, which closes it — same
-                // contract GameLibraryRepository.probeDocument/probeRaw use. Do NOT wrap in
-                // use{}: closing an already-detached descriptor is not ours to do.
-                val raw = if (uri.scheme == "content") {
-                    val pfd = ctx.contentResolver.openFileDescriptor(uri, "r") ?: return@runCatching null
-                    NativeApp.getGameSerialFromFd(pfd.detachFd())
-                } else {
-                    val f = java.io.File(uri.path ?: return@runCatching null)
-                    if (!f.isFile) return@runCatching null
-                    val pfd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY)
-                    NativeApp.getGameSerialFromFd(pfd.detachFd())
-                }
-                // The probe tags its result "<platform>:<serial>" when SYSTEM.CNF parsed.
-                raw?.takeIf { it.isNotBlank() }?.substringAfterLast(':')?.takeIf { it.isNotBlank() }
-            }.getOrNull()
+            val disc = probeExternalDisc(uriString)
+            val serial = disc?.first
+
+            // The same game the library scanned under another address.
+            libraryGameForSerial(serial)?.let {
+                android.util.Log.i("ARMSX3-Launch", "external launch: '$name' is $serial, the library's entry")
+                return@runCatching it
+            }
+            android.util.Log.i("ARMSX3-Launch", "external launch: '$name' is ${serial ?: "a title with no id"}")
             GameInfo(
                 uri = uri,
-                title = stem,
+                title = disc?.second?.takeIf { it.isNotBlank() } ?: stem,
                 serial = serial,
                 extension = name.substringAfterLast('.', "").uppercase(),
             )
+        }.getOrNull()
+
+        /**
+         * Title id and title from the PARAM.SFO of the disc an external launch names, or null.
+         *
+         * The library scan's own probe, on the path the boot will use. An EBOOT.BIN is read through
+         * the folder two levels up (PS3_GAME, or an installed game's folder), where its PARAM.SFO
+         * is. Skipped unless the VM is idle: the probe mounts the image under the lock a boot holds.
+         * The disc's icon is kept as the title's cover if the library has none for it yet.
+         */
+        private fun probeExternalDisc(uriString: String): Pair<String, String>? = runCatching {
+            if (!isVmIdle()) return null
+            val path = com.armsx2.storage.ContentUri.bootPathFor(uriString)
+            if (path.startsWith("content://")) return null
+            val target = if (path.substringAfterLast('/').equals("EBOOT.BIN", ignoreCase = true)) {
+                java.io.File(path).parentFile?.parentFile?.path ?: return null
+            } else {
+                path
+            }
+            // Its own staging name: the library scan may be probing at the same time.
+            val staged = com.armsx2.DiscIcons.fileFor("__external")
+            val info = org.json.JSONObject(net.rpcsx.RPCSX.instance.probeDiscInfo(target, staged.absolutePath))
+            val id = info.optString("titleId").takeIf { it.isNotBlank() }
+            if (id != null && info.optBoolean("icon") && staged.length() > 0L && !com.armsx2.DiscIcons.has(id)) {
+                staged.renameTo(com.armsx2.DiscIcons.fileFor(id))
+            }
+            staged.delete()
+            id?.let { it to info.optString("title") }
         }.getOrNull()
 
         /**
