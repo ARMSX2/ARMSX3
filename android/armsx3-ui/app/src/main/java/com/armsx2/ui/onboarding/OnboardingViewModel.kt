@@ -191,6 +191,7 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
                     val progressId =
                         ProgressRepository.create(getApplication(), "Installing firmware") { update ->
                             if (update.isFailed()) reason = update.message
+                            com.armsx2.FirmwareCompile.onUpdate(update)
                         }
                     resolver.openAssetFileDescriptor(candidate.uri, "r").use { afd ->
                         val fd = afd?.parcelFileDescriptor?.fd ?: return@runCatching false

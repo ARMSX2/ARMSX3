@@ -86,6 +86,7 @@ fun BiosManagerScreen(onBack: () -> Unit) {
                 runCatching {
                     val id = ProgressRepository.create(context, "Installing firmware") { update ->
                         if (update.isFailed()) reason = update.message
+                        com.armsx2.FirmwareCompile.onUpdate(update)
                     }
                     context.contentResolver
                         .openAssetFileDescriptor(uri, "r")

@@ -394,7 +394,9 @@ fun HomeScreen(
                 val tbi = HomeInputController.toolbarIndex.intValue
                 ArmsTopBar(
                     title = str("games.section.library"),
-                    subtitle = if (state.scanning) {
+                    // The firmware compile after setup first: until it ends the core reads no disc,
+                    // so titles and covers wait on it, and a scan says nothing about why.
+                    subtitle = com.armsx2.FirmwareCompile.progress.value?.let(com.armsx2.FirmwareCompile::headerLine) ?: if (state.scanning) {
                         str("games.scanningRoms")
                     } else {
                         "${str("games.library.totalGames")}: ${state.allGames.size}"
@@ -1151,6 +1153,7 @@ fun HomeScreen(
             },
         )
     }
+    com.armsx2.FirmwareCompile.progress.value?.let { FirmwareCompileDialog(it) }
     if (screensaverDelay) {
         val minutesText = str("app.screensaver.minutes")
         AlertDialog(
@@ -2179,6 +2182,45 @@ private fun TrialBadge(modifier: Modifier = Modifier) {
             lineHeight = 10.sp,
         )
     }
+}
+
+/**
+ * Over the library while the firmware compile that follows setup runs, with no way to close it.
+ *
+ * A game booted during the compile tore it down halfway: the compile thread never finished, its
+ * progress stayed on screen, and the compiler stayed wedged until the app restarted. Until it
+ * ends the core also reads no disc, so the library has no titles or covers to offer yet. It runs
+ * once (a minute or more, longer on older devices) and closes itself when the compile reports done
+ * or failed.
+ */
+@Composable
+private fun FirmwareCompileDialog(progress: com.armsx2.FirmwareCompile.Progress) {
+    AlertDialog(
+        onDismissRequest = {},
+        properties = androidx.compose.ui.window.DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+        ),
+        title = { Text(str("games.compilingFirmware.title")) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(str("games.compilingFirmware.body"))
+                val fraction = progress.fraction
+                if (fraction != null) {
+                    androidx.compose.material3.LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    androidx.compose.material3.LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                progress.countText()?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {},
+    )
 }
 
 @Composable
