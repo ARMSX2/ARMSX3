@@ -1946,10 +1946,19 @@ namespace rsx
 			m_graphics_state.set(rsx::rtt_config_valid);
 		}
 
-		if (!m_graphics_state.test(rsx::rtt_config_valid) && !layout.zeta_address)
+		const bool framebufferless = !m_graphics_state.test(rsx::rtt_config_valid) && !layout.zeta_address;
+		if (framebufferless)
 		{
-			rsx_log.warning("Framebuffer setup failed. Draw calls may have been lost");
-			return;
+			// No attachments. The hardware still rasterizes in this case and side effects such as ZPASS counters are still updated.
+			if (context != rsx::framebuffer_creation_context::context_draw ||
+				!backend_config.supports_framebufferless_rendering)
+			{
+				rsx_log.warning("Framebuffer setup failed. Draw calls may have been lost");
+				return;
+			}
+
+			// Context must be draw now...
+			// TODO: Also disable rendering if ZPASS stat counting is not enabled (side-effect)
 		}
 
 		// At least one attachment exists
@@ -2025,7 +2034,8 @@ namespace rsx
 			}
 		}
 
-		if (!really_changed)
+		// Framebufferless setups have no surface info to compare against. Always rebuild.
+		if (!really_changed && !framebufferless)
 		{
 			if (layout.zeta_address == m_depth_surface_info.address &&
 				layout.depth_format == m_depth_surface_info.depth_format &&
