@@ -152,9 +152,12 @@
             need a data-safety declaration for a feature we do not ship. Declaring only this one
             activity means we inherit no permissions at all.
 
-            The scheme must match the redirect URI registered in the Discord developer portal
-            (discord-<application id>) or the browser hands the code back to nothing and the sign-in
-            silently never completes. Same id as kApplicationId in cpp/discord_bridge.cpp. ARMSX3 app id: 1534624714989764829.
+            The scheme must match a redirect URI registered in the Discord developer portal or the
+            browser hands the code back to nothing and the sign-in silently never completes. It comes
+            from the flavor (discordAuthScheme in app/build.gradle.kts): the github build uses the
+            default discord-<application id>, the play build its own com.armsx3.play, so the two
+            installed side by side do not both claim the result. Same id as kApplicationId in
+            cpp/discord_bridge.cpp. ARMSX3 app id: 1534624714989764829.
 
             Its ForegroundService is deliberately NOT declared — it exists for voice.
         -->
@@ -168,7 +171,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="discord-1534624714989764829" />
+                <data android:scheme="${discordAuthScheme}" />
             </intent-filter>
         </activity>
 

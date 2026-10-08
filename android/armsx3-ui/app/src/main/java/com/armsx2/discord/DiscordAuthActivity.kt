@@ -67,7 +67,7 @@ class DiscordAuthActivity : Activity() {
         }
             .onFailure { Log.w("ARMSX2DiscordSvc", "setEngineActivity failed: ${it.message}") }
 
-        runCatching { DiscordNative.authorize() }
+        runCatching { DiscordNative.authorize(com.armsx2.BuildConfig.DISCORD_AUTH_SCHEME) }
             .onFailure { Log.w("ARMSX2DiscordSvc", "authorize failed: ${it.message}") }
 
         finish()
