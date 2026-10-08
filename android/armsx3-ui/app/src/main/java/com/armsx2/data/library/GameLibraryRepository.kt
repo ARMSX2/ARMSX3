@@ -264,6 +264,7 @@ class GameLibraryRepository(private val context: Context) {
         val reprobeImages = probedSchema < DiscGamesSchemaVersion &&
             MainActivityRuntime.eState.value == com.armsx2.EmuState.STOPPED
         reprobeFallback.clear()
+        owesProbes = false
 
         // A serial is an identity: two different games cannot hold the same one. When two cached
         // entries do, at least one of them is wrong.
@@ -419,6 +420,7 @@ class GameLibraryRepository(private val context: Context) {
                 // Only once the re-probe has actually run. Skipped because a game was loaded, it
                 // is still owed, and the next scan tries again.
                 if (reprobeImages) MainActivityRuntime.prefs.edit { putInt(ProbedSchemaKey, ScanSchemaVersion) }
+                MainActivityRuntime.prefs.edit { putBoolean(ProbesOwedKey, owesProbes) }
             }
     }
 
@@ -1248,6 +1250,15 @@ class GameLibraryRepository(private val context: Context) {
         android.util.Log.i(ScanTag, "  probeDiscInfo('$label') -> $raw")
         if (raw == null) return reprobeFallback.remove(path)?.also { discInfoCache[path] = it }
 
+        // The core mounts nothing while it is booting, running or compiling, and the firmware
+        // compile that follows setup is long enough that a new user's first scan lands in it.
+        // Nothing is wrong with the disc, so nothing is cached for it: the scan records that it
+        // owes a probe, and the library scans again once the core is idle (HomeViewModel).
+        if (runCatching { JSONObject(raw).optBoolean("busy") }.getOrDefault(false)) {
+            owesProbes = true
+            return reprobeFallback.remove(path)
+        }
+
         val info = runCatching {
             val o = JSONObject(raw)
             val id = o.optString("titleId")
@@ -1310,6 +1321,17 @@ class GameLibraryRepository(private val context: Context) {
     private data class DiscInfo(val titleId: String, val title: String)
 
     private val discInfoCache = HashMap<String, DiscInfo>()
+
+    /** Set by probeDisc when the core was too busy to mount an image; see [probesOwed]. */
+    @Volatile
+    private var owesProbes = false
+
+    /**
+     * True when the last scan met a busy core and listed discs it could not read, with no title
+     * ID and so no title or cover. Kept in preferences, so an app closed before the rescan still
+     * owes it on the next launch.
+     */
+    fun probesOwed(): Boolean = MainActivityRuntime.prefs.getBoolean(ProbesOwedKey, false)
 
     /** What the cache knew about an image this scan chose to re-probe, by probe path. Used only
      *  if the probe comes back empty -- a boot can start mid-scan, and the probe refuses to
@@ -1445,6 +1467,7 @@ class GameLibraryRepository(private val context: Context) {
         const val DiscGamesSchemaVersion = 9
         /** The scanner version whose disc-image probe has run over this library. */
         const val ProbedSchemaKey = "gamesProbedSchema"
+        const val ProbesOwedKey = "library.probesOwed"
         const val ScanTag = "ARMSX3-Scan"
         /** The directories the last scan listed, with their times (see [changedSinceScan]). */
         const val ListedDirectoriesKey = "gamesCacheDirs"

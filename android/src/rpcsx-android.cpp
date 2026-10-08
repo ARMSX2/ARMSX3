@@ -4821,8 +4821,18 @@ static std::string disc_games_json(const std::string &disc_root, std::string_vie
 
 extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
                                             std::string_view iconOut) {
-  if (isoPath.empty() || !Emu.IsStopped()) {
+  // Busy, not empty, while the core is not stopped: the library scans again once the core is
+  // idle. Answering "{}" here listed every disc with no title ID, title or cover until a manual
+  // refresh, which is what a new user got, because their first scan lands in the firmware compile
+  // that follows setup.
+  static constexpr std::string_view k_busy = R"({"busy":true})";
+
+  if (isoPath.empty()) {
     return "{}";
+  }
+
+  if (!Emu.IsStopped()) {
+    return std::string(k_busy);
   }
 
   const std::string path(isoPath);
@@ -4857,7 +4867,7 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
   // Re-checked under the lock: a boot may have started while we were waiting for it,
   // and mounting into a live VM's vfs would shadow the disc it is running from.
   if (!Emu.IsStopped()) {
-    return "{}";
+    return std::string(k_busy);
   }
 
   // g_fxo has to be set up before anything mounts, and being STOPPED is exactly when it is not.
