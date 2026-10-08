@@ -102,11 +102,14 @@ android {
 
             // Its own Discord sign-in scheme. With both builds installed, the Discord app handed
             // the sign-in result to the github copy, which claims the same default scheme and had
-            // no sign-in waiting, so the play copy never finished. The redirect
-            // com.armsx3.play:/authorize/callback is registered for the application in the
-            // Discord developer portal; without it Discord refuses this build's sign-in.
-            manifestPlaceholders["discordAuthScheme"] = "com.armsx3.play"
-            buildConfigField("String", "DISCORD_AUTH_SCHEME", "\"com.armsx3.play\"")
+            // no sign-in waiting, so the play copy never finished. It has to start with
+            // "discord-": the SDK's AuthenticationActivity ignores any other callback scheme
+            // (CALLBACK_SCHEME_PREFIX), so a scheme like com.armsx3.play would never complete.
+            // The redirect discord-1534624714989764829-play:/authorize/callback is registered for
+            // the application in the Discord developer portal; without it Discord answers
+            // "Invalid OAuth2 redirect_uri".
+            manifestPlaceholders["discordAuthScheme"] = "discord-1534624714989764829-play"
+            buildConfigField("String", "DISCORD_AUTH_SCHEME", "\"discord-1534624714989764829-play\"")
 
             // Frame generation is excluded by SOURCE SET, not by a packaging filter: a
             // packaging block inside a flavor is not honoured and silently applied to both,

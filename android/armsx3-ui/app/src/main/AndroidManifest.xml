@@ -155,8 +155,9 @@
             The scheme must match a redirect URI registered in the Discord developer portal or the
             browser hands the code back to nothing and the sign-in silently never completes. It comes
             from the flavor (discordAuthScheme in app/build.gradle.kts): the github build uses the
-            default discord-<application id>, the play build its own com.armsx3.play, so the two
-            installed side by side do not both claim the result. Same id as kApplicationId in
+            default discord-<application id>, the play build its own discord-<application id>-play, so
+            the two installed side by side do not both claim the result. Any scheme has to start with
+            "discord-": the SDK's AuthenticationActivity ignores callbacks on any other scheme. Same id as kApplicationId in
             cpp/discord_bridge.cpp. ARMSX3 app id: 1534624714989764829.
 
             Its ForegroundService is deliberately NOT declared — it exists for voice.
