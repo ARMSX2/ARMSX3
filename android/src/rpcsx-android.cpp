@@ -767,6 +767,7 @@ static std::pair<std::string, std::u32string> g_strings[] = {
                 "You have earned a platinum trophy.\n%0"),
     MAKE_STRING(RSX_OVERLAYS_COMPILING_SHADERS, "Compiling shaders"),
     MAKE_STRING(RSX_OVERLAYS_COMPILING_PPU_MODULES, "Compiling PPU Modules"),
+    MAKE_STRING(RSX_OVERLAYS_COMPILING_SPU_CODE, "Compiling SPU Code"),
     MAKE_STRING(RSX_OVERLAYS_MSG_DIALOG_YES, "Yes"),
     MAKE_STRING(RSX_OVERLAYS_MSG_DIALOG_NO, "No"),
     MAKE_STRING(RSX_OVERLAYS_MSG_DIALOG_CANCEL, "Back"),
@@ -1108,6 +1109,8 @@ static std::pair<std::string, std::u32string> g_strings[] = {
                 "Show Shader Compilation Hint"),
     MAKE_STRING(HOME_MENU_SETTINGS_OVERLAYS_SHOW_PPU_COMPILATION_HINT,
                 "Show PPU Compilation Hint"),
+    MAKE_STRING(HOME_MENU_SETTINGS_OVERLAYS_SHOW_SPU_COMPILATION_HINT,
+                "Show SPU Compilation Hint"),
     MAKE_STRING(HOME_MENU_SETTINGS_OVERLAYS_SHOW_AUTO_SAVE_LOAD_HINT,
                 "Show Autosave/Autoload Hint"),
     MAKE_STRING(HOME_MENU_SETTINGS_OVERLAYS_SHOW_PRESSURE_INTENSITY_TOGGLE_HINT,
@@ -4818,8 +4821,18 @@ static std::string disc_games_json(const std::string &disc_root, std::string_vie
 
 extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
                                             std::string_view iconOut) {
-  if (isoPath.empty() || !Emu.IsStopped()) {
+  // Busy, not empty, while the core is not stopped: the library scans again once the core is
+  // idle. Answering "{}" here listed every disc with no title ID, title or cover until a manual
+  // refresh, which is what a new user got, because their first scan lands in the firmware compile
+  // that follows setup.
+  static constexpr std::string_view k_busy = R"({"busy":true})";
+
+  if (isoPath.empty()) {
     return "{}";
+  }
+
+  if (!Emu.IsStopped()) {
+    return std::string(k_busy);
   }
 
   const std::string path(isoPath);
@@ -4854,7 +4867,7 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
   // Re-checked under the lock: a boot may have started while we were waiting for it,
   // and mounting into a live VM's vfs would shadow the disc it is running from.
   if (!Emu.IsStopped()) {
-    return "{}";
+    return std::string(k_busy);
   }
 
   // g_fxo has to be set up before anything mounts, and being STOPPED is exactly when it is not.

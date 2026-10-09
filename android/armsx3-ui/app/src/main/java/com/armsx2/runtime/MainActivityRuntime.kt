@@ -324,17 +324,39 @@ open class MainActivityRuntime : ComponentActivity() {
          * advance and keep writable emulator data in app-private storage.
          */
         fun validateSystemDirWritable(posixPath: String): Boolean {
-            return try {
-                val dir = File(posixPath)
-                if (!dir.exists() && !dir.mkdirs()) return false
-                if (!dir.isDirectory) return false
-                val probe = File(dir, ".armsx3-write-probe")
+            val dir = File(posixPath)
+            // A few tries before calling a folder unwritable: shared storage can refuse a write for
+            // a moment while the app starts, and the answer decides which folder this whole launch
+            // uses (see assetCopyRoot).
+            repeat(3) { attempt ->
+                if (probeWritable(dir)) return true
+                if (attempt < 2) runCatching { Thread.sleep(100) }
+            }
+            return false
+        }
+
+        private fun probeWritable(dir: File): Boolean = try {
+            if (!dir.exists() && !dir.mkdirs()) {
+                false
+            } else if (!dir.isDirectory) {
+                false
+            } else {
+                // A probe name of its own each time. With one fixed name, a probe left behind by a
+                // process that died between create and delete made createNewFile() return false,
+                // "not writable", on every launch after that, and two threads probing at once failed
+                // one of them. Either way the app quietly ran from its own folder instead of the
+                // user's, and their saves looked gone. The old fixed name is cleared if it was left.
+                File(dir, ".armsx3-write-probe").takeIf { it.exists() }?.delete()
+                val probe = File(
+                    dir,
+                    ".armsx3-write-probe-${android.os.Process.myPid()}-${Thread.currentThread().id}-${System.nanoTime()}",
+                )
                 val ok = probe.createNewFile()
                 if (ok) probe.delete()
                 ok
-            } catch (_: Exception) {
-                false
             }
+        } catch (_: Exception) {
+            false
         }
 
         val surface = mutableStateOf<EmulationSurface?>(null)
@@ -976,6 +998,13 @@ open class MainActivityRuntime : ComponentActivity() {
                     else -> if (limit) 0 else 3
                 }
             )
+            // The output size (Display Resolution and the screen resolution override), resolved
+            // for this game. The surface sized itself once, when it was laid out at app start with
+            // no game chosen, and nothing re-applied it at boot: a game's own Display Resolution
+            // took effect only when changed in-game, and every relaunch came back at Screen. A
+            // tester saw 14 fps at Screen and 30 at 1080p on 1.0.9, set in-game, gone on reopen.
+            // Posted: it resizes the SurfaceView, and boot runs off the main thread.
+            surface.value?.let { s -> s.post { s.applyOutputScale() } }
         }
 
         /**
@@ -1064,15 +1093,6 @@ open class MainActivityRuntime : ComponentActivity() {
         }
 
         /**
-         * Minimal [GameInfo] for a URI arriving from outside the app and NOT in the library.
-         *
-         * The serial probe here is getGameSerialFromFd, which reads a PS2 SYSTEM.CNF and so
-         * answers nothing for a PS3 disc. That is why this is the fallback and not the first
-         * move: for anything the library has scanned, [libraryGameFor] supplies the real
-         * serial. A failed probe is still fine for ELF/homebrew, where settingsKey falls back
-         * to the filename stem, matching issue #253's behaviour.
-         */
-        /**
          * The library's own entry for an incoming launch, matched by path.
          *
          * This is what makes a shortcut launch the SAME game as a library launch rather than a
@@ -1116,6 +1136,18 @@ open class MainActivityRuntime : ComponentActivity() {
             }
         }.getOrNull()
 
+        /**
+         * The [GameInfo] for a URI arriving from outside the app.
+         *
+         * The library's entry when the path matches one ([libraryGameFor]). Otherwise the title id
+         * comes from the disc's own PARAM.SFO, and the library's entry with that id stands in for
+         * it. This used to ask getGameSerialFromFd, ARMSX2's PS2 probe, which the PS3 core never
+         * implemented, so a launch the library could not match by path had no serial at all:
+         * per-game settings resolved under the filename, and the in-game patch list was empty, so
+         * a patch turned on from it was filed under no game. Frontends such as Beacon hand over
+         * their own form of a path, so for them that was most launches. With no title id, ELF and
+         * homebrew still key off the filename stem, as issue #253 has it.
+         */
         private fun externalGameInfo(uriString: String): GameInfo? = runCatching {
             // The library first: a game we already know is not worth re-deriving badly.
             libraryGameFor(uriString)?.let { return@runCatching it }
@@ -1123,29 +1155,49 @@ open class MainActivityRuntime : ComponentActivity() {
             val uri = uriString.toUri()
             val name = uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':').orEmpty()
             val stem = name.substringBeforeLast('.').ifBlank { name }
-            val serial = runCatching {
-                val ctx = instance ?: return@runCatching null
-                // detachFd() hands ownership of the fd to native, which closes it — same
-                // contract GameLibraryRepository.probeDocument/probeRaw use. Do NOT wrap in
-                // use{}: closing an already-detached descriptor is not ours to do.
-                val raw = if (uri.scheme == "content") {
-                    val pfd = ctx.contentResolver.openFileDescriptor(uri, "r") ?: return@runCatching null
-                    NativeApp.getGameSerialFromFd(pfd.detachFd())
-                } else {
-                    val f = java.io.File(uri.path ?: return@runCatching null)
-                    if (!f.isFile) return@runCatching null
-                    val pfd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY)
-                    NativeApp.getGameSerialFromFd(pfd.detachFd())
-                }
-                // The probe tags its result "<platform>:<serial>" when SYSTEM.CNF parsed.
-                raw?.takeIf { it.isNotBlank() }?.substringAfterLast(':')?.takeIf { it.isNotBlank() }
-            }.getOrNull()
+            val disc = probeExternalDisc(uriString)
+            val serial = disc?.first
+
+            // The same game the library scanned under another address.
+            libraryGameForSerial(serial)?.let {
+                android.util.Log.i("ARMSX3-Launch", "external launch: '$name' is $serial, the library's entry")
+                return@runCatching it
+            }
+            android.util.Log.i("ARMSX3-Launch", "external launch: '$name' is ${serial ?: "a title with no id"}")
             GameInfo(
                 uri = uri,
-                title = stem,
+                title = disc?.second?.takeIf { it.isNotBlank() } ?: stem,
                 serial = serial,
                 extension = name.substringAfterLast('.', "").uppercase(),
             )
+        }.getOrNull()
+
+        /**
+         * Title id and title from the PARAM.SFO of the disc an external launch names, or null.
+         *
+         * The library scan's own probe, on the path the boot will use. An EBOOT.BIN is read through
+         * the folder two levels up (PS3_GAME, or an installed game's folder), where its PARAM.SFO
+         * is. Skipped unless the VM is idle: the probe mounts the image under the lock a boot holds.
+         * The disc's icon is kept as the title's cover if the library has none for it yet.
+         */
+        private fun probeExternalDisc(uriString: String): Pair<String, String>? = runCatching {
+            if (!isVmIdle()) return null
+            val path = com.armsx2.storage.ContentUri.bootPathFor(uriString)
+            if (path.startsWith("content://")) return null
+            val target = if (path.substringAfterLast('/').equals("EBOOT.BIN", ignoreCase = true)) {
+                java.io.File(path).parentFile?.parentFile?.path ?: return null
+            } else {
+                path
+            }
+            // Its own staging name: the library scan may be probing at the same time.
+            val staged = com.armsx2.DiscIcons.fileFor("__external")
+            val info = org.json.JSONObject(net.rpcsx.RPCSX.instance.probeDiscInfo(target, staged.absolutePath))
+            val id = info.optString("titleId").takeIf { it.isNotBlank() }
+            if (id != null && info.optBoolean("icon") && staged.length() > 0L && !com.armsx2.DiscIcons.has(id)) {
+                staged.renameTo(com.armsx2.DiscIcons.fileFor(id))
+            }
+            staged.delete()
+            id?.let { it to info.optString("title") }
         }.getOrNull()
 
         /**
@@ -1820,11 +1872,34 @@ open class MainActivityRuntime : ComponentActivity() {
             }
         }
 
+        /** The data root this process settled on, and the configured folder it was decided for. */
+        @Volatile private var resolvedDataRoot: Pair<String?, String>? = null
+
         fun assetCopyRoot(context: Context): String {
             val custom = systemDirPosix()
-            return custom?.takeIf { validateSystemDirWritable(it) }
-                ?: context.getExternalFilesDir(null)?.absolutePath
-                ?: context.dataDir.absolutePath
+            // Decided once per configured folder, not on every call. The core pins its root at
+            // startup from this same function, and a later call answering differently (one probe
+            // failing mid-session) sent whatever asked it next to another folder than the emulator.
+            resolvedDataRoot?.let { (decidedFor, root) -> if (decidedFor == custom) return root }
+
+            if (custom != null && validateSystemDirWritable(custom)) {
+                resolvedDataRoot = custom to custom
+                return custom
+            }
+
+            val fallback = context.getExternalFilesDir(null)?.absolutePath ?: context.dataDir.absolutePath
+            if (custom == null) {
+                // The Internal choice: nothing was probed, so the answer cannot change.
+                resolvedDataRoot = null to fallback
+            } else {
+                // Not remembered, so the next call tries the user's folder again: once setup has
+                // them grant access, it must be used, not this. And not silent: onCreate routes this
+                // case to setup before the core starts, so reaching it means something changed
+                // mid-launch. Say where data is going.
+                android.util.Log.e("ARMSX3", "data folder $custom is not writable; using $fallback")
+                println("@@ANDROID_DATA_ROOT@@ fallback custom=$custom using=$fallback")
+            }
+            return fallback
         }
 
         fun copyAssetAll(p_context: Context, srcPath: String) {
@@ -2014,71 +2089,13 @@ open class MainActivityRuntime : ComponentActivity() {
         copyAssetAll(applicationContext, "bios")
         copyAssetAll(applicationContext, "resources")
 
-        // On an app UPDATE (versionCode changed), drop the regenerable GPU caches. Installing a
-        // new build over an old one keeps the compiled GS shader/pipeline cache under
-        // <dataRoot>/cache, and a cache baked by a different core build can render corrupt — the
-        // "scrambled PS2 logo" and post-update graphical glitches users currently fix by
-        // reinstalling clean (#376/#385). The cache is pure derived data (rebuilt on demand),
-        // never user content, so wiping it is always safe. Skipped on first install (no prior
-        // version recorded) — there is nothing stale to clear.
-        // ONLY the GPU caches, never the compiled guest modules.
-        //
-        // This came from ARMSX2, where <dataRoot>/cache held the GS shader/pipeline cache and
-        // nothing else, so deleting the lot was free. In ARMSX3 that same directory is RPCS3's
-        // whole cache root: <dataRoot>/cache/cache/<TITLEID>/ppu-<hash>-EBOOT.BIN/ holds every
-        // compiled PPU module, and deleting it threw away work measured in tens of minutes per
-        // game -- an hour for the XMB's 390 firmware modules. Every update, on purpose, by code
-        // that believed it was clearing shaders. That is the "why do I have to recompile my games
-        // after every update" report, and it is the single worst thing about updating.
-        //
-        // The original worry stands and is preserved: a pipeline cache baked against a different
-        // core build can render corrupt (#376/#385). But that argument is about GPU pipeline blobs,
-        // not guest code. PPU objects already carry their own compatibility key in the filename --
-        // format version, module hash, the settings that affect codegen, and the CPU target -- so a
-        // build that changes any of that simply does not match them, and one that does not change
-        // it has no reason to discard them.
-        //
-        // OFF THE MAIN THREAD. kickoffEmucoreInit runs from onCreate, and this walk covers the
-        // WHOLE cache root -- which holds every compiled PPU module and reaches tens of GB on a
-        // full library. Walking that on the UI thread blocks it for seconds and Android kills the
-        // app as unresponsive, which users report as "crashes during the logo animation after
-        // updating" (#94, seen on Retroid Pocket 6 and AYN Thor).
-        //
-        // It also explains why re-launching eventually works: lastRunVersionCode is only written
-        // once the walk finishes, so a kill part-way through means the next launch retries, each
-        // attempt deleting a few more directories until the walk is finally short enough to
-        // survive. A clean install has no cache to walk, which is why reinstalling "fixes" it.
-        //
-        // Nothing below depends on this having finished -- the caches are regenerable and the core
-        // rebuilds them on demand -- so it is safe to let it run behind startup.
-        val prevVc = prefs.getInt("lastRunVersionCode", 0)
-        val curVc = BuildConfig.VERSION_CODE
-
-        if (prevVc != 0 && prevVc != curVc) {
-            Thread {
-                runCatching {
-                    val root = File(assetCopyRoot(applicationContext), "cache")
-                    var cleared = 0
-                    // Depth-first over the cache root, removing only directories named
-                    // shaders_cache (RPCS3 puts one beside each title's compiled modules).
-                    // walkBottomUp so a match is deleted whole without the walk then descending
-                    // into a directory that is gone.
-                    root.walkBottomUp()
-                        .filter { it.isDirectory && it.name == "shaders_cache" }
-                        .forEach { if (it.deleteRecursively()) cleared++ }
-                    android.util.Log.i(
-                        "ARMSX2",
-                        "Update $prevVc -> $curVc: cleared $cleared shader cache(s); compiled modules kept",
-                    )
-                }
-                // Recorded only after the sweep actually completes, so an interrupted run repeats
-                // rather than silently leaving a build's stale pipeline blobs behind.
-                runCatching { prefs.edit { putInt("lastRunVersionCode", curVc) } }
-            }.apply { isDaemon = true; name = "shader-cache-sweep"; priority = Thread.MIN_PRIORITY }
-                .start()
-        } else if (prevVc != curVc) {
-            runCatching { prefs.edit { putInt("lastRunVersionCode", curVc) } }
-        }
+        // No shader cache sweep on update. ARMSX2 deletes its GPU caches whenever the versionCode
+        // changes, because a PCSX2 GS cache built by another version can render corrupt (#376/#385),
+        // and that sweep came over with the app code. It protected nothing here: RPCS3's shaders_cache
+        // holds the games' own shader programs and pipeline state, the host shaders are rebuilt from
+        // them at every boot by the running build, and RPCS3 versions its pipeline folder itself
+        // (pipelines/vulkan/v1.96-eds). All the sweep did was make every game rebuild its GPU
+        // programs during play after each update, which is a stutter users notice.
 
         // Point the ANGLE EGL env vars at the bundled libs (or clear them) before the
         // GS thread ever opens a GL context. Re-applied per launch below too.
@@ -2260,6 +2277,11 @@ open class MainActivityRuntime : ComponentActivity() {
         // ([fromController] false): they are how people add triggers to touch-only play, and
         // hiding the touch controls on every press left them nothing else to play with.
         if (fromController) com.armsx2.ui.touch.TouchControls.onControllerInputDetected()
+        // A button mapped to a motion action moves the SIXAXIS sensors; it is not a pad button.
+        if (p_keycode_in in com.armsx2.input.MotionButtons.CODES) {
+            com.armsx2.input.MotionButtons.onKey(port, p_keycode_in, p_action == KeyEventType.KeyDown)
+            return
+        }
         // D-pad as left analog stick: a physical d-pad press (arriving as a key,
         // not a HAT) drives the left stick instead of the digital d-pad. The
         // remapped code is >=110 so the analog-force branch below gives a
@@ -2356,6 +2378,24 @@ open class MainActivityRuntime : ComponentActivity() {
             if (showSystemBars) show(WindowInsetsCompat.Type.systemBars())
             else hide(WindowInsetsCompat.Type.systemBars())
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    // Every launcher in the app ends up here, the system document pickers included. On a device
+    // with nothing that handles one (HarmonyOS without Google services, issue #186) the platform
+    // throws ActivityNotFoundException straight out of the click that launched it and the app
+    // closes. Caught here once for all of them: SystemPickers either hands over to a caller's
+    // fallback or tells the user, and the launcher is answered as a cancel so its callback and
+    // the result registry's bookkeeping still complete.
+    @Deprecated("Deprecated in Java")
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        try {
+            super.startActivityForResult(intent, requestCode, options)
+        } catch (_: android.content.ActivityNotFoundException) {
+            com.armsx2.ui.common.SystemPickers.onLaunchFailed(this, intent)
+            window.decorView.post {
+                activityResultRegistry.dispatchResult(requestCode, RESULT_CANCELED, null)
+            }
         }
     }
 
@@ -2487,6 +2527,15 @@ open class MainActivityRuntime : ComponentActivity() {
         // folder is actually reachable, drop setupComplete for this session so the wizard
         // re-runs (and re-requests the permission); finishSetup re-arms it.
         if (setupComplete.value && !romsAccessible(this, romsDirs.value)) {
+            setupComplete.value = false
+            setupRecoveryNeeded.value = true
+        }
+        // The same for a custom data folder (saves, firmware, caches). If it cannot be written,
+        // the app used to fall back to its own folder without a word, and the user's saves and
+        // firmware looked gone (issue #180). Re-run setup instead, before the core starts, so they
+        // can grant access again or pick the folder; nothing is moved or deleted.
+        if (setupComplete.value && systemDirPosix()?.let { !validateSystemDirWritable(it) } == true) {
+            println("@@ANDROID_DATA_ROOT@@ unwritable at launch: ${systemDirPosix()}, setup re-shown")
             setupComplete.value = false
             setupRecoveryNeeded.value = true
         }
@@ -4199,7 +4248,11 @@ open class MainActivityRuntime : ComponentActivity() {
                     val on = mag > STICK_DIGITAL_THRESHOLD
                     val was = held.contains(target)
                     if (on != was) {
-                        NativeApp.setPadButtonForPort(port, target, if (on) 32767 else 0, on)
+                        if (target in com.armsx2.input.MotionButtons.CODES) {
+                            com.armsx2.input.MotionButtons.onKey(port, target, on)
+                        } else {
+                            NativeApp.setPadButtonForPort(port, target, if (on) 32767 else 0, on)
+                        }
                         if (on) held.add(target) else held.remove(target)
                     }
                 }
@@ -5292,6 +5345,9 @@ open class MainActivityRuntime : ComponentActivity() {
             // proportional pressure to the merge layer so it can't be released by
             // the target stick's own (resting) ANALOG writer in the same event.
             accumAnalog(target, out)
+        } else if (target in com.armsx2.input.MotionButtons.CODES) {
+            // A trigger mapped to a motion action: held past the dead zone, released below it.
+            com.armsx2.input.MotionButtons.onKey(port, target, out > 0f)
         } else {
             // coerceAtLeast(1) because range 0 is the input layer's "full press"
             // convention: the lightest real squeeze floors to 0 here, which would

@@ -1233,16 +1233,16 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		}
 		else if (m_device->get_multidraw_support())
 		{
-			const auto subranges = draw_call.get_subranges();
-			auto ptr = utils::bless<const VkMultiDrawInfoEXT>(& subranges.front().first);
+			const auto& subranges = draw_call.get_subranges();
+			auto ptr = utils::bless<const VkMultiDrawInfoEXT>(&subranges.front().first);
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(::size32(subranges));
 			_vkCmdDrawMultiEXT(*m_current_command_buffer, ::size32(subranges), ptr, 1, 0, sizeof(rsx::draw_range_t));
 		}
 		else
 		{
 			u32 vertex_offset = 0;
-			const auto subranges = draw_call.get_subranges();
-			for (const auto &range : subranges)
+			const auto& subranges = draw_call.get_subranges();
+			for (const auto& range : subranges)
 			{
 				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(1);
 				vkCmdDraw(*m_current_command_buffer, range.count, 1, vertex_offset, 0);
@@ -1269,7 +1269,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		}
 		else if (m_device->get_multidraw_support())
 		{
-			const auto subranges = draw_call.get_subranges();
+			const auto& subranges = draw_call.get_subranges();
 			const auto subranges_count = ::size32(subranges);
 			const auto allocation_size = subranges_count * sizeof(VkMultiDrawIndexedInfoEXT);
 
@@ -1295,8 +1295,8 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		else
 		{
 			u32 vertex_offset = 0;
-			const auto subranges = draw_call.get_subranges();
-			for (const auto &range : subranges)
+			const auto& subranges = draw_call.get_subranges();
+			for (const auto& range : subranges)
 			{
 				const auto count = get_index_count(draw_call.primitive, range.count);
 				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(1);

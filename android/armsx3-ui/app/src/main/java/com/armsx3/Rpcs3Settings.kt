@@ -516,6 +516,9 @@ object Rpcs3Settings {
     fun setPpuCompilationHint(enabled: Boolean) =
         setBool("$MISC@@Show PPU compilation hint", enabled)
 
+    fun setSpuCompilationHint(enabled: Boolean) =
+        setBool("$MISC@@Show SPU compilation hint", enabled)
+
     // ---- PS3 core (PPU / SPU) ------------------------------------------
     //
     // Enum VALUES are matched literally by cfg::_enum::from_string, so these

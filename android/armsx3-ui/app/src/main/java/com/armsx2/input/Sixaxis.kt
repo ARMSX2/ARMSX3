@@ -215,6 +215,8 @@ class Sixaxis(context: Context) {
      */
     private fun send(port: Int, x: Float, y: Float, z: Float, yawLeft: Float, from: String) {
         if (port !in source.indices) return
+        // A button mapped to a motion action has this player's sensors (MotionButtons).
+        if (MotionButtons.overriding(port)) return
         if (source[port] != from) {
             source[port] = from
             runCatching { net.rpcsx.RPCSX.instance.logAndroid("sixaxis: player ${port + 1} motion from $from") }

@@ -72,6 +72,25 @@ public:
 	void handle_events(const pollfd& native_fd, bool unset_connecting = false);
 	void queue_wake(ppu_thread* ppu);
 
+	// Whether a host poll result means "readable" to a PS3 game.
+	//
+	// Linux reports POLLHUP on its own for a TCP socket that is bound but neither connected nor
+	// listening yet (tcp_poll in TCP_CLOSE). A PS3 never reports such a socket readable, and a
+	// game that trusts select() calls accept() on it: Metal Gear Solid V: The Phantom Pain
+	// (BLUS31491) selects on its server socket between its own bind() and listen(), so whenever
+	// its network thread got there first, accept() failed with EINVAL and the game read a null
+	// pointer, freezing 37 seconds into boot. Every real readable case on Linux also sets POLLIN
+	// (data, or end of stream through RCV_SHUTDOWN), so a lone POLLHUP is dropped. Windows keeps
+	// the old reading, since WSAPoll can report a graceful close as POLLHUP alone.
+	static bool native_readable(s16 revents)
+	{
+#ifdef _WIN32
+		return revents & (POLLIN | POLLHUP);
+#else
+		return revents & POLLIN;
+#endif
+	}
+
 	lv2_socket_family get_family() const;
 	lv2_socket_type get_type() const;
 	lv2_ip_protocol get_protocol() const;

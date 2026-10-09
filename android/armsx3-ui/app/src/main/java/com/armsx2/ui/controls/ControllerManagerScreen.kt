@@ -127,6 +127,7 @@ private fun ControllerOptions(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                 ChoiceRow(str("pad.section.buttonMapping"), state.section == ControllerSection.Buttons, { viewModel.setSection(ControllerSection.Buttons) }, Modifier.weight(1f).controllerFocusable("controls.section.buttons", RoundedCornerShape(14.dp), onConfirm = { viewModel.setSection(ControllerSection.Buttons) }))
+                ChoiceRow(str("pad.section.motion"), state.section == ControllerSection.Motion, { viewModel.setSection(ControllerSection.Motion) }, Modifier.weight(1f).controllerFocusable("controls.section.motion", RoundedCornerShape(14.dp), onConfirm = { viewModel.setSection(ControllerSection.Motion) }))
                 ChoiceRow(str("tab.hotkeys"), state.section == ControllerSection.Hotkeys, { viewModel.setSection(ControllerSection.Hotkeys) }, Modifier.weight(1f).controllerFocusable("controls.section.hotkeys", RoundedCornerShape(14.dp), onConfirm = { viewModel.setSection(ControllerSection.Hotkeys) }))
             }
             if (!compact) Spacer(Modifier.weight(1f))
@@ -157,12 +158,22 @@ private fun ControllerOptions(
 private fun ControllerBindings(state: ControllerManagerUiState, viewModel: ControllerManagerViewModel, modifier: Modifier) {
     Column(modifier) {
         SectionTitle(
-            if (state.section == ControllerSection.Buttons) str("pad.section.buttonMapping") else str("hotkeys.header"),
-            if (state.section == ControllerSection.Buttons) str("pad.instruction.tapThenPress") else str("hotkeys.help"),
+            when (state.section) {
+                ControllerSection.Buttons -> str("pad.section.buttonMapping")
+                ControllerSection.Motion -> str("pad.section.motion")
+                ControllerSection.Hotkeys -> str("hotkeys.header")
+            },
+            when (state.section) {
+                ControllerSection.Buttons -> str("pad.instruction.tapThenPress")
+                ControllerSection.Motion -> str("pad.motion.help")
+                ControllerSection.Hotkeys -> str("hotkeys.help")
+            },
         )
-        if (state.section == ControllerSection.Buttons) {
+        if (state.section != ControllerSection.Hotkeys) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ControllerMappings.actions.forEach { action ->
+                val shown = if (state.section == ControllerSection.Motion) ControllerMappings.motionActions
+                else ControllerMappings.buttonActions
+                shown.forEach { action ->
                     BindingRow(
                         controllerId = "controls.button.${action.id}",
                         label = action.label,

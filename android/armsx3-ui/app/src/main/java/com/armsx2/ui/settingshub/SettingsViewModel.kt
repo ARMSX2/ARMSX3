@@ -77,6 +77,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         // General -> Performance under a game scope, so reading it here would reset the wrong
         // (or no) tab.
         if (!categoryHasResettableSettings(category)) return
+        // The running game's resolved settings before the reset, so the live push below writes
+        // only what the reset changed for it (Settings.applyChangesSince).
+        val runningKey = com.armsx2.ui.InGameOverlay.currentSerial.value
+        val runningBefore = if (MainActivityRuntime.nativeReady.value &&
+            MainActivityRuntime.eState.value != EmuState.STOPPED
+        ) runCatching { ConfigStore.resolveForGame(runningKey) }.getOrNull() else null
         val serial = uiState.value.game?.settingsKey
         if (serial != null) {
             // Per-game: drop just this tab's override keys, so those settings fall back to
@@ -105,7 +111,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 // In-game: re-apply live so the change shows immediately, then regenerate the
                 // running game's INI for the next boot (mirrors InGameOverlay.saveSettings).
                 gameSerial != null && running -> {
-                    settings.value.applyTo()
+                    pushToRunningGame(runningKey, runningBefore)
                     ConfigStore.resolveForGame(gameSerial).writeGameSettingsIni(ConfigStore.loadGlobal())
                 }
                 // From the library (no VM): the INI can't be reached through a running game, so
@@ -114,8 +120,15 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 gameSerial != null -> ConfigStore.resolveForGame(gameSerial)
                     .writeGameSettingsIni(ConfigStore.loadGlobal(), gameSerial)
                 // Global scope with a game live: re-apply the reset globals to the base layer.
-                running -> settings.value.applyTo()
+                running -> pushToRunningGame(runningKey, runningBefore)
             }
         }
+    }
+
+    /** The running game's resolved settings now, written live as only what differs from [before].
+     *  Without a [before] (none could be resolved) every key goes, as it always did. */
+    private fun pushToRunningGame(runningKey: String?, before: com.armsx2.config.Settings?) {
+        val after = ConfigStore.resolveForGame(runningKey)
+        if (before != null) after.applyChangesSince(before) else after.applyTo()
     }
 }

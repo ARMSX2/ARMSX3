@@ -696,6 +696,13 @@ object Rpcs3Bridge {
                 "LLVM Precompilation" -> Rpcs3Settings.setLlvmPrecompilation(asBool(value))
                 "Accurate SPU DMA" -> Rpcs3Settings.setAccurateSpuDma(asBool(value))
                 "Clocks scale" -> Rpcs3Settings.setClocksScale(asInt(value))
+                "Thread Scheduler Mode" -> Rpcs3Settings.setThreadScheduler(
+                    when (asInt(value)) {
+                        1 -> "RPCS3 Scheduler"
+                        2 -> "RPCS3 Alternative Scheduler"
+                        else -> "Operating System"
+                    },
+                )
                 "SPU XFloat Accuracy" -> Rpcs3Settings.setSpuXFloat(asInt(value))
                 "Accurate SPU Reservations" -> Rpcs3Settings.setAccurateSpuReservations(asBool(value))
                 "Accurate Cache Line Stores" -> Rpcs3Settings.setAccurateCacheLineStores(asBool(value))
@@ -774,6 +781,8 @@ object Rpcs3Bridge {
 
             "PS3/Misc" -> when (key) {
                 "Silence All Logs" -> Rpcs3Settings.setSilenceAllLogs(asBool(value))
+                "Show shader compilation hint" -> Rpcs3Settings.setShaderCompilationHint(asBool(value))
+                "Show SPU compilation hint" -> Rpcs3Settings.setSpuCompilationHint(asBool(value))
                 else -> return false
             }
 

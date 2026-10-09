@@ -95,8 +95,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             // a useful cached result, so never trust one.
             // Installed (PKG) games live in the emulator's own storage, so a user with no
             // ROM folder at all can still have a library worth scanning.
+            // A cache from a scan that met a busy core is missing titles and covers too, so it
+            // is no answer either (see rescanWhenCoreIdle).
             pendingInitialScan = (romDirectories.isNotEmpty() || repository.hasInternalGames()) &&
-                (cached.games.isEmpty() || cached.key != repository.cacheKey(romDirectories))
+                (cached.games.isEmpty() || cached.key != repository.cacheKey(romDirectories) ||
+                    repository.probesOwed())
             android.util.Log.i("ARMSX3-Scan", "load(first): dirs=$romDirectories nativeReady=$nativeReady cachedKey=${cached.key} newKey=${repository.cacheKey(romDirectories)} cachedGames=${cached.games.size} pending=$pendingInitialScan")
             state.value = buildState(
                 base = state.value.copy(
@@ -127,6 +130,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun checkForChanges() {
         if (!loaded || scanJob?.isActive == true || changeCheck?.isActive == true) return
         if (!MainActivityRuntime.isVmIdle()) return
+        // A scan that met a busy core still owes those discs a probe; see rescanWhenCoreIdle.
+        if (nativeReadySeen && repository.probesOwed() && coreIdle()) {
+            refresh()
+            return
+        }
         changeCheck = scope.launch {
             val games = state.value.allGames
             val missing = withContext(Dispatchers.IO) {
@@ -164,6 +172,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 // Catches what the install screens do not see: a title copied into
                 // dev_hdd0/game by hand, or one installed before a folder was picked.
                 com.armsx2.packages.FrontendExport.requestSync(getApplication())
+                if (repository.probesOwed()) rescanWhenCoreIdle()
             }.onFailure { failure ->
                 pendingInitialScan = false
                 state.value = state.value.copy(
@@ -184,6 +193,37 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    private var idleRescan: Job? = null
+
+    /**
+     * Scan again once the core is idle, after a scan that met it busy.
+     *
+     * The core mounts no disc image while it is booting, running or compiling, so that scan
+     * listed those discs with no title ID, which means no title and no cover. A new user's first
+     * scan always lands in the firmware compile that follows setup, and nothing else rescanned
+     * until they pressed refresh. Polled because the compile announces nothing the library can
+     * wait on. Bounded at half an hour; checkForChanges covers a core that stays busy longer,
+     * such as a game left running.
+     */
+    private fun rescanWhenCoreIdle() {
+        if (idleRescan?.isActive == true) return
+        idleRescan = scope.launch {
+            repeat(900) {
+                kotlinx.coroutines.delay(2_000)
+                if (coreIdle()) {
+                    android.util.Log.i("ARMSX3-Scan", "core idle, scanning again for the discs it could not read")
+                    if (scanJob?.isActive == true) rescanQueued = true else refresh()
+                    return@launch
+                }
+            }
+        }
+    }
+
+    /** No game loaded, and the core itself stopped: 0 is system_state::stopped. The firmware
+     *  compile runs with no game, so isVmIdle() alone reads it as idle. */
+    private fun coreIdle(): Boolean =
+        MainActivityRuntime.isVmIdle() && runCatching { net.rpcsx.RPCSX.instance.getState() == 0 }.getOrDefault(false)
 
     /**
      * Re-read storage after a licence install.

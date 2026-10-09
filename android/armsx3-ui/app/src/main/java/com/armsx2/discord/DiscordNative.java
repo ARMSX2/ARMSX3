@@ -76,8 +76,12 @@ public final class DiscordNative {
     /** Create the client; a non-empty token skips the browser and connects directly. Idempotent. */
     public static native void start(String savedToken);
 
-    /** Full browser authorization. Needs an Activity bound via DiscordSocialSdkInit first. */
-    public static native void authorize();
+    /**
+     * Full browser authorization. Needs an Activity bound via DiscordSocialSdkInit first.
+     * customScheme is the URI scheme the sign-in returns through; empty means the SDK's default,
+     * discord-&lt;application id&gt;.
+     */
+    public static native void authorize(String customScheme);
 
     /** The freshly-issued token, exactly once, so the caller can persist it. Empty otherwise. */
     public static native String takeToken();

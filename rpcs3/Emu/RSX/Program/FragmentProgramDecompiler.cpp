@@ -91,6 +91,26 @@ void FragmentProgramDecompiler::SetDst(std::string code, u32 flags)
 {
 	if (!src0.exec_if_eq && !src0.exec_if_gr && !src0.exec_if_lt) return;
 
+	// With native half types an operation runs at the precision of its operands, so one whose
+	// inputs are half registers was computed in fp16 even when its result goes to a full-precision
+	// register. The RSX does not work that way: its fragment ALU computes in fp32, and the half
+	// registers only store fp16. A product, reciprocal or exponential that briefly passes 65504
+	// became infinity here and poisoned everything after it. Metal Gear Solid V: The Phantom Pain
+	// (BLUS31491) drew its whole sky as one flat colour on Shader Precision Low (Odin 3, Turnip);
+	// High fixed it but cost a lot of frame rate, since it gives up fp16 everywhere.
+	//
+	// So compute in fp32 wherever the hardware's result is fp32, and for division whatever the
+	// destination, since its reciprocal can overflow when the quotient would not. Half-to-half
+	// arithmetic, most of a typical shader's colour math, keeps native fp16. Ops already casting
+	// (op_extern: dot products, comparisons) or managing their own types are left as they are.
+	if (device_props.has_native_half_support && !(flags & (OPFLAGS::skip_type_cast | OPFLAGS::texture_ref)))
+	{
+		if (!dst.fp16 || dst.opcode == RSX_FP_OPCODE_DIV || dst.opcode == RSX_FP_OPCODE_DIVSQ)
+		{
+			flags |= OPFLAGS::src_cast_f32;
+		}
+	}
+
 	if (src1.scale)
 	{
 		std::string modifier;

@@ -118,7 +118,7 @@ void lv2_socket::handle_events(const pollfd& native_pfd, [[maybe_unused]] bool u
 {
 	bs_t<lv2_socket::poll_t> events_happening{};
 
-	if (native_pfd.revents & (POLLIN | POLLHUP) && events.test_and_reset(lv2_socket::poll_t::read))
+	if (native_readable(native_pfd.revents) && events.test_and_reset(lv2_socket::poll_t::read))
 		events_happening += lv2_socket::poll_t::read;
 	if (native_pfd.revents & POLLOUT && events.test_and_reset(lv2_socket::poll_t::write))
 		events_happening += lv2_socket::poll_t::write;

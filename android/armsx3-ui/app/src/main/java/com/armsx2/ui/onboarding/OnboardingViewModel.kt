@@ -191,6 +191,7 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
                     val progressId =
                         ProgressRepository.create(getApplication(), "Installing firmware") { update ->
                             if (update.isFailed()) reason = update.message
+                            com.armsx2.FirmwareCompile.onUpdate(update)
                         }
                     resolver.openAssetFileDescriptor(candidate.uri, "r").use { afd ->
                         val fd = afd?.parcelFileDescriptor?.fd ?: return@runCatching false
@@ -414,6 +415,17 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         com.armsx2.storage.ContentUri.attach(context)
         com.armsx2.storage.ContentUri.keyForTree(uri)
         val updated = (state.value.gameFolders + uri.toString()).distinct()
+        MainActivityRuntime.setRomsDirs(updated)
+        state.value = state.value.copy(gameFolders = updated, error = null)
+    }
+
+    /**
+     * A folder chosen in our own browser, used where the device has no system folder picker.
+     * It is stored as a plain path rather than a tree URI: there is no grant to persist, and it
+     * is read through All files access, which that browser needs anyway.
+     */
+    fun addGameFolderPath(path: String) {
+        val updated = (state.value.gameFolders + path).distinct()
         MainActivityRuntime.setRomsDirs(updated)
         state.value = state.value.copy(gameFolders = updated, error = null)
     }

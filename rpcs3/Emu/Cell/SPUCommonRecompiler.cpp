@@ -1238,6 +1238,21 @@ void spu_cache::initialize(bool build_existing_cache)
 	{
 		return;
 	}
+	else if (!g_cfg.core.spu_cache && !is_debug)
+	{
+		// ARMSX3: SPU Cache off leaves the saved list unbuilt as well, so every function compiles
+		// when it is first run. Upstream only stops adding to the list and still builds whatever
+		// it already holds, so for a game that had one, turning the option off changed nothing.
+		// Blades of Time (BLUS30833) needs it off for real: with its whole list built before the
+		// game starts, its JobMgr#1 thread reads a null pointer 0.1 s in and the emulator
+		// freezes, on every boot after the first.
+		if (!func_list.empty())
+		{
+			spu_log.notice("SPU Cache is off: %u saved SPU functions in %s are not built", func_list.size(), loc);
+		}
+
+		return;
+	}
 	else
 	{
 		total_precompile = 0;

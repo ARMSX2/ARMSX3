@@ -49,6 +49,7 @@ private:
 		case localized_string_id::RSX_OVERLAYS_COMPILING_SHADERS_OPENGL_BUILD: return tr("Building variant %0...").arg(std::forward<Args>(args)...);
 		case localized_string_id::RSX_OVERLAYS_COMPILING_SHADERS_OPENGL_LINK: return tr("Linking variant %0...").arg(std::forward<Args>(args)...);
 		case localized_string_id::RSX_OVERLAYS_COMPILING_PPU_MODULES: return tr("Compiling PPU Modules");
+		case localized_string_id::RSX_OVERLAYS_COMPILING_SPU_CODE: return tr("Compiling SPU Code");
 		case localized_string_id::RSX_OVERLAYS_MSG_DIALOG_YES: return tr("Yes", "Message Dialog");
 		case localized_string_id::RSX_OVERLAYS_MSG_DIALOG_NO: return tr("No", "Message Dialog");
 		case localized_string_id::RSX_OVERLAYS_MSG_DIALOG_CANCEL: return tr("Back", "Message Dialog");
@@ -278,6 +279,7 @@ private:
 		case localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_RPCN_POPUPS: return tr("Show RPCN Popups", "Overlays");
 		case localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_SHADER_COMPILATION_HINT: return tr("Show Shader Compilation Hint", "Overlays");
 		case localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_PPU_COMPILATION_HINT: return tr("Show PPU Compilation Hint", "Overlays");
+		case localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_SPU_COMPILATION_HINT: return tr("Show SPU Compilation Hint", "Overlays");
 		case localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_AUTO_SAVE_LOAD_HINT: return tr("Show Autosave/Autoload Hint", "Overlays");
 		case localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_PRESSURE_INTENSITY_TOGGLE_HINT: return tr("Show Pressure Intensity Toggle Hint", "Overlays");
 		case localized_string_id::HOME_MENU_SETTINGS_OVERLAYS_SHOW_ANALOG_LIMITER_TOGGLE_HINT: return tr( "Show Analog Limiter Toggle Hint", "Overlays");

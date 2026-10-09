@@ -134,7 +134,7 @@ namespace rsx
 			mutable rsx::thread* m_thread;
 			RsxDmaControl* m_ctrl = nullptr;
 			const rsx::rsx_iomap_table* m_iotable;
-			u32 m_internal_get = 0;
+			u32 m_fifo_pos = 0;
 
 			u32 m_memwatch_addr = 0;
 			u32 m_memwatch_cmp = 0;
@@ -156,6 +156,18 @@ namespace rsx
 			// a heavy scene took over 1200 refills per frame for 1.29MB of FIFO. Fetching
 			// 4KB at a time pays it a quarter as often for the same bytes moved.
 			static constexpr u32 cache_line_count = 32;
+
+			// Since RPCS3 #19606 GET is the read pointer, the end of what the puller has fetched.
+			// Upstream fetches 8 lines, so its GET runs at most 1KB ahead of execution, and that
+			// is what its fixes were tested against: guests that wait for GET to reach PUT, or
+			// that write new commands at GET. Reporting our 4KB would tell them we had read up to
+			// 3KB further than upstream ever claims. So the cache is served one upstream-sized
+			// window at a time: moving to the next window inside data we already hold costs a
+			// compare and a GET publish, and only data we do not hold costs a refill.
+			static constexpr u32 fetch_window_size = 8 * 128;
+
+			// Bytes from m_cache_addr that count as fetched: the end of the current window.
+			u32 m_hit_size = 0;
 
 			alignas(64) std::byte m_cache[cache_line_count][128];
 
@@ -180,16 +192,16 @@ namespace rsx
 
 			inline std::pair<bool, u32> fetch_u32(u32 addr)
 			{
-				if (addr - m_cache_addr >= m_cache_size) [[unlikely]]
+				if (addr - m_cache_addr >= m_hit_size) [[unlikely]]
 				{
 					return fetch_u32_refill(addr);
 				}
 
 				return {true, read_from_ptr_unsafe<be_t<u32>>(+m_cache[0], addr - m_cache_addr)};
 			}
-			void invalidate_cache() { m_cache_size = 0; }
+			void invalidate_cache() { m_cache_size = 0; m_hit_size = 0; }
 
-			u32 get_pos() const { return m_internal_get; }
+			u32 get_pos() const { return m_fifo_pos; }
 			u32 last_cmd() const { return m_cmd; }
 			// Publishing GET is a release store into guest DMA memory, and `get` shares a
 			// 64-byte line with `put` which the guest PPU writes from another CPU cluster. At
@@ -197,6 +209,7 @@ namespace rsx
 			// lag instead, with sync_get_force on every path that can idle or block.
 			void sync_get() const;
 			void sync_get_force() const;
+			u32 reported_get() const;
 			mutable u32 m_get_sync_counter = 0;
 
 			// Last value actually stored into ctrl->get. GET is ours to write -- the guest only
@@ -216,7 +229,7 @@ namespace rsx
 			bool m_accurate_fetch = false;
 			std::span<const u32> get_current_arg_ptr(u32 length_in_words) const;
 			u32 get_remaining_args_count() const { return m_remaining_commands; }
-			void restore_state(u32 cmd, u32 count);
+			void restore_state(u32 cmd, u32 count, u32 position);
 			void inc_get(bool wait);
 
 			void set_get(u32 get, u32 spin_cmd = 0);

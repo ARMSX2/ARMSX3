@@ -34,8 +34,9 @@
 
 namespace {
 
-/// ARMSX3's Discord application id. Must match the redirect scheme in the
-/// manifest (discord-1534624714989764829) or the OAuth callback lands nowhere.
+/// ARMSX3's Discord application id. The github build's redirect scheme is the SDK
+/// default, discord-1534624714989764829, which must match the manifest or the OAuth
+/// callback lands nowhere. The play build passes its own scheme to authorize().
 constexpr uint64_t kApplicationId = 1534624714989764829ULL;
 
 /// Field separator for the string lists handed back to Kotlin. \x1F (US) is used
@@ -215,11 +216,15 @@ Java_com_armsx2_discord_DiscordNative_start(JNIEnv* env, jclass, jstring jtoken)
 }
 
 JNIEXPORT void JNICALL
-Java_com_armsx2_discord_DiscordNative_authorize(JNIEnv*, jclass) {
+Java_com_armsx2_discord_DiscordNative_authorize(JNIEnv* env, jclass, jstring jscheme) {
     State& s = state();
     if (!s.client) {
         return;
     }
+
+    // Empty means the SDK's default scheme, discord-<application id>. The play build passes its
+    // own, so a github copy installed beside it cannot take its sign-in result.
+    const std::string scheme = jstr(env, jscheme);
 
     // PKCE: the SDK generates the verifier/challenge pair for us. Skipping it
     // would make the authorization code interceptable by any app that can claim
@@ -230,6 +235,9 @@ Java_com_armsx2_discord_DiscordNative_authorize(JNIEnv*, jclass) {
     args.SetClientId(kApplicationId);
     args.SetScopes(discordpp::Client::GetDefaultPresenceScopes());
     args.SetCodeChallenge(verifier.Challenge());
+    if (!scheme.empty()) {
+        args.SetCustomSchemeParam(scheme);
+    }
 
     s.client->Authorize(
         args,

@@ -30,7 +30,7 @@ object Ps3PatchRepo {
      */
     /** Asked for the current release rather than a pinned asset url, which would rot. */
     private const val ARTEMIS_LATEST_RELEASE =
-        "https://api.github.com/repos/chidreams/Artemis-Patch-Collection-RPCS3/releases/latest"
+        "https://api.github.com/repos/chidreams/Artemis-Patch-Collection-Android/releases/latest"
 
     private fun patchUrl(version: String) =
         "https://rpcs3.net/compatibility?patch&api=v1&v=$version"
@@ -156,8 +156,11 @@ object Ps3PatchRepo {
     /**
      * The Artemis collection, a second source of patches.
      *
-     * Maintained by @chidreams at github.com/chidreams/Artemis-Patch-Collection-RPCS3. All this
-     * does is download their work; the cheats, the testing and the upkeep are theirs.
+     * Maintained by @chidreams. Taken from github.com/chidreams/Artemis-Patch-Collection-Android,
+     * the edition they publish for ARMSX3 and asked us to use: their workflow copies
+     * imported_patch.yml from the main branch of Artemis-Patch-Collection-RPCS3 and releases it,
+     * so it carries the same patches without waiting for that repo's own releases. All this does
+     * is download their work; the cheats, the testing and the upkeep are theirs.
      *
      * Community cheats, MIT licensed, and already in RPCS3's own patch format: PPU hash keyed,
      * with `[ be32, addr, value ]` entries. No conversion step. It gets a file of its own,
@@ -167,9 +170,10 @@ object Ps3PatchRepo {
      *
      * The release ASSET is asked for rather than hardcoded. It is attached to a GitHub release and
      * the tag moves, so a pinned url would rot the first time they publish. Asking the API which
-     * asset is current costs one small request and survives that. Either packaging is taken: up
-     * to v1.04bfu it was a zip holding the yml, and from v2026.09.19 it is the bare
-     * imported_patch.yml. Accepting only the zip is what broke the button the day they switched.
+     * asset is current costs one small request and survives that. Either packaging is taken: the
+     * RPCS3 repo released a zip holding the yml up to v1.04bfu and the bare imported_patch.yml
+     * from v2026.09.19, which is also what the Android edition releases. Accepting only the zip
+     * is what broke the button the day they switched.
      *
      * No checksum to verify: unlike rpcs3.net there is no published digest to compare against.
      * The transport is https and the core parses the result, so a corrupt file is rejected
@@ -378,8 +382,8 @@ object Ps3PatchRepo {
         // GRAN TURISMO 6 v01.22, BCUS99247 and BCUS98296 -- illusion's "Disable MLAA" and
         // "Disable Motion Blur", brought to ARMSX3 by mlgprorektm8. Without the first the game
         // needs Write and Read Color Buffers to render right, and the core turns both off while it
-        // is applied; without the second replays and track intros are black. Keyed by the two
-        // executables they were made for. See canary_patches.yml.
+        // is applied; without the second replays and track intros are black. Keyed by
+        // executable: every GT6 v01.22 executable we know of. See canary_patches.yml.
         Bundled(
             hash = "PPU-42367707f4caac2668f10cb46498f64bde9db440",
             name = "Disable MLAA",
@@ -407,6 +411,90 @@ object Ps3PatchRepo {
             serial = "BCUS98296",
             appVersion = "01.22",
             sinceRevision = 9,
+        ),
+        Bundled(
+            hash = "PPU-6ac472e1f334f54ec4753cde9e8e1515bfab4d17",
+            name = "Disable MLAA",
+            serial = "BCUS98296",
+            appVersion = "01.22",
+            sinceRevision = 10,
+        ),
+        Bundled(
+            hash = "PPU-6ac472e1f334f54ec4753cde9e8e1515bfab4d17",
+            name = "Disable Motion Blur",
+            serial = "BCUS98296",
+            appVersion = "01.22",
+            sinceRevision = 10,
+        ),
+        Bundled(
+            hash = "PPU-638ef307e2b35d593f599efec0dc0c37059a984b",
+            name = "Disable MLAA",
+            serial = "BCES01893",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-638ef307e2b35d593f599efec0dc0c37059a984b",
+            name = "Disable Motion Blur",
+            serial = "BCES01893",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-80f0d67b29d3d17ac885a309a3fc4cd8dcf50658",
+            name = "Disable MLAA",
+            serial = "NPEA00502",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-80f0d67b29d3d17ac885a309a3fc4cd8dcf50658",
+            name = "Disable Motion Blur",
+            serial = "NPEA00502",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-4213aba5ed17f7e3cd3f299fa44d9d9acef0ba18",
+            name = "Disable MLAA",
+            serial = "NPUA81049",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-4213aba5ed17f7e3cd3f299fa44d9d9acef0ba18",
+            name = "Disable Motion Blur",
+            serial = "NPUA81049",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-6a7de7fdfd7e7cbd1031bf28a7104b29c308136c",
+            name = "Disable MLAA",
+            serial = "NPHA80269",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-6a7de7fdfd7e7cbd1031bf28a7104b29c308136c",
+            name = "Disable Motion Blur",
+            serial = "NPHA80269",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-43e618448eed82aa96856338d072f1e4978c36a8",
+            name = "Disable MLAA",
+            serial = "NPJA00113",
+            appVersion = "01.22",
+            sinceRevision = 11,
+        ),
+        Bundled(
+            hash = "PPU-43e618448eed82aa96856338d072f1e4978c36a8",
+            name = "Disable Motion Blur",
+            serial = "NPJA00113",
+            appVersion = "01.22",
+            sinceRevision = 11,
         ),
         // SONIC THE HEDGEHOG (2006), BLUS30008 v01.01 -- without this the game
         // renders only its HUD and skybox. See canary_patches.yml.
@@ -636,7 +724,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 9
+    private const val BUNDLED_REVISION = 11
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"

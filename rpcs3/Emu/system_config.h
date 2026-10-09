@@ -125,7 +125,17 @@ struct cfg_root : cfg::node
 		cfg::_float<0, 1000> second_frame_limit{ this, "Second Frame Limit", 0, true }; // 0 disables its effect
 		cfg::_enum<msaa_level> antialiasing_level{ this, "MSAA", msaa_level::_auto };
 		cfg::_enum<shader_mode> shadermode{ this, "Shader Mode", shader_mode::async_with_interpreter };
-		cfg::_enum<gpu_preset_level> shader_precision{ this, "Shader Precision", gpu_preset_level::high };
+		// Low on Android. Phone GPUs run fp16 at up to twice the fp32 rate, and Low is what lets the
+		// PS3's half-precision shader math use it. It used to also run math the RSX does at full
+		// precision in half, which overflowed (Metal Gear Solid V's flat sky); since the fragment
+		// decompiler keeps that math in fp32, Low costs nothing in correctness where it counts.
+		cfg::_enum<gpu_preset_level> shader_precision{ this, "Shader Precision",
+#ifdef __ANDROID__
+			gpu_preset_level::low
+#else
+			gpu_preset_level::high
+#endif
+		};
 		cfg::_enum<vsync_mode> vsync{ this, "VSync Mode", vsync_mode::off, true };
 
 		cfg::_bool write_color_buffers{ this, "Write Color Buffers" };
@@ -447,8 +457,18 @@ struct cfg_root : cfg::node
 		cfg::_bool prevent_display_sleep{ this, "Prevent display sleep while running games", true, true };
 		cfg::_bool show_trophy_popups{ this, "Show trophy popups", true, true };
 		cfg::_bool show_rpcn_popups{ this, "Show RPCN popups", true, true };
-		cfg::_bool show_shader_compilation_hint{ this, "Show shader compilation hint", false, true };
+		// On by default on Android: a phone compiles shaders far slower than a PC, and without the
+		// hint a first-run stutter reads as the emulator being slow.
+		cfg::_bool show_shader_compilation_hint{ this, "Show shader compilation hint",
+#ifdef __ANDROID__
+			true,
+#else
+			false,
+#endif
+			true };
 		cfg::_bool show_ppu_compilation_hint{ this, "Show PPU compilation hint", true, true };
+		// SPU code compiled on demand during play, the first time a game runs it.
+		cfg::_bool show_spu_compilation_hint{ this, "Show SPU compilation hint", true, true };
 		cfg::_bool show_autosave_autoload_hint{ this, "Show autosave/autoload hint", false, true };
 		cfg::_bool show_pressure_intensity_toggle_hint{ this, "Show pressure intensity toggle hint", true, true };
 		cfg::_bool show_analog_limiter_toggle_hint{ this, "Show analog limiter toggle hint", true, true };
