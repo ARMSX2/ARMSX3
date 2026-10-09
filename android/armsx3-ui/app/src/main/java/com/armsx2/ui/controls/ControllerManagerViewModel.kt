@@ -4,7 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import com.armsx2.input.ControllerMappings
 
-enum class ControllerSection { Buttons, Hotkeys }
+enum class ControllerSection { Buttons, Motion, Hotkeys }
 
 data class ControllerManagerUiState(
     val player: Int = 0,

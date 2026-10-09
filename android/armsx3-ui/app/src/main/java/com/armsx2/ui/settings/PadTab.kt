@@ -542,7 +542,7 @@ fun PadTab(state: MutableState<Settings>) {
         }
 
         CollapsibleSection(str("pad.section.buttonMapping"), initiallyExpanded = false) {
-            ControllerMappings.actions.forEach { action ->
+            ControllerMappings.buttonActions.forEach { action ->
                 val physical = ControllerMappings.physicalForScope(action, editPlayer.intValue, editSerial)
                 PadBindingRow(
                     action = action,
@@ -617,6 +617,32 @@ fun PadTab(state: MutableState<Settings>) {
                     "${str("action.reset")} · $who${if (editSerial != null) " · ${str("scope.game")}" else ""}",
                     color = Colors.pasx2_blue, fontSize = 16.sp, fontWeight = FontWeight.Bold,
                 )
+            }
+        }
+        // SIXAXIS motion on buttons (MotionButtons): bound the same way as the buttons above, for
+        // the same player and scope, but kept apart because they move the motion sensors instead
+        // of pressing anything. No turbo: a held motion already lasts while held.
+        CollapsibleSection(str("pad.section.motion"), initiallyExpanded = false) {
+            Text(
+                str("pad.motion.help"),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
+            )
+            ControllerMappings.motionActions.forEach { action ->
+                val physical = ControllerMappings.physicalForScope(action, editPlayer.intValue, editSerial)
+                PadBindingRow(
+                    action = action,
+                    physical = physical,
+                    capturing = capture.value == action,
+                    onClick = { capture.value = action },
+                    onClear = {
+                        ControllerMappings.clearAction(action, editPlayer.intValue, editSerial)
+                        if (capture.value == action) capture.value = null
+                        refreshToken.intValue++
+                    },
+                )
+                SettingsDivider()
             }
         }
         // Named mapping profiles (#186). Sits right under the mapping rows because it

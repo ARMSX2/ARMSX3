@@ -1178,6 +1178,8 @@ val EN: Map<String, String> = mapOf(
     "pad.padProfiles.saveNewLabel" to "Save this map as a new profile:",
     "pad.section.analogSticks" to "Analog Sticks",
     "pad.section.buttonMapping" to "Button Mapping",
+    "pad.section.motion" to "Sixaxis Button Mapping",
+    "pad.motion.help" to "Map a button, trigger or stick direction to a motion of the controller. Tilts, turns and shake last while held; a flick plays once per press. Clear that input's other mapping first.",
     "pad.section.macros" to "Macros",
     "pad.section.onScreenControls" to "On-Screen Controls",
     "pad.section.padProfiles" to "Mapping Profiles",
