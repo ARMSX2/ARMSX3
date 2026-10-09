@@ -2277,6 +2277,11 @@ open class MainActivityRuntime : ComponentActivity() {
         // ([fromController] false): they are how people add triggers to touch-only play, and
         // hiding the touch controls on every press left them nothing else to play with.
         if (fromController) com.armsx2.ui.touch.TouchControls.onControllerInputDetected()
+        // A button mapped to a motion action moves the SIXAXIS sensors; it is not a pad button.
+        if (p_keycode_in in com.armsx2.input.MotionButtons.CODES) {
+            com.armsx2.input.MotionButtons.onKey(port, p_keycode_in, p_action == KeyEventType.KeyDown)
+            return
+        }
         // D-pad as left analog stick: a physical d-pad press (arriving as a key,
         // not a HAT) drives the left stick instead of the digital d-pad. The
         // remapped code is >=110 so the analog-force branch below gives a
@@ -4243,7 +4248,11 @@ open class MainActivityRuntime : ComponentActivity() {
                     val on = mag > STICK_DIGITAL_THRESHOLD
                     val was = held.contains(target)
                     if (on != was) {
-                        NativeApp.setPadButtonForPort(port, target, if (on) 32767 else 0, on)
+                        if (target in com.armsx2.input.MotionButtons.CODES) {
+                            com.armsx2.input.MotionButtons.onKey(port, target, on)
+                        } else {
+                            NativeApp.setPadButtonForPort(port, target, if (on) 32767 else 0, on)
+                        }
                         if (on) held.add(target) else held.remove(target)
                     }
                 }
@@ -5336,6 +5345,9 @@ open class MainActivityRuntime : ComponentActivity() {
             // proportional pressure to the merge layer so it can't be released by
             // the target stick's own (resting) ANALOG writer in the same event.
             accumAnalog(target, out)
+        } else if (target in com.armsx2.input.MotionButtons.CODES) {
+            // A trigger mapped to a motion action: held past the dead zone, released below it.
+            com.armsx2.input.MotionButtons.onKey(port, target, out > 0f)
         } else {
             // coerceAtLeast(1) because range 0 is the input layer's "full press"
             // convention: the lightest real squeeze floors to 0 here, which would

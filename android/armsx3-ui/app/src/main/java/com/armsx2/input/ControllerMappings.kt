@@ -58,6 +58,19 @@ object ControllerMappings {
         Action("rs_down", "R-Stick Down (send)", 122, KeyEvent.KEYCODE_UNKNOWN),
         Action("rs_left", "R-Stick Left (send)", 123, KeyEvent.KEYCODE_UNKNOWN),
         Action("rs_right", "R-Stick Right (send)", 121, KeyEvent.KEYCODE_UNKNOWN),
+        // ---- SIXAXIS motion on a button (Dolphin-style motion mapping) ----
+        // Not buttons: MotionButtons moves the controller's motion sensors while these are held,
+        // or plays the gesture once (flicks). UNBOUND by default. Codes 300-308 never reach the
+        // core as buttons; the input paths hand them to MotionButtons.
+        Action("motion_flick_up", "Motion: Flick Up", MotionButtons.FLICK_UP, KeyEvent.KEYCODE_UNKNOWN),
+        Action("motion_flick_down", "Motion: Flick Down", MotionButtons.FLICK_DOWN, KeyEvent.KEYCODE_UNKNOWN),
+        Action("motion_shake", "Motion: Shake", MotionButtons.SHAKE, KeyEvent.KEYCODE_UNKNOWN),
+        Action("motion_tilt_left", "Motion: Tilt Left", MotionButtons.TILT_LEFT, KeyEvent.KEYCODE_UNKNOWN),
+        Action("motion_tilt_right", "Motion: Tilt Right", MotionButtons.TILT_RIGHT, KeyEvent.KEYCODE_UNKNOWN),
+        Action("motion_tilt_forward", "Motion: Tilt Forward", MotionButtons.TILT_FORWARD, KeyEvent.KEYCODE_UNKNOWN),
+        Action("motion_tilt_back", "Motion: Tilt Back", MotionButtons.TILT_BACK, KeyEvent.KEYCODE_UNKNOWN),
+        Action("motion_turn_left", "Motion: Turn Left", MotionButtons.TURN_LEFT, KeyEvent.KEYCODE_UNKNOWN),
+        Action("motion_turn_right", "Motion: Turn Right", MotionButtons.TURN_RIGHT, KeyEvent.KEYCODE_UNKNOWN),
     )
 
     // ---- Analog stick remapping (physical sticks → digital PS2 inputs) ----
