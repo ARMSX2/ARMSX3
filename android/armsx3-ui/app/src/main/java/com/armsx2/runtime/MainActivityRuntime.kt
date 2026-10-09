@@ -998,6 +998,13 @@ open class MainActivityRuntime : ComponentActivity() {
                     else -> if (limit) 0 else 3
                 }
             )
+            // The output size (Display Resolution and the screen resolution override), resolved
+            // for this game. The surface sized itself once, when it was laid out at app start with
+            // no game chosen, and nothing re-applied it at boot: a game's own Display Resolution
+            // took effect only when changed in-game, and every relaunch came back at Screen. A
+            // tester saw 14 fps at Screen and 30 at 1080p on 1.0.9, set in-game, gone on reopen.
+            // Posted: it resizes the SurfaceView, and boot runs off the main thread.
+            surface.value?.let { s -> s.post { s.applyOutputScale() } }
         }
 
         /**

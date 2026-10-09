@@ -293,7 +293,8 @@ class EmulationSurface(context: Context) :
         // still holds the previous game's (or global) values and the new game's override
         // would not apply until you opened the menu.
         val effective = runCatching {
-            com.armsx2.config.ConfigStore.resolveForGame(MainActivityRuntime.currentGame.value?.settingsKey)
+            com.armsx2.config.ConfigStore.resolveForGame(
+                com.armsx2.config.ConfigStore.effectiveKey(MainActivityRuntime.currentGame.value?.settingsKey))
         }.getOrElse { com.armsx2.ui.InGameOverlay.settingsState.value }
         val multiplier = effective.hwScaler
 
