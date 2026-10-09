@@ -1126,6 +1126,10 @@ data class Settings(
         put("PS3/Core", "Accurate SPU DMA", "bool", ps3.accurateSpuDma.toString())
         put("Savestate", "Compatible Savestate Mode", "bool", ps3.savestateCompatibleMode.toString())
         put("PS3/Core", "Clocks scale", "int", ps3.clocksScale.toString())
+        // Performance > Thread Scheduler. It only ever reached Rpcs3Bridge.setAffinityMode, ARMSX2's
+        // affinity hook, which is a stub here, so on ARMSX3 the row never did anything and the core
+        // kept its own default (Operating System, the row's default too).
+        put("PS3/Core", "Thread Scheduler Mode", "enum", affinityMode.toString())
         // From upscaleFloat, which is the control that exists.
         //
         // ps3.resolutionScale has no writer anywhere in the UI, so it sits at its default of
