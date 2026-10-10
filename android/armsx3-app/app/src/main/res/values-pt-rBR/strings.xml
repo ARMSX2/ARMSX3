@@ -1,0 +1,126 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name" translatable="false">ARMSX3</string>
+    <string name="add">Adicionar</string>
+    <string name="close">Fechar</string>
+    <string name="error">Erro</string>
+    <string name="export">Exportar</string>
+    <string name="import_">Importar</string>
+    <string name="none">Nenhum</string>
+    <string name="reset">Redefinir</string>
+    <string name="boot_game">Iniciar jogo</string>
+    <string name="install_game">Instalar jogo</string>
+    <string name="install_firmware">Instalar firmware</string>
+    <string name="run_sample">Executar exemplo</string>
+    <!-- AppNavHost -->
+    <string name="about">Sobre</string>
+    <string name="copied_to_clipboard">Copiado para a área de transferência!</string>
+    <string name="device_info">Informações do dispositivo</string>
+    <string name="driver_download_channel">Canal de download do driver de GPU</string>
+    <string name="edit_overlay">Editar controles na tela</string>
+    <string name="firmware">Firmware</string>
+    <string name="rpcsx_download_channel">Canal de download do RPCSX</string>
+    <string name="settings">Configurações</string>
+    <string name="ui_update_channel">Canal de atualização da interface Android do RPCSX</string>
+    <!-- FileUtil -->
+    <string name="installing_dir">Instalando diretório</string>
+    <!-- GamesScreen -->
+    <string name="current_and_new_version">Versão atual: %1$s\nNova versão: %2$s</string>
+    <string name="deleting_game">Excluindo jogo</string>
+    <string name="delete">Excluir</string>
+    <string name="downloading_latest_rpcsx">Baixando a versão mais recente do RPCSX</string>
+    <string name="downloading_rpcsx">Baixando RPCSX %1$s</string>
+    <string name="downloading_ui">Baixando a interface Android do RPCSX %1$s</string>
+    <string name="failed_to_delete_game_cache">Não foi possível excluir o cache do jogo</string>
+    <string name="failed_to_download_rpcsx">Não foi possível baixar o RPCSX</string>
+    <string name="game_compiling_not_finished">A compilação do jogo ainda não terminou</string>
+    <string name="game_require_key">Este jogo requer uma chave para ser executado</string>
+    <string name="install_custom_version">Instalar versão personalizada</string>
+    <string name="install_firmware_to_continue">Instale o firmware necessário para continuar.</string>
+    <string name="install_rap_file">Instalar arquivo RAP</string>
+    <string name="license_installation">Instalação de licença</string>
+    <string name="missing_firmware">Firmware ausente</string>
+    <string name="missing_key">Chave ausente</string>
+    <string name="missing_rpcsx_lib">Biblioteca RPCSX ausente</string>
+    <string name="retry">Tentar novamente</string>
+    <string name="rpcsx_update_available">Atualização do RPCSX disponível</string>
+    <string name="ui_update_available">Atualização da interface disponível</string>
+    <string name="unexpected_error">Erro inesperado</string>
+    <string name="update">Atualizar</string>
+    <string name="wait_until_firmware_install">Aguarde a conclusão da instalação do firmware para continuar.</string>
+    <string name="wait_until_game_compile">Aguarde a conclusão da compilação do jogo para continuar.</string>
+    <!-- GpuDriversScreen -->
+    <string name="choose">Escolher</string>
+    <string name="download">Baixar</string>
+    <string name="downloading">Baixando…</string>
+    <string name="drivers">Drivers</string>
+    <string name="failed_to_load_selected_driver">Não foi possível carregar o driver selecionado</string>
+    <string name="fetching">Buscando…</string>
+    <string name="install">Instalar</string>
+    <string name="installing">Instalando…</string>
+    <string name="please_wait">Aguarde</string>
+    <string name="select_driver">Selecione um driver de GPU</string>
+    <!-- MainActivity -->
+    <string name="failed_to_load_new_version">Não foi possível carregar a nova versão. A versão anterior foi restaurada.</string>
+    <string name="failed_to_update_rpcsx">Não foi possível atualizar o RPCSX</string>
+    <string name="installation_progress">Progresso da instalação</string>
+    <!-- OverlayEditActivity -->
+    <string name="ask_if_reset_button">Redefinir %1$s?</string>
+    <string name="ask_if_reset_button_description">Tem certeza de que deseja redefinir %1$s?</string>
+    <string name="control_panel">Painel de controle</string>
+    <string name="editing">Editando</string>
+    <string name="opacity">Opacidade</string>
+    <string name="scale">Escala</string>
+    <!-- PrecompilerService -->
+    <string name="firmware_installation">Instalação do firmware</string>
+    <string name="package_installation">Instalação de pacote</string>
+    <!-- RPCSXActivity -->
+    <string name="error_with_msg">Erro: %1$s</string>
+    <string name="failed_to_boot">Não foi possível iniciar</string>
+    <!-- RpcsxUpdater -->
+    <string name="restart_ui_to_apply_change">Reinicie a interface do RPCSX para aplicar a alteração</string>
+    <!-- SettingsScreen -->
+    <string name="active_user">Usuário ativo</string>
+    <string name="advanced_settings">Configurações avançadas</string>
+    <string name="advanced_settings_description">Configure as opções avançadas do emulador</string>
+    <string name="ask_if_reset_key">Deseja redefinir \"%1$s\" para o valor padrão?</string>
+    <string name="controls">Controles</string>
+    <string name="controls_description">Configure o controle</string>
+    <string name="custom_driver">Driver de GPU personalizado</string>
+    <string name="custom_driver_description">Instale drivers alternativos para possivelmente melhorar o desempenho ou a precisão</string>
+    <string name="custom_driver_not_supported">Driver personalizado não compatível</string>
+    <string name="custom_driver_not_supported_description">O carregamento de drivers personalizados não é compatível com este dispositivo no momento.</string>
+    <string name="download_channels">Canais de download</string>
+    <string name="enable_haptic_feedback">Ativar resposta tátil</string>
+    <string name="failed_to_assign_value">Não foi possível atribuir o valor %1$s a %2$s</string>
+    <string name="failed_to_reset_key">Não foi possível redefinir %1$s</string>
+    <string name="failed_to_view_internal_dir">Não foi possível abrir o diretório interno</string>
+    <string name="gamepad_overlay">Controles na tela</string>
+    <string name="install_custom_rpcsx_lib">Instalar biblioteca RPCSX personalizada</string>
+    <string name="key_mappings">Mapeamento de teclas</string>
+    <string name="log_not_found">Arquivo de log não encontrado!</string>
+    <string name="manage_settings">Gerenciar configurações</string>
+    <string name="no_activity_to_handle_action">Nenhum aplicativo foi encontrado para realizar esta ação</string>
+    <string name="perform_input">Pressione uma entrada</string>
+    <string name="reset_setting">Redefinir configuração</string>
+    <string name="search">Pesquisar</string>
+    <string name="share_log">Compartilhar log</string>
+    <string name="share_log_description">Compartilhe o arquivo de log do RPCSX para ajudar a investigar problemas</string>
+    <string name="users">Usuários</string>
+    <string name="view_internal_dir">Abrir diretório interno</string>
+    <string name="view_internal_dir_description">Abra o diretório interno do RPCSX no gerenciador de arquivos</string>
+    <!-- SliderPreference -->
+    <string name="slider_value_supporting">O valor deve ser um múltiplo do intervalo %1$d entre %2$.0f e %3$.0f</string>
+    <string name="value">Valor</string>
+    <!-- UiUpdater -->
+    <string name="failed_to_update_ui">Não foi possível atualizar a interface</string>
+    <string name="permission_required">Permissão necessária</string>
+    <string name="permission_required_description">Permita a instalação por esta fonte para realizar a atualização.</string>
+    <!-- UpdateChannelListScreen -->
+    <string name="enter_repo_url">Insira a URL do repositório</string>
+    <string name="select_repo">Selecionar repositório</string>
+    <!-- UsersScreen -->
+    <string name="ask_if_stop_emu">Parar o emulador?</string>
+    <string name="ask_if_stop_emu_description">Para trocar de usuário, primeiro é necessário parar o emulador.\n\nDeseja parar o emulador agora?</string>
+    <string name="home_menu">Menu inicial</string>
+</resources>

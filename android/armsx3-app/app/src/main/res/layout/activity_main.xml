@@ -23,25 +23,25 @@
             android:id="@+id/boot_game"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Boot Game" />
+            android:text="@string/boot_game" />
 
         <Button
             android:id="@+id/install_game"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Install Game" />
+            android:text="@string/install_game" />
 
         <Button
             android:id="@+id/install_fw"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Install FW" />
+            android:text="@string/install_firmware" />
 
         <Button
             android:id="@+id/run_sample"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Run Sample" />
+            android:text="@string/run_sample" />
 
     </LinearLayout>
 

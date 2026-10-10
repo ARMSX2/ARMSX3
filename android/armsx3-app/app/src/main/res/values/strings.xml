@@ -9,6 +9,10 @@
     <string name="import_">Import</string>
     <string name="none">None</string>
     <string name="reset">Reset</string>
+    <string name="boot_game">Boot Game</string>
+    <string name="install_game">Install Game</string>
+    <string name="install_firmware">Install Firmware</string>
+    <string name="run_sample">Run Sample</string>
 
     <!-- AppNavHost -->
     <string name="about">About</string>
