@@ -2218,7 +2218,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		frame_dump_finish();
 	}
 
-	m_frame_stats.flip_time = m_profiler.duration();
+	m_ctx->stats.flip_time = m_profiler.duration();
 
 	m_frame->flip(m_context);
 	rsx::thread::flip(info);
