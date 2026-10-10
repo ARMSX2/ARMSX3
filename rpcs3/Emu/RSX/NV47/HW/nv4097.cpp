@@ -8,9 +8,7 @@
 #include "Emu/RSX/rsx_profiler.h"
 #include "Emu/system_config.h"
 
-#define RSX(ctx) ctx->rsxthr
-#define REGS(ctx) (&rsx::method_registers)
-#define RSX_CAPTURE_EVENT(name) if (RSX(ctx)->capture_current_frame) { RSX(ctx)->capture_frame(name); }
+#include "context_accessors.define.h"
 
 namespace rsx
 {
@@ -467,7 +465,7 @@ namespace rsx
 				RSX(ctx)->GRAPH_frontend().append_array_element(arg);
 		}
 
-		void draw_arrays(context* /*rsx*/, u32 /*reg*/, u32 arg)
+		void draw_arrays(context* ctx, u32 /*reg*/, u32 arg)
 		{
 			REGS(ctx)->current_draw_clause.command = rsx::draw_command::array;
 			rsx::registers_decoder<NV4097_DRAW_ARRAYS>::decoded_type v(arg);
@@ -475,7 +473,7 @@ namespace rsx
 			REGS(ctx)->current_draw_clause.append(v.start(), v.count());
 		}
 
-		void draw_index_array(context* /*rsx*/, u32 /*reg*/, u32 arg)
+		void draw_index_array(context* ctx, u32 /*reg*/, u32 arg)
 		{
 			REGS(ctx)->current_draw_clause.command = rsx::draw_command::indexed;
 			rsx::registers_decoder<NV4097_DRAW_INDEX_ARRAY>::decoded_type v(arg);
@@ -483,7 +481,7 @@ namespace rsx
 			REGS(ctx)->current_draw_clause.append(v.start(), v.count());
 		}
 
-		void draw_inline_array(context* /*rsx*/, u32 /*reg*/, u32 arg)
+		void draw_inline_array(context* ctx, u32 /*reg*/, u32 arg)
 		{
 			arg = std::bit_cast<u32, be_t<u32>>(arg);
 			REGS(ctx)->current_draw_clause.command = rsx::draw_command::inlined_array;

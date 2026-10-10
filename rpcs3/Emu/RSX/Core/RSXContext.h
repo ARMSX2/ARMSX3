@@ -4,6 +4,7 @@
 #include "Emu/Cell/lv2/sys_rsx.h"
 #include "Emu/RSX/GCM.h"
 #include "Emu/RSX/Utils/rsx_utils.h"
+#include <memory>
 #include "Emu/RSX/NV47/FW/context.h"
 #include "Emu/RSX/NV47/HW/context.h"
 
@@ -29,5 +30,6 @@ namespace rsx
 
 	private:
 		u32 m_id = 0;
+		std::unique_ptr<rsx_state> m_owned_register_state;
 	};
 }
