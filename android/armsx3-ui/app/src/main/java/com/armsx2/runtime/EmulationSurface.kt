@@ -298,7 +298,10 @@ class EmulationSurface(context: Context) :
     }
 
     fun applyOutputScale() {
-        if (viewWidth <= 0 || viewHeight <= 0) return
+        if (viewWidth <= 0 || viewHeight <= 0) {
+            android.util.Log.i("ARMSX3-Scaler", "applyOutputScale: skipped, view not laid out (${viewWidth}x$viewHeight)")
+            return
+        }
         // Scoped, not a raw pref: both of these are per-game overridable, so resolve the
         // effective Settings for whatever is running. Reading prefs here would ignore a
         // per-game value (and writing them there was the bug that made a Game-scope
@@ -308,9 +311,14 @@ class EmulationSurface(context: Context) :
         // that state is only populated when the overlay OPENS, so at game-boot layout it
         // still holds the previous game's (or global) values and the new game's override
         // would not apply until you opened the menu.
+        //
+        // The plain settingsKey, NOT ConfigStore.effectiveKey() of it. resolveForGame already
+        // follows the serial alias once (keyForGame), which is exactly how the settings were
+        // saved; following it again here walked one hop past them. Sonic '06 had "hwScaler":720
+        // saved and logged at launch, and this read hwScaler=0 for the same game, so a per-game
+        // Display Resolution never reached the screen.
         val effective = runCatching {
-            com.armsx2.config.ConfigStore.resolveForGame(
-                com.armsx2.config.ConfigStore.effectiveKey(MainActivityRuntime.currentGame.value?.settingsKey))
+            com.armsx2.config.ConfigStore.resolveForGame(MainActivityRuntime.currentGame.value?.settingsKey)
         }.getOrElse { com.armsx2.ui.InGameOverlay.settingsState.value }
         val multiplier = effective.hwScaler
 
@@ -327,6 +335,17 @@ class EmulationSurface(context: Context) :
         val shortSide = minOf(baseW, baseH)
         val targetShortSide = if (multiplier > 0) multiplier else shortSide
         val scale = if (targetShortSide in 1 until shortSide) targetShortSide.toFloat() / shortSide else 1f
+
+        // Said once per call, so a Display Resolution that never reaches the screen can be told
+        // apart from one that was never asked for: which game's settings were read, what they
+        // said, and what the surface was told. 720p on a 1920x1080 panel should end "fixed 1280x720".
+        android.util.Log.i(
+            "ARMSX3-Scaler",
+            "applyOutputScale: game=${MainActivityRuntime.currentGame.value?.settingsKey} hwScaler=$multiplier " +
+                "override=${effective.screenResOverride} view=${viewWidth}x$viewHeight -> " +
+                if (override == null && scale == 1f) "from layout" else
+                    "fixed ${(baseW * scale).toInt()}x${(baseH * scale).toInt()}",
+        )
 
         // With no override and no downscale, let the surface track the layout (native panel size) —
         // the original behavior. Otherwise pin an explicit buffer size and let the compositor scale.

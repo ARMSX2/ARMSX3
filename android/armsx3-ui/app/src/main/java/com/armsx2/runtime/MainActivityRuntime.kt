@@ -749,9 +749,11 @@ open class MainActivityRuntime : ComponentActivity() {
                     // Both of these are consumed by native when the VM boots, so they must be
                     // pushed BEFORE runVMThread (which blocks until the VM exits). One resolve,
                     // per-game ∘ global.
+                    // The plain key: resolveForGame follows the serial alias itself, the way the
+                    // settings were saved. Passing effectiveKey() here followed it twice, the same
+                    // walk past the saved settings that kept a per-game Display Resolution off.
                     val bootCfg = com.armsx2.config.ConfigStore
-                        .resolveForGame(
-                            com.armsx2.config.ConfigStore.effectiveKey(currentGame.value?.settingsKey))
+                        .resolveForGame(currentGame.value?.settingsKey)
                     // Read by VMManager::SetEmuThreadAffinities during boot.
                     runCatching { NativeApp.setAffinityMode(bootCfg.affinityMode) }
                     // The hold itself waits for the VM to come up. BIOS boots skip it.
@@ -880,8 +882,12 @@ open class MainActivityRuntime : ComponentActivity() {
             // Resolve via settingsKey (serial for discs, filename stem for
             // serial-less ELF/homebrew) so ELF per-game settings survive a reboot
             // instead of falling back to global (issue #253).
-            var resolved = com.armsx2.config.ConfigStore.resolveForGame(
-                com.armsx2.config.ConfigStore.effectiveKey(currentGame.value?.settingsKey))
+            //
+            // The plain key, as the launch path uses: resolveForGame follows the serial alias
+            // once itself (keyForGame), which is how settings are saved. An effectiveKey() here
+            // made it two hops, and for a title whose alias chains on, the renderer read another
+            // key's settings: Sonic '06 resolved hwScaler 0 with 720 saved for it.
+            var resolved = com.armsx2.config.ConfigStore.resolveForGame(currentGame.value?.settingsKey)
             // Build immutable input maps before the VM starts so the first ABXY
             // edge never pays SharedPreferences parsing on the UI thread.
             ControllerMappings.warmRuntimeCaches()
@@ -1004,6 +1010,10 @@ open class MainActivityRuntime : ComponentActivity() {
             // took effect only when changed in-game, and every relaunch came back at Screen. A
             // tester saw 14 fps at Screen and 30 at 1080p on 1.0.9, set in-game, gone on reopen.
             // Posted: it resizes the SurfaceView, and boot runs off the main thread.
+            android.util.Log.i(
+                "ARMSX3-Scaler",
+                "boot: re-applying output scale for ${currentGame.value?.settingsKey}, surface ${if (surface.value == null) "MISSING" else "present"}",
+            )
             surface.value?.let { s -> s.post { s.applyOutputScale() } }
         }
 
