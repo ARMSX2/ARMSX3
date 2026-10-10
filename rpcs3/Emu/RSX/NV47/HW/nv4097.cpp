@@ -18,7 +18,7 @@ namespace rsx
 
 		void set_shader_program_dirty(context* ctx, u32, u32)
 		{
-			RSX(ctx)->m_graphics_state |= rsx::pipeline_state::fragment_program_ucode_dirty;
+			ctx->graphics_state |= rsx::pipeline_state::fragment_program_ucode_dirty;
 		}
 
 		set_transform_constant::write_range set_transform_constant::compute_write_range(context* ctx, u32 reg, u32 count)
@@ -80,7 +80,7 @@ namespace rsx
 		{
 			const auto dst = get_constants_ptr(ctx, first_word);
 
-			if (RSX(ctx)->m_graphics_state & rsx::pipeline_state::transform_constants_dirty)
+			if (ctx->graphics_state & rsx::pipeline_state::transform_constants_dirty)
 			{
 				// Minor optimization: don't compare values if we already know we need invalidation
 				copy_data_swap_u32(dst, src, count);
@@ -90,7 +90,7 @@ namespace rsx
 			if (copy_data_swap_u32_cmp(dst, src, count))
 			{
 				// Transform constants invalidation is expensive (~8k bytes per update)
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::transform_constants_dirty;
+				ctx->graphics_state |= rsx::pipeline_state::transform_constants_dirty;
 			}
 		}
 
@@ -147,7 +147,7 @@ namespace rsx
 				return;
 			}
 
-			if (RSX(ctx)->in_begin_end && !REGS(ctx)->current_draw_clause.empty())
+			if (ctx->in_begin_end && !REGS(ctx)->current_draw_clause.empty())
 			{
 				// Updating constants mid-draw is messy. Defer the writes
 				REGS(ctx)->current_draw_clause.insert_command_barrier(
@@ -241,7 +241,7 @@ namespace rsx
 
 			pipeline_state to_set_dirty = rsx::pipeline_state::vertex_program_ucode_dirty;
 
-			if (rcount >= 4 && !RSX(ctx)->m_graphics_state.test(rsx::pipeline_state::vertex_program_ucode_dirty))
+			if (rcount >= 4 && !ctx->graphics_state.test(rsx::pipeline_state::vertex_program_ucode_dirty))
 			{
 				// Assume clean
 				to_set_dirty = {};
@@ -284,7 +284,7 @@ namespace rsx
 			// the ROP remap merge, alongside the rotl above.
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_xform_program_words += rcount;
 
-			RSX(ctx)->m_graphics_state |= to_set_dirty;
+			ctx->graphics_state |= to_set_dirty;
 			REGS(ctx)->transform_program_load_set(load_pos + ((rcount + index % 4) / 4));
 
 			// If the FIFO span came up short, the remaining in-range args are dispatched again. Otherwise consume everything, including the trimmed tail.
@@ -305,18 +305,18 @@ namespace rsx
 			switch (reg)
 			{
 			case NV4097_SET_SURFACE_COLOR_TARGET:
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::pipeline_config_dirty;
+				ctx->graphics_state |= rsx::pipeline_state::pipeline_config_dirty;
 				break;
 			case NV4097_SET_SURFACE_CLIP_VERTICAL:
 			case NV4097_SET_SURFACE_CLIP_HORIZONTAL:
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::vertex_state_dirty;
+				ctx->graphics_state |= rsx::pipeline_state::vertex_state_dirty;
 				break;
 			default:
 				break;
 			}
 
-			RSX(ctx)->m_graphics_state.set(rtt_config_dirty);
-			RSX(ctx)->m_graphics_state.clear(rtt_config_contested);
+			ctx->graphics_state.set(rtt_config_dirty);
+			ctx->graphics_state.clear(rtt_config_contested);
 		}
 
 		void set_zmin_max_control(context* ctx, u32 /*reg*/, u32 arg)
@@ -326,12 +326,12 @@ namespace rsx
 				return;
 			}
 
-			RSX(ctx)->m_graphics_state |= rsx::pipeline_state::pipeline_config_dirty;
+			ctx->graphics_state |= rsx::pipeline_state::pipeline_config_dirty;
 
 			// Depth clip and clamp are read by the fragment epilogue when the depth range is emulated
 			if (!RSX(ctx)->get_backend_config().supports_extended_depth_range && g_cfg.video.emulate_extended_depth_range)
 			{
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::fragment_state_dirty;
+				ctx->graphics_state |= rsx::pipeline_state::fragment_state_dirty;
 			}
 		}
 
@@ -344,7 +344,7 @@ namespace rsx
 			}
 
 			// The important parameters have changed (format, type, antialias)
-			RSX(ctx)->m_graphics_state |= rsx::pipeline_state::pipeline_config_dirty;
+			ctx->graphics_state |= rsx::pipeline_state::pipeline_config_dirty;
 
 			// Check if we need to also update fragment state
 			const auto current = REGS(ctx)->decode<NV4097_SET_SURFACE_FORMAT>(arg);
@@ -353,25 +353,25 @@ namespace rsx
 			// Check for different ROP emulation
 			if (current.is_integer_color_format() != previous.is_integer_color_format())
 			{
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::fragment_program_state_dirty;
+				ctx->graphics_state |= rsx::pipeline_state::fragment_program_state_dirty;
 			}
 
 			// If swizzle remap changed, we have to flag both the shader and the ROP parameters
 			if (current.is_remapped_format() != previous.is_remapped_format())
 			{
-				RSX(ctx)->m_graphics_state |=
+				ctx->graphics_state |=
 					rsx::pipeline_state::fragment_program_state_dirty |
 					rsx::pipeline_state::fragment_state_dirty;
 			}
 			// If we're still remapping outputs but the format changed, reload ROP params
 			else if ((current.is_remapped_format() && *current.color_fmt() != *previous.color_fmt()))
 			{
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::fragment_state_dirty;
+				ctx->graphics_state |= rsx::pipeline_state::fragment_state_dirty;
 			}
 			// If antialias control has changed, also update ROP parameters
 			else if (*current.antialias() != *previous.antialias())
 			{
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::fragment_state_dirty;
+				ctx->graphics_state |= rsx::pipeline_state::fragment_state_dirty;
 			}
 
 			set_surface_dirty_bit(ctx, reg, arg);
@@ -382,7 +382,7 @@ namespace rsx
 			if (arg != REGS(ctx)->latch)
 			{
 				RSX(ctx)->on_framebuffer_options_changed(reg);
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_config_dirty;
+				ctx->graphics_state |= rsx::pipeline_config_dirty;
 			}
 		}
 
@@ -429,7 +429,7 @@ namespace rsx
 			}
 
 			// Reconfigure pipeline.
-			RSX(ctx)->m_graphics_state |= rsx::pipeline_config_dirty;
+			ctx->graphics_state |= rsx::pipeline_config_dirty;
 
 			// If we support A2C in hardware, leave the rest upto the hardware. The pipeline config should take care of it.
 			const auto& backend_config = RSX(ctx)->get_backend_config();
@@ -444,7 +444,7 @@ namespace rsx
 			const auto a2c_new = REGS(ctx)->decode<NV4097_SET_ANTI_ALIASING_CONTROL>(arg).msaa_alpha_to_coverage();
 			if (a2c_old != a2c_new)
 			{
-				RSX(ctx)->m_graphics_state |= rsx::fragment_program_state_dirty;
+				ctx->graphics_state |= rsx::fragment_program_state_dirty;
 			}
 		}
 
@@ -452,7 +452,7 @@ namespace rsx
 
 		void set_array_element16(context* ctx, u32, u32 arg)
 		{
-			if (RSX(ctx)->in_begin_end)
+			if (ctx->in_begin_end)
 			{
 				RSX(ctx)->GRAPH_frontend().append_array_element(arg & 0xFFFF);
 				RSX(ctx)->GRAPH_frontend().append_array_element(arg >> 16);
@@ -461,7 +461,7 @@ namespace rsx
 
 		void set_array_element32(context* ctx, u32, u32 arg)
 		{
-			if (RSX(ctx)->in_begin_end)
+			if (ctx->in_begin_end)
 				RSX(ctx)->GRAPH_frontend().append_array_element(arg);
 		}
 
@@ -492,7 +492,7 @@ namespace rsx
 		{
 			if (REGS(ctx)->registers[reg] != REGS(ctx)->latch)
 			{
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::vertex_program_ucode_dirty;
+				ctx->graphics_state |= rsx::pipeline_state::vertex_program_ucode_dirty;
 			}
 		}
 
@@ -500,7 +500,7 @@ namespace rsx
 		{
 			if (REGS(ctx)->registers[reg] != REGS(ctx)->latch)
 			{
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_state::vertex_program_state_dirty;
+				ctx->graphics_state |= rsx::pipeline_state::vertex_program_state_dirty;
 			}
 		}
 
@@ -537,7 +537,7 @@ namespace rsx
 				const auto primitive_type = to_primitive_type(prim);
 				if (!primitive_type)
 				{
-					RSX(ctx)->in_begin_end = true;
+					ctx->in_begin_end = true;
 
 					rsx_log.warning("Invalid NV4097_SET_BEGIN_END value: 0x%x", arg);
 					return;
@@ -587,14 +587,14 @@ namespace rsx
 				// Notify the backend if the drawing style changes (instanced vs non-instanced)
 				if (REGS(ctx)->current_draw_clause.is_trivial_instanced_draw != RSX(ctx)->is_current_vertex_program_instanced())
 				{
-					RSX(ctx)->m_graphics_state |= rsx::pipeline_state::xform_instancing_state_dirty;
+					ctx->graphics_state |= rsx::pipeline_state::xform_instancing_state_dirty;
 				}
 
 				RSX(ctx)->end();
 			}
 			else
 			{
-				RSX(ctx)->in_begin_end = false;
+				ctx->in_begin_end = false;
 			}
 
 			if (RSX(ctx)->pause_on_draw && RSX(ctx)->pause_on_draw.exchange(false))
@@ -637,7 +637,7 @@ namespace rsx
 
 			if (valid) [[ likely ]]
 			{
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_config_dirty;
+				ctx->graphics_state |= rsx::pipeline_config_dirty;
 			}
 			else
 			{
@@ -655,7 +655,7 @@ namespace rsx
 			if (to_blend_equation(arg & 0xFFFF) &&
 				to_blend_equation((arg >> 16) & 0xFFFF)) [[ likely ]]
 			{
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_config_dirty;
+				ctx->graphics_state |= rsx::pipeline_config_dirty;
 				return;
 			}
 
@@ -673,7 +673,7 @@ namespace rsx
 			if (to_blend_factor(arg & 0xFFFF) &&
 				to_blend_factor((arg >> 16) & 0xFFFF)) [[ likely ]]
 			{
-				RSX(ctx)->m_graphics_state |= rsx::pipeline_config_dirty;
+				ctx->graphics_state |= rsx::pipeline_config_dirty;
 				return;
 			}
 
@@ -781,7 +781,7 @@ namespace rsx
 
 			if (to_shading_mode(arg))
 			{
-				RSX(ctx)->m_graphics_state |= rsx::vertex_program_state_dirty | rsx::fragment_program_state_dirty;
+				ctx->graphics_state |= rsx::vertex_program_state_dirty | rsx::fragment_program_state_dirty;
 				return;
 			}
 

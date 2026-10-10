@@ -5,8 +5,10 @@
 #include "Emu/RSX/GCM.h"
 #include "Emu/RSX/Utils/rsx_utils.h"
 #include <memory>
+#include "Emu/RSX/Common/bitfield.hpp"
 #include "Emu/RSX/NV47/FW/context.h"
 #include "Emu/RSX/NV47/HW/context.h"
+#include "RSXDriverState.h"
 
 namespace rsx
 {
@@ -18,6 +20,11 @@ namespace rsx
 	{
 		thread* rsxthr = nullptr;
 		rsx_state* register_state = nullptr;
+
+		// Pipeline state
+		bitmask_t<pipeline_state> graphics_state;
+		atomic_bitmask_t<eng_interrupt_reason> eng_interrupt_mask;
+		bool in_begin_end = false;
 
 		context(u32 id, thread* owner);
 		~context();
