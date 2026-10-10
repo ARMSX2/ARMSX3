@@ -52,6 +52,7 @@ namespace vk
 	{
 		const bool nullable = !!(flags & VK_BUFFER_CREATE_ALLOW_NULL_RPCS3);
 		const bool no_vmem_recovery = !!(flags & VK_BUFFER_CREATE_IGNORE_VMEM_PRESSURE_RPCS3);
+		const bool dedicated = !!(flags & VK_BUFFER_CREATE_DEDICATED_MEMORY_RPCS3);
 
 		info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		info.flags = flags & ~VK_BUFFER_CREATE_SPECIAL_FLAGS_RPCS3;
@@ -78,7 +79,8 @@ namespace vk
 			.memory_type = &allocation_type_info,
 			.pool = allocation_pool,
 			.throw_on_fail = !nullable,
-			.recover_vmem_on_fail = !no_vmem_recovery
+			.recover_vmem_on_fail = !no_vmem_recovery,
+			.dedicated = dedicated
 		};
 		memory = std::make_unique<memory_block>(m_device, request);
 

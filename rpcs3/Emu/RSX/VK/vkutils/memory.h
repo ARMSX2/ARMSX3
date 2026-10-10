@@ -74,6 +74,10 @@ namespace vk
 		vmm_allocation_pool pool = VMM_ALLOCATION_POOL_UNDEFINED;
 		bool throw_on_fail = true;
 		bool recover_vmem_on_fail = true;
+
+		// A VkDeviceMemory of its own instead of a range inside a shared block, so freeing it
+		// returns the memory to the heap at once rather than leaving a hole the block keeps.
+		bool dedicated = false;
 	};
 
 	class mem_allocator_base

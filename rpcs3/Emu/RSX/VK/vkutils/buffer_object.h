@@ -11,8 +11,9 @@ namespace vk
 	{
 		VK_BUFFER_CREATE_ALLOW_NULL_RPCS3           = 0x10000000,   // If we cannot allocate memory for the buffer, just return an empty but valid object with a null handle.
 		VK_BUFFER_CREATE_IGNORE_VMEM_PRESSURE_RPCS3 = 0x20000000,   // If we cannot allocate memory for the buffer, do not run recovery routine to recover VRAM. Crash or return empty handle immediately instead.
+		VK_BUFFER_CREATE_DEDICATED_MEMORY_RPCS3     = 0x40000000,   // Give the buffer device memory of its own instead of a range in a shared block. Freeing it returns all of it.
 
-		VK_BUFFER_CREATE_SPECIAL_FLAGS_RPCS3 = (VK_BUFFER_CREATE_ALLOW_NULL_RPCS3 | VK_BUFFER_CREATE_IGNORE_VMEM_PRESSURE_RPCS3)
+		VK_BUFFER_CREATE_SPECIAL_FLAGS_RPCS3 = (VK_BUFFER_CREATE_ALLOW_NULL_RPCS3 | VK_BUFFER_CREATE_IGNORE_VMEM_PRESSURE_RPCS3 | VK_BUFFER_CREATE_DEDICATED_MEMORY_RPCS3)
 	};
 
 	struct buffer_view : public unique_resource

@@ -297,6 +297,15 @@ namespace vk
 				create_info.memoryTypeBits = 1u << memory_type_index;
 				create_info.flags = m_allocation_flags;
 
+				if (request.dedicated)
+				{
+					// VMA already does this unasked for anything over half a block (128M of a
+					// 256M block); this extends it to the requests the caller knows are better
+					// off alone. The allocator without VMA needs nothing: every allocation it
+					// makes is already its own VkDeviceMemory.
+					create_info.flags |= VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT;
+				}
+
 				error_code = vmaAllocateMemory(m_allocator, &mem_req, &create_info, &vma_alloc, nullptr);
 				if (error_code == VK_SUCCESS)
 				{

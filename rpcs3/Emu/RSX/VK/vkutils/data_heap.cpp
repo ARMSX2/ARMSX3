@@ -264,6 +264,28 @@ namespace vk
 		// Update heap information and reset the allocator
 		rsx::data_heap::init(aligned_new_size, m_name, m_min_guard_size);
 
+		// A grown heap gets device memory of its own instead of a range inside VMA's shared blocks.
+		//
+		// The cap (vram_allocation_limit, applied as VMA's pHeapSizeLimit) is charged for whole
+		// blocks, and a block is only handed back once nothing at all is left in it. A grown heap
+		// that shares one does two kinds of damage. Going in, a heap with no free range big enough
+		// opens a whole new 256M block: LEGO Harry Potter's attrib ring took 128M and VMA's blocks
+		// went 1120M -> 1376M for it. Going out, the old heap leaves its range behind: once that
+		// burst (64M -> 256M in 110ms) had retired, the blocks fell back only by the 192M heap that
+		// had memory of its own, 1824M to 1632M, with ~600M of the 2048M cap now reserved for
+		// nothing. In the session that froze, the texture upload ring made the same climb and its
+		// 256M allocation was refused even after the last-ditch eviction had freed the old heaps
+		// (its pool total was back to 437M). A freed range inside a block VMA keeps does not give
+		// the cap back.
+		//
+		// With memory of its own a heap costs exactly its size, and disposing of it returns all of
+		// it. VMA already does this unasked above half a block (192M and 256M heaps were dedicated
+		// all along), so this only extends it to the 64M and 128M steps. Only heaps that GROW take
+		// it: a game whose rings never grow allocates exactly as it did before, and growth is rare
+		// enough (7 grows in a 7 minute LEGO session) that a few more VkDeviceMemory objects are
+		// nothing next to the driver's limit.
+		constexpr VkFlags grown_heap_flags = VK_BUFFER_CREATE_DEDICATED_MEMORY_RPCS3;
+
 		// Discard old heap and create a new one. Old heap will be garbage collected when no longer needed
 		auto gc = get_resource_manager();
 		if (shadow)
@@ -272,7 +294,7 @@ namespace vk
 			rsx_log.warning("Buffer usage %u is not heap-compatible using this driver, explicit staging buffer in use", usage);
 
 			gc->dispose(shadow);
-			shadow = std::make_unique<buffer>(*g_render_device, aligned_new_size, memory_index, memory_flags, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 0, VMM_ALLOCATION_POOL_SYSTEM);
+			shadow = std::make_unique<buffer>(*g_render_device, aligned_new_size, memory_index, memory_flags, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, grown_heap_flags, VMM_ALLOCATION_POOL_SYSTEM);
 			usage |= VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 			memory_flags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 			memory_index = memory_map.device_local;
@@ -280,7 +302,7 @@ namespace vk
 
 		gc->dispose(heap);
 
-		VkFlags create_flags = 0;
+		VkFlags create_flags = grown_heap_flags;
 		if (m_prefer_writethrough)
 		{
 			create_flags |= (VK_BUFFER_CREATE_ALLOW_NULL_RPCS3 | VK_BUFFER_CREATE_IGNORE_VMEM_PRESSURE_RPCS3);
@@ -296,7 +318,7 @@ namespace vk
 			// We failed to place the buffer in rebar memory. Try again in host-visible.
 			m_prefer_writethrough = false;
 			gc->dispose(heap);
-			heap = std::make_unique<buffer>(*g_render_device, aligned_new_size, memory_map.host_visible_coherent, memory_flags, usage, 0, VMM_ALLOCATION_POOL_SYSTEM);
+			heap = std::make_unique<buffer>(*g_render_device, aligned_new_size, memory_map.host_visible_coherent, memory_flags, usage, grown_heap_flags, VMM_ALLOCATION_POOL_SYSTEM);
 		}
 
 		if (notify_on_grow)
