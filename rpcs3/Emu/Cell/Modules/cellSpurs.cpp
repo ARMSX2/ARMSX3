@@ -2725,6 +2725,14 @@ s32 cellSpursRemoveWorkload(ppu_thread& ppu, vm::ptr<CellSpurs> spurs, u32 wid)
 	}
 
 	s32 rc;
+
+	// Every other reservation_op in this file sets the flag first, and vm::writer_lock (taken
+	// inside) treats its absence as fatal: "vm::writer_lock is being used without
+	// cpu_flag::wait set by the caller". This call was the one left out. It surfaced on arm64
+	// once the far-jump stub that routes the LLE export here was fixed: NBA 08 runs with
+	// Accurate SPU Reservations off, which forces this function to HLE, and died here on boot.
+	ppu.state += cpu_flag::wait;
+
 	vm::reservation_op(ppu, vm::unsafe_ptr_cast<spurs_wkl_state_op>(spurs.ptr(&CellSpurs::wklState1)), [&](spurs_wkl_state_op& op)
 	{
 		auto& state = wid < CELL_SPURS_MAX_WORKLOAD ? op.wklState1[wid] : op.wklState2[wid % 16];
