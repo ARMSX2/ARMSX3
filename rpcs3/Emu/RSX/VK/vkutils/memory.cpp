@@ -196,6 +196,7 @@ namespace vk
 				heap_limits.push_back(max_sz);
 			}
 			allocatorInfo.pHeapSizeLimit = heap_limits.data();
+			m_heap_capped = true;
 		}
 
 		// Ask the driver what it will actually give us, instead of assuming the heap
@@ -397,6 +398,14 @@ namespace vk
 			vmm_get_application_pool_usage(request.pool) / 0x100000,
 			static_cast<u64>(g_cfg.video.vk.vram_allocation_limit));
 
+		// And who holds the rest. The pool total above covers only the failing request's own pool,
+		// which in LEGO Harry Potter was 437M of a 2048M cap when a 256M ring heap was refused,
+		// and nothing said whether the cap or the driver refused it, or what held the remainder.
+		// This names what VMA had in blocks against the cap (the figure it actually refuses on),
+		// what every pool held, and how far the GPU was behind, since memory handed to the garbage
+		// collector stays allocated until the next submission retires.
+		rsx_log.error("Video memory at the failure: %s", vmm_describe_memory_usage());
+
 		die_with_error(error_code);
 		fmt::throw_exception("Unreachable! Error_code=0x%x", static_cast<u32>(error_code));
 	}
@@ -466,6 +475,40 @@ namespace vk
 		}
 
 		return max_usage;
+	}
+
+	std::string mem_allocator_vma::describe_heap_usage()
+	{
+		// A local copy: get_memory_usage() keeps its own in 'stats', and a report should not
+		// write over it.
+		std::array<VmaBudget, VK_MAX_MEMORY_HEAPS> budgets{};
+		vmaGetHeapBudgets(m_allocator, budgets.data());
+
+		// VMA's own copy of the properties, where a capped heap's size IS the cap it enforces.
+		const VkPhysicalDeviceMemoryProperties* props = nullptr;
+		vmaGetMemoryProperties(m_allocator, &props);
+
+		// VMA refuses on blockBytes (whole VkDeviceMemory blocks), checked before the driver is
+		// even asked, so that is the number to hold against the cap. allocationBytes is the part
+		// of those blocks actually handed out; the gap is space VMA holds but nothing uses.
+		std::string result;
+		for (u32 i = 0; i < props->memoryHeapCount; ++i)
+		{
+			if (!(props->memoryHeaps[i].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT))
+			{
+				continue;
+			}
+
+			const auto& heap = budgets[i];
+			fmt::append(result, "%sheap %u: %lluM in %u blocks of a %lluM %s (%lluM in %u allocations), driver reports %lluM used of a %lluM budget",
+				result.empty() ? "" : ", ", i,
+				heap.statistics.blockBytes / 0x100000, heap.statistics.blockCount,
+				props->memoryHeaps[i].size / 0x100000, m_heap_capped ? "cap" : "heap",
+				heap.statistics.allocationBytes / 0x100000, heap.statistics.allocationCount,
+				heap.usage / 0x100000, heap.budget / 0x100000);
+		}
+
+		return result;
 	}
 
 	void mem_allocator_vma::set_safest_allocation_flags()

@@ -197,6 +197,13 @@ namespace vk
 			m_name, static_cast<u32>(m_size / 0x100000),
 			static_cast<u32>(aligned_new_size / 0x100000), static_cast<u32>(size / 1024));
 
+		// What video memory looked like going in. The old heap is disposed below and stays
+		// allocated until the next submission retires, so a burst of grows can hold every old
+		// heap at once: LEGO Harry Potter took its texture upload ring 64M->128M->192M->256M in
+		// 164ms and the 256M allocation was refused. Logged per grow, the event numbers here
+		// against the ones at a failure say which old heaps were still held.
+		rsx_log.notice("[%s] Video memory before growing: %s", m_name, vk::vmm_describe_memory_usage());
+
 		// Wait for DMA activity to end
 		g_fxo->get<rsx::dma_manager>().sync();
 
