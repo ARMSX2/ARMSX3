@@ -11,6 +11,7 @@
 #include "RSXDriverState.h"
 #include "RSXFrameBuffer.h"
 #include "RSXProgramState.h"
+#include "RSXTextureState.h"
 
 namespace rsx
 {
@@ -30,6 +31,7 @@ namespace rsx
 
 		framebuffer_state fb;
 		program_state program;
+		texture_state textures;
 
 		context(u32 id, thread* owner);
 		~context();
