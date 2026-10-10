@@ -88,8 +88,24 @@ class EmulationSurface(context: Context) :
             val current = holder.surface
 
             if (current != null && current.isValid && width > 0 && height > 0) {
-                pushDisplayCutoutInset(width, height)
-                NativeApp.onNativeSurfaceChanged(current, width, height)
+                // The SURFACE's size, the same one surfaceChanged reports, not the view's.
+                //
+                // The two differ whenever Display Resolution or a resolution override pins the
+                // buffer with setFixedSize: the view stays at the panel's 1920x1080 while the
+                // surface is 1280x720. Sending the view size told the renderer the window was
+                // 1920x1080 straight after surfaceChanged had said 1280x720, so every flip found
+                // a swapchain built at the surface's real 1280x720 "the wrong size" and rebuilt
+                // it: 13,231 rebuilds in a 15 minute Splatterhouse session at 720p, one per
+                // frame, each waiting for the GPU to go idle and dropping the frame frame
+                // generation was holding. At native resolution the two sizes are equal, so
+                // nothing changes there. The frame is empty only before the surface has ever
+                // been sized, where the view is the best guess there is.
+                val frame = holder.surfaceFrame
+                val surfaceWidth = if (frame.width() > 0) frame.width() else width
+                val surfaceHeight = if (frame.height() > 0) frame.height() else height
+
+                pushDisplayCutoutInset(surfaceWidth, surfaceHeight)
+                NativeApp.onNativeSurfaceChanged(current, surfaceWidth, surfaceHeight)
             }
         }
     }
