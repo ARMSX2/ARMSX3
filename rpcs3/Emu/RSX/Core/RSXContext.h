@@ -9,6 +9,7 @@
 #include "Emu/RSX/NV47/FW/context.h"
 #include "Emu/RSX/NV47/HW/context.h"
 #include "RSXDriverState.h"
+#include "RSXFrameBuffer.h"
 
 namespace rsx
 {
@@ -25,6 +26,8 @@ namespace rsx
 		bitmask_t<pipeline_state> graphics_state;
 		atomic_bitmask_t<eng_interrupt_reason> eng_interrupt_mask;
 		bool in_begin_end = false;
+
+		framebuffer_state fb;
 
 		context(u32 id, thread* owner);
 		~context();

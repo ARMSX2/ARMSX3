@@ -1549,7 +1549,7 @@ void VKGSRender::end()
 		// Touches every bound surface and can queue cache invalidations, so it is per-draw
 		// work in the same class as the write barriers rather than bookkeeping.
 		RSX_PROF_SCOPE(rtt_write);
-		m_rtts.on_write(m_framebuffer_layout.color_write_enabled, m_framebuffer_layout.zeta_write_enabled);
+		m_rtts.on_write(m_ctx->fb.layout.color_write_enabled, m_ctx->fb.layout.zeta_write_enabled);
 	}
 
 	rsx::thread::end();
