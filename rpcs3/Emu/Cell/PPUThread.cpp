@@ -1443,18 +1443,36 @@ struct ppu_far_jumps_t
 				c.mov(args[2], vm::g_base_addr + pc);
 				c.jmp(ppu_far_jump);
 #else
+				// This sits in the exec table like any PPU block and is entered the same way, as
+				// GHC, so the thread is in x20 -- not x0. The x86 path above makes the same move
+				// from rbp. Without it ppu_far_jump took whatever x0 held, guest r0 in practice,
+				// as its ppu_thread&, and its store to ppu.cia faulted at r0 + 0x474: 0x475 every
+				// time, for NBA 08's code cave and for every line of Splatterhouse's, whether the
+				// patch point was reached by a branch or by falling into it.
+				//
+				// It then escapes to the host instead of returning, for the reason given in
+				// ppu_recompiler_fallback_ghc: GHC code on arm64 keeps no call stack to return
+				// into. The gateway resumes at the ppu.cia that ppu_far_jump just set.
 				Label jmp_address = c.newLabel();
 				Label this_op_address = c.newLabel();
+				Label escape_address = c.newLabel();
 
+				c.mov(args[0], a64::x20);
 				c.ldr(args[2], arm::ptr(this_op_address));
-				c.ldr(args[1], arm::ptr(jmp_address));
-				c.br(args[1]);
+				c.ldr(a64::x13, arm::ptr(jmp_address));
+				c.blr(a64::x13);
+
+				c.mov(a64::x0, a64::x20);
+				c.ldr(a64::x13, arm::ptr(escape_address));
+				c.br(a64::x13);
 
 				c.align(AlignMode::kCode, 16);
 				c.bind(jmp_address);
 				c.embedUInt64(reinterpret_cast<u64>(ppu_far_jump));
 				c.bind(this_op_address);
 				c.embedUInt64(reinterpret_cast<u64>(vm::g_base_addr) + pc);
+				c.bind(escape_address);
+				c.embedUInt64(reinterpret_cast<u64>(ppu_escape));
 #endif
 			}, &rt);
 		}
