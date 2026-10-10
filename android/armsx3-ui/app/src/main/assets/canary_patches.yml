@@ -556,3 +556,73 @@ PPU-43e618448eed82aa96856338d072f1e4978c36a8:
     Patch Version: 1.0
     Patch:
       - [ be32, 0x008C2B4C, 0x38600000 ]
+
+# SPLATTERHOUSE, BLUS30335 and BLES01120 (one executable) -- ours. Crash a few seconds into a
+# phase, "Access violation reading location 0x11e" on main_thread, the same as RPCS3 #5837 in
+# 2019; upstream lists the title as Ingame.
+#
+# The game hands work to the SPUs through 8 type-0 job slots (0x1597e80, 0x180 bytes each,
+# state halfword at +0x11c: 0 free, 1 taken, 6 finished). The allocator at 0x6c7758 walks
+# them and, when all 8 are still in flight, reaches 0x6c7860 (li r31,0) and returns NULL;
+# every caller hands that NULL to the job-fill function, which reads +0x11e from it. A slot
+# only comes back after the main thread's own dispatcher (0x6c67c0) polls the SPU channels
+# and marks it 6, so when a phase starts and the jobs queue faster than they retire, the
+# 9th request crashes. On a PS3 the slots evidently never run out.
+#
+# The cave at 0x6c7860 does what the game would have done a moment later: drops the slot
+# lock, runs that dispatcher (polls, recycles finished slots, starts queued jobs), sleeps
+# 100us and searches again. It keeps the original NULL for the allocator's cleanup pass
+# (second argument != 0), for type-1 requests, for a call made from inside the dispatcher
+# (its lock depth at ctx+0x250 is non-zero) and, after 5000 tries, for good. Tested on an
+# Odin 3: the crash every time before, well past it after.
+#
+# Needs 425d0680e (the arm64 far-jump stub): without it every calloc/jump/jumpl in any
+# patch dies at fault 0x475.
+PPU-0e747cbf4d807d363b085d983fff749c2c9cbdee:
+  "ARMSX3 phase start crash fix":
+    Games:
+      "Splatterhouse":
+        BLUS30335: [ All ]
+        BLES01120: [ All ]
+    Author: "jpolo1224"
+    Notes: "Fixes the crash a few seconds after a new phase starts."
+    Patch Version: 1.0
+    Patch:
+      - [ calloc, 0x006c7860, 0x25 ]
+      - [ be32, 0x00000000, 0x40920090 ] # bne cr4,null: a cleanup pass, keep the original
+      - [ be32, 0x00000000, 0x2f9b0000 ] # cmpwi cr7,r27,0
+      - [ be32, 0x00000000, 0x409e0088 ] # bne cr7,null: a type-1 request, keep the original
+      - [ be32, 0x00000000, 0x3d200158 ] # lis r9,0x158
+      - [ be32, 0x00000000, 0x80697e00 ] # lwz r3,0x7e00(r9): the job context
+      - [ be32, 0x00000000, 0x2f830000 ] # cmpwi cr7,r3,0
+      - [ be32, 0x00000000, 0x419e0078 ] # beq cr7,null: no context yet
+      - [ be32, 0x00000000, 0x80030250 ] # lwz r0,0x250(r3): dispatcher lock depth
+      - [ be32, 0x00000000, 0x2f800000 ] # cmpwi cr7,r0,0
+      - [ be32, 0x00000000, 0x409e006c ] # bne cr7,null: already inside the dispatcher
+      - [ be32, 0x00000000, 0x7b390002 ] # rotldi r25,r25,32: retry count in the high half
+      - [ be32, 0x00000000, 0x3b390001 ] # addi r25,r25,1
+      - [ be32, 0x00000000, 0x2b991388 ] # cmplwi cr7,r25,5000
+      - [ be32, 0x00000000, 0x7b390002 ] # rotldi r25,r25,32: slot count back in the low half
+      - [ be32, 0x00000000, 0x419d0058 ] # bgt cr7,null: give up the original way
+      - [ be32, 0x00000000, 0x813a3c20 ] # lwz r9,0x3c20(r26)
+      - [ be32, 0x00000000, 0x3929ffff ] # addi r9,r9,-1
+      - [ be32, 0x00000000, 0x913a3c20 ] # stw r9,0x3c20(r26)
+      - [ be32, 0x00000000, 0x7f83e378 ] # mr r3,r28
+      - [ jumpl, 0x00000000, 0x010acb98 ] # sys_lwmutex_unlock(slot lock)
+      - [ be32, 0x00000000, 0x3d200158 ] # lis r9,0x158
+      - [ be32, 0x00000000, 0x80697e00 ] # lwz r3,0x7e00(r9)
+      - [ be32, 0x00000000, 0x78630020 ] # clrldi r3,r3,32
+      - [ jumpl, 0x00000000, 0x006c67c0 ] # the game's dispatcher: polls the SPUs, recycles finished slots, starts queued jobs
+      - [ be32, 0x00000000, 0x38600064 ] # li r3,100
+      - [ be32, 0x00000000, 0x3960008d ] # li r11,141
+      - [ be32, 0x00000000, 0x44000002 ] # sc: sys_timer_usleep(100)
+      - [ be32, 0x00000000, 0x7f83e378 ] # mr r3,r28
+      - [ be32, 0x00000000, 0x38800000 ] # li r4,0
+      - [ jumpl, 0x00000000, 0x010acb60 ] # sys_lwmutex_lock(slot lock, 0)
+      - [ be32, 0x00000000, 0x813a3c20 ] # lwz r9,0x3c20(r26)
+      - [ be32, 0x00000000, 0x39290001 ] # addi r9,r9,1
+      - [ be32, 0x00000000, 0x913a3c20 ] # stw r9,0x3c20(r26)
+      - [ be32, 0x00000000, 0x7f5dd378 ] # mr r29,r26: back to the first slot
+      - [ be32, 0x00000000, 0x3bc00000 ] # li r30,0
+      - [ jump, 0x00000000, 0x006c77f8 ] # search again
+      - [ be32, 0x00000000, 0x3be00000 ] # null: li r31,0, the instruction this replaced; then back to 0x6c7864
