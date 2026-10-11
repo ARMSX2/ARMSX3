@@ -1328,24 +1328,13 @@ void VKGSRender::emit_geometry(u32 sub_index)
 	m_ctx->stats.draw_exec_time += m_profiler.duration();
 }
 
-void VKGSRender::begin()
+void VKGSRender::begin_draw()
 {
 	// Everything a draw costs before geometry is emitted. The scopes it calls into nest inside
 	// and are charged to themselves; draw_setup is only ever the remainder. Calling that
 	// remainder "setup" hid 23 ms/frame of barriers and epilogue work behind a plausible name,
 	// so every block with a body of its own now carries a scope and this keeps the leftovers.
 	RSX_PROF_SCOPE(draw_setup);
-
-	// Save shader state now before prefetch and loading happens
-	m_interpreter_state = (m_ctx->graphics_state.load() & rsx::pipeline_state::invalidate_pipeline_bits);
-
-	rsx::thread::begin();
-
-	if (m_ctx->frame_skip.skip_current_frame ||
-		m_ctx->cond_render.disable_rendering())
-	{
-		return;
-	}
 
 	init_buffers(rsx::framebuffer_creation_context::context_draw);
 
@@ -1357,10 +1346,10 @@ void VKGSRender::begin()
 	}
 }
 
-void VKGSRender::end()
+bool VKGSRender::end_draw(rsx::flags32_t pre_begin_pipeline_state)
 {
-	// begin() carries a scope and end() did not, so every per-draw cost here fell through
-	// to fifo_decode -- which is the ENCLOSING scope of the whole RSX loop, not a decode
+	// begin_draw() carries a scope and end_draw() did not, so every per-draw cost here fell
+	// through to fifo_decode -- which is the ENCLOSING scope of the whole RSX loop, not a decode
 	// measurement. That is why fifo_decode read as 100% of the RSX thread while the FIFO
 	// itself only accounts for a couple of milliseconds.
 	RSX_PROF_SCOPE(draw_setup);
@@ -1370,12 +1359,8 @@ void VKGSRender::end()
 		m_frame_dump.draws++;
 	}
 
-	if (should_skip_draw())
-	{
-		execute_nop_draw();
-		rsx::thread::end();
-		return;
-	}
+	// Shader state as it was before prefetch and loading happened
+	m_interpreter_state = pre_begin_pipeline_state;
 
 	m_profiler.start();
 
@@ -1431,10 +1416,8 @@ void VKGSRender::end()
 	{
 		// Program is not ready, skip drawing this
 		std::this_thread::yield();
-		execute_nop_draw();
 		// m_rtts.on_write(); - breaks games for obvious reasons
-		rsx::thread::end();
-		return;
+		return false;
 	}
 
 	// Load program execution environment
@@ -1552,5 +1535,5 @@ void VKGSRender::end()
 		m_rtts.on_write(m_ctx->fb.layout.color_write_enabled, m_ctx->fb.layout.zeta_write_enabled);
 	}
 
-	rsx::thread::end();
+	return true;
 }
