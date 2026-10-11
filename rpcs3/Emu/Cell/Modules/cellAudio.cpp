@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "Emu/emu_callbacks.h"
 #include "Emu/System.h"
+#include "Emu/android_app_state.h"
 #include "Emu/system_config.h"
 #include "Emu/Audio/audio_utils.h"
 #include "Emu/Cell/PPUModule.h"
@@ -952,7 +953,9 @@ void cell_audio_thread::operator()()
 		{
 			m_audio_should_restart = true;
 			ringbuffer->flush();
-			thread_ctrl::wait_for(10000);
+			// ARMSX3: 4 checks a second instead of 100 while the app is out of sight (#196). A
+			// resume can only come after the app is back, and finds the thread within 250 ms.
+			thread_ctrl::wait_for(g_android_app_backgrounded ? 250'000 : 10000);
 			continue;
 		}
 

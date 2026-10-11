@@ -73,6 +73,9 @@ public final class NativeApp {
     /** [MAPPED] -> _rpcsx_resume */
     public static void resume() { Rpcs3Bridge.resume(); }
 
+    /** [MAPPED] -> _rpcsx_setAppBackgrounded */
+    public static void setAppBackgrounded(boolean backgrounded) { Rpcs3Bridge.setAppBackgrounded(backgrounded); }
+
     /** [MAPPED] -> _rpcsx_kill */
     public static void shutdown() { Rpcs3Bridge.shutdown(); }
 

@@ -5463,6 +5463,21 @@ open class MainActivityRuntime : ComponentActivity() {
         super.onPause()
     }
 
+    // Stopped, not paused: a split-screen or picture-in-picture app is paused but still in sight.
+    // Out of sight a locked device can sit for hours with the app on top, which Android never
+    // freezes, so everything that polls slows down until onStart (#196).
+    override fun onStart() {
+        super.onStart()
+        runCatching { NativeApp.setAppBackgrounded(false) }
+        com.armsx2.DiscordPresence.setForeground(true)
+    }
+
+    override fun onStop() {
+        runCatching { NativeApp.setAppBackgrounded(true) }
+        com.armsx2.DiscordPresence.setForeground(false)
+        super.onStop()
+    }
+
     override fun onResume() {
         super.onResume()
         runCatching { com.armsx2.SecondScreen.setForeground(applicationContext, true) }

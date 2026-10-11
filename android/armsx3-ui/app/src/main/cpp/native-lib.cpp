@@ -37,6 +37,7 @@ struct RPCSXApi {
   void (*kill)();
   void (*resume)();
   void (*pause)();
+  void (*setAppBackgrounded)(bool);
   void (*openHomeMenu)();
   void (*captureFrame)();
   std::string (*getTitleId)();
@@ -171,6 +172,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.kill = reinterpret_cast<decltype(kill)>(dlsym(handle, "_rpcsx_kill"));
     result.resume = reinterpret_cast<decltype(resume)>(dlsym(handle, "_rpcsx_resume"));
     result.pause = reinterpret_cast<decltype(pause)>(dlsym(handle, "_rpcsx_pause"));
+    result.setAppBackgrounded = reinterpret_cast<decltype(setAppBackgrounded)>(dlsym(handle, "_rpcsx_setAppBackgrounded"));
     result.captureFrame = reinterpret_cast<decltype(captureFrame)>(dlsym(handle, "_rpcsx_captureFrame"));
     result.openHomeMenu = reinterpret_cast<decltype(openHomeMenu)>(dlsym(handle, "_rpcsx_openHomeMenu"));
     result.getTitleId = reinterpret_cast<decltype(getTitleId)>(dlsym(handle, "_rpcsx_getTitleId"));
@@ -484,6 +486,17 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_pause(JNIEnv *env,
   }
 
   return rpcsxLib.pause();
+}
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setAppBackgrounded(JNIEnv *env,
+                                                                          jobject,
+                                                                          jboolean backgrounded) {
+  // Same null guard as pause: the core may not be loaded yet, and an older core lacks the export.
+  if (rpcsxLib.setAppBackgrounded == nullptr) {
+      return;
+  }
+
+  rpcsxLib.setAppBackgrounded(backgrounded == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_openHomeMenu(JNIEnv *env,

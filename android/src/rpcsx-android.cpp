@@ -14,6 +14,7 @@
 #include "Emu/Cell/SPURecompiler.h"
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/IdManager.h"
+#include "Emu/android_app_state.h"
 #include "Emu/Io/KeyboardHandler.h"
 #include "Emu/Io/Null/NullKeyboardHandler.h"
 #include "Emu/Io/Null/NullMouseHandler.h"
@@ -4183,6 +4184,11 @@ extern "C" void _rpcsx_kill() {
   stop_session();
 }
 extern "C" void _rpcsx_resume() { Emu.Resume(); }
+
+// From the activity's onStart/onStop. See Emu/android_app_state.h for who reads it.
+extern "C" void _rpcsx_setAppBackgrounded(bool backgrounded) {
+  g_android_app_backgrounded = backgrounded;
+}
 
 // The counterpart to _rpcsx_resume, which had none. Rpcs3Bridge.pause() set a bool and returned,
 // on the belief that "RPCS3 has no explicit pause entry point" -- but Emu.Pause() is right here,

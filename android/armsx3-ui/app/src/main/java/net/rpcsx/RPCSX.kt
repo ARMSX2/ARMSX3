@@ -217,6 +217,8 @@ class RPCSX {
     external fun kill()
     external fun resume()
     external fun pause()
+    /** From the activity's onStart (false) and onStop (true); paused-game threads poll less. */
+    external fun setAppBackgrounded(backgrounded: Boolean)
     external fun openHomeMenu()
 
     /** Arm an RSX frame capture: the next frame the emulator renders is recorded to

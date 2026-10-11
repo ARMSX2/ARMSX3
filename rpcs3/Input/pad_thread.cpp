@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "pad_thread.h"
+#include "Emu/android_app_state.h"
 #include "product_info.h"
 #include "ds3_pad_handler.h"
 #include "ds4_pad_handler.h"
@@ -516,7 +517,8 @@ void pad_thread::operator()()
 
 					if (Emu.IsPaused())
 					{
-						pad_sleep = std::max<u64>(pad_sleep, 30'000);
+						// ARMSX3: slower still while the app is out of sight (#196)
+						pad_sleep = std::max<u64>(pad_sleep, g_android_app_backgrounded ? 250'000 : 30'000);
 					}
 
 					thread_ctrl::wait_for(pad_sleep);
@@ -547,7 +549,8 @@ void pad_thread::operator()()
 
 					if (Emu.IsPaused())
 					{
-						pad_sleep = std::max<u64>(pad_sleep, 30'000);
+						// ARMSX3: slower still while the app is out of sight (#196)
+						pad_sleep = std::max<u64>(pad_sleep, g_android_app_backgrounded ? 250'000 : 30'000);
 					}
 
 					thread_ctrl::wait_for(pad_sleep);
@@ -810,7 +813,8 @@ void pad_thread::operator()()
 
 		if (Emu.GetStatus(false) == system_state::paused)
 		{
-			pad_sleep = std::max<u64>(pad_sleep, 30'000);
+			// ARMSX3: slower still while the app is out of sight (#196)
+			pad_sleep = std::max<u64>(pad_sleep, g_android_app_backgrounded ? 250'000 : 30'000);
 
 			u64 timestamp = get_system_time();
 			u32 pressed_mask = 0;

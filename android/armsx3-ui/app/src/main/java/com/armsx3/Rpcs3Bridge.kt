@@ -338,7 +338,8 @@ object Rpcs3Bridge {
         try {
             while (!stopRequested) {
                 if (RPCSX.getState() != EmulatorState.Stopped) {
-                    Thread.sleep(POLL_INTERVAL_MS)
+                    // Once a second out of sight: ten checks a second ran on in a locked device.
+                    Thread.sleep(if (appBackgrounded) 1000L else POLL_INTERVAL_MS)
                     continue
                 }
 
@@ -457,6 +458,20 @@ object Rpcs3Bridge {
         paused = false
         RPCSX.instance.resume()
         sixaxis?.start()
+    }
+
+    @Volatile
+    private var appBackgrounded = false
+
+    /**
+     * The app left the screen (true) or came back (false), from the activity's onStop/onStart.
+     * While out of sight the core's paused-game threads poll less, and so does boot()'s wait for
+     * the session to end (#196).
+     */
+    @JvmStatic
+    fun setAppBackgrounded(backgrounded: Boolean) {
+        appBackgrounded = backgrounded
+        runCatching { RPCSX.instance.setAppBackgrounded(backgrounded) }
     }
 
     /** Set by shutdown() to release boot()'s wait; see the loop there. */
