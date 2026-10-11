@@ -121,6 +121,14 @@ void gdb_thread::start_server()
 	// IPv4 address:port in format 127.0.0.1:2345
 	static const std::regex ipv4_regex("^([0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3})\\:([0-9]{1,5})$");
 
+#ifdef __ANDROID__
+	// ARMSX3: no debugger attaches to a phone app, and its 5 ms accept() poll was 229 wakeups a
+	// second for the whole session, paused and locked included (#196). It also left a port open
+	// that any app on the device could connect to.
+	GDB.notice("GDB Server is disabled on Android.");
+	return;
+#endif
+
 	auto sname = g_cfg.misc.gdb_server.to_string();
 
 	if (sname[0] == '\0')
