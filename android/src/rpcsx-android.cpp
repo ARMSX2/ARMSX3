@@ -630,7 +630,7 @@ private:
   u32 m_frames_since_log = 0;
 
 public:
-  // These two drive the resize check in VKGSRender::flip, so a stale value here does not
+  // These two drive the resize check in VKGSRender::present_frame, so a stale value here does not
   // make the picture late, it makes it wrong: the swapchain keeps the extent it had and
   // the present framebuffer is built to match, whatever shape the window is now.
   //

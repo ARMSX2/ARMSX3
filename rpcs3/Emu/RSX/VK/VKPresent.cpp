@@ -1234,8 +1234,14 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 	return image_to_flip;
 }
 
-void VKGSRender::flip(const rsx::display_flip_info_t& info)
+bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 {
+	if (!info.emu_flip)
+	{
+		// Native UI flips are requested from the local task. Submit outstanding work first.
+		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[8]++; flush_command_queue(true);
+	}
+
 	// Frame dumps (VKFrameDump.cpp) start, wait and finish on flips.
 	frame_dump_on_flip(info);
 
@@ -1364,8 +1370,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			if (Emu.IsStopped())
 			{
 				m_frame->flip(m_context);
-				rsx::thread::flip(info);
-				return;
+				return false;
 			}
 
 			std::this_thread::sleep_for(100ms);
@@ -1414,8 +1419,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		}
 
 		m_frame->flip(m_context);
-		rsx::thread::flip(info);
-		return;
+		return false;
 	}
 
 	u32 buffer_width = display_buffers[info.buffer].width;
@@ -1569,8 +1573,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 				rsx_log.error("vkAcquireNextImageKHR kept returning VK_ERROR_OUT_OF_DATE_KHR across %u rebuilds in one flip. Dropping the frame.", acquire_attempts);
 				swapchain_unavailable = true;
 				m_frame->flip(m_context);
-				rsx::thread::flip(info);
-				return;
+				return false;
 			}
 
 			rsx_log.warning("vkAcquireNextImageKHR failed with VK_ERROR_OUT_OF_DATE_KHR. Flip request ignored until surface is recreated.");
@@ -1589,8 +1592,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 				// Drop this frame; the next flip retries. Never spin here.
 				m_frame->flip(m_context);
-				rsx::thread::flip(info);
-				return;
+				return false;
 			}
 
 			m_consecutive_swapchain_rebuild_failures = 0;
@@ -1613,8 +1615,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 				// Still no usable window. Drop this frame rather than spinning in
 				// the acquire loop; the next flip retries.
 				m_frame->flip(m_context);
-				rsx::thread::flip(info);
-				return;
+				return false;
 			}
 			continue;
 		}
@@ -1623,7 +1624,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			{
 				// Same reason as the present arm below: dying here skips on_exit().
 				rsx::request_device_lost_shutdown("acquiring a swapchain image");
-				return;
+				return false;
 			}
 
 			vk::die_with_error(status);
@@ -2221,8 +2222,11 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	m_ctx->stats.flip_time = m_profiler.duration();
 
 	m_frame->flip(m_context);
-	rsx::thread::flip(info);
+	return true;
+}
 
+void VKGSRender::post_present()
+{
 	// Data sync
 	const rsx::surface_scaling_config_t active_res_scaling_config =
 	{

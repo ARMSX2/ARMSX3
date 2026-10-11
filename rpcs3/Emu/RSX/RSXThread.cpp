@@ -1440,6 +1440,11 @@ namespace rsx
 
 	void thread::do_local_task(FIFO::state state)
 	{
+		if (!m_renderer->on_local_task(state))
+		{
+			// The backend is busy and cannot service the rest of the task right now
+			return;
+		}
 
 		m_ctx->eng_interrupt_mask.clear(rsx::backend_interrupt);
 
@@ -1492,6 +1497,23 @@ namespace rsx
 
 			m_invalidated_memory_range = utils::address_range32::start_end(0x2 << 28, constants::local_mem_base + local_mem_size - 1);
 			handle_invalidated_memory_range();
+		}
+
+		if (state == FIFO::state::lock_wait)
+		{
+			// Critical check finished
+			return;
+		}
+
+		if (m_overlay_manager)
+		{
+			const auto should_ignore = m_ctx->in_begin_end && state != FIFO::state::empty;
+			if ((async_flip_requested & flip_request::native_ui) && !should_ignore && !is_stopped())
+			{
+				display_flip_info_t info{};
+				info.buffer = current_display_buffer;
+				flip(info);
+			}
 		}
 	}
 
@@ -2838,6 +2860,8 @@ namespace rsx
 
 	void thread::flip(const display_flip_info_t& info)
 	{
+		const bool presented = m_renderer->present_frame(info);
+
 		m_ctx->eng_interrupt_mask.clear(rsx::display_interrupt);
 
 #ifdef __ANDROID__
@@ -2913,6 +2937,11 @@ namespace rsx
 		}
 
 		last_host_flip_timestamp = get_system_time();
+
+		if (presented)
+		{
+			m_renderer->post_present();
+		}
 	}
 
 	void thread::check_zcull_status(bool framebuffer_swap)
@@ -3015,14 +3044,18 @@ namespace rsx
 		m_ctx->cond_render.disable_conditional_render(this);
 	}
 
-	void thread::begin_conditional_rendering(const std::vector<reports::occlusion_query_info*>& /*sources*/)
+	void thread::begin_conditional_rendering(const std::vector<reports::occlusion_query_info*>& sources)
 	{
+		m_renderer->on_begin_conditional_rendering(sources);
+
 		m_ctx->cond_render.hw_cond_active = true;
 		m_ctx->cond_render.eval_sources.clear();
 	}
 
 	void thread::end_conditional_rendering()
 	{
+		m_renderer->on_end_conditional_rendering();
+
 		m_ctx->cond_render.hw_cond_active = false;
 	}
 
@@ -3048,9 +3081,10 @@ namespace rsx
 		//ensure(async_tasks_pending.load() == 0);
 	}
 
-	void thread::sync_hint(FIFO::interrupt_hint /*hint*/, rsx::reports::sync_hint_payload_t payload)
+	void thread::sync_hint(FIFO::interrupt_hint hint, rsx::reports::sync_hint_payload_t payload)
 	{
 		zcull_ctrl->on_sync_hint(payload);
+		m_renderer->on_sync_hint(hint, payload);
 	}
 
 	bool thread::is_fifo_idle() const
@@ -3492,7 +3526,7 @@ namespace rsx
 		m_invalidated_memory_range.invalidate();
 	}
 
-	void thread::renderctl(u32 request_code, void* /*args*/)
+	void thread::renderctl(u32 request_code, void* args)
 	{
 		switch (request_code)
 		{
@@ -3500,7 +3534,10 @@ namespace rsx
 			rsx::mm_flush();
 			break;
 		default:
-			fmt::throw_exception("Unknown backend request: 0x%x", request_code);
+			if (!m_renderer->on_renderctl(request_code, args))
+			{
+				fmt::throw_exception("Unknown backend request: 0x%x", request_code);
+			}
 		}
 	}
 
