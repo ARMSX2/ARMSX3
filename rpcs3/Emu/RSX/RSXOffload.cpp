@@ -335,7 +335,7 @@ namespace rsx
 					}
 				}
 
-				rsxthr->on_semaphore_acquire_wait();
+				rsxthr->renderer()->on_semaphore_acquire_wait();
 
 				if (++spins < 500 || static_cast<thread_state>(_thr) != thread_state::created)
 				{

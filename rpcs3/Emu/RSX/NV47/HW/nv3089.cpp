@@ -5,8 +5,8 @@
 #include "Emu/RSX/RSXThread.h"
 #include "Emu/RSX/Core/RSXReservationLock.hpp"
 #include "Emu/RSX/Common/tiled_dma_copy.hpp"
-#include "Emu/RSX/Utils/image_utils.hpp"
 #include "Emu/RSX/Host/MM.h"
+#include "Emu/RSX/Utils/image_utils.hpp"
 
 #include "context_accessors.define.h"
 
@@ -596,7 +596,7 @@ namespace rsx
 
 			if (!g_cfg.video.force_cpu_blit_processing &&
 				(dst.dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER || src.dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER) &&
-				RSX(ctx)->scaled_image_from_memory(src, dst, in_inter == blit_engine::transfer_interpolator::foh))
+				RSX(ctx)->renderer()->scaled_image_from_memory(src, dst, in_inter == blit_engine::transfer_interpolator::foh))
 			{
 				// HW-accelerated blit
 				return;

@@ -183,7 +183,7 @@ namespace rsx
 					continue;
 				}
 
-				RSX(ctx)->on_semaphore_acquire_wait();
+				RSX(ctx)->renderer()->on_semaphore_acquire_wait();
 
 				RSX_PROF_SCOPE(idle_sema);
 
