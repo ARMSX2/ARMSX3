@@ -3,6 +3,7 @@
 
 #include "Emu/emu_callbacks.h"
 #include "Emu/System.h"
+#include "Emu/android_app_state.h"
 #include "Emu/system_config.h"
 #include "Emu/Cell/PPUModule.h"
 #include "Emu/Cell/lv2/sys_event.h"
@@ -1665,7 +1666,11 @@ void camera_context::operator()()
 
 		if (!init || !fps || Emu.IsPausedOrReady() || g_cfg.io.camera == camera_handler::null)
 		{
-			thread_ctrl::wait_for(1000); // hack
+			// ARMSX3: 1 ms made this the busiest thread of a paused game in a locked device, 1,100
+			// wakeups a second (#196). With no camera handler (the default, and all Android has)
+			// nothing can ever stream, and a game paused out of sight cannot resume until it is back.
+			const bool long_idle = g_cfg.io.camera == camera_handler::null || (g_android_app_backgrounded && Emu.IsPaused());
+			thread_ctrl::wait_for(long_idle ? (g_android_app_backgrounded ? 250'000 : 100'000) : 1000); // hack
 			continue;
 		}
 
