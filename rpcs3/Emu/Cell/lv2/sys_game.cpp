@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Emu/android_app_state.h"
 #include "util/sysinfo.hpp"
 #include "util/v128.hpp"
 #include "Emu/Cell/lv2/sys_process.h"
@@ -115,7 +116,8 @@ struct watchdog_t
 			{
 				start_time += current_time - old_time;
 				old_time = current_time;
-				thread_ctrl::wait_for(sleep_time);
+				// ARMSX3: 4 checks a second instead of 20 while the app is out of sight (#196)
+				thread_ctrl::wait_for(g_android_app_backgrounded ? 250'000 : sleep_time);
 				current_time = get_system_time();
 				continue;
 			}

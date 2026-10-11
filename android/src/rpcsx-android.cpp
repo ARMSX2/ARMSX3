@@ -434,18 +434,27 @@ struct GraphicsFrame : GSFrameBase {
     // rest of the session. The symptom was a black game area at 0% CPU with the log stopping dead
     // just after Vulkan device creation and nothing at all to say why. Say so instead.
     u32 waited_ms = 0;
+    u32 next_report_ms = 3000;
 
     while ((result = g_native_window.load()) == nullptr) [[unlikely]] {
       if (Emu.IsStopped()) {
         return activeNativeWindow;
       }
 
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      waited_ms += 100;
+      // Out of sight the surface is gone on purpose and comes back with the app, so wait in
+      // longer steps and say nothing: this line every 3 s kept the log writer busy for as long
+      // as the device stayed locked (#196).
+      const u32 step_ms = g_android_app_backgrounded ? 250 : 100;
+      std::this_thread::sleep_for(std::chrono::milliseconds(step_ms));
+      waited_ms += step_ms;
 
-      if (waited_ms % 3000 == 0) {
-        rpcsx_android.error("Still waiting for a Surface after %u ms -- the renderer cannot start "
-                            "until surfaceChanged reaches native.", waited_ms);
+      if (waited_ms >= next_report_ms) {
+        next_report_ms = waited_ms + 3000;
+
+        if (!g_android_app_backgrounded) {
+          rpcsx_android.error("Still waiting for a Surface after %u ms -- the renderer cannot start "
+                              "until surfaceChanged reaches native.", waited_ms);
+        }
       }
     }
 

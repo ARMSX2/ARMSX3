@@ -1,6 +1,7 @@
 #include <cstdlib>
 #include "stdafx.h"
 #include "rsx_profiler.h"
+#include "Emu/android_app_state.h"
 #include "Emu/Cell/PPUThread.h"
 #include "Emu/Cell/PPUDisAsm.h"
 #include "Emu/Cell/SPUDisAsm.h"
@@ -209,7 +210,8 @@ namespace rsx::prof
 				// off, which is every session nobody turned it on in, there is nothing to sample:
 				// waking 200 times a second to find that out is a cost of its own on a phone. Ten
 				// times a second is enough to notice it being switched on.
-				thread_ctrl::wait_for(enabled ? 5'000 : 100'000);
+				// Four times a second while the app is out of sight (#196).
+				thread_ctrl::wait_for(enabled ? 5'000 : (g_android_app_backgrounded ? 250'000 : 100'000));
 			}
 		});
 	}

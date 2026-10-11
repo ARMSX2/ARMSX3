@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "Emu/android_app_state.h"
 
 #include "Emu/Memory/vm.h"
 #include "Common/BufferUtils.h"
@@ -112,7 +113,10 @@ namespace rsx
 					// The timeout exists only so the loop can re-check thread_ctrl::state():
 					// aborting does not push anything, so an untimed wait would never return and
 					// shutdown would hang instead of spin -- a worse bug than the one being fixed.
-					m_work_queue.get_wait_atomic().wait(0, atomic_wait_timeout{5'000'000});
+					//
+					// ARMSX3: so out of sight it can be long. 5 ms was 227 wakeups a second in a locked
+					// device (#196); a job still wakes it at once either way.
+					m_work_queue.get_wait_atomic().wait(0, atomic_wait_timeout{g_android_app_backgrounded ? u64{250'000'000} : u64{5'000'000}});
 				}
 			}
 

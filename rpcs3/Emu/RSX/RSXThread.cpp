@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "RSXThread.h"
+#include "Emu/android_app_state.h"
 
 #include "Capture/rsx_capture.h"
 #include "Common/surface_store.h"
@@ -1318,7 +1319,8 @@ namespace rsx
 
 					while (Emu.IsPaused() && !is_stopped())
 					{
-						thread_ctrl::wait_for(5'000);
+						// ARMSX3: 4 checks a second instead of 200 while the app is out of sight (#196)
+						thread_ctrl::wait_for(g_android_app_backgrounded ? 250'000 : 5'000);
 					}
 
 					// Restore difference

@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "VFS.h"
+#include "Emu/android_app_state.h"
 #include "Utilities/bin_patch.h"
 #include "Emu/Memory/vm.h"
 #include "Emu/emu_callbacks.h"
@@ -3625,9 +3626,15 @@ bool Emulator::Pause(bool freeze_emulation, bool show_resume_message)
 		{
 			while (*msg_ref && GetStatus(false) == status)
 			{
-				// Refresh Native UI
-				rsx::set_native_ui_flip();
-				thread_ctrl::wait_for(33'000);
+				// ARMSX3: out of sight there is nothing to draw it on, so no redraw and 4 checks a
+				// second instead of 30 (#196)
+				if (!g_android_app_backgrounded)
+				{
+					// Refresh Native UI
+					rsx::set_native_ui_flip();
+				}
+
+				thread_ctrl::wait_for(g_android_app_backgrounded ? 250'000 : 33'000);
 			}
 
 			msg_ref->release(0);
