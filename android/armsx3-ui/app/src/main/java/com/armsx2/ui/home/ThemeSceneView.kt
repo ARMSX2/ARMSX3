@@ -6,6 +6,7 @@ import android.util.Log
 import android.view.TextureView
 import java.io.File
 import java.io.RandomAccessFile
+import java.util.concurrent.locks.LockSupport
 
 /**
  * A dynamic PS3 theme played live as the library background: its [ThemeScene], moved by the theme's
@@ -64,7 +65,10 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
         private val onStatus: (Boolean) -> Unit,
     ) : Thread("theme-scene") {
         @Volatile private var running = true
+
+        /** Parks the loop while set; finish()'s interrupt wakes it too. */
         @Volatile var paused = false
+            set(value) { field = value; LockSupport.unpark(this) }
 
         fun resize(w: Int, h: Int) {
             width = w
@@ -106,7 +110,9 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
                         var next = last
                         while (running) {
                             if (paused) {
-                                sleep(PAUSED_POLL_MS)
+                                // Parked, not polled: it used to wake ten times a second
+                                // for a scene no one could see.
+                                LockSupport.park(this)
                                 last = System.nanoTime()
                                 next = last
                                 continue
@@ -148,7 +154,6 @@ class ThemeSceneView(context: Context, private val scene: File) : TextureView(co
 
     private companion object {
         const val TAG = "ThemeScene"
-        const val PAUSED_POLL_MS = 100L
         const val JOIN_MS = 500L
         const val FRAME_NANOS = 1_000_000_000L / 30
         const val MAX_REPORTS = 16
