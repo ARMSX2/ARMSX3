@@ -92,6 +92,9 @@ namespace logs
 		atomic_t<u64, 128> m_buf{0}; // MSB (39 bits): push begin, LSB (25 bis): push size
 		atomic_t<u64, 128> m_out{0}; // Amount of bytes written to file
 
+		// ARMSX3: bumped to cut the writer's idle wait short, see the writer thread
+		atomic_t<u32> m_wake{0};
+
 		uchar m_zout[65536]{};
 
 		// Write buffered logs immediately
@@ -506,8 +509,13 @@ logs::file_writer::file_writer(const std::string& name, u64 max_size)
 
 		thread_ctrl::scoped_priority low_prio(-1);
 
+		// ARMSX3: empty polls in a row
+		u32 idle = 0;
+
 		while (true)
 		{
+			// Read before looking for work, so a wake that lands after the look still ends the wait
+			const u32 wake = m_wake;
 			const u64 bufv = m_buf;
 
 			if (bufv % s_log_size)
@@ -517,14 +525,30 @@ logs::file_writer::file_writer(const std::string& name, u64 max_size)
 				continue;
 			}
 
-			if (!flush(bufv))
+			if (flush(bufv))
+			{
+				idle = 0;
+			}
+			else
 			{
 				if (m_out == umax)
 				{
 					break;
 				}
 
-				std::this_thread::sleep_for(10ms);
+				// ARMSX3: polling every 10 ms is a hundred wakeups a second for the life of the
+				// process, in the library and in the background with the screen off (#196). After a
+				// second with nothing to write, wait up to 250 ms instead. sync() and the destructor
+				// end the wait early; anything else logged meanwhile is written when it ends.
+				if (idle < 100)
+				{
+					idle++;
+					std::this_thread::sleep_for(10ms);
+				}
+				else
+				{
+					m_wake.wait(wake, atomic_wait_timeout{250'000'000});
+				}
 			}
 		}
 	});
@@ -541,6 +565,8 @@ logs::file_writer::~file_writer()
 	file_writer::sync();
 
 	m_out = -1;
+	m_wake++;
+	m_wake.notify_one();
 	m_writer.join();
 
 	if (m_fout2)
@@ -696,6 +722,10 @@ void logs::file_writer::sync()
 	{
 		return;
 	}
+
+	// ARMSX3: the writer may be in its idle wait
+	m_wake++;
+	m_wake.notify_one();
 
 	// Wait for the writer thread
 	while ((m_out % s_log_size) * s_log_size != m_buf % (s_log_size * s_log_size))
