@@ -446,12 +446,17 @@ object Rpcs3Bridge {
         // pause() did not, so the pair was asymmetric and "Pause" was decorative.
         paused = true
         RPCSX.instance.pause()
+        // Motion goes off with the game. A paused game reads none, and the phone's accelerometer
+        // and gyro otherwise kept streaming fifty samples a second each into an app that had been
+        // put in the background or locked (#196).
+        sixaxis?.stop()
     }
 
     @JvmStatic
     fun resume() {
         paused = false
         RPCSX.instance.resume()
+        sixaxis?.start()
     }
 
     /** Set by shutdown() to release boot()'s wait; see the loop there. */
@@ -1859,7 +1864,9 @@ object Rpcs3Bridge {
                     lastSmall[port] = wantSmall
                 }
 
-                try { Thread.sleep(30) } catch (_: InterruptedException) { break }
+                // Slower while paused, when the motors are already off and the only news is the
+                // resume: 33 polls a second otherwise ran on in a backgrounded or locked app.
+                try { Thread.sleep(if (paused) 250 else 30) } catch (_: InterruptedException) { break }
             }
             runCatching { active.forEach { it?.cancel() } }
         }.apply { isDaemon = true; name = "rumble-pump"; start() }
@@ -1924,6 +1931,7 @@ object Rpcs3Bridge {
 
     // ---- SIXAXIS motion ------------------------------------------------
 
+    @Volatile
     private var sixaxis: com.armsx2.input.Sixaxis? = null
 
     /**
