@@ -51,6 +51,7 @@ object DiscordIpc {
     const val MSG_SET_PLAYING = 3  // DATA_SERIAL / DATA_TITLE / DATA_COVER
     const val MSG_QUERY = 4        // request one MSG_STATE; replyTo carries the answer
     const val MSG_STOP = 5         // sign out and tear the client down
+    const val MSG_IDLE = 6         // DATA_IDLE: the app is out of sight, so drain the SDK slowly
 
     // Helper -> app.
     const val MSG_STATE = 100
@@ -67,6 +68,7 @@ object DiscordIpc {
     const val DATA_ERROR = "error"
     const val DATA_FRESH_TOKEN = "freshToken"
     const val DATA_AVAILABLE = "available"
+    const val DATA_IDLE = "idle"
 
     /** Must match kFieldSep / kRecordSep in cpp/discord_bridge.cpp. */
     const val FIELD_SEP = ''
