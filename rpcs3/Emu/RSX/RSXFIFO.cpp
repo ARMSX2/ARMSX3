@@ -1173,6 +1173,13 @@ namespace rsx
 				rsx::prof::g_method_counts[reg & (rsx::prof::method_slot_count - 1)]++;
 			}
 
+			const bool value_changed = m_ctx->register_state->latch != value;
+			if (value_changed)
+			{
+				// Mark the decoded draw state that depends on this register. Applies to method registers too.
+				m_ctx->draw_state.pending |= draw_state_signals[reg];
+			}
+
 			if (auto method = methods[reg])
 			{
 				{
@@ -1205,7 +1212,7 @@ namespace rsx
 					break;
 				}
 			}
-			else if (m_ctx->register_state->latch != value)
+			else if (value_changed)
 			{
 				// Something changed, set signal flags if any specified
 				m_ctx->graphics_state |= state_signals[reg];
