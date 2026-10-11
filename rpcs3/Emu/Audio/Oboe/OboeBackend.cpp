@@ -273,7 +273,15 @@ void OboeBackend::Pause()
 	// must not leave the emulator believing audio is still running.
 	if (const oboe::Result result = m_stream->requestPause(); result != oboe::Result::OK)
 	{
-		Oboe.error("requestPause failed: %s", oboe::convertToText(result));
+		// Stop it instead. A stream left running plays silence for a paused game and keeps
+		// Android's audio mixer holding a wakelock, so the device never sleeps. Play() starts a
+		// stopped stream the same as a paused one.
+		Oboe.error("requestPause failed: %s, stopping instead", oboe::convertToText(result));
+
+		if (const oboe::Result stop_result = m_stream->requestStop(); stop_result != oboe::Result::OK)
+		{
+			Oboe.error("requestStop failed: %s", oboe::convertToText(stop_result));
+		}
 	}
 
 	std::lock_guard lock(m_cb_mutex);
