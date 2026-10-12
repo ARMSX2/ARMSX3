@@ -704,6 +704,7 @@ namespace rsx
 		const auto viewport = static_cast<u8>(draw_state_t::group::viewport);
 		const auto input_assembly = static_cast<u8>(draw_state_t::group::input_assembly);
 		const auto stipple = static_cast<u8>(draw_state_t::group::stipple);
+		const auto fragment_env = static_cast<u8>(draw_state_t::group::fragment_env);
 
 		static_assert(static_cast<u32>(draw_state_t::group::decoded) <= 0xFF, "Signalled draw state groups must fit in draw_state_signals entries");
 
@@ -769,6 +770,8 @@ namespace rsx
 		{
 			draw_state_signals[reg] |= stipple;
 		}
+
+		draw_state_signals[NV4097_SET_ALPHA_FUNC] |= fragment_env;
 	}
 
 	static void init_state_signals()
