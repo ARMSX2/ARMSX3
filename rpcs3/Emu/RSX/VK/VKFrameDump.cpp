@@ -338,7 +338,7 @@ namespace
 	}
 }
 
-void VKGSRender::frame_dump_on_flip()
+void VKGSRender::frame_dump_on_flip(const rsx::display_flip_info_t& info)
 {
 	m_frame_dump_flips++;
 
@@ -410,6 +410,15 @@ void VKGSRender::frame_dump_on_flip()
 			mode_name(mode));
 		d.flip_index_start = d.index.size();
 		rsx_log.notice("Frame dump: armed (%s), writing to %s", mode_name(mode), d.dir);
+		return;
+	}
+
+	// Only the game's own flips end a frame. The rest are native UI refreshes, which the emulator
+	// presents whenever an overlay asks, in the middle of a frame too: a capture replay makes dozens
+	// of them per frame while it copies memory between command chunks, and the performance overlay
+	// asks for them in game. Taking those for frame ends cut the frame into pieces.
+	if (!info.emu_flip)
+	{
 		return;
 	}
 

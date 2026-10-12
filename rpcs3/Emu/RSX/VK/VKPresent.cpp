@@ -1225,7 +1225,7 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 void VKGSRender::flip(const rsx::display_flip_info_t& info)
 {
 	// Frame dumps (VKFrameDump.cpp) start, wait and finish on flips.
-	frame_dump_on_flip();
+	frame_dump_on_flip(info);
 
 	// GPU timing is driven from the flip, the only place that corresponds to a real
 	// presented frame. collect() is non-blocking: anything the GPU has not finished is

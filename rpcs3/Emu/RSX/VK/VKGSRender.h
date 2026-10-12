@@ -316,7 +316,7 @@ private:
 	};
 	std::vector<frame_dump_copy> m_frame_dump_pending;
 
-	void frame_dump_on_flip();
+	void frame_dump_on_flip(const rsx::display_flip_info_t& info);
 	void frame_dump_capture(const char* why);
 	void frame_dump_save(const std::vector<vk::image*>& images, const char* why, const std::string& desc);
 	void frame_dump_record(const std::vector<vk::image*>& images, const char* tag, const char* why, const std::string& desc);
