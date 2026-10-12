@@ -4182,6 +4182,19 @@ extern "C" int _rpcsx_boot(std::string_view path_) {
     }
   }
 
+  // An RSX capture (.rrc, as written by the in-game Capture button to config/captures) replays
+  // its one frame in a loop instead of booting a game: the way to look at a graphics bug again
+  // without the game, or on another machine. Started like any file, e.g. a VIEW intent with its
+  // file:// path:
+  //   adb shell am start -a android.intent.action.VIEW -d file://<path>.rrc.gz
+  //       -n com.armsx3/com.armsx2.BootSplashActivity
+  if (const std::string lower = fmt::to_lower(path);
+      lower.ends_with(".rrc") || lower.ends_with(".rrc.gz") || lower.ends_with(".rrc.zst")) {
+    rpcsx_android.notice("boot: '%s' is an RSX capture, replaying it", path);
+    return static_cast<int>(Emu.BootRsxCapture(path) ? game_boot_result::no_errors
+                                                     : game_boot_result::generic_error);
+  }
+
   return static_cast<int>(Emu.BootGame(path, "", false, cfg_mode::custom));
 }
 
