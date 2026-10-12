@@ -5207,7 +5207,34 @@ extern "C" bool _rpcsx_patchSetEnabled(std::string_view hash,
   entry.version = h->second.version;
 
   auto &info = entry.patch_info_map[std::string(description)];
+
+  // The patch's details come from the database, but every serial's switch comes from the config
+  // read just above.
+  //
+  // The cached database carries the enabled state the config had when the cache was built, and
+  // it is rebuilt only when a patch FILE changes, never when the config does. Copying it over the
+  // entry wholesale put every other serial back the way it was at that moment, so switching one
+  // patch on for several serials in a row kept only the last. Ps3PatchRepo.BUNDLED does exactly
+  // that: on a clean install GTA IV's collision fix came out on for NPUB30702 alone, and the
+  // Complete Edition (BLUS30682) would have run Approximate without it.
+  const patch_engine::patch_titles current = std::move(info.titles);
   info = p->second;
+
+  for (auto &[title, serials] : info.titles)
+    for (auto &[ser, versions] : serials)
+      for (auto &[ver, values] : versions) {
+        // Absent from the config means off.
+        values.enabled = false;
+
+        if (const auto t = current.find(title); t != current.end())
+          if (const auto s = t->second.find(ser); s != t->second.end())
+            if (const auto v = s->second.find(ver); v != s->second.end()) {
+              values.enabled = v->second.enabled;
+
+              if (!v->second.config_values.empty())
+                values.config_values = v->second.config_values;
+            }
+      }
 
   // patch_key::all is spelled "All"; the lowercase literal this used to compare
   // against never matched, so a wildcard patch toggled from a game's own list

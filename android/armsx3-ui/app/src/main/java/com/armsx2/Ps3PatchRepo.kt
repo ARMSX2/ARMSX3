@@ -323,6 +323,12 @@ object Ps3PatchRepo {
      * keeps a bump from touching the patches that were already here: an install whose
      * stored revision is at or above it has been offered this patch once already, and
      * whatever the user did with the toggle afterwards is their answer.
+     *
+     * The exception is 14. Until then patchSetEnabled kept only the LAST serial of a patch
+     * enabled for several serials in a row (rpcsx-android.cpp explains why), so every
+     * earlier serial of such a group was never actually turned on, whatever the stored
+     * revision says. Those entries are offered again at 14; the last of each group keeps
+     * its original revision, since that one did turn on and a user's OFF there is real.
      */
     private data class Bundled(
         val hash: String,
@@ -343,14 +349,14 @@ object Ps3PatchRepo {
             name = "ARMSX3 Approximate collision fix",
             serial = "BLUS30682",
             appVersion = "All",
-            sinceRevision = 13,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "SPU-d0a1508208613e2184fbd64906d34d5f07890033",
             name = "ARMSX3 Approximate collision fix",
             serial = "BLUS30127",
             appVersion = "All",
-            sinceRevision = 13,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "SPU-d0a1508208613e2184fbd64906d34d5f07890033",
@@ -368,7 +374,7 @@ object Ps3PatchRepo {
             name = "ARMSX3 phase start crash fix",
             serial = "BLUS30335",
             appVersion = "All",
-            sinceRevision = 12,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-0e747cbf4d807d363b085d983fff749c2c9cbdee",
@@ -582,7 +588,7 @@ object Ps3PatchRepo {
             name = "Disable MLAA(Post-processing On SPU)",
             serial = "BCES01007",
             appVersion = "01.00",
-            sinceRevision = 8,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-ae204e2198c9a051a44a69913c48f6591b811082",
@@ -596,7 +602,7 @@ object Ps3PatchRepo {
             name = "Disable MLAA (Post-processing on SPU)",
             serial = "BCES01007",
             appVersion = "01.14",
-            sinceRevision = 8,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-4836b8e74c47919f50b030ee6b47d96bc7305387",
@@ -645,21 +651,21 @@ object Ps3PatchRepo {
             name = "Freeze Fix",
             serial = "BCAS20200",
             appVersion = "01.03",
-            sinceRevision = 4,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-4c819c69904784a56685c31df12f5d492bc0ed64",
             name = "Freeze Fix",
             serial = "BCES01141",
             appVersion = "01.03",
-            sinceRevision = 4,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-4c819c69904784a56685c31df12f5d492bc0ed64",
             name = "Freeze Fix",
             serial = "BCES01142",
             appVersion = "01.03",
-            sinceRevision = 4,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-4c819c69904784a56685c31df12f5d492bc0ed64",
@@ -673,7 +679,7 @@ object Ps3PatchRepo {
             name = "Freeze fix",
             serial = "BCES01908",
             appVersion = "01.00",
-            sinceRevision = 4,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-ed460e668a491f5e39f6547f3a24c2f20e2cb39b",
@@ -687,28 +693,28 @@ object Ps3PatchRepo {
             name = "Freeze fix",
             serial = "BCUS99245",
             appVersion = "01.01",
-            sinceRevision = 4,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
             name = "Freeze fix",
             serial = "NPUA80908",
             appVersion = "01.01",
-            sinceRevision = 4,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
             name = "Freeze fix",
             serial = "BCES01908",
             appVersion = "01.01",
-            sinceRevision = 4,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
             name = "Freeze fix",
             serial = "BCES01949",
             appVersion = "01.01",
-            sinceRevision = 4,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
@@ -722,21 +728,21 @@ object Ps3PatchRepo {
             name = "Freeze Fix",
             serial = "BCAS20052",
             appVersion = "All",
-            sinceRevision = 4,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-f07f7086588a4ea86a28bd768f0cbe710f5b813b",
             name = "Freeze Fix",
             serial = "BCES00301",
             appVersion = "All",
-            sinceRevision = 4,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-f07f7086588a4ea86a28bd768f0cbe710f5b813b",
             name = "Freeze Fix",
             serial = "NPEA00088",
             appVersion = "All",
-            sinceRevision = 4,
+            sinceRevision = 14,
         ),
         Bundled(
             hash = "PPU-f07f7086588a4ea86a28bd768f0cbe710f5b813b",
@@ -768,7 +774,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 13
+    private const val BUNDLED_REVISION = 14
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
