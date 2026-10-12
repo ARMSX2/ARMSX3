@@ -336,8 +336,8 @@ object Ps3PatchRepo {
         // GRAND THEFT AUTO IV, BLUS30682 v01.02 and the same executable as BLUS30127 / NPUB30702
         // v01.08 -- ours. The collision job seeds its distances with the SPU's largest float,
         // which is a NaN on Approximate, so the first convergence test fails and Niko falls
-        // through the world; the patch uses FLT_MAX instead. The xfloat default stays Accurate.
-        // See canary_patches.yml.
+        // through the world; the patch uses FLT_MAX instead. ConfigDatabase.LOCAL_OVERRIDES puts
+        // these three serials on Approximate, which relies on this being on. See canary_patches.yml.
         Bundled(
             hash = "SPU-d0a1508208613e2184fbd64906d34d5f07890033",
             name = "ARMSX3 Approximate collision fix",

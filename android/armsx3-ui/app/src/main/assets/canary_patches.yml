@@ -630,7 +630,8 @@ PPU-0e747cbf4d807d363b085d983fff749c2c9cbdee:
 # GRAND THEFT AUTO IV, BLUS30682 v01.02 (Complete Edition) and the same executable sold as
 # BLUS30127 / NPUB30702 v01.08 -- ours. With SPU XFloat Accuracy on Approximate, Niko falls
 # through floors, roads and cars; RPCS3's database pins the game to Accurate for that, which
-# costs a lot of SPU time.
+# costs a lot of SPU time. With this patch on, ConfigDatabase.LOCAL_OVERRIDES puts these three
+# serials back on Approximate.
 #
 # The collision job SpuCollide_psn_final.task.elf starts its searches with "max distance"
 # set to 0x7FFFFFFF, the SPU's largest float (~6.8e38; the SPU has no NaN or infinity). On
