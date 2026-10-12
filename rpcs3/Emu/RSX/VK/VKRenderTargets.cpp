@@ -879,22 +879,18 @@ namespace vk
 			write_barrier(cmd);
 		}
 
-		// Keep the render pass open across this barrier on Android.
+		// End the render pass before this barrier, on every platform.
 		//
-		// This is the fragment feedback case, an attachment sampled while still bound, and it
-		// is now covered by the by-region self-dependency the render pass declares. Ending the
-		// pass here was costing 20 to 23 restarts a frame out of roughly 83 in Arkham City,
-		// and on a tiled GPU each is a tile store plus a reload of the attachment.
-		//
-		// Android only for now: the self-dependency is declared everywhere, but this device is
-		// where the tile traffic is measured and where it hurts.
-#ifdef __ANDROID__
-		constexpr bool preserve_renderpass = true;
-#else
-		constexpr bool preserve_renderpass = false;
-#endif
-
-		vk::insert_texture_barrier(cmd, this, optimal_layout, preserve_renderpass);
+		// This is the feedback case: an attachment sampled while it is still bound. Android used
+		// to keep the pass open here (08553f02d) to save tile stores, and that cannot work. The
+		// barrier moves the attachment into the feedback layout, the layout is part of the render
+		// pass key, so the next draw ends the pass and begins another one anyway. A barrier
+		// recorded inside a pass only orders commands inside that same subpass, so nothing then
+		// ordered the old pass's writes, its tile store included, before the new pass sampled the
+		// attachment. Those reads race the writes and can come back stale in tile-sized blocks.
+		// Ending the pass first, as upstream does, puts the barrier outside it, where it covers
+		// everything the pass wrote.
+		vk::insert_texture_barrier(cmd, this, optimal_layout);
 		m_cyclic_ref_tracker.on_insert_texture_barrier();
 
 		if (is_framebuffer_read_only)
