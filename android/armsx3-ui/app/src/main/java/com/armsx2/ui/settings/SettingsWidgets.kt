@@ -290,7 +290,10 @@ internal object SettingsControllerNav {
     fun moveSpatial(dx: Int, dy: Int): Boolean {
         if (dx == 0 && dy == 0) return false
         val curId = selectedId.value
-        val cur = curId?.let { positions[it] }
+        // Only the active layer takes part, as in [move]. Without this an overlay's rows reached
+        // the screen behind them: Up through the capture picker in Settings, Advanced landed on the
+        // Frame dump row it covers, which sits between two of its rows on screen.
+        val cur = curId?.takeIf { inActiveLayer(it) }?.let { positions[it] }
         if (cur == null) {
             val moved = move(if (dx < 0 || dy < 0) -1 else 1)
             android.util.Log.d("ARMSX2_MCNAV", "moveSpatial dx=$dx dy=$dy cur=$curId NO_POS -> fallback move=$moved")
@@ -308,7 +311,7 @@ internal object SettingsControllerNav {
             // nowhere useful on the card grid.
             var rowY: Float? = null
             for ((id, p) in positions) {
-                if (id == curId || registry[id] == null) continue
+                if (id == curId || registry[id] == null || !inActiveLayer(id)) continue
                 val py = p.first
                 if (dy < 0 && py >= cy - rowTol) continue   // need a row strictly above
                 if (dy > 0 && py <= cy + rowTol) continue   // need a row strictly below
@@ -323,7 +326,7 @@ internal object SettingsControllerNav {
                 var bestId: String? = null
                 var bestDx = Float.MAX_VALUE
                 for ((id, p) in positions) {
-                    if (id == curId || registry[id] == null) continue
+                    if (id == curId || registry[id] == null || !inActiveLayer(id)) continue
                     if (abs(p.first - ry) > rowTol) continue
                     val d = abs(p.second - cx)
                     if (d < bestDx) { bestDx = d; bestId = id }
@@ -335,7 +338,7 @@ internal object SettingsControllerNav {
             var bestId: String? = null
             var bestScore = Float.MAX_VALUE
             for ((id, p) in positions) {
-                if (id == curId || registry[id] == null) continue
+                if (id == curId || registry[id] == null || !inActiveLayer(id)) continue
                 val ddx = p.second - cx
                 val ddy = p.first - cy
                 val inDir = if (dx > 0) ddx > 1f && abs(ddy) < rowTol
