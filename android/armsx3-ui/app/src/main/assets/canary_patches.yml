@@ -642,8 +642,10 @@ PPU-0e747cbf4d807d363b085d983fff749c2c9cbdee:
 # the xyz mask at LS 0x1d890. numeric_limits<float>::max() in .data (LS 0x1dc18) must NOT be
 # changed: lowest() is compared bit for bit against 0xffffffff "unset" fill.
 #
-# Harmless on Accurate, where both values are finite. Episodes from Liberty City is a
-# separate executable with its own collision job and is not covered.
+# Harmless on Accurate, where both values are finite. On the Complete Edition the two
+# Episodes from Liberty City run inside this same executable as add-on content (ELC/DLC1,
+# ELC/DLC2): a Ballad of Gay Tony boot loaded the same SpuCollide and took all 14 lines. The
+# standalone Episodes from Liberty City disc is a different executable and is not covered.
 #
 # Offsets are LS addresses: apply_modification subtracts p_vaddr (0x3000).
 # Ps3PatchRepo.BUNDLED must list this, or it is imported but never enabled.
