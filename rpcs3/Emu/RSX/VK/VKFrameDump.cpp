@@ -58,9 +58,10 @@ namespace
 	constexpr u32 min_frame_draws = 50;
 
 	// But not forever, so a game that really does draw that little is still dumped. In every_pass
-	// mode each flip waited through also saves its targets, hence the far shorter wait.
+	// mode each flip waited through saves its targets (and removes them again), so it waits less. A
+	// capture replay needs about 30: it presents near-empty frames between its real ones.
 	constexpr u64 max_wait_flips_final = 600;
-	constexpr u64 max_wait_flips_passes = 16;
+	constexpr u64 max_wait_flips_passes = 120;
 
 	struct env_trigger
 	{
@@ -404,7 +405,10 @@ void VKGSRender::frame_dump_on_flip()
 
 		d.active = true;
 		d.fb_desc = "(bound before the dump started)";
-		d.index = fmt::format("ARMSX3 frame dump\nGame: %s %s\nMode: %s\n\n", Emu.GetTitleID(), Emu.GetTitle(), mode_name(mode));
+		d.index = fmt::format("ARMSX3 frame dump\nGame: %s\nMode: %s\n\n",
+			Emu.GetTitleID().empty() && Emu.GetTitle().empty() ? std::string("(capture replay)") : fmt::format("%s %s", Emu.GetTitleID(), Emu.GetTitle()),
+			mode_name(mode));
+		d.flip_index_start = d.index.size();
 		rsx_log.notice("Frame dump: armed (%s), writing to %s", mode_name(mode), d.dir);
 		return;
 	}
@@ -424,17 +428,29 @@ void VKGSRender::frame_dump_on_flip()
 
 	if (d.frame_draws < min_frame_draws && d.flips_waited < max_wait && d.stop_reason.empty())
 	{
-		if (d.mode == dump_mode::every_pass && d.frame_draws)
+		// Not the frame. In every_pass mode, take back what it saved, so the folder holds one frame.
+		for (const auto& name : d.flip_files)
 		{
-			fmt::append(d.index, "Flip %u had only %u draws, so the dump carried on into the next one.\n", d.flips_waited, d.frame_draws);
+			fs::remove_file(d.dir + name);
 		}
 
+		d.images -= ::size32(d.flip_files);
+		d.bytes -= d.flip_bytes;
+		d.index.resize(d.flip_index_start);
+		d.flip_files.clear();
+		d.flip_bytes = 0;
+		d.flips_passed_over++;
 		d.frame_draws = 0;
 		return;
 	}
 
 	// This flip shows that frame: save what it shows, then what reached the screen.
-	fmt::append(d.index, "\nThe dumped frame had %u draws (flip %u after the dump was asked for).\n", d.frame_draws, d.flips_waited);
+	if (d.flips_passed_over)
+	{
+		fmt::append(d.index, "Passed over %u flip(s) with fewer than %u draws before this frame.\n", d.flips_passed_over, min_frame_draws);
+	}
+
+	fmt::append(d.index, "The dumped frame had %u draws.\n\n", d.frame_draws);
 	d.active = false;
 	d.take_final = true;
 	d.take_screen = true;
@@ -507,6 +523,7 @@ void VKGSRender::frame_dump_record(const std::vector<vk::image*>& images, const 
 		copy.size = u64{copy.width} * copy.height * copy.bpp;
 		copy.why = why;
 		copy.desc = desc;
+		copy.draws = std::strcmp(tag, "pass") == 0 ? d.draws : umax;
 		copy.name = fmt::format("%03u_%s_a%u_%ux%u.png", d.images + static_cast<u32>(m_frame_dump_pending.size()), tag, i, copy.width, copy.height);
 		copy.buf = std::make_unique<vk::buffer>(*m_device, copy.size,
 			m_device->get_memory_mapping().host_visible_coherent, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
@@ -529,14 +546,14 @@ void VKGSRender::frame_dump_write_pending()
 	// Caller's job: the GPU has finished the copies, and a TRANSFER -> HOST barrier made them visible.
 	for (auto& p : m_frame_dump_pending)
 	{
-		frame_dump_write(p.name, p.width, p.height, p.format, p.bpp, p.buf->map(0, p.size), p.why.c_str(), p.desc);
+		frame_dump_write(p, p.buf->map(0, p.size));
 		p.buf->unmap();
 	}
 
 	m_frame_dump_pending.clear();
 }
 
-bool VKGSRender::frame_dump_write(const std::string& name, u32 width, u32 height, VkFormat format, u32 bpp, const void* data, const char* why, const std::string& desc)
+bool VKGSRender::frame_dump_write(const frame_dump_copy& copy, const void* data)
 {
 	auto& d = m_frame_dump;
 
@@ -557,12 +574,12 @@ bool VKGSRender::frame_dump_write(const std::string& name, u32 width, u32 height
 		return false;
 	}
 
-	const rgb_image image = to_rgb8(format, bpp, static_cast<const u8*>(data), width, height);
-	const std::vector<u8> png = encode_png(image, width, height);
+	const rgb_image image = to_rgb8(copy.format, copy.bpp, static_cast<const u8*>(data), copy.width, copy.height);
+	const std::vector<u8> png = encode_png(image, copy.width, copy.height);
 
 	if (png.empty())
 	{
-		fmt::append(d.index, "%s: could not be encoded\n", name);
+		fmt::append(d.index, "%s: could not be encoded\n", copy.name);
 		return false;
 	}
 
@@ -572,19 +589,30 @@ bool VKGSRender::frame_dump_write(const std::string& name, u32 width, u32 height
 		return false;
 	}
 
-	fs::file out(d.dir + name, fs::rewrite);
+	fs::file out(d.dir + copy.name, fs::rewrite);
 
 	if (!out)
 	{
-		d.stop_reason = fmt::format("could not write %s (%s)", name, fs::g_tls_error);
+		d.stop_reason = fmt::format("could not write %s (%s)", copy.name, fs::g_tls_error);
 		return false;
 	}
 
 	out.write(png.data(), png.size());
 	d.bytes += png.size();
 	d.images++;
+	d.flip_files.push_back(copy.name);
+	d.flip_bytes += png.size();
 
-	fmt::append(d.index, "%s  %s: %u draws into %s; %ux%u %s (VkFormat %d)", name, why, d.draws, desc, width, height, image.kind, static_cast<int>(format));
+	if (copy.draws != umax)
+	{
+		fmt::append(d.index, "%s  %s: %u draw(s) into %s", copy.name, copy.why, copy.draws, copy.desc);
+	}
+	else
+	{
+		fmt::append(d.index, "%s  %s: %s", copy.name, copy.why, copy.desc);
+	}
+
+	fmt::append(d.index, "; %ux%u %s (VkFormat %d)", copy.width, copy.height, image.kind, static_cast<int>(copy.format));
 
 	if (image.nan_or_inf)
 	{

@@ -2142,6 +2142,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			copy.size = u64{copy.width} * copy.height * copy.bpp;
 			copy.why = "screen";
 			copy.desc = "the swapchain image, as it is handed to the display";
+			copy.draws = umax;
 			copy.name = fmt::format("%03u_screen_%ux%u.png", m_frame_dump.images + static_cast<u32>(m_frame_dump_pending.size()), copy.width, copy.height);
 			copy.buf = std::make_unique<vk::buffer>(*m_device, copy.size,
 				m_device->get_memory_mapping().host_visible_coherent, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,

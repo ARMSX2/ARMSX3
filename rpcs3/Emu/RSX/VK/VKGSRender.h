@@ -293,6 +293,10 @@ private:
 		u32 images = 0;           // images written
 		u32 draws = 0;            // draws since the last save
 		u32 frame_draws = 0;      // draws in the frame being looked at
+		u32 flips_passed_over = 0; // flips with too few draws to be the frame
+		std::vector<std::string> flip_files; // every_pass: written during this flip, removed if it is passed over
+		u64 flip_bytes = 0;       // their size
+		usz flip_index_start = 0; // where this flip's lines in index begin
 		bool active = false;      // armed and still looking for its frame
 		bool take_final = false;  // save the image this flip shows
 		bool take_screen = false; // read the screen buffer back on this flip
@@ -305,6 +309,7 @@ private:
 	{
 		std::unique_ptr<vk::buffer> buf;
 		std::string name, why, desc;
+		u32 draws = 0;            // draws into it since the last save; shown for passes only
 		u32 width = 0, height = 0, bpp = 0;
 		VkFormat format = VK_FORMAT_UNDEFINED;
 		u64 size = 0;
@@ -316,7 +321,7 @@ private:
 	void frame_dump_save(const std::vector<vk::image*>& images, const char* why, const std::string& desc);
 	void frame_dump_record(const std::vector<vk::image*>& images, const char* tag, const char* why, const std::string& desc);
 	void frame_dump_write_pending();
-	bool frame_dump_write(const std::string& name, u32 width, u32 height, VkFormat format, u32 bpp, const void* data, const char* why, const std::string& desc);
+	bool frame_dump_write(const frame_dump_copy& copy, const void* data);
 	void frame_dump_finish();
 
 	void close_and_submit_command_buffer(
