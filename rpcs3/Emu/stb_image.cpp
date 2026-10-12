@@ -5,11 +5,15 @@
 // Sneak in truetype as well.
 #define STB_TRUETYPE_IMPLEMENTATION
 
+// And the PNG writer, for frame dumps (RSX/VK/VKFrameDump.cpp).
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+
 // This header generates lots of errors, so we ignore those (not rpcs3 code)
 #ifdef _MSC_VER
 #pragma warning(push, 0)
 #include <stb_image.h>
 #include <stb_truetype.h>
+#include <stb_image_write.h>
 #pragma warning(pop)
 #else
 #pragma GCC diagnostic push
@@ -26,5 +30,6 @@
 #pragma GCC diagnostic ignored "-Wsign-compare"
 #include <stb_image.h>
 #include <stb_truetype.h>
+#include <stb_image_write.h>
 #pragma GCC diagnostic pop
 #endif

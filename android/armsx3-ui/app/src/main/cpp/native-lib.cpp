@@ -40,6 +40,7 @@ struct RPCSXApi {
   void (*setAppBackgrounded)(bool);
   void (*openHomeMenu)();
   void (*captureFrame)();
+  bool (*dumpFrame)(int mode);
   std::string (*getTitleId)();
   std::string (*getTitle)();
   unsigned long long (*getFramePeriodNs)();
@@ -174,6 +175,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.pause = reinterpret_cast<decltype(pause)>(dlsym(handle, "_rpcsx_pause"));
     result.setAppBackgrounded = reinterpret_cast<decltype(setAppBackgrounded)>(dlsym(handle, "_rpcsx_setAppBackgrounded"));
     result.captureFrame = reinterpret_cast<decltype(captureFrame)>(dlsym(handle, "_rpcsx_captureFrame"));
+    result.dumpFrame = reinterpret_cast<decltype(dumpFrame)>(dlsym(handle, "_rpcsx_dumpFrame"));
     result.openHomeMenu = reinterpret_cast<decltype(openHomeMenu)>(dlsym(handle, "_rpcsx_openHomeMenu"));
     result.getTitleId = reinterpret_cast<decltype(getTitleId)>(dlsym(handle, "_rpcsx_getTitleId"));
     result.getTitle = reinterpret_cast<decltype(getTitle)>(dlsym(handle, "_rpcsx_getTitle"));
@@ -518,6 +520,15 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_captureFrame(JNIEnv *env,
   }
 
   return rpcsxLib.captureFrame();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_dumpFrame(JNIEnv *env,
+                                                                    jobject, jint mode) {
+  if (rpcsxLib.dumpFrame == nullptr) {
+      return false;
+  }
+
+  return rpcsxLib.dumpFrame(mode);
 }
 
 extern "C" JNIEXPORT jstring JNICALL

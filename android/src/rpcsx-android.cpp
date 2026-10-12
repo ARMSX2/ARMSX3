@@ -29,6 +29,7 @@
 #include "Emu/RSX/Overlays/overlay_trophy_notification.h"
 #include "Emu/RSX/Overlays/overlay_utils.h"
 #include "Emu/RSX/RSXThread.h"
+#include "Emu/RSX/rsx_frame_dump.h"
 #include "Emu/RSX/GL/GLGSRender.h"
 #include "Emu/RSX/VK/VKGSRender.h"
 #include "Emu/savestate_utils.hpp"
@@ -4271,6 +4272,16 @@ extern "C" void _rpcsx_openHomeMenu() { open_home_menu_async(); }
 // at the next frame boundary, records that frame's command stream, writes it under
 // config/captures/ and pauses the emulator.
 extern "C" void _rpcsx_captureFrame() { g_user_asked_for_frame_capture = true; }
+
+// Arm a frame dump of the next frame (rsx_frame_dump.h): 1 = final image, 2 = every render pass.
+// False when the renderer cannot do it, which the menu says rather than arming nothing.
+extern "C" bool _rpcsx_dumpFrame(int mode) {
+  if (mode != 1 && mode != 2) {
+    return false;
+  }
+
+  return rsx::frame_dump::request(static_cast<rsx::frame_dump::dump_mode>(mode));
+}
 
 extern "C" std::string _rpcsx_getTitleId() { return Emu.GetTitleID(); }
 

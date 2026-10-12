@@ -224,6 +224,10 @@ class RPCSX {
     /** Arm an RSX frame capture: the next frame the emulator renders is recorded to
      *  config/captures/ and emulation pauses. */
     external fun captureFrame()
+
+    /** Arm a frame dump of the next frame (1 = final image, 2 = every render pass), saved as PNGs to
+     *  config/captures/. False when the renderer cannot dump frames. */
+    external fun dumpFrame(mode: Int): Boolean
     external fun loginUser(userId: String)
     external fun getUser(): String
     external fun getTitleId(): String

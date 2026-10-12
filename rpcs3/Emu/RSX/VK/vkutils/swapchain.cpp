@@ -4,6 +4,10 @@
 
 namespace vk
 {
+	// Whether the WSI images were created with TRANSFER_SRC, so a frame dump can read the screen
+	// buffer back (VKPresent.cpp).
+	bool g_swapchain_transfer_src = false;
+
 	// Swapchain image RPCS3
 	swapchain_image_RPCS3::swapchain_image_RPCS3(render_device& dev, const memory_type_mapping& memory_map, u32 width, u32 height)
 		:image(dev, memory_map.device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_IMAGE_TYPE_2D, VK_FORMAT_B8G8R8A8_UNORM, width, height, 1, 1, 1,
@@ -431,6 +435,16 @@ namespace vk
 			rsx_log.warning("Swapchain: surface does not support TRANSFER_SRC; frame generation"
 				" cannot read presented frames on this surface.");
 		}
+
+		// A scripted frame dump (ARMSX3_DUMP_PASSES, see rsx_frame_dump.h) reads the screen buffer back
+		// too. Asked for only then: TRANSFER_SRC is not free on every driver.
+		if (const char* env = std::getenv("ARMSX3_DUMP_PASSES"); env && *env &&
+			(surface_descriptors.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT))
+		{
+			swap_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+		}
+
+		g_swapchain_transfer_src = !!(swap_info.imageUsage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
 		swap_info.preTransform = pre_transform;
 
 		// compositeAlpha must be one of the bits in surface_descriptors.supportedCompositeAlpha

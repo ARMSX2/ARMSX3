@@ -1347,6 +1347,11 @@ void VKGSRender::end()
 	// itself only accounts for a couple of milliseconds.
 	RSX_PROF_SCOPE(draw_setup);
 
+	if (m_frame_dump.active) [[unlikely]]
+	{
+		m_frame_dump.draws++;
+	}
+
 	if (skip_current_frame || !m_graphics_state.test(rsx::rtt_config_valid) || swapchain_unavailable || cond_render_ctrl.disable_rendering())
 	{
 		execute_nop_draw();

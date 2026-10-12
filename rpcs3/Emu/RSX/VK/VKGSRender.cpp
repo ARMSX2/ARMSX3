@@ -2735,6 +2735,12 @@ void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)
 		return;
 	}
 
+	// Frame dump, every pass: the targets about to be replaced are finished, so save them first.
+	if (m_frame_dump.active && m_frame_dump.mode == rsx::frame_dump::dump_mode::every_pass && m_draw_fbo && m_frame_dump.draws) [[unlikely]]
+	{
+		frame_dump_capture("target switch");
+	}
+
 	m_graphics_state.clear(
 		rsx::rtt_config_dirty |
 		rsx::rtt_config_contested |
@@ -2942,6 +2948,16 @@ void VKGSRender::prepare_rtts(rsx::framebuffer_creation_context context)
 
 	m_draw_fbo = vk::get_framebuffer(*m_device, fbo_width, fbo_height, vk::to_bool32(!input_attachments.empty()), m_cached_renderpass, m_fbo_images);
 	m_draw_fbo->add_ref();
+
+	if (m_frame_dump.active) [[unlikely]]
+	{
+		const auto& l = m_framebuffer_layout;
+		m_frame_dump.fb_desc = fmt::format("%ux%u colour format %d at [0x%x 0x%x 0x%x 0x%x] writing [%d%d%d%d], depth format %d at 0x%x",
+			l.width, l.height, static_cast<int>(l.color_format),
+			l.color_addresses[0], l.color_addresses[1], l.color_addresses[2], l.color_addresses[3],
+			+l.color_write_enabled[0], +l.color_write_enabled[1], +l.color_write_enabled[2], +l.color_write_enabled[3],
+			static_cast<int>(l.depth_format), l.zeta_address);
+	}
 
 	set_viewport();
 	set_scissor(clipped_scissor);

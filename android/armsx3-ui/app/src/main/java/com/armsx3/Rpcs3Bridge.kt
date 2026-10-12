@@ -1369,6 +1369,13 @@ object Rpcs3Bridge {
         runCatching { RPCSX.instance.captureFrame() }
     }
 
+    /** Arm a frame dump: the next frame with real drawing is saved as PNGs to config/captures/.
+     *  Like a capture, it waits for a frame to be rendered, so close the pause menu first. False when
+     *  the active renderer cannot do it. */
+    @JvmStatic
+    fun dumpFrame(mode: Int): Boolean =
+        runCatching { RPCSX.instance.dumpFrame(mode) }.getOrDefault(false)
+
     @JvmStatic
     fun rpcnDeleteTrophies(): String =
         runCatching { RPCSX.instance.rpcnDeleteTrophies() }

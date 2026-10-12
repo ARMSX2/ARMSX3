@@ -24,6 +24,12 @@
 extern atomic_t<bool> g_user_asked_for_screenshot;
 extern atomic_t<recording_mode> g_recording_mode;
 
+namespace vk
+{
+	// Set in swapchain.cpp: whether the WSI images can be read back (TRANSFER_SRC).
+	extern bool g_swapchain_transfer_src;
+}
+
 namespace
 {
 	VkFormat RSX_display_format_to_vk_format(u8 format)
@@ -1091,6 +1097,23 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 	const auto overlap_info = m_rtts.get_merged_texture_memory_region(*m_current_command_buffer,
 		info->address, info->width, info->height, info->pitch, format_bpp, rsx::surface_access::transfer_read);
 
+	if (m_frame_dump.take_final) [[unlikely]]
+	{
+		// Frame dump: what the image shown is assembled from, since a wrong piece here is its own bug.
+		fmt::append(m_frame_dump.index, "The final image is display buffer 0x%x, %ux%u, pitch %u, format %d, from %u surface(s):\n",
+			info->address, info->width, info->height, info->pitch, static_cast<int>(info->format), static_cast<u32>(overlap_info.size()));
+
+		for (const auto& section : overlap_info)
+		{
+			const auto rtt = vk::as_rtt(section.surface);
+			fmt::append(m_frame_dump.index, "  surface 0x%x, %ux%u%s%s%s, from [%u,%u %ux%u] to [%u,%u %ux%u]\n",
+				rtt->base_addr, rtt->get_surface_width<rsx::surface_metrics::samples>(), rtt->get_surface_height<rsx::surface_metrics::samples>(),
+				section.is_depth ? ", depth" : "", section.is_clipped ? ", clipped" : "", section.is_reloaded ? ", reloaded" : "",
+				section.src_area.x, section.src_area.y, section.src_area.width, section.src_area.height,
+				section.dst_area.x, section.dst_area.y, section.dst_area.width, section.dst_area.height);
+		}
+	}
+
 	if (!overlap_info.empty())
 	{
 		const auto& section = overlap_info.back();
@@ -1201,6 +1224,9 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 
 void VKGSRender::flip(const rsx::display_flip_info_t& info)
 {
+	// Frame dumps (VKFrameDump.cpp) start, wait and finish on flips.
+	frame_dump_on_flip();
+
 	// GPU timing is driven from the flip, the only place that corresponds to a real
 	// presented frame. collect() is non-blocking: anything the GPU has not finished is
 	// left for a later call rather than waited on.
@@ -1426,6 +1452,20 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			.eye = 0
 		};
 		image_to_flip = get_present_source(&present_info, avconfig);
+
+		if (m_frame_dump.take_final) [[unlikely]]
+		{
+			m_frame_dump.take_final = false;
+
+			if (image_to_flip)
+			{
+				frame_dump_save({ image_to_flip }, "final image", fmt::format("the image this flip shows (%ux%u)", image_to_flip->width(), image_to_flip->height()));
+			}
+			else
+			{
+				m_frame_dump.index += "This flip had no image to show.\n";
+			}
+		}
 
 		if (avconfig.stereo_enabled) [[unlikely]]
 		{
@@ -2069,12 +2109,71 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			buffer_width, buffer_height);
 	}
 
+	// Frame dump: copy out the swapchain image as it will be presented, to tell a frame that was
+	// rendered wrong from one that only reached the screen wrong.
+	std::unique_ptr<vk::buffer> dump_screen;
+	vk::command_buffer_chunk* dump_screen_cb = nullptr;
+	const u32 dump_screen_width = m_swapchain->get_width();
+	const u32 dump_screen_height = m_swapchain->get_height();
+	const VkFormat dump_screen_format = m_swapchain->get_surface_format();
+	const u32 dump_screen_bpp = vk::get_format_texel_width(dump_screen_format);
+	const u64 dump_screen_size = u64{dump_screen_width} * dump_screen_height * dump_screen_bpp;
+
+	if (m_frame_dump.take_screen) [[unlikely]]
+	{
+		m_frame_dump.take_screen = false;
+
+		if (m_swapchain->is_headless() || !vk::g_swapchain_transfer_src || !m_frame_dump.stop_reason.empty())
+		{
+			// Reading a WSI image needs TRANSFER_SRC, which the swapchain only asks for when frame
+			// generation is on or ARMSX3_DUMP_PASSES was set at boot.
+			m_frame_dump.index += m_frame_dump.stop_reason.empty()
+				? "The screen buffer was not saved: this swapchain cannot be read back.\n"
+				: "";
+		}
+		else
+		{
+			dump_screen = std::make_unique<vk::buffer>(*m_device, dump_screen_size,
+				m_device->get_memory_mapping().host_visible_coherent, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
+				VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_SYSTEM);
+
+			vk::change_image_layout(*m_current_command_buffer, target_image, target_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, subresource_range);
+			target_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+			VkBufferImageCopy region{};
+			region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+			region.imageExtent = { dump_screen_width, dump_screen_height, 1 };
+			vkCmdCopyImageToBuffer(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dump_screen->value, 1, &region);
+
+			vk::insert_global_memory_barrier(*m_current_command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+				VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+			dump_screen_cb = m_current_command_buffer;
+		}
+
+		if (!dump_screen)
+		{
+			frame_dump_finish();
+		}
+	}
+
 	if (target_layout != present_layout)
 	{
 		vk::change_image_layout(*m_current_command_buffer, target_image, target_layout, present_layout, subresource_range);
 	}
 
 	queue_swap_request();
+
+	if (dump_screen) [[unlikely]]
+	{
+		// The copy rides in the frame's own command buffer, so wait for that one to land.
+		dump_screen_cb->wait(FRAME_PRESENT_TIMEOUT);
+
+		const std::string name = fmt::format("%03u_screen_%ux%u.png", m_frame_dump.images, dump_screen_width, dump_screen_height);
+		frame_dump_write(name, dump_screen_width, dump_screen_height, dump_screen_format, dump_screen_bpp,
+			dump_screen->map(0, dump_screen_size), "screen", "the swapchain image, as it is handed to the display");
+		dump_screen->unmap();
+		frame_dump_finish();
+	}
 
 	m_frame_stats.flip_time = m_profiler.duration();
 

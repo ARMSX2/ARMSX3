@@ -21,6 +21,7 @@
 
 #include "Emu/RSX/GSRender.h"
 #include "Emu/RSX/Host/RSXDMAWriter.h"
+#include "Emu/RSX/rsx_frame_dump.h"
 #include <functional>
 #include <initializer_list>
 
@@ -278,6 +279,32 @@ public:
 
 private:
 	void prepare_rtts(rsx::framebuffer_creation_context context);
+
+	// Frame dumps (rsx_frame_dump.h, VKFrameDump.cpp). Inactive and free unless one was requested.
+	struct frame_dump_state
+	{
+		rsx::frame_dump::dump_mode mode = rsx::frame_dump::dump_mode::none;
+		std::string dir;          // this dump's folder, with a trailing slash
+		std::string index;        // frame.txt, written when the dump ends
+		std::string fb_desc;      // the render target set currently bound
+		std::string stop_reason;  // set when a limit was reached; nothing more is written
+		u64 flips_waited = 0;     // flips since the dump was armed
+		u64 bytes = 0;            // PNG bytes written
+		u32 images = 0;           // images written
+		u32 draws = 0;            // draws since the last save
+		u32 frame_draws = 0;      // draws in the frame being looked at
+		bool active = false;      // armed and still looking for its frame
+		bool take_final = false;  // save the image this flip shows
+		bool take_screen = false; // read the screen buffer back on this flip
+	} m_frame_dump;
+
+	u64 m_frame_dump_flips = 0;   // flips since boot, for ARMSX3_DUMP_PASSES
+
+	void frame_dump_on_flip();
+	void frame_dump_capture(const char* why);
+	void frame_dump_save(const std::vector<vk::image*>& images, const char* why, const std::string& desc);
+	bool frame_dump_write(const std::string& name, u32 width, u32 height, VkFormat format, u32 bpp, const void* data, const char* why, const std::string& desc);
+	void frame_dump_finish();
 
 	void close_and_submit_command_buffer(
 		vk::fence* fence = nullptr,
