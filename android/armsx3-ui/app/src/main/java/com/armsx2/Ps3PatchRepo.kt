@@ -333,6 +333,32 @@ object Ps3PatchRepo {
     )
 
     private val BUNDLED = listOf(
+        // GRAND THEFT AUTO IV, BLUS30682 v01.02 and the same executable as BLUS30127 / NPUB30702
+        // v01.08 -- ours. The collision job seeds its distances with the SPU's largest float,
+        // which is a NaN on Approximate, so the first convergence test fails and Niko falls
+        // through the world; the patch uses FLT_MAX instead. The xfloat default stays Accurate.
+        // See canary_patches.yml.
+        Bundled(
+            hash = "SPU-d0a1508208613e2184fbd64906d34d5f07890033",
+            name = "ARMSX3 Approximate collision fix",
+            serial = "BLUS30682",
+            appVersion = "All",
+            sinceRevision = 13,
+        ),
+        Bundled(
+            hash = "SPU-d0a1508208613e2184fbd64906d34d5f07890033",
+            name = "ARMSX3 Approximate collision fix",
+            serial = "BLUS30127",
+            appVersion = "All",
+            sinceRevision = 13,
+        ),
+        Bundled(
+            hash = "SPU-d0a1508208613e2184fbd64906d34d5f07890033",
+            name = "ARMSX3 Approximate collision fix",
+            serial = "NPUB30702",
+            appVersion = "All",
+            sinceRevision = 13,
+        ),
         // SPLATTERHOUSE, BLUS30335 and BLES01120 (one executable) -- ours. When a phase starts
         // the game queues SPU jobs faster than its 8 job slots come back, gets a NULL slot and
         // crashes on it; the allocator now runs the game's own dispatcher and retries instead.
@@ -742,7 +768,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 12
+    private const val BUNDLED_REVISION = 13
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
