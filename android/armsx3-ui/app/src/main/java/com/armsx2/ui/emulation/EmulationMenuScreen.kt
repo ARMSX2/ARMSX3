@@ -1217,6 +1217,21 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
             armed = true
             Rpcs3Bridge.captureFrame()
         }
+        Spacer(Modifier.height(6.dp))
+        // The frame as pictures, pass by pass if asked (Settings, Advanced, Developer tools).
+        // 0 = not yet, 1 = armed, 2 = the renderer cannot dump frames.
+        var dumpState by remember { mutableStateOf(0) }
+        MenuButtonRow(
+            title = str("capture.frameDump"),
+            description = when (dumpState) {
+                1 -> str("capture.frameDump.armed")
+                2 -> str("capture.frameDump.unsupported")
+                else -> str("capture.frameDump.detail")
+            },
+            glyph = if (dumpState == 1) "●" else "▦",
+        ) {
+            dumpState = if (Rpcs3Bridge.dumpFrame(com.armsx2.DevTools.frameDumpMode)) 1 else 2
+        }
     }
     SectionCard(str("tab.overlay")) {
         // RPCS3's overlay has no per-element switches: one Enabled flag plus a

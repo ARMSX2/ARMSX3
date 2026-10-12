@@ -1,6 +1,21 @@
 package com.armsx2.ui.settings
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
+import com.armsx2.DevTools
+import com.armsx2.ui.common.GlobalConfirm
+import java.io.File
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.armsx2.config.Settings
+import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.ui.InGameOverlay
 
@@ -226,7 +242,151 @@ fun FixesTab(state: MutableState<Settings>) {
             )
         }
 
+        DeveloperSection()
+
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+/**
+ * Tools for chasing graphics bugs: replaying an RSX capture, and choosing what the in-game menu's
+ * Dump this frame saves. App preferences, not core settings, so they hold for every game. See
+ * [DevTools].
+ */
+@Composable
+private fun DeveloperSection() {
+    CollapsibleSection(str("adv.section.developer")) {
+        HelpText(
+            str("adv.section.developer.help"),
+            modifier = Modifier.padding(horizontal = 6.dp),
+        )
+
+        // Listed when the section is drawn, so a capture made since shows up on the next visit.
+        val captures = remember { DevTools.captures() }
+        DevActionRow(
+            label = str("adv.replayCapture.label"),
+            description = if (captures.isEmpty()) str("adv.replayCapture.none")
+            else str("adv.replayCapture.count").replace("%d", captures.size.toString()),
+            controllerId = "adv.replayCapture",
+            enabled = captures.isNotEmpty(),
+        ) {
+            // I18n.get, not str(): this runs in a click handler, outside composition.
+            GlobalConfirm.ask(
+                title = I18n.get("adv.replayCapture.label"),
+                message = I18n.get("adv.replayCapture.message"),
+                confirmLabel = I18n.get("adv.replayCapture.newest"),
+                extra = { layer -> CaptureList(layer, captures) },
+                onConfirm = { DevTools.replay(captures.first()) },
+            )
+        }
+
+        SettingsDivider()
+
+        var dumpMode by remember { mutableStateOf(DevTools.frameDumpMode) }
+        SegmentedRow(
+            label = str("adv.frameDump.label"),
+            options = listOf(str("adv.frameDump.final"), str("adv.frameDump.passes")),
+            selectedIndex = if (dumpMode == DevTools.DUMP_EVERY_PASS) 1 else 0,
+            description = str("adv.frameDump.description"),
+        ) {
+            dumpMode = if (it == 1) DevTools.DUMP_EVERY_PASS else DevTools.DUMP_FINAL_IMAGE
+            DevTools.frameDumpMode = dumpMode
+        }
+    }
+}
+
+/** A row that does something when chosen, styled like [ToggleRow] without the switch. */
+@Composable
+private fun DevActionRow(
+    label: String,
+    description: String,
+    controllerId: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val click = { if (enabled) onClick() }
+    Surface(
+        onClick = click,
+        enabled = enabled,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 5.dp)
+            .controllerFocusable(controllerId = controllerId, onConfirm = click),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.46f)),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = 78.dp)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(label, color = MaterialTheme.colorScheme.onSurface, fontSize = 18.sp, lineHeight = 23.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    description,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp,
+                    lineHeight = 19.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (enabled) {
+                Spacer(Modifier.width(12.dp))
+                Text("\u203a", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 26.sp)
+            }
+        }
+    }
+}
+
+/**
+ * The captures to pick from, inside the replay prompt. Every row registers under the prompt's
+ * controller [layer], or the pad could not reach it.
+ */
+@Composable
+private fun CaptureList(layer: String, captures: List<File>) {
+    val format = remember { java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.SHORT, java.text.DateFormat.SHORT) }
+    Column(
+        Modifier
+            .heightIn(max = 300.dp)
+            .verticalScroll(rememberScrollState()),
+    ) {
+        // The newest twenty: older ones are still there to pull off the card, and a list longer
+        // than this is no easier to pick from.
+        captures.take(20).forEachIndexed { index, file ->
+            val pick = {
+                GlobalConfirm.dismiss()
+                DevTools.replay(file)
+            }
+            Surface(
+                onClick = pick,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 3.dp)
+                    .controllerFocusable(controllerId = "$layer.capture.$index", layer = layer, onConfirm = pick),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+            ) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                    Text(
+                        file.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        "${format.format(java.util.Date(file.lastModified()))}  \u00b7  ${"%.1f".format(file.length() / 1048576.0)} MB",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
     }
 }
 

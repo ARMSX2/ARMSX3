@@ -181,6 +181,9 @@ object GlobalConfirm {
         val confirmLabel: String?,
         val destructive: Boolean,
         val onConfirm: () -> Unit,
+        /** Drawn between the message and the buttons, as [ConfirmOverlay]'s `extra`: a list to pick
+         *  from, say. Anything focusable in it registers under the layer it is given. */
+        val extra: (@Composable (layer: String) -> Unit)? = null,
     )
 
     val pending = mutableStateOf<Request?>(null)
@@ -190,9 +193,10 @@ object GlobalConfirm {
         message: String,
         confirmLabel: String? = null,
         destructive: Boolean = false,
+        extra: (@Composable (layer: String) -> Unit)? = null,
         onConfirm: () -> Unit,
     ) {
-        pending.value = Request(title, message, confirmLabel, destructive, onConfirm)
+        pending.value = Request(title, message, confirmLabel, destructive, onConfirm, extra)
     }
 
     fun dismiss() {
@@ -215,6 +219,7 @@ object GlobalConfirm {
                 request.onConfirm()
             },
             onDismiss = { pending.value = null },
+            extra = request.extra,
         )
     }
 }
