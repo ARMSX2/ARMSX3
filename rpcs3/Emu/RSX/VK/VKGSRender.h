@@ -299,8 +299,11 @@ private:
 	std::unique_ptr<remote_capture_hardware> remote_capture_create_hardware(u32 width, u32 height);
 	void remote_capture_release(bool device_idle);
 
-	//Vertex layout
+	// Vertex layout
 	rsx::vertex_input_layout m_vertex_layout;
+
+	// Constant buffers whose host copy is out of date.
+	rsx::bitmask_t<rsx::draw_state_t::group> m_stale_constants;
 
 	vk::shader_interpreter m_shader_interpreter;
 	rsx::bitmask_t<rsx::draw_state_t::group> m_interpreter_state;
