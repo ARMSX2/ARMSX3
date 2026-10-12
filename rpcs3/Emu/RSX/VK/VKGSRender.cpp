@@ -1957,13 +1957,9 @@ bool VKGSRender::load_program()
 	const auto pipeline_topology = vk::get_pipeline_topology(vertex_state.primitive, vertex_state.restart_index_enabled);
 	m_current_primitive_topology = vertex_state.primitive;
 
-	if (m_ctx->graphics_state & rsx::pipeline_state::invalidate_pipeline_bits)
+	if (m_ctx->draw_state.dirty.test(rsx::draw_state_t::group::programs))
 	{
-		get_current_fragment_program(m_ctx->textures.fs_sampler_state);
-		ensure(m_ctx->program.fragment_program.valid);
-
-		get_current_vertex_program(m_ctx->textures.vs_sampler_state);
-
+		// The core has resolved the programs for this draw
 		m_ctx->graphics_state.clear(rsx::pipeline_state::invalidate_pipeline_bits);
 	}
 	else if (!(m_ctx->graphics_state & rsx::pipeline_state::pipeline_config_dirty) &&

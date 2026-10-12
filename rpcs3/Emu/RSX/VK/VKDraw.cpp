@@ -1347,25 +1347,15 @@ void VKGSRender::begin_draw()
 	}
 }
 
-bool VKGSRender::end_draw(rsx::flags32_t pre_begin_pipeline_state)
+bool VKGSRender::resolve_sampler_state()
 {
-	// begin_draw() carries a scope and end_draw() did not, so every per-draw cost here fell
-	// through to fifo_decode -- which is the ENCLOSING scope of the whole RSX loop, not a decode
-	// measurement. That is why fifo_decode read as 100% of the RSX thread while the FIFO
-	// itself only accounts for a couple of milliseconds.
+	// Draw setup that used to open end_draw(): the frame resource check and the texture
+	// environment. Billed to the same draw_setup bucket as end_draw(), so the split does not
+	// show in the report.
 	RSX_PROF_SCOPE(draw_setup);
 
-	if (m_frame_dump.active) [[unlikely]]
-	{
-		m_frame_dump.draws++;
-	}
-
-	// Shader state as it was before prefetch and loading happened
-	m_interpreter_state = pre_begin_pipeline_state;
-
-	m_profiler.start();
-
 	// Check for frame resource status here because it is possible for an async flip to happen between begin/end
+	// This runs before any texture upload of the current draw is recorded
 	if (m_current_frame->flags & frame_context_state::dirty) [[unlikely]]
 	{
 		RSX_PROF_SCOPE(present_check);
@@ -1406,12 +1396,25 @@ bool VKGSRender::end_draw(rsx::flags32_t pre_begin_pipeline_state)
 		m_current_frame->flags &= ~frame_context_state::dirty;
 	}
 
-	analyse_current_rsx_pipeline();
-
-	m_ctx->stats.setup_time += m_profiler.duration();
-
 	load_texture_env();
-	m_ctx->stats.textures_upload_time += m_profiler.duration();
+	return true;
+}
+
+bool VKGSRender::end_draw(rsx::flags32_t pre_begin_pipeline_state)
+{
+	// begin_draw() carries a scope and end_draw() did not, so every per-draw cost here fell
+	// through to fifo_decode -- which is the ENCLOSING scope of the whole RSX loop, not a decode
+	// measurement. That is why fifo_decode read as 100% of the RSX thread while the FIFO
+	// itself only accounts for a couple of milliseconds.
+	RSX_PROF_SCOPE(draw_setup);
+
+	if (m_frame_dump.active) [[unlikely]]
+	{
+		m_frame_dump.draws++;
+	}
+
+	// Shader state as it was before prefetch and loading happened
+	m_interpreter_state = pre_begin_pipeline_state;
 
 	if (!load_program())
 	{
