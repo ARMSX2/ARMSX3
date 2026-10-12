@@ -300,9 +300,22 @@ private:
 
 	u64 m_frame_dump_flips = 0;   // flips since boot, for ARMSX3_DUMP_PASSES
 
+	// A copy recorded into the command stream, written out as a PNG once the GPU has done it.
+	struct frame_dump_copy
+	{
+		std::unique_ptr<vk::buffer> buf;
+		std::string name, why, desc;
+		u32 width = 0, height = 0, bpp = 0;
+		VkFormat format = VK_FORMAT_UNDEFINED;
+		u64 size = 0;
+	};
+	std::vector<frame_dump_copy> m_frame_dump_pending;
+
 	void frame_dump_on_flip();
 	void frame_dump_capture(const char* why);
 	void frame_dump_save(const std::vector<vk::image*>& images, const char* why, const std::string& desc);
+	void frame_dump_record(const std::vector<vk::image*>& images, const char* tag, const char* why, const std::string& desc);
+	void frame_dump_write_pending();
 	bool frame_dump_write(const std::string& name, u32 width, u32 height, VkFormat format, u32 bpp, const void* data, const char* why, const std::string& desc);
 	void frame_dump_finish();
 

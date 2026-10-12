@@ -355,6 +355,16 @@ void VKGSRender::frame_dump_on_flip()
 
 	auto& d = m_frame_dump;
 
+	// Copies the previous flip recorded and then returned without submitting (a failed swapchain
+	// acquire): wait for them here, at the start of a flip, where nothing is half-presented yet.
+	if (!m_frame_dump_pending.empty())
+	{
+		vk::insert_global_memory_barrier(*m_current_command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+		flush_command_queue(true);
+		frame_dump_write_pending();
+	}
+
 	// The previous flip was to save the final image or read the screen back and never got that far:
 	// it skipped the frame, or had nothing to show. Close the dump with what it has.
 	if (d.take_final || d.take_screen)
@@ -444,12 +454,28 @@ void VKGSRender::frame_dump_capture(const char* why)
 
 void VKGSRender::frame_dump_save(const std::vector<vk::image*>& images, const char* why, const std::string& desc)
 {
+	// Mid-frame, between passes: record, wait for the GPU, write. The wait is what makes every_pass
+	// slow, and why it can hide races: every pass has finished before the next begins.
+	frame_dump_record(images, "pass", why, desc);
+
+	if (!m_frame_dump_pending.empty())
+	{
+		vk::insert_global_memory_barrier(*m_current_command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+		flush_command_queue(true);
+		frame_dump_write_pending();
+	}
+
+	m_frame_dump.frame_draws += m_frame_dump.draws;
+	m_frame_dump.draws = 0;
+}
+
+void VKGSRender::frame_dump_record(const std::vector<vk::image*>& images, const char* tag, const char* why, const std::string& desc)
+{
 	auto& d = m_frame_dump;
 
 	if (!d.stop_reason.empty())
 	{
-		d.frame_draws += d.draws;
-		d.draws = 0;
 		return;
 	}
 
@@ -459,16 +485,6 @@ void VKGSRender::frame_dump_save(const std::vector<vk::image*>& images, const ch
 	{
 		vk::end_renderpass(cmd);
 	}
-
-	struct pending_t
-	{
-		std::unique_ptr<vk::buffer> buf;
-		u32 attachment, width, height, bpp;
-		VkFormat format;
-		u64 size;
-	};
-
-	std::vector<pending_t> pending;
 
 	for (u32 i = 0; i < images.size(); ++i)
 	{
@@ -483,12 +499,16 @@ void VKGSRender::frame_dump_save(const std::vector<vk::image*>& images, const ch
 			continue;
 		}
 
-		const u32 width = img->width();
-		const u32 height = img->height();
-		const u32 bpp = vk::get_format_texel_width(format);
-		const u64 size = u64{width} * height * bpp;
-
-		auto buf = std::make_unique<vk::buffer>(*m_device, size,
+		frame_dump_copy copy;
+		copy.width = img->width();
+		copy.height = img->height();
+		copy.bpp = vk::get_format_texel_width(format);
+		copy.format = format;
+		copy.size = u64{copy.width} * copy.height * copy.bpp;
+		copy.why = why;
+		copy.desc = desc;
+		copy.name = fmt::format("%03u_%s_a%u_%ux%u.png", d.images + static_cast<u32>(m_frame_dump_pending.size()), tag, i, copy.width, copy.height);
+		copy.buf = std::make_unique<vk::buffer>(*m_device, copy.size,
 			m_device->get_memory_mapping().host_visible_coherent, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
 			VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_SYSTEM);
 
@@ -496,29 +516,24 @@ void VKGSRender::frame_dump_save(const std::vector<vk::image*>& images, const ch
 
 		VkBufferImageCopy region{};
 		region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-		region.imageExtent = { width, height, 1 };
-		vkCmdCopyImageToBuffer(cmd, img->value, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf->value, 1, &region);
+		region.imageExtent = { copy.width, copy.height, 1 };
+		vkCmdCopyImageToBuffer(cmd, img->value, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, copy.buf->value, 1, &region);
 
 		img->pop_layout(cmd);
-		pending.push_back({ std::move(buf), i, width, height, bpp, format, size });
+		m_frame_dump_pending.push_back(std::move(copy));
 	}
+}
 
-	// Waits for the GPU. This is what makes every_pass slow, and why it can hide races: every pass
-	// has finished before the next begins.
-	vk::insert_global_memory_barrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
-		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
-	flush_command_queue(true);
-
-	for (auto& p : pending)
+void VKGSRender::frame_dump_write_pending()
+{
+	// Caller's job: the GPU has finished the copies, and a TRANSFER -> HOST barrier made them visible.
+	for (auto& p : m_frame_dump_pending)
 	{
-		const char* tag = std::strcmp(why, "final image") == 0 ? "final" : "pass";
-		const std::string name = fmt::format("%03u_%s_a%u_%ux%u.png", d.images, tag, p.attachment, p.width, p.height);
-		frame_dump_write(name, p.width, p.height, p.format, p.bpp, p.buf->map(0, p.size), why, desc);
+		frame_dump_write(p.name, p.width, p.height, p.format, p.bpp, p.buf->map(0, p.size), p.why.c_str(), p.desc);
 		p.buf->unmap();
 	}
 
-	d.frame_draws += d.draws;
-	d.draws = 0;
+	m_frame_dump_pending.clear();
 }
 
 bool VKGSRender::frame_dump_write(const std::string& name, u32 width, u32 height, VkFormat format, u32 bpp, const void* data, const char* why, const std::string& desc)

@@ -1459,7 +1459,11 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 			if (image_to_flip)
 			{
-				frame_dump_save({ image_to_flip }, "final image", fmt::format("the image this flip shows (%ux%u)", image_to_flip->width(), image_to_flip->height()));
+				// Recorded into this frame's commands and written after the frame is submitted. A GPU
+				// wait here, between choosing the present source and presenting it, can let a temporary
+				// source go while the flip still uses it: the first version of this crashed the RSX
+				// thread on its next draw with an invalid layout.
+				frame_dump_record({ image_to_flip }, "final", "final image", fmt::format("the image this flip shows (%ux%u)", image_to_flip->width(), image_to_flip->height()));
 			}
 			else
 			{
@@ -2110,30 +2114,36 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	}
 
 	// Frame dump: copy out the swapchain image as it will be presented, to tell a frame that was
-	// rendered wrong from one that only reached the screen wrong.
-	std::unique_ptr<vk::buffer> dump_screen;
-	vk::command_buffer_chunk* dump_screen_cb = nullptr;
-	const u32 dump_screen_width = m_swapchain->get_width();
-	const u32 dump_screen_height = m_swapchain->get_height();
-	const VkFormat dump_screen_format = m_swapchain->get_surface_format();
-	const u32 dump_screen_bpp = vk::get_format_texel_width(dump_screen_format);
-	const u64 dump_screen_size = u64{dump_screen_width} * dump_screen_height * dump_screen_bpp;
+	// rendered wrong from one that only reached the screen wrong. It joins the final image's copy,
+	// and both are written once this frame's commands have finished.
+	vk::command_buffer_chunk* dump_cb = nullptr;
 
 	if (m_frame_dump.take_screen) [[unlikely]]
 	{
 		m_frame_dump.take_screen = false;
 
-		if (m_swapchain->is_headless() || !vk::g_swapchain_transfer_src || !m_frame_dump.stop_reason.empty())
+		if (!m_frame_dump.stop_reason.empty())
+		{
+			// A limit was reached: frame_dump_finish says which, and nothing more is written.
+		}
+		else if (m_swapchain->is_headless() || !vk::g_swapchain_transfer_src)
 		{
 			// Reading a WSI image needs TRANSFER_SRC, which the swapchain only asks for when frame
 			// generation is on or ARMSX3_DUMP_PASSES was set at boot.
-			m_frame_dump.index += m_frame_dump.stop_reason.empty()
-				? "The screen buffer was not saved: this swapchain cannot be read back.\n"
-				: "";
+			m_frame_dump.index += "The screen buffer was not saved: this swapchain cannot be read back.\n";
 		}
 		else
 		{
-			dump_screen = std::make_unique<vk::buffer>(*m_device, dump_screen_size,
+			frame_dump_copy copy;
+			copy.width = m_swapchain->get_width();
+			copy.height = m_swapchain->get_height();
+			copy.format = m_swapchain->get_surface_format();
+			copy.bpp = vk::get_format_texel_width(copy.format);
+			copy.size = u64{copy.width} * copy.height * copy.bpp;
+			copy.why = "screen";
+			copy.desc = "the swapchain image, as it is handed to the display";
+			copy.name = fmt::format("%03u_screen_%ux%u.png", m_frame_dump.images + static_cast<u32>(m_frame_dump_pending.size()), copy.width, copy.height);
+			copy.buf = std::make_unique<vk::buffer>(*m_device, copy.size,
 				m_device->get_memory_mapping().host_visible_coherent, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
 				VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_SYSTEM);
 
@@ -2142,18 +2152,19 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 			VkBufferImageCopy region{};
 			region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
-			region.imageExtent = { dump_screen_width, dump_screen_height, 1 };
-			vkCmdCopyImageToBuffer(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dump_screen->value, 1, &region);
+			region.imageExtent = { copy.width, copy.height, 1 };
+			vkCmdCopyImageToBuffer(*m_current_command_buffer, target_image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, copy.buf->value, 1, &region);
 
+			m_frame_dump_pending.push_back(std::move(copy));
+		}
+
+		if (!m_frame_dump_pending.empty())
+		{
 			vk::insert_global_memory_barrier(*m_current_command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
 				VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
-			dump_screen_cb = m_current_command_buffer;
 		}
 
-		if (!dump_screen)
-		{
-			frame_dump_finish();
-		}
+		dump_cb = m_current_command_buffer;
 	}
 
 	if (target_layout != present_layout)
@@ -2163,15 +2174,15 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 	queue_swap_request();
 
-	if (dump_screen) [[unlikely]]
+	if (dump_cb) [[unlikely]]
 	{
-		// The copy rides in the frame's own command buffer, so wait for that one to land.
-		dump_screen_cb->wait(FRAME_PRESENT_TIMEOUT);
+		// The copies ride in this frame's own command buffers, so wait for the last one to land.
+		if (!m_frame_dump_pending.empty())
+		{
+			dump_cb->wait(FRAME_PRESENT_TIMEOUT);
+			frame_dump_write_pending();
+		}
 
-		const std::string name = fmt::format("%03u_screen_%ux%u.png", m_frame_dump.images, dump_screen_width, dump_screen_height);
-		frame_dump_write(name, dump_screen_width, dump_screen_height, dump_screen_format, dump_screen_bpp,
-			dump_screen->map(0, dump_screen_size), "screen", "the swapchain image, as it is handed to the display");
-		dump_screen->unmap();
 		frame_dump_finish();
 	}
 
