@@ -181,6 +181,22 @@ object ConfigDatabase {
         // session. The EU disc is the same game and was not tested on its own.
         "BLUS30833" to "Core:\n  SPU Cache: false\n",
         "BLES01395" to "Core:\n  SPU Cache: false\n",
+
+        // Grand Theft Auto IV: Multithreaded RSX off.
+        //
+        // The database turns it on. Here the RSX thread then spent 79% of its time in
+        // dma_manager::sync() under NV4097_TEXTURE_READ_SEMAPHORE_RELEASE, waiting for the
+        // offloader, while the offloader sat parked 99.4% of the time: every handoff costs two
+        // thread wake-ups, and the game releases that semaphore many times a frame. Off, the RSX
+        // thread does the copies itself (about 7% of its time): 16-18 fps became 25-30 (Odin 3,
+        // 10-12, same spot, nothing else changed). Every GTA IV serial carries the same database
+        // entry, so all of them get this.
+        "BLUS30682" to "Video:\n  Multithreaded RSX: false\n",
+        "BLUS30127" to "Video:\n  Multithreaded RSX: false\n",
+        "BLES00229" to "Video:\n  Multithreaded RSX: false\n",
+        "BLES01128" to "Video:\n  Multithreaded RSX: false\n",
+        "NPUB30702" to "Video:\n  Multithreaded RSX: false\n",
+        "NPEB00882" to "Video:\n  Multithreaded RSX: false\n",
     )
 
     /**
