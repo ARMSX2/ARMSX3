@@ -755,7 +755,7 @@ val EN: Map<String, String> = mapOf(
     "rpcn.account.connected" to "Signed in as",
     "capture.title" to "Frame capture",
     "capture.rsx" to "Capture RSX frame",
-    "capture.rsx.detail" to "Records the graphics commands for one frame, then pauses. Close this menu first: it captures whatever renders next. The file lands in config/captures.",
+    "capture.rsx.detail" to "Records the graphics commands for one frame. Close this menu first: it captures whatever renders next. The file lands in config/captures, and a message says when it is saved.",
     "capture.rsx.armed" to "Armed. Close this menu and the next frame is captured.",
     "capture.frameDump" to "Dump this frame",
     "capture.frameDump.detail" to "Saves the next frame as pictures in config/captures. Close this menu first: it dumps whatever renders next. What it saves is set in Settings, Advanced, Developer tools.",
