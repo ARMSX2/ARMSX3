@@ -1337,7 +1337,7 @@ void VKGSRender::begin_draw()
 	// so every block with a body of its own now carries a scope and this keeps the leftovers.
 	RSX_PROF_SCOPE(draw_setup);
 
-	init_buffers(rsx::framebuffer_creation_context::context_draw);
+	set_scissor();
 
 	if (m_ctx->graphics_state & rsx::pipeline_state::invalidate_pipeline_bits)
 	{
@@ -1507,7 +1507,7 @@ bool VKGSRender::end_draw(rsx::flags32_t pre_begin_pipeline_state)
 	u32 sub_index = 0;               // RSX subdraw ID
 	m_current_draw.subdraw_id = 0;   // Host subdraw ID. Invalid RSX subdraws do not increment this value
 
-	// Scissor changes request the reload themselves when the framebuffer is bound (set_scissor)
+	// Scissor changes request the reload themselves when they are applied (set_scissor)
 	if (m_ctx->draw_state.dirty.test(rsx::draw_state_t::group::raster) ||
 		m_ctx->draw_state.dirty.test(rsx::draw_state_t::group::depth_stencil) ||
 		m_ctx->draw_state.dirty.test(rsx::draw_state_t::group::viewport))
