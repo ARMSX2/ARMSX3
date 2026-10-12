@@ -213,8 +213,13 @@ PPU-ed460e668a491f5e39f6547f3a24c2f20e2cb39b:
     Patch:
       - [ be32, 0x005f7128, 0x4082fff4 ]
 
+# Into the Nexus v01.01 is named apart from the Artemis collection's "Freeze fix" for this same
+# executable. That one is the identical change (Juhn, 0x005f8ca8) but lists NPUA80908 alone at
+# Patch Version 1.2, and the loader keeps only the higher version of one hash and name, so with
+# Artemis installed it replaced this entry and the other four versions ran with no fix at all.
+# For NPUA80908 both can now apply; they write the same word.
 PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08:
-  "Freeze fix":
+  "Freeze fix (all regions)":
     Games:
       "Ratchet & Clank: Into the Nexus":
         BCUS99245: [ 01.01 ]

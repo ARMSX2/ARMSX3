@@ -688,40 +688,43 @@ object Ps3PatchRepo {
             appVersion = "01.00",
             sinceRevision = 4,
         ),
+        // Into the Nexus v01.01, renamed in 15 so the Artemis collection's "Freeze fix" for this
+        // executable (same change, NPUA80908 only, higher version) cannot replace it. The new
+        // name has never been offered, so all five come in at 15. See canary_patches.yml.
         Bundled(
             hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
-            name = "Freeze fix",
+            name = "Freeze fix (all regions)",
             serial = "BCUS99245",
             appVersion = "01.01",
-            sinceRevision = 14,
+            sinceRevision = 15,
         ),
         Bundled(
             hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
-            name = "Freeze fix",
+            name = "Freeze fix (all regions)",
             serial = "NPUA80908",
             appVersion = "01.01",
-            sinceRevision = 14,
+            sinceRevision = 15,
         ),
         Bundled(
             hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
-            name = "Freeze fix",
+            name = "Freeze fix (all regions)",
             serial = "BCES01908",
             appVersion = "01.01",
-            sinceRevision = 14,
+            sinceRevision = 15,
         ),
         Bundled(
             hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
-            name = "Freeze fix",
+            name = "Freeze fix (all regions)",
             serial = "BCES01949",
             appVersion = "01.01",
-            sinceRevision = 14,
+            sinceRevision = 15,
         ),
         Bundled(
             hash = "PPU-fadb0af6fb7bd0113e88fb9af3eb78fe3be05d08",
-            name = "Freeze fix",
+            name = "Freeze fix (all regions)",
             serial = "NPEA00457",
             appVersion = "01.01",
-            sinceRevision = 4,
+            sinceRevision = 15,
         ),
         Bundled(
             hash = "PPU-f07f7086588a4ea86a28bd768f0cbe710f5b813b",
@@ -774,7 +777,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 14
+    private const val BUNDLED_REVISION = 15
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
