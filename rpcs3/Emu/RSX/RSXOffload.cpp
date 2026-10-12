@@ -21,7 +21,45 @@ namespace rsx
 		atomic_t<u64> m_processed_count = 0;
 		transport_packet* m_current_job = nullptr;
 
+		// Whoever holds this runs queued jobs: the offloader, or the RSX thread inside sync()
+		// when the offloader has not picked them up yet (see sync()). Jobs run one batch at a
+		// time in push order either way, so a later copy can never overtake an earlier one.
+		atomic_t<u32> m_exec_claim = 0;
+
+		// Set while the RSX thread runs jobs itself. Only that thread reads or writes it.
+		bool m_rsx_running_jobs = false;
+
 		thread_base* current_thread_ = nullptr;
+
+		static void execute(transport_packet& job)
+		{
+			switch (job.type)
+			{
+			case raw_copy:
+			{
+				const u32 vm_addr = vm::try_get_addr(job.src).first;
+				rsx::reservation_lock<true, 1> rsx_lock(vm_addr, job.length, g_cfg.video.strict_rendering_mode && vm_addr);
+				std::memcpy(job.dst, job.src, job.length);
+				break;
+			}
+			case vector_copy:
+			{
+				std::memcpy(job.dst, job.opt_storage.data(), job.length);
+				break;
+			}
+			case index_emulate:
+			{
+				write_index_array_for_non_indexed_non_native_primitive_to_buffer(static_cast<char*>(job.dst), static_cast<rsx::primitive_type>(job.aux_param0), job.length);
+				break;
+			}
+			case callback:
+			{
+				rsx::get_current_renderer()->renderctl(job.aux_param0, job.src);
+				break;
+			}
+			default: fmt::throw_exception("Unreachable");
+			}
+		}
 
 		void operator ()()
 		{
@@ -55,41 +93,23 @@ namespace rsx
 
 			while (thread_ctrl::state() != thread_state::aborting)
 			{
+				if (!m_exec_claim.compare_and_swap_test(0, 1))
+				{
+					// The RSX thread is running the queue itself (see sync()). It is a short
+					// batch, and anything it leaves is ours on the next pass.
+					std::this_thread::yield();
+					continue;
+				}
+
 				for (auto&& job : m_work_queue.pop_all())
 				{
 					m_current_job = &job;
-
-					switch (job.type)
-					{
-					case raw_copy:
-					{
-						const u32 vm_addr = vm::try_get_addr(job.src).first;
-						rsx::reservation_lock<true, 1> rsx_lock(vm_addr, job.length, g_cfg.video.strict_rendering_mode && vm_addr);
-						std::memcpy(job.dst, job.src, job.length);
-						break;
-					}
-					case vector_copy:
-					{
-						std::memcpy(job.dst, job.opt_storage.data(), job.length);
-						break;
-					}
-					case index_emulate:
-					{
-						write_index_array_for_non_indexed_non_native_primitive_to_buffer(static_cast<char*>(job.dst), static_cast<rsx::primitive_type>(job.aux_param0), job.length);
-						break;
-					}
-					case callback:
-					{
-						rsx::get_current_renderer()->renderctl(job.aux_param0, job.src);
-						break;
-					}
-					default: fmt::throw_exception("Unreachable");
-					}
-
-					m_processed_count.release(m_processed_count + 1);
+					execute(job);
+					m_processed_count++;
 				}
 
 				m_current_job = nullptr;
+				m_exec_claim.release(0);
 
 				if (m_enqueued_count.load() == m_processed_count.load())
 				{
@@ -207,7 +227,7 @@ namespace rsx
 		return false;
 	}
 
-	bool dma_manager::sync() const
+	bool dma_manager::sync(bool run_here) const
 	{
 		// The offloader thread is created when the RSX thread first runs (thread::on_task), but the
 		// renderer is built while the game is still loading. A stop in between tears down a renderer
@@ -232,6 +252,14 @@ namespace rsx
 			if (m_mem_fault_flag)
 			{
 				// Abort if offloader is in recovery mode
+				return false;
+			}
+
+			if (_thr.m_rsx_running_jobs)
+			{
+				// Re-entered from a fault inside a job this thread is running itself: the fault
+				// handler flushes the command queue, and the submit syncs. The rest of the batch
+				// cannot run until we return, so answer as the offloader-fault path above does.
 				return false;
 			}
 
@@ -277,6 +305,34 @@ namespace rsx
 				if (_thr.m_enqueued_count.load() <= processed)
 				{
 					break;
+				}
+
+				// Run the queue here when the offloader has not picked it up. The offloader parks
+				// when idle (see operator()), so waiting meant a wake-up each way per handoff: in
+				// GTA IV this thread spent 79% of its time in this function under
+				// NV4097_TEXTURE_READ_SEMAPHORE_RELEASE while the offloader slept 99.4% of the
+				// time, 16-18 fps against 25-30 with Multithreaded RSX off (Odin 3, 10-12). These
+				// are the same copies and submits the non-MTRSX path runs on this thread anyway,
+				// and the claim keeps them in push order with any batch the offloader runs.
+				if (run_here && _thr.m_exec_claim.compare_and_swap_test(0, 1))
+				{
+					bool ran = false;
+					_thr.m_rsx_running_jobs = true;
+
+					for (auto&& job : _thr.m_work_queue.pop_all())
+					{
+						offload_thread::execute(job);
+						_thr.m_processed_count++;
+						ran = true;
+					}
+
+					_thr.m_rsx_running_jobs = false;
+					_thr.m_exec_claim.release(0);
+
+					if (ran)
+					{
+						continue;
+					}
 				}
 
 				rsxthr->on_semaphore_acquire_wait();
