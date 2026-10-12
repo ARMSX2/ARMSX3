@@ -925,6 +925,12 @@ VKGSRender::~VKGSRender()
 	// boot in the same process reused the stale handles because the stack still looked valid.
 	vk::frame_gen::release_device_resources();
 
+	// The GPU timer's query pool too, for the same reason. on_exit() releases it, but only a renderer
+	// whose thread ends normally gets there; this destructor runs either way. A pool left behind was
+	// destroyed by the next renderer's gpu_timer::init() through this dead device, and the app
+	// crashed booting a game after an RSX capture replay.
+	vk::get_gpu_timer().destroy();
+
 	// Globals. TODO: Refactor lifetime management
 	if (auto async_scheduler = g_fxo->try_get<vk::AsyncTaskScheduler>())
 	{

@@ -24,6 +24,15 @@ namespace vk
 
 	void gpu_timer::init(const render_device& dev)
 	{
+		// A pool still here belongs to an earlier renderer that did not release it, and its device
+		// may already be gone: destroying the pool would call into that dead device. Drop it without
+		// touching Vulkan instead; the driver freed it with its device.
+		if (m_pool)
+		{
+			rsx_log.warning("[gpu_timer] An earlier renderer left its timer behind; dropping it without touching its device.");
+			[[maybe_unused]] auto* leaked = m_pool.release();
+		}
+
 		destroy();
 
 		const auto& limits = dev.gpu().get_limits();
