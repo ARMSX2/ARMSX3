@@ -288,16 +288,12 @@ private:
 		std::string index;        // frame.txt, written when the dump ends
 		std::string fb_desc;      // the render target set currently bound
 		std::string stop_reason;  // set when a limit was reached; nothing more is written
-		u64 flips_waited = 0;     // flips since the dump was armed
 		u64 bytes = 0;            // PNG bytes written
 		u32 images = 0;           // images written
 		u32 draws = 0;            // draws since the last save
-		u32 frame_draws = 0;      // draws in the frame being looked at
-		u32 flips_passed_over = 0; // flips with too few draws to be the frame
-		std::vector<std::string> flip_files; // every_pass: written during this flip, removed if it is passed over
-		u64 flip_bytes = 0;       // their size
-		usz flip_index_start = 0; // where this flip's lines in index begin
-		bool active = false;      // armed and still looking for its frame
+		u32 frame_draws = 0;      // draws in the frame being dumped
+		bool armed = false;       // asked for, waiting for the game's next flip to start the frame
+		bool active = false;      // inside the frame being dumped
 		bool take_final = false;  // save the image this flip shows
 		bool take_screen = false; // read the screen buffer back on this flip
 	} m_frame_dump;

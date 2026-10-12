@@ -53,16 +53,6 @@ namespace
 	constexpr u64 max_bytes = 1536ull << 20; // PNG data per dump
 	constexpr u64 min_free = 1024ull << 20;  // left free on the card
 
-	// A frame with fewer draws than this is passed over in favour of the next: a capture replay
-	// presents near-empty frames between its real ones, and a game does on a loading screen.
-	constexpr u32 min_frame_draws = 50;
-
-	// But not forever, so a game that really does draw that little is still dumped. In every_pass
-	// mode each flip waited through saves its targets (and removes them again), so it waits less. A
-	// capture replay needs about 30: it presents near-empty frames between its real ones.
-	constexpr u64 max_wait_flips_final = 600;
-	constexpr u64 max_wait_flips_passes = 120;
-
 	struct env_trigger
 	{
 		s64 flip = -1;
@@ -375,15 +365,29 @@ void VKGSRender::frame_dump_on_flip(const rsx::display_flip_info_t& info)
 		frame_dump_finish();
 	}
 
-	if (!d.active)
+	// A request is taken at whatever flip comes next, but the dump starts at the game's next flip, so
+	// the frame it covers is whole even when the button was pressed mid-frame or while paused.
+	if (!d.armed && !d.active)
 	{
-		const dump_mode mode = rsx::frame_dump::take_request();
-
-		if (mode == dump_mode::none)
+		if (const dump_mode mode = rsx::frame_dump::take_request(); mode != dump_mode::none)
 		{
-			return;
+			d = {};
+			d.mode = mode;
+			d.armed = true;
 		}
+	}
 
+	// Only the game's own flips mark frames. The rest are native UI refreshes, which the emulator
+	// presents whenever an overlay asks, in the middle of a frame too: a capture replay makes dozens
+	// of them per frame while it copies memory between command chunks, and the performance overlay
+	// asks for them in game. Taking those for frame ends cut the frame into pieces.
+	if (!info.emu_flip)
+	{
+		return;
+	}
+
+	if (d.armed)
+	{
 		std::string title = Emu.GetTitleID();
 
 		if (title.empty())
@@ -391,8 +395,7 @@ void VKGSRender::frame_dump_on_flip(const rsx::display_flip_info_t& info)
 			title = Emu.GetTitle().empty() ? "replay" : Emu.GetTitle();
 		}
 
-		d = {};
-		d.mode = mode;
+		d.armed = false;
 		d.dir = fs::get_config_dir() + "captures/" + file_safe(title) + "_" + date_time::current_time_narrow() + "_frame/";
 
 		if (!fs::create_path(d.dir))
@@ -404,27 +407,20 @@ void VKGSRender::frame_dump_on_flip(const rsx::display_flip_info_t& info)
 		}
 
 		d.active = true;
-		d.fb_desc = "(bound before the dump started)";
+		d.fb_desc = "(bound before the frame started)";
 		d.index = fmt::format("ARMSX3 frame dump\nGame: %s\nMode: %s\n\n",
 			Emu.GetTitleID().empty() && Emu.GetTitle().empty() ? std::string("(capture replay)") : fmt::format("%s %s", Emu.GetTitleID(), Emu.GetTitle()),
-			mode_name(mode));
-		d.flip_index_start = d.index.size();
-		rsx_log.notice("Frame dump: armed (%s), writing to %s", mode_name(mode), d.dir);
+			mode_name(d.mode));
+		rsx_log.notice("Frame dump: dumping the next frame (%s) to %s", mode_name(d.mode), d.dir);
 		return;
 	}
 
-	// Only the game's own flips end a frame. The rest are native UI refreshes, which the emulator
-	// presents whenever an overlay asks, in the middle of a frame too: a capture replay makes dozens
-	// of them per frame while it copies memory between command chunks, and the performance overlay
-	// asks for them in game. Taking those for frame ends cut the frame into pieces.
-	if (!info.emu_flip)
+	if (!d.active)
 	{
 		return;
 	}
 
-	// The frame that just ended. In every_pass mode its last target is still bound, so save it.
-	d.flips_waited++;
-
+	// The frame ended here. In every_pass mode its last target is still bound, so save it.
 	if (d.mode == dump_mode::every_pass && m_draw_fbo && d.draws)
 	{
 		frame_dump_capture("end of frame");
@@ -433,33 +429,8 @@ void VKGSRender::frame_dump_on_flip(const rsx::display_flip_info_t& info)
 	d.frame_draws += d.draws;
 	d.draws = 0;
 
-	const u64 max_wait = d.mode == dump_mode::every_pass ? max_wait_flips_passes : max_wait_flips_final;
-
-	if (d.frame_draws < min_frame_draws && d.flips_waited < max_wait && d.stop_reason.empty())
-	{
-		// Not the frame. In every_pass mode, take back what it saved, so the folder holds one frame.
-		for (const auto& name : d.flip_files)
-		{
-			fs::remove_file(d.dir + name);
-		}
-
-		d.images -= ::size32(d.flip_files);
-		d.bytes -= d.flip_bytes;
-		d.index.resize(d.flip_index_start);
-		d.flip_files.clear();
-		d.flip_bytes = 0;
-		d.flips_passed_over++;
-		d.frame_draws = 0;
-		return;
-	}
-
 	// This flip shows that frame: save what it shows, then what reached the screen.
-	if (d.flips_passed_over)
-	{
-		fmt::append(d.index, "Passed over %u flip(s) with fewer than %u draws before this frame.\n", d.flips_passed_over, min_frame_draws);
-	}
-
-	fmt::append(d.index, "The dumped frame had %u draws.\n\n", d.frame_draws);
+	fmt::append(d.index, "The frame had %u draws.\n\n", d.frame_draws);
 	d.active = false;
 	d.take_final = true;
 	d.take_screen = true;
@@ -609,8 +580,6 @@ bool VKGSRender::frame_dump_write(const frame_dump_copy& copy, const void* data)
 	out.write(png.data(), png.size());
 	d.bytes += png.size();
 	d.images++;
-	d.flip_files.push_back(copy.name);
-	d.flip_bytes += png.size();
 
 	if (copy.draws != umax)
 	{
