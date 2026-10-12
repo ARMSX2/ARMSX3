@@ -321,9 +321,6 @@ namespace rsx
 		// looks like, and unscoped it was billed to draw_setup along with everything else.
 		RSX_PROF_SCOPE(draw_prologue);
 
-		// Save shader state now before prefetch and loading happens
-		m_pre_begin_pipeline_state = (m_ctx->graphics_state.load() & rsx::pipeline_state::invalidate_pipeline_bits);
-
 		if (m_ctx->cond_render.hw_cond_active)
 		{
 			if (!m_ctx->cond_render.eval_pending())
@@ -373,6 +370,9 @@ namespace rsx
 			return;
 		}
 
+		// The backend drops its program binding in begin_draw() if the programs will be resolved again
+		update_program_state(m_ctx->graphics_state.load() & rsx::pipeline_state::invalidate_pipeline_bits);
+
 		// Binding the framebuffer reads the viewport
 		decode_draw_state();
 		m_graph.bind_framebuffer(rsx::framebuffer_creation_context::context_draw);
@@ -390,8 +390,9 @@ namespace rsx
 		{
 			decode_draw_state();
 			resolve_programs();
+			resolve_pipeline_state();
 
-			if (RSX(m_ctx)->renderer()->end_draw(m_pre_begin_pipeline_state))
+			if (RSX(m_ctx)->renderer()->end_draw())
 			{
 				// The backend has seen this draw's change set. If the draw was not executed, changes keep accumulating.
 				m_ctx->draw_state.dirty.clear();
@@ -430,6 +431,12 @@ namespace rsx
 		m_graph.get_current_vertex_program(m_ctx->textures.vs_sampler_state);
 
 		// The bits are consumed here. The backend looks up its pipeline from the draw state groups instead.
+		update_program_state(program_bits);
+		m_ctx->graphics_state.clear(rsx::pipeline_state::invalidate_pipeline_bits);
+	}
+
+	void core_renderer::update_program_state(rsx::flags32_t program_bits)
+	{
 		if (program_bits & (rsx::pipeline_state::vertex_program_dirty | rsx::pipeline_state::xform_instancing_state_dirty))
 		{
 			m_ctx->draw_state.dirty.set(draw_state_t::group::vertex_program);
@@ -439,8 +446,37 @@ namespace rsx
 		{
 			m_ctx->draw_state.dirty.set(draw_state_t::group::fragment_program);
 		}
+	}
 
-		m_ctx->graphics_state.clear(rsx::pipeline_state::invalidate_pipeline_bits);
+	void core_renderer::resolve_pipeline_state()
+	{
+		// Pipeline bits that every executed draw consumes move into the draw state here.
+		// Note that the backend only consumes these as group flags and skipped draws forward the flags to the next draw.
+		auto& dirty = m_ctx->draw_state.dirty;
+		const rsx::flags32_t bits = m_ctx->graphics_state.load();
+
+		if (bits & rsx::pipeline_state::vertex_state_dirty)
+		{
+			dirty.set(draw_state_t::group::vertex_env);
+		}
+
+		if (bits & rsx::pipeline_state::fragment_state_dirty)
+		{
+			dirty.set(draw_state_t::group::fragment_env);
+		}
+
+		if (bits & rsx::pipeline_state::zeta_address_cyclic_barrier)
+		{
+			dirty.set(draw_state_t::group::depth_cyclic_barrier);
+		}
+
+		// NOTE: pipeline_config_dirty has no group.
+		// The GRAPH engine has already re-evaluated the programs for it and backends rebuild their pipelines from the decoded groups that changed.
+		m_ctx->graphics_state.clear(
+			rsx::pipeline_state::vertex_state_dirty |
+			rsx::pipeline_state::fragment_state_dirty |
+			rsx::pipeline_state::zeta_address_cyclic_barrier |
+			rsx::pipeline_state::pipeline_config_dirty);
 	}
 
 	void core_renderer::decode_draw_state()
