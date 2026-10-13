@@ -2672,7 +2672,7 @@ void PPUTranslator::MCRF(ppu_opcode_t op)
 
 void PPUTranslator::BCLR(ppu_opcode_t op)
 {
-	const auto target = RegLoad(m_lr);
+	const auto target = m_ir->CreateAnd(RegLoad(m_lr), ~3);
 
 	if (op.lk)
 	{
@@ -2735,7 +2735,7 @@ void PPUTranslator::CROR(ppu_opcode_t op)
 
 void PPUTranslator::BCCTR(ppu_opcode_t op)
 {
-	const auto target = RegLoad(m_ctr);
+	const auto target = m_ir->CreateAnd(RegLoad(m_ctr), ~3);
 
 	if (op.lk)
 	{
