@@ -507,9 +507,6 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 	m_occlusion_query_manager = std::make_unique<vk::query_pool_manager>(*m_device, VK_QUERY_TYPE_OCCLUSION, OCCLUSION_MAX_POOL_SIZE);
 	m_occlusion_map.resize(rsx::reports::occlusion_query_count);
 
-	for (u32 n = 0; n < rsx::reports::occlusion_query_count; ++n)
-		m_occlusion_query_data[n].driver_handle = n;
-
 	if (g_cfg.video.precise_zpass_count)
 	{
 		m_occlusion_query_manager->set_control_flags(VK_QUERY_CONTROL_PRECISE_BIT, 0);
@@ -913,9 +910,6 @@ VKGSRender::VKGSRender(utils::serial* ar) noexcept : GSRender(ar)
 
 VKGSRender::~VKGSRender()
 {
-	// Force-release ZCULL-ctrl since it is a pointer to self.
-	zcull_ctrl.release();
-
 	if (m_device == VK_NULL_HANDLE)
 	{
 		//Initialization failed
@@ -1463,7 +1457,6 @@ void VKGSRender::on_init_thread()
 	vk::get_gpu_timer().init(*m_device);
 
 	GSRender::on_init_thread();
-	zcull_ctrl.reset(static_cast<::rsx::reports::ZCULL_control*>(this));
 
 	if (g_cfg.video.shadermode == shader_mode::async_with_interpreter ||
 		g_cfg.video.shadermode == shader_mode::interpreter_only)
@@ -1504,7 +1497,6 @@ void VKGSRender::on_exit()
 	vk::get_gpu_timer().destroy();
 	GSRender::on_exit();
 	vk::destroy_pipe_compiler(); // Ensure no pending shaders being compiled
-	zcull_ctrl.release();
 }
 
 void VKGSRender::clear()
@@ -1873,7 +1865,7 @@ void VKGSRender::on_sync_hint(rsx::FIFO::interrupt_hint hint, rsx::reports::sync
 	case rsx::FIFO::interrupt_hint::zcull_sync:
 	{
 		// Check if the required report is synced to this CB
-		auto& data = m_occlusion_map[payload.query->driver_handle];
+		auto& data = m_occlusion_map[payload.query->slot_index];
 
 		// NOTE: Currently, a special condition exists where the indices can be empty even with active draw count.
 		// This is caused by async compiler and should be removed when ubershaders are added in
@@ -2570,7 +2562,7 @@ void VKGSRender::close_and_submit_command_buffer(vk::fence* pFence, VkSemaphore 
 	// End open queries. Flags will be automatically reset by the submit routine
 	if (m_current_command_buffer->flags & vk::command_buffer::cb_has_open_query)
 	{
-		auto open_query = m_occlusion_map[m_active_query_info->driver_handle].indices.back();
+		auto open_query = m_occlusion_map[m_active_query_info->slot_index].indices.back();
 		m_occlusion_query_manager->end_query(*m_current_command_buffer, open_query);
 		m_current_command_buffer->flags &= ~vk::command_buffer::cb_has_open_query;
 	}
@@ -2925,7 +2917,7 @@ void VKGSRender::end_occlusion_query(rsx::reports::occlusion_query_info* query)
 		}
 
 		// End query
-		auto open_query = m_occlusion_map[m_active_query_info->driver_handle].indices.back();
+		auto open_query = m_occlusion_map[m_active_query_info->slot_index].indices.back();
 		m_occlusion_query_manager->end_query(*m_current_command_buffer, open_query);
 		m_current_command_buffer->flags &= ~vk::command_buffer::cb_has_open_query;
 	}
@@ -2942,7 +2934,7 @@ bool VKGSRender::check_occlusion_query_status(rsx::reports::occlusion_query_info
 	if (!query->num_draws)
 		return true;
 
-	auto &data = m_occlusion_map[query->driver_handle];
+	auto &data = m_occlusion_map[query->slot_index];
 	if (data.indices.empty())
 		return true;
 
@@ -2955,7 +2947,7 @@ bool VKGSRender::check_occlusion_query_status(rsx::reports::occlusion_query_info
 
 void VKGSRender::get_occlusion_query_result(rsx::reports::occlusion_query_info* query)
 {
-	auto &data = m_occlusion_map[query->driver_handle];
+	auto &data = m_occlusion_map[query->slot_index];
 	if (data.indices.empty())
 		return;
 
@@ -3000,7 +2992,7 @@ void VKGSRender::discard_occlusion_query(rsx::reports::occlusion_query_info* que
 		end_occlusion_query(query);
 	}
 
-	auto &data = m_occlusion_map[query->driver_handle];
+	auto &data = m_occlusion_map[query->slot_index];
 	if (data.indices.empty())
 		return;
 
@@ -3014,7 +3006,7 @@ void VKGSRender::emergency_query_cleanup(vk::command_buffer* commands)
 
 	if (m_current_command_buffer->flags & vk::command_buffer::cb_has_open_query)
 	{
-		auto open_query = m_occlusion_map[m_active_query_info->driver_handle].indices.back();
+		auto open_query = m_occlusion_map[m_active_query_info->slot_index].indices.back();
 		m_occlusion_query_manager->end_query(*m_current_command_buffer, open_query);
 		m_current_command_buffer->flags &= ~vk::command_buffer::cb_has_open_query;
 	}
@@ -3102,7 +3094,7 @@ void VKGSRender::on_begin_conditional_rendering(const std::vector<rsx::reports::
 	// The idea is to avoid scheduling a compute task unless we have to.
 	for (usz i = first; i < last; ++i)
 	{
-		auto& query_info = m_occlusion_map[sources[i]->driver_handle];
+		auto& query_info = m_occlusion_map[sources[i]->slot_index];
 		num_hw_queries += ::size32(query_info.indices);
 	}
 
@@ -3122,7 +3114,7 @@ void VKGSRender::on_begin_conditional_rendering(const std::vector<rsx::reports::
 		// Accept the first available query handle as the source of truth. No aggregation is required.
 		for (usz i = first; i < last; ++i)
 		{
-			auto& query_info = m_occlusion_map[sources[i]->driver_handle];
+			auto& query_info = m_occlusion_map[sources[i]->slot_index];
 			if (!query_info.indices.empty())
 			{
 				const auto& index = query_info.indices.front();
@@ -3162,7 +3154,7 @@ void VKGSRender::on_begin_conditional_rendering(const std::vector<rsx::reports::
 
 		for (usz i = first; i < last; ++i)
 		{
-			auto& query_info = m_occlusion_map[sources[i]->driver_handle];
+			auto& query_info = m_occlusion_map[sources[i]->slot_index];
 			for (const auto& index : query_info.indices)
 			{
 				// First iteration?

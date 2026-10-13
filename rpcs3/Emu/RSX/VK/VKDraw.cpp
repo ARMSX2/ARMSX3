@@ -1113,13 +1113,13 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		{
 			// Force flush
 			rsx_log.warning("[Performance Warning] Out of free occlusion slots. Forcing hard sync.");
-			ZCULL_control::sync(this);
+			zcull_ctrl->sync(this);
 
 			occlusion_id = m_occlusion_query_manager->allocate_query(*m_current_command_buffer);
 			if (occlusion_id == umax)
 			{
 				//rsx_log.error("Occlusion pool overflow");
-				if (m_current_task) m_current_task->result = 1;
+				if (auto task = zcull_ctrl->get_current_query_task()) task->result = 1;
 			}
 		}
 
@@ -1138,7 +1138,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 
 		m_occlusion_query_manager->begin_query(*m_current_command_buffer, occlusion_id);
 
-		auto& data = m_occlusion_map[m_active_query_info->driver_handle];
+		auto& data = m_occlusion_map[m_active_query_info->slot_index];
 		data.indices.push_back(occlusion_id);
 		data.set_sync_command_buffer(m_current_command_buffer);
 

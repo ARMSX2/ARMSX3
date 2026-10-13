@@ -735,6 +735,9 @@ namespace rsx
 		m_draw_processor.init(m_ctx);
 		m_core.init(m_ctx);
 
+		// The ZCULL unit belongs to the thread. The renderer only provides the host queries.
+		zcull_ctrl = std::make_unique<reports::ZCULL_control>();
+
 		if (g_cfg.misc.use_native_interface && (g_cfg.video.renderer == video_renderer::opengl || g_cfg.video.renderer == video_renderer::vulkan))
 		{
 			m_overlay_manager = g_fxo->init<rsx::overlays::display_manager>(0);
@@ -918,12 +921,6 @@ namespace rsx
 
 		is_initialized = true;
 		is_initialized.notify_all();
-
-		if (!zcull_ctrl)
-		{
-			// Backend did not provide an implementation, provide NULL object
-			zcull_ctrl = std::make_unique<::rsx::reports::ZCULL_control>();
-		}
 
 		zcull_ctrl->set_provider(m_renderer->occlusion_queries());
 
@@ -1245,14 +1242,18 @@ namespace rsx
 		// leads to those being destroyed.
 		rsx::prof::stop_sampler();
 
+		// Retire the queued reports, then stop calling into the renderer's host queries.
+		//
 		// Not on a lost device. sync() blocks on occlusion query results that a dead GPU can
-		// never produce, and it is the FIRST statement in on_exit -- so waiting here would defeat
-		// the clean shutdown this whole path exists to reach, and leave the app hung exactly as
-		// before at a different line.
-		if (zcull_ctrl && !g_gpu_device_lost)
+		// never produce, and it runs first in on_exit -- so waiting here would defeat the clean
+		// shutdown this whole path exists to reach, and leave the app hung exactly as before at
+		// a different line.
+		if (!g_gpu_device_lost)
 		{
 			zcull_ctrl->sync(this);
 		}
+
+		zcull_ctrl->set_provider(nullptr);
 
 		// Deregister violation handler
 		g_access_violation_handler = nullptr;
