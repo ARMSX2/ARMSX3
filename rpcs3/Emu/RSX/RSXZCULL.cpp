@@ -8,7 +8,10 @@ namespace rsx
 {
 	namespace reports
 	{
+		static occlusion_query_provider s_null_provider;
+
 		ZCULL_control::ZCULL_control()
+			: m_provider(&s_null_provider)
 		{
 			for (auto& query : m_occlusion_query_data)
 			{
@@ -19,6 +22,11 @@ namespace rsx
 			{
 				stat.flags = stat.result = 0;
 			}
+		}
+
+		void ZCULL_control::set_provider(occlusion_query_provider* provider)
+		{
+			m_provider = provider ? provider : &s_null_provider;
 		}
 
 		ZCULL_control::~ZCULL_control()
@@ -73,14 +81,14 @@ namespace rsx
 				{
 					ensure(unit_enabled && m_current_task == nullptr);
 					allocate_new_query(ptimer);
-					begin_occlusion_query(m_current_task);
+					m_provider->begin_occlusion_query(m_current_task);
 				}
 				else
 				{
 					ensure(m_current_task);
 					if (m_current_task->num_draws)
 					{
-						end_occlusion_query(m_current_task);
+						m_provider->end_occlusion_query(m_current_task);
 						m_current_task->active = false;
 						m_current_task->pending = true;
 						m_current_task->sync_tag = m_timer++;
@@ -92,7 +100,7 @@ namespace rsx
 					}
 					else
 					{
-						discard_occlusion_query(m_current_task);
+						m_provider->discard_occlusion_query(m_current_task);
 						free_query(m_current_task);
 						m_current_task->active = false;
 					}
@@ -161,7 +169,7 @@ namespace rsx
 			if (m_current_task && type == CELL_GCM_ZPASS_PIXEL_CNT)
 			{
 				m_current_task->owned = true;
-				end_occlusion_query(m_current_task);
+				m_provider->end_occlusion_query(m_current_task);
 				m_pending_writes.push_back({});
 
 				m_current_task->active = false;
@@ -171,7 +179,7 @@ namespace rsx
 				m_pending_writes.back().query = m_current_task;
 
 				allocate_new_query(ptimer);
-				begin_occlusion_query(m_current_task);
+				m_provider->begin_occlusion_query(m_current_task);
 			}
 			else
 			{
@@ -292,12 +300,12 @@ namespace rsx
 			// Discard any running queries. The results will never be read anyway.
 			if (m_current_task && m_current_task->active)
 			{
-				discard_occlusion_query(m_current_task);
+				m_provider->discard_occlusion_query(m_current_task);
 				free_query(m_current_task);
 				m_current_task->active = false;
 
 				allocate_new_query(ptimer);
-				begin_occlusion_query(m_current_task);
+				m_provider->begin_occlusion_query(m_current_task);
 			}
 
 			if (!m_pending_writes.empty())
@@ -308,7 +316,7 @@ namespace rsx
 				{
 					if (!It->sink)
 					{
-						discard_occlusion_query(It->query);
+						m_provider->discard_occlusion_query(It->query);
 						free_query(It->query);
 						valid_size--;
 						ptimer->async_tasks_pending--;
@@ -495,13 +503,13 @@ namespace rsx
 
 					if (implemented && !have_result && query->num_draws)
 					{
-						get_occlusion_query_result(query);
+						m_provider->get_occlusion_query_result(query);
 						counter.result += query->result;
 					}
 					else
 					{
 						// Already have a hit, no need to retest
-						discard_occlusion_query(query);
+						m_provider->discard_occlusion_query(query);
 					}
 
 					free_query(query);
@@ -635,11 +643,11 @@ namespace rsx
 
 					if (!implemented || !query->num_draws || have_result)
 					{
-						discard_occlusion_query(query);
+						m_provider->discard_occlusion_query(query);
 					}
-					else if (force_read || check_occlusion_query_status(query))
+					else if (force_read || m_provider->check_occlusion_query_status(query))
 					{
-						get_occlusion_query_result(query);
+						m_provider->get_occlusion_query_result(query);
 						counter.result += query->result;
 					}
 					else
