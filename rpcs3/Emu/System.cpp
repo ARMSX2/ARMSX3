@@ -69,7 +69,6 @@
 #include "Emu/RSX/VK/VulkanAPI.h"
 #endif
 
-#include "Emu/RSX/GSRender.h"
 
 #ifdef LLVM_AVAILABLE
 #include "llvm/Config/llvm-config.h"
@@ -1329,9 +1328,9 @@ void Emulator::SetContinuousMode(bool continuous_mode)
 {
 	m_continuous_mode = continuous_mode;
 
-	if (GSRender* render = static_cast<GSRender*>(g_fxo->try_get<rsx::thread>()))
+	if (auto rsx = g_fxo->try_get<rsx::thread>())
 	{
-		render->set_continuous_mode(continuous_mode);
+		rsx->display().set_continuous_mode(continuous_mode);
 	}
 }
 
@@ -4211,7 +4210,7 @@ void Emulator::Kill(bool allow_autoexit, bool savestate, savestate_stage* save_s
 	const bool continuous_savestate_mode = savestate && !g_cfg.savestate.suspend_emu;
 
 	// Decide upfront (before the renderer is torn down) whether this stop should return to Big Picture
-	// Mode, so SetContinuousMode() takes effect before GSRender::~GSRender() runs and closes the window.
+	// Mode, so SetContinuousMode() takes effect before rsx::display_output::~display_output() runs and closes the window.
 	const bool return_to_big_picture_mode = !after_kill_callback && g_big_picture_mode_active.exchange(false);
 
 	if (return_to_big_picture_mode)
