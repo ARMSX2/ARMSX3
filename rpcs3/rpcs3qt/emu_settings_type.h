@@ -102,6 +102,7 @@ enum class emu_settings_type
 	RelaxedZCULL,
 	PreciseZCULL,
 	DriverWakeUpDelay,
+	PPUEventWakeUpDelay,
 	VulkanAsyncTextureUploads,
 	VulkanAsyncSchedulerDriver,
 	AllowHostGPULabels,
