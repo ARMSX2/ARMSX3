@@ -1447,7 +1447,7 @@ void VKGSRender::bind_viewport()
 	vkCmdSetScissor(*m_current_command_buffer, 0, 1, &m_scissor);
 }
 
-void VKGSRender::on_init_thread()
+void VKGSRender::on_init()
 {
 	if (m_device == VK_NULL_HANDLE)
 	{
@@ -1456,7 +1456,7 @@ void VKGSRender::on_init_thread()
 
 	vk::get_gpu_timer().init(*m_device);
 
-	GSRender::on_init_thread();
+	GSRender::on_init();
 
 	if (g_cfg.video.shadermode == shader_mode::async_with_interpreter ||
 		g_cfg.video.shadermode == shader_mode::interpreter_only)
@@ -1492,10 +1492,10 @@ void VKGSRender::on_init_thread()
 	}
 }
 
-void VKGSRender::on_exit()
+void VKGSRender::on_shutdown()
 {
 	vk::get_gpu_timer().destroy();
-	GSRender::on_exit();
+	GSRender::on_shutdown();
 	vk::destroy_pipe_compiler(); // Ensure no pending shaders being compiled
 }
 
