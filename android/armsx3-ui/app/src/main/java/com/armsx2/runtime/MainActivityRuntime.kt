@@ -4975,14 +4975,17 @@ open class MainActivityRuntime : ComponentActivity() {
         val ay = abs(gy)
         if (ax >= ay) { if (ay < ax * STICK_CROSS_GATE) gy = 0f }
         else { if (ax < ay * STICK_CROSS_GATE) gx = 0f }
-        val mag = kotlin.math.hypot(gx, gy)
+        // Magnitude from the RAW vector: the snap only chooses the direction. Measured after it, a
+        // near-straight push lost the dropped axis's share and fell short of full tilt.
+        val mag = kotlin.math.hypot(vx, vy)
         if (mag <= 0f) return
         val shaped = shapeStickMag(mag.coerceAtMost(1f), left)
         // Dividing by the magnitude caps a full diagonal at the unit circle: 0.707 per axis, which
         // is what a circular-gated DualShock 3 really sends. Games that deadzone each axis on its
         // own then ignore diagonals almost entirely. Dividing by the LARGER axis instead expands
         // to the square, so a full diagonal reaches 1.0 on both. Same result on the cardinals.
-        val denom = if (ControllerMappings.stickSquareGate(left)) kotlin.math.max(abs(gx), abs(gy)) else mag
+        val denom = if (ControllerMappings.stickSquareGate(left)) kotlin.math.max(abs(gx), abs(gy))
+            else kotlin.math.hypot(gx, gy)
         val scale = if (denom > 0f) shaped / denom else 0f
         val ox = gx * scale
         val oy = gy * scale
