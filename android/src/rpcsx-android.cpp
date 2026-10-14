@@ -1106,6 +1106,8 @@ static std::pair<std::string, std::u32string> g_strings[] = {
                 "Handle RSX Memory Tiling"),
     MAKE_STRING(HOME_MENU_SETTINGS_ADVANCED_MAX_SPURS_THREADS,
                 "Max SPURS Threads"),
+    MAKE_STRING(HOME_MENU_SETTINGS_ADVANCED_PPU_EVENT_WAKE_UP_DELAY,
+                "PPU Event Wake-Up Delay"),
     MAKE_STRING(HOME_MENU_SETTINGS_ADVANCED_DRIVER_WAKE_UP_DELAY,
                 "Driver Wake-Up Delay"),
     MAKE_STRING(HOME_MENU_SETTINGS_ADVANCED_VBLANK_FREQUENCY,
