@@ -5514,6 +5514,8 @@ extern "C" void _rpcsx_setPadDeviceClasses(const int *classes, int count) {
 // Polled rather than pushed: the guest writes the motors through cellPadSetActDirect
 // whenever it likes, and there is no notification to hook. Returns 0 when nothing is
 // running, so a caller that keeps polling after the game stops simply sees silence.
+//
+// Fix contributed by mariobob (PR #200)
 extern "C" int _rpcsx_getPadRumble(int port) {
   std::lock_guard lock(g_virtual_pad_mutex);
 
