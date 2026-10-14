@@ -18,6 +18,20 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$ROOT/rpcs3/git-version.h"
 
 cd "$ROOT"
+
+# The stamp names a commit, so the build has to BE that commit, submodules included. A
+# submodule whose checkout differs from the one this commit records (a '+' in `git submodule
+# status`) builds library code the stamp does not describe: switching from a test branch that
+# bumped curl, wolfSSL or VMA back to armsx3-ship leaves the newer checkouts in place, and a
+# release built then would ship them without anyone choosing to. Refuse instead.
+# Output captured and tested, not piped into grep -q, so pipefail cannot invert the check.
+if mismatched="$(git submodule status 2>/dev/null | grep '^+' || true)"; [ -n "$mismatched" ]; then
+	echo "FAIL: these submodules are not checked out at the commit this tree records:" >&2
+	echo "$mismatched" >&2
+	echo "Fix: git -C \"$ROOT\" submodule update -- <path>   (or --init for all)" >&2
+	exit 1
+fi
+
 COUNT="$(git rev-list HEAD --count)"
 SHA="$(git rev-parse --short=8 HEAD)"
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
