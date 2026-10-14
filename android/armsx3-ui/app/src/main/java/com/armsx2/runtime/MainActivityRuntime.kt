@@ -2294,15 +2294,28 @@ open class MainActivityRuntime : ComponentActivity() {
         }
         // D-pad as left analog stick: a physical d-pad press (arriving as a key,
         // not a HAT) drives the left stick instead of the digital d-pad. The
-        // remapped code is >=110 so the analog-force branch below gives a
-        // (near-)full deflection. HAT-style d-pads are folded into the stick in
-        // dispatchStick instead. 19=Up 20=Down 21=Left 22=Right ->
-        // 110=L_Up 112=L_Down 113=L_Left 111=L_Right.
+        // remapped code is a stick direction, handled just below. HAT-style
+        // d-pads are folded into the stick in dispatchStick instead.
+        // 19=Up 20=Down 21=Left 22=Right -> 110=L_Up 112=L_Down 113=L_Left 111=L_Right.
         val p_keycode = if (ControllerMappings.dpadAsLeftStick()) {
             when (p_keycode_in) {
                 19 -> 110; 20 -> 112; 21 -> 113; 22 -> 111; else -> p_keycode_in
             }
         } else p_keycode_in
+        // A KEY bound to a stick direction (d-pad-as-left-stick, or a button bound to a "(send)"
+        // stick row) deflects that direction fully, and only through the merge layer. It used to
+        // write the code itself, at 90% (a leftover "Joystic test value"), and on release wrote
+        // 0 outright: a stick still pushing that direction then read as centred, because
+        // flushAnalogAxes only resends a code whose value changed, and a stick held at its
+        // stop sends no further motion events (ARMSX3 #198: full up / full left walked).
+        if (p_keycode in 110..123 && port in analogKeyHeld.indices &&
+            (p_action == KeyEventType.KeyDown || p_action == KeyEventType.KeyUp || p_action == KeyEventType.Unknown)) {
+            val down = p_action == KeyEventType.KeyDown
+            if (down) analogKeyHeld[port][p_keycode] = 1f else analogKeyHeld[port].remove(p_keycode)
+            com.armsx2.ui.touch.TouchControls.notePressureKeyState(port, p_keycode, down)
+            writeMergedAnalog(port, p_keycode)
+            return
+        }
         if (p_action == KeyEventType.KeyDown) {
             var pad_force = 0
             if (p_keycode >= 110) {
@@ -2314,17 +2327,10 @@ open class MainActivityRuntime : ComponentActivity() {
                 // buttons while the modifier is held; 0 (full press) otherwise.
                 pad_force = com.armsx2.ui.touch.TouchControls.pressureRangeFor(p_keycode)
             }
-            // KEYS bound to an analog stick code (d-pad-as-left-stick, or a button
-            // bound to a "(send)" stick row): register the held deflection with the
-            // merge layer so a stick MOTION event can't release it mid-hold.
-            if (p_keycode in 110..123 && port in analogKeyHeld.indices)
-                analogKeyHeld[port][p_keycode] = pad_force / 32767f
             // Track for the LIVE pressure modifier (see TouchControls.notePressureKeyState).
             com.armsx2.ui.touch.TouchControls.notePressureKeyState(port, p_keycode, true)
             NativeApp.setPadButtonForPort(port, p_keycode, pad_force, true)
         } else if (p_action == KeyEventType.KeyUp || p_action == KeyEventType.Unknown) {
-            if (p_keycode in 110..123 && port in analogKeyHeld.indices)
-                analogKeyHeld[port].remove(p_keycode)
             com.armsx2.ui.touch.TouchControls.notePressureKeyState(port, p_keycode, false)
             NativeApp.setPadButtonForPort(port, p_keycode, 0, false)
         }
@@ -4886,6 +4892,22 @@ open class MainActivityRuntime : ComponentActivity() {
     private val analogAccum = HashMap<Int, Float>()
     private val analogPrevSent = Array(8) { HashMap<Int, Float>() } // per unified pad slot (multitap)
     val analogKeyHeld = Array(8) { HashMap<Int, Float>() } // written by sendKeyAction; per unified pad slot
+    private val analogMotionLast = Array(8) { HashMap<Int, Float>() } // last flush's motion-only contributions
+
+    /** Write ONE stick direction as the merge of the last motion event's contribution and any key
+     *  holding it, and record it as sent, so flushAnalogAxes' "changed?" test keeps matching what
+     *  the core holds. Used when a key changes between motion events (see sendKeyAction). */
+    private fun writeMergedAnalog(port: Int, code: Int) {
+        val v = maxOf(analogMotionLast[port][code] ?: 0f, analogKeyHeld[port][code] ?: 0f)
+        val prev = analogPrevSent[port]
+        if (v > 0f) {
+            NativeApp.setPadButtonForPort(port, code, (v * 32767).toInt(), true)
+            prev[code] = v
+        } else {
+            NativeApp.setPadButtonForPort(port, code, 0, false)
+            prev.remove(code)
+        }
+    }
 
     // ---- Gyro <-> physical-stick ADDITIVE combine (P1 / port 0) -----------
     // The aim/steer gyro drives a PS2 analog stick; so does the physical stick.
@@ -4913,6 +4935,10 @@ open class MainActivityRuntime : ComponentActivity() {
      *  (so stale codes release exactly once). */
     private fun flushAnalogAxes(port: Int) {
         val prev = analogPrevSent[port]
+        // What this event's motion contributed, before the key-held deflections are folded in,
+        // for writeMergedAnalog to merge a key change against without waiting for motion.
+        analogMotionLast[port].clear()
+        analogMotionLast[port].putAll(analogAccum)
         for ((code, held) in analogKeyHeld[port]) accumAnalog(code, held)
         // Release pass: codes we sent before but that have no contribution now.
         for (code in prev.keys) {
