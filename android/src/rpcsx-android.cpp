@@ -5427,13 +5427,6 @@ extern "C" void _rpcsx_setPadSensor(int port, int x, int y, int z, int g) {
   pad->m_sensors[3].m_value = clamp10(g);
 }
 
-// What the game is currently asking the rumble motors to do, packed as
-// (large << 8) | small, both 0..255.
-//
-// Polled rather than pushed: the guest writes these through cellPadSetActDirect
-// whenever it likes, and there is no notification to hook. The caller reads it on a
-// timer and drives the phone's vibrator. Returns 0 when nothing is running, so a
-// caller that keeps polling after the game stops simply sees silence.
 // Device temperatures, pushed from the app layer -- see the note in overlay_perf_metrics.h for
 // why discovery lives there and not here. Values are degrees Celsius, or the 'none' sentinel.
 extern "C" void _rpcsx_setThermals(float cpu, float gpu, float battery, bool show) {
@@ -5509,6 +5502,16 @@ extern "C" void _rpcsx_setPadDeviceClasses(const int *classes, int count) {
   pad::reset(Emu.GetTitleID());
 }
 
+// The motor speeds for what the game is currently asking the rumble motors to do,
+// packed as (large << 8) | small, both 0..255.
+//
+// The request goes through the player's pad config, the same conversion a physical pad
+// gets before its motors are driven. That includes the vibration threshold: a DS3
+// ignores low large-motor values, so a game can leave the motor at one to keep it still.
+//
+// Polled rather than pushed: the guest writes the motors through cellPadSetActDirect
+// whenever it likes, and there is no notification to hook. Returns 0 when nothing is
+// running, so a caller that keeps polling after the game stops simply sees silence.
 extern "C" int _rpcsx_getPadRumble(int port) {
   std::lock_guard lock(g_virtual_pad_mutex);
 
@@ -5522,8 +5525,13 @@ extern "C" int _rpcsx_getPadRumble(int port) {
     return 0;
   }
 
-  const int large = pad->m_vibrate_motors[0].value;
-  const int small = pad->m_vibrate_motors[1].value;
+  if (static_cast<usz>(port) >= g_cfg_input.player.size() || !g_cfg_input.player[port]) {
+    return 0;
+  }
+
+  const cfg_pad &config = g_cfg_input.player[port]->config;
+  const int large = config.get_large_motor_speed(pad->m_vibrate_motors);
+  const int small = config.get_small_motor_speed(pad->m_vibrate_motors);
   return (large << 8) | small;
 }
 
