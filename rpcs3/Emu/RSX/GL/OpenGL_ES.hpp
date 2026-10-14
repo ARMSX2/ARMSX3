@@ -381,6 +381,8 @@ namespace gl::es
 	GLenum glCheckNamedFramebufferStatus(GLuint framebuffer, GLenum target);
 	void glNamedFramebufferDrawBuffers(GLuint framebuffer, GLsizei n, const GLenum* bufs);
 	void glNamedFramebufferReadBuffer(GLuint framebuffer, GLenum src);
+	void glNamedFramebufferParameteri(GLuint framebuffer, GLenum pname, GLint param);
+	void glNamedFramebufferParameteriEXT(GLuint framebuffer, GLenum pname, GLint param);
 
 	// --- Not sugar. Real reimplementations. ---
 
