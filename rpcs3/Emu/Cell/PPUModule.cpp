@@ -1565,7 +1565,10 @@ struct prx_names_table
 
 			// Doesn't support addresses above 256MB because it wastes memory and is very unlikely (if somehow does occur increase it)
 			const u32 max0 = (seg.addr + seg.size - 1) >> 16;
-			const u32 max = std::min<u32>(::size32(lut), max0);
+			// max0 is the segment's LAST page, inclusive, and the loop below runs to <= max, so the
+			// cap must be the table's last index: capping at its size wrote one entry past the end.
+			// (Upstream 7b1d4f98e loops to < max instead, which also drops every segment's last page.)
+			const u32 max = std::min<u32>(::size32(lut) - 1, max0);
 
 			if (max0 > max)
 			{
