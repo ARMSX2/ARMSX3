@@ -40,6 +40,7 @@
 #include "Emu/RSX/rsx_frame_dump.h"
 #include "Emu/RSX/GL/GLGSRender.h"
 #include "Emu/RSX/VK/VKGSRender.h"
+#include "Emu/RSX/Core/RSXRendererFactory.h"
 #include "Emu/savestate_utils.hpp"
 // patch_engine, needed by the precompile path before ppu_load_exec.
 #include "Utilities/bin_patch.h"
@@ -2641,24 +2642,10 @@ static void setupCallbacks() {
       // the switch and we do not have to re-list every handler it gains.
       .init_gs_render =
           [](utils::serial *ar) {
-            switch (g_cfg.video.renderer.get()) {
-            case video_renderer::null:
-              g_fxo->init<rsx::thread, named_thread<NullGSRender>>(ar);
-              break;
-            case video_renderer::vulkan:
-              g_fxo->init<rsx::thread, named_thread<VKGSRender>>(ar);
-              break;
-
-            // ARMSX3: the GL backend now targets OpenGL ES 3.2 (see
+            // ARMSX3: the GL backend targets OpenGL ES 3.2 (see
             // Emu/RSX/GL/OpenGL_ES.hpp). It is also the only path that can run on
             // ANGLE, which is why it exists on a Vulkan-capable platform at all.
-            case video_renderer::opengl:
-              g_fxo->init<rsx::thread, named_thread<GLGSRender>>(ar);
-              break;
-
-            default:
-              break;
-            }
+            rsx::create_render_thread(g_cfg.video.renderer.get(), ar);
           },
       .get_audio =
           [](auto...) {
