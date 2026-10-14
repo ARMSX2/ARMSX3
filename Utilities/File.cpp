@@ -1935,7 +1935,15 @@ void fs::sync(const std::string& path)
 
 	if (fd == -1)
 	{
+#ifdef ANDROID
+		// A folder reached through the Storage Access Framework is not a path the kernel can
+		// open (see android/src/saf_device.h), and returning here would leave a save on it with
+		// no sync at all. Flush everything instead, as fs::sync() did before it took a path.
+		::sync();
+		fs::g_tls_error = fs::error::ok;
+#else
 		fs::g_tls_error = to_error(errno);
+#endif
 		return;
 	}
 
