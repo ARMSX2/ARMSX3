@@ -1093,9 +1093,15 @@ object Rpcs3Bridge {
          *  JNI call per input event for values that never change. */
         val pressureSent = IntArray(PRESSURE_SLOTS)
 
-        /** Opposing directions cancel; 128 is centre, matching CELL_PAD. */
-        private fun axis(pos: Int, neg: Int) =
-            (128f + (dir[pos] - dir[neg]) * 127f).toInt().coerceIn(0, 255)
+        /** Opposing directions cancel; 128 is centre, matching CELL_PAD. Each side scales to its
+         *  own end, so a full push reads 0 up/left and 255 down/right, as a real DualShock 3 sends
+         *  and RPCS3's ConvertAxis gives. One 127 scale for both sides stopped full up and full
+         *  left at 1, one step short (ARMSX3 #198: full up / full left walked, the rest ran).
+         *  Rounded, so a push within half a step of either end reaches it. */
+        private fun axis(pos: Int, neg: Int): Int {
+            val v = dir[pos] - dir[neg]
+            return (128.5f + v * (if (v < 0f) 128f else 127f)).toInt().coerceIn(0, 255)
+        }
 
         fun leftX() = axis(1, 3)
         fun leftY() = axis(2, 0)
@@ -1453,9 +1459,10 @@ object Rpcs3Bridge {
     @JvmStatic
     fun setStick(port: Int, left: Boolean, x: Int, y: Int) {
         val pad = pads.getOrNull(port) ?: return
-        // Absolute axis -> the two opposing deflections it implies.
+        // Absolute axis -> the two opposing deflections it implies (inverse of axis()).
         fun split(v: Int): Pair<Float, Float> {
-            val n = ((v.coerceIn(0, 255) - 128) / 127f).coerceIn(-1f, 1f)
+            val d = v.coerceIn(0, 255) - 128
+            val n = if (d < 0) d / 128f else d / 127f
             return if (n >= 0f) n to 0f else 0f to -n
         }
         val (xPos, xNeg) = split(x)
