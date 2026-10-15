@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,7 +47,9 @@ import com.armsx2.ui.common.ArmsBackdrop
 import com.armsx2.ui.common.ArmsTopBar
 import com.armsx2.ui.common.GlassPanel
 import com.armsx2.ui.common.RoundAction
+import com.armsx2.ui.settings.SegmentedRow
 import com.armsx2.ui.settings.controllerFocusable
+import kotlinx.coroutines.delay
 
 /**
  * Remote play from the library: join a friend as player 2, on the same Wi-Fi or with the invite
@@ -59,11 +62,24 @@ fun RemotePlayScreen(onBack: () -> Unit) {
     var address by remember { mutableStateOf("") }
     var invite by remember { mutableStateOf("") }
     var inviteError by remember { mutableStateOf(false) }
+    var scanning by remember { mutableStateOf(false) }
+    var exitMode by remember { mutableStateOf(RemotePlayPrefs.exitButton(context)) }
+    var touchMode by remember { mutableStateOf(RemotePlayPrefs.touchControls(context)) }
 
-    DisposableEffect(Unit) {
+    // Looking for hosts only when asked, and for a minute at most: browsing holds a Wi-Fi
+    // multicast lock and keeps the radio busier, which is battery nobody should pay by opening
+    // this screen.
+    DisposableEffect(scanning) {
+        if (!scanning) return@DisposableEffect onDispose {}
         val browser = HostBrowser(context) { hosts = it }
         browser.start()
         onDispose { browser.stop() }
+    }
+    LaunchedEffect(scanning) {
+        if (scanning) {
+            delay(60_000)
+            scanning = false
+        }
     }
 
     // A six-character code from the lobby service, or a whole pasted invite.
@@ -143,20 +159,61 @@ fun RemotePlayScreen(onBack: () -> Unit) {
                 GlassPanel(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         SectionTitle(str("remoteplay.join.title"))
-                        if (hosts.isEmpty()) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                                Spacer(Modifier.width(8.dp))
-                                Text(str("remoteplay.join.searching"), style = MaterialTheme.typography.bodySmall)
+                        val toggleScan = { scanning = !scanning }
+                        if (scanning) {
+                            if (hosts.isEmpty()) {
+                                Busy(str("remoteplay.join.searching"))
+                                Text(
+                                    str("remoteplay.join.howToHost"),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
+                            OutlinedButton(
+                                onClick = toggleScan,
+                                modifier = Modifier.controllerFocusable("remoteplay.join.scan", onConfirm = toggleScan),
+                            ) { Text(str("remoteplay.join.scanStop")) }
+                        } else {
                             Text(
-                                str("remoteplay.join.howToHost"),
-                                style = MaterialTheme.typography.labelSmall,
+                                str("remoteplay.join.scanHint"),
+                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                            Button(
+                                onClick = toggleScan,
+                                modifier = Modifier.controllerFocusable("remoteplay.join.scan", onConfirm = toggleScan),
+                            ) { Text(str("remoteplay.join.scan")) }
                         }
                         hosts.forEach { host ->
                             HostRow(host) { RemotePlayViewerActivity.start(context, host.address, host.port, host.name) }
+                        }
+                    }
+                }
+
+                GlassPanel(Modifier.fillMaxWidth()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        SectionTitle(str("remoteplay.screen.title"))
+                        val choices = listOf(str("remoteplay.screen.tap"), str("remoteplay.screen.on"), str("remoteplay.screen.off"))
+                        val modes = RevealMode.entries
+                        SegmentedRow(
+                            label = str("remoteplay.screen.exit"),
+                            options = choices,
+                            selectedIndex = modes.indexOf(exitMode),
+                            description = str("remoteplay.screen.exitDesc"),
+                            notDefault = exitMode != RevealMode.TAP,
+                        ) { index ->
+                            exitMode = modes[index]
+                            RemotePlayPrefs.setExitButton(context, exitMode)
+                        }
+                        SegmentedRow(
+                            label = str("remoteplay.screen.touch"),
+                            options = choices,
+                            selectedIndex = modes.indexOf(touchMode),
+                            description = str("remoteplay.screen.touchDesc"),
+                            notDefault = touchMode != RevealMode.TAP,
+                        ) { index ->
+                            touchMode = modes[index]
+                            RemotePlayPrefs.setTouchControls(context, touchMode)
                         }
                     }
                 }
