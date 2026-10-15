@@ -1,6 +1,12 @@
 package com.armsx2.remoteplay
 
+import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,10 +34,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.ui.common.ArmsBackdrop
 import com.armsx2.ui.common.ArmsTopBar
@@ -40,19 +48,32 @@ import com.armsx2.ui.common.RoundAction
 import com.armsx2.ui.settings.controllerFocusable
 
 /**
- * Remote play from the library: find a friend hosting on this Wi-Fi and join as player 2.
- * Hosting is in the in-game menu (Friends), since only a running game can be hosted.
+ * Remote play from the library: join a friend as player 2, on the same Wi-Fi or with the invite
+ * code they sent. Hosting is in the in-game menu (Friends), since only a running game can be hosted.
  */
 @Composable
 fun RemotePlayScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     var hosts by remember { mutableStateOf(emptyList<RemotePlayHostInfo>()) }
     var address by remember { mutableStateOf("") }
+    var invite by remember { mutableStateOf("") }
+    var inviteError by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         val browser = HostBrowser(context) { hosts = it }
         browser.start()
         onDispose { browser.stop() }
+    }
+
+    val joinInvite: () -> Unit = {
+        val offer = RemotePlayProtocol.decodeCode(invite)
+        if (offer != null && offer.optString("t") == "offer") {
+            inviteError = false
+            invite = ""
+            RemotePlayViewerActivity.startWithInvite(context, offer)
+        } else {
+            inviteError = true
+        }
     }
 
     ArmsBackdrop {
@@ -75,11 +96,44 @@ fun RemotePlayScreen(onBack: () -> Unit) {
 
                 GlassPanel(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SectionTitle(str("remoteplay.join.code"))
                         Text(
-                            str("remoteplay.join.title"),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
+                            str("remoteplay.join.codeHint"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        CodeField(
+                            value = invite,
+                            onValueChange = {
+                                invite = it
+                                inviteError = false
+                            },
+                            label = str("remoteplay.join.codeField"),
+                        )
+                        if (inviteError) ErrorText(str("remoteplay.join.badCode"))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            val paste: () -> Unit = {
+                                clipboardText(context)?.let {
+                                    invite = it
+                                    inviteError = false
+                                }
+                            }
+                            OutlinedButton(
+                                onClick = paste,
+                                modifier = Modifier.controllerFocusable("remoteplay.join.paste", onConfirm = paste),
+                            ) { Text(str("remoteplay.code.paste")) }
+                            Button(
+                                onClick = joinInvite,
+                                enabled = invite.isNotBlank(),
+                                modifier = Modifier.controllerFocusable("remoteplay.join.invite", onConfirm = joinInvite),
+                            ) { Text(str("remoteplay.join.connect")) }
+                        }
+                    }
+                }
+
+                GlassPanel(Modifier.fillMaxWidth()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        SectionTitle(str("remoteplay.join.title"))
                         if (hosts.isEmpty()) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -100,11 +154,7 @@ fun RemotePlayScreen(onBack: () -> Unit) {
 
                 GlassPanel(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            str("remoteplay.join.manual"),
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold,
-                        )
+                        SectionTitle(str("remoteplay.join.manual"))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             OutlinedTextField(
                                 value = address,
@@ -177,16 +227,13 @@ private fun joinAddress(context: Context, text: String) {
 fun RemotePlayHostPanel(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val status by RemotePlayHost.status
-    val start = { RemotePlayHost.start(context) }
+    val hostWifi = { RemotePlayHost.startWifi(context) }
+    val invite = { RemotePlayHost.createInvite(context) }
     val stop = { RemotePlayHost.stop() }
 
     GlassPanel(modifier.fillMaxWidth()) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                str("remoteplay.title"),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-            )
+            SectionTitle(str("remoteplay.title"))
             when (val current = status) {
                 RemotePlayHost.Status.Off -> {
                     Text(
@@ -194,18 +241,20 @@ fun RemotePlayHostPanel(modifier: Modifier = Modifier) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    Button(
-                        onClick = start,
-                        modifier = Modifier.controllerFocusable("remoteplay.host.start", onConfirm = start),
-                    ) { Text(str("remoteplay.host.start")) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = hostWifi,
+                            modifier = Modifier.controllerFocusable("remoteplay.host.wifi", onConfirm = hostWifi),
+                        ) { Text(str("remoteplay.host.wifi")) }
+                        Button(
+                            onClick = invite,
+                            modifier = Modifier.controllerFocusable("remoteplay.host.invite", onConfirm = invite),
+                        ) { Text(str("remoteplay.host.invite")) }
+                    }
                 }
 
                 is RemotePlayHost.Status.Waiting -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                        Text(str("remoteplay.host.waiting"), style = MaterialTheme.typography.bodySmall)
-                    }
+                    Busy(str("remoteplay.host.waiting"))
                     current.address?.let {
                         Text(
                             str("remoteplay.host.address").format(it),
@@ -213,15 +262,19 @@ fun RemotePlayHostPanel(modifier: Modifier = Modifier) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    StopButton(stop)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = invite,
+                            modifier = Modifier.controllerFocusable("remoteplay.host.invite", onConfirm = invite),
+                        ) { Text(str("remoteplay.host.invite")) }
+                        StopButton(stop)
+                    }
                 }
 
+                is RemotePlayHost.Status.Inviting -> InvitePanel(current.code, stop)
+
                 is RemotePlayHost.Status.Connecting -> {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                        Text(str("remoteplay.host.connecting").format(current.viewer), style = MaterialTheme.typography.bodySmall)
-                    }
+                    Busy(str("remoteplay.host.connecting").format(current.viewer))
                     StopButton(stop)
                 }
 
@@ -231,25 +284,150 @@ fun RemotePlayHostPanel(modifier: Modifier = Modifier) {
                 }
 
                 is RemotePlayHost.Status.Failed -> {
-                    Text(
-                        current.message,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    Button(
-                        onClick = start,
-                        modifier = Modifier.controllerFocusable("remoteplay.host.retry", onConfirm = start),
-                    ) { Text(str("remoteplay.host.retry")) }
+                    ErrorText(current.message)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = hostWifi,
+                            modifier = Modifier.controllerFocusable("remoteplay.host.wifi", onConfirm = hostWifi),
+                        ) { Text(str("remoteplay.host.wifi")) }
+                        Button(
+                            onClick = invite,
+                            modifier = Modifier.controllerFocusable("remoteplay.host.invite", onConfirm = invite),
+                        ) { Text(str("remoteplay.host.invite")) }
+                    }
                 }
             }
         }
     }
 }
 
+/** An online invite: send the code, then paste the friend's reply. */
 @Composable
-private fun StopButton(stop: () -> Unit) {
+private fun InvitePanel(code: String?, cancel: () -> Unit) {
+    val context = LocalContext.current
+    var reply by remember { mutableStateOf("") }
+    var replyError by remember { mutableStateOf(false) }
+
+    if (code == null) {
+        Busy(str("remoteplay.invite.preparing"))
+        StopButton(cancel, str("remoteplay.invite.cancel"))
+        return
+    }
+
+    val share = { shareText(context, I18n.get("remoteplay.invite.share").format(code)) }
+    val copy = { copyText(context, code) }
+    val paste: () -> Unit = {
+        clipboardText(context)?.let {
+            reply = it
+            replyError = false
+        }
+    }
+    val connect: () -> Unit = {
+        if (!RemotePlayHost.acceptReply(reply)) replyError = true
+    }
+
+    Text(str("remoteplay.invite.step1"), style = MaterialTheme.typography.bodySmall)
+    Text(
+        code.take(32) + "...",
+        style = MaterialTheme.typography.labelSmall,
+        fontFamily = FontFamily.Monospace,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = share,
+            modifier = Modifier.controllerFocusable("remoteplay.invite.share", onConfirm = share),
+        ) { Text(str("remoteplay.code.share")) }
+        OutlinedButton(
+            onClick = copy,
+            modifier = Modifier.controllerFocusable("remoteplay.invite.copy", onConfirm = copy),
+        ) { Text(str("remoteplay.code.copy")) }
+    }
+
+    Text(str("remoteplay.invite.step2"), style = MaterialTheme.typography.bodySmall)
+    CodeField(
+        value = reply,
+        onValueChange = {
+            reply = it
+            replyError = false
+        },
+        label = str("remoteplay.invite.reply"),
+    )
+    if (replyError) ErrorText(str("remoteplay.invite.badReply"))
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(
+            onClick = paste,
+            modifier = Modifier.controllerFocusable("remoteplay.invite.paste", onConfirm = paste),
+        ) { Text(str("remoteplay.code.paste")) }
+        Button(
+            onClick = connect,
+            enabled = reply.isNotBlank(),
+            modifier = Modifier.controllerFocusable("remoteplay.invite.connect", onConfirm = connect),
+        ) { Text(str("remoteplay.invite.connect")) }
+        StopButton(cancel, str("remoteplay.invite.cancel"))
+    }
+}
+
+@Composable
+private fun SectionTitle(text: String) {
+    Text(text, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+}
+
+@Composable
+private fun Busy(text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+        Spacer(Modifier.width(8.dp))
+        Text(text, style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun ErrorText(text: String) {
+    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+}
+
+/** A code is long and only ever pasted, so the field shows its start and keeps it on a few lines. */
+@Composable
+private fun CodeField(value: String, onValueChange: (String) -> Unit, label: String) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        maxLines = 3,
+        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun StopButton(stop: () -> Unit, label: String = str("remoteplay.host.stop")) {
     OutlinedButton(
         onClick = stop,
         modifier = Modifier.controllerFocusable("remoteplay.host.stop", onConfirm = stop),
-    ) { Text(str("remoteplay.host.stop")) }
+    ) { Text(label) }
+}
+
+/** Opens the share sheet, so the player can send a code over Discord or any chat. */
+internal fun shareText(context: Context, text: String) {
+    val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+    val chooser = Intent.createChooser(send, null)
+    if (context !is Activity) chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { context.startActivity(chooser) }
+}
+
+internal fun copyText(context: Context, text: String) {
+    val clipboard = context.getSystemService(ClipboardManager::class.java) ?: return
+    clipboard.setPrimaryClip(ClipData.newPlainText("ARMSX3", text))
+    // Android 13 and later confirm a copy themselves.
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+        Toast.makeText(context, I18n.get("remoteplay.code.copied"), Toast.LENGTH_SHORT).show()
+    }
+}
+
+/** Pasting with a button, since a long-press paste is awkward with a controller. */
+internal fun clipboardText(context: Context): String? {
+    val clip = context.getSystemService(ClipboardManager::class.java)?.primaryClip ?: return null
+    if (clip.itemCount == 0) return null
+    return clip.getItemAt(0).coerceToText(context)?.toString()
 }

@@ -16,7 +16,6 @@ import net.rpcsx.RPCSX
 import org.json.JSONObject
 import org.webrtc.CapturerObserver
 import org.webrtc.DataChannel
-import org.webrtc.IceCandidate
 import org.webrtc.JavaI420Buffer
 import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
@@ -37,19 +36,26 @@ private const val TAG = "RemotePlay"
 /** Player 2 is pad port 1. Pushing data to it is what plugs the controller in (see overlayPadData). */
 private const val PLAYER_2_PORT = 1
 
+/** After the friend's answer arrives, how long the connection gets to come up. */
+private const val CONNECT_TIMEOUT_MS = 60_000L
+
 /**
- * The hosting side. Listens on this Wi-Fi, takes one viewer at a time, streams the running game
- * to it and feeds the viewer's pad in as player 2.
+ * The hosting side. Takes one viewer at a time, streams the running game to it and feeds the
+ * viewer's pad in as player 2. A viewer arrives one of two ways: on the same Wi-Fi it finds this
+ * device by itself ([startWifi]); online, the players swap connection codes ([createInvite],
+ * [acceptReply]).
  *
- * Process-wide rather than tied to a screen, so closing the in-game menu does not end a session.
- * It ends when hosting is stopped or the game closes. Everything here runs on the main thread
- * unless a comment says otherwise.
+ * Process-wide rather than tied to a screen, so closing the in-game menu, or leaving for a chat
+ * app to send an invite, does not end anything. Hosting ends when it is stopped or the game
+ * closes. Main thread unless a comment says otherwise.
  */
 object RemotePlayHost {
     sealed interface Status {
         data object Off : Status
-        /** [address] is what a viewer can type when the host does not show up in its list. */
+        /** Hosting on this Wi-Fi. [address] is what a viewer can type if this device is not listed. */
         data class Waiting(val address: String?) : Status
+        /** An online invite. [code] is null while it is being prepared. */
+        data class Inviting(val code: String?) : Status
         data class Connecting(val viewer: String) : Status
         data class Playing(val viewer: String) : Status
         data class Failed(val message: String) : Status
@@ -75,41 +81,83 @@ object RemotePlayHost {
         }
     }
 
-    fun start(context: Context) {
-        val current = _status.value
-        if (current !is Status.Off && current !is Status.Failed) return
-
-        val game = MainActivityRuntime.currentGame.value
-        if (game == null) {
-            _status.value = Status.Failed(I18n.get("remoteplay.host.noGame"))
-            return
-        }
-
+    /** Host on this Wi-Fi: listen, and announce this device so viewers list it. */
+    fun startWifi(context: Context) {
+        if (server != null) return
+        val game = runningGame() ?: return
         val app = context.applicationContext
         appContext = app
 
-        val listener = SignalingServer { socket -> main.post { onViewer(socket) } }
+        val listener = SignalingServer { socket -> main.post { onWifiViewer(socket) } }
         if (!listener.start()) {
             _status.value = Status.Failed(I18n.get("remoteplay.host.noNetwork"))
             return
         }
         server = listener
-        advertiser = HostAdvertiser(app).also { it.register(Build.MODEL, listener.port, game.title) }
-        _status.value = Status.Waiting(address(app, listener.port))
+        advertiser = HostAdvertiser(app).also { it.register(Build.MODEL, listener.port, game) }
+        if (session == null) _status.value = Status.Waiting(address(app, listener.port))
+        watchGame()
+    }
 
-        main.removeCallbacks(gameWatch)
-        main.postDelayed(gameWatch, 1_000)
+    /** Online: prepare an offer for the player to send as a code. */
+    fun createInvite(context: Context) {
+        if (session != null) return
+        val game = runningGame() ?: return
+        val app = context.applicationContext
+        appContext = app
+
+        lateinit var created: HostSession
+        val link = CodeLink { code -> main.post { if (session === created) _status.value = Status.Inviting(code) } }
+        created = HostSession(app, link, game, onFinished = { ended, message -> main.post { if (session === ended) sessionEnded(ended, message) } })
+        session = created
+        _status.value = Status.Inviting(null)
+        watchGame()
+        created.offer()
+    }
+
+    /**
+     * The friend's reply to an invite, as pasted (the whole chat message is fine). False when it
+     * holds no reply code; the invite stays open so the player can try again.
+     */
+    fun acceptReply(text: String): Boolean {
+        val pending = session ?: return false
+        val message = RemotePlayProtocol.decodeCode(text) ?: return false
+        if (message.optString("t") != "answer") return false
+        if (message.optInt("v") != RemotePlayProtocol.VERSION) {
+            sessionEnded(pending, I18n.get("remoteplay.bye.version"))
+            return true
+        }
+        pending.onSignal(message)
+        return true
     }
 
     fun stop() {
         main.removeCallbacks(gameWatch)
         session?.end("stopped")
         session = null
+        stopWifi()
+        _status.value = Status.Off
+    }
+
+    private fun stopWifi() {
         advertiser?.unregister()
         advertiser = null
         server?.stop()
         server = null
-        _status.value = Status.Off
+    }
+
+    private fun runningGame(): String? {
+        val game = MainActivityRuntime.currentGame.value
+        if (game == null) {
+            _status.value = Status.Failed(I18n.get("remoteplay.host.noGame"))
+            return null
+        }
+        return game.title
+    }
+
+    private fun watchGame() {
+        main.removeCallbacks(gameWatch)
+        main.postDelayed(gameWatch, 1_000)
     }
 
     private fun address(context: Context, port: Int): String? {
@@ -117,9 +165,10 @@ object RemotePlayHost {
         return if (port == RemotePlayProtocol.PORT) ip else "$ip:$port"
     }
 
-    private fun onViewer(socket: Socket) {
+    private fun onWifiViewer(socket: Socket) {
         val app = appContext
-        if (session != null || server == null || app == null) {
+        val game = MainActivityRuntime.currentGame.value?.title
+        if (session != null || server == null || app == null || game == null) {
             // One player 2 at a time.
             SignalingConnection(socket, {}, {}).also { it.start() }.sendAndClose(RemotePlayRtc.bye("busy"))
             return
@@ -129,35 +178,49 @@ object RemotePlayHost {
         val connection = SignalingConnection(
             socket,
             onMessage = { message -> main.post { if (session === created) created.onSignal(message) } },
-            onClosed = { main.post { if (session === created) sessionEnded(created) } },
+            onClosed = { main.post { if (session === created) created.linkClosed() } },
         )
-        created = HostSession(app, connection, onFinished = { ended -> main.post { if (session === ended) sessionEnded(ended) } })
+        created = HostSession(app, TcpLink(connection), game, onFinished = { ended, message -> main.post { if (session === ended) sessionEnded(ended, message) } })
         session = created
         connection.start()
     }
 
-    private fun sessionEnded(ended: HostSession) {
+    /** [message] is shown to the player when the session ended on a problem, not by choice. */
+    private fun sessionEnded(ended: HostSession, message: String?) {
         ended.end("ended")
         session = null
-        val listener = server ?: return
-        _status.value = Status.Waiting(appContext?.let { address(it, listener.port) })
+        val listener = server
+        _status.value = when {
+            message != null -> Status.Failed(message)
+            listener != null -> Status.Waiting(appContext?.let { address(it, listener.port) })
+            else -> Status.Off
+        }
+        if (message != null) {
+            // A failure ends hosting entirely, so the message is not replaced by a list nobody asked for.
+            main.removeCallbacks(gameWatch)
+            stopWifi()
+        } else if (listener == null) {
+            main.removeCallbacks(gameWatch)
+        }
     }
 
     internal fun report(status: Status) {
-        main.post { if (server != null) _status.value = status }
+        main.post { _status.value = status }
     }
 }
 
-/** One viewer, from its hello to its bye. */
+/** One viewer, from the offer to the bye. Main thread unless a comment says otherwise. */
 private class HostSession(
     private val context: Context,
-    private val connection: SignalingConnection,
-    private val onFinished: (HostSession) -> Unit,
+    private val link: SignalLink,
+    private val game: String,
+    private val onFinished: (HostSession, String?) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
     private var viewer = "?"
     private var rtc: RemotePlayRtc.Factory? = null
     private var peer: PeerConnection? = null
+    private var gather: GatherWait? = null
     private var videoSource: VideoSource? = null
     private var videoTrack: VideoTrack? = null
     private var inputChannel: DataChannel? = null
@@ -169,6 +232,9 @@ private class HostSession(
     private var streaming = false
     private var videoThread: Thread? = null
     private var audioThread: Thread? = null
+    private var offered = false
+    private var answered = false
+    private var connectedOnce = false
     private var ended = false
 
     private var appliedPad = RemotePlayProtocol.PadState()
@@ -186,44 +252,68 @@ private class HostSession(
         }
     }
 
+    private val connectTimeout = Runnable {
+        if (!connectedOnce) finish(I18n.get("remoteplay.timeout.host"))
+    }
+
     fun onSignal(message: JSONObject) {
         if (ended) return
         when (message.optString("t")) {
             "hello" -> {
                 if (message.optInt("v") != RemotePlayProtocol.VERSION) {
-                    connection.sendAndClose(RemotePlayRtc.bye("version"))
+                    link.close(RemotePlayRtc.bye("version"))
+                    finish(null)
                     return
                 }
                 viewer = message.optString("name").ifBlank { "?" }.take(40)
                 RemotePlayHost.report(RemotePlayHost.Status.Connecting(viewer))
-                createPeer()
+                offer()
             }
-            "answer" -> peer?.setRemoteDescription(
-                SdpAdapter(::fail),
-                SessionDescription(SessionDescription.Type.ANSWER, message.optString("sdp")),
-            )
-            "ice" -> peer?.addIceCandidate(RemotePlayRtc.iceFromMessage(message))
-            "bye" -> finish()
+            "answer" -> {
+                val pc = peer ?: return
+                if (answered) return
+                answered = true
+                viewer = message.optString("name").ifBlank { viewer }.take(40)
+                RemotePlayHost.report(RemotePlayHost.Status.Connecting(viewer))
+                pc.setRemoteDescription(
+                    SdpAdapter { error -> fail("answer: $error") },
+                    SessionDescription(SessionDescription.Type.ANSWER, message.optString("sdp")),
+                )
+                main.postDelayed(connectTimeout, CONNECT_TIMEOUT_MS)
+            }
+            "bye" -> finish(null)
         }
     }
 
-    private fun createPeer() {
+    /** The Wi-Fi link dropped. Before the stream is up that is the end; after, the stream carries on. */
+    fun linkClosed() {
+        if (!connectedOnce) finish(null)
+    }
+
+    /** Builds the peer and sends the offer once it is complete, candidates included. */
+    fun offer() {
+        if (offered || ended) return
+        offered = true
+
         val factory = RemotePlayRtc.createFactory(context).also { rtc = it }.factory
+        val wait = GatherWait(main, 4_000) {
+            val description = peer?.localDescription ?: return@GatherWait
+            link.send(
+                RemotePlayRtc.sdpMessage("offer", description)
+                    .put("v", RemotePlayProtocol.VERSION)
+                    .put("game", game.take(80))
+                    .put("host", Build.MODEL),
+            )
+        }
+        gather = wait
 
         val pc = factory.createPeerConnection(RemotePlayRtc.configuration(), object : PeerObserverAdapter() {
-            override fun onIceCandidate(candidate: IceCandidate) {
-                connection.send(RemotePlayRtc.iceMessage(candidate))
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
+                if (state == PeerConnection.IceGatheringState.COMPLETE) wait.gatheringComplete()
             }
 
             override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
-                main.post {
-                    when (newState) {
-                        PeerConnection.PeerConnectionState.CONNECTED -> startStreaming()
-                        PeerConnection.PeerConnectionState.FAILED,
-                        PeerConnection.PeerConnectionState.CLOSED -> finish()
-                        else -> Unit
-                    }
-                }
+                main.post { onConnectionState(newState) }
             }
         })
         if (pc == null) {
@@ -238,7 +328,7 @@ private class HostSession(
             track,
             RtpTransceiver.RtpTransceiverInit(RtpTransceiver.RtpTransceiverDirection.SEND_ONLY, listOf("armsx3")),
         )
-        RemotePlayRtc.preferH264(factory, transceiver)
+        RemotePlayRtc.restrictCodecs(factory, transceiver)
 
         // Unordered and never retransmitted: a late pad state is worse than a missing one, since
         // the next packet carries the whole pad anyway, and late audio is just a delay.
@@ -247,16 +337,33 @@ private class HostSession(
             maxRetransmits = 0
         }
         inputChannel = pc.createDataChannel(RemotePlayProtocol.CHANNEL_INPUT, lossy())?.also { channel ->
-            channel.registerObserver(MessageObserver { buffer -> onPadPacket(buffer.data) })
+            channel.registerObserver(MessageObserver { buffer -> onInputPacket(buffer.data) })
         }
         audioChannel = pc.createDataChannel(RemotePlayProtocol.CHANNEL_AUDIO, lossy())
 
-        pc.createOffer(object : SdpAdapter(::fail) {
+        pc.createOffer(object : SdpAdapter({ error -> fail("offer: $error") }) {
             override fun onCreateSuccess(description: SessionDescription) {
-                pc.setLocalDescription(SdpAdapter(::fail), description)
-                connection.send(RemotePlayRtc.sdpMessage("offer", description))
+                pc.setLocalDescription(object : SdpAdapter({ error -> fail("local: $error") }) {
+                    override fun onSetSuccess() = wait.localDescriptionSet()
+                }, description)
             }
         }, MediaConstraints())
+    }
+
+    private fun onConnectionState(state: PeerConnection.PeerConnectionState) {
+        if (ended) return
+        when (state) {
+            PeerConnection.PeerConnectionState.CONNECTED -> {
+                connectedOnce = true
+                main.removeCallbacks(connectTimeout)
+                startStreaming()
+            }
+            // Before the first connection, a failure can still recover once the friend's side
+            // starts answering; the connect timeout decides. After it, failed means gone.
+            PeerConnection.PeerConnectionState.FAILED -> if (connectedOnce) finish(null)
+            PeerConnection.PeerConnectionState.CLOSED -> finish(null)
+            else -> Unit
+        }
     }
 
     private fun startStreaming() {
@@ -342,7 +449,11 @@ private class HostSession(
     }
 
     // WebRTC's thread.
-    private fun onPadPacket(data: ByteBuffer) {
+    private fun onInputPacket(data: ByteBuffer) {
+        if (RemotePlayProtocol.isBye(data)) {
+            main.post { finish(null) }
+            return
+        }
         val (seq, pad) = RemotePlayProtocol.decodePad(data) ?: return
         main.post {
             if (ended || !streaming) return@post
@@ -374,19 +485,22 @@ private class HostSession(
 
     private fun fail(reason: String) {
         Log.w(TAG, "host session failed: $reason")
-        finish()
+        main.post { finish(I18n.get("remoteplay.host.failed")) }
     }
 
-    /** Any thread. Asks the host to end this session. */
-    private fun finish() {
-        main.post { onFinished(this) }
+    /** Asks the host to end this session; [message] is shown when it ended on a problem. */
+    private fun finish(message: String?) {
+        if (ended) return
+        onFinished(this, message)
     }
 
-    /** Main thread. Idempotent. */
+    /** Idempotent. */
     fun end(reason: String) {
         if (ended) return
         ended = true
         main.removeCallbacks(padWatch)
+        main.removeCallbacks(connectTimeout)
+        gather?.cancel()
 
         if (streaming) {
             streaming = false
@@ -397,7 +511,12 @@ private class HostSession(
         audioThread?.join(500)
         applyPad(RemotePlayProtocol.PadState())
 
-        connection.sendAndClose(RemotePlayRtc.bye(reason))
+        // A few times, since the channel drops what it cannot deliver.
+        audioChannel?.takeIf { it.state() == DataChannel.State.OPEN }?.let { channel ->
+            repeat(3) { channel.send(DataChannel.Buffer(RemotePlayProtocol.encodeBye(), true)) }
+        }
+        link.close(RemotePlayRtc.bye(reason))
+
         runCatching { peer?.close() }
         runCatching { inputChannel?.unregisterObserver() }
         runCatching { inputChannel?.dispose() }

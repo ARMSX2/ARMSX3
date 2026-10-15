@@ -94,6 +94,37 @@ internal class SignalingConnection(
     }
 }
 
+/**
+ * How a session's offer, answer and bye travel. Same Wi-Fi: a [SignalingConnection]. Online: the
+ * players themselves, as connection codes, so sending a message means showing its code.
+ */
+internal interface SignalLink {
+    fun send(message: JSONObject)
+
+    /** Ends the link, sending [last] first where the link can. */
+    fun close(last: JSONObject?)
+}
+
+internal class TcpLink(private val connection: SignalingConnection) : SignalLink {
+    override fun send(message: JSONObject) = connection.send(message)
+
+    override fun close(last: JSONObject?) {
+        if (last != null) connection.sendAndClose(last) else connection.close()
+    }
+}
+
+/** Online, with no server: offers and answers become codes for the player to send. */
+internal class CodeLink(private val show: (String) -> Unit) : SignalLink {
+    override fun send(message: JSONObject) {
+        when (message.optString("t")) {
+            "offer", "answer" -> show(RemotePlayProtocol.encodeCode(message))
+        }
+    }
+
+    // A code session ends over the data channels (RemotePlayProtocol.encodeBye).
+    override fun close(last: JSONObject?) {}
+}
+
 /** The host's listening socket. Takes [RemotePlayProtocol.PORT] when free, any port otherwise. */
 internal class SignalingServer(private val onClient: (Socket) -> Unit) {
     private var server: ServerSocket? = null

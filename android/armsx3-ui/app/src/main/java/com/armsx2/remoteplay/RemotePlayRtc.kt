@@ -1,6 +1,7 @@
 package com.armsx2.remoteplay
 
 import android.content.Context
+import android.os.Handler
 import org.json.JSONObject
 import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
@@ -52,9 +53,18 @@ internal object RemotePlayRtc {
         return Factory(factory, audio)
     }
 
-    /** Same-Wi-Fi only for now: local candidates are all it needs, so no STUN server is asked. */
+    /**
+     * Public STUN servers tell each side the address the internet sees for it, which is what a
+     * friend online connects to. They only answer "what is my address"; no game traffic goes near
+     * them, and there is no relay: a pair that cannot connect directly does not connect.
+     */
+    private val stunServers = listOf(
+        PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
+        PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer(),
+    )
+
     fun configuration(): PeerConnection.RTCConfiguration =
-        PeerConnection.RTCConfiguration(emptyList()).apply {
+        PeerConnection.RTCConfiguration(stunServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
@@ -62,23 +72,72 @@ internal object RemotePlayRtc {
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
         }
 
-    /** H.264 first: every phone has a hardware encoder and decoder for it. */
-    fun preferH264(factory: PeerConnectionFactory, transceiver: RtpTransceiver) {
+    /**
+     * H.264 first, since every phone has a hardware encoder and decoder for it, and VP8 as the
+     * fallback a software decoder always covers. Offering nothing else also keeps a connection
+     * code short: every listed codec is several lines of the offer.
+     */
+    fun restrictCodecs(factory: PeerConnectionFactory, transceiver: RtpTransceiver) {
         val codecs = factory.getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO)?.codecs ?: return
-        val (h264, rest) = codecs.partition { it.name.equals("H264", ignoreCase = true) }
-        if (h264.isNotEmpty()) runCatching { transceiver.setCodecPreferences(h264 + rest) }
+        fun rank(name: String) = when (name.uppercase()) {
+            "H264" -> 0
+            "VP8" -> 1
+            "RTX", "RED", "ULPFEC" -> 2
+            else -> -1
+        }
+        val kept = codecs.filter { rank(it.name) >= 0 }.sortedBy { rank(it.name) }
+        if (kept.any { rank(it.name) <= 1 }) runCatching { transceiver.setCodecPreferences(kept) }
     }
 
     fun sdpMessage(type: String, sdp: SessionDescription): JSONObject =
         JSONObject().put("t", type).put("sdp", sdp.description)
 
-    fun iceMessage(candidate: IceCandidate): JSONObject =
-        JSONObject().put("t", "ice").put("mid", candidate.sdpMid).put("i", candidate.sdpMLineIndex).put("c", candidate.sdp)
-
-    fun iceFromMessage(message: JSONObject): IceCandidate =
-        IceCandidate(message.optString("mid"), message.optInt("i"), message.optString("c"))
-
     fun bye(reason: String): JSONObject = JSONObject().put("t", "bye").put("reason", reason)
+}
+
+/**
+ * Waits for a local description to be complete. Offers and answers go out whole, candidates
+ * included, so they wait for ICE gathering; STUN usually answers within a second, and after
+ * [timeoutMs] whatever was gathered goes out anyway. Main thread; [onReady] runs at most once.
+ */
+internal class GatherWait(private val main: Handler, private val timeoutMs: Long, private val onReady: () -> Unit) {
+    private var localSet = false
+    private var gathered = false
+    private var timedOut = false
+    private var fired = false
+    private val timeout = Runnable {
+        timedOut = true
+        check()
+    }
+
+    fun localDescriptionSet() {
+        main.post {
+            localSet = true
+            main.postDelayed(timeout, timeoutMs)
+            check()
+        }
+    }
+
+    fun gatheringComplete() {
+        main.post {
+            gathered = true
+            check()
+        }
+    }
+
+    fun cancel() {
+        main.post {
+            fired = true
+            main.removeCallbacks(timeout)
+        }
+    }
+
+    private fun check() {
+        if (fired || !localSet || !(gathered || timedOut)) return
+        fired = true
+        main.removeCallbacks(timeout)
+        onReady()
+    }
 }
 
 /** SdpObserver with nothing to do by default; failures go to [onFailure]. */

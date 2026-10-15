@@ -20,20 +20,24 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -44,7 +48,6 @@ import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import org.json.JSONObject
 import org.webrtc.DataChannel
-import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
 import org.webrtc.RendererCommon
@@ -64,21 +67,49 @@ import kotlin.math.roundToInt
 
 private const val TAG = "RemotePlay"
 
+/** On the same Wi-Fi the host answers at once; give up after this. */
+private const val WIFI_CONNECT_TIMEOUT_MS = 30_000L
+
+/** Online, the friend still has to receive the reply and paste it. */
+private const val INVITE_CONNECT_TIMEOUT_MS = 5 * 60_000L
+
+/** How a viewer reaches its host. */
+internal sealed interface ViewerMode {
+    data class Wifi(val host: String, val port: Int) : ViewerMode
+
+    /** From an invite code; [offer] is the decoded invite. */
+    data class Invite(val offer: JSONObject) : ViewerMode
+}
+
 /**
  * The viewer: a friend's game on this screen, played as player 2 with this device's controller.
- * Nothing is emulated here, so it needs no BIOS, firmware or game, only the host on the same Wi-Fi.
+ * Nothing is emulated here, so it needs no BIOS, firmware or game, only a way to reach the host:
+ * the same Wi-Fi, or an invite code.
  */
 class RemotePlayViewerActivity : ComponentActivity() {
     companion object {
         private const val EXTRA_HOST = "host"
         private const val EXTRA_PORT = "port"
         private const val EXTRA_NAME = "name"
+        private const val EXTRA_OFFER = "offer"
 
+        /** Join a host on this Wi-Fi. */
         fun start(context: Context, host: String, port: Int, name: String) {
-            val intent = Intent(context, RemotePlayViewerActivity::class.java)
-                .putExtra(EXTRA_HOST, host)
-                .putExtra(EXTRA_PORT, port)
-                .putExtra(EXTRA_NAME, name)
+            launch(
+                context,
+                Intent(context, RemotePlayViewerActivity::class.java)
+                    .putExtra(EXTRA_HOST, host)
+                    .putExtra(EXTRA_PORT, port)
+                    .putExtra(EXTRA_NAME, name),
+            )
+        }
+
+        /** Join from an invite. [offer] is the decoded invite code (RemotePlayProtocol.decodeCode). */
+        fun startWithInvite(context: Context, offer: JSONObject) {
+            launch(context, Intent(context, RemotePlayViewerActivity::class.java).putExtra(EXTRA_OFFER, offer.toString()))
+        }
+
+        private fun launch(context: Context, intent: Intent) {
             if (context !is android.app.Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
         }
@@ -88,10 +119,17 @@ class RemotePlayViewerActivity : ComponentActivity() {
     private var session: ViewerSession? = null
     private val main = Handler(Looper.getMainLooper())
 
-    // Shown over the video until the first frame arrives; empty once it has.
+    // Shown over the black screen until the first frame arrives.
     private val status = mutableStateOf("")
+    private val playing = mutableStateOf(false)
     private val hintVisible = mutableStateOf(false)
     private val leaveAsked = mutableStateOf(false)
+
+    // Online: the reply code the player sends back, once it is ready.
+    private val inviteMode = mutableStateOf(false)
+    private val reply = mutableStateOf<String?>(null)
+    private val connected = mutableStateOf(false)
+
     private val input = ViewerInput { pad -> session?.sendPad(pad) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -103,19 +141,23 @@ class RemotePlayViewerActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
+        val offer = intent.getStringExtra(EXTRA_OFFER)?.let { runCatching { JSONObject(it) }.getOrNull() }
         val host = intent.getStringExtra(EXTRA_HOST)
-        if (host == null) {
-            finish()
-            return
+        val mode = when {
+            offer != null -> ViewerMode.Invite(offer)
+            host != null -> ViewerMode.Wifi(host, intent.getIntExtra(EXTRA_PORT, RemotePlayProtocol.PORT))
+            else -> {
+                finish()
+                return
+            }
         }
-        val port = intent.getIntExtra(EXTRA_PORT, RemotePlayProtocol.PORT)
-        val name = intent.getStringExtra(EXTRA_NAME).orEmpty().ifBlank { host }
+        inviteMode.value = mode is ViewerMode.Invite
 
         renderer = SurfaceViewRenderer(this).apply {
             init(RemotePlayRtc.eglBase.eglBaseContext, object : RendererCommon.RendererEvents {
                 override fun onFirstFrameRendered() {
                     main.post {
-                        status.value = ""
+                        playing.value = true
                         hintVisible.value = true
                         main.postDelayed({ hintVisible.value = false }, 6_000)
                     }
@@ -132,16 +174,20 @@ class RemotePlayViewerActivity : ComponentActivity() {
                 Box(Modifier.fillMaxSize().background(Color.Black)) {
                     AndroidView(factory = { renderer }, modifier = Modifier.fillMaxSize())
 
-                    if (status.value.isNotEmpty()) {
-                        Text(
-                            status.value,
-                            color = Color.White,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.align(Alignment.Center).padding(24.dp),
-                        )
+                    if (!playing.value) {
+                        if (inviteMode.value && !connected.value) {
+                            ReplyPanel()
+                        } else if (status.value.isNotEmpty()) {
+                            Text(
+                                status.value,
+                                color = Color.White,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.align(Alignment.Center).padding(24.dp),
+                            )
+                        }
                     }
 
-                    if (hintVisible.value && !leaveAsked.value) {
+                    if (playing.value && hintVisible.value && !leaveAsked.value) {
                         Text(
                             str("remoteplay.viewer.hint"),
                             color = Color.White,
@@ -161,22 +207,69 @@ class RemotePlayViewerActivity : ComponentActivity() {
             }
         }
 
-        status.value = I18n.get("remoteplay.viewer.connecting").format(name)
+        status.value = when (mode) {
+            is ViewerMode.Wifi -> I18n.get("remoteplay.viewer.connecting").format(intent.getStringExtra(EXTRA_NAME).orEmpty().ifBlank { mode.host })
+            is ViewerMode.Invite -> ""
+        }
         session = ViewerSession(
             context = this,
-            host = host,
-            port = port,
+            mode = mode,
             renderer = renderer,
-            onConnected = { status.value = I18n.get("remoteplay.viewer.waitingVideo") },
+            onReply = { code -> reply.value = code },
+            onConnected = {
+                connected.value = true
+                status.value = I18n.get("remoteplay.viewer.waitingVideo")
+            },
             onEnded = { message ->
                 if (message != null) Toast.makeText(this, message, Toast.LENGTH_LONG).show()
                 finish()
             },
-        ).also { it.connect() }
+        ).also { it.start() }
     }
 
-    @androidx.compose.runtime.Composable
-    private fun androidx.compose.foundation.layout.BoxScope.LeavePrompt() {
+    private fun shareReply() {
+        reply.value?.let { shareText(this, I18n.get("remoteplay.reply.share").format(it)) }
+    }
+
+    private fun copyReply() {
+        reply.value?.let { copyText(this, it) }
+    }
+
+    @Composable
+    private fun BoxScope.ReplyPanel() {
+        Column(
+            Modifier
+                .align(Alignment.Center)
+                .widthIn(max = 520.dp)
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            val code = reply.value
+            if (code == null) {
+                Text(str("remoteplay.viewer.preparing"), color = Color.White)
+            } else {
+                Text(str("remoteplay.viewer.sendReply"), color = Color.White, textAlign = TextAlign.Center)
+                Text(
+                    code.take(32) + "...",
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontFamily = FontFamily.Monospace,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = { shareReply() }) { Text(str("remoteplay.code.share") + " (A)") }
+                    OutlinedButton(onClick = { copyReply() }) { Text(str("remoteplay.code.copy") + " (Y)") }
+                }
+                Text(
+                    str("remoteplay.viewer.waitingHost"),
+                    color = Color.White.copy(alpha = 0.7f),
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+    }
+
+    @Composable
+    private fun BoxScope.LeavePrompt() {
         Column(
             Modifier
                 .align(Alignment.Center)
@@ -222,6 +315,17 @@ class RemotePlayViewerActivity : ComponentActivity() {
             if (event.action == KeyEvent.ACTION_UP) {
                 input.releaseAll()
                 leaveAsked.value = true
+            }
+            return true
+        }
+
+        // While the reply waits to be sent, the pad works the panel: A shares, Y copies.
+        if (inviteMode.value && !connected.value && reply.value != null && fromPad) {
+            if (event.action == KeyEvent.ACTION_UP) {
+                when (event.keyCode) {
+                    KeyEvent.KEYCODE_BUTTON_A -> shareReply()
+                    KeyEvent.KEYCODE_BUTTON_Y -> copyReply()
+                }
             }
             return true
         }
@@ -362,9 +466,9 @@ internal class ViewerInput(private val send: (RemotePlayProtocol.PadState) -> Un
 /** The viewer's connection: signaling, the peer, audio playback and the pad. Main thread. */
 internal class ViewerSession(
     private val context: Context,
-    private val host: String,
-    private val port: Int,
+    private val mode: ViewerMode,
     private val renderer: SurfaceViewRenderer,
+    private val onReply: (String) -> Unit,
     private val onConnected: () -> Unit,
     private val onEnded: (String?) -> Unit,
 ) {
@@ -372,15 +476,17 @@ internal class ViewerSession(
     private val audio = AudioOut()
 
     @Volatile
-    private var connection: SignalingConnection? = null
+    private var link: SignalLink? = null
     private var rtc: RemotePlayRtc.Factory? = null
     private var peer: PeerConnection? = null
+    private var gather: GatherWait? = null
 
     @Volatile
     private var inputChannel: DataChannel? = null
     private var audioChannel: DataChannel? = null
     private var pad = RemotePlayProtocol.PadState()
     private var seq = 0
+    private var connectedOnce = false
     private var ended = false
 
     // The pad goes out on every change and also every 50 ms, which fixes a lost packet within
@@ -393,13 +499,34 @@ internal class ViewerSession(
         }
     }
 
-    fun connect() {
+    private val connectTimeout = Runnable {
+        if (connectedOnce) return@Runnable
+        end(I18n.get(if (mode is ViewerMode.Invite) "remoteplay.timeout.viewer" else "remoteplay.error.connect"))
+    }
+
+    fun start() {
+        when (mode) {
+            is ViewerMode.Wifi -> connectWifi(mode.host, mode.port)
+            is ViewerMode.Invite -> {
+                if (mode.offer.optInt("v") != RemotePlayProtocol.VERSION) {
+                    end(I18n.get("remoteplay.bye.version"))
+                    return
+                }
+                link = CodeLink { code -> main.post { if (!ended) onReply(code) } }
+                answer(mode.offer.optString("sdp"))
+                main.postDelayed(connectTimeout, INVITE_CONNECT_TIMEOUT_MS)
+            }
+        }
+    }
+
+    private fun connectWifi(host: String, port: Int) {
         thread(name = "rp-connect", isDaemon = true) {
-            val link = try {
+            val connection = try {
                 SignalingConnection.connect(
                     host, port,
                     onMessage = { message -> main.post { onSignal(message) } },
-                    onClosed = { main.post { end(I18n.get("remoteplay.viewer.lost")) } },
+                    // Once the stream is up the link has done its job.
+                    onClosed = { main.post { if (!connectedOnce) end(I18n.get("remoteplay.viewer.lost")) } },
                 )
             } catch (e: IOException) {
                 Log.w(TAG, "connect to $host:$port failed", e)
@@ -408,17 +535,18 @@ internal class ViewerSession(
             }
             main.post {
                 if (ended) {
-                    link.close()
+                    connection.close()
                     return@post
                 }
-                connection = link
-                link.start()
-                link.send(
+                link = TcpLink(connection)
+                connection.start()
+                connection.send(
                     JSONObject()
                         .put("t", "hello")
                         .put("v", RemotePlayProtocol.VERSION)
                         .put("name", Build.MODEL),
                 )
+                main.postDelayed(connectTimeout, WIFI_CONNECT_TIMEOUT_MS)
             }
         }
     }
@@ -438,18 +566,28 @@ internal class ViewerSession(
         if (ended) return
         when (message.optString("t")) {
             "offer" -> answer(message.optString("sdp"))
-            "ice" -> peer?.addIceCandidate(RemotePlayRtc.iceFromMessage(message))
             "bye" -> end(byeMessage(message.optString("reason")))
         }
     }
 
+    /** Answers the host's offer; the answer goes out once complete, candidates included. */
     private fun answer(offer: String) {
-        if (peer != null) return
+        if (peer != null || ended) return
         val factory = RemotePlayRtc.createFactory(context).also { rtc = it }.factory
 
+        val wait = GatherWait(main, 4_000) {
+            val description = peer?.localDescription ?: return@GatherWait
+            link?.send(
+                RemotePlayRtc.sdpMessage("answer", description)
+                    .put("v", RemotePlayProtocol.VERSION)
+                    .put("name", Build.MODEL),
+            )
+        }
+        gather = wait
+
         val pc = factory.createPeerConnection(RemotePlayRtc.configuration(), object : PeerObserverAdapter() {
-            override fun onIceCandidate(candidate: IceCandidate) {
-                connection?.send(RemotePlayRtc.iceMessage(candidate))
+            override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
+                if (state == PeerConnection.IceGatheringState.COMPLETE) wait.gatheringComplete()
             }
 
             override fun onTrack(transceiver: RtpTransceiver) {
@@ -461,7 +599,11 @@ internal class ViewerSession(
                     RemotePlayProtocol.CHANNEL_INPUT -> inputChannel = channel
                     RemotePlayProtocol.CHANNEL_AUDIO -> {
                         channel.registerObserver(MessageObserver { buffer ->
-                            RemotePlayProtocol.decodeAudio(buffer.data)?.let(audio::enqueue)
+                            if (RemotePlayProtocol.isBye(buffer.data)) {
+                                main.post { end(I18n.get("remoteplay.bye.stopped")) }
+                            } else {
+                                RemotePlayProtocol.decodeAudio(buffer.data)?.let(audio::enqueue)
+                            }
                         })
                         main.post { audioChannel = channel }
                     }
@@ -469,18 +611,7 @@ internal class ViewerSession(
             }
 
             override fun onConnectionChange(newState: PeerConnection.PeerConnectionState) {
-                main.post {
-                    when (newState) {
-                        PeerConnection.PeerConnectionState.CONNECTED -> {
-                            onConnected()
-                            main.removeCallbacks(heartbeat)
-                            main.post(heartbeat)
-                        }
-                        PeerConnection.PeerConnectionState.FAILED,
-                        PeerConnection.PeerConnectionState.CLOSED -> end(I18n.get("remoteplay.viewer.lost"))
-                        else -> Unit
-                    }
-                }
+                main.post { onConnectionState(newState) }
             }
         })
         if (pc == null) {
@@ -497,12 +628,33 @@ internal class ViewerSession(
             override fun onSetSuccess() {
                 pc.createAnswer(object : SdpAdapter(failed) {
                     override fun onCreateSuccess(description: SessionDescription) {
-                        pc.setLocalDescription(SdpAdapter(failed), description)
-                        connection?.send(RemotePlayRtc.sdpMessage("answer", description))
+                        pc.setLocalDescription(object : SdpAdapter(failed) {
+                            override fun onSetSuccess() = wait.localDescriptionSet()
+                        }, description)
                     }
                 }, MediaConstraints())
             }
         }, SessionDescription(SessionDescription.Type.OFFER, offer))
+    }
+
+    private fun onConnectionState(state: PeerConnection.PeerConnectionState) {
+        if (ended) return
+        when (state) {
+            PeerConnection.PeerConnectionState.CONNECTED -> {
+                if (!connectedOnce) {
+                    connectedOnce = true
+                    main.removeCallbacks(connectTimeout)
+                    onConnected()
+                    main.removeCallbacks(heartbeat)
+                    main.post(heartbeat)
+                }
+            }
+            // Before the first connection a failure can still recover: online, the host has not
+            // necessarily pasted the reply yet. The connect timeout decides. After it, failed means gone.
+            PeerConnection.PeerConnectionState.FAILED -> if (connectedOnce) end(I18n.get("remoteplay.viewer.lost"))
+            PeerConnection.PeerConnectionState.CLOSED -> end(I18n.get("remoteplay.viewer.lost"))
+            else -> Unit
+        }
     }
 
     private fun byeMessage(reason: String): String = when (reason) {
@@ -517,8 +669,16 @@ internal class ViewerSession(
         if (ended) return
         ended = true
         main.removeCallbacks(heartbeat)
-        connection?.sendAndClose(RemotePlayRtc.bye("left"))
+        main.removeCallbacks(connectTimeout)
+        gather?.cancel()
+
+        // A few times, since the channel drops what it cannot deliver.
+        inputChannel?.takeIf { it.state() == DataChannel.State.OPEN }?.let { channel ->
+            repeat(3) { channel.send(DataChannel.Buffer(RemotePlayProtocol.encodeBye(), true)) }
+        }
+        link?.close(RemotePlayRtc.bye("left"))
         audio.stop()
+
         runCatching { peer?.close() }
         runCatching { audioChannel?.unregisterObserver() }
         runCatching { audioChannel?.dispose() }
