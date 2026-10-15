@@ -26,8 +26,8 @@ import java.util.concurrent.TimeUnit;
  * up behind each other: when more than one is done, the newest is shown and the older ones are
  * skipped, so the picture is never behind.
  *
- * On a screen well above the stream's rate, or online, frames go up in step with the screen
- * instead ({@link Pacer}).
+ * On a screen well above the stream's rate, frames go up in step with the screen instead
+ * ({@link Pacer}).
  *
  * WebRTC still hears of each frame shown, as a frame with a size and no pixels, so its statistics
  * stay true. If the codec will not start on the screen, the stock decoder takes over for the rest
@@ -512,8 +512,8 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
    * ("balanced") pacing does: decoded frames wait, oldest first and {@link #PACED_WAITING} at most
    * (a newer one pushes the oldest out unshown), and each refresh puts up the next once most of a
    * frame's time has passed since the last. Shown the moment they are decoded, frames stay up for
-   * uneven numbers of refreshes on a 90 or 120 Hz screen, or when they arrive unevenly over the
-   * internet, which reads as stutter. Costs up to one refresh of waiting.
+   * uneven numbers of refreshes on a 90 or 120 Hz screen, which reads as stutter. Costs up to one
+   * refresh (8 to 11 ms there) of waiting.
    */
   private final class Pacer implements Choreographer.FrameCallback {
     private final Running codec;

@@ -281,7 +281,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
                 override fun onFallback() {
                     main.post { useRenderer() }
                 }
-            }, /* online, where frames arrive less evenly: */ mode !is ViewerMode.Wifi)
+            })
             output = target
             videoView.value = SurfaceView(this).also { view ->
                 view.holder.addCallback(object : SurfaceHolder.Callback {
