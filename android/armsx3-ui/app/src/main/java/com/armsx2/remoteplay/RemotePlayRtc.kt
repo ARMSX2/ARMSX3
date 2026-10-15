@@ -144,7 +144,14 @@ internal object RemotePlayRtc {
         PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer(),
     )
 
-    fun configuration(): PeerConnection.RTCConfiguration =
+    /**
+     * [dscp]: video and audio marked as such (DSCP AF41 and EF), which a Wi-Fi router sends from
+     * its WMM video and voice queues, ahead of other traffic. Off unless the viewer turns on QoS
+     * marking: on the same Wi-Fi it halved the longest gaps between frames (37 ms at most against
+     * 68 to 82, tests 20 and 23) but left frames waiting 28 to 45 ms before decoding instead of 7
+     * to 18. A trade for the player to make, not a default; networks differ.
+     */
+    fun configuration(dscp: Boolean = false): PeerConnection.RTCConfiguration =
         PeerConnection.RTCConfiguration(stunServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
@@ -155,9 +162,7 @@ internal object RemotePlayRtc {
             // falling behind and answers by shrinking the picture. The encoder is a separate
             // hardware block, so that load says nothing about it.
             enableCpuOveruseDetection = false
-            // No DSCP marking. With video marked AF41 (test 20), routers sent it from their WMM
-            // video queue, and frames waited 28 to 45 ms before decoding instead of 7 to 11 (test
-            // 19), unevenly enough to judder.
+            enableDscp = dscp
         }
 
     /**

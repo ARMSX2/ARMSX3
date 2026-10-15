@@ -67,6 +67,7 @@ fun RemotePlayScreen(onBack: () -> Unit) {
     var exitMode by remember { mutableStateOf(RemotePlayPrefs.exitButton(context)) }
     var touchMode by remember { mutableStateOf(RemotePlayPrefs.touchControls(context)) }
     var statsOn by remember { mutableStateOf(RemotePlayPrefs.streamStats(context)) }
+    var qosOn by remember { mutableStateOf(RemotePlayPrefs.wifiQos(context)) }
 
     // Looking for hosts only when asked, and for a minute at most: browsing holds a Wi-Fi
     // multicast lock and keeps the radio busier, which is battery nobody should pay by opening
@@ -243,6 +244,15 @@ fun RemotePlayScreen(onBack: () -> Unit) {
                         ) { on ->
                             statsOn = on
                             RemotePlayPrefs.setStreamStats(context, on)
+                        }
+                        ToggleRow(
+                            label = str("remoteplay.screen.qos"),
+                            value = qosOn,
+                            description = str("remoteplay.screen.qosDesc"),
+                            notDefault = qosOn,
+                        ) { on ->
+                            qosOn = on
+                            RemotePlayPrefs.setWifiQos(context, on)
                         }
                     }
                 }

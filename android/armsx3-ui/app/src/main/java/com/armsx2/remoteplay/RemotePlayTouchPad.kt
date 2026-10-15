@@ -20,16 +20,19 @@ object RemotePlayPrefs {
     private const val KEY_EXIT = "exitButton"
     private const val KEY_TOUCH = "touchControls"
     private const val KEY_STATS = "streamStats"
+    private const val KEY_QOS = "wifiQos"
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
     fun exitButton(context: Context) = RevealMode.of(prefs(context).getString(KEY_EXIT, null))
     fun touchControls(context: Context) = RevealMode.of(prefs(context).getString(KEY_TOUCH, null))
     fun streamStats(context: Context) = prefs(context).getBoolean(KEY_STATS, false)
+    fun wifiQos(context: Context) = prefs(context).getBoolean(KEY_QOS, false)
 
     fun setExitButton(context: Context, mode: RevealMode) = prefs(context).edit().putString(KEY_EXIT, mode.key).apply()
     fun setTouchControls(context: Context, mode: RevealMode) = prefs(context).edit().putString(KEY_TOUCH, mode.key).apply()
     fun setStreamStats(context: Context, on: Boolean) = prefs(context).edit().putBoolean(KEY_STATS, on).apply()
+    fun setWifiQos(context: Context, on: Boolean) = prefs(context).edit().putBoolean(KEY_QOS, on).apply()
 }
 
 /**

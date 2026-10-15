@@ -186,6 +186,8 @@ val EN: Map<String, String> = mapOf(
     "remoteplay.screen.touchDesc" to "Your ARMSX3 touch controls, with your own layout and skin, for when you don't have a controller. With tap to reveal, tap the screen to show them. They hide again when you use a controller.",
     "remoteplay.screen.stats" to "Stream stats",
     "remoteplay.screen.statsDesc" to "Frame rate, delay and connection details in a corner of the screen while you play.",
+    "remoteplay.screen.qos" to "Wi-Fi QoS marking",
+    "remoteplay.screen.qosDesc" to "Asks your friend's device to mark the stream as video, so routers that sort traffic send it from their video queue. On some networks that means fewer hitches; it also adds about 25 ms of delay. Same Wi-Fi only, and nothing to set on your friend's side.",
     "remoteplay.screen.tap" to "Tap to reveal",
     "remoteplay.screen.on" to "Always on",
     "remoteplay.screen.off" to "Off",

@@ -192,6 +192,9 @@ class RemotePlayViewerActivity : ComponentActivity() {
     private val exitShown = mutableStateOf(false)
     private val touchShown = mutableStateOf(false)
     private val statsLine = mutableStateOf("")
+
+    // Same Wi-Fi with QoS marking asked for: the stats say so, so a screenshot shows which mode ran.
+    private var qosMarked = false
     private val hostLine = mutableStateOf("")
 
     private val input = ViewerInput { pad -> session?.sendPad(pad) }
@@ -231,7 +234,8 @@ class RemotePlayViewerActivity : ComponentActivity() {
                 // The screen's refresh rate now: 60 Hz unless the screen could not switch to it.
                 // And this device's Wi-Fi link, the usual suspect behind stalls and lost packets.
                 val screen = window.decorView.display?.refreshRate?.let { " · screen ${it.roundToInt()} Hz" }.orEmpty() +
-                    WifiLink.read(this@RemotePlayViewerActivity)?.let { " · ${it.describe()}" }.orEmpty()
+                    WifiLink.read(this@RemotePlayViewerActivity)?.let { " · ${it.describe()}" }.orEmpty() +
+                    (if (qosMarked) " · QoS" else "")
                 current.sampleStats { line ->
                     val audio = current.audioKind?.let { " · audio $it" }.orEmpty()
                     main.post { statsLine.value = line + decoder + screen + audio }
@@ -271,6 +275,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
             }
         }
         inviteMode.value = mode is ViewerMode.Invite
+        qosMarked = mode is ViewerMode.Wifi && RemotePlayPrefs.wifiQos(this)
 
         exitMode = RemotePlayPrefs.exitButton(this)
         touchMode = RemotePlayPrefs.touchControls(this)
@@ -1059,7 +1064,10 @@ internal class ViewerSession(
                     JSONObject()
                         .put("t", "hello")
                         .put("v", RemotePlayProtocol.VERSION)
-                        .put("name", Build.MODEL),
+                        .put("name", Build.MODEL)
+                        // Asks the host to mark the video for the router's video queue (see
+                        // RemotePlayRtc.configuration), when the player turned that on.
+                        .put("qos", RemotePlayPrefs.wifiQos(context)),
                 )
                 main.postDelayed(connectTimeout, WIFI_CONNECT_TIMEOUT_MS)
             }

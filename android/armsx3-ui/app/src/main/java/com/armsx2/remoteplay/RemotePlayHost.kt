@@ -274,6 +274,9 @@ private class HostSession(
     @Volatile
     private var ended = false
 
+    // Same Wi-Fi: the viewer turned on QoS marking ("qos" in its hello).
+    private var qos = false
+
     // Player 2's pad packets are applied here, not on the main thread, which the game's own
     // screens also use: a press never waits behind them. Audio priority, since each packet is a
     // few microseconds of work and its delay is the delay of the press.
@@ -388,6 +391,7 @@ private class HostSession(
                     return
                 }
                 viewer = message.optString("name").ifBlank { "?" }.take(40)
+                qos = message.optBoolean("qos")
                 RemotePlayHost.report(RemotePlayHost.Status.Connecting(viewer))
                 offer()
             }
@@ -445,7 +449,7 @@ private class HostSession(
         }
         gather = wait
 
-        val pc = factory.createPeerConnection(RemotePlayRtc.configuration(), object : PeerObserverAdapter() {
+        val pc = factory.createPeerConnection(RemotePlayRtc.configuration(dscp = qos), object : PeerObserverAdapter() {
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
                 if (state == PeerConnection.IceGatheringState.COMPLETE) wait.gatheringComplete()
             }
