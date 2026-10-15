@@ -971,6 +971,8 @@ internal class ViewerSession(
         }
     }
 
+    private val prioritize = Runnable { if (!ended) RemotePlayRtc.prioritizeStreamThreads() }
+
     private val connectTimeout = Runnable {
         if (connectedOnce) return@Runnable
         end(
@@ -1253,6 +1255,8 @@ internal class ViewerSession(
                     connectedOnce = true
                     main.removeCallbacks(connectTimeout)
                     wifi.hold()
+                    RemotePlayRtc.prioritizeStreamThreads()
+                    main.postDelayed(prioritize, 2_000)
                     onConnected()
                     main.removeCallbacks(heartbeat)
                     main.post(heartbeat)
@@ -1282,6 +1286,7 @@ internal class ViewerSession(
         ended = true
         main.removeCallbacks(heartbeat)
         main.removeCallbacks(sendLater)
+        main.removeCallbacks(prioritize)
         main.removeCallbacks(connectTimeout)
         gather?.cancel()
 

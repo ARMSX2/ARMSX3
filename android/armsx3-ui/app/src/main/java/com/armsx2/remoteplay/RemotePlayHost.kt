@@ -534,7 +534,12 @@ private class HostSession(
         main.postDelayed(statsTick, 5_000)
         main.postDelayed(hostStatsTick, 1_000)
         main.post(rumbleTick)
+        RemotePlayRtc.prioritizeStreamThreads()
+        main.postDelayed(prioritize, 1_000)
+        main.postDelayed(prioritize, 3_000)
     }
+
+    private val prioritize = Runnable { if (!ended) RemotePlayRtc.prioritizeStreamThreads() }
 
     private fun sendHostStats() {
         val core = IntArray(4)
@@ -702,6 +707,7 @@ private class HostSession(
         main.removeCallbacks(answerTimeout)
         main.removeCallbacks(statsTick)
         main.removeCallbacks(hostStatsTick)
+        main.removeCallbacks(prioritize)
         main.removeCallbacks(rumbleTick)
         gather?.cancel()
 

@@ -75,6 +75,35 @@ internal object RemotePlayRtc {
             "WebRTC-FrameDropper/Disabled/" +
             "WebRTC-CongestionWindow/Disabled/"
 
+    // Threads that carry the stream, by the name the kernel keeps for them (cut to 15 characters):
+    // WebRTC's worker thread (which also paces the video out), network and signalling threads,
+    // its video decoding queue, our encoder's output thread, and our capture, decode and audio
+    // threads (rp-video, rp-video-out, rp-audio, rp-audio-in, rp-audio-out).
+    private val STREAM_THREADS = listOf(
+        "pc_worker", "pc_network", "signaling_thr", "DecodingQueue", "ArmsxH264Encode", "rp-video", "rp-audio",
+    )
+
+    /**
+     * Puts the stream's threads at Android's video priority (nice -10). The emulator keeps every
+     * core busy while a game runs (its RSX thread at nice -8, PPU and SPU threads at 0), and at
+     * the default nice 0 WebRTC's threads waited their turn behind it: test 16 measured packets
+     * waiting 63 ms on average on the host before they went out, and the round trip wandering up
+     * to 85 ms on a strong 5 GHz link, which the viewer saw as uneven frames (55 to 62 fps). These
+     * threads sleep most of the time, so the game loses nothing. Some only exist once frames flow,
+     * so callers run this again shortly after the stream starts; running it twice changes nothing.
+     */
+    fun prioritizeStreamThreads() {
+        val tasks = java.io.File("/proc/self/task").listFiles() ?: return
+        var raised = 0
+        for (task in tasks) {
+            val name = runCatching { java.io.File(task, "comm").readText().trim() }.getOrNull() ?: continue
+            if (STREAM_THREADS.none { name.startsWith(it) }) continue
+            val tid = task.name.toIntOrNull() ?: continue
+            if (runCatching { android.os.Process.setThreadPriority(tid, android.os.Process.THREAD_PRIORITY_VIDEO) }.isSuccess) raised++
+        }
+        android.util.Log.i("RemotePlay", "remote play: $raised stream thread(s) at video priority")
+    }
+
     /**
      * A factory with hardware video codecs. The audio module exists because the factory needs
      * one, but it never starts: no audio track is ever added, and the game's sound travels on a
