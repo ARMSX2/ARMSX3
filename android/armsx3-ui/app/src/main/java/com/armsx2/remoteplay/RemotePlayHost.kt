@@ -42,8 +42,9 @@ private const val CONNECT_TIMEOUT_MS = 60_000L
 /**
  * The hosting side. Takes one viewer at a time, streams the running game to it and feeds the
  * viewer's pad in as player 2. A viewer arrives one of two ways: on the same Wi-Fi it finds this
- * device by itself ([startWifi]); online, the players swap connection codes ([createInvite],
- * [acceptReply]).
+ * device by itself ([startWifi]); online, it joins with an invite ([createInvite]): a six-character
+ * code through the lobby service, or, when that cannot be reached, a pasted code with a pasted
+ * reply ([acceptReply]).
  *
  * Process-wide rather than tied to a screen, so closing the in-game menu, or leaving for a chat
  * app to send an invite, does not end anything. Hosting ends when it is stopped or the game
@@ -54,8 +55,11 @@ object RemotePlayHost {
         data object Off : Status
         /** Hosting on this Wi-Fi. [address] is what a viewer can type if this device is not listed. */
         data class Waiting(val address: String?) : Status
-        /** An online invite. [code] is null while it is being prepared. */
-        data class Inviting(val code: String?) : Status
+        /**
+         * An online invite: [lobbyCode] is the short code to give the friend; [code] is the long
+         * pasted one used when the lobby service cannot be reached. Both null while preparing.
+         */
+        data class Inviting(val code: String? = null, val lobbyCode: String? = null) : Status
         data class Connecting(val viewer: String) : Status
         data class Playing(val viewer: String) : Status
         data class Failed(val message: String) : Status
@@ -99,7 +103,7 @@ object RemotePlayHost {
         watchGame()
     }
 
-    /** Online: prepare an offer for the player to send as a code. */
+    /** Online: prepare an offer and put it up under a short code for the friend to type. */
     fun createInvite(context: Context) {
         if (session != null) return
         val game = runningGame() ?: return
@@ -107,10 +111,15 @@ object RemotePlayHost {
         appContext = app
 
         lateinit var created: HostSession
-        val link = CodeLink { code -> main.post { if (session === created) _status.value = Status.Inviting(code) } }
+        val link = LobbyHostLink(
+            onCode = { code -> main.post { if (session === created) _status.value = Status.Inviting(lobbyCode = code) } },
+            onFallback = { pasted -> main.post { if (session === created) _status.value = Status.Inviting(code = pasted) } },
+            onAnswer = { answer -> main.post { if (session === created) acceptAnswer(created, answer) } },
+            onExpired = { main.post { if (session === created) sessionEnded(created, I18n.get("remoteplay.invite.expired")) } },
+        )
         created = HostSession(app, link, game, onFinished = { ended, message -> main.post { if (session === ended) sessionEnded(ended, message) } })
         session = created
-        _status.value = Status.Inviting(null)
+        _status.value = Status.Inviting()
         watchGame()
         created.offer()
     }
@@ -123,12 +132,16 @@ object RemotePlayHost {
         val pending = session ?: return false
         val message = RemotePlayProtocol.decodeCode(text) ?: return false
         if (message.optString("t") != "answer") return false
+        acceptAnswer(pending, message)
+        return true
+    }
+
+    private fun acceptAnswer(pending: HostSession, message: JSONObject) {
         if (message.optInt("v") != RemotePlayProtocol.VERSION) {
             sessionEnded(pending, I18n.get("remoteplay.bye.version"))
-            return true
+            return
         }
         pending.onSignal(message)
-        return true
     }
 
     fun stop() {

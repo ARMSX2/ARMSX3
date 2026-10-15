@@ -73,12 +73,18 @@ private const val WIFI_CONNECT_TIMEOUT_MS = 30_000L
 /** Online, the friend still has to receive the reply and paste it. */
 private const val INVITE_CONNECT_TIMEOUT_MS = 5 * 60_000L
 
+/** With a lobby code the host collects the answer within a couple of seconds. */
+private const val LOBBY_CONNECT_TIMEOUT_MS = 60_000L
+
 /** How a viewer reaches its host. */
 internal sealed interface ViewerMode {
     data class Wifi(val host: String, val port: Int) : ViewerMode
 
-    /** From an invite code; [offer] is the decoded invite. */
+    /** From a pasted invite; [offer] is the decoded invite. */
     data class Invite(val offer: JSONObject) : ViewerMode
+
+    /** From a six-character code through the lobby service. */
+    data class Lobby(val code: String) : ViewerMode
 }
 
 /**
@@ -92,6 +98,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
         private const val EXTRA_PORT = "port"
         private const val EXTRA_NAME = "name"
         private const val EXTRA_OFFER = "offer"
+        private const val EXTRA_LOBBY = "lobby"
 
         /** Join a host on this Wi-Fi. */
         fun start(context: Context, host: String, port: Int, name: String) {
@@ -104,9 +111,14 @@ class RemotePlayViewerActivity : ComponentActivity() {
             )
         }
 
-        /** Join from an invite. [offer] is the decoded invite code (RemotePlayProtocol.decodeCode). */
+        /** Join from a pasted invite. [offer] is the decoded invite (RemotePlayProtocol.decodeCode). */
         fun startWithInvite(context: Context, offer: JSONObject) {
             launch(context, Intent(context, RemotePlayViewerActivity::class.java).putExtra(EXTRA_OFFER, offer.toString()))
+        }
+
+        /** Join with a six-character code, already normalized (RemotePlayLobby.normalize). */
+        fun startWithLobby(context: Context, code: String) {
+            launch(context, Intent(context, RemotePlayViewerActivity::class.java).putExtra(EXTRA_LOBBY, code))
         }
 
         private fun launch(context: Context, intent: Intent) {
@@ -142,8 +154,10 @@ class RemotePlayViewerActivity : ComponentActivity() {
         }
 
         val offer = intent.getStringExtra(EXTRA_OFFER)?.let { runCatching { JSONObject(it) }.getOrNull() }
+        val lobby = intent.getStringExtra(EXTRA_LOBBY)?.let(RemotePlayLobby::normalize)
         val host = intent.getStringExtra(EXTRA_HOST)
         val mode = when {
+            lobby != null -> ViewerMode.Lobby(lobby)
             offer != null -> ViewerMode.Invite(offer)
             host != null -> ViewerMode.Wifi(host, intent.getIntExtra(EXTRA_PORT, RemotePlayProtocol.PORT))
             else -> {
@@ -209,6 +223,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
 
         status.value = when (mode) {
             is ViewerMode.Wifi -> I18n.get("remoteplay.viewer.connecting").format(intent.getStringExtra(EXTRA_NAME).orEmpty().ifBlank { mode.host })
+            is ViewerMode.Lobby -> I18n.get("remoteplay.viewer.joining").format(RemotePlayLobby.display(mode.code))
             is ViewerMode.Invite -> ""
         }
         session = ViewerSession(
@@ -501,12 +516,21 @@ internal class ViewerSession(
 
     private val connectTimeout = Runnable {
         if (connectedOnce) return@Runnable
-        end(I18n.get(if (mode is ViewerMode.Invite) "remoteplay.timeout.viewer" else "remoteplay.error.connect"))
+        end(
+            I18n.get(
+                when (mode) {
+                    is ViewerMode.Wifi -> "remoteplay.error.connect"
+                    is ViewerMode.Invite -> "remoteplay.timeout.viewer"
+                    is ViewerMode.Lobby -> "remoteplay.timeout.host"
+                },
+            ),
+        )
     }
 
     fun start() {
         when (mode) {
             is ViewerMode.Wifi -> connectWifi(mode.host, mode.port)
+            is ViewerMode.Lobby -> joinLobby(mode.code)
             is ViewerMode.Invite -> {
                 if (mode.offer.optInt("v") != RemotePlayProtocol.VERSION) {
                     end(I18n.get("remoteplay.bye.version"))
@@ -517,6 +541,34 @@ internal class ViewerSession(
                 main.postDelayed(connectTimeout, INVITE_CONNECT_TIMEOUT_MS)
             }
         }
+    }
+
+    private fun joinLobby(code: String) {
+        thread(name = "rp-lobby", isDaemon = true) {
+            val result = RemotePlayLobby.offer(code)
+            main.post {
+                if (ended) return@post
+                val offer = (result as? RemotePlayLobby.Result.Ok)?.value?.let { runCatching { JSONObject(it) }.getOrNull() }
+                when {
+                    offer != null && offer.optString("t") == "offer" -> {
+                        if (offer.optInt("v") != RemotePlayProtocol.VERSION) {
+                            end(I18n.get("remoteplay.bye.version"))
+                            return@post
+                        }
+                        link = LobbyViewerLink(code) { failure -> main.post { end(lobbyMessage(failure)) } }
+                        answer(offer.optString("sdp"))
+                        main.postDelayed(connectTimeout, LOBBY_CONNECT_TIMEOUT_MS)
+                    }
+                    else -> end(lobbyMessage(result))
+                }
+            }
+        }
+    }
+
+    private fun lobbyMessage(result: RemotePlayLobby.Result): String = when (result) {
+        RemotePlayLobby.Result.Busy -> I18n.get("remoteplay.bye.busy")
+        RemotePlayLobby.Result.NotFound -> I18n.get("remoteplay.join.notFound")
+        else -> I18n.get("remoteplay.error.lobby")
     }
 
     private fun connectWifi(host: String, port: Int) {

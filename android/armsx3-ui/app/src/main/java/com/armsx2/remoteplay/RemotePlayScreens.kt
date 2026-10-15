@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.ui.common.ArmsBackdrop
@@ -65,14 +66,22 @@ fun RemotePlayScreen(onBack: () -> Unit) {
         onDispose { browser.stop() }
     }
 
+    // A six-character code from the lobby service, or a whole pasted invite.
     val joinInvite: () -> Unit = {
-        val offer = RemotePlayProtocol.decodeCode(invite)
-        if (offer != null && offer.optString("t") == "offer") {
-            inviteError = false
-            invite = ""
-            RemotePlayViewerActivity.startWithInvite(context, offer)
-        } else {
-            inviteError = true
+        val lobbyCode = RemotePlayLobby.normalize(invite)
+        val offer = if (lobbyCode == null) RemotePlayProtocol.decodeCode(invite) else null
+        when {
+            lobbyCode != null -> {
+                inviteError = false
+                invite = ""
+                RemotePlayViewerActivity.startWithLobby(context, lobbyCode)
+            }
+            offer != null && offer.optString("t") == "offer" -> {
+                inviteError = false
+                invite = ""
+                RemotePlayViewerActivity.startWithInvite(context, offer)
+            }
+            else -> inviteError = true
         }
     }
 
@@ -271,7 +280,10 @@ fun RemotePlayHostPanel(modifier: Modifier = Modifier) {
                     }
                 }
 
-                is RemotePlayHost.Status.Inviting -> InvitePanel(current.code, stop)
+                is RemotePlayHost.Status.Inviting -> {
+                    val lobbyCode = current.lobbyCode
+                    if (lobbyCode != null) LobbyInvitePanel(lobbyCode, stop) else InvitePanel(current.code, stop)
+                }
 
                 is RemotePlayHost.Status.Connecting -> {
                     Busy(str("remoteplay.host.connecting").format(current.viewer))
@@ -301,7 +313,37 @@ fun RemotePlayHostPanel(modifier: Modifier = Modifier) {
     }
 }
 
-/** An online invite: send the code, then paste the friend's reply. */
+/** An online invite through the lobby service: one short code, and the friend's side connects by itself. */
+@Composable
+private fun LobbyInvitePanel(code: String, cancel: () -> Unit) {
+    val context = LocalContext.current
+    val shown = RemotePlayLobby.display(code)
+    val share = { shareText(context, I18n.get("remoteplay.invite.lobbyShare").format(shown)) }
+    val copy = { copyText(context, shown) }
+
+    Text(str("remoteplay.invite.lobbyCode"), style = MaterialTheme.typography.bodySmall)
+    Text(
+        shown,
+        style = MaterialTheme.typography.headlineMedium,
+        fontFamily = FontFamily.Monospace,
+        fontWeight = FontWeight.Bold,
+        letterSpacing = 2.sp,
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(
+            onClick = share,
+            modifier = Modifier.controllerFocusable("remoteplay.invite.share", onConfirm = share),
+        ) { Text(str("remoteplay.code.share")) }
+        OutlinedButton(
+            onClick = copy,
+            modifier = Modifier.controllerFocusable("remoteplay.invite.copy", onConfirm = copy),
+        ) { Text(str("remoteplay.code.copy")) }
+    }
+    Busy(str("remoteplay.invite.lobbyWaiting"))
+    StopButton(cancel, str("remoteplay.invite.cancel"))
+}
+
+/** An online invite without the lobby service: send the code, then paste the friend's reply. */
 @Composable
 private fun InvitePanel(code: String?, cancel: () -> Unit) {
     val context = LocalContext.current

@@ -7,6 +7,7 @@ import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import org.json.JSONObject
 import java.io.IOException
@@ -122,6 +123,92 @@ internal class CodeLink(private val show: (String) -> Unit) : SignalLink {
     }
 
     // A code session ends over the data channels (RemotePlayProtocol.encodeBye).
+    override fun close(last: JSONObject?) {}
+}
+
+/**
+ * Online through the lobby service ([RemotePlayLobby]): the offer goes up under a six-character
+ * code and the answer comes back by polling, so the players swap one short code instead of two
+ * pasted ones. If the service cannot be reached, [onFallback] gets a pasted code instead, so an
+ * invite still works.
+ */
+internal class LobbyHostLink(
+    private val onCode: (String) -> Unit,
+    private val onFallback: (String) -> Unit,
+    private val onAnswer: (JSONObject) -> Unit,
+    private val onExpired: () -> Unit,
+) : SignalLink {
+    @Volatile
+    private var lobby: RemotePlayLobby.Lobby? = null
+
+    @Volatile
+    private var closed = false
+
+    override fun send(message: JSONObject) {
+        if (message.optString("t") != "offer" || closed) return
+        thread(name = "rp-lobby", isDaemon = true) {
+            val opened = RemotePlayLobby.open(message.toString())
+            if (opened == null) {
+                if (!closed) onFallback(RemotePlayProtocol.encodeCode(message))
+                return@thread
+            }
+            lobby = opened
+            if (closed) {
+                RemotePlayLobby.close(opened)
+                return@thread
+            }
+            onCode(opened.code)
+
+            val deadline = SystemClock.uptimeMillis() + RemotePlayLobby.LIFETIME_MS
+            while (!closed && SystemClock.uptimeMillis() < deadline) {
+                try {
+                    Thread.sleep(POLL_MS)
+                } catch (_: InterruptedException) {
+                    return@thread
+                }
+                if (closed) return@thread
+                when (val result = RemotePlayLobby.collectAnswer(opened)) {
+                    is RemotePlayLobby.Result.Ok -> {
+                        val answer = runCatching { JSONObject(result.value) }.getOrNull()
+                        if (answer != null) onAnswer(answer) else onExpired()
+                        return@thread
+                    }
+                    RemotePlayLobby.Result.NotFound -> {
+                        onExpired()
+                        return@thread
+                    }
+                    // Still waiting, or a network blip: keep polling.
+                    else -> Unit
+                }
+            }
+            if (!closed) onExpired()
+        }
+    }
+
+    override fun close(last: JSONObject?) {
+        if (closed) return
+        closed = true
+        lobby?.let { opened -> thread(isDaemon = true) { RemotePlayLobby.close(opened) } }
+    }
+
+    private companion object {
+        const val POLL_MS = 2_000L
+    }
+}
+
+/** The friend's side of a lobby: the answer goes up to the service, where the host collects it. */
+internal class LobbyViewerLink(
+    private val code: String,
+    private val onFailed: (RemotePlayLobby.Result) -> Unit,
+) : SignalLink {
+    override fun send(message: JSONObject) {
+        if (message.optString("t") != "answer") return
+        thread(name = "rp-lobby", isDaemon = true) {
+            val result = RemotePlayLobby.answer(code, message.toString())
+            if (result !is RemotePlayLobby.Result.Ok) onFailed(result)
+        }
+    }
+
     override fun close(last: JSONObject?) {}
 }
 
