@@ -236,6 +236,8 @@ val EN: Map<String, String> = mapOf(
     "remoteplay.viewer.leave" to "Leave",
     "remoteplay.viewer.stay" to "Keep playing",
     "remoteplay.viewer.lost" to "Lost the connection to the host.",
+    "remoteplay.viewer.interrupted" to "Connection interrupted. Reconnecting...",
+    "remoteplay.viewer.hostPaused" to "Your friend paused the game.",
     "remoteplay.timeout.viewer" to "Your friend didn't connect in time. Ask them for a new invite.",
     "remoteplay.timeout.host" to "Couldn't connect to your friend. Some networks block direct connections. Try again, or play on the same Wi-Fi.",
     "remoteplay.error.connect" to "Couldn't reach that device. Make sure you're both on the same Wi-Fi.",

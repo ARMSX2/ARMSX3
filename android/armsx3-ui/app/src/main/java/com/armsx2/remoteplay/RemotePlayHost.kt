@@ -318,19 +318,21 @@ private class HostSession(
         }
     }
 
-    // Player 2's rumble, as the game drives it, for the viewer to feel: checked every 30 ms, as the
-    // local motors are, and sent on every change and every 200 ms besides.
+    // Player 2's rumble, as the game drives it, for the viewer to feel, and whether the game is
+    // paused, for the viewer to say so instead of showing a frozen picture: checked every 30 ms, as
+    // the local motors are, and sent on every change and every 200 ms besides.
     private var rumbleSent = -1
     private var rumbleSentAt = 0L
     private var rumbleSeq = 0
     private val rumbleTick = object : Runnable {
         override fun run() {
             if (ended || !streaming) return
-            val packed = Rpcs3Bridge.remoteRumble(PLAYER_2_PORT)
+            val paused = Rpcs3Bridge.isPaused()
+            val packed = Rpcs3Bridge.remoteRumble(PLAYER_2_PORT) or (if (paused) 1 shl 16 else 0)
             val now = SystemClock.uptimeMillis()
             val channel = audioChannel
             if ((packed != rumbleSent || now - rumbleSentAt >= 200) && channel?.state() == DataChannel.State.OPEN) {
-                val packet = RemotePlayProtocol.encodeRumble(rumbleSeq++, (packed shr 8) and 0xff, packed and 0xff)
+                val packet = RemotePlayProtocol.encodeRumble(rumbleSeq++, (packed shr 8) and 0xff, packed and 0xff, paused)
                 channel.send(DataChannel.Buffer(packet, true))
                 rumbleSent = packed
                 rumbleSentAt = now

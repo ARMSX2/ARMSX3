@@ -1831,6 +1831,10 @@ object Rpcs3Bridge {
     fun remoteRumble(port: Int): Int =
         if (paused) 0 else runCatching { RPCSX.instance.getPadRumble(port) }.getOrDefault(0)
 
+    /** Host: whether the game is paused, for the friend's screen to say so. */
+    @JvmStatic
+    fun isPaused(): Boolean = paused
+
     private var remoteActive: RumbleTarget? = null
     private var remoteAnnounced: String? = null
 

@@ -163,6 +163,11 @@ class RemotePlayViewerActivity : ComponentActivity() {
     private val hintVisible = mutableStateOf(false)
     private val leaveAsked = mutableStateOf(false)
 
+    // Said over the picture, so a stalled or still picture is not a mystery: the connection is
+    // trying to recover, or the host paused the game.
+    private val interrupted = mutableStateOf(false)
+    private val hostPaused = mutableStateOf(false)
+
     // Online: the reply code the player sends back, once it is ready.
     private val inviteMode = mutableStateOf(false)
     private val reply = mutableStateOf<String?>(null)
@@ -388,6 +393,24 @@ class RemotePlayViewerActivity : ComponentActivity() {
                         )
                     }
 
+                    val notice = when {
+                        interrupted.value -> str("remoteplay.viewer.interrupted")
+                        hostPaused.value -> str("remoteplay.viewer.hostPaused")
+                        else -> null
+                    }
+                    if (playing.value && notice != null && !leaveAsked.value) {
+                        Text(
+                            notice,
+                            color = Color.White,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(24.dp)
+                                .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
+                                .padding(horizontal = 18.dp, vertical = 10.dp),
+                        )
+                    }
+
                     if (leaveAsked.value) {
                         LeavePrompt()
                     }
@@ -415,6 +438,8 @@ class RemotePlayViewerActivity : ComponentActivity() {
             mode = mode,
             output = output,
             rumbleDevice = { lastPadDevice },
+            onInterrupted = { interrupted.value = it },
+            onHostPaused = { hostPaused.value = it },
             onReply = { code -> reply.value = code },
             onConnected = {
                 connected.value = true
@@ -832,6 +857,8 @@ internal class ViewerSession(
     private val mode: ViewerMode,
     private val output: ArmsxVideoOutput?,
     private val rumbleDevice: () -> Int,
+    private val onInterrupted: (Boolean) -> Unit,
+    private val onHostPaused: (Boolean) -> Unit,
     private val onReply: (String) -> Unit,
     private val onConnected: () -> Unit,
     private val onEnded: (String?) -> Unit,
@@ -869,6 +896,7 @@ internal class ViewerSession(
     // Player 2's rumble from the host. The host repeats it every 200 ms, so motors left running
     // with nothing heard for a while belong to a connection that stalled, and stop.
     private var foreground = true
+    private var hostPaused = false
     private var rumbleSeq = 0
     private var rumbleHeard = false
     private var rumbleOn = 0
@@ -1002,6 +1030,10 @@ internal class ViewerSession(
         if (rumbleHeard && rumble.seq - rumbleSeq <= 0) return
         rumbleHeard = true
         rumbleSeq = rumble.seq
+        if (rumble.paused != hostPaused) {
+            hostPaused = rumble.paused
+            onHostPaused(rumble.paused)
+        }
 
         val packed = (rumble.large shl 8) or rumble.small
         if (packed != rumbleOn) {
@@ -1140,6 +1172,7 @@ internal class ViewerSession(
         if (ended) return
         when (state) {
             PeerConnection.PeerConnectionState.CONNECTED -> {
+                onInterrupted(false)
                 if (!connectedOnce) {
                     connectedOnce = true
                     main.removeCallbacks(connectTimeout)
@@ -1153,6 +1186,9 @@ internal class ViewerSession(
             // necessarily pasted the reply yet. The connect timeout decides. After it, failed means gone.
             PeerConnection.PeerConnectionState.FAILED -> if (connectedOnce) end(I18n.get("remoteplay.viewer.lost"))
             PeerConnection.PeerConnectionState.CLOSED -> end(I18n.get("remoteplay.viewer.lost"))
+            // Connected before and nothing heard for a few seconds: WebRTC keeps trying for a
+            // while before it gives up (FAILED above), and the screen says so meanwhile.
+            PeerConnection.PeerConnectionState.DISCONNECTED -> if (connectedOnce) onInterrupted(true)
             else -> Unit
         }
     }

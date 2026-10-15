@@ -199,16 +199,19 @@ internal object RemotePlayProtocol {
         return OpusPacket(seq, frame, previous)
     }
 
-    /** Player 2's motors, 0..255 each, as the game drives them on the host. */
-    data class Rumble(val seq: Int, val large: Int, val small: Int)
+    /** Player 2's motors, 0..255 each, as the game drives them on the host, and whether the host paused. */
+    data class Rumble(val seq: Int, val large: Int, val small: Int, val paused: Boolean)
+
+    private const val FLAG_PAUSED = 1
 
     /**
-     * Player 2's rumble: type, the large and small motor (0..255), 0, sequence number. Sent on
-     * every change and every 200 ms besides, so a lost packet is corrected by the next.
+     * Player 2's rumble, and the game's state with it: type, the large and small motor (0..255),
+     * flags (1: the host paused the game), sequence number. Sent on every change and every 200 ms
+     * besides, so a lost packet is corrected by the next.
      */
-    fun encodeRumble(seq: Int, large: Int, small: Int): ByteBuffer {
+    fun encodeRumble(seq: Int, large: Int, small: Int, paused: Boolean): ByteBuffer {
         val out = ByteBuffer.allocate(RUMBLE_PACKET_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-        out.put(PACKET_RUMBLE).put(large.toByte()).put(small.toByte()).put(ZERO)
+        out.put(PACKET_RUMBLE).put(large.toByte()).put(small.toByte()).put(if (paused) FLAG_PAUSED.toByte() else ZERO)
         out.putInt(seq)
         out.flip()
         return out
@@ -220,8 +223,8 @@ internal object RemotePlayProtocol {
         if (buf.remaining() < RUMBLE_PACKET_SIZE || buf.get() != PACKET_RUMBLE) return null
         val large = buf.get().toInt() and 0xff
         val small = buf.get().toInt() and 0xff
-        buf.get()
-        return Rumble(buf.int, large, small)
+        val flags = buf.get().toInt() and 0xff
+        return Rumble(buf.int, large, small, flags and FLAG_PAUSED != 0)
     }
 
     /**

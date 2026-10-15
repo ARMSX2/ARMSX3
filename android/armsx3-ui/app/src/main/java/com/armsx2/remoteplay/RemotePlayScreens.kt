@@ -129,6 +129,18 @@ fun RemotePlayScreen(onBack: () -> Unit) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        // A controller types the code on ARMSX3's own keyboard: the system one cannot
+                        // be driven with a D-pad here.
+                        val typeCode = {
+                            com.armsx2.ui.home.LibraryKeyboard.open(
+                                invite,
+                                {
+                                    invite = it
+                                    inviteError = false
+                                },
+                                I18n.get("remoteplay.join.codeField"),
+                            )
+                        }
                         CodeField(
                             value = invite,
                             onValueChange = {
@@ -136,6 +148,7 @@ fun RemotePlayScreen(onBack: () -> Unit) {
                                 inviteError = false
                             },
                             label = str("remoteplay.join.codeField"),
+                            modifier = Modifier.controllerFocusable("remoteplay.join.codeField", onConfirm = typeCode),
                         )
                         if (inviteError) ErrorText(str("remoteplay.join.badCode"))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -502,16 +515,16 @@ private fun ErrorText(text: String) {
     Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
 }
 
-/** A code is long and only ever pasted, so the field shows its start and keeps it on a few lines. */
+/** A pasted code is long, so the field shows its start and keeps it on a few lines. */
 @Composable
-private fun CodeField(value: String, onValueChange: (String) -> Unit, label: String) {
+private fun CodeField(value: String, onValueChange: (String) -> Unit, label: String, modifier: Modifier = Modifier) {
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
         maxLines = 3,
         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
     )
 }
 
