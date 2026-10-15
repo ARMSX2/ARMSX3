@@ -41,7 +41,7 @@ internal class RemotePlayStats(private val sending: Boolean) {
         val totals = listOf(
             "bytesSent", "bytesReceived", "totalDecodeTime", "framesDecoded", "framesReceived",
             "jitterBufferDelay", "jitterBufferEmittedCount", "framesDropped", "packetsLost",
-            "nackCount", "pliCount",
+            "nackCount", "pliCount", "keyFramesDecoded",
         ).mapNotNull { key -> (m[key] as? Number)?.toDouble()?.let { key to it } }.toMap()
         val seconds = if (lastTimeUs > 0 && rtp.timestampUs > lastTimeUs) (rtp.timestampUs - lastTimeUs) / 1e6 else 0.0
         fun delta(key: String): Double? {
@@ -79,6 +79,8 @@ internal class RemotePlayStats(private val sending: Boolean) {
             perFrameMs("totalDecodeTime", "framesDecoded")?.let { parts += String.format(Locale.US, "decode %.1f ms", it) }
             delta("framesDropped")?.takeIf { it > 0 }?.let { parts += String.format(Locale.US, "dropped %.0f", it) }
             delta("packetsLost")?.takeIf { it > 0 }?.let { parts += String.format(Locale.US, "lost %.0f", it) }
+            // Key frames in the last second: a large frame is one of these, or a busy ordinary one.
+            delta("keyFramesDecoded")?.takeIf { it > 0 }?.let { parts += String.format(Locale.US, "key %.0f", it) }
             // How unevenly packets arrive (RFC 3550 interarrival jitter, smoothed).
             (m["jitter"] as? Number)?.let { parts += String.format(Locale.US, "jitter %.0f ms", it.toDouble() * 1000) }
         }

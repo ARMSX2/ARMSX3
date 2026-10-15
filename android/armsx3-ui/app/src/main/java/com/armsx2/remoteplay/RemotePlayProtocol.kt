@@ -45,13 +45,13 @@ internal object RemotePlayProtocol {
     class Bitrate(val min: Int, val start: Int, val max: Int)
 
     /**
-     * Same Wi-Fi: room to spare, so start where 720p60 game footage looks clean and let it climb.
-     * The floor keeps WebRTC from settling low while the picture is still: it sends at about 2.5
-     * times its bandwidth estimate, and at the 4 Mbps test 13 settled on, the first large frames
-     * after standing still took longer than a frame's 16.7 ms to go out, so they bunched up and some
-     * were dropped. Any home Wi-Fi carries 6 Mbps.
+     * Same Wi-Fi: a fixed 10 Mbps, as Moonlight streams on a home network. Left to adapt, WebRTC's
+     * estimate sagged while the picture was still (4 Mbps in test 13) and the encoder's target
+     * moved with it (5.8 to 8.1 Mbps in test 17), so frame sizes swung and the first frames after
+     * standing still came out large. A home Wi-Fi link carries 10 Mbps many times over (test 15
+     * and 17: 480 to 1200 Mbps links on both devices).
      */
-    val WIFI_BITRATE = Bitrate(min = 6_000_000, start = 10_000_000, max = 25_000_000)
+    val WIFI_BITRATE = Bitrate(min = 10_000_000, start = 10_000_000, max = 10_000_000)
 
     /** Online: the host's upload decides, so start where most connections cope. */
     val ONLINE_BITRATE = Bitrate(min = 1_000_000, start = 4_000_000, max = 12_000_000)

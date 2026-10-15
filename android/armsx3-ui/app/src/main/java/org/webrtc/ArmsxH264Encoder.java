@@ -4,6 +4,7 @@ import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.opengl.GLES20;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.Surface;
 import androidx.annotation.Nullable;
@@ -37,6 +38,9 @@ class ArmsxH264Encoder implements VideoEncoder {
   // rather than adding more delay.
   private static final int MAX_FRAMES_IN_CODEC = 6;
   private static final int FRAME_RATE = 60;
+  // Quantizer floors (see format()): key frames, then the rest.
+  private static final int MIN_QP_KEY_FRAME = 26;
+  private static final int MIN_QP_FRAME = 22;
   private static final int DEQUEUE_OUTPUT_BUFFER_TIMEOUT_US = 100_000;
   private static final int MEDIA_CODEC_RELEASE_TIMEOUT_MS = 5000;
 
@@ -198,6 +202,15 @@ class ArmsxH264Encoder implements VideoEncoder {
       format.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0);
       if (codecName.startsWith("c2.qti.") || codecName.startsWith("OMX.qcom.")) {
         format.setInteger("vendor.qti-ext-enc-low-latency.enable", 1);
+      }
+      // A floor on the quantizer, so no single frame grows far past the average. While the
+      // picture is still, CBR spends its budget on ever finer detail; the first frames after
+      // moving again, and a key frame, then came out at up to 130 KB against about 15 KB usual
+      // (test 17), and every frame behind one waited for it. Still scenes lose detail nobody
+      // sees at 720p; busy ones sit above the floor anyway.
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        format.setInteger(MediaFormat.KEY_VIDEO_QP_I_MIN, MIN_QP_KEY_FRAME);
+        format.setInteger(MediaFormat.KEY_VIDEO_QP_P_MIN, MIN_QP_FRAME);
       }
     }
     return format;
