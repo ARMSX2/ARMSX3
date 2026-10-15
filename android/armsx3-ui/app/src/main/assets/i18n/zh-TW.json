@@ -890,7 +890,7 @@
  "remoteplay.viewer.hostPaused": "朋友暫停了遊戲。",
  "remoteplay.timeout.viewer": "朋友未能及時連線。請向朋友索取新的邀請。",
  "remoteplay.timeout.host": "無法連線到朋友。部分網路會封鎖直接連線。請再試一次，或在同一個 Wi-Fi 下遊玩。",
- "remoteplay.error.connect": "無法連線到該裝置。請確認你們連接的是同一個 Wi-Fi。",
+ "remoteplay.error.connect": "無法連線到該裝置。請確認房主已啟動遊戲，並且你們連接的是同一個 Wi-Fi。",
  "remoteplay.error.lobby": "無法連線到遠端遊玩服務。請檢查網路連線。",
  "remoteplay.bye.busy": "已經有其他人以玩家 2 身分在玩了。",
  "remoteplay.bye.stopped": "房主已關閉房間。",

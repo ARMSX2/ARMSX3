@@ -890,7 +890,7 @@
  "remoteplay.viewer.hostPaused": "Temanmu menjeda game.",
  "remoteplay.timeout.viewer": "Temanmu tidak terhubung tepat waktu. Minta undangan baru darinya.",
  "remoteplay.timeout.host": "Tidak bisa terhubung ke temanmu. Beberapa jaringan memblokir koneksi langsung. Coba lagi, atau main di Wi-Fi yang sama.",
- "remoteplay.error.connect": "Tidak bisa menjangkau perangkat itu. Pastikan kalian berdua di Wi-Fi yang sama.",
+ "remoteplay.error.connect": "Tidak bisa menjangkau perangkat itu. Pastikan host sudah memulai game dan kalian berdua di Wi-Fi yang sama.",
  "remoteplay.error.lobby": "Tidak bisa menjangkau layanan main jarak jauh. Periksa koneksi internetmu.",
  "remoteplay.bye.busy": "Sudah ada orang lain yang bermain sebagai pemain 2 di sana.",
  "remoteplay.bye.stopped": "Temanmu berhenti jadi host.",

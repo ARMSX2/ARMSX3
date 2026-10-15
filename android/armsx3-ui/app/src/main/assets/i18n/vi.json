@@ -890,7 +890,7 @@
  "remoteplay.viewer.hostPaused": "Chủ phòng đã tạm dừng game.",
  "remoteplay.timeout.viewer": "Bạn bè không kết nối kịp. Hãy xin họ lời mời mới.",
  "remoteplay.timeout.host": "Không thể kết nối với bạn bè. Một số mạng chặn kết nối trực tiếp. Hãy thử lại, hoặc chơi trên cùng Wi-Fi.",
- "remoteplay.error.connect": "Không thể kết nối tới thiết bị đó. Hãy đảm bảo cả hai cùng dùng một mạng Wi-Fi.",
+ "remoteplay.error.connect": "Không thể kết nối tới thiết bị đó. Hãy đảm bảo chủ phòng đã chạy game và cả hai cùng dùng một mạng Wi-Fi.",
  "remoteplay.error.lobby": "Không thể kết nối tới dịch vụ chơi từ xa. Hãy kiểm tra kết nối internet.",
  "remoteplay.bye.busy": "Đã có người khác chơi với vai trò người chơi 2 ở đó.",
  "remoteplay.bye.stopped": "Chủ phòng đã đóng phòng.",

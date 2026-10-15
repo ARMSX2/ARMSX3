@@ -890,7 +890,7 @@
  "remoteplay.viewer.hostPaused": "친구가 게임을 일시 정지했습니다.",
  "remoteplay.timeout.viewer": "친구가 제시간에 연결하지 않았습니다. 새 초대장을 요청하세요.",
  "remoteplay.timeout.host": "친구와 연결할 수 없습니다. 일부 네트워크는 직접 연결을 차단합니다. 다시 시도하거나 같은 Wi-Fi에서 플레이하세요.",
- "remoteplay.error.connect": "해당 기기에 연결할 수 없습니다. 둘 다 같은 Wi-Fi에 연결되어 있는지 확인하세요.",
+ "remoteplay.error.connect": "해당 기기에 연결할 수 없습니다. 호스트가 게임을 시작했는지, 둘 다 같은 Wi-Fi에 연결되어 있는지 확인하세요.",
  "remoteplay.error.lobby": "리모트 플레이 서비스에 연결할 수 없습니다. 인터넷 연결을 확인하세요.",
  "remoteplay.bye.busy": "이미 다른 사람이 플레이어 2로 플레이하고 있습니다.",
  "remoteplay.bye.stopped": "호스트가 호스팅을 중지했습니다.",

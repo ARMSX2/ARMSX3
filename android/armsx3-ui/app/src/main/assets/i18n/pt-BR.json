@@ -894,7 +894,7 @@
  "remoteplay.viewer.hostPaused": "Seu amigo pausou o jogo.",
  "remoteplay.timeout.viewer": "Seu amigo não se conectou a tempo. Peça um novo convite a ele.",
  "remoteplay.timeout.host": "Não foi possível conectar ao seu amigo. Algumas redes bloqueiam conexões diretas. Tente de novo ou joguem no mesmo Wi-Fi.",
- "remoteplay.error.connect": "Não foi possível acessar esse aparelho. Confira se vocês dois estão no mesmo Wi-Fi.",
+ "remoteplay.error.connect": "Não foi possível acessar esse aparelho. Confira se o anfitrião já iniciou o jogo e se vocês estão no mesmo Wi-Fi.",
  "remoteplay.error.lobby": "Não foi possível acessar o serviço de jogo remoto. Verifique sua conexão com a internet.",
  "remoteplay.bye.busy": "Outra pessoa já está jogando como jogador 2 nessa partida.",
  "remoteplay.bye.stopped": "O anfitrião parou de hospedar.",

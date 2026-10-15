@@ -890,7 +890,7 @@
  "remoteplay.viewer.hostPaused": "Znajomy wstrzymał grę.",
  "remoteplay.timeout.viewer": "Znajomy nie połączył się na czas. Poproś go o nowe zaproszenie.",
  "remoteplay.timeout.host": "Nie udało się połączyć ze znajomym. Niektóre sieci blokują połączenia bezpośrednie. Spróbuj ponownie lub zagrajcie w tej samej sieci Wi-Fi.",
- "remoteplay.error.connect": "Nie udało się połączyć z tym urządzeniem. Upewnij się, że oboje jesteście w tej samej sieci Wi-Fi.",
+ "remoteplay.error.connect": "Nie udało się połączyć z tym urządzeniem. Upewnij się, że host uruchomił grę i że jesteście w tej samej sieci Wi-Fi.",
  "remoteplay.error.lobby": "Nie udało się połączyć z usługą zdalnej gry. Sprawdź połączenie z internetem.",
  "remoteplay.bye.busy": "Ktoś inny już tam gra jako gracz 2.",
  "remoteplay.bye.stopped": "Host zakończył hostowanie.",

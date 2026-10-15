@@ -890,7 +890,7 @@
  "remoteplay.viewer.hostPaused": "友達がゲームを一時停止しました。",
  "remoteplay.timeout.viewer": "友達が時間内に接続しませんでした。新しい招待を送ってもらってください。",
  "remoteplay.timeout.host": "友達に接続できませんでした。直接接続をブロックするネットワークもあります。もう一度試すか、同じ Wi-Fi で遊んでください。",
- "remoteplay.error.connect": "その端末に接続できませんでした。お互いが同じ Wi-Fi に接続しているか確認してください。",
+ "remoteplay.error.connect": "その端末に接続できませんでした。ホストがゲームを開始していて、お互いが同じ Wi-Fi に接続しているか確認してください。",
  "remoteplay.error.lobby": "リモートプレイのサービスに接続できませんでした。インターネット接続を確認してください。",
  "remoteplay.bye.busy": "すでに別の人がプレイヤー2として参加しています。",
  "remoteplay.bye.stopped": "友達がホストを終了しました。",
