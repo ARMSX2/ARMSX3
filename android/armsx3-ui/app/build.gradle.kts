@@ -304,6 +304,9 @@ dependencies {
     // kotlinx-serialization.
     implementation(libs.kotlinxSerializationJson)
 
+    // Remote play (com.armsx2.remoteplay): video, audio and player 2's input between two devices.
+    implementation(libs.streamWebrtc)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
