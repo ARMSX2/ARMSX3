@@ -312,6 +312,27 @@ private class HostSession(
         }
     }
 
+    // Player 2's rumble, as the game drives it, for the viewer to feel: checked every 30 ms, as the
+    // local motors are, and sent on every change and every 200 ms besides.
+    private var rumbleSent = -1
+    private var rumbleSentAt = 0L
+    private var rumbleSeq = 0
+    private val rumbleTick = object : Runnable {
+        override fun run() {
+            if (ended || !streaming) return
+            val packed = Rpcs3Bridge.remoteRumble(PLAYER_2_PORT)
+            val now = SystemClock.uptimeMillis()
+            val channel = audioChannel
+            if ((packed != rumbleSent || now - rumbleSentAt >= 200) && channel?.state() == DataChannel.State.OPEN) {
+                val packet = RemotePlayProtocol.encodeRumble(rumbleSeq++, (packed shr 8) and 0xff, packed and 0xff)
+                channel.send(DataChannel.Buffer(packet, true))
+                rumbleSent = packed
+                rumbleSentAt = now
+            }
+            main.postDelayed(this, 30)
+        }
+    }
+
     fun onSignal(message: JSONObject) {
         if (ended) return
         when (message.optString("t")) {
@@ -464,6 +485,7 @@ private class HostSession(
         main.postDelayed(padWatch, 250)
         main.postDelayed(statsTick, 5_000)
         main.postDelayed(hostStatsTick, 1_000)
+        main.post(rumbleTick)
     }
 
     private fun sendHostStats() {
@@ -604,6 +626,7 @@ private class HostSession(
         main.removeCallbacks(connectTimeout)
         main.removeCallbacks(statsTick)
         main.removeCallbacks(hostStatsTick)
+        main.removeCallbacks(rumbleTick)
         gather?.cancel()
 
         if (streaming) {

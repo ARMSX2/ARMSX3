@@ -59,6 +59,7 @@ import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.ui.touch.RemotePlayTouchControls
 import com.armsx2.ui.touch.setRemotePlayPadSink
+import com.armsx3.Rpcs3Bridge
 import org.json.JSONObject
 import org.webrtc.ArmsxVideoOutput
 import org.webrtc.DataChannel
@@ -184,6 +185,9 @@ class RemotePlayViewerActivity : ComponentActivity() {
 
     // Fingers on the screen now. Tap to reveal never hides the controls under a held finger.
     private var fingersDown = 0
+
+    // The controller last used here, where the host's rumble for player 2 goes; -1 before any.
+    private var lastPadDevice = -1
 
     private val hideExit = Runnable { exitShown.value = false }
     private val hideTouch = object : Runnable {
@@ -389,6 +393,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
             context = this,
             mode = mode,
             output = output,
+            rumbleDevice = { lastPadDevice },
             onReply = { code -> reply.value = code },
             onConnected = {
                 connected.value = true
@@ -567,6 +572,17 @@ class RemotePlayViewerActivity : ComponentActivity() {
         }
     }
 
+    // Rumble only while this screen is in front: in the background nobody is holding the pad.
+    override fun onStart() {
+        super.onStart()
+        session?.setForeground(true)
+    }
+
+    override fun onStop() {
+        session?.setForeground(false)
+        super.onStop()
+    }
+
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
         setRemotePlayPadSink(null)
@@ -580,6 +596,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
         val fromPad = event.isFromSource(InputDevice.SOURCE_GAMEPAD) ||
             event.isFromSource(InputDevice.SOURCE_JOYSTICK) ||
             event.isFromSource(InputDevice.SOURCE_DPAD)
+        if (fromPad && event.deviceId >= 0) lastPadDevice = event.deviceId
 
         if (leaveAsked.value) {
             if (event.action == KeyEvent.ACTION_UP) {
@@ -619,6 +636,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
     }
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (event.isFromSource(InputDevice.SOURCE_JOYSTICK) && event.deviceId >= 0) lastPadDevice = event.deviceId
         if (!leaveAsked.value && input.onMotion(event)) return true
         return super.dispatchGenericMotionEvent(event)
     }
@@ -765,6 +783,7 @@ internal class ViewerSession(
     private val context: Context,
     private val mode: ViewerMode,
     private val output: ArmsxVideoOutput?,
+    private val rumbleDevice: () -> Int,
     private val onReply: (String) -> Unit,
     private val onConnected: () -> Unit,
     private val onEnded: (String?) -> Unit,
@@ -798,6 +817,14 @@ internal class ViewerSession(
     @Volatile
     var audioKind: String? = null
         private set
+
+    // Player 2's rumble from the host. The host repeats it every 200 ms, so motors left running
+    // with nothing heard for a while belong to a connection that stalled, and stop.
+    private var foreground = true
+    private var rumbleSeq = 0
+    private var rumbleHeard = false
+    private var rumbleOn = 0
+    private val rumbleWatchdog = Runnable { stopRumble() }
 
     /** The host's side of the stream, as it last reported it (once a second). */
     @Volatile
@@ -915,6 +942,35 @@ internal class ViewerSession(
         videoTrack?.addSink(target)
     }
 
+    /** Whether the screen is in front; rumble only plays while it is. */
+    fun setForeground(on: Boolean) {
+        foreground = on
+        if (!on) stopRumble()
+    }
+
+    private fun onRumble(rumble: RemotePlayProtocol.Rumble) {
+        if (ended || !foreground) return
+        // The channel is unordered: an older packet must not undo a newer one.
+        if (rumbleHeard && rumble.seq - rumbleSeq <= 0) return
+        rumbleHeard = true
+        rumbleSeq = rumble.seq
+
+        val packed = (rumble.large shl 8) or rumble.small
+        if (packed != rumbleOn) {
+            rumbleOn = packed
+            Rpcs3Bridge.playRemoteRumble(rumbleDevice(), rumble.large, rumble.small)
+        }
+        main.removeCallbacks(rumbleWatchdog)
+        if (packed != 0) main.postDelayed(rumbleWatchdog, 600)
+    }
+
+    private fun stopRumble() {
+        main.removeCallbacks(rumbleWatchdog)
+        if (rumbleOn == 0) return
+        rumbleOn = 0
+        Rpcs3Bridge.playRemoteRumble(-1, 0, 0)
+    }
+
     fun sendPad(state: RemotePlayProtocol.PadState) {
         pad = state
         sendNow()
@@ -984,6 +1040,10 @@ internal class ViewerSession(
                             }
                             RemotePlayProtocol.decodeHostStats(data)?.let {
                                 hostStats = it
+                                return@MessageObserver
+                            }
+                            RemotePlayProtocol.decodeRumble(data)?.let { rumble ->
+                                main.post { onRumble(rumble) }
                                 return@MessageObserver
                             }
                             RemotePlayProtocol.decodeOpus(data)?.let {
@@ -1069,6 +1129,7 @@ internal class ViewerSession(
             repeat(3) { channel.send(DataChannel.Buffer(RemotePlayProtocol.encodeBye(), true)) }
         }
         link?.close(RemotePlayRtc.bye("left"))
+        stopRumble()
         opusIn.stop()
         audio.stop()
         wifi.release()

@@ -27,7 +27,7 @@ import java.util.zip.Inflater
  *    the viewer's answer says it plays it ("audio": "opus"), each packet carrying the one before
  *    as well ([encodeOpus]); on the same Wi-Fi, or with no Opus encoder on the host, plain 16-bit
  *    samples ([encodeAudio]). Once a second the audio channel also carries the host's side of the
- *    stream stats ([HostStats]).
+ *    stream stats ([HostStats]), and every 200 ms player 2's rumble ([encodeRumble]).
  */
 internal object RemotePlayProtocol {
     const val VERSION = 1
@@ -67,6 +67,8 @@ internal object RemotePlayProtocol {
     private const val PACKET_BYE: Byte = 3
     private const val PACKET_HOST_STATS: Byte = 4
     private const val PACKET_AUDIO_OPUS: Byte = 5
+    private const val PACKET_RUMBLE: Byte = 6
+    private const val RUMBLE_PACKET_SIZE = 8
     private const val ZERO: Byte = 0
     private const val PAD_PACKET_SIZE = 16
     const val AUDIO_HEADER_SIZE = 8
@@ -195,6 +197,31 @@ internal object RemotePlayProtocol {
         val rest = buf.remaining()
         val previous = if (rest in 1..MAX_OPUS_FRAME) ByteArray(rest).also { buf.get(it) } else null
         return OpusPacket(seq, frame, previous)
+    }
+
+    /** Player 2's motors, 0..255 each, as the game drives them on the host. */
+    data class Rumble(val seq: Int, val large: Int, val small: Int)
+
+    /**
+     * Player 2's rumble: type, the large and small motor (0..255), 0, sequence number. Sent on
+     * every change and every 200 ms besides, so a lost packet is corrected by the next.
+     */
+    fun encodeRumble(seq: Int, large: Int, small: Int): ByteBuffer {
+        val out = ByteBuffer.allocate(RUMBLE_PACKET_SIZE).order(ByteOrder.LITTLE_ENDIAN)
+        out.put(PACKET_RUMBLE).put(large.toByte()).put(small.toByte()).put(ZERO)
+        out.putInt(seq)
+        out.flip()
+        return out
+    }
+
+    /** A rumble packet, or null for anything else. */
+    fun decodeRumble(data: ByteBuffer): Rumble? {
+        val buf = data.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        if (buf.remaining() < RUMBLE_PACKET_SIZE || buf.get() != PACKET_RUMBLE) return null
+        val large = buf.get().toInt() and 0xff
+        val small = buf.get().toInt() and 0xff
+        buf.get()
+        return Rumble(buf.int, large, small)
     }
 
     /**

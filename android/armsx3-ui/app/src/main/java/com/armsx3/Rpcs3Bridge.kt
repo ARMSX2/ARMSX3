@@ -1792,8 +1792,10 @@ object Rpcs3Bridge {
      * mid-session. Callers only ask when the motor state changes, so enumerating devices is not a
      * per-frame cost.
      */
-    private fun vibrator(port: Int = 0): RumbleTarget? {
-        val dev = deviceForPort(port)
+    private fun vibrator(port: Int = 0): RumbleTarget? = vibratorFor(deviceForPort(port), handheld = port == 0)
+
+    /** [vibrator] for a given controller. [handheld]: this device's own motor may stand in. */
+    private fun vibratorFor(dev: android.view.InputDevice?, handheld: Boolean): RumbleTarget? {
         val mode = PadRouter.rumbleMode(dev?.descriptor)
         if (mode == PadRouter.RumbleMode.OFF) return null
 
@@ -1811,8 +1813,52 @@ object Rpcs3Bridge {
         // motor would just be the wrong device again.
         val wantDevice = mode == PadRouter.RumbleMode.DEVICE || NativeApp.sPhoneRumbleEnabled
         return deviceVibrator()
-            .takeIf { port == 0 && wantDevice && it?.hasVibrator() == true }
+            .takeIf { handheld && wantDevice && it?.hasVibrator() == true }
             ?.let { RumbleTarget("this device", listOf(it)) }
+    }
+
+    // ---- Remote play -----------------------------------------------------
+    //
+    // A friend playing as player 2 through remote play feels player 2's rumble on their own
+    // device: the host reads it here and sends it, and the friend's side plays it here.
+
+    /**
+     * Host: what the game has player [port]'s motors doing, packed (large << 8) | small, or 0 while
+     * paused, as the local motors are. This device's own vibration settings do not apply: the
+     * friend's side applies its own.
+     */
+    @JvmStatic
+    fun remoteRumble(port: Int): Int =
+        if (paused) 0 else runCatching { RPCSX.instance.getPadRumble(port) }.getOrDefault(0)
+
+    private var remoteActive: RumbleTarget? = null
+    private var remoteAnnounced: String? = null
+
+    /**
+     * Friend's side: runs this device's motors as the host asks, wherever local play would send
+     * player 1's rumble, with this device's vibration settings: the controller in use ([deviceId],
+     * -1 when none has been used yet) if it has motors, else the handheld's own. 0, 0 stops them.
+     * Main thread.
+     */
+    @JvmStatic
+    fun playRemoteRumble(deviceId: Int, large: Int, small: Int) {
+        val vib = if (rumbleEnabled && (large > 0 || small > 0)) {
+            runCatching {
+                val dev = if (deviceId >= 0) android.view.InputDevice.getDevice(deviceId) else deviceForPort(0)
+                vibratorFor(dev, handheld = true)
+            }.getOrNull()
+        } else {
+            null
+        }
+        if (vib != null && remoteAnnounced != vib.label) {
+            remoteAnnounced = vib.label
+            logRumble("remote play -> ${vib.label}")
+        }
+        remoteActive?.takeIf { !it.sameAs(vib) }?.let { runCatching { it.cancel() } }
+        remoteActive = null
+        if (vib == null) return
+        runCatching { vib.play(large, small) }
+        remoteActive = vib
     }
 
     @JvmStatic
