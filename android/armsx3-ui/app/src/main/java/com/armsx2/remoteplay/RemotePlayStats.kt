@@ -93,6 +93,7 @@ internal fun describeHost(stats: RemotePlayProtocol.HostStats): String {
         "gpu busy" to stats.droppedGpu,
         "late" to stats.droppedLate,
         "encoder" to stats.droppedEncoder,
+        "webrtc" to stats.droppedWebrtc,
     ).filter { it.second > 0 }
     if (dropped.isNotEmpty()) parts += "dropped " + dropped.joinToString(", ") { "${it.second} ${it.first}" }
     // The slowest frame from capture to out of the encoder, and the largest, in the last second.

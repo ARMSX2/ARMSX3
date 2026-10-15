@@ -304,6 +304,12 @@ private class HostSession(
     private var hostStats: RemotePlayProtocol.HostStats? = null
     private var lastCore: IntArray? = null
     private var lastEncoder: IntArray? = null
+
+    // Frames handed to WebRTC (rp-video thread). Those that never reach the encoder were skipped
+    // inside WebRTC, which the stats show.
+    @Volatile
+    private var framesHanded = 0
+    private var lastHanded = -1
     private val hostStatsTick = object : Runnable {
         override fun run() {
             if (ended || !streaming) return
@@ -493,11 +499,14 @@ private class HostSession(
         if (!RPCSX.instance.remotePlayCounters(core)) return
         val encoder = ArmsxVideoEncoderFactory.encoderCounters()
         val peaks = ArmsxVideoEncoderFactory.takeEncoderPeaks()
+        val handed = framesHanded
         val previousCore = lastCore
         val previousEncoder = lastEncoder
+        val previousHanded = lastHanded
         lastCore = core
         lastEncoder = encoder
-        if (previousCore == null || previousEncoder == null) return
+        lastHanded = handed
+        if (previousCore == null || previousEncoder == null || previousHanded < 0) return
 
         // Counters are running totals; the stats are the last second's share of them.
         fun coreDelta(index: Int) = core[index] - previousCore[index]
@@ -509,6 +518,7 @@ private class HostSession(
             droppedGpu = coreDelta(1),
             droppedLate = coreDelta(3),
             droppedEncoder = encoderDelta(2),
+            droppedWebrtc = (handed - previousHanded - encoderDelta(0) - encoderDelta(2)).coerceAtLeast(0),
             peakEncodeMs = peaks[0],
             peakFrameKb = (peaks[1] + 1023) / 1024,
             encoder = ArmsxVideoEncoderFactory.encoderName(),
@@ -526,6 +536,7 @@ private class HostSession(
             when (val next = pipeline.poll(50)) {
                 is RemotePlayFrames.Poll.Frame -> {
                     observer.onFrameCaptured(next.frame)
+                    framesHanded++
                     next.frame.release()
                 }
                 RemotePlayFrames.Poll.Stopped -> break

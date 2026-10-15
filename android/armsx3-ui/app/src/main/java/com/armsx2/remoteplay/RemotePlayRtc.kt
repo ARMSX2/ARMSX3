@@ -58,12 +58,17 @@ internal object RemotePlayRtc {
      *  - No frame dropper: it skips frames whenever the encoder runs over its bitrate, which fast
      *    game footage often does. The bitrate still follows the network; frames are simply not
      *    thrown away on top.
+     *  - The same for the congestion window: with more data in flight than it allows, WebRTC's
+     *    default skips every few frames before they are encoded (a 54 fps second with the game at
+     *    60, in test 10, when moving again after standing still). DropFrame:false lowers the
+     *    bitrate for that moment instead, so every frame still goes out, a little softer.
      */
     private const val FIELD_TRIALS =
         "WebRTC-ForcePlayoutDelay/min_ms:0,max_ms:100/" +
             "WebRTC-ForceSendPlayoutDelay/min_ms:0,max_ms:100/" +
             "WebRTC-ZeroPlayoutDelay/min_pacing:12ms,max_decode_queue_size:2/" +
-            "WebRTC-FrameDropper/Disabled/"
+            "WebRTC-FrameDropper/Disabled/" +
+            "WebRTC-CongestionWindow/QueueSize:350,MinBitrate:30000,DropFrame:false/"
 
     /**
      * A factory with hardware video codecs. The audio module exists because the factory needs
