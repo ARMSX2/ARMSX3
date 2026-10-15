@@ -502,6 +502,7 @@ target_sources(rpcs3_emu PRIVATE
     RSX/Core/RSXCoreRenderer.cpp
     RSX/Core/RSXDisplayEngine.cpp
     RSX/Core/RSXDisplayOutput.cpp
+    RSX/Core/RSXPowerMgmt.cpp
     RSX/Core/RSXRenderBackend.cpp
     RSX/Core/RSXRendererFactory.cpp
     RSX/Core/RSXDisplay.cpp
