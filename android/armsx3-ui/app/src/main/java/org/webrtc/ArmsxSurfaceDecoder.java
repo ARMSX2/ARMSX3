@@ -2,17 +2,13 @@ package org.webrtc;
 
 import android.media.MediaCodec;
 import android.media.MediaFormat;
-import android.os.Handler;
-import android.os.HandlerThread;
 import android.os.Process;
 import android.os.SystemClock;
-import android.view.Choreographer;
 import android.view.Surface;
 import androidx.annotation.Nullable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -24,10 +20,8 @@ import java.util.concurrent.TimeUnit;
  * still waiting to be drawn is thrown away. Here MediaCodec draws onto the screen's surface itself,
  * as a video player does, and the display shows the decoded picture as it is. Frames never queue
  * up behind each other: when more than one is done, the newest is shown and the older ones are
- * skipped, so the picture is never behind.
- *
- * On a screen well above the stream's rate, frames go up in step with the screen instead
- * ({@link Pacer}).
+ * skipped, so the picture is never behind. The viewer asks the screen for 60 Hz while it streams,
+ * so each frame stays up for exactly one refresh.
  *
  * WebRTC still hears of each frame shown, as a frame with a size and no pixels, so its statistics
  * stay true. If the codec will not start on the screen, the stock decoder takes over for the rest
@@ -49,10 +43,6 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
   private static final int MAX_FRAMES_UNSHOWN = 120;
   // Frames the codec dropped never come out; their records go after this many.
   private static final int MAX_IN_CODEC = 32;
-  // Paced (see Pacer): the next frame goes up once most (80%) of a 60 fps frame's time has passed
-  // since the last, which on a 120 Hz screen is every other refresh. At most this many wait.
-  private static final long PACED_INTERVAL_NS = 13_333_333;
-  private static final int PACED_WAITING = 2;
 
   // MediaFormat's crop keys, named there only from Android 13.
   private static final String CROP_LEFT = "crop-left";
@@ -68,16 +58,10 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
   private static final java.util.concurrent.atomic.AtomicInteger peakGapMs =
       new java.util.concurrent.atomic.AtomicInteger();
   private static volatile long lastShownMs;
-  private static volatile boolean pacing;
 
   /** Both peaks since the last call, which starts them over: {decode ms, gap ms}. */
   public static int[] takePeaks() {
     return new int[] {peakDecodeMs.getAndSet(0), peakGapMs.getAndSet(0)};
-  }
-
-  /** For the stats: whether the decoder last started puts frames up in step with the screen. */
-  public static boolean isPaced() {
-    return pacing;
   }
 
   /** Makes the stock decoder for the same stream, or null when there is none. */
@@ -279,15 +263,9 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
       }
       return null;
     }
-    boolean paced = output.paced();
-    pacing = paced;
-    Logging.d(TAG, codecName + " decoding " + width + "x" + height + " onto the screen"
-        + (paced ? ", paced" : ""));
-    Running started = new Running(codec, surface, width, height, callback, paced);
+    Logging.d(TAG, codecName + " decoding " + width + "x" + height + " onto the screen");
+    Running started = new Running(codec, surface, width, height, callback);
     started.thread.start();
-    if (started.pacer != null) {
-      started.pacer.start();
-    }
     return started;
   }
 
@@ -325,9 +303,6 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
       codec.thread.join(STOP_TIMEOUT_MS);
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
-    }
-    if (codec.pacer != null) {
-      codec.pacer.stop();
     }
     try {
       codec.codec.stop();
@@ -371,7 +346,6 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
     final int width;
     final int height;
     final Thread thread;
-    final @Nullable Pacer pacer;
     volatile boolean stopping;
     volatile boolean broken;
     volatile boolean showedFrames;
@@ -385,8 +359,7 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
     private volatile int shownWidth;
     private volatile int shownHeight;
 
-    Running(MediaCodec codec, Surface surface, int width, int height, Callback callback,
-        boolean paced) {
+    Running(MediaCodec codec, Surface surface, int width, int height, Callback callback) {
       this.codec = codec;
       this.surface = surface;
       this.width = width;
@@ -395,7 +368,6 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
       this.shownWidth = width;
       this.shownHeight = height;
       this.thread = new Thread(this::show, "rp-video-out");
-      this.pacer = paced ? new Pacer(this) : null;
     }
 
     synchronized void queued(long presentationUs, int rotation) {
@@ -428,10 +400,6 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
             continue;
           }
           if (index < 0) {
-            continue;
-          }
-          if (pacer != null) {
-            pacer.offer(decoded(index, info.presentationTimeUs));
             continue;
           }
           // More frames done behind this one: only the newest is worth showing.
@@ -492,7 +460,7 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
       return new long[] {index, presentationUs, decodeMs, record != null ? record[2] : 0};
     }
 
-    /** Output or vsync thread: [frame] is on its way to the screen; tells WebRTC and the stats. */
+    /** Output thread: [frame] is on its way to the screen; tells WebRTC and the stats. */
     private void shown(long[] frame) {
       long presentationUs = frame[1];
       long now = SystemClock.elapsedRealtime();
@@ -511,114 +479,6 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
       shown.release();
       showedFrames = true;
       output.frameShown();
-    }
-  }
-
-  /**
-   * Puts frames up in step with the screen, one per refresh at most, the way Moonlight's default
-   * ("balanced") pacing does: decoded frames wait, oldest first and {@link #PACED_WAITING} at most
-   * (a newer one pushes the oldest out unshown), and each refresh puts up the next once most of a
-   * frame's time has passed since the last. Shown the moment they are decoded, frames stay up for
-   * uneven numbers of refreshes on a 90 or 120 Hz screen, which reads as stutter. Costs up to one
-   * refresh (8 to 11 ms there) of waiting.
-   */
-  private final class Pacer implements Choreographer.FrameCallback {
-    private final Running codec;
-    private final HandlerThread thread =
-        new HandlerThread("rp-video-vsync", Process.THREAD_PRIORITY_DISPLAY);
-    private final ArrayDeque<long[]> waiting = new ArrayDeque<>();
-    private volatile @Nullable Handler handler;
-    private volatile boolean running = true;
-    // Vsync thread.
-    private long lastShownNs;
-
-    Pacer(Running codec) {
-      this.codec = codec;
-    }
-
-    void start() {
-      thread.start();
-      Handler started = new Handler(thread.getLooper());
-      handler = started;
-      started.post(() -> Choreographer.getInstance().postFrameCallback(this));
-    }
-
-    /** Output thread: a decoded frame (see Running.decoded) to put up when its refresh comes. */
-    void offer(long[] frame) {
-      long[] pushedOut = null;
-      synchronized (waiting) {
-        if (waiting.size() >= PACED_WAITING) {
-          pushedOut = waiting.pollFirst();
-        }
-        waiting.addLast(frame);
-      }
-      if (pushedOut != null) {
-        codec.codec.releaseOutputBuffer((int) pushedOut[0], false);
-      }
-    }
-
-    @Override
-    public void doFrame(long frameTimeNanos) {
-      if (!running) {
-        return;
-      }
-      long[] next = null;
-      synchronized (waiting) {
-        if (!waiting.isEmpty() && frameTimeNanos - lastShownNs >= PACED_INTERVAL_NS) {
-          next = waiting.pollFirst();
-        }
-      }
-      if (next != null) {
-        try {
-          // Due already, so it goes up at this refresh's end.
-          codec.codec.releaseOutputBuffer((int) next[0], frameTimeNanos);
-        } catch (IllegalStateException e) {
-          if (running) {
-            Logging.e(TAG, "Decoder failed", e);
-            codec.broken = true;
-          }
-          return;
-        }
-        lastShownNs = frameTimeNanos;
-        codec.shown(next);
-      }
-      Choreographer.getInstance().postFrameCallback(this);
-    }
-
-    /** After the output thread has stopped: nothing more goes up, and waiting frames go back. */
-    void stop() {
-      running = false;
-      Handler current = handler;
-      if (current != null) {
-        CountDownLatch done = new CountDownLatch(1);
-        boolean posted = current.post(() -> {
-          Choreographer.getInstance().removeFrameCallback(this);
-          done.countDown();
-        });
-        try {
-          if (posted) {
-            done.await(STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-          }
-        } catch (InterruptedException e) {
-          Thread.currentThread().interrupt();
-        }
-      }
-      thread.quitSafely();
-      try {
-        thread.join(STOP_TIMEOUT_MS);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-      }
-      synchronized (waiting) {
-        for (long[] frame : waiting) {
-          try {
-            codec.codec.releaseOutputBuffer((int) frame[0], false);
-          } catch (IllegalStateException e) {
-            // The codec is going anyway.
-          }
-        }
-        waiting.clear();
-      }
     }
   }
 

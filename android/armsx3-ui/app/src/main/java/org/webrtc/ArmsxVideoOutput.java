@@ -30,7 +30,6 @@ public final class ArmsxVideoOutput {
   private static volatile boolean failedBefore;
 
   private final Listener listener;
-  private volatile float refreshRate = 60f;
   private volatile @Nullable Surface surface;
   private volatile @Nullable ArmsxSurfaceDecoder decoder;
   private final AtomicBoolean firstFrameShown = new AtomicBoolean();
@@ -38,23 +37,6 @@ public final class ArmsxVideoOutput {
 
   public ArmsxVideoOutput(Listener listener) {
     this.listener = listener;
-  }
-
-  /** Main thread: how often the screen showing the stream refreshes, in Hz. */
-  public void setRefreshRate(float hz) {
-    if (hz > 0f) {
-      refreshRate = hz;
-    }
-  }
-
-  /**
-   * Whether to put frames up in step with the screen rather than as soon as they are decoded
-   * ({@link ArmsxSurfaceDecoder}): on a screen well above the stream's 60 fps (90, 120 Hz), where
-   * frames shown as decoded stay up for uneven numbers of refreshes. Not at 60 Hz, where waiting
-   * for the next refresh would cost up to a frame of delay to smooth over far less.
-   */
-  boolean paced() {
-    return refreshRate > 75f;
   }
 
   /** Whether to decode onto the screen at all: false once it has failed on this device. */

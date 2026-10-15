@@ -228,11 +228,8 @@ class RemotePlayViewerActivity : ComponentActivity() {
                 // screen waited for the next one. Only when it decodes onto the screen itself.
                 val peaks = if (output != null && renderer == null) ArmsxSurfaceDecoder.takePeaks() else null
                 val decoder = peaks?.let { " · decode max ${it[0]} ms · gap max ${it[1]} ms" }.orEmpty()
-                // The screen's refresh rate now (it can change after the stream asks for 60 Hz),
-                // and whether frames wait for its refreshes.
-                val screen = window.decorView.display?.refreshRate?.let {
-                    " · screen ${it.roundToInt()} Hz" + if (peaks != null && ArmsxSurfaceDecoder.isPaced()) " paced" else ""
-                }.orEmpty()
+                // The screen's refresh rate now: 60 Hz unless the screen could not switch to it.
+                val screen = window.decorView.display?.refreshRate?.let { " · screen ${it.roundToInt()} Hz" }.orEmpty()
                 current.sampleStats { line ->
                     val audio = current.audioKind?.let { " · audio $it" }.orEmpty()
                     main.post { statsLine.value = line + decoder + screen + audio }
@@ -252,6 +249,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
             return
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        preferSixtyHz()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowCompat.getInsetsController(window, window.decorView).apply {
             hide(WindowInsetsCompat.Type.systemBars())
@@ -301,12 +299,12 @@ class RemotePlayViewerActivity : ComponentActivity() {
             videoView.value = SurfaceView(this).also { view ->
                 view.holder.addCallback(object : SurfaceHolder.Callback {
                     override fun surfaceCreated(holder: SurfaceHolder) {
-                        screenReady(view, holder)
+                        screenReady(holder)
                         target.setSurface(holder.surface)
                     }
 
                     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-                        screenReady(view, holder)
+                        screenReady(holder)
                         target.setSurface(holder.surface)
                     }
 
@@ -501,10 +499,10 @@ class RemotePlayViewerActivity : ComponentActivity() {
             setEnableHardwareScaler(true)
         }
         view.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(holder: SurfaceHolder) = screenReady(view, holder)
+            override fun surfaceCreated(holder: SurfaceHolder) = screenReady(holder)
 
             override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) =
-                screenReady(view, holder)
+                screenReady(holder)
 
             override fun surfaceDestroyed(holder: SurfaceHolder) = Unit
         })
@@ -514,11 +512,31 @@ class RemotePlayViewerActivity : ComponentActivity() {
     }
 
     /**
-     * The stream's surface is there: asks the screen for a refresh rate the stream's 60 fps divides
-     * evenly (60 or 120 Hz rather than 90, where frames would stay up for uneven times), and tells
-     * the decoder how fast it refreshes.
+     * The stream runs at 60 fps, so while it plays the screen does too, as Moonlight does: each
+     * frame then stays up for exactly one refresh. On a 90 or 120 Hz screen, frames shown as they
+     * arrive stay up for one refresh or two (or three), which reads as stutter, and evening that
+     * out by holding frames back cost both delay and frames (test 12 and 13: 45 to 48 fps on a 120
+     * Hz screen). Takes the screen's own 60 Hz mode at its current resolution; a screen without
+     * one stays as it is. Leaving this screen gives the rest of the app its usual rate back.
      */
-    private fun screenReady(view: SurfaceView, holder: SurfaceHolder) {
+    private fun preferSixtyHz() {
+        val screen = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) this.display else null)
+            ?: @Suppress("DEPRECATION") windowManager.defaultDisplay
+            ?: return
+        val current = screen.mode
+        val sixty = screen.supportedModes
+            .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+            .filter { abs(it.refreshRate - 60f) < 1f }
+            .minByOrNull { abs(it.refreshRate - 60f) }
+            ?: return
+        if (sixty.modeId != current.modeId) {
+            window.attributes = window.attributes.apply { preferredDisplayModeId = sixty.modeId }
+        }
+        Log.i(TAG, "remote play: screen ${current.refreshRate.roundToInt()} Hz, asked for mode ${sixty.modeId} (${sixty.refreshRate.roundToInt()} Hz)")
+    }
+
+    /** The stream's surface is there: tells the system its content runs at 60 fps. */
+    private fun screenReady(holder: SurfaceHolder) {
         val surface = holder.surface
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && surface.isValid) {
             runCatching {
@@ -529,7 +547,6 @@ class RemotePlayViewerActivity : ComponentActivity() {
                 }
             }
         }
-        view.display?.refreshRate?.let { output?.setRefreshRate(it) }
     }
 
     /** [unclaimed]: the tap landed on nothing, neither a control nor the exit area. */
