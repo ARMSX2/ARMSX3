@@ -150,6 +150,7 @@ class RPCSX {
     external fun remotePlayStop()
     external fun remotePlayPollVideo(buffer: java.nio.ByteBuffer, info: IntArray, timeoutMs: Int): Int
     external fun remotePlayPollAudio(buffer: java.nio.ByteBuffer, capFrames: Int, timeoutMs: Int): Int
+    external fun remotePlayCounters(out: IntArray): Boolean
     /** Analog pressure per pressure-capable button, in CELL_PAD press-offset order
      *  (RIGHT, LEFT, UP, DOWN, TRIANGLE, CIRCLE, CROSS, SQUARE, L1, R1, L2, R2),
      *  each 1..255, or 0 to leave that button digital. */

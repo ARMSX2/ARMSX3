@@ -14,6 +14,7 @@ import com.armsx2.runtime.MainActivityRuntime
 import com.armsx3.Rpcs3Bridge
 import net.rpcsx.RPCSX
 import org.json.JSONObject
+import org.webrtc.ArmsxVideoEncoderFactory
 import org.webrtc.CapturerObserver
 import org.webrtc.DataChannel
 import org.webrtc.JavaI420Buffer
@@ -117,7 +118,10 @@ object RemotePlayHost {
             onAnswer = { answer -> main.post { if (session === created) acceptAnswer(created, answer) } },
             onExpired = { main.post { if (session === created) sessionEnded(created, I18n.get("remoteplay.invite.expired")) } },
         )
-        created = HostSession(app, link, game, onFinished = { ended, message -> main.post { if (session === ended) sessionEnded(ended, message) } })
+        created = HostSession(
+            app, link, game, RemotePlayProtocol.ONLINE_BITRATE,
+            onFinished = { ended, message -> main.post { if (session === ended) sessionEnded(ended, message) } },
+        )
         session = created
         _status.value = Status.Inviting()
         watchGame()
@@ -193,7 +197,10 @@ object RemotePlayHost {
             onMessage = { message -> main.post { if (session === created) created.onSignal(message) } },
             onClosed = { main.post { if (session === created) created.linkClosed() } },
         )
-        created = HostSession(app, TcpLink(connection), game, onFinished = { ended, message -> main.post { if (session === ended) sessionEnded(ended, message) } })
+        created = HostSession(
+            app, TcpLink(connection), game, RemotePlayProtocol.WIFI_BITRATE,
+            onFinished = { ended, message -> main.post { if (session === ended) sessionEnded(ended, message) } },
+        )
         session = created
         connection.start()
     }
@@ -222,11 +229,15 @@ object RemotePlayHost {
     }
 }
 
-/** One viewer, from the offer to the bye. Main thread unless a comment says otherwise. */
+/**
+ * One viewer, from the offer to the bye. [bitrate] suits the way the viewer came: the same Wi-Fi
+ * or online. Main thread unless a comment says otherwise.
+ */
 private class HostSession(
     private val context: Context,
     private val link: SignalLink,
     private val game: String,
+    private val bitrate: RemotePlayProtocol.Bitrate,
     private val onFinished: (HostSession, String?) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
@@ -274,8 +285,22 @@ private class HostSession(
     private val statsTick = object : Runnable {
         override fun run() {
             if (ended || !streaming) return
-            peer?.let { pc -> stats.sample(pc) { line -> Log.i(TAG, "host stream: $line") } }
+            val host = hostStats?.let(::describeHost)
+            peer?.let { pc -> stats.sample(pc) { line -> Log.i(TAG, "host stream: $line" + (host?.let { " · $it" } ?: "")) } }
             main.postDelayed(this, 5_000)
+        }
+    }
+
+    // The host's side of the stream, sent to the viewer once a second for its stats: what the game
+    // drew, what was captured and encoded, and what was dropped on the way. A few bytes a second.
+    private var hostStats: RemotePlayProtocol.HostStats? = null
+    private var lastCore: IntArray? = null
+    private var lastEncoder: IntArray? = null
+    private val hostStatsTick = object : Runnable {
+        override fun run() {
+            if (ended || !streaming) return
+            sendHostStats()
+            main.postDelayed(this, 1_000)
         }
     }
 
@@ -348,7 +373,7 @@ private class HostSession(
         peer = pc
         // Start near where a game stream settles instead of ramping up from a few hundred kbps,
         // which left the first seconds blurry and stuttering.
-        pc.setBitrate(RemotePlayProtocol.MIN_BITRATE_BPS, RemotePlayProtocol.START_BITRATE_BPS, RemotePlayProtocol.MAX_BITRATE_BPS)
+        pc.setBitrate(bitrate.min, bitrate.start, bitrate.max)
 
         val source = factory.createVideoSource(false).also { videoSource = it }
         val track = factory.createVideoTrack("game", source).also { videoTrack = it }
@@ -410,7 +435,7 @@ private class HostSession(
             val parameters = sender.parameters
             parameters.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
             parameters.encodings.forEach {
-                it.maxBitrateBps = RemotePlayProtocol.MAX_BITRATE_BPS
+                it.maxBitrateBps = bitrate.max
                 it.maxFramerate = 60
             }
             sender.setParameters(parameters)
@@ -424,6 +449,33 @@ private class HostSession(
         lastPadAt = SystemClock.uptimeMillis()
         main.postDelayed(padWatch, 250)
         main.postDelayed(statsTick, 5_000)
+        main.postDelayed(hostStatsTick, 1_000)
+    }
+
+    private fun sendHostStats() {
+        val core = IntArray(4)
+        if (!RPCSX.instance.remotePlayCounters(core)) return
+        val encoder = ArmsxVideoEncoderFactory.encoderCounters()
+        val previousCore = lastCore
+        val previousEncoder = lastEncoder
+        lastCore = core
+        lastEncoder = encoder
+        if (previousCore == null || previousEncoder == null) return
+
+        // Counters are running totals; the stats are the last second's share of them.
+        fun coreDelta(index: Int) = core[index] - previousCore[index]
+        fun encoderDelta(index: Int) = encoder[index] - previousEncoder[index]
+        val current = RemotePlayProtocol.HostStats(
+            gameFps = coreDelta(0),
+            capturedFps = coreDelta(2),
+            encodedFps = encoderDelta(1),
+            // Not read back (GPU busy), replaced before the app took them, refused by the encoder.
+            dropped = coreDelta(1) + coreDelta(3) + encoderDelta(2),
+            encoder = ArmsxVideoEncoderFactory.encoderName(),
+        )
+        hostStats = current
+        audioChannel?.takeIf { it.state() == DataChannel.State.OPEN }
+            ?.send(DataChannel.Buffer(RemotePlayProtocol.encodeHostStats(current), true))
     }
 
     // rp-video thread. Pulls frames from the core and hands them to the encoder.
@@ -523,6 +575,7 @@ private class HostSession(
         main.removeCallbacks(padWatch)
         main.removeCallbacks(connectTimeout)
         main.removeCallbacks(statsTick)
+        main.removeCallbacks(hostStatsTick)
         gather?.cancel()
 
         if (streaming) {

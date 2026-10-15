@@ -24,7 +24,11 @@
 
 extern atomic_t<bool> g_user_asked_for_screenshot;
 extern atomic_t<recording_mode> g_recording_mode;
-extern atomic_t<u32> g_remote_play_max_size; // android/src/remote_play.cpp
+// android/src/remote_play.cpp
+extern atomic_t<u32> g_remote_play_max_size;
+extern atomic_t<u32> g_remote_play_frames;
+extern atomic_t<u32> g_remote_play_skipped;
+std::vector<u8> remote_play_frame_buffer(usz size);
 
 namespace vk
 {
@@ -2243,6 +2247,8 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 height, u32 max_size)
 {
+	g_remote_play_frames++;
+
 	// The stream wants 8-bit colour; anything else (an HDR or 16-bit display buffer) is skipped
 	// rather than converted, so a format nobody has tested cannot break the presenter.
 	const VkFormat format = src->format();
@@ -2272,6 +2278,7 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 
 	if (!slot)
 	{
+		g_remote_play_skipped++;
 		return;
 	}
 
@@ -2355,7 +2362,7 @@ void VKGSRender::remote_capture_collect(vk::frame_context_t* frame)
 		}
 
 		const usz size = usz{slot.width} * slot.height * 4;
-		std::vector<u8> pixels(size);
+		std::vector<u8> pixels = remote_play_frame_buffer(size);
 		const auto mapped = slot.buffer->map(0, size);
 		std::memcpy(pixels.data(), mapped, size);
 		slot.buffer->unmap();

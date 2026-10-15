@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Handler
 import org.json.JSONObject
 import org.webrtc.DataChannel
-import org.webrtc.DefaultVideoDecoderFactory
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaStream
@@ -24,13 +23,36 @@ internal object RemotePlayRtc {
     /** One EGL context for the process: the viewer's renderer and the codecs share it. */
     val eglBase: EglBase by lazy { EglBase.create() }
 
-    /** [h264Encoder] names the hardware H.264 encoder in use, or is null when there is none. */
-    class Factory(val factory: PeerConnectionFactory, private val audio: JavaAudioDeviceModule, val h264Encoder: String?) {
+    /**
+     * [h264Encoder] and [h264Decoder] name the hardware H.264 codecs in use, or are null when
+     * there is none.
+     */
+    class Factory(
+        val factory: PeerConnectionFactory,
+        private val audio: JavaAudioDeviceModule,
+        val h264Encoder: String?,
+        val h264Decoder: String?,
+    ) {
         fun dispose() {
             runCatching { factory.dispose() }
             runCatching { audio.release() }
         }
     }
+
+    /**
+     * WebRTC is built for calls, where a steady picture matters more than a fast one. A game is
+     * the other way round:
+     *  - Playout delay 0: the viewer shows each frame as soon as it is decoded instead of holding
+     *    frames in a jitter buffer to even out their timing. Set on both sides, since the host's
+     *    half travels in the video packets.
+     *  - No frame dropper: it skips frames whenever the encoder runs over its bitrate, which fast
+     *    game footage often does. The bitrate still follows the network; frames are simply not
+     *    thrown away on top.
+     */
+    private const val FIELD_TRIALS =
+        "WebRTC-ForcePlayoutDelay/min_ms:0,max_ms:0/" +
+            "WebRTC-ForceSendPlayoutDelay/min_ms:0,max_ms:0/" +
+            "WebRTC-FrameDropper/Disabled/"
 
     /**
      * A factory with hardware video codecs. The audio module exists because the factory needs
@@ -41,18 +63,24 @@ internal object RemotePlayRtc {
     fun createFactory(context: Context): Factory {
         val app = context.applicationContext
         if (!initialized) {
-            PeerConnectionFactory.initialize(PeerConnectionFactory.InitializationOptions.builder(app).createInitializationOptions())
+            PeerConnectionFactory.initialize(
+                PeerConnectionFactory.InitializationOptions.builder(app)
+                    .setFieldTrials(FIELD_TRIALS)
+                    .createInitializationOptions(),
+            )
             initialized = true
         }
         val audio = JavaAudioDeviceModule.builder(app).createAudioDeviceModule()
-        // Not DefaultVideoEncoderFactory: its H.264 check misses current Snapdragons (see the class).
+        // Not WebRTC's default factories: their H.264 encoder check misses current Snapdragons,
+        // and neither sets its codec up for low latency (see the classes).
         val encoders = org.webrtc.ArmsxVideoEncoderFactory(eglBase.eglBaseContext)
+        val decoders = org.webrtc.ArmsxVideoDecoderFactory(eglBase.eglBaseContext)
         val factory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(audio)
             .setVideoEncoderFactory(encoders)
-            .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
+            .setVideoDecoderFactory(decoders)
             .createPeerConnectionFactory()
-        return Factory(factory, audio, encoders.hardwareH264Name())
+        return Factory(factory, audio, encoders.hardwareH264Name(), decoders.hardwareH264Name())
     }
 
     /**

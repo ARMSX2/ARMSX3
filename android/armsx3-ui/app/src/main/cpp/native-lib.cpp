@@ -29,6 +29,7 @@ struct RPCSXApi {
   void (*remotePlayStop)();
   int (*remotePlayPollVideo)(uint8_t *dst, int64_t cap, int32_t *info, int timeoutMs);
   int (*remotePlayPollAudio)(int16_t *dst, int capFrames, int timeoutMs);
+  void (*remotePlayCounters)(uint32_t *out);
   bool (*keyboardKey)(int androidKeyCode, int unicode, bool pressed, bool repeat);
   bool (*initialize)(std::string_view rootDir, std::string_view user);
   void (*setSocInfo)(std::string_view socInfo);
@@ -170,6 +171,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.remotePlayStop = reinterpret_cast<decltype(remotePlayStop)>(dlsym(handle, "_rpcsx_remotePlayStop"));
     result.remotePlayPollVideo = reinterpret_cast<decltype(remotePlayPollVideo)>(dlsym(handle, "_rpcsx_remotePlayPollVideo"));
     result.remotePlayPollAudio = reinterpret_cast<decltype(remotePlayPollAudio)>(dlsym(handle, "_rpcsx_remotePlayPollAudio"));
+    result.remotePlayCounters = reinterpret_cast<decltype(remotePlayCounters)>(dlsym(handle, "_rpcsx_remotePlayCounters"));
     result.keyboardKey = reinterpret_cast<decltype(keyboardKey)>(dlsym(handle, "_rpcsx_keyboardKey"));
     result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_rpcsx_initialize"));
     result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_rpcsx_setSocInfo"));
@@ -346,7 +348,7 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayStop(JNIEnv *, 
   }
 }
 
-// buffer: a direct ByteBuffer for the I420 frame. info (4 ints): width, height, timestamp ms
+// buffer: a direct ByteBuffer for the RGBA frame. info (4 ints): width, height, timestamp ms
 // low and high. Returns 1 with a frame, 0 on timeout, -1 when capture is off, -2 when the buffer
 // is too small for the frame described in info.
 extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
@@ -366,6 +368,24 @@ extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
   const int result = rpcsxLib.remotePlayPollVideo(dst, cap, out, timeoutMs);
   env->SetIntArrayRegion(info, 0, 4, out);
   return result;
+}
+
+// out (4 ints): running totals of game frames seen while capturing, frames not read back, frames
+// handed to the app and frames replaced before the app took them. False when the core lacks it.
+extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_remotePlayCounters(
+    JNIEnv *env, jobject, jintArray out) {
+  if (rpcsxLib.remotePlayCounters == nullptr || out == nullptr || env->GetArrayLength(out) < 4) {
+    return false;
+  }
+
+  uint32_t counters[4] = {};
+  rpcsxLib.remotePlayCounters(counters);
+  jint values[4];
+  for (int i = 0; i < 4; i++) {
+    values[i] = static_cast<jint>(counters[i]);
+  }
+  env->SetIntArrayRegion(out, 0, 4, values);
+  return true;
 }
 
 // buffer: a direct ByteBuffer receiving stereo s16 at 48 kHz. Returns frames written, 0 on

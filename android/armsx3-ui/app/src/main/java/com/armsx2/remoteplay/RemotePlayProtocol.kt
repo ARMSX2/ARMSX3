@@ -23,7 +23,8 @@ import java.util.zip.Inflater
  *  - Video: a WebRTC video track, host to viewer.
  *  - Audio and player 2's pad: WebRTC data channels, unordered and never retransmitted, so a lost
  *    packet is skipped rather than delaying everything behind it. The game's audio does not go
- *    through WebRTC's audio stack, which is built around the microphone.
+ *    through WebRTC's audio stack, which is built around the microphone. Once a second the audio
+ *    channel also carries the host's side of the stream stats ([HostStats]).
  */
 internal object RemotePlayProtocol {
     const val VERSION = 1
@@ -36,9 +37,15 @@ internal object RemotePlayProtocol {
     /** The stream is at most this size; the presenter scales larger frames down on the GPU. */
     const val MAX_WIDTH = 1280
     const val MAX_HEIGHT = 720
-    const val MIN_BITRATE_BPS = 1_000_000
-    const val START_BITRATE_BPS = 4_000_000
-    const val MAX_BITRATE_BPS = 10_000_000
+
+    /** Video bitrate bounds in bits per second. WebRTC moves between them as the network allows. */
+    class Bitrate(val min: Int, val start: Int, val max: Int)
+
+    /** Same Wi-Fi: room to spare, so start where 720p60 game footage looks clean and let it climb. */
+    val WIFI_BITRATE = Bitrate(min = 2_000_000, start = 10_000_000, max = 25_000_000)
+
+    /** Online: the host's upload decides, so start where most connections cope. */
+    val ONLINE_BITRATE = Bitrate(min = 1_000_000, start = 4_000_000, max = 12_000_000)
 
     const val SAMPLE_RATE = 48_000
     const val AUDIO_CHUNK_FRAMES = 480 // 10 ms
@@ -46,6 +53,7 @@ internal object RemotePlayProtocol {
     private const val PACKET_PAD: Byte = 1
     private const val PACKET_AUDIO: Byte = 2
     private const val PACKET_BYE: Byte = 3
+    private const val PACKET_HOST_STATS: Byte = 4
     private const val ZERO: Byte = 0
     private const val PAD_PACKET_SIZE = 16
     const val AUDIO_HEADER_SIZE = 8
@@ -155,6 +163,49 @@ internal object RemotePlayProtocol {
     }
 
     fun isBye(data: ByteBuffer): Boolean = data.remaining() >= 1 && data.get(data.position()) == PACKET_BYE
+
+    /**
+     * The host's side of the stream over the last second, for the viewer's stats: frames the game
+     * drew, frames captured from them, frames out of the encoder and frames dropped on the way,
+     * and which encoder runs.
+     */
+    data class HostStats(
+        val gameFps: Int,
+        val capturedFps: Int,
+        val encodedFps: Int,
+        val dropped: Int,
+        val encoder: String,
+    )
+
+    private const val HOST_STATS_HEADER_SIZE = 12
+    private const val MAX_ENCODER_NAME_BYTES = 48
+
+    fun encodeHostStats(stats: HostStats): ByteBuffer {
+        val name = stats.encoder.toByteArray(Charsets.UTF_8).take(MAX_ENCODER_NAME_BYTES).toByteArray()
+        val out = ByteBuffer.allocate(HOST_STATS_HEADER_SIZE + name.size).order(ByteOrder.LITTLE_ENDIAN)
+        out.put(PACKET_HOST_STATS).put(ZERO).put(ZERO).put(ZERO)
+        for (value in intArrayOf(stats.gameFps, stats.capturedFps, stats.encodedFps, stats.dropped)) {
+            out.putShort(value.coerceIn(0, 0xffff).toShort())
+        }
+        out.put(name)
+        out.flip()
+        return out
+    }
+
+    /** The host's stats, or null for any other packet. */
+    fun decodeHostStats(data: ByteBuffer): HostStats? {
+        val buf = data.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        if (buf.remaining() < HOST_STATS_HEADER_SIZE || buf.get() != PACKET_HOST_STATS) return null
+        buf.position(buf.position() + 3)
+        fun u16() = buf.short.toInt() and 0xffff
+        val gameFps = u16()
+        val capturedFps = u16()
+        val encodedFps = u16()
+        val dropped = u16()
+        val name = ByteArray(minOf(buf.remaining(), MAX_ENCODER_NAME_BYTES))
+        buf.get(name)
+        return HostStats(gameFps, capturedFps, encodedFps, dropped, String(name, Charsets.UTF_8))
+    }
 
     // ---- Connection codes --------------------------------------------------------------------
 
