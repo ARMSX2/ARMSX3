@@ -756,7 +756,7 @@ void pad_thread::operator()()
 			static u64 s_last_change_us = 0;
 
 			const u64 now = get_system_time();
-			const u64 idx = rsxthr->int_flip_index;
+			const u64 idx = rsxthr->display_ctrl().int_flip_index;
 
 			if (idx != s_last_flip_index)
 			{
