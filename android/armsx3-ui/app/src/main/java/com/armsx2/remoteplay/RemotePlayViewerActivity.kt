@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
@@ -97,6 +98,14 @@ private const val LOBBY_CONNECT_TIMEOUT_MS = 60_000L
 /** Tap to reveal: how long the exit button stays, and how long the touch controls stay untouched. */
 private const val EXIT_SHOWN_MS = 4_000L
 private const val TOUCH_HIDE_MS = 15_000L
+
+/**
+ * Stick and trigger movement goes to the host at most this often (125 times a second); a button
+ * press or release goes at once. Input reaches the app the moment the controller reports it, which
+ * for some built-in controllers is hundreds of times a second while a stick moves, and every
+ * packet sent takes its turn on the Wi-Fi channel the video needs.
+ */
+private const val ANALOG_SEND_MS = 8L
 
 /** How a viewer reaches its host. */
 internal sealed interface ViewerMode {
@@ -1072,14 +1081,36 @@ internal class ViewerSession(
         Rpcs3Bridge.playRemoteRumble(-1, 0, 0)
     }
 
+    // When the pad last went out and with which buttons, for spacing out stick movement
+    // (ANALOG_SEND_MS); the movement in between goes out once that time is up.
+    private var padSentAt = 0L
+    private var padSentButtons = 0
+    private var padLater = false
+    private val sendLater = Runnable {
+        padLater = false
+        sendNow()
+    }
+
     fun sendPad(state: RemotePlayProtocol.PadState) {
         pad = state
-        sendNow()
+        val wait = padSentAt + ANALOG_SEND_MS - SystemClock.uptimeMillis()
+        if (state.buttons != padSentButtons || wait <= 0) {
+            sendNow()
+        } else if (!padLater) {
+            padLater = true
+            main.postDelayed(sendLater, wait)
+        }
     }
 
     private fun sendNow() {
         val channel = inputChannel ?: return
         if (channel.state() != DataChannel.State.OPEN) return
+        if (padLater) {
+            main.removeCallbacks(sendLater)
+            padLater = false
+        }
+        padSentAt = SystemClock.uptimeMillis()
+        padSentButtons = pad.buttons
         channel.send(DataChannel.Buffer(RemotePlayProtocol.encodePad(seq++, pad), true))
     }
 
@@ -1226,6 +1257,7 @@ internal class ViewerSession(
         if (ended) return
         ended = true
         main.removeCallbacks(heartbeat)
+        main.removeCallbacks(sendLater)
         main.removeCallbacks(connectTimeout)
         gather?.cancel()
 
