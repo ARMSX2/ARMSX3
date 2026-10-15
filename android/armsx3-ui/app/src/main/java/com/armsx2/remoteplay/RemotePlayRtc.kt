@@ -67,13 +67,21 @@ internal object RemotePlayRtc {
      *    low estimate a large frame takes longer than 16.7 ms to send. Without the window the
      *    bitrate follows the bandwidth estimate alone, which still backs off as soon as delay
      *    builds up or packets go missing. The setting only counts when it names a QueueSize.
+     *  - Forward error correction (FlexFEC): spare packets a lost one is rebuilt from at once,
+     *    instead of the frame waiting a round trip for a resend, which online is a stutter. WebRTC
+     *    adds them only as packets go missing and the round trip grows, so on the same Wi-Fi it
+     *    sticks to resends. Out in tests 12 to 20 with that batch's other changes, before the
+     *    stalls were traced elsewhere (starved threads, frame sizes). Advertised so both sides
+     *    agree on it in the offer and answer.
      */
     private const val FIELD_TRIALS =
         "WebRTC-ForcePlayoutDelay/min_ms:0,max_ms:100/" +
             "WebRTC-ForceSendPlayoutDelay/min_ms:0,max_ms:100/" +
             "WebRTC-ZeroPlayoutDelay/min_pacing:12ms,max_decode_queue_size:2/" +
             "WebRTC-FrameDropper/Disabled/" +
-            "WebRTC-CongestionWindow/Disabled/"
+            "WebRTC-CongestionWindow/Disabled/" +
+            "WebRTC-FlexFEC-03-Advertised/Enabled/" +
+            "WebRTC-FlexFEC-03/Enabled/"
 
     // Threads that carry the stream, by the name the kernel keeps for them (cut to 15 characters):
     // WebRTC's worker thread (which also paces the video out), network and signalling threads,
@@ -170,7 +178,7 @@ internal object RemotePlayRtc {
         fun rank(name: String) = when (name.uppercase()) {
             "H264" -> 0
             "VP8" -> 1
-            "RTX", "RED", "ULPFEC" -> 2
+            "RTX", "RED", "ULPFEC", "FLEXFEC-03" -> 2
             else -> -1
         }
         val kept = codecs.filter { rank(it.name) >= 0 }.sortedBy { rank(it.name) }
