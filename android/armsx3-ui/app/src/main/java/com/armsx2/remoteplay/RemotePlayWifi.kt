@@ -2,6 +2,7 @@ package com.armsx2.remoteplay
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import android.os.Build
 
 /**
  * Keeps the Wi-Fi radio awake while a stream runs. A radio in power saving only picks up waiting
@@ -13,7 +14,17 @@ import android.net.wifi.WifiManager
 internal class RemotePlayWifi(context: Context) {
     private val lock = runCatching {
         (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
-            .createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "armsx3:remoteplay")
+            .createWifiLock(
+                // The low-latency mode is new in Android 10. Before it, high performance is the
+                // closest: it keeps the radio out of power saving too.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                },
+                "armsx3:remoteplay",
+            )
             .apply { setReferenceCounted(false) }
     }.getOrNull()
 

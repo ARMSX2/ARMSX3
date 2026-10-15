@@ -35,8 +35,11 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
   // How often the output thread looks up from waiting, to see whether it should stop.
   private static final long OUTPUT_TIMEOUT_US = 20_000;
   private static final long STOP_TIMEOUT_MS = 1_000;
-  // Starts that may fail in a row before the stock decoder takes over.
-  private static final int MAX_START_FAILURES = 3;
+  // Codecs in a row that may fail, without ever putting a frame on the screen, before the stock
+  // decoder takes over. Failing covers not starting, refusing frames, an error, and taking this
+  // many frames without showing one.
+  private static final int MAX_FAILURES = 3;
+  private static final int MAX_FRAMES_UNSHOWN = 120;
   // Frames the codec dropped never come out; their records go after this many.
   private static final int MAX_IN_CODEC = 32;
 
@@ -60,7 +63,6 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
   // WebRTC's decoder thread.
   private @Nullable Settings settings;
   private @Nullable Callback callback;
-  private int startFailures;
   private int width = 1280;
   private int height = 720;
   // Once the stock decoder has taken over, it stays, also through a reset by WebRTC.
@@ -71,6 +73,7 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
   // when the surface goes.
   private @Nullable Running running;
   private boolean keyFrameRequired = true;
+  private int failures;
 
   ArmsxSurfaceDecoder(
       String codecName, String mime, ArmsxVideoOutput output, StockDecoder stockDecoder) {
@@ -117,15 +120,21 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
     synchronized (this) {
       Surface surface = output.surface();
       Running current = running;
-      if (current != null
-          && (surface != current.surface || current.broken
-              || (key && (width != current.width || height != current.height)))) {
-        stop(current);
-        running = current = null;
-        keyFrameRequired = true;
+      if (current != null) {
+        boolean failed = current.broken
+            || (!current.showedFrames && current.framesQueued >= MAX_FRAMES_UNSHOWN);
+        if (failed || surface != current.surface
+            || (key && (width != current.width || height != current.height))) {
+          drop(current, failed);
+          current = null;
+        }
       }
 
-      if (surface != null) {
+      if (surface == null) {
+        keyFrameRequired = true;
+      } else if (failures >= MAX_FAILURES) {
+        giveUp = true;
+      } else {
         if (current == null) {
           if (!key) {
             // The codec can only start on a key frame: ask the host for one.
@@ -133,13 +142,14 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
             return VideoCodecStatus.NO_OUTPUT;
           }
           current = start(surface, callback);
-          if (current == null && ++startFailures < MAX_START_FAILURES) {
-            // Asks for another key frame, to try again with.
-            return VideoCodecStatus.NO_OUTPUT;
-          }
-          if (current != null) {
+          if (current == null) {
+            if (++failures < MAX_FAILURES) {
+              // Asks for another key frame, to try again with.
+              return VideoCodecStatus.NO_OUTPUT;
+            }
+            giveUp = true;
+          } else {
             running = current;
-            startFailures = 0;
             keyFrameRequired = false;
           }
         }
@@ -152,14 +162,12 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
             return VideoCodecStatus.OK;
           }
           // Stuck or failed: start over from the next key frame.
-          stop(current);
-          running = null;
-          keyFrameRequired = true;
-          return VideoCodecStatus.NO_OUTPUT;
+          drop(current, true);
+          if (failures < MAX_FAILURES) {
+            return VideoCodecStatus.NO_OUTPUT;
+          }
+          giveUp = true;
         }
-        giveUp = true;
-      } else {
-        keyFrameRequired = true;
       }
     }
     if (giveUp) {
@@ -178,13 +186,15 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
 
   @Override
   public VideoCodecStatus release() {
-    output.detach(this);
+    // The codec stops before the screen lets go of this decoder: a surface destroyed in between
+    // still waits for it.
     synchronized (this) {
       if (running != null) {
         stop(running);
         running = null;
       }
     }
+    output.detach(this);
     callback = null;
     VideoDecoder decoder = stock;
     stock = null;
@@ -201,10 +211,22 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
   void surfaceLost() {
     synchronized (this) {
       if (running != null) {
-        stop(running);
-        running = null;
+        drop(running, false);
       }
       keyFrameRequired = true;
+    }
+  }
+
+  // Under this lock. A codec that put frames on the screen worked, whatever ended it, so the count
+  // of failures starts over.
+  private void drop(Running codec, boolean failed) {
+    stop(codec);
+    running = null;
+    keyFrameRequired = true;
+    if (codec.showedFrames) {
+      failures = 0;
+    } else if (failed) {
+      failures++;
     }
   }
 
@@ -255,6 +277,7 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
       long presentationUs = TimeUnit.NANOSECONDS.toMicros(frame.captureTimeNs);
       codec.queued(presentationUs, frame.rotation);
       codec.codec.queueInputBuffer(index, 0, size, presentationUs, 0);
+      codec.framesQueued++;
       return true;
     } catch (IllegalStateException e) {
       Logging.e(TAG, "Decoder refused a frame", e);
@@ -279,7 +302,7 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
   }
 
   private VideoCodecStatus fallBack(EncodedImage frame, DecodeInfo info) {
-    Logging.e(TAG, codecName + " would not start on the screen; the stock decoder takes over");
+    Logging.e(TAG, codecName + " shows nothing on the screen; the stock decoder takes over");
     ArmsxVideoOutput.markFailed();
     useStock = true;
     output.detach(this);
@@ -314,6 +337,9 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
     final Thread thread;
     volatile boolean stopping;
     volatile boolean broken;
+    volatile boolean showedFrames;
+    // Decoder thread.
+    int framesQueued;
 
     private final Callback callback;
     // Frames in the codec, oldest first: presentation time (us), when it went in (ms), rotation.
@@ -396,8 +422,10 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
     }
 
     private void formatChanged(MediaFormat format) {
-      int w = format.containsKey(MediaFormat.KEY_WIDTH) ? format.getInteger(MediaFormat.KEY_WIDTH) : width;
-      int h = format.containsKey(MediaFormat.KEY_HEIGHT) ? format.getInteger(MediaFormat.KEY_HEIGHT) : height;
+      int w = format.containsKey(MediaFormat.KEY_WIDTH)
+          ? format.getInteger(MediaFormat.KEY_WIDTH) : width;
+      int h = format.containsKey(MediaFormat.KEY_HEIGHT)
+          ? format.getInteger(MediaFormat.KEY_HEIGHT) : height;
       if (format.containsKey(CROP_LEFT) && format.containsKey(CROP_RIGHT)) {
         w = format.getInteger(CROP_RIGHT) + 1 - format.getInteger(CROP_LEFT);
       }
@@ -419,6 +447,7 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
           TimeUnit.MICROSECONDS.toNanos(presentationUs));
       callback.onDecodedFrame(shown, decodeMs, null);
       shown.release();
+      showedFrames = true;
       output.frameShown();
     }
   }

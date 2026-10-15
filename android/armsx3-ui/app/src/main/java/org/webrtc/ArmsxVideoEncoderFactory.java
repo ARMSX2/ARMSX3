@@ -14,8 +14,9 @@ import java.util.Map;
  * WebRTC's HardwareVideoEncoderFactory only trusts H.264 encoders named OMX.qcom.* or OMX.Exynos.*.
  * Current Snapdragons name theirs c2.qti.*, so it fell back to software VP8: slow to encode on a
  * host that is already running a game, and slow to decode on a small handheld. This factory picks
- * the AVC encoder by MediaCodecInfo.isHardwareAccelerated() instead and leaves every other codec
- * to the stock factories.
+ * the AVC encoder Android reports as hardware instead (before Android 10, which does not say, the
+ * one not named as Android's own software codec) and leaves every other codec to the stock
+ * factories.
  *
  * It lives in org.webrtc because the codec helpers it builds on are package-private.
  */
@@ -40,7 +41,10 @@ public class ArmsxVideoEncoderFactory implements VideoEncoderFactory {
   private static @Nullable MediaCodecInfo findH264Encoder() {
     String mime = VideoCodecMimeType.H264.mimeType();
     for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
-      if (!info.isEncoder() || info.isAlias() || !info.isHardwareAccelerated()) continue;
+      if (!info.isEncoder() || ArmsxVideoDecoderFactory.isAlias(info)
+          || !MediaCodecUtils.isHardwareAccelerated(info)) {
+        continue;
+      }
       if (!MediaCodecUtils.codecSupportsType(info, VideoCodecMimeType.H264)) continue;
       if (MediaCodecUtils.selectColorFormat(
               MediaCodecUtils.ENCODER_COLOR_FORMATS, info.getCapabilitiesForType(mime)) == null) {

@@ -59,6 +59,9 @@ internal object RemotePlayProtocol {
      */
     const val OPUS_BITRATE = 128_000
 
+    // The most one 20 ms Opus packet can hold: a frame's 1,275 bytes and its table of contents.
+    private const val MAX_OPUS_FRAME = 1_276
+
     private const val PACKET_PAD: Byte = 1
     private const val PACKET_AUDIO: Byte = 2
     private const val PACKET_BYE: Byte = 3
@@ -180,16 +183,17 @@ internal object RemotePlayProtocol {
         return out
     }
 
-    /** An Opus packet, or null for anything else. */
+    /** An Opus packet, or null for anything else, or for frames bigger than Opus makes. */
     fun decodeOpus(data: ByteBuffer): OpusPacket? {
         val buf = data.duplicate().order(ByteOrder.LITTLE_ENDIAN)
         if (buf.remaining() <= AUDIO_HEADER_SIZE || buf.get() != PACKET_AUDIO_OPUS) return null
         buf.get()
         val length = buf.short.toInt() and 0xffff
         val seq = buf.int
-        if (length == 0 || length > buf.remaining()) return null
+        if (length == 0 || length > MAX_OPUS_FRAME || length > buf.remaining()) return null
         val frame = ByteArray(length).also { buf.get(it) }
-        val previous = if (buf.hasRemaining()) ByteArray(buf.remaining()).also { buf.get(it) } else null
+        val rest = buf.remaining()
+        val previous = if (rest in 1..MAX_OPUS_FRAME) ByteArray(rest).also { buf.get(it) } else null
         return OpusPacket(seq, frame, previous)
     }
 

@@ -27,33 +27,35 @@ internal class OpusEncoder private constructor(private val codec: MediaCodec) {
 
     private val info = MediaCodec.BufferInfo()
     private var framesIn = 0L
-    private var packetsOut = 0L
+
+    // Packets the chunks so far have completed and the encoder has not handed out yet.
+    private var owed = 0
 
     /**
      * Encodes [frames] stereo frames from the start of [pcm]. Each packet this completes goes to
-     * [onPacket] as soon as it is out. Throws IllegalStateException when the codec fails.
+     * [onPacket] as soon as it is out. Throws a RuntimeException when the codec fails.
      */
     fun encode(pcm: ByteBuffer, frames: Int, onPacket: (ByteArray) -> Unit) {
         val bytes = frames * 4
         val index = codec.dequeueInputBuffer(CODEC_TIMEOUT_US)
         if (index < 0) return
         val input = codec.getInputBuffer(index) ?: return
+        check(input.capacity() >= bytes) { "encoder input holds ${input.capacity()} bytes, not $bytes" }
         input.clear()
         val chunk = pcm.duplicate()
         chunk.position(0).limit(bytes)
         input.put(chunk)
         codec.queueInputBuffer(index, 0, bytes, framesIn * 1_000_000 / RemotePlayProtocol.SAMPLE_RATE, 0)
+        owed += ((framesIn + frames) / FRAME_SAMPLES - framesIn / FRAME_SAMPLES).toInt()
         framesIn += frames
 
         // Waits for the packets this chunk completes, so each leaves the moment it exists instead
         // of with the next chunk, 10 ms later.
-        val due = framesIn / FRAME_SAMPLES
         while (true) {
-            val waiting = packetsOut < due
-            val out = codec.dequeueOutputBuffer(info, if (waiting) CODEC_TIMEOUT_US else 0)
+            val out = codec.dequeueOutputBuffer(info, if (owed > 0) CODEC_TIMEOUT_US else 0)
             if (out == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                // Late after all: it goes out with the next chunk.
-                if (waiting) packetsOut = due
+                // Late after all: it goes out with the next chunk, which does not wait for it.
+                owed = 0
                 return
             }
             if (out < 0) continue
@@ -63,7 +65,7 @@ internal class OpusEncoder private constructor(private val codec: MediaCodec) {
                 val packet = ByteArray(info.size)
                 buffer.position(info.offset)
                 buffer.get(packet)
-                packetsOut++
+                if (owed > 0) owed--
                 onPacket(packet)
             }
             codec.releaseOutputBuffer(out, false)
@@ -109,16 +111,19 @@ internal class OpusDecoder private constructor(private val codec: MediaCodec) {
     private var timeUs = 0L
 
     /**
-     * Decodes [packet]; its sound goes to [onPcm] (16-bit stereo) as soon as it is out. Throws
-     * IllegalStateException when the codec fails.
+     * Decodes [packet]; its sound goes to [onPcm] (16-bit stereo) as soon as it is out. Throws a
+     * RuntimeException when the codec fails.
      */
     fun decode(packet: ByteArray, onPcm: (ByteArray) -> Unit) {
         val index = codec.dequeueInputBuffer(CODEC_TIMEOUT_US)
         if (index < 0) return
         val input = codec.getInputBuffer(index) ?: return
         input.clear()
-        input.put(packet)
-        codec.queueInputBuffer(index, 0, packet.size, timeUs, 0)
+        // Never more than an Opus packet holds (RemotePlayProtocol.decodeOpus), but a codec with
+        // a smaller input than that gets an empty buffer back rather than an overflow.
+        val size = if (packet.size <= input.capacity()) packet.size else 0
+        input.put(packet, 0, size)
+        codec.queueInputBuffer(index, 0, size, timeUs, 0)
         timeUs += 20_000
 
         var wait = CODEC_TIMEOUT_US
@@ -206,8 +211,10 @@ internal class OpusIn(private val out: AudioOut) {
     fun offer(packet: RemotePlayProtocol.OpusPacket) {
         if (closed) return
         if (worker == null) worker = thread(name = "rp-audio-in", isDaemon = true) { run() }
-        // A stalled decoder must not pile up a backlog; what is current matters.
-        if (queue.size < MAX_QUEUED) queue.offer(packet)
+        // A stalled decoder must not pile up a backlog: the oldest goes, since what is current
+        // matters.
+        while (queue.size >= MAX_QUEUED) queue.poll()
+        queue.offer(packet)
     }
 
     fun stop() {
@@ -221,31 +228,48 @@ internal class OpusIn(private val out: AudioOut) {
     }
 
     private fun run() {
-        val decoder = OpusDecoder.create() ?: return
+        var decoder: OpusDecoder? = null
         var expected = 0
         var started = false
+        var failures = 0
         try {
             while (true) {
                 val packet = queue.poll(100, TimeUnit.MILLISECONDS) ?: continue
-                if (started) {
-                    val gap = packet.seq - expected
-                    if (gap < 0) continue
-                    // The packet before this one went missing: its copy plays first.
-                    if (gap > 0) packet.previous?.let { decoder.decode(it, out::enqueue) }
+                val codec = decoder ?: OpusDecoder.create()
+                if (codec == null) {
+                    // Nothing can play it. Gives up after a few tries rather than retry 50 times a
+                    // second for the whole session.
+                    if (++failures >= MAX_FAILURES) return
+                    continue
                 }
-                decoder.decode(packet.frame, out::enqueue)
-                started = true
-                expected = packet.seq + 1
+                decoder = codec
+                try {
+                    if (started) {
+                        val gap = packet.seq - expected
+                        if (gap < 0) continue
+                        // The packet before this one went missing: its copy plays first.
+                        if (gap > 0) packet.previous?.let { codec.decode(it, out::enqueue) }
+                    }
+                    codec.decode(packet.frame, out::enqueue)
+                    started = true
+                    expected = packet.seq + 1
+                } catch (e: RuntimeException) {
+                    // A decoder in an error state stays in it: start a new one on the next packet.
+                    Log.w(TAG, "Opus decoder failed", e)
+                    codec.release()
+                    decoder = null
+                    started = false
+                    if (++failures >= MAX_FAILURES) return
+                }
             }
         } catch (_: InterruptedException) {
-        } catch (e: IllegalStateException) {
-            Log.w(TAG, "Opus decoder failed", e)
         } finally {
-            decoder.release()
+            decoder?.release()
         }
     }
 
     private companion object {
         const val MAX_QUEUED = 16
+        const val MAX_FAILURES = 5
     }
 }

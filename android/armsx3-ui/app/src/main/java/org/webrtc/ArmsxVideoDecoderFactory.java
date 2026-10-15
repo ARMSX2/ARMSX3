@@ -47,7 +47,9 @@ public class ArmsxVideoDecoderFactory implements VideoDecoderFactory {
   private static @Nullable MediaCodecInfo findH264Decoder() {
     String mime = VideoCodecMimeType.H264.mimeType();
     for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
-      if (info.isEncoder() || info.isAlias() || !info.isHardwareAccelerated()) continue;
+      if (info.isEncoder() || isAlias(info) || !MediaCodecUtils.isHardwareAccelerated(info)) {
+        continue;
+      }
       if (!MediaCodecUtils.codecSupportsType(info, VideoCodecMimeType.H264)) continue;
       if (MediaCodecUtils.selectColorFormat(
               MediaCodecUtils.DECODER_COLOR_FORMATS, info.getCapabilitiesForType(mime)) == null) {
@@ -117,8 +119,7 @@ public class ArmsxVideoDecoderFactory implements VideoDecoderFactory {
     String mime = type.mimeType();
     MediaCodecInfo software = null;
     for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
-      boolean alias = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info.isAlias();
-      if (info.isEncoder() || alias || !MediaCodecUtils.codecSupportsType(info, type)) {
+      if (info.isEncoder() || isAlias(info) || !MediaCodecUtils.codecSupportsType(info, type)) {
         continue;
       }
       MediaCodecInfo.CodecCapabilities capabilities = info.getCapabilitiesForType(mime);
@@ -142,10 +143,20 @@ public class ArmsxVideoDecoderFactory implements VideoDecoderFactory {
     Integer colorFormat = MediaCodecUtils.selectColorFormat(
         MediaCodecUtils.DECODER_COLOR_FORMATS, codec.getCapabilitiesForType(type.mimeType()));
     if (colorFormat == null) {
-      return null;
+      if (sharedContext == null) {
+        return null;
+      }
+      // Frames that come out as textures never use the color format: AndroidVideoDecoder only
+      // checks it is one it knows, and sets it on the codec only for frames in memory.
+      colorFormat = MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar;
     }
     return new AndroidVideoDecoder(
         new LowLatencyCodecs(), codec.getName(), type, colorFormat, sharedContext);
+  }
+
+  /** Android 10 added aliases, and asking for one before that fails. */
+  static boolean isAlias(MediaCodecInfo info) {
+    return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info.isAlias();
   }
 
   /** The format with low latency asked for, in general and in each vendor's own terms. */

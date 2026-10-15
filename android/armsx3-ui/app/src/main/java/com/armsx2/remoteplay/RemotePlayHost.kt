@@ -536,7 +536,7 @@ private class HostSession(
                         seq++
                         previous = packet
                     }
-                } catch (e: IllegalStateException) {
+                } catch (e: RuntimeException) {
                     Log.w(TAG, "Opus encoder failed, sending uncompressed audio", e)
                     opus.release()
                     encoder = null
