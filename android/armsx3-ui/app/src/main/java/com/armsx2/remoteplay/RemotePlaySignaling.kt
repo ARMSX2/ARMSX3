@@ -159,10 +159,13 @@ internal class LobbyHostLink(
             }
             onCode(opened.code)
 
-            val deadline = SystemClock.uptimeMillis() + RemotePlayLobby.LIFETIME_MS
+            val opensAt = SystemClock.uptimeMillis()
+            val deadline = opensAt + RemotePlayLobby.LIFETIME_MS
             while (!closed && SystemClock.uptimeMillis() < deadline) {
                 try {
-                    Thread.sleep(POLL_MS)
+                    // Often while the friend is typing the code, so an answer is picked up within
+                    // a second; less often once the invite has waited a while.
+                    Thread.sleep(if (SystemClock.uptimeMillis() - opensAt < FAST_POLLING_MS) FAST_POLL_MS else SLOW_POLL_MS)
                 } catch (_: InterruptedException) {
                     return@thread
                 }
@@ -192,7 +195,9 @@ internal class LobbyHostLink(
     }
 
     private companion object {
-        const val POLL_MS = 2_000L
+        const val FAST_POLL_MS = 1_000L
+        const val SLOW_POLL_MS = 3_000L
+        const val FAST_POLLING_MS = 2 * 60_000L
     }
 }
 
