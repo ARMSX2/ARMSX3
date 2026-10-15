@@ -3,6 +3,7 @@ package com.armsx2.remoteplay
 import android.content.Context
 import android.os.Handler
 import org.json.JSONObject
+import org.webrtc.ArmsxVideoOutput
 import org.webrtc.DataChannel
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
@@ -48,9 +49,9 @@ internal object RemotePlayRtc {
      *    500 ms is what switches the mode on). Set on both sides, since the host's half travels in
      *    the video packets.
      *  - Decodes at least 12 ms apart. Frames that arrive bunched up on Wi-Fi went to the decoder
-     *    back to back, and WebRTC's decoder holds one frame for the screen at a time and throws
-     *    away a newer one that comes out before the screen has taken it. Spaced out they each get
-     *    shown; a steady 60 fps (16.7 ms apart) is never held back.
+     *    back to back, and a screen shows one frame per refresh: of two done within the same
+     *    refresh only the newer is shown. Spaced out they each get shown; a steady 60 fps
+     *    (16.7 ms apart) is never held back.
      *  - No frame dropper: it skips frames whenever the encoder runs over its bitrate, which fast
      *    game footage often does. The bitrate still follows the network; frames are simply not
      *    thrown away on top.
@@ -64,10 +65,11 @@ internal object RemotePlayRtc {
     /**
      * A factory with hardware video codecs. The audio module exists because the factory needs
      * one, but it never starts: no audio track is ever added, and the game's sound travels on a
-     * data channel instead, so the microphone is never touched.
+     * data channel instead, so the microphone is never touched. [videoOutput]: the viewer's screen,
+     * which its decoder then draws onto directly.
      */
     @Synchronized
-    fun createFactory(context: Context): Factory {
+    fun createFactory(context: Context, videoOutput: ArmsxVideoOutput? = null): Factory {
         val app = context.applicationContext
         if (!initialized) {
             PeerConnectionFactory.initialize(
@@ -81,7 +83,7 @@ internal object RemotePlayRtc {
         // Not WebRTC's default factories: their H.264 encoder check misses current Snapdragons,
         // and neither sets its codec up for low latency (see the classes).
         val encoders = org.webrtc.ArmsxVideoEncoderFactory(eglBase.eglBaseContext)
-        val decoders = org.webrtc.ArmsxVideoDecoderFactory(eglBase.eglBaseContext)
+        val decoders = org.webrtc.ArmsxVideoDecoderFactory(eglBase.eglBaseContext, videoOutput)
         val factory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(audio)
             .setVideoEncoderFactory(encoders)

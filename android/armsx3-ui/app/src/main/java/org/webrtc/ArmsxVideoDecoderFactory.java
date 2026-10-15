@@ -5,6 +5,7 @@ import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.media.MediaCrypto;
 import android.media.MediaFormat;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.Surface;
 import androidx.annotation.Nullable;
@@ -12,8 +13,12 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 
 /**
- * Remote play (com.armsx2.remoteplay): the hardware H.264 decoder in low-latency mode, everything
- * else as WebRTC's DefaultVideoDecoderFactory.
+ * Remote play (com.armsx2.remoteplay): the viewer's decoders.
+ *
+ * With a screen to decode onto ({@link ArmsxVideoOutput}), each codec's own MediaCodec decoder,
+ * hardware first, draws straight onto it ({@link ArmsxSurfaceDecoder}). Otherwise, and when that
+ * fails, the hardware H.264 decoder runs the stock way in low-latency mode, and everything else as
+ * WebRTC's DefaultVideoDecoderFactory.
  *
  * Left in its default mode a decoder may hold several frames before it shows the first, which is
  * fine for a film and adds a few frames of lag to a game. The decoder is asked for low latency and
@@ -26,11 +31,15 @@ public class ArmsxVideoDecoderFactory implements VideoDecoderFactory {
   private static final String TAG = "ArmsxVideoDecoder";
 
   private final @Nullable EglBase.Context sharedContext;
+  private final @Nullable ArmsxVideoOutput output;
   private final VideoDecoderFactory stock;
   private final @Nullable MediaCodecInfo h264;
 
-  public ArmsxVideoDecoderFactory(@Nullable EglBase.Context sharedContext) {
+  /** {@code output}: the viewer's screen to decode straight onto, or null for the stock way. */
+  public ArmsxVideoDecoderFactory(
+      @Nullable EglBase.Context sharedContext, @Nullable ArmsxVideoOutput output) {
     this.sharedContext = sharedContext;
+    this.output = output;
     this.stock = new DefaultVideoDecoderFactory(sharedContext);
     this.h264 = findH264Decoder();
   }
@@ -61,15 +70,100 @@ public class ArmsxVideoDecoderFactory implements VideoDecoderFactory {
 
   @Override
   public @Nullable VideoDecoder createDecoder(VideoCodecInfo info) {
+    if (output != null) {
+      VideoDecoder direct = ArmsxVideoOutput.available() ? createDirect(info) : null;
+      if (direct != null) {
+        return direct;
+      }
+      // Nothing can decode this stream onto the screen: the viewer draws its frames after all.
+      output.fallBack();
+    }
     if (h264 != null && VideoCodecMimeType.H264.name().equalsIgnoreCase(info.name)) {
-      Integer colorFormat = MediaCodecUtils.selectColorFormat(MediaCodecUtils.DECODER_COLOR_FORMATS,
-          h264.getCapabilitiesForType(VideoCodecMimeType.H264.mimeType()));
-      if (colorFormat != null) {
-        return new AndroidVideoDecoder(new LowLatencyCodecs(), h264.getName(),
-            VideoCodecMimeType.H264, colorFormat, sharedContext);
+      VideoDecoder decoder = textureDecoder(h264, VideoCodecMimeType.H264);
+      if (decoder != null) {
+        return decoder;
       }
     }
     return stock.createDecoder(info);
+  }
+
+  private @Nullable VideoDecoder createDirect(VideoCodecInfo info) {
+    VideoCodecMimeType type = null;
+    for (VideoCodecMimeType candidate : VideoCodecMimeType.values()) {
+      if (candidate.name().equalsIgnoreCase(info.name)) {
+        type = candidate;
+        break;
+      }
+    }
+    if (type == null) {
+      return null;
+    }
+    MediaCodecInfo codec = findDirectDecoder(type);
+    if (codec == null) {
+      return null;
+    }
+    VideoCodecMimeType codecType = type;
+    return new ArmsxSurfaceDecoder(codec.getName(), type.mimeType(), output,
+        () -> textureDecoder(codec, codecType));
+  }
+
+  /**
+   * A decoder that can draw this codec onto a surface: hardware first, then Android's own
+   * software one, which every device has for the codecs WebRTC sends. None that needs a protected
+   * or tunneled pipeline, which a plain surface is not. Works back to Android 8: before 10,
+   * Android does not say which codecs are hardware, and WebRTC's helper goes by the name.
+   */
+  private static @Nullable MediaCodecInfo findDirectDecoder(VideoCodecMimeType type) {
+    String mime = type.mimeType();
+    MediaCodecInfo software = null;
+    for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+      boolean alias = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info.isAlias();
+      if (info.isEncoder() || alias || !MediaCodecUtils.codecSupportsType(info, type)) {
+        continue;
+      }
+      MediaCodecInfo.CodecCapabilities capabilities = info.getCapabilitiesForType(mime);
+      if (capabilities.isFeatureRequired(MediaCodecInfo.CodecCapabilities.FEATURE_SecurePlayback)
+          || capabilities.isFeatureRequired(
+              MediaCodecInfo.CodecCapabilities.FEATURE_TunneledPlayback)) {
+        continue;
+      }
+      if (MediaCodecUtils.isHardwareAccelerated(info)) {
+        return info;
+      }
+      if (software == null) {
+        software = info;
+      }
+    }
+    return software;
+  }
+
+  /** The stock decoder on this codec: frames out as GL textures, in low-latency mode. */
+  private @Nullable VideoDecoder textureDecoder(MediaCodecInfo codec, VideoCodecMimeType type) {
+    Integer colorFormat = MediaCodecUtils.selectColorFormat(
+        MediaCodecUtils.DECODER_COLOR_FORMATS, codec.getCapabilitiesForType(type.mimeType()));
+    if (colorFormat == null) {
+      return null;
+    }
+    return new AndroidVideoDecoder(
+        new LowLatencyCodecs(), codec.getName(), type, colorFormat, sharedContext);
+  }
+
+  /** The format with low latency asked for, in general and in each vendor's own terms. */
+  static MediaFormat lowLatency(MediaFormat original, String name) {
+    MediaFormat format = new MediaFormat(original);
+    format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
+    format.setInteger(MediaFormat.KEY_PRIORITY, 0);
+    // Each vendor's own switch. A codec ignores keys from another vendor.
+    if (name.startsWith("c2.qti.") || name.startsWith("OMX.qcom.")) {
+      format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1);
+    } else if (name.startsWith("c2.exynos.") || name.startsWith("OMX.Exynos.")) {
+      format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1);
+    } else if (name.startsWith("c2.mtk.") || name.startsWith("OMX.MTK.")) {
+      format.setInteger("vdec-lowlatency", 1);
+    } else if (name.startsWith("c2.amlogic.") || name.startsWith("OMX.amlogic.")) {
+      format.setInteger("vendor.low-latency.enable", 1);
+    }
+    return format;
   }
 
   /** Opens codecs for AndroidVideoDecoder, adding the low-latency settings when it configures. */
@@ -101,23 +195,6 @@ public class ArmsxVideoDecoderFactory implements VideoDecoderFactory {
         codec.reset();
         codec.configure(format, surface, crypto, flags);
       }
-    }
-
-    private static MediaFormat lowLatency(MediaFormat original, String name) {
-      MediaFormat format = new MediaFormat(original);
-      format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
-      format.setInteger(MediaFormat.KEY_PRIORITY, 0);
-      // Each vendor's own switch. A codec ignores keys from another vendor.
-      if (name.startsWith("c2.qti.") || name.startsWith("OMX.qcom.")) {
-        format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1);
-      } else if (name.startsWith("c2.exynos.") || name.startsWith("OMX.Exynos.")) {
-        format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1);
-      } else if (name.startsWith("c2.mtk.") || name.startsWith("OMX.MTK.")) {
-        format.setInteger("vdec-lowlatency", 1);
-      } else if (name.startsWith("c2.amlogic.") || name.startsWith("OMX.amlogic.")) {
-        format.setInteger("vendor.low-latency.enable", 1);
-      }
-      return format;
     }
 
     @Override

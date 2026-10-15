@@ -13,6 +13,9 @@ import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.SurfaceHolder
+import android.view.SurfaceView
+import android.view.View
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -37,6 +40,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +60,7 @@ import com.armsx2.i18n.str
 import com.armsx2.ui.touch.RemotePlayTouchControls
 import com.armsx2.ui.touch.setRemotePlayPadSink
 import org.json.JSONObject
+import org.webrtc.ArmsxVideoOutput
 import org.webrtc.DataChannel
 import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
@@ -63,6 +68,7 @@ import org.webrtc.RendererCommon
 import org.webrtc.RtpTransceiver
 import org.webrtc.SessionDescription
 import org.webrtc.SurfaceViewRenderer
+import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
 import java.io.IOException
 import java.util.concurrent.LinkedBlockingDeque
@@ -140,7 +146,11 @@ class RemotePlayViewerActivity : ComponentActivity() {
         }
     }
 
-    private lateinit var renderer: SurfaceViewRenderer
+    // The picture: decoded straight onto a plain view where the device allows (ArmsxSurfaceDecoder),
+    // otherwise drawn by WebRTC's renderer, which also takes over if that fails mid-session.
+    private var output: ArmsxVideoOutput? = null
+    private var renderer: SurfaceViewRenderer? = null
+    private val videoView = mutableStateOf<View?>(null)
     private var session: ViewerSession? = null
     private val main = Handler(Looper.getMainLooper())
 
@@ -238,26 +248,33 @@ class RemotePlayViewerActivity : ComponentActivity() {
         // The Back key and the back gesture both ask before leaving; asked again, they cancel.
         onBackPressedDispatcher.addCallback(this) { askToLeave() }
 
-        renderer = SurfaceViewRenderer(this).apply {
-            init(RemotePlayRtc.eglBase.eglBaseContext, object : RendererCommon.RendererEvents {
-                override fun onFirstFrameRendered() {
-                    main.post {
-                        playing.value = true
-                        hintVisible.value = true
-                        main.postDelayed({ hintVisible.value = false }, 6_000)
-                        touchActivity()
-                        if (statsOn) main.post(statsTick)
-                    }
+        if (ArmsxVideoOutput.available()) {
+            val target = ArmsxVideoOutput(object : ArmsxVideoOutput.Listener {
+                override fun onFirstFrame() {
+                    main.post { firstFrame() }
                 }
 
-                override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
-                    if (width <= 0 || height <= 0) return
-                    val aspect = if (rotation % 180 == 0) width.toFloat() / height else height.toFloat() / width
-                    main.post { videoAspect.value = aspect }
+                override fun onVideoSize(width: Int, height: Int) {
+                    main.post { videoAspect.value = width.toFloat() / height }
+                }
+
+                override fun onFallback() {
+                    main.post { useRenderer() }
                 }
             })
-            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
-            setEnableHardwareScaler(true)
+            output = target
+            videoView.value = SurfaceView(this).apply {
+                holder.addCallback(object : SurfaceHolder.Callback {
+                    override fun surfaceCreated(holder: SurfaceHolder) = target.setSurface(holder.surface)
+
+                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) =
+                        target.setSurface(holder.surface)
+
+                    override fun surfaceDestroyed(holder: SurfaceHolder) = target.setSurface(null)
+                })
+            }
+        } else {
+            useRenderer()
         }
 
         setContent {
@@ -281,10 +298,15 @@ class RemotePlayViewerActivity : ComponentActivity() {
                     contentAlignment = Alignment.Center,
                 ) {
                     val aspect = videoAspect.value
-                    AndroidView(
-                        factory = { renderer },
-                        modifier = if (aspect != null) Modifier.aspectRatio(aspect) else Modifier.fillMaxSize(),
-                    )
+                    videoView.value?.let { view ->
+                        // A view of its own when the renderer takes over from the plain one.
+                        key(view) {
+                            AndroidView(
+                                factory = { view },
+                                modifier = if (aspect != null) Modifier.aspectRatio(aspect) else Modifier.fillMaxSize(),
+                            )
+                        }
+                    }
 
                     if (!playing.value) {
                         if (inviteMode.value && !connected.value) {
@@ -361,7 +383,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
         session = ViewerSession(
             context = this,
             mode = mode,
-            renderer = renderer,
+            output = output,
             onReply = { code -> reply.value = code },
             onConnected = {
                 connected.value = true
@@ -371,7 +393,45 @@ class RemotePlayViewerActivity : ComponentActivity() {
                 if (message != null) Toast.makeText(this, message, Toast.LENGTH_LONG).show()
                 finish()
             },
-        ).also { it.start() }
+        ).also { created ->
+            renderer?.let(created::showOn)
+            created.start()
+        }
+    }
+
+    private fun firstFrame() {
+        if (playing.value) return
+        playing.value = true
+        hintVisible.value = true
+        main.postDelayed({ hintVisible.value = false }, 6_000)
+        touchActivity()
+        if (statsOn) main.post(statsTick)
+    }
+
+    /**
+     * WebRTC's renderer draws the frames: from the start when decoding onto the screen has failed
+     * on this device before, or from now on when it just did.
+     */
+    private fun useRenderer() {
+        if (renderer != null || isDestroyed) return
+        val view = SurfaceViewRenderer(this).apply {
+            init(RemotePlayRtc.eglBase.eglBaseContext, object : RendererCommon.RendererEvents {
+                override fun onFirstFrameRendered() {
+                    main.post { firstFrame() }
+                }
+
+                override fun onFrameResolutionChanged(width: Int, height: Int, rotation: Int) {
+                    if (width <= 0 || height <= 0) return
+                    val aspect = if (rotation % 180 == 0) width.toFloat() / height else height.toFloat() / width
+                    main.post { videoAspect.value = aspect }
+                }
+            })
+            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            setEnableHardwareScaler(true)
+        }
+        renderer = view
+        videoView.value = view
+        session?.showOn(view)
     }
 
     /** [unclaimed]: the tap landed on nothing, neither a control nor the exit area. */
@@ -507,7 +567,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
         setRemotePlayPadSink(null)
         session?.end(null)
         session = null
-        if (::renderer.isInitialized) renderer.release()
+        renderer?.release()
         super.onDestroy()
     }
 
@@ -699,7 +759,7 @@ internal class ViewerInput(private val send: (RemotePlayProtocol.PadState) -> Un
 internal class ViewerSession(
     private val context: Context,
     private val mode: ViewerMode,
-    private val renderer: SurfaceViewRenderer,
+    private val output: ArmsxVideoOutput?,
     private val onReply: (String) -> Unit,
     private val onConnected: () -> Unit,
     private val onEnded: (String?) -> Unit,
@@ -722,6 +782,11 @@ internal class ViewerSession(
     private var seq = 0
     private var connectedOnce = false
     private var ended = false
+
+    // The host's video, and where WebRTC's renderer draws it when the decoder does not draw it onto
+    // the screen itself.
+    private var videoTrack: VideoTrack? = null
+    private var sink: VideoSink? = null
 
     /** The host's side of the stream, as it last reported it (once a second). */
     @Volatile
@@ -832,6 +897,13 @@ internal class ViewerSession(
         peer?.let { stats.sample(it, onLine) }
     }
 
+    /** From now on WebRTC's renderer draws the host's video, on [target]. */
+    fun showOn(target: VideoSink) {
+        if (ended) return
+        sink = target
+        videoTrack?.addSink(target)
+    }
+
     fun sendPad(state: RemotePlayProtocol.PadState) {
         pad = state
         sendNow()
@@ -854,9 +926,13 @@ internal class ViewerSession(
     /** Answers the host's offer; the answer goes out once complete, candidates included. */
     private fun answer(offer: String) {
         if (peer != null || ended) return
-        val created = RemotePlayRtc.createFactory(context).also { rtc = it }
+        val created = RemotePlayRtc.createFactory(context, output).also { rtc = it }
         val factory = created.factory
-        Log.i(TAG, "video decoder: ${created.h264Decoder ?: "no hardware H.264, stock factories"}")
+        Log.i(
+            TAG,
+            "video decoder: ${created.h264Decoder ?: "no hardware H.264, stock factories"}" +
+                if (output != null) ", straight onto the screen" else ", drawn by the renderer",
+        )
 
         val wait = GatherWait(main, 4_000) {
             val description = peer?.localDescription ?: return@GatherWait
@@ -874,7 +950,12 @@ internal class ViewerSession(
             }
 
             override fun onTrack(transceiver: RtpTransceiver) {
-                (transceiver.receiver.track() as? VideoTrack)?.addSink(renderer)
+                val track = transceiver.receiver.track() as? VideoTrack ?: return
+                main.post {
+                    if (ended) return@post
+                    videoTrack = track
+                    sink?.let(track::addSink)
+                }
             }
 
             override fun onDataChannel(channel: DataChannel) {
@@ -976,6 +1057,7 @@ internal class ViewerSession(
         runCatching { peer?.dispose() }
         rtc?.dispose()
         peer = null
+        videoTrack = null
         inputChannel = null
         audioChannel = null
         onEnded(message)
