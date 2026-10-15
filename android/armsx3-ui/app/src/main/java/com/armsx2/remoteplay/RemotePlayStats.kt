@@ -184,5 +184,6 @@ internal fun describeHost(stats: RemotePlayProtocol.HostStats): String {
     parts += "encode max ${stats.peakEncodeMs} ms"
     parts += "frame max ${stats.peakFrameKb} KB"
     if (stats.encoder.isNotEmpty()) parts += stats.encoder
+    if (stats.wifiMhz > 0) parts += WifiLink(stats.wifiMhz, stats.wifiTxMbps, stats.wifiRxMbps, stats.wifiRssi).describe()
     return parts.joinToString(" · ")
 }

@@ -1,6 +1,8 @@
 package com.armsx2.remoteplay
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 
@@ -34,5 +36,35 @@ internal class RemotePlayWifi(context: Context) {
 
     fun release() {
         runCatching { if (lock?.isHeld == true) lock.release() }
+    }
+}
+
+/**
+ * This device's Wi-Fi link, for the stream's stats: the band (from the channel frequency), the
+ * link speeds and the signal. Stalls of 50 to 150 ms every second or so with packets lost are what
+ * a weak or crowded link gives, a 2.4 GHz one most of all (Bluetooth shares that band too), so the
+ * stats show it beside the stream's own numbers. Read through the network's capabilities, which
+ * needs no permission beyond the network state the app already has. Null when not on Wi-Fi.
+ */
+internal class WifiLink(val frequencyMhz: Int, val txMbps: Int, val rxMbps: Int, val rssiDbm: Int) {
+    fun describe(): String {
+        val band = when {
+            frequencyMhz >= 5925 -> "6 GHz"
+            frequencyMhz >= 4900 -> "5 GHz"
+            frequencyMhz > 0 -> "2.4 GHz"
+            else -> "?"
+        }
+        return "wifi $band ${txMbps.coerceAtLeast(0)}/${rxMbps.coerceAtLeast(0)} Mbps $rssiDbm dBm"
+    }
+
+    companion object {
+        fun read(context: Context): WifiLink? {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+            return runCatching {
+                val connectivity = context.applicationContext.getSystemService(ConnectivityManager::class.java)
+                val info = connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.transportInfo as? WifiInfo
+                info?.let { WifiLink(it.frequency, it.txLinkSpeedMbps, it.rxLinkSpeedMbps, it.rssi) }
+            }.getOrNull()
+        }
     }
 }

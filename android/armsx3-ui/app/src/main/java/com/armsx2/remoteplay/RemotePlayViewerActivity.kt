@@ -229,7 +229,9 @@ class RemotePlayViewerActivity : ComponentActivity() {
                 val peaks = if (output != null && renderer == null) ArmsxSurfaceDecoder.takePeaks() else null
                 val decoder = peaks?.let { " · decode max ${it[0]} ms · gap max ${it[1]} ms" }.orEmpty()
                 // The screen's refresh rate now: 60 Hz unless the screen could not switch to it.
-                val screen = window.decorView.display?.refreshRate?.let { " · screen ${it.roundToInt()} Hz" }.orEmpty()
+                // And this device's Wi-Fi link, the usual suspect behind stalls and lost packets.
+                val screen = window.decorView.display?.refreshRate?.let { " · screen ${it.roundToInt()} Hz" }.orEmpty() +
+                    WifiLink.read(this@RemotePlayViewerActivity)?.let { " · ${it.describe()}" }.orEmpty()
                 current.sampleStats { line ->
                     val audio = current.audioKind?.let { " · audio $it" }.orEmpty()
                     main.post { statsLine.value = line + decoder + screen + audio }

@@ -550,6 +550,7 @@ private class HostSession(
         fun coreDelta(index: Int) = core[index] - previousCore[index]
         fun encoderDelta(index: Int) = encoder[index] - previousEncoder[index]
         val rtc = rtcSampler.latest
+        val link = WifiLink.read(context)
         val current = RemotePlayProtocol.HostStats(
             gameFps = coreDelta(0),
             capturedFps = coreDelta(2),
@@ -566,6 +567,10 @@ private class HostSession(
             targetKbps = rtc?.targetKbps ?: 0,
             nacks = rtc?.nacks ?: 0,
             plis = rtc?.plis ?: 0,
+            wifiMhz = link?.frequencyMhz ?: 0,
+            wifiTxMbps = link?.txMbps ?: 0,
+            wifiRxMbps = link?.rxMbps ?: 0,
+            wifiRssi = link?.rssiDbm ?: 0,
         )
         hostStats = current
         audioChannel?.takeIf { it.state() == DataChannel.State.OPEN }
