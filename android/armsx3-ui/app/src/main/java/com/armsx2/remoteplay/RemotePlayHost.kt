@@ -25,10 +25,10 @@ import org.webrtc.SessionDescription
 import org.webrtc.VideoFrame
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
+import org.webrtc.YuvHelper
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.concurrent.ArrayBlockingQueue
 import kotlin.concurrent.thread
 
 private const val TAG = "RemotePlay"
@@ -269,6 +269,16 @@ private class HostSession(
         if (!connectedOnce) finish(I18n.get("remoteplay.timeout.host"))
     }
 
+    // What the stream is doing, in logcat (tag RemotePlay) every few seconds while it runs.
+    private val stats = RemotePlayStats(sending = true)
+    private val statsTick = object : Runnable {
+        override fun run() {
+            if (ended || !streaming) return
+            peer?.let { pc -> stats.sample(pc) { line -> Log.i(TAG, "host stream: $line") } }
+            main.postDelayed(this, 5_000)
+        }
+    }
+
     fun onSignal(message: JSONObject) {
         if (ended) return
         when (message.optString("t")) {
@@ -308,7 +318,9 @@ private class HostSession(
         if (offered || ended) return
         offered = true
 
-        val factory = RemotePlayRtc.createFactory(context).also { rtc = it }.factory
+        val created = RemotePlayRtc.createFactory(context).also { rtc = it }
+        val factory = created.factory
+        Log.i(TAG, "video encoder: ${created.h264Encoder ?: "no hardware H.264, stock factories"}")
         val wait = GatherWait(main, 4_000) {
             val description = peer?.localDescription ?: return@GatherWait
             link.send(
@@ -334,6 +346,9 @@ private class HostSession(
             return
         }
         peer = pc
+        // Start near where a game stream settles instead of ramping up from a few hundred kbps,
+        // which left the first seconds blurry and stuttering.
+        pc.setBitrate(RemotePlayProtocol.MIN_BITRATE_BPS, RemotePlayProtocol.START_BITRATE_BPS, RemotePlayProtocol.MAX_BITRATE_BPS)
 
         val source = factory.createVideoSource(false).also { videoSource = it }
         val track = factory.createVideoTrack("game", source).also { videoTrack = it }
@@ -408,37 +423,31 @@ private class HostSession(
         audioThread = thread(name = "rp-audio") { audioLoop() }
         lastPadAt = SystemClock.uptimeMillis()
         main.postDelayed(padWatch, 250)
+        main.postDelayed(statsTick, 5_000)
     }
 
     // rp-video thread. Pulls frames from the core and hands them to the encoder.
     private fun videoLoop(observer: CapturerObserver) {
-        val frameBytes = RemotePlayProtocol.MAX_WIDTH * RemotePlayProtocol.MAX_HEIGHT * 3 / 2
-        // The encoder holds a buffer until it is done with it; three cover the frame in flight.
-        val pool = ArrayBlockingQueue<ByteBuffer>(3).apply { repeat(3) { add(ByteBuffer.allocateDirect(frameBytes)) } }
-        // Polled into when the encoder still holds every buffer, so that frame is dropped here
-        // instead of piling up in the core.
-        val overflow = ByteBuffer.allocateDirect(frameBytes)
+        val rgba = ByteBuffer.allocateDirect(RemotePlayProtocol.MAX_WIDTH * RemotePlayProtocol.MAX_HEIGHT * 4)
         val info = IntArray(4)
 
         while (streaming) {
-            val buffer = pool.poll()
-            val result = RPCSX.instance.remotePlayPollVideo(buffer ?: overflow, info, 50)
-            if (result != 1 || buffer == null) {
-                buffer?.let(pool::offer)
-                if (result == -1) break
-                continue
-            }
+            val result = RPCSX.instance.remotePlayPollVideo(rgba, info, 50)
+            if (result == -1) break
+            if (result != 1) continue
 
             val width = info[0]
             val height = info[1]
-            val luma = width * height
-            val chroma = luma / 4
-            val i420 = JavaI420Buffer.wrap(
+            // libyuv, NEON-optimized on ARM, rather than the plain C loop the core used to run.
+            // The encoder releases the buffer when it is done with the frame.
+            val i420 = JavaI420Buffer.allocate(width, height)
+            YuvHelper.ABGRToI420(
+                rgba, width * 4,
+                i420.dataY, i420.strideY,
+                i420.dataU, i420.strideU,
+                i420.dataV, i420.strideV,
                 width, height,
-                buffer.region(0, luma), width,
-                buffer.region(luma, chroma), width / 2,
-                buffer.region(luma + chroma, chroma), width / 2,
-            ) { pool.offer(buffer) }
+            )
             val frame = VideoFrame(i420, 0, System.nanoTime())
             observer.onFrameCaptured(frame)
             frame.release()
@@ -513,6 +522,7 @@ private class HostSession(
         ended = true
         main.removeCallbacks(padWatch)
         main.removeCallbacks(connectTimeout)
+        main.removeCallbacks(statsTick)
         gather?.cancel()
 
         if (streaming) {
@@ -542,12 +552,4 @@ private class HostSession(
         audioChannel = null
         inputChannel = null
     }
-}
-
-/** A standalone view of [length] bytes at [offset], for handing one plane to the encoder. */
-private fun ByteBuffer.region(offset: Int, length: Int): ByteBuffer {
-    val view = duplicate()
-    view.position(offset)
-    view.limit(offset + length)
-    return view.slice()
 }

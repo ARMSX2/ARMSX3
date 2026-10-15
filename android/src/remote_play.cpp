@@ -8,7 +8,8 @@
 // and cellAudio threads, which must never wait on the app.
 //
 // Frames come from VKPresent's remote capture path (see g_remote_play_max_size): already scaled to
-// fit the stream and read back a frame late, so the game never waits on the GPU for them.
+// fit the stream, in RGBA, and read back a frame late, so the game never waits on the GPU for them.
+// The app converts them to the encoder's YUV with libyuv.
 
 #include "stdafx.h"
 #include "Emu/Audio/AudioBackend.h"
@@ -17,6 +18,7 @@
 #include "util/video_provider.h"
 
 #include <chrono>
+#include <cstring>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -102,48 +104,29 @@ namespace
 		return g_sink;
 	}
 
-	// BT.601 limited range, the matrix the encoders assume for I420 input. Width and height must
-	// be even; the presenter only ever produces even sizes for this path.
-	void rgba_to_i420(const u8* src, u32 pitch, u32 width, u32 height, bool bgra, u8* dst_y, u8* dst_u, u8* dst_v)
+	// Tightly packed RGBA (pitch = width * 4). The remote capture path always delivers RGBA; a
+	// BGRA frame can only come from elsewhere and is swapped here rather than miscoloured.
+	void copy_rgba(const u8* src, u32 pitch, u32 width, u32 height, bool bgra, u8* dst)
 	{
-		const u32 ri = bgra ? 2 : 0;
-		const u32 bi = bgra ? 0 : 2;
-		const u32 chroma_width = width / 2;
+		const usz row_bytes = usz{width} * 4;
 
-		for (u32 row = 0; row < height; row += 2)
+		for (u32 row = 0; row < height; row++)
 		{
-			const u8* line0 = src + usz{row} * pitch;
-			const u8* line1 = line0 + pitch;
-			u8* y0 = dst_y + usz{row} * width;
-			u8* y1 = y0 + width;
-			u8* u = dst_u + usz{row / 2} * chroma_width;
-			u8* v = dst_v + usz{row / 2} * chroma_width;
+			const u8* in = src + usz{row} * pitch;
+			u8* out = dst + usz{row} * row_bytes;
 
-			for (u32 col = 0; col < width; col += 2)
+			if (!bgra)
 			{
-				s32 r_sum = 0, g_sum = 0, b_sum = 0;
+				std::memcpy(out, in, row_bytes);
+				continue;
+			}
 
-				for (u32 k = 0; k < 2; k++)
-				{
-					const u8* p0 = line0 + (col + k) * 4;
-					const u8* p1 = line1 + (col + k) * 4;
-					const s32 r0 = p0[ri], g0 = p0[1], b0 = p0[bi];
-					const s32 r1 = p1[ri], g1 = p1[1], b1 = p1[bi];
-
-					y0[col + k] = static_cast<u8>(((66 * r0 + 129 * g0 + 25 * b0 + 128) >> 8) + 16);
-					y1[col + k] = static_cast<u8>(((66 * r1 + 129 * g1 + 25 * b1 + 128) >> 8) + 16);
-
-					r_sum += r0 + r1;
-					g_sum += g0 + g1;
-					b_sum += b0 + b1;
-				}
-
-				const s32 r = (r_sum + 2) >> 2;
-				const s32 g = (g_sum + 2) >> 2;
-				const s32 b = (b_sum + 2) >> 2;
-
-				u[col / 2] = static_cast<u8>(((-38 * r - 74 * g + 112 * b + 128) >> 8) + 128);
-				v[col / 2] = static_cast<u8>(((112 * r - 94 * g - 18 * b + 128) >> 8) + 128);
+			for (u32 col = 0; col < width; col++)
+			{
+				out[col * 4 + 0] = in[col * 4 + 2];
+				out[col * 4 + 1] = in[col * 4 + 1];
+				out[col * 4 + 2] = in[col * 4 + 0];
+				out[col * 4 + 3] = in[col * 4 + 3];
 			}
 		}
 	}
@@ -246,7 +229,7 @@ extern "C" void _rpcsx_remotePlayStop()
 	rp_log.notice("remote play: capture stopped");
 }
 
-// Waits up to timeout_ms for a frame and writes it as I420 (Y, then U, then V, tightly packed).
+// Waits up to timeout_ms for a frame and writes it as tightly packed RGBA.
 // info receives width, height and the frame's timestamp in ms (low, high).
 // Returns 1 with a frame, 0 on timeout, -1 when capture is not running, -2 when cap is too small
 // (info still holds the size, and that frame is dropped).
@@ -279,8 +262,7 @@ extern "C" int _rpcsx_remotePlayPollVideo(u8* dst, s64 cap, s32* info, int timeo
 
 	const u32 width = frame.width & ~1u;
 	const u32 height = frame.height & ~1u;
-	const usz luma = usz{width} * height;
-	const usz needed = luma + luma / 2;
+	const usz needed = usz{width} * height * 4;
 
 	info[0] = static_cast<s32>(width);
 	info[1] = static_cast<s32>(height);
@@ -297,8 +279,7 @@ extern "C" int _rpcsx_remotePlayPollVideo(u8* dst, s64 cap, s32* info, int timeo
 		return -2;
 	}
 
-	rgba_to_i420(frame.data.data(), frame.pitch, width, height, frame.av_pixel_format == AV_PIX_FMT_BGRA,
-		dst, dst + luma, dst + luma + luma / 4);
+	copy_rgba(frame.data.data(), frame.pitch, width, height, frame.av_pixel_format == AV_PIX_FMT_BGRA, dst);
 	return 1;
 }
 

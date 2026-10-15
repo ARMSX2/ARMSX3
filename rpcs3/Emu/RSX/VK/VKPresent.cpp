@@ -2275,6 +2275,11 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 		return;
 	}
 
+	// Always RGBA for the stream: the blit converts BGRA for free, and the app's converter (libyuv
+	// ABGRToI420) takes RGBA byte order. sRGB stays sRGB so the blit does not re-encode the values.
+	const bool srgb = format == VK_FORMAT_B8G8R8A8_SRGB || format == VK_FORMAT_R8G8B8A8_SRGB;
+	const VkFormat capture_format = srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+
 	// Fit inside the stream's size, keep the aspect ratio, and keep both sides even for I420.
 	const u32 max_width = max_size >> 16;
 	const u32 max_height = max_size & 0xffff;
@@ -2283,7 +2288,7 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	const u32 dst_height = std::max(2u, static_cast<u32>(height * scale) & ~1u);
 
 	if (m_remote_capture_img &&
-		(m_remote_capture_img->width() != dst_width || m_remote_capture_img->height() != dst_height || m_remote_capture_img->format() != format))
+		(m_remote_capture_img->width() != dst_width || m_remote_capture_img->height() != dst_height || m_remote_capture_img->format() != capture_format))
 	{
 		vk::get_resource_manager()->dispose(m_remote_capture_img);
 	}
@@ -2291,7 +2296,7 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	if (!m_remote_capture_img)
 	{
 		m_remote_capture_img = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-			VK_IMAGE_TYPE_2D, format, dst_width, dst_height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+			VK_IMAGE_TYPE_2D, capture_format, dst_width, dst_height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
 			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
 			0, VMM_ALLOCATION_POOL_SYSTEM);
 	}
@@ -2310,7 +2315,7 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	vk::copy_scaled_image(cmd, src, m_remote_capture_img.get(),
 		areai{ 0, 0, static_cast<s32>(width), static_cast<s32>(height) },
 		areai{ 0, 0, static_cast<s32>(dst_width), static_cast<s32>(dst_height) },
-		{}, true, VK_FILTER_LINEAR);
+		{}, format == capture_format, VK_FILTER_LINEAR);
 
 	src->pop_layout(cmd);
 	m_remote_capture_img->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
@@ -2328,7 +2333,7 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	slot->frame = m_current_frame;
 	slot->width = dst_width;
 	slot->height = dst_height;
-	slot->bgra = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
+	slot->bgra = false;
 	slot->pending = true;
 }
 

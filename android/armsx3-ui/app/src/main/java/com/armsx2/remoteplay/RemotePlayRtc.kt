@@ -5,7 +5,6 @@ import android.os.Handler
 import org.json.JSONObject
 import org.webrtc.DataChannel
 import org.webrtc.DefaultVideoDecoderFactory
-import org.webrtc.DefaultVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.IceCandidate
 import org.webrtc.MediaStream
@@ -25,7 +24,8 @@ internal object RemotePlayRtc {
     /** One EGL context for the process: the viewer's renderer and the codecs share it. */
     val eglBase: EglBase by lazy { EglBase.create() }
 
-    class Factory(val factory: PeerConnectionFactory, private val audio: JavaAudioDeviceModule) {
+    /** [h264Encoder] names the hardware H.264 encoder in use, or is null when there is none. */
+    class Factory(val factory: PeerConnectionFactory, private val audio: JavaAudioDeviceModule, val h264Encoder: String?) {
         fun dispose() {
             runCatching { factory.dispose() }
             runCatching { audio.release() }
@@ -45,12 +45,14 @@ internal object RemotePlayRtc {
             initialized = true
         }
         val audio = JavaAudioDeviceModule.builder(app).createAudioDeviceModule()
+        // Not DefaultVideoEncoderFactory: its H.264 check misses current Snapdragons (see the class).
+        val encoders = org.webrtc.ArmsxVideoEncoderFactory(eglBase.eglBaseContext)
         val factory = PeerConnectionFactory.builder()
             .setAudioDeviceModule(audio)
-            .setVideoEncoderFactory(DefaultVideoEncoderFactory(eglBase.eglBaseContext, true, true))
+            .setVideoEncoderFactory(encoders)
             .setVideoDecoderFactory(DefaultVideoDecoderFactory(eglBase.eglBaseContext))
             .createPeerConnectionFactory()
-        return Factory(factory, audio)
+        return Factory(factory, audio, encoders.hardwareH264Name())
     }
 
     /**
@@ -70,6 +72,10 @@ internal object RemotePlayRtc {
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
             tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.DISABLED
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_ONCE
+            // The host is always busy running the game, which this detector reads as the encoder
+            // falling behind and answers by shrinking the picture. The encoder is a separate
+            // hardware block, so that load says nothing about it.
+            enableCpuOveruseDetection = false
         }
 
     /**

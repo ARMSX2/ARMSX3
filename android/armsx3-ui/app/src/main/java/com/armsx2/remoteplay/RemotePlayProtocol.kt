@@ -36,6 +36,8 @@ internal object RemotePlayProtocol {
     /** The stream is at most this size; the presenter scales larger frames down on the GPU. */
     const val MAX_WIDTH = 1280
     const val MAX_HEIGHT = 720
+    const val MIN_BITRATE_BPS = 1_000_000
+    const val START_BITRATE_BPS = 4_000_000
     const val MAX_BITRATE_BPS = 10_000_000
 
     const val SAMPLE_RATE = 48_000
