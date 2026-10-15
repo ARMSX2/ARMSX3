@@ -62,13 +62,20 @@ internal object RemotePlayRtc {
      *    default skips every few frames before they are encoded (a 54 fps second with the game at
      *    60, in test 10, when moving again after standing still). DropFrame:false lowers the
      *    bitrate for that moment instead, so every frame still goes out, a little softer.
+     *  - Forward error correction (FlexFEC), the way Moonlight streams carry it: spare packets a
+     *    lost one is rebuilt from at once, instead of the frame waiting a round trip for it to be
+     *    sent again. WebRTC adds them only as packets go missing and the round trip grows, so on
+     *    the same Wi-Fi it stays with plain resends, and online it covers the losses a resend
+     *    would turn into a stutter. Advertised so both sides agree on it in the offer and answer.
      */
     private const val FIELD_TRIALS =
         "WebRTC-ForcePlayoutDelay/min_ms:0,max_ms:100/" +
             "WebRTC-ForceSendPlayoutDelay/min_ms:0,max_ms:100/" +
             "WebRTC-ZeroPlayoutDelay/min_pacing:12ms,max_decode_queue_size:2/" +
             "WebRTC-FrameDropper/Disabled/" +
-            "WebRTC-CongestionWindow/QueueSize:350,MinBitrate:30000,DropFrame:false/"
+            "WebRTC-CongestionWindow/QueueSize:350,MinBitrate:30000,DropFrame:false/" +
+            "WebRTC-FlexFEC-03-Advertised/Enabled/" +
+            "WebRTC-FlexFEC-03/Enabled/"
 
     /**
      * A factory with hardware video codecs. The audio module exists because the factory needs
@@ -125,15 +132,16 @@ internal object RemotePlayRtc {
 
     /**
      * H.264 first, since every phone has a hardware encoder and decoder for it, and VP8 as the
-     * fallback a software decoder always covers. Offering nothing else also keeps a connection
-     * code short: every listed codec is several lines of the offer.
+     * fallback a software decoder always covers, plus what repairs losses (resends, FEC). Offering
+     * nothing else also keeps a connection code short: every listed codec is several lines of the
+     * offer.
      */
     fun restrictCodecs(factory: PeerConnectionFactory, transceiver: RtpTransceiver) {
         val codecs = factory.getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO)?.codecs ?: return
         fun rank(name: String) = when (name.uppercase()) {
             "H264" -> 0
             "VP8" -> 1
-            "RTX", "RED", "ULPFEC" -> 2
+            "RTX", "RED", "ULPFEC", "FLEXFEC-03" -> 2
             else -> -1
         }
         val kept = codecs.filter { rank(it.name) >= 0 }.sortedBy { rank(it.name) }
