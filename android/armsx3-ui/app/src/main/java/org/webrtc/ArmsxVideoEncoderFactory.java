@@ -4,8 +4,9 @@ import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import androidx.annotation.Nullable;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * Remote play (com.armsx2.remoteplay): hardware H.264 from any encoder Android itself reports as
@@ -28,6 +29,8 @@ public class ArmsxVideoEncoderFactory implements VideoEncoderFactory {
   private final VideoEncoderFactory hardware;
   private final VideoEncoderFactory software = new SoftwareVideoEncoderFactory();
   private final @Nullable MediaCodecInfo h264;
+  // The AVC level for High profile when the encoder can do it for 720p at 60 fps; else null.
+  private final @Nullable Integer h264HighLevel;
 
   public ArmsxVideoEncoderFactory(@Nullable EglBase.Context sharedContext) {
     this.sharedContext =
@@ -35,6 +38,32 @@ public class ArmsxVideoEncoderFactory implements VideoEncoderFactory {
     this.hardware = new HardwareVideoEncoderFactory(
         sharedContext, /* enableIntelVp8Encoder= */ true, /* enableH264HighProfile= */ false);
     this.h264 = findH264Encoder();
+    this.h264HighLevel = h264 != null
+        ? highProfileLevel(h264.getCapabilitiesForType(VideoCodecMimeType.H264.mimeType()))
+        : null;
+  }
+
+  /**
+   * The level to use H.264 High profile at, when the codec lists High at 3.2 or above (720p at 60
+   * fps needs 3.2): its highest, capped at 4; else null. Used by the decoder factory too.
+   */
+  static @Nullable Integer highProfileLevel(MediaCodecInfo.CodecCapabilities capabilities) {
+    int best = 0;
+    for (MediaCodecInfo.CodecProfileLevel profileLevel : capabilities.profileLevels) {
+      if (profileLevel.profile == MediaCodecInfo.CodecProfileLevel.AVCProfileHigh) {
+        best = Math.max(best, profileLevel.level);
+      }
+    }
+    if (best < MediaCodecInfo.CodecProfileLevel.AVCLevel32) {
+      return null;
+    }
+    return Math.min(best, MediaCodecInfo.CodecProfileLevel.AVCLevel4);
+  }
+
+  /** Whether an H.264 codec description names High profile (profile-level-id 64xxxx). */
+  static boolean isHighProfile(VideoCodecInfo info) {
+    String id = info.params.get(VideoCodecInfo.H264_FMTP_PROFILE_LEVEL_ID);
+    return id != null && id.regionMatches(true, 0, "64", 0, 2);
   }
 
   /** The first hardware AVC encoder that takes a YUV layout WebRTC can fill. */
@@ -104,16 +133,30 @@ public class ArmsxVideoEncoderFactory implements VideoEncoderFactory {
 
   @Override
   public VideoCodecInfo[] getSupportedCodecs() {
-    Map<String, VideoCodecInfo> codecs = new LinkedHashMap<>();
+    List<VideoCodecInfo> codecs = new ArrayList<>();
     if (h264 != null) {
-      // Constrained Baseline: every decoder takes it, and it has no B-frames to add delay.
-      codecs.put(VideoCodecMimeType.H264.name(), new VideoCodecInfo(VideoCodecMimeType.H264.name(),
+      // Constrained High where the encoder can (no B-frames, so no added delay): CABAC and 8x8
+      // transforms give a cleaner picture for the same bitrate, which counts most online. Then
+      // Constrained Baseline, which every decoder takes. The decoder side offers High only where
+      // its codec has it, so a pair that cannot both do it settles on Baseline.
+      if (h264HighLevel != null) {
+        codecs.add(new VideoCodecInfo(VideoCodecMimeType.H264.name(),
+            MediaCodecUtils.getCodecProperties(VideoCodecMimeType.H264, /* highProfile= */ true),
+            /* scalabilityModes= */ new ArrayList<>()));
+      }
+      codecs.add(new VideoCodecInfo(VideoCodecMimeType.H264.name(),
           MediaCodecUtils.getCodecProperties(VideoCodecMimeType.H264, /* highProfile= */ false),
           /* scalabilityModes= */ new ArrayList<>()));
     }
-    for (VideoCodecInfo info : hardware.getSupportedCodecs()) codecs.putIfAbsent(info.name, info);
-    for (VideoCodecInfo info : software.getSupportedCodecs()) codecs.putIfAbsent(info.name, info);
-    return codecs.values().toArray(new VideoCodecInfo[0]);
+    Set<String> names = new HashSet<>();
+    for (VideoCodecInfo info : codecs) names.add(info.name);
+    for (VideoCodecInfo info : hardware.getSupportedCodecs()) {
+      if (names.add(info.name)) codecs.add(info);
+    }
+    for (VideoCodecInfo info : software.getSupportedCodecs()) {
+      if (names.add(info.name)) codecs.add(info);
+    }
+    return codecs.toArray(new VideoCodecInfo[0]);
   }
 
   // NV12 first: remote play's frames arrive in it, so the encoder copies them without converting.
@@ -135,7 +178,7 @@ public class ArmsxVideoEncoderFactory implements VideoEncoderFactory {
         Integer surfaceColorFormat =
             MediaCodecUtils.selectColorFormat(MediaCodecUtils.TEXTURE_COLOR_FORMATS, capabilities);
         return new ArmsxH264Encoder(h264.getName(), colorFormat, surfaceColorFormat,
-            PERIODIC_KEY_FRAME_INTERVAL_S, sharedContext);
+            isHighProfile(info) ? h264HighLevel : null, PERIODIC_KEY_FRAME_INTERVAL_S, sharedContext);
       }
     }
     VideoEncoder hardwareEncoder = hardware.createEncoder(info);

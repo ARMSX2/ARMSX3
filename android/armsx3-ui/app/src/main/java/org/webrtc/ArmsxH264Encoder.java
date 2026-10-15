@@ -65,6 +65,8 @@ class ArmsxH264Encoder implements VideoEncoder {
   private final String codecName;
   private final int colorFormat;
   private final @Nullable Integer surfaceColorFormat;
+  // The AVC level to encode High profile at, as negotiated; null for Constrained Baseline.
+  private final @Nullable Integer highProfileLevel;
   private final int keyFrameIntervalSec;
   private final @Nullable EglBase14.Context sharedContext;
   private final BlockingDeque<EncodedImage.Builder> outputBuilders = new LinkedBlockingDeque<>();
@@ -82,6 +84,7 @@ class ArmsxH264Encoder implements VideoEncoder {
   private int appliedBitrateBps;
   private long lastPresentationUs;
   private boolean lowLatency;
+  private boolean highProfile;
   private @Nullable Thread outputThread;
 
   // Surface mode (texture frames): the codec's input surface, drawn with GL on the encode thread.
@@ -100,10 +103,12 @@ class ArmsxH264Encoder implements VideoEncoder {
   private @Nullable ByteBuffer configBuffer;
 
   ArmsxH264Encoder(String codecName, int colorFormat, @Nullable Integer surfaceColorFormat,
-      int keyFrameIntervalSec, @Nullable EglBase14.Context sharedContext) {
+      @Nullable Integer highProfileLevel, int keyFrameIntervalSec,
+      @Nullable EglBase14.Context sharedContext) {
     this.codecName = codecName;
     this.colorFormat = colorFormat;
     this.surfaceColorFormat = surfaceColorFormat;
+    this.highProfileLevel = highProfileLevel;
     this.keyFrameIntervalSec = keyFrameIntervalSec;
     this.sharedContext = sharedContext;
   }
@@ -143,15 +148,7 @@ class ArmsxH264Encoder implements VideoEncoder {
     }
     codec = created;
     try {
-      try {
-        created.configure(format(true), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        lowLatency = true;
-      } catch (IllegalArgumentException | IllegalStateException e) {
-        Logging.w(TAG, "Low-latency setup refused, configuring the plain one: " + e);
-        created.reset();
-        created.configure(format(false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        lowLatency = false;
-      }
+      configure(created);
       if (useSurfaceMode) {
         try {
           textureEglBase = EglBase.createEgl14(sharedContext, EglBase.CONFIG_RECORDABLE);
@@ -183,7 +180,32 @@ class ArmsxH264Encoder implements VideoEncoder {
     return VideoCodecStatus.OK;
   }
 
-  private MediaFormat format(boolean lowLatency) {
+  /**
+   * Low latency and, when negotiated, High profile; then Baseline (which a decoder agreed on High
+   * plays too) before giving up low latency; then plain. Low latency matters more.
+   */
+  private void configure(MediaCodec created) {
+    boolean[][] attempts = highProfileLevel != null
+        ? new boolean[][] {{true, true}, {true, false}, {false, false}}
+        : new boolean[][] {{true, false}, {false, false}};
+    for (int i = 0;; i++) {
+      lowLatency = attempts[i][0];
+      highProfile = attempts[i][1];
+      try {
+        created.configure(format(), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+        return;
+      } catch (IllegalArgumentException | IllegalStateException e) {
+        if (i == attempts.length - 1) {
+          throw e;
+        }
+        Logging.w(TAG, "Encoder setup refused (low latency " + lowLatency + ", High profile "
+                + highProfile + "), trying less: " + e);
+        created.reset();
+      }
+    }
+  }
+
+  private MediaFormat format() {
     MediaFormat format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
     format.setInteger(MediaFormat.KEY_BIT_RATE, targetBitrateBps);
     format.setInteger(
@@ -191,11 +213,18 @@ class ArmsxH264Encoder implements VideoEncoder {
     format.setInteger(MediaFormat.KEY_COLOR_FORMAT, useSurfaceMode ? surfaceColorFormat : colorFormat);
     format.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE);
     format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, keyFrameIntervalSec);
+    // Never B-frames, which hold frames back to reorder them. Baseline has none anyway; High
+    // without them is the Constrained High profile the offer names.
+    format.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0);
+    Integer level = highProfileLevel;
+    if (highProfile && level != null) {
+      format.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
+      format.setInteger(MediaFormat.KEY_LEVEL, level);
+    }
     if (lowLatency) {
       format.setInteger(MediaFormat.KEY_LATENCY, 1);
       format.setInteger(MediaFormat.KEY_PRIORITY, 0);
       format.setInteger(MediaFormat.KEY_OPERATING_RATE, FRAME_RATE);
-      format.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0);
       if (codecName.startsWith("c2.qti.") || codecName.startsWith("OMX.qcom.")) {
         format.setInteger("vendor.qti-ext-enc-low-latency.enable", 1);
       }
@@ -443,7 +472,7 @@ class ArmsxH264Encoder implements VideoEncoder {
 
   @Override
   public String getImplementationName() {
-    String name = lowLatency ? codecName + " low-latency" : codecName;
+    String name = codecName + (highProfile ? " High" : "") + (lowLatency ? " low-latency" : "");
     return useSurfaceMode ? name + " zero-copy" : name;
   }
 
