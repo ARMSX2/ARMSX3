@@ -492,6 +492,7 @@ private class HostSession(
         val core = IntArray(4)
         if (!RPCSX.instance.remotePlayCounters(core)) return
         val encoder = ArmsxVideoEncoderFactory.encoderCounters()
+        val peaks = ArmsxVideoEncoderFactory.takeEncoderPeaks()
         val previousCore = lastCore
         val previousEncoder = lastEncoder
         lastCore = core
@@ -508,6 +509,8 @@ private class HostSession(
             droppedGpu = coreDelta(1),
             droppedLate = coreDelta(3),
             droppedEncoder = encoderDelta(2),
+            peakEncodeMs = peaks[0],
+            peakFrameKb = (peaks[1] + 1023) / 1024,
             encoder = ArmsxVideoEncoderFactory.encoderName(),
         )
         hostStats = current

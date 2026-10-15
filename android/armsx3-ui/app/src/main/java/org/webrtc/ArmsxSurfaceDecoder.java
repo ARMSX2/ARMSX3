@@ -49,6 +49,20 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
   private static final String CROP_TOP = "crop-top";
   private static final String CROP_BOTTOM = "crop-bottom";
 
+  // For the stream's stats: the slowest frame through the decoder (ms) and the longest wait between
+  // two frames put on the screen (ms) since the stats last took them. A stall shows up in the gap;
+  // the decode time says whether it was this decoder's.
+  private static final java.util.concurrent.atomic.AtomicInteger peakDecodeMs =
+      new java.util.concurrent.atomic.AtomicInteger();
+  private static final java.util.concurrent.atomic.AtomicInteger peakGapMs =
+      new java.util.concurrent.atomic.AtomicInteger();
+  private static volatile long lastShownMs;
+
+  /** Both peaks since the last call, which starts them over: {decode ms, gap ms}. */
+  public static int[] takePeaks() {
+    return new int[] {peakDecodeMs.getAndSet(0), peakGapMs.getAndSet(0)};
+  }
+
   /** Makes the stock decoder for the same stream, or null when there is none. */
   interface StockDecoder {
     @Nullable
@@ -209,6 +223,8 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
 
   /** Main thread: the surface is being destroyed. Nothing is drawn on it once this returns. */
   void surfaceLost() {
+    // Time in the background is no gap in the stream.
+    lastShownMs = 0;
     synchronized (this) {
       if (running != null) {
         drop(running, false);
@@ -435,7 +451,16 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
 
     private void shown(long presentationUs) {
       long[] frame = finished(presentationUs);
-      Integer decodeMs = frame != null ? (int) (SystemClock.elapsedRealtime() - frame[1]) : null;
+      long now = SystemClock.elapsedRealtime();
+      Integer decodeMs = frame != null ? (int) (now - frame[1]) : null;
+      if (decodeMs != null) {
+        peakDecodeMs.accumulateAndGet(decodeMs, Math::max);
+      }
+      long previous = lastShownMs;
+      lastShownMs = now;
+      if (previous != 0) {
+        peakGapMs.accumulateAndGet((int) Math.min(now - previous, 60_000), Math::max);
+      }
       int rotation = frame != null ? (int) frame[2] : 0;
       VideoFrame shown = new VideoFrame(new ShownBuffer(shownWidth, shownHeight), rotation,
           TimeUnit.MICROSECONDS.toNanos(presentationUs));

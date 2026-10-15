@@ -37,7 +37,7 @@ internal class RemotePlayStats(private val sending: Boolean) {
 
         // Running totals, kept for the next sample.
         val totals = listOf(
-            "bytesSent", "bytesReceived", "totalDecodeTime", "framesDecoded",
+            "bytesSent", "bytesReceived", "totalDecodeTime", "framesDecoded", "framesReceived",
             "jitterBufferDelay", "jitterBufferEmittedCount", "framesDropped", "packetsLost",
         ).mapNotNull { key -> (m[key] as? Number)?.toDouble()?.let { key to it } }.toMap()
         val seconds = if (lastTimeUs > 0 && rtp.timestampUs > lastTimeUs) (rtp.timestampUs - lastTimeUs) / 1e6 else 0.0
@@ -62,8 +62,10 @@ internal class RemotePlayStats(private val sending: Boolean) {
             if (implementation.isNullOrBlank()) codec else "$codec ($implementation)",
             "${width}x$height",
             String.format(Locale.US, "%.0f fps", fps),
-            String.format(Locale.US, "%.1f Mbps", mbps),
         )
+        // Frames that arrived, beside the frames decoded: a dip in both started before this device.
+        if (!sending) delta("framesReceived")?.let { parts += String.format(Locale.US, "recv %.0f", it / seconds) }
+        parts += String.format(Locale.US, "%.1f Mbps", mbps)
         rttMs?.let { parts += String.format(Locale.US, "rtt %.0f ms", it) }
         if (sending) {
             m["qualityLimitationReason"]?.toString()?.takeIf { it != "none" }?.let { parts += "limited by $it" }
@@ -93,6 +95,9 @@ internal fun describeHost(stats: RemotePlayProtocol.HostStats): String {
         "encoder" to stats.droppedEncoder,
     ).filter { it.second > 0 }
     if (dropped.isNotEmpty()) parts += "dropped " + dropped.joinToString(", ") { "${it.second} ${it.first}" }
+    // The slowest frame from capture to out of the encoder, and the largest, in the last second.
+    parts += "encode max ${stats.peakEncodeMs} ms"
+    parts += "frame max ${stats.peakFrameKb} KB"
     if (stats.encoder.isNotEmpty()) parts += stats.encoder
     return parts.joinToString(" · ")
 }

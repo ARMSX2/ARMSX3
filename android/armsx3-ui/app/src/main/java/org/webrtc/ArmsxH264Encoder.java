@@ -49,6 +49,14 @@ class ArmsxH264Encoder implements VideoEncoder {
   static volatile String activeName = "";
 
   /**
+   * The longest a frame took from capture to out of the encoder (ms) and the largest frame
+   * (bytes) since the stats last took them: a stall in the stream shows up here if it starts in
+   * the encoder.
+   */
+  static final AtomicInteger peakEncodeMs = new AtomicInteger();
+  static final AtomicInteger peakFrameBytes = new AtomicInteger();
+
+  /**
    * Set when the codec's input surface could not be set up. From then on texture frames go through
    * the byte path, and remote play stops sending them (see ArmsxVideoEncoderFactory).
    */
@@ -579,6 +587,9 @@ class ArmsxH264Encoder implements VideoEncoder {
               .setFrameType(isKeyFrame ? EncodedImage.FrameType.VideoFrameKey
                                        : EncodedImage.FrameType.VideoFrameDelta)
               .createEncodedImage();
+      int encodeMs = (int) TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - image.captureTimeNs);
+      peakEncodeMs.accumulateAndGet(encodeMs, Math::max);
+      peakFrameBytes.accumulateAndGet(frameBuffer.remaining(), Math::max);
       Callback target = callback;
       if (target != null) {
         target.onEncodedFrame(image, new CodecSpecificInfo());

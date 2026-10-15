@@ -61,6 +61,7 @@ import com.armsx2.ui.touch.RemotePlayTouchControls
 import com.armsx2.ui.touch.setRemotePlayPadSink
 import com.armsx3.Rpcs3Bridge
 import org.json.JSONObject
+import org.webrtc.ArmsxSurfaceDecoder
 import org.webrtc.ArmsxVideoOutput
 import org.webrtc.DataChannel
 import org.webrtc.MediaConstraints
@@ -207,9 +208,13 @@ class RemotePlayViewerActivity : ComponentActivity() {
         override fun run() {
             if (!statsOn) return
             session?.let { current ->
+                // The decoder's own worst of the last second: its slowest frame, and the longest the
+                // screen waited for the next one. Only when it decodes onto the screen itself.
+                val peaks = if (output != null && renderer == null) ArmsxSurfaceDecoder.takePeaks() else null
+                val decoder = peaks?.let { " · decode max ${it[0]} ms · gap max ${it[1]} ms" }.orEmpty()
                 current.sampleStats { line ->
                     val audio = current.audioKind?.let { " · audio $it" }.orEmpty()
-                    main.post { statsLine.value = line + audio }
+                    main.post { statsLine.value = line + decoder + audio }
                 }
                 current.hostStats?.let { hostLine.value = describeHost(it) }
             }

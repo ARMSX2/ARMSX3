@@ -241,7 +241,8 @@ internal object RemotePlayProtocol {
      * The host's side of the stream over the last second, for the viewer's stats: frames the game
      * drew, frames captured from them, frames out of the encoder, the frames lost on the way and
      * where (the GPU still busy with every capture slot, replaced by a newer frame before the app
-     * took them, refused by the encoder), and which encoder runs.
+     * took them, refused by the encoder), the slowest frame from capture to out of the encoder and
+     * the largest frame, and which encoder runs.
      */
     data class HostStats(
         val gameFps: Int,
@@ -250,10 +251,12 @@ internal object RemotePlayProtocol {
         val droppedGpu: Int,
         val droppedLate: Int,
         val droppedEncoder: Int,
+        val peakEncodeMs: Int,
+        val peakFrameKb: Int,
         val encoder: String,
     )
 
-    private const val HOST_STATS_HEADER_SIZE = 16
+    private const val HOST_STATS_HEADER_SIZE = 20
     private const val MAX_ENCODER_NAME_BYTES = 48
 
     fun encodeHostStats(stats: HostStats): ByteBuffer {
@@ -263,6 +266,7 @@ internal object RemotePlayProtocol {
         val values = intArrayOf(
             stats.gameFps, stats.capturedFps, stats.encodedFps,
             stats.droppedGpu, stats.droppedLate, stats.droppedEncoder,
+            stats.peakEncodeMs, stats.peakFrameKb,
         )
         for (value in values) {
             out.putShort(value.coerceIn(0, 0xffff).toShort())
@@ -284,9 +288,14 @@ internal object RemotePlayProtocol {
         val droppedGpu = u16()
         val droppedLate = u16()
         val droppedEncoder = u16()
+        val peakEncodeMs = u16()
+        val peakFrameKb = u16()
         val name = ByteArray(minOf(buf.remaining(), MAX_ENCODER_NAME_BYTES))
         buf.get(name)
-        return HostStats(gameFps, capturedFps, encodedFps, droppedGpu, droppedLate, droppedEncoder, String(name, Charsets.UTF_8))
+        return HostStats(
+            gameFps, capturedFps, encodedFps, droppedGpu, droppedLate, droppedEncoder,
+            peakEncodeMs, peakFrameKb, String(name, Charsets.UTF_8),
+        )
     }
 
     // ---- Connection codes --------------------------------------------------------------------

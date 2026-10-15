@@ -69,6 +69,15 @@ public class ArmsxVideoEncoderFactory implements VideoEncoderFactory {
         ArmsxH264Encoder.framesDropped.get()};
   }
 
+  /**
+   * The slowest frame through the encoder (ms, from capture) and the largest (bytes) since the
+   * last call, which starts both over.
+   */
+  public static int[] takeEncoderPeaks() {
+    return new int[] {ArmsxH264Encoder.peakEncodeMs.getAndSet(0),
+        ArmsxH264Encoder.peakFrameBytes.getAndSet(0)};
+  }
+
   /** The encoder running now, as its stats name it, or empty when H.264 has not started. */
   public static String encoderName() {
     return ArmsxH264Encoder.activeName;
