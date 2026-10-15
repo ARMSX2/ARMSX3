@@ -623,11 +623,6 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 		}
 	);
 
-	if (g_cfg.video.disable_vertex_cache)
-		m_vertex_cache = std::make_unique<vk::null_vertex_cache>();
-	else
-		m_vertex_cache = std::make_unique<vk::weak_vertex_cache>();
-
 	// The on-disk cache stores pipeline_props as a raw struct, so the meaning of the bytes is
 	// what the version directory has to protect -- not just their layout. Two things move here:
 	// v1.95 -> v1.96 because the fields normalize_dynamic_pipeline_state() erases changed what a
@@ -1482,7 +1477,14 @@ void VKGSRender::on_init()
 
 std::unique_ptr<rsx::context_resources> VKGSRender::create_context_resources(rsx::context* /*ctx*/)
 {
-	return std::make_unique<vk_context_resources>();
+	auto resources = std::make_unique<vk::context_resources>();
+
+	if (g_cfg.video.disable_vertex_cache)
+		resources->vertex_cache = std::make_unique<vk::null_vertex_cache>();
+	else
+		resources->vertex_cache = std::make_unique<vk::weak_vertex_cache>();
+
+	return resources;
 }
 
 void VKGSRender::on_bind_context(rsx::context* ctx)
@@ -1490,6 +1492,14 @@ void VKGSRender::on_bind_context(rsx::context* ctx)
 	m_rtts.set_context(ctx);
 	m_vertex_layout.set_context(ctx);
 	m_shader_interpreter.set_context(ctx);
+}
+
+void VKGSRender::on_unbind_context(rsx::context* ctx)
+{
+	if (const auto resources = res(ctx))
+	{
+		resources->vertex_cache->purge();
+	}
 }
 
 void VKGSRender::on_shutdown()

@@ -664,7 +664,10 @@ void VKGSRender::advance_queued_frames()
 
 	vk::remove_unused_framebuffers();
 
-	m_vertex_cache->purge();
+	if (const auto resources = res())
+	{
+		resources->vertex_cache->purge();
+	}
 	m_current_frame->tag_frame_end();
 
 	// Throttle here rather than by accident.
