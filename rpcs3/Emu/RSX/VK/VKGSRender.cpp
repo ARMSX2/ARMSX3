@@ -691,9 +691,6 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 		}
 	}
 
-	m_texture_cache.initialize((*m_device), m_device->get_graphics_queue(),
-			m_texture_upload_buffer_ring_info);
-
 	vk::get_overlay_pass<vk::ui_overlay_renderer>()->init(*m_current_command_buffer, m_texture_upload_buffer_ring_info);
 
 	if (shadermode == shader_mode::async_with_interpreter || shadermode == shader_mode::interpreter_only)
@@ -974,7 +971,6 @@ VKGSRender::~VKGSRender()
 
 	// Textures
 	m_rtts.destroy();
-	m_texture_cache.destroy();
 
 	m_overlay_recording_img.reset();
 	remote_capture_release(true);
@@ -1055,10 +1051,16 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 		}
 	} av_timer_v{av_start};
 
+	const auto resources = res(ctx);
+	if (!resources)
+	{
+		return false;
+	}
+
 	vk::texture_cache::thrashed_set result;
 	{
 		const rsx::invalidation_cause cause = is_writing ? rsx::invalidation_cause::deferred_write : rsx::invalidation_cause::deferred_read;
-		result = m_texture_cache.invalidate_address(*m_secondary_cb_list.get(), address, cause);
+		result = resources->texture_cache.invalidate_address(*m_secondary_cb_list.get(), address, cause);
 	}
 
 	if (result.invalidate_samplers)
@@ -1134,7 +1136,7 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 			};
 		}
 
-		m_texture_cache.flush_all(*m_secondary_cb_list.next(), result, data_transfer_completed_callback);
+		resources->texture_cache.flush_all(*m_secondary_cb_list.next(), result, data_transfer_completed_callback);
 
 		if (has_queue_ref)
 		{
@@ -1146,16 +1148,22 @@ bool VKGSRender::on_access_violation(rsx::context* ctx, u32 address, bool is_wri
 	return true;
 }
 
-void VKGSRender::on_invalidate_memory_range(rsx::context* /*ctx*/, const utils::address_range32 &range, rsx::invalidation_cause cause)
+void VKGSRender::on_invalidate_memory_range(rsx::context* ctx, const utils::address_range32 &range, rsx::invalidation_cause cause)
 {
+	const auto resources = res(ctx);
+	if (!resources)
+	{
+		return;
+	}
+
 	std::lock_guard lock(m_secondary_cb_guard);
 
-	auto data = m_texture_cache.invalidate_range(*m_secondary_cb_list.next(), range, cause);
+	auto data = resources->texture_cache.invalidate_range(*m_secondary_cb_list.next(), range, cause);
 	AUDIT(data.empty());
 
 	if (cause == rsx::invalidation_cause::unmap && data.violation_handled)
 	{
-		m_texture_cache.purge_unreleased_sections();
+		resources->texture_cache.purge_unreleased_sections();
 		{
 			std::lock_guard lock(m_sampler_mutex);
 			m_samplers_dirty.store(true);
@@ -1212,7 +1220,8 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 		// with 0 reclaim attempts and 0 recoveries logged: it never got the chance to free
 		// anything. Clamped below fatal so the flush-dependent path stays unreachable.
 		const auto safe_severity = std::min(severity, rsx::problem_severity::severe);
-		const bool relieved = m_texture_cache.handle_memory_pressure(safe_severity);
+		const auto resources = res();
+		const bool relieved = resources && resources->texture_cache.handle_memory_pressure(safe_severity);
 
 		rsx_log.warning("Video memory pressure while uninterruptible: %s without a hard sync.",
 			relieved ? "released some resources" : "found nothing to release");
@@ -1220,6 +1229,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 		return relieved;
 	}
 
+	const auto resources = res();
 	bool texture_cache_relieved = false;
 	if (severity >= rsx::problem_severity::fatal)
 	{
@@ -1228,7 +1238,7 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 		if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[1]++; flush_command_queue(true, true);
 		g_fxo->get<vk::driver_manager_thread>().drain();
 
-		if (m_texture_cache.is_overallocated())
+		if (resources && resources->texture_cache.is_overallocated())
 		{
 			// Evict some unused textures. Do not evict any active references
 			std::set<u32> exclusion_list;
@@ -1249,11 +1259,14 @@ bool VKGSRender::on_vram_exhausted(rsx::problem_severity severity)
 			std::lock_guard lock(m_secondary_cb_guard);
 
 			rsx_log.warning("Texture cache is overallocated. Will evict unnecessary textures.");
-			texture_cache_relieved = m_texture_cache.evict_unused(exclusion_list);
+			texture_cache_relieved = resources->texture_cache.evict_unused(exclusion_list);
 		}
 	}
 
-	texture_cache_relieved |= m_texture_cache.handle_memory_pressure(severity);
+	if (resources)
+	{
+		texture_cache_relieved |= resources->texture_cache.handle_memory_pressure(severity);
+	}
 	if (severity == rsx::problem_severity::low)
 	{
 		// Low severity only handles invalidating unused textures
@@ -1484,6 +1497,8 @@ std::unique_ptr<rsx::context_resources> VKGSRender::create_context_resources(rsx
 	else
 		resources->vertex_cache = std::make_unique<vk::weak_vertex_cache>();
 
+	resources->texture_cache.initialize(*m_device, m_device->get_graphics_queue(), m_texture_upload_buffer_ring_info);
+
 	return resources;
 }
 
@@ -1492,6 +1507,14 @@ void VKGSRender::on_bind_context(rsx::context* ctx)
 	m_rtts.set_context(ctx);
 	m_vertex_layout.set_context(ctx);
 	m_shader_interpreter.set_context(ctx);
+}
+
+void VKGSRender::on_release_context_resources(rsx::context* ctx)
+{
+	// Destroyed section images go through the GC and point back at their cache. Retire them while the cache still exists.
+	vkDeviceWaitIdle(*m_device);
+	res(ctx)->texture_cache.destroy();
+	vk::get_resource_manager()->flush();
 }
 
 void VKGSRender::on_unbind_context(rsx::context* ctx)
@@ -1941,7 +1964,10 @@ bool VKGSRender::on_local_task(rsx::FIFO::state state)
 		{
 			//This will re-engage locks and break the texture cache if another thread is waiting in access violation handler!
 			//Only call when there are no waiters
-			m_texture_cache.do_update();
+			if (const auto resources = res())
+			{
+				resources->texture_cache.do_update();
+			}
 			m_ctx->graphics_state.clear(rsx::pipeline_state::framebuffer_reads_dirty);
 		}
 	}
@@ -2671,8 +2697,8 @@ bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 		if (m_ctx->fb.surface_info[i].pitch && g_cfg.video.write_color_buffers)
 		{
 			const utils::address_range32 rsx_range = m_ctx->fb.surface_info[i].get_memory_range();
-			m_texture_cache.set_memory_read_flags(rsx_range, rsx::memory_read_flags::flush_once);
-			m_texture_cache.flush_if_cache_miss_likely(*m_current_command_buffer, rsx_range);
+			res()->texture_cache.set_memory_read_flags(rsx_range, rsx::memory_read_flags::flush_once);
+			res()->texture_cache.flush_if_cache_miss_likely(*m_current_command_buffer, rsx_range);
 		}
 
 		m_ctx->fb.surface_info[i].address = m_ctx->fb.surface_info[i].pitch = 0;
@@ -2688,8 +2714,8 @@ bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 		if (m_ctx->fb.depth_surface_info.pitch && g_cfg.video.write_depth_buffer)
 		{
 			const utils::address_range32 surface_range = m_ctx->fb.depth_surface_info.get_memory_range();
-			m_texture_cache.set_memory_read_flags(surface_range, rsx::memory_read_flags::flush_once);
-			m_texture_cache.flush_if_cache_miss_likely(*m_current_command_buffer, surface_range);
+			res()->texture_cache.set_memory_read_flags(surface_range, rsx::memory_read_flags::flush_once);
+			res()->texture_cache.flush_if_cache_miss_likely(*m_current_command_buffer, surface_range);
 		}
 
 		m_ctx->fb.depth_surface_info.address = m_ctx->fb.depth_surface_info.pitch = 0;
@@ -2715,7 +2741,7 @@ bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 			m_ctx->fb.surface_info[index].pitch = m_ctx->fb.layout.actual_color_pitch[index];
 			ensure(surface->rsx_pitch == m_ctx->fb.layout.actual_color_pitch[index]);
 
-			m_texture_cache.notify_surface_changed(m_ctx->fb.surface_info[index].get_memory_range(m_ctx->fb.layout.aa_factors));
+			res()->texture_cache.notify_surface_changed(m_ctx->fb.surface_info[index].get_memory_range(m_ctx->fb.layout.aa_factors));
 			m_draw_buffers.push_back(index);
 		}
 	}
@@ -2729,7 +2755,7 @@ bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 		m_ctx->fb.depth_surface_info.pitch = m_ctx->fb.layout.actual_zeta_pitch;
 		ensure(ds->rsx_pitch == m_ctx->fb.layout.actual_zeta_pitch);
 
-		m_texture_cache.notify_surface_changed(m_ctx->fb.depth_surface_info.get_memory_range(m_ctx->fb.layout.aa_factors));
+		res()->texture_cache.notify_surface_changed(m_ctx->fb.depth_surface_info.get_memory_range(m_ctx->fb.layout.aa_factors));
 	}
 
 	// Before messing with memory properties, flush command queue if there are dma transfers queued up
@@ -2742,7 +2768,7 @@ bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 	{
 		for (auto& surface : m_rtts.superseded_surfaces)
 		{
-			m_texture_cache.discard_framebuffer_memory_region(*m_current_command_buffer, surface->get_memory_range());
+			res()->texture_cache.discard_framebuffer_memory_region(*m_current_command_buffer, surface->get_memory_range());
 		}
 
 		m_rtts.superseded_surfaces.clear();
@@ -2757,7 +2783,7 @@ bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 
 			if (lock &&
 #ifdef TEXTURE_CACHE_DEBUG
-				!m_texture_cache.is_protected(
+				!res()->texture_cache.is_protected(
 					base_addr,
 					surface->get_memory_range(),
 					rsx::texture_upload_context::framebuffer_storage)
@@ -2771,11 +2797,11 @@ bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 
 			if (!lock) [[likely]]
 			{
-				m_texture_cache.commit_framebuffer_memory_region(*m_current_command_buffer, surface->get_memory_range());
+				res()->texture_cache.commit_framebuffer_memory_region(*m_current_command_buffer, surface->get_memory_range());
 				continue;
 			}
 
-			m_texture_cache.lock_memory_region(
+			res()->texture_cache.lock_memory_region(
 				*m_current_command_buffer, surface, surface->get_memory_range(), false,
 				surface->get_surface_width<rsx::surface_metrics::pixels>(), surface->get_surface_height<rsx::surface_metrics::pixels>(), surface->get_rsx_pitch(),
 				surface);
@@ -2791,14 +2817,14 @@ bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 		const utils::address_range32 surface_range = m_ctx->fb.surface_info[index].get_memory_range();
 		if (g_cfg.video.write_color_buffers)
 		{
-			m_texture_cache.lock_memory_region(
+			res()->texture_cache.lock_memory_region(
 				*m_current_command_buffer, m_rtts.m_bound_render_targets[index].second, surface_range, true,
 				m_ctx->fb.surface_info[index].width, m_ctx->fb.surface_info[index].height, m_ctx->fb.layout.actual_color_pitch[index],
 				m_rtts.m_bound_render_targets[index].second);
 		}
 		else
 		{
-			m_texture_cache.commit_framebuffer_memory_region(*m_current_command_buffer, surface_range);
+			res()->texture_cache.commit_framebuffer_memory_region(*m_current_command_buffer, surface_range);
 		}
 	}
 
@@ -2807,14 +2833,14 @@ bool VKGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 		const utils::address_range32 surface_range = m_ctx->fb.depth_surface_info.get_memory_range();
 		if (g_cfg.video.write_depth_buffer)
 		{
-			m_texture_cache.lock_memory_region(
+			res()->texture_cache.lock_memory_region(
 				*m_current_command_buffer, m_rtts.m_bound_depth_stencil.second, surface_range, true,
 				m_ctx->fb.depth_surface_info.width, m_ctx->fb.depth_surface_info.height, m_ctx->fb.layout.actual_zeta_pitch,
 				m_rtts.m_bound_depth_stencil.second);
 		}
 		else
 		{
-			m_texture_cache.commit_framebuffer_memory_region(*m_current_command_buffer, surface_range);
+			res()->texture_cache.commit_framebuffer_memory_region(*m_current_command_buffer, surface_range);
 		}
 	}
 
@@ -2889,7 +2915,7 @@ bool VKGSRender::scaled_image_from_memory(const rsx::blit_src_info& src, const r
 
 	vk::gpu_scope blit_gpu_scope(*m_current_command_buffer, vk::gpu_timer::region::blit);
 
-	if (m_texture_cache.blit(src, dst, interpolate, m_rtts, *m_current_command_buffer))
+	if (res()->texture_cache.blit(src, dst, interpolate, m_rtts, *m_current_command_buffer))
 	{
 		m_samplers_dirty.store(true);
 		m_current_command_buffer->set_flag(vk::command_buffer::cb_has_blit_transfer);

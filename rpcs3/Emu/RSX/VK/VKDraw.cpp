@@ -334,7 +334,7 @@ rsx::flags32_t VKGSRender::load_texture_env()
 	bool check_for_cyclic_refs = false;
 	auto check_surface_cache_sampler_valid = [&](auto descriptor, const auto& tex)
 	{
-		if (!m_texture_cache.test_if_descriptor_expired(*m_current_command_buffer, m_rtts, descriptor, tex))
+		if (!res()->texture_cache.test_if_descriptor_expired(*m_current_command_buffer, m_rtts, descriptor, tex))
 		{
 			check_for_cyclic_refs |= descriptor->is_cyclic_reference;
 			return true;
@@ -383,7 +383,7 @@ rsx::flags32_t VKGSRender::load_texture_env()
 			continue;
 		}
 
-		*sampler_state = m_texture_cache.upload_texture(*m_current_command_buffer, tex, m_rtts);
+		*sampler_state = res()->texture_cache.upload_texture(*m_current_command_buffer, tex, m_rtts);
 		if (!sampler_state->validate())
 		{
 			continue;
@@ -615,7 +615,7 @@ rsx::flags32_t VKGSRender::load_texture_env()
 			continue;
 		}
 
-		*sampler_state = m_texture_cache.upload_texture(*m_current_command_buffer, tex, m_rtts);
+		*sampler_state = res()->texture_cache.upload_texture(*m_current_command_buffer, tex, m_rtts);
 		if (!sampler_state->validate())
 		{
 			continue;
@@ -737,7 +737,7 @@ bool VKGSRender::bind_texture_env()
 			if (view = sampler_state->image_handle; !view)
 			{
 				//Requires update, copy subresource
-				if (!(view = m_texture_cache.create_temporary_subresource(*m_current_command_buffer, sampler_state->external_subresource_desc)))
+				if (!(view = res()->texture_cache.create_temporary_subresource(*m_current_command_buffer, sampler_state->external_subresource_desc)))
 				{
 					out_of_memory = true;
 				}
@@ -822,7 +822,7 @@ bool VKGSRender::bind_texture_env()
 
 		if (!image_ptr && sampler_state->validate())
 		{
-			if (!(image_ptr = m_texture_cache.create_temporary_subresource(*m_current_command_buffer, sampler_state->external_subresource_desc)))
+			if (!(image_ptr = res()->texture_cache.create_temporary_subresource(*m_current_command_buffer, sampler_state->external_subresource_desc)))
 			{
 				out_of_memory = true;
 			}
@@ -969,7 +969,7 @@ bool VKGSRender::bind_interpreter_texture_env()
 				? rtt->get_memory_range()
 				: utils::address_range32::start_length(desc->ref_address, attr.pitch * attr.height);
 
-			return m_texture_cache.create_temporary_subresource(*m_current_command_buffer, flatten_op);
+			return res()->texture_cache.create_temporary_subresource(*m_current_command_buffer, flatten_op);
 		}
 
 		image->change_layout(*m_current_command_buffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -990,7 +990,7 @@ bool VKGSRender::bind_interpreter_texture_env()
 			if (view = sampler_state->image_handle; !view)
 			{
 				//Requires update, copy subresource
-				if (!(view = m_texture_cache.create_temporary_subresource(*m_current_command_buffer, sampler_state->external_subresource_desc)))
+				if (!(view = res()->texture_cache.create_temporary_subresource(*m_current_command_buffer, sampler_state->external_subresource_desc)))
 				{
 					out_of_memory = true;
 				}
@@ -1494,7 +1494,7 @@ bool VKGSRender::end_draw()
 
 	{
 		RSX_PROF_SCOPE(tex_release);
-		m_texture_cache.release_uncached_temporary_subresources();
+		res()->texture_cache.release_uncached_temporary_subresources();
 	}
 
 	m_ctx->stats.textures_upload_time += m_profiler.duration();
