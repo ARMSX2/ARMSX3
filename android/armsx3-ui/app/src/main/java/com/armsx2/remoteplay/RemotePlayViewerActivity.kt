@@ -13,6 +13,7 @@ import android.util.Log
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -275,14 +276,19 @@ class RemotePlayViewerActivity : ComponentActivity() {
                 override fun onFallback() {
                     main.post { useRenderer() }
                 }
-            })
+            }, /* online, where frames arrive less evenly: */ mode !is ViewerMode.Wifi)
             output = target
-            videoView.value = SurfaceView(this).apply {
-                holder.addCallback(object : SurfaceHolder.Callback {
-                    override fun surfaceCreated(holder: SurfaceHolder) = target.setSurface(holder.surface)
-
-                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) =
+            videoView.value = SurfaceView(this).also { view ->
+                view.holder.addCallback(object : SurfaceHolder.Callback {
+                    override fun surfaceCreated(holder: SurfaceHolder) {
+                        screenReady(view, holder)
                         target.setSurface(holder.surface)
+                    }
+
+                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+                        screenReady(view, holder)
+                        target.setSurface(holder.surface)
+                    }
 
                     override fun surfaceDestroyed(holder: SurfaceHolder) = target.setSurface(null)
                 })
@@ -389,6 +395,16 @@ class RemotePlayViewerActivity : ComponentActivity() {
             }
         }
 
+        // The pad and the touch controls reach this screen as soon as they move, not saved up for
+        // the next refresh as Android does by default: up to a frame sooner (as Moonlight does).
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.decorView.post {
+                window.decorView.requestUnbufferedDispatch(
+                    InputDevice.SOURCE_CLASS_JOYSTICK or InputDevice.SOURCE_CLASS_BUTTON or InputDevice.SOURCE_CLASS_POINTER,
+                )
+            }
+        }
+
         status.value = when (mode) {
             is ViewerMode.Wifi -> I18n.get("remoteplay.viewer.connecting").format(intent.getStringExtra(EXTRA_NAME).orEmpty().ifBlank { mode.host })
             is ViewerMode.Lobby -> I18n.get("remoteplay.viewer.joining").format(RemotePlayLobby.display(mode.code))
@@ -444,9 +460,36 @@ class RemotePlayViewerActivity : ComponentActivity() {
             setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
             setEnableHardwareScaler(true)
         }
+        view.holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(holder: SurfaceHolder) = screenReady(view, holder)
+
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) =
+                screenReady(view, holder)
+
+            override fun surfaceDestroyed(holder: SurfaceHolder) = Unit
+        })
         renderer = view
         videoView.value = view
         session?.showOn(view)
+    }
+
+    /**
+     * The stream's surface is there: asks the screen for a refresh rate the stream's 60 fps divides
+     * evenly (60 or 120 Hz rather than 90, where frames would stay up for uneven times), and tells
+     * the decoder how fast it refreshes.
+     */
+    private fun screenReady(view: SurfaceView, holder: SurfaceHolder) {
+        val surface = holder.surface
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && surface.isValid) {
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    surface.setFrameRate(60f, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE, Surface.CHANGE_FRAME_RATE_ALWAYS)
+                } else {
+                    surface.setFrameRate(60f, Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE)
+                }
+            }
+        }
+        view.display?.refreshRate?.let { output?.setRefreshRate(it) }
     }
 
     /** [unclaimed]: the tap landed on nothing, neither a control nor the exit area. */

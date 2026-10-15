@@ -30,13 +30,34 @@ public final class ArmsxVideoOutput {
   private static volatile boolean failedBefore;
 
   private final Listener listener;
+  private final boolean online;
+  private volatile float refreshRate = 60f;
   private volatile @Nullable Surface surface;
   private volatile @Nullable ArmsxSurfaceDecoder decoder;
   private final AtomicBoolean firstFrameShown = new AtomicBoolean();
   private final AtomicBoolean fellBack = new AtomicBoolean();
 
-  public ArmsxVideoOutput(Listener listener) {
+  /** {@code online}: the stream comes over the internet, where frames arrive less evenly. */
+  public ArmsxVideoOutput(Listener listener, boolean online) {
     this.listener = listener;
+    this.online = online;
+  }
+
+  /** Main thread: how often the screen showing the stream refreshes, in Hz. */
+  public void setRefreshRate(float hz) {
+    if (hz > 0f) {
+      refreshRate = hz;
+    }
+  }
+
+  /**
+   * Whether to put frames up in step with the screen rather than as soon as they are decoded
+   * ({@link ArmsxSurfaceDecoder}): on a screen well above the stream's 60 fps (90, 120 Hz), where
+   * frames shown as decoded stay up for uneven numbers of refreshes, and online, where they
+   * arrive unevenly.
+   */
+  boolean paced() {
+    return online || refreshRate > 75f;
   }
 
   /** Whether to decode onto the screen at all: false once it has failed on this device. */
