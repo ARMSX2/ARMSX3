@@ -87,7 +87,12 @@ internal fun describeHost(stats: RemotePlayProtocol.HostStats): String {
         "captured ${stats.capturedFps}",
         "encoded ${stats.encodedFps}",
     )
-    if (stats.dropped > 0) parts += "dropped ${stats.dropped}"
+    val dropped = listOf(
+        "gpu busy" to stats.droppedGpu,
+        "late" to stats.droppedLate,
+        "encoder" to stats.droppedEncoder,
+    ).filter { it.second > 0 }
+    if (dropped.isNotEmpty()) parts += "dropped " + dropped.joinToString(", ") { "${it.second} ${it.first}" }
     if (stats.encoder.isNotEmpty()) parts += stats.encoder
     return parts.joinToString(" · ")
 }

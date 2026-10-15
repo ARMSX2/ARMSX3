@@ -261,22 +261,30 @@ private:
 	std::unique_ptr<vk::image> m_overlay_recording_img;
 
 	// ARMSX3 remote play (android/src/remote_play.cpp). Frames are scaled down on the GPU and read
-	// back a frame late: each slot is filled during a flip and read once that frame's command
-	// buffer has completed, in frame_context_cleanup. The recording path above it instead does a
-	// hard sync on every captured frame, which a live stream would pay at 60 fps.
+	// back without stalling the game. Each slot is filled during a flip, and the GPU then writes the
+	// slot's sequence number into m_remote_capture_marker, so the following flips can see which
+	// copies are done and hand those frames on, usually one frame later. Waiting for the frame
+	// context to retire instead meant waiting for the pipeline behind it: six more frames on a
+	// 7-image swapchain, 100 ms, and with slots held that long most frames found none free.
 	struct remote_capture_slot
 	{
 		std::unique_ptr<vk::buffer> buffer;
 		vk::frame_context_t* frame = nullptr;
 		u32 width = 0;
 		u32 height = 0;
-		bool bgra = false;
+		u32 seq = 0;
 		bool pending = false;
 	};
-	std::array<remote_capture_slot, 3> m_remote_capture_slots;
+	std::array<remote_capture_slot, 4> m_remote_capture_slots;
 	std::unique_ptr<vk::image> m_remote_capture_img;
+	std::unique_ptr<vk::buffer> m_remote_capture_marker;
+	const volatile u32* m_remote_capture_markers = nullptr; // m_remote_capture_marker, kept mapped
+	u32 m_remote_capture_seq = 0;
 	void remote_capture_record(vk::viewable_image* src, u32 width, u32 height, u32 max_size);
+	void remote_capture_poll();
 	void remote_capture_collect(vk::frame_context_t* frame);
+	void remote_capture_deliver(remote_capture_slot& slot);
+	void remote_capture_release();
 
 	//Vertex layout
 	rsx::vertex_input_layout m_vertex_layout;

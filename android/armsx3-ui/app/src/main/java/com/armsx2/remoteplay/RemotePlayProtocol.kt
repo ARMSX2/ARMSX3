@@ -166,25 +166,32 @@ internal object RemotePlayProtocol {
 
     /**
      * The host's side of the stream over the last second, for the viewer's stats: frames the game
-     * drew, frames captured from them, frames out of the encoder and frames dropped on the way,
-     * and which encoder runs.
+     * drew, frames captured from them, frames out of the encoder, the frames lost on the way and
+     * where (the GPU still busy with every capture slot, replaced by a newer frame before the app
+     * took them, refused by the encoder), and which encoder runs.
      */
     data class HostStats(
         val gameFps: Int,
         val capturedFps: Int,
         val encodedFps: Int,
-        val dropped: Int,
+        val droppedGpu: Int,
+        val droppedLate: Int,
+        val droppedEncoder: Int,
         val encoder: String,
     )
 
-    private const val HOST_STATS_HEADER_SIZE = 12
+    private const val HOST_STATS_HEADER_SIZE = 16
     private const val MAX_ENCODER_NAME_BYTES = 48
 
     fun encodeHostStats(stats: HostStats): ByteBuffer {
         val name = stats.encoder.toByteArray(Charsets.UTF_8).take(MAX_ENCODER_NAME_BYTES).toByteArray()
         val out = ByteBuffer.allocate(HOST_STATS_HEADER_SIZE + name.size).order(ByteOrder.LITTLE_ENDIAN)
         out.put(PACKET_HOST_STATS).put(ZERO).put(ZERO).put(ZERO)
-        for (value in intArrayOf(stats.gameFps, stats.capturedFps, stats.encodedFps, stats.dropped)) {
+        val values = intArrayOf(
+            stats.gameFps, stats.capturedFps, stats.encodedFps,
+            stats.droppedGpu, stats.droppedLate, stats.droppedEncoder,
+        )
+        for (value in values) {
             out.putShort(value.coerceIn(0, 0xffff).toShort())
         }
         out.put(name)
@@ -201,10 +208,12 @@ internal object RemotePlayProtocol {
         val gameFps = u16()
         val capturedFps = u16()
         val encodedFps = u16()
-        val dropped = u16()
+        val droppedGpu = u16()
+        val droppedLate = u16()
+        val droppedEncoder = u16()
         val name = ByteArray(minOf(buf.remaining(), MAX_ENCODER_NAME_BYTES))
         buf.get(name)
-        return HostStats(gameFps, capturedFps, encodedFps, dropped, String(name, Charsets.UTF_8))
+        return HostStats(gameFps, capturedFps, encodedFps, droppedGpu, droppedLate, droppedEncoder, String(name, Charsets.UTF_8))
     }
 
     // ---- Connection codes --------------------------------------------------------------------

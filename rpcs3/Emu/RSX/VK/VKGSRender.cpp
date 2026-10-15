@@ -1021,6 +1021,13 @@ VKGSRender::~VKGSRender()
 		slot.buffer.reset();
 		slot.pending = false;
 	}
+
+	if (m_remote_capture_marker)
+	{
+		m_remote_capture_marker->unmap();
+		m_remote_capture_markers = nullptr;
+		m_remote_capture_marker.reset();
+	}
 	m_stencil_mirror_sampler.reset();
 
 	// Queries

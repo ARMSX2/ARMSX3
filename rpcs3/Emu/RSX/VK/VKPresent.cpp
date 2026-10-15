@@ -1704,6 +1704,10 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	{
 		remote_capture_record(image_to_flip, buffer_width, buffer_height, remote_play_max_size);
 	}
+	else if (!remote_play_max_size && (m_remote_capture_markers || m_remote_capture_img))
+	{
+		remote_capture_release();
+	}
 
 	// WARNING: We have to do this here. We cannot touch the acquired image on the CB and then do a hard sync on it before it is submitted to the presentation engine.
 	// That introduces a WRITE_AFTER_PRESENT (from the previous present) when we later try to present on a different CB
@@ -2249,6 +2253,9 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 {
 	g_remote_play_frames++;
 
+	// Hand on whatever the GPU has finished since the last flip, which frees those slots.
+	remote_capture_poll();
+
 	// The stream wants 8-bit colour; anything else (an HDR or 16-bit display buffer) is skipped
 	// rather than converted, so a format nobody has tested cannot break the presenter.
 	const VkFormat format = src->format();
@@ -2315,6 +2322,16 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
 	}
 
+	// One u32 per slot, cleared once and kept mapped, so checking a slot costs a memory read.
+	if (!m_remote_capture_marker)
+	{
+		m_remote_capture_marker = std::make_unique<vk::buffer>(*m_device, 0x100, m_device->get_memory_mapping().host_visible_coherent,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
+		auto markers = static_cast<u32*>(m_remote_capture_marker->map(0, sizeof(u32) * m_remote_capture_slots.size()));
+		std::memset(markers, 0, sizeof(u32) * m_remote_capture_slots.size());
+		m_remote_capture_markers = markers;
+	}
+
 	auto& cmd = *m_current_command_buffer;
 	src->push_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 	m_remote_capture_img->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -2333,40 +2350,126 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	region.imageExtent = { dst_width, dst_height, 1 };
 	vk::copy_image_to_buffer(cmd, m_remote_capture_img.get(), slot->buffer.get(), region);
 
-	// Make the copy visible to the host read in remote_capture_collect.
+	// The copy's writes go out to the host, and the marker write waits for them, so a marker that
+	// shows this slot's number means its pixels are in.
 	vk::insert_buffer_memory_barrier(cmd, slot->buffer->value, 0, size,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+
+	if (!++m_remote_capture_seq)
+	{
+		// 0 is what a cleared marker reads.
+		++m_remote_capture_seq;
+	}
+
+	const u32 index = static_cast<u32>(slot - m_remote_capture_slots.data());
+	vkCmdFillBuffer(cmd, m_remote_capture_marker->value, index * sizeof(u32), sizeof(u32), m_remote_capture_seq);
+	vk::insert_buffer_memory_barrier(cmd, m_remote_capture_marker->value, index * sizeof(u32), sizeof(u32),
 		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
 
 	slot->frame = m_current_frame;
 	slot->width = dst_width;
 	slot->height = dst_height;
-	slot->bgra = false;
+	slot->seq = m_remote_capture_seq;
 	slot->pending = true;
 }
 
+// RSX thread, each captured flip: the slots whose marker the GPU has written, oldest first.
+void VKGSRender::remote_capture_poll()
+{
+	if (!m_remote_capture_markers)
+	{
+		return;
+	}
+
+	std::array<remote_capture_slot*, std::tuple_size_v<decltype(m_remote_capture_slots)>> done{};
+	usz count = 0;
+
+	for (usz i = 0; i < m_remote_capture_slots.size(); i++)
+	{
+		auto& slot = m_remote_capture_slots[i];
+
+		if (slot.pending && m_remote_capture_markers[i] == slot.seq)
+		{
+			done[count++] = &slot;
+		}
+	}
+
+	std::sort(done.begin(), done.begin() + count, [](const remote_capture_slot* a, const remote_capture_slot* b)
+	{
+		return a->seq < b->seq;
+	});
+
+	for (usz i = 0; i < count; i++)
+	{
+		remote_capture_deliver(*done[i]);
+	}
+}
+
+// From frame_context_cleanup: this frame's command buffers have completed, so any slot it filled is
+// ready whether or not a flip has looked at its marker yet.
 void VKGSRender::remote_capture_collect(vk::frame_context_t* frame)
 {
 	for (auto& slot : m_remote_capture_slots)
 	{
-		if (!slot.pending || slot.frame != frame)
+		if (slot.pending && slot.frame == frame)
 		{
-			continue;
+			remote_capture_deliver(slot);
 		}
+	}
+}
 
-		slot.pending = false;
+void VKGSRender::remote_capture_deliver(remote_capture_slot& slot)
+{
+	slot.pending = false;
 
-		// Capture stopped in between: the frame has nowhere to go.
-		if (!g_remote_play_max_size)
+	// Capture stopped in between: the frame has nowhere to go.
+	if (!g_remote_play_max_size)
+	{
+		return;
+	}
+
+	// The marker was read before the pixels; keep it that way.
+	std::atomic_thread_fence(std::memory_order_acquire);
+
+	const usz size = usz{slot.width} * slot.height * 4;
+	std::vector<u8> pixels = remote_play_frame_buffer(size);
+	const auto mapped = slot.buffer->map(0, size);
+	std::memcpy(pixels.data(), mapped, size);
+	slot.buffer->unmap();
+
+	m_frame->present_frame(std::move(pixels), slot.width * 4, slot.width, slot.height, false);
+}
+
+// RSX thread, once remote play is off: nothing it allocated stays behind. Waits for any slot the
+// GPU may still be writing; frame_context_cleanup collects those.
+void VKGSRender::remote_capture_release()
+{
+	for (const auto& slot : m_remote_capture_slots)
+	{
+		if (slot.pending)
 		{
-			continue;
+			return;
 		}
+	}
 
-		const usz size = usz{slot.width} * slot.height * 4;
-		std::vector<u8> pixels = remote_play_frame_buffer(size);
-		const auto mapped = slot.buffer->map(0, size);
-		std::memcpy(pixels.data(), mapped, size);
-		slot.buffer->unmap();
+	for (auto& slot : m_remote_capture_slots)
+	{
+		if (slot.buffer)
+		{
+			vk::get_resource_manager()->dispose(slot.buffer);
+		}
+	}
 
-		m_frame->present_frame(std::move(pixels), slot.width * 4, slot.width, slot.height, slot.bgra);
+	if (m_remote_capture_img)
+	{
+		vk::get_resource_manager()->dispose(m_remote_capture_img);
+	}
+
+	if (m_remote_capture_marker)
+	{
+		m_remote_capture_marker->unmap();
+		m_remote_capture_markers = nullptr;
+		vk::get_resource_manager()->dispose(m_remote_capture_marker);
 	}
 }

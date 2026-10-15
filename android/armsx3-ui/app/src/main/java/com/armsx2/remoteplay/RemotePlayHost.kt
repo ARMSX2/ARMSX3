@@ -261,6 +261,8 @@ private class HostSession(
     private var connectedOnce = false
     private var ended = false
 
+    private val wifi = RemotePlayWifi(context)
+
     private var appliedPad = RemotePlayProtocol.PadState()
     private var lastPadSeq = 0
     private var hasPadSeq = false
@@ -442,6 +444,7 @@ private class HostSession(
         }
 
         RemotePlayHost.report(RemotePlayHost.Status.Playing(viewer))
+        wifi.hold()
         val observer = source.capturerObserver
         observer.onCapturerStarted(true)
         videoThread = thread(name = "rp-video") { videoLoop(observer) }
@@ -469,8 +472,9 @@ private class HostSession(
             gameFps = coreDelta(0),
             capturedFps = coreDelta(2),
             encodedFps = encoderDelta(1),
-            // Not read back (GPU busy), replaced before the app took them, refused by the encoder.
-            dropped = coreDelta(1) + coreDelta(3) + encoderDelta(2),
+            droppedGpu = coreDelta(1),
+            droppedLate = coreDelta(3),
+            droppedEncoder = encoderDelta(2),
             encoder = ArmsxVideoEncoderFactory.encoderName(),
         )
         hostStats = current
@@ -586,6 +590,7 @@ private class HostSession(
         videoThread?.join(500)
         audioThread?.join(500)
         applyPad(RemotePlayProtocol.PadState())
+        wifi.release()
 
         // A few times, since the channel drops what it cannot deliver.
         audioChannel?.takeIf { it.state() == DataChannel.State.OPEN }?.let { channel ->
