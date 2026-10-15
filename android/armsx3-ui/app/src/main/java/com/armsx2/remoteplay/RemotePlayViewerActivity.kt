@@ -228,9 +228,14 @@ class RemotePlayViewerActivity : ComponentActivity() {
                 // screen waited for the next one. Only when it decodes onto the screen itself.
                 val peaks = if (output != null && renderer == null) ArmsxSurfaceDecoder.takePeaks() else null
                 val decoder = peaks?.let { " · decode max ${it[0]} ms · gap max ${it[1]} ms" }.orEmpty()
+                // The screen's refresh rate now (it can change after the stream asks for 60 Hz),
+                // and whether frames wait for its refreshes.
+                val screen = window.decorView.display?.refreshRate?.let {
+                    " · screen ${it.roundToInt()} Hz" + if (peaks != null && ArmsxSurfaceDecoder.isPaced()) " paced" else ""
+                }.orEmpty()
                 current.sampleStats { line ->
                     val audio = current.audioKind?.let { " · audio $it" }.orEmpty()
-                    main.post { statsLine.value = line + decoder + audio }
+                    main.post { statsLine.value = line + decoder + screen + audio }
                 }
                 current.hostStats?.let { hostLine.value = describeHost(it) }
             }

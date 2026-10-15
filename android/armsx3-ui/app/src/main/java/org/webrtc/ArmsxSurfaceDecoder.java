@@ -68,10 +68,16 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
   private static final java.util.concurrent.atomic.AtomicInteger peakGapMs =
       new java.util.concurrent.atomic.AtomicInteger();
   private static volatile long lastShownMs;
+  private static volatile boolean pacing;
 
   /** Both peaks since the last call, which starts them over: {decode ms, gap ms}. */
   public static int[] takePeaks() {
     return new int[] {peakDecodeMs.getAndSet(0), peakGapMs.getAndSet(0)};
+  }
+
+  /** For the stats: whether the decoder last started puts frames up in step with the screen. */
+  public static boolean isPaced() {
+    return pacing;
   }
 
   /** Makes the stock decoder for the same stream, or null when there is none. */
@@ -274,6 +280,7 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
       return null;
     }
     boolean paced = output.paced();
+    pacing = paced;
     Logging.d(TAG, codecName + " decoding " + width + "x" + height + " onto the screen"
         + (paced ? ", paced" : ""));
     Running started = new Running(codec, surface, width, height, callback, paced);

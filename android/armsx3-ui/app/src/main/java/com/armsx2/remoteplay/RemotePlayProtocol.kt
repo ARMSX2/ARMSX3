@@ -245,7 +245,10 @@ internal object RemotePlayProtocol {
      * drew, frames captured from them, frames out of the encoder, the frames lost on the way and
      * where (the GPU still busy with every capture slot, replaced by a newer frame before the app
      * took them, refused by the encoder, skipped inside WebRTC before it), the slowest frame from
-     * capture to out of the encoder and the largest frame, and which encoder runs.
+     * capture to out of the encoder and the largest frame, and which encoder runs. Then WebRTC's
+     * own account ([HostRtcSampler]): frames it sent, its estimate of the bandwidth to the
+     * viewer, the bitrate it asked of the encoder, and the viewer's requests to resend lost packets
+     * (NACK) and for a new key frame (PLI). Zero from a host that does not send them.
      */
     data class HostStats(
         val gameFps: Int,
@@ -258,19 +261,28 @@ internal object RemotePlayProtocol {
         val peakEncodeMs: Int,
         val peakFrameKb: Int,
         val encoder: String,
+        val sentFps: Int = 0,
+        val bweKbps: Int = 0,
+        val targetKbps: Int = 0,
+        val nacks: Int = 0,
+        val plis: Int = 0,
     )
 
+    // Type, layout version, two spare bytes, then 16-bit values: nine, or fourteen from version 1.
     private const val HOST_STATS_HEADER_SIZE = 22
+    private const val HOST_STATS_V1_HEADER_SIZE = 32
+    private const val HOST_STATS_VERSION: Byte = 1
     private const val MAX_ENCODER_NAME_BYTES = 48
 
     fun encodeHostStats(stats: HostStats): ByteBuffer {
         val name = stats.encoder.toByteArray(Charsets.UTF_8).take(MAX_ENCODER_NAME_BYTES).toByteArray()
-        val out = ByteBuffer.allocate(HOST_STATS_HEADER_SIZE + name.size).order(ByteOrder.LITTLE_ENDIAN)
-        out.put(PACKET_HOST_STATS).put(ZERO).put(ZERO).put(ZERO)
+        val out = ByteBuffer.allocate(HOST_STATS_V1_HEADER_SIZE + name.size).order(ByteOrder.LITTLE_ENDIAN)
+        out.put(PACKET_HOST_STATS).put(HOST_STATS_VERSION).put(ZERO).put(ZERO)
         val values = intArrayOf(
             stats.gameFps, stats.capturedFps, stats.encodedFps,
             stats.droppedGpu, stats.droppedLate, stats.droppedEncoder, stats.droppedWebrtc,
             stats.peakEncodeMs, stats.peakFrameKb,
+            stats.sentFps, stats.bweKbps, stats.targetKbps, stats.nacks, stats.plis,
         )
         for (value in values) {
             out.putShort(value.coerceIn(0, 0xffff).toShort())
@@ -284,7 +296,9 @@ internal object RemotePlayProtocol {
     fun decodeHostStats(data: ByteBuffer): HostStats? {
         val buf = data.duplicate().order(ByteOrder.LITTLE_ENDIAN)
         if (buf.remaining() < HOST_STATS_HEADER_SIZE || buf.get() != PACKET_HOST_STATS) return null
-        buf.position(buf.position() + 3)
+        val version = buf.get()
+        if (version >= HOST_STATS_VERSION && buf.remaining() < HOST_STATS_V1_HEADER_SIZE - 2) return null
+        buf.position(buf.position() + 2)
         fun u16() = buf.short.toInt() and 0xffff
         val gameFps = u16()
         val capturedFps = u16()
@@ -295,11 +309,13 @@ internal object RemotePlayProtocol {
         val droppedWebrtc = u16()
         val peakEncodeMs = u16()
         val peakFrameKb = u16()
+        val rtc = if (version >= HOST_STATS_VERSION) IntArray(5) { u16() } else IntArray(5)
         val name = ByteArray(minOf(buf.remaining(), MAX_ENCODER_NAME_BYTES))
         buf.get(name)
         return HostStats(
             gameFps, capturedFps, encodedFps, droppedGpu, droppedLate, droppedEncoder, droppedWebrtc,
             peakEncodeMs, peakFrameKb, String(name, Charsets.UTF_8),
+            sentFps = rtc[0], bweKbps = rtc[1], targetKbps = rtc[2], nacks = rtc[3], plis = rtc[4],
         )
     }
 

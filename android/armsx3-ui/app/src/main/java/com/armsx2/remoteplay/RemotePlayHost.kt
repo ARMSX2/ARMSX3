@@ -330,9 +330,12 @@ private class HostSession(
     @Volatile
     private var framesHanded = 0
     private var lastHanded = -1
+    private val rtcSampler = HostRtcSampler()
     private val hostStatsTick = object : Runnable {
         override fun run() {
             if (ended || !streaming) return
+            // WebRTC answers in the background; its numbers go with the next second's stats.
+            peer?.let(rtcSampler::sample)
             sendHostStats()
             main.postDelayed(this, 1_000)
         }
@@ -546,6 +549,7 @@ private class HostSession(
         // Counters are running totals; the stats are the last second's share of them.
         fun coreDelta(index: Int) = core[index] - previousCore[index]
         fun encoderDelta(index: Int) = encoder[index] - previousEncoder[index]
+        val rtc = rtcSampler.latest
         val current = RemotePlayProtocol.HostStats(
             gameFps = coreDelta(0),
             capturedFps = coreDelta(2),
@@ -557,6 +561,11 @@ private class HostSession(
             peakEncodeMs = peaks[0],
             peakFrameKb = (peaks[1] + 1023) / 1024,
             encoder = ArmsxVideoEncoderFactory.encoderName(),
+            sentFps = rtc?.sentFps ?: 0,
+            bweKbps = rtc?.bweKbps ?: 0,
+            targetKbps = rtc?.targetKbps ?: 0,
+            nacks = rtc?.nacks ?: 0,
+            plis = rtc?.plis ?: 0,
         )
         hostStats = current
         audioChannel?.takeIf { it.state() == DataChannel.State.OPEN }

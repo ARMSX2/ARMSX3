@@ -3,6 +3,7 @@ package com.armsx2.remoteplay
 import org.webrtc.PeerConnection
 import org.webrtc.RTCStatsReport
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * One line of what the stream is doing, from WebRTC's own statistics: codec and which encoder or
@@ -39,6 +40,7 @@ internal class RemotePlayStats(private val sending: Boolean) {
         val totals = listOf(
             "bytesSent", "bytesReceived", "totalDecodeTime", "framesDecoded", "framesReceived",
             "jitterBufferDelay", "jitterBufferEmittedCount", "framesDropped", "packetsLost",
+            "nackCount", "pliCount",
         ).mapNotNull { key -> (m[key] as? Number)?.toDouble()?.let { key to it } }.toMap()
         val seconds = if (lastTimeUs > 0 && rtp.timestampUs > lastTimeUs) (rtp.timestampUs - lastTimeUs) / 1e6 else 0.0
         fun delta(key: String): Double? {
@@ -69,16 +71,70 @@ internal class RemotePlayStats(private val sending: Boolean) {
         rttMs?.let { parts += String.format(Locale.US, "rtt %.0f ms", it) }
         if (sending) {
             m["qualityLimitationReason"]?.toString()?.takeIf { it != "none" }?.let { parts += "limited by $it" }
+            (pair?.members?.get("availableOutgoingBitrate") as? Number)?.let { parts += String.format(Locale.US, "bwe %.1f Mbps", it.toDouble() / 1e6) }
+            (m["targetBitrate"] as? Number)?.let { parts += String.format(Locale.US, "target %.1f Mbps", it.toDouble() / 1e6) }
         } else {
             perFrameMs("jitterBufferDelay", "jitterBufferEmittedCount")?.let { parts += String.format(Locale.US, "buffer %.0f ms", it) }
             perFrameMs("totalDecodeTime", "framesDecoded")?.let { parts += String.format(Locale.US, "decode %.1f ms", it) }
             delta("framesDropped")?.takeIf { it > 0 }?.let { parts += String.format(Locale.US, "dropped %.0f", it) }
             delta("packetsLost")?.takeIf { it > 0 }?.let { parts += String.format(Locale.US, "lost %.0f", it) }
         }
+        // Lost packets asked for again (NACK) and new key frames asked for (PLI): what recovering
+        // from losses cost, sent by the viewer, received by the host.
+        delta("nackCount")?.takeIf { it > 0 }?.let { parts += String.format(Locale.US, "nack %.0f", it) }
+        delta("pliCount")?.takeIf { it > 0 }?.let { parts += String.format(Locale.US, "pli %.0f", it) }
 
         last = totals
         lastTimeUs = rtp.timestampUs
         return parts.joinToString(" · ")
+    }
+}
+
+/**
+ * The host's own WebRTC numbers for [RemotePlayProtocol.HostStats], per second: frames sent, the
+ * bandwidth estimate to the viewer and the bitrate asked of the encoder, and the viewer's requests
+ * to resend lost packets (NACK) and for a new key frame (PLI). Frames encoded but not sent, or a
+ * low estimate that holds the encoder back, show up here and nowhere else.
+ */
+internal class HostRtcSampler {
+    class Sample(val sentFps: Int, val bweKbps: Int, val targetKbps: Int, val nacks: Int, val plis: Int)
+
+    private var last: Map<String, Double> = emptyMap()
+    private var lastTimeUs = 0.0
+
+    /** The newest sample, about a second old; null until there are two to compare. */
+    @Volatile
+    var latest: Sample? = null
+        private set
+
+    /** Any thread; [latest] is updated on WebRTC's thread. */
+    fun sample(peer: PeerConnection) {
+        runCatching { peer.getStats { report -> update(report) } }
+    }
+
+    @Synchronized
+    private fun update(report: RTCStatsReport) {
+        val all = report.statsMap.values
+        val rtp = all.firstOrNull { it.type == "outbound-rtp" && it.members["kind"] == "video" } ?: return
+        val m = rtp.members
+        val totals = listOf("framesSent", "nackCount", "pliCount")
+            .mapNotNull { key -> (m[key] as? Number)?.toDouble()?.let { key to it } }.toMap()
+        val seconds = if (lastTimeUs > 0 && rtp.timestampUs > lastTimeUs) (rtp.timestampUs - lastTimeUs) / 1e6 else 0.0
+        fun delta(key: String): Double = ((totals[key] ?: 0.0) - (last[key] ?: 0.0)).coerceAtLeast(0.0)
+        if (seconds > 0) {
+            val pair = all.firstOrNull { it.type == "candidate-pair" && it.members["nominated"] == true && it.members["state"] == "succeeded" }
+            val bwe = (pair?.members?.get("availableOutgoingBitrate") as? Number)?.toDouble() ?: 0.0
+            val target = (m["targetBitrate"] as? Number)?.toDouble() ?: 0.0
+            latest = Sample(
+                sentFps = (delta("framesSent") / seconds).roundToInt(),
+                bweKbps = (bwe / 1000).roundToInt(),
+                targetKbps = (target / 1000).roundToInt(),
+                nacks = delta("nackCount").roundToInt(),
+                plis = delta("pliCount").roundToInt(),
+            )
+        }
+        last = totals
+        lastTimeUs = rtp.timestampUs
     }
 }
 
@@ -89,6 +145,14 @@ internal fun describeHost(stats: RemotePlayProtocol.HostStats): String {
         "captured ${stats.capturedFps}",
         "encoded ${stats.encodedFps}",
     )
+    // WebRTC's side, from a host that reports it: what went out, and the bitrate it allowed.
+    if (stats.bweKbps > 0 || stats.sentFps > 0) {
+        parts += "sent ${stats.sentFps}"
+        parts += String.format(Locale.US, "bwe %.1f Mbps", stats.bweKbps / 1000.0)
+        parts += String.format(Locale.US, "target %.1f Mbps", stats.targetKbps / 1000.0)
+        if (stats.nacks > 0) parts += "nack ${stats.nacks}"
+        if (stats.plis > 0) parts += "pli ${stats.plis}"
+    }
     val dropped = listOf(
         "gpu busy" to stats.droppedGpu,
         "late" to stats.droppedLate,
