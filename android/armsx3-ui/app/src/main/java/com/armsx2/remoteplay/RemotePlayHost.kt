@@ -595,10 +595,12 @@ private class HostSession(
             return
         }
         val (seq, pad) = RemotePlayProtocol.decodePad(data) ?: return
-        main.post {
-            if (ended || !streaming) return@post
+        // Ahead of whatever else the main thread has queued: a press should not wait behind the
+        // UI. Out of order is fine, the newest wins (below).
+        main.postAtFrontOfQueue {
+            if (ended || !streaming) return@postAtFrontOfQueue
             // The channel is unordered: a late packet must not undo a newer one.
-            if (hasPadSeq && seq - lastPadSeq <= 0) return@post
+            if (hasPadSeq && seq - lastPadSeq <= 0) return@postAtFrontOfQueue
             hasPadSeq = true
             lastPadSeq = seq
             lastPadAt = SystemClock.uptimeMillis()
