@@ -52,6 +52,9 @@ internal object RemotePlayRtc {
      *    back to back, and a screen shows one frame per refresh: of two done within the same
      *    refresh only the newer is shown. Spaced out they each get shown; a steady 60 fps
      *    (16.7 ms apart) is never held back.
+     *  - More than two frames waiting, after a hiccup, go to the decoder at once instead, so the
+     *    picture jumps to the newest. Spaced out, the backlog played faster than the game ran
+     *    (up to 83 fps) until it had caught up.
      *  - No frame dropper: it skips frames whenever the encoder runs over its bitrate, which fast
      *    game footage often does. The bitrate still follows the network; frames are simply not
      *    thrown away on top.
@@ -59,7 +62,7 @@ internal object RemotePlayRtc {
     private const val FIELD_TRIALS =
         "WebRTC-ForcePlayoutDelay/min_ms:0,max_ms:100/" +
             "WebRTC-ForceSendPlayoutDelay/min_ms:0,max_ms:100/" +
-            "WebRTC-ZeroPlayoutDelay/min_pacing:12ms/" +
+            "WebRTC-ZeroPlayoutDelay/min_pacing:12ms,max_decode_queue_size:2/" +
             "WebRTC-FrameDropper/Disabled/"
 
     /**

@@ -439,10 +439,13 @@ private class HostSession(
         }
         streaming = true
 
-        // Smooth motion over sharpness: a game that stutters is worse than one that softens.
+        // The frame rate and the resolution never change; a tight network only softens the picture.
+        // Left to adapt, WebRTC lowered the resolution whenever the picture got busy (a scene
+        // change, moving again after standing still) and raised it once things calmed down, and
+        // every switch restarts the encoder here and the decoder on the viewer: a hitch each time.
         pc.senders.firstOrNull { it.track()?.kind() == "video" }?.let { sender ->
             val parameters = sender.parameters
-            parameters.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_FRAMERATE
+            parameters.degradationPreference = RtpParameters.DegradationPreference.DISABLED
             parameters.encodings.forEach {
                 it.maxBitrateBps = bitrate.max
                 it.maxFramerate = 60

@@ -64,7 +64,6 @@ class ArmsxH264Encoder implements VideoEncoder {
 
   // Encode thread.
   private @Nullable Callback callback;
-  private boolean automaticResizeOn;
   private int width;
   private int height;
   private int stride;
@@ -108,7 +107,6 @@ class ArmsxH264Encoder implements VideoEncoder {
   @Override
   public VideoCodecStatus initEncode(Settings settings, Callback callback) {
     this.callback = callback;
-    automaticResizeOn = settings.automaticResizeOn;
     if (settings.width % 2 != 0 || settings.height % 2 != 0) {
       Logging.e(TAG, "MediaCodec requires 2x2 alignment.");
       return VideoCodecStatus.ERR_SIZE;
@@ -428,10 +426,11 @@ class ArmsxH264Encoder implements VideoEncoder {
     }
   }
 
+  // Never resized by how complex the picture is: remote play keeps one resolution throughout,
+  // since each change restarts this encoder and the viewer's decoder (see RemotePlayHost).
   @Override
   public ScalingSettings getScalingSettings() {
-    // WebRTC's own thresholds for H.264.
-    return automaticResizeOn ? new ScalingSettings(24, 37) : ScalingSettings.OFF;
+    return ScalingSettings.OFF;
   }
 
   @Override
