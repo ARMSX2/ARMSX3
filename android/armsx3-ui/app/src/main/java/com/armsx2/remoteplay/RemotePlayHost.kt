@@ -330,6 +330,10 @@ private class HostSession(
     @Volatile
     private var framesHanded = 0
     private var lastHanded = -1
+
+    // The longest wait between two frames handed to WebRTC since the stats last took it (ms): a
+    // stall that starts here is the game's or the capture's, not the network's.
+    private val peakHandGapMs = java.util.concurrent.atomic.AtomicInteger()
     private val rtcSampler = HostRtcSampler()
     private val hostStatsTick = object : Runnable {
         override fun run() {
@@ -571,6 +575,8 @@ private class HostSession(
             wifiTxMbps = link?.txMbps ?: 0,
             wifiRxMbps = link?.rxMbps ?: 0,
             wifiRssi = link?.rssiDbm ?: 0,
+            captureGapMs = peakHandGapMs.getAndSet(0),
+            pacerMs = rtc?.pacerMs ?: 0,
         )
         hostStats = current
         audioChannel?.takeIf { it.state() == DataChannel.State.OPEN }
@@ -581,12 +587,16 @@ private class HostSession(
     // encoder draws straight into its input where the device allows, otherwise as NV12 the GPU drew
     // and this thread copies out once (see RemotePlayFrames).
     private fun videoLoop(observer: CapturerObserver, pipeline: RemotePlayFrames) {
+        var lastHandedAt = 0L
         while (streaming) {
             when (val next = pipeline.poll(50)) {
                 is RemotePlayFrames.Poll.Frame -> {
                     observer.onFrameCaptured(next.frame)
                     framesHanded++
                     next.frame.release()
+                    val now = SystemClock.elapsedRealtime()
+                    if (lastHandedAt != 0L) peakHandGapMs.accumulateAndGet((now - lastHandedAt).toInt()) { a, b -> maxOf(a, b) }
+                    lastHandedAt = now
                 }
                 RemotePlayFrames.Poll.Stopped -> break
                 RemotePlayFrames.Poll.Timeout -> Unit

@@ -278,19 +278,22 @@ internal object RemotePlayProtocol {
         val wifiTxMbps: Int = 0,
         val wifiRxMbps: Int = 0,
         val wifiRssi: Int = 0,
+        val captureGapMs: Int = 0,
+        val pacerMs: Int = 0,
     )
 
     // Type, layout version, two spare bytes, then 16-bit values: nine, fourteen from version 1,
-    // eighteen from version 2.
+    // eighteen from version 2, twenty from version 3.
     private const val HOST_STATS_HEADER_SIZE = 22
     private const val HOST_STATS_V1_HEADER_SIZE = 32
     private const val HOST_STATS_V2_HEADER_SIZE = 40
-    private const val HOST_STATS_VERSION: Byte = 2
+    private const val HOST_STATS_V3_HEADER_SIZE = 44
+    private const val HOST_STATS_VERSION: Byte = 3
     private const val MAX_ENCODER_NAME_BYTES = 48
 
     fun encodeHostStats(stats: HostStats): ByteBuffer {
         val name = stats.encoder.toByteArray(Charsets.UTF_8).take(MAX_ENCODER_NAME_BYTES).toByteArray()
-        val out = ByteBuffer.allocate(HOST_STATS_V2_HEADER_SIZE + name.size).order(ByteOrder.LITTLE_ENDIAN)
+        val out = ByteBuffer.allocate(HOST_STATS_V3_HEADER_SIZE + name.size).order(ByteOrder.LITTLE_ENDIAN)
         out.put(PACKET_HOST_STATS).put(HOST_STATS_VERSION).put(ZERO).put(ZERO)
         val values = intArrayOf(
             stats.gameFps, stats.capturedFps, stats.encodedFps,
@@ -298,6 +301,7 @@ internal object RemotePlayProtocol {
             stats.peakEncodeMs, stats.peakFrameKb,
             stats.sentFps, stats.bweKbps, stats.targetKbps, stats.nacks, stats.plis,
             stats.wifiMhz, stats.wifiTxMbps, stats.wifiRxMbps, -stats.wifiRssi,
+            stats.captureGapMs, stats.pacerMs,
         )
         for (value in values) {
             out.putShort(value.coerceIn(0, 0xffff).toShort())
@@ -313,6 +317,7 @@ internal object RemotePlayProtocol {
         if (buf.remaining() < HOST_STATS_HEADER_SIZE || buf.get() != PACKET_HOST_STATS) return null
         val version = buf.get()
         val size = when {
+            version >= 3 -> HOST_STATS_V3_HEADER_SIZE
             version >= 2 -> HOST_STATS_V2_HEADER_SIZE
             version >= 1 -> HOST_STATS_V1_HEADER_SIZE
             else -> HOST_STATS_HEADER_SIZE
@@ -331,6 +336,7 @@ internal object RemotePlayProtocol {
         val peakFrameKb = u16()
         val rtc = if (version >= 1) IntArray(5) { u16() } else IntArray(5)
         val link = if (version >= 2) IntArray(4) { u16() } else IntArray(4)
+        val timing = if (version >= 3) IntArray(2) { u16() } else IntArray(2)
         val name = ByteArray(minOf(buf.remaining(), MAX_ENCODER_NAME_BYTES))
         buf.get(name)
         return HostStats(
@@ -338,6 +344,7 @@ internal object RemotePlayProtocol {
             peakEncodeMs, peakFrameKb, String(name, Charsets.UTF_8),
             sentFps = rtc[0], bweKbps = rtc[1], targetKbps = rtc[2], nacks = rtc[3], plis = rtc[4],
             wifiMhz = link[0], wifiTxMbps = link[1], wifiRxMbps = link[2], wifiRssi = -link[3],
+            captureGapMs = timing[0], pacerMs = timing[1],
         )
     }
 

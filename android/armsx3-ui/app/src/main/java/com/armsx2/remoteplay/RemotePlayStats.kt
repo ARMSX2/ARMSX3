@@ -79,6 +79,8 @@ internal class RemotePlayStats(private val sending: Boolean) {
             perFrameMs("totalDecodeTime", "framesDecoded")?.let { parts += String.format(Locale.US, "decode %.1f ms", it) }
             delta("framesDropped")?.takeIf { it > 0 }?.let { parts += String.format(Locale.US, "dropped %.0f", it) }
             delta("packetsLost")?.takeIf { it > 0 }?.let { parts += String.format(Locale.US, "lost %.0f", it) }
+            // How unevenly packets arrive (RFC 3550 interarrival jitter, smoothed).
+            (m["jitter"] as? Number)?.let { parts += String.format(Locale.US, "jitter %.0f ms", it.toDouble() * 1000) }
         }
         // Lost packets asked for again (NACK) and new key frames asked for (PLI): what recovering
         // from losses cost, sent by the viewer, received by the host.
@@ -117,7 +119,7 @@ internal class RemotePlayStats(private val sending: Boolean) {
  * low estimate that holds the encoder back, show up here and nowhere else.
  */
 internal class HostRtcSampler {
-    class Sample(val sentFps: Int, val bweKbps: Int, val targetKbps: Int, val nacks: Int, val plis: Int)
+    class Sample(val sentFps: Int, val bweKbps: Int, val targetKbps: Int, val nacks: Int, val plis: Int, val pacerMs: Int)
 
     private var last: Map<String, Double> = emptyMap()
     private var lastTimeUs = 0.0
@@ -137,7 +139,7 @@ internal class HostRtcSampler {
         val all = report.statsMap.values
         val rtp = all.firstOrNull { it.type == "outbound-rtp" && it.members["kind"] == "video" } ?: return
         val m = rtp.members
-        val totals = listOf("framesSent", "nackCount", "pliCount")
+        val totals = listOf("framesSent", "nackCount", "pliCount", "totalPacketSendDelay", "packetsSent")
             .mapNotNull { key -> (m[key] as? Number)?.toDouble()?.let { key to it } }.toMap()
         val seconds = if (lastTimeUs > 0 && rtp.timestampUs > lastTimeUs) (rtp.timestampUs - lastTimeUs) / 1e6 else 0.0
         fun delta(key: String): Double = ((totals[key] ?: 0.0) - (last[key] ?: 0.0)).coerceAtLeast(0.0)
@@ -151,6 +153,8 @@ internal class HostRtcSampler {
                 targetKbps = (target / 1000).roundToInt(),
                 nacks = delta("nackCount").roundToInt(),
                 plis = delta("pliCount").roundToInt(),
+                // Seconds summed over packets: the average wait of a packet in the last second.
+                pacerMs = delta("packetsSent").takeIf { it > 0 }?.let { (delta("totalPacketSendDelay") * 1000 / it).roundToInt() } ?: 0,
             )
         }
         last = totals
@@ -172,6 +176,10 @@ internal fun describeHost(stats: RemotePlayProtocol.HostStats): String {
         parts += String.format(Locale.US, "target %.1f Mbps", stats.targetKbps / 1000.0)
         if (stats.nacks > 0) parts += "nack ${stats.nacks}"
         if (stats.plis > 0) parts += "pli ${stats.plis}"
+        // Where a stall starts on the host: the game or capture (frames handed late), or WebRTC
+        // holding packets back to its bitrate (pacer wait per packet).
+        parts += "capture gap max ${stats.captureGapMs} ms"
+        parts += "pacer ${stats.pacerMs} ms"
     }
     val dropped = listOf(
         "gpu busy" to stats.droppedGpu,
