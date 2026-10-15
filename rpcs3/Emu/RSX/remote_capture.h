@@ -39,12 +39,17 @@ namespace remote_capture
 		u32 width = 0;
 		u32 height = 0;
 
+		// When the presenter recorded the frame (steady clock, ns), for how long the GPU usually takes.
+		u64 recorded_ns = 0;
+
 		// NV12 frames: mapped for as long as the slot exists. The Y plane (width x height), then the
 		// interleaved UV plane (width x height / 2), rows packed.
 		const u8* data = nullptr;
 
 		// Hardware frames: the buffer, and a number that changes whenever it is replaced, so the app
-		// knows to import it again. hardware says which kind the recorded frame is.
+		// knows to import it again (from g_generation, so it never repeats within the process).
+		// hardware says which kind the recorded frame is. The buffer pointer only changes under
+		// g_mutex, on a free slot.
 		AHardwareBuffer* hardware_buffer = nullptr;
 		u32 generation = 0;
 		bool hardware = false;
@@ -64,4 +69,8 @@ namespace remote_capture
 	// Counts frames the presenter has recorded; it notifies after each. The app's thread sleeps on it
 	// until there is a frame to wait for, instead of checking every millisecond in between.
 	inline atomic_t<u32> g_recorded{0};
+
+	// Hardware buffer generations, process-wide, so a renderer that comes back never repeats one the
+	// app has already imported.
+	inline atomic_t<u32> g_generation{0};
 }

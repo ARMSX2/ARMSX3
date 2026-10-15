@@ -2254,6 +2254,19 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 namespace vk
 {
+	// ARMSX3 remote play: a capture pass's target. Its framebuffers go with it when the resource
+	// manager finally destroys it, after the frames that drew into it have completed, the way render
+	// targets do theirs, instead of while a pending frame may still use them.
+	struct remote_capture_target : public image
+	{
+		using image::image;
+
+		~remote_capture_target() override
+		{
+			vk::remove_framebuffers_with_image(this);
+		}
+	};
+
 	// ARMSX3 remote play: the stream's frame, drawn from the game's. Three modes: the Y plane at the
 	// stream's size, the interleaved UV plane at half that, or the whole frame as RGBA for the
 	// hardware path. Each samples the game's frame with linear filtering, which is also the
@@ -2426,13 +2439,12 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	{
 		if (target && (target->width() != target_width || target->height() != target_height))
 		{
-			vk::remove_framebuffers_with_image(target.get());
 			vk::get_resource_manager()->dispose(target);
 		}
 
 		if (!target)
 		{
-			target = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			target = std::make_unique<vk::remote_capture_target>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 				VK_IMAGE_TYPE_2D, target_format, target_width, target_height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
 				VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL,
 				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -2446,14 +2458,21 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	auto& buffer = m_remote_capture_buffers[index];
 	bool use_hardware = g_remote_play_hardware && !m_remote_capture_hardware_failed && m_device->get_external_memory_ahb_support();
 
-	if (use_hardware && (!hardware.image || hardware.width != dst_width || hardware.height != dst_height))
+	if (use_hardware && (!hardware || hardware->width != dst_width || hardware->height != dst_height))
 	{
-		remote_capture_destroy_hardware(hardware);
-
-		if (remote_capture_create_hardware(hardware, dst_width, dst_height))
+		if (hardware)
 		{
-			slot.hardware_buffer = hardware.buffer;
-			slot.generation++;
+			vk::get_resource_manager()->dispose(hardware);
+		}
+
+		hardware = remote_capture_create_hardware(dst_width, dst_height);
+
+		std::lock_guard lock(remote_capture::g_mutex);
+
+		if (hardware)
+		{
+			slot.hardware_buffer = hardware->buffer;
+			slot.generation = ++remote_capture::g_generation;
 		}
 		else
 		{
@@ -2478,7 +2497,8 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 
 		buffer = std::make_unique<vk::buffer>(*m_device, utils::align(nv12_size, 0x10000), m_device->get_memory_mapping().host_visible_coherent,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
-		slot.data = static_cast<const u8*>(buffer->map(0, nv12_size));
+		// All of it: a later, larger frame can still fit.
+		slot.data = static_cast<const u8*>(buffer->map(0, buffer->size()));
 	}
 
 	// One u32 per slot, cleared once and kept mapped, so checking a slot costs a memory read.
@@ -2522,7 +2542,7 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 		acquire.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 		acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		acquire.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-		acquire.image = hardware.image;
+		acquire.image = hardware->image;
 		acquire.subresourceRange = range;
 		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &acquire);
 
@@ -2530,22 +2550,20 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 		copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
 		copy.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
 		copy.extent = { dst_width, dst_height, 1 };
-		vkCmdCopyImage(cmd, m_remote_capture_rgba->value, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, hardware.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+		vkCmdCopyImage(cmd, m_remote_capture_rgba->value, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, hardware->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
 
 		// Hand it to the encoder's side (GL, on the same GPU): released to the foreign queue family.
+		// The second scope is TRANSFER, not BOTTOM_OF_PIPE, so the marker write below waits for the
+		// release and its layout change to finish, and a landed marker means GL may read.
 		VkImageMemoryBarrier release = { .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
 		release.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 		release.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
 		release.newLayout = VK_IMAGE_LAYOUT_GENERAL;
 		release.srcQueueFamilyIndex = m_device->get_graphics_queue_family();
 		release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
-		release.image = hardware.image;
+		release.image = hardware->image;
 		release.subresourceRange = range;
-		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &release);
-
-		// The marker below must not land before the copy is done.
-		vk::insert_global_memory_barrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &release);
 	}
 	else
 	{
@@ -2586,6 +2604,7 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	slot.width = dst_width;
 	slot.height = dst_height;
 	slot.hardware = use_hardware;
+	slot.recorded_ns = static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
 	slot.state.store(remote_capture::slot_recorded, std::memory_order_release);
 
 	// Wakes the app's thread, which then waits the few ms until the GPU has the frame done.
@@ -2594,10 +2613,13 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 }
 
 // An AHardwareBuffer the GPU can copy a frame into and the encoder's GL can read, imported as a
-// Vulkan image with its own dedicated memory.
-bool VKGSRender::remote_capture_create_hardware(remote_capture_hardware& hardware, u32 width, u32 height)
+// Vulkan image with its own dedicated memory. Null when any step fails.
+std::unique_ptr<VKGSRender::remote_capture_hardware> VKGSRender::remote_capture_create_hardware(u32 width, u32 height)
 {
 #ifdef __ANDROID__
+	auto hardware = std::make_unique<remote_capture_hardware>();
+	hardware->device = *m_device;
+
 	AHardwareBuffer_Desc desc = {};
 	desc.width = width;
 	desc.height = height;
@@ -2608,22 +2630,19 @@ bool VKGSRender::remote_capture_create_hardware(remote_capture_hardware& hardwar
 	// linear buffer is the one layout both are sure to agree on.
 	desc.usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_CPU_READ_RARELY;
 
-	if (AHardwareBuffer_allocate(&desc, &hardware.buffer) != 0 || !hardware.buffer)
+	if (AHardwareBuffer_allocate(&desc, &hardware->buffer) != 0 || !hardware->buffer)
 	{
-		hardware.buffer = nullptr;
-		return false;
+		hardware->buffer = nullptr;
+		return {};
 	}
-
-	const VkDevice dev = *m_device;
 
 	VkAndroidHardwareBufferFormatPropertiesANDROID format_properties = { .sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID };
 	VkAndroidHardwareBufferPropertiesANDROID properties = { .sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID, .pNext = &format_properties };
 
-	if (!vkGetAndroidHardwareBufferPropertiesANDROID || vkGetAndroidHardwareBufferPropertiesANDROID(dev, hardware.buffer, &properties) != VK_SUCCESS ||
+	if (!vkGetAndroidHardwareBufferPropertiesANDROID || vkGetAndroidHardwareBufferPropertiesANDROID(hardware->device, hardware->buffer, &properties) != VK_SUCCESS ||
 		!properties.memoryTypeBits || format_properties.format != VK_FORMAT_R8G8B8A8_UNORM)
 	{
-		remote_capture_destroy_hardware(hardware);
-		return false;
+		return {};
 	}
 
 	VkExternalMemoryImageCreateInfo external = { .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO };
@@ -2641,81 +2660,68 @@ bool VKGSRender::remote_capture_create_hardware(remote_capture_hardware& hardwar
 	image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-	if (vkCreateImage(dev, &image_info, nullptr, &hardware.image) != VK_SUCCESS)
+	if (vkCreateImage(hardware->device, &image_info, nullptr, &hardware->image) != VK_SUCCESS)
 	{
-		hardware.image = VK_NULL_HANDLE;
-		remote_capture_destroy_hardware(hardware);
-		return false;
+		hardware->image = VK_NULL_HANDLE;
+		return {};
 	}
 
 	VkImportAndroidHardwareBufferInfoANDROID import = { .sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID };
-	import.buffer = hardware.buffer;
+	import.buffer = hardware->buffer;
 
 	VkMemoryDedicatedAllocateInfo dedicated = { .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, .pNext = &import };
-	dedicated.image = hardware.image;
+	dedicated.image = hardware->image;
 
 	VkMemoryAllocateInfo allocate = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &dedicated };
 	allocate.allocationSize = properties.allocationSize;
 	allocate.memoryTypeIndex = static_cast<u32>(std::countr_zero(properties.memoryTypeBits));
 
-	if (vkAllocateMemory(dev, &allocate, nullptr, &hardware.memory) != VK_SUCCESS)
+	if (vkAllocateMemory(hardware->device, &allocate, nullptr, &hardware->memory) != VK_SUCCESS)
 	{
-		hardware.memory = VK_NULL_HANDLE;
-		remote_capture_destroy_hardware(hardware);
-		return false;
+		hardware->memory = VK_NULL_HANDLE;
+		return {};
 	}
 
-	if (vkBindImageMemory(dev, hardware.image, hardware.memory, 0) != VK_SUCCESS)
+	if (vkBindImageMemory(hardware->device, hardware->image, hardware->memory, 0) != VK_SUCCESS)
 	{
-		remote_capture_destroy_hardware(hardware);
-		return false;
+		return {};
 	}
 
-	hardware.width = width;
-	hardware.height = height;
-	return true;
+	hardware->width = width;
+	hardware->height = height;
+	return hardware;
 #else
-	(void)hardware;
 	(void)width;
 	(void)height;
-	return false;
+	return {};
 #endif
 }
 
-// Only for a slot nothing is using: free, so the GPU and the encoder are done with it. The buffer
-// itself lives on while the encoder's GL still holds an image of it.
-void VKGSRender::remote_capture_destroy_hardware(remote_capture_hardware& hardware)
+// The buffer itself lives on while the encoder's GL still holds an image of it.
+VKGSRender::remote_capture_hardware::~remote_capture_hardware()
 {
-	const VkDevice dev = *m_device;
-
-	if (hardware.image)
+	if (image)
 	{
-		vkDestroyImage(dev, hardware.image, nullptr);
-		hardware.image = VK_NULL_HANDLE;
+		vkDestroyImage(device, image, nullptr);
 	}
 
-	if (hardware.memory)
+	if (memory)
 	{
-		vkFreeMemory(dev, hardware.memory, nullptr);
-		hardware.memory = VK_NULL_HANDLE;
+		vkFreeMemory(device, memory, nullptr);
 	}
 
 #ifdef __ANDROID__
-	if (hardware.buffer)
+	if (buffer)
 	{
-		AHardwareBuffer_release(hardware.buffer);
-		hardware.buffer = nullptr;
+		AHardwareBuffer_release(buffer);
 	}
 #endif
-
-	hardware.width = 0;
-	hardware.height = 0;
 }
 
 // RSX thread. Everything remote play allocated goes once it stops. device_idle: the GPU has nothing
 // in flight (the renderer is going away). Otherwise a slot the GPU may still be filling is waited for
-// over the next flips. A frame the encoder still holds needs no waiting: its buffer outlives the
-// Vulkan image for as long as GL has it.
+// over the next flips, and the rest goes through the resource manager. A frame the encoder still
+// holds needs no waiting: its buffer outlives the Vulkan image for as long as GL has it.
 void VKGSRender::remote_capture_release(bool device_idle)
 {
 	auto& ring = m_remote_capture_ring;
@@ -2745,6 +2751,24 @@ void VKGSRender::remote_capture_release(bool device_idle)
 
 	m_remote_capture_published = false;
 
+	// Destroyed now when the device is idle, otherwise once the frames that used them complete.
+	const auto discard = [device_idle](auto& resource)
+	{
+		if (!resource)
+		{
+			return;
+		}
+
+		if (device_idle)
+		{
+			resource.reset();
+		}
+		else
+		{
+			vk::get_resource_manager()->dispose(resource);
+		}
+	};
+
 	for (usz i = 0; i < ring.slots.size(); i++)
 	{
 		auto& slot = ring.slots[i];
@@ -2756,50 +2780,20 @@ void VKGSRender::remote_capture_release(bool device_idle)
 		if (auto& buffer = m_remote_capture_buffers[i])
 		{
 			buffer->unmap();
-
-			if (device_idle)
-			{
-				buffer.reset();
-			}
-			else
-			{
-				vk::get_resource_manager()->dispose(buffer);
-			}
 		}
 
-		remote_capture_destroy_hardware(m_remote_capture_hardware[i]);
+		discard(m_remote_capture_buffers[i]);
+		discard(m_remote_capture_hardware[i]);
 	}
 
 	if (m_remote_capture_marker)
 	{
 		m_remote_capture_marker->unmap();
 		ring.markers = nullptr;
-
-		if (device_idle)
-		{
-			m_remote_capture_marker.reset();
-		}
-		else
-		{
-			vk::get_resource_manager()->dispose(m_remote_capture_marker);
-		}
 	}
 
-	for (auto* target : { &m_remote_capture_y, &m_remote_capture_uv, &m_remote_capture_rgba })
-	{
-		if (!*target)
-		{
-			continue;
-		}
-
-		if (device_idle)
-		{
-			target->reset();
-		}
-		else
-		{
-			vk::remove_framebuffers_with_image(target->get());
-			vk::get_resource_manager()->dispose(*target);
-		}
-	}
+	discard(m_remote_capture_marker);
+	discard(m_remote_capture_y);
+	discard(m_remote_capture_uv);
+	discard(m_remote_capture_rgba);
 }

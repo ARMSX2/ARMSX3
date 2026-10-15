@@ -35,7 +35,7 @@ struct RPCSXApi {
   int (*remotePlayPollVideo)(uint8_t *dst, int64_t cap, int32_t *info, int timeoutMs);
   int (*remotePlayPollAudio)(int16_t *dst, int capFrames, int timeoutMs);
   void (*remotePlayCounters)(uint32_t *out);
-  void (*remotePlayReleaseFrame)(int slot);
+  void (*remotePlayReleaseFrame)(int slot, uint32_t seq);
   AHardwareBuffer *(*remotePlayHardwareBuffer)(int slot, uint32_t *generation);
   void (*remotePlaySetHardware)(bool enabled);
   bool (*keyboardKey)(int androidKeyCode, int unicode, bool pressed, bool repeat);
@@ -359,13 +359,14 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayStop(JNIEnv *, 
   }
 }
 
-// buffer: a direct ByteBuffer for the NV12 frame (Y plane, then interleaved UV, rows packed).
-// info (4 ints): width, height, two unused. Returns 1 with a frame, 0 on timeout, -1 when capture
-// is off, -2 when the buffer is too small for the frame described in info.
+// buffer: a direct ByteBuffer for an NV12 frame (Y plane, then interleaved UV, rows packed).
+// info (6 ints): width, height, slot, generation, seq, unused. Returns 2 with a hardware frame
+// (nothing written to buffer), 1 with an NV12 frame, 0 on timeout, -1 when capture is off, -2 when
+// the buffer is too small for the frame described in info.
 extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
     JNIEnv *env, jobject, jobject buffer, jintArray info, jint timeoutMs) {
   if (rpcsxLib.remotePlayPollVideo == nullptr || buffer == nullptr || info == nullptr ||
-      env->GetArrayLength(info) < 4) {
+      env->GetArrayLength(info) < 6) {
     return -1;
   }
 
@@ -375,9 +376,9 @@ extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
     return -1;
   }
 
-  int32_t out[4] = {};
+  int32_t out[6] = {};
   const int result = rpcsxLib.remotePlayPollVideo(dst, cap, out, timeoutMs);
-  env->SetIntArrayRegion(info, 0, 4, out);
+  env->SetIntArrayRegion(info, 0, 6, out);
   return result;
 }
 
@@ -385,9 +386,9 @@ extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
 // video encoder as GL textures so a frame never passes through the CPU. The two calls below that
 // touch GL need a current EGL context on the calling thread.
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayReleaseFrame(JNIEnv *, jobject, jint slot) {
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayReleaseFrame(JNIEnv *, jobject, jint slot, jint seq) {
   if (rpcsxLib.remotePlayReleaseFrame != nullptr) {
-    rpcsxLib.remotePlayReleaseFrame(slot);
+    rpcsxLib.remotePlayReleaseFrame(slot, static_cast<uint32_t>(seq));
   }
 }
 

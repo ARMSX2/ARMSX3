@@ -53,6 +53,15 @@ namespace
 	atomic_t<u32> g_delivered{0};
 	atomic_t<u32> g_superseded{0};
 
+	// How long the GPU usually takes from recording a frame to finishing it, in us, averaged. Only
+	// the app's video thread uses it, to sleep through most of that wait instead of polling.
+	u64 g_gpu_delay_us = 8000;
+
+	u64 steady_ns()
+	{
+		return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+	}
+
 	class remote_play_sink final : public utils::video_sink
 	{
 	public:
@@ -109,14 +118,14 @@ namespace
 	// The newest frame the GPU has finished. Finished frames older than it are freed unread: for a
 	// live stream they are already late. A hardware frame stays with the app (its slot held) until
 	// _rpcsx_remotePlayReleaseFrame; an NV12 frame is copied to dst and its slot freed at once.
-	// Returns 2 with a hardware frame (info: width, height, slot, generation), 1 with an NV12 frame
-	// in dst (info: width, height), 0 when none is finished yet, -2 when cap is too small for one.
-	// pending tells the caller whether a recorded frame is still on the GPU.
-	int take_frame(u8* dst, usz cap, s32* info, bool& pending)
+	// Returns 2 with a hardware frame (info: width, height, slot, generation, seq), 1 with an NV12
+	// frame in dst (info: width, height), 0 when none is finished yet, -2 when cap is too small for
+	// one. pending_since: when the oldest frame still on the GPU was recorded, or 0 for none.
+	int take_frame(u8* dst, usz cap, s32* info, u64& pending_since)
 	{
 		std::lock_guard lock(remote_capture::g_mutex);
 
-		pending = false;
+		pending_since = 0;
 		auto* const ring = remote_capture::g_ring;
 
 		if (!ring || !ring->markers)
@@ -138,7 +147,11 @@ namespace
 
 			if (ring->markers[i] != slot.seq)
 			{
-				pending = true;
+				if (!pending_since || slot.recorded_ns < pending_since)
+				{
+					pending_since = slot.recorded_ns;
+				}
+
 				continue;
 			}
 
@@ -167,8 +180,18 @@ namespace
 		// The marker was read before the frame; keep it that way.
 		std::atomic_thread_fence(std::memory_order_acquire);
 
+		// How long that one took, for the next wait.
+		const u64 now = steady_ns();
+		if (now > newest->recorded_ns)
+		{
+			const u64 took_us = std::min<u64>((now - newest->recorded_ns) / 1000, 100'000);
+			g_gpu_delay_us = (g_gpu_delay_us * 7 + took_us) / 8;
+		}
+
 		info[0] = static_cast<s32>(newest->width);
 		info[1] = static_cast<s32>(newest->height);
+		info[4] = static_cast<s32>(newest->seq);
+		info[5] = 0;
 
 		if (newest->hardware)
 		{
@@ -301,11 +324,11 @@ extern "C" void _rpcsx_remotePlayStop()
 	rp_log.notice("remote play: capture stopped");
 }
 
-// Waits up to timeout_ms for a frame. Runs on the app's video thread. Returns:
-//  2: a hardware frame. info: width, height, slot, generation. The slot is the app's until
-//     _rpcsx_remotePlayReleaseFrame; _rpcsx_remotePlayHardwareBuffer gives its buffer.
+// Waits up to timeout_ms for a frame. Runs on the app's video thread. info has 6 ints. Returns:
+//  2: a hardware frame. info: width, height, slot, generation, seq. The slot is the app's until
+//     _rpcsx_remotePlayReleaseFrame(slot, seq); _rpcsx_remotePlayHardwareBuffer gives its buffer.
 //  1: an NV12 frame written to dst: the Y plane, then the interleaved UV plane, rows packed
-//     (width x height x 3 / 2 bytes). info: width, height, -1, 0.
+//     (width x height x 3 / 2 bytes). info: width, height, -1, 0, seq.
 //  0: timeout. -1: capture is not running. -2: cap is too small (info holds the size; the frame
 //     is dropped).
 extern "C" int _rpcsx_remotePlayPollVideo(u8* dst, s64 cap, s32* info, int timeout_ms)
@@ -323,9 +346,9 @@ extern "C" int _rpcsx_remotePlayPollVideo(u8* dst, s64 cap, s32* info, int timeo
 	{
 		// Read before looking, so a frame recorded in between still wakes the wait below.
 		const u32 recorded = remote_capture::g_recorded;
-		bool pending = false;
+		u64 pending_since = 0;
 
-		if (const int result = take_frame(dst, static_cast<usz>(cap), info, pending))
+		if (const int result = take_frame(dst, static_cast<usz>(cap), info, pending_since))
 		{
 			return result;
 		}
@@ -342,11 +365,14 @@ extern "C" int _rpcsx_remotePlayPollVideo(u8* dst, s64 cap, s32* info, int timeo
 			return 0;
 		}
 
-		if (pending)
+		if (pending_since)
 		{
-			// Recorded and still on the GPU, which finishes within a few ms; there is nothing to
-			// be told about that, so look again shortly.
-			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			// Recorded and still on the GPU, which says nothing when it is done. Sleep through
+			// most of the time it usually takes, then look every millisecond.
+			const u64 waited_us = (steady_ns() - pending_since) / 1000;
+			const u64 sleep_us = waited_us + 1500 < g_gpu_delay_us ? g_gpu_delay_us - waited_us - 1000 : 1000;
+			const u64 left_us = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now).count();
+			std::this_thread::sleep_for(std::chrono::microseconds(std::min<u64>({sleep_us, left_us, 20'000})));
 		}
 		else
 		{
@@ -357,14 +383,15 @@ extern "C" int _rpcsx_remotePlayPollVideo(u8* dst, s64 cap, s32* info, int timeo
 	}
 }
 
-// Gives a hardware frame's slot back to the presenter, once the encoder has drawn it.
-extern "C" void _rpcsx_remotePlayReleaseFrame(int slot)
+// Gives a hardware frame's slot back to the presenter, once the encoder has drawn it. seq is the
+// frame's, so a late release from an earlier session cannot free a slot that now holds another.
+extern "C" void _rpcsx_remotePlayReleaseFrame(int slot, u32 seq)
 {
 	std::lock_guard lock(remote_capture::g_mutex);
 
 	auto* const ring = remote_capture::g_ring;
 
-	if (!ring || slot < 0 || static_cast<usz>(slot) >= ring->slots.size())
+	if (!ring || slot < 0 || static_cast<usz>(slot) >= ring->slots.size() || ring->slots[slot].seq != seq)
 	{
 		return;
 	}

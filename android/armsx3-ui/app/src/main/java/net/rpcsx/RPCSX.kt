@@ -156,7 +156,7 @@ class RPCSX {
     // may send them at all.
     external fun remotePlayImportFrame(slot: Int, texture: Int): Long
     external fun remotePlayDestroyImage(image: Long)
-    external fun remotePlayReleaseFrame(slot: Int)
+    external fun remotePlayReleaseFrame(slot: Int, seq: Int)
     external fun remotePlaySetHardware(enabled: Boolean)
     /** Analog pressure per pressure-capable button, in CELL_PAD press-offset order
      *  (RIGHT, LEFT, UP, DOWN, TRIANGLE, CIRCLE, CROSS, SQUARE, L1, R1, L2, R2),

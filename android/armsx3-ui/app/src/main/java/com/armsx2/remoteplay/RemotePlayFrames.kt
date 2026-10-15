@@ -12,12 +12,12 @@ import org.webrtc.ArmsxVideoEncoderFactory
 import org.webrtc.EglBase
 import org.webrtc.GlUtil
 import org.webrtc.TextureBufferImpl
-import org.webrtc.ThreadUtils
 import org.webrtc.VideoFrame
 import org.webrtc.YuvConverter
 import java.nio.ByteBuffer
-import java.util.concurrent.Callable
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 private const val TAG = "RemotePlay"
 
@@ -43,12 +43,17 @@ internal class RemotePlayFrames(textureInput: Boolean) {
     @Volatile
     private var hardware = textureInput
 
+    @Volatile
+    private var released = false
+
     private val pool = ConcurrentLinkedQueue<ByteBuffer>()
-    private val info = IntArray(4)
+    private val info = IntArray(6)
 
     // Texture frames: the GL thread, and per slot its texture, EGL image and the buffer generation
-    // that image is of.
+    // that image is of. The arrays belong to the GL thread, except generations (rp-video thread).
     private var glThread: HandlerThread? = null
+
+    @Volatile
     private var gl: Handler? = null
     private var egl: EglBase? = null
     private var yuvConverter: YuvConverter? = null
@@ -59,22 +64,17 @@ internal class RemotePlayFrames(textureInput: Boolean) {
     init {
         if (hardware) {
             val thread = HandlerThread("rp-gl").also { it.start() }
-            val handler = Handler(thread.looper)
             glThread = thread
-            gl = handler
-            hardware = runCatching {
-                ThreadUtils.invokeAtFrontUninterruptibly(handler, Callable {
-                    egl = EglBase.create(RemotePlayRtc.eglBase.eglBaseContext, EglBase.CONFIG_PIXEL_BUFFER).apply {
-                        createDummyPbufferSurface()
-                        makeCurrent()
-                    }
-                    yuvConverter = YuvConverter()
-                    true
-                })
-            }.getOrElse {
-                Log.w(TAG, "remote play: no GL context for texture frames", it)
-                false
-            }
+            gl = Handler(thread.looper)
+            hardware = onGl {
+                egl = EglBase.create(RemotePlayRtc.eglBase.eglBaseContext, EglBase.CONFIG_PIXEL_BUFFER).apply {
+                    createDummyPbufferSurface()
+                    makeCurrent()
+                }
+                yuvConverter = YuvConverter()
+                true
+            } == true
+            if (!hardware) Log.w(TAG, "remote play: no GL context for texture frames")
         }
         RPCSX.instance.remotePlaySetHardware(hardware)
         Log.i(TAG, "remote play: frames go to the encoder as " + if (hardware) "GPU textures" else "NV12 copies")
@@ -89,25 +89,24 @@ internal class RemotePlayFrames(textureInput: Boolean) {
         if (result != 1) pool.offer(buffer)
 
         return when (result) {
-            2 -> textureFrame(slot = info[2], generation = info[3], width = info[0], height = info[1])
+            2 -> textureFrame(slot = info[2], generation = info[3], seq = info[4], width = info[0], height = info[1])
             1 -> Poll.Frame(VideoFrame(ArmsxNV12Buffer(info[0], info[1], buffer) { pool.offer(buffer) }, 0, System.nanoTime()))
             -1 -> Poll.Stopped
             else -> Poll.Timeout
         }
     }
 
-    private fun textureFrame(slot: Int, generation: Int, width: Int, height: Int): Poll {
+    private fun textureFrame(slot: Int, generation: Int, seq: Int, width: Int, height: Int): Poll {
         val handler = gl
         val converter = yuvConverter
-        if (!hardware || handler == null || converter == null || slot !in 0 until SLOTS) {
-            RPCSX.instance.remotePlayReleaseFrame(slot)
+        if (!hardware || released || handler == null || converter == null || slot !in 0 until SLOTS) {
+            RPCSX.instance.remotePlayReleaseFrame(slot, seq)
             return Poll.Timeout
         }
 
         if (generations[slot] != generation) {
-            val imported = ThreadUtils.invokeAtFrontUninterruptibly(handler, Callable { import(slot) })
-            if (!imported) {
-                RPCSX.instance.remotePlayReleaseFrame(slot)
+            if (onGl { import(slot) } != true) {
+                RPCSX.instance.remotePlayReleaseFrame(slot, seq)
                 disableHardware()
                 return Poll.Timeout
             }
@@ -116,7 +115,7 @@ internal class RemotePlayFrames(textureInput: Boolean) {
 
         val texture = TextureBufferImpl(
             width, height, VideoFrame.TextureBuffer.Type.OES, textures[slot], Matrix(FLIP), handler, converter,
-        ) { RPCSX.instance.remotePlayReleaseFrame(slot) }
+        ) { RPCSX.instance.remotePlayReleaseFrame(slot, seq) }
         return Poll.Frame(VideoFrame(texture, 0, System.nanoTime()))
     }
 
@@ -139,6 +138,33 @@ internal class RemotePlayFrames(textureInput: Boolean) {
         return true
     }
 
+    /**
+     * Runs [block] on the GL thread and waits for it, for at most a second. Null when the thread is
+     * gone, the block threw or it did not finish in time: never a wait that cannot end, which a
+     * post to a thread that has already quit would be.
+     */
+    private fun <T> onGl(block: () -> T): T? {
+        val handler = gl ?: return null
+        var value: T? = null
+        val done = CountDownLatch(1)
+        val posted = handler.post {
+            try {
+                value = block()
+            } catch (e: RuntimeException) {
+                Log.w(TAG, "remote play: GL work failed", e)
+            } finally {
+                done.countDown()
+            }
+        }
+        if (!posted) return null
+        return try {
+            if (done.await(1, TimeUnit.SECONDS)) value else null
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+            null
+        }
+    }
+
     private fun disableHardware() {
         if (!hardware) return
         hardware = false
@@ -148,7 +174,9 @@ internal class RemotePlayFrames(textureInput: Boolean) {
 
     /** Once nothing can draw the textures any more: after the peer, and with it the encoder, is gone. */
     fun release() {
+        released = true
         val handler = gl ?: return
+        gl = null
         handler.post {
             for (slot in 0 until SLOTS) {
                 if (images[slot] != 0L) RPCSX.instance.remotePlayDestroyImage(images[slot])
@@ -160,7 +188,6 @@ internal class RemotePlayFrames(textureInput: Boolean) {
             egl?.release()
         }
         glThread?.quitSafely()
-        gl = null
     }
 
     private companion object {

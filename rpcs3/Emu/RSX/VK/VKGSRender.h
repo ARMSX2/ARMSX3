@@ -270,17 +270,24 @@ private:
 	//    hardware_buffer, and the app asking for it);
 	//  - otherwise a mapped buffer holding the frame as the encoder's NV12, drawn by two small fragment
 	//    passes (Y and UV), which the app copies out once.
+	// A slot's shareable buffer and its Vulkan image. Destroyed through the resource manager, after
+	// the frames that used it have completed.
 	struct remote_capture_hardware
 	{
+		VkDevice device = VK_NULL_HANDLE;
 		AHardwareBuffer* buffer = nullptr;
 		VkImage image = VK_NULL_HANDLE;
 		VkDeviceMemory memory = VK_NULL_HANDLE;
 		u32 width = 0;
 		u32 height = 0;
+
+		remote_capture_hardware() = default;
+		remote_capture_hardware(const remote_capture_hardware&) = delete;
+		~remote_capture_hardware();
 	};
 	remote_capture::ring m_remote_capture_ring;
 	std::array<std::unique_ptr<vk::buffer>, 4> m_remote_capture_buffers;
-	std::array<remote_capture_hardware, 4> m_remote_capture_hardware;
+	std::array<std::unique_ptr<remote_capture_hardware>, 4> m_remote_capture_hardware;
 	std::unique_ptr<vk::image> m_remote_capture_y;
 	std::unique_ptr<vk::image> m_remote_capture_uv;
 	std::unique_ptr<vk::image> m_remote_capture_rgba;
@@ -289,8 +296,7 @@ private:
 	bool m_remote_capture_published = false;
 	bool m_remote_capture_hardware_failed = false;
 	void remote_capture_record(vk::viewable_image* src, u32 width, u32 height, u32 max_size);
-	bool remote_capture_create_hardware(remote_capture_hardware& hardware, u32 width, u32 height);
-	void remote_capture_destroy_hardware(remote_capture_hardware& hardware);
+	std::unique_ptr<remote_capture_hardware> remote_capture_create_hardware(u32 width, u32 height);
 	void remote_capture_release(bool device_idle);
 
 	//Vertex layout
