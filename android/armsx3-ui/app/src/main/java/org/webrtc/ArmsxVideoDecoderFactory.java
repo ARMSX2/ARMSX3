@@ -11,9 +11,6 @@ import android.view.Surface;
 import androidx.annotation.Nullable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
 import java.util.Locale;
 
 /**
@@ -38,8 +35,6 @@ public class ArmsxVideoDecoderFactory implements VideoDecoderFactory {
   private final @Nullable ArmsxVideoOutput output;
   private final VideoDecoderFactory stock;
   private final @Nullable MediaCodecInfo h264;
-  // Whether this device's H.264 decoder plays High profile at 720p and 60 fps (level 3.2).
-  private final boolean h264High;
 
   /** {@code output}: the viewer's screen to decode straight onto, or null for the stock way. */
   public ArmsxVideoDecoderFactory(
@@ -48,12 +43,6 @@ public class ArmsxVideoDecoderFactory implements VideoDecoderFactory {
     this.output = output;
     this.stock = new DefaultVideoDecoderFactory(sharedContext);
     this.h264 = findH264Decoder();
-    MediaCodecInfo direct = findDirectDecoder(VideoCodecMimeType.H264);
-    MediaCodecInfo highCandidate = direct != null ? direct : h264;
-    this.h264High = highCandidate != null
-        && ArmsxVideoEncoderFactory.highProfileLevel(
-               highCandidate.getCapabilitiesForType(VideoCodecMimeType.H264.mimeType()))
-            != null;
   }
 
   private static @Nullable MediaCodecInfo findH264Decoder() {
@@ -77,29 +66,9 @@ public class ArmsxVideoDecoderFactory implements VideoDecoderFactory {
     return h264 != null ? h264.getName() : null;
   }
 
-  /**
-   * WebRTC's list, plus H.264 Constrained High where this device's decoder plays it: WebRTC offers
-   * High only for decoders named OMX.qcom., OMX.Exynos. or OMX.Marvell., and current ones are c2.*
-   * (see ArmsxVideoEncoderFactory for why High).
-   */
   @Override
   public VideoCodecInfo[] getSupportedCodecs() {
-    VideoCodecInfo[] codecs = stock.getSupportedCodecs();
-    if (!h264High) {
-      return codecs;
-    }
-    for (VideoCodecInfo codec : codecs) {
-      if (VideoCodecMimeType.H264.name().equalsIgnoreCase(codec.name)
-          && ArmsxVideoEncoderFactory.isHighProfile(codec)) {
-        return codecs;
-      }
-    }
-    List<VideoCodecInfo> withHigh = new ArrayList<>();
-    withHigh.add(new VideoCodecInfo(VideoCodecMimeType.H264.name(),
-        MediaCodecUtils.getCodecProperties(VideoCodecMimeType.H264, /* highProfile= */ true),
-        /* scalabilityModes= */ new ArrayList<>()));
-    withHigh.addAll(Arrays.asList(codecs));
-    return withHigh.toArray(new VideoCodecInfo[0]);
+    return stock.getSupportedCodecs();
   }
 
   @Override

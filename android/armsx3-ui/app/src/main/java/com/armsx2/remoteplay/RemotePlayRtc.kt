@@ -11,7 +11,6 @@ import org.webrtc.MediaStream
 import org.webrtc.MediaStreamTrack
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionFactory
-import org.webrtc.RtpCapabilities
 import org.webrtc.RtpTransceiver
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
@@ -132,22 +131,21 @@ internal object RemotePlayRtc {
         }
 
     /**
-     * H.264 first, since every phone has a hardware encoder and decoder for it: High profile before
-     * Baseline (a cleaner picture for the bitrate; see ArmsxVideoEncoderFactory), and VP8 as the
+     * H.264 first, since every phone has a hardware encoder and decoder for it, and VP8 as the
      * fallback a software decoder always covers, plus what repairs losses (resends, FEC). Offering
      * nothing else also keeps a connection code short: every listed codec is several lines of the
      * offer.
      */
     fun restrictCodecs(factory: PeerConnectionFactory, transceiver: RtpTransceiver) {
         val codecs = factory.getRtpSenderCapabilities(MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO)?.codecs ?: return
-        fun rank(codec: RtpCapabilities.CodecCapability) = when (codec.name.uppercase()) {
-            "H264" -> if (codec.parameters["profile-level-id"]?.startsWith("64", ignoreCase = true) == true) 0 else 1
-            "VP8" -> 2
-            "RTX", "RED", "ULPFEC", "FLEXFEC-03" -> 3
+        fun rank(name: String) = when (name.uppercase()) {
+            "H264" -> 0
+            "VP8" -> 1
+            "RTX", "RED", "ULPFEC", "FLEXFEC-03" -> 2
             else -> -1
         }
-        val kept = codecs.filter { rank(it) >= 0 }.sortedBy { rank(it) }
-        if (kept.any { rank(it) <= 2 }) runCatching { transceiver.setCodecPreferences(kept) }
+        val kept = codecs.filter { rank(it.name) >= 0 }.sortedBy { rank(it.name) }
+        if (kept.any { rank(it.name) <= 1 }) runCatching { transceiver.setCodecPreferences(kept) }
     }
 
     fun sdpMessage(type: String, sdp: SessionDescription): JSONObject = sdpMessage(type, sdp.description)
