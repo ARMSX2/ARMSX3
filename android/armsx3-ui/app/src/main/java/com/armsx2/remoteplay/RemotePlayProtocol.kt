@@ -44,8 +44,14 @@ internal object RemotePlayProtocol {
     /** Video bitrate bounds in bits per second. WebRTC moves between them as the network allows. */
     class Bitrate(val min: Int, val start: Int, val max: Int)
 
-    /** Same Wi-Fi: room to spare, so start where 720p60 game footage looks clean and let it climb. */
-    val WIFI_BITRATE = Bitrate(min = 2_000_000, start = 10_000_000, max = 25_000_000)
+    /**
+     * Same Wi-Fi: room to spare, so start where 720p60 game footage looks clean and let it climb.
+     * The floor keeps WebRTC from settling low while the picture is still: it sends at about 2.5
+     * times its bandwidth estimate, and at the 4 Mbps test 13 settled on, the first large frames
+     * after standing still took longer than a frame's 16.7 ms to go out, so they bunched up and some
+     * were dropped. Any home Wi-Fi carries 6 Mbps.
+     */
+    val WIFI_BITRATE = Bitrate(min = 6_000_000, start = 10_000_000, max = 25_000_000)
 
     /** Online: the host's upload decides, so start where most connections cope. */
     val ONLINE_BITRATE = Bitrate(min = 1_000_000, start = 4_000_000, max = 12_000_000)
