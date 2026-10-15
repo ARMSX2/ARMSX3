@@ -58,6 +58,8 @@ add_library(rpcsx-android SHARED
     # Reaches a user-picked folder through SAF on builds with no filesystem
     # permission, as an fs::device_base. See src/saf_device.h.
     src/saf_device.cpp
+    # Remote play capture: hands frames and audio from RPCS3's recording hook to the app.
+    src/remote_play.cpp
     # Carried from RPCSX; no upstream equivalent.
     ${CMAKE_SOURCE_DIR}/rpcs3/dev/iso.cpp
     ${ARMSX3_INPUT_SOURCES}

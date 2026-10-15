@@ -14,6 +14,7 @@
 #include "Emu/Cell/SPURecompiler.h"
 #include "Emu/Cell/SPUThread.h"
 #include "Emu/IdManager.h"
+#include "util/video_provider.h"
 #include "Emu/android_app_state.h"
 #include "Emu/Io/KeyboardHandler.h"
 #include "Emu/Io/Null/NullKeyboardHandler.h"
@@ -635,12 +636,19 @@ public:
 
   u64 display_epoch() const override { return g_native_window_epoch.load(); }
 
-  bool can_consume_frame() const override { return false; }
+  // The recording hook, as the Qt gs_frame forwards it. Its only user here is remote play
+  // (remote_play.cpp); with nothing recording, can_consume_frame stays false.
+  bool can_consume_frame() const override {
+    return g_fxo->get<utils::video_provider>().can_consume_frame();
+  }
 
   // Upstream takes the buffer by rvalue ref (it moves it); RPCSX's lvalue-ref
   // signature no longer overrides, which left GraphicsFrame abstract.
   void present_frame(std::vector<u8> &&data, u32 pitch, u32 width, u32 height,
-                     bool is_bgra) const override {}
+                     bool is_bgra) const override {
+    g_fxo->get<utils::video_provider>().present_frame(std::move(data), pitch, width,
+                                                      height, is_bgra);
+  }
   // Save slot thumbnails. RPCS3 already renders and hands over the finished frame here
   // whenever a screenshot is requested; this used to drop it, which is why the slot picker
   // had nothing to show. Kept as the most recent frame rather than written straight out:

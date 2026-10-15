@@ -260,6 +260,24 @@ private:
 
 	std::unique_ptr<vk::image> m_overlay_recording_img;
 
+	// ARMSX3 remote play (android/src/remote_play.cpp). Frames are scaled down on the GPU and read
+	// back a frame late: each slot is filled during a flip and read once that frame's command
+	// buffer has completed, in frame_context_cleanup. The recording path above it instead does a
+	// hard sync on every captured frame, which a live stream would pay at 60 fps.
+	struct remote_capture_slot
+	{
+		std::unique_ptr<vk::buffer> buffer;
+		vk::frame_context_t* frame = nullptr;
+		u32 width = 0;
+		u32 height = 0;
+		bool bgra = false;
+		bool pending = false;
+	};
+	std::array<remote_capture_slot, 3> m_remote_capture_slots;
+	std::unique_ptr<vk::image> m_remote_capture_img;
+	void remote_capture_record(vk::viewable_image* src, u32 width, u32 height, u32 max_size);
+	void remote_capture_collect(vk::frame_context_t* frame);
+
 	//Vertex layout
 	rsx::vertex_input_layout m_vertex_layout;
 

@@ -24,6 +24,7 @@
 
 extern atomic_t<bool> g_user_asked_for_screenshot;
 extern atomic_t<recording_mode> g_recording_mode;
+extern atomic_t<u32> g_remote_play_max_size; // android/src/remote_play.cpp
 
 namespace vk
 {
@@ -1034,6 +1035,9 @@ void VKGSRender::frame_context_cleanup(vk::frame_context_t *ctx)
 		ctx->framegen_cb_count = 0;
 	}
 
+	// This frame's command buffers are done, so any remote play readback recorded in them is too.
+	remote_capture_collect(ctx);
+
 	// Resource cleanup.
 	{
 		RSX_PROF_SCOPE(res_trim);
@@ -1670,7 +1674,10 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 	const bool has_overlay = (m_overlay_manager && m_overlay_manager->has_visible());
 	const bool user_asked_for_screenshot = g_user_asked_for_screenshot.exchange(false);
-	const bool user_is_recording = (g_recording_mode != recording_mode::stopped && m_frame->can_consume_frame());
+	// Remote play takes the recording hook too, but reads frames back on its own path (below).
+	const u32 remote_play_max_size = g_remote_play_max_size.load();
+	const bool remote_play_capture = remote_play_max_size && g_recording_mode != recording_mode::stopped && m_frame->can_consume_frame();
+	const bool user_is_recording = !remote_play_max_size && (g_recording_mode != recording_mode::stopped && m_frame->can_consume_frame());
 	const bool need_media_capture = user_asked_for_screenshot || user_is_recording;
 
 	const auto render_overlays = [&](vk::framebuffer_holder* fbo, const areau& area)
@@ -1688,6 +1695,11 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 			ui_renderer->run(*m_current_command_buffer, render_area, fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get());
 		}
 	};
+
+	if (image_to_flip && remote_play_capture)
+	{
+		remote_capture_record(image_to_flip, buffer_width, buffer_height, remote_play_max_size);
+	}
 
 	// WARNING: We have to do this here. We cannot touch the acquired image on the CB and then do a hard sync on it before it is submitted to the presentation engine.
 	// That introduces a WRITE_AFTER_PRESENT (from the previous present) when we later try to present on a different CB
@@ -2226,5 +2238,123 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[20]++; flush_command_queue(true);
 		}
+	}
+}
+
+void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 height, u32 max_size)
+{
+	// The stream wants 8-bit colour; anything else (an HDR or 16-bit display buffer) is skipped
+	// rather than converted, so a format nobody has tested cannot break the presenter.
+	const VkFormat format = src->format();
+	if (format != VK_FORMAT_B8G8R8A8_UNORM && format != VK_FORMAT_R8G8B8A8_UNORM &&
+		format != VK_FORMAT_B8G8R8A8_SRGB && format != VK_FORMAT_R8G8B8A8_SRGB)
+	{
+		return;
+	}
+
+	width = std::min(width, src->width());
+	height = std::min(height, src->height());
+	if (width < 2 || height < 2)
+	{
+		return;
+	}
+
+	// The GPU is still on the frames these slots hold: drop this one rather than wait.
+	remote_capture_slot* slot = nullptr;
+	for (auto& candidate : m_remote_capture_slots)
+	{
+		if (!candidate.pending)
+		{
+			slot = &candidate;
+			break;
+		}
+	}
+
+	if (!slot)
+	{
+		return;
+	}
+
+	// Fit inside the stream's size, keep the aspect ratio, and keep both sides even for I420.
+	const u32 max_width = max_size >> 16;
+	const u32 max_height = max_size & 0xffff;
+	const f32 scale = std::min({1.f, static_cast<f32>(max_width) / width, static_cast<f32>(max_height) / height});
+	const u32 dst_width = std::max(2u, static_cast<u32>(width * scale) & ~1u);
+	const u32 dst_height = std::max(2u, static_cast<u32>(height * scale) & ~1u);
+
+	if (m_remote_capture_img &&
+		(m_remote_capture_img->width() != dst_width || m_remote_capture_img->height() != dst_height || m_remote_capture_img->format() != format))
+	{
+		vk::get_resource_manager()->dispose(m_remote_capture_img);
+	}
+
+	if (!m_remote_capture_img)
+	{
+		m_remote_capture_img = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+			VK_IMAGE_TYPE_2D, format, dst_width, dst_height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+			VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+			0, VMM_ALLOCATION_POOL_SYSTEM);
+	}
+
+	const usz size = usz{dst_width} * dst_height * 4;
+	if (!slot->buffer || slot->buffer->size() < size)
+	{
+		slot->buffer = std::make_unique<vk::buffer>(*m_device, utils::align(size, 0x10000), m_device->get_memory_mapping().host_visible_coherent,
+			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
+	}
+
+	auto& cmd = *m_current_command_buffer;
+	src->push_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+	m_remote_capture_img->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+	vk::copy_scaled_image(cmd, src, m_remote_capture_img.get(),
+		areai{ 0, 0, static_cast<s32>(width), static_cast<s32>(height) },
+		areai{ 0, 0, static_cast<s32>(dst_width), static_cast<s32>(dst_height) },
+		{}, true, VK_FILTER_LINEAR);
+
+	src->pop_layout(cmd);
+	m_remote_capture_img->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+	VkBufferImageCopy region{};
+	region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+	region.imageSubresource.layerCount = 1;
+	region.imageExtent = { dst_width, dst_height, 1 };
+	vk::copy_image_to_buffer(cmd, m_remote_capture_img.get(), slot->buffer.get(), region);
+
+	// Make the copy visible to the host read in remote_capture_collect.
+	vk::insert_buffer_memory_barrier(cmd, slot->buffer->value, 0, size,
+		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+
+	slot->frame = m_current_frame;
+	slot->width = dst_width;
+	slot->height = dst_height;
+	slot->bgra = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
+	slot->pending = true;
+}
+
+void VKGSRender::remote_capture_collect(vk::frame_context_t* frame)
+{
+	for (auto& slot : m_remote_capture_slots)
+	{
+		if (!slot.pending || slot.frame != frame)
+		{
+			continue;
+		}
+
+		slot.pending = false;
+
+		// Capture stopped in between: the frame has nowhere to go.
+		if (!g_remote_play_max_size)
+		{
+			continue;
+		}
+
+		const usz size = usz{slot.width} * slot.height * 4;
+		std::vector<u8> pixels(size);
+		const auto mapped = slot.buffer->map(0, size);
+		std::memcpy(pixels.data(), mapped, size);
+		slot.buffer->unmap();
+
+		m_frame->present_frame(std::move(pixels), slot.width * 4, slot.width, slot.height, slot.bgra);
 	}
 }

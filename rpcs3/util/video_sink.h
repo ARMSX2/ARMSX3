@@ -102,6 +102,11 @@ namespace utils
 		bool use_internal_audio = false; // True if we want to fetch samples from cellAudio
 		bool use_internal_video = false; // True if we want to fetch frames from rsx
 
+		// ARMSX3 remote play: take every audio block. The provider drops a block whose timestamp
+		// lands in the same 256-sample slot as the previous one, which a file recorder can absorb
+		// but a live stream hears as a click whenever cellAudio delivers two blocks close together.
+		bool accept_all_samples = false;
+
 	protected:
 		shared_mutex m_video_mtx;
 		std::deque<encoder_frame> m_frames_to_encode;

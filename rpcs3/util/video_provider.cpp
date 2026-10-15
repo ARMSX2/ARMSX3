@@ -201,7 +201,7 @@ namespace utils
 		const s64 pts = m_video_sink->get_audio_pts(timestamp_us);
 
 		// We can just skip this sample if it has the same timestamp.
-		if (pts <= m_last_audio_pts_incoming)
+		if (pts <= m_last_audio_pts_incoming && !m_video_sink->accept_all_samples)
 		{
 			return;
 		}

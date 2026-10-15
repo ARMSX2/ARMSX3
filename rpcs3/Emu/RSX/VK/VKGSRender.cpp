@@ -1014,6 +1014,13 @@ VKGSRender::~VKGSRender()
 	m_texture_cache.destroy();
 
 	m_overlay_recording_img.reset();
+	m_remote_capture_img.reset();
+
+	for (auto& slot : m_remote_capture_slots)
+	{
+		slot.buffer.reset();
+		slot.pending = false;
+	}
 	m_stencil_mirror_sampler.reset();
 
 	// Queries

@@ -24,6 +24,11 @@ struct RPCSXApi {
   bool (*overlayPadData)(int port, int digital1, int digital2, int leftStickX,
                          int leftStickY, int rightStickX, int rightStickY);
   bool (*overlayPadPressure)(int port, const int *values, int count);
+  // Remote play capture (android/src/remote_play.cpp in the core).
+  bool (*remotePlayStart)(int maxWidth, int maxHeight);
+  void (*remotePlayStop)();
+  int (*remotePlayPollVideo)(uint8_t *dst, int64_t cap, int32_t *info, int timeoutMs);
+  int (*remotePlayPollAudio)(int16_t *dst, int capFrames, int timeoutMs);
   bool (*keyboardKey)(int androidKeyCode, int unicode, bool pressed, bool repeat);
   bool (*initialize)(std::string_view rootDir, std::string_view user);
   void (*setSocInfo)(std::string_view socInfo);
@@ -161,6 +166,10 @@ struct RPCSXLibrary : RPCSXApi {
     // clang-format off
     result.overlayPadData = reinterpret_cast<decltype(overlayPadData)>(dlsym(handle, "_rpcsx_overlayPadData"));
     result.overlayPadPressure = reinterpret_cast<decltype(overlayPadPressure)>(dlsym(handle, "_rpcsx_overlayPadPressure"));
+    result.remotePlayStart = reinterpret_cast<decltype(remotePlayStart)>(dlsym(handle, "_rpcsx_remotePlayStart"));
+    result.remotePlayStop = reinterpret_cast<decltype(remotePlayStop)>(dlsym(handle, "_rpcsx_remotePlayStop"));
+    result.remotePlayPollVideo = reinterpret_cast<decltype(remotePlayPollVideo)>(dlsym(handle, "_rpcsx_remotePlayPollVideo"));
+    result.remotePlayPollAudio = reinterpret_cast<decltype(remotePlayPollAudio)>(dlsym(handle, "_rpcsx_remotePlayPollAudio"));
     result.keyboardKey = reinterpret_cast<decltype(keyboardKey)>(dlsym(handle, "_rpcsx_keyboardKey"));
     result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_rpcsx_initialize"));
     result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_rpcsx_setSocInfo"));
@@ -318,6 +327,63 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_overlayPadData(
 
   return rpcsxLib.overlayPadData(port, digital1, digital2, leftStickX,
                                  leftStickY, rightStickX, rightStickY);
+}
+
+// Remote play. The streaming threads pull frames and audio from the core through these; the core
+// never calls back into Java for them. Every one fails soft on a core without the exports.
+extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_remotePlayStart(
+    JNIEnv *, jobject, jint maxWidth, jint maxHeight) {
+  if (rpcsxLib.remotePlayStart == nullptr) {
+    return false;
+  }
+
+  return rpcsxLib.remotePlayStart(maxWidth, maxHeight);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayStop(JNIEnv *, jobject) {
+  if (rpcsxLib.remotePlayStop != nullptr) {
+    rpcsxLib.remotePlayStop();
+  }
+}
+
+// buffer: a direct ByteBuffer for the I420 frame. info (4 ints): width, height, timestamp ms
+// low and high. Returns 1 with a frame, 0 on timeout, -1 when capture is off, -2 when the buffer
+// is too small for the frame described in info.
+extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
+    JNIEnv *env, jobject, jobject buffer, jintArray info, jint timeoutMs) {
+  if (rpcsxLib.remotePlayPollVideo == nullptr || buffer == nullptr || info == nullptr ||
+      env->GetArrayLength(info) < 4) {
+    return -1;
+  }
+
+  auto *dst = static_cast<uint8_t *>(env->GetDirectBufferAddress(buffer));
+  const jlong cap = env->GetDirectBufferCapacity(buffer);
+  if (dst == nullptr || cap <= 0) {
+    return -1;
+  }
+
+  int32_t out[4] = {};
+  const int result = rpcsxLib.remotePlayPollVideo(dst, cap, out, timeoutMs);
+  env->SetIntArrayRegion(info, 0, 4, out);
+  return result;
+}
+
+// buffer: a direct ByteBuffer receiving stereo s16 at 48 kHz. Returns frames written, 0 on
+// timeout, -1 when capture is off.
+extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollAudio(
+    JNIEnv *env, jobject, jobject buffer, jint capFrames, jint timeoutMs) {
+  if (rpcsxLib.remotePlayPollAudio == nullptr || buffer == nullptr) {
+    return -1;
+  }
+
+  auto *dst = static_cast<int16_t *>(env->GetDirectBufferAddress(buffer));
+  const jlong cap = env->GetDirectBufferCapacity(buffer);
+  if (dst == nullptr || cap < 4) {
+    return -1;
+  }
+
+  const int frames = static_cast<int>(std::min<jlong>(capFrames, cap / 4));
+  return rpcsxLib.remotePlayPollAudio(dst, frames, timeoutMs);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_overlayPadPressure(
