@@ -158,6 +158,11 @@ class RPCSX {
     external fun remotePlayDestroyImage(image: Long)
     external fun remotePlayReleaseFrame(slot: Int, seq: Int)
     external fun remotePlaySetHardware(enabled: Boolean)
+    // Online hosting, a port on the router (UPnP): this device's address on the router's network or
+    // null (blocks ~2 s the first time); "public address:port" opened for a UDP port or null; close.
+    external fun remotePlayUpnpPrepare(): String?
+    external fun remotePlayUpnpMap(internalPort: Int, externalHint: Int, leaseSeconds: Int): String?
+    external fun remotePlayUpnpUnmap(externalPort: Int)
     /** Analog pressure per pressure-capable button, in CELL_PAD press-offset order
      *  (RIGHT, LEFT, UP, DOWN, TRIANGLE, CIRCLE, CROSS, SQUARE, L1, R1, L2, R2),
      *  each 1..255, or 0 to leave that button digital. */

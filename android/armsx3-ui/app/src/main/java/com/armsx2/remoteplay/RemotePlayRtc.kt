@@ -148,8 +148,9 @@ internal object RemotePlayRtc {
         if (kept.any { rank(it.name) <= 1 }) runCatching { transceiver.setCodecPreferences(kept) }
     }
 
-    fun sdpMessage(type: String, sdp: SessionDescription): JSONObject =
-        JSONObject().put("t", type).put("sdp", sdp.description)
+    fun sdpMessage(type: String, sdp: SessionDescription): JSONObject = sdpMessage(type, sdp.description)
+
+    fun sdpMessage(type: String, sdp: String): JSONObject = JSONObject().put("t", type).put("sdp", sdp)
 
     fun bye(reason: String): JSONObject = JSONObject().put("t", "bye").put("reason", reason)
 }

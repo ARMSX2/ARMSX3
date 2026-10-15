@@ -269,6 +269,9 @@ private class HostSession(
 
     private val wifi = RemotePlayWifi(context)
 
+    // Online: the host's router asked to let the friend in (UPnP), for this session only.
+    private val upnp = if (online) RemotePlayUpnp() else null
+
     private var appliedPad = RemotePlayProtocol.PadState()
     private var lastPadSeq = 0
     private var hasPadSeq = false
@@ -381,17 +384,30 @@ private class HostSession(
         if (offered || ended) return
         offered = true
 
+        // Looks for the router while WebRTC gathers, so the offer seldom waits for it.
+        upnp?.start()
         val created = RemotePlayRtc.createFactory(context).also { rtc = it }
         val factory = created.factory
         Log.i(TAG, "video encoder: ${created.h264Encoder ?: "no hardware H.264, stock factories"}")
         val wait = GatherWait(main, 4_000) {
             val description = peer?.localDescription ?: return@GatherWait
-            link.send(
-                RemotePlayRtc.sdpMessage("offer", description)
-                    .put("v", RemotePlayProtocol.VERSION)
-                    .put("game", game.take(80))
-                    .put("host", Build.MODEL),
-            )
+            val send = { sdp: String ->
+                link.send(
+                    RemotePlayRtc.sdpMessage("offer", sdp)
+                        .put("v", RemotePlayProtocol.VERSION)
+                        .put("game", game.take(80))
+                        .put("host", Build.MODEL),
+                )
+            }
+            val router = upnp
+            if (router == null) {
+                send(description.description)
+            } else {
+                thread(name = "rp-upnp-offer", isDaemon = true) {
+                    val sdp = router.addCandidates(description.description, 3_000)
+                    main.post { if (!ended) send(sdp) }
+                }
+            }
         }
         gather = wait
 
@@ -656,6 +672,7 @@ private class HostSession(
         audioThread?.join(500)
         applyPad(RemotePlayProtocol.PadState())
         wifi.release()
+        upnp?.close()
 
         // A few times, since the channel drops what it cannot deliver.
         audioChannel?.takeIf { it.state() == DataChannel.State.OPEN }?.let { channel ->

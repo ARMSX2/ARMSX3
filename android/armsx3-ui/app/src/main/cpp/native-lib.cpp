@@ -38,6 +38,9 @@ struct RPCSXApi {
   void (*remotePlayReleaseFrame)(int slot, uint32_t seq);
   AHardwareBuffer *(*remotePlayHardwareBuffer)(int slot, uint32_t *generation);
   void (*remotePlaySetHardware)(bool enabled);
+  bool (*remotePlayUpnpPrepare)(char *lanAddr, int lanAddrLen);
+  int (*remotePlayUpnpMap)(int internalPort, int externalHint, int leaseSeconds, char *publicAddr, int publicAddrLen);
+  void (*remotePlayUpnpUnmap)(int externalPort);
   bool (*keyboardKey)(int androidKeyCode, int unicode, bool pressed, bool repeat);
   bool (*initialize)(std::string_view rootDir, std::string_view user);
   void (*setSocInfo)(std::string_view socInfo);
@@ -183,6 +186,9 @@ struct RPCSXLibrary : RPCSXApi {
     result.remotePlayReleaseFrame = reinterpret_cast<decltype(remotePlayReleaseFrame)>(dlsym(handle, "_rpcsx_remotePlayReleaseFrame"));
     result.remotePlayHardwareBuffer = reinterpret_cast<decltype(remotePlayHardwareBuffer)>(dlsym(handle, "_rpcsx_remotePlayHardwareBuffer"));
     result.remotePlaySetHardware = reinterpret_cast<decltype(remotePlaySetHardware)>(dlsym(handle, "_rpcsx_remotePlaySetHardware"));
+    result.remotePlayUpnpPrepare = reinterpret_cast<decltype(remotePlayUpnpPrepare)>(dlsym(handle, "_rpcsx_remotePlayUpnpPrepare"));
+    result.remotePlayUpnpMap = reinterpret_cast<decltype(remotePlayUpnpMap)>(dlsym(handle, "_rpcsx_remotePlayUpnpMap"));
+    result.remotePlayUpnpUnmap = reinterpret_cast<decltype(remotePlayUpnpUnmap)>(dlsym(handle, "_rpcsx_remotePlayUpnpUnmap"));
     result.keyboardKey = reinterpret_cast<decltype(keyboardKey)>(dlsym(handle, "_rpcsx_keyboardKey"));
     result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_rpcsx_initialize"));
     result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_rpcsx_setSocInfo"));
@@ -389,6 +395,36 @@ extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
 extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayReleaseFrame(JNIEnv *, jobject, jint slot, jint seq) {
   if (rpcsxLib.remotePlayReleaseFrame != nullptr) {
     rpcsxLib.remotePlayReleaseFrame(slot, static_cast<uint32_t>(seq));
+  }
+}
+
+// Remote play online hosting: this device's address on the router's network, or null when there
+// is no router to open a port on. Blocks about two seconds the first time.
+extern "C" JNIEXPORT jstring JNICALL Java_net_rpcsx_RPCSX_remotePlayUpnpPrepare(JNIEnv *env, jobject) {
+  char lan[64] = {};
+  if (rpcsxLib.remotePlayUpnpPrepare == nullptr || !rpcsxLib.remotePlayUpnpPrepare(lan, sizeof(lan)) || lan[0] == 0) {
+    return nullptr;
+  }
+  return env->NewStringUTF(lan);
+}
+
+// "public address:router port" for UDP internalPort opened on the router, or null.
+extern "C" JNIEXPORT jstring JNICALL Java_net_rpcsx_RPCSX_remotePlayUpnpMap(
+    JNIEnv *env, jobject, jint internalPort, jint externalHint, jint leaseSeconds) {
+  char address[64] = {};
+  const int port = rpcsxLib.remotePlayUpnpMap == nullptr
+      ? 0
+      : rpcsxLib.remotePlayUpnpMap(internalPort, externalHint, leaseSeconds, address, sizeof(address));
+  if (port <= 0 || address[0] == 0) {
+    return nullptr;
+  }
+  const std::string result = std::string(address) + ":" + std::to_string(port);
+  return env->NewStringUTF(result.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayUpnpUnmap(JNIEnv *, jobject, jint externalPort) {
+  if (rpcsxLib.remotePlayUpnpUnmap != nullptr) {
+    rpcsxLib.remotePlayUpnpUnmap(externalPort);
   }
 }
 

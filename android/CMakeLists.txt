@@ -60,6 +60,8 @@ add_library(rpcsx-android SHARED
     src/saf_device.cpp
     # Remote play capture: hands frames and audio from RPCS3's recording hook to the app.
     src/remote_play.cpp
+    # Remote play online hosting: a port opened on the router (UPnP) for the session.
+    src/remote_play_upnp.cpp
     # Carried from RPCSX; no upstream equivalent.
     ${CMAKE_SOURCE_DIR}/rpcs3/dev/iso.cpp
     ${ARMSX3_INPUT_SOURCES}
