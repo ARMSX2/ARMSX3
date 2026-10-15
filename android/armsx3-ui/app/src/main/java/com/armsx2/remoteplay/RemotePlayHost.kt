@@ -171,6 +171,12 @@ object RemotePlayHost {
             _status.value = Status.Failed(I18n.get("remoteplay.host.noGame"))
             return null
         }
+        // Only the Vulkan renderer captures frames: on OpenGL the friend would hear the game and
+        // never see it.
+        if (!runCatching { RPCSX.instance.remotePlayCanCapture() }.getOrDefault(true)) {
+            _status.value = Status.Failed(I18n.get("remoteplay.host.needsVulkan"))
+            return null
+        }
         return game.title
     }
 

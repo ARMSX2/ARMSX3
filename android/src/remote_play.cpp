@@ -17,6 +17,7 @@
 #include "Emu/Audio/AudioBackend.h"
 #include "Emu/IdManager.h"
 #include "Emu/RSX/remote_capture.h"
+#include "Emu/RSX/VK/VKGSRender.h"
 #include "Emu/System.h"
 #include "util/video_provider.h"
 
@@ -108,6 +109,15 @@ namespace
 	// Stereo s16 samples converted but not yet handed out. Only the app's one audio thread polls.
 	std::mutex g_audio_mutex;
 	std::vector<s16> g_audio_pending;
+
+	// Whether the running game's renderer captures frames for the stream: only the Vulkan one does
+	// (VKPresent.cpp). Asked of the renderer itself, not the setting: a renderer picked in the menu
+	// only takes over when the game restarts.
+	bool renderer_captures()
+	{
+		auto* const rsx = rsx::get_current_renderer();
+		return rsx && dynamic_cast<VKGSRender*>(rsx) != nullptr;
+	}
 
 	std::shared_ptr<remote_play_sink> current_sink()
 	{
@@ -261,6 +271,13 @@ extern "C" bool _rpcsx_remotePlayStart(int max_width, int max_height)
 		return false;
 	}
 
+	if (!renderer_captures())
+	{
+		// The friend would hear the game and never see it.
+		rp_log.warning("remote play: the game is not on the Vulkan renderer, the only one that captures frames");
+		return false;
+	}
+
 	auto sink = std::make_shared<remote_play_sink>();
 
 	{
@@ -287,6 +304,14 @@ extern "C" bool _rpcsx_remotePlayStart(int max_width, int max_height)
 	g_recording_mode = recording_mode::rpcs3;
 	rp_log.notice("remote play: capture started, up to %dx%d", max_width, max_height);
 	return true;
+}
+
+// Whether the running game can be hosted: a game is running, on a renderer that captures frames.
+// The app asks before it starts hosting, so the player hears why at once rather than when a friend
+// connects to a stream with no picture.
+extern "C" bool _rpcsx_remotePlayCanCapture()
+{
+	return !Emu.IsStopped() && renderer_captures();
 }
 
 // Emulation (re)started running (g_emu_callbacks.on_run, on the thread that ran it). A game that

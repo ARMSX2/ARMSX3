@@ -38,6 +38,7 @@ struct RPCSXApi {
   void (*remotePlayReleaseFrame)(int slot, uint32_t seq);
   AHardwareBuffer *(*remotePlayHardwareBuffer)(int slot, uint32_t *generation);
   void (*remotePlaySetHardware)(bool enabled);
+  bool (*remotePlayCanCapture)();
   bool (*remotePlayUpnpPrepare)(char *lanAddr, int lanAddrLen);
   int (*remotePlayUpnpMap)(int internalPort, int externalHint, int leaseSeconds, char *publicAddr, int publicAddrLen);
   void (*remotePlayUpnpUnmap)(int externalPort);
@@ -186,6 +187,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.remotePlayReleaseFrame = reinterpret_cast<decltype(remotePlayReleaseFrame)>(dlsym(handle, "_rpcsx_remotePlayReleaseFrame"));
     result.remotePlayHardwareBuffer = reinterpret_cast<decltype(remotePlayHardwareBuffer)>(dlsym(handle, "_rpcsx_remotePlayHardwareBuffer"));
     result.remotePlaySetHardware = reinterpret_cast<decltype(remotePlaySetHardware)>(dlsym(handle, "_rpcsx_remotePlaySetHardware"));
+    result.remotePlayCanCapture = reinterpret_cast<decltype(remotePlayCanCapture)>(dlsym(handle, "_rpcsx_remotePlayCanCapture"));
     result.remotePlayUpnpPrepare = reinterpret_cast<decltype(remotePlayUpnpPrepare)>(dlsym(handle, "_rpcsx_remotePlayUpnpPrepare"));
     result.remotePlayUpnpMap = reinterpret_cast<decltype(remotePlayUpnpMap)>(dlsym(handle, "_rpcsx_remotePlayUpnpMap"));
     result.remotePlayUpnpUnmap = reinterpret_cast<decltype(remotePlayUpnpUnmap)>(dlsym(handle, "_rpcsx_remotePlayUpnpUnmap"));
@@ -432,6 +434,12 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlaySetHardware(JNI
   if (rpcsxLib.remotePlaySetHardware != nullptr) {
     rpcsxLib.remotePlaySetHardware(enabled);
   }
+}
+
+// Whether the running game can be hosted: its renderer captures frames (Vulkan only). True on a
+// core without the check, which hosted regardless.
+extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_remotePlayCanCapture(JNIEnv *, jobject) {
+  return rpcsxLib.remotePlayCanCapture == nullptr || rpcsxLib.remotePlayCanCapture();
 }
 
 namespace {

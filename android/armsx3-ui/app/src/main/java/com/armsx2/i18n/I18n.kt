@@ -204,6 +204,7 @@ val EN: Map<String, String> = mapOf(
     "remoteplay.host.playing" to "%s is playing as player 2.",
     "remoteplay.host.stop" to "Stop hosting",
     "remoteplay.host.noGame" to "Start a game to host it.",
+    "remoteplay.host.needsVulkan" to "Hosting needs the Vulkan renderer. Switch the renderer to Vulkan, restart the game, then host again.",
     "remoteplay.host.noNetwork" to "Couldn't start hosting. Check that Wi-Fi is on.",
     "remoteplay.host.failed" to "Remote play stopped because of a connection problem. Try again.",
     "remoteplay.invite.preparing" to "Preparing your invite...",

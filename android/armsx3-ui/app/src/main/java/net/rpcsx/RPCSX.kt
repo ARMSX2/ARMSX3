@@ -158,6 +158,8 @@ class RPCSX {
     external fun remotePlayDestroyImage(image: Long)
     external fun remotePlayReleaseFrame(slot: Int, seq: Int)
     external fun remotePlaySetHardware(enabled: Boolean)
+    // Whether the running game can be hosted: only the Vulkan renderer captures frames.
+    external fun remotePlayCanCapture(): Boolean
     // Online hosting, a port on the router (UPnP): this device's address on the router's network or
     // null (blocks ~2 s the first time); "public address:port" opened for a UDP port or null; close.
     external fun remotePlayUpnpPrepare(): String?
