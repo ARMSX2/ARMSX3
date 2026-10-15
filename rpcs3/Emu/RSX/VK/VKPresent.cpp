@@ -2288,9 +2288,13 @@ namespace vk
 			f32 scale_y = 1.f;
 			s32 mode = luma;
 			s32 srgb = 0;
+			f32 area_x = 0.f;
+			f32 area_y = 0.f;
+			f32 area_w = 1.f;
+			f32 area_h = 1.f;
 		} params;
 
-		static constexpr u32 push_constants_size = 16;
+		static constexpr u32 push_constants_size = 32;
 
 		remote_play_capture_pass()
 		{
@@ -2311,11 +2315,21 @@ layout(push_constant) uniform static_data
 	vec2 scale;
 	int mode;
 	int srgb;
+	vec4 area;
 };
 
 void main()
 {
-	vec3 c = texture(fs0, tc0 * scale).rgb;
+	// Where this pixel falls in the game's picture, which sits in the stream's frame the way it
+	// sits on a screen: the bars around it are black.
+	vec2 pos = (tc0 - area.xy) / area.zw;
+	if (any(lessThan(pos, vec2(0.0))) || any(greaterThan(pos, vec2(1.0))))
+	{
+		ocol = mode == 0 ? vec4(16.0 / 255.0) : mode == 1 ? vec4(128.0 / 255.0, 128.0 / 255.0, 0.0, 1.0) : vec4(0.0, 0.0, 0.0, 1.0);
+		return;
+	}
+
+	vec3 c = texture(fs0, pos * scale).rgb;
 
 	if (srgb != 0)
 	{
@@ -2363,13 +2377,18 @@ void main()
 			vkCmdPushConstants(cmd, program->layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, push_constants_size, &params);
 		}
 
-		// Draws over the whole of target; scale picks the part of src the game displays.
-		void run(vk::command_buffer& cmd, vk::image* target, vk::image_view* src, f32 scale_x, f32 scale_y, mode what, bool srgb)
+		// Draws over the whole of target: the picture in area (x, y, width, height, as fractions of
+		// target), black around it. scale picks the part of src the game displays.
+		void run(vk::command_buffer& cmd, vk::image* target, vk::image_view* src, f32 scale_x, f32 scale_y, const std::array<f32, 4>& area, mode what, bool srgb)
 		{
 			params.scale_x = scale_x;
 			params.scale_y = scale_y;
 			params.mode = what;
 			params.srgb = srgb ? 1 : 0;
+			params.area_x = area[0];
+			params.area_y = area[1];
+			params.area_w = area[2];
+			params.area_h = area[3];
 
 			target->change_layout(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
@@ -2427,13 +2446,25 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 
 	auto& slot = ring.slots[index];
 
-	// Fit inside the stream's size and keep the aspect ratio. NV12 wants the width a multiple of 4
-	// (two chroma samples per word) and the height even; the hardware path keeps the same size.
-	const u32 max_width = max_size >> 16;
-	const u32 max_height = max_size & 0xffff;
-	const f32 scale = std::min({1.f, static_cast<f32>(max_width) / width, static_cast<f32>(max_height) / height});
-	const u32 dst_width = std::max(4u, static_cast<u32>(width * scale) & ~3u);
-	const u32 dst_height = std::max(2u, static_cast<u32>(height * scale) & ~1u);
+	// Every frame is the stream's full size, whatever size the game's own frame is. Games switch
+	// buffer sizes between menus, videos and play, and a stream that followed them changed
+	// resolution there: the encoder here and the decoder on the viewer both restart, a hitch at
+	// every such scene change. The game's picture goes in as the screen would show it, aspect and
+	// all, black around it. NV12 wants the width a multiple of 4 (two chroma samples per word) and
+	// the height even; the hardware path keeps the same size.
+	const u32 dst_width = std::max(4u, (max_size >> 16) & ~3u);
+	const u32 dst_height = std::max(2u, (max_size & 0xffff) & ~1u);
+
+	std::array<f32, 4> area = { 0.f, 0.f, 1.f, 1.f };
+	if (!g_cfg.video.stretch_to_display_area)
+	{
+		const areau region = g_fxo->get<rsx::avconf>().aspect_convert_region({ width, height }, { dst_width, dst_height });
+		if (region.width() && region.height())
+		{
+			area = { static_cast<f32>(region.x1) / dst_width, static_cast<f32>(region.y1) / dst_height,
+				static_cast<f32>(region.width()) / dst_width, static_cast<f32>(region.height()) / dst_height };
+		}
+	}
 
 	const auto make_target = [&](std::unique_ptr<vk::image>& target, VkFormat target_format, u32 target_width, u32 target_height)
 	{
@@ -2530,7 +2561,7 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	if (use_hardware)
 	{
 		make_target(m_remote_capture_rgba, VK_FORMAT_R8G8B8A8_UNORM, dst_width, dst_height);
-		pass->run(cmd, m_remote_capture_rgba.get(), view, scale_x, scale_y, vk::remote_play_capture_pass::rgba, srgb);
+		pass->run(cmd, m_remote_capture_rgba.get(), view, scale_x, scale_y, area, vk::remote_play_capture_pass::rgba, srgb);
 		src->pop_layout(cmd);
 
 		const VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
@@ -2569,8 +2600,8 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	{
 		make_target(m_remote_capture_y, VK_FORMAT_R8_UNORM, dst_width, dst_height);
 		make_target(m_remote_capture_uv, VK_FORMAT_R8G8_UNORM, dst_width / 2, dst_height / 2);
-		pass->run(cmd, m_remote_capture_y.get(), view, scale_x, scale_y, vk::remote_play_capture_pass::luma, srgb);
-		pass->run(cmd, m_remote_capture_uv.get(), view, scale_x, scale_y, vk::remote_play_capture_pass::chroma, srgb);
+		pass->run(cmd, m_remote_capture_y.get(), view, scale_x, scale_y, area, vk::remote_play_capture_pass::luma, srgb);
+		pass->run(cmd, m_remote_capture_uv.get(), view, scale_x, scale_y, area, vk::remote_play_capture_pass::chroma, srgb);
 		src->pop_layout(cmd);
 
 		VkBufferImageCopy region{};
