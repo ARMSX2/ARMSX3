@@ -707,6 +707,7 @@ internal class ViewerSession(
     private val main = Handler(Looper.getMainLooper())
     private val audio = AudioOut()
     private val stats = RemotePlayStats(sending = false)
+    private val wifi = RemotePlayWifi(context)
 
     @Volatile
     private var link: SignalLink? = null
@@ -931,6 +932,7 @@ internal class ViewerSession(
                 if (!connectedOnce) {
                     connectedOnce = true
                     main.removeCallbacks(connectTimeout)
+                    wifi.hold()
                     onConnected()
                     main.removeCallbacks(heartbeat)
                     main.post(heartbeat)
@@ -965,6 +967,7 @@ internal class ViewerSession(
         }
         link?.close(RemotePlayRtc.bye("left"))
         audio.stop()
+        wifi.release()
 
         runCatching { peer?.close() }
         runCatching { audioChannel?.unregisterObserver() }

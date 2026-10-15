@@ -14,6 +14,9 @@
     <!-- Remote play: finding hosts on the same Wi-Fi (DNS-SD). Some drivers drop the multicast
          replies unless an app holds a multicast lock. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <!-- Remote play: a low-latency Wi-Fi lock while a stream runs, so the radio does not doze
+         between packets (Android requires this permission for any Wi-Fi lock). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"
