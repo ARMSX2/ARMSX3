@@ -348,9 +348,9 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayStop(JNIEnv *, 
   }
 }
 
-// buffer: a direct ByteBuffer for the RGBA frame. info (4 ints): width, height, timestamp ms
-// low and high. Returns 1 with a frame, 0 on timeout, -1 when capture is off, -2 when the buffer
-// is too small for the frame described in info.
+// buffer: a direct ByteBuffer for the NV12 frame (Y plane, then interleaved UV, rows packed).
+// info (4 ints): width, height, two unused. Returns 1 with a frame, 0 on timeout, -1 when capture
+// is off, -2 when the buffer is too small for the frame described in info.
 extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
     JNIEnv *env, jobject, jobject buffer, jintArray info, jint timeoutMs) {
   if (rpcsxLib.remotePlayPollVideo == nullptr || buffer == nullptr || info == nullptr ||

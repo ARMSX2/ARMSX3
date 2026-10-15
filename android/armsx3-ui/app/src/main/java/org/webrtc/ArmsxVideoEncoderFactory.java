@@ -81,11 +81,19 @@ public class ArmsxVideoEncoderFactory implements VideoEncoderFactory {
     return codecs.values().toArray(new VideoCodecInfo[0]);
   }
 
+  // NV12 first: remote play's frames arrive in it, so the encoder copies them without converting.
+  private static final int[] COLOR_FORMATS = {
+      MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar,
+      MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar,
+      0x7FA30C00, // OMX_QCOM_COLOR_FormatYUV420SemiPlanar
+      MediaCodecUtils.COLOR_QCOM_FORMATYUV420PackedSemiPlanar32m,
+  };
+
   @Override
   public @Nullable VideoEncoder createEncoder(VideoCodecInfo info) {
     if (h264 != null && VideoCodecMimeType.H264.name().equalsIgnoreCase(info.name)) {
-      Integer colorFormat = MediaCodecUtils.selectColorFormat(MediaCodecUtils.ENCODER_COLOR_FORMATS,
-          h264.getCapabilitiesForType(VideoCodecMimeType.H264.mimeType()));
+      Integer colorFormat = MediaCodecUtils.selectColorFormat(
+          COLOR_FORMATS, h264.getCapabilitiesForType(VideoCodecMimeType.H264.mimeType()));
       if (colorFormat != null) {
         return new ArmsxH264Encoder(h264.getName(), colorFormat, PERIODIC_KEY_FRAME_INTERVAL_S);
       }

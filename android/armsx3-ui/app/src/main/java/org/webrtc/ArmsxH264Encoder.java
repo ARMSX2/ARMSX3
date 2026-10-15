@@ -275,6 +275,18 @@ class ArmsxH264Encoder implements VideoEncoder {
   }
 
   private void fillInputBuffer(ByteBuffer input, VideoFrame.Buffer buffer) {
+    if (semiPlanar && buffer instanceof ArmsxNV12Buffer) {
+      // Remote play's own frames are NV12 already: a plane copy each, nothing converted.
+      ArmsxNV12Buffer nv12 = (ArmsxNV12Buffer) buffer;
+      int ySize = nv12.width * nv12.height;
+      YuvHelper.copyPlane(slice(nv12.data, 0, ySize), nv12.width, slice(input, 0, stride * sliceHeight),
+          stride, nv12.width, nv12.height);
+      YuvHelper.copyPlane(slice(nv12.data, ySize, ySize / 2), nv12.width,
+          slice(input, stride * sliceHeight, input.capacity() - stride * sliceHeight), stride,
+          nv12.width, nv12.height / 2);
+      return;
+    }
+
     VideoFrame.I420Buffer i420 = buffer.toI420();
     if (semiPlanar) {
       YuvHelper.I420ToNV12(i420.getDataY(), i420.getStrideY(), i420.getDataU(), i420.getStrideU(),
@@ -286,6 +298,13 @@ class ArmsxH264Encoder implements VideoEncoder {
           sliceHeight);
     }
     i420.release();
+  }
+
+  private static ByteBuffer slice(ByteBuffer buffer, int offset, int length) {
+    ByteBuffer view = buffer.duplicate();
+    view.position(offset);
+    view.limit(offset + length);
+    return view.slice();
   }
 
   private void requestKeyFrame(MediaCodec current) {

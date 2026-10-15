@@ -1,20 +1,20 @@
 // Remote play, core side: hands the running game's picture and sound to the app, which streams
 // them to a friend's device (the friend plays as player 2).
 //
-// Nothing here talks to the network. RPCS3's recording hook (utils::video_provider) already gives
-// every presented frame and every mixed audio block to a video_sink; this sink keeps the newest
-// frame and the queued audio, and the app's streaming threads pull them out through the
-// _rpcsx_remotePlay* functions below. Pulling rather than calling into Java keeps JNI off the RSX
-// and cellAudio threads, which must never wait on the app.
+// Nothing here talks to the network. The app's streaming threads pull frames and audio out through
+// the _rpcsx_remotePlay* functions below; pulling rather than calling into Java keeps JNI off the
+// RSX and cellAudio threads, which must never wait on the app.
 //
-// Frames come from VKPresent's remote capture path (see g_remote_play_max_size): already scaled to
-// fit the stream, in RGBA, and read back a frame late, so the game never waits on the GPU for them.
-// Their buffers are reused rather than allocated per frame (remote_play_frame_buffer). The app
-// converts them to the encoder's YUV with libyuv.
+// Frames come from VKPresent's remote capture path (see g_remote_play_max_size and
+// Emu/RSX/remote_capture.h): drawn on the GPU straight into the encoder's NV12 at the stream's size,
+// and picked up here, on the app's thread, as soon as the GPU marks them done. The RSX thread never
+// touches the pixels. Audio comes through RPCS3's recording hook (utils::video_provider), which
+// gives every mixed audio block to the sink below.
 
 #include "stdafx.h"
 #include "Emu/Audio/AudioBackend.h"
 #include "Emu/IdManager.h"
+#include "Emu/RSX/remote_capture.h"
 #include "Emu/System.h"
 #include "util/video_provider.h"
 
@@ -23,11 +23,6 @@
 #include <mutex>
 #include <thread>
 #include <vector>
-
-extern "C"
-{
-#include <libavutil/pixfmt.h>
-}
 
 LOG_CHANNEL(rp_log, "RemotePlay");
 
@@ -39,44 +34,31 @@ extern atomic_t<recording_mode> g_recording_mode;
 atomic_t<u32> g_remote_play_max_size{0};
 
 // Counted by VKPresent.cpp while capturing: every game frame the presenter saw, and the ones it
-// could not read back because the GPU still held every slot. With the two below they are the
-// host's side of the stream stats (_rpcsx_remotePlayCounters).
+// could not capture because the GPU or the app still held every slot. With the two below they are
+// the host's side of the stream stats (_rpcsx_remotePlayCounters).
 atomic_t<u32> g_remote_play_frames{0};
 atomic_t<u32> g_remote_play_skipped{0};
 
 namespace
 {
-	// Frames handed to the app, and frames replaced by a newer one before the app took them.
+	// Frames handed to the app, and finished frames passed over because a newer one was ready.
 	atomic_t<u32> g_delivered{0};
 	atomic_t<u32> g_superseded{0};
-
-	// Frame-sized buffers going round between the presenter and the app's video thread, so the RSX
-	// thread does not allocate and zero a fresh one (3.7 MB at 720p) for every frame it reads back.
-	std::mutex g_pool_mutex;
-	std::vector<std::vector<u8>> g_pool;
-	constexpr usz pool_max = 4;
-
-	void recycle(std::vector<u8>&& buffer)
-	{
-		std::lock_guard lock(g_pool_mutex);
-
-		if (g_pool.size() < pool_max)
-		{
-			g_pool.push_back(std::move(buffer));
-		}
-	}
 
 	class remote_play_sink final : public utils::video_sink
 	{
 	public:
 		remote_play_sink()
 		{
+			// Video: the provider then reports that it can take frames (can_consume_frame), which is
+			// what turns the presenter's capture on. The frames themselves bypass the provider and go
+			// through remote_capture's ring.
 			use_internal_video = true;
 			use_internal_audio = true;
 			accept_all_samples = true;
 
-			// The provider drops a frame whose timestamp rounds to the previous one at this rate.
-			// At 120 that never happens to a 60 fps game, so the game sets the pace, not the sink.
+			// can_consume_frame says no to a second frame within one tick of this rate. At 120 a game
+			// running at 60 is never refused, so the game sets the pace, not the sink.
 			m_framerate = 120;
 		}
 
@@ -85,29 +67,6 @@ namespace
 		void resume() override {}
 
 		bool stopped() const { return m_stopped; }
-
-		// The newest frame only: anything older is already late for a live stream.
-		bool take_frame(encoder_frame& out)
-		{
-			std::lock_guard lock(m_video_mtx);
-
-			if (m_frames_to_encode.empty())
-			{
-				return false;
-			}
-
-			out = std::move(m_frames_to_encode.back());
-			m_frames_to_encode.pop_back();
-			g_superseded += static_cast<u32>(m_frames_to_encode.size());
-
-			for (auto& stale : m_frames_to_encode)
-			{
-				recycle(std::move(stale.data));
-			}
-
-			m_frames_to_encode.clear();
-			return true;
-		}
 
 		bool take_samples(std::deque<encoder_sample>& out)
 		{
@@ -139,31 +98,72 @@ namespace
 		return g_sink;
 	}
 
-	// Tightly packed RGBA (pitch = width * 4). The remote capture path always delivers RGBA; a
-	// BGRA frame can only come from elsewhere and is swapped here rather than miscoloured.
-	void copy_rgba(const u8* src, u32 pitch, u32 width, u32 height, bool bgra, u8* dst)
+	// The newest frame the GPU has finished, copied to dst (NV12, rows packed) and its slot freed.
+	// Finished frames older than it are freed unread: for a live stream they are already late.
+	// Returns 1 with a frame, 0 when none is ready, -2 when cap is too small (info still says why).
+	int take_frame(u8* dst, usz cap, s32* info)
 	{
-		const usz row_bytes = usz{width} * 4;
+		std::lock_guard lock(remote_capture::g_mutex);
 
-		for (u32 row = 0; row < height; row++)
+		auto* const ring = remote_capture::g_ring;
+
+		if (!ring || !ring->markers)
 		{
-			const u8* in = src + usz{row} * pitch;
-			u8* out = dst + usz{row} * row_bytes;
+			return 0;
+		}
 
-			if (!bgra)
+		remote_capture::slot* newest = nullptr;
+
+		for (usz i = 0; i < ring->slots.size(); i++)
+		{
+			auto& slot = ring->slots[i];
+
+			if (slot.state.load(std::memory_order_acquire) != remote_capture::slot_recorded || ring->markers[i] != slot.seq)
 			{
-				std::memcpy(out, in, row_bytes);
 				continue;
 			}
 
-			for (u32 col = 0; col < width; col++)
+			if (newest && static_cast<s32>(slot.seq - newest->seq) < 0)
 			{
-				out[col * 4 + 0] = in[col * 4 + 2];
-				out[col * 4 + 1] = in[col * 4 + 1];
-				out[col * 4 + 2] = in[col * 4 + 0];
-				out[col * 4 + 3] = in[col * 4 + 3];
+				slot.state.store(remote_capture::slot_free, std::memory_order_release);
+				g_superseded++;
+				continue;
 			}
+
+			if (newest)
+			{
+				newest->state.store(remote_capture::slot_free, std::memory_order_release);
+				g_superseded++;
+			}
+
+			newest = &slot;
 		}
+
+		if (!newest)
+		{
+			return 0;
+		}
+
+		// The marker was read before the pixels; keep it that way.
+		std::atomic_thread_fence(std::memory_order_acquire);
+
+		const usz size = usz{newest->width} * newest->height * 3 / 2;
+		info[0] = static_cast<s32>(newest->width);
+		info[1] = static_cast<s32>(newest->height);
+		info[2] = 0;
+		info[3] = 0;
+
+		int result = -2;
+
+		if (cap >= size)
+		{
+			std::memcpy(dst, newest->data, size);
+			g_delivered++;
+			result = 1;
+		}
+
+		newest->state.store(remote_capture::slot_free, std::memory_order_release);
+		return result;
 	}
 
 	// One cellAudio block (f32, interleaved, 2/6/8 channels) appended as stereo s16.
@@ -196,27 +196,6 @@ namespace
 			out[base + i] = static_cast<s16>(std::clamp(sample, -1.f, 1.f) * 32767.f);
 		}
 	}
-}
-
-// Called by VKPresent.cpp on the RSX thread: a buffer of exactly size bytes for one frame, its
-// contents undefined. The app's video thread hands it back once the frame is copied out.
-std::vector<u8> remote_play_frame_buffer(usz size)
-{
-	std::vector<u8> buffer;
-
-	{
-		std::lock_guard lock(g_pool_mutex);
-
-		if (!g_pool.empty())
-		{
-			buffer = std::move(g_pool.back());
-			g_pool.pop_back();
-		}
-	}
-
-	// A recycled buffer of the same frame size needs no work here; only a new size is zeroed.
-	buffer.resize(size);
-	return buffer;
 }
 
 // Starts handing frames and audio to the app. Only while a game runs: the provider lives in the
@@ -266,13 +245,8 @@ extern "C" void _rpcsx_remotePlayStop()
 		sink.swap(g_sink);
 	}
 
+	// The presenter frees its capture buffers at its next flip once this is 0.
 	g_remote_play_max_size = 0;
-
-	// Nothing stays allocated once remote play is off.
-	{
-		std::lock_guard lock(g_pool_mutex);
-		std::vector<std::vector<u8>>().swap(g_pool);
-	}
 
 	if (!sink)
 	{
@@ -291,24 +265,29 @@ extern "C" void _rpcsx_remotePlayStop()
 	rp_log.notice("remote play: capture stopped");
 }
 
-// Waits up to timeout_ms for a frame and writes it as tightly packed RGBA.
-// info receives width, height and the frame's timestamp in ms (low, high).
+// Waits up to timeout_ms for a frame and writes it as NV12: the Y plane, then the interleaved UV
+// plane, rows packed (width x height x 3 / 2 bytes). info receives width, height and two unused
+// ints. Runs on the app's video thread, which does the only copy a frame gets on the CPU.
 // Returns 1 with a frame, 0 on timeout, -1 when capture is not running, -2 when cap is too small
 // (info still holds the size, and that frame is dropped).
 extern "C" int _rpcsx_remotePlayPollVideo(u8* dst, s64 cap, s32* info, int timeout_ms)
 {
 	const auto sink = current_sink();
 
-	if (!sink || sink->stopped() || !dst || !info)
+	if (!sink || sink->stopped() || !dst || !info || cap <= 0)
 	{
 		return -1;
 	}
 
 	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
-	utils::video_sink::encoder_frame frame;
 
-	while (!sink->take_frame(frame))
+	while (true)
 	{
+		if (const int result = take_frame(dst, static_cast<usz>(cap), info))
+		{
+			return result;
+		}
+
 		if (sink->stopped())
 		{
 			return -1;
@@ -319,36 +298,13 @@ extern "C" int _rpcsx_remotePlayPollVideo(u8* dst, s64 cap, s32* info, int timeo
 			return 0;
 		}
 
+		// The GPU finishes a frame within a few ms of the flip; this finds it within one more.
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
-
-	const u32 width = frame.width & ~1u;
-	const u32 height = frame.height & ~1u;
-	const usz needed = usz{width} * height * 4;
-
-	info[0] = static_cast<s32>(width);
-	info[1] = static_cast<s32>(height);
-	info[2] = static_cast<s32>(frame.timestamp_ms & 0xffffffffu);
-	info[3] = static_cast<s32>(frame.timestamp_ms >> 32);
-
-	if (!width || !height || frame.data.size() < usz{frame.pitch} * height)
-	{
-		return 0;
-	}
-
-	if (static_cast<usz>(cap) < needed)
-	{
-		return -2;
-	}
-
-	copy_rgba(frame.data.data(), frame.pitch, width, height, frame.av_pixel_format == AV_PIX_FMT_BGRA, dst);
-	recycle(std::move(frame.data));
-	g_delivered++;
-	return 1;
 }
 
 // Running totals for the stream stats, in out[0..3]: game frames seen while capturing, frames not
-// read back (GPU busy), frames handed to the app, frames replaced before the app took them.
+// captured (no free slot), frames handed to the app, finished frames passed over for a newer one.
 extern "C" void _rpcsx_remotePlayCounters(u32* out)
 {
 	if (!out)
