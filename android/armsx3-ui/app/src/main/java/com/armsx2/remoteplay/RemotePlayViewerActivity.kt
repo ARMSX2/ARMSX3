@@ -961,13 +961,17 @@ internal class ViewerSession(
     var hostStats: RemotePlayProtocol.HostStats? = null
         private set
 
-    // The pad goes out on every change and also every 50 ms, which fixes a lost packet within
-    // one beat and tells the host the viewer is still there.
+    // The pad goes out on every change and also every 10 ms, which fixes a lost packet within
+    // one beat, tells the host the viewer is still there, and keeps this device's Wi-Fi radio
+    // from dozing between frames: a dozing radio has the router hold the stream's packets and
+    // hand them over in a clump when it wakes (the round trip flipped between 8 and 83 ms in test
+    // 19 on a strong link, with 70 to 100 ms gaps between frames). About 80 kbit/s; the host
+    // ignores a pad state that has not changed.
     private val heartbeat = object : Runnable {
         override fun run() {
             if (ended) return
             sendNow()
-            main.postDelayed(this, 50)
+            main.postDelayed(this, 10)
         }
     }
 

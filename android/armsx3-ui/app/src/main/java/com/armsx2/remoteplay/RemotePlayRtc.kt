@@ -155,6 +155,10 @@ internal object RemotePlayRtc {
             // falling behind and answers by shrinking the picture. The encoder is a separate
             // hardware block, so that load says nothing about it.
             enableCpuOveruseDetection = false
+            // Video and audio packets marked as such (DSCP AF41 and EF), which a Wi-Fi router
+            // sends from its video and voice queues (WMM): ahead of other traffic on the network
+            // and with less waiting for the air on both hops, host to router and router to viewer.
+            enableDscp = true
         }
 
     /**
