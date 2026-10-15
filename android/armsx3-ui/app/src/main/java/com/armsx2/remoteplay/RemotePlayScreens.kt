@@ -48,6 +48,7 @@ import com.armsx2.ui.common.ArmsTopBar
 import com.armsx2.ui.common.GlassPanel
 import com.armsx2.ui.common.RoundAction
 import com.armsx2.ui.settings.SegmentedRow
+import com.armsx2.ui.settings.ToggleRow
 import com.armsx2.ui.settings.controllerFocusable
 import kotlinx.coroutines.delay
 
@@ -65,6 +66,7 @@ fun RemotePlayScreen(onBack: () -> Unit) {
     var scanning by remember { mutableStateOf(false) }
     var exitMode by remember { mutableStateOf(RemotePlayPrefs.exitButton(context)) }
     var touchMode by remember { mutableStateOf(RemotePlayPrefs.touchControls(context)) }
+    var statsOn by remember { mutableStateOf(RemotePlayPrefs.streamStats(context)) }
 
     // Looking for hosts only when asked, and for a minute at most: browsing holds a Wi-Fi
     // multicast lock and keeps the radio busier, which is battery nobody should pay by opening
@@ -193,6 +195,11 @@ fun RemotePlayScreen(onBack: () -> Unit) {
                 GlassPanel(Modifier.fillMaxWidth()) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         SectionTitle(str("remoteplay.screen.title"))
+                        Text(
+                            str("remoteplay.screen.note"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         val choices = listOf(str("remoteplay.screen.tap"), str("remoteplay.screen.on"), str("remoteplay.screen.off"))
                         val modes = RevealMode.entries
                         SegmentedRow(
@@ -214,6 +221,15 @@ fun RemotePlayScreen(onBack: () -> Unit) {
                         ) { index ->
                             touchMode = modes[index]
                             RemotePlayPrefs.setTouchControls(context, touchMode)
+                        }
+                        ToggleRow(
+                            label = str("remoteplay.screen.stats"),
+                            value = statsOn,
+                            description = str("remoteplay.screen.statsDesc"),
+                            notDefault = statsOn,
+                        ) { on ->
+                            statsOn = on
+                            RemotePlayPrefs.setStreamStats(context, on)
                         }
                     }
                 }

@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -41,7 +42,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontFamily
@@ -53,6 +53,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
+import com.armsx2.ui.touch.RemotePlayTouchControls
+import com.armsx2.ui.touch.setRemotePlayPadSink
 import org.json.JSONObject
 import org.webrtc.DataChannel
 import org.webrtc.MediaConstraints
@@ -82,6 +84,10 @@ private const val INVITE_CONNECT_TIMEOUT_MS = 5 * 60_000L
 
 /** With a lobby code the host collects the answer within a couple of seconds. */
 private const val LOBBY_CONNECT_TIMEOUT_MS = 60_000L
+
+/** Tap to reveal: how long the exit button stays, and how long the touch controls stay untouched. */
+private const val EXIT_SHOWN_MS = 4_000L
+private const val TOUCH_HIDE_MS = 15_000L
 
 /** How a viewer reaches its host. */
 internal sealed interface ViewerMode {
@@ -152,31 +158,54 @@ class RemotePlayViewerActivity : ComponentActivity() {
     // The picture's own shape, so it is fitted to this screen instead of cropped to fill it.
     private val videoAspect = mutableStateOf<Float?>(null)
 
-    // The exit button and touch pad, as chosen on the Remote play screen.
+    // The exit button, touch controls and stream stats, as chosen on the Remote play screen.
     private var exitMode = RevealMode.TAP
     private var touchMode = RevealMode.TAP
+    private var statsOn = false
     private val exitShown = mutableStateOf(false)
     private val touchShown = mutableStateOf(false)
-    private val statsShown = mutableStateOf(false)
     private val statsLine = mutableStateOf("")
+    private val hostLine = mutableStateOf("")
 
     private val input = ViewerInput { pad -> session?.sendPad(pad) }
 
-    private val hideExit = Runnable { exitShown.value = false }
-    private val hideTouch = Runnable { if (touchMode == RevealMode.TAP) hideTouchPad() }
-    private val hideStats = Runnable { statsShown.value = false }
+    // The on-screen controls' presses, merged into player 2's pad.
+    private val touchPad = TouchPadState { pad -> input.setTouch(pad) }
 
-    // While the numbers are on screen they refresh every second; nothing is sampled otherwise.
+    // Fingers on the screen now. Tap to reveal never hides the controls under a held finger.
+    private var fingersDown = 0
+
+    private val hideExit = Runnable { exitShown.value = false }
+    private val hideTouch = object : Runnable {
+        override fun run() {
+            if (touchMode != RevealMode.TAP) return
+            if (fingersDown > 0) {
+                main.postDelayed(this, TOUCH_HIDE_MS)
+            } else {
+                hideTouchPad()
+            }
+        }
+    }
+
+    // Only while the stats are switched on: they refresh every second, and nothing is sampled
+    // otherwise.
     private val statsTick = object : Runnable {
         override fun run() {
-            if (!statsShown.value) return
+            if (!statsOn) return
             session?.sampleStats { line -> main.post { statsLine.value = line } }
+            session?.hostStats?.let { hostLine.value = describeHost(it) }
             main.postDelayed(this, 1_000)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Recreated after the app's process was ended: that session is gone, and the app's settings
+        // this screen reads are only loaded by the main screen.
+        if (savedInstanceState != null) {
+            finish()
+            return
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowCompat.getInsetsController(window, window.decorView).apply {
@@ -200,8 +229,11 @@ class RemotePlayViewerActivity : ComponentActivity() {
 
         exitMode = RemotePlayPrefs.exitButton(this)
         touchMode = RemotePlayPrefs.touchControls(this)
+        statsOn = RemotePlayPrefs.streamStats(this)
         exitShown.value = exitMode == RevealMode.ON
         touchShown.value = touchMode == RevealMode.ON
+        // The touch controls press player 2's buttons for as long as this screen is open.
+        setRemotePlayPadSink(touchPad::onKey)
 
         // The Back key and the back gesture both ask before leaving; asked again, they cancel.
         onBackPressedDispatcher.addCallback(this) { askToLeave() }
@@ -213,6 +245,8 @@ class RemotePlayViewerActivity : ComponentActivity() {
                         playing.value = true
                         hintVisible.value = true
                         main.postDelayed({ hintVisible.value = false }, 6_000)
+                        touchActivity()
+                        if (statsOn) main.post(statsTick)
                     }
                 }
 
@@ -233,11 +267,14 @@ class RemotePlayViewerActivity : ComponentActivity() {
                         .fillMaxSize()
                         .background(Color.Black)
                         .pointerInput(Unit) {
-                            // Watches every touch without taking it, so the pad still gets its fingers.
+                            // Watches every touch after the controls and the exit area have had it,
+                            // and takes none. A tap nobody claimed brings the touch controls up.
                             awaitPointerEventScope {
                                 while (true) {
-                                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                                    if (event.changes.any { it.changedToDownIgnoreConsumed() }) onScreenTouched()
+                                    val event = awaitPointerEvent()
+                                    fingersDown = event.changes.count { it.pressed }
+                                    val downs = event.changes.filter { it.changedToDownIgnoreConsumed() }
+                                    if (downs.isNotEmpty()) onScreenTouched(unclaimed = downs.any { !it.isConsumed })
                                 }
                             }
                         },
@@ -263,16 +300,22 @@ class RemotePlayViewerActivity : ComponentActivity() {
                     }
 
                     if (playing.value && touchShown.value && !leaveAsked.value) {
-                        TouchPad(onChange = { pad -> input.setTouch(pad) }, onTouch = { touchActivity() })
+                        RemotePlayTouchControls()
+                    }
+
+                    // Tap to reveal: the top middle of the screen is the exit button's, and only a
+                    // tap there brings it up. Above the touch controls, so it is never a button.
+                    if (exitMode == RevealMode.TAP && !leaveAsked.value) {
+                        ExitArea()
                     }
 
                     if (exitShown.value && !leaveAsked.value) {
                         ExitButton()
                     }
 
-                    if (statsShown.value && statsLine.value.isNotEmpty() && !leaveAsked.value) {
+                    if (statsOn && playing.value && statsLine.value.isNotEmpty() && !leaveAsked.value) {
                         Text(
-                            statsLine.value,
+                            if (hostLine.value.isEmpty()) statsLine.value else statsLine.value + "\n" + hostLine.value,
                             color = Color.White.copy(alpha = 0.85f),
                             style = MaterialTheme.typography.labelSmall,
                             modifier = Modifier
@@ -284,8 +327,13 @@ class RemotePlayViewerActivity : ComponentActivity() {
                     }
 
                     if (playing.value && hintVisible.value && !leaveAsked.value && !touchShown.value) {
-                        val hint = str("remoteplay.viewer.hint") +
-                            if (exitMode == RevealMode.TAP || touchMode == RevealMode.TAP) " " + str("remoteplay.viewer.hintTap") else ""
+                        val hint = buildList {
+                            add(str("remoteplay.viewer.hint"))
+                            if (exitMode == RevealMode.TAP) add(str("remoteplay.viewer.hintExit"))
+                            if (touchMode == RevealMode.TAP) {
+                                add(str(if (exitMode == RevealMode.TAP) "remoteplay.viewer.hintTouchElsewhere" else "remoteplay.viewer.hintTouch"))
+                            }
+                        }.joinToString(" ")
                         Text(
                             hint,
                             color = Color.White,
@@ -326,32 +374,27 @@ class RemotePlayViewerActivity : ComponentActivity() {
         ).also { it.start() }
     }
 
-    private fun onScreenTouched() {
-        if (exitMode == RevealMode.TAP) {
-            exitShown.value = true
-            main.removeCallbacks(hideExit)
-            main.postDelayed(hideExit, 4_000)
-        }
-        if (touchMode == RevealMode.TAP && playing.value) touchShown.value = true
+    /** [unclaimed]: the tap landed on nothing, neither a control nor the exit area. */
+    private fun onScreenTouched(unclaimed: Boolean) {
+        if (unclaimed && touchMode == RevealMode.TAP && playing.value) touchShown.value = true
         touchActivity()
-
-        if (!statsShown.value) {
-            statsShown.value = true
-            main.post(statsTick)
-        }
-        main.removeCallbacks(hideStats)
-        main.postDelayed(hideStats, 6_000)
     }
 
-    // Tap to reveal: the pad goes away again after a while untouched.
+    private fun revealExit() {
+        exitShown.value = true
+        main.removeCallbacks(hideExit)
+        main.postDelayed(hideExit, EXIT_SHOWN_MS)
+    }
+
+    // Tap to reveal: the controls go away again after a while untouched.
     private fun touchActivity() {
         main.removeCallbacks(hideTouch)
-        if (touchMode == RevealMode.TAP) main.postDelayed(hideTouch, 15_000)
+        if (touchMode == RevealMode.TAP) main.postDelayed(hideTouch, TOUCH_HIDE_MS)
     }
 
     private fun hideTouchPad() {
         touchShown.value = false
-        input.setTouch(RemotePlayProtocol.PadState())
+        touchPad.clear()
     }
 
     private fun askToLeave() {
@@ -369,6 +412,27 @@ class RemotePlayViewerActivity : ComponentActivity() {
 
     private fun copyReply() {
         reply.value?.let { copyText(this, it) }
+    }
+
+    /** The top middle of the screen, invisible: a tap here shows the exit button. */
+    @Composable
+    private fun BoxScope.ExitArea() {
+        Box(
+            Modifier
+                .align(Alignment.TopCenter)
+                .size(width = 260.dp, height = 96.dp)
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val downs = event.changes.filter { it.changedToDownIgnoreConsumed() }
+                            if (downs.isEmpty()) continue
+                            downs.forEach { it.consume() }
+                            revealExit()
+                        }
+                    }
+                },
+        )
     }
 
     @Composable
@@ -440,6 +504,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null)
+        setRemotePlayPadSink(null)
         session?.end(null)
         session = null
         if (::renderer.isInitialized) renderer.release()
@@ -657,6 +722,11 @@ internal class ViewerSession(
     private var connectedOnce = false
     private var ended = false
 
+    /** The host's side of the stream, as it last reported it (once a second). */
+    @Volatile
+    var hostStats: RemotePlayProtocol.HostStats? = null
+        private set
+
     // The pad goes out on every change and also every 50 ms, which fixes a lost packet within
     // one beat and tells the host the viewer is still there.
     private val heartbeat = object : Runnable {
@@ -783,7 +853,9 @@ internal class ViewerSession(
     /** Answers the host's offer; the answer goes out once complete, candidates included. */
     private fun answer(offer: String) {
         if (peer != null || ended) return
-        val factory = RemotePlayRtc.createFactory(context).also { rtc = it }.factory
+        val created = RemotePlayRtc.createFactory(context).also { rtc = it }
+        val factory = created.factory
+        Log.i(TAG, "video decoder: ${created.h264Decoder ?: "no hardware H.264, stock factories"}")
 
         val wait = GatherWait(main, 4_000) {
             val description = peer?.localDescription ?: return@GatherWait
@@ -811,6 +883,11 @@ internal class ViewerSession(
                         channel.registerObserver(MessageObserver { buffer ->
                             if (RemotePlayProtocol.isBye(buffer.data)) {
                                 main.post { end(I18n.get("remoteplay.bye.stopped")) }
+                                return@MessageObserver
+                            }
+                            val stats = RemotePlayProtocol.decodeHostStats(buffer.data)
+                            if (stats != null) {
+                                hostStats = stats
                             } else {
                                 RemotePlayProtocol.decodeAudio(buffer.data)?.let(audio::enqueue)
                             }
