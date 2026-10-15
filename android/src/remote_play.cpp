@@ -289,6 +289,30 @@ extern "C" bool _rpcsx_remotePlayStart(int max_width, int max_height)
 	return true;
 }
 
+// Emulation (re)started running (g_emu_callbacks.on_run, on the thread that ran it). A game that
+// restarts itself into another executable (exitspawn: Gran Turismo 6 at every boot) or an in-game
+// Restart comes back with a new video provider and nothing attached, so the stream froze for good
+// while the session looked healthy. While remote play runs, the stream's sink goes onto the new one.
+void remote_play_on_run()
+{
+	const auto sink = current_sink();
+
+	if (!sink || sink->stopped() || Emu.IsStopped() || !g_fxo->is_init<utils::video_provider>())
+	{
+		return;
+	}
+
+	// The same sink again is a no-op: a game that only paused and ran on keeps its stream.
+	if (!g_fxo->get<utils::video_provider>().set_video_sink(sink, recording_mode::rpcs3))
+	{
+		rp_log.error("remote play: the restarted game took the recording hook; the stream stops here");
+		return;
+	}
+
+	g_recording_mode = recording_mode::rpcs3;
+	rp_log.notice("remote play: capture follows the game into its restart");
+}
+
 extern "C" void _rpcsx_remotePlayStop()
 {
 	std::shared_ptr<remote_play_sink> sink;

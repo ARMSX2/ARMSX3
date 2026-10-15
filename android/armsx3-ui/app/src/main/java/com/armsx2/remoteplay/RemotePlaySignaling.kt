@@ -43,7 +43,7 @@ internal class SignalingConnection(
             try {
                 socket.getInputStream().bufferedReader().use { reader ->
                     while (true) {
-                        val line = reader.readLine() ?: break
+                        val line = readLine(reader) ?: break
                         val message = runCatching { JSONObject(line) }.getOrNull() ?: continue
                         onMessage(message)
                     }
@@ -52,6 +52,22 @@ internal class SignalingConnection(
             } finally {
                 close()
             }
+        }
+    }
+
+    /**
+     * One line, or null at the end. Anything on the Wi-Fi can connect to the port, and a line with
+     * no end would otherwise grow until the app ran out of memory, taking the running game with it:
+     * a line longer than any message ever sent ends the connection instead.
+     */
+    private fun readLine(reader: java.io.Reader): String? {
+        val line = StringBuilder()
+        while (true) {
+            val c = reader.read()
+            if (c < 0) return if (line.isEmpty()) null else line.toString()
+            if (c == '\n'.code) return line.toString()
+            if (line.length >= MAX_LINE) throw IOException("signaling line over $MAX_LINE characters")
+            line.append(c.toChar())
         }
     }
 
@@ -85,8 +101,12 @@ internal class SignalingConnection(
     }
 
     companion object {
-        /** Connects to a host. Blocking: call it off the main thread. */
+        // Well above the largest message (an offer: a few KB), as decodeCode allows.
+        private const val MAX_LINE = 64 * 1024
+
+        /** Connects to a host. Blocking: call it off the main thread. Throws IOException. */
         fun connect(host: String, port: Int, onMessage: (JSONObject) -> Unit, onClosed: () -> Unit): SignalingConnection {
+            if (port !in 1..65535) throw IOException("no such port: $port")
             val socket = Socket()
             socket.tcpNoDelay = true
             socket.connect(InetSocketAddress(host, port), 5_000)

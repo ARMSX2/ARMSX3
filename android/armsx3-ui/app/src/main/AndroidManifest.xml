@@ -133,6 +133,7 @@
             android:name="com.armsx2.remoteplay.RemotePlayViewerActivity"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|density|navigation"
             android:exported="false"
+            android:launchMode="singleTop"
             android:hardwareAccelerated="true"
             android:screenOrientation="sensorLandscape" />
 

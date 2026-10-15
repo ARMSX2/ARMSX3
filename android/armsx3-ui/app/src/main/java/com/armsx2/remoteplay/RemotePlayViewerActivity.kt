@@ -59,6 +59,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.ui.touch.RemotePlayTouchControls
+import com.armsx2.ui.touch.clearRemotePlayPadSink
 import com.armsx2.ui.touch.setRemotePlayPadSink
 import com.armsx3.Rpcs3Bridge
 import org.json.JSONObject
@@ -73,7 +74,6 @@ import org.webrtc.SessionDescription
 import org.webrtc.SurfaceViewRenderer
 import org.webrtc.VideoSink
 import org.webrtc.VideoTrack
-import java.io.IOException
 import java.util.concurrent.LinkedBlockingDeque
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -189,6 +189,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
 
     // The on-screen controls' presses, merged into player 2's pad.
     private val touchPad = TouchPadState { pad -> input.setTouch(pad) }
+    private val padSink: (Int, Int, Boolean) -> Unit = { keycode, value, pressed -> touchPad.onKey(keycode, value, pressed) }
 
     // Fingers on the screen now. Tap to reveal never hides the controls under a held finger.
     private var fingersDown = 0
@@ -212,7 +213,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
     // otherwise.
     private val statsTick = object : Runnable {
         override fun run() {
-            if (!statsOn) return
+            if (!statsOn || isDestroyed) return
             session?.let { current ->
                 // The decoder's own worst of the last second: its slowest frame, and the longest the
                 // screen waited for the next one. Only when it decodes onto the screen itself.
@@ -263,7 +264,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
         exitShown.value = exitMode == RevealMode.ON
         touchShown.value = touchMode == RevealMode.ON
         // The touch controls press player 2's buttons for as long as this screen is open.
-        setRemotePlayPadSink(touchPad::onKey)
+        setRemotePlayPadSink(padSink)
 
         // The Back key and the back gesture both ask before leaving; asked again, they cancel.
         onBackPressedDispatcher.addCallback(this) { askToLeave() }
@@ -456,7 +457,7 @@ class RemotePlayViewerActivity : ComponentActivity() {
     }
 
     private fun firstFrame() {
-        if (playing.value) return
+        if (playing.value || isDestroyed) return
         playing.value = true
         hintVisible.value = true
         main.postDelayed({ hintVisible.value = false }, 6_000)
@@ -656,11 +657,23 @@ class RemotePlayViewerActivity : ComponentActivity() {
         super.onStop()
     }
 
+    // Focus gone (the notification shade, a call, Home): whatever is held now would stay held on the
+    // host, since its release goes to another window. Let go of everything.
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (!hasFocus) {
+            input.releaseAll()
+            touchPad.clear()
+        }
+    }
+
     override fun onDestroy() {
-        main.removeCallbacksAndMessages(null)
-        setRemotePlayPadSink(null)
+        // The session first: while it ends, the decoder can still post to this screen, and those
+        // posts go with the rest below.
         session?.end(null)
         session = null
+        main.removeCallbacksAndMessages(null)
+        clearRemotePlayPadSink(padSink)
         renderer?.release()
         super.onDestroy()
     }
@@ -773,6 +786,14 @@ internal class ViewerInput(private val send: (RemotePlayProtocol.PadState) -> Un
 
     fun onMotion(event: MotionEvent): Boolean {
         if (!event.isFromSource(InputDevice.SOURCE_JOYSTICK) && !event.isFromSource(InputDevice.SOURCE_GAMEPAD)) return false
+        // The system cancels a held stick when the window loses it: let go, as for a release.
+        if (event.action == MotionEvent.ACTION_CANCEL) {
+            lx = 128; ly = 128; rx = 128; ry = 128
+            l2Axis = 0; r2Axis = 0
+            hatButtons = 0
+            publish()
+            return true
+        }
         if (event.action != MotionEvent.ACTION_MOVE) return false
 
         val device = event.device
@@ -983,7 +1004,7 @@ internal class ViewerSession(
                     // Once the stream is up the link has done its job.
                     onClosed = { main.post { if (!connectedOnce) end(I18n.get("remoteplay.viewer.lost")) } },
                 )
-            } catch (e: IOException) {
+            } catch (e: Exception) {
                 Log.w(TAG, "connect to $host:$port failed", e)
                 main.post { end(I18n.get("remoteplay.error.connect")) }
                 return@thread
@@ -1218,6 +1239,8 @@ internal class ViewerSession(
         audio.stop()
         wifi.release()
 
+        // The renderer, when it draws: a sink left on the track keeps it, and this screen, alive.
+        sink?.let { renderer -> runCatching { videoTrack?.removeSink(renderer) } }
         runCatching { peer?.close() }
         runCatching { audioChannel?.unregisterObserver() }
         runCatching { audioChannel?.dispose() }

@@ -2377,6 +2377,9 @@ static std::atomic<bool> g_disc_eject_enabled{false};
 static std::atomic<bool> g_disc_insert_enabled{false};
 
 
+// Remote play (remote_play.cpp): keeps a stream on a game that restarts itself.
+void remote_play_on_run();
+
 static void setupCallbacks() {
   g_emu_callbacks = emu_callbacks{
       .call_from_main_thread =
@@ -2392,7 +2395,7 @@ static void setupCallbacks() {
 
             g_mainThreadDispatcher.post(std::move(cb));
           },
-      .on_run = [](auto...) {},
+      .on_run = [](auto...) { remote_play_on_run(); },
       .on_pause = [](auto...) {},
       .on_resume = [](auto...) {},
       .on_stop = [](auto...) {},

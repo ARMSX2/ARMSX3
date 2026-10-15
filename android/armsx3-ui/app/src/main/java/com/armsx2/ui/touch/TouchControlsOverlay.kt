@@ -550,6 +550,14 @@ fun TouchControlsOverlay() {
 private var remotePlayPadSink: ((keycode: Int, value: Int, pressed: Boolean) -> Unit)? = null
 
 /** Remote play's viewer sets this when it opens and clears it when it closes; see [RemotePlayTouchControls]. */
+/**
+ * Clears the sink, but only while it is still [sink]: a second viewer screen that closes (refused,
+ * say) must not cut off the one still playing.
+ */
+fun clearRemotePlayPadSink(sink: (keycode: Int, value: Int, pressed: Boolean) -> Unit) {
+    if (remotePlayPadSink === sink) remotePlayPadSink = null
+}
+
 fun setRemotePlayPadSink(sink: ((keycode: Int, value: Int, pressed: Boolean) -> Unit)?) {
     remotePlayPadSink = sink
 }

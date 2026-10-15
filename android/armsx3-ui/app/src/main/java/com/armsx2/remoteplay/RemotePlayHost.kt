@@ -37,6 +37,9 @@ private const val PLAYER_2_PORT = 1
 /** After the friend's answer arrives, how long the connection gets to come up. */
 private const val CONNECT_TIMEOUT_MS = 60_000L
 
+/** On the same Wi-Fi, how long a viewer that connected gets to answer the offer. */
+private const val WIFI_ANSWER_TIMEOUT_MS = 30_000L
+
 /**
  * The hosting side. Takes one viewer at a time, streams the running game to it and feeds the
  * viewer's pad in as player 2. A viewer arrives one of two ways: on the same Wi-Fi it finds this
@@ -199,6 +202,7 @@ object RemotePlayHost {
             onFinished = { ended, message -> main.post { if (session === ended) sessionEnded(ended, message) } },
         )
         session = created
+        created.expectAnswerWithin(WIFI_ANSWER_TIMEOUT_MS)
         connection.start()
     }
 
@@ -289,6 +293,19 @@ private class HostSession(
 
     private val connectTimeout = Runnable {
         if (!connectedOnce) finish(I18n.get("remoteplay.timeout.host"))
+    }
+
+    // Same Wi-Fi: a viewer that connected and then never answered (gone from the network, or
+    // anything else that opened the port) must not hold hosting as "busy" for everyone else. The
+    // session ends quietly and hosting goes back to waiting.
+    private val answerTimeout = Runnable {
+        if (!answered && !ended) finish(null)
+    }
+
+    /** Ends the session quietly unless the viewer answers within [ms]. */
+    fun expectAnswerWithin(ms: Long) {
+        main.removeCallbacks(answerTimeout)
+        main.postDelayed(answerTimeout, ms)
     }
 
     // What the stream is doing, in logcat (tag RemotePlay) every few seconds while it runs.
@@ -658,6 +675,7 @@ private class HostSession(
         ended = true
         main.removeCallbacks(padWatch)
         main.removeCallbacks(connectTimeout)
+        main.removeCallbacks(answerTimeout)
         main.removeCallbacks(statsTick)
         main.removeCallbacks(hostStatsTick)
         main.removeCallbacks(rumbleTick)
@@ -680,19 +698,40 @@ private class HostSession(
         }
         link.close(RemotePlayRtc.bye(reason))
 
-        runCatching { peer?.close() }
-        runCatching { inputChannel?.unregisterObserver() }
-        runCatching { inputChannel?.dispose() }
-        runCatching { audioChannel?.dispose() }
-        runCatching { peer?.dispose() }
-        runCatching { videoTrack?.dispose() }
-        runCatching { videoSource?.dispose() }
-        rtc?.dispose()
-        // The encoder is gone with the peer, so nothing draws the frame textures any more.
-        frames?.release()
+        val pc = peer
+        val input = inputChannel
+        val audio = audioChannel
+        val track = videoTrack
+        val source = videoSource
+        val factory = rtc
+        val pipeline = frames
         frames = null
         peer = null
         audioChannel = null
         inputChannel = null
+        val dispose = {
+            runCatching { pc?.close() }
+            runCatching { input?.unregisterObserver() }
+            runCatching { input?.dispose() }
+            runCatching { audio?.dispose() }
+            runCatching { pc?.dispose() }
+            runCatching { track?.dispose() }
+            runCatching { source?.dispose() }
+            factory?.dispose()
+            // The encoder is gone with the peer, so nothing draws the frame textures any more.
+            pipeline?.release()
+        }
+        // A loop still running would use what is disposed here (a freed video source, a disposed
+        // channel): a crash. Both are on their way out (their polls return -1, the GL waits are
+        // bounded), so a straggler is waited for off the main thread before anything goes.
+        val stragglers = listOfNotNull(videoThread, audioThread).filter { it.isAlive }
+        if (stragglers.isEmpty()) {
+            dispose()
+        } else {
+            thread(name = "rp-end", isDaemon = true) {
+                stragglers.forEach { it.join() }
+                dispose()
+            }
+        }
     }
 }

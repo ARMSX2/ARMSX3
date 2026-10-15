@@ -312,7 +312,8 @@ private fun joinAddress(context: Context, text: String) {
     val value = text.trim()
     if (value.isEmpty()) return
     val colon = value.lastIndexOf(':')
-    val port = if (colon > 0) value.substring(colon + 1).toIntOrNull() else null
+    // A port out of range is no port: the address is tried on the usual one.
+    val port = if (colon > 0) value.substring(colon + 1).toIntOrNull()?.takeIf { it in 1..65535 } else null
     val host = if (port != null) value.substring(0, colon) else value
     RemotePlayViewerActivity.start(context, host, port ?: RemotePlayProtocol.PORT, host)
 }
