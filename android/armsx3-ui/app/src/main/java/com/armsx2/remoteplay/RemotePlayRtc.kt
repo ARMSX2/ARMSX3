@@ -42,16 +42,22 @@ internal object RemotePlayRtc {
     /**
      * WebRTC is built for calls, where a steady picture matters more than a fast one. A game is
      * the other way round:
-     *  - Playout delay 0: the viewer shows each frame as soon as it is decoded instead of holding
-     *    frames in a jitter buffer to even out their timing. Set on both sides, since the host's
-     *    half travels in the video packets.
+     *  - Low-latency playout: the viewer decodes each frame as soon as it is complete instead of
+     *    holding frames in a jitter buffer to even out their timing (min 0; a max at or under
+     *    500 ms is what switches the mode on). Set on both sides, since the host's half travels in
+     *    the video packets.
+     *  - Decodes at least 12 ms apart. Frames that arrive bunched up on Wi-Fi went to the decoder
+     *    back to back, and WebRTC's decoder holds one frame for the screen at a time and throws
+     *    away a newer one that comes out before the screen has taken it. Spaced out they each get
+     *    shown; a steady 60 fps (16.7 ms apart) is never held back.
      *  - No frame dropper: it skips frames whenever the encoder runs over its bitrate, which fast
      *    game footage often does. The bitrate still follows the network; frames are simply not
      *    thrown away on top.
      */
     private const val FIELD_TRIALS =
-        "WebRTC-ForcePlayoutDelay/min_ms:0,max_ms:0/" +
-            "WebRTC-ForceSendPlayoutDelay/min_ms:0,max_ms:0/" +
+        "WebRTC-ForcePlayoutDelay/min_ms:0,max_ms:100/" +
+            "WebRTC-ForceSendPlayoutDelay/min_ms:0,max_ms:100/" +
+            "WebRTC-ZeroPlayoutDelay/min_pacing:12ms/" +
             "WebRTC-FrameDropper/Disabled/"
 
     /**
