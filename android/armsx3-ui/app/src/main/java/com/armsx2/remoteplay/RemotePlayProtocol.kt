@@ -23,8 +23,11 @@ import java.util.zip.Inflater
  *  - Video: a WebRTC video track, host to viewer.
  *  - Audio and player 2's pad: WebRTC data channels, unordered and never retransmitted, so a lost
  *    packet is skipped rather than delaying everything behind it. The game's audio does not go
- *    through WebRTC's audio stack, which is built around the microphone. Once a second the audio
- *    channel also carries the host's side of the stream stats ([HostStats]).
+ *    through WebRTC's audio stack, which is built around the microphone. Online it is Opus when
+ *    the viewer's answer says it plays it ("audio": "opus"), each packet carrying the one before
+ *    as well ([encodeOpus]); on the same Wi-Fi, or with no Opus encoder on the host, plain 16-bit
+ *    samples ([encodeAudio]). Once a second the audio channel also carries the host's side of the
+ *    stream stats ([HostStats]).
  */
 internal object RemotePlayProtocol {
     const val VERSION = 1
@@ -50,10 +53,17 @@ internal object RemotePlayProtocol {
     const val SAMPLE_RATE = 48_000
     const val AUDIO_CHUNK_FRAMES = 480 // 10 ms
 
+    /**
+     * Online audio: stereo Opus at this rate, against 1.5 Mbps for plain samples. Every packet
+     * also carries the packet before it, so it costs twice this on the wire, still about a sixth.
+     */
+    const val OPUS_BITRATE = 128_000
+
     private const val PACKET_PAD: Byte = 1
     private const val PACKET_AUDIO: Byte = 2
     private const val PACKET_BYE: Byte = 3
     private const val PACKET_HOST_STATS: Byte = 4
+    private const val PACKET_AUDIO_OPUS: Byte = 5
     private const val ZERO: Byte = 0
     private const val PAD_PACKET_SIZE = 16
     const val AUDIO_HEADER_SIZE = 8
@@ -149,6 +159,38 @@ internal object RemotePlayProtocol {
         val pcm = ByteArray(buf.remaining() and 3.inv())
         buf.get(pcm)
         return pcm
+    }
+
+    /** One Opus packet ([seq]) and, when there was one, the packet before it. */
+    class OpusPacket(val seq: Int, val frame: ByteArray, val previous: ByteArray?)
+
+    /**
+     * A compressed audio packet: header (type, 0, the frame's length, sequence number), the Opus
+     * frame, then the frame before it again. The channel never resends, so a packet that goes
+     * missing is played from the copy in the next one instead.
+     */
+    fun encodeOpus(seq: Int, frame: ByteArray, previous: ByteArray?): ByteBuffer {
+        val out = ByteBuffer.allocate(AUDIO_HEADER_SIZE + frame.size + (previous?.size ?: 0)).order(ByteOrder.LITTLE_ENDIAN)
+        out.put(PACKET_AUDIO_OPUS).put(ZERO)
+        out.putShort(frame.size.toShort())
+        out.putInt(seq)
+        out.put(frame)
+        previous?.let(out::put)
+        out.flip()
+        return out
+    }
+
+    /** An Opus packet, or null for anything else. */
+    fun decodeOpus(data: ByteBuffer): OpusPacket? {
+        val buf = data.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        if (buf.remaining() <= AUDIO_HEADER_SIZE || buf.get() != PACKET_AUDIO_OPUS) return null
+        buf.get()
+        val length = buf.short.toInt() and 0xffff
+        val seq = buf.int
+        if (length == 0 || length > buf.remaining()) return null
+        val frame = ByteArray(length).also { buf.get(it) }
+        val previous = if (buf.hasRemaining()) ByteArray(buf.remaining()).also { buf.get(it) } else null
+        return OpusPacket(seq, frame, previous)
     }
 
     /**

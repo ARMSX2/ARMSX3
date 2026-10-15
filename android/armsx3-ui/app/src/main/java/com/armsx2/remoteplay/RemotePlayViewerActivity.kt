@@ -202,8 +202,13 @@ class RemotePlayViewerActivity : ComponentActivity() {
     private val statsTick = object : Runnable {
         override fun run() {
             if (!statsOn) return
-            session?.sampleStats { line -> main.post { statsLine.value = line } }
-            session?.hostStats?.let { hostLine.value = describeHost(it) }
+            session?.let { current ->
+                current.sampleStats { line ->
+                    val audio = current.audioKind?.let { " · audio $it" }.orEmpty()
+                    main.post { statsLine.value = line + audio }
+                }
+                current.hostStats?.let { hostLine.value = describeHost(it) }
+            }
             main.postDelayed(this, 1_000)
         }
     }
@@ -766,6 +771,7 @@ internal class ViewerSession(
 ) {
     private val main = Handler(Looper.getMainLooper())
     private val audio = AudioOut()
+    private val opusIn = OpusIn(audio)
     private val stats = RemotePlayStats(sending = false)
     private val wifi = RemotePlayWifi(context)
 
@@ -787,6 +793,11 @@ internal class ViewerSession(
     // the screen itself.
     private var videoTrack: VideoTrack? = null
     private var sink: VideoSink? = null
+
+    /** How the host's audio arrives, for the stats: "Opus" or "uncompressed"; null before any. */
+    @Volatile
+    var audioKind: String? = null
+        private set
 
     /** The host's side of the stream, as it last reported it (once a second). */
     @Volatile
@@ -933,13 +944,16 @@ internal class ViewerSession(
             "video decoder: ${created.h264Decoder ?: "no hardware H.264, stock factories"}" +
                 if (output != null) ", straight onto the screen" else ", drawn by the renderer",
         )
+        // Tells the host this device can play compressed audio (it can on any Android from 5).
+        val audioFormat = if (OpusDecoder.available()) "opus" else "pcm"
 
         val wait = GatherWait(main, 4_000) {
             val description = peer?.localDescription ?: return@GatherWait
             link?.send(
                 RemotePlayRtc.sdpMessage("answer", description)
                     .put("v", RemotePlayProtocol.VERSION)
-                    .put("name", Build.MODEL),
+                    .put("name", Build.MODEL)
+                    .put("audio", audioFormat),
             )
         }
         gather = wait
@@ -963,15 +977,23 @@ internal class ViewerSession(
                     RemotePlayProtocol.CHANNEL_INPUT -> inputChannel = channel
                     RemotePlayProtocol.CHANNEL_AUDIO -> {
                         channel.registerObserver(MessageObserver { buffer ->
-                            if (RemotePlayProtocol.isBye(buffer.data)) {
+                            val data = buffer.data
+                            if (RemotePlayProtocol.isBye(data)) {
                                 main.post { end(I18n.get("remoteplay.bye.stopped")) }
                                 return@MessageObserver
                             }
-                            val stats = RemotePlayProtocol.decodeHostStats(buffer.data)
-                            if (stats != null) {
-                                hostStats = stats
-                            } else {
-                                RemotePlayProtocol.decodeAudio(buffer.data)?.let(audio::enqueue)
+                            RemotePlayProtocol.decodeHostStats(data)?.let {
+                                hostStats = it
+                                return@MessageObserver
+                            }
+                            RemotePlayProtocol.decodeOpus(data)?.let {
+                                audioKind = "Opus"
+                                opusIn.offer(it)
+                                return@MessageObserver
+                            }
+                            RemotePlayProtocol.decodeAudio(data)?.let {
+                                audioKind = "uncompressed"
+                                audio.enqueue(it)
                             }
                         })
                         main.post { audioChannel = channel }
@@ -1047,6 +1069,7 @@ internal class ViewerSession(
             repeat(3) { channel.send(DataChannel.Buffer(RemotePlayProtocol.encodeBye(), true)) }
         }
         link?.close(RemotePlayRtc.bye("left"))
+        opusIn.stop()
         audio.stop()
         wifi.release()
 
@@ -1077,8 +1100,12 @@ internal class AudioOut {
     private var running = false
     private var worker: Thread? = null
 
+    // Set by stop(): a packet still on its way in then must not start playback again.
+    private var closed = false
+
     @Synchronized
     fun enqueue(pcm: ByteArray) {
+        if (closed) return
         if (!running) {
             running = true
             worker = thread(name = "rp-audio-out", isDaemon = true) { play() }
@@ -1092,6 +1119,7 @@ internal class AudioOut {
     }
 
     fun stop() {
+        synchronized(this) { closed = true }
         running = false
         worker?.join(300)
         worker = null

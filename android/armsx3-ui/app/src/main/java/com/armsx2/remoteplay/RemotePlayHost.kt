@@ -116,7 +116,7 @@ object RemotePlayHost {
             onExpired = { main.post { if (session === created) sessionEnded(created, I18n.get("remoteplay.invite.expired")) } },
         )
         created = HostSession(
-            app, link, game, RemotePlayProtocol.ONLINE_BITRATE,
+            app, link, game, online = true,
             onFinished = { ended, message -> main.post { if (session === ended) sessionEnded(ended, message) } },
         )
         session = created
@@ -195,7 +195,7 @@ object RemotePlayHost {
             onClosed = { main.post { if (session === created) created.linkClosed() } },
         )
         created = HostSession(
-            app, TcpLink(connection), game, RemotePlayProtocol.WIFI_BITRATE,
+            app, TcpLink(connection), game, online = false,
             onFinished = { ended, message -> main.post { if (session === ended) sessionEnded(ended, message) } },
         )
         session = created
@@ -227,17 +227,25 @@ object RemotePlayHost {
 }
 
 /**
- * One viewer, from the offer to the bye. [bitrate] suits the way the viewer came: the same Wi-Fi
- * or online. Main thread unless a comment says otherwise.
+ * One viewer, from the offer to the bye. [online]: the viewer came with an invite rather than over
+ * this Wi-Fi, which sets the video bitrate and compresses the audio. Main thread unless a comment
+ * says otherwise.
  */
 private class HostSession(
     private val context: Context,
     private val link: SignalLink,
     private val game: String,
-    private val bitrate: RemotePlayProtocol.Bitrate,
+    private val online: Boolean,
     private val onFinished: (HostSession, String?) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
+    private val bitrate = if (online) RemotePlayProtocol.ONLINE_BITRATE else RemotePlayProtocol.WIFI_BITRATE
+
+    // Online, the audio goes out as Opus when the viewer plays it. On the same Wi-Fi it stays plain
+    // samples: there is bandwidth to spare, and the sound arrives sooner (Opus gathers 20 ms before
+    // it encodes, and looks 6.5 ms ahead).
+    @Volatile
+    private var opusAudio = false
     private var viewer = "?"
     private var rtc: RemotePlayRtc.Factory? = null
     private var peer: PeerConnection? = null
@@ -322,6 +330,7 @@ private class HostSession(
                 if (answered) return
                 answered = true
                 viewer = message.optString("name").ifBlank { viewer }.take(40)
+                opusAudio = online && message.optString("audio") == "opus"
                 RemotePlayHost.report(RemotePlayHost.Status.Connecting(viewer))
                 pc.setRemoteDescription(
                     SdpAdapter { error -> fail("answer: $error") },
@@ -498,18 +507,43 @@ private class HostSession(
         observer.onCapturerStopped()
     }
 
-    // rp-audio thread. Pulls 10 ms chunks from the core and sends each as one packet.
+    // rp-audio thread. Pulls 10 ms chunks from the core and sends them: as plain samples, a chunk to
+    // a packet, or as Opus, 20 ms to a packet with the packet before riding along (see opusAudio).
     private fun audioLoop() {
         val pcm = ByteBuffer.allocateDirect(RemotePlayProtocol.AUDIO_CHUNK_FRAMES * 4).order(ByteOrder.LITTLE_ENDIAN)
+        var encoder = if (opusAudio) OpusEncoder.create() else null
+        Log.i(TAG, "audio: " + (encoder?.let { "Opus ${RemotePlayProtocol.OPUS_BITRATE / 1000} kbps (${it.name})" } ?: "uncompressed"))
         var seq = 0
-        while (streaming) {
-            val frames = RPCSX.instance.remotePlayPollAudio(pcm, RemotePlayProtocol.AUDIO_CHUNK_FRAMES, 50)
-            if (frames < 0) break
-            if (frames == 0) continue
-            val channel = audioChannel ?: break
-            // Behind on the network: skip a chunk rather than build up delay.
-            if (channel.state() != DataChannel.State.OPEN || channel.bufferedAmount() > 64 * 1024) continue
-            channel.send(DataChannel.Buffer(RemotePlayProtocol.encodeAudio(seq++, pcm, frames), true))
+        var previous: ByteArray? = null
+        try {
+            while (streaming) {
+                val frames = RPCSX.instance.remotePlayPollAudio(pcm, RemotePlayProtocol.AUDIO_CHUNK_FRAMES, 50)
+                if (frames < 0) break
+                if (frames == 0) continue
+                val channel = audioChannel ?: break
+                // Behind on the network: skip rather than build up delay.
+                val behind = channel.state() != DataChannel.State.OPEN || channel.bufferedAmount() > 64 * 1024
+                val opus = encoder
+                if (opus == null) {
+                    if (!behind) channel.send(DataChannel.Buffer(RemotePlayProtocol.encodeAudio(seq++, pcm, frames), true))
+                    continue
+                }
+                try {
+                    // A skipped packet still takes its number, so the viewer sees the gap and plays
+                    // the copy in the next one.
+                    opus.encode(pcm, frames) { packet ->
+                        if (!behind) channel.send(DataChannel.Buffer(RemotePlayProtocol.encodeOpus(seq, packet, previous), true))
+                        seq++
+                        previous = packet
+                    }
+                } catch (e: IllegalStateException) {
+                    Log.w(TAG, "Opus encoder failed, sending uncompressed audio", e)
+                    opus.release()
+                    encoder = null
+                }
+            }
+        } finally {
+            encoder?.release()
         }
     }
 
