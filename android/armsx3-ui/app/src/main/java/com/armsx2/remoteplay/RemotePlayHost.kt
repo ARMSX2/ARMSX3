@@ -3,7 +3,9 @@ package com.armsx2.remoteplay
 import android.content.Context
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
+import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import android.view.KeyEvent
@@ -269,25 +271,33 @@ private class HostSession(
     private var offered = false
     private var answered = false
     private var connectedOnce = false
+    @Volatile
     private var ended = false
+
+    // Player 2's pad packets are applied here, not on the main thread, which the game's own
+    // screens also use: a press never waits behind them. Audio priority, since each packet is a
+    // few microseconds of work and its delay is the delay of the press.
+    private val inputThread = HandlerThread("rp-input", Process.THREAD_PRIORITY_AUDIO).apply { start() }
+    private val input = Handler(inputThread.looper)
 
     private val wifi = RemotePlayWifi(context)
 
     // Online: the host's router asked to let the friend in (UPnP), for this session only.
     private val upnp = if (online) RemotePlayUpnp() else null
 
+    // Input thread.
     private var appliedPad = RemotePlayProtocol.PadState()
     private var lastPadSeq = 0
     private var hasPadSeq = false
     private var lastPadAt = 0L
 
-    // Releases player 2's buttons when its packets stop arriving, so a dropped connection does not
-    // leave a direction held until it recovers.
+    // Input thread. Releases player 2's buttons when its packets stop arriving, so a dropped
+    // connection does not leave a direction held until it recovers.
     private val padWatch = object : Runnable {
         override fun run() {
             if (ended) return
             if (SystemClock.uptimeMillis() - lastPadAt > 1_000) applyPad(RemotePlayProtocol.PadState())
-            main.postDelayed(this, 250)
+            input.postDelayed(this, 250)
         }
     }
 
@@ -529,8 +539,8 @@ private class HostSession(
         val pipeline = RemotePlayFrames(textureInput = rtc?.textureInput == true).also { frames = it }
         videoThread = thread(name = "rp-video") { videoLoop(observer, pipeline) }
         audioThread = thread(name = "rp-audio") { audioLoop() }
-        lastPadAt = SystemClock.uptimeMillis()
-        main.postDelayed(padWatch, 250)
+        input.post { lastPadAt = SystemClock.uptimeMillis() }
+        input.postDelayed(padWatch, 250)
         main.postDelayed(statsTick, 5_000)
         main.postDelayed(hostStatsTick, 1_000)
         main.post(rumbleTick)
@@ -657,12 +667,10 @@ private class HostSession(
             return
         }
         val (seq, pad) = RemotePlayProtocol.decodePad(data) ?: return
-        // Ahead of whatever else the main thread has queued: a press should not wait behind the
-        // UI. Out of order is fine, the newest wins (below).
-        main.postAtFrontOfQueue {
-            if (ended || !streaming) return@postAtFrontOfQueue
+        input.post {
+            if (ended || !streaming) return@post
             // The channel is unordered: a late packet must not undo a newer one.
-            if (hasPadSeq && seq - lastPadSeq <= 0) return@postAtFrontOfQueue
+            if (hasPadSeq && seq - lastPadSeq <= 0) return@post
             hasPadSeq = true
             lastPadSeq = seq
             lastPadAt = SystemClock.uptimeMillis()
@@ -702,7 +710,7 @@ private class HostSession(
     fun end(reason: String) {
         if (ended) return
         ended = true
-        main.removeCallbacks(padWatch)
+        input.removeCallbacksAndMessages(null)
         main.removeCallbacks(connectTimeout)
         main.removeCallbacks(answerTimeout)
         main.removeCallbacks(statsTick)
@@ -718,6 +726,9 @@ private class HostSession(
         }
         videoThread?.join(500)
         audioThread?.join(500)
+        // The input thread first, so nothing applies a press after the release below.
+        inputThread.quitSafely()
+        runCatching { inputThread.join(200) }
         applyPad(RemotePlayProtocol.PadState())
         wifi.release()
         upnp?.close()
