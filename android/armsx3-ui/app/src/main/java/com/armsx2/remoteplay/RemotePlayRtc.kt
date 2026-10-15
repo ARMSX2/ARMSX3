@@ -48,13 +48,14 @@ internal object RemotePlayRtc {
      *    holding frames in a jitter buffer to even out their timing (min 0; a max at or under
      *    500 ms is what switches the mode on). Set on both sides, since the host's half travels in
      *    the video packets.
-     *  - Decodes at least 12 ms apart. Frames that arrive bunched up on Wi-Fi went to the decoder
-     *    back to back, and a screen shows one frame per refresh: of two done within the same
-     *    refresh only the newer is shown. Spaced out they each get shown; a steady 60 fps
-     *    (16.7 ms apart) is never held back.
+     *  - Decodes at least 16 ms apart, about one 60 Hz refresh (the viewer's screen runs at 60 Hz
+     *    while it streams). Frames that arrive bunched up on Wi-Fi went to the decoder back to
+     *    back, and a screen shows one frame per refresh: of two done within the same refresh only
+     *    the newer is shown. Spaced out they each get shown. At 12 ms (until test 14) a backlog
+     *    after a hiccup played faster than the game ran, up to 83 fps (73 seen in test 14), which
+     *    reads as judder; at 16 ms it cannot outrun 60 fps.
      *  - More than two frames waiting, after a hiccup, go to the decoder at once instead, so the
-     *    picture jumps to the newest. Spaced out, the backlog played faster than the game ran
-     *    (up to 83 fps) until it had caught up.
+     *    picture jumps to the newest rather than fast-forwarding through the backlog.
      *  - No frame dropper: it skips frames whenever the encoder runs over its bitrate, which fast
      *    game footage often does. The bitrate still follows the network; frames are simply not
      *    thrown away on top.
@@ -70,7 +71,7 @@ internal object RemotePlayRtc {
     private const val FIELD_TRIALS =
         "WebRTC-ForcePlayoutDelay/min_ms:0,max_ms:100/" +
             "WebRTC-ForceSendPlayoutDelay/min_ms:0,max_ms:100/" +
-            "WebRTC-ZeroPlayoutDelay/min_pacing:12ms,max_decode_queue_size:2/" +
+            "WebRTC-ZeroPlayoutDelay/min_pacing:16ms,max_decode_queue_size:2/" +
             "WebRTC-FrameDropper/Disabled/" +
             "WebRTC-CongestionWindow/Disabled/"
 
