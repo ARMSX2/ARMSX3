@@ -1,6 +1,7 @@
 package com.armsx2.remoteplay
 
 import org.webrtc.PeerConnection
+import org.webrtc.RTCStats
 import org.webrtc.RTCStatsReport
 import java.util.Locale
 import kotlin.math.roundToInt
@@ -83,10 +84,29 @@ internal class RemotePlayStats(private val sending: Boolean) {
         // from losses cost, sent by the viewer, received by the host.
         delta("nackCount")?.takeIf { it > 0 }?.let { parts += String.format(Locale.US, "nack %.0f", it) }
         delta("pliCount")?.takeIf { it > 0 }?.let { parts += String.format(Locale.US, "pli %.0f", it) }
+        // How the devices reach each other, by the host address WebRTC settled on (viewer side).
+        if (!sending) route(report, pair)?.let { parts += it }
 
         last = totals
         lastTimeUs = rtp.timestampUs
         return parts.joinToString(" · ")
+    }
+
+    /**
+     * The host's address in use, in words: on the local network, across the internet through the
+     * port the host's router opened for the session (UPnP; RemotePlayUpnp marks that address with
+     * a foundation starting "u"), or across the internet otherwise. Null before there is a route.
+     */
+    private fun route(report: RTCStatsReport, pair: RTCStats?): String? {
+        val id = pair?.members?.get("remoteCandidateId")?.toString() ?: return null
+        val remote = report.statsMap[id]?.members ?: return null
+        return when (remote["candidateType"]?.toString()) {
+            "host" -> "via local network"
+            "srflx", "prflx" ->
+                if (remote["foundation"]?.toString()?.startsWith("u") == true) "via internet, router port (UPnP)" else "via internet"
+            "relay" -> "via relay"
+            else -> null
+        }
     }
 }
 
