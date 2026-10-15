@@ -425,8 +425,10 @@ extern "C" void _rpcsx_remotePlayCounters(u32* out)
 	out[3] = g_superseded;
 }
 
-// Waits up to timeout_ms for audio and writes up to cap_frames stereo s16 frames at 48 kHz.
-// Returns the frames written, 0 on timeout, -1 when capture is not running.
+// Waits up to timeout_ms for cap_frames of audio and writes them as stereo s16 at 48 kHz. Full
+// chunks, so each network packet carries cap_frames rather than whatever cellAudio's last block
+// held (about 5 ms, which nearly doubled the packets). On timeout it returns what there is.
+// Returns the frames written, 0 when there were none, -1 when capture is not running.
 extern "C" int _rpcsx_remotePlayPollAudio(s16* dst, int cap_frames, int timeout_ms)
 {
 	const auto sink = current_sink();
@@ -442,7 +444,7 @@ extern "C" int _rpcsx_remotePlayPollAudio(s16* dst, int cap_frames, int timeout_
 	std::deque<utils::video_sink::encoder_sample> blocks;
 	std::vector<f32> scratch;
 
-	while (g_audio_pending.empty())
+	while (g_audio_pending.size() / 2 < static_cast<usz>(cap_frames))
 	{
 		// Read before looking, so a block that lands in between still wakes the wait below.
 		const u32 added = sink->samples_added;
@@ -467,7 +469,7 @@ extern "C" int _rpcsx_remotePlayPollAudio(s16* dst, int cap_frames, int timeout_
 
 		if (now >= deadline)
 		{
-			return 0;
+			break;
 		}
 
 		// cellAudio mixes a block every few ms; sleep until the next one arrives.
@@ -476,6 +478,12 @@ extern "C" int _rpcsx_remotePlayPollAudio(s16* dst, int cap_frames, int timeout_
 	}
 
 	const usz frames = std::min<usz>(g_audio_pending.size() / 2, static_cast<usz>(cap_frames));
+
+	if (!frames)
+	{
+		return 0;
+	}
+
 	std::copy_n(g_audio_pending.begin(), frames * 2, dst);
 	g_audio_pending.erase(g_audio_pending.begin(), g_audio_pending.begin() + frames * 2);
 	return static_cast<int>(frames);
