@@ -11,6 +11,7 @@ import android.view.Surface;
 import androidx.annotation.Nullable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Locale;
 
 /**
  * Remote play (com.armsx2.remoteplay): the viewer's decoders.
@@ -159,20 +160,84 @@ public class ArmsxVideoDecoderFactory implements VideoDecoderFactory {
     return Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && info.isAlias();
   }
 
-  /** The format with low latency asked for, in general and in each vendor's own terms. */
-  static MediaFormat lowLatency(MediaFormat original, String name) {
+  // Snapdragon 765, 765G and 768G (Adreno 620), where Moonlight found the decoder crashes when
+  // asked for its fastest clocks. Before Android 12 only the platform's name says so: "lito" is
+  // that family, and the 750G, which is left out with it to be safe.
+  private static final boolean SNAPDRAGON_765 =
+      (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && Build.SOC_MODEL.startsWith("SM7250"))
+      || "lito".equalsIgnoreCase(Build.BOARD);
+
+  /**
+   * Configures a decoder for low latency: everything {@link #lowLatency} asks for, then Android's
+   * own switch alone, then plainly, each only when the one before was refused. Most to least
+   * risky, as Moonlight does.
+   */
+  static void configureLowLatency(MediaCodec codec, MediaFormat format, @Nullable Surface surface,
+      @Nullable MediaCrypto crypto) {
+    MediaFormat android = new MediaFormat(format);
+    android.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
+    MediaFormat[] attempts = {lowLatency(format, codec), android, format};
+    String[] modes = {"low-latency mode", "Android's low-latency mode only", "default mode"};
+    for (int i = 0;; i++) {
+      try {
+        codec.configure(attempts[i], surface, crypto, 0);
+        Logging.d(TAG, codec.getName() + " in " + modes[i]);
+        return;
+      } catch (IllegalArgumentException | IllegalStateException e) {
+        if (i == attempts.length - 1) {
+          throw e;
+        }
+        Logging.w(TAG, "Low-latency setup refused, trying less: " + e);
+        codec.reset();
+      }
+    }
+  }
+
+  /**
+   * The format with low latency asked for the way Moonlight asks for it
+   * (MediaCodecHelper.setDecoderLowLatencyOptions): Android's own switch, which is all a codec
+   * that declares it honours it needs. Any other codec also gets the fastest clocks on Qualcomm
+   * (realtime priority elsewhere) and each vendor's own switches.
+   */
+  static MediaFormat lowLatency(MediaFormat original, MediaCodec codec) {
     MediaFormat format = new MediaFormat(original);
     format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1);
-    format.setInteger(MediaFormat.KEY_PRIORITY, 0);
-    // Each vendor's own switch. A codec ignores keys from another vendor.
-    if (name.startsWith("c2.qti.") || name.startsWith("OMX.qcom.")) {
+    String mime = format.getString(MediaFormat.KEY_MIME);
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mime != null) {
+      try {
+        if (codec.getCodecInfo().getCapabilitiesForType(mime).isFeatureSupported(
+                MediaCodecInfo.CodecCapabilities.FEATURE_LowLatency)) {
+          return format;
+        }
+      } catch (IllegalArgumentException e) {
+        // No capabilities for that type: carry on with the rest.
+      }
+    }
+
+    String name = codec.getName().toLowerCase(Locale.ROOT);
+    boolean qualcomm = name.startsWith("omx.qcom") || name.startsWith("c2.qti");
+    if (qualcomm && !SNAPDRAGON_765) {
+      // Not realtime priority as well: a codec asked for both that cannot keep up crashes.
+      format.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
+    } else {
+      format.setInteger(MediaFormat.KEY_PRIORITY, 0);
+    }
+
+    // Each vendor's own switches. A codec ignores keys from another vendor.
+    if (qualcomm) {
+      format.setInteger("vendor.qti-ext-dec-picture-order.enable", 1);
       format.setInteger("vendor.qti-ext-dec-low-latency.enable", 1);
-    } else if (name.startsWith("c2.exynos.") || name.startsWith("OMX.Exynos.")) {
+    } else if (name.startsWith("omx.exynos") || name.startsWith("c2.exynos")) {
       format.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1);
-    } else if (name.startsWith("c2.mtk.") || name.startsWith("OMX.MTK.")) {
+    } else if (name.startsWith("omx.mtk") || name.startsWith("c2.mtk")) {
       format.setInteger("vdec-lowlatency", 1);
-    } else if (name.startsWith("c2.amlogic.") || name.startsWith("OMX.amlogic.")) {
+    } else if (name.startsWith("omx.amlogic") || name.startsWith("c2.amlogic")) {
+      format.setInteger("vdec-lowlatency", 1);
       format.setInteger("vendor.low-latency.enable", 1);
+    } else if (name.startsWith("omx.hisi") || name.startsWith("c2.hisi")) {
+      String hisi = "vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-";
+      format.setInteger(hisi + "req", 1);
+      format.setInteger(hisi + "rdy", -1);
     }
     return format;
   }
@@ -194,18 +259,11 @@ public class ArmsxVideoDecoderFactory implements VideoDecoderFactory {
 
     @Override
     public void configure(MediaFormat format, Surface surface, MediaCrypto crypto, int flags) {
-      if ((flags & MediaCodec.CONFIGURE_FLAG_ENCODE) != 0) {
+      if (flags != 0) {
         codec.configure(format, surface, crypto, flags);
         return;
       }
-      try {
-        codec.configure(lowLatency(format, codec.getName()), surface, crypto, flags);
-        Logging.d(TAG, codec.getName() + " in low-latency mode");
-      } catch (IllegalArgumentException | IllegalStateException e) {
-        Logging.w(TAG, "Low-latency setup refused, configuring the plain one: " + e);
-        codec.reset();
-        codec.configure(format, surface, crypto, flags);
-      }
+      configureLowLatency(codec, format, surface, crypto);
     }
 
     @Override

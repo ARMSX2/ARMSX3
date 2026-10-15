@@ -235,14 +235,8 @@ public class ArmsxSurfaceDecoder implements VideoDecoder {
     MediaCodec codec = null;
     try {
       codec = MediaCodec.createByCodecName(codecName);
-      MediaFormat format = MediaFormat.createVideoFormat(mime, width, height);
-      try {
-        codec.configure(ArmsxVideoDecoderFactory.lowLatency(format, codecName), surface, null, 0);
-      } catch (IllegalArgumentException | IllegalStateException e) {
-        Logging.w(TAG, "Low-latency setup refused, configuring the plain one: " + e);
-        codec.reset();
-        codec.configure(format, surface, null, 0);
-      }
+      ArmsxVideoDecoderFactory.configureLowLatency(
+          codec, MediaFormat.createVideoFormat(mime, width, height), surface, null);
       codec.setVideoScalingMode(MediaCodec.VIDEO_SCALING_MODE_SCALE_TO_FIT);
       codec.start();
     } catch (IOException | IllegalArgumentException | IllegalStateException e) {
