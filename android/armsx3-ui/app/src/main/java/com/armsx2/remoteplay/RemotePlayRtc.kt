@@ -25,13 +25,14 @@ internal object RemotePlayRtc {
 
     /**
      * [h264Encoder] and [h264Decoder] name the hardware H.264 codecs in use, or are null when
-     * there is none.
+     * there is none. [textureInput]: the encoder can take frames as GL textures.
      */
     class Factory(
         val factory: PeerConnectionFactory,
         private val audio: JavaAudioDeviceModule,
         val h264Encoder: String?,
         val h264Decoder: String?,
+        val textureInput: Boolean,
     ) {
         fun dispose() {
             runCatching { factory.dispose() }
@@ -86,7 +87,7 @@ internal object RemotePlayRtc {
             .setVideoEncoderFactory(encoders)
             .setVideoDecoderFactory(decoders)
             .createPeerConnectionFactory()
-        return Factory(factory, audio, encoders.hardwareH264Name(), decoders.hardwareH264Name())
+        return Factory(factory, audio, encoders.hardwareH264Name(), decoders.hardwareH264Name(), encoders.textureInput())
     }
 
     /**

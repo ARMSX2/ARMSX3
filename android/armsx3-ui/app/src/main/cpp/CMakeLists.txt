@@ -21,6 +21,9 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     android
     log
     adrenotools
+    # Remote play: hardware frames reach the video encoder as EGL images of AHardwareBuffers.
+    EGL
+    GLESv2
 )
 
 # ---------------------------------------------------------------------------

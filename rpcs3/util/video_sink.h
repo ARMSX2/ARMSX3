@@ -37,8 +37,14 @@ namespace utils
 				return false;
 
 			std::vector<u8> sample(buf, buf + sample_count * channels * sizeof(f32));
-			std::lock_guard lock(m_audio_mtx);
-			m_samples_to_encode.emplace_back(timestamp_us, sample_count, channels, std::move(sample));
+
+			{
+				std::lock_guard lock(m_audio_mtx);
+				m_samples_to_encode.emplace_back(timestamp_us, sample_count, channels, std::move(sample));
+			}
+
+			samples_added++;
+			samples_added.notify_one();
 			return true;
 		}
 
@@ -106,6 +112,10 @@ namespace utils
 		// lands in the same 256-sample slot as the previous one, which a file recorder can absorb
 		// but a live stream hears as a click whenever cellAudio delivers two blocks close together.
 		bool accept_all_samples = false;
+
+		// ARMSX3 remote play: counts audio blocks as they arrive, so the stream's audio thread can
+		// sleep until there is one instead of checking every millisecond.
+		atomic_t<u32> samples_added{0};
 
 	protected:
 		shared_mutex m_video_mtx;

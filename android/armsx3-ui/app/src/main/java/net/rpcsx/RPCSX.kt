@@ -151,6 +151,13 @@ class RPCSX {
     external fun remotePlayPollVideo(buffer: java.nio.ByteBuffer, info: IntArray, timeoutMs: Int): Int
     external fun remotePlayPollAudio(buffer: java.nio.ByteBuffer, capFrames: Int, timeoutMs: Int): Int
     external fun remotePlayCounters(out: IntArray): Boolean
+    // Hardware frames (remotePlayPollVideo returned 2): the slot's buffer as a GL texture, needing a
+    // current EGL context; the slot handed back once the encoder has drawn it; and whether the core
+    // may send them at all.
+    external fun remotePlayImportFrame(slot: Int, texture: Int): Long
+    external fun remotePlayDestroyImage(image: Long)
+    external fun remotePlayReleaseFrame(slot: Int)
+    external fun remotePlaySetHardware(enabled: Boolean)
     /** Analog pressure per pressure-capable button, in CELL_PAD press-offset order
      *  (RIGHT, LEFT, UP, DOWN, TRIANGLE, CIRCLE, CROSS, SQUARE, L1, R1, L2, R2),
      *  each 1..255, or 0 to leave that button digital. */

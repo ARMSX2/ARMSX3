@@ -14,7 +14,6 @@ import com.armsx2.runtime.MainActivityRuntime
 import com.armsx3.Rpcs3Bridge
 import net.rpcsx.RPCSX
 import org.json.JSONObject
-import org.webrtc.ArmsxNV12Buffer
 import org.webrtc.ArmsxVideoEncoderFactory
 import org.webrtc.CapturerObserver
 import org.webrtc.DataChannel
@@ -23,7 +22,6 @@ import org.webrtc.PeerConnection
 import org.webrtc.RtpParameters
 import org.webrtc.RtpTransceiver
 import org.webrtc.SessionDescription
-import org.webrtc.VideoFrame
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
 import java.net.Socket
@@ -255,6 +253,7 @@ private class HostSession(
     private var streaming = false
     private var videoThread: Thread? = null
     private var audioThread: Thread? = null
+    private var frames: RemotePlayFrames? = null
     private var offered = false
     private var answered = false
     private var connectedOnce = false
@@ -446,7 +445,8 @@ private class HostSession(
         wifi.hold()
         val observer = source.capturerObserver
         observer.onCapturerStarted(true)
-        videoThread = thread(name = "rp-video") { videoLoop(observer) }
+        val pipeline = RemotePlayFrames(textureInput = rtc?.textureInput == true).also { frames = it }
+        videoThread = thread(name = "rp-video") { videoLoop(observer, pipeline) }
         audioThread = thread(name = "rp-audio") { audioLoop() }
         lastPadAt = SystemClock.uptimeMillis()
         main.postDelayed(padWatch, 250)
@@ -481,28 +481,19 @@ private class HostSession(
             ?.send(DataChannel.Buffer(RemotePlayProtocol.encodeHostStats(current), true))
     }
 
-    // rp-video thread. Pulls frames from the core and hands them to the encoder. They arrive as
-    // NV12, which the GPU drew at the stream's size, so this thread copies each frame once and
-    // converts nothing; the encoder copies it into the codec the same way.
-    private fun videoLoop(observer: CapturerObserver) {
-        val frameBytes = RemotePlayProtocol.MAX_WIDTH * RemotePlayProtocol.MAX_HEIGHT * 3 / 2
-        // Buffers go back here when WebRTC lets go of their frame (on its encoder thread).
-        val pool = java.util.concurrent.ConcurrentLinkedQueue<ByteBuffer>()
-        val info = IntArray(4)
-
+    // rp-video thread. Pulls frames from the core and hands them to the encoder: as GPU textures the
+    // encoder draws straight into its input where the device allows, otherwise as NV12 the GPU drew
+    // and this thread copies out once (see RemotePlayFrames).
+    private fun videoLoop(observer: CapturerObserver, pipeline: RemotePlayFrames) {
         while (streaming) {
-            val buffer = pool.poll() ?: ByteBuffer.allocateDirect(frameBytes)
-            val result = RPCSX.instance.remotePlayPollVideo(buffer, info, 50)
-            if (result != 1) {
-                pool.offer(buffer)
-                if (result == -1) break
-                continue
+            when (val next = pipeline.poll(50)) {
+                is RemotePlayFrames.Poll.Frame -> {
+                    observer.onFrameCaptured(next.frame)
+                    next.frame.release()
+                }
+                RemotePlayFrames.Poll.Stopped -> break
+                RemotePlayFrames.Poll.Timeout -> Unit
             }
-
-            val nv12 = ArmsxNV12Buffer(info[0], info[1], buffer) { pool.offer(buffer) }
-            val frame = VideoFrame(nv12, 0, System.nanoTime())
-            observer.onFrameCaptured(frame)
-            frame.release()
         }
         observer.onCapturerStopped()
     }
@@ -602,6 +593,9 @@ private class HostSession(
         runCatching { videoTrack?.dispose() }
         runCatching { videoSource?.dispose() }
         rtc?.dispose()
+        // The encoder is gone with the peer, so nothing draws the frame textures any more.
+        frames?.release()
+        frames = null
         peer = null
         audioChannel = null
         inputChannel = null

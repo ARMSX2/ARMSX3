@@ -22,12 +22,19 @@
 #include "util/asm.hpp"
 #include "util/video_provider.h"
 
+#include <bit>
+
+#ifdef __ANDROID__
+#include <android/hardware_buffer.h>
+#endif
+
 extern atomic_t<bool> g_user_asked_for_screenshot;
 extern atomic_t<recording_mode> g_recording_mode;
 // android/src/remote_play.cpp
 extern atomic_t<u32> g_remote_play_max_size;
 extern atomic_t<u32> g_remote_play_frames;
 extern atomic_t<u32> g_remote_play_skipped;
+extern atomic_t<bool> g_remote_play_hardware;
 
 namespace vk
 {
@@ -1700,7 +1707,7 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 	{
 		remote_capture_record(image_to_flip, buffer_width, buffer_height, remote_play_max_size);
 	}
-	else if (!remote_play_max_size && (m_remote_capture_marker || m_remote_capture_y))
+	else if (!remote_play_max_size && (m_remote_capture_marker || m_remote_capture_y || m_remote_capture_rgba))
 	{
 		remote_capture_release(false);
 	}
@@ -2247,24 +2254,32 @@ void VKGSRender::flip(const rsx::display_flip_info_t& info)
 
 namespace vk
 {
-	// ARMSX3 remote play: the stream's NV12 planes, drawn from the game's frame. One draw writes the Y
-	// plane at the stream's size, another the interleaved UV plane at half that, both sampling the
-	// frame with linear filtering, which is also the downscale. Fragment passes rather than compute:
-	// a compute dispatch every frame is the graphics->compute switch that hung Adreno 830 (see
-	// compute_task::run). BT.601 limited range, as libyuv's ABGRToI420 that this replaces.
-	struct remote_play_yuv_pass : public overlay_pass
+	// ARMSX3 remote play: the stream's frame, drawn from the game's. Three modes: the Y plane at the
+	// stream's size, the interleaved UV plane at half that, or the whole frame as RGBA for the
+	// hardware path. Each samples the game's frame with linear filtering, which is also the
+	// downscale. Fragment passes rather than compute: a compute dispatch every frame is the
+	// graphics->compute switch that hung Adreno 830 (see compute_task::run). YUV is BT.601 limited
+	// range, as libyuv's ABGRToI420 that this replaced.
+	struct remote_play_capture_pass : public overlay_pass
 	{
+		enum mode : s32
+		{
+			luma = 0,
+			chroma = 1,
+			rgba = 2,
+		};
+
 		struct
 		{
 			f32 scale_x = 1.f;
 			f32 scale_y = 1.f;
-			s32 chroma = 0;
+			s32 mode = luma;
 			s32 srgb = 0;
 		} params;
 
 		static constexpr u32 push_constants_size = 16;
 
-		remote_play_yuv_pass()
+		remote_play_capture_pass()
 		{
 			vs_src =
 			#include "../Program/GLSLSnippets/GenericVSPassthrough.glsl"
@@ -2281,7 +2296,7 @@ layout(location=0) out vec4 ocol;
 layout(push_constant) uniform static_data
 {
 	vec2 scale;
-	int chroma;
+	int mode;
 	int srgb;
 };
 
@@ -2291,20 +2306,24 @@ void main()
 
 	if (srgb != 0)
 	{
-		// The view decoded sRGB when sampling; YUV is made from the encoded values.
+		// The view decoded sRGB when sampling; the stream is made from the encoded values.
 		c = mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
 	}
 
-	if (chroma == 0)
+	if (mode == 0)
 	{
 		ocol = vec4((16.0 + dot(c, vec3(65.481, 128.553, 24.966))) / 255.0);
 	}
-	else
+	else if (mode == 1)
 	{
 		ocol = vec4(
 			(128.0 + dot(c, vec3(-37.797, -74.203, 112.0))) / 255.0,
 			(128.0 + dot(c, vec3(112.0, -93.786, -18.214))) / 255.0,
 			0.0, 1.0);
+	}
+	else
+	{
+		ocol = vec4(c, 1.0);
 	}
 }
 )";
@@ -2331,13 +2350,15 @@ void main()
 			vkCmdPushConstants(cmd, program->layout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0, push_constants_size, &params);
 		}
 
-		// Draws one plane over the whole of target; scale picks the part of src the game displays.
-		void run(vk::command_buffer& cmd, vk::image* target, vk::image_view* src, f32 scale_x, f32 scale_y, bool chroma, bool srgb)
+		// Draws over the whole of target; scale picks the part of src the game displays.
+		void run(vk::command_buffer& cmd, vk::image* target, vk::image_view* src, f32 scale_x, f32 scale_y, mode what, bool srgb)
 		{
 			params.scale_x = scale_x;
 			params.scale_y = scale_y;
-			params.chroma = chroma ? 1 : 0;
+			params.mode = what;
 			params.srgb = srgb ? 1 : 0;
+
+			target->change_layout(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
 			const VkRenderPass render_pass = vk::get_renderpass(*vk::get_current_renderer(), vk::get_renderpass_key(target->format()));
 			overlay_pass::run(cmd, areau{ 0, 0, target->width(), target->height() }, target, src, render_pass);
@@ -2346,6 +2367,8 @@ void main()
 			{
 				vk::end_renderpass(cmd);
 			}
+
+			target->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 		}
 	};
 }
@@ -2370,7 +2393,7 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 		return;
 	}
 
-	// A slot the app's thread has finished with. When the GPU or the app still holds all of them,
+	// A slot the app's side has finished with. When the GPU or the app still holds all of them,
 	// drop this frame rather than wait.
 	auto& ring = m_remote_capture_ring;
 	usz index = ring.slots.size();
@@ -2392,42 +2415,60 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	auto& slot = ring.slots[index];
 
 	// Fit inside the stream's size and keep the aspect ratio. NV12 wants the width a multiple of 4
-	// (two chroma samples per word) and the height even.
+	// (two chroma samples per word) and the height even; the hardware path keeps the same size.
 	const u32 max_width = max_size >> 16;
 	const u32 max_height = max_size & 0xffff;
 	const f32 scale = std::min({1.f, static_cast<f32>(max_width) / width, static_cast<f32>(max_height) / height});
 	const u32 dst_width = std::max(4u, static_cast<u32>(width * scale) & ~3u);
 	const u32 dst_height = std::max(2u, static_cast<u32>(height * scale) & ~1u);
 
-	if (m_remote_capture_y && (m_remote_capture_y->width() != dst_width || m_remote_capture_y->height() != dst_height))
+	const auto make_target = [&](std::unique_ptr<vk::image>& target, VkFormat target_format, u32 target_width, u32 target_height)
 	{
-		vk::remove_framebuffers_with_image(m_remote_capture_y.get());
-		vk::remove_framebuffers_with_image(m_remote_capture_uv.get());
-		vk::get_resource_manager()->dispose(m_remote_capture_y);
-		vk::get_resource_manager()->dispose(m_remote_capture_uv);
-	}
-
-	if (!m_remote_capture_y)
-	{
-		const auto make_plane = [&](VkFormat plane_format, u32 plane_width, u32 plane_height)
+		if (target && (target->width() != target_width || target->height() != target_height))
 		{
-			return std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-				VK_IMAGE_TYPE_2D, plane_format, plane_width, plane_height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
+			vk::remove_framebuffers_with_image(target.get());
+			vk::get_resource_manager()->dispose(target);
+		}
+
+		if (!target)
+		{
+			target = std::make_unique<vk::image>(*m_device, m_device->get_memory_mapping().device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+				VK_IMAGE_TYPE_2D, target_format, target_width, target_height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT,
 				VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_TILING_OPTIMAL,
 				VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
 				0, VMM_ALLOCATION_POOL_SYSTEM);
-		};
+		}
+	};
 
-		m_remote_capture_y = make_plane(VK_FORMAT_R8_UNORM, dst_width, dst_height);
-		m_remote_capture_uv = make_plane(VK_FORMAT_R8G8_UNORM, dst_width / 2, dst_height / 2);
+	// The slot's storage. A free slot is nobody's, so it can be replaced here, and a frame of either
+	// kind can go into any slot.
+	auto& hardware = m_remote_capture_hardware[index];
+	auto& buffer = m_remote_capture_buffers[index];
+	bool use_hardware = g_remote_play_hardware && !m_remote_capture_hardware_failed && m_device->get_external_memory_ahb_support();
+
+	if (use_hardware && (!hardware.image || hardware.width != dst_width || hardware.height != dst_height))
+	{
+		remote_capture_destroy_hardware(hardware);
+
+		if (remote_capture_create_hardware(hardware, dst_width, dst_height))
+		{
+			slot.hardware_buffer = hardware.buffer;
+			slot.generation++;
+		}
+		else
+		{
+			// Frames go through the CPU from here on, for as long as this renderer lives.
+			m_remote_capture_hardware_failed = true;
+			use_hardware = false;
+			slot.hardware_buffer = nullptr;
+			rsx_log.warning("Remote play: no shareable frame buffers on this device, sending frames through the CPU.");
+		}
 	}
 
-	// The slot's buffer, mapped once for as long as it lives. A free slot is nobody's, so it can be
-	// replaced here.
 	const usz y_size = usz{dst_width} * dst_height;
-	const usz size = y_size + y_size / 2;
-	auto& buffer = m_remote_capture_buffers[index];
-	if (!buffer || buffer->size() < size)
+	const usz nv12_size = y_size + y_size / 2;
+
+	if (!use_hardware && (!buffer || buffer->size() < nv12_size))
 	{
 		if (buffer)
 		{
@@ -2435,9 +2476,9 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 			vk::get_resource_manager()->dispose(buffer);
 		}
 
-		buffer = std::make_unique<vk::buffer>(*m_device, utils::align(size, 0x10000), m_device->get_memory_mapping().host_visible_coherent,
+		buffer = std::make_unique<vk::buffer>(*m_device, utils::align(nv12_size, 0x10000), m_device->get_memory_mapping().host_visible_coherent,
 			VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_BUFFER_USAGE_TRANSFER_DST_BIT, 0, VMM_ALLOCATION_POOL_UNDEFINED);
-		slot.data = static_cast<const u8*>(buffer->map(0, size));
+		slot.data = static_cast<const u8*>(buffer->map(0, nv12_size));
 	}
 
 	// One u32 per slot, cleared once and kept mapped, so checking a slot costs a memory read.
@@ -2458,7 +2499,7 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	}
 
 	auto& cmd = *m_current_command_buffer;
-	auto* const pass = vk::get_overlay_pass<vk::remote_play_yuv_pass>();
+	auto* const pass = vk::get_overlay_pass<vk::remote_play_capture_pass>();
 	const bool srgb = format == VK_FORMAT_B8G8R8A8_SRGB || format == VK_FORMAT_R8G8B8A8_SRGB;
 	const f32 scale_x = static_cast<f32>(width) / src->width();
 	const f32 scale_y = static_cast<f32>(height) / src->height();
@@ -2466,32 +2507,70 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	src->push_layout(cmd, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 	vk::image_view* const view = src->get_view(rsx::default_remap_vector.with_encoding(vk::VK_REMAP_IDENTITY));
 
-	m_remote_capture_y->change_layout(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-	pass->run(cmd, m_remote_capture_y.get(), view, scale_x, scale_y, false, srgb);
+	if (use_hardware)
+	{
+		make_target(m_remote_capture_rgba, VK_FORMAT_R8G8B8A8_UNORM, dst_width, dst_height);
+		pass->run(cmd, m_remote_capture_rgba.get(), view, scale_x, scale_y, vk::remote_play_capture_pass::rgba, srgb);
+		src->pop_layout(cmd);
 
-	m_remote_capture_uv->change_layout(cmd, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-	pass->run(cmd, m_remote_capture_uv.get(), view, scale_x, scale_y, true, srgb);
+		const VkImageSubresourceRange range = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 
-	src->pop_layout(cmd);
+		// Whatever the encoder last read from it is discarded, so no ownership transfer back is needed.
+		VkImageMemoryBarrier acquire = { .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+		acquire.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		acquire.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		acquire.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		acquire.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		acquire.image = hardware.image;
+		acquire.subresourceRange = range;
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &acquire);
 
-	m_remote_capture_y->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-	m_remote_capture_uv->change_layout(cmd, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+		VkImageCopy copy = {};
+		copy.srcSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		copy.dstSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 };
+		copy.extent = { dst_width, dst_height, 1 };
+		vkCmdCopyImage(cmd, m_remote_capture_rgba->value, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, hardware.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
 
-	VkBufferImageCopy region{};
-	region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-	region.imageSubresource.layerCount = 1;
-	region.imageExtent = { dst_width, dst_height, 1 };
-	vk::copy_image_to_buffer(cmd, m_remote_capture_y.get(), buffer.get(), region);
+		// Hand it to the encoder's side (GL, on the same GPU): released to the foreign queue family.
+		VkImageMemoryBarrier release = { .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+		release.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		release.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		release.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+		release.srcQueueFamilyIndex = m_device->get_graphics_queue_family();
+		release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+		release.image = hardware.image;
+		release.subresourceRange = range;
+		vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &release);
 
-	region.bufferOffset = y_size;
-	region.imageExtent = { dst_width / 2, dst_height / 2, 1 };
-	vk::copy_image_to_buffer(cmd, m_remote_capture_uv.get(), buffer.get(), region);
+		// The marker below must not land before the copy is done.
+		vk::insert_global_memory_barrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+	}
+	else
+	{
+		make_target(m_remote_capture_y, VK_FORMAT_R8_UNORM, dst_width, dst_height);
+		make_target(m_remote_capture_uv, VK_FORMAT_R8G8_UNORM, dst_width / 2, dst_height / 2);
+		pass->run(cmd, m_remote_capture_y.get(), view, scale_x, scale_y, vk::remote_play_capture_pass::luma, srgb);
+		pass->run(cmd, m_remote_capture_uv.get(), view, scale_x, scale_y, vk::remote_play_capture_pass::chroma, srgb);
+		src->pop_layout(cmd);
 
-	// The planes go out to the host, and the marker write waits for them, so a marker that shows this
-	// slot's number means its frame is in.
-	vk::insert_buffer_memory_barrier(cmd, buffer->value, 0, size,
-		VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
-		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+		VkBufferImageCopy region{};
+		region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		region.imageSubresource.layerCount = 1;
+		region.imageExtent = { dst_width, dst_height, 1 };
+		vk::copy_image_to_buffer(cmd, m_remote_capture_y.get(), buffer.get(), region);
+
+		region.bufferOffset = y_size;
+		region.imageExtent = { dst_width / 2, dst_height / 2, 1 };
+		vk::copy_image_to_buffer(cmd, m_remote_capture_uv.get(), buffer.get(), region);
+
+		// The planes go out to the host, and the marker write waits for them, so a marker that shows
+		// this slot's number means its frame is in.
+		vk::insert_buffer_memory_barrier(cmd, buffer->value, 0, nv12_size,
+			VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_HOST_BIT,
+			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_HOST_READ_BIT);
+	}
 
 	if (!++m_remote_capture_seq)
 	{
@@ -2506,12 +2585,137 @@ void VKGSRender::remote_capture_record(vk::viewable_image* src, u32 width, u32 h
 	slot.seq = m_remote_capture_seq;
 	slot.width = dst_width;
 	slot.height = dst_height;
+	slot.hardware = use_hardware;
 	slot.state.store(remote_capture::slot_recorded, std::memory_order_release);
+
+	// Wakes the app's thread, which then waits the few ms until the GPU has the frame done.
+	remote_capture::g_recorded++;
+	remote_capture::g_recorded.notify_one();
+}
+
+// An AHardwareBuffer the GPU can copy a frame into and the encoder's GL can read, imported as a
+// Vulkan image with its own dedicated memory.
+bool VKGSRender::remote_capture_create_hardware(remote_capture_hardware& hardware, u32 width, u32 height)
+{
+#ifdef __ANDROID__
+	AHardwareBuffer_Desc desc = {};
+	desc.width = width;
+	desc.height = height;
+	desc.layers = 1;
+	desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
+	// CPU_READ_RARELY although the CPU never reads it: it keeps gralloc from picking a compressed
+	// GPU layout. The writer can be Turnip while the reader is the system GLES driver, and a plain
+	// linear buffer is the one layout both are sure to agree on.
+	desc.usage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_CPU_READ_RARELY;
+
+	if (AHardwareBuffer_allocate(&desc, &hardware.buffer) != 0 || !hardware.buffer)
+	{
+		hardware.buffer = nullptr;
+		return false;
+	}
+
+	const VkDevice dev = *m_device;
+
+	VkAndroidHardwareBufferFormatPropertiesANDROID format_properties = { .sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID };
+	VkAndroidHardwareBufferPropertiesANDROID properties = { .sType = VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID, .pNext = &format_properties };
+
+	if (!vkGetAndroidHardwareBufferPropertiesANDROID || vkGetAndroidHardwareBufferPropertiesANDROID(dev, hardware.buffer, &properties) != VK_SUCCESS ||
+		!properties.memoryTypeBits || format_properties.format != VK_FORMAT_R8G8B8A8_UNORM)
+	{
+		remote_capture_destroy_hardware(hardware);
+		return false;
+	}
+
+	VkExternalMemoryImageCreateInfo external = { .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO };
+	external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+
+	VkImageCreateInfo image_info = { .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .pNext = &external };
+	image_info.imageType = VK_IMAGE_TYPE_2D;
+	image_info.format = VK_FORMAT_R8G8B8A8_UNORM;
+	image_info.extent = { width, height, 1 };
+	image_info.mipLevels = 1;
+	image_info.arrayLayers = 1;
+	image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+	image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+	image_info.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+	image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+	if (vkCreateImage(dev, &image_info, nullptr, &hardware.image) != VK_SUCCESS)
+	{
+		hardware.image = VK_NULL_HANDLE;
+		remote_capture_destroy_hardware(hardware);
+		return false;
+	}
+
+	VkImportAndroidHardwareBufferInfoANDROID import = { .sType = VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID };
+	import.buffer = hardware.buffer;
+
+	VkMemoryDedicatedAllocateInfo dedicated = { .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO, .pNext = &import };
+	dedicated.image = hardware.image;
+
+	VkMemoryAllocateInfo allocate = { .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &dedicated };
+	allocate.allocationSize = properties.allocationSize;
+	allocate.memoryTypeIndex = static_cast<u32>(std::countr_zero(properties.memoryTypeBits));
+
+	if (vkAllocateMemory(dev, &allocate, nullptr, &hardware.memory) != VK_SUCCESS)
+	{
+		hardware.memory = VK_NULL_HANDLE;
+		remote_capture_destroy_hardware(hardware);
+		return false;
+	}
+
+	if (vkBindImageMemory(dev, hardware.image, hardware.memory, 0) != VK_SUCCESS)
+	{
+		remote_capture_destroy_hardware(hardware);
+		return false;
+	}
+
+	hardware.width = width;
+	hardware.height = height;
+	return true;
+#else
+	(void)hardware;
+	(void)width;
+	(void)height;
+	return false;
+#endif
+}
+
+// Only for a slot nothing is using: free, so the GPU and the encoder are done with it. The buffer
+// itself lives on while the encoder's GL still holds an image of it.
+void VKGSRender::remote_capture_destroy_hardware(remote_capture_hardware& hardware)
+{
+	const VkDevice dev = *m_device;
+
+	if (hardware.image)
+	{
+		vkDestroyImage(dev, hardware.image, nullptr);
+		hardware.image = VK_NULL_HANDLE;
+	}
+
+	if (hardware.memory)
+	{
+		vkFreeMemory(dev, hardware.memory, nullptr);
+		hardware.memory = VK_NULL_HANDLE;
+	}
+
+#ifdef __ANDROID__
+	if (hardware.buffer)
+	{
+		AHardwareBuffer_release(hardware.buffer);
+		hardware.buffer = nullptr;
+	}
+#endif
+
+	hardware.width = 0;
+	hardware.height = 0;
 }
 
 // RSX thread. Everything remote play allocated goes once it stops. device_idle: the GPU has nothing
 // in flight (the renderer is going away). Otherwise a slot the GPU may still be filling is waited for
-// over the next flips.
+// over the next flips. A frame the encoder still holds needs no waiting: its buffer outlives the
+// Vulkan image for as long as GL has it.
 void VKGSRender::remote_capture_release(bool device_idle)
 {
 	auto& ring = m_remote_capture_ring;
@@ -2530,7 +2734,7 @@ void VKGSRender::remote_capture_release(bool device_idle)
 	}
 
 	{
-		// The app's thread copies under this lock, so once the ring is withdrawn nothing reads it.
+		// The app's side reads slots under this lock, so once the ring is withdrawn nothing reads it.
 		std::lock_guard lock(remote_capture::g_mutex);
 
 		if (remote_capture::g_ring == &ring)
@@ -2546,6 +2750,8 @@ void VKGSRender::remote_capture_release(bool device_idle)
 		auto& slot = ring.slots[i];
 		slot.state.store(remote_capture::slot_free, std::memory_order_relaxed);
 		slot.data = nullptr;
+		slot.hardware_buffer = nullptr;
+		slot.hardware = false;
 
 		if (auto& buffer = m_remote_capture_buffers[i])
 		{
@@ -2560,6 +2766,8 @@ void VKGSRender::remote_capture_release(bool device_idle)
 				vk::get_resource_manager()->dispose(buffer);
 			}
 		}
+
+		remote_capture_destroy_hardware(m_remote_capture_hardware[i]);
 	}
 
 	if (m_remote_capture_marker)
@@ -2577,21 +2785,21 @@ void VKGSRender::remote_capture_release(bool device_idle)
 		}
 	}
 
-	for (auto* plane : { &m_remote_capture_y, &m_remote_capture_uv })
+	for (auto* target : { &m_remote_capture_y, &m_remote_capture_uv, &m_remote_capture_rgba })
 	{
-		if (!*plane)
+		if (!*target)
 		{
 			continue;
 		}
 
 		if (device_idle)
 		{
-			plane->reset();
+			target->reset();
 		}
 		else
 		{
-			vk::remove_framebuffers_with_image(plane->get());
-			vk::get_resource_manager()->dispose(*plane);
+			vk::remove_framebuffers_with_image(target->get());
+			vk::get_resource_manager()->dispose(*target);
 		}
 	}
 }

@@ -3,19 +3,24 @@ package org.webrtc;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
+import android.opengl.GLES20;
 import android.os.Bundle;
+import android.view.Surface;
 import androidx.annotation.Nullable;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.LinkedBlockingDeque;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Remote play (com.armsx2.remoteplay): the hardware H.264 encoder, set up for a live game stream.
  *
- * Built like WebRTC's HardwareVideoEncoder, byte-buffer input only, with the parts that held the
- * stream under 30 fps changed:
+ * Built like WebRTC's HardwareVideoEncoder, with the parts that held the stream under 30 fps
+ * changed. Frames come in two ways: as GL textures (remote play's hardware frames), drawn straight
+ * into the codec's input surface so they never pass through the CPU, or as NV12 or I420 bytes,
+ * copied into the codec's input buffers. The changes:
  *  - HardwareVideoEncoder throws a frame away whenever more than two are inside the codec. A
  *    Snapdragon encoder left in its default mode holds about three, so close to every other frame
  *    was lost. Here a frame is only dropped once {@link #MAX_FRAMES_IN_CODEC} are waiting.
@@ -43,9 +48,17 @@ class ArmsxH264Encoder implements VideoEncoder {
   /** The running encoder's implementation name, for the stream's stats; empty before the first. */
   static volatile String activeName = "";
 
+  /**
+   * Set when the codec's input surface could not be set up. From then on texture frames go through
+   * the byte path, and remote play stops sending them (see ArmsxVideoEncoderFactory).
+   */
+  static volatile boolean surfaceFailed;
+
   private final String codecName;
   private final int colorFormat;
+  private final @Nullable Integer surfaceColorFormat;
   private final int keyFrameIntervalSec;
+  private final @Nullable EglBase14.Context sharedContext;
   private final BlockingDeque<EncodedImage.Builder> outputBuilders = new LinkedBlockingDeque<>();
   private final BusyCount outputBuffersBusyCount = new BusyCount();
 
@@ -64,6 +77,13 @@ class ArmsxH264Encoder implements VideoEncoder {
   private boolean lowLatency;
   private @Nullable Thread outputThread;
 
+  // Surface mode (texture frames): the codec's input surface, drawn with GL on the encode thread.
+  private boolean useSurfaceMode;
+  private @Nullable EglBase14 textureEglBase;
+  private @Nullable Surface textureInputSurface;
+  private final GlRectDrawer textureDrawer = new GlRectDrawer();
+  private final VideoFrameDrawer videoFrameDrawer = new VideoFrameDrawer();
+
   // Shared with the output thread.
   private volatile @Nullable MediaCodec codec;
   private volatile boolean running;
@@ -72,10 +92,17 @@ class ArmsxH264Encoder implements VideoEncoder {
   // Output thread: H.264's SPS and PPS, put in front of every key frame.
   private @Nullable ByteBuffer configBuffer;
 
-  ArmsxH264Encoder(String codecName, int colorFormat, int keyFrameIntervalSec) {
+  ArmsxH264Encoder(String codecName, int colorFormat, @Nullable Integer surfaceColorFormat,
+      int keyFrameIntervalSec, @Nullable EglBase14.Context sharedContext) {
     this.codecName = codecName;
     this.colorFormat = colorFormat;
+    this.surfaceColorFormat = surfaceColorFormat;
     this.keyFrameIntervalSec = keyFrameIntervalSec;
+    this.sharedContext = sharedContext;
+  }
+
+  private boolean canUseSurface() {
+    return sharedContext != null && surfaceColorFormat != null && !surfaceFailed;
   }
 
   @Override
@@ -88,6 +115,9 @@ class ArmsxH264Encoder implements VideoEncoder {
     }
     width = settings.width;
     height = settings.height;
+    // Texture frames when they can be drawn, as WebRTC's own encoder assumes; the first frame of
+    // the other kind switches over.
+    useSurfaceMode = canUseSurface();
     if (settings.startBitrate != 0) {
       targetBitrateBps = settings.startBitrate * 1000;
     }
@@ -116,9 +146,25 @@ class ArmsxH264Encoder implements VideoEncoder {
         created.configure(format(false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         lowLatency = false;
       }
-      updateInputFormat(created.getInputFormat());
+      if (useSurfaceMode) {
+        try {
+          textureEglBase = EglBase.createEgl14(sharedContext, EglBase.CONFIG_RECORDABLE);
+          textureInputSurface = created.createInputSurface();
+          textureEglBase.createSurface(textureInputSurface);
+          textureEglBase.makeCurrent();
+        } catch (RuntimeException e) {
+          // Start over in byte mode for good; texture frames get converted until they stop coming.
+          Logging.e(TAG, "Input surface failed, frames go through buffers from here on", e);
+          surfaceFailed = true;
+          release();
+          useSurfaceMode = false;
+          return initEncodeInternal();
+        }
+      } else {
+        updateInputFormat(created.getInputFormat());
+      }
       created.start();
-    } catch (IllegalArgumentException | IllegalStateException e) {
+    } catch (RuntimeException e) {
       Logging.e(TAG, "initEncodeInternal failed", e);
       release();
       return VideoCodecStatus.FALLBACK_SOFTWARE;
@@ -136,7 +182,7 @@ class ArmsxH264Encoder implements VideoEncoder {
     format.setInteger(MediaFormat.KEY_BIT_RATE, targetBitrateBps);
     format.setInteger(
         MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
-    format.setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFormat);
+    format.setInteger(MediaFormat.KEY_COLOR_FORMAT, useSurfaceMode ? surfaceColorFormat : colorFormat);
     format.setInteger(MediaFormat.KEY_FRAME_RATE, FRAME_RATE);
     format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, keyFrameIntervalSec);
     if (lowLatency) {
@@ -174,6 +220,17 @@ class ArmsxH264Encoder implements VideoEncoder {
         }
       }
     }
+    // GL goes on the encode thread, where its context is current.
+    textureDrawer.release();
+    videoFrameDrawer.release();
+    if (textureEglBase != null) {
+      textureEglBase.release();
+      textureEglBase = null;
+    }
+    if (textureInputSurface != null) {
+      textureInputSurface.release();
+      textureInputSurface = null;
+    }
     outputBuilders.clear();
     codec = null;
     outputThread = null;
@@ -190,8 +247,9 @@ class ArmsxH264Encoder implements VideoEncoder {
     VideoFrame.Buffer buffer = videoFrame.getBuffer();
     int frameWidth = buffer.getWidth();
     int frameHeight = buffer.getHeight();
-    if (frameWidth != width || frameHeight != height) {
-      VideoCodecStatus status = resetCodec(frameWidth, frameHeight);
+    boolean surfaceFrame = canUseSurface() && buffer instanceof VideoFrame.TextureBuffer;
+    if (frameWidth != width || frameHeight != height || surfaceFrame != useSurfaceMode) {
+      VideoCodecStatus status = resetCodec(frameWidth, frameHeight, surfaceFrame);
       if (status != VideoCodecStatus.OK) {
         return status;
       }
@@ -227,7 +285,9 @@ class ArmsxH264Encoder implements VideoEncoder {
     }
     lastPresentationUs = presentationUs;
 
-    VideoCodecStatus status = encodeByteBuffer(current, videoFrame, presentationUs);
+    VideoCodecStatus status = useSurfaceMode
+        ? encodeTextureBuffer(videoFrame, presentationUs)
+        : encodeByteBuffer(current, videoFrame, presentationUs);
     if (status != VideoCodecStatus.OK) {
       // Nothing went into the codec, so nothing will come out for this builder.
       outputBuilders.pollLast();
@@ -236,6 +296,27 @@ class ArmsxH264Encoder implements VideoEncoder {
       framesIn.incrementAndGet();
     }
     return status;
+  }
+
+  private VideoCodecStatus encodeTextureBuffer(VideoFrame videoFrame, long presentationUs) {
+    EglBase14 eglBase = textureEglBase;
+    if (eglBase == null) {
+      return VideoCodecStatus.UNINITIALIZED;
+    }
+    try {
+      GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+      // Drawn upright. This wraps the caller's buffer and is not released here.
+      VideoFrame derotated = new VideoFrame(videoFrame.getBuffer(), 0, videoFrame.getTimestampNs());
+      videoFrameDrawer.drawFrame(derotated, textureDrawer, null);
+      eglBase.swapBuffers(TimeUnit.MICROSECONDS.toNanos(presentationUs));
+      // The texture goes back to the presenter as soon as WebRTC releases this frame, right after
+      // this returns, and the GPU has to be done reading it by then.
+      GLES20.glFinish();
+    } catch (RuntimeException e) {
+      Logging.e(TAG, "encodeTexture failed", e);
+      return VideoCodecStatus.ERROR;
+    }
+    return VideoCodecStatus.OK;
   }
 
   private VideoCodecStatus encodeByteBuffer(
@@ -355,7 +436,8 @@ class ArmsxH264Encoder implements VideoEncoder {
 
   @Override
   public String getImplementationName() {
-    return lowLatency ? codecName + " low-latency" : codecName;
+    String name = lowLatency ? codecName + " low-latency" : codecName;
+    return useSurfaceMode ? name + " zero-copy" : name;
   }
 
   @Override
@@ -363,7 +445,7 @@ class ArmsxH264Encoder implements VideoEncoder {
     return new EncoderInfo(2, false);
   }
 
-  private VideoCodecStatus resetCodec(int newWidth, int newHeight) {
+  private VideoCodecStatus resetCodec(int newWidth, int newHeight, boolean newUseSurfaceMode) {
     VideoCodecStatus status = release();
     if (status != VideoCodecStatus.OK) {
       return status;
@@ -374,6 +456,7 @@ class ArmsxH264Encoder implements VideoEncoder {
     }
     width = newWidth;
     height = newHeight;
+    useSurfaceMode = newUseSurfaceMode;
     return initEncodeInternal();
   }
 

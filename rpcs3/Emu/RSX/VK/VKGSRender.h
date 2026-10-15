@@ -261,19 +261,36 @@ private:
 
 	std::unique_ptr<vk::image> m_overlay_recording_img;
 
-	// ARMSX3 remote play (android/src/remote_play.cpp, Emu/RSX/remote_capture.h). Each captured frame
-	// is drawn on the GPU straight into the stream's NV12 (two small fragment passes, Y and UV), copied
-	// into a slot's mapped buffer, and marked done by a GPU-written sequence number. The app's video
-	// thread watches those numbers and copies finished frames out itself, so the RSX thread records a
-	// few commands per frame and never touches the pixels.
+	// ARMSX3 remote play (android/src/remote_play.cpp, Emu/RSX/remote_capture.h). Each captured frame is
+	// drawn on the GPU into a slot and marked done by a GPU-written sequence number; the app's video
+	// thread watches those numbers and takes finished frames itself, so the RSX thread records a few
+	// commands per frame and never touches the pixels. A slot is one of:
+	//  - an AHardwareBuffer the frame is copied into as RGBA, which the app hands to the video encoder
+	//    as a GL texture: nothing passes through the CPU (needs VK_ANDROID_external_memory_android_
+	//    hardware_buffer, and the app asking for it);
+	//  - otherwise a mapped buffer holding the frame as the encoder's NV12, drawn by two small fragment
+	//    passes (Y and UV), which the app copies out once.
+	struct remote_capture_hardware
+	{
+		AHardwareBuffer* buffer = nullptr;
+		VkImage image = VK_NULL_HANDLE;
+		VkDeviceMemory memory = VK_NULL_HANDLE;
+		u32 width = 0;
+		u32 height = 0;
+	};
 	remote_capture::ring m_remote_capture_ring;
 	std::array<std::unique_ptr<vk::buffer>, 4> m_remote_capture_buffers;
+	std::array<remote_capture_hardware, 4> m_remote_capture_hardware;
 	std::unique_ptr<vk::image> m_remote_capture_y;
 	std::unique_ptr<vk::image> m_remote_capture_uv;
+	std::unique_ptr<vk::image> m_remote_capture_rgba;
 	std::unique_ptr<vk::buffer> m_remote_capture_marker;
 	u32 m_remote_capture_seq = 0;
 	bool m_remote_capture_published = false;
+	bool m_remote_capture_hardware_failed = false;
 	void remote_capture_record(vk::viewable_image* src, u32 width, u32 height, u32 max_size);
+	bool remote_capture_create_hardware(remote_capture_hardware& hardware, u32 width, u32 height);
+	void remote_capture_destroy_hardware(remote_capture_hardware& hardware);
 	void remote_capture_release(bool device_idle);
 
 	//Vertex layout

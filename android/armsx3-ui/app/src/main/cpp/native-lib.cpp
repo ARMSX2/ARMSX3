@@ -1,6 +1,11 @@
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES2/gl2.h>
+#include <GLES2/gl2ext.h>
 #include <algorithm>
 #include <android/api-level.h>
 #include <android/dlext.h>
+#include <android/hardware_buffer.h>
 #include <android/log.h>
 #include <cstdio>
 #include <cstring>
@@ -30,6 +35,9 @@ struct RPCSXApi {
   int (*remotePlayPollVideo)(uint8_t *dst, int64_t cap, int32_t *info, int timeoutMs);
   int (*remotePlayPollAudio)(int16_t *dst, int capFrames, int timeoutMs);
   void (*remotePlayCounters)(uint32_t *out);
+  void (*remotePlayReleaseFrame)(int slot);
+  AHardwareBuffer *(*remotePlayHardwareBuffer)(int slot, uint32_t *generation);
+  void (*remotePlaySetHardware)(bool enabled);
   bool (*keyboardKey)(int androidKeyCode, int unicode, bool pressed, bool repeat);
   bool (*initialize)(std::string_view rootDir, std::string_view user);
   void (*setSocInfo)(std::string_view socInfo);
@@ -172,6 +180,9 @@ struct RPCSXLibrary : RPCSXApi {
     result.remotePlayPollVideo = reinterpret_cast<decltype(remotePlayPollVideo)>(dlsym(handle, "_rpcsx_remotePlayPollVideo"));
     result.remotePlayPollAudio = reinterpret_cast<decltype(remotePlayPollAudio)>(dlsym(handle, "_rpcsx_remotePlayPollAudio"));
     result.remotePlayCounters = reinterpret_cast<decltype(remotePlayCounters)>(dlsym(handle, "_rpcsx_remotePlayCounters"));
+    result.remotePlayReleaseFrame = reinterpret_cast<decltype(remotePlayReleaseFrame)>(dlsym(handle, "_rpcsx_remotePlayReleaseFrame"));
+    result.remotePlayHardwareBuffer = reinterpret_cast<decltype(remotePlayHardwareBuffer)>(dlsym(handle, "_rpcsx_remotePlayHardwareBuffer"));
+    result.remotePlaySetHardware = reinterpret_cast<decltype(remotePlaySetHardware)>(dlsym(handle, "_rpcsx_remotePlaySetHardware"));
     result.keyboardKey = reinterpret_cast<decltype(keyboardKey)>(dlsym(handle, "_rpcsx_keyboardKey"));
     result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_rpcsx_initialize"));
     result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_rpcsx_setSocInfo"));
@@ -368,6 +379,97 @@ extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
   const int result = rpcsxLib.remotePlayPollVideo(dst, cap, out, timeoutMs);
   env->SetIntArrayRegion(info, 0, 4, out);
   return result;
+}
+
+// Remote play's hardware frames: slots the GPU fills with RGBA as AHardwareBuffers, handed to the
+// video encoder as GL textures so a frame never passes through the CPU. The two calls below that
+// touch GL need a current EGL context on the calling thread.
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayReleaseFrame(JNIEnv *, jobject, jint slot) {
+  if (rpcsxLib.remotePlayReleaseFrame != nullptr) {
+    rpcsxLib.remotePlayReleaseFrame(slot);
+  }
+}
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlaySetHardware(JNIEnv *, jobject, jboolean enabled) {
+  if (rpcsxLib.remotePlaySetHardware != nullptr) {
+    rpcsxLib.remotePlaySetHardware(enabled);
+  }
+}
+
+namespace {
+struct RemotePlayEgl {
+  PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC getNativeClientBuffer = nullptr;
+  PFNEGLCREATEIMAGEKHRPROC createImage = nullptr;
+  PFNEGLDESTROYIMAGEKHRPROC destroyImage = nullptr;
+  PFNGLEGLIMAGETARGETTEXTURE2DOESPROC imageTargetTexture = nullptr;
+
+  bool load() {
+    if (createImage == nullptr) {
+      getNativeClientBuffer = reinterpret_cast<PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC>(eglGetProcAddress("eglGetNativeClientBufferANDROID"));
+      createImage = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(eglGetProcAddress("eglCreateImageKHR"));
+      destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(eglGetProcAddress("eglDestroyImageKHR"));
+      imageTargetTexture = reinterpret_cast<PFNGLEGLIMAGETARGETTEXTURE2DOESPROC>(eglGetProcAddress("glEGLImageTargetTexture2DOES"));
+    }
+    return getNativeClientBuffer != nullptr && createImage != nullptr && destroyImage != nullptr &&
+           imageTargetTexture != nullptr;
+  }
+};
+
+RemotePlayEgl remotePlayEgl;
+} // namespace
+
+// Binds a hardware frame slot's buffer to texture (GL_TEXTURE_EXTERNAL_OES). Returns the EGLImage
+// to destroy later with remotePlayDestroyImage, or 0 when the slot has no buffer or the import
+// failed; the app then asks for NV12 frames instead.
+extern "C" JNIEXPORT jlong JNICALL Java_net_rpcsx_RPCSX_remotePlayImportFrame(JNIEnv *, jobject, jint slot, jint texture) {
+  if (rpcsxLib.remotePlayHardwareBuffer == nullptr || !remotePlayEgl.load()) {
+    return 0;
+  }
+
+  uint32_t generation = 0;
+  AHardwareBuffer *buffer = rpcsxLib.remotePlayHardwareBuffer(slot, &generation);
+  if (buffer == nullptr) {
+    return 0;
+  }
+
+  const EGLDisplay display = eglGetCurrentDisplay();
+  const EGLClientBuffer client = remotePlayEgl.getNativeClientBuffer(buffer);
+  const EGLint attributes[] = {EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE};
+  EGLImageKHR image = EGL_NO_IMAGE_KHR;
+
+  if (display != EGL_NO_DISPLAY && client != nullptr) {
+    image = remotePlayEgl.createImage(display, EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, client, attributes);
+  }
+
+  // The image holds the buffer from here on.
+  AHardwareBuffer_release(buffer);
+
+  if (image == EGL_NO_IMAGE_KHR) {
+    return 0;
+  }
+
+  // Errors left over from earlier GL work on this context would read as a failed bind.
+  for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; i++) {
+  }
+
+  glBindTexture(GL_TEXTURE_EXTERNAL_OES, static_cast<GLuint>(texture));
+  remotePlayEgl.imageTargetTexture(GL_TEXTURE_EXTERNAL_OES, static_cast<GLeglImageOES>(image));
+  const bool bound = glGetError() == GL_NO_ERROR;
+  glBindTexture(GL_TEXTURE_EXTERNAL_OES, 0);
+
+  if (!bound) {
+    remotePlayEgl.destroyImage(display, image);
+    return 0;
+  }
+
+  return reinterpret_cast<jlong>(image);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayDestroyImage(JNIEnv *, jobject, jlong image) {
+  if (image != 0 && remotePlayEgl.load()) {
+    remotePlayEgl.destroyImage(eglGetCurrentDisplay(), reinterpret_cast<EGLImageKHR>(image));
+  }
 }
 
 // out (4 ints): running totals of game frames seen while capturing, frames not read back, frames

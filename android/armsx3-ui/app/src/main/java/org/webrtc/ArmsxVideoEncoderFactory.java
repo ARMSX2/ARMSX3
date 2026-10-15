@@ -23,11 +23,14 @@ public class ArmsxVideoEncoderFactory implements VideoEncoderFactory {
   // WebRTC's own default: key frames come on request (packet loss), not on a timer.
   private static final int PERIODIC_KEY_FRAME_INTERVAL_S = 3600;
 
+  private final @Nullable EglBase14.Context sharedContext;
   private final VideoEncoderFactory hardware;
   private final VideoEncoderFactory software = new SoftwareVideoEncoderFactory();
   private final @Nullable MediaCodecInfo h264;
 
   public ArmsxVideoEncoderFactory(@Nullable EglBase.Context sharedContext) {
+    this.sharedContext =
+        sharedContext instanceof EglBase14.Context ? (EglBase14.Context) sharedContext : null;
     this.hardware = new HardwareVideoEncoderFactory(
         sharedContext, /* enableIntelVp8Encoder= */ true, /* enableH264HighProfile= */ false);
     this.h264 = findH264Encoder();
@@ -67,6 +70,25 @@ public class ArmsxVideoEncoderFactory implements VideoEncoderFactory {
     return ArmsxH264Encoder.activeName;
   }
 
+  /**
+   * Whether frames can reach the encoder as GL textures, drawn into its input surface without
+   * passing through the CPU: a hardware H.264 encoder with an input surface, a shared EGL context,
+   * and no failed attempt so far.
+   */
+  public boolean textureInput() {
+    if (h264 == null || sharedContext == null || ArmsxH264Encoder.surfaceFailed) {
+      return false;
+    }
+    return MediaCodecUtils.selectColorFormat(MediaCodecUtils.TEXTURE_COLOR_FORMATS,
+               h264.getCapabilitiesForType(VideoCodecMimeType.H264.mimeType()))
+        != null;
+  }
+
+  /** True once the encoder could not set up its input surface; send byte frames from then on. */
+  public static boolean textureInputFailed() {
+    return ArmsxH264Encoder.surfaceFailed;
+  }
+
   @Override
   public VideoCodecInfo[] getSupportedCodecs() {
     Map<String, VideoCodecInfo> codecs = new LinkedHashMap<>();
@@ -92,10 +114,15 @@ public class ArmsxVideoEncoderFactory implements VideoEncoderFactory {
   @Override
   public @Nullable VideoEncoder createEncoder(VideoCodecInfo info) {
     if (h264 != null && VideoCodecMimeType.H264.name().equalsIgnoreCase(info.name)) {
-      Integer colorFormat = MediaCodecUtils.selectColorFormat(
-          COLOR_FORMATS, h264.getCapabilitiesForType(VideoCodecMimeType.H264.mimeType()));
+      MediaCodecInfo.CodecCapabilities capabilities =
+          h264.getCapabilitiesForType(VideoCodecMimeType.H264.mimeType());
+      Integer colorFormat = MediaCodecUtils.selectColorFormat(COLOR_FORMATS, capabilities);
       if (colorFormat != null) {
-        return new ArmsxH264Encoder(h264.getName(), colorFormat, PERIODIC_KEY_FRAME_INTERVAL_S);
+        // The input-surface format, for frames that arrive as GL textures.
+        Integer surfaceColorFormat =
+            MediaCodecUtils.selectColorFormat(MediaCodecUtils.TEXTURE_COLOR_FORMATS, capabilities);
+        return new ArmsxH264Encoder(h264.getName(), colorFormat, surfaceColorFormat,
+            PERIODIC_KEY_FRAME_INTERVAL_S, sharedContext);
       }
     }
     VideoEncoder hardwareEncoder = hardware.createEncoder(info);
