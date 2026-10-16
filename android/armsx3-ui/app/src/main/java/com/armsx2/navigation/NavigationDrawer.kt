@@ -399,5 +399,7 @@ private fun sameDestination(current: AppRoute, target: AppRoute): Boolean = when
     AppRoute.News -> current is AppRoute.News
     AppRoute.Friends -> current is AppRoute.Friends
     AppRoute.RemotePlay -> current is AppRoute.RemotePlay
-    AppRoute.About -> current is AppRoute.About
+    // The licenses screen is a page of About, so the drawer keeps About lit there.
+    AppRoute.About -> current is AppRoute.About || current is AppRoute.Licenses
+    AppRoute.Licenses -> current is AppRoute.Licenses
 }

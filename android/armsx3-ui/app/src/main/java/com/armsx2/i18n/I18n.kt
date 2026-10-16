@@ -300,6 +300,9 @@ val EN: Map<String, String> = mapOf(
     "about.pageSize" to "Memory page",
     "about.rpcs3.title" to "RPCS3 project",
     "about.rpcs3.description" to "ARMSX3 is built on the open-source RPCS3 emulator.",
+    "about.licenses.title" to "Open-source licenses",
+    "about.licenses.description" to "The third-party software inside ARMSX3 and its licenses.",
+    "licenses.intro" to "ARMSX3 is free software under the GNU General Public License, version 2. It includes the software below, each part under its own license. Select one to read its license.",
     // --- drawer About section: external links ---
     "about.section.header" to "About",
     "about.discord" to "Discord",

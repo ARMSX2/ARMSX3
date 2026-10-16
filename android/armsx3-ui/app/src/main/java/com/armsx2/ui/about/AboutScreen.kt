@@ -39,7 +39,11 @@ private const val RepositoryUrl = "https://github.com/ARMSX2/ARMSX3"
 private const val Rpcs3RepositoryUrl = "https://github.com/RPCS3/rpcs3"
 
 @Composable
-fun AboutScreen(onBack: () -> Unit, viewModel: AboutViewModel = viewModel()) {
+fun AboutScreen(
+    onBack: () -> Unit,
+    onOpenLicenses: () -> Unit,
+    viewModel: AboutViewModel = viewModel(),
+) {
     val state = viewModel.state.value
     val uriHandler = LocalUriHandler.current
     LaunchedEffect(Unit) { viewModel.load() }
@@ -142,6 +146,17 @@ fun AboutScreen(onBack: () -> Unit, viewModel: AboutViewModel = viewModel()) {
                             )
                         }
                     }
+                    // Every third-party component in the APK and its license: BSD, MIT, Apache-2.0
+                    // and the rest require their notices to ship with the binary.
+                    ProjectCard(
+                        title = str("about.licenses.title"),
+                        repository = "GPL-2.0 · BSD · MIT · Apache-2.0",
+                        description = str("about.licenses.description"),
+                        glyph = "©",
+                        secondary = true,
+                        trailing = "›",
+                        onOpen = onOpenLicenses,
+                    )
                     // The library music is CC0, so no attribution is legally required — the
                     // author asks for credit and it costs nothing to give it.
                     Text(
@@ -171,6 +186,7 @@ private fun ProjectCard(
     glyph: String,
     modifier: Modifier = Modifier,
     secondary: Boolean = false,
+    trailing: String = "↗",
     onOpen: () -> Unit,
 ) {
     val accent = if (secondary) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
@@ -210,7 +226,7 @@ private fun ProjectCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Text("↗", color = accent, fontSize = 22.sp)
+            Text(trailing, color = accent, fontSize = 22.sp)
         }
     }
 }

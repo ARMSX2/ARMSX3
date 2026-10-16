@@ -22,6 +22,7 @@ import com.armsx2.ui.achievements.AchievementsScreen
 import com.armsx2.ui.bios.BiosManagerScreen
 import com.armsx2.ui.controls.ControllerManagerScreen
 import com.armsx2.ui.about.AboutScreen
+import com.armsx2.ui.about.LicensesScreen
 import com.armsx2.ui.friends.FriendsScreen
 import com.armsx2.ui.news.NewsScreen
 import com.armsx2.ui.home.HomeScreen
@@ -59,7 +60,8 @@ fun AppNavigation() {
                 )
                 val isReturning = targetState is AppRoute.Home ||
                     ((initialState is AppRoute.Language || initialState is AppRoute.About) &&
-                        targetState is AppRoute.Settings)
+                        targetState is AppRoute.Settings) ||
+                    (initialState is AppRoute.Licenses && targetState is AppRoute.About)
                 val exit = if (isReturning) {
                     fadeOut(
                         animationSpec = tween(
@@ -123,7 +125,11 @@ fun AppNavigation() {
                 AppRoute.News -> NewsScreen(onBack = UiNavigator::home)
                 AppRoute.Friends -> FriendsScreen(onBack = UiNavigator::home)
                 AppRoute.RemotePlay -> com.armsx2.remoteplay.RemotePlayScreen(onBack = UiNavigator::home)
-                AppRoute.About -> AboutScreen(onBack = UiNavigator::home)
+                AppRoute.About -> AboutScreen(
+                    onBack = UiNavigator::home,
+                    onOpenLicenses = { UiNavigator.navigate(AppRoute.Licenses) },
+                )
+                AppRoute.Licenses -> LicensesScreen(onBack = { UiNavigator.navigate(AppRoute.About) })
             }
         }
 
