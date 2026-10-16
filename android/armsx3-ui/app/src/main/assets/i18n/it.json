@@ -896,6 +896,8 @@
  "remoteplay.bye.stopped": "L'host ha smesso di ospitare.",
  "remoteplay.bye.version": "Quel dispositivo ha una versione diversa di ARMSX3. Aggiornali entrambi alla stessa versione.",
  "remoteplay.bye.ended": "La sessione è terminata.",
+ "remoteplay.permission.host": "Per ospitare sulla stessa rete Wi-Fi serve l'autorizzazione Dispositivi nelle vicinanze. Consentila quando ti viene chiesto, oppure in Autorizzazioni nelle impostazioni di questa app. Puoi comunque invitare un amico online.",
+ "remoteplay.permission.join": "Per trovare un amico sulla stessa rete Wi-Fi serve l'autorizzazione Dispositivi nelle vicinanze. Consentila quando ti viene chiesto, oppure in Autorizzazioni nelle impostazioni di questa app. Puoi comunque entrare con un codice.",
  "remoteplay.screen.qos": "Marcatura QoS Wi-Fi",
  "remoteplay.screen.qosDesc": "Chiede al dispositivo del tuo amico di contrassegnare lo stream come video, così i router che smistano il traffico lo inviano dalla loro coda video. Su alcune reti significa meno scatti, ma aggiunge anche circa 25 ms di latenza. Solo sulla stessa rete Wi-Fi, e il tuo amico non deve impostare nulla.",
  "remoteplay.notice.joined": "%s si è unito alla partita come giocatore 2",

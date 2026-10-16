@@ -896,6 +896,8 @@
  "remoteplay.bye.stopped": "L'hôte a arrêté d'héberger.",
  "remoteplay.bye.version": "Cet appareil a une autre version d'ARMSX3. Mettez les deux appareils à jour vers la même version.",
  "remoteplay.bye.ended": "La session est terminée.",
+ "remoteplay.permission.host": "Héberger sur le même Wi-Fi nécessite l'autorisation Appareils à proximité. Autorisez-la quand elle vous est demandée, ou dans Autorisations, dans les paramètres de cette application. Vous pouvez toujours inviter un ami en ligne.",
+ "remoteplay.permission.join": "Trouver un ami sur le même Wi-Fi nécessite l'autorisation Appareils à proximité. Autorisez-la quand elle vous est demandée, ou dans Autorisations, dans les paramètres de cette application. Vous pouvez toujours rejoindre avec un code.",
  "remoteplay.screen.qos": "Marquage QoS du Wi-Fi",
  "remoteplay.screen.qosDesc": "Demande à l'appareil de votre ami de marquer le flux comme vidéo, pour que les routeurs qui trient le trafic l'envoient depuis leur file vidéo. Sur certains réseaux, cela réduit les saccades, mais ajoute aussi environ 25 ms de latence. Sur le même Wi-Fi uniquement, et rien à régler du côté de votre ami.",
  "remoteplay.notice.joined": "%s a rejoint la partie en tant que joueur 2",

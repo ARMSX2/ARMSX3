@@ -896,6 +896,8 @@
  "remoteplay.bye.stopped": "房主已關閉房間。",
  "remoteplay.bye.version": "對方裝置的 ARMSX3 版本不同。請將兩台裝置更新到相同版本。",
  "remoteplay.bye.ended": "本次遊玩已結束。",
+ "remoteplay.permission.host": "在同一個 Wi-Fi 下擔任房主需要「鄰近裝置」權限。請在系統詢問時允許，或在本應用程式設定的「權限」中開啟。你仍然可以在線上邀請朋友。",
+ "remoteplay.permission.join": "在同一個 Wi-Fi 下尋找朋友需要「鄰近裝置」權限。請在系統詢問時允許，或在本應用程式設定的「權限」中開啟。你仍然可以使用代碼加入。",
  "remoteplay.screen.qos": "Wi-Fi QoS 標記",
  "remoteplay.screen.qosDesc": "請朋友的裝置把串流標記為影片，讓依類型分流的路由器從影片佇列傳送它。在某些網路上這能減少卡頓，但也會增加約 25 毫秒的延遲。僅限同一 Wi-Fi，朋友那邊不需要任何設定。",
  "remoteplay.notice.joined": "%s 已以玩家 2 身分加入",

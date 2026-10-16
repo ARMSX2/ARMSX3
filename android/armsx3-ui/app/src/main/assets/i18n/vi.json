@@ -896,6 +896,8 @@
  "remoteplay.bye.stopped": "Chủ phòng đã đóng phòng.",
  "remoteplay.bye.version": "Thiết bị đó dùng phiên bản ARMSX3 khác. Hãy cập nhật cả hai lên cùng một phiên bản.",
  "remoteplay.bye.ended": "Phiên chơi đã kết thúc.",
+ "remoteplay.permission.host": "Để làm chủ phòng trên cùng mạng Wi-Fi, cần quyền Thiết bị ở gần. Hãy cho phép khi được hỏi, hoặc trong mục Quyền ở phần cài đặt của ứng dụng này. Bạn vẫn có thể mời bạn bè qua mạng.",
+ "remoteplay.permission.join": "Để tìm bạn bè trên cùng mạng Wi-Fi, cần quyền Thiết bị ở gần. Hãy cho phép khi được hỏi, hoặc trong mục Quyền ở phần cài đặt của ứng dụng này. Bạn vẫn có thể tham gia bằng mã.",
  "remoteplay.screen.qos": "Đánh dấu QoS Wi-Fi",
  "remoteplay.screen.qosDesc": "Yêu cầu thiết bị của bạn bè đánh dấu stream là video, để các router phân loại lưu lượng gửi stream từ hàng đợi video của chúng. Trên một số mạng, điều này giúp bớt giật, nhưng cũng tăng độ trễ khoảng 25 ms. Chỉ áp dụng trên cùng mạng Wi-Fi, và bạn bè không cần cài đặt gì.",
  "remoteplay.notice.joined": "%s đã tham gia với vai trò người chơi 2",

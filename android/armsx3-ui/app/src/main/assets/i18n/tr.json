@@ -896,6 +896,8 @@
  "remoteplay.bye.stopped": "Arkadaşınız barındırmayı durdurdu.",
  "remoteplay.bye.version": "O cihazda farklı bir ARMSX3 sürümü var. İkisini de aynı sürüme güncelleyin.",
  "remoteplay.bye.ended": "Oturum sona erdi.",
+ "remoteplay.permission.host": "Aynı Wi-Fi'da barındırmak için Yakındaki cihazlar izni gerekir. Sorulduğunda izin verin veya bu uygulamanın ayarlarındaki İzinler bölümünden açın. Arkadaşınızı yine de çevrimiçi davet edebilirsiniz.",
+ "remoteplay.permission.join": "Aynı Wi-Fi'daki bir arkadaşınızı bulmak için Yakındaki cihazlar izni gerekir. Sorulduğunda izin verin veya bu uygulamanın ayarlarındaki İzinler bölümünden açın. Yine de bir kodla katılabilirsiniz.",
  "remoteplay.screen.qos": "Wi-Fi QoS işaretlemesi",
  "remoteplay.screen.qosDesc": "Arkadaşınızın cihazından yayını video olarak işaretlemesini ister; böylece trafiği sınıflandıran yönlendiriciler onu video kuyruğundan gönderir. Bazı ağlarda bu daha az takılma demektir, ancak yaklaşık 25 ms gecikme de ekler. Yalnızca aynı Wi-Fi'da geçerlidir ve arkadaşınızın bir şey ayarlaması gerekmez.",
  "remoteplay.notice.joined": "%s 2. oyuncu olarak katıldı",
