@@ -9,7 +9,8 @@
 //
 // The app (RemotePlayUpnp.kt) asks for the UDP port WebRTC already listens on, adds the router's
 // public address for it to the offer, renews the lease while the session lasts and closes the port
-// when it ends. The lease means a port left open by a crash closes itself.
+// when it ends. The lease means a port left open by a crash closes itself, so a router that only
+// opens ports for good is not used at all: nothing would ever close a port the app did not live to.
 
 #include "stdafx.h"
 
@@ -139,19 +140,23 @@ extern "C" int _rpcsx_remotePlayUpnpMap(int internal_port, int external_hint, in
 	}
 
 	const std::string internal = std::to_string(internal_port);
-	std::string lease = std::to_string(lease_seconds);
+	const std::string lease = std::to_string(lease_seconds);
 	const int first = external_hint > 0 ? external_hint : internal_port;
+	// A renewal asks for the port it had and no other. That port is the one in the friend's offer,
+	// and a mapping moved anywhere else would only leave the old one open behind it.
+	const int last = external_hint > 0 ? first : std::min(first + 32, 0xffff);
 
-	for (int external_port = first; external_port <= std::min(first + 32, 0xffff); external_port++)
+	for (int external_port = first; external_port <= last; external_port++)
 	{
 		const std::string external = std::to_string(external_port);
-		int result = add_mapping(external, internal, lease);
+		const int result = add_mapping(external, internal, lease);
 
 		if (result == only_permanent_leases_supported)
 		{
-			// Some routers take no lease: permanent it is, and the app removes it at the end.
-			lease = "0";
-			result = add_mapping(external, internal, lease);
+			// Not taken: a permanent forward stays open on the router for good if the app is killed
+			// before the session ends. The offer goes out as it was, as with no router at all.
+			rp_upnp_log.notice("Remote play: the router only opens ports permanently, so it is not used");
+			return 0;
 		}
 
 		if (result == UPNPCOMMAND_SUCCESS)
