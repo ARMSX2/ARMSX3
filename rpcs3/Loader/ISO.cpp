@@ -1221,7 +1221,8 @@ iso_fs_node* iso_archive::retrieve(const std::string& passed_path)
 
 		bool found = false;
 
-		if (path_component == ".")
+		// An empty component names the current node, as "." does (e.g. "dir//name" resolves as "dir/name")
+		if (path_component.empty() || path_component == ".")
 		{
 			found = true;
 		}
