@@ -90,6 +90,9 @@ import kotlin.math.roundToInt
  *  SCREEN_ASPECTS in RendererTab minus the Custom entry (no slider in the quick menu). */
 private val IN_GAME_SCREEN_ASPECTS = listOf(0, 1333, 1600, 1778, 2000, 2167, 2222, 2333)
 
+/** The Friends panel's nav layer: only its controls answer the pad while it is open. */
+private const val FRIENDS_NAV_LAYER = "menu.friends"
+
 @Composable
 fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
     val state = viewModel.state.value
@@ -137,14 +140,19 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
     // The nav registry is shared between the menu and the panel, so ownership has to be explicit:
     // the selection is cleared on both edges, because a selection left pointing at a control on
     // the other side of the transition highlights something the user cannot see.
+    // The panel also claims its own nav layer while open: the menu stays composed behind it, and
+    // without a layer a move could pick one of the menu's controls.
     DisposableEffect(friendsOpen) {
-        if (friendsOpen) {
-            EmulationMenuInputController.overlayDismiss = { friendsOpen = false }
-            com.armsx2.ui.settings.SettingsControllerNav.clearSelection()
-        }
+        if (!friendsOpen) return@DisposableEffect onDispose {}
+        EmulationMenuInputController.overlayDismiss = { friendsOpen = false }
+        val nav = com.armsx2.ui.settings.SettingsControllerNav
+        val previous = nav.activeLayer.value
+        nav.activeLayer.value = FRIENDS_NAV_LAYER
+        nav.clearSelection()
         onDispose {
             EmulationMenuInputController.overlayDismiss = null
-            com.armsx2.ui.settings.SettingsControllerNav.clearSelection()
+            nav.activeLayer.value = previous
+            nav.clearSelection()
         }
     }
     // Highlight the panel's first control once it has actually composed. Selecting in the same
@@ -291,32 +299,36 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                 shadowElevation = 24.dp,
             ) {
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                    Row(
-                        Modifier.fillMaxWidth().padding(start = 16.dp, end = 10.dp, top = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        com.armsx2.ui.settings.LocalNavLayer provides FRIENDS_NAV_LAYER,
                     ) {
-                        Text(
-                            str("friends.title"),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 10.dp, top = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                str("friends.title"),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                            )
+                            // Between the title and Close: whose Discord this is.
+                            com.armsx2.ui.friends.SelfChip(
+                                Modifier.weight(1f).padding(horizontal = 12.dp),
+                            )
+                            TextButton(
+                                onClick = { friendsOpen = false },
+                                modifier = Modifier.controllerFocusable(
+                                    "menu.friends.close",
+                                    onConfirm = { friendsOpen = false },
+                                ),
+                            ) { Text(str("action.close")) }
+                        }
+                        // Hosting sits with Friends: there is no room for another tab in this menu.
+                        com.armsx2.remoteplay.RemotePlayHostPanel(
+                            Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
                         )
-                        // Between the title and Close: whose Discord this is.
-                        com.armsx2.ui.friends.SelfChip(
-                            Modifier.weight(1f).padding(horizontal = 12.dp),
-                        )
-                        TextButton(
-                            onClick = { friendsOpen = false },
-                            modifier = Modifier.controllerFocusable(
-                                "menu.friends.close",
-                                onConfirm = { friendsOpen = false },
-                            ),
-                        ) { Text(str("action.close")) }
+                        com.armsx2.ui.friends.FriendsPanel(Modifier.padding(horizontal = 12.dp))
                     }
-                    // Hosting sits with Friends: there is no room for another tab in this menu.
-                    com.armsx2.remoteplay.RemotePlayHostPanel(
-                        Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
-                    )
-                    com.armsx2.ui.friends.FriendsPanel(Modifier.padding(horizontal = 12.dp))
                 }
             }
         }

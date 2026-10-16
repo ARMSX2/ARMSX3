@@ -104,6 +104,11 @@ internal fun rowAura() = Brush.horizontalGradient(
     listOf(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.055f), Color.Transparent),
 )
 
+/** The nav layer the controls composed here belong to, for those that don't name one. An overlay
+ *  provides its layer once (the in-game menu's Friends panel does) and everything inside it, shared
+ *  rows included, registers under that layer with no plumbing. */
+internal val LocalNavLayer = staticCompositionLocalOf<String?> { null }
+
 internal object SettingsControllerNav {
     private data class Item(
         val id: String,
@@ -432,6 +437,7 @@ internal fun Modifier.controllerFocusable(
     onRight: (() -> Unit)? = null,
     layer: String? = null,
 ): Modifier = composed {
+    val navLayer = layer ?: LocalNavLayer.current
     var focused by remember { mutableStateOf(false) }
     val bringIntoView = remember { BringIntoViewRequester() }
     if (controllerId != null) {
@@ -445,7 +451,7 @@ internal fun Modifier.controllerFocusable(
                 onConfirm = onConfirm,
                 onLeft = onLeft,
                 onRight = onRight,
-                layer = layer,
+                layer = navLayer,
             )
         }
         DisposableEffect(controllerId) {
