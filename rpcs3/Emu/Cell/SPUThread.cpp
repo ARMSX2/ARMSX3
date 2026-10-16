@@ -2363,7 +2363,7 @@ void spu_thread::push_snr(u32 number, u32 value)
 
 	// Configueable SPU head start (compnesation)
 	// SPU wakes up immediately on realhW and is faster than PPU
-	thread_ctrl::wait_for_accurate(g_cfg.core.spu_mmio_delay_eanbled ? +g_cfg.core.spu_mmio_delay : 3);
+	thread_ctrl::wait_for_accurate(g_cfg.core.spu_mmio_delay_enabled ? +g_cfg.core.spu_mmio_delay : 3);
 }
 
 void spu_thread::push_in_mbox(u32 value)
@@ -2426,7 +2426,7 @@ void spu_thread::push_in_mbox(u32 value)
 
 	// Configurable SPU head start (compensation)
 	// SPU wakes up immediately on realhw and is faster than PPU
-	thread_ctrl::wait_for_accurate(g_cfg.core.spu_mmio_delay_eanbled ? +g_cfg.core.spu_mmio_delay : 3);
+	thread_ctrl::wait_for_accurate(g_cfg.core.spu_mmio_delay_enabled ? +g_cfg.core.spu_mmio_delay : 3);
 }
 
 #ifndef ARMSX3_WATCH_HOOKS
