@@ -339,6 +339,16 @@ object Ps3PatchRepo {
     )
 
     private val BUNDLED = listOf(
+        // THE IDOLM@STER 2, NPJB00337 v01.00 -- ours. A scene change frees objects that the draw
+        // thread is still drawing from last frame's list, which holds them without a reference;
+        // the frame's draw kick now waits for that list to be drawn. See canary_patches.yml.
+        Bundled(
+            hash = "PPU-f942422316f63af3d64dc940b35ec8fddade0f44",
+            name = "ARMSX3 boot crash fix",
+            serial = "NPJB00337",
+            appVersion = "01.00",
+            sinceRevision = 16,
+        ),
         // GRAND THEFT AUTO IV, BLUS30682 v01.02 and the same executable as BLUS30127 / NPUB30702
         // v01.08 -- ours. The collision job seeds its distances with the SPU's largest float,
         // which is a NaN on Approximate, so the first convergence test fails and Niko falls
@@ -777,7 +787,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 15
+    private const val BUNDLED_REVISION = 16
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"

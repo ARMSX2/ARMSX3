@@ -680,3 +680,50 @@ SPU-d0a1508208613e2184fbd64906d34d5f07890033:
       - [ be32, 0x158d8, 0x413fbfa0 ] # ilhu r32,0x7f7f (was 0x413fffa0): FLT_MAX instead of SPU max
       - [ be32, 0x17098, 0x413fbfbd ] # ilhu r61,0x7f7f (was 0x413fffbd): FLT_MAX instead of SPU max
       - [ be32, 0x175f8, 0x413fbfcf ] # ilhu r79,0x7f7f (was 0x413fffcf): FLT_MAX instead of SPU max
+
+# THE IDOLM@STER 2, NPJB00337 v01.00 -- ours. Crash as the boot screen gives way to the logo,
+# "Access violation reading location 0x0" on NU::Draw::RequestManager (0x44ba8c). About one boot
+# in four at default settings and every boot with PPU Threads 1; the PPU interpreter only hid it
+# by being slower, it crashes there too with PPU Threads 1.
+#
+# Each frame the main thread's frame sync (0x42bd48) swaps the draw lists and wakes the draw
+# thread (KickDraw, 0x435384) to turn last frame's list into RSX commands, then goes straight on
+# to the frame's update. A draw request (vtable 0x648428) holds plain pointers to the objects it
+# draws and takes no reference, and the update is where a scene change releases its objects
+# (count at +4, Release 0x42d864). On a PS3 the draw thread starts on the other hardware thread at
+# once and is long done with the list before the update gets that far. Here the update can win: a
+# write watch on the object saw the main thread drop its count to 0 and free it 1.4 ms before the
+# draw thread called through it.
+#
+# KickDraw now waits for the draw thread to finish that list before it returns, with the game's
+# own WaitDrawIdle (0x435354, which the blocking frame sync at 0x42bee8 already calls before its
+# flip). The twelve words fit KickDraw exactly: set the draw event to 1 as before, then tail-call
+# WaitDrawIdle. Only the two frame syncs call KickDraw, on the main thread with no lock held, and
+# the draw thread clears the event as soon as the list is done, before it waits for the flip, so
+# the wait cannot deadlock. It costs the main thread one list's worth of draw thread time per
+# frame (about 0.2 ms on the logo screen).
+#
+# Tested on an Odin 3: with PPU Threads 1 the crash came on 8 of 8 boots before and 0 of 6 after;
+# 3 of 3 boots at default settings reached the title screen. The tester's crash log is the same
+# executable. Ps3PatchRepo.BUNDLED must list this, or it is imported but never enabled.
+PPU-f942422316f63af3d64dc940b35ec8fddade0f44:
+  "ARMSX3 boot crash fix":
+    Games:
+      "THE IDOLM@STER 2":
+        NPJB00337: [ 01.00 ]
+    Author: "jpolo1224"
+    Notes: "Fixes the crash when the boot screen changes to the logo."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x00435384, 0x7c0802a6 ] # mflr r0
+      - [ be32, 0x00435388, 0xf8010010 ] # std r0,0x10(r1)
+      - [ be32, 0x0043538c, 0xf821ff81 ] # stdu r1,-0x80(r1)
+      - [ be32, 0x00435390, 0xf8610070 ] # std r3,0x70(r1): the request manager
+      - [ be32, 0x00435394, 0x38630068 ] # addi r3,r3,0x68: its draw event
+      - [ be32, 0x00435398, 0x38800001 ] # li r4,1
+      - [ be32, 0x0043539c, 0x4bffa939 ] # bl 0x42fcd4: set the event to 1, wakes the draw thread (as before)
+      - [ be32, 0x004353a0, 0xe8610070 ] # ld r3,0x70(r1)
+      - [ be32, 0x004353a4, 0x38210080 ] # addi r1,r1,0x80
+      - [ be32, 0x004353a8, 0xe8010010 ] # ld r0,0x10(r1)
+      - [ be32, 0x004353ac, 0x7c0803a6 ] # mtlr r0
+      - [ be32, 0x004353b0, 0x4bffffa4 ] # b 0x435354: WaitDrawIdle, returns once the list is drawn
