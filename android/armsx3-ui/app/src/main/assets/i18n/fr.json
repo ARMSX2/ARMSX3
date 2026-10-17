@@ -692,7 +692,7 @@
  "perf.clearPpuCache.label": "Effacer le cache PPU",
  "perf.clearSpuCache.description": "Supprime les programmes SPU recompilés, en conservant les modules PPU compilés afin que les jeux démarrent toujours rapidement. Le cache SPU se reconstruit la prochaine fois que vous jouez.",
  "perf.clearSpuCache.label": "Effacer le cache SPU",
- "perf.clocksScale.description": "Met à l'échelle l'horloge émulée de la PS3. 100% est exact. Le réduire fait tourner les jeux au ralenti mais peut stabiliser ceux qui dépassent l'appareil ; l'augmenter peut casser les titres sensibles au timing.",
+ "perf.clocksScale.description": "Met à l'échelle l'horloge émulée de la PS3. 100 % est la valeur exacte. Les valeurs plus basses ralentissent les jeux qui mesurent le temps avec l'horloge ; ceux qui se calent sur les images gardent leur vitesse. L'augmenter peut casser les jeux sensibles au timing. S'applique au prochain démarrage.",
  "perf.clocksScale.label": "Vitesse d'horloge émulée",
  "perf.configDb.apply": "Appliquer les paramètres téléchargés",
  "perf.configDb.applyOff": "Les paramètres téléchargés sont conservés mais ne sont pas appliqués. Prend effet au prochain démarrage du jeu.",

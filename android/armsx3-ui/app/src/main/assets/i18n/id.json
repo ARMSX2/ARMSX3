@@ -692,7 +692,7 @@
  "perf.clearPpuCache.label": "Hapus Cache PPU",
  "perf.clearSpuCache.description": "Menghapus program SPU yang telah dikompilasi ulang, menjaga modul PPU yang telah dikompilasi sehingga game tetap dapat melakukan booting dengan cepat. Cache SPU dibangun kembali saat Anda bermain lagi.",
  "perf.clearSpuCache.label": "Hapus Cache SPU",
- "perf.clocksScale.description": "Menskalakan clock PS3 yang ditiru. 100% akurat. Menurunkannya membuat game berjalan dalam gerakan lambat namun dapat menstabilkan game yang melebihi kecepatan perangkat; menaikkannya dapat merusak judul yang sensitif terhadap waktu.",
+ "perf.clocksScale.description": "Menskalakan clock PS3 yang ditiru. 100% adalah nilai yang akurat. Nilai yang lebih rendah memperlambat game yang mengukur waktunya dengan clock; game yang mengatur kecepatannya berdasarkan frame tetap pada kecepatannya. Menaikkannya dapat merusak game yang sensitif terhadap waktu. Berlaku pada boot berikutnya.",
  "perf.clocksScale.label": "Kecepatan Clock yang Ditiru",
  "perf.configDb.apply": "Terapkan Pengaturan yang Diunduh",
  "perf.configDb.applyOff": "Pengaturan yang diunduh disimpan tetapi tidak diterapkan. Berlaku saat game dibooting lagi.",

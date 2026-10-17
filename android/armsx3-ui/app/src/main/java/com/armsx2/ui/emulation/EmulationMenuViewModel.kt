@@ -155,7 +155,7 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
             EmulationMenuTab.Fixes -> Unit
             EmulationMenuTab.Performance -> when (state.value.selectedAction) {
                 0 -> updateSettings { it.copy(frameLimitEnable = !it.frameLimitEnable) }
-                1 -> setSpeed(it = state.value.settings.nominalSpeedPercent + 5)
+                1 -> setSpeed(it = state.value.settings.ps3.clocksScale + 5)
                 2 -> setFrameSkip((state.value.settings.frameSkip + 1) % 6)
             }
             EmulationMenuTab.Controls -> when (state.value.selectedAction) {
@@ -276,7 +276,8 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
 
     fun setEeCycleSkip(value: Int) = updateSettings { it.copy(eeCycleSkip = value.coerceIn(0, 3)) }
 
-    fun setSpeed(it: Int) = updateSettings { settings -> settings.copy(nominalSpeedPercent = it.coerceIn(50, 200)) }
+    /** The Speed Limit % row: Emulated Clock Speed (Core@@Clocks scale), on the next boot. */
+    fun setSpeed(it: Int) = updateSettings { settings -> settings.copy(ps3 = settings.ps3.copy(clocksScale = it.coerceIn(10, 300))) }
 
     fun setFpsLimit(value: Int) = updateSettings { it.copy(fpsLimit = value.coerceIn(-1, 240)) } // -1 = PS3 native pacing
 

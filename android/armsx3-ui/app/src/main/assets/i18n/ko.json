@@ -692,7 +692,7 @@
  "perf.clearPpuCache.label": "PPU 캐시 지우기",
  "perf.clearSpuCache.description": "다시 컴파일된 SPU 프로그램을 삭제하고 컴파일된 PPU 모듈을 유지하여 게임이 계속 빠르게 부팅되도록 합니다. 다음에 플레이할 때 SPU 캐시가 재구축됩니다.",
  "perf.clearSpuCache.label": "SPU 캐시 지우기",
- "perf.clocksScale.description": "에뮬레이트된 PS3 시계의 크기를 조정합니다. 100% 정확합니다. 이를 낮추면 게임이 슬로우 모션으로 실행되지만 장치보다 빠른 게임을 안정화할 수 있습니다. 높이면 타이밍에 민감한 제목이 손상될 수 있습니다.",
+ "perf.clocksScale.description": "에뮬레이트된 PS3 클럭의 배율을 조정합니다. 100%가 정확한 값입니다. 값을 낮추면 시계로 시간을 재는 게임은 느려지지만, 프레임 단위로 진행하는 게임은 속도가 그대로입니다. 높이면 타이밍에 민감한 게임이 깨질 수 있습니다. 다음 부팅 시 적용됩니다.",
  "perf.clocksScale.label": "에뮬레이트된 클럭 속도",
  "perf.configDb.apply": "다운로드한 설정 적용",
  "perf.configDb.applyOff": "다운로드한 설정은 유지되지만 적용되지는 않습니다. 다음에 게임을 부팅할 때 적용됩니다.",

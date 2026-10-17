@@ -7069,6 +7069,16 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
     decoded.assign(valueString);
   }
 
+  // Clocks scale is read on every guest clock read, against an offset taken at boot with the
+  // boot-time scale (initialize_timebased_time). Changed under a running game the clock jumps:
+  // lowered, it drops below that offset and wraps to ~2^64 (convert_to_timebased_time then fails
+  // its ensure); raised, it leaps ahead by most of the device's uptime. RPCS3 keeps it to the
+  // boot for that reason. The app remembers the edit and applies it before the next boot.
+  if (root == &g_cfg.core.clocks_scale && !Emu.IsStopped(true) && decoded != root->to_string()) {
+    rpcsx_android.notice("settingsSet: %s changes at the next boot, not under a running game", path);
+    return false;
+  }
+
   if (!root->from_string(decoded, !Emu.IsStopped())) {
     rpcsx_android.error("settingsSet: node %s does not accept value '%s'", path,
                         decoded);

@@ -692,7 +692,7 @@
  "perf.clearPpuCache.label": "PPU Önbelleğini Temizle",
  "perf.clearSpuCache.description": "Yeniden derlenen SPU programlarını siler ve derlenmiş PPU modüllerini koruyarak oyunların hızlı bir şekilde başlatılmasını sağlar. SPU önbelleği bir sonraki oyununuzda yeniden oluşturulur.",
  "perf.clearSpuCache.label": "SPU Önbelleğini Temizle",
- "perf.clocksScale.description": "Öykünülmüş PS3 saatini ölçeklendirir. %100 doğrudur. Bunu düşürmek oyunların ağır çekimde çalışmasını sağlar ancak cihazın ötesindeki oyunları dengeleyebilir; bunu yükseltmek zamanlamaya duyarlı başlıkları bozabilir.",
+ "perf.clocksScale.description": "Öykünülen PS3 saatini ölçeklendirir. %100 doğru değerdir. Daha düşük değerler, zamanını saatle ölçen oyunları yavaşlatır; hızını karelere göre ayarlayan oyunlar hızını korur. Yükseltmek, zamanlamaya duyarlı oyunları bozabilir. Bir sonraki önyüklemede geçerlidir.",
  "perf.clocksScale.label": "Benzetilmiş Saat Hızı",
  "perf.configDb.apply": "İndirilen Ayarları Uygula",
  "perf.configDb.applyOff": "İndirilen ayarlar korunur ancak uygulanmaz. Bir sonraki oyun açılışında etkili olur.",

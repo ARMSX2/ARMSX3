@@ -696,7 +696,7 @@
  "perf.clearPpuCache.label": "Limpar cache de PPU",
  "perf.clearSpuCache.description": "Exclui programas SPU recompilados, mantendo os módulos PPU compilados para que os jogos inicializem rapidamente. O cache SPU será reconstruído na próxima vez que você jogar.",
  "perf.clearSpuCache.label": "Limpar cache SPU",
- "perf.clocksScale.description": "Dimensiona o relógio PS3 emulado. 100% é preciso. Abaixá-lo faz com que os jogos rodem em câmera lenta, mas pode estabilizar aqueles que ultrapassam o dispositivo; aumentá-lo pode quebrar títulos sensíveis ao tempo.",
+ "perf.clocksScale.description": "Ajusta a escala do relógio emulado do PS3. 100% é o valor exato. Valores menores deixam mais lentos os jogos que medem o tempo pelo relógio; os jogos que se guiam por quadros mantêm a velocidade. Aumentá-lo pode quebrar jogos sensíveis ao tempo. Aplica-se na próxima inicialização.",
  "perf.clocksScale.label": "Velocidade de clock emulada",
  "perf.configDb.apply": "Aplicar configurações baixadas",
  "perf.configDb.applyOff": "As configurações baixadas são mantidas, mas não aplicadas. Entra em vigor na próxima vez que um jogo for inicializado.",

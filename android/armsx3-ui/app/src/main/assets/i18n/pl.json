@@ -692,7 +692,7 @@
  "perf.clearPpuCache.label": "Wyczyść pamięć podręczną PPU",
  "perf.clearSpuCache.description": "Usuwa przekompilowane programy SPU, zachowując skompilowane moduły PPU, dzięki czemu gry nadal uruchamiają się szybko. Pamięć podręczna SPU zostanie odbudowana przy następnej grze.",
  "perf.clearSpuCache.label": "Wyczyść pamięć podręczną SPU",
- "perf.clocksScale.description": "Skaluje emulowany zegar PS3. 100% jest dokładne. Obniżenie powoduje, że gry działają w zwolnionym tempie, ale mogą ustabilizować te, które wyprzedzają urządzenie; podniesienie go może spowodować uszkodzenie tytułów wrażliwych na czas.",
+ "perf.clocksScale.description": "Skaluje emulowany zegar PS3. 100% to wartość dokładna. Niższe wartości spowalniają gry, które mierzą czas zegarem; gry, które odmierzają tempo klatkami, zachowują swoją prędkość. Podniesienie może zepsuć gry wrażliwe na czas. Obowiązuje przy następnym uruchomieniu.",
  "perf.clocksScale.label": "Emulowana prędkość zegara",
  "perf.configDb.apply": "Zastosuj pobrane ustawienia",
  "perf.configDb.applyOff": "Pobrane ustawienia zostaną zachowane, ale nie zastosowane. Obowiązuje przy następnym uruchomieniu gry.",

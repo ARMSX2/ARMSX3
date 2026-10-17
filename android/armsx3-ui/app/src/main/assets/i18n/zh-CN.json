@@ -692,7 +692,7 @@
  "perf.clearPpuCache.label": "清除 PPU 缓存",
  "perf.clearSpuCache.description": "删除重新编译的SPU程序，保留编译的PPU模块，以便游戏仍然快速启动。 SPU 缓存会在您下次玩游戏时重建。",
  "perf.clearSpuCache.label": "清除SPU缓存",
- "perf.clocksScale.description": "缩放模拟 PS3 时钟。 100% 准确。降低它会使游戏以慢动作运行，但可以稳定那些超过设备的游戏；提高它可能会破坏对时间敏感的标题。",
+ "perf.clocksScale.description": "缩放模拟的 PS3 时钟。100% 为准确值。较低的值会让按时钟计时的游戏变慢；按帧控制节奏的游戏速度不变。调高可能会破坏对时序敏感的游戏。适用于下次启动。",
  "perf.clocksScale.label": "模拟时钟速度",
  "perf.configDb.apply": "应用下载的设置",
  "perf.configDb.applyOff": "保留但不应用下载的设置。下次游戏启动时生效。",

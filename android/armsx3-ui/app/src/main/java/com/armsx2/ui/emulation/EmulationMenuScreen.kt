@@ -1101,7 +1101,7 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
     SectionCard(str("perf.speedLimit.label")) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (settings.frameLimitEnable) "${settings.nominalSpeedPercent}%" else str("setup.toggle.off"),
+                if (settings.frameLimitEnable) "${settings.ps3.clocksScale}%" else str("setup.toggle.off"),
                 modifier = Modifier.weight(1f),
                 color = MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.titleMedium,
@@ -1115,12 +1115,16 @@ private fun PerformancePane(state: EmulationMenuUiState, viewModel: EmulationMen
             )
         }
         Spacer(Modifier.height(8.dp))
+        // Emulated Clock Speed, the same setting as the row in PS3 CPU below. The core takes it
+        // at boot only (a running game's clock would jump), so it comes with Apply & Restart.
         HorizontalOptionRow(
             options = listOf(50, 75, 90, 100, 110, 125, 150, 200).map { it to "$it%" },
-            selected = settings.nominalSpeedPercent,
+            selected = settings.ps3.clocksScale,
             keyPrefix = str("perf.speedLimit.label"),
             onSelect = viewModel::setSpeed,
         )
+        Spacer(Modifier.height(8.dp))
+        CompactAction(str("backend.applyRestart"), "↻", Modifier.fillMaxWidth(), MainActivityRuntime::restart)
     }
     HorizontalOptions(
         title = str("perf.displayFpsCap.label"),

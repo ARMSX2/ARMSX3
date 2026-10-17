@@ -692,7 +692,7 @@
  "perf.clearPpuCache.label": "清除 PPU 快取",
  "perf.clearSpuCache.description": "刪除重新編譯的SPU程序，保留編譯的PPU模組，以便遊戲仍快速啟動。 SPU 快取會在您下次玩遊戲時重建。",
  "perf.clearSpuCache.label": "清除SPU快取",
- "perf.clocksScale.description": "縮放模擬 PS3 時脈。 100% 準確。降低它會使遊戲以慢動作運行，但可以穩定那些超過設備的遊戲；提高它可能會破壞對時間敏感的標題。",
+ "perf.clocksScale.description": "縮放模擬的 PS3 時脈。100% 為準確值。較低的值會讓以時鐘計時的遊戲變慢；以影格控制節奏的遊戲速度不變。調高可能會破壞對時序敏感的遊戲。適用於下次啟動。",
  "perf.clocksScale.label": "類比時脈速度",
  "perf.configDb.apply": "應用程式下載的設定",
  "perf.configDb.applyOff": "保留但不套用下載的設定。下次遊戲啟動時生效。",

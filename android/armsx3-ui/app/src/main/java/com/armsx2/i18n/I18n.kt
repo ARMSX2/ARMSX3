@@ -1562,7 +1562,7 @@ val EN: Map<String, String> = mapOf(
     "perf.maxSpursThreads.label" to "Max SPURS Threads",
     "perf.maxSpursThreads.description" to "Caps how many SPURS threads run per thread group. 6 is hardware-accurate. Lowering it is a hack that can help badly threaded games on few-core devices, at the risk of breaking others.",
     "perf.clocksScale.label" to "Emulated Clock Speed",
-    "perf.clocksScale.description" to "Scales the emulated PS3 clock. 100% is accurate. Lowering it makes games run in slow motion but can stabilise ones that outpace the device; raising it can break timing-sensitive titles.",
+    "perf.clocksScale.description" to "Scales the emulated PS3 clock. 100% is accurate. Lower values slow down games that time themselves by the clock; games that pace themselves by frames keep their speed. Raising it can break timing-sensitive games. Applies on the next boot.",
     "perf.spuCache.label" to "SPU Cache",
     "perf.spuCache.description" to "Caches compiled SPU blocks to disk so later launches skip recompiling. Leave on: turning it off only costs you load time.",
     "perf.llvmPrecompile.label" to "LLVM Precompilation",

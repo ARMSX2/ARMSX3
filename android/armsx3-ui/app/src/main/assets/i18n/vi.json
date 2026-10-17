@@ -692,7 +692,7 @@
  "perf.clearPpuCache.label": "Xóa bộ nhớ đệm PPU",
  "perf.clearSpuCache.description": "Xóa các chương trình SPU được biên dịch lại, giữ lại các mô-đun PPU đã biên dịch để trò chơi vẫn khởi động nhanh chóng. Bộ đệm SPU sẽ được xây dựng lại vào lần tiếp theo bạn chơi.",
  "perf.clearSpuCache.label": "Xóa bộ nhớ đệm SPU",
- "perf.clocksScale.description": "Cân đồng hồ PS3 mô phỏng. 100% là chính xác. Việc hạ thấp nó khiến trò chơi chạy ở chế độ chuyển động chậm nhưng có thể ổn định những trò chơi chạy nhanh hơn thiết bị; nâng cao nó có thể phá vỡ các tiêu đề nhạy cảm về thời gian.",
+ "perf.clocksScale.description": "Thay đổi tỉ lệ đồng hồ PS3 mô phỏng. 100% là giá trị chính xác. Giá trị thấp hơn làm chậm các trò chơi tính thời gian theo đồng hồ; các trò chơi chạy theo khung hình vẫn giữ nguyên tốc độ. Tăng giá trị có thể làm hỏng các trò chơi nhạy cảm về thời gian. Áp dụng cho lần khởi động tiếp theo.",
  "perf.clocksScale.label": "Tốc độ đồng hồ mô phỏng",
  "perf.configDb.apply": "Áp dụng cài đặt đã tải xuống",
  "perf.configDb.applyOff": "Cài đặt đã tải xuống được giữ lại nhưng không được áp dụng. Có hiệu lực vào lần khởi động trò chơi tiếp theo.",

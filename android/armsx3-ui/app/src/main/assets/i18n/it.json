@@ -692,7 +692,7 @@
  "perf.clearPpuCache.label": "Cancella cache PPU",
  "perf.clearSpuCache.description": "Elimina i programmi SPU ricompilati, mantenendo i moduli PPU compilati in modo che i giochi continuino ad avviarsi rapidamente. La cache della SPU verrà ricostruita la prossima volta che giochi.",
  "perf.clearSpuCache.label": "Cancella cache SPU",
- "perf.clocksScale.description": "Ridimensiona l'orologio della PS3 emulata. Il 100% è accurato. Abbassandolo i giochi vengono eseguiti al rallentatore ma è possibile stabilizzare quelli che superano il dispositivo; alzarlo può danneggiare i titoli sensibili al timing.",
+ "perf.clocksScale.description": "Scala l'orologio emulato della PS3. Il 100% è il valore esatto. Valori più bassi rallentano i giochi che misurano il tempo con l'orologio; i giochi che si regolano sui fotogrammi mantengono la loro velocità. Alzarlo può rompere i giochi sensibili ai tempi. Si applica al prossimo avvio.",
  "perf.clocksScale.label": "Velocità di clock emulata",
  "perf.configDb.apply": "Applica le impostazioni scaricate",
  "perf.configDb.applyOff": "Le impostazioni scaricate vengono mantenute ma non applicate. Ha effetto al successivo avvio del gioco.",

@@ -692,7 +692,7 @@
  "perf.clearPpuCache.label": "PPU Cache paqij bike",
  "perf.clearSpuCache.description": "Bernameyên SPU yên ji nû ve berhevkirî jêdibe, modulên PPU yên berhevkirî diparêze, ji ber vê yekê lîstik hîn zû dest pê dike. Dema ku hûn dilîzin cache SPU ji nû ve ava dike.",
  "perf.clearSpuCache.label": "SPU Cache paqij bike",
- "perf.clocksScale.description": "Demjimêra PS3-ya emûlkirî dipîve. 100% rast e. Kêmkirina wê lîstokan bi tevgera hêdî dimeşîne lê dikare yên ku ji cîhazê derbas dibin aram bike; bilindkirina wê dikare sernavên hesas-dem bişkîne.",
+ "perf.clocksScale.description": "Demjimêra PS3-ya emûlekirî dipîve. 100% rast e. Nirxên kêmtir lîstokên ku dema xwe bi demjimêrê dipîvin hêdî dikin; lîstokên ku leza xwe li gorî çarçoveyan eyar dikin leza xwe diparêzin. Bilindkirina wê dikare lîstokên ku ji demê re hesas in xera bike. Di boota din de derbas dibe.",
  "perf.clocksScale.label": "Leza Saetê Emulated",
  "perf.configDb.apply": "Mîhengên Dakêşandî Bikin",
  "perf.configDb.applyOff": "Mîhengên dakêşandî têne parastin lê nayên sepandin. Cara din ku lîstikek boot dike bandor dike.",

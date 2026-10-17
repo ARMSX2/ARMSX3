@@ -1281,9 +1281,10 @@ data class Settings(
         // EmulationSpeedOptions::SanityCheck (0.05..10.0).
         put("Framerate", "NominalScalar", "float",
             (nominalSpeedPercent.coerceIn(10, 1000) / 100f).toString())
-        // Live-apply: the setSetting above only persists; the running frame
-        // pacer needs a direct re-pace (mirrors speedhackLimitermode).
-        if (emitSink == null) NativeApp.setNominalSpeed(nominalSpeedPercent.coerceIn(10, 1000))
+        // No NativeApp.setNominalSpeed here. It writes Core@@Clocks scale, which ps3.clocksScale
+        // already wrote above, and running after it, it put this field's 100 back over every
+        // Emulated Clock Speed the user chose (issue #203). The in-game Speed Limit % row edits
+        // ps3.clocksScale now, so nothing else needs this field.
         // Max presented-FPS cap — independent of the Speed Limit % above. Caps
         // the display rate by dropping presents on the GS thread (emulation keeps
         // full speed, NominalScalar untouched); 0 = off. See GSRenderer::VSync.

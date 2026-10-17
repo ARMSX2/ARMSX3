@@ -692,7 +692,7 @@
  "perf.clearPpuCache.label": "PPU-Cache löschen",
  "perf.clearSpuCache.description": "Löscht neu kompilierte SPU-Programme und behält die kompilierten PPU-Module bei, sodass Spiele weiterhin schnell starten. Der SPU-Cache wird beim nächsten Spielen neu erstellt.",
  "perf.clearSpuCache.label": "SPU-Cache löschen",
- "perf.clocksScale.description": "Skaliert die emulierte PS3-Uhr. 100 % stimmt. Durch Absenken werden Spiele in Zeitlupe ausgeführt, Spiele, die schneller laufen, können jedoch stabilisiert werden. Eine Erhöhung kann bei zeitkritischen Titeln zu Störungen führen.",
+ "perf.clocksScale.description": "Skaliert die emulierte PS3-Uhr. 100 % ist exakt. Niedrigere Werte verlangsamen Spiele, die ihre Zeit über die Uhr messen; Spiele, die sich nach Bildern takten, behalten ihr Tempo. Höhere Werte können zeitkritische Spiele stören. Gilt beim nächsten Start.",
  "perf.clocksScale.label": "Emulierte Taktrate",
  "perf.configDb.apply": "Heruntergeladene Einstellungen anwenden",
  "perf.configDb.applyOff": "Heruntergeladene Einstellungen werden beibehalten, aber nicht angewendet. Wird beim nächsten Spielstart wirksam.",
