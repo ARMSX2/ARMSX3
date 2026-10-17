@@ -140,6 +140,7 @@ struct msg_dlg_thread_info
 					}
 
 					dlg->close(true, true);
+					continue;
 				}
 			}
 			else if (const auto dlg = g_fxo->get<msg_info>().get())
@@ -150,7 +151,15 @@ struct msg_dlg_thread_info
 				}
 
 				dlg->on_close(CELL_MSGDIALOG_BUTTON_NONE);
+				continue;
 			}
+
+			// ARMSX3: nothing to close, so the dialog this delay was for is gone. Drop it: kept,
+			// this loop spun on it and closed the next dialog the moment it was created, from any
+			// module, before show() had set its on_close. A blocking caller then waited forever:
+			// The Idolm@ster 2's "save data cannot be found" vanished in 17 us and
+			// cellSaveDataAutoLoad2 never returned, so the game stayed on its loading screen.
+			wait_until.compare_and_swap_test(new_value, 0);
 		}
 	}
 
@@ -186,6 +195,9 @@ error_code open_msg_dialog(bool is_blocking, u32 type, vm::cptr<char> msgString,
 			return CellSysutilError{ret + 0u};
 		}
 
+		// ARMSX3: a delayed close belongs to the dialog that was open when it was asked for.
+		g_fxo->get<msg_dlg_thread>().wait_until = 0;
+
 		const auto notify = std::make_shared<atomic_t<u32>>(0);
 
 		const auto res = manager->create<rsx::overlays::message_dialog>()->show(is_blocking, msgString.get_ptr(), _type, source, [callback, userData, &return_code, is_blocking, notify](s32 status)
@@ -194,6 +206,10 @@ error_code open_msg_dialog(bool is_blocking, u32 type, vm::cptr<char> msgString,
 			{
 				*return_code = status;
 			}
+
+			// ARMSX3: as the msg_info path below does. Answered before its cellMsgDialogClose
+			// delay ran out, a dialog left the delay armed for whatever dialog came next.
+			g_fxo->get<msg_dlg_thread>().wait_until = 0;
 
 			sysutil_send_system_cmd(CELL_SYSUTIL_DRAWING_END, 0);
 
