@@ -739,13 +739,16 @@ open class MainActivityRuntime : ComponentActivity() {
                     // does not spell out its title id resolves per-game settings under its
                     // filename while the core boots it as the serial and reads there. The core
                     // reports the serial about a second into boot, which is too late for the
-                    // settings just pushed above -- but recording it now means every later boot
+                    // settings just pushed above -- but recording it means every later boot
                     // resolves under the right key. See ConfigStore.rememberSerial.
-                    runCatching {
-                        com.armsx2.config.ConfigStore.rememberSerial(
-                            currentGame.value?.settingsKey,
-                            com.armsx3.NativeApp.getGameSerial())
-                    }
+                    //
+                    // Only once the core has read THIS disc. Asked here, before runVMThread, it
+                    // still answered with the last game's serial (Emulator::Kill keeps the title
+                    // id), so playing Batman: Arkham City and then The Idolm@ster 2 filed the
+                    // second under the first: it booted with Arkham's settings and saved into them.
+                    // And only for an entry without a serial, the one case the alias is for.
+                    currentGame.value?.takeIf { it.serial.isNullOrBlank() }?.settingsKey
+                        ?.let { rememberSerialAfterBoot(it) }
                     // Both of these are consumed by native when the VM boots, so they must be
                     // pushed BEFORE runVMThread (which blocks until the VM exits). One resolve,
                     // per-game ∘ global.
@@ -1716,6 +1719,35 @@ open class MainActivityRuntime : ComponentActivity() {
                         extension = if (folder) "FOLDER" else name.substringAfterLast('.', "").uppercase(),
                         platform = com.armsx2.GamePlatform.PS3,
                     )
+                }
+            })
+        }
+
+        /**
+         * Alias [stem], a library entry's filename key, to the serial the core boots it as.
+         *
+         * Polled like [adoptExternalGameIdentity]: until the core is past loading, its title id is
+         * still the last game's, and recording that is what linked one game to another's settings.
+         */
+        private fun rememberSerialAfterBoot(stem: String) {
+            val handler = android.os.Handler(android.os.Looper.getMainLooper())
+            handler.post(object : Runnable {
+                var attempts = 0
+                override fun run() {
+                    if (vmStopInProgress || eState.value == EmuState.STOPPED) return
+                    val booted = when (runCatching { net.rpcsx.RPCSX.getState() }.getOrNull()) {
+                        net.rpcsx.EmulatorState.Ready, net.rpcsx.EmulatorState.Starting,
+                        net.rpcsx.EmulatorState.Running, net.rpcsx.EmulatorState.Paused,
+                        net.rpcsx.EmulatorState.Frozen -> true
+                        else -> false
+                    }
+                    val serial = if (!booted) null else runCatching { NativeApp.getGameSerial() }.getOrNull()
+                        ?.trim()?.uppercase()?.takeIf { it.isNotEmpty() && it != "00000000" }
+                    if (serial == null) {
+                        if (++attempts < 240) handler.postDelayed(this, 250)
+                        return
+                    }
+                    runCatching { com.armsx2.config.ConfigStore.rememberSerial(stem, serial) }
                 }
             })
         }

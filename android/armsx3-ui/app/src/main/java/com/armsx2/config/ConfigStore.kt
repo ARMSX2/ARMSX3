@@ -144,11 +144,16 @@ object ConfigStore {
     // fix and a bigger one; this makes per-game settings work in the meantime.
     private fun aliasKey(stem: String) = "config.serialalias.$stem"
 
+    // A PS3 title id, BLUS30538 or NPJB00337. A key shaped like one is the library's own serial,
+    // never a filename stem, so it never needs an alias.
+    private val TITLE_ID = Regex("^[A-Z]{4}-?[0-9]{5}$")
+
     /** Record the core-reported serial for a title whose library entry had none. */
     fun rememberSerial(settingsKey: String?, serial: String?) {
         val stem = settingsKey?.takeIf { it.isNotBlank() } ?: return
         val real = serial?.takeIf { it.isNotBlank() } ?: return
         if (stem == real) return
+        if (TITLE_ID.matches(stem)) return
         if (MainActivityRuntime.prefs.getString(aliasKey(stem), null) == real) return
         MainActivityRuntime.prefs.edit { putString(aliasKey(stem), real) }
     }
@@ -187,6 +192,11 @@ object ConfigStore {
     /** The key per-game settings should actually be stored and resolved under. */
     fun effectiveKey(settingsKey: String?): String? {
         val stem = settingsKey?.takeIf { it.isNotBlank() } ?: return settingsKey
+        // Every alias whose stem is a title id was recorded by the launch reading the PREVIOUS
+        // game's serial (MainActivityRuntime.start, fixed), so it points at another game: The
+        // Idolm@ster 2 read and saved Batman: Arkham City's settings. Ignored, every title linked
+        // that way is back on its own settings; the stale entries are just never read.
+        if (TITLE_ID.matches(stem)) return stem
         return runCatching { MainActivityRuntime.prefs.getString(aliasKey(stem), null) }
             .getOrNull()?.takeIf { it.isNotBlank() } ?: stem
     }
