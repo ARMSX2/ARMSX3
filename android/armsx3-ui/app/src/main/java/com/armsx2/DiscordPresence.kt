@@ -238,15 +238,56 @@ object DiscordPresence {
         else line.take(RA_STATE_MAX)
     }
 
+    /**
+     * A remote play session with both players in it, on either device. While there is one, Discord
+     * reads "Playing remote play (2 of 2)" under the game, and both devices publish the same [id]
+     * so Discord knows they are together. [hostGame] and [hostSerial] are the host's game, for the
+     * friend's device, which runs no game of its own; on the host they stay null and it publishes
+     * its own game as usual. Nobody's name or device goes into it.
+     */
+    data class RemotePlayParty(val id: String, val hostGame: String? = null, val hostSerial: String = "")
+
+    val remotePlay = mutableStateOf<RemotePlayParty?>(null)
+
+    /** Both players are in: the host has started streaming, or the friend shows its first frame. */
+    fun joinRemotePlay(party: RemotePlayParty) {
+        remotePlay.value = party
+    }
+
+    /** That session is over. A newer one is left alone. */
+    fun leaveRemotePlay(id: String) {
+        if (remotePlay.value?.id == id) remotePlay.value = null
+    }
+
+    // What the bridge (discord_bridge.cpp) publishes outside a game, and as the second line of a
+    // remote play session. A friend's status is read back with them, so they must match it.
+    private const val LIBRARY_DETAILS = "In the library"
+    private const val REMOTE_PLAY_STATE = "Playing remote play"
+
     /** Re-publish the current game; used on (re)connect and whenever the running game changes. */
     private fun pushPresence() {
         val game = MainActivityRuntime.currentGame.value
         lastRaPresence = raPresence()
+        val party = remotePlay.value
+        val hostGame = party?.hostGame
+        if (party != null && hostGame != null) {
+            // The friend's side of remote play: the host's game, with the cover this device would
+            // show for it, derived from the serial the way a friend's row is.
+            send(DiscordIpc.MSG_SET_PLAYING, Bundle().apply {
+                putString(DiscordIpc.DATA_SERIAL, party.hostSerial)
+                putString(DiscordIpc.DATA_TITLE, hostGame)
+                putString(DiscordIpc.DATA_COVER, DiscordFriend("", hostGame, party.hostSerial, "").coverUrl.orEmpty())
+                putString(DiscordIpc.DATA_RA, "")
+                putString(DiscordIpc.DATA_PARTY, party.id)
+            })
+            return
+        }
         send(DiscordIpc.MSG_SET_PLAYING, Bundle().apply {
             putString(DiscordIpc.DATA_SERIAL, game?.serial.orEmpty())
             putString(DiscordIpc.DATA_TITLE, game?.let { it.displayTitle(false) }.orEmpty())
             putString(DiscordIpc.DATA_COVER, game?.coverUrl.orEmpty())
             putString(DiscordIpc.DATA_RA, lastRaPresence)
+            putString(DiscordIpc.DATA_PARTY, party?.id.orEmpty())
         })
     }
 
@@ -495,10 +536,15 @@ object DiscordPresence {
             val f = record.split(FIELD_SEP)
             val name = f.getOrNull(0).orEmpty()
             if (name.isBlank()) return@mapNotNull null
+            val details = f.getOrNull(1).orEmpty()
+            val state = f.getOrNull(2).orEmpty()
+            // In the library a friend publishes LIBRARY_DETAILS and no second line; in remote play
+            // the second line is REMOTE_PLAY_STATE. Neither is a game's name or serial.
+            val inLibrary = details == LIBRARY_DETAILS && state.isBlank()
             DiscordFriend(
                 name = name,
-                game = f.getOrNull(1).orEmpty(),
-                serial = f.getOrNull(2).orEmpty(),
+                game = if (inLibrary) "" else details,
+                serial = if (state == REMOTE_PLAY_STATE) "" else state,
                 avatarUrl = f.getOrNull(3).orEmpty(),
             )
         }
@@ -543,7 +589,7 @@ object DiscordPresence {
             // pushPresence reads currentGame itself, so this only needs to know it changed. The
             // cover it sends is the same URL the library renders — Discord takes a URL, so there
             // is nothing to upload per game and a title with no published cover falls back.
-            snapshotFlow { MainActivityRuntime.currentGame.value }.collect { pushPresence() }
+            snapshotFlow { MainActivityRuntime.currentGame.value to remotePlay.value }.collect { pushPresence() }
         }
     }
 }

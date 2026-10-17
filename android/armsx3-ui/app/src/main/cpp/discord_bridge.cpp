@@ -101,11 +101,13 @@ struct State {
     std::string want_title;
     std::string want_cover;
     std::string want_ra;
+    // A remote play session's party id, while both players are in one; empty otherwise.
+    std::string want_party;
     bool want_pending = false;
 };
 
 void applyPresence(const std::string& serial, const std::string& title,
-                   const std::string& cover, const std::string& ra);
+                   const std::string& cover, const std::string& ra, const std::string& party);
 
 State& state() {
     static State s;
@@ -173,7 +175,7 @@ Java_com_armsx2_discord_DiscordNative_start(JNIEnv* env, jclass, jstring jtoken)
 
                 // Replay presence that arrived before we were ready.
                 bool replay = false;
-                std::string serial, title, cover, ra;
+                std::string serial, title, cover, ra, party;
                 {
                     std::lock_guard<std::mutex> lock(st.text_mutex);
                     if (st.want_pending) {
@@ -182,12 +184,13 @@ Java_com_armsx2_discord_DiscordNative_start(JNIEnv* env, jclass, jstring jtoken)
                         title = st.want_title;
                         cover = st.want_cover;
                         ra = st.want_ra;
+                        party = st.want_party;
                         st.want_pending = false;
                     }
                 }
                 if (replay) {
                     LOGI("replaying queued presence");
-                    applyPresence(serial, title, cover, ra);
+                    applyPresence(serial, title, cover, ra, party);
                 }
             } else if (status == discordpp::Client::Status::Disconnected && code != 0) {
                 std::lock_guard<std::mutex> lock(st.text_mutex);
@@ -306,12 +309,13 @@ Java_com_armsx2_discord_DiscordNative_error(JNIEnv* env, jclass) {
 JNIEXPORT void JNICALL
 Java_com_armsx2_discord_DiscordNative_setPlaying(JNIEnv* env, jclass, jstring jserial,
                                                  jstring jtitle, jstring jcoverUrl,
-                                                 jstring jraPresence) {
+                                                 jstring jraPresence, jstring jparty) {
     State& s = state();
     const std::string serial = jstr(env, jserial);
     const std::string title = jstr(env, jtitle);
     const std::string cover = jstr(env, jcoverUrl);
     const std::string ra = jstr(env, jraPresence);
+    const std::string party = jstr(env, jparty);
 
     if (!s.client || !s.ready.load()) {
         // Queue rather than drop: the app pushes on the CONNECTED edge, which can
@@ -321,12 +325,13 @@ Java_com_armsx2_discord_DiscordNative_setPlaying(JNIEnv* env, jclass, jstring js
         s.want_title = title;
         s.want_cover = cover;
         s.want_ra = ra;
+        s.want_party = party;
         s.want_pending = true;
         LOGI("presence queued until ready");
         return;
     }
 
-    applyPresence(serial, title, cover, ra);
+    applyPresence(serial, title, cover, ra, party);
 }
 
 }  // extern "C"
@@ -334,7 +339,11 @@ Java_com_armsx2_discord_DiscordNative_setPlaying(JNIEnv* env, jclass, jstring js
 namespace {
 
 void applyPresence(const std::string& serial, const std::string& title,
-                   const std::string& cover, const std::string& ra) {
+                   const std::string& cover, const std::string& ra, const std::string& party) {
+    // Read back from a friend's status by DiscordPresence.parseFriends, so they must match it.
+    static constexpr const char* kLibraryDetails = "In the library";
+    static constexpr const char* kRemotePlayState = "Playing remote play";
+
     State& s = state();
     if (!s.client) {
         return;
@@ -350,12 +359,26 @@ void applyPresence(const std::string& serial, const std::string& title,
     // "ARMSX3" with artwork and no idea what was being played.
     if (!title.empty()) {
         activity.SetDetails(title);
+    } else {
+        // Not in a game: friends read where we are, as ARMSX2 shows it, rather than a bare
+        // "ARMSX3". No second line goes with it, which is how a friend's client tells the library
+        // from a game.
+        activity.SetDetails(std::string(kLibraryDetails));
     }
 
-    // Second line. RetroAchievements rich presence describes what you are doing
-    // right now ("Street: 12 of 40 challenges"); without it there is nothing
-    // meaningful to put here, so the line is left off rather than padded.
-    if (!ra.empty()) {
+    if (!title.empty() && !party.empty()) {
+        // Remote play with both players in. The second line says so, and the party, the same id
+        // on both devices, is what makes Discord add "(2 of 2)" after it.
+        activity.SetState(std::string(kRemotePlayState));
+        discordpp::ActivityParty group;
+        group.SetId(party);
+        group.SetCurrentSize(2);
+        group.SetMaxSize(2);
+        activity.SetParty(std::move(group));
+    } else if (!ra.empty()) {
+        // Second line. RetroAchievements rich presence describes what you are doing
+        // right now ("Street: 12 of 40 challenges"); without it there is nothing
+        // meaningful to put here, so the line is left off rather than padded.
         activity.SetState(ra);
     }
 
