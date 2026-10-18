@@ -274,9 +274,22 @@ fun PadTab(state: MutableState<Settings>) {
             // usually whatever presses something first. Pins are stored per controller (by
             // descriptor, so they survive reconnects) and set once, rather than raced for at the
             // start of every session.
+            //
+            // Or every controller on player 1, for one person who docks the handheld: its own
+            // controls and the pad it is docked with then both play, with nothing to reassign.
+            val allToPlayer1 = remember(refreshToken.intValue) { com.armsx2.input.PadRouter.allToPlayer1 }
+            ToggleRow(
+                str("pad.allToPlayer1.label"),
+                allToPlayer1,
+                description = str("pad.allToPlayer1.description"),
+                notDefault = allToPlayer1,
+            ) {
+                com.armsx2.input.PadRouter.setAllToPlayer1(it)
+                refreshToken.intValue++
+            }
             val pads = remember(refreshToken.intValue) { com.armsx2.input.PadRouter.connectedPads() }
             if (pads.isNotEmpty()) {
-                HelpText(str("pad.assign.help"))
+                if (!allToPlayer1) HelpText(str("pad.assign.help"))
                 val slotLabels = listOf(str("pad.assign.auto")) +
                     (0 until com.armsx2.input.PadRouter.MAX_PADS).map { str("pad.player${it + 1}") }
                 val rumbleModes = com.armsx2.input.PadRouter.RumbleMode.entries
@@ -288,7 +301,7 @@ fun PadTab(state: MutableState<Settings>) {
                 )
                 pads.forEach { pad ->
                     val pinnedPort = com.armsx2.input.PadRouter.pins()[pad.descriptor]
-                    SegmentedRow(
+                    if (!allToPlayer1) SegmentedRow(
                         label = pad.name,
                         options = slotLabels,
                         selectedIndex = pinnedPort?.plus(1) ?: 0,

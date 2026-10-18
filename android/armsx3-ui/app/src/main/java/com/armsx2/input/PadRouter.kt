@@ -58,10 +58,30 @@ object PadRouter {
     private val rumbleModes = LinkedHashMap<String, RumbleMode>()
     private const val KEY_RUMBLE = "pad_router_rumble"
 
+    /**
+     * Every controller plays as player 1, whatever presses first and whatever is pinned.
+     *
+     * For playing alone on a handheld that gets docked: its own controls and a Bluetooth pad both
+     * drive player 1, so picking either up just works. Without it the second one to press a
+     * button became player 2 and the game ignored it.
+     */
+    @Volatile var allToPlayer1 = false
+        private set
+    private const val KEY_ALL_P1 = "pad_router_all_p1"
+
+    fun setAllToPlayer1(on: Boolean) {
+        allToPlayer1 = on
+        reset()
+        com.armsx2.runtime.MainActivityRuntime.prefs.edit().putBoolean(KEY_ALL_P1, on).apply()
+    }
+
     /** Load pins and rumble choices from prefs. Safe to call more than once. */
     fun loadPins() {
         pinned.clear()
         rumbleModes.clear()
+        allToPlayer1 = runCatching {
+            com.armsx2.runtime.MainActivityRuntime.prefs.getBoolean(KEY_ALL_P1, false)
+        }.getOrDefault(false)
         runCatching {
             val raw = com.armsx2.runtime.MainActivityRuntime.prefs.getString(KEY_PINNED, null)
             if (raw != null) {
@@ -114,19 +134,22 @@ object PadRouter {
     /**
      * Pin a controller to a player slot, or pass null to clear it.
      *
-     * A slot holds one controller, so pinning displaces whatever else claimed it -- both the
-     * pin and the live slot, otherwise the settings screen would disagree with where input
-     * actually goes until the next reset.
+     * Several controllers can share a player: a handheld's own controls and the pad it is docked
+     * with, both player 1. Pinning used to displace every other pin on that slot, so the second
+     * controller always pushed the first off. A controller that merely auto-claimed the slot still
+     * gives it up (both its claim here and the pin's), so the screen agrees with where input goes.
      */
     fun setPin(descriptor: String, port: Int?) {
         if (port == null) {
             pinned.remove(descriptor)
         } else {
             if (port !in 0 until MAX_PADS) return
-            pinned.entries.removeAll { it.value == port && it.key != descriptor }
             pinned[descriptor] = port
             val claimed = slots[port]
-            if (claimed >= 0 && descriptorOf(claimed) != descriptor) slots[port] = -1
+            if (claimed >= 0) {
+                val owner = descriptorOf(claimed)
+                if (owner != descriptor && (owner == null || pinned[owner] != port)) slots[port] = -1
+            }
             for (i in slots.indices) {
                 if (i != port && slots[i] >= 0 && descriptorOf(slots[i]) == descriptor) slots[i] = -1
             }
@@ -194,9 +217,20 @@ object PadRouter {
     fun deviceIdForPort(port: Int): Int {
         if (port !in slots.indices) return -1
 
-        // A PIN OUTRANKS A CLAIM. Slots are filled first-to-press, so a pad can auto-claim a
-        // port before the user ever states a preference -- on a handheld the built-in pad
-        // usually claims 0, pushing an external controller to 1. Reading the slot first meant
+        // The slot holds the controller that last pressed something on this port. With several
+        // controllers on one player, that is the one in the player's hands, so it gets the rumble.
+        val claimed = slots[port]
+        val claimedDev = if (claimed >= 0) runCatching { InputDevice.getDevice(claimed) }.getOrNull() else null
+        if (allToPlayer1) {
+            if (port != 0) return -1
+            if (claimedDev != null) return claimed
+            return connectedPads().firstOrNull()?.deviceId ?: -1
+        }
+        if (claimedDev != null && pinned[claimedDev.descriptor] == port) return claimed
+
+        // A PIN OUTRANKS AN AUTOMATIC CLAIM. Slots are filled first-to-press, so a pad can
+        // auto-claim a port before the user ever states a preference -- on a handheld the built-in
+        // pad usually claims 0, pushing an external controller to 1. Reading the slot first meant
         // the stale claim answered for the port the user had since assigned elsewhere, so a
         // DualSense pinned to player 1 still replied as player 2.
         //
@@ -206,15 +240,11 @@ object PadRouter {
             if (pinned[pad.descriptor] == port) return pad.deviceId
         }
 
-        val claimed = slots[port]
-        if (claimed >= 0) {
-            // Drop the claim if the device is gone (ids are reassigned on every reconnect) or
-            // if it has since been pinned to somebody else. Self-healing here keeps a stale
-            // slot from outliving the session that made it.
-            val dev = runCatching { InputDevice.getDevice(claimed) }.getOrNull()
-            if (dev != null && !pinnedElsewhere(dev.descriptor, port)) return claimed
-            slots[port] = -1
-        }
+        // Drop the claim if the device is gone (ids are reassigned on every reconnect) or if it
+        // has since been pinned to somebody else. Self-healing here keeps a stale slot from
+        // outliving the session that made it.
+        if (claimedDev != null && !pinnedElsewhere(claimedDev.descriptor, port)) return claimed
+        if (claimed >= 0) slots[port] = -1
         return -1
     }
 
@@ -248,12 +278,29 @@ object PadRouter {
      * controller's sensor stream is not a player pressing a button.
      */
     fun claimedPort(deviceId: Int): Int {
+        if (allToPlayer1) {
+            val ours = deviceId >= 0 || (deviceId != 0 && deviceId == syntheticDeviceId)
+            return if (ours) 0 else -1
+        }
         if (deviceId != 0 && deviceId == syntheticDeviceId) return syntheticPort
         for (i in slots.indices) if (slots[i] == deviceId) return i
-        return -1
+        // Another controller pressed last on a player this one shares: it still holds that port.
+        val descriptor = descriptorOf(deviceId) ?: return -1
+        return pinned[descriptor] ?: -1
     }
 
     fun portForDevice(deviceId: Int): Int {
+        if (allToPlayer1) {
+            // Remembered as the last to press, for rumble (deviceIdForPort). Only a real pad node:
+            // a DualSense's touchpad node is not where its motors are.
+            if (deviceId >= 0 && slots[0] != deviceId) {
+                val src = runCatching { InputDevice.getDevice(deviceId)?.sources }.getOrNull() ?: 0
+                if ((src and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
+                    (src and InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK
+                ) slots[0] = deviceId
+            }
+            return 0
+        }
         if (deviceId != 0 && deviceId == syntheticDeviceId) return syntheticPort
         if (deviceId < 0) return 0
         // Fast path: already-claimed nodes (no InputDevice lookup).
