@@ -259,10 +259,13 @@ object DiscordPresence {
         if (remotePlay.value?.id == id) remotePlay.value = null
     }
 
-    // What the bridge (discord_bridge.cpp) publishes outside a game, and as the second line of a
-    // remote play session. A friend's status is read back with them, so they must match it.
+    // What the bridge (discord_bridge.cpp) publishes outside a game; a friend's status is read
+    // back with it, so the two must match.
     private const val LIBRARY_DETAILS = "In the library"
-    private const val REMOTE_PLAY_STATE = "Playing remote play"
+
+    // A PS3 title id, the only thing taken from a friend's cover caption as a serial. The
+    // filename form (BLUS-30443) counts too; the cover repository names it without the dash.
+    private val TITLE_ID = Regex("([A-Z]{4})-?([0-9]{5})")
 
     /** Re-publish the current game; used on (re)connect and whenever the running game changes. */
     private fun pushPresence() {
@@ -538,13 +541,18 @@ object DiscordPresence {
             if (name.isBlank()) return@mapNotNull null
             val details = f.getOrNull(1).orEmpty()
             val state = f.getOrNull(2).orEmpty()
-            // In the library a friend publishes LIBRARY_DETAILS and no second line; in remote play
-            // the second line is REMOTE_PLAY_STATE. Neither is a game's name or serial.
+            // In the library a friend publishes LIBRARY_DETAILS and no second line.
             val inLibrary = details == LIBRARY_DETAILS && state.isBlank()
+            // The serial is their cover's caption, as on ARMSX2. The second line is never one: it
+            // is the RetroAchievements line or remote play's, and reading it as a serial was why
+            // no friend ever had a cover here. Only a title id counts, so an older ARMSX3, which
+            // captions the cover with the game's name, shows no cover rather than a broken one.
+            val caption = f.getOrNull(4).orEmpty()
             DiscordFriend(
                 name = name,
                 game = if (inLibrary) "" else details,
-                serial = if (state == REMOTE_PLAY_STATE) "" else state,
+                serial = TITLE_ID.matchEntire(caption)?.takeIf { !inLibrary }
+                    ?.let { it.groupValues[1] + it.groupValues[2] }.orEmpty(),
                 avatarUrl = f.getOrNull(3).orEmpty(),
             )
         }

@@ -400,20 +400,25 @@ void applyPresence(const std::string& serial, const std::string& title,
 
     discordpp::ActivityAssets assets{};
 
+    // The cover's caption carries the serial: a friend's client reads it back to find the game's
+    // cover (DiscordPresence.parseFriends), the way ARMSX2 does, since the second line is the
+    // RetroAchievements line. Nothing else may go in it. Without a serial it is the game's name,
+    // or ARMSX3.
+    const std::string caption = !serial.empty() ? serial
+        : (!title.empty() && !cover.empty()) ? title : std::string("ARMSX3");
+
     if (!cover.empty()) {
         // Cover art large, emulator small -- the shape ARMSX2 uses, and the one that reads as
         // "playing this, on this" rather than just naming a game.
         assets.SetLargeImage(cover);
-        if (!title.empty()) {
-            assets.SetLargeText(title);
-        }
+        assets.SetLargeText(caption);
         assets.SetSmallImage(kLogoUrl);
         assets.SetSmallText("ARMSX3");
     } else {
         // No cover: the logo takes the large slot instead of sending no assets at all, which is
         // what used to happen and left the card blank.
         assets.SetLargeImage(kLogoUrl);
-        assets.SetLargeText("ARMSX3");
+        assets.SetLargeText(caption);
     }
 
     activity.SetAssets(assets);
@@ -465,6 +470,12 @@ Java_com_armsx2_discord_DiscordNative_friends(JNIEnv* env, jclass) {
         out += activity->State().value_or("");
         out += kFS;
         out += avatarUrl(user->Id(), user->Avatar());
+        // Their serial, from the cover's caption, where applyPresence puts it. Last, so the
+        // fields before it keep their places.
+        out += kFS;
+        if (const auto assets = activity->Assets(); assets.has_value()) {
+            out += assets->LargeText().value_or("");
+        }
     }
 
     return jout(env, out);
