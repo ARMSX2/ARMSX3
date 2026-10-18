@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "Controlador del sistema Vulkan",
  "backend.glDriver.description": "Elija cómo se ejecuta el renderizador OpenGL. ANGLE traduce OpenGL ES a Vulkan con un controlador incluido: ayuda en GPU que no son Adreno (Mali/Xclipse/PowerVR) cuyo controlador OpenGL nativo es débil o tiene errores. Reinicia el juego para aplicar.",
  "backend.glDriver.label": "Controlador OpenGL",
- "backend.gpuDriver.description": "Reemplace el controlador Vulkan del sistema con Mesa Turnip u otro controlador Adreno. Recomendado para dispositivos Adreno-6XX con controladores OEM obsoletos.",
+ "backend.gpuDriver.description": "Reemplace el controlador Vulkan del sistema con Mesa Turnip u otro controlador Adreno, o en Mali con un paquete PanVK de la comunidad hecho para su dispositivo. Turnip se recomienda para dispositivos Adreno-6XX con controladores OEM obsoletos.",
  "backend.gpuDriver.label": "Controlador de GPU",
  "backend.graphicsApi.label": "API de gráficos",
  "backend.renderer.auto": "Automático",

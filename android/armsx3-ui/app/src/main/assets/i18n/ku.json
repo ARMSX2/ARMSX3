@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "Driverê Vulkan ê pergalê",
  "backend.glDriver.description": "Hilbijêrin ka renderera OpenGL çawa dixebite. ANGLE OpenGL ES-ê bi driverekî pêvekirî werdigerîne Vulkan-ê, ku li ser GPU-yên ne-Adreno (Mali / Xclipse / PowerVR) yên ku driverê wan ê OpenGL ê xwemalî qels an xeletdar e alîkar dibe. Ji bo sepandinê lîstikê ji nû ve bidin destpêkirin.",
  "backend.glDriver.label": "Driverê OpenGL",
- "backend.gpuDriver.description": "Driverê Vulkan ê pergalê bi Mesa Turnip an driverekî din ê Adreno biguherînin. Ji bo cîhazên Adreno-6XX yên ku driverên OEM ên kevin bikar tînin tê pêşniyarkirin.",
+ "backend.gpuDriver.description": "Driverê Vulkan ê pergalê bi Mesa Turnip an driverekî din ê Adreno biguherînin, an li ser Mali bi pakêteke PanVK a civakê ku ji bo cîhaza we hatiye çêkirin. Ji bo cîhazên Adreno-6XX yên ku driverên OEM ên kevin bikar tînin Turnip tê pêşniyarkirin.",
  "backend.gpuDriver.label": "Driverê GPU",
  "backend.graphicsApi.label": "API ya grafîkê",
  "backend.renderer.auto": "Auto",

@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "Sterownik systemowy Vulkan",
  "backend.glDriver.description": "Wybierz sposób działania modułu renderującego OpenGL. ANGLE tłumaczy OpenGL ES na Vulkan za pomocą dołączonego sterownika, co pomaga na procesorach graficznych innych niż Adreno (Mali / Xclipse / PowerVR), których natywny sterownik OpenGL jest słaby lub zawiera błędy. Uruchom ponownie grę, aby zastosować.",
  "backend.glDriver.label": "Sterownik OpenGL",
- "backend.gpuDriver.description": "Zamień systemowy sterownik Vulkan na Mesa Turnip lub inny sterownik Adreno. Zalecane dla urządzeń Adreno-6XX z nieaktualnymi sterownikami OEM.",
+ "backend.gpuDriver.description": "Zamień systemowy sterownik Vulkan na Mesa Turnip lub inny sterownik Adreno, a na Mali na społecznościowy pakiet PanVK zbudowany dla Twojego urządzenia. Turnip jest zalecany dla urządzeń Adreno-6XX z nieaktualnymi sterownikami OEM.",
  "backend.gpuDriver.label": "Sterownik GPU",
  "backend.graphicsApi.label": "API graficzne",
  "backend.renderer.auto": "Automat",

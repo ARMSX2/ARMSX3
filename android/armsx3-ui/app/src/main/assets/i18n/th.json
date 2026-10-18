@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "ไดรเวอร์ระบบ Vulkan",
  "backend.glDriver.description": "เลือกวิธีการทำงานของตัวเรนเดอร์ OpenGL ANGLE แปล OpenGL ES เป็น Vulkan พร้อมไดรเวอร์ที่ให้มา ซึ่งช่วยได้กับ GPU ที่ไม่ใช่ Adreno (Mali / Xclipse / PowerVR) ที่ไดรเวอร์ OpenGL ดั้งเดิมอ่อนแอหรือมีข้อบกพร่อง รีสตาร์ทเกมเพื่อใช้",
  "backend.glDriver.label": "ไดรเวอร์ OpenGL",
- "backend.gpuDriver.description": "แทนที่ไดรเวอร์ระบบ Vulkan ด้วย Mesa Turnip หรือไดรเวอร์ Adreno อื่น แนะนำสำหรับอุปกรณ์ Adreno-6XX ที่ใช้ไดรเวอร์ OEM เก่า",
+ "backend.gpuDriver.description": "แทนที่ไดรเวอร์ระบบ Vulkan ด้วย Mesa Turnip หรือไดรเวอร์ Adreno อื่น หรือบน Mali ด้วยแพ็ก PanVK จากชุมชนที่สร้างมาสำหรับอุปกรณ์ของคุณ แนะนำ Turnip สำหรับอุปกรณ์ Adreno-6XX ที่ใช้ไดรเวอร์ OEM เก่า",
  "backend.gpuDriver.label": "ไดรเวอร์จีพียู",
  "backend.graphicsApi.label": "API กราฟิก",
  "backend.renderer.auto": "อัตโนมัติ",

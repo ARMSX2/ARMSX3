@@ -797,7 +797,7 @@ val EN: Map<String, String> = mapOf(
     "backend.turnip.env.desc" to "One NAME=value per line. FD_, TU_, IR3_ and MESA_ variables only. TU_DEBUG is read once, so restart the app after changing it.",
     "backend.glDriver.label" to "OpenGL Driver",
     "backend.glDriver.description" to "Choose how the OpenGL renderer runs. ANGLE translates OpenGL ES to Vulkan with a bundled driver, which helps on non-Adreno GPUs (Mali / Xclipse / PowerVR) whose native OpenGL driver is weak or buggy. Restart the game to apply.",
-    "backend.gpuDriver.description" to "Replace the system Vulkan driver with Mesa Turnip or another Adreno driver. Recommended for Adreno-6XX devices on stale OEM drivers.",
+    "backend.gpuDriver.description" to "Replace the system Vulkan driver with Mesa Turnip or another Adreno driver, or on Mali with a community PanVK pack built for your device. Turnip is recommended for Adreno-6XX devices on stale OEM drivers.",
     "backend.gpuDriver.label" to "GPU Driver",
     "backend.graphicsApi.label" to "Graphics API",
     "backend.renderer.auto" to "Auto",

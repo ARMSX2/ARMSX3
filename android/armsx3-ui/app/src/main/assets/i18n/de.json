@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "System-Vulkan-Treiber",
  "backend.glDriver.description": "Wählen Sie aus, wie der OpenGL-Renderer ausgeführt wird. ANGLE übersetzt OpenGL ES mit einem gebündelten Treiber in Vulkan, was auf Nicht-Adreno-GPUs (Mali / Xclipse / PowerVR) hilft, deren nativer OpenGL-Treiber schwach oder fehlerhaft ist. Starten Sie das Spiel neu, um es anzuwenden.",
  "backend.glDriver.label": "OpenGL-Treiber",
- "backend.gpuDriver.description": "Ersetzen Sie den System-Vulkan-Treiber durch Mesa Turnip oder einen anderen Adreno-Treiber. Empfohlen für Adreno-6XX-Geräte mit veralteten OEM-Treibern.",
+ "backend.gpuDriver.description": "Ersetzen Sie den System-Vulkan-Treiber durch Mesa Turnip oder einen anderen Adreno-Treiber, auf Mali durch ein Community-PanVK-Paket für Ihr Gerät. Turnip wird für Adreno-6XX-Geräte mit veralteten OEM-Treibern empfohlen.",
  "backend.gpuDriver.label": "GPU-Treiber",
  "backend.graphicsApi.label": "Grafik-API",
  "backend.renderer.auto": "Automatisch",

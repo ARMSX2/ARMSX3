@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "Системный драйвер Vulkan",
  "backend.glDriver.description": "Выберите способ работы средства визуализации OpenGL. ANGLE транслирует OpenGL ES в Vulkan с помощью встроенного драйвера, что помогает на графических процессорах, отличных от Adreno (Mali / Xclipse / PowerVR), у которых собственный драйвер OpenGL слаб или содержит ошибки. Перезапустите игру, чтобы применить.",
  "backend.glDriver.label": "Драйвер OpenGL",
- "backend.gpuDriver.description": "Замените системный драйвер Vulkan на Mesa Turnip или другой драйвер Adreno. Рекомендуется для устройств Adreno-6XX с устаревшими OEM-драйверами.",
+ "backend.gpuDriver.description": "Замените системный драйвер Vulkan на Mesa Turnip или другой драйвер Adreno, а на Mali на пакет PanVK от сообщества, собранный для вашего устройства. Turnip рекомендуется для устройств Adreno-6XX с устаревшими OEM-драйверами.",
  "backend.gpuDriver.label": "Драйвер графического процессора",
  "backend.graphicsApi.label": "Графический API",
  "backend.renderer.auto": "Авто",

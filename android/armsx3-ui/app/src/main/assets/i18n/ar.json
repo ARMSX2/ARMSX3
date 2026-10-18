@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "برنامج تشغيل نظام Vulkan",
  "backend.glDriver.description": "اختر كيفية تشغيل عارض OpenGL. يقوم ANGLE بترجمة OpenGL ES إلى Vulkan باستخدام برنامج تشغيل مضمن، وهو يساعد على وحدات معالجة الرسوميات غير Adreno (Mali / Xclipse / PowerVR) التي يكون برنامج تشغيل OpenGL الأصلي الخاص بها ضعيفًا أو به أخطاء. أعد تشغيل اللعبة للتطبيق.",
  "backend.glDriver.label": "برنامج تشغيل OpenGL",
- "backend.gpuDriver.description": "استبدل برنامج تشغيل النظام Vulkan بـ Mesa Turnip أو برنامج تشغيل Adreno آخر. يوصى به لأجهزة Adreno-6XX التي تحتوي على برامج تشغيل OEM قديمة.",
+ "backend.gpuDriver.description": "استبدل برنامج تشغيل النظام Vulkan بـ Mesa Turnip أو برنامج تشغيل Adreno آخر، أو على Mali بحزمة PanVK مجتمعية مبنية لجهازك. يوصى بـ Turnip لأجهزة Adreno-6XX التي تحتوي على برامج تشغيل OEM قديمة.",
  "backend.gpuDriver.label": "برنامج تشغيل GPU",
  "backend.graphicsApi.label": "واجهة برمجة تطبيقات الرسومات",
  "backend.renderer.auto": "تلقائي",

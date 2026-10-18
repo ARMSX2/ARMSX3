@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "系统Vulkan驱动程序",
  "backend.glDriver.description": "选择 OpenGL 渲染器的运行方式。ANGLE 通过捆绑的驱动程序将 OpenGL ES 转换为 Vulkan，有助于原生 OpenGL 驱动程序较弱或有错误的非 Adreno GPU（Mali / Xclipse / PowerVR）。重新启动游戏即可应用。",
  "backend.glDriver.label": "OpenGL驱动程序",
- "backend.gpuDriver.description": "将系统 Vulkan 驱动程序替换为 Mesa Turnip 或其他 Adreno 驱动程序。建议用于使用过时 OEM 驱动程序的 Adreno-6XX 设备。",
+ "backend.gpuDriver.description": "将系统 Vulkan 驱动程序替换为 Mesa Turnip 或其他 Adreno 驱动程序；Mali 设备可替换为专为你的设备构建的社区 PanVK 包。建议使用过时 OEM 驱动程序的 Adreno-6XX 设备使用 Turnip。",
  "backend.gpuDriver.label": "显卡驱动",
  "backend.graphicsApi.label": "图形API",
  "backend.renderer.auto": "自动",

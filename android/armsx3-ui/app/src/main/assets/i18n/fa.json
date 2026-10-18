@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "درایور سیستم Vulkan",
  "backend.glDriver.description": "نحوه اجرای رندر OpenGL را انتخاب کنید. ANGLE OpenGL ES را با یک درایور همراه به Vulkan ترجمه می‌کند؛ این کار به GPUهای غیر Adreno (Mali / Xclipse / PowerVR) که درایور اصلی OpenGL آنها ضعیف یا باگ است کمک می‌کند. برای اعمال بازی را مجدداً راه اندازی کنید.",
  "backend.glDriver.label": "درایور OpenGL",
- "backend.gpuDriver.description": "درایور سیستم Vulkan را با Mesa Turnip یا درایور دیگری Adreno جایگزین کنید. برای دستگاه های Adreno-6XX در درایورهای قدیمی OEM توصیه می شود.",
+ "backend.gpuDriver.description": "درایور سیستم Vulkan را با Mesa Turnip یا درایور دیگری Adreno جایگزین کنید، یا در Mali با یک بسته PanVK جامعه که برای دستگاه شما ساخته شده است. Turnip برای دستگاه های Adreno-6XX با درایورهای قدیمی OEM توصیه می شود.",
  "backend.gpuDriver.label": "درایور GPU",
  "backend.graphicsApi.label": "API گرافیکی",
  "backend.renderer.auto": "خودکار",

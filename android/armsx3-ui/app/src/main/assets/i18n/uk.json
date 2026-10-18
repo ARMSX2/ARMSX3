@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "Системний драйвер Vulkan",
  "backend.glDriver.description": "Виберіть, як працюватиме рендерер OpenGL. ANGLE перетворює OpenGL ES на Vulkan за допомогою вбудованого драйвера, що допомагає на графічних процесорах без Adreno (Mali / Xclipse / PowerVR), у яких рідний драйвер OpenGL слабкий або має помилки. Перезапустіть гру, щоб застосувати.",
  "backend.glDriver.label": "Драйвер OpenGL",
- "backend.gpuDriver.description": "Замініть системний драйвер Vulkan на Mesa Turnip або інший драйвер Adreno. Рекомендовано для пристроїв Adreno-6XX із застарілими OEM-драйверами.",
+ "backend.gpuDriver.description": "Замініть системний драйвер Vulkan на Mesa Turnip або інший драйвер Adreno, а на Mali на пакет PanVK від спільноти, зібраний для вашого пристрою. Turnip рекомендовано для пристроїв Adreno-6XX із застарілими OEM-драйверами.",
  "backend.gpuDriver.label": "Драйвер GPU",
  "backend.graphicsApi.label": "Графічний API",
  "backend.renderer.auto": "Авто",

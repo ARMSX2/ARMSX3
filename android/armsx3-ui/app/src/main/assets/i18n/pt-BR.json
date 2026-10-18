@@ -263,7 +263,7 @@
  "backend.driver.systemVulkan": "Driver Vulkan do sistema",
  "backend.glDriver.description": "Escolha como o renderizador OpenGL é executado. ANGLE traduz OpenGL ES para Vulkan com um driver incluído, o que ajuda em GPUs não Adreno (Mali / Xclipse / PowerVR) cujo driver OpenGL nativo é fraco ou com erros. Reinicie o jogo para aplicar.",
  "backend.glDriver.label": "Driver OpenGL",
- "backend.gpuDriver.description": "Substitua o driver Vulkan do sistema pelo Mesa Turnip ou outro driver Adreno. Recomendado para dispositivos Adreno-6XX em drivers OEM obsoletos.",
+ "backend.gpuDriver.description": "Substitua o driver Vulkan do sistema pelo Mesa Turnip ou outro driver Adreno, ou no Mali por um pacote PanVK da comunidade feito para o seu dispositivo. O Turnip é recomendado para dispositivos Adreno-6XX em drivers OEM obsoletos.",
  "backend.gpuDriver.label": "Driver de GPU",
  "backend.graphicsApi.label": "API gráfica",
  "backend.renderer.auto": "Automático",

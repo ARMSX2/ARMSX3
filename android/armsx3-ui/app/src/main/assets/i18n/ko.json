@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "시스템 Vulkan 드라이버",
  "backend.glDriver.description": "OpenGL 렌더러 실행 방법을 선택합니다. ANGLE은 번들 드라이버를 사용하여 OpenGL ES를 Vulkan으로 변환합니다. 이는 기본 OpenGL 드라이버가 약하거나 버그가 있는 비 Adreno GPU(Mali/Xclipse/PowerVR)에 도움이 됩니다. 적용하려면 게임을 다시 시작하세요.",
  "backend.glDriver.label": "OpenGL 드라이버",
- "backend.gpuDriver.description": "시스템 Vulkan 드라이버를 Mesa Turnip 또는 다른 Adreno 드라이버로 교체하십시오. 오래된 OEM 드라이버의 Adreno-6XX 장치에 권장됩니다.",
+ "backend.gpuDriver.description": "시스템 Vulkan 드라이버를 Mesa Turnip 또는 다른 Adreno 드라이버로 교체하거나, Mali에서는 기기에 맞게 만들어진 커뮤니티 PanVK 팩으로 교체하십시오. 오래된 OEM 드라이버의 Adreno-6XX 장치에는 Turnip이 권장됩니다.",
  "backend.gpuDriver.label": "GPU 드라이버",
  "backend.graphicsApi.label": "그래픽 API",
  "backend.renderer.auto": "자동",

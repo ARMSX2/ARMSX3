@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "Sistem Vulkan sürücüsü",
  "backend.glDriver.description": "OpenGL oluşturucunun nasıl çalışacağını seçin. ANGLE, OpenGL ES'yi paketlenmiş bir sürücüyle Vulkan'a çevirir; bu, yerel OpenGL sürücüsü zayıf veya sorunlu olan Adreno olmayan GPU'lara (Mali / Xclipse / PowerVR) yardımcı olur. Uygulamak için oyunu yeniden başlatın.",
  "backend.glDriver.label": "OpenGL Sürücüsü",
- "backend.gpuDriver.description": "Sistem Vulkan sürücüsünü Mesa Turnip veya başka bir Adreno sürücüsü ile değiştirin. Eski OEM sürücülerini kullanan Adreno-6XX aygıtları için önerilir.",
+ "backend.gpuDriver.description": "Sistem Vulkan sürücüsünü Mesa Turnip veya başka bir Adreno sürücüsü ile, Mali'de ise cihazınız için hazırlanmış bir topluluk PanVK paketiyle değiştirin. Eski OEM sürücülerini kullanan Adreno-6XX aygıtları için Turnip önerilir.",
  "backend.gpuDriver.label": "GPU Sürücüsü",
  "backend.graphicsApi.label": "Grafik API'si",
  "backend.renderer.auto": "Otomatik",

@@ -264,7 +264,7 @@
  "backend.driver.systemVulkan": "Trình điều khiển hệ thống Vulkan",
  "backend.glDriver.description": "Chọn cách trình kết xuất OpenGL chạy. ANGLE dịch OpenGL ES sang Vulkan bằng trình điều khiển đi kèm, giúp ích trên các GPU không phải Adreno (Mali / Xclipse / PowerVR) có trình điều khiển OpenGL gốc yếu hoặc có lỗi. Khởi động lại trò chơi để áp dụng.",
  "backend.glDriver.label": "Trình điều khiển OpenGL",
- "backend.gpuDriver.description": "Thay thế trình điều khiển Vulkan của hệ thống bằng Mesa Turnip hoặc trình điều khiển Adreno khác. Được khuyên dùng cho các thiết bị Adreno-6XX trên trình điều khiển OEM cũ.",
+ "backend.gpuDriver.description": "Thay thế trình điều khiển Vulkan của hệ thống bằng Mesa Turnip hoặc trình điều khiển Adreno khác, hoặc trên Mali bằng gói PanVK cộng đồng được tạo cho thiết bị của bạn. Turnip được khuyên dùng cho các thiết bị Adreno-6XX trên trình điều khiển OEM cũ.",
  "backend.gpuDriver.label": "Trình điều khiển GPU",
  "backend.graphicsApi.label": "API đồ họa",
  "backend.renderer.auto": "Tự động",
