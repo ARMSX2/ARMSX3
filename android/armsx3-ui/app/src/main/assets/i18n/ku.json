@@ -253,6 +253,7 @@
  "backend.driver.import": "Îthal bike",
  "backend.driver.importError": "Nekarî wê pelê têxe. Pêdiviya wê bi şêwaza AdrenoToolsDrivers .zip heye (meta.json + libvulkan_freedreno.so di kokê de).",
  "backend.driver.importFailed": "Îthalkirin têk çû",
+ "backend.driver.notLoaded": "Driverê taybet nehat barkirin. Driverê pergalê tê bikaranîn.",
  "backend.driver.installed": "Sazkirî",
  "backend.driver.installedOk": "Sazkirî",
  "backend.driver.installing": "Sazkirin…",

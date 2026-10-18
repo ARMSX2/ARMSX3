@@ -253,6 +253,7 @@
  "backend.driver.import": "导入",
  "backend.driver.importError": "无法导入该文件。它需要一个 AdrenoToolsDrivers 风格的 .zip（meta.json + libvulkan_freedreno.so 位于根目录）。",
  "backend.driver.importFailed": "导入失败",
+ "backend.driver.notLoaded": "无法加载自定义驱动程序，正在使用系统驱动程序。",
  "backend.driver.installed": "已安装",
  "backend.driver.installedOk": "已安装",
  "backend.driver.installing": "正在安装...",

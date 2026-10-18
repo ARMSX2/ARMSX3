@@ -253,6 +253,7 @@
  "backend.driver.import": "واردات",
  "backend.driver.importError": "نمی‌توان آن فایل را وارد کرد. به یک .zip به سبک AdrenoToolsDrivers (meta.json + libvulkan_freedreno.so در ریشه) نیاز دارد.",
  "backend.driver.importFailed": "واردات انجام نشد",
+ "backend.driver.notLoaded": "درایور سفارشی بارگیری نشد. از درایور سیستم استفاده می‌شود.",
  "backend.driver.installed": "نصب شده است",
  "backend.driver.installedOk": "نصب شده است",
  "backend.driver.installing": "در حال نصب…",

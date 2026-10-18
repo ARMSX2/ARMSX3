@@ -967,7 +967,15 @@ open class MainActivityRuntime : ComponentActivity() {
                 } else null
             // Turnip options go into the environment before the device is created.
             com.armsx2.CustomDriver.applyDriverEnv()
-            if (ctx != null) com.armsx2.CustomDriver.applyToNative(ctx, picked)
+            if (ctx != null && !com.armsx2.CustomDriver.applyToNative(ctx, picked) && picked != null) {
+                // The pack could not be loaded and the system driver runs in its place. Said here
+                // because nothing else would: the game starts and plays, on a driver the player
+                // did not pick, and a pack that never loaded gets reported as working.
+                val notice = com.armsx2.i18n.I18n.get("backend.driver.notLoaded")
+                instance?.runOnUiThread {
+                    android.widget.Toast.makeText(ctx, notice, android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
             when (renderer.value) {
                 "vulkan" -> NativeApp.renderVulkan()
                 "opengl" -> NativeApp.renderOpenGL()

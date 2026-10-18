@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -1160,6 +1161,62 @@ Java_net_rpcsx_RPCSX_getVersion(JNIEnv *env, jobject) {
 }
 
 #if defined(__aarch64__)
+// Whether the driver adrenotools was asked for is the driver it opened.
+//
+// adrenotools opens the driver only when the Vulkan loader first needs one, and when that
+// fails (a library this device cannot link, a pack built against another kernel driver) it
+// logs to logcat and opens the system driver instead. The load looked successful, the emulator
+// logged "Vulkan driver bound (custom)", and Arm's own driver ran: a Mali-G720 user's PanVK
+// pack "worked", with a log identical in every Vulkan line to a run on the system driver.
+//
+// So the loader is made to open its driver now, through the cheapest call that needs one, and
+// the driver file is looked for among the files mapped into this process. By inode and name,
+// since the same file can be reached as /data/data/<pkg> or /data/user/0/<pkg>. When the maps
+// cannot be read the answer is yes, which is what every load was taken for before.
+static bool custom_driver_loaded(void *loader, const std::string &soPath) {
+  struct stat file {};
+  if (::stat(soPath.c_str(), &file) != 0) {
+    return false;
+  }
+
+  using enumerate_fn = int32_t (*)(const char *, uint32_t *, void *);
+  if (auto enumerate = reinterpret_cast<enumerate_fn>(
+          dlsym(loader, "vkEnumerateInstanceExtensionProperties"))) {
+    uint32_t count = 0;
+    enumerate(nullptr, &count, nullptr);
+  }
+
+  std::FILE *maps = std::fopen("/proc/self/maps", "re");
+  if (maps == nullptr) {
+    return true;
+  }
+
+  const std::string name = soPath.substr(soPath.find_last_of('/') + 1);
+  bool found = false;
+  char line[1024];
+
+  while (!found && std::fgets(line, sizeof(line), maps) != nullptr) {
+    // address perms offset dev inode path
+    unsigned long inode = 0;
+    int path_at = 0;
+    if (std::sscanf(line, "%*s %*s %*s %*s %lu %n", &inode, &path_at) != 1 ||
+        inode != file.st_ino) {
+      continue;
+    }
+
+    std::string_view path{line + path_at};
+    while (!path.empty() && (path.back() == '\n' || path.back() == ' ')) {
+      path.remove_suffix(1);
+    }
+
+    found = path.size() > name.size() && path.substr(path.size() - name.size()) == name &&
+            path[path.size() - name.size() - 1] == '/';
+  }
+
+  std::fclose(maps);
+  return found;
+}
+
 // Why a driver will not load, when the answer is knowable before trying.
 //
 // A community driver built against a newer NDK imports symbols versioned against a libc
@@ -1340,10 +1397,24 @@ Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
               RTLD_NOW, ADRENOTOOLS_DRIVER_CUSTOM, nullptr, (hookDir + "/").c_str(),
               (path + "/").c_str(), libraryName.c_str(), nullptr, nullptr);
 
-      if (loader == nullptr) {
-          __android_log_print(ANDROID_LOG_INFO, "RPCSX-UI",
-                              "Failed to load custom driver at '%s': %s",
-                              path.c_str(), ::dlerror());
+      if (loader == nullptr || !custom_driver_loaded(loader, path + "/" + libraryName)) {
+          const char *error = ::dlerror();
+          const std::string report =
+              "Custom driver '" + libraryName + "' could not be loaded on this device, so the "
+              "system driver is used instead. The reason is in logcat, under hook_impl" +
+              (error != nullptr ? std::string(": ") + error : std::string("."));
+
+          __android_log_print(ANDROID_LOG_ERROR, "RPCSX-UI", "%s", report.c_str());
+
+          if (rpcsxLib.reportDriverProblem != nullptr) {
+            rpcsxLib.reportDriverProblem(report);
+          }
+
+          // The system driver, bound as itself rather than left behind whatever adrenotools
+          // fell back to, so every later log line names the driver that actually runs. Also
+          // replaces a custom driver an earlier game left bound. false tells the caller the
+          // driver it asked for is not the one in use.
+          rpcsxLib.setCustomDriver(nullptr);
           return false;
       }
   }

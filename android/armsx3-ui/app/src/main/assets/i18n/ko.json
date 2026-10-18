@@ -253,6 +253,7 @@
  "backend.driver.import": "가져오기",
  "backend.driver.importError": "해당 파일을 가져올 수 없습니다. AdrenoToolsDrivers 스타일의 .zip(루트의 meta.json + libvulkan_freedreno.so)이 필요합니다.",
  "backend.driver.importFailed": "가져오기 실패",
+ "backend.driver.notLoaded": "사용자 지정 드라이버를 불러오지 못해 시스템 드라이버를 사용합니다.",
  "backend.driver.installed": "설치됨",
  "backend.driver.installedOk": "설치됨",
  "backend.driver.installing": "설치 중…",

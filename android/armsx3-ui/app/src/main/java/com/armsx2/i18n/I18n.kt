@@ -781,6 +781,7 @@ val EN: Map<String, String> = mapOf(
     "backend.driver.installedOk" to "Installed",
     "backend.driver.downloadFailed" to "Download failed",
     "backend.driver.importFailed" to "Import failed",
+    "backend.driver.notLoaded" to "Custom driver couldn't load. Using the system driver.",
     "backend.driver.fetchError" to "Couldn't reach github.com/K11MCH1/AdrenoToolsDrivers. Check your connection and try again.",
     "backend.driver.importError" to "Couldn't import that file. It needs an AdrenoToolsDrivers-style .zip (meta.json + libvulkan_freedreno.so at the root).",
     "backend.driver.installed" to "Installed",

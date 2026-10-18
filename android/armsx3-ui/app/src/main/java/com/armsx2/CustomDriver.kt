@@ -476,11 +476,12 @@ object CustomDriver {
     /** Push the active selection to native. Pass null to revert to the
      *  system loader. The native side reads these on the next
      *  Vulkan::LoadVulkanLibrary call (first MTGS::Open), so this must
-     *  be called BEFORE MainActivityRuntime.start()'s applyRendererPrefs runs the VM. */
-    fun applyToNative(context: Context, installed: InstalledDriver?) {
+     *  be called BEFORE MainActivityRuntime.start()'s applyRendererPrefs runs the VM.
+     *  Returns whether the driver asked for is the one in use: false when [installed] could
+     *  not be loaded and the system driver runs in its place. */
+    fun applyToNative(context: Context, installed: InstalledDriver?): Boolean {
         if (installed == null) {
-            NativeApp.setCustomVulkanDriver("", "", "", "")
-            return
+            return NativeApp.setCustomVulkanDriver("", "", "", "")
         }
         // adrenotools' path resolution wants the driver dir to end with
         // a slash. The redirect dir doesn't strictly require it but we
@@ -488,7 +489,7 @@ object CustomDriver {
         val driverDirPath = installed.driverDir.absolutePath + "/"
         val redirectDirPath = installed.redirectDir.apply { mkdirs() }.absolutePath + "/"
         val hookLibDir = context.applicationInfo.nativeLibraryDir
-        NativeApp.setCustomVulkanDriver(
+        return NativeApp.setCustomVulkanDriver(
             driverDirPath, installed.libraryName, redirectDirPath, hookLibDir)
     }
 }

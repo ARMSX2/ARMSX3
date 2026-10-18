@@ -253,6 +253,7 @@
  "backend.driver.import": "İthalat",
  "backend.driver.importError": "Bu dosya içe aktarılamadı. AdrenoToolsDrivers tarzı bir .zip dosyasına (kökte meta.json + libvulkan_freedreno.so) ihtiyacı var.",
  "backend.driver.importFailed": "İçe aktarma başarısız oldu",
+ "backend.driver.notLoaded": "Özel sürücü yüklenemedi. Sistem sürücüsü kullanılıyor.",
  "backend.driver.installed": "Yüklendi",
  "backend.driver.installedOk": "Yüklendi",
  "backend.driver.installing": "Yükleniyor…",

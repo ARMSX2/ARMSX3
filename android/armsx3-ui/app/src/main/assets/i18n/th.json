@@ -253,6 +253,7 @@
  "backend.driver.import": "นำเข้า",
  "backend.driver.importError": "ไม่สามารถนำเข้าไฟล์นั้นได้ ต้องการ AdrenoToolsDrivers-style .zip (meta.json + libvulkan_freedreno.so ที่ราก)",
  "backend.driver.importFailed": "การนำเข้าล้มเหลว",
+ "backend.driver.notLoaded": "โหลดไดรเวอร์ที่กำหนดเองไม่ได้ จึงใช้ไดรเวอร์ระบบแทน",
  "backend.driver.installed": "ติดตั้งแล้ว",
  "backend.driver.installedOk": "ติดตั้งแล้ว",
  "backend.driver.installing": "กำลังติดตั้ง...",

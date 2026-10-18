@@ -253,6 +253,7 @@
  "backend.driver.import": "Impor",
  "backend.driver.importError": "Tidak dapat mengimpor file itu. Dibutuhkan .zip bergaya AdrenoToolsDrivers (meta.json + libvulkan_freedreno.so di root).",
  "backend.driver.importFailed": "Impor gagal",
+ "backend.driver.notLoaded": "Driver kustom gagal dimuat. Memakai driver sistem.",
  "backend.driver.installed": "Terpasang",
  "backend.driver.installedOk": "Terpasang",
  "backend.driver.installing": "Memasang…",

@@ -253,6 +253,7 @@
  "backend.driver.import": "استيراد",
  "backend.driver.importError": "تعذر استيراد هذا الملف. فهو يحتاج إلى ملف .zip على نمط AdrenoToolsDrivers (meta.json + libvulkan_freedreno.so في الجذر).",
  "backend.driver.importFailed": "فشل الاستيراد",
+ "backend.driver.notLoaded": "تعذر تحميل برنامج التشغيل المخصص. يُستخدم برنامج تشغيل النظام.",
  "backend.driver.installed": "تم التثبيت",
  "backend.driver.installedOk": "تم التثبيت",
  "backend.driver.installing": "جارٍ التثبيت…",

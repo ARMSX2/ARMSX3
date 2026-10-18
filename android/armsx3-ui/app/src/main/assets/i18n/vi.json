@@ -253,6 +253,7 @@
  "backend.driver.import": "Nhập",
  "backend.driver.importError": "Không thể nhập tập tin đó. Nó cần một .zip kiểu AdrenoToolsDrivers (meta.json + libvulkan_freedreno.so ở thư mục gốc).",
  "backend.driver.importFailed": "Nhập không thành công",
+ "backend.driver.notLoaded": "Không tải được trình điều khiển tùy chỉnh. Đang dùng của hệ thống.",
  "backend.driver.installed": "Đã cài đặt",
  "backend.driver.installedOk": "Đã cài đặt",
  "backend.driver.installing": "Đang cài đặt…",

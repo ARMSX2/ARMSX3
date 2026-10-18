@@ -253,6 +253,7 @@
  "backend.driver.import": "インポート",
  "backend.driver.importError": "そのファイルをインポートできませんでした。 AdrenoToolsDrivers スタイルの .zip (ルートにメタ.json + libvulkan_freedreno.so) が必要です。",
  "backend.driver.importFailed": "インポートに失敗しました",
+ "backend.driver.notLoaded": "カスタムドライバーを読み込めませんでした。システムドライバーを使用します。",
  "backend.driver.installed": "インストール済み",
  "backend.driver.installedOk": "インストール済み",
  "backend.driver.installing": "インストール中…",

@@ -252,6 +252,7 @@
  "backend.driver.import": "Importar",
  "backend.driver.importError": "Não foi possível importar esse arquivo. Ele precisa de um .zip estilo AdrenoToolsDrivers (meta.json + libvulkan_freedreno.so na raiz).",
  "backend.driver.importFailed": "Falha na importação",
+ "backend.driver.notLoaded": "Não foi possível carregar o driver personalizado. Usando o do sistema.",
  "backend.driver.installed": "Instalado",
  "backend.driver.installedOk": "Instalado",
  "backend.driver.installing": "Instalando…",
