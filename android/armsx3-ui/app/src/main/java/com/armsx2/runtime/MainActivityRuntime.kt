@@ -1778,10 +1778,13 @@ open class MainActivityRuntime : ComponentActivity() {
          * launch and a later change to the folder does not put a working install back into
          * setup.
          */
-        private fun adoptPreparedSetup() {
+        private fun adoptPreparedSetup(context: Context) {
             if (setupComplete.value) return
 
-            val root = currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: return
+            // Resolved the way kickoffEmucoreInit pins it. The pinned root is only recorded by that
+            // init, which waits for setupComplete, so on the fresh install this exists for it was
+            // still null and the check gave up before looking (ARMSX3 #205, traced by carter-lilley).
+            val root = currentInitDataRoot()?.takeIf { it.isNotBlank() } ?: assetCopyRoot(context)
             val config = File(root, "config")
 
             // The same file boot checks before starting the XMB, so "firmware is installed"
@@ -2566,7 +2569,7 @@ open class MainActivityRuntime : ComponentActivity() {
                 if (legacy != null) listOf(legacy) else emptyList()
             }
         }
-        adoptPreparedSetup()
+        adoptPreparedSetup(applicationContext)
         runCatching { com.armsx2.TrophySound.load() }
         // Setup recovery. Auto Backup can restore our prefs (incl. setupComplete + the
         // ROMs URIs) on reinstall, but SAF/all-files PERMISSIONS are never backed up — so
@@ -2574,7 +2577,10 @@ open class MainActivityRuntime : ComponentActivity() {
         // the user in an empty library with the wizard skipped. If no configured ROMs
         // folder is actually reachable, drop setupComplete for this session so the wizard
         // re-runs (and re-requests the permission); finishSetup re-arms it.
-        if (setupComplete.value && !romsAccessible(this, romsDirs.value)) {
+        // Only when there IS a ROMs folder to lose. An install with none keeps its games in the data
+        // folder (a launcher's, see adoptPreparedSetup), and romsAccessible counts an empty list as
+        // lost, which put the wizard straight back after the skip.
+        if (setupComplete.value && romsDirs.value.isNotEmpty() && !romsAccessible(this, romsDirs.value)) {
             setupComplete.value = false
             setupRecoveryNeeded.value = true
         }
