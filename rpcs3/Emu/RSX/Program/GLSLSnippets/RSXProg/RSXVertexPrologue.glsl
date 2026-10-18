@@ -46,6 +46,17 @@ vec4 apply_zclip_xform(
 		// Compress Z and store towards highest end of the range
 		d = min(1., 0.99 + (0.01 * (pos.z - near_plane) / (far_plane - near_plane)));
 	}
+	else if (d < 0.f && d > -0.000002)
+	{
+		// Rounding put a layer drawn right on the near or far plane a hair outside [0, 1], where
+		// it would be clipped. Back onto the edge, as the fp64 path above snaps it; the margin is
+		// the value that path started from (one float step at 1.0 is already 0.00000012).
+		d = 0.f;
+	}
+	else if (d > 1.f && d < 1.000002)
+	{
+		d = 1.f;
+	}
 	else // This catch-call also handles w=0 since d=inf
 	{
 		return pos;
