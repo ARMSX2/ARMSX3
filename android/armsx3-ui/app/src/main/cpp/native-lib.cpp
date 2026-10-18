@@ -1117,10 +1117,14 @@ Java_net_rpcsx_RPCSX_uninstallGame(JNIEnv *env, jobject, jstring jpath) {
   return rpcsxLib.uninstallGame(unwrap(env, jpath));
 }
 
+// Whether a user-supplied Vulkan driver has a GPU kernel interface to drive here. adrenotools
+// loads any vendor's driver library; what decides it is the kernel side: Adreno's kgsl for Turnip,
+// or Arm's kbase (/dev/mali0) for Mali, which the community PanVK builds for Android talk to
+// directly. Only the driver screen's warning reads this.
 extern "C" JNIEXPORT jboolean JNICALL
 Java_net_rpcsx_RPCSX_supportsCustomDriverLoading(JNIEnv *env,
                                                  jobject instance) {
-  return access("/dev/kgsl-3d0", F_OK) == 0;
+  return access("/dev/kgsl-3d0", F_OK) == 0 || access("/dev/mali0", F_OK) == 0;
 }
 
 // Force the Adreno GPU to its maximum clocks, or release it back to normal scaling.

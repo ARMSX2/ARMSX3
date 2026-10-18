@@ -113,9 +113,9 @@ fun DriverManagerSection() {
             }
         }
 
-        // Adreno-only: adrenotools works by patching Qualcomm loader behaviour,
-        // so on Mali/PowerVR/Xclipse there is nothing to swap and the list would
-        // be a trap. Say so rather than let an install look like it took effect.
+        // Adreno (Turnip on kgsl) or Mali (community PanVK builds on Arm's kbase). Elsewhere no
+        // driver pack has a kernel interface to drive, and the list would be a trap. Say so
+        // rather than let an install look like it took effect.
         if (!com.armsx3.NativeApp.supportsCustomVulkanDriver()) {
             Surface(
                 shape = RoundedCornerShape(16.dp),
@@ -123,7 +123,7 @@ fun DriverManagerSection() {
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Text(
-                    "Custom Vulkan drivers need an Adreno GPU. This device will " +
+                    "Custom Vulkan drivers need an Adreno or Mali GPU. This device will " +
                         "keep using its system driver.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
