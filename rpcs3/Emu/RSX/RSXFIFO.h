@@ -145,6 +145,11 @@ namespace rsx
 			u32 m_args_ptr = 0;
 			u32 m_cmd = ~0u;
 
+			// Where the next command header is, for the refill to follow the command stream: GET
+			// must not be published past a JUMP, CALL or RET (RPCS3 #19820, elad335). umax while
+			// a flow control command is being executed, until set_get gives its target.
+			u32 m_next_cmd_entry = ~0u;
+
 			u32 m_cache_addr = 0;
 			u32 m_cache_size = 0;
 			// 32 lines rather than 8.

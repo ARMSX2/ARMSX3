@@ -103,6 +103,12 @@ namespace rsx
 			m_fifo_pos = position - (count ? 4 : 0);
 			m_args_ptr = m_iotable->get_addr(m_fifo_pos);
 			m_command_reg = (m_cmd & 0xffff) + m_command_inc * (((m_cmd >> 18) - count) & 0x7ff) - m_command_inc;
+
+			// count is the arguments left plus the one at position, which runs again, so the next
+			// header is just past them. Upstream has m_fifo_pos + count * 4 here, which is the
+			// last argument for a state saved mid-command: the refill then walks the stream from
+			// an argument, and upstream's own sanity check fails at the next header.
+			m_next_cmd_entry = position + count * 4;
 		}
 
 		void FIFO_control::inc_get(bool wait)
@@ -168,6 +174,23 @@ namespace rsx
 					return {false, FIFO_ERROR};
 				}
 
+				if (addr == m_next_cmd_entry)
+				{
+					if (const u32 cmd = vm::read32(addr1 | (addr & 127)); cmd & RSX_METHOD_NON_METHOD_CMD_MASK)
+					{
+						// The next command is flow control (or invalid): hand it over by itself, with
+						// nothing past it fetched and GET left where it is. GET past a JUMP claims the
+						// RSX read memory it will never run, and a guest that frees command buffer
+						// space by GET then overwrites commands the RSX has not run yet: the "possible
+						// desync" behind Uncharted 2's black screen and Armored Core 4's freeze.
+						m_cache_addr = addr;
+						m_cache_size = 4;
+						m_hit_size = 4;
+						write_to_ptr<be_t<u32>>(m_cache[0], cmd);
+						return {true, cmd};
+					}
+				}
+
 				m_cache_size = std::min<u32>((put | 0x7f) - m_cache_addr, u32{sizeof(m_cache)} - 1) + 1;
 
 				if (0x100000 - (m_cache_addr & 0xfffff) < m_cache_size)
@@ -216,6 +239,17 @@ namespace rsx
 				u64 start_time = 0;
 				u32 bytes_read = 0;
 
+				// The command stream is followed through the lines as they arrive, and the fetch
+				// stops just past the first flow control command (RPCS3 #19820, elad335). Upstream
+				// asserts the next header is within the 8KB one command can span; here a value
+				// outside it, which means the position moved without it, only skips the walk.
+				u32 fifo_code_path = m_next_cmd_entry;
+
+				if (fifo_code_path - m_fifo_pos >= 8192)
+				{
+					fifo_code_path = umax;
+				}
+
 				// Find the next set bit after every iteration
 				for (int i = 0;; i = (std::countr_zero<u32>(std::rotl<u32>(to_fetch, 0 - i - 1)) + i + 1) % cache_line_count)
 				{
@@ -231,6 +265,39 @@ namespace rsx
 						{
 							// The fetch of the cache line content has been successful, unset its bit
 							to_fetch &= ~(1u << i);
+
+							// Every line below this one is in, so the commands up to the first line
+							// still missing can be read.
+							if (fifo_code_path != umax && (to_fetch & ((1u << i) - 1)) == 0)
+							{
+								const u32 held = to_fetch ? std::countr_zero(to_fetch) * 128 : bytes_read + 128;
+								const u32 high_addr = m_cache_addr + std::min<u32>(m_cache_size, held);
+								bool flow_control = false;
+
+								while (fifo_code_path < high_addr)
+								{
+									const u32 cmd = read_from_ptr_unsafe<be_t<u32>>(+m_cache[0], fifo_code_path - m_cache_addr);
+									fifo_code_path += 4;
+
+									if (cmd & RSX_METHOD_NON_METHOD_CMD_MASK) [[unlikely]]
+									{
+										flow_control = true;
+										break;
+									}
+
+									fifo_code_path += ((cmd >> 18) & 0x7ff) * 4;
+								}
+
+								// A flag rather than upstream's fifo_code_path < high_addr: a JUMP in
+								// the last word of the lines held so far ends the walk exactly at
+								// high_addr, which that test takes for no JUMP, and the lines after it
+								// were then fetched and walked as if they ran next.
+								if (flow_control)
+								{
+									m_cache_size = std::max<u32>(fifo_code_path, addr + 4) - m_cache_addr;
+									break;
+								}
+							}
 
 							if (!to_fetch)
 							{
@@ -313,6 +380,7 @@ namespace rsx
 			invalidate_cache();
 
 			m_thread->last_code_jump = m_fifo_pos;
+			m_next_cmd_entry = get;
 
 			if (spin_cmd && m_fifo_pos == get)
 			{
@@ -513,6 +581,9 @@ namespace rsx
 
 			if (m_cmd & RSX_METHOD_NON_METHOD_CMD_MASK) [[unlikely]]
 			{
+				// Where the stream goes next is set_get's to say.
+				m_next_cmd_entry = umax;
+
 				if ((m_cmd & RSX_METHOD_OLD_JUMP_CMD_MASK) == RSX_METHOD_OLD_JUMP_CMD ||
 					(m_cmd & RSX_METHOD_NEW_JUMP_CMD_MASK) == RSX_METHOD_NEW_JUMP_CMD ||
 					(m_cmd & RSX_METHOD_CALL_CMD_MASK) == RSX_METHOD_CALL_CMD ||
@@ -530,6 +601,8 @@ namespace rsx
 
 			ensure(!m_remaining_commands);
 			const u32 count = (m_cmd >> 18) & 0x7ff;
+
+			m_next_cmd_entry = m_fifo_pos + count * 4 + 4;
 
 			if (!count)
 			{
