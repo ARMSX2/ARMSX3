@@ -1488,7 +1488,7 @@ void VKGSRender::on_init()
 	}
 }
 
-std::unique_ptr<rsx::context_resources> VKGSRender::create_context_resources(rsx::context* /*ctx*/)
+std::unique_ptr<rsx::context_resources> VKGSRender::create_context_resources(rsx::context* ctx)
 {
 	auto resources = std::make_unique<vk::context_resources>();
 
@@ -1497,6 +1497,7 @@ std::unique_ptr<rsx::context_resources> VKGSRender::create_context_resources(rsx
 	else
 		resources->vertex_cache = std::make_unique<vk::weak_vertex_cache>();
 
+	resources->texture_cache.set_context(ctx);
 	resources->texture_cache.initialize(*m_device, m_device->get_graphics_queue(), m_texture_upload_buffer_ring_info);
 
 	return resources;
