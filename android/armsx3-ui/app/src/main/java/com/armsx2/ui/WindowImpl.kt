@@ -255,6 +255,10 @@ object WindowImpl {
                 // and here rather than at the call site because a prompt raised from inside a
                 // scrolling settings tab would clip to that tab and scroll away with it.
                 com.armsx2.ui.common.GlobalConfirm.Host()
+
+                // An install another app asked for (issue #188). Last, so it covers everything,
+                // and here because the request can arrive while any screen is open.
+                com.armsx2.ui.packages.ExternalInstallHost()
             }
         }
     }

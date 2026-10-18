@@ -209,6 +209,13 @@ fun AppTab() {
         ConfigDatabaseRow()
         GameFoldersRow()
         FrontendExportRow()
+        // Issue #188: lets a library manager check what is installed (InstalledTitlesProvider).
+        ToggleRow(
+            label = str("app.shareInstalled"),
+            value = com.armsx2.packages.ShareInstalled.enabled.value,
+            description = str("app.shareInstalled.desc"),
+            onChange = { com.armsx2.packages.ShareInstalled.set(it) },
+        )
         Surface(
             onClick = { UiNavigator.navigate(AppRoute.Language) },
             modifier = Modifier.fillMaxWidth()

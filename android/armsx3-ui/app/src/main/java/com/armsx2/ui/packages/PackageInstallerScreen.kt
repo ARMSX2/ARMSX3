@@ -74,7 +74,7 @@ private fun isLicence(file: java.io.File): Boolean = isLicenceName(file.name)
  * USB-OTG app, a card reader or a network share -- so the display name the provider reports is
  * the only thing there is to route on.
  */
-private fun isLicenceName(name: String): Boolean =
+internal fun isLicenceName(name: String): Boolean =
     name.endsWith(".rap", ignoreCase = true) || name.endsWith(".edat", ignoreCase = true)
 
 /**
@@ -238,7 +238,7 @@ private fun licenceTitleId(file: java.io.File): String? =
  * listed: a 1.1GB BLUS30464_INSTALL is exactly the kind of thing someone comes here to
  * reclaim, even though it is not bootable.
  */
-private fun isInstalledContent(dir: java.io.File): Boolean {
+internal fun isInstalledContent(dir: java.io.File): Boolean {
     if (dir.name.startsWith("$") || dir.name.startsWith("＄")) return false
     return runCatching {
         dir.listFiles()?.any { it.isFile && it.name.equals("PARAM.SFO", ignoreCase = true) }
@@ -281,7 +281,7 @@ private fun removeCacheFor(titleId: String): Boolean = runCatching {
 }.getOrDefault(false)
 
 /** A named reason an external pick could not be installed, kept so the user sees it. */
-private class ExternalPickFailure(message: String) : Exception(message)
+internal class ExternalPickFailure(message: String) : Exception(message)
 
 /**
  * A picked document, opened as something the native installer can actually read.
@@ -289,7 +289,7 @@ private class ExternalPickFailure(message: String) : Exception(message)
  * Owns the copy it may have had to make: [close] drops the staged file as well as the
  * descriptor, so a failed or a finished install never leaves gigabytes behind.
  */
-private class OpenedDocument(
+internal class OpenedDocument(
     val descriptor: ParcelFileDescriptor,
     private val staged: java.io.File?,
 ) {
@@ -360,7 +360,7 @@ private fun stagingDir(context: android.content.Context): java.io.File? {
  * afterwards -- the installer sniffs the file's magic, never its extension -- so reducing it to
  * plain characters costs nothing.
  */
-private fun stagedName(name: String): String =
+internal fun stagedName(name: String): String =
     name.substringAfterLast('/').substringAfterLast('\\')
         .filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }
         .trimStart('.')
@@ -381,7 +381,7 @@ private fun stagedName(name: String): String =
  * unsupported or broken with nothing wrong with it. Those get copied, which is slow and costs
  * the space, but is the only thing that can be done with a stream.
  */
-private fun openForInstall(
+internal fun openForInstall(
     context: android.content.Context,
     uri: android.net.Uri,
     name: String,

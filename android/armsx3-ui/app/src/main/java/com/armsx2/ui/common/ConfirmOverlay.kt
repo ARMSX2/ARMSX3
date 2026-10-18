@@ -78,10 +78,9 @@ fun ConfirmOverlay(
         }
     }
     // Then take a selection of our own, once our buttons have registered (they register during
-    // this composition, so it cannot happen in the DisposableEffect above). Required, not
-    // cosmetic: the home screen routes the D-pad to the cover grid unless this registry reports
-    // a selection, so without this the first press would move the library behind the scrim.
-    // Cancel, so the safe option is pre-focused on a destructive prompt.
+    // this composition, so it cannot happen in the DisposableEffect above). The layer above is
+    // what keeps the cover grid behind the scrim from taking the pad; this gives the first press
+    // a button to land on. Cancel, so the safe option is pre-focused on a destructive prompt.
     LaunchedEffect(layer) {
         var attempts = 0
         while (!SettingsControllerNav.selectById("$layer.cancel") && attempts < 10) {

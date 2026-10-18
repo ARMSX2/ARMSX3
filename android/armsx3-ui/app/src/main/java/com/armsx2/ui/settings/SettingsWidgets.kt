@@ -247,10 +247,9 @@ internal object SettingsControllerNav {
     /** Focus a specific control by id. Returns false when it hasn't registered yet, so a caller
      *  that composes its controls in the same frame can retry.
      *
-     *  Exists for modal layers (see ConfirmOverlay): the home screen decides whether the D-pad
-     *  belongs to this registry or to the cover grid by asking [hasSelection], so a modal that
-     *  merely claims [activeLayer] without also taking a selection would lose its first press to
-     *  the grid behind the scrim. */
+     *  Exists for modal layers (see ConfirmOverlay). Claiming [activeLayer] is what takes the pad
+     *  from the cover grid behind the scrim (MainActivityRuntime checks it before handing the grid
+     *  any input); taking a selection as well is what gives the first press a button to land on. */
     fun selectById(id: String): Boolean {
         val ids = orderedIds()
         val index = ids.indexOf(id)

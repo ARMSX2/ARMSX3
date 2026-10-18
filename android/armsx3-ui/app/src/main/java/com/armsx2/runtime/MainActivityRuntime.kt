@@ -2533,6 +2533,7 @@ open class MainActivityRuntime : ComponentActivity() {
         com.armsx2.SecondScreen.attach(applicationContext)
         com.armsx2.BatteryWatcher.load()
         com.armsx2.BatteryWatcher.start(applicationContext)
+        com.armsx2.packages.ShareInstalled.load()
         // Restore the saved rumble master toggle into the native gate (NativeApp.onPadRumble).
         NativeApp.sRumbleEnabled = ControllerMappings.rumbleEnabled()
         NativeApp.sPhoneRumbleEnabled = ControllerMappings.phoneRumbleEnabled()
@@ -3432,9 +3433,13 @@ open class MainActivityRuntime : ComponentActivity() {
             // model (HomeInputController). It must yield when something is layered
             // ON TOP of the library — the nav drawer, an in-game manager screen, or
             // the pause overlay — so those own the pad instead of the grid behind.
+            // Likewise a modal that claims its own nav layer (ConfirmOverlay, the
+            // install another app asked for): without this the grid kept the pad
+            // behind the question, B opened the drawer and A started the game under it.
             if (!WindowImpl.overlayVisible.value &&
                 WindowImpl.inGameScreen.value == null &&
                 !com.armsx2.navigation.UiNavigator.drawerOpen.value &&
+                com.armsx2.ui.settings.SettingsControllerNav.activeLayer.value == null &&
                 com.armsx2.ui.home.HomeInputController.active()
             ) {
                 // Square button (or the Menu hotkey) opens settings for the
@@ -4497,6 +4502,9 @@ open class MainActivityRuntime : ComponentActivity() {
         val nav = com.armsx2.navigation.UiNavigator
         val onHome = nav.route.value == com.armsx2.navigation.AppRoute.Home
         when {
+            // An install another app asked for (issue #188) sits over every screen, so its
+            // question is what B answers, not the screen behind it.
+            com.armsx2.packages.ExternalInstall.showing.value != null -> com.armsx2.packages.ExternalInstall.cancel()
             nav.drawerOpen.value -> nav.drawerOpen.value = false
             WindowImpl.inGameScreen.value != null -> WindowImpl.dismissInGameScreen()
             WindowImpl.showLibrary.value && !onHome -> nav.back()
@@ -4558,9 +4566,10 @@ open class MainActivityRuntime : ComponentActivity() {
                 com.armsx2.ui.emulation.EmulationMenuInputController.move(dx, dy)
             }
             // Library cover grid — only when it actually owns input (same gate as
-            // the key path: not behind the drawer / an in-game screen).
+            // the key path: not behind the drawer / an in-game screen / a modal).
             WindowImpl.inGameScreen.value == null &&
                 !com.armsx2.navigation.UiNavigator.drawerOpen.value &&
+                com.armsx2.ui.settings.SettingsControllerNav.activeLayer.value == null &&
                 com.armsx2.ui.home.HomeInputController.active() -> {
                 com.armsx2.ui.home.HomeInputController.move(dx, dy)
             }
@@ -5635,6 +5644,9 @@ open class MainActivityRuntime : ComponentActivity() {
     }
 
     private fun handleExternalLaunchIntent(intent: Intent?) {
+        // An install another app asked for (issue #188), which carries no game. Taken first so
+        // nothing below can read it as a launch.
+        if (com.armsx2.packages.ExternalInstall.accept(intent)) return
         val launched = extractLaunchUri(intent) ?: return
         persistReadGrant(intent, launched)
         // A .ps3 shortcut handed over as a file stands for the installed game its title id names.

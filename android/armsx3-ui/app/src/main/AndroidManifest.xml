@@ -165,6 +165,56 @@
         </receiver>
 
         <!--
+            Issue #188: another app (a game library manager) asks ARMSX3 to install a package or a
+            licence, and gets the result back. See com.armsx2.packages.ExternalInstall.
+
+            Started for a result, so it runs in the caller's task; it sends the user to Main to
+            confirm and waits there. taskAffinity="" keeps it out of ARMSX3's own task when it is
+            started as a new task (adb, a launcher): there it would sit on top of Main, and starting
+            Main from it would make a second Main. configChanges, so a rotation cannot recreate it
+            mid-request and lose the caller.
+
+            The action is the same in both builds on purpose; the package tells them apart. Three
+            filters because a filter with a MIME type only matches intents that have one: no data,
+            data without a type, and anything with a type (content:// data always has one, from
+            its provider).
+        -->
+        <activity
+            android:name="com.armsx2.packages.ExternalInstallActivity"
+            android:exported="true"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|density|navigation">
+            <intent-filter>
+                <action android:name="com.armsx3.action.INSTALL" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.armsx3.action.INSTALL" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.armsx3.action.INSTALL" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
+
+        <!--
+            Issue #188: which titles and licences are installed, for other apps to read. Answers
+            only once the user turns on Settings > App > Share installed games with other apps,
+            which is the gate a permission could not be: any app can declare a normal permission.
+        -->
+        <provider
+            android:name="com.armsx2.packages.InstalledTitlesProvider"
+            android:authorities="${applicationId}.installed"
+            android:exported="true"
+            tools:ignore="ExportedContentProvider" />
+
+        <!--
             Discord Social SDK's OAuth landing activity. Declared here rather than inherited from
             the vendor .aar on purpose: that .aar's manifest also declares RECORD_AUDIO, three
             foreground-service permissions and Bluetooth for its voice features, and the merger
