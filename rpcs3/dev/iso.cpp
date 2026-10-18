@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <ctime>
 #include <memory>
 #include <string>
 #include <vector>
