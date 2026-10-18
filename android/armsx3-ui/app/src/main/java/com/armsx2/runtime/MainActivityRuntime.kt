@@ -3709,15 +3709,12 @@ open class MainActivityRuntime : ComponentActivity() {
         //
         // Deliberately keyed on the PHYSICAL code before remapping: what decides ownership is
         // how the hardware reports the trigger, not what the user bound it to.
+        //
+        // "Where there is an axis" means an axis that has moved, not one the pad merely lists: see
+        // liveTriggerAxes. A listed axis that never moves leaves these keys in charge.
         if (physicalCode == KeyEvent.KEYCODE_BUTTON_L2 || physicalCode == KeyEvent.KEYCODE_BUTTON_R2)
         {
-            val isLeft = physicalCode == KeyEvent.KEYCODE_BUTTON_L2
-            val axisA = if (isLeft) MotionEvent.AXIS_LTRIGGER else MotionEvent.AXIS_RTRIGGER
-            val axisB = if (isLeft) MotionEvent.AXIS_BRAKE else MotionEvent.AXIS_GAS
-            val axisC = if (isLeft) -1 else rightTriggerExtraAxis(event.deviceId)
-
-            if (deviceHasAxis(event.deviceId, axisA) || deviceHasAxis(event.deviceId, axisB) ||
-                deviceHasAxis(event.deviceId, axisC))
+            if (triggerAxisLive(event.deviceId, physicalCode == KeyEvent.KEYCODE_BUTTON_L2))
             {
                 return true
             }
@@ -4252,7 +4249,7 @@ open class MainActivityRuntime : ComponentActivity() {
             // instead — take the max so we handle whichever the device
             // actually emits without double-driving when both are present.
             sendTrigger(ev, MotionEvent.AXIS_LTRIGGER, MotionEvent.AXIS_BRAKE,
-                KeyEvent.KEYCODE_BUTTON_L2, port)
+                KeyEvent.KEYCODE_BUTTON_L2, port, axisC = leftTriggerExtraAxis(ev.deviceId))
             sendTrigger(ev, MotionEvent.AXIS_RTRIGGER, MotionEvent.AXIS_GAS,
                 KeyEvent.KEYCODE_BUTTON_R2, port, axisC = rightTriggerExtraAxis(ev.deviceId))
             // Physical STICK DIRECTIONS bound to a PS2 control via the "(send)"
@@ -4361,6 +4358,23 @@ open class MainActivityRuntime : ComponentActivity() {
         val rz = runCatching { InputDevice.getDevice(deviceId)?.getMotionRange(MotionEvent.AXIS_RZ) }.getOrNull()
         if (rz != null && rz.min >= 0f) MotionEvent.AXIS_RZ else -1
     }
+    // The left-hand twin: the same pads put the left trigger on AXIS_Z. Again only when Z is a 0..1
+    // range, because a real right-stick-X spans -1..1. -1 = no such axis.
+    private val leftTriggerAxisCache = HashMap<Int, Int>()
+    private fun leftTriggerExtraAxis(deviceId: Int): Int = leftTriggerAxisCache.getOrPut(deviceId) {
+        val z = runCatching { InputDevice.getDevice(deviceId)?.getMotionRange(MotionEvent.AXIS_Z) }.getOrNull()
+        if (z != null && z.min >= 0f) MotionEvent.AXIS_Z else -1
+    }
+
+    // Trigger axes that have actually moved past the dead zone, per controller and side. A pad can
+    // list analog trigger axes and still deliver its triggers only as L2/R2 key events (an AYANEO
+    // Pocket DS, ARMSX3 #206): trusting the axes because they were listed dropped the keys and read
+    // an axis that never moves, so L2/R2 were dead in every game. Until a side's axis moves, that
+    // side's keys drive the trigger and sendTrigger writes nothing. Main thread only, like the caches
+    // above; device ids are new on every reconnect, so a re-paired pad starts over.
+    private val liveTriggerAxes = HashSet<Long>()
+    private fun liveTriggerKey(deviceId: Int, left: Boolean): Long = (deviceId.toLong() shl 1) or (if (left) 1L else 0L)
+    private fun triggerAxisLive(deviceId: Int, left: Boolean): Boolean = liveTriggerKey(deviceId, left) in liveTriggerAxes
 
     private var lastStickProbeMs = 0L
     private fun debugStickProbe(ev: MotionEvent) {
@@ -4778,7 +4792,10 @@ open class MainActivityRuntime : ComponentActivity() {
         // Same axis pairs the gameplay path uses (sendTrigger), including the per-device third
         // axis some pads put the right trigger on, so a trigger that works in game can be bound.
         // Threshold is a deliberate half-pull: resting drift on a worn trigger must not self-bind.
-        val capLt = maxOf(ev.getAxisValue(MotionEvent.AXIS_LTRIGGER), ev.getAxisValue(MotionEvent.AXIS_BRAKE))
+        var capLt = maxOf(ev.getAxisValue(MotionEvent.AXIS_LTRIGGER), ev.getAxisValue(MotionEvent.AXIS_BRAKE))
+        leftTriggerExtraAxis(ev.deviceId).takeIf { it >= 0 }?.let { extra ->
+            capLt = maxOf(capLt, ev.getAxisValue(extra))
+        }
         var capRt = maxOf(ev.getAxisValue(MotionEvent.AXIS_RTRIGGER), ev.getAxisValue(MotionEvent.AXIS_GAS))
         rightTriggerExtraAxis(ev.deviceId).takeIf { it != 0 }?.let { extra ->
             capRt = maxOf(capRt, ev.getAxisValue(extra))
@@ -5415,11 +5432,19 @@ open class MainActivityRuntime : ComponentActivity() {
         // keycode binding path, so clearing/remapping them in the Pad tab was ignored.
         // Resolve the physical trigger keycode to its mapped PS2 target — null = cleared,
         // so the trigger is disabled; otherwise drive the resolved (possibly remapped) code.
-        val target = ControllerMappings.targetForPhysical(code, port) ?: return
         val raw = maxOf(
             maxOf(event.getAxisValue(axisA), event.getAxisValue(axisB)),
             if (axisC >= 0) event.getAxisValue(axisC) else 0f,
         ).coerceIn(0f, 1f)
+        // Until this side's axis has moved on this controller, its L2/R2 keys are in charge
+        // (liveTriggerAxes), and writing "released" here on every stick event would cancel a held
+        // key press, the same shape as the no-axis case above.
+        val left = code == KeyEvent.KEYCODE_BUTTON_L2
+        if (!triggerAxisLive(event.deviceId, left)) {
+            if (raw <= TRIGGER_DEAD) return
+            liveTriggerAxes.add(liveTriggerKey(event.deviceId, left))
+        }
+        val target = ControllerMappings.targetForPhysical(code, port) ?: return
         val out = if (raw <= TRIGGER_DEAD) 0f else (raw - TRIGGER_DEAD) / (1f - TRIGGER_DEAD)
         if (target in 110..123) {
             // Trigger bound to a PS2 STICK direction ("(send)" rows): contribute the
@@ -5447,7 +5472,7 @@ open class MainActivityRuntime : ComponentActivity() {
     private fun triggerTravel(ev: MotionEvent, left: Boolean): Float {
         val a = if (left) MotionEvent.AXIS_LTRIGGER else MotionEvent.AXIS_RTRIGGER
         val b = if (left) MotionEvent.AXIS_BRAKE else MotionEvent.AXIS_GAS
-        val c = if (left) -1 else rightTriggerExtraAxis(ev.deviceId)
+        val c = if (left) leftTriggerExtraAxis(ev.deviceId) else rightTriggerExtraAxis(ev.deviceId)
         if (!deviceHasAxis(ev.deviceId, a) && !deviceHasAxis(ev.deviceId, b) &&
             !deviceHasAxis(ev.deviceId, c))
             return -1f
