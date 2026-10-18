@@ -257,9 +257,33 @@ namespace vk
 			custom_border_color_support.require_border_color_remap = get_driver_vendor() != driver_vendor::AMD;
 		}
 
-		// v3dv and PanVK support BC1-BC3 which is all we require, support is reported as false since not all formats are supported
-		optional_features_support.texture_compression_bc = features.textureCompressionBC
-				|| get_driver_vendor() == driver_vendor::V3DV || get_driver_vendor() == driver_vendor::PANVK;
+		// v3dv and PanVK can sample BC1-BC3, which is all we require, while reporting the feature as
+		// false because the rest of BC is missing. Ask for those formats instead of trusting the
+		// driver's name: PanVK built for Android Mali (on Arm's kbase kernel driver) has no BC at
+		// all, and taking it on trust would hand the GPU DXT textures it cannot sample instead of
+		// decoding them on the CPU.
+		optional_features_support.texture_compression_bc = features.textureCompressionBC;
+
+		if (!features.textureCompressionBC &&
+			(get_driver_vendor() == driver_vendor::V3DV || get_driver_vendor() == driver_vendor::PANVK))
+		{
+			bool bc1_3_sampled = true;
+
+			for (const VkFormat format : { VK_FORMAT_BC1_RGBA_UNORM_BLOCK, VK_FORMAT_BC1_RGBA_SRGB_BLOCK,
+				VK_FORMAT_BC2_UNORM_BLOCK, VK_FORMAT_BC2_SRGB_BLOCK, VK_FORMAT_BC3_UNORM_BLOCK, VK_FORMAT_BC3_SRGB_BLOCK })
+			{
+				VkFormatProperties props{};
+				vkGetPhysicalDeviceFormatProperties(dev, format, &props);
+				bc1_3_sampled = bc1_3_sampled && (props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT);
+			}
+
+			optional_features_support.texture_compression_bc = bc1_3_sampled;
+
+			if (!bc1_3_sampled)
+			{
+				rsx_log.notice("Vulkan: this driver cannot sample BC1-BC3; DXT textures are decoded on the CPU.");
+			}
+		}
 
 		// Texel buffer UAB is reported to the trigger for some driver crashes on older NV cards
 		if (get_driver_vendor() == driver_vendor::NVIDIA &&
