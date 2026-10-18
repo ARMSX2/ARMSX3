@@ -655,12 +655,12 @@ void VKGSRender::advance_queued_frames()
 	m_device->rebalance_memory_type_usage();
 	vk::vmm_check_memory_usage();
 
-	// m_rtts storage is double buffered and should be safe to tag on frame boundary
-	m_rtts.trim(*m_current_command_buffer, vk::vmm_determine_memory_load_severity());
-
-	// Texture cache is also double buffered to prevent use-after-free
 	if (const auto resources = res())
 	{
+		// Surface storage is double buffered and should be safe to tag on frame boundary
+		resources->surface_cache.trim(*m_current_command_buffer, vk::vmm_determine_memory_load_severity());
+
+		// Texture cache is also double buffered to prevent use-after-free
 		resources->texture_cache.on_frame_end();
 	}
 	m_samplers_dirty.store(true);
@@ -1114,7 +1114,7 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 
 	// Check the surface store first
 	const auto format_bpp = rsx::get_format_block_size_in_bytes(info->format);
-	const auto overlap_info = m_rtts.get_merged_texture_memory_region(*m_current_command_buffer,
+	const auto overlap_info = res()->surface_cache.get_merged_texture_memory_region(*m_current_command_buffer,
 		info->address, info->width, info->height, info->pitch, format_bpp, rsx::surface_access::transfer_read);
 
 	if (m_frame_dump.take_final) [[unlikely]]
@@ -2247,22 +2247,22 @@ void VKGSRender::post_present()
 		.min_scalable_dimension = static_cast<u16>(g_cfg.video.min_scalable_dimension),
 	};
 
-	if (active_res_scaling_config != RSX(m_ctx)->resolution_scaling_config)
+	if (res() && active_res_scaling_config != RSX(m_ctx)->resolution_scaling_config)
 	{
 		// First, try to reclaim any memory since the res scale upgrade is so memory intensive
 		if (const auto severity = vk::vmm_determine_memory_load_severity();
-			severity > rsx::problem_severity::low && m_rtts.handle_memory_pressure(*m_current_command_buffer, severity))
+			severity > rsx::problem_severity::low && res()->surface_cache.handle_memory_pressure(*m_current_command_buffer, severity))
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[19]++; flush_command_queue(true);
 		}
 
 		// Then apply the change
-		m_rtts.sync_scaling_config(*m_current_command_buffer, active_res_scaling_config);
+		res()->surface_cache.sync_scaling_config(*m_current_command_buffer, active_res_scaling_config);
 		RSX(m_ctx)->resolution_scaling_config = active_res_scaling_config;
 
 		// Finally reclaim any unused resources
 		if (const auto severity = vk::vmm_determine_memory_load_severity();
-			severity > rsx::problem_severity::low && m_rtts.handle_memory_pressure(*m_current_command_buffer, severity))
+			severity > rsx::problem_severity::low && res()->surface_cache.handle_memory_pressure(*m_current_command_buffer, severity))
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::g_flush_sites[20]++; flush_command_queue(true);
 		}
