@@ -72,19 +72,21 @@ class ArmsxDocumentsProvider : android.provider.DocumentsProvider() {
     // ---- root -------------------------------------------------------------------------
 
     /**
-     * The data folder currently in use, or null before setup has chosen one.
+     * The data folder currently in use: the one chosen in setup, or the app's primary external
+     * files dir when the choice is internal storage or the chosen folder is not there.
      *
-     * Falls back to the app's primary external files dir rather than returning null when the
-     * runtime has not initialised: the provider can be queried by the Files app while ARMSX3 is
-     * not running at all, which is exactly when someone is dropping games in.
+     * The choice is read from where setup saved it, not from the running app: the Files app
+     * queries this while ARMSX3 is not running at all, which is exactly when someone is dropping
+     * games in, and the running app's copy is only loaded when ARMSX3 opens.
      */
     private fun rootDir(): File? {
-        val configured = runCatching { MainActivityRuntime.systemDirPosix() }.getOrNull()
+        val context = context ?: return null
+        val configured = runCatching { MainActivityRuntime.savedSystemDirPosix(context) }.getOrNull()
         if (!configured.isNullOrBlank()) {
             val dir = File(configured)
             if (dir.isDirectory) return dir
         }
-        return runCatching { context?.getExternalFilesDir(null) }.getOrNull()?.takeIf { it.isDirectory }
+        return runCatching { context.getExternalFilesDir(null) }.getOrNull()?.takeIf { it.isDirectory }
     }
 
     /**

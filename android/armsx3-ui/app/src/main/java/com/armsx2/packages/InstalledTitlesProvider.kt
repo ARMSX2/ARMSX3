@@ -82,20 +82,15 @@ class InstalledTitlesProvider : ContentProvider() {
         throw UnsupportedOperationException("read only")
 
     /**
-     * The data folder in use, or null when the chosen one is not there (an SD card that is out).
+     * The data folder in use, or null when the chosen one is not there (an SD card that is out):
+     * what is installed is then unknown, and the internal folder would answer for the wrong one.
      *
-     * Worked out from the saved choice, the way the core picks its root at startup, rather than
-     * read from the running core: a query can start the process with ARMSX3 closed.
+     * From the saved choice rather than the running core: a query can start the process with
+     * ARMSX3 closed.
      */
     private fun dataRoot(context: Context): File? {
-        val chosen = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("systemDir", null)
-            ?: return context.getExternalFilesDir(null)
-        val path = if (chosen.startsWith("content://")) {
-            MainActivityRuntime.resolveTreeUriToPosix(chosen)
-        } else {
-            chosen
-        }
-        return path?.let(::File)?.takeIf { it.isDirectory }
+        val chosen = MainActivityRuntime.savedSystemDirPosix(context) ?: return context.getExternalFilesDir(null)
+        return File(chosen).takeIf { it.isDirectory }
     }
 
     private fun titles(hdd0: File): List<Map<String, String?>> =

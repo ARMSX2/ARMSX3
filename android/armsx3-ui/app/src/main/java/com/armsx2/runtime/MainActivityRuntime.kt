@@ -239,6 +239,23 @@ open class MainActivityRuntime : ComponentActivity() {
             return if (v.startsWith("content://")) resolveTreeUriToPosix(v) else v
         }
 
+        /**
+         * [systemDirPosix], read from the saved choice instead of [systemDir]. For code that can
+         * run with ARMSX3 closed.
+         *
+         * [systemDir] is loaded by onCreate. A provider queried by another app (the Files app
+         * browsing ARMSX3's storage, a library manager asking what is installed) can start the
+         * process on its own, and then [systemDir] is still null, which reads as the internal
+         * default: with the data folder on an SD card, the Files app showed the internal folder,
+         * and games dropped there never reached the emulator. Setup writes the preference and
+         * [systemDir] together, so in a running app the two agree.
+         */
+        fun savedSystemDirPosix(context: Context): String? {
+            val v = context.getSharedPreferences("ARMSX2", Context.MODE_PRIVATE)
+                .getString("systemDir", null) ?: return null
+            return if (v.startsWith("content://")) resolveTreeUriToPosix(v) else v
+        }
+
         /** `<DataRoot>/inputprofiles/` — the portable folder both touch-layout and
          *  controller-mapping profiles mirror themselves into, so they survive a
          *  data-folder move and can be shared or hand-dropped. Null when no system
