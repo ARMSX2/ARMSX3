@@ -339,6 +339,40 @@ object Ps3PatchRepo {
     )
 
     private val BUNDLED = listOf(
+        // BLITZ: THE LEAGUE II, BLUS30203 -- ours. Its three raw SPUs park themselves when a loop
+        // counter reaches a limit, which here runs out mid-load, and nothing restarts them; the
+        // patch makes each loop skip the count, as it does when there is no limit. Two programs,
+        // one entry per program and serial. BLES00397 untested: the patch only applies if its
+        // programs hash the same.
+        // See canary_patches.yml.
+        Bundled(
+            hash = "SPU-30d17ae952dd9ccc1abc46b631654e1fe432fde9",
+            name = "ARMSX3 raw SPU park fix",
+            serial = "BLUS30203",
+            appVersion = "All",
+            sinceRevision = 18,
+        ),
+        Bundled(
+            hash = "SPU-30d17ae952dd9ccc1abc46b631654e1fe432fde9",
+            name = "ARMSX3 raw SPU park fix",
+            serial = "BLES00397",
+            appVersion = "All",
+            sinceRevision = 18,
+        ),
+        Bundled(
+            hash = "SPU-93f3b15e03c594d9eaf5a0d8521854fd6eb2a8c7",
+            name = "ARMSX3 raw SPU park fix",
+            serial = "BLUS30203",
+            appVersion = "All",
+            sinceRevision = 18,
+        ),
+        Bundled(
+            hash = "SPU-93f3b15e03c594d9eaf5a0d8521854fd6eb2a8c7",
+            name = "ARMSX3 raw SPU park fix",
+            serial = "BLES00397",
+            appVersion = "All",
+            sinceRevision = 18,
+        ),
         // THE IDOLM@STER 2, NPJB00337 v01.00 -- ours. A scene change frees objects that the draw
         // thread is still drawing from last frame's list, which holds them without a reference;
         // the frame's draw kick now waits for that list to be drawn. See canary_patches.yml.
@@ -787,7 +821,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 16
+    private const val BUNDLED_REVISION = 18
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"

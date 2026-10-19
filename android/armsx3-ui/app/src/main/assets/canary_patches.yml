@@ -727,3 +727,45 @@ PPU-f942422316f63af3d64dc940b35ec8fddade0f44:
       - [ be32, 0x004353a8, 0xe8010010 ] # ld r0,0x10(r1)
       - [ be32, 0x004353ac, 0x7c0803a6 ] # mtlr r0
       - [ be32, 0x004353b0, 0x4bffffa4 ] # b 0x435354: WaitDrawIdle, returns once the list is drawn
+
+# BLITZ: THE LEAGUE II, BLUS30203 v01.00 -- ours. The game runs its own job system on three raw
+# SPUs. Each one's main loop counts its passes and parks itself (stop 0x1300) when the count
+# reaches a limit, after which the PPU is expected to restart it. On a PS3 every pass waits on a
+# DMA, so the 2,097,152 passes take long enough that the SPUs never park in the middle of a load;
+# here a DMA completes at once, the limit runs out during the data install or a match load,
+# nothing restarts the parked SPU, and the game waits for its work forever: the install stalls
+# (behind a black screen on the first boot) and matches freeze on one frame.
+#
+# The patch turns the program's own "no limit" test (brz r3, taken when the limit is 0) into an
+# unconditional branch back to the loop, so the SPUs never park. The limit itself cannot be
+# patched: the PPU writes each program's parameter block, limit included, into LS at run time
+# (raw SPU 1's carries a heap pointer, 0x0149cc00), and a patched data word was overwritten.
+# The stop handler's sys_mutex_lock ESRCH in the log is the game's own and harmless: its mutex
+# id global (0x1318b10) holds 0 and the handler ignores the error. Found with a probe build on
+# the Odin 3, 10-19: limit 0x00200000 at LS 0xcd2c, counter at the same value.
+#
+# The two programs are embedded in the executable and copied into LS by the game itself.
+# Offsets are LS addresses: apply_modification maps them into the image's code segment.
+# Ps3PatchRepo.BUNDLED must list these, or they are imported but never enabled.
+SPU-30d17ae952dd9ccc1abc46b631654e1fe432fde9:
+  "ARMSX3 raw SPU park fix":
+    Games:
+      "Blitz: The League II":
+        BLUS30203: [ All ]
+        BLES00397: [ All ]
+    Author: "jpolo1224"
+    Notes: "Keeps the game's SPU workers from parking during loads, which froze the data install and matches."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x0ab8c, 0x327f8a00 ] # br 0x0a7dc (was brz r3,0x0a7dc, 0x207f8a03): never count toward the park limit
+SPU-93f3b15e03c594d9eaf5a0d8521854fd6eb2a8c7:
+  "ARMSX3 raw SPU park fix":
+    Games:
+      "Blitz: The League II":
+        BLUS30203: [ All ]
+        BLES00397: [ All ]
+    Author: "jpolo1224"
+    Notes: "Keeps the game's SPU workers from parking during loads, which froze the data install and matches."
+    Patch Version: 1.0
+    Patch:
+      - [ be32, 0x075ac, 0x327fd700 ] # br 0x07464 (was brz r3,0x07464, 0x207fd703): never count toward the park limit
