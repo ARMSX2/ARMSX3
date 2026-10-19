@@ -68,9 +68,9 @@ object GameDefaults {
     /**
      * Stock value for every path any title here can set.
      *
-     * Required, not decorative. The Android port keeps ONE global config.yml: settingsSet
-     * persists through Emulator::SaveSettings(g_cfg.to_string(), "") and an empty title id is
-     * the global path. So a value written for one game stays written for the next one.
+     * Required, not decorative. The Android port keeps ONE global config.yml, and settingsSet
+     * saves every value it is given into it. So a value written for one game stays written for
+     * the next one.
      *
      * [apply] used to return early for a title with no entry, writing nothing. Booting
      * Uncharted 3 therefore set Core@@Stub PPU Traps to 1 and left it there, and every game

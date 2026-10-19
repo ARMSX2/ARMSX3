@@ -6949,16 +6949,100 @@ extern void reset_debug_overlay();
 
 // Settings batching.
 //
-// Every settingsSet used to end in Emulator::SaveSettings(g_cfg.to_string(), ""), which
-// serialises the WHOLE PS3 config to YAML and writes it to disk. The app pushes its full
-// settings block on each change -- ~165 keys -- so one toggle in the in-game menu cost 165
-// whole-config serialisations and 165 file writes, synchronously, on the UI thread. That is
-// the reported "lag when switching settings in the in game menu".
+// Every settingsSet used to end in a save of the WHOLE PS3 config, serialised to YAML and
+// written to disk. The app pushes its full settings block on each change -- ~165 keys -- so
+// one toggle in the in-game menu cost 165 whole-config serialisations and 165 file writes,
+// synchronously, on the UI thread. That is the reported "lag when switching settings in the
+// in game menu".
 //
 // Between begin/end the save is deferred and coalesced into exactly one write. Single
 // settingsSet calls (the dynamic settings screen) are unaffected and still save immediately.
 static std::atomic<int> g_settings_batch_depth{0};
-static std::atomic<bool> g_settings_batch_dirty{false};
+
+// What settingsSet saves to config.yml.
+//
+// It used to save the live config, which is config.yml plus whatever the running or last game
+// put over it: Emulator::Load applies the title's database entry after reading config.yml, and
+// nothing takes it off again when the game stops. So the next save, normally the push before
+// the next launch, made one title's entry every title's. Sonic '06 booted with Blitz: The
+// League II's SPU MMIO Delay (300) and compile pause out of config.yml, at half its frame rate.
+//
+// Now the file gets what it already holds plus the values pushed to it, and nothing else.
+struct global_cfg_edit {
+  std::string path;
+  std::string value;           // decoded, for a value node
+  std::set<std::string> items; // for a set node
+  bool is_set = false;
+};
+
+static std::mutex g_global_cfg_mutex;
+static std::vector<global_cfg_edit> g_global_cfg_edits; // under g_global_cfg_mutex
+
+// Under g_global_cfg_mutex.
+static void write_global_cfg_edits() {
+  if (g_global_cfg_edits.empty()) {
+    return;
+  }
+
+  const std::string cfg_path = fs::get_config_dir(true) + "config.yml";
+  const auto file_cfg = std::make_unique<cfg_root>();
+
+  // A missing or unparseable file starts over the way Emulator::Init would run without it.
+  const auto from_init_defaults = [&] {
+    file_cfg->from_default();
+    file_cfg->video.renderer.set(g_cfg.video.renderer.get());
+    file_cfg->video.vk.adapter.from_string(g_cfg.video.vk.adapter.to_string());
+  };
+
+  if (const fs::file file{cfg_path}) {
+    file_cfg->from_default();
+
+    if (!file_cfg->from_string(file.to_string())) {
+      rpcsx_android.error("settingsSet: %s does not parse, saving it afresh", cfg_path);
+      from_init_defaults();
+    }
+  } else if (fs::is_file(cfg_path)) {
+    // There but unreadable. Defaults written over it would lose every other setting it holds;
+    // these values are live already and the app pushes them again before the next boot.
+    rpcsx_android.error("settingsSet: cannot read %s (%s), not saved", cfg_path, fs::g_tls_error);
+    g_global_cfg_edits.clear();
+    return;
+  } else {
+    from_init_defaults();
+  }
+
+  for (auto &edit : g_global_cfg_edits) {
+    cfg::_base *node = find_cfg_node(file_cfg.get(), edit.path);
+
+    // The live tree accepted it, and this is the same tree.
+    if (node == nullptr || !cfg_is_editable(node)) {
+      continue;
+    }
+
+    if (edit.is_set) {
+      if (node->get_type() == cfg::type::set) {
+        static_cast<cfg::set_entry *>(node)->set_set(std::move(edit.items));
+      }
+    } else if (!node->from_string(edit.value)) {
+      rpcsx_android.error("settingsSet: %s = '%s' not saved to %s", edit.path, edit.value, cfg_path);
+    }
+  }
+
+  g_global_cfg_edits.clear();
+  Emulator::SaveSettingsFile(file_cfg->to_string(), "");
+
+  // As SaveSettings did: RPCS3's home menu tells changed settings apart by comparing with it.
+  g_backup_cfg.from_string(g_cfg.to_string());
+}
+
+static void save_global_cfg_edit(global_cfg_edit edit) {
+  std::lock_guard lock(g_global_cfg_mutex);
+  g_global_cfg_edits.push_back(std::move(edit));
+
+  if (g_settings_batch_depth.load() <= 0) {
+    write_global_cfg_edits();
+  }
+}
 
 extern "C" void _rpcsx_settingsBeginBatch() { g_settings_batch_depth.fetch_add(1); }
 
@@ -6967,9 +7051,8 @@ extern "C" void _rpcsx_settingsEndBatch() {
   if (g_settings_batch_depth.fetch_sub(1) != 1) {
     return;
   }
-  if (g_settings_batch_dirty.exchange(false)) {
-    Emulator::SaveSettings(g_cfg.to_string(), "");
-  }
+  std::lock_guard lock(g_global_cfg_mutex);
+  write_global_cfg_edits();
 }
 
 // Import the Lossless Scaling shaders from a file the user chose.
@@ -7022,6 +7105,8 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
     // The app re-pushes every remembered value on each settings change, so an unchanged list
     // must not count as a write, or the running-game refusal below would fire on every one.
     if (items == set->get_set()) {
+      // The file still gets it: the live list can be the last game's, and a boot reads the file.
+      save_global_cfg_edit({.path = std::string(path), .items = std::move(items), .is_set = true});
       return true;
     }
 
@@ -7034,13 +7119,8 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
       return false;
     }
 
-    set->set_set(std::move(items));
-
-    if (g_settings_batch_depth.load() > 0) {
-      g_settings_batch_dirty.store(true);
-    } else {
-      Emulator::SaveSettings(g_cfg.to_string(), "");
-    }
+    set->set_set(std::set<std::string>(items));
+    save_global_cfg_edit({.path = std::string(path), .items = std::move(items), .is_set = true});
     return true;
   }
 
@@ -7085,11 +7165,7 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
     return false;
   }
 
-  if (g_settings_batch_depth.load() > 0) {
-    g_settings_batch_dirty.store(true);
-  } else {
-    Emulator::SaveSettings(g_cfg.to_string(), "");
-  }
+  save_global_cfg_edit({.path = std::string(path), .value = decoded});
 
   // The overlays own live objects built from the config; they are not re-read
   // per frame. reset_*_overlay() is what applies a change to the running one

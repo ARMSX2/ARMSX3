@@ -462,6 +462,9 @@ public:
 	static bool IsValidSfb(const std::string& path);
 
 	static void SaveSettings(std::string_view settings, const std::string& title_id);
+
+	// ARMSX3: the file half of SaveSettings, for a caller that must leave the live config alone.
+	static bool SaveSettingsFile(std::string_view settings, const std::string& title_id);
 };
 
 extern Emulator Emu;
