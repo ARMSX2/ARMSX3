@@ -212,19 +212,23 @@ object ConfigDatabase {
         "BLUD80019" to "Core:\n  PPU Event Wake-Up Delay: 25\n",
 
         // Blitz: The League II: SPU MMIO Delay on at 300 us (upstream elad335 #19851, RPCS3 issue
-        // #11529), and Pause Game During SPU Compilation.
+        // #11529), Pause Game During SPU Compilation, and a 3072 MB VRAM allocation limit.
         //
-        // The game hands work to three raw SPUs and expects them to answer at once, as they do on a
-        // PS3. Here the PPU gets ahead and the data install stalls for good, behind a black screen on
-        // the first boot: the raw SPUs stop and their PPU interrupt handlers' sys_mutex_lock fails
-        // with ESRCH. The delay holds the PPU back after every mailbox write; Elad's 100 us is enough
-        // on his PC, and 300 is what a ROG Ally X player needed and what the Odin 3 ran. The bigger
-        // gap is SPU code compiled on the spot: both stalls came while a raw SPU compiled new code,
-        // and the run with that code already cached got through (Odin 3, 10-19). The pause hides
-        // those compiles from the game. Both are off for every other game: in Sonic '06 the delay
-        // halves the frame rate (Odin 3, 10-14). The EU disc is the same game and was not tested.
-        "BLUS30203" to "Core:\n  SPU MMIO Delay Enabled: true\n  SPU MMIO Delay: 300\n  Pause Game During SPU Compilation: true\n",
-        "BLES00397" to "Core:\n  SPU MMIO Delay Enabled: true\n  SPU MMIO Delay: 300\n  Pause Game During SPU Compilation: true\n",
+        // The game runs its jobs on three raw SPUs, which park themselves after a set number of idle
+        // passes; that is what stalled the data install and froze matches, and the bundled "ARMSX3
+        // raw SPU park fix" patch (canary_patches.yml) keeps them running. The delay holds the PPU
+        // back after every mailbox write, as RPCS3 needs for this game; Elad's 100 us is enough on his
+        // PC, 300 is what a ROG Ally X player needed and what the Odin 3 runs. The pause hides
+        // on-demand SPU compiles from the game; with it a cold install went through on the first try
+        // (10-19), before the park fix existed, so it may no longer be needed.
+        //
+        // A match load peaks at about 2.2 GB of video memory here (ring buffers ~1.1 GB, texture cache
+        // ~0.9 GB; Odin 3, 10-19), past the 2048 MB cap phones get, and the RSX thread died on it;
+        // 3072 MB holds it with about 870 MB to spare. This title only: the cap exists because video
+        // memory is the phone's RAM. All of this is off for every other game: in Sonic '06 the delay
+        // alone halves the frame rate (Odin 3, 10-14). The EU disc is the same game and was not tested.
+        "BLUS30203" to "Core:\n  SPU MMIO Delay Enabled: true\n  SPU MMIO Delay: 300\n  Pause Game During SPU Compilation: true\nVideo:\n  Vulkan:\n    VRAM allocation limit (MB): 3072\n",
+        "BLES00397" to "Core:\n  SPU MMIO Delay Enabled: true\n  SPU MMIO Delay: 300\n  Pause Game During SPU Compilation: true\nVideo:\n  Vulkan:\n    VRAM allocation limit (MB): 3072\n",
 
     )
 
