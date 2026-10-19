@@ -211,18 +211,20 @@ object ConfigDatabase {
         "BLJM60180" to "Core:\n  PPU Event Wake-Up Delay: 25\n",
         "BLUD80019" to "Core:\n  PPU Event Wake-Up Delay: 25\n",
 
-        // Blitz: The League II: SPU MMIO Delay on, 300 us (upstream elad335 #19851, RPCS3 issue #11529).
+        // Blitz: The League II: SPU MMIO Delay on at 300 us (upstream elad335 #19851, RPCS3 issue
+        // #11529), and Pause Game During SPU Compilation.
         //
-        // The game writes an SPU's inbound mailbox and expects the SPU to act on it before the PPU
-        // gets much further: on a PS3 the SPU wakes at once and outruns the PPU. Here the PPU gets
-        // ahead and the game stalls at its first logo movie: its three raw SPUs stop and their PPU
-        // interrupt handlers' sys_mutex_lock fails with ESRCH. The delay holds the PPU back
-        // after every mailbox write. Elad's 100 us is enough on his PC but not on a phone, where the
-        // SPUs run slower: at 100 the Odin 3 sat on a black screen, at 300 it went in-game (10-19),
-        // the same value a ROG Ally X player needed. Off for every other game: in Sonic '06 it
+        // The game hands work to three raw SPUs and expects them to answer at once, as they do on a
+        // PS3. Here the PPU gets ahead and the data install stalls for good, behind a black screen on
+        // the first boot: the raw SPUs stop and their PPU interrupt handlers' sys_mutex_lock fails
+        // with ESRCH. The delay holds the PPU back after every mailbox write; Elad's 100 us is enough
+        // on his PC, and 300 is what a ROG Ally X player needed and what the Odin 3 ran. The bigger
+        // gap is SPU code compiled on the spot: both stalls came while a raw SPU compiled new code,
+        // and the run with that code already cached got through (Odin 3, 10-19). The pause hides
+        // those compiles from the game. Both are off for every other game: in Sonic '06 the delay
         // halves the frame rate (Odin 3, 10-14). The EU disc is the same game and was not tested.
-        "BLUS30203" to "Core:\n  SPU MMIO Delay Enabled: true\n  SPU MMIO Delay: 300\n",
-        "BLES00397" to "Core:\n  SPU MMIO Delay Enabled: true\n  SPU MMIO Delay: 300\n",
+        "BLUS30203" to "Core:\n  SPU MMIO Delay Enabled: true\n  SPU MMIO Delay: 300\n  Pause Game During SPU Compilation: true\n",
+        "BLES00397" to "Core:\n  SPU MMIO Delay Enabled: true\n  SPU MMIO Delay: 300\n  Pause Game During SPU Compilation: true\n",
 
     )
 

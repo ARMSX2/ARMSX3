@@ -19,6 +19,7 @@
 #include "util/shared_ptr.hpp"
 
 #include "Emu/Cell/Modules/cellSync.h"
+#include "Emu/Cell/timers.hpp"
 
 #include "SPUThread.h"
 #include "SPUAnalyser.h"
@@ -2674,6 +2675,46 @@ spu_recompiler_base::~spu_recompiler_base()
 {
 }
 
+#ifdef ARCH_ARM64
+// Pause Game During SPU Compilation, a per-game setting (off unless a game's entry turns it on).
+//
+// On a PS3 SPU code is already machine code, so an SPU answers the PPU within microseconds. Here
+// code an SPU reaches for the first time is compiled on the spot, which on a phone takes tens to
+// hundreds of milliseconds, and the rest of the game keeps running meanwhile. Blitz: The League II
+// cannot take that: its PPU hands work to three raw SPUs, runs ahead while one of them compiles,
+// and the raw SPUs end in stop 0x1300 with their interrupt handlers' sys_mutex_lock failing
+// (ESRCH); the install, or the boot, then waits forever. It only happened while a raw SPU was
+// compiling new code, and a run with that code already cached went through (Odin 3, 10-19).
+// Holding every other guest thread for the length of the compile makes it take no time as far as
+// the game's threads can tell. The guest clock still moves: the JITs bake the timebase offset, so
+// winding it back is not safe.
+static spu_function_t compile_spu_llvm_paused(spu_thread& spu, const spu_program& program)
+{
+	static thread_local bool t_logged = false;
+	const u64 start = get_system_time();
+
+	// When another thread is already suspending everyone, it runs this for us with our compiler
+	// while we are parked, so the compiler is still only used by one thread at a time.
+	const auto func = cpu_thread::suspend_all(&spu, {}, [&]
+	{
+		return compile_spu_llvm_with_retry(spu.jit, program);
+	});
+
+	const u64 took = get_system_time() - start;
+
+	if (!std::exchange(t_logged, true))
+	{
+		spu_log.success("Pause Game During SPU Compilation: the game paused %u us while this SPU compiled 0x%05x.", took, program.entry_point);
+	}
+	else if (took >= 100'000)
+	{
+		spu_log.warning("Pause Game During SPU Compilation: the game paused %u ms while this SPU compiled 0x%05x.", took / 1000, program.entry_point);
+	}
+
+	return func;
+}
+#endif
+
 void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 {
 	// If code verification failed from a patched patchpoint, clear it with a dispatcher jump
@@ -2779,7 +2820,7 @@ void spu_recompiler_base::dispatch(spu_thread& spu, void*, u8* rip)
 #endif
 	auto program = spu.jit->analyse(spu._ptr<u32>(0), spu.pc);
 #ifdef ARCH_ARM64
-	const auto func = compile_spu_llvm_with_retry(spu.jit, program);
+	const auto func = g_cfg.core.spu_compile_pause ? compile_spu_llvm_paused(spu, program) : compile_spu_llvm_with_retry(spu.jit, program);
 #else
 	const auto func = spu.jit->compile(std::move(program));
 #endif

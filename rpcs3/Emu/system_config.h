@@ -40,6 +40,7 @@ struct cfg_root : cfg::node
 		cfg::_bool spu_accurate_reservations{ this, "Accurate SPU Reservations", true };
 		cfg::_bool spu_mmio_delay_enabled{ this, "SPU MMIO Delay Enabled", false, true};
 		cfg::uint<3, 1000> spu_mmio_delay{ this, "SPU MMIO Delay", 100, true };
+		cfg::_bool spu_compile_pause{ this, "Pause Game During SPU Compilation", false, true }; // ARMSX3: hide on-demand SPU compiles from the guest (Blitz: The League II)
 		cfg::_bool accurate_cache_line_stores{ this, "Accurate Cache Line Stores", false };
 		cfg::_bool rsx_accurate_res_access{this, "Accurate RSX reservation access", false, true};
 		cfg::_bool ppu_reservation_priority_over_spu{this, "PPU Reservation Priority Over SPUs", false, true};
