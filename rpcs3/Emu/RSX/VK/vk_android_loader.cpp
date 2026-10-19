@@ -126,6 +126,7 @@ extern "C"
 	PFN_vkGetPhysicalDeviceFeatures vkGetPhysicalDeviceFeatures = nullptr;
 	PFN_vkGetPhysicalDeviceFeatures2 vkGetPhysicalDeviceFeatures2 = nullptr;
 	PFN_vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties = nullptr;
+	PFN_vkGetPhysicalDeviceImageFormatProperties vkGetPhysicalDeviceImageFormatProperties = nullptr;
 	PFN_vkGetPhysicalDeviceMemoryProperties vkGetPhysicalDeviceMemoryProperties = nullptr;
 	PFN_vkGetPhysicalDeviceMemoryProperties2 vkGetPhysicalDeviceMemoryProperties2 = nullptr;
 	PFN_vkGetPhysicalDeviceProperties vkGetPhysicalDeviceProperties = nullptr;
@@ -401,6 +402,8 @@ namespace vk::android
 			if (!vkGetPhysicalDeviceFeatures2) vkGetPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(dlsym(handle, "vkGetPhysicalDeviceFeatures2"));
 			vkGetPhysicalDeviceFormatProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(vkGetInstanceProcAddr(nullptr, "vkGetPhysicalDeviceFormatProperties"));
 			if (!vkGetPhysicalDeviceFormatProperties) vkGetPhysicalDeviceFormatProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(dlsym(handle, "vkGetPhysicalDeviceFormatProperties"));
+			vkGetPhysicalDeviceImageFormatProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceImageFormatProperties>(vkGetInstanceProcAddr(nullptr, "vkGetPhysicalDeviceImageFormatProperties"));
+			if (!vkGetPhysicalDeviceImageFormatProperties) vkGetPhysicalDeviceImageFormatProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceImageFormatProperties>(dlsym(handle, "vkGetPhysicalDeviceImageFormatProperties"));
 			vkGetPhysicalDeviceMemoryProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(vkGetInstanceProcAddr(nullptr, "vkGetPhysicalDeviceMemoryProperties"));
 			if (!vkGetPhysicalDeviceMemoryProperties) vkGetPhysicalDeviceMemoryProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(dlsym(handle, "vkGetPhysicalDeviceMemoryProperties"));
 			vkGetPhysicalDeviceMemoryProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(vkGetInstanceProcAddr(nullptr, "vkGetPhysicalDeviceMemoryProperties2"));
@@ -571,6 +574,7 @@ namespace vk::android
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures")) vkGetPhysicalDeviceFeatures = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2")) vkGetPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceFormatProperties")) vkGetPhysicalDeviceFormatProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(p);
+		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceImageFormatProperties")) vkGetPhysicalDeviceImageFormatProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceImageFormatProperties>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceMemoryProperties")) vkGetPhysicalDeviceMemoryProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceMemoryProperties2")) vkGetPhysicalDeviceMemoryProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties2>(p);
 		if (auto p = vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties")) vkGetPhysicalDeviceProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(p);

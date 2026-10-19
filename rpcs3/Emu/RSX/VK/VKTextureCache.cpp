@@ -1159,6 +1159,60 @@ namespace vk
 		dst->pop_layout(cmd);
 	}
 
+	// Single-row textures in a linear layout (ARMSX3).
+	//
+	// Turnip lays a tiled image out in tiles 16 rows tall and adds a compression metadata block, so
+	// a 4096x1 four-float texture, 64 KB of data, costs 1040 KB. Blitz: The League II binds a slice
+	// of its per-draw data buffer as such a texture for every draw, at a new address each time;
+	// while a match loads that is ~300 of them a frame, ~300 MB, which ran the 2048 MB cap out and
+	// killed the RSX thread (Odin 3, 10-19). A linear image has neither the padding nor the block.
+	// Only where the linear layout can do everything the tiled one does for this format (sampling,
+	// filtering, copies, blits), since the draw code decides filtering from the tiled features; and
+	// only for what such a texture is used for, a copy in and sampling.
+	static bool use_linear_layout(VkFormat format, VkImageType type, u16 width, u16 height, u16 depth, u16 layers, u16 mipmaps,
+		VkImageUsageFlags usage, VkImageCreateFlags create_flags)
+	{
+		if (height != 1 || depth != 1 || layers != 1 || mipmaps != 1 || create_flags != 0 ||
+			(type != VK_IMAGE_TYPE_1D && type != VK_IMAGE_TYPE_2D) ||
+			(usage & ~(VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)))
+		{
+			return false;
+		}
+
+		const auto& dev = *vk::get_current_renderer();
+		const VkFormatProperties props = dev.get_format_properties(format);
+		constexpr VkFormatFeatureFlags relevant = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT |
+			VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+		const VkFormatFeatureFlags wanted = props.optimalTilingFeatures & relevant;
+
+		if (!(wanted & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) || (props.linearTilingFeatures & wanted) != wanted)
+		{
+			return false;
+		}
+
+		// Linear images have size limits of their own: ask the driver, once per format, type and usage
+		static std::unordered_map<u64, u32> s_max_width;
+		static shared_mutex s_mutex;
+		const u64 key = (u64{static_cast<u32>(format)} << 32) | (u64{static_cast<u32>(type)} << 24) | usage;
+
+		{
+			reader_lock lock(s_mutex);
+
+			if (const auto found = s_max_width.find(key); found != s_max_width.end())
+			{
+				return width <= found->second;
+			}
+		}
+
+		VkImageFormatProperties limits{};
+		const u32 max_width = vkGetPhysicalDeviceImageFormatProperties(dev.gpu(), format, type, VK_IMAGE_TILING_LINEAR, usage, 0, &limits) == VK_SUCCESS
+			? limits.maxExtent.width : 0;
+
+		std::lock_guard lock(s_mutex);
+		s_max_width[key] = max_width;
+		return width <= max_width;
+	}
+
 	cached_texture_section* texture_cache::create_new_texture(vk::command_buffer& cmd, const utils::address_range32& rsx_range, u16 width, u16 height, u16 depth, u16 mipmaps, u32 pitch,
 		u32 gcm_format, rsx::texture_upload_context context, rsx::texture_dimension_extended type, bool swizzled, rsx::component_order swizzle_flags, rsx::flags32_t flags)
 	{
@@ -1305,11 +1359,14 @@ namespace vk
 					create_format.viewFormatCount = mutable_format_list.size();
 				}
 
+				const VkImageTiling tiling = use_linear_layout(vk_format, image_type, width, height, depth, layer, mipmaps, usage_flags, create_flags)
+					? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
+
 				image = new vk::viewable_image(*m_device,
 					m_memory_types.device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 					image_type, create_format,
 					width, height, depth, mipmaps, layer, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
-					VK_IMAGE_TILING_OPTIMAL, usage_flags, create_flags,
+					tiling, usage_flags, create_flags,
 					VMM_ALLOCATION_POOL_TEXTURE_CACHE, rsx::classify_format(gcm_format));
 			}
 
