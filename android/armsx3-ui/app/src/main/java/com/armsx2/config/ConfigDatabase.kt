@@ -211,6 +211,18 @@ object ConfigDatabase {
         "BLJM60180" to "Core:\n  PPU Event Wake-Up Delay: 25\n",
         "BLUD80019" to "Core:\n  PPU Event Wake-Up Delay: 25\n",
 
+        // Blitz: The League II: SPU MMIO Delay on (upstream elad335 #19851, RPCS3 issue #11529).
+        //
+        // The game writes an SPU's inbound mailbox and expects the SPU to act on it before the PPU
+        // gets much further: on a PS3 the SPU wakes at once and outruns the PPU. Here the PPU gets
+        // ahead and the game freezes in the opening video or at the data install. The delay holds
+        // the PPU back after every mailbox write; 100 us is the core default and what Elad uses.
+        // Off for every other game: in Sonic '06 it halves the frame rate (Odin 3, 10-14). Not
+        // tested on ARMSX3: nobody here has the game, so if it still freezes the per-game setting
+        // is the place to raise SPU MMIO Delay.
+        "BLUS30203" to "Core:\n  SPU MMIO Delay Enabled: true\n",
+        "BLES00397" to "Core:\n  SPU MMIO Delay Enabled: true\n",
+
     )
 
     /**
