@@ -1245,6 +1245,8 @@ val EN: Map<String, String> = mapOf(
     "pad.onScreenControls.always" to "Always",
     "pad.onScreenControls.description" to "On-screen touch buttons. Never: always hidden, for devices with physical controls (this also hides the settings cog, so nothing overlaps R1). 1 to 10s: hide after that long without a touch. Auto: show on touch, hide when you use a controller. Always: never hide, for playing with a controller and the touch buttons together.",
     "pad.multiTouch.description" to "How far from a button's center a touch still counts as a press, so you can hit two adjacent on-screen buttons at once. Higher = more reach (easier rolls and combos).",
+    "pad.tightShoulders.label" to "Tight L1/L2/R1/R2 touch areas",
+    "pad.tightShoulders.description" to "L1, L2, R1 and R2 respond only to touches on the button itself, not the space around it, so they take up less of the screen.",
     "pad.onScreenControls.label" to "On-screen controls",
     "pad.assign.auto" to "Auto",
     "pad.usbTakeover.label" to "Direct USB control (PlayStation pads)",

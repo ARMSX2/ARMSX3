@@ -809,6 +809,14 @@ fun PadTab(state: MutableState<Settings>) {
                 onChange = { TouchControls.setMultiTouchRadius(it / 100f) },
             )
             SettingsDivider()
+            // L1/L2/R1/R2 touch areas cut to their artwork: without it the shoulder squares and
+            // their multi-touch circles reach far past the wide sprites.
+            ToggleRow(
+                str("pad.tightShoulders.label"),
+                TouchControls.tightShoulders.value,
+                description = str("pad.tightShoulders.description"),
+            ) { TouchControls.setTightShoulders(it) }
+            SettingsDivider()
             // How hard the pressure modifier presses. There was a PRESSURE button (on-screen and
             // bindable as "Pressure Modifier (hold)") but no way to choose the amount, so it was
             // permanently stuck at the hardcoded 50%. Range is 5..100: 0 would collide with the

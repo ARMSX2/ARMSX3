@@ -144,6 +144,7 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("pad.onScreenControls.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.touchHaptics.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("touch.editor.multiTouchOn", true, SettingsCategory.Controls),
+    SettingsSearchEntry("pad.tightShoulders.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.pressureAmount.label", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.usb.section", true, SettingsCategory.Controls),
     SettingsSearchEntry("pad.usb.subtype", true, SettingsCategory.Controls),

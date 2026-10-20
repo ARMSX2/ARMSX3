@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "Nút hành động",
  "pad.testRumble.player1": "Kiểm tra rung: Người chơi 1",
  "pad.testRumble.player2": "Kiểm tra rung: Người chơi 2",
+ "pad.tightShoulders.description": "L1, L2, R1 và R2 chỉ phản hồi khi chạm vào chính nút, không phải khoảng trống xung quanh, nên chiếm ít chỗ trên màn hình hơn.",
+ "pad.tightShoulders.label": "Vùng chạm vừa khít cho L1/L2/R1/R2",
  "pad.touchHaptics.description": "Rung nhanh khi bạn nhấn nút trên màn hình (như PPSSPP / Azahar). Tách biệt với rung của tay cầm.",
  "pad.touchHaptics.label": "Cảm ứng xúc giác",
  "pad.usb.help": "Gắn thiết bị USB mô phỏng vào cổng: Buzz buzzers, bộ trống Rock Band, Keyboardmania, bàn xoay DJ, GunCon 2, v.v. Các điều khiển thông thường của bạn sẽ điều khiển nó, không cần ánh xạ thêm. Khởi động lại trò chơi sau khi thay đổi cổng: trò chơi sẽ kiểm tra những gì được cắm vào khi khởi động.",

@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "페이스 버튼",
  "pad.testRumble.player1": "진동 테스트: 플레이어 1",
  "pad.testRumble.player2": "진동 테스트: 플레이어 2",
+ "pad.tightShoulders.description": "L1, L2, R1, R2가 버튼 주변 공간이 아닌 버튼 자체를 터치할 때만 반응하므로 화면을 덜 차지합니다.",
+ "pad.tightShoulders.label": "L1/L2/R1/R2 터치 영역 좁히기",
  "pad.touchHaptics.description": "화면 버튼(예: PPSSPP/Azahar)을 누르면 짧게 진동합니다. 컨트롤러 진동과는 별개입니다.",
  "pad.touchHaptics.label": "터치 햅틱",
  "pad.usb.help": "에뮬레이트된 USB 장치를 포트에 연결합니다: Buzz 버저, Rock Band 드럼 키트, Keyboardmania, DJ 턴테이블, GunCon 2 등. 일반적인 컨트롤이 이를 구동하므로 추가 매핑이 필요하지 않습니다. 포트를 변경한 후 게임을 다시 시작하십시오. 게임은 부팅할 때 연결된 것이 무엇인지 확인합니다.",

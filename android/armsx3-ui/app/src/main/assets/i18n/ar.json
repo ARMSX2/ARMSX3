@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "أزرار الأشكال",
  "pad.testRumble.player1": "اختبار الاهتزاز: اللاعب 1",
  "pad.testRumble.player2": "اختبار الاهتزاز: اللاعب 2",
+ "pad.tightShoulders.description": "تستجيب L1 وL2 وR1 وR2 للمس على الزر نفسه فقط، لا للمساحة المحيطة به، فتشغل مساحة أقل من الشاشة.",
+ "pad.tightShoulders.label": "مساحة لمس محكمة لأزرار L1/L2/R1/R2",
  "pad.touchHaptics.description": "اهتزاز لفترة وجيزة عند الضغط على زر على الشاشة (مثل PPSSPP / Azahar). منفصل عن اهتزاز وحدة التحكم.",
  "pad.touchHaptics.label": "اهتزاز اللمس",
  "pad.usb.help": "قم بتوصيل جهاز USB مقلد بمنفذ Buzz Buzz، ومجموعة طبول Rock Band، وKeyboardmania، وقرص DJ الدوار، وGunCon 2 والمزيد. عناصر التحكم العادية الخاصة بك هي التي تقودها، ولا حاجة إلى رسم خرائط إضافية. أعد تشغيل اللعبة بعد تغيير المنفذ: تتحقق اللعبة مما تم توصيله عند تشغيلها.",

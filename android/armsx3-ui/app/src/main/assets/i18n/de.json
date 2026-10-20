@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "Aktionstasten",
  "pad.testRumble.player1": "Vibration testen: Spieler 1",
  "pad.testRumble.player2": "Vibration testen: Spieler 2",
+ "pad.tightShoulders.description": "L1, L2, R1 und R2 reagieren nur auf Berührungen der Taste selbst, nicht auf den Bereich darum, und nehmen so weniger Platz auf dem Bildschirm ein.",
+ "pad.tightShoulders.label": "Enge Touch-Fläche für L1/L2/R1/R2",
  "pad.touchHaptics.description": "Kurze Vibration, wenn Sie eine Taste auf dem Bildschirm drücken (wie bei PPSSPP / Azahar). Unabhängig von der Controller-Vibration.",
  "pad.touchHaptics.label": "Touch-Haptik",
  "pad.usb.help": "Schließen Sie ein emuliertes USB-Gerät an einen Anschluss an: Buzz-Buzzer, ein Schlagzeug für Rock Band, Keyboardmania, ein DJ-Plattenspieler, GunCon 2 und mehr. Die Steuerung erfolgt über Ihre normalen Bedienelemente, es ist keine zusätzliche Zuordnung erforderlich. Starten Sie das Spiel neu, nachdem Sie einen Port geändert haben: Das Spiel prüft beim Booten, was angeschlossen ist.",

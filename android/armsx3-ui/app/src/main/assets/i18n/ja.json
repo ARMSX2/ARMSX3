@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "フェイスボタン",
  "pad.testRumble.player1": "振動テスト：プレイヤー 1",
  "pad.testRumble.player2": "振動テスト：プレイヤー 2",
+ "pad.tightShoulders.description": "L1・L2・R1・R2がボタンそのものへのタッチにだけ反応し、周囲の余白には反応しなくなるため、画面を占める範囲が小さくなります。",
+ "pad.tightShoulders.label": "L1/L2/R1/R2のタッチ範囲を絞る",
  "pad.touchHaptics.description": "画面上のボタンを押すと短く振動します (PPSSPP / Azahar など)。コントローラーの振動とは別のものです。",
  "pad.touchHaptics.label": "タッチハプティクス",
  "pad.usb.help": "エミュレートされた USB デバイスをポートに接続し、Buzz ブザー、Rock Band のドラム キット、キーボードマニア、DJ ターンテーブル、GunCon 2 などを接続します。通常のコントロールで制御できるため、追加のマッピングは必要ありません。ポートを変更した後、ゲームを再起動します。ゲームは起動時に何が接続されているかを確認します。",

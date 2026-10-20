@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "Pulsanti frontali",
  "pad.testRumble.player1": "Test vibrazione: giocatore 1",
  "pad.testRumble.player2": "Test vibrazione: giocatore 2",
+ "pad.tightShoulders.description": "L1, L2, R1 e R2 rispondono solo ai tocchi sul pulsante stesso, non sullo spazio intorno, così occupano meno schermo.",
+ "pad.tightShoulders.label": "Area di tocco ridotta per L1/L2/R1/R2",
  "pad.touchHaptics.description": "Vibra brevemente quando premi un pulsante sullo schermo (come PPSSPP / Azahar). Separato dalla vibrazione del controller.",
  "pad.touchHaptics.label": "Vibrazione al tocco",
  "pad.usb.help": "Collega un dispositivo USB emulato a una porta, cicalini Buzz, una batteria Rock Band, Keyboardmania, un giradischi DJ, GunCon 2 e altro ancora. I tuoi normali controlli lo guidano, non è necessaria alcuna mappatura aggiuntiva. Riavvia il gioco dopo aver cambiato una porta: il gioco controlla cosa è collegato all'avvio.",

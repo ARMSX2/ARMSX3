@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "Tombol Wajah",
  "pad.testRumble.player1": "Uji getaran: Pemain 1",
  "pad.testRumble.player2": "Uji getaran: Pemain 2",
+ "pad.tightShoulders.description": "L1, L2, R1, dan R2 hanya merespons sentuhan pada tombol itu sendiri, bukan ruang di sekitarnya, sehingga tidak banyak memakan layar.",
+ "pad.tightShoulders.label": "Area sentuh L1/L2/R1/R2 yang pas",
  "pad.touchHaptics.description": "Bergetar sebentar ketika Anda menekan tombol di layar (seperti PPSSPP/Azahar). Terpisah dari getaran kontroler.",
  "pad.touchHaptics.label": "Haptik Sentuh",
  "pad.usb.help": "Pasang perangkat USB yang ditiru ke port: Buzz buzzer, kit drum Rock Band, Keyboardmania, meja putar DJ, GunCon 2, dan banyak lagi. Kontrol normal Anda menggerakkannya, tidak diperlukan pemetaan tambahan. Mulai ulang game setelah mengganti port: game memeriksa apa yang dicolokkan saat boot.",

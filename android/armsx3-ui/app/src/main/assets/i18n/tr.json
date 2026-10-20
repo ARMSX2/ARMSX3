@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "Yüz Düğmeleri",
  "pad.testRumble.player1": "Titreşim testi: Oyuncu 1",
  "pad.testRumble.player2": "Titreşim testi: Oyuncu 2",
+ "pad.tightShoulders.description": "L1, L2, R1 ve R2 yalnızca düğmenin kendisine dokunulduğunda tepki verir, etrafındaki boşluğa değil; böylece ekranda daha az yer kaplar.",
+ "pad.tightShoulders.label": "L1/L2/R1/R2 için dar dokunma alanı",
  "pad.touchHaptics.description": "Ekrandaki bir düğmeye (PPSSPP / Azahar gibi) bastığınızda kısa süre titreşir. Kumanda titreşiminden ayrıdır.",
  "pad.touchHaptics.label": "Dokunma Titreşimi",
  "pad.usb.help": "Bağlantı noktasına öykünmüş bir USB aygıtı takın: Buzz buzzer'lar, Rock Band bateri seti, Keyboardmania, DJ pikabı, GunCon 2 ve daha fazlası. Normal kontrolleriniz bunu yönlendirir, ekstra eşlemeye gerek yoktur. Bağlantı noktasını değiştirdikten sonra oyunu yeniden başlatın: Oyun başlatıldığında neyin takılı olduğunu kontrol eder.",

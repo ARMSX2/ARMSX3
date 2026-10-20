@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "Przyciski akcji",
  "pad.testRumble.player1": "Test wibracji: gracz 1",
  "pad.testRumble.player2": "Test wibracji: gracz 2",
+ "pad.tightShoulders.description": "L1, L2, R1 i R2 reagują tylko na dotyk samego przycisku, a nie miejsca wokół niego, więc zajmują mniej ekranu.",
+ "pad.tightShoulders.label": "Wąski obszar dotyku L1/L2/R1/R2",
  "pad.touchHaptics.description": "Krótko wibruj po naciśnięciu przycisku ekranowego (np. PPSSPP / Azahar). Niezależne od wibracji kontrolera.",
  "pad.touchHaptics.label": "Reakcja haptyczna na dotyk",
  "pad.usb.help": "Podłącz emulowane urządzenie USB do portu: brzęczyki Buzz, zestaw perkusyjny Rock Band, Keyboardmania, gramofon DJ, GunCon 2 i nie tylko. Sterowanie nim odbywa się za pomocą zwykłych elementów sterujących, bez konieczności dodatkowego mapowania. Uruchom grę ponownie po zmianie portu: gra sprawdza, co jest podłączone podczas uruchamiania.",

@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "Bişkojkên sereke",
  "pad.testRumble.player1": "Lerizînê biceribîne: Lîstikvan 1",
  "pad.testRumble.player2": "Lerizînê biceribîne: Lîstikvan 2",
+ "pad.tightShoulders.description": "L1, L2, R1 û R2 tenê bersivê didin destdanên li ser bişkokê bi xwe, ne valahiya li dora wê, ji ber vê yekê cihê kêmtir ji ekranê digirin.",
+ "pad.tightShoulders.label": "Qada destdanê ya teng ji bo L1/L2/R1/R2",
  "pad.touchHaptics.description": "Dema ku hûn bişkokeke li ser ekranê pêl dikin, bi kurtî bilerizîne (wek PPSSPP / Azahar). Ji lerizîna kontrolkerê cuda ye.",
  "pad.touchHaptics.label": "Haptîkên destlêdanê",
  "pad.usb.help": "Amûrek USB-ya emulkirî bi portekê ve girêdin: Buzz buzzers, kitek drumek Rock Band, Keyboardmania, tabloyek DJ-ê, GunCon 2 û bêtir. Kontrolên we yên normal wê dimeşînin, nexşeyek zêde hewce nake. Piştî guheztina portekê lîstikê ji nû ve bidin destpêkirin: lîstik dema ku boot dike kontrol dike ka çi girêdayî ye.",

@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "Botones frontales",
  "pad.testRumble.player1": "Probar vibración: jugador 1",
  "pad.testRumble.player2": "Probar vibración: jugador 2",
+ "pad.tightShoulders.description": "L1, L2, R1 y R2 solo responden a toques sobre el propio botón, no en el espacio que lo rodea, así ocupan menos pantalla.",
+ "pad.tightShoulders.label": "Área táctil ajustada en L1/L2/R1/R2",
  "pad.touchHaptics.description": "Vibra brevemente cuando presionas un botón en pantalla (como PPSSPP / Azahar). Independiente de la vibración del mando.",
  "pad.touchHaptics.label": "Respuesta háptica al tocar",
  "pad.usb.help": "Conecte un dispositivo USB emulado a un puerto: zumbadores Buzz, una batería de Rock Band, Keyboardmania, un tocadiscos de DJ, GunCon 2 y más. Sus controles normales lo controlan, no se necesita mapeo adicional. Reinicia el juego después de cambiar un puerto: el juego comprueba qué está conectado cuando arranca.",

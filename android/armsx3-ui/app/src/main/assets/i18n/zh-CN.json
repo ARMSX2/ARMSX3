@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "动作键",
  "pad.testRumble.player1": "测试震动：玩家 1",
  "pad.testRumble.player2": "测试震动：玩家 2",
+ "pad.tightShoulders.description": "L1、L2、R1 和 R2 只在触碰按键本身时响应，按键周围的空白处不再响应，占用的屏幕空间更少。",
+ "pad.tightShoulders.label": "L1/L2/R1/R2 触控范围贴合按键",
  "pad.touchHaptics.description": "当您按下屏幕上的按钮时短暂震动（类似 PPSSPP / Azahar）。与手柄震动相互独立。",
  "pad.touchHaptics.label": "触控触觉反馈",
  "pad.usb.help": "将模拟 USB 设备连接到端口：Buzz 抢答器、Rock Band 鼓组、Keyboardmania、DJ 转盘、GunCon 2 等。用你平常的按键即可操作，无需额外映射。更改端口后请重新启动游戏：游戏启动时会检查插入了哪些设备。",

@@ -683,6 +683,8 @@
  "pad.stickTarget.ps2Buttons": "Boutons d'action",
  "pad.testRumble.player1": "Tester les vibrations : Joueur 1",
  "pad.testRumble.player2": "Tester les vibrations : Joueur 2",
+ "pad.tightShoulders.description": "L1, L2, R1 et R2 ne réagissent qu'aux appuis sur le bouton lui-même, pas sur l'espace autour, et prennent ainsi moins de place à l'écran.",
+ "pad.tightShoulders.label": "Zone tactile ajustée pour L1/L2/R1/R2",
  "pad.touchHaptics.description": "Vibre brièvement lorsque vous appuyez sur un bouton à l'écran (comme PPSSPP / Azahar). Indépendant des vibrations de la manette.",
  "pad.touchHaptics.label": "Retour haptique tactile",
  "pad.usb.help": "Connectez un périphérique USB émulé à un port : des buzzers Buzz, un kit de batterie Rock Band, Keyboardmania, une platine DJ, GunCon 2 et plus encore. Vos commandes normales le pilotent, aucun mappage supplémentaire n'est nécessaire. Redémarrez le jeu après avoir changé de port : le jeu vérifie ce qui est branché au démarrage.",
