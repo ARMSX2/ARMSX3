@@ -10,7 +10,9 @@
 #include "Emu/RSX/NV47/HW/context.h"
 #include "Emu/RSX/RSXZCULL.h"
 #include "RSXContextResources.h"
+#include "RSXCoreRenderer.h"
 #include "RSXDisplay.h"
+#include "RSXDrawCommands.h"
 #include "RSXDrawState.h"
 #include "RSXDriverState.h"
 #include "RSXFrameBuffer.h"
@@ -27,6 +29,10 @@ namespace rsx
 	{
 		thread* rsxthr = nullptr;
 		rsx_state* register_state = nullptr;
+		core_renderer core{};
+
+		// Draw sequencing and the immediate-mode push buffers of this context
+		draw_command_processor draw_processor;
 
 		// Pipeline state
 		bitmask_t<pipeline_state> graphics_state;
@@ -63,6 +69,9 @@ namespace rsx
 
 		// Stable identity. 0 is reserved for the primary context.
 		u32 id() const { return m_id; }
+
+		// Use to invalidate all state decoder caching flags. This is what makes a context switch expensive.
+		void mark_all_dirty();
 
 	private:
 		u32 m_id = 0;
