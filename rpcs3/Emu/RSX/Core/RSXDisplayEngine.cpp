@@ -80,7 +80,7 @@ namespace rsx
 			async_flip_buffer = buffer;
 			async_flip_requested |= flip_request::emu_requested;
 
-			m_pump->get_context()->eng_interrupt_mask |= rsx::display_interrupt;
+			m_pump->eng_interrupt_mask |= rsx::display_interrupt;
 
 			if (m_pump->state & cpu_flag::exit)
 			{
@@ -244,7 +244,7 @@ namespace rsx
 		auto renderer = m_pump->renderer();
 		const bool presented = renderer->present_frame(info);
 
-		m_pump->get_context()->eng_interrupt_mask.clear(rsx::display_interrupt);
+		m_pump->eng_interrupt_mask.clear(rsx::display_interrupt);
 
 #ifdef __ANDROID__
 		// ADPF feed: publish this frame's real CPU cost and the presenting thread's OS tid so
