@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "اختر ملف تعريف لتحميله لهذا اللاعب فورًا، أو احفظ خريطة الأزرار الحالية كملف تعريف جديد.",
  "pad.pressButton": "اضغط على زر...",
  "pad.pressControllerButton": "اضغط على زر في وحدة التحكم…",
- "pad.pressureAmount.description": "مدى قوة الضغط الذي يطبّقه مُعدِّل الضغط، للألعاب الحساسة للضغط في DualShock 2 (Metal Gear Solid، GTA). ينطبق على زر PRESSURE على الشاشة وعلى ربط \"Pressure Modifier (hold)\". القيمة الأقل = ضغط أخف.",
+ "pad.pressureAmount.description": "مدى قوة الضغط الذي يطبّقه مُعدِّل الضغط، لألعاب PS3 التي تقرأ مدى قوة الضغط على الزر. ينطبق على زر PRESSURE على الشاشة وعلى ربط \"Pressure Modifier (hold)\". القيمة الأقل = ضغط أخف.",
  "pad.pressureAmount.label": "كمية تعديل الضغط",
  "pad.rightStick.description": "ما ترسله العصا التناظرية الصحيحة: تناظري (افتراضي)، أو وجه، أو مخصص (اربط كل اتجاه أدناه).",
  "pad.rightStick.invertX.description": "قم بعكس العصا اليمنى أفقيًا (لإصلاح \"اليسار هو اليمين\").",

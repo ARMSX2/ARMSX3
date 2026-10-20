@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "เลือกโปรไฟล์เพื่อโหลดให้ผู้เล่นคนนี้ทันที หรือบันทึกการแมปปัจจุบันเป็นโปรไฟล์ใหม่",
  "pad.pressButton": "กดปุ่ม...",
  "pad.pressControllerButton": "กดปุ่มบนคอนโทรลเลอร์...",
- "pad.pressureAmount.description": "ตัวปรับแรงกดจะกดแรงแค่ไหน สำหรับเกมของ DualShock 2 ที่รับรู้แรงกด (Metal Gear Solid, GTA) ใช้กับปุ่ม PRESSURE บนหน้าจอและการผูกปุ่ม \"Pressure Modifier (hold)\" ค่าต่ำ = กดเบาลง",
+ "pad.pressureAmount.description": "ตัวปรับแรงกดจะกดแรงแค่ไหน สำหรับเกม PS3 ที่อ่านค่าแรงกดปุ่ม ใช้กับปุ่ม PRESSURE บนหน้าจอและการผูกปุ่ม \"Pressure Modifier (hold)\" ค่าต่ำ = กดเบาลง",
  "pad.pressureAmount.label": "ระดับของตัวปรับแรงกด",
  "pad.rightStick.description": "สิ่งที่อนาล็อกขวาส่ง: อนาล็อก (ค่าเริ่มต้น), ปุ่ม ○×△□ หรือกำหนดเอง (ผูกแต่ละทิศทางด้านล่าง)",
  "pad.rightStick.invertX.description": "สะท้อนอนาล็อกขวาในแนวนอน (แก้ปัญหา \"ซ้ายเป็นขวา\")",

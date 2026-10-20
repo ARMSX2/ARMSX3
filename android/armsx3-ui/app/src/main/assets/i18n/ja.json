@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "プロファイルを選ぶと、このプレイヤーにすぐ読み込まれます。現在のマッピングを新しいプロファイルとして保存することもできます。",
  "pad.pressButton": "ボタンを押してください…",
  "pad.pressControllerButton": "コントローラーのボタンを押してください…",
- "pad.pressureAmount.description": "DualShock 2 の感圧に対応したゲーム（メタルギアソリッド、GTA）向けに、感圧モディファイアが押す強さを設定します。画面上の PRESSURE ボタンと「Pressure Modifier (hold)」のバインドに適用されます。値が低いほど弱く押します。",
+ "pad.pressureAmount.description": "ボタンを押す強さを読み取る PS3 ゲーム向けに、感圧モディファイアが押す強さを設定します。画面上の PRESSURE ボタンと「Pressure Modifier (hold)」のバインドに適用されます。値が低いほど弱く押します。",
  "pad.pressureAmount.label": "感圧モディファイアの強さ",
  "pad.rightStick.description": "右のアナログ スティックが送信するもの: アナログ (デフォルト)、フェイス、またはカスタム (以下の各方向をバインド)。",
  "pad.rightStick.invertX.description": "右スティックを水平方向にミラーリングします。「左が右」を修正します。",

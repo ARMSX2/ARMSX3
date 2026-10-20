@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "Elija un perfil para cargarlo al instante en este jugador, o guarde el mapa actual como un nuevo perfil.",
  "pad.pressButton": "Presiona un botón...",
  "pad.pressControllerButton": "Presione un botón del mando...",
- "pad.pressureAmount.description": "Con qué fuerza presiona el modificador de presión, para juegos de DualShock 2 sensibles a la presión (Metal Gear Solid, GTA). Se aplica al botón PRESSURE en pantalla y a la asignación \"Pressure Modifier (hold)\". Más bajo = pulsación más suave.",
+ "pad.pressureAmount.description": "Con qué fuerza presiona el modificador de presión, para juegos de PS3 que leen con qué fuerza se pulsa un botón. Se aplica al botón PRESSURE en pantalla y a la asignación \"Pressure Modifier (hold)\". Más bajo = pulsación más suave.",
  "pad.pressureAmount.label": "Cantidad de modificador de presión",
  "pad.rightStick.description": "Lo que envía el joystick analógico derecho: analógico (predeterminado), frontal o personalizado (vincula cada dirección a continuación).",
  "pad.rightStick.invertX.description": "Refleje el joystick derecho horizontalmente: corrige \"la izquierda es la derecha\".",

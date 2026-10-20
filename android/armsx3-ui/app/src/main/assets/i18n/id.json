@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "Pilih profil untuk langsung memuatnya bagi pemain ini, atau simpan pemetaan saat ini sebagai profil baru.",
  "pad.pressButton": "Tekan tombol...",
  "pad.pressControllerButton": "Tekan tombol kontroler…",
- "pad.pressureAmount.description": "Seberapa keras pengubah tekanan menekan, untuk game DualShock 2 yang sensitif terhadap tekanan (Metal Gear Solid, GTA). Berlaku untuk tombol PRESSURE di layar dan untuk tombol yang diikat ke \"Pressure Modifier (hold)\". Lebih rendah = tekanan lebih lembut.",
+ "pad.pressureAmount.description": "Seberapa keras pengubah tekanan menekan, untuk game PS3 yang membaca seberapa keras tombol ditekan. Berlaku untuk tombol PRESSURE di layar dan untuk tombol yang diikat ke \"Pressure Modifier (hold)\". Lebih rendah = tekanan lebih lembut.",
  "pad.pressureAmount.label": "Jumlah pengubah tekanan",
  "pad.rightStick.description": "Apa yang dikirim oleh stik analog kanan: Analog (default), Wajah, atau Kustom (ikat setiap arah di bawah).",
  "pad.rightStick.invertX.description": "Cerminkan stik kanan secara horizontal (memperbaiki \"kiri adalah kanan\").",

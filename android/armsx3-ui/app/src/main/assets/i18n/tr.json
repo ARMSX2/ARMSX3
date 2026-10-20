@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "Bu oyuncuya hemen yüklemek için bir profil seçin veya mevcut eşlemeyi yeni bir profil olarak kaydedin.",
  "pad.pressButton": "Bir düğmeye basın...",
  "pad.pressControllerButton": "Bir kumanda düğmesine basın…",
- "pad.pressureAmount.description": "Basınç değiştiricinin ne kadar sert bastığı; DualShock 2'nin basınca duyarlı oyunları için (Metal Gear Solid, GTA). Ekrandaki PRESSURE düğmesine ve \"Pressure Modifier (hold)\" atamasına uygulanır. Düşük = daha yumuşak basış.",
+ "pad.pressureAmount.description": "Basınç değiştiricinin ne kadar sert bastığı; düğmeye ne kadar sert basıldığını okuyan PS3 oyunları için. Ekrandaki PRESSURE düğmesine ve \"Pressure Modifier (hold)\" atamasına uygulanır. Düşük = daha yumuşak basış.",
  "pad.pressureAmount.label": "Basınç değiştirici miktarı",
  "pad.rightStick.description": "Doğru analog çubuğun gönderdiği şey: Analog (varsayılan), Yüz veya Özel (aşağıdaki her yönü bağlayın).",
  "pad.rightStick.invertX.description": "Sağ çubuğu yatay olarak yansıtın (\"sol sağdır\" sorununu düzeltir).",

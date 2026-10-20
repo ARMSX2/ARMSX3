@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "Chọn một hồ sơ để tải ngay cho người chơi này, hoặc lưu ánh xạ hiện tại làm hồ sơ mới.",
  "pad.pressButton": "Nhấn một nút...",
  "pad.pressControllerButton": "Nhấn một nút trên tay cầm…",
- "pad.pressureAmount.description": "Mức lực nhấn của bộ điều chỉnh lực nhấn, dành cho các trò chơi DualShock 2 có nút cảm ứng lực (Metal Gear Solid, GTA). Áp dụng cho nút PRESSURE trên màn hình và cho liên kết \"Pressure Modifier (hold)\". Thấp hơn = nhấn nhẹ hơn.",
+ "pad.pressureAmount.description": "Mức lực nhấn của bộ điều chỉnh lực nhấn, dành cho các trò chơi PS3 có đọc lực nhấn nút. Áp dụng cho nút PRESSURE trên màn hình và cho liên kết \"Pressure Modifier (hold)\". Thấp hơn = nhấn nhẹ hơn.",
  "pad.pressureAmount.label": "Mức điều chỉnh lực nhấn",
  "pad.rightStick.description": "Cần analog bên phải gửi nội dung gì: Analog (mặc định), Face hoặc Custom (liên kết từng hướng bên dưới).",
  "pad.rightStick.invertX.description": "Phản chiếu cần phải theo chiều ngang (sửa lỗi \"trái là phải\").",

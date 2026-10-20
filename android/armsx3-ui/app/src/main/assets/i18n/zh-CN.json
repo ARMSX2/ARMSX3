@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "选择一个配置文件即可立即为该玩家加载，也可以将当前映射另存为新配置文件。",
  "pad.pressButton": "按一个按钮...",
  "pad.pressControllerButton": "按下手柄按钮...",
- "pad.pressureAmount.description": "压力调节器的按压力度，用于支持 DualShock 2 压感按键的游戏（合金装备、GTA）。作用于屏幕上的 PRESSURE 按钮以及“Pressure Modifier (hold)”绑定。数值越低，按压越轻。",
+ "pad.pressureAmount.description": "压力调节器的按压力度，用于会读取按键力度的 PS3 游戏。作用于屏幕上的 PRESSURE 按钮以及“Pressure Modifier (hold)”绑定。数值越低，按压越轻。",
  "pad.pressureAmount.label": "压力调节器力度",
  "pad.rightStick.description": "右侧模拟摇杆发送的内容：模拟（默认）、面部或自定义（绑定下面的每个方向）。",
  "pad.rightStick.invertX.description": "水平镜像右摇杆（修复“左即右”）。",

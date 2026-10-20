@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "یک نمایه را انتخاب کنید تا فوراً برای این بازیکن بارگذاری شود، یا نگاشت فعلی را به عنوان نمایه جدید ذخیره کنید.",
  "pad.pressButton": "یک دکمه را فشار دهید ...",
  "pad.pressControllerButton": "دکمه کنترلر را فشار دهید…",
- "pad.pressureAmount.description": "تعدیل‌کننده فشار چقدر محکم فشار می‌دهد، برای بازی‌های حساس به فشار DualShock 2 (Metal Gear Solid، GTA). روی دکمه PRESSURE روی صفحه و اتصال \"Pressure Modifier (hold)\" اعمال می‌شود. کمتر = فشار ملایم‌تر.",
+ "pad.pressureAmount.description": "تعدیل‌کننده فشار چقدر محکم فشار می‌دهد، برای بازی‌های PS3 که میزان فشار روی دکمه را می‌خوانند. روی دکمه PRESSURE روی صفحه و اتصال \"Pressure Modifier (hold)\" اعمال می‌شود. کمتر = فشار ملایم‌تر.",
  "pad.pressureAmount.label": "مقدار تعدیل کننده فشار",
  "pad.rightStick.description": "آنچه که استیک آنالوگ راست ارسال می کند: آنالوگ (پیش فرض)، چهره یا سفارشی (هر جهت را در زیر متصل کنید).",
  "pad.rightStick.invertX.description": "استیک راست را به صورت افقی آینه کنید (\"چپ راست است\" را رفع می‌کند).",

@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "選擇一個設定檔即可立即為此玩家載入，也可以將目前的映射另存為新設定檔。",
  "pad.pressButton": "按下一個按鈕...",
  "pad.pressControllerButton": "按下控制器按鈕...",
- "pad.pressureAmount.description": "壓力調節器的按壓力度，用於支援 DualShock 2 壓感按鍵的遊戲（潛龍諜影、GTA）。適用於螢幕上的 PRESSURE 按鈕以及「Pressure Modifier (hold)」綁定。數值越低，按壓越輕。",
+ "pad.pressureAmount.description": "壓力調節器的按壓力度，用於會讀取按鍵力度的 PS3 遊戲。適用於螢幕上的 PRESSURE 按鈕以及「Pressure Modifier (hold)」綁定。數值越低，按壓越輕。",
  "pad.pressureAmount.label": "壓力調節器力度",
  "pad.rightStick.description": "右側模擬搖桿發送的內容：模擬（預設）、臉部或自訂（綁定下面的每個方向）。",
  "pad.rightStick.invertX.description": "水平鏡像右搖桿（修復「左即右」）。",

@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "Scegli un profilo per caricarlo subito per questo giocatore, oppure salva la mappa attuale come nuovo profilo.",
  "pad.pressButton": "Premi un pulsante...",
  "pad.pressControllerButton": "Premi un pulsante del controller...",
- "pad.pressureAmount.description": "La forza con cui preme il modificatore di pressione, per i giochi DualShock 2 sensibili alla pressione (Metal Gear Solid, GTA). Si applica al pulsante PRESSURE sullo schermo e all'associazione \"Pressure Modifier (hold)\". Più basso = pressione più leggera.",
+ "pad.pressureAmount.description": "La forza con cui preme il modificatore di pressione, per i giochi PS3 che leggono quanto forte viene premuto un pulsante. Si applica al pulsante PRESSURE sullo schermo e all'associazione \"Pressure Modifier (hold)\". Più basso = pressione più leggera.",
  "pad.pressureAmount.label": "Quantità del modificatore di pressione",
  "pad.rightStick.description": "Cosa invia la levetta analogica destra: Analogico (predefinito), Volto o Personalizzato (associa ciascuna direzione di seguito).",
  "pad.rightStick.invertX.description": "Specchia la levetta destra orizzontalmente: risolve il problema \"sinistra è destra\".",

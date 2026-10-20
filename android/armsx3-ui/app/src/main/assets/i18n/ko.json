@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "프로필을 선택하면 이 플레이어에 바로 불러옵니다. 현재 매핑을 새 프로필로 저장할 수도 있습니다.",
  "pad.pressButton": "버튼을 누르세요...",
  "pad.pressControllerButton": "컨트롤러 버튼을 누르세요…",
- "pad.pressureAmount.description": "DualShock 2 감압 버튼을 지원하는 게임(Metal Gear Solid, GTA)에서 감압 모디파이어가 버튼을 누르는 강도입니다. 화면의 PRESSURE 버튼과 \"Pressure Modifier (hold)\" 바인딩에 적용됩니다. 낮을수록 약하게 누릅니다.",
+ "pad.pressureAmount.description": "버튼을 누르는 세기를 읽는 PS3 게임에서 감압 모디파이어가 버튼을 누르는 강도입니다. 화면의 PRESSURE 버튼과 \"Pressure Modifier (hold)\" 바인딩에 적용됩니다. 낮을수록 약하게 누릅니다.",
  "pad.pressureAmount.label": "감압 모디파이어 강도",
  "pad.rightStick.description": "오른쪽 아날로그 스틱이 보내는 것: 아날로그(기본값), 얼굴 또는 사용자 정의(아래 각 방향 바인딩).",
  "pad.rightStick.invertX.description": "오른쪽 스틱을 수평으로 미러링하여 \"왼쪽이 오른쪽\"이 되도록 수정합니다.",

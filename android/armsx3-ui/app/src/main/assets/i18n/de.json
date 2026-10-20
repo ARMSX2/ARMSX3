@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "Wählen Sie ein Profil, um es sofort für diesen Spieler zu laden, oder speichern Sie die aktuelle Belegung als neues Profil.",
  "pad.pressButton": "Eine Taste drücken...",
  "pad.pressControllerButton": "Drücken Sie eine Controller-Taste…",
- "pad.pressureAmount.description": "Wie stark der Druckmodifikator drückt, für druckempfindliche DualShock-2-Spiele (Metal Gear Solid, GTA). Gilt für die PRESSURE-Taste auf dem Bildschirm und für die Belegung „Druckmodifikator (halten)“. Niedriger = sanfterer Druck.",
+ "pad.pressureAmount.description": "Wie stark der Druckmodifikator drückt, für PS3-Spiele, die auswerten, wie fest eine Taste gedrückt wird. Gilt für die PRESSURE-Taste auf dem Bildschirm und für die Belegung „Druckmodifikator (halten)“. Niedriger = sanfterer Druck.",
  "pad.pressureAmount.label": "Stärke des Druckmodifikators",
  "pad.rightStick.description": "Was der rechte Analogstick sendet: Analog (Standard), Gesicht oder Benutzerdefiniert (jede Richtung unten binden).",
  "pad.rightStick.invertX.description": "Spiegeln Sie den rechten Stick horizontal (behebt „links ist rechts“).",

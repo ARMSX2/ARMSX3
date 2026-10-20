@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "Profîlekê hilbijêre da ku yekser ji bo vî lîstikvanî were barkirin, an nexşeya niha wekî profîla nû tomar bike.",
  "pad.pressButton": "Bişkokek bikirtînin...",
  "pad.pressControllerButton": "Bişkojek kontrolkerê bikirtînin…",
- "pad.pressureAmount.description": "Guherkerê zextê çiqas dijwar pêl dike, ji bo lîstikên DualShock 2 yên ku li hember zextê hesas in (Metal Gear Solid, GTA). Li ser bişkoka PRESSURE ya li ser ekranê û li ser girêdana \"Pressure Modifier (hold)\" derbas dibe. Kêmtir = pêlkirina nermtir.",
+ "pad.pressureAmount.description": "Guherkerê zextê çiqas dijwar pêl dike, ji bo lîstikên PS3 yên ku dixwînin bişkok çiqas dijwar tê pêlkirin. Li ser bişkoka PRESSURE ya li ser ekranê û li ser girêdana \"Pressure Modifier (hold)\" derbas dibe. Kêmtir = pêlkirina nermtir.",
  "pad.pressureAmount.label": "Mîqdara guherînkarê zextê",
  "pad.rightStick.description": "Tiştê ku stickê analog ê rast dişîne: Analog (xwerû), Rû, an Xweser (her arasteyê li jêr girêdin).",
  "pad.rightStick.invertX.description": "Stickê rast bi horizontalî neynik bikin (\"çep rast e\" rast dike).",

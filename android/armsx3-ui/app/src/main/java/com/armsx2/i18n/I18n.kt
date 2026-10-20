@@ -1706,8 +1706,8 @@ val EN: Map<String, String> = mapOf(
     "savestate.title.loadManage" to "Load / Manage Saves",
     "pad.pressureAmount.label" to "Pressure modifier amount",
     "pad.pressureAmount.description" to
-        "How hard the pressure modifier presses, for DualShock 2 pressure-sensitive games " +
-        "(Metal Gear Solid, GTA). Applies to the on-screen PRESSURE button and to the " +
+        "How hard the pressure modifier presses, for PS3 games that read how hard a button is " +
+        "pressed. Applies to the on-screen PRESSURE button and to the " +
         "\"Pressure Modifier (hold)\" binding. Lower = softer press.",
     "renderer.coalesceRenderPasses.description" to
         "Groups consecutive draws to the same target into one render pass. Helps on tiling GPUs " +

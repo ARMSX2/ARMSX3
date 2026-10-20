@@ -640,7 +640,7 @@
  "pad.padProfiles.controlsInfo": "Wybierz profil, aby od razu wczytać go dla tego gracza, albo zapisz obecne mapowanie jako nowy profil.",
  "pad.pressButton": "Naciśnij przycisk...",
  "pad.pressControllerButton": "Naciśnij przycisk kontrolera…",
- "pad.pressureAmount.description": "Jak mocno naciska modyfikator nacisku w grach na DualShock 2 wrażliwych na siłę nacisku (Metal Gear Solid, GTA). Dotyczy ekranowego przycisku PRESSURE i przypisania „Modyfikator nacisku (przytrzymaj)”. Niżej = słabszy nacisk.",
+ "pad.pressureAmount.description": "Jak mocno naciska modyfikator nacisku w grach na PS3, które odczytują siłę nacisku przycisku. Dotyczy ekranowego przycisku PRESSURE i przypisania „Modyfikator nacisku (przytrzymaj)”. Niżej = słabszy nacisk.",
  "pad.pressureAmount.label": "Wartość modyfikatora nacisku",
  "pad.rightStick.description": "Co wysyła prawy drążek analogowy: Analogowy (domyślny), Twarz lub Niestandardowy (powiąż każdy kierunek poniżej).",
  "pad.rightStick.invertX.description": "Odbij prawy drążek w poziomie (naprawia sytuację, gdy lewo działa jak prawo).",
