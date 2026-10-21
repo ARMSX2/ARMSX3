@@ -236,6 +236,7 @@ enum class emu_settings_type
 	MaximumCacheSize,
 	EmulateHddSpeed,
 	EmulateBdvdSpeed,
+	EmulateSavedataSpeed,
 
 	// Log
 	Log,
