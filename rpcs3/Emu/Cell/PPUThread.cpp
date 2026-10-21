@@ -5963,7 +5963,13 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 	std::vector<std::pair<std::string, ppu_module<lv2_obj>>> workload;
 
 	// Info to load to main JIT instance (true - compiled)
-	std::vector<std::pair<std::string, bool>> link_workload;
+	struct link_entry
+	{
+		std::string obj_name;
+		bool is_compiled = false;
+		std::unique_ptr<llvm::MemoryBuffer> object;
+	};
+	std::vector<link_entry> link_workload;
 
 	bool compiled_new = false;
 
@@ -6633,16 +6639,27 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 
 		if (!check_only)
 		{
-			link_workload.emplace_back(obj_name, false);
+			link_workload.push_back(link_entry{
+				.obj_name = obj_name,
+				.is_compiled = false,
+				.object = nullptr
+			});
 		}
 
 		// Check object file
-		if (jit_compiler::check(cache_path + obj_name))
+		if (auto object = jit_compiler::load_object(cache_path + obj_name))
 		{
-			if (!is_being_used_in_emulation && !check_only)
+			if (!check_only)
 			{
-				ppu_log.success("LLVM: Module exists: %s", obj_name);
-				link_workload.pop_back();
+				if (is_being_used_in_emulation)
+				{
+					link_workload.back().object = std::move(object);
+				}
+				else
+				{
+					ppu_log.success("LLVM: Module exists: %s", obj_name);
+					link_workload.pop_back();
+				}
 			}
 
 			continue;
@@ -6657,7 +6674,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 		compiled_new = true;
 
 		// Adjust information (is_compiled)
-		link_workload.back().second = true;
+		link_workload.back().is_compiled = true;
 
 		// Fill workload list for compilation
 		workload.emplace_back(std::move(obj_name), std::move(part));
@@ -7135,7 +7152,7 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 
 		ppu_log.notice("Loading %u modules", link_workload.size());
 
-		for (const auto& [obj_name, is_compiled] : link_workload)
+		for (link_entry& entry : link_workload)
 		{
 			mod_index++;
 
@@ -7157,9 +7174,18 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 			// Skipping only the module that failed is safe for the same reason excluded_funcs is:
 			// a guest function with no compiled code keeps its dispatcher entry and is interpreted.
 			// So the cost of a bad module is its own functions, not the whole executable.
-			if (!jits[mod_index / c_modules_per_jit]->add(cache_path + obj_name))
+			//
+			// A module the cache check already read is added from that buffer instead of being read from
+			// disk a second time; a module compiled just now is read from its file.
+			auto& jit = jits[mod_index / c_modules_per_jit];
+
+			const bool ok = entry.object
+				? jit->add(std::move(entry.object), cache_path + entry.obj_name)
+				: jit->add(cache_path + entry.obj_name);
+
+			if (!ok)
 			{
-				ppu_log.error("LLVM: Failed to load module %s; its functions will be interpreted", obj_name);
+				ppu_log.error("LLVM: Failed to load module %s; its functions will be interpreted", entry.obj_name);
 				failed_module_count++;
 			}
 
@@ -7169,9 +7195,9 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 				g_progr_pdone++;
 			}
 
-			if (!is_compiled)
+			if (ok && !entry.is_compiled)
 			{
-				ppu_log.success("LLVM: Loaded module #%u %s", mod_index, obj_name);
+				ppu_log.success("LLVM: Loaded module #%u %s", mod_index, entry.obj_name);
 			}
 		}
 	}
