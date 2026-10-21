@@ -5466,7 +5466,7 @@ usz map_workload(std::string_view thread_name, usz thread_count, usz count, std:
 		{
 			func(i);
 		}
-		return 1;
+		return thread_count;
 	}
 
 	atomic_t<u32> num_threads_succeeded {0}; // Check if any thread didn't finish. For example when hitting an exception.
@@ -5516,7 +5516,7 @@ usz map_workload(std::string_view thread_name, usz thread_count, std::function<v
 	if (thread_count <= 1)
 	{
 		func();
-		return 1;
+		return thread_count;
 	}
 
 	atomic_t<u32> num_threads_succeeded {0}; // Check if any thread didn't finish. For example when hitting an exception.
