@@ -205,9 +205,11 @@ namespace rsx
 		{
 			if (!m_pump->isHLE)
 			{
-				sys_rsx_context_attribute(0x55555555, 0xFEC, buffer, 0, 0, 0);
+				// The context that flipped gets the notification
+				context* ctx = m_pump->get_context();
+				sys_rsx_context_attribute(ctx->id(), 0xFEC, buffer, 0, 0, 0);
 
-				if (m_pump->unsent_gcm_events)
+				if (ctx->fw.unsent_gcm_events)
 				{
 					// TODO: A proper fix
 					return;
@@ -353,7 +355,21 @@ namespace rsx
 		}
 		else
 		{
-			sys_rsx_context_attribute(0x55555555, 0xFED, 1, get_guest_system_time(post_event_time), 0, 0);
+			// Broadcast vblank event to all context listeners.
+			rsx::simple_array<u32> lv2_ids;
+			m_pump->for_each_context([&](context* ctx)
+			{
+				if (ctx->fw.driver_info)
+				{
+					lv2_ids.push_back(ctx->id());
+				}
+			});
+
+			const u64 guest_time = get_guest_system_time(post_event_time);
+			for (const u32 id : lv2_ids)
+			{
+				sys_rsx_context_attribute(id, 0xFED, 1, guest_time, 0, 0);
+			}
 		}
 	}
 
@@ -474,8 +490,8 @@ namespace rsx
 			// Which condition ended it. unsent_gcm_events is the savestate hand-off, so seeing
 			// it here outside a savestate means a live send failed and took the vblank source
 			// down with it -- permanently, since nothing restarts this thread.
-			rsx_log.error("VBlank: loop exited after %u iterations (stopped=%d, unsent_gcm_events=0x%x, aborting=%d)",
-				iterations, m_pump->is_stopped() ? 1 : 0, m_pump->unsent_gcm_events.load(),
+			rsx_log.error("VBlank: loop exited after %u iterations (stopped=%d, unsent_gcm_events=%d, aborting=%d)",
+				iterations, m_pump->is_stopped() ? 1 : 0, m_pump->has_unsent_gcm_events() ? 1 : 0,
 				thread_ctrl::state() == thread_state::aborting ? 1 : 0);
 		})));
 	}

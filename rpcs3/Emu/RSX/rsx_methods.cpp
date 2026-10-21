@@ -58,14 +58,14 @@ namespace rsx
 		RSX(ctx)->reset();
 		RSX(ctx)->on_frame_end(arg);
 		RSX(ctx)->request_emu_flip(arg);
-		vm::_ptr<atomic_t<u128>>(RSX(ctx)->label_addr + 0x10)->store(u128{});
+		vm::_ptr<atomic_t<u128>>(ctx->fw.label_addr + 0x10)->store(u128{});
 	}
 
 	void user_command(context* ctx, u32, u32 arg)
 	{
 		if (!RSX(ctx)->isHLE)
 		{
-			sys_rsx_context_attribute(0x55555555, 0xFEF, 0, arg, 0, 0);
+			sys_rsx_context_attribute(ctx->id(), 0xFEF, 0, arg, 0, 0);
 			return;
 		}
 
