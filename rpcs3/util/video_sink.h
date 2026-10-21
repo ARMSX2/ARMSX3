@@ -27,6 +27,7 @@ namespace utils
 
 			std::lock_guard lock(m_video_mtx);
 			m_frames_to_encode.emplace_back(timestamp_ms, pitch, width, height, pixel_format, std::move(frame));
+			signal_work();
 			return true;
 		}
 
@@ -43,6 +44,7 @@ namespace utils
 				m_samples_to_encode.emplace_back(timestamp_us, sample_count, channels, std::move(sample));
 			}
 
+			signal_work();
 			samples_added++;
 			samples_added.notify_one();
 			return true;
@@ -123,10 +125,18 @@ namespace utils
 		shared_mutex m_audio_mtx;
 		std::deque<encoder_sample> m_samples_to_encode;
 		atomic_t<bool> m_paused = false;
-		atomic_t<bool> m_flush = false;
+		atomic_t<u32> m_flush = 0;
+		atomic_t<u32> m_work_signal = 0;
 		u32 m_framerate = 30;
 		u32 m_sample_rate = 48000;
 		s32 m_sample_format = -1;
 		static constexpr u32 m_samples_per_block = 256;
+
+	protected:
+		void signal_work()
+		{
+			m_work_signal++;
+			m_work_signal.notify_one();
+		}
 	};
 }
