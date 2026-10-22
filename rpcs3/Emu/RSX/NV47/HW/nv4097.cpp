@@ -847,7 +847,7 @@ namespace rsx
 				return;
 			}
 
-			const u32 addr = get_address(offset, REGS(ctx)->semaphore_context_dma_4097());
+			const u32 addr = get_address(ctx, offset, REGS(ctx)->semaphore_context_dma_4097());
 
 			if (ctx->fw.label_addr >> 28 != addr >> 28)
 			{
@@ -877,7 +877,7 @@ namespace rsx
 				return;
 			}
 
-			const u32 addr = get_address(offset, REGS(ctx)->semaphore_context_dma_4097());
+			const u32 addr = get_address(ctx, offset, REGS(ctx)->semaphore_context_dma_4097());
 
 			if (ctx->fw.label_addr >> 28 != addr >> 28)
 			{
