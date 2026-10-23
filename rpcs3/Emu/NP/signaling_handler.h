@@ -25,6 +25,9 @@ struct signaling_info
 	// Signaling
 	u32 conn_id = 0;
 	bool op_activated = false;
+	// ARMSX3: the game activated this connection itself (sceNpSignalingActivateConnection), as opposed to a
+	// Matching2 room bringing it up on its own
+	bool self_activated = false;
 	u32 info_counter = 10;
 
 	// Matching2

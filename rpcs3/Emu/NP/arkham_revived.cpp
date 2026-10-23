@@ -199,9 +199,14 @@ namespace arkham_revived
 		}
 	}
 
+	bool is_arkham_origins(std::string_view title_id)
+	{
+		return std::find(std::begin(s_titles), std::end(s_titles), title_id) != std::end(s_titles);
+	}
+
 	void prepare(const std::string& title_id)
 	{
-		if (std::find(std::begin(s_titles), std::end(s_titles), title_id) == std::end(s_titles))
+		if (!is_arkham_origins(title_id))
 		{
 			return;
 		}
