@@ -226,6 +226,8 @@ namespace rpcn
 		atomic_t<bool> want_auth    = false;
 		// ARMSX3: set when the connection of a signed-in session drops, until rpcn_thread has signed it in again
 		atomic_t<bool> session_lost = false;
+		// ARMSX3: set by terminate_connection(), after which the server closes the connection on purpose
+		atomic_t<bool> session_ending = false;
 		u32 binding_address = 0;
 		std::binary_semaphore sem_connected, sem_authentified;
 		std::mutex mutex_connected, mutex_authentified;

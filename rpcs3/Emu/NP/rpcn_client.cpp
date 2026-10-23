@@ -588,6 +588,7 @@ namespace rpcn
 						}
 
 						reconnect_attempts = 0;
+						session_ending = false;
 						continue;
 					}
 					else
@@ -1505,6 +1506,9 @@ namespace rpcn
 
 	bool rpcn_client::terminate_connection()
 	{
+		// ARMSX3: the server closes the connection after this, which is not a dropped session to sign in again
+		session_ending = true;
+
 		const u64 req_id = rpcn_request_counter.fetch_add(1);
 
 		std::vector<u8> packet_data;
@@ -3236,7 +3240,7 @@ namespace rpcn
 	// goes false, so whatever sees it disconnected also sees that its requests are to wait (handle_output).
 	void rpcn_client::lose_connection()
 	{
-		const bool dropped = authentified && !terminate && !session_lost.exchange(true);
+		const bool dropped = authentified && !terminate && !session_ending && !session_lost.exchange(true);
 
 		connected = false;
 
