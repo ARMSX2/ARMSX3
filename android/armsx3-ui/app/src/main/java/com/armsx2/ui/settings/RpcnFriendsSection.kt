@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.armsx2.i18n.str
+import com.armsx2.ui.common.PadInput
 import com.armsx3.Rpcs3Bridge
 import java.util.concurrent.Executors
 import kotlinx.coroutines.Dispatchers
@@ -165,6 +166,8 @@ internal fun RpcnFriendsList(
     var busy by remember { mutableStateOf(false) }
     // The friend whose Remove is waiting for a second press, or null.
     var confirmRemove by remember { mutableStateOf<String?>(null) }
+    // A control to hand the pad's selection to once it has registered, or null.
+    var restoreTo by remember { mutableStateOf<String?>(null) }
     // Sessions this list opened; each one is closed when it leaves the screen.
     var opened by remember { mutableIntStateOf(0) }
     // Whether an account is saved (null until known), and whether this list has tried to connect it.
@@ -240,14 +243,21 @@ internal fun RpcnFriendsList(
     }
 
     // Swapping a row's buttons drops the selected one from the pad's registry, which sends the
-    // selection to the top of the list; put it on the safe choice instead, once it has registered.
+    // selection (and the page) to the top. So the buttons let go of it first, and with the pad
+    // driving it lands here instead: Keep when the question appears, back on Remove after Keep.
+    // Under touch nothing is selected at all, as nothing would show it.
     LaunchedEffect(confirmRemove) {
-        val target = confirmRemove?.let { "$controllerIdPrefix.keep.$it" } ?: return@LaunchedEffect
+        val name = confirmRemove ?: return@LaunchedEffect
+        if (PadInput.active.value) restoreTo = "$controllerIdPrefix.keep.$name"
+    }
+    LaunchedEffect(restoreTo) {
+        val target = restoreTo ?: return@LaunchedEffect
         var attempts = 0
         while (!SettingsControllerNav.selectById(target) && attempts < 10) {
             attempts++
             withFrameNanos {}
         }
+        restoreTo = null
     }
 
     Column(Modifier.fillMaxWidth()) {
@@ -361,10 +371,16 @@ internal fun RpcnFriendsList(
                 val name = friend.name
                 if (confirmRemove == name) {
                     val remove = {
+                        SettingsControllerNav.clearSelection()
                         confirmRemove = null
+                        if (PadInput.active.value && canAdd) restoreTo = "$controllerIdPrefix.add"
                         act(msgRemoved.format(name), { Rpcs3Bridge.rpcnRemoveFriend(name) })
                     }
-                    val keep = { confirmRemove = null }
+                    val keep = {
+                        SettingsControllerNav.clearSelection()
+                        confirmRemove = null
+                        if (PadInput.active.value) restoreTo = "$controllerIdPrefix.remove.$name"
+                    }
                     EntryRow(str("rpcn.friends.removeConfirm").format(name), null) {
                         TextButton(
                             enabled = !busy,
