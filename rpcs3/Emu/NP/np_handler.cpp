@@ -1013,6 +1013,7 @@ namespace np
 			}
 
 			local_ip_addr  = std::bit_cast<u32, be_t<u32>>(rpcn->get_addr_local());
+			discover_route();
 
 			break;
 		}
