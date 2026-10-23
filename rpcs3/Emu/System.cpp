@@ -31,6 +31,7 @@
 
 #include "Emu/title.h"
 #include "Emu/IdManager.h"
+#include "Emu/NP/arkham_revived.h"
 #include "Emu/RSX/Capture/rsx_replay.h"
 #include "Emu/RSX/Overlays/overlay_message.h"
 #include "Emu/RSX/Overlays/BigPicture/overlay_big_picture.h"
@@ -2380,6 +2381,9 @@ game_boot_result Emulator::Load(const std::string& title_id, bool is_disc_patch,
 			// Load patches from different locations
 			g_fxo->get<patch_engine>().append_global_patches();
 			g_fxo->get<patch_engine>().append_title_patches(m_title_id);
+
+			// ARMSX3: Batman: Arkham Origins multiplayer reaches Arkham: Revived (Emu/NP/arkham_revived.h)
+			arkham_revived::prepare(m_title_id);
 		}
 
 		// Set bdvd_dir
