@@ -1244,6 +1244,12 @@ vk::viewable_image* VKGSRender::get_present_source(/* inout */ vk::present_surfa
 
 bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 {
+	if (m_device->is_lost())
+	{
+		// A lost device presents nothing. The core replaces the renderer.
+		return false;
+	}
+
 	if (!info.emu_flip)
 	{
 		// Native UI flips are requested from the local task. Submit outstanding work first.
@@ -1632,14 +1638,8 @@ bool VKGSRender::present_frame(const rsx::display_flip_info_t& info)
 			continue;
 		}
 		default:
-			if (status == VK_ERROR_DEVICE_LOST)
-			{
-				// Same reason as the present arm below: dying here skips on_exit().
-				rsx::request_device_lost_shutdown("acquiring a swapchain image");
+			if (vk::die_with_error(status))
 				return false;
-			}
-
-			vk::die_with_error(status);
 		}
 
 		if (should_reinitialize_swapchain)

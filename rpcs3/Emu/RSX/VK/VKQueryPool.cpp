@@ -49,16 +49,14 @@ namespace vk
 			return query.ready;
 		}
 		default:
-			if (error == VK_ERROR_DEVICE_LOST)
-			{
-				// See sync.cpp: latch and return rather than killing the RSX thread here.
-				// "not ready" is the honest answer for a query that can never complete.
-				rsx::request_device_lost_shutdown("polling an occlusion query");
+			if (!die_with_error(error))
 				return false;
-			}
 
-			die_with_error(error);
-			return false;
+			// The query will never complete. Report everything as visible, as if there was no host query.
+			query.any_passed = true;
+			query.ready = true;
+			query.data = umax;
+			return true;
 		}
 	}
 
