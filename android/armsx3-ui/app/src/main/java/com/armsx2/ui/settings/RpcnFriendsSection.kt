@@ -106,9 +106,9 @@ private val sessionDispatcher = sessionExecutor.asCoroutineDispatcher()
  * game's invite list offers friends who are online, so until a request is accepted there is no
  * one to invite.
  *
- * A game in progress has a session to read. Outside one there is nothing until someone asks: the
- * sign-in button holds a session open for as long as this list is showing, and nothing here opens
- * one on its own.
+ * A game playing online has a session to read. Outside one there is none, so with an account saved
+ * the list connects on its own and holds that session for as long as it is showing: a saved
+ * account reads as signed in, and a separate "Sign in" step here read as being signed out.
  */
 @Composable
 internal fun RpcnFriendsList(controllerIdPrefix: String, canAdd: Boolean, canRemove: Boolean) {
@@ -123,6 +123,9 @@ internal fun RpcnFriendsList(controllerIdPrefix: String, canAdd: Boolean, canRem
     var busy by remember { mutableStateOf(false) }
     // Sessions this list opened; each one is closed when it leaves the screen.
     var opened by remember { mutableIntStateOf(0) }
+    // Whether an account is saved (null until known), and whether this list has tried to connect it.
+    var configured by remember { mutableStateOf<Boolean?>(null) }
+    var connectTried by remember { mutableStateOf(false) }
 
     // str() is @Composable, so it cannot be called from inside a coroutine or an onClick lambda.
     val msgWorking = str("rpcn.friends.working")
@@ -165,9 +168,10 @@ internal fun RpcnFriendsList(controllerIdPrefix: String, canAdd: Boolean, canRem
         }
     }
 
-    fun signIn() {
+    fun connect() {
         busy = true
-        status = msgWorking
+        status = ""
+        connectTried = true
         opened++
         scope.launch {
             val result = withContext(sessionDispatcher) { Rpcs3Bridge.rpcnFriendsSession(true) }
@@ -175,6 +179,17 @@ internal fun RpcnFriendsList(controllerIdPrefix: String, canAdd: Boolean, canRem
             busy = false
             read()
         }
+    }
+
+    LaunchedEffect(Unit) {
+        configured = withContext(Dispatchers.IO) {
+            runCatching { JSONObject(Rpcs3Bridge.rpcnStatus()).optBoolean("configured") }.getOrDefault(false)
+        }
+    }
+
+    // Once, after the first read shows no session: a game that is online needs nothing from here.
+    LaunchedEffect(loaded, configured) {
+        if (loaded && configured == true && !data.signedIn && !connectTried) connect()
     }
 
     Column(Modifier.fillMaxWidth()) {
@@ -213,16 +228,31 @@ internal fun RpcnFriendsList(controllerIdPrefix: String, canAdd: Boolean, canRem
         if (!loaded) {
             // First read still on its way.
         } else if (!data.signedIn) {
-            Text(
-                str("rpcn.friends.signedOut"),
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 6.dp),
-            )
-            TextButton(
-                enabled = !busy,
-                onClick = ::signIn,
-                modifier = Modifier.controllerFocusable("$controllerIdPrefix.signin", onConfirm = ::signIn),
-            ) { Text(str("rpcn.friends.signin")) }
+            when {
+                configured == false -> Text(
+                    str("rpcn.friends.noAccount"),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                busy || configured == null || !connectTried -> Text(
+                    str("rpcn.friends.connecting"),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+                else -> {
+                    // The reason, if the core gave one, is in the status line below.
+                    Text(
+                        str("rpcn.friends.signedOut"),
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                    TextButton(
+                        enabled = !busy,
+                        onClick = ::connect,
+                        modifier = Modifier.controllerFocusable("$controllerIdPrefix.retry", onConfirm = ::connect),
+                    ) { Text(str("rpcn.friends.retry")) }
+                }
+            }
         } else {
             if (data.received.isNotEmpty()) {
                 SectionLabel(str("rpcn.friends.requests"))

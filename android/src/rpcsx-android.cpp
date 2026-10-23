@@ -3409,7 +3409,7 @@ extern "C" const char *_rpcsx_rpcnRemoveFriend(std::string_view npid) {
 // Deliberately does NOT sign in, nor even create a client (peek_instance): this is polled to draw
 // a list, and a screen that silently opens a network session just by being looked at is not what
 // anyone expects. The session is a running game's, or the one _rpcsx_rpcnFriendsSession holds
-// open on an explicit tap.
+// open while a friends list is showing.
 extern "C" const char *_rpcsx_rpcnGetFriends() {
   static thread_local std::string result;
 
@@ -3454,8 +3454,8 @@ extern "C" const char *_rpcsx_rpcnGetFriends() {
 //
 // The client lives only as long as someone holds it. In a game the NP handler does; in the
 // library nothing does, so the session an add or remove signs in is gone again the moment the
-// request is sent, and the list showed nothing there. A screen opens one here on an explicit tap
-// and closes it when it goes away. Opens are counted, so one screen closing does not end another's.
+// request is sent, and the list showed nothing there. A friends list opens one here while it is
+// showing and closes it when it goes away. Opens are counted, so one closing does not end another's.
 static std::mutex s_rpcn_friends_session_mutex;
 static std::shared_ptr<rpcn::rpcn_client> s_rpcn_friends_session;
 static u32 s_rpcn_friends_session_users = 0;
