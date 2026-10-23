@@ -100,6 +100,7 @@ struct RPCSXApi {
   const char *(*rpcnAddFriend)(std::string_view npid);
   const char *(*rpcnRemoveFriend)(std::string_view npid);
   const char *(*rpcnGetFriends)();
+  const char *(*rpcnFriendsSession)(bool open);
   const char *(*rpcnCreateAccount)(std::string_view npid, std::string_view password,
                                    std::string_view onlineName, std::string_view email);
   const char *(*rpcnResendToken)(std::string_view npid, std::string_view password);
@@ -253,6 +254,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.rpcnAddFriend = reinterpret_cast<decltype(rpcnAddFriend)>(dlsym(handle, "_rpcsx_rpcnAddFriend"));
     result.rpcnRemoveFriend = reinterpret_cast<decltype(rpcnRemoveFriend)>(dlsym(handle, "_rpcsx_rpcnRemoveFriend"));
     result.rpcnGetFriends = reinterpret_cast<decltype(rpcnGetFriends)>(dlsym(handle, "_rpcsx_rpcnGetFriends"));
+    result.rpcnFriendsSession = reinterpret_cast<decltype(rpcnFriendsSession)>(dlsym(handle, "_rpcsx_rpcnFriendsSession"));
     result.rpcnCreateAccount = reinterpret_cast<decltype(rpcnCreateAccount)>(dlsym(handle, "_rpcsx_rpcnCreateAccount"));
     result.rpcnResendToken = reinterpret_cast<decltype(rpcnResendToken)>(dlsym(handle, "_rpcsx_rpcnResendToken"));
     result.rpcnSendResetToken = reinterpret_cast<decltype(rpcnSendResetToken)>(dlsym(handle, "_rpcsx_rpcnSendResetToken"));
@@ -1773,10 +1775,18 @@ Java_net_rpcsx_RPCSX_rpcnRemoveFriend(JNIEnv *env, jobject, jstring npid) {
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_net_rpcsx_RPCSX_rpcnGetFriends(JNIEnv *env, jobject) {
-  if (!rpcsxLib.rpcnGetFriends) return env->NewStringUTF("[]");
+  if (!rpcsxLib.rpcnGetFriends) return env->NewStringUTF("{}");
 
   const char *msg = rpcsxLib.rpcnGetFriends();
-  return env->NewStringUTF(msg ? msg : "[]");
+  return env->NewStringUTF(msg ? msg : "{}");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnFriendsSession(JNIEnv *env, jobject, jboolean open) {
+  if (!rpcsxLib.rpcnFriendsSession) return rpcn_unavailable(env);
+
+  const char *msg = rpcsxLib.rpcnFriendsSession(open == JNI_TRUE);
+  return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL

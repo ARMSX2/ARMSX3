@@ -3397,39 +3397,98 @@ extern "C" const char *_rpcsx_rpcnRemoveFriend(std::string_view npid) {
   });
 }
 
-// The friend list as JSON, or an empty array when not signed in.
+// The friend list and the requests waiting on either side, as JSON:
+//   {"signedIn":true,"friends":[{"npid":"a","online":true}],"received":["b"],"sent":["c"]}
+// and signedIn false with empty lists when no session is signed in.
 //
-// Deliberately does NOT sign in on its own: this is polled to draw a list, and a screen that
-// silently opens a network session just by being looked at is not what anyone expects. Adding a
-// friend is an explicit action and can afford to authenticate; showing a list cannot.
+// Requests are half of it: on RPCN two people are friends only once both have added each other,
+// and until then the request sits in requests_received on one side and requests_sent on the
+// other. A game's invite list offers friends only, so a request nobody can see was an invite
+// nobody could send.
+//
+// Deliberately does NOT sign in, nor even create a client (peek_instance): this is polled to draw
+// a list, and a screen that silently opens a network session just by being looked at is not what
+// anyone expects. The session is a running game's, or the one _rpcsx_rpcnFriendsSession holds
+// open on an explicit tap.
 extern "C" const char *_rpcsx_rpcnGetFriends() {
   static thread_local std::string result;
 
-  const auto rpcn = rpcn::rpcn_client::get_instance(0);
+  const auto rpcn = rpcn::rpcn_client::peek_instance();
 
   if (!rpcn || !rpcn->is_authentified()) {
-    result = "[]";
+    result = R"({"signedIn":false,"friends":[],"received":[],"sent":[]})";
     return result.c_str();
   }
 
-  std::string entries;
+  // One copy under the client's lock, so the three lists agree with each other.
+  rpcn::friend_data data;
+  rpcn->get_friends(data);
 
-  for (u32 i = 0, count = rpcn->get_num_friends(); i < count; i++) {
-    const auto presence = rpcn->get_friend_presence_by_index(i);
+  std::string friends;
 
-    if (!presence) {
-      continue;
-    }
+  for (const auto &[npid, presence] : data.friends) {
+    if (!friends.empty()) friends += ",";
 
-    if (!entries.empty()) entries += ",";
-
-    fmt::append(entries, R"({"npid":"%s","online":%s})",
-                json_escape(presence->first),
-                presence->second.online ? "true" : "false");
+    fmt::append(friends, R"({"npid":"%s","online":%s})", json_escape(npid),
+                presence.online ? "true" : "false");
   }
 
-  result = fmt::format("[%s]", entries);
+  const auto names = [](const std::set<std::string> &npids) {
+    std::string out;
+
+    for (const auto &npid : npids) {
+      if (!out.empty()) out += ",";
+      fmt::append(out, R"("%s")", json_escape(npid));
+    }
+
+    return out;
+  };
+
+  result = fmt::format(R"({"signedIn":true,"friends":[%s],"received":[%s],"sent":[%s]})",
+                       friends, names(data.requests_received), names(data.requests_sent));
   return result.c_str();
+}
+
+// Keeps a signed-in session open while a friends screen is showing, so the list above has
+// something to read outside a game.
+//
+// The client lives only as long as someone holds it. In a game the NP handler does; in the
+// library nothing does, so the session an add or remove signs in is gone again the moment the
+// request is sent, and the list showed nothing there. A screen opens one here on an explicit tap
+// and closes it when it goes away. Opens are counted, so one screen closing does not end another's.
+static std::mutex s_rpcn_friends_session_mutex;
+static std::shared_ptr<rpcn::rpcn_client> s_rpcn_friends_session;
+static u32 s_rpcn_friends_session_users = 0;
+
+extern "C" const char *_rpcsx_rpcnFriendsSession(bool open) {
+  if (!open) {
+    std::shared_ptr<rpcn::rpcn_client> last;
+
+    {
+      std::lock_guard lock(s_rpcn_friends_session_mutex);
+
+      if (s_rpcn_friends_session_users && --s_rpcn_friends_session_users == 0) {
+        last = std::move(s_rpcn_friends_session);
+      }
+    }
+
+    // Dropped outside the lock: the last reference tears the client down and joins its threads.
+    last.reset();
+    return rpcn_ok();
+  }
+
+  {
+    std::lock_guard lock(s_rpcn_friends_session_mutex);
+
+    if (!s_rpcn_friends_session) {
+      s_rpcn_friends_session = rpcn::rpcn_client::get_instance(0);
+    }
+
+    s_rpcn_friends_session_users++;
+  }
+
+  // Signs the held client in with the saved account, if it is not already.
+  return rpcn_with_auth([](rpcn::rpcn_client &) { return true; });
 }
 
 extern "C" const char *_rpcsx_rpcnCreateAccount(std::string_view npid,

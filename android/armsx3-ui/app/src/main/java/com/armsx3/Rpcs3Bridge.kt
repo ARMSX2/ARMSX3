@@ -1342,7 +1342,10 @@ object Rpcs3Bridge {
         runCatching { RPCSX.instance.rpcnRemoveFriend(npid) }.getOrElse { it.message ?: "" }
 
     fun rpcnGetFriends(): String =
-        runCatching { RPCSX.instance.rpcnGetFriends() }.getOrElse { "[]" }
+        runCatching { RPCSX.instance.rpcnGetFriends() }.getOrElse { "{}" }
+
+    fun rpcnFriendsSession(open: Boolean): String =
+        runCatching { RPCSX.instance.rpcnFriendsSession(open) }.getOrElse { it.message ?: "" }
 
     fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String =
         runCatching { RPCSX.instance.rpcnCreateAccount(npid, password, onlineName, email) }

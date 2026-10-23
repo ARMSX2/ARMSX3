@@ -27,6 +27,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -59,6 +61,11 @@ import com.armsx2.ui.common.GlassPanel
 import com.armsx2.ui.common.RoundAction
 import com.armsx2.ui.common.SettingSwitchRow
 import com.armsx2.ui.settings.controllerFocusable
+import com.armsx2.ui.settings.RpcnFriendsList
+import com.armsx3.Rpcs3Bridge
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 /**
  * Who else is in ARMSX2 right now, via Discord.
@@ -75,7 +82,38 @@ fun FriendsScreen(onBack: () -> Unit) {
                 title = str("friends.title"),
                 leading = { RoundAction("←", str("action.back"), onClick = onBack) },
             )
+            RpcnFriendsPanel(Modifier.padding(horizontal = 8.dp).padding(bottom = 10.dp))
             FriendsPanel(Modifier.padding(horizontal = 8.dp))
+        }
+    }
+}
+
+/**
+ * RPCN friends and the requests waiting on them, for whoever plays online through RPCN.
+ *
+ * The rest of this tab is Discord's, and a friend request on RPCN had no screen at all: the RPCN
+ * settings listed accepted friends only. A game's invite list offers RPCN friends who are online,
+ * so a request nobody could see was a friend nobody could invite. Shown only once an RPCN account
+ * is set up, so the tab stays Discord's for everyone else.
+ */
+@Composable
+fun RpcnFriendsPanel(modifier: Modifier = Modifier) {
+    var configured by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        configured = withContext(Dispatchers.IO) {
+            runCatching { JSONObject(Rpcs3Bridge.rpcnStatus()).optBoolean("configured") }.getOrDefault(false)
+        }
+    }
+    if (!configured) return
+
+    GlassPanel(modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(
+                str("friends.rpcn.title"),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            RpcnFriendsList(controllerIdPrefix = "friends.rpcn", canAdd = false, canRemove = false)
         }
     }
 }

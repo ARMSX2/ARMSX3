@@ -201,8 +201,12 @@ class RPCSX {
     /** Removes a friend. Returns "" on success or a message. */
     external fun rpcnRemoveFriend(npid: String): String
 
-    /** Friend list as JSON, or [] when not signed in. Never signs in on its own. */
+    /** Friends and pending requests as JSON: signedIn, friends, received, sent. Never signs in on its own. */
     external fun rpcnGetFriends(): String
+
+    /** Holds a signed-in session open for a friends screen (true, signing in if needed) or lets it go (false).
+     *  Returns "" on success or a message. */
+    external fun rpcnFriendsSession(open: Boolean): String
 
     external fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String
     external fun rpcnResendToken(npid: String, password: String): String

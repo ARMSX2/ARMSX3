@@ -336,6 +336,9 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                         com.armsx2.remoteplay.RemotePlayHostPanel(
                             Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 10.dp),
                         )
+                        com.armsx2.ui.friends.RpcnFriendsPanel(
+                            Modifier.padding(horizontal = 12.dp).padding(bottom = 10.dp),
+                        )
                         if (com.armsx2.DiscordPresence.available()) {
                             com.armsx2.ui.friends.FriendsPanel(Modifier.padding(horizontal = 12.dp))
                         }
