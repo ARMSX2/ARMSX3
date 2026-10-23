@@ -769,3 +769,46 @@ SPU-93f3b15e03c594d9eaf5a0d8521854fd6eb2a8c7:
     Patch Version: 1.0
     Patch:
       - [ be32, 0x075ac, 0x327fd700 ] # br 0x07464 (was brz r3,0x07464, 0x207fd703): never count toward the park limit
+
+# BATMAN: ARKHAM ORIGINS, BLUS31147 update 01.06, multiplayer executable (MP.SELF) -- ours, OFF by default.
+#
+# Online play on Arkham: Revived meets only RPCN players, and a private lobby's host gets no START GAME
+# button until 3 players are in. The lobby script (BmScript GDGFxMovieUI_LobbyMenu, cooked into the
+# disc's MULTIPLAYER/BMGAME/COOKEDPS3/FRONTEND.XXX) decides it with
+#     IsReadyToStartPrivateGame(NumPlayers) = NumPlayers >= (class'GDWorldInfo'.static.IsShippingBuild() ? 3 : 1)
+# and PopulateLobbyListTeam only asks after bIsLobbyHost, so only the host needs this patch: players
+# with and without it can share a lobby. Public lobbies (start once full) are left alone.
+#
+# IsShippingBuild() cannot simply return false: RGameInfo.AllowCheats is "return !IsShippingBuild()",
+# so that would allow cheats online. Nor can 0xcfe50, the li r3,1 it calls: that function is shared by
+# 29 callers. The cave replaces that call inside AWorldInfo::execIsShippingBuild (0xf76ec4) and answers
+# "not shipping" only when the script bytes right after the call are the private check's own
+# "? 3 : 1": 00 02 7c 03 00 01 0f 5e (skip 2, byte 3, skip 1, one, end of parms; Arkham Origins
+# shuffles the bytecode token values). There r4 is the script frame and r5 its code pointer, already
+# past the call (P_FINISH). Every other caller still gets "shipping", and the private minimum becomes
+# 1, the developers' own rule.
+#
+# Deliberately NOT in Ps3PatchRepo.BUNDLED: it changes a game rule rather than fixing a broken game,
+# so it stays off until the host turns it on.
+PPU-602e58994456e14dfd80a6e0f376729b53c3109a:
+  "Private matches start with fewer players":
+    Games:
+      "Batman: Arkham Origins":
+        BLUS31147: [ All ]
+    Author: "jpolo1224"
+    Notes: "Lets the host start a private match with fewer than 3 players. Only the host needs it on."
+    Patch Version: 1.0
+    Patch:
+      - [ calloc, 0x00f76ec4, 0x0c ] # in place of bl 0xcfe50 (li r3,1); returns to stw r3,0(r31)
+      - [ be32, 0x00000000, 0x80c50000 ] # lwz r6,0(r5): the script bytes after the call
+      - [ be32, 0x00000000, 0x3ce00002 ] # lis r7,0x0002
+      - [ be32, 0x00000000, 0x60e77c03 ] # ori r7,r7,0x7c03
+      - [ be32, 0x00000000, 0x38600001 ] # li r3,1: shipping, as before
+      - [ be32, 0x00000000, 0x7c063800 ] # cmpw r6,r7
+      - [ be32, 0x00000000, 0x4082001c ] # bne +0x1c: some other caller
+      - [ be32, 0x00000000, 0x80c50004 ] # lwz r6,4(r5)
+      - [ be32, 0x00000000, 0x3ce00001 ] # lis r7,0x0001
+      - [ be32, 0x00000000, 0x60e70f5e ] # ori r7,r7,0x0f5e
+      - [ be32, 0x00000000, 0x7c063800 ] # cmpw r6,r7
+      - [ be32, 0x00000000, 0x40820008 ] # bne +8
+      - [ be32, 0x00000000, 0x38600000 ] # li r3,0: the private check, so its minimum is 1
