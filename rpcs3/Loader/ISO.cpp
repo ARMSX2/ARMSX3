@@ -8,6 +8,7 @@
 
 #include <codecvt>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <stack>
@@ -912,19 +913,19 @@ static std::optional<iso_fs_metadata> iso_read_directory_entry(fs::file& entry, 
 	const u32 start_sector = retrieve_endian_int<u32>(header.start_sector);
 	const u32 file_size = retrieve_endian_int<u32>(header.file_size);
 
-	std::tm file_date = {};
+	// ARMSX3: ISO 9660 records local time at a signed offset from GMT in 15-minute steps (-48 West to +52 East);
+	// PS3 discs record 0, so their dates are UTC. Upstream read them as the host's local time and added
+	// (offset - 50) * 15 min in an s16, which overflowed (-45000 became +20536), so every file reported a date
+	// hours off. Batman: Arkham Origins checks its HDD cache against the real date in single-player and the
+	// reported one in multiplayer, and re-copied the cache at every switch between them.
+	std::time_t date_time = 0;
 
-	file_date.tm_year = header.year;
-	file_date.tm_mon = header.month - 1;
-	file_date.tm_mday = header.day;
-	file_date.tm_hour = header.hour;
-	file_date.tm_min = header.minute;
-	file_date.tm_sec = header.second;
-
-	const s16 timezone_value = header.timezone_value;
-	const s16 timezone_offset = (timezone_value - 50) * 15 * 60;
-
-	const std::time_t date_time = std::mktime(&file_date) + timezone_offset;
+	if (const std::chrono::year_month_day date{std::chrono::year{1900 + header.year}, std::chrono::month{header.month}, std::chrono::day{header.day}}; date.ok())
+	{
+		date_time = std::chrono::sys_seconds{std::chrono::sys_days{date}}.time_since_epoch().count()
+			+ header.hour * 3600 + header.minute * 60 + header.second
+			- static_cast<s8>(header.timezone_value) * 15 * 60;
+	}
 
 	// 2nd flag bit indicates whether a given fs node is a directory
 	const bool is_directory = header.flags & 0b00000010;
