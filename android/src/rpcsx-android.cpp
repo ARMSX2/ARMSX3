@@ -3238,6 +3238,14 @@ extern "C" const char *_rpcsx_rpcnStatus() {
   return result.c_str();
 }
 
+// Whether an RPCN session is signed in right now, polled while a game runs so the app can keep
+// that session reachable in the background (OnlineSession). Unlike _rpcsx_rpcnStatus it does not
+// reload rpcn.yml, which logs a line each time, and like it never creates a client.
+extern "C" bool _rpcsx_rpcnSignedIn() {
+  const auto rpcn = rpcn::rpcn_client::peek_instance();
+  return rpcn && rpcn->is_authentified();
+}
+
 // ---- Saved servers -------------------------------------------------------------------
 //
 // The list already exists in the core (cfg_rpcn "Hosts", "desc|host" entries joined by

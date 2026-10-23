@@ -823,6 +823,8 @@ open class MainActivityRuntime : ComponentActivity() {
                     // actually unwound, so users can't launch the next game
                     // while the previous VM is still tearing down.
                     eState.value = EmuState.STOPPED
+                    // The game's RPCN session goes with it (see onStart).
+                    com.armsx2.online.OnlineSession.release(com.armsx2.Pasx2Application.appContext)
                     val restartNow = synchronized(vmLifecycleLock) {
                         vmRunLoopActive = false
                         vmStopInProgress = false
@@ -1274,6 +1276,7 @@ open class MainActivityRuntime : ComponentActivity() {
                     NativeApp.runVMThread(m_szGamefile)
                 } finally {
                     eState.value = EmuState.STOPPED
+                    com.armsx2.online.OnlineSession.release(com.armsx2.Pasx2Application.appContext)
                     val restartNow = synchronized(vmLifecycleLock) {
                         vmRunLoopActive = false
                         vmStopInProgress = false
@@ -5601,13 +5604,29 @@ open class MainActivityRuntime : ComponentActivity() {
     // Stopped, not paused: a split-screen or picture-in-picture app is paused but still in sight.
     // Out of sight a locked device can sit for hours with the app on top, which Android never
     // freezes, so everything that polls slows down until onStart (#196).
+    // While the app is in sight, a game whose RPCN session is signed in gets that session kept
+    // reachable in the background (OnlineSession). Watched from here because Android lets a
+    // foreground service start only from the foreground; the game stopping releases it.
+    private var onlineSessionWatch: Job? = null
+
     override fun onStart() {
         super.onStart()
         runCatching { NativeApp.setAppBackgrounded(false) }
         com.armsx2.DiscordPresence.setForeground(true)
+        onlineSessionWatch?.cancel()
+        onlineSessionWatch = lifecycleScope.launch {
+            while (true) {
+                // Off the main thread: peek_instance waits out a client being torn down
+                if (eState.value != EmuState.STOPPED && withContext(Dispatchers.IO) { com.armsx3.Rpcs3Bridge.rpcnSignedIn() })
+                    com.armsx2.online.OnlineSession.keepAlive(applicationContext)
+                delay(2_000)
+            }
+        }
     }
 
     override fun onStop() {
+        onlineSessionWatch?.cancel()
+        onlineSessionWatch = null
         runCatching { NativeApp.setAppBackgrounded(true) }
         com.armsx2.DiscordPresence.setForeground(false)
         super.onStop()

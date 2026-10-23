@@ -1423,6 +1423,10 @@ object Rpcs3Bridge {
     fun rpcnStatus(): String =
         runCatching { RPCSX.instance.rpcnStatus() }.getOrDefault("")
 
+    @JvmStatic
+    fun rpcnSignedIn(): Boolean =
+        runCatching { RPCSX.instance.rpcnSignedIn() }.getOrDefault(false)
+
     /** One key transition for cellKb. See RPCSX.keyboardKey. */
     @JvmStatic
     fun keyboardKey(androidKeyCode: Int, unicode: Int, pressed: Boolean): Boolean =

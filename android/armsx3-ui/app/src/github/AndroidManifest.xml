@@ -20,7 +20,28 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
+    <!--
+        The foreground service that keeps a running game's RPCN session reachable while the app is
+        in the background (com.armsx2.online.OnlineSession). Android 15 otherwise cuts the app's
+        network a few seconds after it leaves the screen, and the server closes the player's lobby.
+        Not in the play bundle: a foreground service there needs a Play Console declaration first.
+        The main manifest removes FOREGROUND_SERVICE as merged from the Discord SDK; declaring it
+        here, in the flavor, puts it back for this build only.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <application>
+        <service
+            android:name="com.armsx2.online.OnlineSessionService"
+            android:exported="false"
+            android:stopWithTask="true"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps an online game's connection to its matchmaking server while the player switches apps" />
+        </service>
+
         <!-- Hands the downloaded update APK to the system package installer. -->
         <provider
             android:name="androidx.core.content.FileProvider"

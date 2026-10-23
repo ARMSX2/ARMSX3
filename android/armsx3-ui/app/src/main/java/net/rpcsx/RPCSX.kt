@@ -245,6 +245,10 @@ class RPCSX {
      *  credentials -- so `configured` is what survives a restart, not `authentified`. */
     external fun rpcnStatus(): String
 
+    /** Whether an RPCN session is signed in right now. Cheap enough to poll: no config reload, and
+     *  it never creates a client. */
+    external fun rpcnSignedIn(): Boolean
+
     /** Coalesce the config file writes of every settingsSet until [settingsEndBatch]. */
     external fun settingsBeginBatch()
     external fun settingsEndBatch()

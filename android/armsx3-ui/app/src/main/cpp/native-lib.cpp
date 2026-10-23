@@ -117,6 +117,7 @@ struct RPCSXApi {
   void (*rpcnResetHosts)();
   void (*rpcnSetIpv6)(bool enabled);
   const char *(*rpcnStatus)();
+  bool (*rpcnSignedIn)();
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
   bool (*installSplitPkg)(JNIEnv *env, const int *fds, int count, long progressId);
@@ -272,6 +273,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.rpcnResetHosts = reinterpret_cast<decltype(rpcnResetHosts)>(dlsym(handle, "_rpcsx_rpcnResetHosts"));
     result.rpcnSetIpv6 = reinterpret_cast<decltype(rpcnSetIpv6)>(dlsym(handle, "_rpcsx_rpcnSetIpv6"));
     result.rpcnStatus = reinterpret_cast<decltype(rpcnStatus)>(dlsym(handle, "_rpcsx_rpcnStatus"));
+    result.rpcnSignedIn = reinterpret_cast<decltype(rpcnSignedIn)>(dlsym(handle, "_rpcsx_rpcnSignedIn"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
     // symbol, and refusing to load it over a missing optional feature would be worse than the
@@ -1692,6 +1694,12 @@ Java_net_rpcsx_RPCSX_rpcnStatus(JNIEnv *env, jobject) {
   if (!rpcsxLib.rpcnStatus) return env->NewStringUTF("");
   const char *json = rpcsxLib.rpcnStatus();
   return env->NewStringUTF(json ? json : "");
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_rpcnSignedIn(JNIEnv *, jobject) {
+  if (!rpcsxLib.rpcnSignedIn) return JNI_FALSE;
+  return rpcsxLib.rpcnSignedIn() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jstring JNICALL

@@ -808,6 +808,10 @@ val EN: Map<String, String> = mapOf(
     "net.psn.off" to "Off",
     "net.psn.simulated" to "Simulated",
     "net.psn.rpcn" to "RPCN",
+    // The notification of the GitHub build's keep-alive for online games (OnlineSession)
+    "online.channel" to "Online play",
+    "online.notification.title" to "Staying online",
+    "online.notification.text" to "Your game stays connected while you use other apps.",
     "rpcn.title" to "RPCN account",
     "rpcn.description" to "RPCN is the community replacement for PSN, and what makes online play work. An account is created here, not on a website: the server emails you a token that activates it.",
     "rpcn.server" to "Server",
