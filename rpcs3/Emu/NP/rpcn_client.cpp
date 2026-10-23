@@ -436,11 +436,28 @@ namespace rpcn
 					return;
 				}
 
-				if (!handle_output())
-				{
-					break;
-				}
+				// ARMSX3: a failed send used to end this thread, so a session that signed in again had nothing left
+				// to send with. What did not go out now waits for that sign-in (handle_output).
+				handle_output();
 			}
+		}
+	}
+
+	// ARMSX3: what signing a dropped session in again can get past by trying later: no network yet, or a server that
+	// has not let go of the old connection. Not a refused account or a server speaking another protocol.
+	static bool worth_retrying(rpcn_state state)
+	{
+		switch (state)
+		{
+		case rpcn_state::failure_wolfssl:
+		case rpcn_state::failure_resolve:
+		case rpcn_state::failure_binding:
+		case rpcn_state::failure_connect:
+		case rpcn_state::failure_id_already_logged_in:
+		case rpcn_state::failure_other:
+			return true;
+		default:
+			return false;
 		}
 	}
 
@@ -451,6 +468,9 @@ namespace rpcn
 		// UDP Signaling related
 		steady_clock::time_point last_ping_time_ipv4{}, last_pong_time_ipv4{};
 		steady_clock::time_point last_ping_time_ipv6{}, last_pong_time_ipv6{};
+
+		// ARMSX3: attempts at signing in again since the session dropped
+		u32 reconnect_attempts = 0;
 
 		while (true)
 		{
@@ -474,6 +494,41 @@ namespace rpcn
 							connect(g_cfg_rpcn.get_host());
 						}
 						sem_connected.release();
+
+						// ARMSX3: a dropped session goes on to sign in (below) rather than waiting to be asked
+						if (session_lost)
+						{
+							continue;
+						}
+					}
+					else if (session_lost)
+					{
+						// ARMSX3: the connection of a signed-in session dropped. Android cuts an app's network a few
+						// seconds after it leaves the screen, and nothing signed in again when it came back, so the
+						// game's next request (creating a lobby) waited forever. Tries again after 1, 2 and 4 seconds,
+						// then every 5 for as long as the session is held, while the game's requests wait.
+						const auto delay = std::chrono::seconds(std::min(1u << std::min(reconnect_attempts, 3u), 5u));
+
+						// Woken early by a request or terminate: those first
+						if (sem_rpcn.try_acquire_for(delay))
+						{
+							continue;
+						}
+
+						rpcn_log.notice("Signing in to RPCN again (attempt %u)", ++reconnect_attempts);
+
+						bool result_connect;
+						{
+							std::lock_guard lock(mutex_connected);
+							result_connect = connect(g_cfg_rpcn.get_host());
+						}
+
+						if (!result_connect && !worth_retrying(state))
+						{
+							give_up_session();
+						}
+
+						continue;
 					}
 
 					break;
@@ -481,19 +536,58 @@ namespace rpcn
 
 				if (!authentified)
 				{
-					if (want_auth)
+					// ARMSX3: or a dropped session signing in again
+					if (want_auth || session_lost)
 					{
 						bool result_login;
 						{
 							std::lock_guard lock(mutex_authentified);
 							result_login = login(g_cfg_rpcn.get_npid(), g_cfg_rpcn.get_password(), g_cfg_rpcn.get_token());
 						}
-						sem_authentified.release();
+
+						// ARMSX3: only for whoever is waiting in wait_for_authentified. want_auth stayed set after the
+						// first sign-in, which would release this for every sign-in again with nobody there.
+						if (want_auth.exchange(false))
+						{
+							sem_authentified.release();
+						}
 
 						if (!result_login)
 						{
+							// ARMSX3: a dropped session tries again (above) unless the account itself was refused
+							if (session_lost)
+							{
+								if (worth_retrying(state))
+								{
+									continue;
+								}
+
+								give_up_session();
+							}
+
 							break;
 						}
+
+						// ARMSX3: what the dropped session was sent while it was out goes now
+						if (session_lost)
+						{
+							usz waiting = 0;
+							{
+								std::lock_guard lock(mutex_packets_to_send);
+								waiting = packets_to_send.size();
+								session_lost = false;
+							}
+
+							rpcn_log.success("Signed in to RPCN again: sending the %u requests that waited", waiting);
+							sem_writer.release();
+
+							if (!Emu.IsStopped())
+							{
+								rsx::overlays::queue_message(localized_string_id::RPCN_SUCCESS_LOGGED_ON);
+							}
+						}
+
+						reconnect_attempts = 0;
 						continue;
 					}
 					else
@@ -778,14 +872,30 @@ namespace rpcn
 		std::vector<std::vector<u8>> packets;
 		{
 			std::lock_guard lock(mutex_packets_to_send);
+
+			// ARMSX3: a dropped session keeps these until it has signed in again (rpcn_thread)
+			if (session_lost)
+			{
+				return true;
+			}
+
 			packets = std::move(packets_to_send);
 			packets_to_send.clear();
 		}
 
-		for (const auto& packet : packets)
+		for (auto it = packets.begin(); it != packets.end(); it++)
 		{
-			if (!send_packet(packet))
+			if (!send_packet(*it))
 			{
+				// ARMSX3: when that was the session dropping, what did not go out waits for it too, ahead of anything
+				// queued since. Without a session to sign in again it is dropped, as before.
+				std::lock_guard lock(mutex_packets_to_send);
+
+				if (session_lost)
+				{
+					packets_to_send.insert(packets_to_send.begin(), std::make_move_iterator(it), std::make_move_iterator(packets.end()));
+				}
+
 				return false;
 			}
 		}
@@ -949,6 +1059,14 @@ namespace rpcn
 		// TODO: add a check for status?
 
 		std::vector<u8> sent_packet = forge_request(command, packet_id, data);
+
+		// ARMSX3: a dropped session's sign-in goes out ahead of what handle_output() keeps for it
+		if (command == CommandType::Login && session_lost)
+		{
+			std::lock_guard lock(mutex_write);
+			return send_packet(sent_packet);
+		}
+
 		add_packet(std::move(sent_packet));
 		return true;
 	}
@@ -1127,7 +1245,73 @@ namespace rpcn
 				return false;
 			}
 
-			if (::connect(sockfd, reinterpret_cast<struct sockaddr*>(&addr_rpcn), sizeof(addr_rpcn)) != 0)
+#ifdef _WIN32
+			u_long _true = 1;
+			ensure(::ioctlsocket(sockfd, FIONBIO, &_true) == 0);
+#else
+			ensure(::fcntl(sockfd, F_SETFL, ::fcntl(sockfd, F_GETFL, 0) | O_NONBLOCK) == 0);
+#endif
+
+			// ARMSX3: connected without blocking, so a network that swallows the attempt (Android's, for an app in the
+			// background) fails it within RPCN_TIMEOUT rather than the system's two minutes, and terminate is not kept
+			// waiting for it. Signing a dropped session in again makes these attempts while the network is still out.
+			const auto connect_socket = [this]() -> bool
+			{
+				if (::connect(sockfd, reinterpret_cast<struct sockaddr*>(&addr_rpcn), sizeof(addr_rpcn)) == 0)
+				{
+					return true;
+				}
+
+#ifdef _WIN32
+				if (get_native_error() != WSAEWOULDBLOCK)
+#else
+				if (get_native_error() != EINPROGRESS)
+#endif
+				{
+					rpcn_log.error("connect: Native error: %d", get_native_error());
+					return false;
+				}
+
+				for (int waited = 0; waited < RPCN_TIMEOUT && !terminate; waited += RPCN_TIMEOUT_INTERVAL)
+				{
+					pollfd poll_fd{};
+					poll_fd.fd = sockfd;
+					poll_fd.events = POLLOUT;
+#ifdef _WIN32
+					const int res_poll = WSAPoll(&poll_fd, 1, RPCN_TIMEOUT_INTERVAL);
+#else
+					const int res_poll = poll(&poll_fd, 1, RPCN_TIMEOUT_INTERVAL);
+#endif
+					if (res_poll < 0)
+					{
+						rpcn_log.error("connect: poll failed with native error: %d", get_native_error());
+						return false;
+					}
+
+					if (res_poll > 0)
+					{
+						int error = 0;
+						socklen_t error_size = sizeof(error);
+
+						if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, reinterpret_cast<char*>(&error), &error_size) != 0 || error != 0)
+						{
+							rpcn_log.error("connect: Native error: %d", error);
+							return false;
+						}
+
+						return true;
+					}
+				}
+
+				if (!terminate)
+				{
+					rpcn_log.error("connect: No answer within %d ms", RPCN_TIMEOUT);
+				}
+
+				return false;
+			};
+
+			if (!connect_socket())
 			{
 				rpcn_log.error("connect: Failed to connect to RPCN server!");
 				state = rpcn_state::failure_connect;
@@ -1135,13 +1319,6 @@ namespace rpcn
 			}
 
 			rpcn_log.notice("connect: Connection successful");
-
-#ifdef _WIN32
-			u_long _true = 1;
-			ensure(::ioctlsocket(sockfd, FIONBIO, &_true) == 0);
-#else
-			ensure(::fcntl(sockfd, F_SETFL, ::fcntl(sockfd, F_GETFL, 0) | O_NONBLOCK) == 0);
-#endif
 
 			sockaddr_in client_addr;
 			socklen_t client_addr_size = sizeof(client_addr);
@@ -1287,6 +1464,12 @@ namespace rpcn
 		{
 			std::lock_guard lock(mutex_friends);
 
+			// ARMSX3: a session signing in again gets the lists as they are now, not on top of the old ones
+			if (error == rpcn::ErrorType::NoError)
+			{
+				friend_infos = {};
+			}
+
 			get_usernames_and_status(reply, friend_infos.friends);
 			get_usernames(reply, friend_infos.requests_sent);
 			get_usernames(reply, friend_infos.requests_received);
@@ -1305,7 +1488,9 @@ namespace rpcn
 			default: state = rpcn_state::failure_id; break;
 			}
 
-			disconnect();
+			// ARMSX3: with the reader out of the socket first. A session signing in again comes back here each time
+			// the server still holds the old one (LoginAlreadyLoggedIn), so the race is no longer a rare one.
+			close_connection();
 			return false;
 		}
 
@@ -3035,16 +3220,62 @@ namespace rpcn
 
 	bool rpcn_client::error_and_disconnect(std::string_view error_msg)
 	{
-		connected = false;
+		lose_connection();
 		rpcn_log.error("%s", error_msg);
 		return false;
 	}
 
 	bool rpcn_client::error_and_disconnect_notice(std::string_view error_msg)
 	{
-		connected = false;
+		lose_connection();
 		rpcn_log.notice("%s", error_msg);
 		return false;
+	}
+
+	// ARMSX3: a signed-in session that loses its connection is signed in again by rpcn_thread. Marked before connected
+	// goes false, so whatever sees it disconnected also sees that its requests are to wait (handle_output).
+	void rpcn_client::lose_connection()
+	{
+		const bool dropped = authentified && !terminate && !session_lost.exchange(true);
+
+		connected = false;
+
+		if (dropped)
+		{
+			rpcn_log.warning("The connection to RPCN dropped: signing in again");
+
+			// Out of its wait between pings, rather than up to 5 seconds later
+			sem_rpcn.release();
+		}
+	}
+
+	// ARMSX3: disconnect() frees what the reader and writer threads use, so they are let out of it first. They notice
+	// connected going false within RPCN_TIMEOUT_INTERVAL.
+	void rpcn_client::close_connection()
+	{
+		connected = false;
+
+		std::lock_guard lock_read(mutex_read), lock_write(mutex_write);
+		disconnect();
+	}
+
+	// ARMSX3: the account or the server refused the dropped session, so stop, and drop what waited for it
+	void rpcn_client::give_up_session()
+	{
+		usz dropped = 0;
+		{
+			std::lock_guard lock(mutex_packets_to_send);
+			dropped = packets_to_send.size();
+			packets_to_send.clear();
+			session_lost = false;
+		}
+
+		if (connected)
+		{
+			close_connection();
+		}
+
+		rpcn_log.error("Stopped signing in to RPCN again: %s (%u requests dropped)", rpcn_state_to_string(state), dropped);
 	}
 
 	rpcn_state rpcn_client::wait_for_connection()
