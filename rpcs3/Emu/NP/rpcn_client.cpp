@@ -3362,6 +3362,24 @@ namespace rpcn
 		return vec_messages;
 	}
 
+	std::vector<std::pair<u64, shared_ptr<std::pair<std::string, message_data>>>> rpcn_client::get_messages(SceNpBasicMessageMainType type_filter, bool include_bootable) const
+	{
+		std::vector<std::pair<u64, shared_ptr<std::pair<std::string, message_data>>>> vec_messages;
+
+		std::lock_guard lock(mutex_messages);
+		for (auto id : active_messages)
+		{
+			const auto& entry = ::at32(messages, id);
+			const auto& msg = entry->second;
+			if (msg.mainType == type_filter && (include_bootable || !(msg.msgFeatures & SCE_NP_BASIC_MESSAGE_FEATURES_BOOTABLE)))
+			{
+				vec_messages.push_back(std::make_pair(id, entry));
+			}
+		}
+
+		return vec_messages;
+	}
+
 	void rpcn_client::remove_message_cb(message_cb_func cb_func, void* cb_param)
 	{
 		std::lock_guard lock(mutex_messages);

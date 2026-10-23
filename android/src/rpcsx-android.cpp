@@ -39,6 +39,7 @@
 #include "Emu/localized_string_id.h"
 #include "Emu/emu_callbacks.h"
 #include "Emu/system_config.h"
+#include "Emu/NP/np_handler.h"
 #include "Emu/NP/rpcn_client.h"
 #include "Emu/NP/rpcn_config.h"
 #include "Emu/system_config_types.h"
@@ -3398,7 +3399,10 @@ extern "C" const char *_rpcsx_rpcnRemoveFriend(std::string_view npid) {
 }
 
 // The friend list and the requests waiting on either side, as JSON:
-//   {"signedIn":true,"friends":[{"npid":"a","online":true}],"received":["b"],"sent":["c"]}
+//   {"signedIn":true,"friends":[{"npid":"a","online":true,"title":"...","status":"...","comment":"..."}],
+//    "received":["b"],"sent":["c"]}
+// title, status and comment are the friend's presence as their game sets it: what RPCN has about
+// a friend beyond their name and whether they are online. It sends no pictures of other users.
 // and signedIn false with empty lists when no session is signed in.
 //
 // Requests are half of it: on RPCN two people are friends only once both have added each other,
@@ -3429,8 +3433,10 @@ extern "C" const char *_rpcsx_rpcnGetFriends() {
   for (const auto &[npid, presence] : data.friends) {
     if (!friends.empty()) friends += ",";
 
-    fmt::append(friends, R"({"npid":"%s","online":%s})", json_escape(npid),
-                presence.online ? "true" : "false");
+    fmt::append(friends, R"({"npid":"%s","online":%s,"title":"%s","status":"%s","comment":"%s"})",
+                json_escape(npid), presence.online ? "true" : "false",
+                json_escape(presence.pr_title), json_escape(presence.pr_status),
+                json_escape(presence.pr_comment));
   }
 
   const auto names = [](const std::set<std::string> &npids) {
@@ -3447,6 +3453,98 @@ extern "C" const char *_rpcsx_rpcnGetFriends() {
   result = fmt::format(R"({"signedIn":true,"friends":[%s],"received":[%s],"sent":[%s]})",
                        friends, names(data.requests_received), names(data.requests_sent));
   return result.c_str();
+}
+
+// Game invites received and not yet used, as JSON: [{"id":1,"from":"a","subject":"...","body":"..."}].
+//
+// A game sends an invite through RPCN with its own session data in it (only the game can make one,
+// which is why inviting is the game's own menu), and the receiving game takes it when the system
+// says one was selected. On a PS3 that is the XMB's friends list; RPCS3's is the friends page of its
+// home menu, which nothing in this app opens. Read from the session already signed in, never
+// creating one: an invite is only any use to a game that is running.
+//
+// Only invites for the game that is running and online, as RPCS3's home menu lists them: the game
+// registers its NP communication id with its basic handler, and an invite carries the id of the
+// game that sent it. Handed to any other game (a single-player one, another title) an invite does
+// nothing useful and is used up all the same; listed only here, it waits for its own game.
+static std::optional<SceNpCommunicationId> running_game_np_context() {
+  if (Emu.IsStopped()) {
+    return std::nullopt;
+  }
+
+  auto *nph = g_fxo->try_get<named_thread<np::np_handler>>();
+
+  if (!nph || !nph->basic_handler_registered) {
+    return std::nullopt;
+  }
+
+  return nph->get_basic_handler_context();
+}
+
+static bool invite_is_for(const message_data &message, const SceNpCommunicationId &context) {
+  return std::strncmp(message.commId.data, context.data, sizeof(context.data) - 1) == 0;
+}
+
+extern "C" const char *_rpcsx_rpcnGetInvites() {
+  static thread_local std::string result;
+
+  const auto rpcn = rpcn::rpcn_client::peek_instance();
+  const auto context = running_game_np_context();
+
+  if (!rpcn || !rpcn->is_authentified() || !context) {
+    result = "[]";
+    return result.c_str();
+  }
+
+  std::string entries;
+
+  for (const auto &[id, message] :
+       rpcn->get_messages(SCE_NP_BASIC_MESSAGE_MAIN_TYPE_INVITE, true)) {
+    if (!invite_is_for(message->second, *context)) continue;
+
+    if (!entries.empty()) entries += ",";
+
+    fmt::append(entries, R"({"id":%d,"from":"%s","subject":"%s","body":"%s"})", id,
+                json_escape(message->first), json_escape(message->second.subject),
+                json_escape(message->second.body));
+  }
+
+  result = fmt::format("[%s]", entries);
+  return result.c_str();
+}
+
+// Hands an invite to the running game, as selecting it in the XMB would: the game is told one was
+// selected and loads it (CELL_SYSUTIL_NP_INVITATION_SELECTED). np_handler marks it used once sent.
+extern "C" const char *_rpcsx_rpcnAcceptInvite(u64 id) {
+  const auto context = running_game_np_context();
+  const auto rpcn = rpcn::rpcn_client::peek_instance();
+  const auto message = rpcn ? rpcn->get_message(id) : std::nullopt;
+
+  // The list only offers invites for the running game; checked again here because the game can
+  // have changed between drawing the list and the press.
+  if (!context || !message || !invite_is_for(message.value()->second, *context)) {
+    return rpcn_fail("That invite is for another game. Start that game to join.");
+  }
+
+  auto *nph = g_fxo->try_get<named_thread<np::np_handler>>();
+
+  if (!nph || !nph->select_invitation(id)) {
+    return rpcn_fail("The game did not take the invite. It may be for another game, or "
+                     "this game may only accept invites from its own menus.");
+  }
+
+  return rpcn_ok();
+}
+
+extern "C" const char *_rpcsx_rpcnDeclineInvite(u64 id) {
+  const auto rpcn = rpcn::rpcn_client::peek_instance();
+
+  if (!rpcn) {
+    return rpcn_fail("Not signed in to RPCN.");
+  }
+
+  rpcn->mark_message_used(id);
+  return rpcn_ok();
 }
 
 // Keeps a signed-in session open while a friends screen is showing, so the list above has

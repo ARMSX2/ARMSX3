@@ -101,6 +101,9 @@ struct RPCSXApi {
   const char *(*rpcnRemoveFriend)(std::string_view npid);
   const char *(*rpcnGetFriends)();
   const char *(*rpcnFriendsSession)(bool open);
+  const char *(*rpcnGetInvites)();
+  const char *(*rpcnAcceptInvite)(uint64_t id);
+  const char *(*rpcnDeclineInvite)(uint64_t id);
   const char *(*rpcnCreateAccount)(std::string_view npid, std::string_view password,
                                    std::string_view onlineName, std::string_view email);
   const char *(*rpcnResendToken)(std::string_view npid, std::string_view password);
@@ -255,6 +258,9 @@ struct RPCSXLibrary : RPCSXApi {
     result.rpcnRemoveFriend = reinterpret_cast<decltype(rpcnRemoveFriend)>(dlsym(handle, "_rpcsx_rpcnRemoveFriend"));
     result.rpcnGetFriends = reinterpret_cast<decltype(rpcnGetFriends)>(dlsym(handle, "_rpcsx_rpcnGetFriends"));
     result.rpcnFriendsSession = reinterpret_cast<decltype(rpcnFriendsSession)>(dlsym(handle, "_rpcsx_rpcnFriendsSession"));
+    result.rpcnGetInvites = reinterpret_cast<decltype(rpcnGetInvites)>(dlsym(handle, "_rpcsx_rpcnGetInvites"));
+    result.rpcnAcceptInvite = reinterpret_cast<decltype(rpcnAcceptInvite)>(dlsym(handle, "_rpcsx_rpcnAcceptInvite"));
+    result.rpcnDeclineInvite = reinterpret_cast<decltype(rpcnDeclineInvite)>(dlsym(handle, "_rpcsx_rpcnDeclineInvite"));
     result.rpcnCreateAccount = reinterpret_cast<decltype(rpcnCreateAccount)>(dlsym(handle, "_rpcsx_rpcnCreateAccount"));
     result.rpcnResendToken = reinterpret_cast<decltype(rpcnResendToken)>(dlsym(handle, "_rpcsx_rpcnResendToken"));
     result.rpcnSendResetToken = reinterpret_cast<decltype(rpcnSendResetToken)>(dlsym(handle, "_rpcsx_rpcnSendResetToken"));
@@ -1779,6 +1785,30 @@ Java_net_rpcsx_RPCSX_rpcnGetFriends(JNIEnv *env, jobject) {
 
   const char *msg = rpcsxLib.rpcnGetFriends();
   return env->NewStringUTF(msg ? msg : "{}");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnGetInvites(JNIEnv *env, jobject) {
+  if (!rpcsxLib.rpcnGetInvites) return env->NewStringUTF("[]");
+
+  const char *msg = rpcsxLib.rpcnGetInvites();
+  return env->NewStringUTF(msg ? msg : "[]");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnAcceptInvite(JNIEnv *env, jobject, jlong id) {
+  if (!rpcsxLib.rpcnAcceptInvite) return rpcn_unavailable(env);
+
+  const char *msg = rpcsxLib.rpcnAcceptInvite(static_cast<uint64_t>(id));
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnDeclineInvite(JNIEnv *env, jobject, jlong id) {
+  if (!rpcsxLib.rpcnDeclineInvite) return rpcn_unavailable(env);
+
+  const char *msg = rpcsxLib.rpcnDeclineInvite(static_cast<uint64_t>(id));
+  return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL

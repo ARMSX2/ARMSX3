@@ -338,6 +338,7 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                         )
                         com.armsx2.ui.friends.RpcnFriendsPanel(
                             Modifier.padding(horizontal = 12.dp).padding(bottom = 10.dp),
+                            inGame = true,
                         )
                         if (com.armsx2.DiscordPresence.available()) {
                             com.armsx2.ui.friends.FriendsPanel(Modifier.padding(horizontal = 12.dp))

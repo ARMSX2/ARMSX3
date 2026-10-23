@@ -18,8 +18,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.armsx2.i18n.str
@@ -30,10 +32,12 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * RPCN friends: add, remove, see who is online, and answer friend requests.
+ * RPCN friends: add, remove, see who is online and what they are playing, and answer friend
+ * requests.
  *
  * The core has had add_friend/remove_friend and the friend list all along; nothing reached them
  * from Android, so there was no way to add a friend at all short of doing it from a game that
@@ -47,20 +51,33 @@ fun RpcnFriendsSection() {
             style = MaterialTheme.typography.titleSmall,
             modifier = Modifier.padding(bottom = 4.dp),
         )
-        RpcnFriendsList(controllerIdPrefix = "rpcn.friends", canAdd = true, canRemove = true)
+        RpcnFriendsList(controllerIdPrefix = "rpcn.friends", canAdd = true, canRemove = true, showInvites = false)
     }
 }
+
+/** A friend, and their presence as their game sets it: everything RPCN sends about one. */
+internal data class RpcnFriend(
+    val name: String,
+    val online: Boolean,
+    /** The game, as its presence names it. */
+    val title: String = "",
+    val status: String = "",
+    val comment: String = "",
+)
 
 /** One read of the RPCN friend list: friends, and the requests waiting on either side. */
 internal data class RpcnFriends(
     val signedIn: Boolean = false,
-    /** Name and whether they are online; online first. */
-    val friends: List<Pair<String, Boolean>> = emptyList(),
+    /** Online first. */
+    val friends: List<RpcnFriend> = emptyList(),
     /** Requests from others, waiting on this account. */
     val received: List<String> = emptyList(),
     /** Requests this account sent, waiting on them. */
     val sent: List<String> = emptyList(),
 )
+
+/** A game invite that has not been used yet. */
+internal data class RpcnInvite(val id: Long, val from: String, val subject: String, val body: String)
 
 internal fun parseRpcnFriends(json: String): RpcnFriends = runCatching {
     val o = JSONObject(json)
@@ -76,12 +93,26 @@ internal fun parseRpcnFriends(json: String): RpcnFriends = runCatching {
         signedIn = o.optBoolean("signedIn"),
         friends = (0 until (arr?.length() ?: 0)).map { i ->
             val e = arr!!.getJSONObject(i)
-            e.optString("npid") to e.optBoolean("online")
-        }.sortedWith(compareByDescending<Pair<String, Boolean>> { it.second }.thenBy { it.first.lowercase() }),
+            RpcnFriend(
+                name = e.optString("npid"),
+                online = e.optBoolean("online"),
+                title = e.optString("title"),
+                status = e.optString("status"),
+                comment = e.optString("comment"),
+            )
+        }.sortedWith(compareByDescending<RpcnFriend> { it.online }.thenBy { it.name.lowercase() }),
         received = names("received"),
         sent = names("sent"),
     )
 }.getOrDefault(RpcnFriends())
+
+internal fun parseRpcnInvites(json: String): List<RpcnInvite> = runCatching {
+    val arr = JSONArray(json)
+    (0 until arr.length()).map { i ->
+        val e = arr.getJSONObject(i)
+        RpcnInvite(e.optLong("id"), e.optString("from"), e.optString("subject"), e.optString("body"))
+    }
+}.getOrDefault(emptyList())
 
 /**
  * Opening and closing the held session, one at a time and in order.
@@ -95,7 +126,7 @@ private val sessionExecutor = Executors.newSingleThreadExecutor { Thread(it, "rp
 private val sessionDispatcher = sessionExecutor.asCoroutineDispatcher()
 
 /**
- * The RPCN friend list with its requests, shared by the RPCN settings and the Friends tab.
+ * The RPCN friend list with its requests, shared by the RPCN settings and the Friends tabs.
  *
  * Read again every two seconds while it is on screen. Reading is local (the signed-in session
  * already holds the list) and requests, presence and sign-ins change while the screen is open:
@@ -109,18 +140,31 @@ private val sessionDispatcher = sessionExecutor.asCoroutineDispatcher()
  * A game playing online has a session to read. Outside one there is none, so with an account saved
  * the list connects on its own and holds that session for as long as it is showing: a saved
  * account reads as signed in, and a separate "Sign in" step here read as being signed out.
+ *
+ * @param canRemove whether friends can be removed here. Not in the in-game menu, where a Remove
+ *   next to every name only gets in the way of what that panel is for.
+ * @param showInvites whether game invites are listed, for the in-game menu: an invite can only be
+ *   taken by the game it is for, while it runs.
  */
 @Composable
-internal fun RpcnFriendsList(controllerIdPrefix: String, canAdd: Boolean, canRemove: Boolean) {
+internal fun RpcnFriendsList(
+    controllerIdPrefix: String,
+    canAdd: Boolean,
+    canRemove: Boolean,
+    showInvites: Boolean,
+) {
     val scope = rememberCoroutineScope()
 
     var data by remember { mutableStateOf(RpcnFriends()) }
+    var invites by remember { mutableStateOf(emptyList<RpcnInvite>()) }
     // Nothing is drawn for the signed-out case until the first read, so a game's signed-in list
-    // does not open with a flash of the sign-in button.
+    // does not open with a flash of "Connecting".
     var loaded by remember { mutableStateOf(false) }
     var newFriend by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    // The friend whose Remove is waiting for a second press, or null.
+    var confirmRemove by remember { mutableStateOf<String?>(null) }
     // Sessions this list opened; each one is closed when it leaves the screen.
     var opened by remember { mutableIntStateOf(0) }
     // Whether an account is saved (null until known), and whether this list has tried to connect it.
@@ -135,9 +179,12 @@ internal fun RpcnFriendsList(controllerIdPrefix: String, canAdd: Boolean, canRem
     val msgCancelled = str("rpcn.friends.cancelled")
     val msgRemoved = str("rpcn.friends.removed")
     val msgNeedName = str("rpcn.friends.need.name")
+    val msgJoining = str("rpcn.invites.joining")
+    val msgInviteDeclined = str("rpcn.invites.declined")
 
     suspend fun read() {
         data = parseRpcnFriends(withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetFriends() })
+        if (showInvites) invites = parseRpcnInvites(withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetInvites() })
         loaded = true
     }
 
@@ -192,6 +239,17 @@ internal fun RpcnFriendsList(controllerIdPrefix: String, canAdd: Boolean, canRem
         if (loaded && configured == true && !data.signedIn && !connectTried) connect()
     }
 
+    // Swapping a row's buttons drops the selected one from the pad's registry, which sends the
+    // selection to the top of the list; put it on the safe choice instead, once it has registered.
+    LaunchedEffect(confirmRemove) {
+        val target = confirmRemove?.let { "$controllerIdPrefix.keep.$it" } ?: return@LaunchedEffect
+        var attempts = 0
+        while (!SettingsControllerNav.selectById(target) && attempts < 10) {
+            attempts++
+            withFrameNanos {}
+        }
+    }
+
     Column(Modifier.fillMaxWidth()) {
         if (canAdd) {
             val add: () -> Unit = add@{
@@ -229,23 +287,11 @@ internal fun RpcnFriendsList(controllerIdPrefix: String, canAdd: Boolean, canRem
             // First read still on its way.
         } else if (!data.signedIn) {
             when {
-                configured == false -> Text(
-                    str("rpcn.friends.noAccount"),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
-                busy || configured == null || !connectTried -> Text(
-                    str("rpcn.friends.connecting"),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(top = 6.dp),
-                )
+                configured == false -> Note(str("rpcn.friends.noAccount"))
+                busy || configured == null || !connectTried -> Note(str("rpcn.friends.connecting"))
                 else -> {
                     // The reason, if the core gave one, is in the status line below.
-                    Text(
-                        str("rpcn.friends.signedOut"),
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
+                    Note(str("rpcn.friends.signedOut"))
                     TextButton(
                         enabled = !busy,
                         onClick = ::connect,
@@ -254,58 +300,90 @@ internal fun RpcnFriendsList(controllerIdPrefix: String, canAdd: Boolean, canRem
                 }
             }
         } else {
-            if (data.received.isNotEmpty()) {
-                SectionLabel(str("rpcn.friends.requests"))
-                data.received.forEach { name ->
-                    val accept = { act(msgAccepted.format(name), { Rpcs3Bridge.rpcnAddFriend(name) }) }
-                    val decline = { act(msgDeclined.format(name), { Rpcs3Bridge.rpcnRemoveFriend(name) }) }
-                    NameRow(name) {
+            if (showInvites) {
+                SectionLabel(str("rpcn.invites.title"))
+                if (invites.isEmpty()) Note(str("rpcn.invites.none"))
+                invites.forEach { invite ->
+                    val join = { act(msgJoining.format(invite.from), { Rpcs3Bridge.rpcnAcceptInvite(invite.id) }) }
+                    val decline = { act(msgInviteDeclined.format(invite.from), { Rpcs3Bridge.rpcnDeclineInvite(invite.id) }) }
+                    val detail = listOf(invite.subject, invite.body).filter { it.isNotBlank() }.joinToString(" ")
+                    EntryRow(str("rpcn.invites.from").format(invite.from), detail) {
                         TextButton(
                             enabled = !busy,
-                            onClick = accept,
-                            modifier = Modifier.controllerFocusable("$controllerIdPrefix.accept.$name", onConfirm = accept),
-                        ) { Text(str("rpcn.friends.accept")) }
+                            onClick = join,
+                            modifier = Modifier.controllerFocusable("$controllerIdPrefix.join.${invite.id}", onConfirm = join),
+                        ) { Text(str("rpcn.invites.join")) }
                         TextButton(
                             enabled = !busy,
                             onClick = decline,
-                            modifier = Modifier.controllerFocusable("$controllerIdPrefix.decline.$name", onConfirm = decline),
+                            modifier = Modifier.controllerFocusable("$controllerIdPrefix.invdecline.${invite.id}", onConfirm = decline),
                         ) { Text(str("rpcn.friends.decline")) }
                     }
                 }
             }
 
-            if (data.sent.isNotEmpty()) {
-                SectionLabel(str("rpcn.friends.sent"))
-                data.sent.forEach { name ->
-                    val cancel = { act(msgCancelled.format(name), { Rpcs3Bridge.rpcnRemoveFriend(name) }) }
-                    NameRow(name) {
-                        TextButton(
-                            enabled = !busy,
-                            onClick = cancel,
-                            modifier = Modifier.controllerFocusable("$controllerIdPrefix.cancel.$name", onConfirm = cancel),
-                        ) { Text(str("rpcn.friends.cancel")) }
-                    }
+            // Always there once signed in, so "no requests" reads as an answer rather than as a
+            // section that is missing.
+            SectionLabel(str("rpcn.friends.requests"))
+            if (data.received.isEmpty() && data.sent.isEmpty()) Note(str("rpcn.friends.noRequests"))
+            data.received.forEach { name ->
+                val accept = { act(msgAccepted.format(name), { Rpcs3Bridge.rpcnAddFriend(name) }) }
+                val decline = { act(msgDeclined.format(name), { Rpcs3Bridge.rpcnRemoveFriend(name) }) }
+                EntryRow(name, str("rpcn.friends.wantsToAdd")) {
+                    TextButton(
+                        enabled = !busy,
+                        onClick = accept,
+                        modifier = Modifier.controllerFocusable("$controllerIdPrefix.accept.$name", onConfirm = accept),
+                    ) { Text(str("rpcn.friends.accept")) }
+                    TextButton(
+                        enabled = !busy,
+                        onClick = decline,
+                        modifier = Modifier.controllerFocusable("$controllerIdPrefix.decline.$name", onConfirm = decline),
+                    ) { Text(str("rpcn.friends.decline")) }
+                }
+            }
+            data.sent.forEach { name ->
+                val cancel = { act(msgCancelled.format(name), { Rpcs3Bridge.rpcnRemoveFriend(name) }) }
+                EntryRow(name, str("rpcn.friends.waiting")) {
+                    TextButton(
+                        enabled = !busy,
+                        onClick = cancel,
+                        modifier = Modifier.controllerFocusable("$controllerIdPrefix.cancel.$name", onConfirm = cancel),
+                    ) { Text(str("rpcn.friends.cancel")) }
                 }
             }
 
+            SectionLabel(str("rpcn.friends.title"))
             if (data.friends.isEmpty()) {
-                if (data.received.isEmpty() && data.sent.isEmpty()) {
-                    Text(
-                        str(if (canAdd) "rpcn.friends.empty" else "rpcn.friends.empty.elsewhere"),
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                }
-            } else {
-                if (data.received.isNotEmpty() || data.sent.isNotEmpty()) SectionLabel(str("rpcn.friends.title"))
-                data.friends.forEach { (name, online) ->
-                    val remove = { act(msgRemoved.format(name), { Rpcs3Bridge.rpcnRemoveFriend(name) }) }
-                    NameRow(if (online) "● $name" else "○ $name", online) {
+                Note(str(if (canAdd) "rpcn.friends.empty" else "rpcn.friends.empty.elsewhere"))
+            }
+            data.friends.forEach { friend ->
+                val name = friend.name
+                if (confirmRemove == name) {
+                    val remove = {
+                        confirmRemove = null
+                        act(msgRemoved.format(name), { Rpcs3Bridge.rpcnRemoveFriend(name) })
+                    }
+                    val keep = { confirmRemove = null }
+                    EntryRow(str("rpcn.friends.removeConfirm").format(name), null) {
+                        TextButton(
+                            enabled = !busy,
+                            onClick = remove,
+                            modifier = Modifier.controllerFocusable("$controllerIdPrefix.confirmremove.$name", onConfirm = remove),
+                        ) { Text(str("rpcn.friends.remove"), color = MaterialTheme.colorScheme.error) }
+                        TextButton(
+                            onClick = keep,
+                            modifier = Modifier.controllerFocusable("$controllerIdPrefix.keep.$name", onConfirm = keep),
+                        ) { Text(str("rpcn.friends.keep")) }
+                    }
+                } else {
+                    FriendRow(friend) {
                         if (canRemove) {
+                            val ask = { confirmRemove = name }
                             TextButton(
                                 enabled = !busy,
-                                onClick = remove,
-                                modifier = Modifier.controllerFocusable("$controllerIdPrefix.remove.$name", onConfirm = remove),
+                                onClick = ask,
+                                modifier = Modifier.controllerFocusable("$controllerIdPrefix.remove.$name", onConfirm = ask),
                             ) { Text(str("rpcn.friends.remove")) }
                         }
                     }
@@ -318,7 +396,7 @@ internal fun RpcnFriendsList(controllerIdPrefix: String, canAdd: Boolean, canRem
                 status,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 4.dp),
+                modifier = Modifier.padding(top = 6.dp),
             )
         }
     }
@@ -330,26 +408,107 @@ private fun SectionLabel(text: String) {
         text,
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 10.dp),
+        modifier = Modifier.padding(top = 12.dp),
     )
 }
 
 @Composable
-private fun NameRow(name: String, highlight: Boolean = true, actions: @Composable () -> Unit) {
+private fun Note(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+}
+
+/** A name with one line under it, and its buttons. */
+@Composable
+private fun EntryRow(name: String, detail: String?, actions: @Composable () -> Unit) {
     Row(
         Modifier.fillMaxWidth().padding(top = 6.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            name,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (highlight) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Column(Modifier.weight(1f)) {
+            Text(
+                name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (!detail.isNullOrBlank()) {
+                Text(
+                    detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) { actions() }
+    }
+}
+
+/**
+ * A friend: whether they are online, and while they are, what their game says they are doing.
+ *
+ * Presence is the game's to set (title, a status line, a comment), so a game that sets none shows
+ * just "Online". RPCN sends no pictures of other users: there is no avatar to show here.
+ */
+@Composable
+private fun FriendRow(friend: RpcnFriend, actions: @Composable () -> Unit) {
+    val stateText = if (friend.online) str("rpcn.friends.online") else str("rpcn.friends.offline")
+    val playing = if (friend.online && friend.title.isNotBlank()) str("rpcn.friends.playing").format(friend.title) else ""
+    val presence = if (friend.online) listOf(friend.status, friend.comment).filter { it.isNotBlank() }.joinToString(" ") else ""
+    Row(
+        Modifier.fillMaxWidth().padding(top = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (friend.online) "● " else "○ ",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (friend.online) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    friend.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Text(
+                    "  $stateText",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (friend.online) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (playing.isNotBlank()) {
+                Text(
+                    playing,
+                    style = MaterialTheme.typography.bodySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (presence.isNotBlank()) {
+                Text(
+                    presence,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) { actions() }
     }
 }

@@ -323,6 +323,8 @@ namespace rpcn
 		std::vector<u64> get_new_messages();
 		std::optional<shared_ptr<std::pair<std::string, message_data>>> get_message(u64 id) const;
 		std::vector<std::pair<u64, shared_ptr<std::pair<std::string, message_data>>>> get_messages_and_register_cb(SceNpBasicMessageMainType type, bool include_bootable, message_cb_func cb_func, void* cb_param);
+		// ARMSX3: the same list without registering for new ones, for a UI that polls it.
+		std::vector<std::pair<u64, shared_ptr<std::pair<std::string, message_data>>>> get_messages(SceNpBasicMessageMainType type_filter, bool include_bootable) const;
 		void remove_message_cb(message_cb_func cb_func, void* cb_param);
 		void mark_message_used(u64 id);
 

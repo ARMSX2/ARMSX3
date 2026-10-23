@@ -95,9 +95,12 @@ fun FriendsScreen(onBack: () -> Unit) {
  * settings listed accepted friends only. A game's invite list offers RPCN friends who are online,
  * so a request nobody could see was a friend nobody could invite. Shown only once an RPCN account
  * is set up, so the tab stays Discord's for everyone else.
+ *
+ * In the in-game menu ([inGame]) it lists game invites, which only the running game can take, and
+ * leaves out Remove, which there would only be in the way.
  */
 @Composable
-fun RpcnFriendsPanel(modifier: Modifier = Modifier) {
+fun RpcnFriendsPanel(modifier: Modifier = Modifier, inGame: Boolean = false) {
     var configured by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         configured = withContext(Dispatchers.IO) {
@@ -113,7 +116,12 @@ fun RpcnFriendsPanel(modifier: Modifier = Modifier) {
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
             )
-            RpcnFriendsList(controllerIdPrefix = "friends.rpcn", canAdd = false, canRemove = false)
+            RpcnFriendsList(
+                controllerIdPrefix = "friends.rpcn",
+                canAdd = false,
+                canRemove = !inGame,
+                showInvites = inGame,
+            )
         }
     }
 }

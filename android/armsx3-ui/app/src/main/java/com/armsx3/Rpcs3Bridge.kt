@@ -1347,6 +1347,15 @@ object Rpcs3Bridge {
     fun rpcnFriendsSession(open: Boolean): String =
         runCatching { RPCSX.instance.rpcnFriendsSession(open) }.getOrElse { it.message ?: "" }
 
+    fun rpcnGetInvites(): String =
+        runCatching { RPCSX.instance.rpcnGetInvites() }.getOrElse { "[]" }
+
+    fun rpcnAcceptInvite(id: Long): String =
+        runCatching { RPCSX.instance.rpcnAcceptInvite(id) }.getOrElse { it.message ?: "" }
+
+    fun rpcnDeclineInvite(id: Long): String =
+        runCatching { RPCSX.instance.rpcnDeclineInvite(id) }.getOrElse { it.message ?: "" }
+
     fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String =
         runCatching { RPCSX.instance.rpcnCreateAccount(npid, password, onlineName, email) }
             .getOrElse { "Could not reach the emulator core." }

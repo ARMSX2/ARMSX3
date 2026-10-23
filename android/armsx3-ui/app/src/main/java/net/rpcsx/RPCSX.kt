@@ -208,6 +208,15 @@ class RPCSX {
      *  Returns "" on success or a message. */
     external fun rpcnFriendsSession(open: Boolean): String
 
+    /** Game invites received and not yet used, as JSON [{id, from, subject, body}]. Never signs in. */
+    external fun rpcnGetInvites(): String
+
+    /** Hands an invite to the running game, as the XMB would. Returns "" on success or a message. */
+    external fun rpcnAcceptInvite(id: Long): String
+
+    /** Discards an invite. Returns "" on success or a message. */
+    external fun rpcnDeclineInvite(id: Long): String
+
     external fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String
     external fun rpcnResendToken(npid: String, password: String): String
     external fun rpcnSendResetToken(npid: String, email: String): String
