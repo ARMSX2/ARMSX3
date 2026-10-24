@@ -138,6 +138,16 @@ object ConfigDatabase {
         // runs at 60 and double speed here.
         "BLUS30903" to "Video:\n  Frame limit: 60\n",
 
+        // J-Stars Victory VS+: Shader Precision High. On the Android default, Low, a battle draws
+        // nothing: the game keeps presenting at 50 fps with its music playing, but every frame is
+        // black, while the menus draw fine. Half-precision math in the battle's shaders is the
+        // difference; High draws the battle (BLUS31519, Odin 3, Turnip, 2026-10-24). EU (BLES02136)
+        // and JP (BLJS10257) run the same game, and High is the accurate setting, so it cannot hurt
+        // them. A Shader Precision set for the game itself still wins.
+        "BLUS31519" to "Video:\n  Shader Precision: High\n",
+        "BLES02136" to "Video:\n  Shader Precision: High\n",
+        "BLJS10257" to "Video:\n  Shader Precision: High\n",
+
         // Helldivers: the database forces the PPU interpreter because the recompiler hung it on a
         // black screen (RPCS3 issue #5831). The hang was LuaJIT's integer arithmetic on
         // mullwo./subfo. and bso, whose overflow flag the recompiler never set correctly; fixed in
