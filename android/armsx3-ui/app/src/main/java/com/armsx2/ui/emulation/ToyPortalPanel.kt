@@ -1,5 +1,7 @@
 package com.armsx2.ui.emulation
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,9 +17,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -26,9 +30,15 @@ import com.armsx2.input.DimensionsToyPad
 import com.armsx2.input.InfinityBase
 import com.armsx2.input.PositionPortal
 import com.armsx2.input.SkylanderPortal
+import com.armsx2.input.ToyPortals
 import com.armsx2.input.UsbPassthrough
 import com.armsx2.runtime.MainActivityRuntime
+import com.armsx2.ui.common.FileBrowserDialog
+import com.armsx2.ui.common.canBrowse
 import com.armsx2.ui.settings.controllerFocusable
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * The emulated toy portals, in the in-game menu: Skylanders, Disney Infinity and LEGO Dimensions, what
@@ -80,15 +90,22 @@ fun ToyPortalPanel(modifier: Modifier = Modifier) {
     }
 }
 
+/** A line under the lists: what the last action did, or what went wrong with it. */
+private class Note(val text: String, val error: Boolean = true)
+
 /** Skylanders: the portal finds a place for each figure itself. */
 @Composable
 private fun SkylanderContent() {
-    // Read when the tab opens, so files copied in meanwhile show up
-    val figures = remember { SkylanderPortal.figures() }
+    // Read when the tab opens, so files copied in meanwhile show up, and again after adding some
+    var figures by remember { mutableStateOf(SkylanderPortal.figures()) }
     val folder = remember { SkylanderPortal.folder().absolutePath }
-    var message by remember { mutableStateOf<String?>(null) }
+    var notes by remember { mutableStateOf(emptyList<Note>()) }
     val fullText = str("portal.full")
     val notFigureText = str("portal.notFigure")
+    val addFigures = rememberFigureAdder(SkylanderPortal.extensions, SkylanderPortal::add) {
+        figures = SkylanderPortal.figures()
+        notes = it
+    }
 
     Header(str("portal.onPortal"))
 
@@ -99,37 +116,41 @@ private fun SkylanderContent() {
     for ((slot, name) in SkylanderPortal.placed.toSortedMap()) {
         FigureRow(name.substringBeforeLast('.'), str("portal.lift"), "portal.lift.$slot", enabled = true) {
             SkylanderPortal.lift(slot)
-            message = null
+            notes = emptyList()
         }
     }
 
-    Header(str("portal.figures"), top = 8)
+    FiguresHeader(str("portal.figures"), addFigures)
 
     for (file in figures) {
         val onPortal = file.name in SkylanderPortal.placed.values
         FigureRow(file.nameWithoutExtension, str(if (onPortal) "portal.onIt" else "portal.place"), "portal.place.${file.name}", enabled = !onPortal) {
-            message = when (SkylanderPortal.place(file)) {
-                SkylanderPortal.Result.Placed -> null
-                SkylanderPortal.Result.Full -> fullText
-                SkylanderPortal.Result.NotAFigure -> notFigureText.format(file.name)
+            notes = when (SkylanderPortal.place(file)) {
+                SkylanderPortal.Result.Placed -> emptyList()
+                SkylanderPortal.Result.Full -> listOf(Note(fullText))
+                SkylanderPortal.Result.NotAFigure -> listOf(Note(notFigureText.format(file.name)))
             }
         }
     }
 
-    Footer(figures.isEmpty(), folder, message)
+    Footer(figures.isEmpty(), folder, notes)
 }
 
 /** Disney Infinity and LEGO Dimensions: pick a position, then the figure to put there. */
 @Composable
 private fun PositionContent(portal: PositionPortal) {
-    val figures = remember(portal) { portal.figures() }
+    var figures by remember(portal) { mutableStateOf(portal.figures()) }
     val folder = remember(portal) { portal.folder().absolutePath }
     var selected by remember(portal) { mutableIntStateOf(portal.positions.first().first) }
-    var message by remember(portal) { mutableStateOf<String?>(null) }
+    var notes by remember(portal) { mutableStateOf(emptyList<Note>()) }
     val notFigureText = str("portal.notFigure")
     val emptyText = str("portal.emptyPosition")
     val names = portal.positions.associate { (position, label) ->
         position to label.second.let { arg -> if (arg == null) str(label.first) else str(label.first).format(arg) }
+    }
+    val addFigures = rememberFigureAdder(portal.extensions, portal::add) {
+        figures = portal.figures()
+        notes = it
     }
 
     Header(str("portal.positions"))
@@ -156,7 +177,7 @@ private fun PositionContent(portal: PositionPortal) {
             if (figure != null) {
                 val lift = {
                     portal.lift(position)
-                    message = null
+                    notes = emptyList()
                 }
                 TextButton(onClick = lift, modifier = Modifier.controllerFocusable("portal.lift.$position", onConfirm = lift)) {
                     Text(str("portal.lift"))
@@ -165,16 +186,75 @@ private fun PositionContent(portal: PositionPortal) {
         }
     }
 
-    Header(str("portal.figuresFor").format(names[selected].orEmpty()), top = 8)
+    FiguresHeader(str("portal.figuresFor").format(names[selected].orEmpty()), addFigures)
 
     for (file in figures) {
         val onPortal = file.name in portal.placed.values
         FigureRow(file.nameWithoutExtension, str(if (onPortal) "portal.onIt" else "portal.place"), "portal.place.${file.name}", enabled = !onPortal) {
-            message = if (portal.place(selected, file)) null else notFigureText.format(file.name)
+            notes = if (portal.place(selected, file)) emptyList() else listOf(Note(notFigureText.format(file.name)))
         }
     }
 
-    Footer(figures.isEmpty(), folder, message)
+    Footer(figures.isEmpty(), folder, notes)
+}
+
+/**
+ * Adding figure files from the device's storage to a portal's folder. Our own browser where it can see
+ * that storage (github build with All files access), which keeps the player in the app with the game
+ * paused behind the menu; the system picker otherwise. [onDone] gets what to say about it. Returns the
+ * action that opens it.
+ */
+@Composable
+private fun rememberFigureAdder(
+    extensions: Set<String>,
+    copy: (List<ToyPortals.Offered>) -> ToyPortals.Added,
+    onDone: (List<Note>) -> Unit,
+): () -> Unit {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var browsing by remember { mutableStateOf(false) }
+    val addedText = str("portal.added")
+    val notAddedText = str("portal.notAdded")
+    val failedText = str("portal.copyFailed")
+
+    // Off the main thread: the files are read, and the system picker's are named by asking their provider
+    fun take(offered: () -> List<ToyPortals.Offered>) {
+        scope.launch {
+            val added = withContext(Dispatchers.IO) { copy(offered()) }
+            onDone(
+                buildList {
+                    if (added.count > 0) add(Note(addedText.format(added.count), error = false))
+                    if (added.notFigures.isNotEmpty()) add(Note(notAddedText.format(added.notFigures.joinToString())))
+                    if (added.failed.isNotEmpty()) add(Note(failedText.format(added.failed.joinToString())))
+                }
+            )
+        }
+    }
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) take { uris.map { ToyPortals.offered(context, it) } }
+    }
+
+    if (browsing) {
+        FileBrowserDialog(
+            title = str("portal.add"),
+            extensions = extensions,
+            onPick = { file ->
+                browsing = false
+                take { listOf(ToyPortals.offered(file)) }
+            },
+            onDismiss = { browsing = false },
+            allowMultiple = true,
+            onPickMultiple = { files ->
+                browsing = false
+                take { files.map { ToyPortals.offered(it) } }
+            },
+            selectedLabel = str("portal.addSelected"),
+        )
+    }
+
+    // Figure files have no type of their own to filter on. Without a system picker the activity says so.
+    return { if (canBrowse()) browsing = true else picker.launch(arrayOf("*/*")) }
 }
 
 @Composable
@@ -187,15 +267,35 @@ private fun Header(text: String, top: Int = 0) {
     )
 }
 
-/** Where the files go, or that there are none yet, and what went wrong with the last one */
+/** The figure list's header, with the way to add more beside it */
 @Composable
-private fun Footer(noFigures: Boolean, folder: String, message: String?) {
+private fun FiguresHeader(text: String, onAdd: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onAdd, modifier = Modifier.controllerFocusable("portal.add", onConfirm = onAdd)) {
+            Text(str("portal.add"))
+        }
+    }
+}
+
+/** Where the files go, or that there are none yet, and what the last action did */
+@Composable
+private fun Footer(noFigures: Boolean, folder: String, notes: List<Note>) {
     if (noFigures) {
         Text(str("portal.noFigures").format(folder), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 
-    message?.let {
-        Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+    for (note in notes) {
+        Text(
+            note.text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (note.error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+        )
     }
 
     if (!noFigures) {

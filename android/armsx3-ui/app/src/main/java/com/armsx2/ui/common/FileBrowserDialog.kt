@@ -73,6 +73,8 @@ fun FileBrowserDialog(
     /** Choose a folder rather than a file: only folders are listed, and the header offers the
      *  one being shown. For devices without the system folder picker (see SystemPickers). */
     pickFolder: Boolean = false,
+    /** What the button that takes the ticked files says, %d being how many. Install unless given. */
+    selectedLabel: String? = null,
 ) {
     var dir by remember { mutableStateOf(defaultBrowseRoot()) }
     // Absolute paths, so a selection survives navigating away and back.
@@ -135,7 +137,7 @@ fun FileBrowserDialog(
                         // installer requires them in order.
                         TextButton(onClick = {
                             onPickMultiple?.invoke(selected.sortedBy { it.name.lowercase() })
-                        }) { Text(str("browse.installSelected").format(selected.size)) }
+                        }) { Text((selectedLabel ?: str("browse.installSelected")).format(selected.size)) }
                     }
                     if (pickFolder) {
                         TextButton(onClick = { onPick(dir) }) { Text(str("browse.useFolder")) }
