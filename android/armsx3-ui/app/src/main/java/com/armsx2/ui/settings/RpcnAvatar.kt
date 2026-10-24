@@ -1,9 +1,13 @@
 package com.armsx2.ui.settings
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.media.ExifInterface
+import android.net.Uri
+import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
 import android.util.LruCache
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -17,6 +21,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -58,18 +63,27 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.armsx2.data.library.Licences
 import com.armsx2.i18n.str
+import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.common.FileBrowserDialog
 import com.armsx2.ui.common.canBrowse
+import com.armsx2.ui.packages.OpenedDocument
+import com.armsx2.ui.packages.isLicenceName
+import com.armsx2.ui.packages.openForInstall
+import com.armsx2.ui.packages.stagedName
 import com.armsx3.Rpcs3Bridge
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.InputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import net.rpcsx.ProgressRepository
+import net.rpcsx.RPCSX
 import org.json.JSONObject
 
 /**
@@ -220,6 +234,74 @@ private fun InputStream.readCapped(): ByteArray? {
     return out.toByteArray()
 }
 
+/** A line under the buttons: what just happened, or what went wrong. */
+private class Notice(val text: String, val error: Boolean)
+
+/** A package or licence the player picked to install, from the in-app browser or the system picker. */
+private class PickedFile(
+    val name: String,
+    /** Opened for the native installer, which reads a descriptor. */
+    val open: () -> OpenedDocument,
+    /** The whole file, for a licence: a .rap is 16 bytes. */
+    val read: () -> ByteArray?,
+)
+
+private fun pickedFile(file: File) = PickedFile(
+    file.name,
+    { OpenedDocument(ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY), null) },
+    { file.takeIf { it.length() <= MaxPictureBytes }?.readBytes() },
+)
+
+private fun pickedFile(context: Context, uri: Uri): PickedFile {
+    val resolver = context.contentResolver
+    val name = runCatching {
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+            if (c.moveToFirst()) c.getString(0) else null
+        }
+    }.getOrNull() ?: uri.lastPathSegment.orEmpty()
+    return PickedFile(name, { openForInstall(context, uri, name) }, { resolver.openInputStream(uri)?.use { it.readCapped() } })
+}
+
+/** Installs one avatar package or licence the way the PKG/Data Manager does. True when it worked. */
+private fun installOne(context: Context, file: PickedFile): Boolean {
+    if (!isLicenceName(file.name)) {
+        val id = ProgressRepository.create(context, "Installing ${file.name}")
+        val opened = try {
+            file.open()
+        } catch (failure: Exception) {
+            // Nothing else finishes the entry when the native call never happens, and its
+            // notification is an ongoing one that would otherwise stay in the shade
+            ProgressRepository.onProgressEvent(id, -1, 0, failure.message.orEmpty())
+            return false
+        }
+        return try {
+            RPCSX.instance.install(opened.descriptor.fd, id)
+        } finally {
+            opened.close()
+        }
+    }
+
+    val bytes = file.read() ?: return false
+    val staged = File(context.cacheDir, stagedName(file.name))
+    return try {
+        staged.writeBytes(bytes)
+        if (file.name.endsWith(".rap", ignoreCase = true)) {
+            Licences.installRap(staged)
+        } else {
+            // An EDAT carries its own content id, so installKey needs no game path
+            val id = ProgressRepository.create(context, "Installing ${file.name}", silent = true)
+            val descriptor = ParcelFileDescriptor.open(staged, ParcelFileDescriptor.MODE_READ_ONLY)
+            try {
+                RPCSX.instance.installKey(descriptor.fd, id, "")
+            } finally {
+                runCatching { descriptor.close() }
+            }
+        }
+    } finally {
+        runCatching { staged.delete() }
+    }
+}
+
 /** "Default avatar", "PS3 user icon", "PSN avatar from NPEB02228" or "Your own picture". */
 @Composable
 private fun describe(list: AvatarList?, defaultMissing: Boolean): String {
@@ -330,9 +412,10 @@ fun RpcnAvatarPickerOverlay() {
     val scope = rememberCoroutineScope()
     var list by remember { mutableStateOf<AvatarList?>(null) }
     var loaded by remember { mutableStateOf(false) }
-    var note by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<Notice?>(null) }
     var busy by remember { mutableStateOf(false) }
     var browsing by remember { mutableStateOf(false) }
+    var browsingPackages by remember { mutableStateOf(false) }
 
     suspend fun reload() {
         list = withContext(Dispatchers.IO) { readAvatarList() }
@@ -349,7 +432,7 @@ fun RpcnAvatarPickerOverlay() {
         busy = true
         scope.launch {
             val ok = withContext(Dispatchers.IO) { Rpcs3Bridge.avatarSelect(path) }
-            note = if (ok) null else failed
+            notice = if (ok) null else Notice(failed, error = true)
             reload()
             busy = false
         }
@@ -363,7 +446,34 @@ fun RpcnAvatarPickerOverlay() {
                 val png = runCatching { read()?.let(::squareAvatarPng) }.getOrNull()
                 png != null && Rpcs3Bridge.avatarUseImage(png)
             }
-            note = if (ok) null else unreadable
+            notice = if (ok) null else Notice(unreadable, error = true)
+            reload()
+            busy = false
+        }
+    }
+
+    // Avatar packages and their licences, installed right here rather than through the PKG/Data
+    // Manager. One package at a time: that screen takes several packages as the parts of one split
+    // package, and avatar packs are whole packages each. Packages before licences, since a licence
+    // unlocks what its package wrote. On the app's scope, so closing the picker does not abandon an
+    // install halfway.
+    val installingText = str("rpcn.avatar.installing")
+    val installedText = str("rpcn.avatar.installed")
+    val installFailedText = str("rpcn.avatar.installFailed")
+
+    fun installAvatars(picked: List<PickedFile>) {
+        if (picked.isEmpty() || busy) return
+        busy = true
+        notice = null
+        MainActivityRuntime.invoke {
+            val failures = mutableListOf<String>()
+            for (file in picked.sortedBy { isLicenceName(it.name) }) {
+                notice = Notice(installingText.format(file.name), error = false)
+                val ok = withContext(Dispatchers.IO) { runCatching { installOne(context, file) }.getOrDefault(false) }
+                if (!ok) failures += file.name
+            }
+            notice = if (failures.isEmpty()) Notice(installedText, error = false)
+            else Notice(installFailedText.format(failures.joinToString()), error = true)
             reload()
             busy = false
         }
@@ -373,6 +483,13 @@ fun RpcnAvatarPickerOverlay() {
         if (uri != null) usePicture { context.contentResolver.openInputStream(uri)?.use { it.readCapped() } }
     }
     val pickPicture = { if (canBrowse()) browsing = true else systemPicker.launch("image/*") }
+    val packagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) installAvatars(uris.map { pickedFile(context, it) })
+    }
+    // Packages have no type of their own to filter on, so the system picker shows everything
+    val pickPackages = { if (canBrowse()) browsingPackages = true else packagePicker.launch(arrayOf("*/*")) }
+    // The installer writes into the user's folders, which a running game has mounted
+    val canInstall = MainActivityRuntime.isVmIdle()
     val useDefault = { choose("") }
     val close = { RpcnAvatarPicker.open.value = false }
 
@@ -414,8 +531,12 @@ fun RpcnAvatarPickerOverlay() {
                 }
 
                 Spacer(Modifier.height(8.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
                     PickerButton("rpcn.avatar.picture", str("rpcn.avatar.useImage"), enabled = !busy, onClick = pickPicture)
+                    PickerButton("rpcn.avatar.install", str("rpcn.avatar.install"), enabled = !busy && canInstall, onClick = pickPackages)
                     PickerButton("rpcn.avatar.default", str("rpcn.avatar.useDefault"), enabled = !busy, onClick = useDefault)
                     PickerButton("rpcn.avatar.close", str("action.close"), onClick = close)
                 }
@@ -440,11 +561,11 @@ fun RpcnAvatarPickerOverlay() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
                 )
-                note?.let {
+                notice?.let {
                     Text(
-                        it,
+                        it.text,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
+                        color = if (it.error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                         modifier = Modifier.padding(top = 2.dp),
                     )
                 }
@@ -500,6 +621,24 @@ fun RpcnAvatarPickerOverlay() {
                 }
             }
         }
+    }
+
+    if (browsingPackages) {
+        FileBrowserDialog(
+            title = str("rpcn.avatar.install"),
+            extensions = setOf("pkg", "rap", "edat"),
+            onPick = { file ->
+                browsingPackages = false
+                installAvatars(listOf(pickedFile(file)))
+            },
+            onDismiss = { browsingPackages = false },
+            allowMultiple = true,
+            onPickMultiple = { files ->
+                browsingPackages = false
+                installAvatars(files.map { pickedFile(it) })
+            },
+            selectedLabel = str("rpcn.avatar.installSelected"),
+        )
     }
 
     if (browsing) {
