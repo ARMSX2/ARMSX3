@@ -832,6 +832,7 @@
  "portal.create.none": "Tidak ada figur dengan nama itu.",
  "portal.create.done": "%s dibuat.",
  "portal.create.failed": "Gagal membuat %s.",
+ "portal.create.senseis": "Sensei dari Imaginators tidak ada di sini: game hanya menerima yang asli. Tambahkan dump figurnya sebagai gantinya.",
  "portal.place": "Taruh",
  "portal.onIt": "Ditaruh",
  "portal.lift": "Angkat",

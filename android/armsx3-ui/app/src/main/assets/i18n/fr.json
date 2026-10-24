@@ -832,6 +832,7 @@
  "portal.create.none": "Aucune figurine de ce nom.",
  "portal.create.done": "Figurine créée : %s.",
  "portal.create.failed": "Impossible de créer %s.",
+ "portal.create.senseis": "Les Senseis d'Imaginators ne sont pas listés : le jeu n'accepte que les vrais. Ajoutez plutôt un dump de la figurine.",
  "portal.place": "Poser",
  "portal.onIt": "Posée",
  "portal.lift": "Retirer",

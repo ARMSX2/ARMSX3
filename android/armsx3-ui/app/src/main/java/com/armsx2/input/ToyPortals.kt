@@ -223,8 +223,16 @@ object SkylanderPortal {
     /** A figure is 64 blocks of 16 bytes, what load_skylander reads. IO thread. */
     fun add(files: List<ToyPortals.Offered>) = ToyPortals.add(folder(), extensions, 0x40 * 0x10, files)
 
-    /** The Skylanders a figure can be made of (Create figure). */
-    fun characters() = ToyPortals.characters("portal/skylanders.tsv")
+    /**
+     * The Skylanders a figure can be made of (Create figure): RPCS3's list without the Imaginators
+     * Senseis, ids 601 to 631. Imaginators-era toys carry identifier data the game checks to see the
+     * toy is real, which a made figure lacks, so a made Sensei is shown as corrupt and its repair
+     * loops (RPCS3 issues #9449 and #10713, and our tester). Senseis work in no earlier game either,
+     * so the list offers only figures that can work. A dump of a real Sensei still goes on the portal.
+     */
+    fun characters() = ToyPortals.characters("portal/skylanders.tsv").filterNot { it.first in IMAGINATORS_SENSEIS }
+
+    private val IMAGINATORS_SENSEIS = 601..631
 
     /** A new figure of [character]: the new file's name, or null. IO thread. */
     fun create(character: ToyPortals.Character) =

@@ -832,6 +832,7 @@
  "portal.create.none": "Bu adda figür yok.",
  "portal.create.done": "%s oluşturuldu.",
  "portal.create.failed": "%s oluşturulamadı.",
+ "portal.create.senseis": "Imaginators Sensei'leri burada yok: oyun yalnızca gerçeklerini kabul ediyor. Bunun yerine figürün dökümünü ekleyin.",
  "portal.place": "Yerleştir",
  "portal.onIt": "Yerleştirildi",
  "portal.lift": "Kaldır",

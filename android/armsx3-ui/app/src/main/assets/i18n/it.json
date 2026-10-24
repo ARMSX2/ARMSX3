@@ -832,6 +832,7 @@
  "portal.create.none": "Nessun personaggio con questo nome.",
  "portal.create.done": "%s creato.",
  "portal.create.failed": "Impossibile creare %s.",
+ "portal.create.senseis": "I Sensei di Imaginators non sono elencati: il gioco accetta solo quelli veri. Aggiungi invece un dump del personaggio.",
  "portal.place": "Posiziona",
  "portal.onIt": "Posizionato",
  "portal.lift": "Togli",

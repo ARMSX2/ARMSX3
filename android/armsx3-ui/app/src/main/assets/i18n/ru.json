@@ -832,6 +832,7 @@
  "portal.create.none": "Фигурки с таким именем нет.",
  "portal.create.done": "Создано: %s.",
  "portal.create.failed": "Не удалось создать: %s.",
+ "portal.create.senseis": "Сэнсеев из Imaginators здесь нет: игра принимает только настоящих. Вместо этого добавьте дамп фигурки.",
  "portal.place": "Поставить",
  "portal.onIt": "Стоит",
  "portal.lift": "Снять",

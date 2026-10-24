@@ -113,7 +113,12 @@ private fun SkylanderContent() {
     }
 
     if (creating) {
-        CreatorContent(remember { SkylanderPortal.characters() }, { it.name }, onBack = { creating = false }) { character ->
+        CreatorContent(
+            remember { SkylanderPortal.characters() },
+            { it.name },
+            note = str("portal.create.senseis"),
+            onBack = { creating = false },
+        ) { character ->
             scope.launch {
                 val made = withContext(Dispatchers.IO) { SkylanderPortal.create(character) }
                 figures = SkylanderPortal.figures()
@@ -331,6 +336,7 @@ private const val MAX_LISTED = 120
 private fun CreatorContent(
     characters: List<ToyPortals.Character>,
     label: (ToyPortals.Character) -> String,
+    note: String? = null,
     onBack: () -> Unit,
     onPick: (ToyPortals.Character) -> Unit,
 ) {
@@ -361,6 +367,11 @@ private fun CreatorContent(
         label = { Text(str("portal.create.search")) },
         modifier = Modifier.fillMaxWidth(),
     )
+
+    // What the list leaves out and why (the Imaginators Senseis)
+    note?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 
     for (character in shown) {
         FigureRow(label(character), makeText, "portal.create.${character.first}.${character.second}", enabled = true) {

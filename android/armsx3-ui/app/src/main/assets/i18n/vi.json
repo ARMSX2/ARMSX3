@@ -832,6 +832,7 @@
  "portal.create.none": "Không có nhân vật nào tên như vậy.",
  "portal.create.done": "Đã tạo %s.",
  "portal.create.failed": "Không tạo được %s.",
+ "portal.create.senseis": "Các Sensei của Imaginators không có ở đây: trò chơi chỉ nhận hàng thật. Hãy thêm bản dump của nhân vật thay thế.",
  "portal.place": "Đặt lên",
  "portal.onIt": "Đã đặt",
  "portal.lift": "Nhấc ra",

@@ -832,6 +832,7 @@
  "portal.create.none": "No hay ninguna figura con ese nombre.",
  "portal.create.done": "Se creó %s.",
  "portal.create.failed": "No se pudo crear %s.",
+ "portal.create.senseis": "Los Senseis de Imaginators no aparecen aquí: el juego solo acepta los reales. Añade en su lugar un volcado de la figura.",
  "portal.place": "Colocar",
  "portal.onIt": "Colocada",
  "portal.lift": "Quitar",

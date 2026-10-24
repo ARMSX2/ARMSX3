@@ -832,6 +832,7 @@
  "portal.create.none": "その名前のフィギュアはありません。",
  "portal.create.done": "%s を作成しました。",
  "portal.create.failed": "%s を作成できませんでした。",
+ "portal.create.senseis": "イマジネーターズのセンセイはここにはありません。ゲームは本物しか受け付けないため、代わりにフィギュアのダンプを追加してください。",
  "portal.place": "置く",
  "portal.onIt": "設置済み",
  "portal.lift": "外す",

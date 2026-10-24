@@ -832,6 +832,7 @@
  "portal.create.none": "لا توجد شخصية بهذا الاسم.",
  "portal.create.done": "تم إنشاء %s.",
  "portal.create.failed": "تعذر إنشاء %s.",
+ "portal.create.senseis": "لا تظهر شخصيات Sensei من Imaginators هنا: اللعبة تقبل الحقيقية منها فقط. أضف ملف نسخة من المجسم بدلًا من ذلك.",
  "portal.place": "وضع",
  "portal.onIt": "موضوعة",
  "portal.lift": "رفع",

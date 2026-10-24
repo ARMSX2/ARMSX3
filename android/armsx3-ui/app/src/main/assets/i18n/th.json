@@ -832,6 +832,7 @@
  "portal.create.none": "ไม่มีฟิกเกอร์ชื่อนี้",
  "portal.create.done": "สร้าง %s แล้ว",
  "portal.create.failed": "สร้าง %s ไม่ได้",
+ "portal.create.senseis": "เซนเซของ Imaginators ไม่อยู่ในรายการ เพราะเกมรับเฉพาะตัวจริง ให้เพิ่มไฟล์ดัมพ์ของฟิกเกอร์แทน",
  "portal.place": "วาง",
  "portal.onIt": "วางแล้ว",
  "portal.lift": "ยกออก",

@@ -1358,6 +1358,7 @@ val EN: Map<String, String> = mapOf(
     "portal.create.none" to "No figure by that name.",
     "portal.create.done" to "Created %s.",
     "portal.create.failed" to "Could not create %s.",
+    "portal.create.senseis" to "Imaginators Senseis aren't listed: the game only accepts real ones. Add a dump of the toy instead.",
     "portal.place" to "Place",
     "portal.onIt" to "Placed",
     "portal.lift" to "Lift off",

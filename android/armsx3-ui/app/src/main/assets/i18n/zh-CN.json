@@ -832,6 +832,7 @@
  "portal.create.none": "没有这个名称的角色。",
  "portal.create.done": "已创建 %s。",
  "portal.create.failed": "无法创建 %s。",
+ "portal.create.senseis": "这里没有 Imaginators 的 Sensei：游戏只接受真品。请改为添加实体角色的转储文件。",
  "portal.place": "放上",
  "portal.onIt": "已放上",
  "portal.lift": "取下",

@@ -832,6 +832,7 @@
  "portal.create.none": "Brak figurki o tej nazwie.",
  "portal.create.done": "Utworzono: %s.",
  "portal.create.failed": "Nie udało się utworzyć: %s.",
+ "portal.create.senseis": "Senseiów z Imaginators tu nie ma: gra przyjmuje tylko prawdziwe. Zamiast tego dodaj zrzut figurki.",
  "portal.place": "Postaw",
  "portal.onIt": "Postawiona",
  "portal.lift": "Zdejmij",

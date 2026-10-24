@@ -832,6 +832,7 @@
  "portal.create.none": "Keine Figur mit diesem Namen.",
  "portal.create.done": "%s erstellt.",
  "portal.create.failed": "%s konnte nicht erstellt werden.",
+ "portal.create.senseis": "Imaginators-Senseis fehlen hier: Das Spiel akzeptiert nur echte. Fügen Sie stattdessen einen Dump der Figur hinzu.",
  "portal.place": "Aufstellen",
  "portal.onIt": "Aufgestellt",
  "portal.lift": "Herunternehmen",

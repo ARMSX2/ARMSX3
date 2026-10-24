@@ -832,6 +832,7 @@
  "portal.create.none": "فیگوری با این نام نیست.",
  "portal.create.done": "%s ساخته شد.",
  "portal.create.failed": "ساخت %s ممکن نشد.",
+ "portal.create.senseis": "Senseiهای Imaginators اینجا نیستند: بازی فقط نمونه‌های واقعی را می‌پذیرد. به‌جای آن یک دامپ از فیگور اضافه کنید.",
  "portal.place": "گذاشتن",
  "portal.onIt": "گذاشته شد",
  "portal.lift": "برداشتن",

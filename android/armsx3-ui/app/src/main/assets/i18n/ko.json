@@ -832,6 +832,7 @@
  "portal.create.none": "그런 이름의 피규어가 없습니다.",
  "portal.create.done": "%s을(를) 만들었습니다.",
  "portal.create.failed": "%s을(를) 만들지 못했습니다.",
+ "portal.create.senseis": "이매지네이터스의 센세이는 목록에 없습니다. 게임이 진짜만 받아들이므로 대신 피규어 덤프를 추가하세요.",
  "portal.place": "올리기",
  "portal.onIt": "올려짐",
  "portal.lift": "내리기",
