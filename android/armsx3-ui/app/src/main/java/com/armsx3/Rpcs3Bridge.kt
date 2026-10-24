@@ -1484,6 +1484,22 @@ object Rpcs3Bridge {
         runCatching { RPCSX.instance.dimensionsCreate(path, id) }.getOrDefault(false)
 
     @JvmStatic
+    fun avatarList(): String =
+        runCatching { RPCSX.instance.avatarList() }.getOrDefault("")
+
+    @JvmStatic
+    fun avatarImage(path: String): ByteArray? =
+        runCatching { RPCSX.instance.avatarImage(path) }.getOrNull()
+
+    @JvmStatic
+    fun avatarSelect(path: String): Boolean =
+        runCatching { RPCSX.instance.avatarSelect(path) }.getOrDefault(false)
+
+    @JvmStatic
+    fun avatarUseImage(png: ByteArray): Boolean =
+        runCatching { RPCSX.instance.avatarUseImage(png) }.getOrDefault(false)
+
+    @JvmStatic
     fun usbSetPassthrough(fds: String) {
         runCatching { RPCSX.instance.usbSetPassthrough(fds) }
     }

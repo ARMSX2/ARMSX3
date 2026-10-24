@@ -185,6 +185,7 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("net.clans.label", true, SettingsCategory.Network),
     SettingsSearchEntry("network.emulateUsbKeyboard", true, SettingsCategory.Network),
     SettingsSearchEntry("rpcn.title", true, SettingsCategory.Network),
+    SettingsSearchEntry("rpcn.avatar.title", true, SettingsCategory.Network),
     SettingsSearchEntry("rpcn.hosts.title", true, SettingsCategory.Network),
     SettingsSearchEntry("rpcn.section.account", true, SettingsCategory.Network),
     SettingsSearchEntry("rpcn.section.advanced", true, SettingsCategory.Network),

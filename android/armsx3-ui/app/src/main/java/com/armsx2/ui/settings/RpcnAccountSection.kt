@@ -207,6 +207,14 @@ fun RpcnAccountSection() {
 
         Spacer(Modifier.height(10.dp))
 
+        // The picture games show for the player (RpcnAvatar.kt). Next to where you stand, since it
+        // is part of who you are online and the one thing here people come back to change.
+        RpcnCard(str("rpcn.avatar.title"), str("rpcn.avatar.description")) {
+            RpcnAvatarRow()
+        }
+
+        Spacer(Modifier.height(10.dp))
+
         // 2. WHICH SERVER. The saved list is the control; the free-text box below it is for
         //    typing one that is not saved yet.
         RpcnCard(str("rpcn.hosts.title"), str("rpcn.hosts.description")) {

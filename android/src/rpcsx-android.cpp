@@ -46,6 +46,7 @@
 #include "Emu/localized_string_id.h"
 #include "Emu/emu_callbacks.h"
 #include "Emu/system_config.h"
+#include "Emu/NP/np_avatar.h"
 #include "Emu/NP/np_handler.h"
 #include "Emu/NP/rpcn_client.h"
 #include "Emu/NP/rpcn_config.h"
@@ -3992,6 +3993,117 @@ extern "C" const char *_rpcsx_rpcnDeleteTrophies() {
   return rpcn_with_connection([&](rpcn::rpcn_client &client) {
     return client.delete_trophies();
   });
+}
+
+// ---- Avatar, for the RPCN tab's picker ----------------------------------------------------------
+//
+// Upstream's np_avatar does the work: it lists the PSN avatars installed for the user (avatar PKGs
+// land in home/<user>/psn_avatar), decrypts them with their RAP, and keeps the choice in
+// home/<user>/rpcs3_avatar, which sceNp reads whenever a game asks for the player's picture. These
+// hand the picker what RPCS3's avatar_selection_dialog takes from it.
+
+// {"userDir", "selected", "default", "avatars": [{"path", "usable"}]}. Usable is the dialog's own
+// test: an avatar whose RAP is missing cannot be decrypted, so the picker leaves it out and counts it.
+extern "C" const char *_rpcsx_avatarList() {
+  static thread_local std::string result;
+
+  const std::string user = Emu.GetUsr();
+  std::string avatars;
+
+  for (const std::string &path : np::avatar::get_installed_avatars(user)) {
+    if (!avatars.empty()) avatars += ",";
+    fmt::append(avatars, R"({"path":"%s","usable":%s})", json_escape(path),
+                np::avatar::is_file_usable(path) ? "true" : "false");
+  }
+
+  result = fmt::format(R"({"userDir":"%s","selected":"%s","default":"%s","avatars":[%s]})",
+                       json_escape(rpcs3::utils::get_hdd0_dir() + "home/" + user + "/"),
+                       json_escape(np::avatar::get_selected_avatar(user)),
+                       json_escape(np::avatar::get_default_avatar_path(user)), avatars);
+  return result.c_str();
+}
+
+// The PNG inside an avatar file, decrypted when it is an EDAT. False when there is none.
+extern "C" bool _rpcsx_avatarImage(std::string_view path, const u8 **data, usz *size) {
+  static thread_local std::vector<u8> image;
+
+  image = np::avatar::load_file(std::string(path));
+  *data = image.data();
+  *size = image.size();
+  return !image.empty();
+}
+
+// Choose an avatar by path, or the default with an empty one. Read first, as the dialog does, so a
+// file that cannot be loaded never becomes the selection.
+extern "C" bool _rpcsx_avatarSelect(std::string_view path) {
+  const std::string s_path{path};
+
+  if (!s_path.empty() && np::avatar::load_file(s_path).empty()) {
+    return false;
+  }
+
+  return np::avatar::set_selected_avatar(Emu.GetUsr(), s_path);
+}
+
+// A picture of the player's own, already a square PNG (the picker crops and scales it), stored in
+// their home folder and chosen. Named after its contents: sceNp caches converted avatars by path
+// for the rest of the session, so a new picture needs a new name to be seen at all. The picture it
+// replaces is removed, so a home folder holds one at most.
+extern "C" bool _rpcsx_avatarUseImage(const u8 *data, usz size) {
+  static constexpr u8 png_signature[8] = {0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+
+  if (!data || size < sizeof(png_signature) || size > 16 * 1024 * 1024 ||
+      std::memcmp(data, png_signature, sizeof(png_signature)) != 0) {
+    return false;
+  }
+
+  const std::string user = Emu.GetUsr();
+  const std::string user_dir = rpcs3::utils::get_hdd0_dir() + "home/" + user + "/";
+
+  u8 digest[20];
+  sha1(data, size, digest);
+  const u64 tag = read_from_ptr<be_t<u64>>(digest);
+  const std::string name = fmt::format("armsx3_avatar_%016x.png", tag);
+  const std::string path = user_dir + name;
+
+  if (!fs::is_file(path)) {
+    // Through a temporary, so a failed write never leaves a broken file under the final name
+    const std::string part = path + ".part";
+    fs::file file(part, fs::rewrite);
+
+    if (!file || file.write(data, size) != size) {
+      file.close();
+      fs::remove_file(part);
+      return false;
+    }
+
+    file.close();
+
+    if (!fs::rename(part, path, true)) {
+      fs::remove_file(part);
+      return false;
+    }
+  }
+
+  if (!np::avatar::set_selected_avatar(user, path)) {
+    return false;
+  }
+
+  // Names first: fs::dir is a live handle on the folder being changed
+  std::vector<std::string> previous;
+
+  for (const auto &entry : fs::dir(user_dir)) {
+    if (!entry.is_directory && entry.name != name && entry.name.starts_with("armsx3_avatar_") &&
+        entry.name.ends_with(".png")) {
+      previous.push_back(entry.name);
+    }
+  }
+
+  for (const std::string &old_name : previous) {
+    fs::remove_file(user_dir + old_name);
+  }
+
+  return true;
 }
 
 extern "C" const char *_rpcsx_rpcnResendToken(std::string_view npid,

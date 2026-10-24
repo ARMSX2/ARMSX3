@@ -275,6 +275,13 @@ class RPCSX {
     external fun infinityCreate(path: String, figure: Int, series: Int): Boolean
     external fun dimensionsCreate(path: String, id: Int): Boolean
 
+    /** The RPCN tab's avatar picker (np_avatar): the installed PSN avatars as JSON, the PNG inside one,
+     *  choosing one by path ("" = the default), and a picture of the player's own as a square PNG. */
+    external fun avatarList(): String
+    external fun avatarImage(path: String): ByteArray?
+    external fun avatarSelect(path: String): Boolean
+    external fun avatarUseImage(png: ByteArray): Boolean
+
     /** Real toy portals the app opened, as comma-separated file descriptors, for the next game (UsbPassthrough). */
     external fun usbSetPassthrough(fds: String)
 

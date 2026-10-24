@@ -131,6 +131,10 @@ struct RPCSXApi {
   bool (*skylanderCreate)(std::string_view path, int32_t id, int32_t variant);
   bool (*infinityCreate)(std::string_view path, int32_t figure, int32_t series);
   bool (*dimensionsCreate)(std::string_view path, int32_t id);
+  const char *(*avatarList)();
+  bool (*avatarImage)(std::string_view path, const uint8_t **data, size_t *size);
+  bool (*avatarSelect)(std::string_view path);
+  bool (*avatarUseImage)(const uint8_t *data, size_t size);
   void (*usbSetPassthrough)(std::string_view fds);
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
@@ -301,6 +305,10 @@ struct RPCSXLibrary : RPCSXApi {
     result.skylanderCreate = reinterpret_cast<decltype(skylanderCreate)>(dlsym(handle, "_rpcsx_skylanderCreate"));
     result.infinityCreate = reinterpret_cast<decltype(infinityCreate)>(dlsym(handle, "_rpcsx_infinityCreate"));
     result.dimensionsCreate = reinterpret_cast<decltype(dimensionsCreate)>(dlsym(handle, "_rpcsx_dimensionsCreate"));
+    result.avatarList = reinterpret_cast<decltype(avatarList)>(dlsym(handle, "_rpcsx_avatarList"));
+    result.avatarImage = reinterpret_cast<decltype(avatarImage)>(dlsym(handle, "_rpcsx_avatarImage"));
+    result.avatarSelect = reinterpret_cast<decltype(avatarSelect)>(dlsym(handle, "_rpcsx_avatarSelect"));
+    result.avatarUseImage = reinterpret_cast<decltype(avatarUseImage)>(dlsym(handle, "_rpcsx_avatarUseImage"));
     result.usbSetPassthrough = reinterpret_cast<decltype(usbSetPassthrough)>(dlsym(handle, "_rpcsx_usbSetPassthrough"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
@@ -1826,6 +1834,37 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_net_rpcsx_RPCSX_dimensionsCreate(JNIEnv *env, jobject, jstring path, jint id) {
   if (!rpcsxLib.dimensionsCreate) return JNI_FALSE;
   return rpcsxLib.dimensionsCreate(jstring_to_string(env, path), id) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_avatarList(JNIEnv *env, jobject) {
+  if (!rpcsxLib.avatarList) return env->NewStringUTF("");
+  const char *json = rpcsxLib.avatarList();
+  return env->NewStringUTF(json ? json : "");
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_net_rpcsx_RPCSX_avatarImage(JNIEnv *env, jobject, jstring path) {
+  const uint8_t *data = nullptr;
+  size_t size = 0;
+  if (!rpcsxLib.avatarImage || !rpcsxLib.avatarImage(jstring_to_string(env, path), &data, &size)) return nullptr;
+  jbyteArray out = env->NewByteArray(static_cast<jsize>(size));
+  if (out) env->SetByteArrayRegion(out, 0, static_cast<jsize>(size), reinterpret_cast<const jbyte *>(data));
+  return out;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_avatarSelect(JNIEnv *env, jobject, jstring path) {
+  if (!rpcsxLib.avatarSelect) return JNI_FALSE;
+  return rpcsxLib.avatarSelect(jstring_to_string(env, path)) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_avatarUseImage(JNIEnv *env, jobject, jbyteArray png) {
+  if (!rpcsxLib.avatarUseImage || !png) return JNI_FALSE;
+  std::vector<uint8_t> bytes(static_cast<size_t>(env->GetArrayLength(png)));
+  env->GetByteArrayRegion(png, 0, static_cast<jsize>(bytes.size()), reinterpret_cast<jbyte *>(bytes.data()));
+  return rpcsxLib.avatarUseImage(bytes.data(), bytes.size()) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL

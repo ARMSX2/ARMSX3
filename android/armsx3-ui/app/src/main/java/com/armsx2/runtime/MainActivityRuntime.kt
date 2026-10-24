@@ -4544,6 +4544,8 @@ open class MainActivityRuntime : ComponentActivity() {
             // An install another app asked for (issue #188) sits over every screen, so its
             // question is what B answers, not the screen behind it.
             com.armsx2.packages.ExternalInstall.showing.value != null -> com.armsx2.packages.ExternalInstall.cancel()
+            // The avatar picker covers the settings screen it was opened from, so B closes it first.
+            com.armsx2.ui.settings.RpcnAvatarPicker.open.value -> com.armsx2.ui.settings.RpcnAvatarPicker.open.value = false
             nav.drawerOpen.value -> nav.drawerOpen.value = false
             WindowImpl.inGameScreen.value != null -> WindowImpl.dismissInGameScreen()
             WindowImpl.showLibrary.value && !onHome -> nav.back()

@@ -282,6 +282,11 @@ fun SettingsScreen(
         SettingsSearchOverlay(this, scopeGame != null)
     }
 
+    // The RPCN tab's avatar picker, drawn over everything here as the reset prompt is (RpcnAvatar.kt)
+    if (com.armsx2.ui.settings.RpcnAvatarPicker.open.value) {
+        com.armsx2.ui.settings.RpcnAvatarPickerOverlay()
+    }
+
     if (showReset) {
         // ConfirmOverlay, not AlertDialog: a Compose dialog is its own window and swallows
         // controller keys, so the old prompt could only be answered by touch.
