@@ -3422,6 +3422,13 @@ extern "C" s32 _rpcsx_skylanderLoad(std::string_view path) {
   return slot;
 }
 
+// The colour the game lit the portal, 0xRRGGBB; 0 until it sets one. Skylanders games light it for
+// the element of the character in play, which the Portal panel's drawing shows.
+extern "C" s32 _rpcsx_skylanderLight() {
+  const auto [r, g, b] = g_skyportal.get_leds();
+  return (s32{r} << 16) | (s32{g} << 8) | s32{b};
+}
+
 extern "C" bool _rpcsx_skylanderRemove(s32 slot) {
   std::lock_guard lock(s_sky_mutex);
 

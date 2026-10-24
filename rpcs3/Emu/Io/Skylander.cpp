@@ -69,6 +69,12 @@ void sky_portal::set_leds(u8 r, u8 g, u8 b)
 	this->b = b;
 }
 
+std::array<u8, 3> sky_portal::get_leds()
+{
+	std::lock_guard lock(sky_mutex);
+	return {r, g, b};
+}
+
 void sky_portal::get_status(u8* reply_buf)
 {
 	std::lock_guard lock(sky_mutex);

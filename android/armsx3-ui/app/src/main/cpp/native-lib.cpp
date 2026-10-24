@@ -126,6 +126,7 @@ struct RPCSXApi {
   void (*micTestStop)();
   int32_t (*skylanderLoad)(std::string_view path);
   bool (*skylanderRemove)(int32_t slot);
+  int32_t (*skylanderLight)();
   bool (*infinityLoad)(std::string_view path, int32_t position);
   bool (*infinityRemove)(int32_t position);
   bool (*dimensionsLoad)(std::string_view path, int32_t index);
@@ -302,6 +303,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.micTestStop = reinterpret_cast<decltype(micTestStop)>(dlsym(handle, "_rpcsx_micTestStop"));
     result.skylanderLoad = reinterpret_cast<decltype(skylanderLoad)>(dlsym(handle, "_rpcsx_skylanderLoad"));
     result.skylanderRemove = reinterpret_cast<decltype(skylanderRemove)>(dlsym(handle, "_rpcsx_skylanderRemove"));
+    result.skylanderLight = reinterpret_cast<decltype(skylanderLight)>(dlsym(handle, "_rpcsx_skylanderLight"));
     result.infinityLoad = reinterpret_cast<decltype(infinityLoad)>(dlsym(handle, "_rpcsx_infinityLoad"));
     result.infinityRemove = reinterpret_cast<decltype(infinityRemove)>(dlsym(handle, "_rpcsx_infinityRemove"));
     result.dimensionsLoad = reinterpret_cast<decltype(dimensionsLoad)>(dlsym(handle, "_rpcsx_dimensionsLoad"));
@@ -1790,6 +1792,11 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_net_rpcsx_RPCSX_skylanderRemove(JNIEnv *, jobject, jint slot) {
   if (!rpcsxLib.skylanderRemove) return JNI_FALSE;
   return rpcsxLib.skylanderRemove(slot) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_skylanderLight(JNIEnv *, jobject) {
+  return rpcsxLib.skylanderLight ? rpcsxLib.skylanderLight() : 0;
 }
 
 static std::string jstring_to_string(JNIEnv *env, jstring value) {

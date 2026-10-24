@@ -2,6 +2,7 @@ package com.armsx2.ui.emulation
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.Spring
@@ -42,6 +43,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -51,13 +53,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
@@ -81,10 +87,12 @@ import com.armsx2.ui.common.canBrowse
 import com.armsx2.ui.home.LibraryKeyboard
 import com.armsx2.ui.settings.SettingsControllerNav
 import com.armsx2.ui.settings.controllerFocusable
+import com.armsx3.Rpcs3Bridge
 import java.io.File
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -586,15 +594,28 @@ private fun Spot(
 /** The Skylanders portal's dark plastic. */
 private val PortalBody = Color(0xFF15131F)
 
+/** The Skylanders portal's light until the game sets one. */
+private val PortalLight = Color(0xFF63D8FF)
+
 /**
- * Skylanders: the round portal in the middle, its eight places four to a side. The + sits on the first
- * free place, where the portal sets the next figure down unless that figure stood elsewhere before.
+ * Skylanders: the round portal in the middle with the figures on it standing on its top, its eight
+ * places four to a side. The + sits on the first free place, where the portal sets the next figure down
+ * unless that figure stood elsewhere before. The portal glows the colour the game lights it, which for a
+ * character in play is its element's.
  */
 @Composable
 private fun SkylanderStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
     val empty = str("portal.emptyPosition")
     val add = "+ " + str("portal.addFigure")
     val next = (0..7).firstOrNull { placed[it] == null }
+    // A few reads a second while the tab is up: three bytes from the core
+    val light by produceState(PortalLight) {
+        while (true) {
+            val rgb = withContext(Dispatchers.IO) { Rpcs3Bridge.skylanderLight() }
+            value = if (rgb != 0) Color(0xFF000000.toInt() or rgb) else PortalLight
+            delay(250)
+        }
+    }
 
     @Composable
     fun place(slot: Int) {
@@ -610,22 +631,26 @@ private fun SkylanderStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             for (slot in 0..3) place(slot)
         }
-        SkylanderPortalArt(placed.size, Modifier.size(132.dp))
+        SkylanderPortalArt(placed.keys.sorted(), light, Modifier.size(132.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             for (slot in 4..7) place(slot)
         }
     }
 }
 
-/** The Skylanders portal: rings of light turning on its top, brighter the more figures stand on it. */
+/**
+ * The Skylanders portal: rings of light turning on its top in the portal's [light], brighter the more
+ * figures stand on it, and those figures ([standing], by place) standing there.
+ */
 @Composable
-private fun SkylanderPortalArt(figures: Int, modifier: Modifier) {
+private fun SkylanderPortalArt(standing: List<Int>, light: Color, modifier: Modifier) {
     val accent = MaterialTheme.colorScheme.primary
-    val light = Color(0xFF63D8FF)
+    val glow by animateColorAsState(light, tween(600), label = "light")
     val turning = rememberInfiniteTransition(label = "portal")
     val angle by turning.animateFloat(0f, 360f, infiniteRepeatable(tween(7000, easing = LinearEasing)), label = "angle")
     val pulse by turning.animateFloat(0.6f, 1f, infiniteRepeatable(tween(1400), RepeatMode.Reverse), label = "pulse")
-    val level by animateFloatAsState(0.35f + 0.65f * figures.coerceIn(0, 8) / 8f, tween(500), label = "level")
+    val level by animateFloatAsState(0.35f + 0.65f * standing.size.coerceIn(0, 8) / 8f, tween(500), label = "level")
+    val grows = (0..7).map { slot -> animateFloatAsState(if (slot in standing) 1f else 0f, SetDown, label = "figure$slot").value }
 
     Canvas(modifier) {
         val r = size.minDimension / 2f
@@ -633,7 +658,7 @@ private fun SkylanderPortalArt(figures: Int, modifier: Modifier) {
         drawCircle(accent.copy(alpha = 0.6f), r * 0.97f, style = Stroke(r * 0.06f))
         drawCircle(
             Brush.radialGradient(
-                listOf(light.copy(alpha = 0.85f * pulse * level), accent.copy(alpha = 0.4f * level), Color.Transparent),
+                listOf(glow.copy(alpha = 0.85f * pulse * level), accent.copy(alpha = 0.4f * level), Color.Transparent),
                 center,
                 r * 0.9f,
             ),
@@ -642,7 +667,7 @@ private fun SkylanderPortalArt(figures: Int, modifier: Modifier) {
         rotate(angle) {
             for (i in 0 until 3) {
                 drawArc(
-                    light.copy(alpha = 0.8f * level),
+                    glow.copy(alpha = 0.8f * level),
                     startAngle = i * 120f,
                     sweepAngle = 70f,
                     useCenter = false,
@@ -665,7 +690,131 @@ private fun SkylanderPortalArt(figures: Int, modifier: Modifier) {
                 )
             }
         }
+
+        // The figures on it: one or two side by side, more in a ring, nearer ones drawn over farther ones
+        val n = standing.size
+        val tall = when {
+            n <= 2 -> r * 0.62f
+            n <= 4 -> r * 0.5f
+            else -> r * 0.42f
+        }
+        val feet = when (n) {
+            0 -> emptyList()
+            1 -> listOf(Offset(center.x, center.y + r * 0.32f))
+            2 -> listOf(Offset(center.x - r * 0.3f, center.y + r * 0.32f), Offset(center.x + r * 0.3f, center.y + r * 0.32f))
+            else -> standing.indices.map { i ->
+                val a = (Math.PI * 2 * i / n - Math.PI / 2).toFloat()
+                Offset(center.x + r * 0.42f * cos(a), center.y + r * 0.42f * sin(a) + tall * 0.45f)
+            }
+        }
+        standing.zip(feet).sortedBy { it.second.y }.forEach { (slot, foot) ->
+            toyFigure(foot, tall, Color.White, Color(0xFFCFE9FF), Color.Black.copy(alpha = 0.35f), glow, square = false, grow = grows[slot])
+        }
     }
+}
+
+/** How a toy lands when it is set down: a little bounce, as on the real thing. */
+private val SetDown = spring<Float>(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow)
+
+/**
+ * A toy standing on a pad: a plain figure on its base, the shape of any toy and the likeness of none.
+ * [square] gives it the LEGO toy pad's brick base and head. [foot] is the middle of its base and [size]
+ * its height; [grow] scales it up from its base as it is set down.
+ */
+private fun DrawScope.toyFigure(
+    foot: Offset,
+    size: Float,
+    top: Color,
+    bottom: Color,
+    outline: Color,
+    glow: Color,
+    square: Boolean,
+    grow: Float,
+) {
+    if (grow <= 0.01f) return
+    scale(grow, foot) {
+        val h = size
+        val w = h * 0.62f
+        val x = foot.x
+        val y = foot.y
+        val halo = Offset(x, y - h * 0.45f)
+        drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = 0.55f), Color.Transparent), halo, h * 0.75f), h * 0.75f, halo)
+
+        val body = Path().apply {
+            // Base, legs, body, arms and head
+            if (square) addRoundRect(RoundRect(Rect(x - w * 0.5f, y - h * 0.13f, x + w * 0.5f, y), CornerRadius(h * 0.03f)))
+            else addOval(Rect(x - w * 0.52f, y - h * 0.13f, x + w * 0.52f, y))
+            addRoundRect(RoundRect(Rect(x - w * 0.21f, y - h * 0.44f, x - w * 0.02f, y - h * 0.11f), CornerRadius(w * 0.05f)))
+            addRoundRect(RoundRect(Rect(x + w * 0.02f, y - h * 0.44f, x + w * 0.21f, y - h * 0.11f), CornerRadius(w * 0.05f)))
+            moveTo(x - w * 0.27f, y - h * 0.74f)
+            lineTo(x + w * 0.27f, y - h * 0.74f)
+            lineTo(x + w * 0.21f, y - h * 0.42f)
+            lineTo(x - w * 0.21f, y - h * 0.42f)
+            close()
+            for (side in listOf(-1f, 1f)) {
+                moveTo(x + side * w * 0.27f, y - h * 0.73f)
+                lineTo(x + side * w * 0.36f, y - h * 0.47f)
+                lineTo(x + side * w * 0.25f, y - h * 0.45f)
+                lineTo(x + side * w * 0.19f, y - h * 0.66f)
+                close()
+            }
+            if (square) {
+                addRoundRect(RoundRect(Rect(x - w * 0.17f, y - h * 0.97f, x + w * 0.17f, y - h * 0.76f), CornerRadius(w * 0.06f)))
+                addRoundRect(RoundRect(Rect(x - w * 0.08f, y - h * 1.01f, x + w * 0.08f, y - h * 0.96f), CornerRadius(w * 0.02f)))
+            } else {
+                addOval(Rect(Offset(x, y - h * 0.87f), h * 0.12f))
+            }
+        }
+        drawPath(body, Brush.verticalGradient(listOf(top, bottom), startY = y - h, endY = y))
+        drawPath(body, outline, style = Stroke(1.2.dp.toPx()))
+    }
+}
+
+/** A play set's piece on the Infinity hexagon: a glowing hexagonal crystal, the shape of any and the likeness of none. */
+private fun DrawScope.playSetPiece(centre: Offset, radius: Float, top: Color, bottom: Color, glow: Color, grow: Float) {
+    if (grow <= 0.01f) return
+    scale(grow, centre) {
+        drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = 0.6f), Color.Transparent), centre, radius * 1.8f), radius * 1.8f, centre)
+        val depth = radius * 0.7f
+        fun face(dy: Float) = Path().apply {
+            for (i in 0 until 6) {
+                val a = Math.toRadians(60.0 * i).toFloat()
+                val px = centre.x + radius * cos(a)
+                val py = centre.y + dy + radius * 0.55f * sin(a)
+                if (i == 0) moveTo(px, py) else lineTo(px, py)
+            }
+            close()
+        }
+        val sides = Path().apply {
+            moveTo(centre.x - radius, centre.y - depth / 2)
+            lineTo(centre.x + radius, centre.y - depth / 2)
+            lineTo(centre.x + radius, centre.y + depth / 2)
+            lineTo(centre.x - radius, centre.y + depth / 2)
+            close()
+        }
+        drawPath(face(depth / 2), bottom)
+        drawPath(sides, Brush.verticalGradient(listOf(bottom, lerp(bottom, Color.Black, 0.2f)), startY = centre.y - depth / 2, endY = centre.y + depth / 2))
+        drawPath(face(-depth / 2), Brush.verticalGradient(listOf(top, lerp(top, bottom, 0.4f)), startY = centre.y - depth, endY = centre.y))
+        drawPath(face(-depth / 2), Color.White.copy(alpha = 0.9f), style = Stroke(1.2.dp.toPx()))
+    }
+}
+
+/** A closed polygon through [points], its corners rounded by [radius]. */
+private fun roundedPolygon(points: List<Offset>, radius: Float) = Path().apply {
+    val n = points.size
+    for (i in 0 until n) {
+        val before = points[(i - 1 + n) % n]
+        val corner = points[i]
+        val after = points[(i + 1) % n]
+        val inLength = (corner - before).getDistance()
+        val outLength = (after - corner).getDistance()
+        val r = minOf(radius, inLength / 2, outLength / 2)
+        val a = corner + (before - corner) * (r / inLength)
+        val b = corner + (after - corner) * (r / outLength)
+        if (i == 0) moveTo(a.x, a.y) else lineTo(a.x, a.y)
+        quadraticTo(corner.x, corner.y, b.x, b.y)
+    }
+    close()
 }
 
 /** Where a spot sits on a drawn portal: centred at ([fx], [fy]) of the drawing's [w] by [h], [cw] wide. */
@@ -690,8 +839,9 @@ private fun ArtCaption(text: String, w: Dp, h: Dp, fx: Float, fy: Float) {
 
 /**
  * Disney Infinity, drawn as the base looks: the hexagon at the back for a play set or power disc, and
- * each player's round pad at the front, named on the drawing. The power discs that go under the figures
- * and the play set have their spots beneath, under the name of what they go with.
+ * each player's round pad at the front, named on the drawing. What stands on a pad stands on it in the
+ * drawing too, its spot moved down under it. The power discs that go under the figures and the play
+ * set have their spots beneath, under the name of what they go with.
  */
 @Composable
 private fun InfinityStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
@@ -706,6 +856,10 @@ private fun InfinityStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
         6, 7, 8 -> 6
         else -> null
     }
+    val grows = listOf(0, 3, 6).associateWith { animateFloatAsState(if (placed[it] != null) 1f else 0f, SetDown, label = "on$it").value }
+    val playsetY by animateFloatAsState(if (placed[0] != null) 0.31f else 0.25f, tween(250), label = "playsetY")
+    val player1Y by animateFloatAsState(if (placed[3] != null) 0.8f else 0.7f, tween(250), label = "player1Y")
+    val player2Y by animateFloatAsState(if (placed[6] != null) 0.8f else 0.7f, tween(250), label = "player2Y")
 
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
@@ -714,12 +868,12 @@ private fun InfinityStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
             val ch = 36.dp
 
             Box(Modifier.size(w, h)) {
-                InfinityBaseArt(placed[0] != null, placed[3] != null, placed[6] != null, pad, Modifier.fillMaxSize())
-                ArtCaption(player.format(1), w, h, 0.29f, 0.565f)
-                ArtCaption(player.format(2), w, h, 0.71f, 0.565f)
-                Spot(0, placed[0], "+ $playset", { onOpen(0) }, Modifier.onArt(w, h, 0.5f, 0.25f, w * 0.26f, ch), ch, big = true)
-                Spot(3, placed[3], figure, { onOpen(3) }, Modifier.onArt(w, h, 0.29f, 0.7f, w * 0.28f, ch), ch, big = true)
-                Spot(6, placed[6], figure, { onOpen(6) }, Modifier.onArt(w, h, 0.71f, 0.7f, w * 0.28f, ch), ch, big = true)
+                InfinityBaseArt(placed[0] != null, placed[3] != null, placed[6] != null, pad, grows, Modifier.fillMaxSize())
+                ArtCaption(player.format(1), w, h, 0.29f, 0.455f)
+                ArtCaption(player.format(2), w, h, 0.71f, 0.455f)
+                Spot(0, placed[0], "+ $playset", { onOpen(0) }, Modifier.onArt(w, h, 0.5f, playsetY, w * 0.26f, ch), ch, big = true)
+                Spot(3, placed[3], figure, { onOpen(3) }, Modifier.onArt(w, h, 0.29f, player1Y, w * 0.28f, ch), ch, big = true)
+                Spot(6, placed[6], figure, { onOpen(6) }, Modifier.onArt(w, h, 0.71f, player2Y, w * 0.28f, ch), ch, big = true)
             }
         }
 
@@ -745,13 +899,23 @@ private fun InfinityStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
 
 /**
  * The Infinity base: frosted white plastic under a grey band, the hexagon set into the band, the two
- * round pads in front. A pad glows while something stands on it, as the real one lights up, and the one
- * the pad's selection is on ([focus]: 0 the hexagon, 3 Player 1's, 6 Player 2's) is ringed.
+ * round pads in front. A pad glows while something stands on it, as the real one lights up, and shows
+ * it standing there ([grows] by position, 0, 3 and 6, for how far each has been set down). The pad the
+ * pad's selection is on ([focus]: 0 the hexagon, 3 Player 1's, 6 Player 2's) is ringed.
  */
 @Composable
-private fun InfinityBaseArt(hexagon: Boolean, player1: Boolean, player2: Boolean, focus: Int?, modifier: Modifier) {
+private fun InfinityBaseArt(
+    hexagon: Boolean,
+    player1: Boolean,
+    player2: Boolean,
+    focus: Int?,
+    grows: Map<Int, Float>,
+    modifier: Modifier,
+) {
     val glow = Color(0xFF7FD0FF)
     val accent = MaterialTheme.colorScheme.primary
+    val toyTop = lerp(accent, Color.White, 0.6f)
+    val toyBottom = lerp(accent, Color.Black, 0.1f)
     val breathing = rememberInfiniteTransition(label = "infinity")
     val pulse by breathing.animateFloat(0.6f, 1f, infiniteRepeatable(tween(1800), RepeatMode.Reverse), label = "pulse")
     val hexLit by animateFloatAsState(if (hexagon) 1f else 0f, tween(400), label = "hexagon")
@@ -806,13 +970,18 @@ private fun InfinityBaseArt(hexagon: Boolean, player1: Boolean, player2: Boolean
             drawCircle(lerp(Color(0xFFB4BBC4), glow, lit), radius, centre, style = Stroke(2.5.dp.toPx()))
             if (focus == spot) drawCircle(accent.copy(alpha = pulse), radius + 5.dp.toPx(), centre, style = Stroke(4.dp.toPx()))
         }
+
+        // What stands on them
+        playSetPiece(Offset(w * 0.5f, h * 0.17f), w * 0.055f, toyTop, toyBottom, glow, grows[0] ?: 0f)
+        toyFigure(Offset(w * 0.29f, h * 0.75f), h * 0.2f, toyTop, toyBottom, Color.White.copy(alpha = 0.9f), glow, square = false, grow = grows[3] ?: 0f)
+        toyFigure(Offset(w * 0.71f, h * 0.75f), h * 0.2f, toyTop, toyBottom, Color.White.copy(alpha = 0.9f), glow, square = false, grow = grows[6] ?: 0f)
     }
 }
 
 /**
  * LEGO Dimensions, drawn as the toy pad looks: the round centre pad at the top, the left and right pads
  * below it either side, named on the drawing and each lit in a colour that slowly changes as the real
- * one is.
+ * one is. Toys stand on the drawing where they stand on the pad, the centre's spot moved down under it.
  */
 @Composable
 private fun DimensionsStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
@@ -826,6 +995,8 @@ private fun DimensionsStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
         in right -> 2
         else -> null
     }
+    val grows = (0..6).map { animateFloatAsState(if (placed[it] != null) 1f else 0f, SetDown, label = "toy$it").value }
+    val centreY by animateFloatAsState(if (placed[1] != null) 0.43f else 0.36f, tween(250), label = "centreY")
 
     BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.TopCenter) {
         val w = minOf(maxWidth, 460.dp)
@@ -838,11 +1009,12 @@ private fun DimensionsStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
                 left = left.count { placed[it] != null } / 3f,
                 right = right.count { placed[it] != null } / 3f,
                 focus = pad,
+                grows = grows,
                 modifier = Modifier.fillMaxSize(),
             )
-            ArtCaption(str("portal.dimensions.leftPad"), w, h, 0.2f, 0.43f)
-            ArtCaption(str("portal.dimensions.rightPad"), w, h, 0.8f, 0.43f)
-            Spot(1, placed[1], toy, { onOpen(1) }, Modifier.onArt(w, h, 0.5f, 0.36f, w * 0.24f, 36.dp), 36.dp, big = true)
+            ArtCaption(str("portal.dimensions.leftPad"), w, h, 0.2f, 0.335f)
+            ArtCaption(str("portal.dimensions.rightPad"), w, h, 0.8f, 0.335f)
+            Spot(1, placed[1], toy, { onOpen(1) }, Modifier.onArt(w, h, 0.5f, centreY, w * 0.24f, 36.dp), 36.dp, big = true)
             for ((row, fy) in listOf(0.64f, 0.755f, 0.87f).withIndex()) {
                 Spot(left[row], placed[left[row]], toy, { onOpen(left[row]) }, Modifier.onArt(w, h, 0.265f, fy, w * 0.36f, ch), ch)
                 Spot(right[row], placed[right[row]], toy, { onOpen(right[row]) }, Modifier.onArt(w, h, 0.735f, fy, w * 0.36f, ch), ch)
@@ -852,77 +1024,116 @@ private fun DimensionsStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
 }
 
 /**
- * The LEGO toy pad: a dark grey slab with a brick stud plate in each top corner, the round centre pad,
- * and the two side pads, each an L that runs up beside the centre one. A pad glows more the more toys
- * stand on it, and the one the pad's selection is on ([focus]: 0 left, 1 centre, 2 right) is ringed.
+ * The LEGO toy pad: a dark slab set with a 2x2 brick's studs in each top corner, and in its well the
+ * round centre pad and the two side pads, each an L that runs up beside the centre one. The pads are
+ * frosted panels lit from below, glowing more the more toys stand on them, and the toys stand on them
+ * here too ([grows] by position, for how far each has been set down). The pad the pad's selection is
+ * on ([focus]: 0 left, 1 centre, 2 right) is ringed.
  */
 @Composable
-private fun ToyPadArt(centre: Boolean, left: Float, right: Float, focus: Int?, modifier: Modifier) {
+private fun ToyPadArt(centre: Boolean, left: Float, right: Float, focus: Int?, grows: List<Float>, modifier: Modifier) {
     val accent = MaterialTheme.colorScheme.primary
+    val toyTop = lerp(accent, Color.White, 0.6f)
+    val toyBottom = lerp(accent, Color.Black, 0.1f)
     val cycling = rememberInfiniteTransition(label = "toypad")
     val hue by cycling.animateFloat(0f, 360f, infiniteRepeatable(tween(9000, easing = LinearEasing)), label = "hue")
     val pulse by cycling.animateFloat(0.6f, 1f, infiniteRepeatable(tween(1800), RepeatMode.Reverse), label = "pulse")
     val centreLit by animateFloatAsState(if (centre) 1f else 0.25f, tween(400), label = "centre")
     val leftLit by animateFloatAsState(0.25f + 0.75f * left, tween(400), label = "left")
     val rightLit by animateFloatAsState(0.25f + 0.75f * right, tween(400), label = "right")
-    val panel = Color(0xFFE6E9EE)
+    val frosted = Color(0xFFE6E9EE)
+    val frostedEdge = Color(0xFFC9CED6)
 
     Canvas(modifier) {
         val w = size.width
         val h = size.height
-        val corner = CornerRadius(w * 0.03f)
-        fun path(vararg points: Pair<Float, Float>) = Path().apply {
-            points.forEachIndexed { i, (x, y) -> if (i == 0) moveTo(w * x, h * y) else lineTo(w * x, h * y) }
-            close()
-        }
 
+        // The slab, lit a little from the top left, with a rim and a bevel
+        val corner = CornerRadius(w * 0.05f)
         translate(top = 6.dp.toPx()) { drawRoundRect(Color.Black.copy(alpha = 0.35f), cornerRadius = corner) }
-        drawRoundRect(Brush.verticalGradient(listOf(Color(0xFF3A3B40), Color(0xFF26272B))), cornerRadius = corner)
-        drawRoundRect(Color(0xFF55575E), cornerRadius = corner, style = Stroke(2.dp.toPx()))
+        drawRoundRect(Brush.verticalGradient(listOf(Color(0xFF4B4E55), Color(0xFF2B2D32))), cornerRadius = corner)
+        drawRoundRect(Brush.radialGradient(listOf(Color.White.copy(alpha = 0.07f), Color.Transparent), Offset(w * 0.2f, h * 0.05f), w * 0.6f), cornerRadius = corner)
+        drawRoundRect(Color(0xFF1A1B1E), cornerRadius = corner, style = Stroke(2.dp.toPx()))
+        val inset = 3.dp.toPx()
+        drawRoundRect(
+            Color.White.copy(alpha = 0.07f),
+            topLeft = Offset(inset, inset),
+            size = Size(w - inset * 2, h - inset * 2),
+            cornerRadius = CornerRadius(w * 0.045f),
+            style = Stroke(1.dp.toPx()),
+        )
+        // The well the pads sit in
+        drawRoundRect(Color(0xFF202125), topLeft = Offset(w * 0.035f, h * 0.265f), size = Size(w * 0.93f, h * 0.705f), cornerRadius = CornerRadius(w * 0.03f))
 
         // A 2x2 brick's studs in each top corner
         for (x in listOf(0.12f, 0.88f)) {
-            val plate = w * 0.085f
-            drawRoundRect(
-                Color(0xFF1E1F22),
-                topLeft = Offset(w * x - plate / 2, h * 0.13f - plate / 2),
-                size = Size(plate, plate),
-                cornerRadius = CornerRadius(plate * 0.12f),
-            )
+            val plate = w * 0.09f
+            val cx = w * x
+            val cy = h * 0.13f
+            val plateTopLeft = Offset(cx - plate / 2, cy - plate / 2)
+            drawRoundRect(Color(0xFF2E3035), topLeft = plateTopLeft, size = Size(plate, plate), cornerRadius = CornerRadius(plate * 0.12f))
+            drawRoundRect(Color(0xFF1C1D20), topLeft = plateTopLeft, size = Size(plate, plate), cornerRadius = CornerRadius(plate * 0.12f), style = Stroke(1.dp.toPx()))
             for (dx in listOf(-1, 1)) for (dy in listOf(-1, 1)) {
-                drawCircle(Color(0xFF3C3E43), plate * 0.17f, Offset(w * x + dx * plate * 0.24f, h * 0.13f + dy * plate * 0.24f))
+                val stud = Offset(cx + dx * plate * 0.24f, cy + dy * plate * 0.24f)
+                val sr = plate * 0.17f
+                drawCircle(Brush.radialGradient(listOf(Color(0xFF7A7E86), Color(0xFF3A3D43)), Offset(stud.x - sr * 0.35f, stud.y - sr * 0.35f), sr * 1.3f), sr, stud)
+                drawCircle(Color(0xFF25272B), sr, stud, style = Stroke(1.dp.toPx()))
             }
         }
 
-        // The side pads: up beside the centre pad, then the full half below it
+        // The side pads: up beside the centre pad, then the full half below it, light bleeding round them
         for ((side, lit, offset) in listOf(Triple(0, leftLit, 0f), Triple(2, rightLit, 240f))) {
             val m = if (side == 0) { x: Float -> x } else { x: Float -> 1f - x }
-            val zone = path(
-                m(0.06f) to 0.3f, m(0.34f) to 0.3f, m(0.34f) to 0.56f, m(0.47f) to 0.56f,
-                m(0.47f) to 0.95f, m(0.06f) to 0.95f,
+            val zone = roundedPolygon(
+                listOf(
+                    Offset(w * m(0.06f), h * 0.3f), Offset(w * m(0.34f), h * 0.3f), Offset(w * m(0.34f), h * 0.56f),
+                    Offset(w * m(0.47f), h * 0.56f), Offset(w * m(0.47f), h * 0.945f), Offset(w * m(0.06f), h * 0.945f),
+                ),
+                w * 0.02f,
             )
             val light = Color.hsv((hue + offset) % 360f, 0.55f, 1f)
-            drawPath(zone, lerp(panel, light, 0.55f * lit))
-            drawPath(zone, light.copy(alpha = 0.9f * lit), style = Stroke(2.5.dp.toPx()))
-            if (focus == side) drawPath(zone, accent.copy(alpha = pulse), style = Stroke(5.dp.toPx()))
+            drawPath(zone, light.copy(alpha = 0.12f * lit), style = Stroke(10.dp.toPx()))
+            drawPath(zone, light.copy(alpha = 0.2f * lit), style = Stroke(6.dp.toPx()))
+            drawPath(
+                zone,
+                Brush.radialGradient(
+                    listOf(lerp(frosted, light, 0.75f * lit), lerp(frostedEdge, light, 0.45f * lit)),
+                    Offset(w * m(0.265f), h * 0.72f),
+                    w * 0.32f,
+                ),
+            )
+            drawPath(zone, Color.White.copy(alpha = 0.45f), style = Stroke(1.5.dp.toPx()))
+            if (focus == side) drawPath(zone, accent.copy(alpha = pulse), style = Stroke(4.dp.toPx()))
         }
 
-        // The centre pad, ringed
+        // The centre pad, sunk in a dark ring, with its inner ring
         val c = Offset(w * 0.5f, h * 0.36f)
         val radius = w * 0.13f
         val light = Color.hsv((hue + 120f) % 360f, 0.55f, 1f)
-        drawCircle(lerp(panel, light, 0.55f * centreLit), radius, c)
-        drawCircle(Color.White.copy(alpha = 0.5f), radius * 0.72f, c, style = Stroke(2.dp.toPx()))
-        drawCircle(light.copy(alpha = 0.9f * centreLit), radius, c, style = Stroke(2.5.dp.toPx()))
-        if (focus == 1) drawCircle(accent.copy(alpha = pulse), radius + 5.dp.toPx(), c, style = Stroke(4.dp.toPx()))
+        drawCircle(light.copy(alpha = 0.18f * centreLit), radius + 10.dp.toPx(), c)
+        drawCircle(Color(0xFF18191C), radius + 5.dp.toPx(), c)
+        drawCircle(Brush.radialGradient(listOf(lerp(frosted, light, 0.75f * centreLit), lerp(frostedEdge, light, 0.45f * centreLit)), c, radius), radius, c)
+        drawCircle(Color.White.copy(alpha = 0.5f), radius, c, style = Stroke(1.5.dp.toPx()))
+        drawCircle(Color.White.copy(alpha = 0.45f), radius * 0.72f, c, style = Stroke(2.dp.toPx()))
+        if (focus == 1) drawCircle(accent.copy(alpha = pulse), radius + 7.dp.toPx(), c, style = Stroke(4.dp.toPx()))
 
         // The red light at the front
+        val front = Offset(w * 0.5f, h * 0.968f)
+        drawCircle(Brush.radialGradient(listOf(Color(0x80E5483D), Color.Transparent), front, w * 0.06f), w * 0.06f, front)
         drawRoundRect(
             Color(0xFFE5483D),
-            topLeft = Offset(w * 0.47f, h * 0.955f),
+            topLeft = Offset(w * 0.47f, h * 0.953f),
             size = Size(w * 0.06f, h * 0.03f),
-            cornerRadius = CornerRadius(h * 0.01f),
+            cornerRadius = CornerRadius(3.dp.toPx()),
         )
+
+        // The toys: on the centre pad, and side by side up each side pad
+        val outline = Color.White.copy(alpha = 0.9f)
+        toyFigure(Offset(w * 0.5f, h * 0.33f), h * 0.17f, toyTop, toyBottom, outline, light, square = true, grow = grows[1])
+        for ((position, x) in listOf(0 to 0.1f, 3 to 0.2f, 4 to 0.3f, 2 to 0.9f, 5 to 0.8f, 6 to 0.7f)) {
+            val zoneLight = Color.hsv((hue + if (x < 0.5f) 0f else 240f) % 360f, 0.55f, 1f)
+            toyFigure(Offset(w * x, h * 0.535f), h * 0.15f, toyTop, toyBottom, outline, zoneLight, square = true, grow = grows[position])
+        }
     }
 }
 

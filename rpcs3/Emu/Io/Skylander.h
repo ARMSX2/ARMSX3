@@ -21,6 +21,8 @@ public:
 	void activate();
 	void deactivate();
 	void set_leds(u8 r, u8 g, u8 b);
+	// ARMSX3: the colour the game last lit the portal, for the in-game menu's drawing of it
+	std::array<u8, 3> get_leds();
 
 	void get_status(u8* buf);
 	void query_block(u8 sky_num, u8 block, u8* reply_buf);

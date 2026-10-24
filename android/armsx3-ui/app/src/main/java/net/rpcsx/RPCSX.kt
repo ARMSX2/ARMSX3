@@ -264,6 +264,7 @@ class RPCSX {
 
     /** Lifts the figure in that place off the emulated portal. */
     external fun skylanderRemove(slot: Int): Boolean
+    external fun skylanderLight(): Int
 
     /** Disney Infinity base: a 320-byte figure file at position 0 to 8 (ToyPortals.InfinityBase). */
     external fun infinityLoad(path: String, position: Int): Boolean

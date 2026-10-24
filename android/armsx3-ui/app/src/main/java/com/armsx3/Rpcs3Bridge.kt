@@ -1460,6 +1460,11 @@ object Rpcs3Bridge {
     fun skylanderRemove(slot: Int): Boolean =
         runCatching { RPCSX.instance.skylanderRemove(slot) }.getOrDefault(false)
 
+    /** The colour the game lit the Skylanders portal, 0xRRGGBB, or 0 before it sets one. */
+    @JvmStatic
+    fun skylanderLight(): Int =
+        runCatching { RPCSX.instance.skylanderLight() }.getOrDefault(0)
+
     @JvmStatic
     fun infinityLoad(path: String, position: Int): Boolean =
         runCatching { RPCSX.instance.infinityLoad(path, position) }.getOrDefault(false)
