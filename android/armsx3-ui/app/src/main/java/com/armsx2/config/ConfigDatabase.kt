@@ -131,6 +131,13 @@ object ConfigDatabase {
         "BLUS31213" to "Video:\n  Frame limit: PS3 Native\n",
         "BLES01935" to "Video:\n  Frame limit: PS3 Native\n",
 
+        // Tales of Graces f (issue #210): the database's PS3 Native holds the field at 30 but lets battle
+        // drop to 30 to 50 fps, where the PS3 holds 60, since a frame that misses its vblank by a little
+        // waits a whole extra one. At 60 battle holds 60, and the bundled "Field at 30 fps with a 60 fps
+        // limit" patch keeps the field at 30 and normal speed. Tied to the patch: without it the field
+        // runs at 60 and double speed here.
+        "BLUS30903" to "Video:\n  Frame limit: 60\n",
+
         // Helldivers: the database forces the PPU interpreter because the recompiler hung it on a
         // black screen (RPCS3 issue #5831). The hang was LuaJIT's integer arithmetic on
         // mullwo./subfo. and bso, whose overflow flag the recompiler never set correctly; fixed in

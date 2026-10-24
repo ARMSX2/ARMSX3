@@ -812,6 +812,16 @@ object Ps3PatchRepo {
             appVersion = "01.00",
             sinceRevision = 4,
         ),
+        // TALES OF GRACES F, BLUS30903 -- ours. Keeps the field at 30 fps under the 60 fps limit that
+        // ConfigDatabase.LOCAL_OVERRIDES gives this title, so battles run at 60 (issue #210).
+        // See canary_patches.yml.
+        Bundled(
+            hash = "PPU-3e9032a3f7857057ef783810bd8f34a439baaa59",
+            name = "Field at 30 fps with a 60 fps limit",
+            serial = "BLUS30903",
+            appVersion = "All",
+            sinceRevision = 20,
+        ),
     )
 
     private const val BUNDLED_ASSET = "canary_patches.yml"
@@ -821,7 +831,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 19
+    private const val BUNDLED_REVISION = 20
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"

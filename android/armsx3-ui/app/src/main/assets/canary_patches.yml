@@ -812,3 +812,48 @@ PPU-602e58994456e14dfd80a6e0f376729b53c3109a:
       - [ be32, 0x00000000, 0x7c063800 ] # cmpw r6,r7
       - [ be32, 0x00000000, 0x40820008 ] # bne +8
       - [ be32, 0x00000000, 0x38600000 ] # li r3,0: the private check, so its minimum is 1
+
+# TALES OF GRACES F, BLUS30903 -- ours. Keeps the field at 30 fps under a 60 fps limit, so battles run at 60.
+#
+# The game paces itself with label 0xc0, which the GPU waits on before every flip. Its flip handler
+# (0x477370) sets a countdown of interval - 1 vblanks (interval 2 on the field, 1 in battle) and clears
+# the label when that is not 0; its vblank handler (0x477314) counts down and sets the label again at 0.
+# On a PS3 a flip always lands on a vblank, so the field gets exactly 2 vblanks a frame.
+#
+# PS3 Native keeps that, but battle runs 30 to 50 fps there: a frame that misses its vblank by a little
+# waits a whole extra one. A 60 fps limit holds battle at 60, but flips then land between vblanks, and
+# the countdown, started at the flip, frees the field again at the very next vblank: 60 fps, double speed.
+#
+# The cave counts from the vblank the frame was released on instead: countdown = release + interval - now,
+# kept within 0..interval, and the next release (now + countdown) is stored in the label's spare word,
+# label + 4 (libgcm spaces labels 16 bytes apart and the GPU uses only the first word). Battle (interval
+# 1) keeps the game's own path. Under PS3 Native a flip lands one vblank after its release, so the
+# countdown comes out at interval - 1 as before. ConfigDatabase.LOCAL_OVERRIDES gives this title the
+# 60 fps limit to go with it.
+PPU-3e9032a3f7857057ef783810bd8f34a439baaa59:
+  "Field at 30 fps with a 60 fps limit":
+    Games:
+      "Tales of Graces f":
+        BLUS30903: [ All ]
+    Author: "jpolo1224"
+    Notes: "Keeps the field at 30 fps and normal speed with the frame limit at 60, so battles run at 60."
+    Patch Version: 1.0
+    Patch:
+      - [ calloc, 0x0047739c, 0x11 ] # in place of lwz r0,0x1e0(r31) after cellGcmGetLabelAddress(0xc0); returns to cmpwi cr7,r0,0
+      - [ be32, 0x00000000, 0x813f01e4 ] # lwz r9,0x1e4(r31): interval
+      - [ be32, 0x00000000, 0x2f890001 ] # cmpwi cr7,r9,1
+      - [ be32, 0x00000000, 0x409d0038 ] # ble cr7,+0x38: battle keeps the game's countdown
+      - [ be32, 0x00000000, 0x817f01dc ] # lwz r11,0x1dc(r31): vblank count, low word
+      - [ be32, 0x00000000, 0x81430004 ] # lwz r10,4(r3): the vblank this frame was released on
+      - [ be32, 0x00000000, 0x7d4a4a14 ] # add r10,r10,r9: when the next frame is due
+      - [ be32, 0x00000000, 0x7c0b5050 ] # subf r0,r11,r10: vblanks from now
+      - [ be32, 0x00000000, 0x2f800000 ] # cmpwi cr7,r0,0
+      - [ be32, 0x00000000, 0x409c0008 ] # bge cr7,+8
+      - [ be32, 0x00000000, 0x38000000 ] # li r0,0: a late frame, release at once
+      - [ be32, 0x00000000, 0x7f804800 ] # cmpw cr7,r0,r9
+      - [ be32, 0x00000000, 0x409d0008 ] # ble cr7,+8
+      - [ be32, 0x00000000, 0x7d204b78 ] # mr r0,r9: never more than interval
+      - [ be32, 0x00000000, 0x901f01e0 ] # stw r0,0x1e0(r31): countdown
+      - [ be32, 0x00000000, 0x7d4b0214 ] # add r10,r11,r0
+      - [ be32, 0x00000000, 0x91430004 ] # stw r10,4(r3): the next frame's release
+      - [ be32, 0x00000000, 0x801f01e0 ] # lwz r0,0x1e0(r31): the replaced instruction
