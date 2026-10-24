@@ -438,6 +438,8 @@ internal fun Modifier.controllerFocusable(
     onLeft: (() -> Unit)? = null,
     onRight: (() -> Unit)? = null,
     layer: String? = null,
+    // False for a control that draws its own selection, as the toy portals' spots do
+    ring: Boolean = true,
 ): Modifier = composed {
     val navLayer = layer ?: LocalNavLayer.current
     var focused by remember { mutableStateOf(false) }
@@ -509,7 +511,7 @@ internal fun Modifier.controllerFocusable(
             // Only while the pad drives the UI: Compose focus lands on controls by itself (the
             // first focusable one when the game surface lets go), and under touch a ring there is
             // a selection nobody made.
-            if ((focused || selected) && com.armsx2.ui.common.PadInput.active.value) {
+            if (ring && (focused || selected) && com.armsx2.ui.common.PadInput.active.value) {
                 // Driver-safe selection ring: solid inner + translucent outer border. We
                 // deliberately avoid Modifier.shadow with a custom ambient/spot color here —
                 // Adreno / Mali / Turnip drivers frequently ignore the tint and render the
