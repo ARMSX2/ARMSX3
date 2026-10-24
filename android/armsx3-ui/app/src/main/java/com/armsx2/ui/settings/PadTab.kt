@@ -858,6 +858,13 @@ private fun UsbDeviceSection(refreshToken: MutableState<Int>) {
     val devices = remember { com.armsx2.input.UsbDevices.available() }
     CollapsibleSection(str("pad.usb.section"), initiallyExpanded = false) {
         HelpText(str("pad.usb.help"))
+        SettingsDivider()
+        // The emulated toy portals are attached whatever this says; it only hides Portal in the menu
+        val portalMenu = remember { mutableStateOf(com.armsx2.input.ToyPortals.menuEnabled()) }
+        ToggleRow(str("portal.menu.label"), portalMenu.value, description = str("portal.menu.description")) {
+            portalMenu.value = it
+            com.armsx2.input.ToyPortals.setMenuEnabled(it)
+        }
         for (port in 0..1) {
             SettingsDivider()
             val current = com.armsx2.input.UsbDevices.portType[port].value

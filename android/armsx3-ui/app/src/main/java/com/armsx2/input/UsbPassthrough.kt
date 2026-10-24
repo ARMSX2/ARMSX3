@@ -36,8 +36,12 @@ object UsbPassthrough {
         0x0E6F to 0x200A, // Kamen Rider Summonride portal
     )
 
-    /** A real Skylanders portal is open for the running game. Main thread. */
-    val realSkylanderPortal = mutableStateOf(false)
+    const val SKYLANDERS = 0
+    const val INFINITY = 1
+    const val DIMENSIONS = 2
+
+    /** Which real portals are open for the running game: [SKYLANDERS], [INFINITY], [DIMENSIONS]. */
+    val realPortals = mutableStateOf(emptySet<Int>())
 
     private val connections = mutableListOf<UsbDeviceConnection>()
     private val asked = HashSet<String>()
@@ -104,7 +108,7 @@ object UsbPassthrough {
         }
 
         val fds = mutableListOf<Int>()
-        var skylanders = false
+        val kinds = HashSet<Int>()
 
         if (manager != null) {
             for (device in manager.deviceList.values) {
@@ -112,11 +116,15 @@ object UsbPassthrough {
                 val connection = runCatching { manager.openDevice(device) }.getOrNull() ?: continue
                 synchronized(connections) { connections += connection }
                 fds += connection.fileDescriptor
-                if (device.vendorId == 0x1430) skylanders = true
+                when (device.vendorId to device.productId) {
+                    0x1430 to 0x0150 -> kinds += SKYLANDERS
+                    0x0E6F to 0x0129 -> kinds += INFINITY
+                    0x0E6F to 0x0241 -> kinds += DIMENSIONS
+                }
             }
         }
 
         Rpcs3Bridge.usbSetPassthrough(fds.joinToString(","))
-        realSkylanderPortal.value = skylanders
+        realPortals.value = kinds
     }
 }

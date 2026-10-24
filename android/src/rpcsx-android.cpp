@@ -19,6 +19,8 @@
 #include "Emu/Audio/Oboe/OboeCapture.h"
 #include "Emu/Cell/lv2/sys_usbd.h"
 #include "Emu/Io/Skylander.h"
+#include "Emu/Io/Infinity.h"
+#include "Emu/Io/Dimensions.h"
 #include "Emu/Io/KeyboardHandler.h"
 #include "Emu/Io/Null/NullKeyboardHandler.h"
 #include "Emu/Io/Null/NullMouseHandler.h"
@@ -3271,6 +3273,66 @@ extern "C" void _rpcsx_setMicDevices(std::string_view list) {
   oboe_capture::set_devices(std::move(devices));
 }
 
+// The microphone test in Audio settings: the capture a game gets (oboe_capture, at the rate and channel
+// count cellMic asks for most), reduced to how loud it is
+static std::mutex s_mic_test_mutex;
+static std::unique_ptr<oboe_capture> s_mic_test;
+static float s_mic_test_level = 0.0f;
+
+extern "C" bool _rpcsx_micTestStart(std::string_view device) {
+  std::lock_guard lock(s_mic_test_mutex);
+
+  s_mic_test = std::make_unique<oboe_capture>();
+  s_mic_test_level = 0.0f;
+
+  if (!s_mic_test->open(std::string(device), 48000, 1) || !s_mic_test->start()) {
+    s_mic_test.reset();
+    return false;
+  }
+
+  return true;
+}
+
+// How loud what arrived since the last call was, 0 to 1 over -60 to 0 dBFS; -1 with no test running
+extern "C" float _rpcsx_micTestLevel() {
+  std::lock_guard lock(s_mic_test_mutex);
+
+  if (!s_mic_test) {
+    return -1.0f;
+  }
+
+  std::array<s16, 2400> buf;
+  u64 count = 0;
+  f64 sum = 0;
+
+  while (true) {
+    const u32 read = s_mic_test->read(buf.data(), ::size32(buf));
+
+    for (u32 i = 0; i < read; i++) {
+      sum += static_cast<f64>(buf[i]) * buf[i];
+    }
+
+    count += read;
+
+    if (read < buf.size()) {
+      break;
+    }
+  }
+
+  // Nothing new since the last call: keep the last reading rather than flicker to silence
+  if (count) {
+    const f64 rms = std::sqrt(sum / count) / 32768.0;
+    s_mic_test_level = static_cast<float>(std::clamp((20.0 * std::log10(std::max(rms, 1e-6)) + 60.0) / 60.0, 0.0, 1.0));
+  }
+
+  return s_mic_test_level;
+}
+
+extern "C" void _rpcsx_micTestStop() {
+  std::lock_guard lock(s_mic_test_mutex);
+  s_mic_test.reset();
+}
+
 // ---- Skylanders portal and USB passthrough ------------------------------------------------------
 //
 // The emulated portal is always attached (sys_usbd adds it unless a real one is passed through), and
@@ -3312,6 +3374,86 @@ extern "C" bool _rpcsx_skylanderRemove(s32 slot) {
   }
 
   s_sky_used[slot] = false;
+  return true;
+}
+
+// Disney Infinity base and Lego Dimensions toy pad: the same, at a position the player picks. Positions
+// are RPCS3's dialogs' own. Infinity 0 to 8: play set or power disc, power discs two and three, then
+// each player and their two abilities; 320-byte figures. Dimensions 0 to 6, the pad following from the
+// index as in its dialog (1 the centre pad, 0, 3 and 4 the left, 2, 5 and 6 the right); 180-byte
+// figures. A taken position is cleared first, as those dialogs do. False when the file is not a figure.
+static std::array<bool, 9> s_infinity_used{};
+static std::array<bool, 7> s_dimensions_used{};
+
+static u8 dimensions_pad(s32 index) {
+  return index == 1 ? 1 : (index == 0 || index == 3 || index == 4) ? 2 : 3;
+}
+
+template <usz Size>
+static bool read_figure(std::string_view path, fs::file &file, std::array<u8, Size> &data) {
+  file = fs::file(std::string(path), fs::read + fs::write + fs::lock);
+  return file && file.read(data.data(), data.size()) == data.size();
+}
+
+extern "C" bool _rpcsx_infinityLoad(std::string_view path, s32 position) {
+  std::lock_guard lock(s_sky_mutex);
+
+  fs::file file;
+  std::array<u8, 0x14 * 0x10> data{};
+
+  if (position < 0 || position >= static_cast<s32>(s_infinity_used.size()) || !read_figure(path, file, data)) {
+    return false;
+  }
+
+  if (s_infinity_used[position]) {
+    g_infinitybase.remove_figure(static_cast<u8>(position));
+  }
+
+  g_infinitybase.load_figure(data, std::move(file), static_cast<u8>(position));
+  s_infinity_used[position] = true;
+  return true;
+}
+
+extern "C" bool _rpcsx_infinityRemove(s32 position) {
+  std::lock_guard lock(s_sky_mutex);
+
+  if (position < 0 || position >= static_cast<s32>(s_infinity_used.size()) || !s_infinity_used[position]) {
+    return false;
+  }
+
+  g_infinitybase.remove_figure(static_cast<u8>(position));
+  s_infinity_used[position] = false;
+  return true;
+}
+
+extern "C" bool _rpcsx_dimensionsLoad(std::string_view path, s32 index) {
+  std::lock_guard lock(s_sky_mutex);
+
+  fs::file file;
+  std::array<u8, 0x2D * 0x04> data{};
+
+  if (index < 0 || index >= static_cast<s32>(s_dimensions_used.size()) || !read_figure(path, file, data)) {
+    return false;
+  }
+
+  if (s_dimensions_used[index]) {
+    g_dimensionstoypad.remove_figure(dimensions_pad(index), static_cast<u8>(index), true, true);
+  }
+
+  g_dimensionstoypad.load_figure(data, std::move(file), dimensions_pad(index), static_cast<u8>(index), true);
+  s_dimensions_used[index] = true;
+  return true;
+}
+
+extern "C" bool _rpcsx_dimensionsRemove(s32 index) {
+  std::lock_guard lock(s_sky_mutex);
+
+  if (index < 0 || index >= static_cast<s32>(s_dimensions_used.size()) || !s_dimensions_used[index]) {
+    return false;
+  }
+
+  g_dimensionstoypad.remove_figure(dimensions_pad(index), static_cast<u8>(index), true, true);
+  s_dimensions_used[index] = false;
   return true;
 }
 

@@ -119,8 +119,15 @@ struct RPCSXApi {
   const char *(*rpcnStatus)();
   bool (*rpcnSignedIn)();
   void (*setMicDevices)(std::string_view list);
+  bool (*micTestStart)(std::string_view device);
+  float (*micTestLevel)();
+  void (*micTestStop)();
   int32_t (*skylanderLoad)(std::string_view path);
   bool (*skylanderRemove)(int32_t slot);
+  bool (*infinityLoad)(std::string_view path, int32_t position);
+  bool (*infinityRemove)(int32_t position);
+  bool (*dimensionsLoad)(std::string_view path, int32_t index);
+  bool (*dimensionsRemove)(int32_t index);
   void (*usbSetPassthrough)(std::string_view fds);
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
@@ -279,8 +286,15 @@ struct RPCSXLibrary : RPCSXApi {
     result.rpcnStatus = reinterpret_cast<decltype(rpcnStatus)>(dlsym(handle, "_rpcsx_rpcnStatus"));
     result.rpcnSignedIn = reinterpret_cast<decltype(rpcnSignedIn)>(dlsym(handle, "_rpcsx_rpcnSignedIn"));
     result.setMicDevices = reinterpret_cast<decltype(setMicDevices)>(dlsym(handle, "_rpcsx_setMicDevices"));
+    result.micTestStart = reinterpret_cast<decltype(micTestStart)>(dlsym(handle, "_rpcsx_micTestStart"));
+    result.micTestLevel = reinterpret_cast<decltype(micTestLevel)>(dlsym(handle, "_rpcsx_micTestLevel"));
+    result.micTestStop = reinterpret_cast<decltype(micTestStop)>(dlsym(handle, "_rpcsx_micTestStop"));
     result.skylanderLoad = reinterpret_cast<decltype(skylanderLoad)>(dlsym(handle, "_rpcsx_skylanderLoad"));
     result.skylanderRemove = reinterpret_cast<decltype(skylanderRemove)>(dlsym(handle, "_rpcsx_skylanderRemove"));
+    result.infinityLoad = reinterpret_cast<decltype(infinityLoad)>(dlsym(handle, "_rpcsx_infinityLoad"));
+    result.infinityRemove = reinterpret_cast<decltype(infinityRemove)>(dlsym(handle, "_rpcsx_infinityRemove"));
+    result.dimensionsLoad = reinterpret_cast<decltype(dimensionsLoad)>(dlsym(handle, "_rpcsx_dimensionsLoad"));
+    result.dimensionsRemove = reinterpret_cast<decltype(dimensionsRemove)>(dlsym(handle, "_rpcsx_dimensionsRemove"));
     result.usbSetPassthrough = reinterpret_cast<decltype(usbSetPassthrough)>(dlsym(handle, "_rpcsx_usbSetPassthrough"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
@@ -1721,6 +1735,27 @@ Java_net_rpcsx_RPCSX_setMicDevices(JNIEnv *env, jobject, jstring list) {
   rpcsxLib.setMicDevices(value);
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_micTestStart(JNIEnv *env, jobject, jstring device) {
+  if (!rpcsxLib.micTestStart) return JNI_FALSE;
+
+  const char *c = device ? env->GetStringUTFChars(device, nullptr) : nullptr;
+  const std::string value = c ? c : "";
+  if (c) env->ReleaseStringUTFChars(device, c);
+
+  return rpcsxLib.micTestStart(value) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_net_rpcsx_RPCSX_micTestLevel(JNIEnv *, jobject) {
+  return rpcsxLib.micTestLevel ? rpcsxLib.micTestLevel() : -1.0f;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_micTestStop(JNIEnv *, jobject) {
+  if (rpcsxLib.micTestStop) rpcsxLib.micTestStop();
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_net_rpcsx_RPCSX_skylanderLoad(JNIEnv *env, jobject, jstring path) {
   if (!rpcsxLib.skylanderLoad) return -1;
@@ -1736,6 +1771,37 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_net_rpcsx_RPCSX_skylanderRemove(JNIEnv *, jobject, jint slot) {
   if (!rpcsxLib.skylanderRemove) return JNI_FALSE;
   return rpcsxLib.skylanderRemove(slot) ? JNI_TRUE : JNI_FALSE;
+}
+
+static std::string jstring_to_string(JNIEnv *env, jstring value) {
+  const char *c = value ? env->GetStringUTFChars(value, nullptr) : nullptr;
+  std::string result = c ? c : "";
+  if (c) env->ReleaseStringUTFChars(value, c);
+  return result;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_infinityLoad(JNIEnv *env, jobject, jstring path, jint position) {
+  if (!rpcsxLib.infinityLoad) return JNI_FALSE;
+  return rpcsxLib.infinityLoad(jstring_to_string(env, path), position) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_infinityRemove(JNIEnv *, jobject, jint position) {
+  if (!rpcsxLib.infinityRemove) return JNI_FALSE;
+  return rpcsxLib.infinityRemove(position) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_dimensionsLoad(JNIEnv *env, jobject, jstring path, jint index) {
+  if (!rpcsxLib.dimensionsLoad) return JNI_FALSE;
+  return rpcsxLib.dimensionsLoad(jstring_to_string(env, path), index) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_dimensionsRemove(JNIEnv *, jobject, jint index) {
+  if (!rpcsxLib.dimensionsRemove) return JNI_FALSE;
+  return rpcsxLib.dimensionsRemove(index) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -93,7 +93,7 @@ private val IN_GAME_SCREEN_ASPECTS = listOf(0, 1333, 1600, 1778, 2000, 2167, 222
 /** The Friends panel's nav layer: only its controls answer the pad while it is open. */
 private const val FRIENDS_NAV_LAYER = "menu.friends"
 
-/** The Skylanders portal panel's nav layer, the same way. */
+/** The toy portal panel's nav layer, the same way. */
 private const val PORTAL_NAV_LAYER = "menu.portal"
 
 @Composable
@@ -104,8 +104,9 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
     var dismissing by remember { mutableStateOf(false) }
     var friendsOpen by remember { mutableStateOf(false) }
     var portalOpen by remember { mutableStateOf(false) }
-    // The emulated portal is attached to every game, but only a Skylanders game looks at it
-    val skylanders = remember { MainActivityRuntime.currentGame.value?.title?.contains("skylanders", ignoreCase = true) == true }
+    // The emulated portals are attached to every game, and only the toys-to-life series look at them;
+    // Portal shows unless switched off in USB Devices settings
+    val portalEntry = remember { com.armsx2.input.ToyPortals.menuEnabled() }
     // A friend waiting to be let in is answered in the hosting panel, which sits with Friends: the
     // menu opens there, whether it was opened for the question or was already open.
     val hostStatus by com.armsx2.remoteplay.RemotePlayHost.status
@@ -261,7 +262,7 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                         compact = true,
                         modifier = Modifier.fillMaxSize(),
                         onOpenFriends = { friendsOpen = true },
-                        onOpenPortal = if (skylanders) { { portalOpen = true } } else null,
+                        onOpenPortal = if (portalEntry) { { portalOpen = true } } else null,
                     )
                 }
             } else {
@@ -287,7 +288,7 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                             compact = false,
                             modifier = Modifier.fillMaxSize(),
                             onOpenFriends = { friendsOpen = true },
-                            onOpenPortal = if (skylanders) { { portalOpen = true } } else null,
+                            onOpenPortal = if (portalEntry) { { portalOpen = true } } else null,
                         )
                     }
                     Surface(
@@ -382,7 +383,7 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
             }
         }
 
-        // The Skylanders portal, as its own panel over the menu, for the same reasons as Friends
+        // The toy portals, as their own panel over the menu, for the same reasons as Friends
         AnimatedVisibility(
             visible = portalOpen,
             enter = fadeIn(tween(160, easing = EaseOut)),
@@ -421,7 +422,7 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Text(
-                                str("portal.title"),
+                                str("portal.button"),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                                 modifier = Modifier.weight(1f),
@@ -434,7 +435,7 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                                 ),
                             ) { Text(str("action.close")) }
                         }
-                        SkylanderPortalPanel(Modifier.padding(start = 16.dp, end = 10.dp, top = 6.dp, bottom = 16.dp))
+                        ToyPortalPanel(Modifier.padding(start = 16.dp, end = 10.dp, top = 6.dp, bottom = 16.dp))
                     }
                 }
             }
@@ -477,7 +478,7 @@ private fun MenuPage(
                 .padding(bottom = 18.dp),
         ) {
             if (compact) CompactMenuTabs(state.tab, viewModel::selectTab)
-            MenuHeader(compact, state.hardcore, state.richPresence, state.gameCRC, onOpenFriends, onOpenPortal)
+            MenuHeader(compact, state.hardcore, state.richPresence, state.gameCRC, onOpenFriends)
             HorizontalDivider(
                 modifier = Modifier.padding(horizontal = 8.dp),
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.34f),
@@ -487,7 +488,7 @@ private fun MenuPage(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 when (state.tab) {
-                    EmulationMenuTab.Session -> SessionPane(state, viewModel)
+                    EmulationMenuTab.Session -> SessionPane(state, viewModel, onOpenPortal)
                     EmulationMenuTab.Graphics -> GraphicsPane(state, viewModel)
                     // The full Fixes settings tab, live-applying via InGameOverlay's
                     // shared Settings state (same as the rest of the overlay); its
@@ -662,7 +663,6 @@ private fun MenuHeader(
     richPresence: String,
     gameCRC: String,
     onOpenFriends: () -> Unit,
-    onOpenPortal: (() -> Unit)?,
 ) {
     val game = MainActivityRuntime.currentGame.value
     Row(
@@ -742,30 +742,6 @@ private fun MenuHeader(
             Modifier.align(Alignment.CenterVertically),
         )
 
-        // The Skylanders portal, beside Friends, in a Skylanders game only
-        if (onOpenPortal != null) {
-            Spacer(Modifier.width(8.dp))
-            Surface(
-                onClick = onOpenPortal,
-                modifier = Modifier.controllerFocusable(
-                    "menu.portal",
-                    RoundedCornerShape(14.dp),
-                    onConfirm = onOpenPortal,
-                ),
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
-            ) {
-                Text(
-                    str("portal.button"),
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                )
-            }
-        }
-
         // Friends, in the header where it is always visible, with the online count on it. Shown
         // even where Discord is not available: remote play hosting lives behind it too, and
         // hosting does not need Discord. The Discord parts inside hide themselves there.
@@ -792,7 +768,7 @@ private fun MenuHeader(
 }
 
 @Composable
-private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuViewModel) {
+private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuViewModel, onOpenPortal: (() -> Unit)?) {
     // Which disc card is open: null, change, or swap. Swap is offered only while the game can take
     // one, which the core reports as it runs; see DiscSection.
     var discCard by remember { mutableStateOf<Boolean?>(null) }
@@ -807,6 +783,10 @@ private fun SessionPane(state: EmulationMenuUiState, viewModel: EmulationMenuVie
             add(MenuAction(str("action.swapDisc"), str("action.swapDisc.detail"), "⇄", null) {
                 discCard = if (discCard == true) null else true
             })
+        }
+        // Skylanders, Disney Infinity and LEGO Dimensions figures (ToyPortalPanel)
+        if (onOpenPortal != null) {
+            add(MenuAction(str("portal.button"), "Skylanders, Disney Infinity, LEGO Dimensions", "\u25CE", null, onOpenPortal))
         }
         add(MenuAction(str("action.close"), MainActivityRuntime.currentGame.value?.title.orEmpty(), "■", Danger) {
             MainActivityRuntime.closeGame()

@@ -252,11 +252,24 @@ class RPCSX {
     /** The phone's microphones for the core: one "<Android device id>\t<name>" per line (MicDevices). */
     external fun setMicDevices(list: String)
 
+    /** Audio settings' microphone test, through the game's own capture: start, poll 0..1 (-1 stopped), stop. */
+    external fun micTestStart(device: String): Boolean
+    external fun micTestLevel(): Float
+    external fun micTestStop()
+
     /** Puts a .sky figure file on the emulated Skylanders portal: the place it took, -1 not a figure, -2 full. */
     external fun skylanderLoad(path: String): Int
 
     /** Lifts the figure in that place off the emulated portal. */
     external fun skylanderRemove(slot: Int): Boolean
+
+    /** Disney Infinity base: a 320-byte figure file at position 0 to 8 (ToyPortals.InfinityBase). */
+    external fun infinityLoad(path: String, position: Int): Boolean
+    external fun infinityRemove(position: Int): Boolean
+
+    /** Lego Dimensions toy pad: a 180-byte figure file at index 0 to 6 (ToyPortals.DimensionsToyPad). */
+    external fun dimensionsLoad(path: String, index: Int): Boolean
+    external fun dimensionsRemove(index: Int): Boolean
 
     /** Real toy portals the app opened, as comma-separated file descriptors, for the next game (UsbPassthrough). */
     external fun usbSetPassthrough(fds: String)

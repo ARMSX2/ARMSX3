@@ -12,13 +12,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +40,11 @@ import com.armsx2.i18n.str
 import com.armsx2.input.MicDevices
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.InGameOverlay
+import com.armsx3.Rpcs3Bridge
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import net.rpcsx.Permission
 
 /**
@@ -255,6 +265,10 @@ private fun MicrophoneSection(s: Settings, apply: (Settings) -> Unit) {
         onChange = { apply(s.copy(ps3 = s.ps3.copy(micDevice1 = names1[it]))) },
     )
 
+    if (allowed) {
+        MicTestRow(s.ps3.micDevice1)
+    }
+
     // SingStar: one microphone per singer
     if (s.ps3.micType == 2) {
         val (names2, labels2) = options(s.ps3.micDevice2, withNone = true)
@@ -265,6 +279,67 @@ private fun MicrophoneSection(s: Settings, apply: (Settings) -> Unit) {
             selectedIndex = names2.indexOf(s.ps3.micDevice2).coerceAtLeast(0),
             columns = 1,
             onChange = { apply(s.copy(ps3 = s.ps3.copy(micDevice2 = names2[it]))) },
+        )
+    }
+}
+
+/**
+ * Hears the chosen microphone through the same capture a game gets (oboe_capture in the core), with a
+ * bar for how loud it is: if the bar moves, a game is sent the same sound.
+ */
+@Composable
+private fun MicTestRow(device: String) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var testing by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+    var level by remember { mutableFloatStateOf(0f) }
+
+    // Never left recording: leaving the screen or the app ends the test
+    DisposableEffect(Unit) { onDispose { Rpcs3Bridge.micTestStop() } }
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        Rpcs3Bridge.micTestStop()
+        testing = false
+    }
+
+    LaunchedEffect(testing) {
+        while (testing) {
+            val now = withContext(Dispatchers.IO) { Rpcs3Bridge.micTestLevel() }
+            if (now < 0f) break
+            level = now
+            delay(60)
+        }
+        level = 0f
+    }
+
+    val toggle: () -> Unit = {
+        if (testing) {
+            Rpcs3Bridge.micTestStop()
+            testing = false
+        } else {
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    MicDevices.push(context)
+                    Rpcs3Bridge.micTestStart(device)
+                }
+                failed = !ok
+                testing = ok
+            }
+        }
+    }
+
+    SettingsDivider()
+    MicActionRow(
+        "audio.mic.test",
+        str(if (testing) "audio.mic.test.stop" else "audio.mic.test"),
+        str(if (failed) "audio.mic.test.failed" else "audio.mic.test.description"),
+        toggle,
+    )
+
+    if (testing) {
+        LinearProgressIndicator(
+            progress = { level },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp).height(10.dp),
         )
     }
 }

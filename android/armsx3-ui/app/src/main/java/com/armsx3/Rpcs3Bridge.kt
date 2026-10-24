@@ -1435,12 +1435,41 @@ object Rpcs3Bridge {
     }
 
     @JvmStatic
+    fun micTestStart(device: String): Boolean =
+        runCatching { RPCSX.instance.micTestStart(device) }.getOrDefault(false)
+
+    @JvmStatic
+    fun micTestLevel(): Float =
+        runCatching { RPCSX.instance.micTestLevel() }.getOrDefault(-1f)
+
+    @JvmStatic
+    fun micTestStop() {
+        runCatching { RPCSX.instance.micTestStop() }
+    }
+
+    @JvmStatic
     fun skylanderLoad(path: String): Int =
         runCatching { RPCSX.instance.skylanderLoad(path) }.getOrDefault(-1)
 
     @JvmStatic
     fun skylanderRemove(slot: Int): Boolean =
         runCatching { RPCSX.instance.skylanderRemove(slot) }.getOrDefault(false)
+
+    @JvmStatic
+    fun infinityLoad(path: String, position: Int): Boolean =
+        runCatching { RPCSX.instance.infinityLoad(path, position) }.getOrDefault(false)
+
+    @JvmStatic
+    fun infinityRemove(position: Int): Boolean =
+        runCatching { RPCSX.instance.infinityRemove(position) }.getOrDefault(false)
+
+    @JvmStatic
+    fun dimensionsLoad(path: String, index: Int): Boolean =
+        runCatching { RPCSX.instance.dimensionsLoad(path, index) }.getOrDefault(false)
+
+    @JvmStatic
+    fun dimensionsRemove(index: Int): Boolean =
+        runCatching { RPCSX.instance.dimensionsRemove(index) }.getOrDefault(false)
 
     @JvmStatic
     fun usbSetPassthrough(fds: String) {
