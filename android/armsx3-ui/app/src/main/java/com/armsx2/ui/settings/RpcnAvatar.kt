@@ -105,22 +105,29 @@ private val CellSize = 76.dp
 private const val CellPixels = 160
 
 /** What np_avatar reports: where the user's avatars are, which one is chosen, and the ones a game
- *  could be given. Avatars without their licence are only counted, as RPCS3's dialog hides them. */
+ *  could be given: the firmware's own user icons, then the PSN avatars installed for the user. PSN
+ *  avatars without their licence are only counted, as RPCS3's dialog hides them. */
 private class AvatarList(
     val userDir: String,
     val selected: String,
     val default: String,
+    val builtin: List<String>,
     val usable: List<String>,
     val hidden: Int,
 ) {
     /** The file games are given now. */
     val current: String get() = selected.ifBlank { default }
+
+    /** Everything the grid offers, the firmware's icons first. */
+    val choices: List<String> get() = builtin + usable
 }
 
 private fun readAvatarList(): AvatarList? {
     val json = Rpcs3Bridge.avatarList().ifBlank { return null }
     return runCatching {
         val o = JSONObject(json)
+        val icons = o.optJSONArray("builtin")
+        val builtin = (0 until (icons?.length() ?: 0)).mapNotNull { icons!!.optString(it).ifBlank { null } }
         val avatars = o.optJSONArray("avatars")
         val usable = ArrayList<String>()
         var hidden = 0
@@ -128,7 +135,7 @@ private fun readAvatarList(): AvatarList? {
             val entry = avatars!!.optJSONObject(i) ?: continue
             if (entry.optBoolean("usable")) usable += entry.optString("path") else hidden++
         }
-        AvatarList(o.optString("userDir"), o.optString("selected"), o.optString("default"), usable, hidden)
+        AvatarList(o.optString("userDir"), o.optString("selected"), o.optString("default"), builtin, usable, hidden)
     }.getOrNull()
 }
 
@@ -213,7 +220,7 @@ private fun InputStream.readCapped(): ByteArray? {
     return out.toByteArray()
 }
 
-/** "Default avatar", "PSN avatar from NPEB02228" or "Your own picture". */
+/** "Default avatar", "PS3 user icon", "PSN avatar from NPEB02228" or "Your own picture". */
 @Composable
 private fun describe(list: AvatarList?, defaultMissing: Boolean): String {
     list ?: return ""
@@ -221,6 +228,7 @@ private fun describe(list: AvatarList?, defaultMissing: Boolean): String {
     return when {
         list.selected.isBlank() ->
             if (defaultMissing) str("rpcn.avatar.noFirmware") else str("rpcn.avatar.current.default")
+        list.selected in list.builtin -> str("rpcn.avatar.current.builtin")
         list.selected.startsWith(psnDir) ->
             str("rpcn.avatar.current.psn").format(list.selected.removePrefix(psnDir).substringBefore('/'))
         else -> str("rpcn.avatar.current.image")
@@ -415,12 +423,15 @@ fun RpcnAvatarPickerOverlay() {
                 val current = list
                 val countText = str("rpcn.avatar.count")
                 val hiddenText = str("rpcn.avatar.hidden")
+                val psnHint = str("rpcn.avatar.psnHint")
                 val status = when {
                     !loaded -> str("rpcn.avatar.loading")
-                    current == null || (current.usable.isEmpty() && current.hidden == 0) -> str("rpcn.avatar.none")
+                    current == null || (current.choices.isEmpty() && current.hidden == 0) -> str("rpcn.avatar.none")
                     else -> buildString {
-                        append(countText.format(current.usable.size))
+                        append(countText.format(current.choices.size))
                         if (current.hidden > 0) append(' ').append(hiddenText.format(current.hidden))
+                        // Most players have no PSN avatars, and nothing else says where they come from
+                        if (current.usable.isEmpty()) append(' ').append(psnHint)
                     }
                 }
                 Text(
@@ -438,7 +449,7 @@ fun RpcnAvatarPickerOverlay() {
                     )
                 }
 
-                val paths = current?.usable.orEmpty()
+                val paths = current?.choices.orEmpty()
                 if (paths.isNotEmpty()) {
                     BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp)) {
                         val columns = maxOf(3, ((maxWidth + 8.dp) / (CellSize + 8.dp)).toInt())
@@ -466,7 +477,9 @@ fun RpcnAvatarPickerOverlay() {
                             items(count = paths.size, key = { paths[it] }) { index ->
                                 val path = paths[index]
                                 val pick = { choose(path) }
-                                val chosen = path == current?.selected
+                                // The default avatar is one of the firmware's icons: mark it while it is in use
+                                val chosen = current != null &&
+                                    (path == current.selected || (current.selected.isBlank() && path == current.default))
                                 Box(
                                     Modifier
                                         .aspectRatio(1f)

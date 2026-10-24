@@ -4002,12 +4002,35 @@ extern "C" const char *_rpcsx_rpcnDeleteTrophies() {
 // home/<user>/rpcs3_avatar, which sceNp reads whenever a game asks for the player's picture. These
 // hand the picker what RPCS3's avatar_selection_dialog takes from it.
 
-// {"userDir", "selected", "default", "avatars": [{"path", "usable"}]}. Usable is the dialog's own
-// test: an avatar whose RAP is missing cannot be decrypted, so the picker leaves it out and counts it.
+// {"userDir", "selected", "default", "builtin": [path], "avatars": [{"path", "usable"}]}.
+//
+// Builtin is the firmware's own user icons, the ones a PS3 offers when a user picks a picture; the
+// default avatar is one of them, and every player with the firmware installed has them. Avatars are
+// the PSN avatar packages, and usable is RPCS3's dialog's own test: one whose RAP is missing cannot
+// be decrypted, so the picker leaves it out and counts it.
 extern "C" const char *_rpcsx_avatarList() {
   static thread_local std::string result;
 
   const std::string user = Emu.GetUsr();
+  const std::string icon_dir = g_cfg_vfs.get_dev_flash() + "vsh/resource/explore/user/";
+
+  std::vector<std::string> icons;
+
+  for (const auto &entry : fs::dir(icon_dir)) {
+    if (!entry.is_directory && fmt::to_lower(entry.name).ends_with(".png")) {
+      icons.push_back(icon_dir + entry.name);
+    }
+  }
+
+  std::sort(icons.begin(), icons.end());
+
+  std::string builtin;
+
+  for (const std::string &path : icons) {
+    if (!builtin.empty()) builtin += ",";
+    fmt::append(builtin, R"("%s")", json_escape(path));
+  }
+
   std::string avatars;
 
   for (const std::string &path : np::avatar::get_installed_avatars(user)) {
@@ -4016,10 +4039,10 @@ extern "C" const char *_rpcsx_avatarList() {
                 np::avatar::is_file_usable(path) ? "true" : "false");
   }
 
-  result = fmt::format(R"({"userDir":"%s","selected":"%s","default":"%s","avatars":[%s]})",
+  result = fmt::format(R"({"userDir":"%s","selected":"%s","default":"%s","builtin":[%s],"avatars":[%s]})",
                        json_escape(rpcs3::utils::get_hdd0_dir() + "home/" + user + "/"),
                        json_escape(np::avatar::get_selected_avatar(user)),
-                       json_escape(np::avatar::get_default_avatar_path(user)), avatars);
+                       json_escape(np::avatar::get_default_avatar_path(user)), builtin, avatars);
   return result.c_str();
 }
 
