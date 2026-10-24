@@ -12,11 +12,12 @@
 #   REQUEST_INSTALL_PACKAGES  a self-updating app is a hard policy violation, and it is the
 #                             declared permission that gets rejected, not the code path
 #   MANAGE_EXTERNAL_STORAGE   all-files access needs a declared exemption the app does not need
-#   RECORD_AUDIO              would put "Microphone" on the listing for a capability not shipped
 #   FOREGROUND_SERVICE_MICROPHONE, FOREGROUND_SERVICE_MEDIA_PLAYBACK
 #                             the Discord SDK's voice services; each typed foreground service
 #                             needs its own Play Console declaration. The one the app does use,
 #                             FOREGROUND_SERVICE_SPECIAL_USE (online keep-alive), is declared there.
+#                             RECORD_AUDIO is the app's own now (microphone for singing games), so
+#                             it is expected, and the data safety form covers it.
 #   libarmsx3_lsfg.so         frame generation is not distributed through Play
 #   "Lossless" in the dex     nor are its screens and strings, which name the product its shaders
 #                             come from; they live in src/github, since a runtime flag would still
@@ -139,7 +140,6 @@ check_absent_manifest() {
 
 check_absent_manifest "REQUEST_INSTALL_PACKAGES" "Play forbids self-updating apps"
 check_absent_manifest "MANAGE_EXTERNAL_STORAGE"  "all-files access needs a declared exemption"
-check_absent_manifest "RECORD_AUDIO"             "would add Microphone to the listing"
 check_absent_manifest "FOREGROUND_SERVICE_MICROPHONE"    "the Discord SDK's voice service, never declared in the Play Console"
 check_absent_manifest "FOREGROUND_SERVICE_MEDIA_PLAYBACK" "the Discord SDK's voice service, never declared in the Play Console"
 check_absent_manifest "updateprovider"           "the updater FileProvider must not ship"

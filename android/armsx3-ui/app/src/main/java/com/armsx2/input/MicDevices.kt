@@ -17,7 +17,7 @@ import com.armsx3.Rpcs3Bridge
  * and its product name, which survive unplugging it. Android's id for a device does not, so the
  * list goes again whenever one comes or goes, and before each game starts.
  *
- * Only a build that declares RECORD_AUDIO has any of this ([supported]); the play bundle does not.
+ * Both flavors declare RECORD_AUDIO; [supported] still checks, so a build without it hides all of this.
  */
 object MicDevices {
     /** Lets Android choose: a plugged-in USB microphone when there is one, the built-in one otherwise. */

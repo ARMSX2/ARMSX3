@@ -11,7 +11,7 @@ import androidx.core.content.ContextCompat
 enum class Permission(val id: Int, val key: String) {
     @SuppressLint("InlinedApi")
     PostNotifications(100, Manifest.permission.POST_NOTIFICATIONS),
-    // Games that are sung or spoken into (Audio settings, Microphone); declared by the github build only
+    // Games that are sung or spoken into (Audio settings, Microphone)
     RecordAudio(101, Manifest.permission.RECORD_AUDIO);
 
     fun checkPermission(context: Context) =

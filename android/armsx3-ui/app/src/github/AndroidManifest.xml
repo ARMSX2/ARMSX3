@@ -20,14 +20,6 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
 
-    <!--
-        The microphone, for games that are sung or spoken into (Audio settings, Microphone; MicDevices).
-        Not in the play bundle, where it would put "Microphone" on the listing and need a data safety
-        answer; build-play-aab.sh fails if it gets there. The main manifest removes RECORD_AUDIO as
-        merged from the Discord SDK, and declaring it here, in the flavor, puts it back for this build.
-    -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-
     <application>
         <!-- Hands the downloaded update APK to the system package installer. -->
         <provider

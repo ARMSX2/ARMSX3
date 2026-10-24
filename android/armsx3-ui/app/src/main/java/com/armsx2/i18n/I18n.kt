@@ -760,7 +760,7 @@ val EN: Map<String, String> = mapOf(
     "audio.synchronization.label" to "Time Stretching",
     "audio.synchronization.description" to "Keeps audio pitch correct when the emulator runs below full speed, instead of letting sound slow and drop in pitch along with it. Costs a little CPU; turn it off if audio stutters more with it on.",
     "audio.buffer.label" to "Audio Buffer",
-    // Microphone (AudioTab MicrophoneSection); github build only, the play bundle has no RECORD_AUDIO
+    // Microphone (AudioTab MicrophoneSection)
     "audio.mic.label" to "Microphone",
     "audio.mic.description" to "For games you sing or talk into, like SingStar, Rock Band and Guitar Hero. Standard is one microphone. SingStar gives each of two singers their own. Real SingStar is the SingStar USB adapter with both of its microphones. Rocksmith is the Rocksmith guitar cable. Takes effect when a game starts.",
     "audio.mic.standard" to "Standard",

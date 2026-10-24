@@ -153,7 +153,7 @@ fun AudioTab(state: MutableState<Settings>) {
         // Removed: SPU2 is the PS2's sound chip; its NEON reverb path does not exist here.
         // Removed: PCSX2 SPU2 lightweight mixing mode. No RPCS3 counterpart.
 
-        // Only where the build declares RECORD_AUDIO: the play bundle does not
+        // Only where the build declares RECORD_AUDIO, which both flavors do
         val context = LocalContext.current
         if (remember { MicDevices.supported(context) }) {
             MicrophoneSection(s) { apply(it) }

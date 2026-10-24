@@ -55,16 +55,20 @@
         brings its <queries> for CustomTabsService with it — no need to restate that here.
 
         What we DO have to undo is its voice permissions. The SDK declares RECORD_AUDIO, three
-        foreground-service permissions and Bluetooth for features we do not ship, and merged
-        unchallenged they would put "Microphone" on the Play listing and require a data-safety
-        declaration for a capability that does not exist in this app. FOREGROUND_SERVICE itself
-        is ours as well now (the online keep-alive below), so only the SDK's two typed ones go.
+        foreground-service permissions and Bluetooth for its voice chat, which we do not ship.
+        FOREGROUND_SERVICE and RECORD_AUDIO are ours as well now (the online keep-alive and the
+        microphone below), so only the SDK's two typed services and MODIFY_AUDIO_SETTINGS go.
 
         tools:node="remove" is the supported way to drop a merged permission, and it is checked:
-        build-play-aab.sh fails the build if RECORD_AUDIO or REQUEST_INSTALL_PACKAGES survive into
-        the bundle, so a regression here cannot ship quietly.
+        build-play-aab.sh fails the build if a removed one survives into the bundle, so a
+        regression here cannot ship quietly.
     -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
+    <!--
+        The microphone, for games that are sung or spoken into (Audio settings, Microphone;
+        MicDevices). Both flavors: on Play it shows "Microphone" on the listing, and the data safety
+        form says audio is used on the device only, never collected or shared.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" tools:node="remove" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" tools:node="remove" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" tools:node="remove" />
