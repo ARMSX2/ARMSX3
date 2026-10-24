@@ -17,12 +17,16 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -43,7 +47,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -53,11 +56,14 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.armsx2.i18n.str
 import com.armsx2.input.DimensionsToyPad
@@ -104,16 +110,24 @@ fun ToyPortalPanel(modifier: Modifier = Modifier) {
     val real by UsbPassthrough.realPortals
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("Skylanders", "Disney Infinity", "LEGO Dimensions").forEachIndexed { index, name ->
-                val pick = { tab = index }
-                val label: @Composable () -> Unit = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                val focus = Modifier.weight(1f).controllerFocusable("portal.tab.$index", onConfirm = pick)
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // The series' full names where they fit, the short ones people use on a narrow screen. Each
+            // tab gets room by the length of its name, so the long names are not the ones cut short.
+            val names = if (maxWidth < 420.dp) listOf("Skylanders", "Infinity", "Dimensions")
+            else listOf("Skylanders", "Disney Infinity", "LEGO Dimensions")
+            val padding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
 
-                if (index == tab) {
-                    Button(onClick = pick, modifier = focus) { label() }
-                } else {
-                    OutlinedButton(onClick = pick, modifier = focus) { label() }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                names.forEachIndexed { index, name ->
+                    val pick = { tab = index }
+                    val label: @Composable () -> Unit = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    val focus = Modifier.weight(name.length.toFloat()).controllerFocusable("portal.tab.$index", onConfirm = pick)
+
+                    if (index == tab) {
+                        Button(onClick = pick, modifier = focus, contentPadding = padding) { label() }
+                    } else {
+                        OutlinedButton(onClick = pick, modifier = focus, contentPadding = padding) { label() }
+                    }
                 }
             }
         }
@@ -315,7 +329,8 @@ private fun Spot(
     selected: Boolean,
     onSelect: () -> Unit,
     modifier: Modifier = Modifier,
-    tall: Boolean = false,
+    height: Dp = 34.dp,
+    big: Boolean = false,
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val shape = RoundedCornerShape(12.dp)
@@ -328,13 +343,13 @@ private fun Spot(
     Box(
         modifier
             .fillMaxWidth()
-            .height(if (tall) 46.dp else 34.dp)
+            .height(height)
             .graphicsLayer {
                 scaleX = scale
                 scaleY = scale
             }
             .clip(shape)
-            .background(if (figure != null) accent.copy(alpha = 0.8f) else Color.Black.copy(alpha = 0.35f))
+            .background(if (figure != null) accent.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.55f))
             .border(
                 if (selected) 2.dp else 1.dp,
                 if (selected) Color.White else accent.copy(alpha = if (figure != null) 0.9f else 0.45f),
@@ -347,16 +362,16 @@ private fun Spot(
     ) {
         Text(
             figure?.substringBeforeLast('.') ?: emptyLabel,
-            style = if (tall) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall,
+            style = if (big) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall,
             fontWeight = if (figure != null) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (figure != null) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = if (figure != null) Color.White else Color.White.copy(alpha = 0.78f),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
     }
 }
 
-/** The base colour of every drawn portal: the plastic the toys stand on. */
+/** The Skylanders portal's dark plastic. */
 private val PortalBody = Color(0xFF15131F)
 
 /** Skylanders: the round portal in the middle, its eight spots four to a side. */
@@ -430,153 +445,209 @@ private fun SkylanderPortalArt(figures: Int, modifier: Modifier) {
     }
 }
 
-/** Disney Infinity: Player 1's pad, the hexagon, Player 2's pad, as the base lays them out. */
+/** Where a spot sits on a drawn portal: centred at ([fx], [fy]) of the drawing's [w] by [h], [cw] wide. */
+private fun Modifier.onArt(w: Dp, h: Dp, fx: Float, fy: Float, cw: Dp, ch: Dp) =
+    offset(x = w * fx - cw / 2, y = h * fy - ch / 2).width(cw)
+
+/**
+ * Disney Infinity, drawn as the base looks: the hexagon at the back for a play set or power disc and a
+ * round pad either side at the front for each player's figure. The power discs that go under the
+ * figures and the play set have their spots in a row beneath, under the pad they belong to.
+ */
 @Composable
 private fun InfinityStage(placed: Map<Int, String>, selected: Int, onSelect: (Int) -> Unit) {
     val player = str("portal.infinity.player")
-    val figure = str("portal.spot.figure")
-    val disc = str("portal.spot.disc")
     val playset = str("portal.spot.playset")
+    val disc = str("portal.spot.disc")
 
-    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        // Positions are the core's (InfinityBase): 3 to 5 Player 1, 0 to 2 the hexagon, 6 to 8 Player 2
-        InfinityPad(player.format(1), 3, listOf(4, 5), false, figure, disc, placed, selected, onSelect, Modifier.weight(1f))
-        InfinityPad(playset, 0, listOf(1, 2), true, playset, disc, placed, selected, onSelect, Modifier.weight(1f))
-        InfinityPad(player.format(2), 6, listOf(7, 8), false, figure, disc, placed, selected, onSelect, Modifier.weight(1f))
-    }
-}
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+            val w = minOf(maxWidth, 440.dp)
+            val h = w * 0.74f
+            val ch = 36.dp
 
-/** One part of the Infinity base: a round player pad or the hexagon, the power discs under it. */
-@Composable
-private fun InfinityPad(
-    title: String,
-    main: Int,
-    discs: List<Int>,
-    hexagon: Boolean,
-    mainLabel: String,
-    discLabel: String,
-    placed: Map<Int, String>,
-    selected: Int,
-    onSelect: (Int) -> Unit,
-    modifier: Modifier,
-) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            title,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Box(Modifier.fillMaxWidth().height(70.dp), contentAlignment = Alignment.Center) {
-            InfinityPadArt(hexagon, lit = placed[main] != null, Modifier.fillMaxWidth().height(70.dp))
-            Spot(main, placed[main], mainLabel, main == selected, { onSelect(main) }, Modifier.padding(horizontal = 12.dp), tall = true)
+            Box(Modifier.size(w, h)) {
+                // Positions are the core's (InfinityBase): 0 the hexagon, 3 Player 1's pad, 6 Player 2's
+                InfinityBaseArt(placed[0] != null, placed[3] != null, placed[6] != null, Modifier.fillMaxSize())
+                Spot(0, placed[0], playset, selected == 0, { onSelect(0) }, Modifier.onArt(w, h, 0.5f, 0.25f, w * 0.26f, ch), ch, big = true)
+                Spot(3, placed[3], player.format(1), selected == 3, { onSelect(3) }, Modifier.onArt(w, h, 0.29f, 0.7f, w * 0.28f, ch), ch, big = true)
+                Spot(6, placed[6], player.format(2), selected == 6, { onSelect(6) }, Modifier.onArt(w, h, 0.71f, 0.7f, w * 0.28f, ch), ch, big = true)
+            }
         }
-        for (position in discs) Spot(position, placed[position], discLabel, position == selected, { onSelect(position) })
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for (column in listOf(listOf(4, 5), listOf(1, 2), listOf(7, 8))) {
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (position in column) {
+                        Spot(position, placed[position], disc, position == selected, { onSelect(position) }, height = 32.dp)
+                    }
+                }
+            }
+        }
     }
 }
 
-/** A pad of the Infinity base, seen at an angle: it glows while a figure or play set stands on it. */
+/**
+ * The Infinity base: frosted white plastic under a grey band, the hexagon set into the band, the two
+ * round pads in front. A pad glows while something stands on it, as the real one lights up.
+ */
 @Composable
-private fun InfinityPadArt(hexagon: Boolean, lit: Boolean, modifier: Modifier) {
-    val accent = MaterialTheme.colorScheme.primary
-    val light = Color(0xFF8FB8FF)
-    val breathing = rememberInfiniteTransition(label = "pad")
-    val pulse by breathing.animateFloat(0.55f, 1f, infiniteRepeatable(tween(1800), RepeatMode.Reverse), label = "pulse")
-    val strength by animateFloatAsState(if (lit) 1f else 0.2f, tween(400), label = "lit")
+private fun InfinityBaseArt(hexagon: Boolean, player1: Boolean, player2: Boolean, modifier: Modifier) {
+    val glow = Color(0xFF7FD0FF)
+    val breathing = rememberInfiniteTransition(label = "infinity")
+    val pulse by breathing.animateFloat(0.6f, 1f, infiniteRepeatable(tween(1800), RepeatMode.Reverse), label = "pulse")
+    val hexLit by animateFloatAsState(if (hexagon) 1f else 0f, tween(400), label = "hexagon")
+    val leftLit by animateFloatAsState(if (player1) 1f else 0f, tween(400), label = "player1")
+    val rightLit by animateFloatAsState(if (player2) 1f else 0f, tween(400), label = "player2")
 
     Canvas(modifier) {
         val w = size.width
         val h = size.height
-        if (hexagon) {
-            // Flattened, as the hexagon looks from a player's seat
-            val rx = minOf(w * 0.5f, h * 0.95f)
-            val ry = h * 0.45f
-            val path = Path().apply {
-                for (i in 0 until 6) {
-                    val a = Math.toRadians(60.0 * i).toFloat()
-                    val point = Offset(center.x + rx * cos(a), center.y + ry * sin(a))
-                    if (i == 0) moveTo(point.x, point.y) else lineTo(point.x, point.y)
-                }
-                close()
+        fun path(vararg points: Pair<Float, Float>) = Path().apply {
+            points.forEachIndexed { i, (x, y) -> if (i == 0) moveTo(w * x, h * y) else lineTo(w * x, h * y) }
+            close()
+        }
+
+        // Flat at the back and the front, pointed at the sides
+        val body = path(0.16f to 0.02f, 0.84f to 0.02f, 0.99f to 0.45f, 0.82f to 0.97f, 0.18f to 0.97f, 0.01f to 0.45f)
+        // Its shadow on the table
+        translate(top = 6.dp.toPx()) { drawPath(body, Color.Black.copy(alpha = 0.35f)) }
+        drawPath(body, Brush.verticalGradient(listOf(Color(0xFFF1F4F8), Color(0xFFC9D0DA))))
+
+        // The grey band across the back, dipping under the hexagon
+        val band = path(
+            0.16f to 0.02f, 0.84f to 0.02f, 0.94f to 0.31f, 0.68f to 0.31f, 0.58f to 0.52f,
+            0.42f to 0.52f, 0.32f to 0.31f, 0.06f to 0.31f,
+        )
+        drawPath(band, Brush.verticalGradient(listOf(Color(0xFFAEB3BB), Color(0xFF8D939B))))
+        drawPath(body, Color.White.copy(alpha = 0.9f), style = Stroke(2.dp.toPx()))
+
+        // The hexagon, points to the sides as on the base
+        val r = w * 0.14f
+        val hexCentre = Offset(w * 0.5f, h * 0.25f)
+        val hex = Path().apply {
+            for (i in 0 until 6) {
+                val a = Math.toRadians(60.0 * i).toFloat()
+                val point = Offset(hexCentre.x + r * cos(a), hexCentre.y + r * sin(a))
+                if (i == 0) moveTo(point.x, point.y) else lineTo(point.x, point.y)
             }
-            drawPath(path, PortalBody)
-            drawPath(path, light.copy(alpha = 0.45f * pulse * strength))
-            drawPath(path, accent.copy(alpha = 0.85f), style = Stroke(3.dp.toPx()))
-        } else {
-            val topLeft = Offset(0f, h * 0.08f)
-            val oval = Size(w, h * 0.84f)
-            drawOval(PortalBody, topLeft, oval)
-            drawOval(
-                Brush.radialGradient(listOf(light.copy(alpha = 0.8f * pulse * strength), Color.Transparent), center, w / 2f),
-                topLeft,
-                oval,
-            )
-            drawOval(accent.copy(alpha = 0.85f), topLeft, oval, style = Stroke(3.dp.toPx()))
+            close()
+        }
+        drawPath(hex, Color(0xFFF8F9FB))
+        drawPath(hex, Brush.radialGradient(listOf(glow.copy(alpha = 0.9f * pulse * hexLit), Color.Transparent), hexCentre, r * 1.1f))
+        drawPath(hex, lerp(Color(0xFF7D838B), glow, hexLit), style = Stroke(2.5.dp.toPx()))
+
+        // The round pads
+        for ((x, lit) in listOf(0.29f to leftLit, 0.71f to rightLit)) {
+            val centre = Offset(w * x, h * 0.7f)
+            val radius = w * 0.15f
+            drawCircle(Color(0xFFF4F6F9), radius, centre)
+            drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = 0.9f * pulse * lit), Color.Transparent), centre, radius), radius, centre)
+            drawCircle(lerp(Color(0xFFB4BBC4), glow, lit), radius, centre, style = Stroke(2.5.dp.toPx()))
         }
     }
 }
 
-/** LEGO Dimensions: the left pad's three spots, the centre pad, the right pad's three. */
+/**
+ * LEGO Dimensions, drawn as the toy pad looks: the round centre pad at the top, the left and right pads
+ * below it either side, each lit in a colour that slowly changes as the real one is.
+ */
 @Composable
 private fun DimensionsStage(placed: Map<Int, String>, selected: Int, onSelect: (Int) -> Unit) {
     val toy = str("portal.spot.toy")
 
-    Row(
-        Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Positions are the core's (DimensionsToyPad): 1 is the centre, 0, 3 and 4 the left, 2, 5 and 6 the right
-        DimensionsPad(str("portal.dimensions.leftPad"), listOf(0, 3, 4), 0f, toy, placed, selected, onSelect, Modifier.weight(1f))
-        DimensionsPad(str("portal.dimensions.centre"), listOf(1), 120f, toy, placed, selected, onSelect, Modifier.weight(1.15f), big = true)
-        DimensionsPad(str("portal.dimensions.rightPad"), listOf(2, 5, 6), 240f, toy, placed, selected, onSelect, Modifier.weight(1f))
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.TopCenter) {
+        val w = minOf(maxWidth, 460.dp)
+        val h = w * 0.74f
+        val ch = minOf(30.dp, h * 0.1f)
+
+        Box(Modifier.size(w, h)) {
+            // Positions are the core's (DimensionsToyPad): 1 the centre, 0, 3 and 4 the left, 2, 5 and 6 the right
+            val left = listOf(0, 3, 4)
+            val right = listOf(2, 5, 6)
+            ToyPadArt(
+                centre = placed[1] != null,
+                left = left.count { placed[it] != null } / 3f,
+                right = right.count { placed[it] != null } / 3f,
+                modifier = Modifier.fillMaxSize(),
+            )
+            Spot(1, placed[1], toy, selected == 1, { onSelect(1) }, Modifier.onArt(w, h, 0.5f, 0.36f, w * 0.24f, 36.dp), 36.dp, big = true)
+            for ((row, fy) in listOf(0.64f, 0.755f, 0.87f).withIndex()) {
+                Spot(left[row], placed[left[row]], toy, selected == left[row], { onSelect(left[row]) }, Modifier.onArt(w, h, 0.265f, fy, w * 0.36f, ch), ch)
+                Spot(right[row], placed[right[row]], toy, selected == right[row], { onSelect(right[row]) }, Modifier.onArt(w, h, 0.735f, fy, w * 0.36f, ch), ch)
+            }
+        }
     }
 }
 
-/** One of the toy pad's three pads, lit in a colour that slowly changes, as the real one is. */
+/**
+ * The LEGO toy pad: a dark grey slab with a brick stud plate in each top corner, the round centre pad,
+ * and the two side pads, each an L that runs up beside the centre one. A pad glows more the more toys
+ * stand on it.
+ */
 @Composable
-private fun DimensionsPad(
-    title: String,
-    positions: List<Int>,
-    hueOffset: Float,
-    emptyLabel: String,
-    placed: Map<Int, String>,
-    selected: Int,
-    onSelect: (Int) -> Unit,
-    modifier: Modifier,
-    big: Boolean = false,
-) {
+private fun ToyPadArt(centre: Boolean, left: Float, right: Float, modifier: Modifier) {
     val cycling = rememberInfiniteTransition(label = "toypad")
     val hue by cycling.animateFloat(0f, 360f, infiniteRepeatable(tween(9000, easing = LinearEasing)), label = "hue")
-    val light = Color.hsv((hue + hueOffset) % 360f, 0.55f, 1f)
-    val standing = positions.count { placed[it] != null }
-    val strength by animateFloatAsState(0.3f + 0.7f * standing / positions.size, tween(400), label = "lit")
+    val centreLit by animateFloatAsState(if (centre) 1f else 0.25f, tween(400), label = "centre")
+    val leftLit by animateFloatAsState(0.25f + 0.75f * left, tween(400), label = "left")
+    val rightLit by animateFloatAsState(0.25f + 0.75f * right, tween(400), label = "right")
+    val panel = Color(0xFFE6E9EE)
 
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-            title,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .drawBehind {
-                    val corner = CornerRadius(18.dp.toPx())
-                    drawRoundRect(PortalBody, cornerRadius = corner)
-                    drawRoundRect(light.copy(alpha = 0.22f * strength), cornerRadius = corner)
-                    drawRoundRect(light.copy(alpha = 0.9f * strength), cornerRadius = corner, style = Stroke(3.dp.toPx()))
-                }
-                .padding(horizontal = 8.dp, vertical = if (big) 14.dp else 8.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            for (position in positions) {
-                Spot(position, placed[position], emptyLabel, position == selected, { onSelect(position) }, tall = big)
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val corner = CornerRadius(w * 0.03f)
+        fun path(vararg points: Pair<Float, Float>) = Path().apply {
+            points.forEachIndexed { i, (x, y) -> if (i == 0) moveTo(w * x, h * y) else lineTo(w * x, h * y) }
+            close()
+        }
+
+        translate(top = 6.dp.toPx()) { drawRoundRect(Color.Black.copy(alpha = 0.35f), cornerRadius = corner) }
+        drawRoundRect(Brush.verticalGradient(listOf(Color(0xFF3A3B40), Color(0xFF26272B))), cornerRadius = corner)
+        drawRoundRect(Color(0xFF55575E), cornerRadius = corner, style = Stroke(2.dp.toPx()))
+
+        // A 2x2 brick's studs in each top corner
+        for (x in listOf(0.12f, 0.88f)) {
+            val plate = w * 0.085f
+            drawRoundRect(
+                Color(0xFF1E1F22),
+                topLeft = Offset(w * x - plate / 2, h * 0.13f - plate / 2),
+                size = Size(plate, plate),
+                cornerRadius = CornerRadius(plate * 0.12f),
+            )
+            for (dx in listOf(-1, 1)) for (dy in listOf(-1, 1)) {
+                drawCircle(Color(0xFF3C3E43), plate * 0.17f, Offset(w * x + dx * plate * 0.24f, h * 0.13f + dy * plate * 0.24f))
             }
         }
+
+        // The side pads: up beside the centre pad, then the full half below it
+        for ((side, lit, offset) in listOf(Triple(0, leftLit, 0f), Triple(1, rightLit, 240f))) {
+            val m = if (side == 0) { x: Float -> x } else { x: Float -> 1f - x }
+            val zone = path(
+                m(0.06f) to 0.3f, m(0.34f) to 0.3f, m(0.34f) to 0.56f, m(0.47f) to 0.56f,
+                m(0.47f) to 0.95f, m(0.06f) to 0.95f,
+            )
+            val light = Color.hsv((hue + offset) % 360f, 0.55f, 1f)
+            drawPath(zone, lerp(panel, light, 0.55f * lit))
+            drawPath(zone, light.copy(alpha = 0.9f * lit), style = Stroke(2.5.dp.toPx()))
+        }
+
+        // The centre pad, ringed
+        val c = Offset(w * 0.5f, h * 0.36f)
+        val radius = w * 0.13f
+        val light = Color.hsv((hue + 120f) % 360f, 0.55f, 1f)
+        drawCircle(lerp(panel, light, 0.55f * centreLit), radius, c)
+        drawCircle(Color.White.copy(alpha = 0.5f), radius * 0.72f, c, style = Stroke(2.dp.toPx()))
+        drawCircle(light.copy(alpha = 0.9f * centreLit), radius, c, style = Stroke(2.5.dp.toPx()))
+
+        // The red light at the front
+        drawRoundRect(
+            Color(0xFFE5483D),
+            topLeft = Offset(w * 0.47f, h * 0.955f),
+            size = Size(w * 0.06f, h * 0.03f),
+            cornerRadius = CornerRadius(h * 0.01f),
+        )
     }
 }
 

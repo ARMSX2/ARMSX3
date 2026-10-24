@@ -2136,6 +2136,13 @@ fs::file::file(const std::string& path, bs_t<open_mode> mode)
 	}
 
 	if (mode & fs::write && mode & fs::lock && ::flock(fd, LOCK_EX | LOCK_NB) != 0)
+#ifdef __ANDROID__
+		// Android's shared storage (the FUSE mount over /storage, internal and SD card alike) has no
+		// file locks: flock fails with ENOSYS for every file there. The lock only keeps a second opener
+		// out, so there the file opens without one rather than not at all. Failing here made every toy
+		// portal figure "not a figure", and fails the lv2 files opened with a lock (sys_fs, sys_game).
+		if (errno != ENOSYS && errno != EOPNOTSUPP)
+#endif
 	{
 		g_tls_error = errno == EWOULDBLOCK ? fs::error::acces : to_error(errno);
 		::close(fd);

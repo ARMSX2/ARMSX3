@@ -168,15 +168,20 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
         }
     }
     // The portal panel takes the pad the same way.
+    val portalScroll = rememberScrollState()
     DisposableEffect(portalOpen) {
         if (!portalOpen) return@DisposableEffect onDispose {}
         EmulationMenuInputController.overlayDismiss = { portalOpen = false }
+        EmulationMenuInputController.overlayEdgeScroll = { dy ->
+            scope.launch { portalScroll.animateScrollTo(if (dy > 0) portalScroll.maxValue else 0) }
+        }
         val nav = com.armsx2.ui.settings.SettingsControllerNav
         val previous = nav.activeLayer.value
         nav.activeLayer.value = PORTAL_NAV_LAYER
         nav.clearSelection()
         onDispose {
             EmulationMenuInputController.overlayDismiss = null
+            EmulationMenuInputController.overlayEdgeScroll = null
             nav.activeLayer.value = previous
             nav.clearSelection()
         }
@@ -417,7 +422,9 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
                 shadowElevation = 24.dp,
             ) {
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                Column(Modifier.fillMaxSize().verticalScroll(portalScroll)) {
+                    // The right stick scrolls it, as it does Settings
+                    com.armsx2.ui.settings.ControllerAutoScroll(portalScroll)
                     androidx.compose.runtime.CompositionLocalProvider(
                         com.armsx2.ui.settings.LocalNavLayer provides PORTAL_NAV_LAYER,
                     ) {

@@ -397,7 +397,10 @@ namespace np::avatar
 
 	std::string get_default_avatar_path(const std::string& user_id)
 	{
-		const u32 index = user_id.empty() ? 0 : rpcs3::utils::check_user(user_id) % 9;
+		// ARMSX3: counted from the first user, so user 1 (the one ARMSX3 makes) gets the first icon,
+		// the white face. Upstream's id % 9 gave it the second, the red one.
+		const u32 id = user_id.empty() ? 0 : rpcs3::utils::check_user(user_id);
+		const u32 index = id ? (id - 1) % 9 : 0;
 		return g_cfg_vfs.get_dev_flash() + fmt::format("vsh/resource/explore/user/%03d.png", index);
 	}
 

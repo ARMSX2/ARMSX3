@@ -26,6 +26,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.armsx2.i18n.str
 import com.armsx2.ui.common.PadInput
+import com.armsx2.ui.home.LibraryKeyboard
 import com.armsx3.Rpcs3Bridge
 import java.util.concurrent.Executors
 import kotlinx.coroutines.Dispatchers
@@ -272,18 +273,23 @@ internal fun RpcnFriendsList(
                 val done = if (name in data.received) msgAccepted.format(name) else msgAdded.format(name)
                 act(done, { Rpcs3Bridge.rpcnAddFriend(name) }) { newFriend = "" }
             }
+            val nameLabel = str("rpcn.friends.username")
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // A pad cannot type into the field itself: A opens the controller keyboard for it
                 OutlinedTextField(
                     value = newFriend,
                     onValueChange = { newFriend = it },
-                    label = { Text(str("rpcn.friends.username")) },
+                    label = { Text(nameLabel) },
                     singleLine = true,
                     enabled = !busy,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).controllerFocusable(
+                        "$controllerIdPrefix.name",
+                        onConfirm = { if (!busy) LibraryKeyboard.open(newFriend, { newFriend = it }, nameLabel) },
+                    ),
                 )
                 TextButton(
                     enabled = !busy,

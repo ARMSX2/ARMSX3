@@ -16,6 +16,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,7 @@ import com.armsx2.ui.common.ArmsBackdrop
 import com.armsx2.ui.common.ArmsTopBar
 import com.armsx2.ui.common.GlassPanel
 import com.armsx2.ui.common.RoundAction
+import kotlinx.coroutines.delay
 
 /** PSN status as Settings stores it: off, simulated, RPCN. */
 private const val PsnRpcn = 2
@@ -62,15 +64,32 @@ fun RpcnScreen(onBack: () -> Unit) {
         psnStatus = PsnRpcn
     }
 
+    val scroll = rememberScrollState()
+    // The pad brings each control into view, and the first one's card begins above it: back up at
+    // the first control, the page goes back to its top
+    val selected = SettingsControllerNav.currentSelectedId()
+    LaunchedEffect(selected) {
+        if (selected == "rpcn.off.turnOn" || selected == "rpcn.profile.avatar") {
+            // After the control's own bring-into-view, which would otherwise have the last word
+            delay(150)
+            scroll.animateScrollTo(0)
+        }
+    }
+
     ArmsBackdrop {
         Box(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            // The bar stays put above the page, so it is never scrolled away out of the pad's reach
+            Column(Modifier.fillMaxSize()) {
                 ArmsTopBar(
                     title = str("rpcn.screen.title"),
                     leading = { RoundAction("←", str("action.back"), onClick = onBack) },
                 )
                 Column(
-                    Modifier.fillMaxWidth().padding(horizontal = 8.dp).padding(bottom = 16.dp),
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll)
+                        .padding(horizontal = 8.dp)
+                        .padding(bottom = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     if (psnStatus != PsnRpcn) {

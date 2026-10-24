@@ -1353,7 +1353,7 @@ val EN: Map<String, String> = mapOf(
         "Show CPU, GPU and battery temperature on the performance overlay. Not every device exposes these \u2014 one that doesn't simply shows nothing.",
     "overlay.tempInterval.label" to "Temperature poll interval",
     "rpcn.friends.title" to "Friends",
-    "rpcn.friends.username" to "PSN username",
+    "rpcn.friends.username" to "RPCN username",
     "rpcn.friends.add" to "Add",
     "rpcn.friends.remove" to "Remove",
     "rpcn.friends.working" to "Working\u2026",

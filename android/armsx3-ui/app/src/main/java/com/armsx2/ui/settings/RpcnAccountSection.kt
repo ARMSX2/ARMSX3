@@ -36,6 +36,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -53,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.armsx2.i18n.str
 import com.armsx2.ui.common.GlassPanel
+import com.armsx2.ui.common.PadInput
 import com.armsx2.ui.home.LibraryKeyboard
 import com.armsx3.Rpcs3Bridge
 import kotlinx.coroutines.Dispatchers
@@ -205,9 +207,39 @@ fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null, advanced: Bool
         }
     }
 
+    // A new step swaps the card under the pad's selection, and a selection whose control goes falls
+    // to the top of the page. So with the pad driving it lets go first and lands on the new card.
+    var restoreTo by remember { mutableStateOf<List<String>?>(null) }
+    LaunchedEffect(restoreTo) {
+        val targets = restoreTo ?: return@LaunchedEffect
+        var attempts = 0
+        while (targets.none { SettingsControllerNav.selectById(it) } && attempts < 10) {
+            attempts++
+            withFrameNanos {}
+        }
+        restoreTo = null
+    }
+
+    /** With the pad driving, select the first of [ids] that is on screen once this change is. */
+    fun landOn(vararg ids: String) {
+        if (PadInput.active.value) {
+            SettingsControllerNav.clearSelection()
+            restoreTo = ids.toList()
+        }
+    }
+
+    fun switchTo(next: Step) {
+        when (next) {
+            Step.Profile -> landOn("rpcn.profile.check")
+            Step.Activate -> landOn("rpcn.field.username", "rpcn.field.code")
+            else -> landOn("rpcn.field.username")
+        }
+        step = next
+    }
+
     fun go(next: Step) {
         notice = null
-        step = next
+        switchTo(next)
     }
 
     fun signIn(token: String = "") {
@@ -217,7 +249,7 @@ fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null, advanced: Bool
             else -> run(msgSignedIn, onOk = {
                 password = ""
                 code = ""
-                step = Step.Profile
+                switchTo(Step.Profile)
             }) { Rpcs3Bridge.rpcnSignIn(host.trim(), username.trim(), password, token.trim()) }
         }
     }
@@ -274,7 +306,7 @@ fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null, advanced: Bool
                         username.isBlank() -> notice = AccountNotice(msgNeedUsername, error = true)
                         password.isEmpty() -> notice = AccountNotice(msgNeedPassword, error = true)
                         email.isBlank() -> notice = AccountNotice(msgNeedEmail, error = true)
-                        else -> run(msgCreated, onOk = { step = Step.Activate }) {
+                        else -> run(msgCreated, onOk = { switchTo(Step.Activate) }) {
                             Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
                             Rpcs3Bridge.rpcnCreateAccount(username.trim(), password, username.trim(), email.trim())
                         }
@@ -319,7 +351,7 @@ fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null, advanced: Bool
                     when {
                         username.isBlank() -> notice = AccountNotice(msgNeedUsername, error = true)
                         email.isBlank() -> notice = AccountNotice(msgNeedEmail, error = true)
-                        else -> run(msgResetSent, onOk = { step = Step.ResetCode }) {
+                        else -> run(msgResetSent, onOk = { switchTo(Step.ResetCode) }) {
                             Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
                             Rpcs3Bridge.rpcnSendResetToken(username.trim(), email.trim())
                         }
@@ -345,7 +377,7 @@ fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null, advanced: Bool
                         else -> run(msgSignedIn, onOk = {
                             password = ""
                             code = ""
-                            step = Step.Profile
+                            switchTo(Step.Profile)
                         }) {
                             Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
                             Rpcs3Bridge.rpcnResetPassword(username.trim(), code.trim(), password).ifBlank {
@@ -380,6 +412,7 @@ fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null, advanced: Bool
                         serverNotice = AccountNotice(msgHostSelected, error = false)
                     },
                     onRemove = if (official) null else ({
+                        landOn("rpcn.hosts.add")
                         scope.launch {
                             val message = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnDelHost(desc, addr) }
                             serverNotice = if (message.isBlank()) AccountNotice(msgHostRemoved, error = false) else AccountNotice(message, error = true)
@@ -403,6 +436,7 @@ fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null, advanced: Bool
                                 val message = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnAddHost(name, addr) }
                                 if (message.isBlank()) {
                                     serverNotice = AccountNotice(msgHostAdded, error = false)
+                                    landOn("rpcn.hosts.add")
                                     addingServer = false
                                     serverName = ""
                                     serverAddress = ""
@@ -413,11 +447,17 @@ fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null, advanced: Bool
                             }
                         }
                     }
-                    SecondaryAction("rpcn.hosts.cancel", str("action.cancel"), !busy) { addingServer = false }
+                    SecondaryAction("rpcn.hosts.cancel", str("action.cancel"), !busy) {
+                        landOn("rpcn.hosts.add")
+                        addingServer = false
+                    }
                 }
             } else {
                 LinkRow {
-                    LinkAction("rpcn.hosts.add", str("rpcn.hosts.add"), !busy) { addingServer = true }
+                    LinkAction("rpcn.hosts.add", str("rpcn.hosts.add"), !busy) {
+                        landOn("rpcn.field.serverName")
+                        addingServer = true
+                    }
                     LinkAction("rpcn.hosts.reset", str("rpcn.hosts.reset"), !busy) {
                         scope.launch {
                             withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnResetHosts() }

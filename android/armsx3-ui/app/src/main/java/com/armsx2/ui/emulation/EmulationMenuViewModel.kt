@@ -428,6 +428,10 @@ object EmulationMenuInputController {
     // is on top visually, so it has to be on top for input too.
     var overlayDismiss: (() -> Unit)? = null
 
+    // Set with overlayDismiss by a panel that scrolls (the toy portals): Up or Down with no control
+    // left that way scrolls it to that end instead, so the lines under the last control can be read
+    var overlayEdgeScroll: ((Int) -> Unit)? = null
+
     fun bind(viewModel: EmulationMenuViewModel) {
         owner = viewModel
         viewModel.load(pendingTab)
@@ -461,7 +465,7 @@ object EmulationMenuInputController {
         // A panel is over the menu: everything is registry nav, there is no tab column to walk.
         if (overlayDismiss != null) {
             when {
-                dy != 0 -> nav.moveSpatial(0, dy)
+                dy != 0 -> if (!nav.moveSpatial(0, dy)) overlayEdgeScroll?.invoke(dy)
                 dx != 0 -> if (!nav.adjust(dx)) nav.moveSpatial(dx, 0)
             }
             return true
