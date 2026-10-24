@@ -100,6 +100,7 @@ extern std::pair<shared_ptr<lv2_overlay>, CellError> ppu_load_overlay(const ppu_
 extern bool ppu_load_rel_exec(const ppu_rel_object&);
 
 extern void send_close_home_menu_cmds();
+extern bool savedata_commit_by_copy(const std::string& from, const std::string& to); // ARMSX3, cellSaveData.cpp
 
 extern void signal_system_cache_can_stay();
 
@@ -926,22 +927,17 @@ void Emulator::Init()
 
 			if (fs::is_dir(pending))
 			{
-				// Finalize interrupted saving
-				if (!fs::rename(pending, save_path + desired, false))
+				// Finalize interrupted saving. Android storage can refuse the rename outright (errno
+				// 1, EPERM) on every launch, so the save is copied into place instead, as
+				// savedata_op does when the same rename fails mid-save (cellSaveData.cpp).
+				if (const fs::error rename_error = fs::rename(pending, save_path + desired, false) ? fs::error::ok : fs::g_tls_error;
+					rename_error != fs::error::ok && !savedata_commit_by_copy(pending, save_path + desired))
 				{
-					// Not fatal, and saying so was actively misleading: the loop continues, the
-					// emulator starts, and only this one save is left half-finished. Reported as a
-					// crash on Android because a fatal line in logcat reads like one.
-					//
-					// It is also permanent when it happens here rather than transient. Android
-					// storage can refuse a directory rename outright -- errno 1, EPERM -- and
-					// nothing about starting the emulator again changes that, so this fires on
-					// every launch and looks like a fault that is getting worse. The message says
-					// what to do instead of repeating an alarm.
+					// Not fatal: the loop continues, the emulator starts, and only this one save is
+					// left unfinished. The .working_ folder holds the newest copy of it, so the
+					// message does not suggest deleting that.
 					sys_log.error("Could not finish an interrupted save: %s (%s). The game will "
-						"start; that one save is left as it was. If this repeats every launch, "
-						"delete the .working_ and .backup_ folders for it under "
-						"dev_hdd0/home/%s/savedata/.", pending, fs::g_tls_error, m_usr);
+						"start; the newest copy of that save is still in that folder.", pending, rename_error);
 					continue;
 				}
 

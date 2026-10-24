@@ -713,6 +713,54 @@ static s32 savedata_check_args(u32 operation, u32 version, vm::cptr<char> dirNam
 	return CELL_OK;
 }
 
+// ARMSX3: puts a finished save in place when its working folder cannot be renamed there.
+//
+// Android's shared storage refuses some folder renames outright, with errno 1 (EPERM). A tester's
+// data folder under /storage/emulated/0 (Naruto: Ultimate Ninja Storm, Android 15, 2026-10-24)
+// let the old save be renamed to its hidden .backup_ name, then refused to rename the hidden
+// .working_ folder to the save's own name. That happened on every save, so none ever finished:
+// the save thread stopped on it and the game waited for it forever, and the newest save stayed
+// hidden in .working_, which reads as saves lost. Making folders and writing files there works,
+// so the save is copied into place file by file instead (save folders hold files only), and the
+// working folder goes once all of it is across. Through fs::file rather than fs::copy_file, which
+// does not handle a folder reached through the storage device (saf_device).
+bool savedata_commit_by_copy(const std::string& from, const std::string& to)
+{
+	const std::string src = from.ends_with('/') ? from : from + '/';
+	const std::string dst = to.ends_with('/') ? to : to + '/';
+
+	if (!fs::create_dir(dst) && fs::g_tls_error != fs::error::exist)
+	{
+		return false;
+	}
+
+	for (const auto& entry : fs::dir(src))
+	{
+		if (entry.name == "." || entry.name == "..")
+		{
+			continue;
+		}
+
+		if (entry.is_directory)
+		{
+			return false;
+		}
+
+		const fs::file file(src + entry.name);
+
+		if (!file || !fs::write_file(dst + entry.name, fs::rewrite, file.to_vector<u8>()))
+		{
+			return false;
+		}
+
+		fs::utime(dst + entry.name, entry.atime, entry.mtime);
+	}
+
+	fs::sync(dst);
+	fs::remove_all(src);
+	return true;
+}
+
 static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 version, vm::cptr<char> dirName,
 	u32 errDialog, PSetList setList, PSetBuf setBuf, PFuncList funcList, PFuncFixed funcFixed, PFuncStat funcStat,
 	PFuncFile funcFile, u32 container, u32 unk_op_flags /*TODO*/, vm::ptr<void> userdata, u32 userId, PFuncDone funcDone)
@@ -2213,8 +2261,16 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 		// Commit new savedata
 		if (!vfs::host::rename(new_path, dir_path, &g_mp_sys_dev_hdd0, false))
 		{
-			// TODO: handle the case when only commit failed at the next save load
-			fmt::throw_exception("Failed to move directory %s (%s)", new_path, fs::g_tls_error);
+			// ARMSX3: storage that refuses the rename gets the save copied into place instead
+			const fs::error rename_error = fs::g_tls_error;
+
+			if (!savedata_commit_by_copy(new_path, dir_path))
+			{
+				// TODO: handle the case when only commit failed at the next save load
+				fmt::throw_exception("Failed to move directory %s (%s)", new_path, rename_error);
+			}
+
+			cellSaveData.warning("savedata_op(): Could not rename %s into place (%s), copied it instead", new_path, rename_error);
 		}
 
 		// Remove backup again (TODO: may be changed to persistent backup implementation)
