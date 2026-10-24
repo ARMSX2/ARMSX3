@@ -1079,7 +1079,19 @@ object ConfigStore {
      * ([previous]), or by already being pinned — and only [clearOverrides] unpins it.
      */
     fun save(scope: SettingsScope, serial: String?, updated: Settings, previous: Settings? = null) {
-        if (scope == SettingsScope.Game && serial != null) {
+        if (scope == SettingsScope.Game && serial != null && previous != null) {
+            // The caller says what it changed: store that, and keep the overrides already there.
+            //
+            // `updated` is the caller's whole copy of the settings, and the in-game menu takes its
+            // copy when it opens. Anything changed in global Settings after that (UPnP, turned on
+            // while Arkham Origins was running) still has its old value in the copy, so comparing
+            // the copy with global, as below, stored that old value as the game's own, and it beat
+            // global from then on. Only what this save changed belongs to the game.
+            val overrides = loadOverrides(serial)?.let { JSONObject(it.toString()) } ?: JSONObject()
+            val changed = Settings.diff(previous, updated)
+            changed.keys().forEach { key -> overrides.put(key, changed.get(key)) }
+            saveOverrides(serial, overrides)
+        } else if (scope == SettingsScope.Game && serial != null) {
             val global = loadGlobal()
             val overrides = Settings.diff(global, updated)
             // Every field, so a pinned key can be given its CURRENT value even when that
