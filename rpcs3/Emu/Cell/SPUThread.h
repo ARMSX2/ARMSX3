@@ -698,12 +698,14 @@ public:
 	u32 mfc_barrier = -1;
 	u32 mfc_fence = -1;
 
+	// MFC shuffling: SPU instructions left before queued commands run (upstream's replacement for
+	// mfc_last_timestamp). ARMSX3: kept in that member's slot, so spu_thread's layout does not move.
+	u64 mfc_queued_ops_timeout = 0;
+
 	// MFC proxy command data
 	spu_mfc_cmd mfc_prxy_cmd{};
 	shared_mutex mfc_prxy_mtx;
 	atomic_t<u32> mfc_prxy_mask = 0;
-
-	u64 mfc_queued_ops_timeout = 0;
 
 	// Tracks writes to MFC proxy command data
 	union

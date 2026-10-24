@@ -246,6 +246,19 @@ object ConfigDatabase {
         // alone halves the frame rate (Odin 3, 10-14). The EU disc is the same game and was not tested.
         "BLUS30203" to "Core:\n  SPU MMIO Delay Enabled: true\n  SPU MMIO Delay: 300\n  Pause Game During SPU Compilation: true\nVideo:\n  Vulkan:\n    VRAM allocation limit (MB): 3072\n",
         "BLES00397" to "Core:\n  SPU MMIO Delay Enabled: true\n  SPU MMIO Delay: 300\n  Pause Game During SPU Compilation: true\nVideo:\n  Vulkan:\n    VRAM allocation limit (MB): 3072\n",
+        // Sonic Generations: MFC command shuffling at 1, upstream's "Delay Each Odd MFC Command"
+        // (elad335, RPCS3 #19873 + #19891: "stable and graphics are good with the MFC option").
+        // Without it the RSDX job system stops an SPU with STOP 0 after a while (RPCS3 issue #13072).
+        // Retail US/EU, the EU PSN release and the six demos. Off for every other game.
+        "BLUS30612" to "Core:\n  MFC Commands Shuffling Limit: 1\n",
+        "BLES01236" to "Core:\n  MFC Commands Shuffling Limit: 1\n",
+        "NPEB00813" to "Core:\n  MFC Commands Shuffling Limit: 1\n",
+        "NPEB90337" to "Core:\n  MFC Commands Shuffling Limit: 1\n",
+        "NPEB90343" to "Core:\n  MFC Commands Shuffling Limit: 1\n",
+        "NPHB00369" to "Core:\n  MFC Commands Shuffling Limit: 1\n",
+        "NPHB00446" to "Core:\n  MFC Commands Shuffling Limit: 1\n",
+        "NPUB90567" to "Core:\n  MFC Commands Shuffling Limit: 1\n",
+        "NPUB90604" to "Core:\n  MFC Commands Shuffling Limit: 1\n",
 
     )
 

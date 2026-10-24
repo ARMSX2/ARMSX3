@@ -1847,9 +1847,11 @@ spu_runtime::spu_runtime()
 		const u32 xfloat = static_cast<u32>(g_cfg.core.spu_xfloat_accuracy.get());
 		const u32 block_size = static_cast<u32>(g_cfg.core.spu_block_size.get());
 		const u32 clocks_scale = static_cast<u32>(g_cfg.core.clocks_scale.get()); // gates the RdDec fast path
+		const u32 mfc_shuffling = static_cast<u32>(g_cfg.core.mfc_transfers_shuffling.get()); // MFC shuffle checks and queue limit
 		fold(xfloat);
 		fold(block_size);
 		fold(clocks_scale);
+		fold(mfc_shuffling);
 
 		const u32 flags =
 			(static_cast<u32>(g_cfg.core.use_accurate_dfma.get())         << 0) |

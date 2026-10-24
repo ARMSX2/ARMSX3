@@ -6296,7 +6296,9 @@ bool spu_thread::process_mfc_cmd()
 				}
 			}
 
-			if (g_cfg.core.mfc_transfers_shuffling < mfc_size + 1)
+			// ARMSX3: only with shuffling on. Upstream drains here with it off too, whenever a command
+			// has to wait (do_dma_check failed), which moves every game's DMA timing; off stays as it was.
+			if (g_cfg.core.mfc_transfers_shuffling && g_cfg.core.mfc_transfers_shuffling < mfc_size + 1)
 			{
 				// Cannot be postponed anymore
 				do_mfc_now = true;
