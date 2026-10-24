@@ -171,7 +171,11 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
     val portalScroll = rememberScrollState()
     DisposableEffect(portalOpen) {
         if (!portalOpen) return@DisposableEffect onDispose {}
-        EmulationMenuInputController.overlayDismiss = { portalOpen = false }
+        // A spot's chooser or the figure maker in the panel steps back first
+        EmulationMenuInputController.overlayDismiss = {
+            val back = ToyPortalBack.handler
+            if (back != null) back() else portalOpen = false
+        }
         EmulationMenuInputController.overlayEdgeScroll = { dy ->
             scope.launch { portalScroll.animateScrollTo(if (dy > 0) portalScroll.maxValue else 0) }
         }

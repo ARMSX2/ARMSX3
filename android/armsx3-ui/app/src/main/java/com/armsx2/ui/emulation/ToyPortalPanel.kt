@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -38,12 +37,15 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -74,9 +76,12 @@ import com.armsx2.input.ToyPortals
 import com.armsx2.input.UsbPassthrough
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.common.FileBrowserDialog
+import com.armsx2.ui.common.PadInput
 import com.armsx2.ui.common.canBrowse
 import com.armsx2.ui.home.LibraryKeyboard
+import com.armsx2.ui.settings.SettingsControllerNav
 import com.armsx2.ui.settings.controllerFocusable
+import java.io.File
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlinx.coroutines.Dispatchers
@@ -86,9 +91,11 @@ import kotlinx.coroutines.withContext
 /**
  * The emulated toy portals, in the in-game menu: Skylanders, Disney Infinity and LEGO Dimensions.
  *
- * Every tab reads the same way: Create figure and Add figure files at the top, then the portal itself,
- * drawn with what stands on each of its spots, then the player's figures. Select a spot to lift its
- * figure off or, on the Infinity base and the LEGO toy pad, to choose where the next figure goes.
+ * Every tab works the same way. Create figure and Add figure files sit at the top, then the portal
+ * itself, drawn with what stands on each spot: a figure's name where one stands, a + where one can go.
+ * Selecting a spot opens a chooser for it (SpotPicker): what stands there now, with Lift off, then the
+ * player's figures, each to put there, or to move there from another spot. B steps back out of the
+ * chooser before it closes the panel (ToyPortalBack).
  *
  * The game sees each change at once, as a toy set down or lifted, and carries on underneath the menu.
  * With a real portal of that kind passed through (UsbPassthrough) the game is not looking at this one,
@@ -144,143 +151,318 @@ fun ToyPortalPanel(modifier: Modifier = Modifier) {
     }
 }
 
-/** A line under the lists: what the last action did, or what went wrong with it. */
+/** A line under the portal or a chooser: what the last action did, or what went wrong with it. */
 private class Note(val text: String, val error: Boolean = true)
 
-/** Skylanders: the portal finds a spot for each figure itself, up to 8. */
-@Composable
-private fun SkylanderContent() {
-    // Read when the tab opens, so files copied in meanwhile show up, and again after adding some
-    var figures by remember { mutableStateOf(SkylanderPortal.figures()) }
-    val folder = remember { SkylanderPortal.folder().absolutePath }
-    var notes by remember { mutableStateOf(emptyList<Note>()) }
-    var creating by remember { mutableStateOf(false) }
-    var selected by remember { mutableStateOf<Int?>(null) }
-    val scope = rememberCoroutineScope()
-    val fullText = str("portal.full")
-    val notFigureText = str("portal.notFigure")
-    val createdText = str("portal.create.done")
-    val createFailedText = str("portal.create.failed")
-    val addFigures = rememberFigureAdder(SkylanderPortal.extensions, SkylanderPortal::add) {
-        figures = SkylanderPortal.figures()
-        notes = it
-    }
-
-    if (creating) {
-        CreatorContent(
-            remember { SkylanderPortal.characters() },
-            { it.name },
-            note = str("portal.create.senseis"),
-            onBack = { creating = false },
-        ) { character ->
-            scope.launch {
-                val made = withContext(Dispatchers.IO) { SkylanderPortal.create(character) }
-                figures = SkylanderPortal.figures()
-                notes = listOf(
-                    if (made != null) Note(createdText.format(made.substringBeforeLast('.')), error = false)
-                    else Note(createFailedText.format(character.name))
-                )
-                creating = false
-            }
-        }
-        return
-    }
-
-    ActionsRow(onCreate = { creating = true }, onAdd = addFigures)
-
-    SkylanderStage(SkylanderPortal.placed, selected) { selected = it }
-
-    val spot = selected
-    SpotBar(
-        name = spot?.let { str("portal.skylanders.spot").format(it + 1) },
-        figure = spot?.let { SkylanderPortal.placed[it] },
-        hint = str("portal.hint.skylanders"),
-    ) {
-        if (spot != null) SkylanderPortal.lift(spot)
-        notes = emptyList()
-    }
-
-    Header(str("portal.figures"))
-
-    for (file in figures) {
-        val onPortal = file.name in SkylanderPortal.placed.values
-        FigureRow(file.nameWithoutExtension, str(if (onPortal) "portal.onIt" else "portal.place"), "portal.place.${file.name}", enabled = !onPortal) {
-            notes = when (SkylanderPortal.place(file)) {
-                SkylanderPortal.Result.Placed -> emptyList()
-                SkylanderPortal.Result.Full -> listOf(Note(fullText))
-                SkylanderPortal.Result.NotAFigure -> listOf(Note(notFigureText.format(file.name)))
-            }
-        }
-    }
-
-    Footer(figures.isEmpty(), folder, notes)
+/**
+ * What the in-game menu's B asks first while the portal panel is up: a chooser or the figure maker to
+ * step back out of. Null on the panel's main view, where B closes the panel.
+ */
+object ToyPortalBack {
+    var handler: (() -> Unit)? = null
 }
 
-/** Disney Infinity and LEGO Dimensions: select a spot on the drawing, then the figure to put there. */
+/** Where a figure went, or why it did not. */
+private sealed interface Placing {
+    class On(val position: Int) : Placing
+    class Refused(val why: String) : Placing
+}
+
+/** One portal as the panel works it, so all three go through the same flow ([PortalFlow]). */
+private class PortalSpec(
+    val key: Any,
+    val placed: Map<Int, String>,
+    val figures: () -> List<File>,
+    val folder: String,
+    val extensions: Set<String>,
+    val add: (List<ToyPortals.Offered>) -> ToyPortals.Added,
+    val characters: () -> List<ToyPortals.Character>,
+    val label: (ToyPortals.Character) -> String,
+    val creatorNote: String?,
+    val create: (ToyPortals.Character) -> String?,
+    /** Whether figures stand on spots the player picks. The Skylanders portal picks its own. */
+    val positional: Boolean,
+    /** The chooser's title, for a spot. */
+    val pickTitle: (Int) -> String,
+    /** Where a figure stands, as the chooser says it ("On Player 2"). */
+    val whereLabel: (Int) -> String,
+    /** What to say once a figure, by name, stands on a spot. */
+    val placedNote: (String, Int) -> String,
+    /** Puts a figure on a spot, off any other spot of this portal first. */
+    val place: (Int, File) -> Placing,
+    val lift: (Int) -> Unit,
+    val hint: String,
+)
+
+/** Skylanders: the portal sets each figure down where it last stood, or in the first free place, up to 8. */
+@Composable
+private fun SkylanderContent() {
+    val pickTitle = str("portal.pick.portal")
+    val onPortal = str("portal.pick.onPortal")
+    val placedText = str("portal.placedOnPortal")
+    val fullText = str("portal.full")
+    val notFigureText = str("portal.notFigure")
+    val spec = PortalSpec(
+        key = SkylanderPortal,
+        placed = SkylanderPortal.placed,
+        figures = SkylanderPortal::figures,
+        folder = remember { SkylanderPortal.folder().absolutePath },
+        extensions = SkylanderPortal.extensions,
+        add = SkylanderPortal::add,
+        characters = SkylanderPortal::characters,
+        label = { it.name },
+        creatorNote = str("portal.create.senseis"),
+        create = SkylanderPortal::create,
+        positional = false,
+        pickTitle = { pickTitle },
+        whereLabel = { onPortal },
+        placedNote = { name, _ -> placedText.format(name) },
+        place = { _, file ->
+            when (SkylanderPortal.place(file)) {
+                SkylanderPortal.Result.Placed ->
+                    Placing.On(SkylanderPortal.placed.entries.firstOrNull { it.value == file.name }?.key ?: 0)
+                SkylanderPortal.Result.Full -> Placing.Refused(fullText)
+                SkylanderPortal.Result.NotAFigure -> Placing.Refused(notFigureText.format(file.name))
+            }
+        },
+        lift = SkylanderPortal::lift,
+        hint = str("portal.hint.skylanders"),
+    )
+    PortalFlow(spec) { onOpen -> SkylanderStage(SkylanderPortal.placed, onOpen) }
+}
+
+/** Disney Infinity and LEGO Dimensions: each figure stands on the spot the player picks for it. */
 @Composable
 private fun PositionContent(portal: PositionPortal) {
-    var figures by remember(portal) { mutableStateOf(portal.figures()) }
-    val folder = remember(portal) { portal.folder().absolutePath }
-    var selected by remember(portal) { mutableIntStateOf(portal.positions.first().first) }
-    var notes by remember(portal) { mutableStateOf(emptyList<Note>()) }
-    var creating by remember(portal) { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    val pickTitle = str("portal.pick.title")
+    val onText = str("portal.pick.on")
+    val placedText = str("portal.placedOn")
     val notFigureText = str("portal.notFigure")
-    val createdText = str("portal.create.done")
-    val createFailedText = str("portal.create.failed")
     val names = portal.positions.associate { (position, label) ->
         position to label.second.let { arg -> if (arg == null) str(label.first) else str(label.first).format(arg) }
     }
-    val addFigures = rememberFigureAdder(portal.extensions, portal::add) {
-        figures = portal.figures()
+    val spec = PortalSpec(
+        key = portal,
+        placed = portal.placed,
+        figures = portal::figures,
+        folder = remember(portal) { portal.folder().absolutePath },
+        extensions = portal.extensions,
+        add = portal::add,
+        characters = portal::characters,
+        label = portal::label,
+        creatorNote = null,
+        create = portal::create,
+        positional = true,
+        pickTitle = { pickTitle.format(names[it].orEmpty()) },
+        whereLabel = { onText.format(names[it].orEmpty()) },
+        placedNote = { name, position -> placedText.format(name, names[position].orEmpty()) },
+        place = { position, file ->
+            // Moved from another spot: off there first, as a toy is picked up and set down again
+            portal.placed.entries.firstOrNull { it.value == file.name }?.key?.let { if (it != position) portal.lift(it) }
+            if (portal.place(position, file)) Placing.On(position) else Placing.Refused(notFigureText.format(file.name))
+        },
+        lift = portal::lift,
+        hint = str("portal.hint.spots"),
+    )
+    PortalFlow(spec) { onOpen ->
+        if (portal === InfinityBase) InfinityStage(portal.placed, onOpen) else DimensionsStage(portal.placed, onOpen)
+    }
+}
+
+/**
+ * A portal's tab: the portal with its spots, a spot's chooser once one is selected, the figure maker
+ * when asked for. A figure made from a spot's chooser goes straight onto that spot.
+ */
+@Composable
+private fun PortalFlow(spec: PortalSpec, stage: @Composable (onOpen: (Int) -> Unit) -> Unit) {
+    // Read when the tab opens, so files copied in meanwhile show up, and again after adding or making some
+    var figures by remember(spec.key) { mutableStateOf(spec.figures()) }
+    var notes by remember(spec.key) { mutableStateOf(emptyList<Note>()) }
+    var picking by remember(spec.key) { mutableStateOf<Int?>(null) }
+    var creating by remember(spec.key) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val land = rememberPadLanding()
+    val liftedText = str("portal.liftedOff")
+    val createdText = str("portal.create.done")
+    val createFailedText = str("portal.create.failed")
+    val addFigures = rememberFigureAdder(spec.extensions, spec.add) {
+        figures = spec.figures()
         notes = it
     }
 
+    fun open(position: Int) {
+        notes = emptyList()
+        picking = position
+        // Lift off when something stands there, else the first figure that could go there
+        val free = figures.firstOrNull { it.name !in spec.placed.values }
+        land(listOfNotNull("portal.pick.lift".takeIf { spec.placed[position] != null }, free?.let { "portal.pick.${it.name}" }, "portal.create"))
+    }
+
+    /** Back to the portal, the pad on [position]'s spot. */
+    fun close(position: Int?) {
+        creating = false
+        picking = null
+        land(listOfNotNull(position?.let { "portal.spot.$it" }, "portal.create"))
+    }
+
+    fun put(position: Int, file: File) {
+        when (val result = spec.place(position, file)) {
+            is Placing.On -> {
+                close(result.position)
+                notes = listOf(Note(spec.placedNote(file.nameWithoutExtension, result.position), error = false))
+            }
+            is Placing.Refused -> notes = listOf(Note(result.why))
+        }
+    }
+
+    val startCreating = {
+        creating = true
+        land(listOf("portal.create.search"))
+    }
+    val stopCreating = {
+        creating = false
+        land(listOf("portal.create"))
+    }
+
+    val position = picking
+    DisposableEffect(spec.key, position, creating) {
+        ToyPortalBack.handler = when {
+            creating -> stopCreating
+            position != null -> ({ close(position) })
+            else -> null
+        }
+        onDispose { ToyPortalBack.handler = null }
+    }
+
     if (creating) {
-        CreatorContent(remember(portal) { portal.characters() }, portal::label, onBack = { creating = false }) { character ->
+        CreatorContent(remember(spec.key) { spec.characters() }, spec.label, spec.creatorNote, onBack = stopCreating) { character ->
             scope.launch {
-                val made = withContext(Dispatchers.IO) { portal.create(character) }
-                figures = portal.figures()
-                notes = listOf(
-                    if (made != null) Note(createdText.format(made.substringBeforeLast('.')), error = false)
-                    else Note(createFailedText.format(portal.label(character)))
-                )
-                creating = false
+                val made = withContext(Dispatchers.IO) { spec.create(character) }
+                figures = spec.figures()
+                val file = made?.let { name -> figures.firstOrNull { it.name == name } }
+                val target = picking
+                when {
+                    file == null -> {
+                        notes = listOf(Note(createFailedText.format(spec.label(character))))
+                        stopCreating()
+                    }
+                    // Made from a spot's chooser: onto that spot
+                    target != null -> {
+                        creating = false
+                        put(target, file)
+                        notes = listOf(Note(createdText.format(file.nameWithoutExtension), error = false)) + notes
+                    }
+                    else -> {
+                        notes = listOf(Note(createdText.format(file.nameWithoutExtension), error = false))
+                        stopCreating()
+                    }
+                }
             }
         }
         return
     }
 
-    ActionsRow(onCreate = { creating = true }, onAdd = addFigures)
-
-    if (portal === InfinityBase) {
-        InfinityStage(portal.placed, selected) { selected = it }
-    } else {
-        DimensionsStage(portal.placed, selected) { selected = it }
+    if (position != null) {
+        SpotPicker(
+            title = spec.pickTitle(position),
+            position = position,
+            figures = figures,
+            placed = spec.placed,
+            positional = spec.positional,
+            whereLabel = spec.whereLabel,
+            onLift = {
+                val name = spec.placed[position]?.substringBeforeLast('.')
+                spec.lift(position)
+                close(position)
+                notes = listOfNotNull(name?.let { Note(liftedText.format(it), error = false) })
+            },
+            onPlace = { put(position, it) },
+            onCreate = startCreating,
+            onAdd = addFigures,
+            onBack = { close(position) },
+        )
+        Footer(figures.isEmpty(), spec.folder, notes)
+        return
     }
 
-    SpotBar(
-        name = names[selected],
-        figure = portal.placed[selected],
-        hint = str("portal.hint.place").format(names[selected].orEmpty()),
-    ) {
-        portal.lift(selected)
-        notes = emptyList()
-    }
+    ActionsRow(onCreate = startCreating, onAdd = addFigures)
+    stage(::open)
+    Text(spec.hint, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Footer(figures.isEmpty(), spec.folder, notes)
+}
 
-    Header(str("portal.figures"))
+/**
+ * Choosing what stands on one spot: what is there now, with Lift off, then the player's figures, each to
+ * put there or, on the Infinity base and the LEGO toy pad, to move there from the spot it stands on.
+ */
+@Composable
+private fun SpotPicker(
+    title: String,
+    position: Int,
+    figures: List<File>,
+    placed: Map<Int, String>,
+    positional: Boolean,
+    whereLabel: (Int) -> String,
+    onLift: () -> Unit,
+    onPlace: (File) -> Unit,
+    onCreate: () -> Unit,
+    onAdd: () -> Unit,
+    onBack: () -> Unit,
+) {
+    val placeText = str("portal.place")
+    val hereText = str("portal.pick.here")
+    val moveText = str("portal.pick.move")
+    val current = placed[position]
 
-    for (file in figures) {
-        val onPortal = file.name in portal.placed.values
-        FigureRow(file.nameWithoutExtension, str(if (onPortal) "portal.onIt" else "portal.place"), "portal.place.${file.name}", enabled = !onPortal) {
-            notes = if (portal.place(selected, file)) emptyList() else listOf(Note(notFigureText.format(file.name)))
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        TextButton(onClick = onBack, modifier = Modifier.controllerFocusable("portal.pick.back", onConfirm = onBack)) {
+            Text(str("action.back"))
         }
     }
 
-    Footer(figures.isEmpty(), folder, notes)
+    if (current != null) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f))
+                .padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(str("portal.pick.current"), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    current.substringBeforeLast('.'),
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            OutlinedButton(onClick = onLift, modifier = Modifier.controllerFocusable("portal.pick.lift", onConfirm = onLift)) {
+                Text(str("portal.lift"))
+            }
+        }
+    }
+
+    ActionsRow(onCreate = onCreate, onAdd = onAdd)
+    Header(str("portal.figures"))
+
+    for (file in figures) {
+        val at = placed.entries.firstOrNull { it.value == file.name }?.key
+        val id = "portal.pick.${file.name}"
+        val name = file.nameWithoutExtension
+        when {
+            at == null -> FigureRow(name, placeText, id, enabled = true) { onPlace(file) }
+            !positional -> FigureRow(name, whereLabel(at), id, enabled = false)
+            at == position -> FigureRow(name, hereText, id, enabled = false)
+            else -> FigureRow(name, moveText, id, enabled = true, caption = whereLabel(at)) { onPlace(file) }
+        }
+    }
 }
 
-/** Create figure and Add figure files, at the top of every portal's tab. */
+/** Create figure and Add figure files, at the top of every portal's tab and every chooser. */
 @Composable
 private fun ActionsRow(onCreate: () -> Unit, onAdd: () -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -293,49 +475,66 @@ private fun ActionsRow(onCreate: () -> Unit, onAdd: () -> Unit) {
     }
 }
 
-/** Under the drawing: the selected spot and what stands on it, with Lift off, or what to do next. */
+/**
+ * Landing the pad's selection on a control once the view under it changes. A selection whose control
+ * goes falls to the top of the panel, so with the pad driving this lets go first, then selects the first
+ * of the given controls that is on screen.
+ */
 @Composable
-private fun SpotBar(name: String?, figure: String?, hint: String, onLift: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (name != null && figure != null) {
-            Column(Modifier.weight(1f)) {
-                Text(name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(
-                    figure.substringBeforeLast('.'),
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+private fun rememberPadLanding(): (List<String>) -> Unit {
+    var targets by remember { mutableStateOf<List<String>?>(null) }
+    LaunchedEffect(targets) {
+        val ids = targets ?: return@LaunchedEffect
+        var attempts = 0
+        while (ids.none { SettingsControllerNav.selectById(it) } && attempts < 10) {
+            attempts++
+            withFrameNanos {}
+        }
+        targets = null
+    }
+    return remember {
+        { ids: List<String> ->
+            if (PadInput.active.value) {
+                SettingsControllerNav.clearSelection()
+                targets = ids
             }
-            OutlinedButton(onClick = onLift, modifier = Modifier.controllerFocusable("portal.lift", onConfirm = onLift)) {
-                Text(str("portal.lift"))
-            }
-        } else {
-            Text(hint, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
 
+/** The spot the pad is on, while the pad drives. */
+@Composable
+private fun padSpot(): Int? =
+    SettingsControllerNav.currentSelectedId()
+        ?.takeIf { PadInput.active.value && it.startsWith("portal.spot.") }
+        ?.removePrefix("portal.spot.")
+        ?.toIntOrNull()
+
 /**
- * One spot on a drawn portal: the figure standing there, or what goes there when nothing does. A
- * figure set down lands with a small bounce, as it would on the real thing.
+ * One spot on a drawn portal: the figure standing there, or what can go there. A figure set down lands
+ * with a small bounce, as it would on the real thing. The pad's spot grows and fills, which shows on the
+ * light Infinity and LEGO pads too. [onOpen] null is a spot that takes nothing yet.
  */
 @Composable
 private fun Spot(
     position: Int,
     figure: String?,
     emptyLabel: String,
-    selected: Boolean,
-    onSelect: () -> Unit,
+    onOpen: (() -> Unit)?,
     modifier: Modifier = Modifier,
     height: Dp = 34.dp,
     big: Boolean = false,
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val shape = RoundedCornerShape(12.dp)
+    val id = "portal.spot.$position"
+    val padHere = onOpen != null && PadInput.active.value && SettingsControllerNav.currentSelectedId() == id
     val scale by animateFloatAsState(
-        if (figure != null) 1f else 0.94f,
+        when {
+            padHere -> 1.08f
+            figure != null -> 1f
+            else -> 0.94f
+        },
         spring(dampingRatio = Spring.DampingRatioMediumBouncy),
         label = "spot",
     )
@@ -349,22 +548,35 @@ private fun Spot(
                 scaleY = scale
             }
             .clip(shape)
-            .background(if (figure != null) accent.copy(alpha = 0.85f) else Color.Black.copy(alpha = 0.55f))
+            .background(
+                when {
+                    figure != null -> accent.copy(alpha = 0.85f)
+                    padHere -> accent.copy(alpha = 0.5f)
+                    onOpen == null -> Color.Black.copy(alpha = 0.3f)
+                    else -> Color.Black.copy(alpha = 0.55f)
+                }
+            )
             .border(
-                if (selected) 2.dp else 1.dp,
-                if (selected) Color.White else accent.copy(alpha = if (figure != null) 0.9f else 0.45f),
+                if (padHere) 2.5.dp else 1.dp,
+                if (padHere) Color.White else accent.copy(alpha = if (figure != null) 0.9f else 0.45f),
                 shape,
             )
-            .clickable(onClick = onSelect)
-            .controllerFocusable("portal.spot.$position", shape, onConfirm = onSelect)
+            .then(
+                if (onOpen != null) Modifier.clickable(onClick = onOpen).controllerFocusable(id, shape, onConfirm = onOpen)
+                else Modifier
+            )
             .padding(horizontal = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             figure?.substringBeforeLast('.') ?: emptyLabel,
             style = if (big) MaterialTheme.typography.bodyMedium else MaterialTheme.typography.bodySmall,
-            fontWeight = if (figure != null) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (figure != null) Color.White else Color.White.copy(alpha = 0.78f),
+            fontWeight = if (figure != null || padHere) FontWeight.SemiBold else FontWeight.Normal,
+            color = when {
+                figure != null || padHere -> Color.White
+                onOpen == null -> Color.White.copy(alpha = 0.45f)
+                else -> Color.White.copy(alpha = 0.85f)
+            },
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -374,10 +586,21 @@ private fun Spot(
 /** The Skylanders portal's dark plastic. */
 private val PortalBody = Color(0xFF15131F)
 
-/** Skylanders: the round portal in the middle, its eight spots four to a side. */
+/**
+ * Skylanders: the round portal in the middle, its eight places four to a side. The + sits on the first
+ * free place, where the portal sets the next figure down unless that figure stood elsewhere before.
+ */
 @Composable
-private fun SkylanderStage(placed: Map<Int, String>, selected: Int?, onSelect: (Int) -> Unit) {
+private fun SkylanderStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
     val empty = str("portal.emptyPosition")
+    val add = "+ " + str("portal.addFigure")
+    val next = (0..7).firstOrNull { placed[it] == null }
+
+    @Composable
+    fun place(slot: Int) {
+        val open = placed[slot] != null || slot == next
+        Spot(slot, placed[slot], if (slot == next) add else empty, if (open) ({ onOpen(slot) }) else null)
+    }
 
     Row(
         Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -385,11 +608,11 @@ private fun SkylanderStage(placed: Map<Int, String>, selected: Int?, onSelect: (
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (slot in 0..3) Spot(slot, placed[slot], empty, slot == selected, { onSelect(slot) })
+            for (slot in 0..3) place(slot)
         }
         SkylanderPortalArt(placed.size, Modifier.size(132.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            for (slot in 4..7) Spot(slot, placed[slot], empty, slot == selected, { onSelect(slot) })
+            for (slot in 4..7) place(slot)
         }
     }
 }
@@ -449,16 +672,40 @@ private fun SkylanderPortalArt(figures: Int, modifier: Modifier) {
 private fun Modifier.onArt(w: Dp, h: Dp, fx: Float, fy: Float, cw: Dp, ch: Dp) =
     offset(x = w * fx - cw / 2, y = h * fy - ch / 2).width(cw)
 
+/** A pad's name printed on the drawing, centred at ([fx], [fy]), dark on the light plastic. */
+@Composable
+private fun ArtCaption(text: String, w: Dp, h: Dp, fx: Float, fy: Float) {
+    val cw = w * 0.34f
+    Text(
+        text,
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        color = Color(0xFF454B54),
+        textAlign = TextAlign.Center,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.offset(x = w * fx - cw / 2, y = h * fy - 9.dp).width(cw),
+    )
+}
+
 /**
- * Disney Infinity, drawn as the base looks: the hexagon at the back for a play set or power disc and a
- * round pad either side at the front for each player's figure. The power discs that go under the
- * figures and the play set have their spots in a row beneath, under the pad they belong to.
+ * Disney Infinity, drawn as the base looks: the hexagon at the back for a play set or power disc, and
+ * each player's round pad at the front, named on the drawing. The power discs that go under the figures
+ * and the play set have their spots beneath, under the name of what they go with.
  */
 @Composable
-private fun InfinityStage(placed: Map<Int, String>, selected: Int, onSelect: (Int) -> Unit) {
+private fun InfinityStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
     val player = str("portal.infinity.player")
     val playset = str("portal.spot.playset")
-    val disc = str("portal.spot.disc")
+    val figure = "+ " + str("portal.spot.figure")
+    val disc = "+ " + str("portal.spot.disc")
+    // Positions are the core's (InfinityBase): 0 to 2 the hexagon, 3 to 5 Player 1, 6 to 8 Player 2
+    val pad = when (padSpot()) {
+        0, 1, 2 -> 0
+        3, 4, 5 -> 3
+        6, 7, 8 -> 6
+        else -> null
+    }
 
     Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
@@ -467,19 +714,28 @@ private fun InfinityStage(placed: Map<Int, String>, selected: Int, onSelect: (In
             val ch = 36.dp
 
             Box(Modifier.size(w, h)) {
-                // Positions are the core's (InfinityBase): 0 the hexagon, 3 Player 1's pad, 6 Player 2's
-                InfinityBaseArt(placed[0] != null, placed[3] != null, placed[6] != null, Modifier.fillMaxSize())
-                Spot(0, placed[0], playset, selected == 0, { onSelect(0) }, Modifier.onArt(w, h, 0.5f, 0.25f, w * 0.26f, ch), ch, big = true)
-                Spot(3, placed[3], player.format(1), selected == 3, { onSelect(3) }, Modifier.onArt(w, h, 0.29f, 0.7f, w * 0.28f, ch), ch, big = true)
-                Spot(6, placed[6], player.format(2), selected == 6, { onSelect(6) }, Modifier.onArt(w, h, 0.71f, 0.7f, w * 0.28f, ch), ch, big = true)
+                InfinityBaseArt(placed[0] != null, placed[3] != null, placed[6] != null, pad, Modifier.fillMaxSize())
+                ArtCaption(player.format(1), w, h, 0.29f, 0.565f)
+                ArtCaption(player.format(2), w, h, 0.71f, 0.565f)
+                Spot(0, placed[0], "+ $playset", { onOpen(0) }, Modifier.onArt(w, h, 0.5f, 0.25f, w * 0.26f, ch), ch, big = true)
+                Spot(3, placed[3], figure, { onOpen(3) }, Modifier.onArt(w, h, 0.29f, 0.7f, w * 0.28f, ch), ch, big = true)
+                Spot(6, placed[6], figure, { onOpen(6) }, Modifier.onArt(w, h, 0.71f, 0.7f, w * 0.28f, ch), ch, big = true)
             }
         }
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (column in listOf(listOf(4, 5), listOf(1, 2), listOf(7, 8))) {
+            for ((name, column) in listOf(player.format(1) to listOf(4, 5), playset to listOf(1, 2), player.format(2) to listOf(7, 8))) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        name,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 4.dp),
+                    )
                     for (position in column) {
-                        Spot(position, placed[position], disc, position == selected, { onSelect(position) }, height = 32.dp)
+                        Spot(position, placed[position], disc, { onOpen(position) }, height = 32.dp)
                     }
                 }
             }
@@ -489,11 +745,13 @@ private fun InfinityStage(placed: Map<Int, String>, selected: Int, onSelect: (In
 
 /**
  * The Infinity base: frosted white plastic under a grey band, the hexagon set into the band, the two
- * round pads in front. A pad glows while something stands on it, as the real one lights up.
+ * round pads in front. A pad glows while something stands on it, as the real one lights up, and the one
+ * the pad's selection is on ([focus]: 0 the hexagon, 3 Player 1's, 6 Player 2's) is ringed.
  */
 @Composable
-private fun InfinityBaseArt(hexagon: Boolean, player1: Boolean, player2: Boolean, modifier: Modifier) {
+private fun InfinityBaseArt(hexagon: Boolean, player1: Boolean, player2: Boolean, focus: Int?, modifier: Modifier) {
     val glow = Color(0xFF7FD0FF)
+    val accent = MaterialTheme.colorScheme.primary
     val breathing = rememberInfiniteTransition(label = "infinity")
     val pulse by breathing.animateFloat(0.6f, 1f, infiniteRepeatable(tween(1800), RepeatMode.Reverse), label = "pulse")
     val hexLit by animateFloatAsState(if (hexagon) 1f else 0f, tween(400), label = "hexagon")
@@ -525,36 +783,49 @@ private fun InfinityBaseArt(hexagon: Boolean, player1: Boolean, player2: Boolean
         // The hexagon, points to the sides as on the base
         val r = w * 0.14f
         val hexCentre = Offset(w * 0.5f, h * 0.25f)
-        val hex = Path().apply {
+        fun hexPath(radius: Float) = Path().apply {
             for (i in 0 until 6) {
                 val a = Math.toRadians(60.0 * i).toFloat()
-                val point = Offset(hexCentre.x + r * cos(a), hexCentre.y + r * sin(a))
+                val point = Offset(hexCentre.x + radius * cos(a), hexCentre.y + radius * sin(a))
                 if (i == 0) moveTo(point.x, point.y) else lineTo(point.x, point.y)
             }
             close()
         }
+        val hex = hexPath(r)
         drawPath(hex, Color(0xFFF8F9FB))
         drawPath(hex, Brush.radialGradient(listOf(glow.copy(alpha = 0.9f * pulse * hexLit), Color.Transparent), hexCentre, r * 1.1f))
         drawPath(hex, lerp(Color(0xFF7D838B), glow, hexLit), style = Stroke(2.5.dp.toPx()))
+        if (focus == 0) drawPath(hexPath(r + 5.dp.toPx()), accent.copy(alpha = pulse), style = Stroke(4.dp.toPx()))
 
         // The round pads
-        for ((x, lit) in listOf(0.29f to leftLit, 0.71f to rightLit)) {
+        for ((spot, x, lit) in listOf(Triple(3, 0.29f, leftLit), Triple(6, 0.71f, rightLit))) {
             val centre = Offset(w * x, h * 0.7f)
             val radius = w * 0.15f
             drawCircle(Color(0xFFF4F6F9), radius, centre)
             drawCircle(Brush.radialGradient(listOf(glow.copy(alpha = 0.9f * pulse * lit), Color.Transparent), centre, radius), radius, centre)
             drawCircle(lerp(Color(0xFFB4BBC4), glow, lit), radius, centre, style = Stroke(2.5.dp.toPx()))
+            if (focus == spot) drawCircle(accent.copy(alpha = pulse), radius + 5.dp.toPx(), centre, style = Stroke(4.dp.toPx()))
         }
     }
 }
 
 /**
  * LEGO Dimensions, drawn as the toy pad looks: the round centre pad at the top, the left and right pads
- * below it either side, each lit in a colour that slowly changes as the real one is.
+ * below it either side, named on the drawing and each lit in a colour that slowly changes as the real
+ * one is.
  */
 @Composable
-private fun DimensionsStage(placed: Map<Int, String>, selected: Int, onSelect: (Int) -> Unit) {
-    val toy = str("portal.spot.toy")
+private fun DimensionsStage(placed: Map<Int, String>, onOpen: (Int) -> Unit) {
+    val toy = "+ " + str("portal.spot.toy")
+    // Positions are the core's (DimensionsToyPad): 1 the centre, 0, 3 and 4 the left, 2, 5 and 6 the right
+    val left = listOf(0, 3, 4)
+    val right = listOf(2, 5, 6)
+    val pad = when (padSpot()) {
+        1 -> 1
+        in left -> 0
+        in right -> 2
+        else -> null
+    }
 
     BoxWithConstraints(Modifier.fillMaxWidth().padding(vertical = 4.dp), contentAlignment = Alignment.TopCenter) {
         val w = minOf(maxWidth, 460.dp)
@@ -562,19 +833,19 @@ private fun DimensionsStage(placed: Map<Int, String>, selected: Int, onSelect: (
         val ch = minOf(30.dp, h * 0.1f)
 
         Box(Modifier.size(w, h)) {
-            // Positions are the core's (DimensionsToyPad): 1 the centre, 0, 3 and 4 the left, 2, 5 and 6 the right
-            val left = listOf(0, 3, 4)
-            val right = listOf(2, 5, 6)
             ToyPadArt(
                 centre = placed[1] != null,
                 left = left.count { placed[it] != null } / 3f,
                 right = right.count { placed[it] != null } / 3f,
+                focus = pad,
                 modifier = Modifier.fillMaxSize(),
             )
-            Spot(1, placed[1], toy, selected == 1, { onSelect(1) }, Modifier.onArt(w, h, 0.5f, 0.36f, w * 0.24f, 36.dp), 36.dp, big = true)
+            ArtCaption(str("portal.dimensions.leftPad"), w, h, 0.2f, 0.43f)
+            ArtCaption(str("portal.dimensions.rightPad"), w, h, 0.8f, 0.43f)
+            Spot(1, placed[1], toy, { onOpen(1) }, Modifier.onArt(w, h, 0.5f, 0.36f, w * 0.24f, 36.dp), 36.dp, big = true)
             for ((row, fy) in listOf(0.64f, 0.755f, 0.87f).withIndex()) {
-                Spot(left[row], placed[left[row]], toy, selected == left[row], { onSelect(left[row]) }, Modifier.onArt(w, h, 0.265f, fy, w * 0.36f, ch), ch)
-                Spot(right[row], placed[right[row]], toy, selected == right[row], { onSelect(right[row]) }, Modifier.onArt(w, h, 0.735f, fy, w * 0.36f, ch), ch)
+                Spot(left[row], placed[left[row]], toy, { onOpen(left[row]) }, Modifier.onArt(w, h, 0.265f, fy, w * 0.36f, ch), ch)
+                Spot(right[row], placed[right[row]], toy, { onOpen(right[row]) }, Modifier.onArt(w, h, 0.735f, fy, w * 0.36f, ch), ch)
             }
         }
     }
@@ -583,12 +854,14 @@ private fun DimensionsStage(placed: Map<Int, String>, selected: Int, onSelect: (
 /**
  * The LEGO toy pad: a dark grey slab with a brick stud plate in each top corner, the round centre pad,
  * and the two side pads, each an L that runs up beside the centre one. A pad glows more the more toys
- * stand on it.
+ * stand on it, and the one the pad's selection is on ([focus]: 0 left, 1 centre, 2 right) is ringed.
  */
 @Composable
-private fun ToyPadArt(centre: Boolean, left: Float, right: Float, modifier: Modifier) {
+private fun ToyPadArt(centre: Boolean, left: Float, right: Float, focus: Int?, modifier: Modifier) {
+    val accent = MaterialTheme.colorScheme.primary
     val cycling = rememberInfiniteTransition(label = "toypad")
     val hue by cycling.animateFloat(0f, 360f, infiniteRepeatable(tween(9000, easing = LinearEasing)), label = "hue")
+    val pulse by cycling.animateFloat(0.6f, 1f, infiniteRepeatable(tween(1800), RepeatMode.Reverse), label = "pulse")
     val centreLit by animateFloatAsState(if (centre) 1f else 0.25f, tween(400), label = "centre")
     val leftLit by animateFloatAsState(0.25f + 0.75f * left, tween(400), label = "left")
     val rightLit by animateFloatAsState(0.25f + 0.75f * right, tween(400), label = "right")
@@ -622,7 +895,7 @@ private fun ToyPadArt(centre: Boolean, left: Float, right: Float, modifier: Modi
         }
 
         // The side pads: up beside the centre pad, then the full half below it
-        for ((side, lit, offset) in listOf(Triple(0, leftLit, 0f), Triple(1, rightLit, 240f))) {
+        for ((side, lit, offset) in listOf(Triple(0, leftLit, 0f), Triple(2, rightLit, 240f))) {
             val m = if (side == 0) { x: Float -> x } else { x: Float -> 1f - x }
             val zone = path(
                 m(0.06f) to 0.3f, m(0.34f) to 0.3f, m(0.34f) to 0.56f, m(0.47f) to 0.56f,
@@ -631,6 +904,7 @@ private fun ToyPadArt(centre: Boolean, left: Float, right: Float, modifier: Modi
             val light = Color.hsv((hue + offset) % 360f, 0.55f, 1f)
             drawPath(zone, lerp(panel, light, 0.55f * lit))
             drawPath(zone, light.copy(alpha = 0.9f * lit), style = Stroke(2.5.dp.toPx()))
+            if (focus == side) drawPath(zone, accent.copy(alpha = pulse), style = Stroke(5.dp.toPx()))
         }
 
         // The centre pad, ringed
@@ -640,6 +914,7 @@ private fun ToyPadArt(centre: Boolean, left: Float, right: Float, modifier: Modi
         drawCircle(lerp(panel, light, 0.55f * centreLit), radius, c)
         drawCircle(Color.White.copy(alpha = 0.5f), radius * 0.72f, c, style = Stroke(2.dp.toPx()))
         drawCircle(light.copy(alpha = 0.9f * centreLit), radius, c, style = Stroke(2.5.dp.toPx()))
+        if (focus == 1) drawCircle(accent.copy(alpha = pulse), radius + 5.dp.toPx(), c, style = Stroke(4.dp.toPx()))
 
         // The red light at the front
         drawRoundRect(
@@ -870,15 +1145,21 @@ private fun Footer(noFigures: Boolean, folder: String, notes: List<Note>) {
 }
 
 @Composable
-private fun FigureRow(name: String, action: String, controllerId: String, enabled: Boolean, onClick: () -> Unit) {
+private fun FigureRow(
+    name: String,
+    action: String,
+    controllerId: String,
+    enabled: Boolean,
+    caption: String? = null,
+    onClick: () -> Unit = {},
+) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            name,
-            style = MaterialTheme.typography.bodyLarge,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        Column(Modifier.weight(1f)) {
+            Text(name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            caption?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+            }
+        }
         TextButton(
             onClick = onClick,
             enabled = enabled,
