@@ -1518,6 +1518,11 @@ object Rpcs3Bridge {
         runCatching { RPCSX.instance.usbSetPassthrough(fds) }
     }
 
+    /** Which real portals the running game's USB scan took: bits 1 Skylanders, 2 Infinity, 4 Dimensions. */
+    @JvmStatic
+    fun usbPassedThrough(): Int =
+        runCatching { RPCSX.instance.usbPassedThrough() }.getOrDefault(0)
+
     /** One key transition for cellKb. See RPCSX.keyboardKey. */
     @JvmStatic
     fun keyboardKey(androidKeyCode: Int, unicode: Int, pressed: Boolean): Boolean =

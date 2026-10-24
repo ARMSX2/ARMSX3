@@ -3667,6 +3667,12 @@ extern "C" void _rpcsx_usbSetPassthrough(std::string_view fds) {
   usb_android_set_devices(std::move(list));
 }
 
+// Which real portals the game's USB scan took, as bits (1 Skylanders, 2 Infinity, 4 Dimensions): the
+// Portal panel shows the emulated one for any the app opened that the core could not take.
+extern "C" s32 _rpcsx_usbPassedThrough() {
+  return static_cast<s32>(usb_android_passed_through());
+}
+
 // ---- Saved servers -------------------------------------------------------------------
 //
 // The list already exists in the core (cfg_rpcn "Hosts", "desc|host" entries joined by

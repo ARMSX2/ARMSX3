@@ -830,7 +830,7 @@
  "portal.infinity.disc": "能量圆盘 %d",
  "portal.infinity.player": "玩家 %d",
  "portal.infinity.playset": "游戏套装或能量圆盘",
- "portal.menu.description": "在游戏内菜单中加入“传送门”，用于把 Skylanders、Disney Infinity 和 LEGO Dimensions 的角色放到模拟的传送门上。只有这些游戏会用到。插入真实的传送门时两种情况下都能使用。",
+ "portal.menu.description": "在游戏内菜单中加入“传送门”，用于把 Skylanders、Disney Infinity 和 LEGO Dimensions 的角色放到模拟的传送门上。只有这些游戏会用到。",
  "portal.menu.label": "玩具传送门",
  "portal.figures": "角色",
  "portal.add": "添加角色文件",

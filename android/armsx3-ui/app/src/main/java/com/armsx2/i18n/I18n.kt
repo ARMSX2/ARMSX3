@@ -1434,7 +1434,7 @@ val EN: Map<String, String> = mapOf(
     "portal.hint.spots" to "Select a spot to choose the figure on it.",
     "portal.addFigure" to "Add a figure",
     "portal.menu.label" to "Toy portals",
-    "portal.menu.description" to "Adds Portal to the in-game menu, for putting Skylanders, Disney Infinity and LEGO Dimensions figures on the emulated portals. Only those games use them. A real portal plugged in works either way.",
+    "portal.menu.description" to "Adds Portal to the in-game menu, for putting Skylanders, Disney Infinity and LEGO Dimensions figures on the emulated portals. Only those games use them.",
     "rpcn.friends.accept" to "Accept",
     "rpcn.friends.decline" to "Decline",
     "rpcn.friends.cancel" to "Cancel",

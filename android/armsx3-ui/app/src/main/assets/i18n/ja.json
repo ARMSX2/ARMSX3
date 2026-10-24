@@ -830,7 +830,7 @@
  "portal.infinity.disc": "パワーディスク %d",
  "portal.infinity.player": "プレイヤー %d",
  "portal.infinity.playset": "プレイセット／パワーディスク",
- "portal.menu.description": "ゲーム内メニューに「ポータル」を追加し、Skylanders、Disney Infinity、LEGO Dimensions のフィギュアをエミュレートされたポータルに置けるようにします。使うのはこれらのゲームだけです。本物のポータルを接続した場合はどちらでも動作します。",
+ "portal.menu.description": "ゲーム内メニューに「ポータル」を追加し、Skylanders、Disney Infinity、LEGO Dimensions のフィギュアをエミュレートされたポータルに置けるようにします。使うのはこれらのゲームだけです。",
  "portal.menu.label": "トイポータル",
  "portal.figures": "フィギュア",
  "portal.add": "フィギュアファイルを追加",

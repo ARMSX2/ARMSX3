@@ -125,7 +125,8 @@ fun ToyPortalPanel(modifier: Modifier = Modifier) {
             }
         )
     }
-    val real by UsbPassthrough.realPortals
+    // Read as the panel opens, after the game's USB scan
+    val real = remember { UsbPassthrough.inUse() }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {

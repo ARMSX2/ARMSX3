@@ -834,7 +834,7 @@
  "portal.infinity.disc": "Disco de poder %d",
  "portal.infinity.player": "Jogador %d",
  "portal.infinity.playset": "Play set ou disco de poder",
- "portal.menu.description": "Adiciona Portal ao menu do jogo, para colocar figuras de Skylanders, Disney Infinity e LEGO Dimensions nos portais emulados. Só esses jogos usam. Um portal real conectado funciona de qualquer jeito.",
+ "portal.menu.description": "Adiciona Portal ao menu do jogo, para colocar figuras de Skylanders, Disney Infinity e LEGO Dimensions nos portais emulados. Só esses jogos usam.",
  "portal.menu.label": "Portais de brinquedos",
  "portal.figures": "Figuras",
  "portal.add": "Adicionar arquivos de figuras",

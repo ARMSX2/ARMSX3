@@ -830,7 +830,7 @@
  "portal.infinity.disc": "Диск сили %d",
  "portal.infinity.player": "Гравець %d",
  "portal.infinity.playset": "Набір гри або диск сили",
- "portal.menu.description": "Додає пункт «Портал» до меню гри, щоб ставити фігурки Skylanders, Disney Infinity і LEGO Dimensions на емульовані портали. Їх використовують лише ці ігри. Підключений справжній портал працює в будь-якому разі.",
+ "portal.menu.description": "Додає пункт «Портал» до меню гри, щоб ставити фігурки Skylanders, Disney Infinity і LEGO Dimensions на емульовані портали. Їх використовують лише ці ігри.",
  "portal.menu.label": "Портали для іграшок",
  "portal.figures": "Фігурки",
  "portal.add": "Додати файли фігурок",

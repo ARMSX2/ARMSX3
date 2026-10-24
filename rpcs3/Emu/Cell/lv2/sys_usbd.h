@@ -69,6 +69,10 @@ struct UsbDeviceIsoRequest
 // gives an app a device only through UsbManager after the user allows it, and libusb cannot open one
 // itself there, so these are what a game's USB scan finds. Set before the game boots.
 void usb_android_set_devices(std::vector<int> fds);
+
+// ARMSX3: which of those the last scan passed through to the game, as bits: 1 Skylanders portal,
+// 2 Disney Infinity base, 4 LEGO Dimensions toy pad. One it could not take is emulated instead.
+u32 usb_android_passed_through();
 #endif
 
 error_code sys_usbd_initialize(ppu_thread& ppu, vm::ptr<u32> handle);

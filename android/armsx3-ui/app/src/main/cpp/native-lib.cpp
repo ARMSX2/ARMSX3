@@ -140,6 +140,7 @@ struct RPCSXApi {
   bool (*avatarSelect)(std::string_view path);
   bool (*avatarUseImage)(const uint8_t *data, size_t size);
   void (*usbSetPassthrough)(std::string_view fds);
+  int32_t (*usbPassedThrough)();
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
   bool (*installSplitPkg)(JNIEnv *env, const int *fds, int count, long progressId);
@@ -317,6 +318,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.avatarSelect = reinterpret_cast<decltype(avatarSelect)>(dlsym(handle, "_rpcsx_avatarSelect"));
     result.avatarUseImage = reinterpret_cast<decltype(avatarUseImage)>(dlsym(handle, "_rpcsx_avatarUseImage"));
     result.usbSetPassthrough = reinterpret_cast<decltype(usbSetPassthrough)>(dlsym(handle, "_rpcsx_usbSetPassthrough"));
+    result.usbPassedThrough = reinterpret_cast<decltype(usbPassedThrough)>(dlsym(handle, "_rpcsx_usbPassedThrough"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
     // symbol, and refusing to load it over a missing optional feature would be worse than the
@@ -1895,6 +1897,11 @@ Java_net_rpcsx_RPCSX_usbSetPassthrough(JNIEnv *env, jobject, jstring fds) {
   if (c) env->ReleaseStringUTFChars(fds, c);
 
   rpcsxLib.usbSetPassthrough(value);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_usbPassedThrough(JNIEnv *, jobject) {
+  return rpcsxLib.usbPassedThrough ? rpcsxLib.usbPassedThrough() : 0;
 }
 
 extern "C" JNIEXPORT jstring JNICALL

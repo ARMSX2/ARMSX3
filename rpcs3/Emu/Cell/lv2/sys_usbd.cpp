@@ -357,12 +357,18 @@ namespace
 {
 	std::mutex s_android_usb_mutex;
 	std::vector<int> s_android_usb_fds;
+	atomic_t<u32> s_android_passed_through = 0;
 }
 
 void usb_android_set_devices(std::vector<int> fds)
 {
 	std::lock_guard lock(s_android_usb_mutex);
 	s_android_usb_fds = std::move(fds);
+}
+
+u32 usb_android_passed_through()
+{
+	return s_android_passed_through.load();
 }
 #endif
 
@@ -375,6 +381,8 @@ void usb_handler_thread::perform_scan()
 		std::lock_guard lock(s_android_usb_mutex);
 		fds = s_android_usb_fds;
 	}
+
+	u32 passed_through = 0;
 
 	for (const int fd : fds)
 	{
@@ -410,6 +418,10 @@ void usb_handler_thread::perform_scan()
 				connect_usb_device(usb_dev, true);
 				usb_passthrough_devices[usb_id] = usb_dev;
 				attached = true;
+
+				if (desc.idVendor == 0x1430 && desc.idProduct == 0x0150) passed_through |= 1;
+				else if (desc.idVendor == 0x0E6F && desc.idProduct == 0x0129) passed_through |= 2;
+				else if (desc.idVendor == 0x0E6F && desc.idProduct == 0x0241) passed_through |= 4;
 				break;
 			}
 		}
@@ -420,6 +432,7 @@ void usb_handler_thread::perform_scan()
 		}
 	}
 
+	s_android_passed_through = passed_through;
 	return;
 #endif
 

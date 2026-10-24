@@ -830,7 +830,7 @@
  "portal.infinity.disc": "Disque de pouvoir %d",
  "portal.infinity.player": "Joueur %d",
  "portal.infinity.playset": "Set de jeu ou disque de pouvoir",
- "portal.menu.description": "Ajoute Portail au menu en jeu, pour poser des figurines Skylanders, Disney Infinity et LEGO Dimensions sur les portails émulés. Seuls ces jeux les utilisent. Un vrai portail branché fonctionne dans tous les cas.",
+ "portal.menu.description": "Ajoute Portail au menu en jeu, pour poser des figurines Skylanders, Disney Infinity et LEGO Dimensions sur les portails émulés. Seuls ces jeux les utilisent.",
  "portal.menu.label": "Portails de jouets",
  "portal.figures": "Figurines",
  "portal.add": "Ajouter des fichiers de figurines",

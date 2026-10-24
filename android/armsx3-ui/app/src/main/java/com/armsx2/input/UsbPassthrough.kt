@@ -40,8 +40,17 @@ object UsbPassthrough {
     const val INFINITY = 1
     const val DIMENSIONS = 2
 
-    /** Which real portals are open for the running game: [SKYLANDERS], [INFINITY], [DIMENSIONS]. */
+    /** Which real portals the app opened for the running game: [SKYLANDERS], [INFINITY], [DIMENSIONS]. */
     val realPortals = mutableStateOf(emptySet<Int>())
+
+    /**
+     * The real portals the game is using: those the app opened that the core took. One it could not
+     * take is emulated instead, and the Portal panel offers that one.
+     */
+    fun inUse(): Set<Int> {
+        val taken = Rpcs3Bridge.usbPassedThrough()
+        return realPortals.value.filterTo(HashSet()) { taken and (1 shl it) != 0 }
+    }
 
     private val connections = mutableListOf<UsbDeviceConnection>()
     private val asked = HashSet<String>()
