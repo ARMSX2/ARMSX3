@@ -837,6 +837,8 @@ val EN: Map<String, String> = mapOf(
     "rpcn.off.title" to "Games are not using RPCN",
     "rpcn.off.note" to "Online play goes through RPCN only while PSN status is set to RPCN. Your account can be set up either way.",
     "rpcn.off.turnOn" to "Use RPCN",
+    "rpcn.settings.title" to "RPCN settings",
+    "rpcn.settings.note" to "Internet connection, PSN status, UPnP, IPv6 and synced trophies.",
     "rpcn.profile.none" to "No RPCN account yet",
     "rpcn.profile.signedIn" to "Signed in",
     "rpcn.profile.saved" to "Account saved",

@@ -48,6 +48,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.armsx2.i18n.str
@@ -68,7 +69,8 @@ import org.json.JSONObject
  * name, and whether it is signed in. Under it only the step at hand, one at a time: signing in,
  * making an account, activating it with the code RPCN emails, or resetting a password. Then
  * [friends], once there is an account to have friends on, the servers, and the switches few people
- * need. It was one card of five text boxes and seven buttons, which people read as a puzzle.
+ * need ([advanced]; the library's RPCN page links to Settings for those instead). It was one card of
+ * five text boxes and seven buttons, which people read as a puzzle.
  *
  * Passwords go to the core as typed, and the core hands RPCN what RPCS3 would: a password derived
  * from it (_rpcsx_rpcnSignIn). So the password someone uses in RPCS3 works here as they know it;
@@ -79,7 +81,7 @@ import org.json.JSONObject
  * from the core as a finished sentence, never an error code.
  */
 @Composable
-fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null) {
+fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null, advanced: Boolean = true) {
     val scope = rememberCoroutineScope()
 
     // What the core holds, read on entry and after anything that writes
@@ -429,7 +431,7 @@ fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null) {
         }
 
         // The rest: IPv6 through the shared ToggleRow, the one destructive action at the bottom
-        FormCard(str("rpcn.section.advanced"), null) {
+        if (advanced) FormCard(str("rpcn.section.advanced"), null) {
             ToggleRow(str("rpcn.ipv6.label"), ipv6, description = str("rpcn.ipv6.description")) {
                 ipv6 = it
                 scope.launch { withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnSetIpv6(it) } }
@@ -493,10 +495,7 @@ private fun ProfileCard(
     actions: @Composable () -> Unit,
 ) {
     val primary = MaterialTheme.colorScheme.primary
-    val ringColors = listOf(primary, MaterialTheme.colorScheme.tertiary, primary.copy(alpha = 0.12f), primary)
     val openPicker = { RpcnAvatarPicker.open.value = true }
-    val ring = rememberInfiniteTransition(label = "rpcn-ring")
-    val angle by ring.animateFloat(0f, 360f, infiniteRepeatable(tween(9_000, easing = LinearEasing)), label = "angle")
 
     GlassPanel(Modifier.fillMaxWidth(), contentPadding = 0.dp) {
         Column(
@@ -507,25 +506,13 @@ private fun ProfileCard(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
+                RpcnAvatarRing(
+                    96.dp,
                     Modifier
-                        .size(96.dp)
                         .clip(CircleShape)
                         .clickable(onClick = openPicker)
                         .controllerFocusable("rpcn.profile.avatar", CircleShape, onConfirm = openPicker),
-                    contentAlignment = Alignment.Center,
                 ) {
-                    // The angle is read while drawing only, so turning it redraws the ring and
-                    // recomposes nothing
-                    Canvas(Modifier.size(96.dp)) {
-                        rotate(angle) {
-                            drawCircle(
-                                Brush.sweepGradient(ringColors),
-                                radius = size.minDimension / 2f - 3.dp.toPx(),
-                                style = Stroke(5.dp.toPx()),
-                            )
-                        }
-                    }
                     RpcnAvatarImage(Modifier.size(78.dp).clip(CircleShape))
                 }
                 Spacer(Modifier.width(16.dp))
@@ -561,6 +548,25 @@ private fun ProfileCard(
             }
             NoticeText(notice)
         }
+    }
+}
+
+/** An avatar inside a slowly turning ring, as the RPCN page and the avatar picker show the player's. */
+@Composable
+internal fun RpcnAvatarRing(diameter: Dp, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val primary = MaterialTheme.colorScheme.primary
+    val colors = listOf(primary, MaterialTheme.colorScheme.tertiary, primary.copy(alpha = 0.12f), primary)
+    val ring = rememberInfiniteTransition(label = "avatar-ring")
+    val angle by ring.animateFloat(0f, 360f, infiniteRepeatable(tween(9_000, easing = LinearEasing)), label = "angle")
+
+    Box(modifier.size(diameter), contentAlignment = Alignment.Center) {
+        // The angle is read while drawing only, so turning it redraws the ring and recomposes nothing
+        Canvas(Modifier.size(diameter)) {
+            rotate(angle) {
+                drawCircle(Brush.sweepGradient(colors), radius = size.minDimension / 2f - 3.dp.toPx(), style = Stroke(5.dp.toPx()))
+            }
+        }
+        content()
     }
 }
 

@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -56,6 +57,8 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -343,6 +346,26 @@ private fun AvatarPicture(path: String?, modifier: Modifier, pixels: Int) {
     }
 }
 
+/**
+ * The firmware's own picture for this user, the one games get until another is chosen: the RPCN row's
+ * icon in the library menu. Null until read, and while the firmware is not installed. Kept once
+ * loaded, as the file depends only on the user and finding it means listing every avatar.
+ */
+@Composable
+internal fun rememberDefaultAvatar(): ImageBitmap? {
+    val image by produceState(DefaultAvatar.image) {
+        if (value == null) {
+            val path = withContext(Dispatchers.IO) { readAvatarList()?.default }.orEmpty()
+            if (path.isNotBlank()) value = AvatarImages.load(path, AvatarPixels)?.also { DefaultAvatar.image = it }
+        }
+    }
+    return image
+}
+
+private object DefaultAvatar {
+    var image: ImageBitmap? = null
+}
+
 /** The picture games are given for the player now: the chosen avatar, or the firmware's default.
  *  Read again whenever the picker closes. For the Friends headers ([com.armsx2.ui.friends.RpcnSelfChip]). */
 @Composable
@@ -476,6 +499,12 @@ fun RpcnAvatarPickerOverlay() {
             Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
+                .background(
+                    Brush.verticalGradient(
+                        0f to MaterialTheme.colorScheme.primary.copy(alpha = 0.22f),
+                        0.3f to Color.Transparent,
+                    ),
+                )
                 // Nothing behind the picker takes a tap while it is up.
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
@@ -490,13 +519,18 @@ fun RpcnAvatarPickerOverlay() {
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    AvatarPicture(list?.current, Modifier.size(64.dp), AvatarPixels)
-                    Spacer(Modifier.width(12.dp))
+                    RpcnAvatarRing(84.dp) {
+                        AvatarPicture(list?.current, Modifier.size(66.dp).clip(CircleShape), AvatarPixels)
+                    }
+                    Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
+                        // Drawn over the page's own background rather than a Surface, so nothing
+                        // supplies a content colour: without one it was black on the dark page
                         Text(
                             str("rpcn.avatar.title"),
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
                         Text(
                             describe(list, defaultMissing),

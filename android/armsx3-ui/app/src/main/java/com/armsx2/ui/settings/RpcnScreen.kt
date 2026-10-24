@@ -1,8 +1,10 @@
 package com.armsx2.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,13 +20,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.armsx2.config.ConfigStore
 import com.armsx2.config.SettingsScope
 import com.armsx2.i18n.str
+import com.armsx2.navigation.AppRoute
+import com.armsx2.navigation.SettingsCategory
+import com.armsx2.navigation.UiNavigator
 import com.armsx2.ui.InGameOverlay
 import com.armsx2.ui.common.ArmsBackdrop
 import com.armsx2.ui.common.ArmsTopBar
@@ -41,7 +48,8 @@ private const val PsnRpcn = 2
  * Settings shows them only once PSN status is set to RPCN, so someone looking for where to sign in
  * found nothing until they changed a setting they had no reason to know about. Here they are always
  * shown, under a card that switches RPCN on while it is off. That is the global setting, as the
- * menu this opens from belongs to no game.
+ * menu this opens from belongs to no game. The switches few people need (IPv6, deleting synced
+ * trophies) stay in Settings, which the last card opens and which comes back here.
  */
 @Composable
 fun RpcnScreen(onBack: () -> Unit) {
@@ -83,12 +91,42 @@ fun RpcnScreen(onBack: () -> Unit) {
                             }
                         }
                     }
-                    RpcnAccountSection(friends = { RpcnFriendsSection() })
+                    RpcnAccountSection(friends = { RpcnFriendsSection() }, advanced = false)
+                    RpcnSettingsLink()
                 }
             }
 
             // The avatar picker, drawn over the page as it is over Settings (RpcnAvatar.kt)
             if (RpcnAvatarPicker.open.value) RpcnAvatarPickerOverlay()
+        }
+    }
+}
+
+/** The way to Settings' RPCN tab, for the internet and PSN switches and the rest; back returns here. */
+@Composable
+private fun RpcnSettingsLink() {
+    val shape = RoundedCornerShape(28.dp)
+    val open = {
+        UiNavigator.navigate(AppRoute.Settings(SettingsCategory.Network, returnTo = AppRoute.Rpcn))
+    }
+    GlassPanel(
+        Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .clickable(onClick = open)
+            .controllerFocusable("rpcn.settings", shape, onConfirm = open),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    str("rpcn.settings.title"),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(str("rpcn.settings.note"), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text("\u203A", fontSize = 30.sp, color = MaterialTheme.colorScheme.primary)
         }
     }
 }
