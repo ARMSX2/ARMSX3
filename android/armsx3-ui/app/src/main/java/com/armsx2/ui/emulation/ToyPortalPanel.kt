@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -100,11 +101,30 @@ private fun SkylanderContent() {
     var figures by remember { mutableStateOf(SkylanderPortal.figures()) }
     val folder = remember { SkylanderPortal.folder().absolutePath }
     var notes by remember { mutableStateOf(emptyList<Note>()) }
+    var creating by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val fullText = str("portal.full")
     val notFigureText = str("portal.notFigure")
+    val createdText = str("portal.create.done")
+    val createFailedText = str("portal.create.failed")
     val addFigures = rememberFigureAdder(SkylanderPortal.extensions, SkylanderPortal::add) {
         figures = SkylanderPortal.figures()
         notes = it
+    }
+
+    if (creating) {
+        CreatorContent(remember { SkylanderPortal.characters() }, { it.name }, onBack = { creating = false }) { character ->
+            scope.launch {
+                val made = withContext(Dispatchers.IO) { SkylanderPortal.create(character) }
+                figures = SkylanderPortal.figures()
+                notes = listOf(
+                    if (made != null) Note(createdText.format(made.substringBeforeLast('.')), error = false)
+                    else Note(createFailedText.format(character.name))
+                )
+                creating = false
+            }
+        }
+        return
     }
 
     Header(str("portal.onPortal"))
@@ -120,7 +140,7 @@ private fun SkylanderContent() {
         }
     }
 
-    FiguresHeader(str("portal.figures"), addFigures)
+    FiguresHeader(str("portal.figures"), onCreate = { creating = true }, onAdd = addFigures)
 
     for (file in figures) {
         val onPortal = file.name in SkylanderPortal.placed.values
@@ -143,14 +163,33 @@ private fun PositionContent(portal: PositionPortal) {
     val folder = remember(portal) { portal.folder().absolutePath }
     var selected by remember(portal) { mutableIntStateOf(portal.positions.first().first) }
     var notes by remember(portal) { mutableStateOf(emptyList<Note>()) }
+    var creating by remember(portal) { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val notFigureText = str("portal.notFigure")
     val emptyText = str("portal.emptyPosition")
+    val createdText = str("portal.create.done")
+    val createFailedText = str("portal.create.failed")
     val names = portal.positions.associate { (position, label) ->
         position to label.second.let { arg -> if (arg == null) str(label.first) else str(label.first).format(arg) }
     }
     val addFigures = rememberFigureAdder(portal.extensions, portal::add) {
         figures = portal.figures()
         notes = it
+    }
+
+    if (creating) {
+        CreatorContent(remember(portal) { portal.characters() }, portal::label, onBack = { creating = false }) { character ->
+            scope.launch {
+                val made = withContext(Dispatchers.IO) { portal.create(character) }
+                figures = portal.figures()
+                notes = listOf(
+                    if (made != null) Note(createdText.format(made.substringBeforeLast('.')), error = false)
+                    else Note(createFailedText.format(portal.label(character)))
+                )
+                creating = false
+            }
+        }
+        return
     }
 
     Header(str("portal.positions"))
@@ -186,7 +225,7 @@ private fun PositionContent(portal: PositionPortal) {
         }
     }
 
-    FiguresHeader(str("portal.figuresFor").format(names[selected].orEmpty()), addFigures)
+    FiguresHeader(str("portal.figuresFor").format(names[selected].orEmpty()), onCreate = { creating = true }, onAdd = addFigures)
 
     for (file in figures) {
         val onPortal = file.name in portal.placed.values
@@ -238,7 +277,7 @@ private fun rememberFigureAdder(
     if (browsing) {
         FileBrowserDialog(
             title = str("portal.add"),
-            extensions = extensions,
+            extensions = extensions + "zip",
             onPick = { file ->
                 browsing = false
                 take { listOf(ToyPortals.offered(file)) }
@@ -267,19 +306,79 @@ private fun Header(text: String, top: Int = 0) {
     )
 }
 
-/** The figure list's header, with the way to add more beside it */
+/** The figure list's header, with the two ways to get more: make one, or add files */
 @Composable
-private fun FiguresHeader(text: String, onAdd: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun FiguresHeader(text: String, onCreate: () -> Unit, onAdd: () -> Unit) {
+    Header(text, top = 8)
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        OutlinedButton(onClick = onCreate, modifier = Modifier.weight(1f).controllerFocusable("portal.create", onConfirm = onCreate)) {
+            Text(str("portal.create"), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        OutlinedButton(onClick = onAdd, modifier = Modifier.weight(1f).controllerFocusable("portal.add", onConfirm = onAdd)) {
+            Text(str("portal.add"), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** How many of RPCS3's figures the Create list shows at once; a search finds the rest */
+private const val MAX_LISTED = 120
+
+/**
+ * RPCS3's list of what a figure can be made of, as its portal managers' Create buttons offer it, with
+ * a search by name. Picking one makes a new figure file, which the list below then shows.
+ */
+@Composable
+private fun CreatorContent(
+    characters: List<ToyPortals.Character>,
+    label: (ToyPortals.Character) -> String,
+    onBack: () -> Unit,
+    onPick: (ToyPortals.Character) -> Unit,
+) {
+    var query by remember { mutableStateOf("") }
+    val matches = remember(query, characters) {
+        val q = query.trim()
+        if (q.isEmpty()) characters else characters.filter { label(it).contains(q, ignoreCase = true) }
+    }
+    val shown = matches.take(MAX_LISTED)
+    val makeText = str("portal.create.make")
+
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
-            text,
+            str("portal.create.title"),
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.weight(1f),
         )
-        TextButton(onClick = onAdd, modifier = Modifier.controllerFocusable("portal.add", onConfirm = onAdd)) {
-            Text(str("portal.add"))
+        TextButton(onClick = onBack, modifier = Modifier.controllerFocusable("portal.create.back", onConfirm = onBack)) {
+            Text(str("action.back"))
         }
+    }
+
+    OutlinedTextField(
+        value = query,
+        onValueChange = { query = it },
+        singleLine = true,
+        label = { Text(str("portal.create.search")) },
+        modifier = Modifier.fillMaxWidth(),
+    )
+
+    for (character in shown) {
+        FigureRow(label(character), makeText, "portal.create.${character.first}.${character.second}", enabled = true) {
+            onPick(character)
+        }
+    }
+
+    when {
+        matches.isEmpty() -> Text(
+            str("portal.create.none"),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        matches.size > shown.size -> Text(
+            str("portal.create.more").format(shown.size, matches.size),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 

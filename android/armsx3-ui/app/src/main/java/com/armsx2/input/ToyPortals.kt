@@ -4,12 +4,14 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.runtime.mutableStateMapOf
+import com.armsx2.Pasx2Application
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx3.Rpcs3Bridge
 import net.rpcsx.RPCSX
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
+import java.util.zip.ZipInputStream
 
 /**
  * The emulated toy portals: Skylanders, Disney Infinity and Lego Dimensions, and which figure files
@@ -74,12 +76,33 @@ object ToyPortals {
         val failed = mutableListOf<String>()
 
         for (file in files) {
-            // The data folder can be on an SD card, whose FAT names take none of these
-            val name = file.name.substringAfterLast('/')
-                .map { if (it < ' ' || it in "\\:*?\"<>|") '_' else it }
-                .joinToString("")
-                .trim()
-            if (name.substringAfterLast('.', "").lowercase() !in extensions || name.substringBeforeLast('.').isBlank()) {
+            val name = safeName(file.name.substringAfterLast('/'))
+
+            // A zip of dumps, as figure packs come: its figures go in by their own names, anything
+            // else in it is passed over
+            if (name.substringAfterLast('.', "").lowercase() == "zip") {
+                val before = added
+                val read = runCatching {
+                    file.open()?.use { input ->
+                        ZipInputStream(input).use { zip ->
+                            for (i in 0 until MAX_ZIP_ENTRIES) {
+                                val entry = zip.nextEntry ?: break
+                                val inner = safeName(entry.name.substringAfterLast('/'))
+                                if (entry.isDirectory || !isFigureName(inner, extensions)) continue
+                                val data = readUpTo(zip, MAX_FIGURE_BYTES + 1)
+                                if (data.size in size..MAX_FIGURE_BYTES && store(folder, inner, data)) added++
+                            }
+                        }
+                    } != null
+                }.getOrDefault(false)
+                when {
+                    !read -> failed += name
+                    added == before -> notFigures += name
+                }
+                continue
+            }
+
+            if (!isFigureName(name, extensions)) {
                 notFigures += name
                 continue
             }
@@ -94,6 +117,62 @@ object ToyPortals {
         }
 
         return Added(added, notFigures, failed)
+    }
+
+    /** How many entries of a zip are looked at, so a pack of millions cannot hold the import up */
+    private const val MAX_ZIP_ENTRIES = 4096
+
+    // The data folder can be on an SD card, whose FAT names take none of these
+    private fun safeName(name: String) = name
+        .map { if (it < ' ' || it in "\\:*?\"<>|") '_' else it }
+        .joinToString("")
+        .trim()
+
+    private fun isFigureName(name: String, extensions: Set<String>) =
+        name.substringAfterLast('.', "").lowercase() in extensions && name.substringBeforeLast('.').isNotBlank()
+
+    /**
+     * A character RPCS3's portal managers can make a figure of: its name and the two numbers its maker
+     * takes (Skylanders id and variant, Disney Infinity figure number and series, LEGO Dimensions id).
+     */
+    data class Character(val name: String, val first: Int, val second: Int)
+
+    private val characterLists = HashMap<String, List<Character>>()
+
+    /**
+     * RPCS3's own list for a portal, from assets/portal (android/tools/gen_portal_figures.py), without
+     * its "Unknown" placeholders. Read once.
+     */
+    internal fun characters(asset: String): List<Character> = synchronized(characterLists) {
+        characterLists.getOrPut(asset) {
+            runCatching {
+                Pasx2Application.appContext.assets.open(asset).bufferedReader().useLines { lines ->
+                    lines.mapNotNull { line ->
+                        val parts = line.split('\t')
+                        when (parts.size) {
+                            3 -> Character(parts[2], parts[0].toInt(), parts[1].toInt())
+                            2 -> Character(parts[1], parts[0].toInt(), 0)
+                            else -> null
+                        }
+                    }.filterNot { it.name.startsWith("Unknown") }.toList()
+                }
+            }.getOrDefault(emptyList())
+        }
+    }
+
+    /**
+     * Makes a new figure file in [folder] named after the character, with a number when the name is
+     * taken, through [make] (the core's maker for that portal). The new file's name, or null when the
+     * maker failed. IO thread.
+     */
+    internal fun create(folder: File, name: String, extension: String, make: (String) -> Boolean): String? {
+        val base = safeName(name).ifEmpty { "Figure" }
+        var target = File(folder, "$base.$extension")
+        var n = 1
+        while (target.exists()) {
+            target = File(folder, "$base (${++n}).$extension")
+        }
+        return if (make(target.absolutePath)) target.name else null
     }
 
     private fun readUpTo(input: InputStream, limit: Int): ByteArray {
@@ -144,6 +223,13 @@ object SkylanderPortal {
     /** A figure is 64 blocks of 16 bytes, what load_skylander reads. IO thread. */
     fun add(files: List<ToyPortals.Offered>) = ToyPortals.add(folder(), extensions, 0x40 * 0x10, files)
 
+    /** The Skylanders a figure can be made of (Create figure). */
+    fun characters() = ToyPortals.characters("portal/skylanders.tsv")
+
+    /** A new figure of [character]: the new file's name, or null. IO thread. */
+    fun create(character: ToyPortals.Character) =
+        ToyPortals.create(folder(), character.name, "sky") { Rpcs3Bridge.skylanderCreate(it, character.first, character.second) }
+
     sealed interface Result {
         data object Placed : Result
         data object NotAFigure : Result
@@ -189,6 +275,17 @@ abstract class PositionPortal(private val directory: String, private val size: I
     /** IO thread. */
     fun add(files: List<ToyPortals.Offered>) = ToyPortals.add(folder(), extensions, size, files)
 
+    /** The figures one can be made of (Create figure). */
+    abstract fun characters(): List<ToyPortals.Character>
+
+    /** How a character is named in the Create figure list. */
+    open fun label(character: ToyPortals.Character) = character.name
+
+    protected abstract fun make(path: String, character: ToyPortals.Character): Boolean
+
+    /** A new figure of [character]: the new file's name, or null. IO thread. */
+    fun create(character: ToyPortals.Character) = ToyPortals.create(folder(), character.name, "bin") { make(it, character) }
+
     /** False when the file is not a figure for this portal. */
     fun place(position: Int, file: File): Boolean {
         if (!load(file.absolutePath, position)) return false
@@ -217,6 +314,14 @@ object InfinityBase : PositionPortal("infinity", 0x14 * 0x10) {
 
     override fun load(path: String, position: Int) = Rpcs3Bridge.infinityLoad(path, position)
     override fun remove(position: Int) = Rpcs3Bridge.infinityRemove(position)
+
+    override fun characters() = ToyPortals.characters("portal/infinity.tsv")
+
+    // With the series it came out in: Disney Infinity 1.0 cannot use the later ones
+    override fun label(character: ToyPortals.Character) = "${character.name} (${character.second}.0)"
+
+    override fun make(path: String, character: ToyPortals.Character) =
+        Rpcs3Bridge.infinityCreate(path, character.first, character.second)
 }
 
 // 45 pages of 4 bytes (Dimensions.h)
@@ -234,4 +339,8 @@ object DimensionsToyPad : PositionPortal("dimensions", 0x2D * 0x04) {
 
     override fun load(path: String, position: Int) = Rpcs3Bridge.dimensionsLoad(path, position)
     override fun remove(position: Int) = Rpcs3Bridge.dimensionsRemove(position)
+
+    override fun characters() = ToyPortals.characters("portal/dimensions.tsv")
+
+    override fun make(path: String, character: ToyPortals.Character) = Rpcs3Bridge.dimensionsCreate(path, character.first)
 }

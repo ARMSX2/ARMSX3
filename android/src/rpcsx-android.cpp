@@ -5,6 +5,8 @@
 #include <cstring>
 #include "Crypto/unpkg.h"
 #include "Crypto/unself.h"
+#include "Crypto/aes.h"
+#include "Crypto/sha1.h"
 #include "Emu/Audio/Cubeb/CubebBackend.h"
 #include "Emu/Cell/Modules/cellAudio.h"
 #include "Emu/RSX/VK/VKFrameGen.h"
@@ -109,6 +111,7 @@
 #include <sys/resource.h>
 #include <thread>
 #include <vector>
+#include <random>
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wreturn-type-c-linkage"
@@ -3455,6 +3458,136 @@ extern "C" bool _rpcsx_dimensionsRemove(s32 index) {
   g_dimensionstoypad.remove_figure(dimensions_pad(index), static_cast<u8>(index), true, true);
   s_dimensions_used[index] = false;
   return true;
+}
+
+// ---- New figures, made as RPCS3's portal managers make them (rpcs3qt/*_dialog.cpp) ------------
+//
+// For players without dumps of their own toys: a blank figure of any character the game knows,
+// which the game sets up the first time it is placed. Each writes a new file and never replaces one.
+static bool write_new_figure(std::string_view path, const u8* data, usz size) {
+  fs::file file(std::string(path), fs::write + fs::create + fs::excl);
+  return file && file.write(data, size) == size;
+}
+
+// skylander_creator_dialog: block permissions, a serial made from the id and variant, then the id,
+// the variant and a CRC-16/CCITT of the first 0x1E bytes (skylander_crc16)
+extern "C" bool _rpcsx_skylanderCreate(std::string_view path, s32 id, s32 variant) {
+  std::array<u8, 0x40 * 0x10> buf{};
+  write_to_ptr<le_t<u32>>(buf, 0x36, 0x690F0F0F);
+  for (u32 index = 1; index < 0x10; index++) {
+    write_to_ptr<le_t<u32>>(buf, (index * 0x40) + 0x36, 0x69080F7F);
+  }
+  write_to_ptr<le_t<u16>>(buf, static_cast<u16>((id | variant) + 1));
+  write_to_ptr<le_t<u16>>(buf, 0x10, static_cast<u16>(id));
+  write_to_ptr<le_t<u16>>(buf, 0x1C, static_cast<u16>(variant));
+
+  u16 crc = 0xFFFF;
+  for (u32 i = 0; i < 0x1E; i++) {
+    crc ^= static_cast<u16>(buf[i] << 8);
+    for (int bit = 0; bit < 8; bit++) {
+      crc = (crc & 0x8000) ? static_cast<u16>((crc << 1) ^ 0x1021) : static_cast<u16>(crc << 1);
+    }
+  }
+  write_to_ptr<le_t<u16>>(buf, 0x1E, crc);
+
+  return write_new_figure(path, buf.data(), buf.size());
+}
+
+// figure_creator_dialog::create_blank_figure: a random tag id, then the figure number, series and the
+// series' release date with a CRC-32 (infinity_crc32), encrypted with a key made from the tag id
+extern "C" bool _rpcsx_infinityCreate(std::string_view path, s32 figure, s32 series) {
+  static constexpr std::array<u8, 32> sha1_constant = {
+      0xAF, 0x62, 0xD2, 0xEC, 0x04, 0x91, 0x96, 0x8C, 0xC5, 0x2A, 0x1A, 0x71, 0x65, 0xF8, 0x65, 0xFE,
+      0x28, 0x63, 0x29, 0x20, 0x44, 0x69, 0x73, 0x6e, 0x65, 0x79, 0x20, 0x32, 0x30, 0x31, 0x33};
+
+  // Standard NFC read/write permissions
+  std::array<u8, 0x14 * 0x10> file_data{};
+  constexpr u32 first_block = 0x17878E;
+  constexpr u32 other_blocks = 0x778788;
+  for (u8 i = 0; i < 3; i++) {
+    file_data[0x36 + i] = u8((first_block >> (2 - i) * 8) & 0xFF);
+  }
+  for (u32 index = 1; index < 5; index++) {
+    for (u8 i = 0; i < 3; i++) {
+      file_data[((index * 0x40) + 0x36) + i] = u8((other_blocks >> (2 - i) * 8) & 0xFF);
+    }
+  }
+
+  std::vector<u8> sha1_calc = {sha1_constant.begin(), sha1_constant.end() - 1};
+  std::array<u8, 16> uid_data = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x89, 0x44, 0x00, 0xC2};
+  std::mt19937 rng(std::random_device{}());
+  std::uniform_int_distribution<int> random_byte(0, 254); // rand() % 255 there
+  for (u8 i = 0; i < 7; i++) {
+    const u8 random = static_cast<u8>(random_byte(rng));
+    sha1_calc.push_back(random);
+    uid_data[i] = random;
+  }
+
+  std::array<u8, 16> figure_data = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                                    0x00, static_cast<u8>(series), 0xD1, 0x1F};
+  figure_data[1] = u8((figure >> 16) & 0xFF);
+  figure_data[2] = u8((figure >> 8) & 0xFF);
+  figure_data[3] = u8(figure & 0xFF);
+
+  // Manufacture date, YY/MM/DD: the series' release
+  if (series == 1) {
+    figure_data[4] = 0x0D, figure_data[5] = 0x08, figure_data[6] = 0x12;
+  } else if (series == 2) {
+    figure_data[4] = 0x0E, figure_data[5] = 0x09, figure_data[6] = 0x12;
+  } else if (series == 3) {
+    figure_data[4] = 0x0F, figure_data[5] = 0x08, figure_data[6] = 0x1C;
+  }
+
+  u32 crc = 0;
+  for (u32 i = 0; i < 12; i++) {
+    crc ^= figure_data[i];
+    for (int bit = 0; bit < 8; bit++) {
+      crc = (crc & 1) ? (crc >> 1) ^ 0xEDB88320u : crc >> 1;
+    }
+  }
+  for (s8 i = 0; i < 4; i++) {
+    figure_data[12 + i] = u8((crc >> (3 - i) * 8) & 0xFF);
+  }
+
+  if (figure_data[1] == 0) {
+    return false;
+  }
+
+  sha1_context ctx;
+  u8 output[20];
+  sha1_starts(&ctx);
+  sha1_update(&ctx, sha1_calc.data(), sha1_calc.size());
+  sha1_finish(&ctx, output);
+
+  u8 key[0x10];
+  for (int i = 0; i < 4; i++) {
+    for (int x = 0; x < 4; x++) {
+      key[x + (i * 4)] = output[(3 - x) + (i * 4)];
+    }
+  }
+
+  aes_context aes;
+  aes_setkey_enc(&aes, key, 128);
+  const std::array<u8, 16> blank_block{};
+  std::array<u8, 16> encrypted_block{};
+  std::array<u8, 16> encrypted_blank{};
+  aes_crypt_ecb(&aes, AES_ENCRYPT, figure_data.data(), encrypted_block.data());
+  aes_crypt_ecb(&aes, AES_ENCRYPT, blank_block.data(), encrypted_blank.data());
+
+  std::memcpy(&file_data[0], uid_data.data(), uid_data.size());
+  std::memcpy(&file_data[16], encrypted_block.data(), encrypted_block.size());
+  for (const u32 block : {0x04u, 0x08u, 0x0Cu, 0x0Du}) {
+    std::memcpy(&file_data[16 * block], encrypted_blank.data(), encrypted_blank.size());
+  }
+
+  return write_new_figure(path, file_data.data(), file_data.size());
+}
+
+// minifig_creation_dialog: the core's own blank tag for the character
+extern "C" bool _rpcsx_dimensionsCreate(std::string_view path, s32 id) {
+  std::array<u8, 0x2D * 0x04> file_data{};
+  dimensions_toypad::create_blank_character(file_data, static_cast<u16>(id));
+  return write_new_figure(path, file_data.data(), file_data.size());
 }
 
 // The real toy portals the app opened for a game, as comma-separated file descriptors

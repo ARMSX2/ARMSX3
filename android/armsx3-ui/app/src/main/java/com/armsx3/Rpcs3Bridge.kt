@@ -1472,6 +1472,18 @@ object Rpcs3Bridge {
         runCatching { RPCSX.instance.dimensionsRemove(index) }.getOrDefault(false)
 
     @JvmStatic
+    fun skylanderCreate(path: String, id: Int, variant: Int): Boolean =
+        runCatching { RPCSX.instance.skylanderCreate(path, id, variant) }.getOrDefault(false)
+
+    @JvmStatic
+    fun infinityCreate(path: String, figure: Int, series: Int): Boolean =
+        runCatching { RPCSX.instance.infinityCreate(path, figure, series) }.getOrDefault(false)
+
+    @JvmStatic
+    fun dimensionsCreate(path: String, id: Int): Boolean =
+        runCatching { RPCSX.instance.dimensionsCreate(path, id) }.getOrDefault(false)
+
+    @JvmStatic
     fun usbSetPassthrough(fds: String) {
         runCatching { RPCSX.instance.usbSetPassthrough(fds) }
     }

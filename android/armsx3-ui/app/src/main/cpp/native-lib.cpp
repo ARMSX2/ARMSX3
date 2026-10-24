@@ -128,6 +128,9 @@ struct RPCSXApi {
   bool (*infinityRemove)(int32_t position);
   bool (*dimensionsLoad)(std::string_view path, int32_t index);
   bool (*dimensionsRemove)(int32_t index);
+  bool (*skylanderCreate)(std::string_view path, int32_t id, int32_t variant);
+  bool (*infinityCreate)(std::string_view path, int32_t figure, int32_t series);
+  bool (*dimensionsCreate)(std::string_view path, int32_t id);
   void (*usbSetPassthrough)(std::string_view fds);
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
@@ -295,6 +298,9 @@ struct RPCSXLibrary : RPCSXApi {
     result.infinityRemove = reinterpret_cast<decltype(infinityRemove)>(dlsym(handle, "_rpcsx_infinityRemove"));
     result.dimensionsLoad = reinterpret_cast<decltype(dimensionsLoad)>(dlsym(handle, "_rpcsx_dimensionsLoad"));
     result.dimensionsRemove = reinterpret_cast<decltype(dimensionsRemove)>(dlsym(handle, "_rpcsx_dimensionsRemove"));
+    result.skylanderCreate = reinterpret_cast<decltype(skylanderCreate)>(dlsym(handle, "_rpcsx_skylanderCreate"));
+    result.infinityCreate = reinterpret_cast<decltype(infinityCreate)>(dlsym(handle, "_rpcsx_infinityCreate"));
+    result.dimensionsCreate = reinterpret_cast<decltype(dimensionsCreate)>(dlsym(handle, "_rpcsx_dimensionsCreate"));
     result.usbSetPassthrough = reinterpret_cast<decltype(usbSetPassthrough)>(dlsym(handle, "_rpcsx_usbSetPassthrough"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
@@ -1802,6 +1808,24 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_net_rpcsx_RPCSX_dimensionsRemove(JNIEnv *, jobject, jint index) {
   if (!rpcsxLib.dimensionsRemove) return JNI_FALSE;
   return rpcsxLib.dimensionsRemove(index) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_skylanderCreate(JNIEnv *env, jobject, jstring path, jint id, jint variant) {
+  if (!rpcsxLib.skylanderCreate) return JNI_FALSE;
+  return rpcsxLib.skylanderCreate(jstring_to_string(env, path), id, variant) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_infinityCreate(JNIEnv *env, jobject, jstring path, jint figure, jint series) {
+  if (!rpcsxLib.infinityCreate) return JNI_FALSE;
+  return rpcsxLib.infinityCreate(jstring_to_string(env, path), figure, series) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_dimensionsCreate(JNIEnv *env, jobject, jstring path, jint id) {
+  if (!rpcsxLib.dimensionsCreate) return JNI_FALSE;
+  return rpcsxLib.dimensionsCreate(jstring_to_string(env, path), id) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -270,6 +270,10 @@ class RPCSX {
     /** Lego Dimensions toy pad: a 180-byte figure file at index 0 to 6 (ToyPortals.DimensionsToyPad). */
     external fun dimensionsLoad(path: String, index: Int): Boolean
     external fun dimensionsRemove(index: Int): Boolean
+    /** New figure files, as RPCS3's portal managers create them. False when the file exists. */
+    external fun skylanderCreate(path: String, id: Int, variant: Int): Boolean
+    external fun infinityCreate(path: String, figure: Int, series: Int): Boolean
+    external fun dimensionsCreate(path: String, id: Int): Boolean
 
     /** Real toy portals the app opened, as comma-separated file descriptors, for the next game (UsbPassthrough). */
     external fun usbSetPassthrough(fds: String)
