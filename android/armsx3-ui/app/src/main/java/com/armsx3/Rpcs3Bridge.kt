@@ -1378,6 +1378,11 @@ object Rpcs3Bridge {
             .getOrElse { "Could not reach the emulator core." }
 
     @JvmStatic
+    fun rpcnSignIn(host: String, npid: String, password: String, token: String): String =
+        runCatching { RPCSX.instance.rpcnSignIn(host, npid, password, token) }
+            .getOrElse { "Could not reach the emulator core." }
+
+    @JvmStatic
     fun rpcnTestLogin(): String =
         runCatching { RPCSX.instance.rpcnTestLogin() }
             .getOrElse { "Could not reach the emulator core." }

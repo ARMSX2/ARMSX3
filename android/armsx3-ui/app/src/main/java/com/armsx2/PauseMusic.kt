@@ -76,7 +76,30 @@ object PauseMusic {
         if (!fg) pause()
     }
 
-    private fun gain(): Float = (volumePercent.value.coerceIn(0, 100)) / 100f
+    /** How much of the set volume plays, 0..1. Below 1 while a screen with music of its own takes
+     *  over (AvatarMusic); at 0 the track waits paused where it was, and nothing else starts it. */
+    private var share = 1f
+
+    private fun gain(): Float = volume() * share
+
+    /** The set volume, 0..1, without [share]: what a track taking over from this one plays at. */
+    fun volume(): Float = (volumePercent.value.coerceIn(0, 100)) / 100f
+
+    /** Turn the track down to [value] of its set volume, for AvatarMusic's handover. */
+    fun setShare(value: Float) {
+        share = value.coerceIn(0f, 1f)
+        val p = player ?: return
+        // A fade-in reads gain() each step, so it follows the share by itself
+        if (fadeJob?.isActive == true) return
+        runCatching {
+            p.setVolume(gain(), gain())
+            if (share <= 0f) {
+                if (p.isPlaying) p.pause()
+            } else if (!p.isPlaying && foreground) {
+                p.start()
+            }
+        }
+    }
 
     private fun cancelFade() {
         fadeJob?.cancel()
@@ -166,7 +189,8 @@ object PauseMusic {
             cancelFade()
             runCatching {
                 player?.let {
-                    if (!it.isPlaying) it.start()
+                    // Handed over to another screen's music: stays where it is until handed back
+                    if (share > 0f && !it.isPlaying) it.start()
                     it.setVolume(gain(), gain())
                 }
             }
@@ -192,11 +216,12 @@ object PauseMusic {
                 isLooping = true
                 setVolume(0f, 0f) // start silent; fadeIn() ramps up
                 prepare()
-                start()
+                // Handed over to another screen's music: ready, but quiet until it hands back
+                if (share > 0f) start()
                 player = this
             }
         }.isSuccess
-        if (created) fadeIn() else Log.w(TAG, "start failed")
+        if (!created) Log.w(TAG, "start failed") else if (share > 0f) fadeIn()
     }
 
     /** Ramp from silence up to the set volume so the track eases in instead of slamming on. */

@@ -41,7 +41,30 @@ object LibraryMusic {
     /** 0..100, backs the App-settings slider. Applied live to the running player. */
     val volumePercent = mutableStateOf(DefaultVolumePercent)
 
-    private fun gain(): Float = (volumePercent.value.coerceIn(0, 100)) / 100f
+    /** How much of the set volume plays, 0..1. Below 1 while a screen with music of its own takes
+     *  over (AvatarMusic); at 0 the track waits paused where it was, and nothing else starts it. */
+    private var share = 1f
+
+    private fun gain(): Float = volume() * share
+
+    /** The set volume, 0..1, without [share]: what a track taking over from this one plays at. */
+    fun volume(): Float = (volumePercent.value.coerceIn(0, 100)) / 100f
+
+    /** Turn the track down to [value] of its set volume, for AvatarMusic's handover. */
+    fun setShare(value: Float) {
+        share = value.coerceIn(0f, 1f)
+        val p = player ?: return
+        runCatching {
+            p.setVolume(gain(), gain())
+            if (share <= 0f) {
+                if (p.isPlaying) p.pause()
+            } else if (!p.isPlaying && !pausedForFocus && enabled.value &&
+                MainActivityRuntime.eState.value == EmuState.STOPPED
+            ) {
+                p.start()
+            }
+        }
+    }
 
     /** Display name of the user's own track, or null when playing the bundled default.
      *  The app never ships or redistributes user tracks — this only plays a file the user
@@ -107,8 +130,7 @@ object LibraryMusic {
         val p = percent.coerceIn(0, 100)
         volumePercent.value = p
         MainActivityRuntime.prefs.edit { putInt(VolumeKey, p) }
-        val g = p / 100f
-        runCatching { player?.setVolume(g, g) }
+        runCatching { player?.setVolume(gain(), gain()) }
     }
 
     /** True while the track is actually audible — drives the cold-start retry below. */
@@ -204,7 +226,8 @@ object LibraryMusic {
                 isLooping = true
                 setVolume(gain(), gain())
                 prepare()
-                start()
+                // Handed over to another screen's music: ready, but quiet until it hands back
+                if (share > 0f) start()
                 player = this
             }
         }.onFailure { Log.w(TAG, "start failed", it) }
@@ -229,6 +252,7 @@ object LibraryMusic {
     fun resume() {
         if (!enabled.value) return
         if (MainActivityRuntime.eState.value != EmuState.STOPPED) return
+        if (share <= 0f) return
         runCatching { player?.takeIf { !it.isPlaying }?.start() }
     }
 

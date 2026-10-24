@@ -353,45 +353,6 @@ internal fun RpcnAvatarImage(modifier: Modifier) {
     AvatarPicture(path, modifier, AvatarPixels)
 }
 
-/** The Avatar panel in the RPCN tab: the picture games get now, and the way into the picker. */
-@Composable
-internal fun RpcnAvatarRow() {
-    val open = { RpcnAvatarPicker.open.value = true }
-    // Read again whenever the picker closes, so the row shows what was just chosen.
-    val list by produceState<AvatarList?>(null, RpcnAvatarPicker.open.value) {
-        if (!RpcnAvatarPicker.open.value) value = withContext(Dispatchers.IO) { readAvatarList() }
-    }
-    val defaultMissing = rememberDefaultMissing(list)
-
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(76.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(rowAura())
-            .clickable(onClick = open)
-            .controllerFocusable("rpcn.avatar", onConfirm = open)
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        AvatarPicture(list?.current, Modifier.size(56.dp), AvatarPixels)
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                str("rpcn.avatar.choose"),
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                describe(list, defaultMissing),
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
 /** The picker: every usable avatar in a grid, a picture of the player's own, or the default. */
 @Composable
 fun RpcnAvatarPickerOverlay() {
@@ -419,6 +380,11 @@ fun RpcnAvatarPickerOverlay() {
     }
 
     val context = LocalContext.current
+    // Its own music while it is up, blended in over the menu's and back out again (AvatarMusic)
+    DisposableEffect(Unit) {
+        com.armsx2.AvatarMusic.enter(context)
+        onDispose { com.armsx2.AvatarMusic.leave() }
+    }
     val scope = rememberCoroutineScope()
     var list by remember { mutableStateOf<AvatarList?>(null) }
     var loaded by remember { mutableStateOf(false) }

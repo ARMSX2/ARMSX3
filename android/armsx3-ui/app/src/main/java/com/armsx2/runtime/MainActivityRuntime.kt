@@ -5585,6 +5585,9 @@ open class MainActivityRuntime : ComponentActivity() {
         // effect would call start() and play the track on the OS home screen. setForeground(false)
         // also pauses whatever is currently playing.
         com.armsx2.PauseMusic.setForeground(false)
+        // The avatar picker's track too, before LibraryMusic.pause() below: it hands that one its
+        // share back when the picker is already closing, and the pause then holds it
+        com.armsx2.AvatarMusic.setForeground(false)
         // Leaving the app (home / recents / slide-out) while a game is running:
         // open the pause OVERLAY instead of a silent pause. A bare pause left
         // users staring at a frozen game with no obvious way back — they had to
@@ -5684,6 +5687,8 @@ open class MainActivityRuntime : ComponentActivity() {
         if (WindowImpl.overlayVisible.value || WindowImpl.inGameScreen.value != null) {
             com.armsx2.PauseMusic.start(this)
         }
+        // And the avatar picker's, if it is still up (the two above stay quiet under it)
+        com.armsx2.AvatarMusic.setForeground(true)
     }
 
     override fun onNewIntent(intent: Intent) {

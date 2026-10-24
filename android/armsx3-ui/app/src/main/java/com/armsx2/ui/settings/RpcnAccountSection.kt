@@ -1,22 +1,32 @@
 package com.armsx2.ui.settings
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -29,597 +39,697 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.armsx2.i18n.str
 import com.armsx2.ui.common.GlassPanel
+import com.armsx2.ui.home.LibraryKeyboard
 import com.armsx3.Rpcs3Bridge
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /**
- * RPCN account setup.
+ * RPCN, the community replacement for PSN that online play goes through: who you are on it, how to
+ * get signed in, and which server.
  *
- * RPCN is RPCS3's replacement for PSN — the thing that makes online play work at all. The
- * client is compiled into this core and always has been; what was missing was any way to
- * reach it. "PSN status" was a boolean that could only pick Disconnected or Simulated, and
- * there was no screen anywhere to enter a username, a password or a server. So online was
- * not broken here, it was unreachable, and a user asking why it did not work had no answer.
+ * It leads with a profile card: the avatar games show for you (select it to change it), the RPCN
+ * name, and whether it is signed in. Under it only the step at hand, one at a time: signing in,
+ * making an account, activating it with the code RPCN emails, or resetting a password. Then
+ * [friends], once there is an account to have friends on, the servers, and the switches few people
+ * need. It was one card of five text boxes and seven buttons, which people read as a puzzle.
  *
- * An RPCN account is created from the client, not from a website: the server takes a
- * username, password and email, then mails a token that has to be entered once to activate
- * the account. That is the whole flow below.
+ * Passwords go to the core as typed, and the core hands RPCN what RPCS3 would: a password derived
+ * from it (_rpcsx_rpcnSignIn). So the password someone uses in RPCS3 works here as they know it;
+ * pasting the long string out of RPCS3's rpcn.yml, which is what people had to do, is not needed
+ * (and still works).
  *
- * Every call here blocks on the network, so all of them run on Dispatchers.IO. A failure
- * comes back from the core as a finished sentence rather than an error code, so there is no
- * second copy of RPCN's two error enums to keep in step on this side.
+ * Every RPCN call blocks on the network, so all of them run on Dispatchers.IO. A failure comes back
+ * from the core as a finished sentence, never an error code.
  */
 @Composable
-fun RpcnAccountSection() {
+fun RpcnAccountSection(friends: (@Composable () -> Unit)? = null) {
     val scope = rememberCoroutineScope()
 
-    var host by remember { mutableStateOf("") }
-    var npid by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var email by remember { mutableStateOf("") }
-    var token by remember { mutableStateOf("") }
-
-    var hasPassword by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-    var creating by remember { mutableStateOf(false) }
-
-    // The saved-server list is the core's own cfg_rpcn "Hosts" entry, read back rather than
-    // mirrored, so add/remove/reset and whatever the core did to it always agree.
+    // What the core holds, read on entry and after anything that writes
+    var host by remember { mutableStateOf("np.rpcs3.net") }
     var hosts by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var savedName by remember { mutableStateOf("") }
     var ipv6 by remember { mutableStateOf(false) }
-    var naming by remember { mutableStateOf(false) }
-    var newName by remember { mutableStateOf("") }
-
-    // Saved-account state, read from the core on entry. RPCN keeps no persistent session, so
-    // this is what actually survives a restart -- see the note on rpcnStatus.
     var configured by remember { mutableStateOf(false) }
     var signedInAs by remember { mutableStateOf("") }
 
-    // The five credential fields are only interesting while setting an account up. Once one is
-    // saved they are noise on every visit, so they collapse behind a row and the panel that
-    // matters -- who am I signed in as -- comes first.
-    var editing by remember { mutableStateOf(false) }
-    var confirmDeleteTrophies by remember { mutableStateOf(false) }
+    // The form
+    var step by remember { mutableStateOf<Step?>(null) }
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
 
-    // str() is @Composable, so it cannot be called from run() or from an onClick lambda.
-    // Resolve every message the callbacks need up here, where it is legal, and let them
-    // close over plain strings.
+    // What the last action did, shown on the card it was done from
+    var notice by remember { mutableStateOf<AccountNotice?>(null) }
+    var serverNotice by remember { mutableStateOf<AccountNotice?>(null) }
+    var advancedNotice by remember { mutableStateOf<AccountNotice?>(null) }
+
+    var addingServer by remember { mutableStateOf(false) }
+    var serverName by remember { mutableStateOf("") }
+    var serverAddress by remember { mutableStateOf("") }
+    var deleteArmed by remember { mutableStateOf(false) }
+
+    // str() is @Composable, so it cannot be called from run() or an onClick lambda. The callbacks
+    // close over these instead.
     val msgWorking = str("rpcn.working")
-    val msgSaved = str("rpcn.saved")
     val msgSignedIn = str("rpcn.signedIn")
     val msgCreated = str("rpcn.created")
-    val msgCreateHint = str("rpcn.create.hint")
     val msgTokenSent = str("rpcn.token.sent")
     val msgResetSent = str("rpcn.reset.sent")
     val msgNeedUsername = str("rpcn.need.username")
     val msgNeedPassword = str("rpcn.need.password")
     val msgNeedNewPassword = str("rpcn.need.newPassword")
     val msgNeedEmail = str("rpcn.need.email")
+    val msgNeedCode = str("rpcn.need.code")
+    val msgNeedServer = str("rpcn.hosts.need")
     val msgHostAdded = str("rpcn.hosts.added")
     val msgHostRemoved = str("rpcn.hosts.removed")
     val msgHostsReset = str("rpcn.hosts.resetDone")
     val msgHostSelected = str("rpcn.hosts.selected")
-
-    /** Re-read everything the core holds. Called on entry and after anything that writes. */
-    suspend fun reload() {
-        val json = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetConfig() }
-
-        if (json.isNotBlank()) {
-            runCatching {
-                val o = JSONObject(json)
-                host = o.optString("host", "np.rpcs3.net")
-                npid = o.optString("npid", "")
-                hasPassword = o.optBoolean("hasPassword", false)
-                ipv6 = o.optBoolean("ipv6", false)
-
-                val arr = o.optJSONArray("hosts")
-                val list = mutableListOf<Pair<String, String>>()
-                for (i in 0 until (arr?.length() ?: 0)) {
-                    val e = arr!!.optJSONObject(i) ?: continue
-                    val desc = e.optString("desc", "")
-                    val addr = e.optString("host", "")
-                    if (desc.isNotBlank() && addr.isNotBlank()) list.add(desc to addr)
-                }
-                hosts = list
-            }
-        }
-
-        if (host.isBlank()) host = "np.rpcs3.net"
-
-        val statusJson = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnStatus() }
-        if (statusJson.isNotBlank()) {
-            runCatching {
-                val o = JSONObject(statusJson)
-                configured = o.optBoolean("configured", false)
-                // Only when a game is actually online; otherwise there is no live client.
-                signedInAs = if (o.optBoolean("authentified", false))
-                    o.optString("onlineName", "") else ""
-            }
-        }
-    }
-
-    // Seed from whatever the core already has, so an existing account shows up rather than
-    // looking unset.
-    LaunchedEffect(Unit) { reload() }
-
-    /** Run one blocking RPCN call, funnelling its message into [status]. */
-    fun run(okMessage: String, block: () -> String) {
-        if (busy) return
-        busy = true
-        status = msgWorking
-
-        scope.launch {
-            val message = withContext(Dispatchers.IO) { runCatching(block).getOrElse { "" } }
-            status = message.ifBlank { okMessage }
-            busy = false
-
-            if (message.isBlank()) {
-                // Re-read rather than assume: the core saves credentials itself on a
-                // successful create or reset, and this is what proves it.
-                reload()
-            }
-        }
-    }
-
     val msgTrophiesDeleted = str("rpcn.trophies.deleted")
 
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        // 1. WHERE YOU STAND. First, because it is the only thing most visits want to know,
-        //    and because the status line used to sit at the very bottom under the IPv6 switch
-        //    -- so a server error read as though IPv6 had caused it.
-        RpcnCard(str("rpcn.title"), str("rpcn.description")) {
-            when {
-                signedInAs.isNotBlank() -> RpcnState(
-                    str("rpcn.account.connected") + " " + signedInAs,
-                    null,
-                    MaterialTheme.colorScheme.primary,
-                )
-                configured -> RpcnState(
-                    str("rpcn.account.saved") + " " + npid,
-                    str("rpcn.account.saved.note"),
-                    MaterialTheme.colorScheme.primary,
-                )
-                else -> RpcnState(
-                    str("rpcn.state.none"),
-                    str("rpcn.state.none.note"),
-                    MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    /** Whether an account is saved, and who is signed in while a game or the friends list is. */
+    suspend fun readStatus() {
+        val status = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnStatus() }
+        runCatching {
+            val o = JSONObject(status)
+            configured = o.optBoolean("configured", false)
+            signedInAs = if (o.optBoolean("authentified", false)) o.optString("onlineName", "") else ""
+        }
+    }
+
+    /** Everything the core holds. */
+    suspend fun reload() {
+        val config = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetConfig() }
+        runCatching {
+            val o = JSONObject(config)
+            host = o.optString("host").ifBlank { "np.rpcs3.net" }
+            savedName = o.optString("npid", "")
+            ipv6 = o.optBoolean("ipv6", false)
+            val list = o.optJSONArray("hosts")
+            hosts = (0 until (list?.length() ?: 0)).mapNotNull { i ->
+                val e = list!!.optJSONObject(i) ?: return@mapNotNull null
+                val desc = e.optString("desc", "")
+                val addr = e.optString("host", "")
+                if (desc.isNotBlank() && addr.isNotBlank()) desc to addr else null
             }
-            if (status.isNotBlank()) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    status,
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.primary,
-                )
+        }
+        readStatus()
+
+        if (step == null) {
+            step = if (configured) Step.Profile else Step.SignIn
+            if (username.isBlank()) username = savedName
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        reload()
+        // The friends list signs in on its own a moment after this opens, and a game can go online
+        // underneath the in-game menu; both are local reads
+        while (true) {
+            delay(2_000)
+            readStatus()
+        }
+    }
+
+    LaunchedEffect(deleteArmed) {
+        if (deleteArmed) {
+            delay(5_000)
+            deleteArmed = false
+        }
+    }
+
+    /** One blocking RPCN call; its sentence goes to [show]. [onOk] runs when it worked. */
+    fun run(
+        okMessage: String,
+        show: (AccountNotice) -> Unit = { notice = it },
+        onOk: () -> Unit = {},
+        block: () -> String,
+    ) {
+        if (busy) return
+        busy = true
+        show(AccountNotice(msgWorking, error = false))
+
+        scope.launch {
+            val message = withContext(Dispatchers.IO) { runCatching(block).getOrElse { it.message.orEmpty() } }
+            busy = false
+            if (message.isBlank()) {
+                show(AccountNotice(okMessage, error = false))
+                onOk()
+                // Re-read rather than assume: the core saves what worked by itself
+                reload()
+            } else {
+                show(AccountNotice(message, error = true))
+            }
+        }
+    }
+
+    fun go(next: Step) {
+        notice = null
+        step = next
+    }
+
+    fun signIn(token: String = "") {
+        when {
+            username.isBlank() -> notice = AccountNotice(msgNeedUsername, error = true)
+            password.isEmpty() -> notice = AccountNotice(msgNeedPassword, error = true)
+            else -> run(msgSignedIn, onOk = {
+                password = ""
+                code = ""
+                step = Step.Profile
+            }) { Rpcs3Bridge.rpcnSignIn(host.trim(), username.trim(), password, token.trim()) }
+        }
+    }
+
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Who you are
+        ProfileCard(
+            name = if (configured || signedInAs.isNotBlank()) signedInAs.ifBlank { savedName } else null,
+            state = when {
+                signedInAs.isNotBlank() -> ProfileState.SignedIn
+                configured -> ProfileState.Saved
+                else -> ProfileState.None
+            },
+            server = hosts.firstOrNull { it.second.equals(host.trim(), ignoreCase = true) }?.first ?: host,
+            notice = notice.takeIf { step == Step.Profile },
+            showActions = configured && step == Step.Profile,
+        ) {
+            PrimaryAction("rpcn.profile.check", str("rpcn.action.check"), !busy) {
+                run(msgSignedIn) { Rpcs3Bridge.rpcnTestLogin() }
+            }
+            SecondaryAction("rpcn.profile.switch", str("rpcn.action.switch"), !busy) {
+                username = ""
+                password = ""
+                go(Step.SignIn)
             }
         }
 
-        Spacer(Modifier.height(10.dp))
+        // The step at hand
+        val formNotice = notice.takeIf { step != Step.Profile }
+        when (step) {
+            Step.SignIn -> FormCard(str("rpcn.signIn.title"), str("rpcn.signIn.note")) {
+                Field("rpcn.field.username", str("rpcn.username"), username, enabled = !busy) { username = it }
+                Field("rpcn.field.password", str("rpcn.password"), password, masked = true, enabled = !busy) { password = it }
+                PrimaryAction("rpcn.signIn.go", str("rpcn.action.signIn"), !busy, Modifier.fillMaxWidth()) { signIn() }
+                NoticeText(formNotice)
+                LinkRow {
+                    LinkAction("rpcn.signIn.create", str("rpcn.action.create"), !busy) { go(Step.Create) }
+                    LinkAction("rpcn.signIn.forgot", str("rpcn.signIn.forgot"), !busy) { go(Step.Reset) }
+                }
+                LinkRow {
+                    LinkAction("rpcn.signIn.code", str("rpcn.signIn.haveCode"), !busy) { go(Step.Activate) }
+                    if (configured) LinkAction("rpcn.signIn.back", str("action.back"), !busy) { go(Step.Profile) }
+                }
+            }
 
-        // The picture games show for the player (RpcnAvatar.kt). Next to where you stand, since it
-        // is part of who you are online and the one thing here people come back to change.
-        RpcnCard(str("rpcn.avatar.title"), str("rpcn.avatar.description")) {
-            RpcnAvatarRow()
+            Step.Create -> FormCard(str("rpcn.create.title"), str("rpcn.create.note")) {
+                Field("rpcn.field.username", str("rpcn.username"), username, enabled = !busy) { username = it }
+                Hint(str("rpcn.username.rules"))
+                Field("rpcn.field.password", str("rpcn.password"), password, masked = true, enabled = !busy) { password = it }
+                Field("rpcn.field.email", str("rpcn.email"), email, keyboard = KeyboardType.Email, enabled = !busy) { email = it }
+                Hint(str("rpcn.email.why"))
+                PrimaryAction("rpcn.create.go", str("rpcn.create.go"), !busy, Modifier.fillMaxWidth()) {
+                    when {
+                        username.isBlank() -> notice = AccountNotice(msgNeedUsername, error = true)
+                        password.isEmpty() -> notice = AccountNotice(msgNeedPassword, error = true)
+                        email.isBlank() -> notice = AccountNotice(msgNeedEmail, error = true)
+                        else -> run(msgCreated, onOk = { step = Step.Activate }) {
+                            Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
+                            Rpcs3Bridge.rpcnCreateAccount(username.trim(), password, username.trim(), email.trim())
+                        }
+                    }
+                }
+                NoticeText(formNotice)
+                LinkRow { LinkAction("rpcn.create.back", str("action.back"), !busy) { go(Step.SignIn) } }
+            }
+
+            Step.Activate -> FormCard(str("rpcn.activate.title"), str("rpcn.activate.note")) {
+                // Straight after Create the name and password are still here. Coming back later
+                // they are not, and the code is redeemed with them.
+                val askAccount = remember { username.isBlank() || password.isEmpty() }
+                if (askAccount) {
+                    Field("rpcn.field.username", str("rpcn.username"), username, enabled = !busy) { username = it }
+                    Field("rpcn.field.password", str("rpcn.password"), password, masked = true, enabled = !busy) { password = it }
+                }
+                Field("rpcn.field.code", str("rpcn.token"), code, enabled = !busy) { code = it }
+                PrimaryAction("rpcn.activate.go", str("rpcn.activate.go"), !busy, Modifier.fillMaxWidth()) {
+                    if (code.isBlank()) notice = AccountNotice(msgNeedCode, error = true) else signIn(token = code)
+                }
+                NoticeText(formNotice)
+                LinkRow {
+                    LinkAction("rpcn.activate.resend", str("rpcn.token.resend"), !busy) {
+                        when {
+                            username.isBlank() -> notice = AccountNotice(msgNeedUsername, error = true)
+                            password.isEmpty() -> notice = AccountNotice(msgNeedPassword, error = true)
+                            else -> run(msgTokenSent) {
+                                Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
+                                Rpcs3Bridge.rpcnResendToken(username.trim(), password)
+                            }
+                        }
+                    }
+                    LinkAction("rpcn.activate.back", str("action.back"), !busy) { go(Step.SignIn) }
+                }
+            }
+
+            Step.Reset -> FormCard(str("rpcn.reset.title"), str("rpcn.reset.note")) {
+                Field("rpcn.field.username", str("rpcn.username"), username, enabled = !busy) { username = it }
+                Field("rpcn.field.email", str("rpcn.email"), email, keyboard = KeyboardType.Email, enabled = !busy) { email = it }
+                PrimaryAction("rpcn.reset.ask", str("rpcn.reset.ask"), !busy, Modifier.fillMaxWidth()) {
+                    when {
+                        username.isBlank() -> notice = AccountNotice(msgNeedUsername, error = true)
+                        email.isBlank() -> notice = AccountNotice(msgNeedEmail, error = true)
+                        else -> run(msgResetSent, onOk = { step = Step.ResetCode }) {
+                            Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
+                            Rpcs3Bridge.rpcnSendResetToken(username.trim(), email.trim())
+                        }
+                    }
+                }
+                NoticeText(formNotice)
+                LinkRow {
+                    LinkAction("rpcn.reset.haveCode", str("rpcn.reset.haveCode"), !busy) { go(Step.ResetCode) }
+                    LinkAction("rpcn.reset.back", str("action.back"), !busy) { go(Step.SignIn) }
+                }
+            }
+
+            Step.ResetCode -> FormCard(str("rpcn.reset.codeTitle"), str("rpcn.reset.codeNote")) {
+                Field("rpcn.field.username", str("rpcn.username"), username, enabled = !busy) { username = it }
+                Field("rpcn.field.code", str("rpcn.reset.code"), code, enabled = !busy) { code = it }
+                Field("rpcn.field.password", str("rpcn.reset.newPassword"), password, masked = true, enabled = !busy) { password = it }
+                PrimaryAction("rpcn.reset.go", str("rpcn.reset.go"), !busy, Modifier.fillMaxWidth()) {
+                    when {
+                        username.isBlank() -> notice = AccountNotice(msgNeedUsername, error = true)
+                        code.isBlank() -> notice = AccountNotice(msgNeedCode, error = true)
+                        password.isEmpty() -> notice = AccountNotice(msgNeedNewPassword, error = true)
+                        // The new password, then signed in with it, in one go
+                        else -> run(msgSignedIn, onOk = {
+                            password = ""
+                            code = ""
+                            step = Step.Profile
+                        }) {
+                            Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
+                            Rpcs3Bridge.rpcnResetPassword(username.trim(), code.trim(), password).ifBlank {
+                                Rpcs3Bridge.rpcnSignIn(host.trim(), username.trim(), password, "")
+                            }
+                        }
+                    }
+                }
+                NoticeText(formNotice)
+                LinkRow { LinkAction("rpcn.resetCode.back", str("action.back"), !busy) { go(Step.Reset) } }
+            }
+
+            Step.Profile, null -> Unit
         }
 
-        Spacer(Modifier.height(10.dp))
+        if (configured && friends != null) {
+            GlassPanel(Modifier.fillMaxWidth()) { friends() }
+        }
 
-        // 2. WHICH SERVER. The saved list is the control; the free-text box below it is for
-        //    typing one that is not saved yet.
-        RpcnCard(str("rpcn.hosts.title"), str("rpcn.hosts.description")) {
+        // Which server
+        FormCard(str("rpcn.hosts.title"), str("rpcn.hosts.description")) {
             hosts.forEach { (desc, addr) ->
-                val selected = addr.equals(host.trim(), ignoreCase = true)
                 val official = desc == "Official RPCN Server" && addr == "np.rpcs3.net"
-                val pick = {
-                    host = addr
-                    Rpcs3Bridge.rpcnSetConfig(addr, "", "", "")
-                    status = msgHostSelected
-                }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(52.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(rowAura())
-                        .clickable(enabled = !busy, onClick = pick)
-                        .controllerFocusable("rpcn.host.$addr", onConfirm = pick)
-                        .padding(horizontal = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        if (selected) "\u25cf" else "\u25cb",
-                        fontSize = 14.sp,
-                        color = if (selected) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            desc,
-                            fontSize = 15.sp,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                            color = if (selected) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(addr, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (!official) {
-                        TextButton(enabled = !busy, onClick = {
-                            scope.launch {
-                                val message = withContext(Dispatchers.IO) {
-                                    Rpcs3Bridge.rpcnDelHost(desc, addr)
-                                }
-                                status = message.ifBlank { msgHostRemoved }
-                                reload()
-                            }
-                        }) { Text(str("rpcn.hosts.remove")) }
-                    }
-                }
-                Spacer(Modifier.height(4.dp))
-            }
-
-            Spacer(Modifier.height(4.dp))
-            OutlinedTextField(
-                value = host,
-                onValueChange = { host = it },
-                label = { Text(str("rpcn.server")) },
-                singleLine = true,
-                enabled = !busy,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(
-                Modifier.fillMaxWidth().padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                TextButton(enabled = !busy, onClick = {
-                    newName = ""
-                    naming = true
-                }) { Text(str("rpcn.hosts.add")) }
-                TextButton(enabled = !busy, onClick = {
-                    scope.launch {
-                        withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnResetHosts() }
-                        status = msgHostsReset
-                        reload()
-                    }
-                }) { Text(str("rpcn.hosts.reset")) }
-            }
-        }
-
-        if (naming) {
-            AlertDialog(
-                onDismissRequest = { naming = false },
-                title = { Text(str("rpcn.hosts.add")) },
-                text = {
-                    OutlinedTextField(
-                        value = newName,
-                        onValueChange = { newName = it },
-                        label = { Text(str("rpcn.hosts.name")) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        val name = newName.trim()
-                        val addr = host.trim()
-                        naming = false
+                ServerRow(
+                    name = desc,
+                    address = addr,
+                    selected = addr.equals(host.trim(), ignoreCase = true),
+                    enabled = !busy,
+                    onPick = {
+                        host = addr
+                        Rpcs3Bridge.rpcnSetConfig(addr, "", "", "")
+                        serverNotice = AccountNotice(msgHostSelected, error = false)
+                    },
+                    onRemove = if (official) null else ({
                         scope.launch {
-                            val message = withContext(Dispatchers.IO) {
-                                Rpcs3Bridge.rpcnAddHost(name, addr)
-                            }
-                            status = message.ifBlank { msgHostAdded }
+                            val message = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnDelHost(desc, addr) }
+                            serverNotice = if (message.isBlank()) AccountNotice(msgHostRemoved, error = false) else AccountNotice(message, error = true)
                             reload()
                         }
-                    }) { Text(str("rpcn.save")) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { naming = false }) { Text(str("action.cancel")) }
-                },
-            )
-        }
+                    }),
+                )
+            }
 
-        Spacer(Modifier.height(10.dp))
-
-        // 3. THE CREDENTIALS. Collapsed whenever an account is already set up, which is the
-        //    common case and the one that does not need five text boxes on screen.
-        RpcnCard(str("rpcn.section.account"), null) {
-            if (configured && !editing) {
-                val open = { editing = true }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(56.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(rowAura())
-                        .clickable(enabled = !busy, onClick = open)
-                        .controllerFocusable("rpcn.account.change", onConfirm = open)
-                        .padding(horizontal = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column {
-                        Text(
-                            str("rpcn.account.change"),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Text(
-                            str("rpcn.account.change.note"),
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+            if (addingServer) {
+                Field("rpcn.field.serverName", str("rpcn.hosts.name"), serverName, enabled = !busy) { serverName = it }
+                Field("rpcn.field.serverAddress", str("rpcn.hosts.address"), serverAddress, keyboard = KeyboardType.Uri, enabled = !busy) { serverAddress = it }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PrimaryAction("rpcn.hosts.save", str("rpcn.hosts.save"), !busy) {
+                        val name = serverName.trim()
+                        val addr = serverAddress.trim()
+                        if (name.isBlank() || addr.isBlank()) {
+                            serverNotice = AccountNotice(msgNeedServer, error = true)
+                        } else {
+                            scope.launch {
+                                val message = withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnAddHost(name, addr) }
+                                if (message.isBlank()) {
+                                    serverNotice = AccountNotice(msgHostAdded, error = false)
+                                    addingServer = false
+                                    serverName = ""
+                                    serverAddress = ""
+                                } else {
+                                    serverNotice = AccountNotice(message, error = true)
+                                }
+                                reload()
+                            }
+                        }
                     }
+                    SecondaryAction("rpcn.hosts.cancel", str("action.cancel"), !busy) { addingServer = false }
                 }
             } else {
-                OutlinedTextField(
-                    value = npid,
-                    onValueChange = { npid = it },
-                    label = { Text(str("rpcn.username")) },
-                    singleLine = true,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = {
-                        // Say when one is already stored, because the field is deliberately blank
-                        // and an empty box would otherwise read as "no password set".
-                        //
-                        // Not shown even though it could be: cfg_rpcn stores the password in
-                        // PLAINTEXT in rpcn.yml (set_password does a straight from_string), so
-                        // rendering it would put it on screen as well as on disk for no gain.
-                        Text(if (hasPassword) str("rpcn.password.stored") else str("rpcn.password"))
-                    },
-                    singleLine = true,
-                    enabled = !busy,
-                    visualTransformation = PasswordVisualTransformation(),
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                )
-                // Always shown, not only while creating an account.
-                //
-                // Password reset sends this address to the server, and hiding the box outside
-                // creation mode meant Reset password posted an EMPTY email. The server rejects
-                // that whole query as Malformed, which reached the user as the meaningless
-                // "Server error 1".
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it },
-                    label = { Text(str("rpcn.email")) },
-                    singleLine = true,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                )
-                Text(
-                    str("rpcn.email.why"),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 4.dp),
-                )
-                // The token arrives by email after creating an account and activates it. Kept
-                // visible always: it is also what a password reset needs.
-                OutlinedTextField(
-                    value = token,
-                    onValueChange = { token = it },
-                    label = { Text(str("rpcn.token")) },
-                    singleLine = true,
-                    enabled = !busy,
-                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                )
-
-                // One filled button, because there is one thing most people want: save what I
-                // typed and tell me whether it works. The rest stay text buttons so the eye is
-                // not asked to choose between seven equals.
-                Button(
-                    enabled = !busy,
-                    onClick = {
-                        // Save first: a login test with a host the user just typed but never
-                        // saved would test the old one and report a confusing result.
-                        Rpcs3Bridge.rpcnSetConfig(host.trim(), npid.trim(), password, token.trim())
-                        password = ""
-                        run(msgSignedIn) { Rpcs3Bridge.rpcnTestLogin() }
-                    },
-                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                ) { Text(str("rpcn.test")) }
-
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    TextButton(enabled = !busy, onClick = {
-                        Rpcs3Bridge.rpcnSetConfig(host.trim(), npid.trim(), password, token.trim())
-                        password = ""
-                        status = msgSaved
-                        scope.launch { reload() }
-                    }) { Text(str("rpcn.save")) }
-
-                    TextButton(enabled = !busy, onClick = {
-                        if (!creating) {
-                            creating = true
-                            status = msgCreateHint
-                        } else if (npid.isBlank()) {
-                            status = msgNeedUsername
-                        } else if (password.isBlank()) {
-                            status = msgNeedPassword
-                        } else if (email.isBlank()) {
-                            status = msgNeedEmail
-                        } else {
-                            Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
-                            run(msgCreated) {
-                                Rpcs3Bridge.rpcnCreateAccount(
-                                    npid.trim(), password, npid.trim(), email.trim(),
-                                )
-                            }
-                        }
-                    }) { Text(if (creating) str("rpcn.create.go") else str("rpcn.create")) }
-                }
-
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    // Checked here rather than sent and rejected. A required field left empty
-                    // makes the whole query Malformed, and the server's answer to that is an
-                    // error number with no way for the user to know which box to fill in. Note
-                    // the password box is CLEARED by Save, so "I typed it a moment ago" is not
-                    // the same as "it is in the field now".
-                    TextButton(enabled = !busy, onClick = {
-                        when {
-                            npid.isBlank() -> status = msgNeedUsername
-                            password.isBlank() -> status = msgNeedPassword
-                            else -> {
-                                Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
-                                run(msgTokenSent) {
-                                    Rpcs3Bridge.rpcnResendToken(npid.trim(), password)
-                                }
-                            }
-                        }
-                    }) { Text(str("rpcn.token.resend")) }
-
-                    TextButton(enabled = !busy, onClick = {
-                        when {
-                            npid.isBlank() -> status = msgNeedUsername
-                            // No token yet: ask the server to email one, which needs the address.
-                            token.isBlank() && email.isBlank() -> status = msgNeedEmail
-                            // Token in hand: this is the actual reset, so a new password is required.
-                            token.isNotBlank() && password.isBlank() -> status = msgNeedNewPassword
-                            else -> {
-                                Rpcs3Bridge.rpcnSetConfig(host.trim(), "", "", "")
-                                run(msgResetSent) {
-                                    if (token.isBlank()) {
-                                        Rpcs3Bridge.rpcnSendResetToken(npid.trim(), email.trim())
-                                    } else {
-                                        Rpcs3Bridge.rpcnResetPassword(npid.trim(), token.trim(), password)
-                                    }
-                                }
-                            }
-                        }
-                    }) { Text(str("rpcn.reset")) }
-
-                    if (configured) {
-                        Spacer(Modifier.weight(1f))
-                        TextButton(enabled = !busy, onClick = { editing = false }) {
-                            Text(str("rpcn.account.hide"))
+                LinkRow {
+                    LinkAction("rpcn.hosts.add", str("rpcn.hosts.add"), !busy) { addingServer = true }
+                    LinkAction("rpcn.hosts.reset", str("rpcn.hosts.reset"), !busy) {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnResetHosts() }
+                            serverNotice = AccountNotice(msgHostsReset, error = false)
+                            reload()
                         }
                     }
                 }
             }
+            NoticeText(serverNotice)
         }
 
-        Spacer(Modifier.height(10.dp))
-
-        // 4. THE REST. IPv6 goes through the shared ToggleRow so it looks and behaves like
-        //    every other switch in Settings, and the destructive action lives on its own at
-        //    the bottom where destructive actions belong.
-        RpcnCard(str("rpcn.section.advanced"), null) {
-            ToggleRow(
-                str("rpcn.ipv6.label"),
-                ipv6,
-                description = str("rpcn.ipv6.description"),
-            ) {
+        // The rest: IPv6 through the shared ToggleRow, the one destructive action at the bottom
+        FormCard(str("rpcn.section.advanced"), null) {
+            ToggleRow(str("rpcn.ipv6.label"), ipv6, description = str("rpcn.ipv6.description")) {
                 ipv6 = it
                 scope.launch { withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnSetIpv6(it) } }
             }
-            HorizontalDivider(
-                Modifier.padding(vertical = 6.dp),
-                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
-            )
-            val askDelete = { confirmDeleteTrophies = true }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(58.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(rowAura())
-                    .clickable(enabled = !busy, onClick = askDelete)
-                    .controllerFocusable("rpcn.trophies.delete", onConfirm = askDelete)
-                    .padding(horizontal = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column {
-                    Text(
-                        str("rpcn.trophies.title"),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                    Text(
-                        str("rpcn.trophies.description"),
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+            // Asks twice on the row itself rather than in a dialog, which a pad cannot reach
+            val delete = {
+                if (!busy) {
+                    if (!deleteArmed) {
+                        deleteArmed = true
+                    } else {
+                        deleteArmed = false
+                        run(msgTrophiesDeleted, show = { advancedNotice = it }) { Rpcs3Bridge.rpcnDeleteTrophies() }
+                    }
                 }
             }
-        }
-
-        if (confirmDeleteTrophies) {
-            AlertDialog(
-                onDismissRequest = { confirmDeleteTrophies = false },
-                title = { Text(str("rpcn.trophies.title")) },
-                text = { Text(str("rpcn.trophies.confirm")) },
-                confirmButton = {
-                    TextButton(onClick = {
-                        confirmDeleteTrophies = false
-                        run(msgTrophiesDeleted) { Rpcs3Bridge.rpcnDeleteTrophies() }
-                    }) { Text(str("rpcn.trophies.title")) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { confirmDeleteTrophies = false }) {
-                        Text(str("action.cancel"))
-                    }
-                },
-            )
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(rowAura())
+                    .clickable(enabled = !busy, onClick = delete)
+                    .controllerFocusable("rpcn.trophies.delete", onConfirm = delete)
+                    .padding(horizontal = 10.dp, vertical = 10.dp),
+            ) {
+                Text(
+                    str(if (deleteArmed) "rpcn.trophies.again" else "rpcn.trophies.title"),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Text(
+                    str(if (deleteArmed) "rpcn.trophies.confirm" else "rpcn.trophies.description"),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            NoticeText(advancedNotice)
         }
     }
 }
 
-/** One titled panel. Four of these replace what used to be a single flat column of every
- *  control RPCN has, in the order they happened to be written. */
+/** Which step of getting an account working is on screen. */
+private enum class Step { Profile, SignIn, Create, Activate, Reset, ResetCode }
+
+private enum class ProfileState { SignedIn, Saved, None }
+
+private class AccountNotice(val text: String, val error: Boolean)
+
+/**
+ * Who you are on RPCN: the avatar games show for you inside a slowly turning ring (select it to
+ * change it), the name, whether it is signed in, and the server.
+ */
 @Composable
-private fun RpcnCard(title: String, description: String?, content: @Composable () -> Unit) {
-    GlassPanel(Modifier.fillMaxWidth(), contentPadding = 14.dp) {
-        Column(Modifier.fillMaxWidth()) {
-            Text(
-                title,
-                fontSize = 16.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            if (description != null) {
-                Text(
-                    description,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 2.dp),
-                )
+private fun ProfileCard(
+    name: String?,
+    state: ProfileState,
+    server: String,
+    notice: AccountNotice?,
+    showActions: Boolean,
+    actions: @Composable () -> Unit,
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    val ringColors = listOf(primary, MaterialTheme.colorScheme.tertiary, primary.copy(alpha = 0.12f), primary)
+    val openPicker = { RpcnAvatarPicker.open.value = true }
+    val ring = rememberInfiniteTransition(label = "rpcn-ring")
+    val angle by ring.animateFloat(0f, 360f, infiniteRepeatable(tween(9_000, easing = LinearEasing)), label = "angle")
+
+    GlassPanel(Modifier.fillMaxWidth(), contentPadding = 0.dp) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(primary.copy(alpha = 0.30f), Color.Transparent)))
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(96.dp)
+                        .clip(CircleShape)
+                        .clickable(onClick = openPicker)
+                        .controllerFocusable("rpcn.profile.avatar", CircleShape, onConfirm = openPicker),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    // The angle is read while drawing only, so turning it redraws the ring and
+                    // recomposes nothing
+                    Canvas(Modifier.size(96.dp)) {
+                        rotate(angle) {
+                            drawCircle(
+                                Brush.sweepGradient(ringColors),
+                                radius = size.minDimension / 2f - 3.dp.toPx(),
+                                style = Stroke(5.dp.toPx()),
+                            )
+                        }
+                    }
+                    RpcnAvatarImage(Modifier.size(78.dp).clip(CircleShape))
+                }
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    Text(
+                        name ?: str("rpcn.profile.none"),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    StatePill(state)
+                    Text(
+                        str("rpcn.profile.server").format(server),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        str("rpcn.profile.avatarHint"),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = primary,
+                    )
+                }
             }
-            Spacer(Modifier.height(10.dp))
+
+            if (showActions) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    actions()
+                }
+            }
+            NoticeText(notice)
+        }
+    }
+}
+
+/** Signed in, saved, or nothing yet, as a small coloured pill. */
+@Composable
+private fun StatePill(state: ProfileState) {
+    val (color, label) = when (state) {
+        ProfileState.SignedIn -> Color(0xFF3DDC84) to str("rpcn.profile.signedIn")
+        ProfileState.Saved -> MaterialTheme.colorScheme.primary to str("rpcn.profile.saved")
+        ProfileState.None -> MaterialTheme.colorScheme.onSurfaceVariant to str("rpcn.profile.notSetUp")
+    }
+    Row(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(color.copy(alpha = 0.16f))
+            .padding(horizontal = 10.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(6.dp))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = color)
+    }
+}
+
+/** One titled card. */
+@Composable
+private fun FormCard(title: String, description: String?, content: @Composable () -> Unit) {
+    GlassPanel(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                if (description != null) {
+                    Text(description, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
             content()
         }
     }
 }
 
-/** The one line that answers "am I set up?", with its footnote. */
+/**
+ * A text field touch types into as any other, and the pad's A opens the controller keyboard for
+ * (LibraryKeyboard), since a pad cannot type into the field itself. A password shows dots, with
+ * Show to check what was typed.
+ */
 @Composable
-private fun RpcnState(line: String, note: String?, color: androidx.compose.ui.graphics.Color) {
-    Text(line, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = color)
-    if (note != null) {
-        Text(
-            note,
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 2.dp),
+private fun Field(
+    id: String,
+    label: String,
+    value: String,
+    masked: Boolean = false,
+    keyboard: KeyboardType = KeyboardType.Text,
+    enabled: Boolean = true,
+    onChange: (String) -> Unit,
+) {
+    var shown by remember { mutableStateOf(false) }
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label) },
+        singleLine = true,
+        enabled = enabled,
+        shape = RoundedCornerShape(14.dp),
+        visualTransformation = if (masked && !shown) PasswordVisualTransformation() else VisualTransformation.None,
+        keyboardOptions = KeyboardOptions(keyboardType = if (masked) KeyboardType.Password else keyboard),
+        trailingIcon = if (masked) {
+            { TextButton(onClick = { shown = !shown }) { Text(str(if (shown) "rpcn.password.hide" else "rpcn.password.show")) } }
+        } else {
+            null
+        },
+        modifier = Modifier
+            .fillMaxWidth()
+            .controllerFocusable(id, onConfirm = { if (enabled) LibraryKeyboard.open(value, onChange, label, masked) }),
+    )
+}
+
+@Composable
+private fun Hint(text: String) {
+    Text(text, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+@Composable
+private fun NoticeText(notice: AccountNotice?) {
+    if (notice == null) return
+    Text(
+        notice.text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (notice.error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+    )
+}
+
+@Composable
+private fun PrimaryAction(id: String, label: String, enabled: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(14.dp),
+        modifier = modifier.height(46.dp).controllerFocusable(id, onConfirm = { if (enabled) onClick() }),
+    ) { Text(label, fontWeight = FontWeight.SemiBold) }
+}
+
+@Composable
+private fun SecondaryAction(id: String, label: String, enabled: Boolean, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = enabled,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.height(46.dp).controllerFocusable(id, onConfirm = { if (enabled) onClick() }),
+    ) { Text(label) }
+}
+
+/** The quieter ways on from a card: back, forgot, have a code. */
+@Composable
+private fun LinkRow(content: @Composable () -> Unit) {
+    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { content() }
+}
+
+@Composable
+private fun LinkAction(id: String, label: String, enabled: Boolean, onClick: () -> Unit) {
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.controllerFocusable(id, onConfirm = { if (enabled) onClick() }),
+    ) { Text(label) }
+}
+
+/** A saved server: lit when it is the one in use, with Remove unless it is the official one. */
+@Composable
+private fun ServerRow(
+    name: String,
+    address: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onPick: () -> Unit,
+    onRemove: (() -> Unit)?,
+) {
+    val primary = MaterialTheme.colorScheme.primary
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) primary.copy(alpha = 0.16f) else Color.Transparent)
+            .clickable(enabled = enabled, onClick = onPick)
+            .controllerFocusable("rpcn.host.$address", onConfirm = { if (enabled) onPick() })
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(12.dp)
+                .clip(CircleShape)
+                .background(if (selected) primary else MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
         )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                name,
+                fontSize = 15.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (selected) primary else MaterialTheme.colorScheme.onSurface,
+            )
+            Text(address, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (onRemove != null) {
+            TextButton(
+                onClick = onRemove,
+                enabled = enabled,
+                modifier = Modifier.controllerFocusable("rpcn.host.remove.$address", onConfirm = { if (enabled) onRemove() }),
+            ) { Text(str("rpcn.hosts.remove")) }
+        }
     }
 }

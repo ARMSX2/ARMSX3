@@ -221,6 +221,8 @@ class RPCSX {
     external fun rpcnResendToken(npid: String, password: String): String
     external fun rpcnSendResetToken(npid: String, email: String): String
     external fun rpcnResetPassword(npid: String, token: String, password: String): String
+    /** Save the account and sign in, offering the password in the forms RPCN may want (RPCS3's derived one first). */
+    external fun rpcnSignIn(host: String, npid: String, password: String, token: String): String
 
     /** Connect and authenticate with the saved account. */
     external fun rpcnTestLogin(): String

@@ -111,6 +111,8 @@ struct RPCSXApi {
   const char *(*rpcnResetPassword)(std::string_view npid, std::string_view token,
                                    std::string_view password);
   const char *(*rpcnTestLogin)();
+  const char *(*rpcnSignIn)(std::string_view host, std::string_view npid,
+                            std::string_view password, std::string_view token);
   const char *(*rpcnDeleteTrophies)();
   const char *(*rpcnAddHost)(std::string_view desc, std::string_view host);
   const char *(*rpcnDelHost)(std::string_view desc, std::string_view host);
@@ -286,6 +288,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.rpcnSendResetToken = reinterpret_cast<decltype(rpcnSendResetToken)>(dlsym(handle, "_rpcsx_rpcnSendResetToken"));
     result.rpcnResetPassword = reinterpret_cast<decltype(rpcnResetPassword)>(dlsym(handle, "_rpcsx_rpcnResetPassword"));
     result.rpcnTestLogin = reinterpret_cast<decltype(rpcnTestLogin)>(dlsym(handle, "_rpcsx_rpcnTestLogin"));
+    result.rpcnSignIn = reinterpret_cast<decltype(rpcnSignIn)>(dlsym(handle, "_rpcsx_rpcnSignIn"));
     result.rpcnDeleteTrophies = reinterpret_cast<decltype(rpcnDeleteTrophies)>(dlsym(handle, "_rpcsx_rpcnDeleteTrophies"));
     result.rpcnAddHost = reinterpret_cast<decltype(rpcnAddHost)>(dlsym(handle, "_rpcsx_rpcnAddHost"));
     result.rpcnDelHost = reinterpret_cast<decltype(rpcnDelHost)>(dlsym(handle, "_rpcsx_rpcnDelHost"));
@@ -2082,6 +2085,24 @@ Java_net_rpcsx_RPCSX_rpcnResetPassword(JNIEnv *env, jobject, jstring npid, jstri
 
   const std::string n = str(npid), t = str(token), p = str(password);
   const char *msg = rpcsxLib.rpcnResetPassword(n, t, p);
+  return env->NewStringUTF(msg ? msg : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_rpcnSignIn(JNIEnv *env, jobject, jstring host, jstring npid, jstring password,
+                                jstring token) {
+  if (!rpcsxLib.rpcnSignIn) return rpcn_unavailable(env);
+
+  auto str = [&](jstring s) -> std::string {
+    if (!s) return {};
+    const char *c = env->GetStringUTFChars(s, nullptr);
+    std::string out = c ? c : "";
+    if (c) env->ReleaseStringUTFChars(s, c);
+    return out;
+  };
+
+  const std::string h = str(host), n = str(npid), p = str(password), t = str(token);
+  const char *msg = rpcsxLib.rpcnSignIn(h, n, p, t);
   return env->NewStringUTF(msg ? msg : "");
 }
 

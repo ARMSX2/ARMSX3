@@ -187,7 +187,7 @@ internal val SETTINGS_SEARCH_INDEX: List<SettingsSearchEntry> = listOf(
     SettingsSearchEntry("rpcn.title", true, SettingsCategory.Network),
     SettingsSearchEntry("rpcn.avatar.title", true, SettingsCategory.Network),
     SettingsSearchEntry("rpcn.hosts.title", true, SettingsCategory.Network),
-    SettingsSearchEntry("rpcn.section.account", true, SettingsCategory.Network),
+    SettingsSearchEntry("rpcn.signIn.title", true, SettingsCategory.Network),
     SettingsSearchEntry("rpcn.section.advanced", true, SettingsCategory.Network),
     SettingsSearchEntry("rpcn.ipv6.label", true, SettingsCategory.Network),
     SettingsSearchEntry("overlay.fontSize.label", true, SettingsCategory.OnScreen),

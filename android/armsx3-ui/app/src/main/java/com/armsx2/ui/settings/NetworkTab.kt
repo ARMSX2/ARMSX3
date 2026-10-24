@@ -84,9 +84,7 @@ fun NetworkTab(state: MutableState<Settings>) {
         // otherwise it invites people to set up an account the emulator will not use.
         if (s.ps3.psnStatus == 2) {
             SettingsDivider()
-            RpcnAccountSection()
-            SettingsDivider()
-            RpcnFriendsSection()
+            RpcnAccountSection(friends = { RpcnFriendsSection() })
         }
         SettingsDivider()
         ToggleRow(

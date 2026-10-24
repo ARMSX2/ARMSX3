@@ -36,6 +36,9 @@ sealed interface AppRoute {
     data object Language : AppRoute
     data object News : AppRoute
     data object Friends : AppRoute
+    // The RPCN account, friends and servers on a page of their own, from the library's menu.
+    // Settings shows the same only once PSN status is set to RPCN.
+    data object Rpcn : AppRoute
     // Joining a friend's game on the same Wi-Fi. Hosting lives in the in-game menu's Friends
     // overlay instead, since only a running game can be hosted.
     data object RemotePlay : AppRoute

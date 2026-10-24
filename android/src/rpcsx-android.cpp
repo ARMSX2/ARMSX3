@@ -50,6 +50,8 @@
 #include "Emu/NP/np_handler.h"
 #include "Emu/NP/rpcn_client.h"
 #include "Emu/NP/rpcn_config.h"
+#include <wolfssl/wolfcrypt/pwdbased.h>
+#include <wolfssl/wolfcrypt/sha3.h>
 #include "Emu/system_config_types.h"
 #include "Emu/system_progress.hpp"
 #include "Emu/system_utils.hpp"
@@ -3146,6 +3148,57 @@ extern "C" const char *_rpcsx_rpcnGetConfig() {
 
 // Save whatever is non-empty. Empty means "leave alone", so the UI can save a host without
 // resending a password it never displayed.
+// RPCN is never given the password a player types. RPCS3 derives one from it (derive_password in
+// rpcn_settings_dialog.cpp: PBKDF2 with SHA3-256 over this salt, as 64 hex digits), makes its
+// accounts with that and signs in with that, so an account made in RPCS3 only signs in here the
+// same way. ARMSX3 used to send the password as typed, and players got in by pasting the derived
+// string out of RPCS3's rpcn.yml instead.
+static std::string derive_rpcn_password(std::string_view typed) {
+  static constexpr std::string_view salt = "No matter where you go, everybody's connected.";
+
+  u8 digest[WC_SHA3_256_DIGEST_SIZE];
+
+  if (wc_PBKDF2(digest, reinterpret_cast<const u8 *>(typed.data()), ::narrow<s32>(typed.size()),
+                reinterpret_cast<const u8 *>(salt.data()), ::narrow<s32>(salt.size()), 200'000,
+                WC_SHA3_256_DIGEST_SIZE, WC_SHA3_256) != 0) {
+    return {};
+  }
+
+  constexpr auto hex = "0123456789ABCDEF";
+  std::string derived(WC_SHA3_256_DIGEST_SIZE * 2, '0');
+
+  for (usz i = 0; i < WC_SHA3_256_DIGEST_SIZE; i++) {
+    derived[i * 2] = hex[digest[i] >> 4];
+    derived[i * 2 + 1] = hex[digest[i] & 15];
+  }
+
+  return derived;
+}
+
+// Already derived: what RPCS3 keeps in rpcn.yml, pasted in by players who found that worked.
+static bool is_derived_rpcn_password(std::string_view text) {
+  return text.size() == WC_SHA3_256_DIGEST_SIZE * 2 &&
+         std::all_of(text.begin(), text.end(),
+                     [](char c) { return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'); });
+}
+
+// The forms of a typed password to offer RPCN, in order: derived, as RPCS3 does, then as typed,
+// which is what an account made with an older ARMSX3 was made with.
+static std::vector<std::string> rpcn_password_forms(std::string_view typed) {
+  if (is_derived_rpcn_password(typed)) {
+    return {std::string(typed)};
+  }
+
+  std::vector<std::string> forms;
+
+  if (std::string derived = derive_rpcn_password(typed); !derived.empty()) {
+    forms.push_back(std::move(derived));
+  }
+
+  forms.emplace_back(typed);
+  return forms;
+}
+
 extern "C" void _rpcsx_rpcnSetConfig(std::string_view host, std::string_view npid,
                                      std::string_view password, std::string_view token) {
   g_cfg_rpcn.load();
@@ -3195,7 +3248,7 @@ static std::string rpcn_describe(rpcn::ErrorType error) {
   case rpcn::ErrorType::LoginInvalidUsername: return "Unknown username.";
   case rpcn::ErrorType::LoginInvalidPassword: return "Wrong password.";
   case rpcn::ErrorType::LoginInvalidToken:
-    return "That token is not valid. Check the email, or send a new token.";
+    return "That activation code is missing or wrong. Enter the code from the email, or send a new one.";
   case rpcn::ErrorType::LoginAlreadyLoggedIn:
     return "That account is already logged in somewhere else.";
   case rpcn::ErrorType::LoginError: return "The server refused the login.";
@@ -3208,7 +3261,7 @@ static std::string rpcn_describe(rpcn::ErrorType error) {
     return "The request was incomplete -- a required field was empty. This is a bug; please "
            "report which button you pressed.";
   case rpcn::ErrorType::Invalid:
-    return "The server rejected that request as out of order. Try Test sign-in first.";
+    return "The server rejected that request as out of order. Sign in first, then try again.";
   default: return fmt::format("Unexpected server error %d.", static_cast<int>(error));
   }
 }
@@ -3958,6 +4011,7 @@ extern "C" const char *_rpcsx_rpcnFriendsSession(bool open) {
   return rpcn_with_auth([](rpcn::rpcn_client &) { return true; });
 }
 
+
 extern "C" const char *_rpcsx_rpcnCreateAccount(std::string_view npid,
                                                 std::string_view password,
                                                 std::string_view onlineName,
@@ -3966,7 +4020,8 @@ extern "C" const char *_rpcsx_rpcnCreateAccount(std::string_view npid,
   static constexpr std::string_view avatar =
       "https://rpcs3.net/cdn/netplay/DefaultAvatar.png";
 
-  const std::string s_npid{npid}, s_pass{password}, s_name{onlineName}, s_email{email};
+  // Made with the derived password, as RPCS3 makes accounts, so it signs in from RPCS3 too
+  const std::string s_npid{npid}, s_pass{rpcn_password_forms(password).front()}, s_name{onlineName}, s_email{email};
 
   return rpcn_with_connection([&](rpcn::rpcn_client &client) {
     const auto err = client.create_user(s_npid, s_pass, s_name, avatar, s_email);
@@ -4146,11 +4201,24 @@ extern "C" bool _rpcsx_avatarUseImage(const u8 *data, usz size) {
 
 extern "C" const char *_rpcsx_rpcnResendToken(std::string_view npid,
                                               std::string_view password) {
-  const std::string s_npid{npid}, s_pass{password};
+  const std::string s_npid{npid};
+  const char *result = rpcn_ok();
 
-  return rpcn_with_connection([&](rpcn::rpcn_client &client) {
-    return client.resend_token(s_npid, s_pass);
-  });
+  // The account checks the password, so it goes in the form the account was made with
+  for (const std::string &form : rpcn_password_forms(password)) {
+    rpcn::ErrorType error = rpcn::ErrorType::NoError;
+
+    result = rpcn_with_connection([&](rpcn::rpcn_client &client) {
+      error = client.resend_token(s_npid, form);
+      return error;
+    });
+
+    if (error != rpcn::ErrorType::LoginInvalidPassword) {
+      break;
+    }
+  }
+
+  return result;
 }
 
 extern "C" const char *_rpcsx_rpcnSendResetToken(std::string_view npid,
@@ -4165,7 +4233,8 @@ extern "C" const char *_rpcsx_rpcnSendResetToken(std::string_view npid,
 extern "C" const char *_rpcsx_rpcnResetPassword(std::string_view npid,
                                                 std::string_view token,
                                                 std::string_view password) {
-  const std::string s_npid{npid}, s_token{token}, s_pass{password};
+  // The new password is derived, as RPCS3 sets it, so RPCS3 signs in with it too
+  const std::string s_npid{npid}, s_token{token}, s_pass{rpcn_password_forms(password).front()};
 
   return rpcn_with_connection([&](rpcn::rpcn_client &client) {
     const auto err = client.reset_password(s_npid, s_token, s_pass);
@@ -4180,17 +4249,19 @@ extern "C" const char *_rpcsx_rpcnResetPassword(std::string_view npid,
   });
 }
 
-// Connect and authenticate with the saved account, so "is my account set up" can be
-// answered here instead of by booting a game and guessing.
+// Connect and authenticate with the saved account. Empty when it signed in, else what went wrong;
+// [state] is how the client ended, which tells a refused password from everything else. [keep]
+// takes the client when it signed in, or it goes with this call.
 //
 // wait_for_authentified is the public path -- login() itself is private -- but it is only
 // half of it, and the half that hangs on its own. See below.
-extern "C" const char *_rpcsx_rpcnTestLogin() {
+static std::string rpcn_saved_login(rpcn::rpcn_state &state,
+                                    std::shared_ptr<rpcn::rpcn_client> *keep = nullptr) {
+  state = rpcn::rpcn_state::failure_other;
   g_cfg_rpcn.load();
 
   if (g_cfg_rpcn.get_npid().empty() || g_cfg_rpcn.get_password().empty()) {
-    return rpcn_fail("No account set up yet. Create one, or enter an existing username "
-                     "and password.");
+    return "No account set up yet. Sign in, or create an account.";
   }
 
   // get_instance's check_config flag does NOT return an error -- it calls
@@ -4200,7 +4271,7 @@ extern "C" const char *_rpcsx_rpcnTestLogin() {
   const auto rpcn = rpcn::rpcn_client::get_instance(0);
 
   if (!rpcn) {
-    return rpcn_fail("Could not create the RPCN client.");
+    return "Could not create the RPCN client.";
   }
 
   // Connect FIRST. rpcn_thread's state machine only acts on want_conn while disconnected:
@@ -4208,19 +4279,117 @@ extern "C" const char *_rpcsx_rpcnTestLogin() {
   // no connection request, breaks back to its semaphore and never releases sem_authentified.
   // The call then blocks forever with nothing in the log after "Loading RPCN config" --
   // which is exactly what it did. np_handler does these two in this order for this reason.
-  if (const auto state = rpcn->wait_for_connection();
-      state != rpcn::rpcn_state::failure_no_failure) {
-    return rpcn_fail(fmt::format("Could not reach the RPCN server: %s",
-                                 rpcn::rpcn_state_to_string(state)));
+  if (state = rpcn->wait_for_connection(); state != rpcn::rpcn_state::failure_no_failure) {
+    return fmt::format("Could not reach the RPCN server: %s", rpcn::rpcn_state_to_string(state));
   }
 
-  if (const auto state = rpcn->wait_for_authentified();
-      state != rpcn::rpcn_state::failure_no_failure) {
-    return rpcn_fail(fmt::format("Sign-in failed: %s",
-                                 rpcn::rpcn_state_to_string(state)));
+  if (state = rpcn->wait_for_authentified(); state != rpcn::rpcn_state::failure_no_failure) {
+    return fmt::format("Sign-in failed: %s", rpcn::rpcn_state_to_string(state));
+  }
+
+  if (keep) {
+    *keep = rpcn;
+  }
+
+  return {};
+}
+
+// Answers "is my account set up" here instead of by booting a game and guessing.
+extern "C" const char *_rpcsx_rpcnTestLogin() {
+  rpcn::rpcn_state state;
+
+  if (std::string message = rpcn_saved_login(state); !message.empty()) {
+    return rpcn_fail(std::move(message));
   }
 
   return rpcn_ok();
+}
+
+// Save the account and sign in with it, offering the password in each form it may be wanted in
+// (rpcn_password_forms): derived, as RPCS3 sends it, then as typed for an account made with an
+// older ARMSX3. The form the server takes is the one saved. When the server turns the details
+// down, the account saved before comes back; when it cannot be reached, the derived form stays,
+// being what RPCS3 itself would save for that password.
+//
+// Each form is tried on a fresh client. A client keeps the first failure it met and answers every
+// later wait with it, so a friends list holding one open (s_rpcn_friends_session) lets go of it
+// here and is given the signed-in one afterwards.
+extern "C" const char *_rpcsx_rpcnSignIn(std::string_view host, std::string_view npid,
+                                         std::string_view password, std::string_view token) {
+  if (npid.empty()) {
+    return rpcn_fail("Enter your RPCN username.");
+  }
+
+  if (password.empty()) {
+    return rpcn_fail("Enter your password.");
+  }
+
+  const std::vector<std::string> forms = rpcn_password_forms(password);
+
+  // The account saved before, put back if the server turns these details down: a mistyped
+  // password while switching accounts should not cost the account that worked
+  g_cfg_rpcn.load();
+  const std::string prev_host = g_cfg_rpcn.get_host(), prev_npid = g_cfg_rpcn.get_npid(),
+                    prev_password = g_cfg_rpcn.get_password(), prev_token = g_cfg_rpcn.get_token();
+
+  std::shared_ptr<rpcn::rpcn_client> held;
+  {
+    std::lock_guard lock(s_rpcn_friends_session_mutex);
+    held = std::move(s_rpcn_friends_session);
+  }
+  held.reset();
+
+  std::string message;
+  rpcn::rpcn_state state = rpcn::rpcn_state::failure_other;
+
+  for (const std::string &form : forms) {
+    g_cfg_rpcn.load();
+    if (!host.empty()) g_cfg_rpcn.set_host(host);
+    g_cfg_rpcn.set_npid(npid);
+    g_cfg_rpcn.set_password(form);
+    if (!token.empty()) g_cfg_rpcn.set_token(token);
+    g_cfg_rpcn.save();
+
+    std::shared_ptr<rpcn::rpcn_client> signed_in;
+    message = rpcn_saved_login(state, &signed_in);
+
+    if (message.empty()) {
+      std::lock_guard lock(s_rpcn_friends_session_mutex);
+
+      if (s_rpcn_friends_session_users) {
+        s_rpcn_friends_session = std::move(signed_in);
+      }
+
+      return rpcn_ok();
+    }
+
+    if (state != rpcn::rpcn_state::failure_id_password) {
+      break;
+    }
+  }
+
+  g_cfg_rpcn.load();
+
+  switch (state) {
+  case rpcn::rpcn_state::failure_id:
+  case rpcn::rpcn_state::failure_id_username:
+  case rpcn::rpcn_state::failure_id_password:
+  case rpcn::rpcn_state::failure_id_token:
+    g_cfg_rpcn.set_host(prev_host);
+    g_cfg_rpcn.set_npid(prev_npid);
+    g_cfg_rpcn.set_password(prev_password);
+    g_cfg_rpcn.set_token(prev_token);
+    break;
+  default:
+    // Not turned down, only not reached (or in use elsewhere): kept, as RPCS3 keeps what is
+    // typed, so games sign in with it once the server answers
+    g_cfg_rpcn.set_password(forms.front());
+    break;
+  }
+
+  g_cfg_rpcn.save();
+
+  return rpcn_fail(std::move(message));
 }
 
 // Hand the core Android's exact SoC identity. Deliberately a separate export

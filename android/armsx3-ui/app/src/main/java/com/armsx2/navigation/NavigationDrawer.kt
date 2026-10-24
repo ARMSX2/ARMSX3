@@ -223,6 +223,9 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // Install .pkg games/updates/DLC. The native installer was always there; this
         // is the entry point it never had.
         DrawerItem("packages.title", "📦", AppRoute.PackageInstaller),
+        // Online play: the RPCN account, its friends and servers. In Settings it only appears
+        // once PSN status is RPCN, which was no help to someone looking for where to sign in.
+        DrawerItem("rpcn.screen.title", "\uD83D\uDEF0\uFE0F", AppRoute.Rpcn),
         // ARMSX3: PS2 memory cards removed - PS3 uses HDD save data instead.
         DrawerItem("savestate.title.loadManage", "📥", AppRoute.SaveManager()),
         DrawerItem("tab.controls", "🕹️", AppRoute.ControllerManager),
@@ -398,6 +401,7 @@ private fun sameDestination(current: AppRoute, target: AppRoute): Boolean = when
     AppRoute.Language -> current is AppRoute.Language
     AppRoute.News -> current is AppRoute.News
     AppRoute.Friends -> current is AppRoute.Friends
+    AppRoute.Rpcn -> current is AppRoute.Rpcn
     AppRoute.RemotePlay -> current is AppRoute.RemotePlay
     // The licenses screen is a page of About, so the drawer keeps About lit there.
     AppRoute.About -> current is AppRoute.About || current is AppRoute.Licenses

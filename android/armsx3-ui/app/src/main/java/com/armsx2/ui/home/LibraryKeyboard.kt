@@ -61,6 +61,9 @@ object LibraryKeyboard {
     /** Empty-buffer hint; caller-set so the same keyboard serves library + settings search. */
     private val placeholder = mutableStateOf("Search games…")
 
+    /** Shows dots instead of what is typed: a password (RPCN sign-in). */
+    private val masked = mutableStateOf(false)
+
     // Special keys carry multi-char labels; letter keys are single chars.
     const val SPACE = "space"
     const val BACKSPACE = "⌫"
@@ -102,10 +105,11 @@ object LibraryKeyboard {
         return useSystemIme.value
     }
 
-    fun open(initial: String, onChange: (String) -> Unit, placeholder: String = "Search games…") {
+    fun open(initial: String, onChange: (String) -> Unit, placeholder: String = "Search games…", masked: Boolean = false) {
         text.value = initial
         this.onChange = onChange
         this.placeholder.value = placeholder
+        this.masked.value = masked
         // Re-read on every open so the preference needs no wiring into app startup, and so a
         // change made in Settings takes effect the next time the keyboard is summoned.
         refreshUseSystemIme()
@@ -192,7 +196,8 @@ object LibraryKeyboard {
                     return@Column
                 }
                 Text(
-                    text = text.value.ifEmpty { placeholder.value },
+                    text = if (masked.value && text.value.isNotEmpty()) "\u2022".repeat(text.value.length)
+                    else text.value.ifEmpty { placeholder.value },
                     color = if (text.value.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant
                     else MaterialTheme.colorScheme.onSurface,
                     fontSize = 18.sp,
@@ -245,7 +250,13 @@ object LibraryKeyboard {
             },
             placeholder = { Text(placeholder.value) },
             singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            visualTransformation = if (masked.value) androidx.compose.ui.text.input.PasswordVisualTransformation()
+            else androidx.compose.ui.text.input.VisualTransformation.None,
+            keyboardOptions = KeyboardOptions(
+                imeAction = ImeAction.Search,
+                keyboardType = if (masked.value) androidx.compose.ui.text.input.KeyboardType.Password
+                else androidx.compose.ui.text.input.KeyboardType.Text,
+            ),
             keyboardActions = KeyboardActions(onSearch = { ime?.hide(); close() }),
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
         )
