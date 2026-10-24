@@ -343,6 +343,16 @@ private fun AvatarPicture(path: String?, modifier: Modifier, pixels: Int) {
     }
 }
 
+/** The picture games are given for the player now: the chosen avatar, or the firmware's default.
+ *  Read again whenever the picker closes. For the Friends headers ([com.armsx2.ui.friends.RpcnSelfChip]). */
+@Composable
+internal fun RpcnAvatarImage(modifier: Modifier) {
+    val path by produceState<String?>(null, RpcnAvatarPicker.open.value) {
+        if (!RpcnAvatarPicker.open.value) value = withContext(Dispatchers.IO) { Rpcs3Bridge.avatarCurrent().ifBlank { null } }
+    }
+    AvatarPicture(path, modifier, AvatarPixels)
+}
+
 /** The Avatar panel in the RPCN tab: the picture games get now, and the way into the picker. */
 @Composable
 internal fun RpcnAvatarRow() {

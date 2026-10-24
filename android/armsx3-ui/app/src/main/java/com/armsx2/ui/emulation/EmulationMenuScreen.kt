@@ -351,13 +351,17 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
                             )
-                            // Between the title and Close: whose Discord this is.
-                            if (com.armsx2.DiscordPresence.available()) {
-                                com.armsx2.ui.friends.SelfChip(
-                                    Modifier.weight(1f).padding(horizontal = 12.dp),
-                                )
-                            } else {
-                                Spacer(Modifier.weight(1f))
+                            // Between the title and Close: who you are, on RPCN (with the avatar games
+                            // show for you) and on Discord.
+                            Row(
+                                Modifier.weight(1f).padding(horizontal = 12.dp),
+                                horizontalArrangement = Arrangement.spacedBy(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                com.armsx2.ui.friends.RpcnSelfChip(Modifier.weight(1f, fill = false), caption = "RPCN")
+                                if (com.armsx2.DiscordPresence.available()) {
+                                    com.armsx2.ui.friends.SelfChip(Modifier.weight(1f, fill = false), caption = "Discord")
+                                }
                             }
                             TextButton(
                                 onClick = { friendsOpen = false },

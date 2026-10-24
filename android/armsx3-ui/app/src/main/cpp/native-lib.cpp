@@ -132,6 +132,7 @@ struct RPCSXApi {
   bool (*infinityCreate)(std::string_view path, int32_t figure, int32_t series);
   bool (*dimensionsCreate)(std::string_view path, int32_t id);
   const char *(*avatarList)();
+  const char *(*avatarCurrent)();
   bool (*avatarImage)(std::string_view path, const uint8_t **data, size_t *size);
   bool (*avatarSelect)(std::string_view path);
   bool (*avatarUseImage)(const uint8_t *data, size_t size);
@@ -306,6 +307,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.infinityCreate = reinterpret_cast<decltype(infinityCreate)>(dlsym(handle, "_rpcsx_infinityCreate"));
     result.dimensionsCreate = reinterpret_cast<decltype(dimensionsCreate)>(dlsym(handle, "_rpcsx_dimensionsCreate"));
     result.avatarList = reinterpret_cast<decltype(avatarList)>(dlsym(handle, "_rpcsx_avatarList"));
+    result.avatarCurrent = reinterpret_cast<decltype(avatarCurrent)>(dlsym(handle, "_rpcsx_avatarCurrent"));
     result.avatarImage = reinterpret_cast<decltype(avatarImage)>(dlsym(handle, "_rpcsx_avatarImage"));
     result.avatarSelect = reinterpret_cast<decltype(avatarSelect)>(dlsym(handle, "_rpcsx_avatarSelect"));
     result.avatarUseImage = reinterpret_cast<decltype(avatarUseImage)>(dlsym(handle, "_rpcsx_avatarUseImage"));
@@ -1841,6 +1843,13 @@ Java_net_rpcsx_RPCSX_avatarList(JNIEnv *env, jobject) {
   if (!rpcsxLib.avatarList) return env->NewStringUTF("");
   const char *json = rpcsxLib.avatarList();
   return env->NewStringUTF(json ? json : "");
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_net_rpcsx_RPCSX_avatarCurrent(JNIEnv *env, jobject) {
+  if (!rpcsxLib.avatarCurrent) return env->NewStringUTF("");
+  const char *path = rpcsxLib.avatarCurrent();
+  return env->NewStringUTF(path ? path : "");
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL

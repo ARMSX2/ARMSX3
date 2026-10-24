@@ -278,6 +278,7 @@ class RPCSX {
     /** The RPCN tab's avatar picker (np_avatar): the installed PSN avatars as JSON, the PNG inside one,
      *  choosing one by path ("" = the default), and a picture of the player's own as a square PNG. */
     external fun avatarList(): String
+    external fun avatarCurrent(): String
     external fun avatarImage(path: String): ByteArray?
     external fun avatarSelect(path: String): Boolean
     external fun avatarUseImage(png: ByteArray): Boolean

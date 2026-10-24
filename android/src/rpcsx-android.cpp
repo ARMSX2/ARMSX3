@@ -4046,6 +4046,21 @@ extern "C" const char *_rpcsx_avatarList() {
   return result.c_str();
 }
 
+// The file games are given for the player now: the chosen avatar, or the firmware's default one.
+// For the Friends headers, which show it beside the RPCN name and need no list of every avatar.
+extern "C" const char *_rpcsx_avatarCurrent() {
+  static thread_local std::string result;
+
+  const std::string user = Emu.GetUsr();
+  result = np::avatar::get_selected_avatar(user);
+
+  if (result.empty()) {
+    result = np::avatar::get_default_avatar_path(user);
+  }
+
+  return result.c_str();
+}
+
 // The PNG inside an avatar file, decrypted when it is an EDAT. False when there is none.
 extern "C" bool _rpcsx_avatarImage(std::string_view path, const u8 **data, usz *size) {
   static thread_local std::vector<u8> image;

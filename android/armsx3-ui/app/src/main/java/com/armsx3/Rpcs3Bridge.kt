@@ -1488,6 +1488,10 @@ object Rpcs3Bridge {
         runCatching { RPCSX.instance.avatarList() }.getOrDefault("")
 
     @JvmStatic
+    fun avatarCurrent(): String =
+        runCatching { RPCSX.instance.avatarCurrent() }.getOrDefault("")
+
+    @JvmStatic
     fun avatarImage(path: String): ByteArray? =
         runCatching { RPCSX.instance.avatarImage(path) }.getOrNull()
 

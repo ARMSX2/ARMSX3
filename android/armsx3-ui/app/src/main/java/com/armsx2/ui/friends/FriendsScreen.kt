@@ -81,6 +81,11 @@ fun FriendsScreen(onBack: () -> Unit) {
             ArmsTopBar(
                 title = str("friends.title"),
                 leading = { RoundAction("←", str("action.back"), onClick = onBack) },
+                // Who you are on each: the RPCN account (with the avatar games show) and Discord
+                actions = {
+                    RpcnSelfChip(Modifier.padding(horizontal = 6.dp), caption = "RPCN")
+                    if (DiscordPresence.available()) SelfChip(Modifier.padding(horizontal = 6.dp), caption = "Discord")
+                },
             )
             RpcnFriendsPanel(Modifier.padding(horizontal = 8.dp).padding(bottom = 10.dp))
             FriendsPanel(Modifier.padding(horizontal = 8.dp))
@@ -446,7 +451,7 @@ fun FriendOnlineBanner() {
  * should say who you are rather than nothing. Renders nothing when not connected.
  */
 @Composable
-fun SelfChip(modifier: Modifier = Modifier) {
+fun SelfChip(modifier: Modifier = Modifier, caption: String? = null) {
     val me by DiscordPresence.self
     val status by DiscordPresence.status
     if (status != DiscordPresence.CONNECTED || me == null) return
@@ -461,12 +466,49 @@ fun SelfChip(modifier: Modifier = Modifier) {
             )
             Spacer(Modifier.width(7.dp))
         }
+        ChipName(me?.name.orEmpty(), caption)
+    }
+}
+
+/**
+ * The RPCN account, compact like [SelfChip]: the avatar games show for the player (chosen in the RPCN
+ * tab) and the RPCN name. Renders nothing until an RPCN account is set up.
+ */
+@Composable
+fun RpcnSelfChip(modifier: Modifier = Modifier, caption: String? = null) {
+    var npid by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        npid = withContext(Dispatchers.IO) {
+            runCatching { JSONObject(Rpcs3Bridge.rpcnGetConfig()).optString("npid") }.getOrDefault("")
+        }
+    }
+    if (npid.isBlank()) return
+
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        com.armsx2.ui.settings.RpcnAvatarImage(Modifier.size(24.dp).clip(CircleShape))
+        Spacer(Modifier.width(7.dp))
+        ChipName(npid, caption)
+    }
+}
+
+/** A chip's name, with the service it belongs to under it when both chips are shown. */
+@Composable
+private fun ChipName(name: String, caption: String?) {
+    Column {
         Text(
-            me?.name.orEmpty(),
+            name,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        caption?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f),
+                maxLines = 1,
+            )
+        }
     }
 }
