@@ -54,18 +54,28 @@
         What we DO have to undo is its voice permissions. The SDK declares RECORD_AUDIO, three
         foreground-service permissions and Bluetooth for features we do not ship, and merged
         unchallenged they would put "Microphone" on the Play listing and require a data-safety
-        declaration for a capability that does not exist in this app.
+        declaration for a capability that does not exist in this app. FOREGROUND_SERVICE itself
+        is ours as well now (the online keep-alive below), so only the SDK's two typed ones go.
 
         tools:node="remove" is the supported way to drop a merged permission, and it is checked:
         build-play-aab.sh fails the build if RECORD_AUDIO or REQUEST_INSTALL_PACKAGES survive into
         the bundle, so a regression here cannot ship quietly.
     -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" tools:node="remove" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" tools:node="remove" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" tools:node="remove" />
     <!-- The SDK's voice foreground service goes with them; we never start a call. -->
+
+    <!--
+        The foreground service that keeps a running game's RPCN session reachable while the app is
+        in the background (com.armsx2.online.OnlineSession). Android 15 otherwise cuts the app's
+        network a few seconds after it leaves the screen, and the server closes the player's lobby.
+        Both flavors: the play listing needs a Play Console declaration of the special use type
+        (App content, Foreground service permissions) before a bundle with this can be published.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:name=".Pasx2Application"
@@ -249,6 +259,17 @@
         <!-- Voice-only; we never start a call, and a declared foreground service we never use is
              just Play-review surface. -->
         <service android:name="com.discord.socialsdk.ForegroundService" tools:node="remove" />
+
+        <!-- The online keep-alive (see FOREGROUND_SERVICE above) -->
+        <service
+            android:name="com.armsx2.online.OnlineSessionService"
+            android:exported="false"
+            android:stopWithTask="true"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps an online game's connection to its matchmaking server while the player switches apps" />
+        </service>
 
         <!--
             The Discord helper, in its own process.

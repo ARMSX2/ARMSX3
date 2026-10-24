@@ -25,8 +25,8 @@ import com.armsx2.i18n.I18n
  * pauses when the app leaves the screen (MainActivityRuntime.onPause): this holds the connection
  * and nothing else.
  *
- * GitHub flavor only. The play bundle declares no foreground service (see the main
- * AndroidManifest), and one there needs a Play Console declaration first; src/play has a no-op.
+ * Both flavors. Publishing the play bundle needs the special use type declared in the Play Console
+ * (see the main AndroidManifest).
  */
 object OnlineSession {
     @Volatile

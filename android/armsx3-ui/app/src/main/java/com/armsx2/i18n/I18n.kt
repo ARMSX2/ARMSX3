@@ -808,7 +808,7 @@ val EN: Map<String, String> = mapOf(
     "net.psn.off" to "Off",
     "net.psn.simulated" to "Simulated",
     "net.psn.rpcn" to "RPCN",
-    // The notification of the GitHub build's keep-alive for online games (OnlineSession)
+    // The notification of the keep-alive for online games (OnlineSession)
     "online.channel" to "Online play",
     "online.notification.title" to "Staying online",
     "online.notification.text" to "Your game stays connected while you use other apps.",
