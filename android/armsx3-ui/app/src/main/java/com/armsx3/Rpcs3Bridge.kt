@@ -781,6 +781,8 @@ object Rpcs3Bridge {
                 "Desired Audio Buffer Duration" -> Rpcs3Settings.setAudioBufferDuration(asInt(value))
                 "Renderer" -> Rpcs3Settings.setAudioRenderer(asInt(value))
                 "Cubeb Backend" -> Rpcs3Settings.setCubebBackend(asInt(value))
+                "Microphone Type" -> Rpcs3Settings.setMicrophoneType(asInt(value))
+                "Microphone Devices" -> Rpcs3Settings.setMicrophoneDevices(value)
                 else -> return false
             }
 
@@ -1426,6 +1428,24 @@ object Rpcs3Bridge {
     @JvmStatic
     fun rpcnSignedIn(): Boolean =
         runCatching { RPCSX.instance.rpcnSignedIn() }.getOrDefault(false)
+
+    @JvmStatic
+    fun setMicDevices(list: String) {
+        runCatching { RPCSX.instance.setMicDevices(list) }
+    }
+
+    @JvmStatic
+    fun skylanderLoad(path: String): Int =
+        runCatching { RPCSX.instance.skylanderLoad(path) }.getOrDefault(-1)
+
+    @JvmStatic
+    fun skylanderRemove(slot: Int): Boolean =
+        runCatching { RPCSX.instance.skylanderRemove(slot) }.getOrDefault(false)
+
+    @JvmStatic
+    fun usbSetPassthrough(fds: String) {
+        runCatching { RPCSX.instance.usbSetPassthrough(fds) }
+    }
 
     /** One key transition for cellKb. See RPCSX.keyboardKey. */
     @JvmStatic

@@ -202,6 +202,12 @@ data class Ps3Settings(
     /** cubeb backend: 0 auto, 1 aaudio, 2 opensl, 3 audiotrack. Auto reaches AAudio on
      *  anything modern; opensl trades latency for far fewer underruns on weak devices. */
     val audioCubebBackend: Int = 0,
+    /** Index into Rpcs3Settings.MIC_TYPES: 0 Off, 1 Standard, 2 SingStar, 3 Real SingStar, 4 Rocksmith. */
+    val micType: Int = 0,
+    /** A MicDevices name, or "Default" for the microphone Android picks (a USB one when plugged in). */
+    val micDevice1: String = "Default",
+    /** SingStar's second singer, the same kind of name; empty for none. */
+    val micDevice2: String = "",
     /** Pin Adreno to max clocks: removes DVFS ramp-up stutter in GPU-bound scenes, costs heat
      *  and battery. Off by default, matching the RPCSX fork this came from. */
     val gpuTurbo: Boolean = false,
@@ -1195,6 +1201,10 @@ data class Settings(
         put("PS3/Audio", "Enable Buffering", "bool", ps3.audioBuffering.toString())
         put("PS3/Audio", "Desired Audio Buffer Duration", "int", ps3.audioBufferMs.toString())
         put("PS3/Audio", "Cubeb Backend", "int", ps3.audioCubebBackend.toString())
+        put("PS3/Audio", "Microphone Type", "enum", ps3.micType.toString())
+        // SingStar takes a second device for the second singer; the core skips an empty one
+        put("PS3/Audio", "Microphone Devices", "string",
+            listOfNotNull(ps3.micDevice1, ps3.micDevice2.takeIf { ps3.micType == 2 }).filter { it.isNotEmpty() }.joinToString("@@@"))
         put("PS3/Net", "Internet enabled", "enum", ps3.netEnabled.toString())
         put("PS3/Net", "PSN status", "enum", ps3.psnStatus.toString())
         put("PS3/Net", "UPNP Enabled", "bool", ps3.upnpEnabled.toString())
@@ -2178,6 +2188,9 @@ data class Settings(
         put("ps3ResolutionScale", ps3.resolutionScale)
         put("ps3MsaaMode", ps3.msaaMode)
         put("ps3AudioCubebBackend", ps3.audioCubebBackend)
+        put("ps3MicType", ps3.micType)
+        put("ps3MicDevice1", ps3.micDevice1)
+        put("ps3MicDevice2", ps3.micDevice2)
         put("ps3ShaderMode", ps3.shaderMode)
         put("ps3BlendingMode", ps3.blendingMode)
         put("ps3FrameGeneration", ps3.frameGeneration)
@@ -2547,6 +2560,9 @@ data class Settings(
                     resolutionScale = json.optInt("ps3ResolutionScale", def.ps3.resolutionScale),
                     msaaMode = json.optInt("ps3MsaaMode", def.ps3.msaaMode),
                     audioCubebBackend = json.optInt("ps3AudioCubebBackend", def.ps3.audioCubebBackend),
+                    micType = json.optInt("ps3MicType", def.ps3.micType),
+                    micDevice1 = json.optString("ps3MicDevice1", def.ps3.micDevice1),
+                    micDevice2 = json.optString("ps3MicDevice2", def.ps3.micDevice2),
                     shaderMode = json.optInt("ps3ShaderMode", def.ps3.shaderMode),
                     blendingMode = json.optInt("ps3BlendingMode", def.ps3.blendingMode),
                     frameGeneration = json.optInt("ps3FrameGeneration", def.ps3.frameGeneration),
@@ -2890,6 +2906,9 @@ data class Settings(
             if (current.ps3.resolutionScale != base.ps3.resolutionScale) j.put("ps3ResolutionScale", current.ps3.resolutionScale)
             if (current.ps3.msaaMode != base.ps3.msaaMode) j.put("ps3MsaaMode", current.ps3.msaaMode)
             if (current.ps3.audioCubebBackend != base.ps3.audioCubebBackend) j.put("ps3AudioCubebBackend", current.ps3.audioCubebBackend)
+            if (current.ps3.micType != base.ps3.micType) j.put("ps3MicType", current.ps3.micType)
+            if (current.ps3.micDevice1 != base.ps3.micDevice1) j.put("ps3MicDevice1", current.ps3.micDevice1)
+            if (current.ps3.micDevice2 != base.ps3.micDevice2) j.put("ps3MicDevice2", current.ps3.micDevice2)
             if (current.ps3.shaderMode != base.ps3.shaderMode) j.put("ps3ShaderMode", current.ps3.shaderMode)
             if (current.ps3.blendingMode != base.ps3.blendingMode) j.put("ps3BlendingMode", current.ps3.blendingMode)
             if (current.ps3.frameGeneration != base.ps3.frameGeneration) j.put("ps3FrameGeneration", current.ps3.frameGeneration)
@@ -3209,6 +3228,9 @@ data class Settings(
                     resolutionScale = if (overrides.has("ps3ResolutionScale")) overrides.getInt("ps3ResolutionScale") else base.ps3.resolutionScale,
                     msaaMode = if (overrides.has("ps3MsaaMode")) overrides.getInt("ps3MsaaMode") else base.ps3.msaaMode,
                     audioCubebBackend = if (overrides.has("ps3AudioCubebBackend")) overrides.getInt("ps3AudioCubebBackend") else base.ps3.audioCubebBackend,
+                    micType = if (overrides.has("ps3MicType")) overrides.getInt("ps3MicType") else base.ps3.micType,
+                    micDevice1 = if (overrides.has("ps3MicDevice1")) overrides.getString("ps3MicDevice1") else base.ps3.micDevice1,
+                    micDevice2 = if (overrides.has("ps3MicDevice2")) overrides.getString("ps3MicDevice2") else base.ps3.micDevice2,
                     shaderMode = if (overrides.has("ps3ShaderMode")) overrides.getInt("ps3ShaderMode") else base.ps3.shaderMode,
                     blendingMode = if (overrides.has("ps3BlendingMode")) overrides.getInt("ps3BlendingMode") else base.ps3.blendingMode,
                     frameGeneration = if (overrides.has("ps3FrameGeneration")) overrides.getInt("ps3FrameGeneration") else base.ps3.frameGeneration,

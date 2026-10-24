@@ -70,8 +70,8 @@ u64 usb_device::get_timestamp()
 //////////////////////////////////////////////////////////////////
 // PASSTHROUGH DEVICE ////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////
-usb_device_passthrough::usb_device_passthrough(libusb_device* _device, libusb_device_descriptor& desc, const std::array<u8, 7>& location)
-	: usb_device(location), lusb_device(_device)
+usb_device_passthrough::usb_device_passthrough(libusb_device* _device, libusb_device_descriptor& desc, const std::array<u8, 7>& location, libusb_device_handle* handle)
+	: usb_device(location), lusb_device(_device), lusb_handle(handle)
 {
 	device = UsbDescriptorNode(USB_DESCRIPTOR_DEVICE, UsbDeviceDescriptor{desc.bcdUSB, desc.bDeviceClass, desc.bDeviceSubClass, desc.bDeviceProtocol, desc.bMaxPacketSize0, desc.idVendor, desc.idProduct,
 														  desc.bcdDevice, desc.iManufacturer, desc.iProduct, desc.iSerialNumber, desc.bNumConfigurations});
@@ -172,7 +172,8 @@ void usb_device_passthrough::send_libusb_transfer(libusb_transfer* transfer)
 
 bool usb_device_passthrough::open_device()
 {
-	if (libusb_open(lusb_device, &lusb_handle) == LIBUSB_SUCCESS)
+	// ARMSX3: a device the app opened on Android arrives with its handle (sys_usbd perform_scan)
+	if (lusb_handle || libusb_open(lusb_device, &lusb_handle) == LIBUSB_SUCCESS)
 	{
 #ifdef __linux__
 		libusb_set_auto_detach_kernel_driver(lusb_handle, true);

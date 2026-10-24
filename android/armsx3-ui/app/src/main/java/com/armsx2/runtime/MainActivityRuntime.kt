@@ -782,6 +782,10 @@ open class MainActivityRuntime : ComponentActivity() {
                     val bootTarget = takeBootTarget(m_szGamefile)
                     if (bootTarget != m_szGamefile)
                         println("@@ANDROID_START_VM@@ from state=${bootTarget.take(240)}")
+                    // The microphones as they are now, by name, for a game that opens one (MicDevices)
+                    runCatching { com.armsx2.input.MicDevices.push(com.armsx2.Pasx2Application.appContext) }
+                    // Real toy portals the user allowed, for the game's USB scan (UsbPassthrough)
+                    runCatching { com.armsx2.input.UsbPassthrough.openForGame(com.armsx2.Pasx2Application.appContext) }
                     val booted = NativeApp.runVMThread(bootTarget)
                     // A failed boot used to be indistinguishable from an instant game exit:
                     // runVMThread's result was dropped, so the app bounced back to the
@@ -5616,6 +5620,8 @@ open class MainActivityRuntime : ComponentActivity() {
         super.onStart()
         runCatching { NativeApp.setAppBackgrounded(false) }
         com.armsx2.DiscordPresence.setForeground(true)
+        com.armsx2.input.MicDevices.watch(applicationContext)
+        com.armsx2.input.UsbPassthrough.watch(applicationContext)
         onlineSessionWatch?.cancel()
         onlineSessionWatch = lifecycleScope.launch {
             while (true) {

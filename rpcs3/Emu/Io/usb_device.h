@@ -265,7 +265,8 @@ protected:
 class usb_device_passthrough : public usb_device
 {
 public:
-	usb_device_passthrough(libusb_device* _device, libusb_device_descriptor& desc, const std::array<u8, 7>& location);
+	// ARMSX3: handle is set for a device the app opened on Android (sys_usbd perform_scan); libusb_open cannot there
+	usb_device_passthrough(libusb_device* _device, libusb_device_descriptor& desc, const std::array<u8, 7>& location, libusb_device_handle* handle = nullptr);
 	~usb_device_passthrough();
 
 	bool open_device() override;

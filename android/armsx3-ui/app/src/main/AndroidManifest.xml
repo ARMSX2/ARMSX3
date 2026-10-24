@@ -47,6 +47,9 @@
          isn't gated for devices without a gyroscope. -->
     <uses-feature android:name="android.hardware.sensor.gyroscope" android:required="false" />
 
+    <!-- Real toy portals passed through to games (UsbPassthrough). Optional: most devices never see one. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+
     <!--
         The Discord Social SDK .aar is now a real dependency, so its manifest merges into ours and
         brings its <queries> for CustomTabsService with it — no need to restate that here.

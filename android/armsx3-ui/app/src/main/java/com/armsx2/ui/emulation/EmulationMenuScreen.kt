@@ -93,6 +93,9 @@ private val IN_GAME_SCREEN_ASPECTS = listOf(0, 1333, 1600, 1778, 2000, 2167, 222
 /** The Friends panel's nav layer: only its controls answer the pad while it is open. */
 private const val FRIENDS_NAV_LAYER = "menu.friends"
 
+/** The Skylanders portal panel's nav layer, the same way. */
+private const val PORTAL_NAV_LAYER = "menu.portal"
+
 @Composable
 fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
     val state = viewModel.state.value
@@ -100,6 +103,9 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
     var shown by remember { mutableStateOf(false) }
     var dismissing by remember { mutableStateOf(false) }
     var friendsOpen by remember { mutableStateOf(false) }
+    var portalOpen by remember { mutableStateOf(false) }
+    // The emulated portal is attached to every game, but only a Skylanders game looks at it
+    val skylanders = remember { MainActivityRuntime.currentGame.value?.title?.contains("skylanders", ignoreCase = true) == true }
     // A friend waiting to be let in is answered in the hosting panel, which sits with Friends: the
     // menu opens there, whether it was opened for the question or was already open.
     val hostStatus by com.armsx2.remoteplay.RemotePlayHost.status
@@ -160,6 +166,26 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
             nav.clearSelection()
         }
     }
+    // The portal panel takes the pad the same way.
+    DisposableEffect(portalOpen) {
+        if (!portalOpen) return@DisposableEffect onDispose {}
+        EmulationMenuInputController.overlayDismiss = { portalOpen = false }
+        val nav = com.armsx2.ui.settings.SettingsControllerNav
+        val previous = nav.activeLayer.value
+        nav.activeLayer.value = PORTAL_NAV_LAYER
+        nav.clearSelection()
+        onDispose {
+            EmulationMenuInputController.overlayDismiss = null
+            nav.activeLayer.value = previous
+            nav.clearSelection()
+        }
+    }
+    LaunchedEffect(portalOpen) {
+        if (portalOpen) {
+            delay(260)
+            if (portalOpen) com.armsx2.ui.settings.SettingsControllerNav.move(1)
+        }
+    }
     // Highlight the panel's first control once it has actually composed. Selecting in the same
     // frame the panel opens would find an empty registry — controllerFocusable only registers
     // items that exist, and the panel's do not until AnimatedVisibility has run.
@@ -172,7 +198,13 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
     // Back closes the friends overlay first when it is up. Without this, opening Friends and
     // pressing Back would dismiss the entire pause menu and resume the game, which is not what
     // anyone means by "go back" from a panel sitting on top of another panel.
-    BackHandler(onBack = { if (friendsOpen) friendsOpen = false else closeMenu() })
+    BackHandler(onBack = {
+        when {
+            friendsOpen -> friendsOpen = false
+            portalOpen -> portalOpen = false
+            else -> closeMenu()
+        }
+    })
 
     state.pendingHardcore?.let { enabling ->
         androidx.compose.runtime.DisposableEffect(Unit) {
@@ -229,6 +261,7 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                         compact = true,
                         modifier = Modifier.fillMaxSize(),
                         onOpenFriends = { friendsOpen = true },
+                        onOpenPortal = if (skylanders) { { portalOpen = true } } else null,
                     )
                 }
             } else {
@@ -254,6 +287,7 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                             compact = false,
                             modifier = Modifier.fillMaxSize(),
                             onOpenFriends = { friendsOpen = true },
+                            onOpenPortal = if (skylanders) { { portalOpen = true } } else null,
                         )
                     }
                     Surface(
@@ -347,6 +381,64 @@ fun EmulationMenuScreen(viewModel: EmulationMenuViewModel = viewModel()) {
                 }
             }
         }
+
+        // The Skylanders portal, as its own panel over the menu, for the same reasons as Friends
+        AnimatedVisibility(
+            visible = portalOpen,
+            enter = fadeIn(tween(160, easing = EaseOut)),
+            exit = fadeOut(tween(140, easing = EaseIn)),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.72f))
+                    .clickable { portalOpen = false },
+            )
+        }
+        AnimatedVisibility(
+            visible = portalOpen,
+            enter = fadeIn(tween(190, easing = EaseOut)),
+            exit = fadeOut(tween(150, easing = EaseIn)),
+            modifier = Modifier.align(Alignment.Center),
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth(if (compact) 0.94f else 0.6f)
+                    .widthIn(max = 620.dp)
+                    .fillMaxHeight(0.9f)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical)),
+                shape = RoundedCornerShape(24.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                shadowElevation = 24.dp,
+            ) {
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        com.armsx2.ui.settings.LocalNavLayer provides PORTAL_NAV_LAYER,
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 10.dp, top = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                str("portal.title"),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                onClick = { portalOpen = false },
+                                modifier = Modifier.controllerFocusable(
+                                    "menu.portal.close",
+                                    onConfirm = { portalOpen = false },
+                                ),
+                            ) { Text(str("action.close")) }
+                        }
+                        SkylanderPortalPanel(Modifier.padding(start = 16.dp, end = 10.dp, top = 6.dp, bottom = 16.dp))
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -357,6 +449,7 @@ private fun MenuPage(
     compact: Boolean,
     modifier: Modifier,
     onOpenFriends: () -> Unit,
+    onOpenPortal: (() -> Unit)?,
 ) {
     val tabScrollStates = remember {
         EmulationMenuTab.visible.associateWith {
@@ -384,7 +477,7 @@ private fun MenuPage(
                 .padding(bottom = 18.dp),
         ) {
             if (compact) CompactMenuTabs(state.tab, viewModel::selectTab)
-            MenuHeader(compact, state.hardcore, state.richPresence, state.gameCRC, onOpenFriends)
+            MenuHeader(compact, state.hardcore, state.richPresence, state.gameCRC, onOpenFriends, onOpenPortal)
             HorizontalDivider(
                 modifier = Modifier.padding(horizontal = 8.dp),
                 color = MaterialTheme.colorScheme.outline.copy(alpha = 0.34f),
@@ -569,6 +662,7 @@ private fun MenuHeader(
     richPresence: String,
     gameCRC: String,
     onOpenFriends: () -> Unit,
+    onOpenPortal: (() -> Unit)?,
 ) {
     val game = MainActivityRuntime.currentGame.value
     Row(
@@ -647,6 +741,30 @@ private fun MenuHeader(
         com.armsx2.ui.common.LibraryStatusCluster(
             Modifier.align(Alignment.CenterVertically),
         )
+
+        // The Skylanders portal, beside Friends, in a Skylanders game only
+        if (onOpenPortal != null) {
+            Spacer(Modifier.width(8.dp))
+            Surface(
+                onClick = onOpenPortal,
+                modifier = Modifier.controllerFocusable(
+                    "menu.portal",
+                    RoundedCornerShape(14.dp),
+                    onConfirm = onOpenPortal,
+                ),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+            ) {
+                Text(
+                    str("portal.button"),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                )
+            }
+        }
 
         // Friends, in the header where it is always visible, with the online count on it. Shown
         // even where Discord is not available: remote play hosting lives behind it too, and

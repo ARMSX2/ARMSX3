@@ -690,6 +690,19 @@ object Rpcs3Settings {
     fun setAudioRenderer(index: Int) =
         setEnum("$AUDIO@@Renderer", AUDIO_RENDERERS.getOrElse(index) { "Cubeb" })
 
+    /**
+     * The microphone a game is given: index -> microphone_handler name, in the order Audio settings
+     * offers them (Off, Standard, SingStar, Real SingStar, Rocksmith). The EyeToy and PS Eye kinds are
+     * left out: they are camera microphones, and no camera is emulated here.
+     */
+    private val MIC_TYPES = arrayOf("Null", "Standard", "SingStar", "Real SingStar", "Rocksmith")
+
+    fun setMicrophoneType(index: Int) =
+        setEnum("$AUDIO@@Microphone Type", MIC_TYPES.getOrElse(index) { "Null" })
+
+    /** Which microphones, "@@@" between them: names from MicDevices, or "Default" for Android's pick. */
+    fun setMicrophoneDevices(value: String) = setString("$AUDIO@@Microphone Devices", value)
+
     // ---- Performance overlay (custom colours) ---------------------------
 
     fun setOverlayPosition(index: Int) = setEnum(

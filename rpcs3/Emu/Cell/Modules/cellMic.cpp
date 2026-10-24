@@ -4,6 +4,9 @@
 #include "Utilities/StrUtil.h"
 
 #include "cellMic.h"
+#ifdef __ANDROID__
+#include "Emu/Audio/Oboe/OboeCapture.h"
+#endif
 #include <Emu/IdManager.h>
 #include <Emu/Cell/lv2/sys_event.h>
 
@@ -507,6 +510,116 @@ error_code microphone_device::open_microphone(const u8 type, const u32 dsp_r, co
 
 	mic_opened = true;
 	return CELL_OK;
+#elif defined(__ANDROID__)
+	// ARMSX3: the steps above, through Oboe (Emu/Audio/Oboe/OboeCapture.h)
+	switch (device_type)
+	{
+	case microphone_handler::standard:
+	case microphone_handler::eye_toy:
+	case microphone_handler::ps_eye:
+		break;
+	case microphone_handler::singstar:
+	case microphone_handler::real_singstar:
+		// SingStar mic has always 2 channels, each channel represent a physical microphone
+		ensure(num_channels >= 2);
+		if (num_channels > 2)
+		{
+			cellMic.error("Tried to open a SingStar-type device with num_channels = %d", num_channels);
+			num_channels = 2;
+		}
+		break;
+	case microphone_handler::rocksmith:
+		num_channels = 1;
+		break;
+	case microphone_handler::null:
+	default:
+		ensure(false);
+		break;
+	}
+
+	ensure(!devices.empty());
+
+	// One stream per microphone: SingStar puts two mono ones side by side (get_data), everything else has one
+	devices.resize(device_type == microphone_handler::singstar ? std::min<usz>(devices.size(), 2) : 1);
+
+	for (mic_device& micdevice : devices)
+	{
+		micdevice.capture = std::make_shared<oboe_capture>();
+	}
+
+	const auto stream_channels = [this]() { return device_type == microphone_handler::singstar ? 1u : u32{num_channels}; };
+
+	// Make sure we use a proper sampling rate. Oboe converts from the device's own, so the first one normally opens.
+	const std::array<u32, 7> samplingrates = { raw_samplingrate, 48000u, 32000u, 24000u, 16000u, 12000u, 8000u };
+
+	bool opened = false;
+
+	// Real firmware tries 4, 2 and then 1 channels if the channel count is not supported
+	while (true)
+	{
+		for (u32 samplingrate : samplingrates)
+		{
+			if (!std::any_of(samplingrates.cbegin() + 1, samplingrates.cend(), [samplingrate](u32 r){ return r == samplingrate; }))
+			{
+				cellMic.warning("Requested sampling rate %d, but we do not support it. Trying next sampling rate...", samplingrate);
+				continue;
+			}
+
+			cellMic.notice("Trying sampling rate %d with %d channel(s)", samplingrate, num_channels);
+
+			if (devices[0].capture->open(devices[0].name, samplingrate, stream_channels()))
+			{
+				raw_samplingrate = samplingrate;
+				opened = true;
+				break;
+			}
+		}
+
+		if (opened || num_channels == 1 || device_type == microphone_handler::singstar || device_type == microphone_handler::real_singstar)
+		{
+			break;
+		}
+
+		num_channels = num_channels == 4 ? 2 : 1;
+	}
+
+	if (!opened)
+	{
+		cellMic.error("Failed to open capture device '%s' (raw_samplingrate=%d, num_channels=%d)", devices[0].name, raw_samplingrate, num_channels);
+		return CELL_MICIN_ERROR_DEVICE_NOT_SUPPORT;
+	}
+
+	cellMic.notice("Using sampling rate %d and %d channel(s)", raw_samplingrate, num_channels);
+
+	aux_samplingrate = dsp_samplingrate = raw_samplingrate; // Same rate for now
+
+	devices[0].buf.resize(inbuf_size, 0);
+
+	if (devices.size() >= 2)
+	{
+		// Open a 2nd microphone into the same device
+		if (devices[1].capture->open(devices[1].name, raw_samplingrate, 1))
+		{
+			devices[1].buf.resize(inbuf_size, 0);
+		}
+		else
+		{
+			// Carried on with one, as upstream means to: get_data leaves the second channel silent. Kept in the
+			// list, the closed stream would fail every start.
+			cellMic.error("Failed to open 2nd SingStar capture device '%s' (raw_samplingrate=%d)", devices[1].name, raw_samplingrate);
+			devices.resize(1);
+		}
+	}
+
+	if (device_type != microphone_handler::real_singstar)
+	{
+		temp_buf.resize(inbuf_size, 0);
+	}
+
+	sample_size = (bit_resolution / 8) * num_channels;
+
+	mic_opened = true;
+	return CELL_OK;
 #else
 	return CELL_MICIN_ERROR_DEVICE_NOT_SUPPORT;
 #endif
@@ -533,6 +646,20 @@ error_code microphone_device::close_microphone()
 
 	temp_buf.clear();
 	mic_opened = false;
+#elif defined(__ANDROID__)
+	if (mic_started)
+	{
+		stop_microphone();
+	}
+
+	for (mic_device& micdevice : devices)
+	{
+		micdevice.capture.reset();
+		micdevice.buf.clear();
+	}
+
+	temp_buf.clear();
+	mic_opened = false;
 #endif
 
 	return CELL_OK;
@@ -547,6 +674,16 @@ error_code microphone_device::start_microphone()
 		if (ALCenum err = alcGetError(micdevice.device); err != ALC_NO_ERROR)
 		{
 			cellMic.error("Error starting capture of device '%s' (error=%s)", micdevice.name, fmt::alc_error{micdevice.device, err});
+			stop_microphone();
+			return CELL_MICIN_ERROR_FATAL;
+		}
+	}
+#elif defined(__ANDROID__)
+	for (const mic_device& micdevice : devices)
+	{
+		if (!micdevice.capture || !micdevice.capture->start())
+		{
+			cellMic.error("Error starting capture of device '%s'", micdevice.name);
 			stop_microphone();
 			return CELL_MICIN_ERROR_FATAL;
 		}
@@ -566,6 +703,14 @@ error_code microphone_device::stop_microphone()
 		if (ALCenum err = alcGetError(micdevice.device); err != ALC_NO_ERROR)
 		{
 			cellMic.error("Error stopping capture of device '%s' (error=%s)", micdevice.name, fmt::alc_error{micdevice.device, err});
+		}
+	}
+#elif defined(__ANDROID__)
+	for (const mic_device& micdevice : devices)
+	{
+		if (micdevice.capture)
+		{
+			micdevice.capture->stop();
 		}
 	}
 #endif
@@ -664,6 +809,18 @@ u32 microphone_device::capture_audio()
 		{
 			cellMic.error("Error capturing samples of device '%s' (error=%s)", micdevice.name, fmt::alc_error{micdevice.device, err});
 		}
+	}
+
+	return num_samples;
+#elif defined(__ANDROID__)
+	ensure(sample_size > 0);
+
+	// What every microphone has delivered, so two SingStar ones stay in step
+	u32 num_samples = inbuf_size / sample_size;
+
+	for (mic_device& micdevice : devices)
+	{
+		num_samples = std::min(num_samples, micdevice.capture ? micdevice.capture->read(micdevice.buf.data(), num_samples) : 0u);
 	}
 
 	return num_samples;

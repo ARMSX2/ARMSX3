@@ -118,6 +118,10 @@ struct RPCSXApi {
   void (*rpcnSetIpv6)(bool enabled);
   const char *(*rpcnStatus)();
   bool (*rpcnSignedIn)();
+  void (*setMicDevices)(std::string_view list);
+  int32_t (*skylanderLoad)(std::string_view path);
+  bool (*skylanderRemove)(int32_t slot);
+  void (*usbSetPassthrough)(std::string_view fds);
   void (*settingsBeginBatch)();
   void (*settingsEndBatch)();
   bool (*installSplitPkg)(JNIEnv *env, const int *fds, int count, long progressId);
@@ -274,6 +278,10 @@ struct RPCSXLibrary : RPCSXApi {
     result.rpcnSetIpv6 = reinterpret_cast<decltype(rpcnSetIpv6)>(dlsym(handle, "_rpcsx_rpcnSetIpv6"));
     result.rpcnStatus = reinterpret_cast<decltype(rpcnStatus)>(dlsym(handle, "_rpcsx_rpcnStatus"));
     result.rpcnSignedIn = reinterpret_cast<decltype(rpcnSignedIn)>(dlsym(handle, "_rpcsx_rpcnSignedIn"));
+    result.setMicDevices = reinterpret_cast<decltype(setMicDevices)>(dlsym(handle, "_rpcsx_setMicDevices"));
+    result.skylanderLoad = reinterpret_cast<decltype(skylanderLoad)>(dlsym(handle, "_rpcsx_skylanderLoad"));
+    result.skylanderRemove = reinterpret_cast<decltype(skylanderRemove)>(dlsym(handle, "_rpcsx_skylanderRemove"));
+    result.usbSetPassthrough = reinterpret_cast<decltype(usbSetPassthrough)>(dlsym(handle, "_rpcsx_usbSetPassthrough"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
     // symbol, and refusing to load it over a missing optional feature would be worse than the
@@ -1700,6 +1708,45 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_net_rpcsx_RPCSX_rpcnSignedIn(JNIEnv *, jobject) {
   if (!rpcsxLib.rpcnSignedIn) return JNI_FALSE;
   return rpcsxLib.rpcnSignedIn() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_setMicDevices(JNIEnv *env, jobject, jstring list) {
+  if (!rpcsxLib.setMicDevices) return;
+
+  const char *c = list ? env->GetStringUTFChars(list, nullptr) : nullptr;
+  const std::string value = c ? c : "";
+  if (c) env->ReleaseStringUTFChars(list, c);
+
+  rpcsxLib.setMicDevices(value);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_skylanderLoad(JNIEnv *env, jobject, jstring path) {
+  if (!rpcsxLib.skylanderLoad) return -1;
+
+  const char *c = path ? env->GetStringUTFChars(path, nullptr) : nullptr;
+  const std::string value = c ? c : "";
+  if (c) env->ReleaseStringUTFChars(path, c);
+
+  return rpcsxLib.skylanderLoad(value);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_skylanderRemove(JNIEnv *, jobject, jint slot) {
+  if (!rpcsxLib.skylanderRemove) return JNI_FALSE;
+  return rpcsxLib.skylanderRemove(slot) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_usbSetPassthrough(JNIEnv *env, jobject, jstring fds) {
+  if (!rpcsxLib.usbSetPassthrough) return;
+
+  const char *c = fds ? env->GetStringUTFChars(fds, nullptr) : nullptr;
+  const std::string value = c ? c : "";
+  if (c) env->ReleaseStringUTFChars(fds, c);
+
+  rpcsxLib.usbSetPassthrough(value);
 }
 
 extern "C" JNIEXPORT jstring JNICALL

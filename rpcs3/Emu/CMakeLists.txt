@@ -153,6 +153,7 @@ target_sources(rpcs3_emu PRIVATE
     Audio/AudioBackend.cpp
     Audio/Cubeb/CubebBackend.cpp
     Audio/Oboe/OboeBackend.cpp
+    Audio/Oboe/OboeCapture.cpp
     Audio/Cubeb/cubeb_enumerator.cpp
 )
 

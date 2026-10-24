@@ -249,6 +249,18 @@ class RPCSX {
      *  it never creates a client. */
     external fun rpcnSignedIn(): Boolean
 
+    /** The phone's microphones for the core: one "<Android device id>\t<name>" per line (MicDevices). */
+    external fun setMicDevices(list: String)
+
+    /** Puts a .sky figure file on the emulated Skylanders portal: the place it took, -1 not a figure, -2 full. */
+    external fun skylanderLoad(path: String): Int
+
+    /** Lifts the figure in that place off the emulated portal. */
+    external fun skylanderRemove(slot: Int): Boolean
+
+    /** Real toy portals the app opened, as comma-separated file descriptors, for the next game (UsbPassthrough). */
+    external fun usbSetPassthrough(fds: String)
+
     /** Coalesce the config file writes of every settingsSet until [settingsEndBatch]. */
     external fun settingsBeginBatch()
     external fun settingsEndBatch()

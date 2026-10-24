@@ -16,6 +16,9 @@
 #include "Emu/IdManager.h"
 #include "util/video_provider.h"
 #include "Emu/android_app_state.h"
+#include "Emu/Audio/Oboe/OboeCapture.h"
+#include "Emu/Cell/lv2/sys_usbd.h"
+#include "Emu/Io/Skylander.h"
 #include "Emu/Io/KeyboardHandler.h"
 #include "Emu/Io/Null/NullKeyboardHandler.h"
 #include "Emu/Io/Null/NullMouseHandler.h"
@@ -3244,6 +3247,88 @@ extern "C" const char *_rpcsx_rpcnStatus() {
 extern "C" bool _rpcsx_rpcnSignedIn() {
   const auto rpcn = rpcn::rpcn_client::peek_instance();
   return rpcn && rpcn->is_authentified();
+}
+
+// The phone's microphones, for the one picked in Audio settings: one "<Android device id>\t<name>" per
+// line, where the name is what the settings store. Android lists input devices to Java only, and a
+// device gets a new id each time it is plugged in, so the app sends the list again before a game
+// starts (oboe_capture).
+extern "C" void _rpcsx_setMicDevices(std::string_view list) {
+  std::vector<std::pair<std::string, s32>> devices;
+
+  for (const std::string &line : fmt::split(list, {"\n"})) {
+    const usz tab = line.find('\t');
+    s32 id = 0;
+
+    if (tab == std::string::npos ||
+        std::from_chars(line.data(), line.data() + tab, id).ec != std::errc{}) {
+      continue;
+    }
+
+    devices.emplace_back(line.substr(tab + 1), id);
+  }
+
+  oboe_capture::set_devices(std::move(devices));
+}
+
+// ---- Skylanders portal and USB passthrough ------------------------------------------------------
+//
+// The emulated portal is always attached (sys_usbd adds it unless a real one is passed through), and
+// these put figure files on it and take them off, as RPCS3's Skylanders manager does: the game sees a
+// figure placed or lifted. The portal keeps the file open and writes the game's changes to the figure
+// (experience, gold, upgrades) back into it, as a real toy keeps them.
+
+static std::mutex s_sky_mutex;
+// Which of the portal's 8 places hold a figure. load_skylander ensure()s a free one, which RPCS3's own
+// manager guarantees with its 8 slots; here a ninth figure is refused instead of aborting the emulator.
+static std::array<bool, 8> s_sky_used{};
+
+// The place the figure took, -1 when the file is not a figure (1024 bytes), -2 when all 8 are taken
+extern "C" s32 _rpcsx_skylanderLoad(std::string_view path) {
+  std::lock_guard lock(s_sky_mutex);
+
+  if (std::all_of(s_sky_used.begin(), s_sky_used.end(), [](bool used) { return used; })) {
+    return -2;
+  }
+
+  fs::file file(std::string(path), fs::read + fs::write + fs::lock);
+  std::array<u8, 0x40 * 0x10> data{};
+
+  if (!file || file.size() < data.size() || file.read(data.data(), data.size()) != data.size()) {
+    return -1;
+  }
+
+  const u8 slot = g_skyportal.load_skylander(data, std::move(file));
+  s_sky_used[slot] = true;
+  return slot;
+}
+
+extern "C" bool _rpcsx_skylanderRemove(s32 slot) {
+  std::lock_guard lock(s_sky_mutex);
+
+  if (slot < 0 || slot >= static_cast<s32>(s_sky_used.size()) ||
+      !g_skyportal.remove_skylander(static_cast<u8>(slot))) {
+    return false;
+  }
+
+  s_sky_used[slot] = false;
+  return true;
+}
+
+// The real toy portals the app opened for a game, as comma-separated file descriptors
+// (usb_android_set_devices). Before the game boots: its USB scan runs once, then.
+extern "C" void _rpcsx_usbSetPassthrough(std::string_view fds) {
+  std::vector<int> list;
+
+  for (const std::string &item : fmt::split(fds, {","})) {
+    int fd = -1;
+
+    if (std::from_chars(item.data(), item.data() + item.size(), fd).ec == std::errc{} && fd >= 0) {
+      list.push_back(fd);
+    }
+  }
+
+  usb_android_set_devices(std::move(list));
 }
 
 // ---- Saved servers -------------------------------------------------------------------
