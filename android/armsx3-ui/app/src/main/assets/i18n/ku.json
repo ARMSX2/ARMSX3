@@ -1090,6 +1090,8 @@
  "renderer.writeColorBuffers.label": "Bufferên Rengê binivîsin",
  "renderer.writeDepthBuffer.description": "Heman raman ji bo kûrahiyê. Ji bo mij, siya an kûrahiya zeviyê ji hêla çend lîstikan ve tê xwestin. Off heta ku tiştek xelet xuya neke.",
  "renderer.writeDepthBuffer.label": "Tampona kûrahiyê binivîse",
+ "rpcn.invite.banner": "%s te vexwend lîstikê",
+ "rpcn.invite.banner.howTo": "Ji bo tevlîbûnê, menuya nav lîstikê veke, paşê Hevalan.",
  "savestate.autoLoadOnBoot": "Li ser bootê rewşa paşîn bixweber barkirin",
  "savestate.autoSaveInterval.description": "Dema ku hûn dilîzin bixweber tomar dike, ji ber vê yekê têkçûnek an pîlek vala herî zêde evqas pêşveçûnê ji we distîne. Ew wekî vebijarka li jor heman hêlîna hilanîna otomatîkî dinivîse, ji ber vê yekê hêlînên we yên bihejmar ên we dimînin. Tomarkirina rewşeke PS3 lîstikê disekinîne û ji nû ve bar dike, ku her carê çend çirkeyan digire, ji ber vê yekê navberê dirêj bihêlin: 15 xulek an zêdetir.",
  "savestate.autoSaveInterval.every": "Her %d min",

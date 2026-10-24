@@ -3095,6 +3095,8 @@ open class MainActivityRuntime : ComponentActivity() {
             ) {
                 androidx.compose.foundation.layout.Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     com.armsx2.ui.friends.FriendOnlineBanner()
+                    // An RPCN invite for the running game (watched in onStart).
+                    com.armsx2.ui.friends.RpcnInviteBanner()
                     // Remote play: a friend joining or leaving as player 2, for the host.
                     com.armsx2.remoteplay.RemotePlayNoticeBanner()
                 }
@@ -5606,7 +5608,8 @@ open class MainActivityRuntime : ComponentActivity() {
     // freezes, so everything that polls slows down until onStart (#196).
     // While the app is in sight, a game whose RPCN session is signed in gets that session kept
     // reachable in the background (OnlineSession). Watched from here because Android lets a
-    // foreground service start only from the foreground; the game stopping releases it.
+    // foreground service start only from the foreground; the game stopping releases it. The same
+    // watch puts up the banner for an RPCN invite to that game (RpcnInviteNotice).
     private var onlineSessionWatch: Job? = null
 
     override fun onStart() {
@@ -5616,9 +5619,19 @@ open class MainActivityRuntime : ComponentActivity() {
         onlineSessionWatch?.cancel()
         onlineSessionWatch = lifecycleScope.launch {
             while (true) {
-                // Off the main thread: peek_instance waits out a client being torn down
-                if (eState.value != EmuState.STOPPED && withContext(Dispatchers.IO) { com.armsx3.Rpcs3Bridge.rpcnSignedIn() })
-                    com.armsx2.online.OnlineSession.keepAlive(applicationContext)
+                if (eState.value != EmuState.STOPPED) {
+                    // Off the main thread: peek_instance waits out a client being torn down
+                    val invites = withContext(Dispatchers.IO) {
+                        if (com.armsx3.Rpcs3Bridge.rpcnSignedIn()) com.armsx3.Rpcs3Bridge.rpcnGetInvites() else null
+                    }
+
+                    if (invites != null) {
+                        com.armsx2.online.OnlineSession.keepAlive(applicationContext)
+                        com.armsx2.ui.friends.RpcnInviteNotice.update(com.armsx2.ui.settings.parseRpcnInvites(invites))
+                    }
+                } else {
+                    com.armsx2.ui.friends.RpcnInviteNotice.reset()
+                }
                 delay(2_000)
             }
         }

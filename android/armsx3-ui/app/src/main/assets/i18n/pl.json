@@ -1090,6 +1090,8 @@
  "renderer.writeColorBuffers.label": "Zapisz bufory kolorów",
  "renderer.writeDepthBuffer.description": "Ten sam pomysł na głębię. Wymagane w kilku grach do mgły, cieni lub głębi ostrości. Wyłączone, chyba że coś jest nie tak.",
  "renderer.writeDepthBuffer.label": "Zapisuj bufor głębi",
+ "rpcn.invite.banner": "%s zaprasza cię do gry",
+ "rpcn.invite.banner.howTo": "Aby dołączyć, otwórz menu w grze, a potem „Przyjaciele”.",
  "savestate.autoLoadOnBoot": "Automatyczne ładowanie ostatniego stanu podczas rozruchu",
  "savestate.autoSaveInterval.description": "Zapisuj automatycznie podczas gry, więc awaria lub rozładowana bateria kosztuje co najwyżej tyle postępów. Zapisuje to samo miejsce automatycznego zapisu, co opcja powyżej, więc Twoje ponumerowane miejsca pozostają Twoje. Zapisanie stanu PS3 zatrzymuje i ponownie ładuje grę, co za każdym razem zajmuje kilka sekund, więc ustaw długi odstęp: 15 minut lub więcej.",
  "savestate.autoSaveInterval.every": "Co %d min",

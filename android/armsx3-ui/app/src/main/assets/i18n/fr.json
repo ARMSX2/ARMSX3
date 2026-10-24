@@ -1090,6 +1090,8 @@
  "renderer.writeColorBuffers.label": "Écrire des tampons de couleur",
  "renderer.writeDepthBuffer.description": "Même idée pour la profondeur. Requis par quelques jeux pour le brouillard, les ombres ou la profondeur de champ. Désactivé sauf si quelque chose ne va pas.",
  "renderer.writeDepthBuffer.label": "Écrire le tampon de profondeur",
+ "rpcn.invite.banner": "%s vous invite à jouer",
+ "rpcn.invite.banner.howTo": "Pour rejoindre, ouvrez le menu en jeu, puis « Amis ».",
  "savestate.autoLoadOnBoot": "Charger automatiquement le dernier état au démarrage",
  "savestate.autoSaveInterval.description": "Enregistrez automatiquement pendant que vous jouez, donc un crash ou une batterie à plat coûte au maximum autant de progrès. Il écrit le même emplacement de sauvegarde automatique que l'option ci-dessus, de sorte que vos emplacements numérotés restent les vôtres. La sauvegarde d'un état PS3 arrête et recharge le jeu, ce qui prend plusieurs secondes à chaque fois : gardez l'intervalle long, 15 minutes ou plus.",
  "savestate.autoSaveInterval.every": "Toutes les %d minutes",

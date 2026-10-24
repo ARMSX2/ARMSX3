@@ -1090,6 +1090,8 @@
  "renderer.writeColorBuffers.label": "Farbpuffer schreiben",
  "renderer.writeDepthBuffer.description": "Gleiche Idee für die Tiefe. Wird von einigen Spielen für Nebel, Schatten oder Tiefenschärfe benötigt. Aus, es sei denn, etwas scheint nicht in Ordnung zu sein.",
  "renderer.writeDepthBuffer.label": "Tiefenpuffer schreiben",
+ "rpcn.invite.banner": "%s hat Sie zum Spielen eingeladen",
+ "rpcn.invite.banner.howTo": "Öffnen Sie zum Beitreten das Menü im Spiel und dann „Freunde“.",
  "savestate.autoLoadOnBoot": "Letzten Status beim Booten automatisch laden",
  "savestate.autoSaveInterval.description": "Speichern Sie automatisch, während Sie spielen, sodass ein Absturz oder ein leerer Akku höchstens so viel Fortschritt kostet. Es wird derselbe Slot für die automatische Speicherung geschrieben wie bei der obigen Option, sodass Ihre nummerierten Slots Ihnen gehören. Beim Speichern eines PS3-Speicherstands wird das Spiel angehalten und neu geladen, was jedes Mal mehrere Sekunden dauert. Halten Sie das Intervall lang: 15 Minuten oder mehr.",
  "savestate.autoSaveInterval.every": "Alle %d Min",

@@ -1090,6 +1090,8 @@
  "renderer.writeColorBuffers.label": "写入颜色缓冲区",
  "renderer.writeDepthBuffer.description": "对于深度也有同样的想法。一些游戏需要雾、阴影或景深。除非有什么问题，否则就关闭。",
  "renderer.writeDepthBuffer.label": "写入深度缓冲区",
+ "rpcn.invite.banner": "%s 邀请你一起玩",
+ "rpcn.invite.banner.howTo": "打开游戏内菜单，再点“朋友”即可加入。",
  "savestate.autoLoadOnBoot": "启动时自动加载最后状态",
  "savestate.autoSaveInterval.description": "玩游戏时会自动保存，因此崩溃或电池电量耗尽最多会消耗这么多进度。它会写入与上述选项相同的自动保存槽位，因此您的编号槽位仍属于您。保存 PS3 状态会停止并重新加载游戏，每次需要几秒钟，因此请保持较长的间隔（15 分钟或更长）。",
  "savestate.autoSaveInterval.every": "每 %d 分钟",

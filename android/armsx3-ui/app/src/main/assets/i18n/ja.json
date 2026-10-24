@@ -1090,6 +1090,8 @@
  "renderer.writeColorBuffers.label": "カラーバッファの書き込み",
  "renderer.writeDepthBuffer.description": "深さについても同じ考えです。霧、影、または被写界深度のためにいくつかのゲームで必要になります。何か問題がなければオフです。",
  "renderer.writeDepthBuffer.label": "深度バッファの書き込み",
+ "rpcn.invite.banner": "%s さんからゲームに招待されました",
+ "rpcn.invite.banner.howTo": "参加するには、ゲーム内メニューを開いて「友達」を選びます。",
  "savestate.autoLoadOnBoot": "起動時に最後の状態を自動ロードする",
  "savestate.autoSaveInterval.description": "プレイ中に自動的に保存されるため、クラッシュやバッテリー切れの場合でも、最大でこの程度の進行度がかかります。上記のオプションと同じ自動保存スロットを書き込むため、番号付きスロットは自分のもののままになります。 PS3 の状態を保存すると、ゲームが停止してリロードされますが、毎回数秒かかります。間隔は 15 分以上と長くしてください。",
  "savestate.autoSaveInterval.every": "%d 分ごと",

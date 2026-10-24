@@ -1090,6 +1090,8 @@
  "renderer.writeColorBuffers.label": "Viết bộ đệm màu",
  "renderer.writeDepthBuffer.description": "Ý tưởng tương tự cho chiều sâu. Được yêu cầu bởi một số trò chơi về sương mù, bóng tối hoặc độ sâu trường ảnh. Tắt trừ khi có gì đó không ổn.",
  "renderer.writeDepthBuffer.label": "Ghi bộ đệm độ sâu",
+ "rpcn.invite.banner": "%s đã mời bạn chơi",
+ "rpcn.invite.banner.howTo": "Để tham gia, hãy mở menu trong game, rồi chọn \"Bạn bè\".",
  "savestate.autoLoadOnBoot": "Tự động tải trạng thái cuối cùng khi khởi động",
  "savestate.autoSaveInterval.description": "Lưu tự động trong khi bạn chơi, nên khi gặp sự cố hoặc hết pin, bạn chỉ mất tối đa chừng ấy tiến độ. Nó ghi cùng một vị trí tự động lưu như tùy chọn ở trên, vì vậy các vị trí được đánh số vẫn là của bạn. Việc lưu trạng thái PS3 sẽ dừng và tải lại trò chơi, mỗi lần mất vài giây, vì vậy hãy đặt khoảng thời gian dài, từ 15 phút trở lên.",
  "savestate.autoSaveInterval.every": "Mỗi %d phút",

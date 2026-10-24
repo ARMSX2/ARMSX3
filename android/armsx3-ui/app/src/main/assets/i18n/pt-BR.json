@@ -1093,6 +1093,8 @@
  "renderer.writeColorBuffers.label": "Escrever buffers de cores",
  "renderer.writeDepthBuffer.description": "A mesma ideia para profundidade. Exigido por alguns jogos para neblina, sombras ou profundidade de campo. Desligado, a menos que algo pareça errado.",
  "renderer.writeDepthBuffer.label": "Escrever buffer de profundidade",
+ "rpcn.invite.banner": "%s convidou você para jogar",
+ "rpcn.invite.banner.howTo": "Para entrar, abra o menu do jogo e depois \"Amigos\".",
  "savestate.autoLoadOnBoot": "Carregar automaticamente o último estado na inicialização",
  "savestate.autoSaveInterval.description": "Salve automaticamente enquanto você joga, portanto, uma falha ou bateria descarregada custará no máximo esse progresso. Ele grava o mesmo slot de salvamento automático da opção acima, para que seus slots numerados permaneçam seus. Salvar um estado do PS3 interrompe e recarrega o jogo, o que leva vários segundos de cada vez. Mantenha o intervalo longo: 15 minutos ou mais.",
  "savestate.autoSaveInterval.every": "A cada %d min",

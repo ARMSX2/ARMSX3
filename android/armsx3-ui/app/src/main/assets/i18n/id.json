@@ -1090,6 +1090,8 @@
  "renderer.writeColorBuffers.label": "Tulis Buffer Warna",
  "renderer.writeDepthBuffer.description": "Ide yang sama untuk kedalaman. Diperlukan oleh beberapa permainan untuk kabut, bayangan, atau kedalaman bidang. Mati kecuali ada yang tidak beres.",
  "renderer.writeDepthBuffer.label": "Tulis Buffer Kedalaman",
+ "rpcn.invite.banner": "%s mengundang Anda bermain",
+ "rpcn.invite.banner.howTo": "Untuk bergabung, buka menu dalam game, lalu \"Teman\".",
  "savestate.autoLoadOnBoot": "Muat otomatis status terakhir saat boot",
  "savestate.autoSaveInterval.description": "Simpan secara otomatis saat Anda bermain, jadi crash atau baterai habis paling banyak hanya menghilangkan progres sebesar ini. Itu menulis slot simpan otomatis yang sama seperti opsi di atas, sehingga slot bernomor Anda tetap menjadi milik Anda. Menyimpan status PS3 akan menghentikan dan memuat ulang game, yang setiap kali memerlukan waktu beberapa detik, jadi jaga intervalnya tetap lama: 15 menit atau lebih.",
  "savestate.autoSaveInterval.every": "Setiap %d mnt",

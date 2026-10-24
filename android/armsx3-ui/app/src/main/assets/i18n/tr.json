@@ -1090,6 +1090,8 @@
  "renderer.writeColorBuffers.label": "Renk Tamponlarını Yaz",
  "renderer.writeDepthBuffer.description": "Derinlik için de aynı fikir. Sis, gölgeler veya alan derinliği için birkaç oyun için gereklidir. Bir sorun olmadığı sürece kapalı.",
  "renderer.writeDepthBuffer.label": "Derinlik Tamponunu Yaz",
+ "rpcn.invite.banner": "%s sizi oynamaya davet etti",
+ "rpcn.invite.banner.howTo": "Katılmak için oyun içi menüyü, ardından \"Arkadaşlar\"ı açın.",
  "savestate.autoLoadOnBoot": "Önyükleme sırasında son durumu otomatik yükle",
  "savestate.autoSaveInterval.description": "Oynarken otomatik olarak kaydedin; böylece bir çökme veya pilin bitmesi en fazla bu kadar ilerlemeye mal olur. Yukarıdaki seçenekle aynı otomatik kaydetme yuvasını yazar, böylece numaralı yuvalarınız size ait olur. PS3 durumunun kaydedilmesi oyunu durdurur ve yeniden yükler; bu işlem her seferinde birkaç saniye sürer; aralığı 15 dakika veya daha uzun olacak şekilde uzun tutun.",
  "savestate.autoSaveInterval.every": "Her %d dakikada bir",

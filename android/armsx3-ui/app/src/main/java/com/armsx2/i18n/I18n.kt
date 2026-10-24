@@ -1317,6 +1317,9 @@ val EN: Map<String, String> = mapOf(
     "rpcn.invites.join" to "Join",
     "rpcn.invites.joining" to "Joining %s.",
     "rpcn.invites.declined" to "Declined the invite from %s.",
+    // The banner over the game when an invite for it arrives (RpcnInviteBanner)
+    "rpcn.invite.banner" to "%s invited you to play",
+    "rpcn.invite.banner.howTo" to "Open the in-game menu, then Friends, to join.",
     "rpcn.friends.accept" to "Accept",
     "rpcn.friends.decline" to "Decline",
     "rpcn.friends.cancel" to "Cancel",
