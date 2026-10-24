@@ -857,3 +857,38 @@ PPU-3e9032a3f7857057ef783810bd8f34a439baaa59:
       - [ be32, 0x00000000, 0x7d4b0214 ] # add r10,r11,r0
       - [ be32, 0x00000000, 0x91430004 ] # stw r10,4(r3): the next frame's release
       - [ be32, 0x00000000, 0x801f01e0 ] # lwz r0,0x1e0(r31): the replaced instruction
+
+PPU-db1e09abb1a2785532b89e9a366d2510ba8e070c:
+  "Battle freeze fix":
+    Games:
+      "J-Stars Victory VS+":
+        BLUS31519: [ 01.00 ]
+    Author: "jpolo1224"
+    Notes: "Stops battles freezing with the music still playing, most often during ultimate attacks. An effect job that reaches a record the game has already reused now ends its list there instead of halting the SPU."
+    Patch Version: 1.0
+    Patch:
+      # SPU code of the SPURS effect job, embedded in the EBOOT (LS address = address - 0x853380).
+      # Its first pass prefetches each record's successor and halts (heqi) on a misaligned link,
+      # which a recycled record carries. Rewritten so that link makes this record the last one.
+      - [ be32, 0x00858988, 0x3fbf2eb5 ] # rotqmbyi r53,r93,-4
+      - [ be32, 0x0085898c, 0x3fe11aae ] # shlqbyi r46,r53,4: the link
+      - [ be32, 0x00858990, 0x1403d734 ] # andi r52,r46,15
+      - [ be32, 0x00858994, 0x210008b4 ] # brnz r52,+0x44: misaligned, end the list
+      - [ be32, 0x00858998, 0x7c003136 ] # ceqi r54,r98,0
+      - [ be32, 0x0085899c, 0x0c001b62 ] # sfi r98,r54,0: the other buffer
+      - [ be32, 0x008589a0, 0x754c3133 ] # mpyui r51,r98,304
+      - [ be32, 0x008589a4, 0x180cf2b0 ] # a r48,r101,r51
+      - [ be32, 0x008589a8, 0x4080002f ] # il r47,0
+      - [ be32, 0x008589ac, 0x3280002c ] # fsmbi r44,0
+      - [ be32, 0x008589b0, 0x4080982d ] # il r45,0x130
+      - [ be32, 0x008589b4, 0x4080202b ] # il r43,0x40
+      - [ be32, 0x008589b8, 0x21a00830 ] # wrch ch16,r48
+      - [ be32, 0x008589bc, 0x21a008af ] # wrch ch17,r47
+      - [ be32, 0x008589c0, 0x21a0092e ] # wrch ch18,r46
+      - [ be32, 0x008589c4, 0x21a009ad ] # wrch ch19,r45
+      - [ be32, 0x008589c8, 0x21a00a2c ] # wrch ch20,r44
+      - [ be32, 0x008589cc, 0x21a00aab ] # wrch ch21,r43: GET the next record
+      - [ be32, 0x008589d0, 0x32000200 ] # br +0x10
+      - [ be32, 0x008589d4, 0x00200000 ] # lnop
+      - [ be32, 0x008589d8, 0x1c007076 ] # ai r118,r96,1: count = this record + 1
+      - [ be32, 0x008589dc, 0x24133fe0 ] # stqd r96,0x4c0(r127): count - 1, read by the sort and the second pass

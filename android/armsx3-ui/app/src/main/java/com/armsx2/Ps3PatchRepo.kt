@@ -822,6 +822,16 @@ object Ps3PatchRepo {
             appVersion = "All",
             sinceRevision = 20,
         ),
+        // J-STARS VICTORY VS+, BLUS31519 -- ours. An effect job halts its SPU on a record the game
+        // has already reused, freezing the battle with the music still playing (RPCS3 #7858).
+        // See canary_patches.yml.
+        Bundled(
+            hash = "PPU-db1e09abb1a2785532b89e9a366d2510ba8e070c",
+            name = "Battle freeze fix",
+            serial = "BLUS31519",
+            appVersion = "01.00",
+            sinceRevision = 21,
+        ),
     )
 
     private const val BUNDLED_ASSET = "canary_patches.yml"
@@ -831,7 +841,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 20
+    private const val BUNDLED_REVISION = 21
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
