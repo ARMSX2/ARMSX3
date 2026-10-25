@@ -4356,6 +4356,14 @@ error_code sceNpManagerRequestTicket(vm::cptr<SceNpId> npId, vm::cptr<char> serv
 		return SCE_NP_ERROR_INVALID_STATE;
 	}
 
+	// ARMSX3: with PSN only simulated there is no server to give a ticket, and np_handler::get_rpcn
+	// ends the game with a fatal error. Answer as an unreachable PSN does instead, so a game that
+	// asks as it starts (Skylanders does) plays on offline.
+	if (g_cfg.net.psn_status == np_psn_status::psn_fake)
+	{
+		return not_an_error(SCE_NP_ERROR_OFFLINE);
+	}
+
 	nph.req_ticket(0x00020001, npId.get_ptr(), serviceId.get_ptr(), static_cast<const u8*>(cookie.get_ptr()), cookieSize, entitlementId.get_ptr(), consumedCount);
 
 	return CELL_OK;
@@ -4387,6 +4395,14 @@ error_code sceNpManagerRequestTicket2(vm::cptr<SceNpId> npId, vm::cptr<SceNpTick
 	if (nph.get_psn_status() != SCE_NP_MANAGER_STATUS_LOGGING_IN && nph.get_psn_status() != SCE_NP_MANAGER_STATUS_ONLINE)
 	{
 		return SCE_NP_ERROR_INVALID_STATE;
+	}
+
+	// ARMSX3: with PSN only simulated there is no server to give a ticket, and np_handler::get_rpcn
+	// ends the game with a fatal error. Answer as an unreachable PSN does instead, so a game that
+	// asks as it starts (Skylanders does) plays on offline.
+	if (g_cfg.net.psn_status == np_psn_status::psn_fake)
+	{
+		return not_an_error(SCE_NP_ERROR_OFFLINE);
 	}
 
 	nph.req_ticket(0x00020001, npId.get_ptr(), serviceId.get_ptr(), static_cast<const u8*>(cookie.get_ptr()), cookieSize, entitlementId.get_ptr(), consumedCount);

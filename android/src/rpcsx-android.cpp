@@ -265,6 +265,13 @@ static void pgo_flush()
 // actively debugging on a device.
 static std::atomic<int> g_logcat_min_level{static_cast<int>(logs::level::warning)};
 
+// The reason the first game thread to die of a fatal error gave, until the app takes it
+// (_rpcsx_takeGameError). The game stops where it was when one does, and on screen that is a freeze
+// with nothing said: one tester's "stuck at SPU compile" was a network thread killed for wanting
+// RPCN, which only the log showed.
+static std::mutex s_game_error_mutex;
+static std::string s_game_error;
+
 struct LogListener : logs::listener {
   LogListener() { logs::listener::add(this); }
 
@@ -296,6 +303,14 @@ struct LogListener : logs::listener {
     case logs::level::trace:
       prio = ANDROID_LOG_VERBOSE;
       break;
+    }
+
+    if (static_cast<logs::level>(msg) == logs::level::fatal) {
+      constexpr std::string_view died = "Thread terminated due to fatal error: ";
+      if (text.starts_with(died)) {
+        std::lock_guard lock(s_game_error_mutex);
+        if (s_game_error.empty()) s_game_error.assign(text.substr(died.size()));
+      }
     }
 
     // Mirroring EVERY message to logcat is not free: each one is a heap allocation plus a
@@ -3665,6 +3680,15 @@ extern "C" void _rpcsx_usbSetPassthrough(std::string_view fds) {
   }
 
   usb_android_set_devices(std::move(list));
+}
+
+// Why a game thread died of a fatal error since the last call, or "". Its first line is the reason
+// RPCS3 gave; the lines under it are where, for the log.
+extern "C" const char *_rpcsx_takeGameError() {
+  static thread_local std::string result;
+  std::lock_guard lock(s_game_error_mutex);
+  result = std::exchange(s_game_error, {});
+  return result.c_str();
 }
 
 // Which real portals the game's USB scan took, as bits (1 Skylanders, 2 Infinity, 4 Dimensions): the

@@ -3098,6 +3098,8 @@ open class MainActivityRuntime : ComponentActivity() {
                 contentAlignment = Alignment.TopCenter,
             ) {
                 androidx.compose.foundation.layout.Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // Why the game stopped, when a thread of it died (watched in onStart)
+                    com.armsx2.ui.emulation.GameErrorBanner()
                     com.armsx2.ui.friends.FriendOnlineBanner()
                     // An RPCN invite for the running game (watched in onStart).
                     com.armsx2.ui.friends.RpcnInviteBanner()
@@ -5618,7 +5620,8 @@ open class MainActivityRuntime : ComponentActivity() {
     // While the app is in sight, a game whose RPCN session is signed in gets that session kept
     // reachable in the background (OnlineSession). Watched from here because Android lets a
     // foreground service start only from the foreground; the game stopping releases it. The same
-    // watch puts up the banner for an RPCN invite to that game (RpcnInviteNotice).
+    // watch puts up the banner for an RPCN invite to that game (RpcnInviteNotice), and the one for
+    // a game that stopped because a thread of it died (GameErrorNotice).
     private var onlineSessionWatch: Job? = null
 
     override fun onStart() {
@@ -5630,7 +5633,11 @@ open class MainActivityRuntime : ComponentActivity() {
         onlineSessionWatch?.cancel()
         onlineSessionWatch = lifecycleScope.launch {
             while (true) {
+                // A reason left from a game already stopped is that game's, and goes with it
+                val gameError = withContext(Dispatchers.IO) { com.armsx3.Rpcs3Bridge.takeGameError() }
                 if (eState.value != EmuState.STOPPED) {
+                    if (gameError.isNotBlank()) com.armsx2.ui.emulation.GameErrorNotice.show(gameError)
+
                     // Off the main thread: peek_instance waits out a client being torn down
                     val invites = withContext(Dispatchers.IO) {
                         if (com.armsx3.Rpcs3Bridge.rpcnSignedIn()) com.armsx3.Rpcs3Bridge.rpcnGetInvites() else null
@@ -5642,6 +5649,7 @@ open class MainActivityRuntime : ComponentActivity() {
                     }
                 } else {
                     com.armsx2.ui.friends.RpcnInviteNotice.reset()
+                    com.armsx2.ui.emulation.GameErrorNotice.clear()
                 }
                 delay(2_000)
             }

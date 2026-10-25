@@ -1523,6 +1523,11 @@ object Rpcs3Bridge {
     fun usbPassedThrough(): Int =
         runCatching { RPCSX.instance.usbPassedThrough() }.getOrDefault(0)
 
+    /** Why a game thread died of a fatal error since the last call, or "" (GameErrorBanner). */
+    @JvmStatic
+    fun takeGameError(): String =
+        runCatching { RPCSX.instance.takeGameError() }.getOrDefault("")
+
     /** One key transition for cellKb. See RPCSX.keyboardKey. */
     @JvmStatic
     fun keyboardKey(androidKeyCode: Int, unicode: Int, pressed: Boolean): Boolean =

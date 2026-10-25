@@ -289,6 +289,7 @@ class RPCSX {
     /** Real toy portals the app opened, as comma-separated file descriptors, for the next game (UsbPassthrough). */
     external fun usbSetPassthrough(fds: String)
     external fun usbPassedThrough(): Int
+    external fun takeGameError(): String
 
     /** Coalesce the config file writes of every settingsSet until [settingsEndBatch]. */
     external fun settingsBeginBatch()

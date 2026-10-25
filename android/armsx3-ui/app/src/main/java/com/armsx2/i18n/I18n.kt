@@ -1435,6 +1435,10 @@ val EN: Map<String, String> = mapOf(
     "portal.addFigure" to "Add a figure",
     "portal.menu.label" to "Toy portals",
     "portal.menu.description" to "Adds Portal to the in-game menu, for putting Skylanders, Disney Infinity and LEGO Dimensions figures on the emulated portals. Only those games use them.",
+    // Why the game stopped, when a thread of it died (GameErrorBanner)
+    "game.error.title" to "The game stopped",
+    "game.error.rpcn" to "PSN status is Simulated, and this game goes online, which needs RPCN. In Settings, RPCN tab, set PSN status to RPCN and sign in, or set it to Off, then start the game again.",
+    "game.error.other" to "Close it from the in-game menu and start it again. If it keeps happening, the reason is in ARMSX3.log in the cache folder.",
     "rpcn.friends.accept" to "Accept",
     "rpcn.friends.decline" to "Decline",
     "rpcn.friends.cancel" to "Cancel",
