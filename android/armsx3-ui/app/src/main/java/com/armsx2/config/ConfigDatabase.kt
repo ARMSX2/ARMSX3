@@ -215,18 +215,18 @@ object ConfigDatabase {
         "BLUS30127" to "Core:\n  SPU XFloat Accuracy: Approximate\n",
         "NPUB30702" to "Core:\n  SPU XFloat Accuracy: Approximate\n",
 
-        // 3D Dot Game Heroes: PPU Event Wake-Up Delay 25 us (upstream yahfz #19824, RPCS3 issue #4433).
+        // 3D Dot Game Heroes: PPU Event Wake-Up Delay 35 us (upstream yahfz #19824, RPCS3 issue #4433).
         //
         // An SPU signals the PPU through an event queue when a SPURS task is done, and the PPU can
         // wake and free the task's context before the SPU has finished saving it; the late save
         // corrupts the heap and the next malloc crashes. The delay holds the woken PPU back for this
-        // long. 25 us is the value yahfz found on his PC; on Android a sleep this short runs long,
-        // which only adds margin. Off (0) for every other game. Not tested on ARMSX3: nobody here
-        // has the game, so if it still crashes the per-game setting is the place to raise it.
-        "BLUS30490" to "Core:\n  PPU Event Wake-Up Delay: 25\n",
-        "BLES00875" to "Core:\n  PPU Event Wake-Up Delay: 25\n",
-        "BLJM60180" to "Core:\n  PPU Event Wake-Up Delay: 25\n",
-        "BLUD80019" to "Core:\n  PPU Event Wake-Up Delay: 25\n",
+        // long. yahfz found 25 us on his PC; a tester (nassau-tk, Retroid Pocket 6) plays at 35 with
+        // no freeze, 10-25, so ARMSX3 uses 35. Off (0) for every other game. Installs that cached 25
+        // get this appended after it at the next start (applyLocalOverrides), and the last one wins.
+        "BLUS30490" to "Core:\n  PPU Event Wake-Up Delay: 35\n",
+        "BLES00875" to "Core:\n  PPU Event Wake-Up Delay: 35\n",
+        "BLJM60180" to "Core:\n  PPU Event Wake-Up Delay: 35\n",
+        "BLUD80019" to "Core:\n  PPU Event Wake-Up Delay: 35\n",
 
         // Blitz: The League II: SPU MMIO Delay on at 300 us (upstream elad335 #19851, RPCS3 issue
         // #11529), Pause Game During SPU Compilation, and a 3072 MB VRAM allocation limit.
