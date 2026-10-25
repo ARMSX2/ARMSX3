@@ -224,6 +224,11 @@ def components():
         c("Bebas Neue", "OFL-1.1", text_id="ofl-1.1",
           notice="Copyright 2019 The Bebas Neue Project Authors (https://github.com/dharmatype/Bebas-Neue).\n"
                  "Bebas Neue is a trademark of Dharma Type."),
+
+        # Music. CC0 asks for no credit; the author says it is appreciated.
+        c("Echoes of the Past", "CC0-1.0",
+          notice="The avatar picker's music, by isaiah658. "
+                 "https://opengameart.org/content/echoes-of-the-past"),
     ]
 
 

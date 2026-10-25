@@ -1016,6 +1016,11 @@
    "license": "OFL-1.1",
    "notice": "Copyright 2019 The Bebas Neue Project Authors (https://github.com/dharmatype/Bebas-Neue).\nBebas Neue is a trademark of Dharma Type.",
    "textId": "ofl-1.1"
+  },
+  {
+   "name": "Echoes of the Past",
+   "license": "CC0-1.0",
+   "notice": "The avatar picker's music, by isaiah658. https://opengameart.org/content/echoes-of-the-past"
   }
  ]
 }
