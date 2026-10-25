@@ -62,6 +62,71 @@ static bool leaves_directory(std::string_view name)
 	return false;
 }
 
+// Where a name that leaves its directory lands, for a package unpacking on the emulated hard drive. "Custom installer"
+// packages (PS3 avatar and mod packs) declare an ordinary content type, then name their files from the root:
+// "../../dev_hdd0/home/psn_avatar/PSNA_....edat" from dev_hdd0/theme/, which a PS3 resolves from the install directory.
+// Resolved the same way from install_dir, the install directory's PS3 path ("dev_hdd0/theme/"). The result is the path
+// below dev_hdd0 (empty for dev_hdd0 itself), or nothing when the name leaves the emulated hard drive.
+static std::optional<std::string> resolve_on_hdd0(std::string_view install_dir, std::string_view name)
+{
+	if (install_dir.empty() || name.starts_with('/'))
+	{
+		return std::nullopt;
+	}
+
+	std::vector<std::string_view> parts;
+
+	const auto append = [&parts](std::string_view path)
+	{
+		for (std::string_view rest = path; !rest.empty();)
+		{
+			const usz sep = rest.find('/');
+			const std::string_view component = rest.substr(0, sep);
+			rest = sep == umax ? std::string_view{} : rest.substr(sep + 1);
+
+			if (component.empty() || component == ".")
+			{
+				continue;
+			}
+
+			if (component == "..")
+			{
+				// Above the root: a PS3 has nothing there
+				if (parts.empty())
+				{
+					return false;
+				}
+
+				parts.pop_back();
+				continue;
+			}
+
+			parts.push_back(component);
+		}
+
+		return true;
+	};
+
+	if (!append(install_dir) || !append(name) || parts.empty() || parts[0] != "dev_hdd0")
+	{
+		return std::nullopt;
+	}
+
+	std::string result;
+
+	for (usz i = 1; i < parts.size(); i++)
+	{
+		if (i > 1)
+		{
+			result += '/';
+		}
+
+		result += parts[i];
+	}
+
+	return result;
+}
+
 package_reader::package_reader(const std::string& path, fs::file file)
 	: m_path(path)
 	, m_file(std::move(file))
@@ -1042,6 +1107,27 @@ bool package_reader::fill_data(std::map<std::string, install_entry*>& all_instal
 		return std::mismatch(install_path.begin(), install_path.end(), path.begin(), path.end()).first == install_path.end();
 	};
 
+	// The install directory's PS3 path, for the names a custom installer gives from the root (resolve_on_hdd0). Only for a
+	// package unpacking where its content type puts it on the emulated hard drive: a root the caller chose has no PS3 path,
+	// so there such names are still refused. What they reach is held to dev_hdd0 instead of the install directory.
+	const std::string hdd0_dir = rpcs3::utils::get_hdd0_dir();
+	const std::string guest_install_dir = s_install_root_override.empty() && m_install_path.starts_with(hdd0_dir)
+		? "dev_hdd0/" + m_install_path.substr(hdd0_dir.size()) : std::string{};
+
+	std::string_view hdd0_trimmed = hdd0_dir;
+
+	while (hdd0_trimmed.ends_with('/'))
+	{
+		hdd0_trimmed.remove_suffix(1);
+	}
+
+	const std::filesystem::path hdd0_path = guest_install_dir.empty() ? std::filesystem::path{} : canonicalize(hdd0_trimmed);
+
+	const auto is_on_hdd0 = [&hdd0_path](const std::filesystem::path& path)
+	{
+		return !hdd0_path.empty() && std::mismatch(hdd0_path.begin(), hdd0_path.end(), path.begin(), path.end()).first == hdd0_path.end();
+	};
+
 	m_install_entries.clear();
 	m_bootable_file_path.clear();
 	m_entry_indexer = 0;
@@ -1079,14 +1165,29 @@ bool package_reader::fill_data(std::map<std::string, install_entry*>& all_instal
 
 		std::string_view name = fmt::trim_back_sv(name_buf, "\0"sv);
 
+		std::string path;
+
+		// Named from the root by a custom installer, and held to dev_hdd0 rather than the install directory
+		bool from_root = false;
+
 		if (leaves_directory(name))
 		{
-			num_failures++;
-			pkg_log.error("PKG entry path escapes installation directory: '%s'", name);
-			break;
-		}
+			const std::optional<std::string> below_hdd0 = resolve_on_hdd0(guest_install_dir, name);
 
-		std::string path = m_install_path + vfs::escape(name);
+			if (!below_hdd0)
+			{
+				num_failures++;
+				pkg_log.error("PKG entry path escapes installation directory: '%s'", name);
+				break;
+			}
+
+			path = below_hdd0->empty() ? std::string(hdd0_trimmed) : hdd0_dir + vfs::escape(*below_hdd0);
+			from_root = true;
+		}
+		else
+		{
+			path = m_install_path + vfs::escape(name);
+		}
 
 		const u8 entry_type = entry.type & 0xff;
 		const bool is_folder = entry_type == PKG_FILE_ENTRY_FOLDER || entry_type == 0x12;
@@ -1117,7 +1218,7 @@ bool package_reader::fill_data(std::map<std::string, install_entry*>& all_instal
 			canonical_path = found->second / fs_path_from_utf8(std::string_view(path).substr(slash + 1));
 		}
 
-		if (canonical_path.empty() || !is_inside_install_path(canonical_path))
+		if (canonical_path.empty() || !(from_root ? is_on_hdd0(canonical_path) : is_inside_install_path(canonical_path)))
 		{
 			num_failures++;
 			pkg_log.error("PKG entry path escapes installation directory: '%s'", name);

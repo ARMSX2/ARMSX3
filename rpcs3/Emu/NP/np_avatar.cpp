@@ -167,6 +167,17 @@ namespace np::avatar
 			}
 		}
 
+		// Avatar packs made for the PS3 ("custom installer" packages) put theirs in one folder shared by every user
+		const std::string shared_dir = rpcs3::utils::get_hdd0_dir() + "home/psn_avatar/";
+
+		for (const auto& entry : fs::dir(shared_dir))
+		{
+			if (!entry.is_directory && entry.name.starts_with("PSNA_") && fmt::to_lower(entry.name).ends_with(".edat"))
+			{
+				avatars.push_back(shared_dir + entry.name);
+			}
+		}
+
 		std::sort(avatars.begin(), avatars.end());
 		return avatars;
 	}
