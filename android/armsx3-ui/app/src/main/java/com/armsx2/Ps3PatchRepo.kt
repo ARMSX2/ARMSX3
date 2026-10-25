@@ -832,6 +832,16 @@ object Ps3PatchRepo {
             appVersion = "01.00",
             sinceRevision = 21,
         ),
+        // SKYLANDERS: SPYRO'S ADVENTURE, BLUS30779 -- ours. The job worker, created below the two threads
+        // that spin on its locks with yield, never ran again once preempted holding one: a freeze a
+        // minute or two in. It now runs at their priority. See canary_patches.yml.
+        Bundled(
+            hash = "PPU-6e828d3466bb1272243213bef0df0e499f3965a5",
+            name = "Freeze fix",
+            serial = "BLUS30779",
+            appVersion = "01.00",
+            sinceRevision = 22,
+        ),
     )
 
     private const val BUNDLED_ASSET = "canary_patches.yml"
@@ -841,7 +851,7 @@ object Ps3PatchRepo {
      * install re-imports and enables the new ones. Not a timestamp: it has to be
      * something a diff of this file makes obvious.
      */
-    private const val BUNDLED_REVISION = 21
+    private const val BUNDLED_REVISION = 22
 
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"

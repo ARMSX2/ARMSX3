@@ -892,3 +892,24 @@ PPU-db1e09abb1a2785532b89e9a366d2510ba8e070c:
       - [ be32, 0x008589d4, 0x00200000 ] # lnop
       - [ be32, 0x008589d8, 0x1c007076 ] # ai r118,r96,1: count = this record + 1
       - [ be32, 0x008589dc, 0x24133fe0 ] # stqd r96,0x4c0(r127): count - 1, read by the sort and the second pass
+
+# Skylanders: Spyro's Adventure freezes a minute or two into play (most often during Hugo's dialogue after a
+# figure goes on the portal): no new frames, music and portal traffic carrying on. The job system's worker
+# thread ("JobQueue PPU Worker") is created at priority 1010, below the main thread and a second game thread
+# (both 1001). When those two wake while the worker holds a job-system lock, they take both PPU slots and
+# spin on the lock with sys_ppu_thread_yield, which only hands the CPU to threads of their own priority, so
+# the worker never runs again to let go of it. Seen on two devices with two different locks (the job
+# queue's own and the global job allocator's), the worker the holder each time. At 1001 the worker is in
+# the yielding threads' group and gets its turn on their next yield.
+PPU-6e828d3466bb1272243213bef0df0e499f3965a5:
+  "Freeze fix":
+    Games:
+      "Skylanders: Spyro's Adventure":
+        BLUS30779: [ 01.00 ]
+    Author: "jpolo1224"
+    Notes: "Stops the game freezing a minute or two in, most often during dialogue after placing a figure. The game's job worker now runs at the main thread's priority, so it always gets its turn."
+    Patch Version: 1.0
+    Patch:
+      # Priority the worker is created with, read by lwz r6,-0x22bc(r29) at 0xd7b0c0 (r29 = rtoc 0xedfa50 + 0x80000)
+      # for sys_ppu_thread_create at 0xd7b0f4. Read nowhere else and never written.
+      - [ be32, 0x00f5d794, 0x000003e9 ] # 1010 -> 1001
