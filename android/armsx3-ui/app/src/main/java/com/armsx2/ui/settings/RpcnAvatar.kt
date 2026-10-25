@@ -16,6 +16,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,6 +42,7 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -137,6 +139,35 @@ private class AvatarList(
 
     /** Everything the grid offers, the firmware's icons first. */
     val choices: List<String> get() = builtin + usable
+}
+
+/** The avatars marked as favourites, by file name so they survive a move of the data folder: a PSN
+ *  avatar is named by its hash, and the firmware's icons and the player's own pictures are named
+ *  apart from those. With a few thousand avatars installed, this is how one gets found again. */
+private object AvatarFavorites {
+    private const val Key = "rpcn.avatar.favorites"
+
+    val names = mutableStateOf<Set<String>>(emptySet())
+    private var loaded = false
+
+    private fun prefs(context: Context) = context.getSharedPreferences("ARMSX2", Context.MODE_PRIVATE)
+
+    fun load(context: Context) {
+        if (loaded) return
+        loaded = true
+        names.value = prefs(context).getStringSet(Key, null)?.toSet().orEmpty()
+    }
+
+    fun contains(path: String): Boolean = path.substringAfterLast('/') in names.value
+
+    /** True when the avatar is a favourite now. */
+    fun toggle(context: Context, path: String): Boolean {
+        val name = path.substringAfterLast('/')
+        val now = if (name in names.value) names.value - name else names.value + name
+        names.value = now
+        prefs(context).edit().putStringSet(Key, now).apply()
+        return name in now
+    }
 }
 
 private fun readAvatarList(): AvatarList? {
@@ -415,6 +446,12 @@ fun RpcnAvatarPickerOverlay() {
     var busy by remember { mutableStateOf(false) }
     var browsing by remember { mutableStateOf(false) }
     var browsingPackages by remember { mutableStateOf(false) }
+    var favoritesOnly by remember { mutableStateOf(false) }
+    // What Favorites shows: the favourites as the view was opened, so taking one off greys its star
+    // instead of pulling the cell out from under the pad
+    var favoritesShown by remember { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(Unit) { AvatarFavorites.load(context) }
+    val favorites by AvatarFavorites.names
 
     suspend fun reload() {
         list = withContext(Dispatchers.IO) { readAvatarList() }
@@ -435,6 +472,15 @@ fun RpcnAvatarPickerOverlay() {
             reload()
             busy = false
         }
+    }
+
+    val favoriteAdded = str("rpcn.avatar.favoriteAdded")
+    val favoriteRemoved = str("rpcn.avatar.favoriteRemoved")
+
+    fun toggleFavorite(path: String) {
+        val on = AvatarFavorites.toggle(context, path)
+        com.armsx2.MenuSfx.play(if (on) com.armsx2.MenuSfx.Event.TOGGLE_ON else com.armsx2.MenuSfx.Event.TOGGLE_OFF)
+        notice = Notice(if (on) favoriteAdded else favoriteRemoved, error = false)
     }
 
     fun usePicture(read: () -> ByteArray?) {
@@ -580,7 +626,38 @@ fun RpcnAvatarPickerOverlay() {
                     )
                 }
 
-                val paths = current?.choices.orEmpty()
+                val all = current?.choices.orEmpty()
+                if (all.isNotEmpty()) {
+                    val favoriteCount = all.count { it.substringAfterLast('/') in favorites }
+                    Row(
+                        Modifier.padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        FilterButton("rpcn.avatar.filter.all", str("rpcn.avatar.all").format(all.size), selected = !favoritesOnly) {
+                            favoritesOnly = false
+                        }
+                        FilterButton("rpcn.avatar.filter.favorites", str("rpcn.avatar.favorites").format(favoriteCount), selected = favoritesOnly) {
+                            favoritesShown = favorites
+                            favoritesOnly = true
+                        }
+                        Text(
+                            str("rpcn.avatar.favoritesHint"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                val paths = if (favoritesOnly) all.filter { it.substringAfterLast('/') in favoritesShown } else all
+                if (favoritesOnly && paths.isEmpty()) {
+                    Text(
+                        str("rpcn.avatar.favoritesEmpty"),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 12.dp),
+                    )
+                }
                 if (paths.isNotEmpty()) {
                     BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp)) {
                         val columns = maxOf(3, ((maxWidth + 8.dp) / (CellSize + 8.dp)).toInt())
@@ -620,10 +697,20 @@ fun RpcnAvatarPickerOverlay() {
                                             if (chosen) Modifier.border(3.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(12.dp))
                                             else Modifier
                                         )
-                                        .clickable(enabled = !busy, onClick = pick)
-                                        .controllerFocusable("$CellPrefix$index", RoundedCornerShape(12.dp), onConfirm = pick),
+                                        .combinedClickable(
+                                            enabled = !busy,
+                                            onClick = pick,
+                                            onLongClick = { toggleFavorite(path) },
+                                        )
+                                        .controllerFocusable(
+                                            "$CellPrefix$index",
+                                            RoundedCornerShape(12.dp),
+                                            onConfirm = pick,
+                                            onSecondary = { toggleFavorite(path) },
+                                        ),
                                 ) {
                                     AvatarPicture(path, Modifier.fillMaxSize(), CellPixels)
+                                    if (path.substringAfterLast('/') in favorites) FavoriteStar(Modifier.align(Alignment.TopEnd))
                                 }
                             }
                         }
@@ -661,6 +748,35 @@ fun RpcnAvatarPickerOverlay() {
             },
             onDismiss = { browsing = false },
         )
+    }
+}
+
+/** All / Favorites. One button whose colours change, not two composables: a swap would drop the
+ *  control from the pad's registry and send the selection to the top of the screen. */
+@Composable
+private fun FilterButton(id: String, label: String, selected: Boolean, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        colors = if (selected) {
+            ButtonDefaults.outlinedButtonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+            )
+        } else ButtonDefaults.outlinedButtonColors(),
+        modifier = Modifier.controllerFocusable(id, onConfirm = onClick),
+    ) { Text(label) }
+}
+
+@Composable
+private fun FavoriteStar(modifier: Modifier) {
+    Box(
+        modifier
+            .padding(4.dp)
+            .size(20.dp)
+            .background(Color.Black.copy(alpha = 0.6f), CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("\u2605", color = Color(0xFFFFD54F), fontSize = 12.sp)
     }
 }
 

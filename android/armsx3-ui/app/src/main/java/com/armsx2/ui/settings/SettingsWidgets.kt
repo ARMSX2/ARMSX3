@@ -67,6 +67,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerId
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
@@ -116,6 +117,7 @@ internal object SettingsControllerNav {
         val onLeft: (() -> Unit)?,
         val onRight: (() -> Unit)?,
         val layer: String? = null,
+        val onSecondary: (() -> Unit)? = null,
     )
 
     // Exclusive input layer. When non-null (e.g. the nav drawer is open), only
@@ -152,8 +154,24 @@ internal object SettingsControllerNav {
      *  scroll to the very top when a category chip regains focus. */
     fun currentSelectedId(): String? = selectedId.value
 
-    fun setPosition(id: String, x: Float, y: Float) {
-        positions[id] = y to x
+    // Each control's layout, read again before a spatial move. A lazy grid's scroll moves its
+    // cells without telling onGloballyPositioned, so a position kept from that callback could be
+    // a row behind: in the avatar picker the selected cell and the row below it then sat at the
+    // same height, and Down found nothing to go to.
+    private val coordinates = HashMap<String, LayoutCoordinates>()
+
+    fun setPosition(id: String, layout: LayoutCoordinates) {
+        coordinates[id] = layout
+        val p = layout.positionInRoot()
+        positions[id] = p.y to p.x
+    }
+
+    private fun refreshPositions() {
+        for ((id, layout) in coordinates) {
+            if (!layout.isAttached) continue
+            val p = layout.positionInRoot()
+            positions[id] = p.y to p.x
+        }
     }
 
     private fun orderedIds(): List<String> {
@@ -199,10 +217,11 @@ internal object SettingsControllerNav {
         onLeft: (() -> Unit)? = null,
         onRight: (() -> Unit)? = null,
         layer: String? = null,
+        onSecondary: (() -> Unit)? = null,
     ) {
         // Upsert — replacing an existing key keeps its insertion order (stable
         // visual order) while refreshing the closures to the current value.
-        registry[id] = Item(id, onConfirm, onLeft, onRight, layer)
+        registry[id] = Item(id, onConfirm, onLeft, onRight, layer, onSecondary)
         if (selectedId.value == id)
             selectedIndex.intValue = orderedIds().indexOf(id)
     }
@@ -210,6 +229,7 @@ internal object SettingsControllerNav {
     fun unregister(id: String) {
         registry.remove(id)
         positions.remove(id)
+        coordinates.remove(id)
         // Handing the selection to the first control scrolls the page there. With the pad driving
         // that keeps it somewhere reachable; under touch it only flung the page to the top when a
         // tapped row went away (Keep on an RPCN friend), so the selection is dropped instead.
@@ -274,6 +294,7 @@ internal object SettingsControllerNav {
     fun count(): Int = registry.size
 
     fun move(delta: Int): Boolean {
+        refreshPositions()
         val ids = orderedIds()
         if (ids.isEmpty() || delta == 0) return false
         val cur = ids.indexOf(selectedId.value)
@@ -296,6 +317,7 @@ internal object SettingsControllerNav {
      *  is selected yet. positions[id] = (y, x). */
     fun moveSpatial(dx: Int, dy: Int): Boolean {
         if (dx == 0 && dy == 0) return false
+        refreshPositions()
         val curId = selectedId.value
         // Only the active layer takes part, as in [move]. Without this an overlay's rows reached
         // the screen behind them: Up through the capture picker in Settings, Advanced landed on the
@@ -387,6 +409,14 @@ internal object SettingsControllerNav {
         return true
     }
 
+    /** Triangle on the selected control, for the few with a second action (favouriting an
+     *  avatar). False when it has none, so the button keeps whatever else it does there. */
+    fun secondary(): Boolean {
+        val action = selectedItem()?.onSecondary ?: return false
+        action.invoke()
+        return true
+    }
+
     fun setScrollVelocity(velocity: Float): Boolean {
         scrollVelocity.floatValue = if (abs(velocity) > 0.08f) velocity.coerceIn(-1f, 1f) else 0f
         return true
@@ -440,6 +470,8 @@ internal fun Modifier.controllerFocusable(
     layer: String? = null,
     // False for a control that draws its own selection, as the toy portals' spots do
     ring: Boolean = true,
+    // What Triangle does on it (SettingsControllerNav.secondary)
+    onSecondary: (() -> Unit)? = null,
 ): Modifier = composed {
     val navLayer = layer ?: LocalNavLayer.current
     var focused by remember { mutableStateOf(false) }
@@ -456,6 +488,7 @@ internal fun Modifier.controllerFocusable(
                 onLeft = onLeft,
                 onRight = onRight,
                 layer = navLayer,
+                onSecondary = onSecondary,
             )
         }
         DisposableEffect(controllerId) {
@@ -473,10 +506,7 @@ internal fun Modifier.controllerFocusable(
         .bringIntoViewRequester(bringIntoView)
         .then(
             if (controllerId != null)
-                Modifier.onGloballyPositioned {
-                    val p = it.positionInRoot()
-                    SettingsControllerNav.setPosition(controllerId, p.x, p.y)
-                }
+                Modifier.onGloballyPositioned { SettingsControllerNav.setPosition(controllerId, it) }
             else Modifier,
         )
         .onFocusChanged { focused = it.isFocused }
