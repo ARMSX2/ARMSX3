@@ -65,6 +65,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -665,15 +666,31 @@ fun RpcnAvatarPickerOverlay() {
                         val columns = maxOf(3, ((maxWidth + 8.dp) / (CellSize + 8.dp)).toInt())
                         val grid = rememberLazyGridState()
 
-                        // The pad only moves between controls that are composed, and a lazy grid
-                        // composes only what is on screen (see armsx3-dpad-nav-lazy-list-dead-end).
-                        // Keeping the selected avatar's row second from the top keeps a row composed
-                        // on both sides of it, so Up and Down always have somewhere to go.
+                        // The pad only moves between controls that are on screen, and a lazy grid
+                        // places only what is (see armsx3-dpad-nav-lazy-list-dead-end). Centring the
+                        // selected avatar's row keeps part of a row on both sides of it in view, so Up
+                        // and Down always have somewhere to go; second from the top left a sliver of
+                        // the next row on the Odin, whose grid shows about two and a third rows. The
+                        // cells opt out of controllerFocusable's own scroll-into-view: it started after
+                        // this one and cancelled it, leaving the selection on the bottom row.
                         val selectedId = SettingsControllerNav.currentSelectedId()
+                        val spacing = with(LocalDensity.current) { 8.dp.roundToPx() }
                         LaunchedEffect(selectedId, columns) {
                             val index = selectedId?.takeIf { it.startsWith(CellPrefix) }
                                 ?.removePrefix(CellPrefix)?.toIntOrNull() ?: return@LaunchedEffect
-                            grid.animateScrollToItem(maxOf(0, (index / columns - 1) * columns))
+                            val row = index / columns
+                            val layout = grid.layoutInfo
+                            val cell = layout.visibleItemsInfo.firstOrNull()?.size?.height
+                            if (cell == null) {
+                                grid.animateScrollToItem(maxOf(0, (row - 1) * columns))
+                                return@LaunchedEffect
+                            }
+                            val pitch = cell + spacing
+                            // Where the selected row's top sits once centred, and the rows above it
+                            // that the scroll lands on so its offset stays positive
+                            val centred = maxOf(0, (layout.viewportEndOffset - layout.viewportStartOffset - cell) / 2)
+                            val above = minOf(row, (centred + pitch - 1) / pitch)
+                            grid.animateScrollToItem((row - above) * columns, maxOf(0, above * pitch - centred))
                         }
 
                         LazyVerticalGrid(
@@ -709,6 +726,8 @@ fun RpcnAvatarPickerOverlay() {
                                             RoundedCornerShape(12.dp),
                                             onConfirm = pick,
                                             onSecondary = { toggleFavorite(path) },
+                                            // The grid scrolls to the selection itself (above)
+                                            scrollIntoView = false,
                                         ),
                                 ) {
                                     AvatarPicture(path, Modifier.fillMaxSize(), CellPixels)

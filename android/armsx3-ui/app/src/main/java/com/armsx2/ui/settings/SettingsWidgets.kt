@@ -472,6 +472,9 @@ internal fun Modifier.controllerFocusable(
     ring: Boolean = true,
     // What Triangle does on it (SettingsControllerNav.secondary)
     onSecondary: (() -> Unit)? = null,
+    // False inside a list that scrolls itself to the selection: this request scrolls as little as
+    // shows the control, and a second scroll at once cancels the list's (the avatar grid's Down)
+    scrollIntoView: Boolean = true,
 ): Modifier = composed {
     val navLayer = layer ?: LocalNavLayer.current
     var focused by remember { mutableStateOf(false) }
@@ -499,7 +502,7 @@ internal fun Modifier.controllerFocusable(
     if (controllerId != null) {
         // Scroll the selected row just into view using its real measured bounds.
         LaunchedEffect(selected) {
-            if (selected) runCatching { bringIntoView.bringIntoView() }
+            if (selected && scrollIntoView) runCatching { bringIntoView.bringIntoView() }
         }
     }
     this
