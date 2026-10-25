@@ -411,15 +411,17 @@ internal fun RpcnAvatarImage(modifier: Modifier) {
 @Composable
 fun RpcnAvatarPickerOverlay() {
     // The pad stays on the picker while it is up, the way ConfirmOverlay holds it, and goes back to
-    // the Avatar row when it closes. Closing on dispose too: leaving settings with the picker up
-    // must not bring it back the next time settings opens.
+    // the picture on the profile card that opened it when it closes. A miss there left nothing
+    // selected, and Up from nothing lands on the last control: the page flung to its bottom.
+    // Closing on dispose too: leaving settings with the picker up must not bring it back the next
+    // time settings opens.
     DisposableEffect(Layer) {
         val previous = SettingsControllerNav.activeLayer.value
         SettingsControllerNav.activeLayer.value = Layer
         SettingsControllerNav.clearSelection()
         onDispose {
             SettingsControllerNav.activeLayer.value = previous
-            if (!SettingsControllerNav.selectById("rpcn.avatar")) SettingsControllerNav.clearSelection()
+            if (!SettingsControllerNav.selectById("rpcn.profile.avatar")) SettingsControllerNav.clearSelection()
             RpcnAvatarPicker.open.value = false
         }
     }
