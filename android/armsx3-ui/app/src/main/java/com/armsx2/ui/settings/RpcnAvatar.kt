@@ -50,6 +50,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -455,6 +456,37 @@ fun RpcnAvatarPickerOverlay() {
     var favoritesShown by remember { mutableStateOf<Set<String>>(emptySet()) }
     LaunchedEffect(Unit) { AvatarFavorites.load(context) }
     val favorites by AvatarFavorites.names
+    val grid = rememberLazyGridState()
+    // Bumped by L1/R1, to land the pad on the first avatar of the view they switched to
+    var shoulderSwitches by remember { mutableIntStateOf(0) }
+
+    fun showFavorites(on: Boolean) {
+        if (on) favoritesShown = AvatarFavorites.names.value
+        favoritesOnly = on
+        scope.launch { grid.scrollToItem(0) }
+    }
+
+    // L1/R1 flip All and Favorites while the picker is up, not the settings tabs behind it
+    DisposableEffect(Unit) {
+        com.armsx2.ui.settingshub.SettingsCategoryNav.overlayCycle = {
+            showFavorites(!favoritesOnly)
+            shoulderSwitches++
+            com.armsx2.MenuSfx.play(com.armsx2.MenuSfx.Event.NAV)
+        }
+        onDispose { com.armsx2.ui.settingshub.SettingsCategoryNav.overlayCycle = null }
+    }
+    LaunchedEffect(shoulderSwitches) {
+        if (shoulderSwitches == 0) return@LaunchedEffect
+        var attempts = 0
+        while (!SettingsControllerNav.selectById("${CellPrefix}0") && attempts < 10) {
+            attempts++
+            withFrameNanos {}
+        }
+        // An empty Favorites has no avatar to land on: its button says where the pad is
+        if (attempts == 10) {
+            SettingsControllerNav.selectById(if (favoritesOnly) "rpcn.avatar.filter.favorites" else "rpcn.avatar.filter.all")
+        }
+    }
 
     suspend fun reload() {
         list = withContext(Dispatchers.IO) { readAvatarList() }
@@ -638,11 +670,10 @@ fun RpcnAvatarPickerOverlay() {
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         FilterButton("rpcn.avatar.filter.all", str("rpcn.avatar.all").format(all.size), selected = !favoritesOnly) {
-                            favoritesOnly = false
+                            showFavorites(false)
                         }
                         FilterButton("rpcn.avatar.filter.favorites", str("rpcn.avatar.favorites").format(favoriteCount), selected = favoritesOnly) {
-                            favoritesShown = favorites
-                            favoritesOnly = true
+                            showFavorites(true)
                         }
                         Text(
                             str("rpcn.avatar.favoritesHint"),
@@ -664,7 +695,6 @@ fun RpcnAvatarPickerOverlay() {
                 if (paths.isNotEmpty()) {
                     BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).padding(top = 8.dp)) {
                         val columns = maxOf(3, ((maxWidth + 8.dp) / (CellSize + 8.dp)).toInt())
-                        val grid = rememberLazyGridState()
 
                         // The pad only moves between controls that are on screen, and a lazy grid
                         // places only what is (see armsx3-dpad-nav-lazy-list-dead-end). Centring the

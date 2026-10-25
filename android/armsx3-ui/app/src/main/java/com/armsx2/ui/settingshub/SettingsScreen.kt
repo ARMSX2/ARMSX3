@@ -87,6 +87,11 @@ object SettingsCategoryNav {
     /** -1 = previous tab, +1 = next. Null whenever the settings screen isn't showing. */
     @Volatile
     var cycle: ((Int) -> Unit)? = null
+
+    /** Claimed by an overlay with tabs of its own while it is up (the avatar picker's All and
+     *  Favorites), so L1/R1 move those instead of the settings tabs behind it. Taken first. */
+    @Volatile
+    var overlayCycle: ((Int) -> Unit)? = null
 }
 
 /** Retains the settings page's scroll offset across close/reopen. The selected category is

@@ -954,7 +954,7 @@ val EN: Map<String, String> = mapOf(
     "rpcn.avatar.imageFailed" to "That picture could not be read.",
     "rpcn.avatar.all" to "All (%d)",
     "rpcn.avatar.favorites" to "Favorites (%d)",
-    "rpcn.avatar.favoritesHint" to "Y (Triangle) or a long press adds an avatar to Favorites.",
+    "rpcn.avatar.favoritesHint" to "Y (Triangle) or a long press adds an avatar to Favorites. LB and RB switch between All and Favorites.",
     "rpcn.avatar.favoritesEmpty" to "No favorites yet. Press Y (Triangle) on an avatar, or hold it, to add it here.",
     "rpcn.avatar.favoriteAdded" to "Added to Favorites.",
     "rpcn.avatar.favoriteRemoved" to "Removed from Favorites.",

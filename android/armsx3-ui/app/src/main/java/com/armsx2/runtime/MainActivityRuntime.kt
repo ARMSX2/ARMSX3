@@ -3249,7 +3249,8 @@ open class MainActivityRuntime : ComponentActivity() {
         // in-game L1/R1 still goes to the pad untouched. Placed after the capture blocks so
         // binding a shoulder button still works.
         if (kc == KeyEvent.KEYCODE_BUTTON_L1 || kc == KeyEvent.KEYCODE_BUTTON_R1) {
-            val cycleTab = com.armsx2.ui.settingshub.SettingsCategoryNav.cycle
+            val cycleTab = com.armsx2.ui.settingshub.SettingsCategoryNav.overlayCycle
+                ?: com.armsx2.ui.settingshub.SettingsCategoryNav.cycle
             if (cycleTab != null) {
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0)
                     cycleTab(if (kc == KeyEvent.KEYCODE_BUTTON_L1) -1 else 1)
