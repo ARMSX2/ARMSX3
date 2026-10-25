@@ -144,6 +144,17 @@ check_absent_manifest "FOREGROUND_SERVICE_MICROPHONE"    "the Discord SDK's voic
 check_absent_manifest "FOREGROUND_SERVICE_MEDIA_PLAYBACK" "the Discord SDK's voice service, never declared in the Play Console"
 check_absent_manifest "updateprovider"           "the updater FileProvider must not ship"
 
+# A permission that implies hardware makes that hardware required on Play unless the manifest
+# declares it optional: RECORD_AUDIO alone took 1.4's first upload off four devices with no
+# microphone. The app's only uses-feature for the microphone is the optional one, so its
+# presence is the check. Read straight from the file, so no pipe can turn a match into a failure.
+if LC_ALL=C grep -aqF "RECORD_AUDIO" "$MANIFEST" && ! LC_ALL=C grep -aqF "android.hardware.microphone" "$MANIFEST"; then
+	echo "FAIL: RECORD_AUDIO without an optional android.hardware.microphone -- Play would drop every device with no microphone" >&2
+	fail=1
+else
+	echo "  ok: the microphone is optional"
+fi
+
 # Native libraries are entries in the archive, so check the listing rather than the bytes.
 #
 # Captured ONCE into a variable rather than piped into each grep. Under `set -o pipefail`,
