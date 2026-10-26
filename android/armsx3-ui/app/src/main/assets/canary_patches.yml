@@ -772,6 +772,7 @@ SPU-93f3b15e03c594d9eaf5a0d8521854fd6eb2a8c7:
 
 # BATMAN: ARKHAM ORIGINS, BLUS31147 and NPUB31261 update 01.06, multiplayer executable (MP.SELF) -- ours, OFF by
 # default. The disc and the PSN release run the same MP.SELF (confirmed on RPCS3 with the Revived patch, 10-27).
+# BLUS31207 untested: the patch only applies if its MP.SELF hashes the same.
 #
 # Online play on Arkham: Revived meets only RPCN players, and a private lobby's host gets no START GAME
 # button until 3 players are in. The lobby script (BmScript GDGFxMovieUI_LobbyMenu, cooked into the
@@ -796,6 +797,7 @@ PPU-602e58994456e14dfd80a6e0f376729b53c3109a:
     Games:
       "Batman: Arkham Origins":
         BLUS31147: [ All ]
+        BLUS31207: [ All ]
         NPUB31261: [ All ]
     Author: "jpolo1224"
     Notes: "Lets the host start a private match with fewer than 3 players. Only the host needs it on."
