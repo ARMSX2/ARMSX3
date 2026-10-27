@@ -359,6 +359,10 @@ void applyPresence(const std::string& serial, const std::string& title,
     // "ARMSX3" with artwork and no idea what was being played.
     if (!title.empty()) {
         activity.SetDetails(title);
+        // The member list then reads "Playing <game>" instead of "Playing ARMSX3". The library keeps
+        // the application name. Contributed by bshar1865 (https://github.com/bshar1865), ported from
+        // their PCSX2 PR #15085.
+        activity.SetStatusDisplayType(discordpp::StatusDisplayTypes::Details);
     } else {
         // Not in a game: friends read where we are, as ARMSX2 shows it, rather than a bare
         // "ARMSX3". No second line goes with it, which is how a friend's client tells the library
