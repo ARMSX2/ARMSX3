@@ -7,8 +7,6 @@
 #include "np_handler.h"
 #include "Emu/NP/vport0.h"
 #include "Emu/NP/np_helpers.h"
-#include "Emu/NP/arkham_revived.h"
-#include "Emu/System.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -83,20 +81,6 @@ void signaling_handler::clear_match2_ctx()
 {
 	std::lock_guard lock(data_mutex);
 	match2_ctx_lst.clear();
-}
-
-namespace
-{
-	// ARMSX3: Batman: Arkham Origins starts tracking a peer only on SCE_NP_SIGNALING_EVENT_EXT_PEER_ACTIVATED, then
-	// activates the connection back and waits for ESTABLISHED to read the peer's address (MP.SELF 0x558430 and
-	// 0x558120). A Matching2 room here brings both ends up on their own, so the peer's activation used to arrive as
-	// MUTUAL on an already active connection, the game never made an entry for the host, and every join timed out
-	// with "It was not possible to connect to the chosen game session". For that game only, the peer's activation is
-	// PEER_ACTIVATED until the game activates the connection itself.
-	bool reports_peer_activation(const signaling_info& si)
-	{
-		return !si.self_activated && arkham_revived::is_arkham_origins(Emu.GetTitleID());
-	}
 }
 
 void signaling_handler::signal_sig_callback(u32 conn_id, s32 event, s32 error_code)
@@ -614,13 +598,12 @@ void signaling_handler::update_si_status(std::shared_ptr<signaling_info>& si, s3
 		signal_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_ESTABLISHED, error_code);
 		signal_sig2_callback(si->room_id, si->member_id, SCE_NP_MATCHING2_SIGNALING_EVENT_Established, error_code);
 
-		if (si->op_activated && !reports_peer_activation(*si))
+		if (si->op_activated)
 			signal_ext_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_EXT_MUTUAL_ACTIVATED, CELL_OK);
 	}
 	else if ((si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_PENDING || si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_ACTIVE) && new_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
 	{
 		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_INACTIVE;
-		si->self_activated = false;
 		signal_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_DEAD, error_code);
 		signal_sig2_callback(si->room_id, si->member_id, SCE_NP_MATCHING2_SIGNALING_EVENT_Dead, error_code);
 		retire_all_packets(si);
@@ -636,7 +619,7 @@ void signaling_handler::update_ext_si_status(std::shared_ptr<signaling_info>& si
 	{
 		si->op_activated = true;
 
-		if (si->conn_status != SCE_NP_SIGNALING_CONN_STATUS_ACTIVE || reports_peer_activation(*si))
+		if (si->conn_status != SCE_NP_SIGNALING_CONN_STATUS_ACTIVE)
 			signal_ext_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_EXT_PEER_ACTIVATED, CELL_OK);
 		else
 			signal_ext_sig_callback(si->conn_id, SCE_NP_SIGNALING_EVENT_EXT_MUTUAL_ACTIVATED, CELL_OK);
@@ -756,7 +739,6 @@ void signaling_handler::stop_sig_nl(u32 conn_id, bool forceful)
 	{
 		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_INACTIVE;
 		si->op_activated = false;
-		si->self_activated = false;
 	}
 
 	// Do not queue packets for an already dead connection
@@ -830,30 +812,17 @@ u32 signaling_handler::init_sig1(const SceNpId& npid)
 	std::lock_guard lock(data_mutex);
 
 	const u32 conn_id = get_always_conn_id(npid);
-	auto& si = ::at32(sig_peers, conn_id);
 
-	if (si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
+	if (sig_peers[conn_id]->conn_status == SCE_NP_SIGNALING_CONN_STATUS_INACTIVE)
 	{
 		sign_log.trace("Creating new sig1 connection and requesting infos from RPCN");
-		si->conn_status = SCE_NP_SIGNALING_CONN_STATUS_PENDING;
+		sig_peers[conn_id]->conn_status = SCE_NP_SIGNALING_CONN_STATUS_PENDING;
 
 		// Request peer infos from RPCN
 		auto& nph = g_fxo->get<named_thread<np::np_handler>>();
 		nph.req_sign_infos(np::npid_to_string(npid), conn_id);
 	}
-	else if (si->conn_status == SCE_NP_SIGNALING_CONN_STATUS_ACTIVE && reports_peer_activation(*si))
-	{
-		// ARMSX3: the game answers a peer that its Matching2 room already connected. Report it the way a fresh
-		// activation ends, so the game reads the peer's address and finishes its join (see reports_peer_activation).
-		sign_log.notice("Activating connection %d that a room already brought up: reporting it established", conn_id);
-		si->self_activated = true;
-		signal_sig_callback(conn_id, SCE_NP_SIGNALING_EVENT_ESTABLISHED, CELL_OK);
 
-		if (si->op_activated)
-			signal_ext_sig_callback(conn_id, SCE_NP_SIGNALING_EVENT_EXT_MUTUAL_ACTIVATED, CELL_OK);
-	}
-
-	si->self_activated = true;
 	return conn_id;
 }
 
