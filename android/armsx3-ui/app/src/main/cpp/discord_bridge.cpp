@@ -103,11 +103,14 @@ struct State {
     std::string want_ra;
     // A remote play session's party id, while both players are in one; empty otherwise.
     std::string want_party;
+    // Friends > Show the game in my status. Off, the status reads "Playing ARMSX3".
+    bool want_show_game = true;
     bool want_pending = false;
 };
 
 void applyPresence(const std::string& serial, const std::string& title,
-                   const std::string& cover, const std::string& ra, const std::string& party);
+                   const std::string& cover, const std::string& ra, const std::string& party,
+                   bool show_game);
 
 State& state() {
     static State s;
@@ -176,6 +179,7 @@ Java_com_armsx2_discord_DiscordNative_start(JNIEnv* env, jclass, jstring jtoken)
                 // Replay presence that arrived before we were ready.
                 bool replay = false;
                 std::string serial, title, cover, ra, party;
+                bool show_game = true;
                 {
                     std::lock_guard<std::mutex> lock(st.text_mutex);
                     if (st.want_pending) {
@@ -185,12 +189,13 @@ Java_com_armsx2_discord_DiscordNative_start(JNIEnv* env, jclass, jstring jtoken)
                         cover = st.want_cover;
                         ra = st.want_ra;
                         party = st.want_party;
+                        show_game = st.want_show_game;
                         st.want_pending = false;
                     }
                 }
                 if (replay) {
                     LOGI("replaying queued presence");
-                    applyPresence(serial, title, cover, ra, party);
+                    applyPresence(serial, title, cover, ra, party, show_game);
                 }
             } else if (status == discordpp::Client::Status::Disconnected && code != 0) {
                 std::lock_guard<std::mutex> lock(st.text_mutex);
@@ -309,13 +314,15 @@ Java_com_armsx2_discord_DiscordNative_error(JNIEnv* env, jclass) {
 JNIEXPORT void JNICALL
 Java_com_armsx2_discord_DiscordNative_setPlaying(JNIEnv* env, jclass, jstring jserial,
                                                  jstring jtitle, jstring jcoverUrl,
-                                                 jstring jraPresence, jstring jparty) {
+                                                 jstring jraPresence, jstring jparty,
+                                                 jboolean jshowGame) {
     State& s = state();
     const std::string serial = jstr(env, jserial);
     const std::string title = jstr(env, jtitle);
     const std::string cover = jstr(env, jcoverUrl);
     const std::string ra = jstr(env, jraPresence);
     const std::string party = jstr(env, jparty);
+    const bool show_game = jshowGame == JNI_TRUE;
 
     if (!s.client || !s.ready.load()) {
         // Queue rather than drop: the app pushes on the CONNECTED edge, which can
@@ -326,12 +333,13 @@ Java_com_armsx2_discord_DiscordNative_setPlaying(JNIEnv* env, jclass, jstring js
         s.want_cover = cover;
         s.want_ra = ra;
         s.want_party = party;
+        s.want_show_game = show_game;
         s.want_pending = true;
         LOGI("presence queued until ready");
         return;
     }
 
-    applyPresence(serial, title, cover, ra, party);
+    applyPresence(serial, title, cover, ra, party, show_game);
 }
 
 }  // extern "C"
@@ -339,7 +347,8 @@ Java_com_armsx2_discord_DiscordNative_setPlaying(JNIEnv* env, jclass, jstring js
 namespace {
 
 void applyPresence(const std::string& serial, const std::string& title,
-                   const std::string& cover, const std::string& ra, const std::string& party) {
+                   const std::string& cover, const std::string& ra, const std::string& party,
+                   bool show_game) {
     // Read back from a friend's status by DiscordPresence.parseFriends, so they must match it.
     static constexpr const char* kLibraryDetails = "In the library";
     static constexpr const char* kRemotePlayState = "Playing remote play";
@@ -359,10 +368,12 @@ void applyPresence(const std::string& serial, const std::string& title,
     // "ARMSX3" with artwork and no idea what was being played.
     if (!title.empty()) {
         activity.SetDetails(title);
-        // The member list then reads "Playing <game>" instead of "Playing ARMSX3". The library keeps
-        // the application name. Contributed by bshar1865 (https://github.com/bshar1865), ported from
-        // their PCSX2 PR #15085.
-        activity.SetStatusDisplayType(discordpp::StatusDisplayTypes::Details);
+        // The member list then reads "Playing <game>" instead of "Playing ARMSX3", unless the player
+        // turned that off. The library keeps the application name. Contributed by bshar1865
+        // (https://github.com/bshar1865), ported from their PCSX2 PR #15085.
+        if (show_game) {
+            activity.SetStatusDisplayType(discordpp::StatusDisplayTypes::Details);
+        }
     } else {
         // Not in a game: friends read where we are, as ARMSX2 shows it, rather than a bare
         // "ARMSX3". No second line goes with it, which is how a friend's client tells the library

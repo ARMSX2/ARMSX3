@@ -75,6 +75,7 @@ object DiscordPresence {
     private const val PREF_ENABLED = "discord.enabled"
     private const val PREF_TOKEN = "discord.token"
     private const val PREF_NOTIFY = "discord.notifyInGame"
+    private const val PREF_SHOW_GAME = "discord.showGameInStatus"
 
     /** Seconds between RA rich-presence re-checks. Discord rate-limits presence updates, so this
      *  stays well clear of it while still following the game within a few seconds. */
@@ -282,6 +283,7 @@ object DiscordPresence {
                 putString(DiscordIpc.DATA_COVER, DiscordFriend("", hostGame, party.hostSerial, "").coverUrl.orEmpty())
                 putString(DiscordIpc.DATA_RA, "")
                 putString(DiscordIpc.DATA_PARTY, party.id)
+                putBoolean(DiscordIpc.DATA_SHOW_GAME, showGameInStatus)
             })
             return
         }
@@ -291,6 +293,7 @@ object DiscordPresence {
             putString(DiscordIpc.DATA_COVER, game?.coverUrl.orEmpty())
             putString(DiscordIpc.DATA_RA, lastRaPresence)
             putString(DiscordIpc.DATA_PARTY, party?.id.orEmpty())
+            putBoolean(DiscordIpc.DATA_SHOW_GAME, showGameInStatus)
         })
     }
 
@@ -330,6 +333,18 @@ object DiscordPresence {
 
     /** Mirror of [notifyInGame] for Compose, which cannot observe SharedPreferences. */
     val notifyState = mutableStateOf(true)
+
+    /** Name the game in the "Playing" status rather than ARMSX3. Default on. */
+    var showGameInStatus: Boolean
+        get() = runCatching { MainActivityRuntime.prefs.getBoolean(PREF_SHOW_GAME, true) }.getOrDefault(true)
+        set(value) {
+            runCatching { MainActivityRuntime.prefs.edit().putBoolean(PREF_SHOW_GAME, value).apply() }
+            showGameState.value = value
+            pushPresence()
+        }
+
+    /** Mirror of [showGameInStatus] for Compose. */
+    val showGameState = mutableStateOf(true)
 
     // Who we had last poll, so a friend appearing can be told apart from a friend still being here.
     private var knownFriends: Set<String> = emptySet()
@@ -371,6 +386,7 @@ object DiscordPresence {
         if (!available() || !enabled || started) return
         started = true
         notifyState.value = notifyInGame
+        showGameState.value = showGameInStatus
         bindHelper()
         // Send it here TOO, not only from onServiceConnected.
         //

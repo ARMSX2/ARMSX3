@@ -143,6 +143,7 @@ fun FriendsPanel(modifier: Modifier = Modifier) {
     val friends by DiscordPresence.friends
     val error by DiscordPresence.error
     val notify by DiscordPresence.notifyState
+    val showGame by DiscordPresence.showGameState
 
     Column(
         modifier.fillMaxWidth(),
@@ -239,12 +240,20 @@ fun FriendsPanel(modifier: Modifier = Modifier) {
 
         if (status == DiscordPresence.CONNECTED) {
             GlassPanel(Modifier.fillMaxWidth()) {
-                SettingSwitchRow(
-                    title = str("friends.notify"),
-                    description = str("friends.notify.desc"),
-                    checked = notify,
-                    onCheckedChange = { DiscordPresence.notifyInGame = it },
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    SettingSwitchRow(
+                        title = str("friends.notify"),
+                        description = str("friends.notify.desc"),
+                        checked = notify,
+                        onCheckedChange = { DiscordPresence.notifyInGame = it },
+                    )
+                    SettingSwitchRow(
+                        title = str("friends.showGame"),
+                        description = str("friends.showGame.desc"),
+                        checked = showGame,
+                        onCheckedChange = { DiscordPresence.showGameInStatus = it },
+                    )
+                }
             }
 
             GlassPanel(Modifier.fillMaxWidth()) {

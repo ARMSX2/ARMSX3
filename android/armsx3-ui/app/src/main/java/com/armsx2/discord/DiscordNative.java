@@ -94,9 +94,10 @@ public final class DiscordNative {
 
     /** Publish what is running. Empty title = back in the library. raPresence is
      *  RetroAchievements' own rich-presence line, or empty when RA is off. remotePlayParty is the
-     *  party id of a remote play session with both players in, or empty outside one. */
+     *  party id of a remote play session with both players in, or empty outside one. With
+     *  showGameInStatus off, the status reads "Playing ARMSX3" instead of the game. */
     public static native void setPlaying(String serial, String title, String coverUrl, String raPresence,
-            String remotePlayParty);
+            String remotePlayParty, boolean showGameInStatus);
 
     /** Friends in ARMSX2, as name/game/serial/avatar records. */
     public static native String friends();
