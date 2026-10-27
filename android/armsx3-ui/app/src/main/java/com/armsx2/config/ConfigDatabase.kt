@@ -188,6 +188,16 @@ object ConfigDatabase {
         // it is this title only, and the per-game database toggle takes it back.
         "BLUS30218" to "Core:\n  Accurate SPU Reservations: false\n",
 
+        // The Elder Scrolls V: Skyrim Legendary Edition: Accurate SPU Reservations off, for the same
+        // reason as Web of Shadows.
+        //
+        // With it on, the SPURS kernel's stores to its control block (LS 0x011e4, 0x00660, 0x01238,
+        // 0x00c24) take vm::writer_lock about 380,000 times a second in busy scenes: 48 ms of PPU
+        // waits a second, single waits up to 36 ms. Off, about 21,000 a second, 18 ms, longest 7 ms,
+        // and the game plays normally from the title screen through a loaded save (Odin 3, 10-27).
+        // Only the US Legendary Edition was tested.
+        "BLUS31202" to "Core:\n  Accurate SPU Reservations: false\n",
+
         // Blades of Time: SPU Cache off.
         //
         // When the game's saved SPU list is built at startup, its JobMgr#1 thread reads a null
