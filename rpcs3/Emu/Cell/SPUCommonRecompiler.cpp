@@ -9458,14 +9458,22 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 		// The whitelist is keyed by guest-code hash, and CellSpurs is Sony's shared library, so an
 		// entry added for one game turns on for every game that links the same routine. Anything
 		// listed here is confined to the title it was measured on until it has been disassembled.
-		// The Elder Scrolls V: Skyrim Legendary Edition (BLUS31202). Its SPURS jobs run these PUTLLC loops
+		// The Elder Scrolls V: Skyrim, measured on the Legendary Edition (BLUS31202). Its SPURS jobs run these PUTLLC loops
 		// constantly, and each refused one took the global writer_lock barrier: ~600k barriers a second,
 		// up to 108 ms a second of PPU waits and single waits of 47 ms, felt as hitches and audio stutter
 		// (Odin 3, 2026-10-27). Each was disassembled from the game's SPU cache and is case 1 below: one
 		// quadword loaded, changed and stored back, nothing else in the 128-byte line read in the loop or
 		// right after it. Refused on the same check: KcM83pJwMk (reads one quadword, writes another),
 		// 29fH7T6a4g and ZoxgLMFeg2 (read another quadword of the line right after the commit), and 620o.
-		// Gated to this title because several are shared atomic helpers whose other callers are unchecked.
+		// Gated to Skyrim because several are shared atomic helpers whose other callers are unchecked.
+		// Every release is listed: the original (patched to 1.09) and the Legendary Edition are the same
+		// engine build, and a release whose SPU code differs at all matches none of these hashes.
+		static constexpr std::string_view s_skyrim_titles[] =
+		{
+			"BLUS31202"sv, "BLES01885"sv, "BLES01886"sv, // Legendary Edition
+			"BLUS30778"sv, "BLES01329"sv, "BLES01330"sv, // the original release
+		};
+
 		static constexpr std::string_view s_skyrim_patterns[] =
 		{
 			"7CYy1Z90VX7dZFY6kVj8K9GNoF7j"sv, // OR into two halfwords
@@ -9494,11 +9502,12 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 			return std::find(std::begin(s_skyrim_patterns), std::end(s_skyrim_patterns), h) != std::end(s_skyrim_patterns);
 		};
 
-		const auto pattern_is_title_gated = [&](std::string_view h) -> std::string_view
+		// Whether a gated pattern may run in the title being compiled; ungated ones run everywhere.
+		const auto pattern_allowed_in_title = [&](std::string_view h, std::string_view title) -> bool
 		{
-			if (h == "620oYSe8uQqq9eTkhWfMqoEXX0us"sv) return "BLUS30736"sv; // Soulcalibur V
-			if (is_skyrim_pattern(h)) return "BLUS31202"sv; // Skyrim Legendary Edition
-			return {};
+			if (h == "620oYSe8uQqq9eTkhWfMqoEXX0us"sv) return title == "BLUS30736"sv; // Soulcalibur V
+			if (is_skyrim_pattern(h)) return std::find(std::begin(s_skyrim_titles), std::end(s_skyrim_titles), title) != std::end(s_skyrim_titles);
+			return true;
 		};
 
 		// The whitelist runs in BOTH reservation modes.
@@ -9602,15 +9611,10 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 
 			allow_pattern = std::any_of(allowed_patterns.begin(), allowed_patterns.end(), FN(pattern_hash == x)) || is_skyrim_pattern(pattern_hash);
 
-			if (allow_pattern)
+			if (allow_pattern && !pattern_allowed_in_title(pattern_hash, Emu.GetTitleID()))
 			{
-				if (const auto only_title = pattern_is_title_gated(pattern_hash);
-					!only_title.empty() && Emu.GetTitleID() != only_title)
-				{
-					// Admitted on measured benefit, not proven safety, so it stays on the one
-					// title it was measured on.
-					allow_pattern = false;
-				}
+				// A gated pattern stays on the titles it was checked or measured on.
+				allow_pattern = false;
 			}
 		}
 
