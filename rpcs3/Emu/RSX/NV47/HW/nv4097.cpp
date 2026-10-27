@@ -132,7 +132,13 @@ namespace rsx
 			const auto range = compute_write_range(ctx, reg, write_count);
 			if (range.word_count < write_count)
 			{
-				rsx_log.warning("Invalid transform register index (load=%u, index=%u, count=%u)", REGS(ctx)->transform_constant_load(), index, write_count);
+				// ARMSX3: Skyrim does this on every draw, ~200 times a second, and the log lives on the SD
+				// card. Once per run says the same thing.
+				static bool s_reported = false;
+				if (!std::exchange(s_reported, true))
+				{
+					rsx_log.warning("Invalid transform register index (load=%u, index=%u, count=%u)", REGS(ctx)->transform_constant_load(), index, write_count);
+				}
 			}
 
 			if (range.word_count == 0)
