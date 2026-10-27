@@ -9458,9 +9458,46 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 		// The whitelist is keyed by guest-code hash, and CellSpurs is Sony's shared library, so an
 		// entry added for one game turns on for every game that links the same routine. Anything
 		// listed here is confined to the title it was measured on until it has been disassembled.
-		const auto pattern_is_title_gated = [](std::string_view h) -> std::string_view
+		// The Elder Scrolls V: Skyrim Legendary Edition (BLUS31202). Its SPURS jobs run these PUTLLC loops
+		// constantly, and each refused one took the global writer_lock barrier: ~600k barriers a second,
+		// up to 108 ms a second of PPU waits and single waits of 47 ms, felt as hitches and audio stutter
+		// (Odin 3, 2026-10-27). Each was disassembled from the game's SPU cache and is case 1 below: one
+		// quadword loaded, changed and stored back, nothing else in the 128-byte line read in the loop or
+		// right after it. Refused on the same check: KcM83pJwMk (reads one quadword, writes another),
+		// 29fH7T6a4g and ZoxgLMFeg2 (read another quadword of the line right after the commit), and 620o.
+		// Gated to this title because several are shared atomic helpers whose other callers are unchecked.
+		static constexpr std::string_view s_skyrim_patterns[] =
+		{
+			"7CYy1Z90VX7dZFY6kVj8K9GNoF7j"sv, // OR into two halfwords
+			"UFURPWe0PJn33pQrnA1uCvs90Cp2"sv, // 32-bit decrement, returns the old value
+			"6QJXWujvpQZ5ELepgGjGkbT8Q5L9"sv, // 32-bit add, returns the old value
+			"TGbz6z8agWq0Cj8imx7t842cVr35"sv, // 32-bit increment, returns the old value
+			"foMGepN0zGHPhhxahvcQXqittkZo"sv, // 32-bit OR, returns the old value
+			"5usgHpKNU2ZCNdy2NUxV4VF7e9uK"sv, // 16-bit increment
+			"3YiHWkYZG4n4GAN9qr8FMLg9S3LM"sv, // saturating byte add
+			"0ufxr18soJFU57mPncwUtGaLKHCJ"sv, // saturating byte add
+			"3VV9Sfbt67RVQpb2kZngKTh4qS8q"sv, // byte bit set
+			"PdRpiE1AFai4RJ9LgEZ8xXrsecQT"sv, // 32-bit field update
+			"sbne73ERLK7k4sALrpEEZQUTGas8"sv, // byte store unless the byte is 0xff
+			"mGg3dYWtVpn3tLcdx2ygsKEpvuqf"sv, // byte store
+			"0wHeUEWZCT14w6FM7od6KX1LKm5z"sv, // 64-bit add when the rest of the quadword is zero, 7 copies:
+			"2mFGbVHMzS04gt9grTZ772JA96EW"sv,
+			"G5HMcMfinTzqUMuKYue2Ea3iiwE7"sv,
+			"NAZKHqqTQurTF66K4X20YbNeyERN"sv,
+			"Ym49FkT7PE9SZpGKWSyzZCRHFuCY"sv,
+			"i8ZH5UuruSu5enEQX3KuhaUMP3GZ"sv,
+			"s2m83ehX3XuAeQv8KJcdkqVGEdMM"sv,
+		};
+
+		const auto is_skyrim_pattern = [](std::string_view h)
+		{
+			return std::find(std::begin(s_skyrim_patterns), std::end(s_skyrim_patterns), h) != std::end(s_skyrim_patterns);
+		};
+
+		const auto pattern_is_title_gated = [&](std::string_view h) -> std::string_view
 		{
 			if (h == "620oYSe8uQqq9eTkhWfMqoEXX0us"sv) return "BLUS30736"sv; // Soulcalibur V
+			if (is_skyrim_pattern(h)) return "BLUS31202"sv; // Skyrim Legendary Edition
 			return {};
 		};
 
@@ -9563,7 +9600,7 @@ spu_program spu_recompiler_base::analyse(const be_t<u32>* ls, u32 entry_point, s
 				"WA0WuYLrZXrcc6Jyw5EMgYRV2bwo"sv,
 			};
 
-			allow_pattern = std::any_of(allowed_patterns.begin(), allowed_patterns.end(), FN(pattern_hash == x));
+			allow_pattern = std::any_of(allowed_patterns.begin(), allowed_patterns.end(), FN(pattern_hash == x)) || is_skyrim_pattern(pattern_hash);
 
 			if (allow_pattern)
 			{
