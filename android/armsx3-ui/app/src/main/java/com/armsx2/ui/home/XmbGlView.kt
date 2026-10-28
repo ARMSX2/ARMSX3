@@ -418,6 +418,8 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
         private const val FLOW_SPEED = 0.18f
         private const val TENSION = 0.12f
         private const val DAMPING = 0.0001f
+        // Not "length": as a shader uniform that name shadows GLSL's built-in length(), which Mali's
+        // compiler rejects, so the wave never started there. Fix contributed by ygordreyer (ARMSX2 PR #879).
         private const val WAVE_LENGTH = 0.306001f
         private const val SPACING = 407.658f
         private const val TIME_STEP = 1.0f
