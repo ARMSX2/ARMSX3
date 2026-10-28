@@ -223,6 +223,20 @@ android {
     }
 }
 
+// The github APKs compress the app's dex files as well, the way the native libraries above already
+// are: a sideloaded APK is downloaded exactly as built, so this takes about 4 MB off the download.
+// Android unpacks the code at install, which costs about as much on the device, and it is the
+// packaging every app used before AGP started storing dex uncompressed. The play build keeps them
+// uncompressed: Play compresses every download itself, so there it would only grow the install.
+// Set per variant because a packaging block inside a flavor applies to both (see productFlavors).
+androidComponents {
+    onVariants { variant ->
+        if (variant.flavorName == "github") {
+            variant.packaging.dex.useLegacyPackaging.set(true)
+        }
+    }
+}
+
 // ARMSX3: fail the build if the bundled ANGLE libraries are not there.
 //
 // This check exists because of a specific, expensive bug in ARMSX2: the repo's
