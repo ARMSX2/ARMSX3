@@ -193,6 +193,23 @@ static atomic_t<bool> g_ppu_compile_oom{false};
 // retrying alone, from a codegen failure, which is worth the allocator-friendly retry instead.
 static thread_local bool g_ppu_module_oom = false;
 
+// Set when the title being booted needs upstream's cached reservation, which only Metal Gear
+// Solid 4 does (see the end of ppu_store_reservation's success path). Written whenever a PPU thread
+// is created, before the game's own code runs, so the conditional store reads one flag instead of
+// comparing serials on every success.
+static atomic_t<bool> g_ppu_res_cache_upstream{false};
+
+static bool ppu_res_cache_upstream_title(std::string_view title)
+{
+	static constexpr std::string_view s_titles[] =
+	{
+		"BLUS30109"sv, "BLES00246"sv, "BLJM67001"sv, // disc
+		"NPUB31633"sv, "NPEB02182"sv, "NPJB00698"sv, // PSN
+	};
+
+	return std::find(std::begin(s_titles), std::end(s_titles), title) != std::end(s_titles);
+}
+
 // Defined in JITLLVM.cpp: runs func on a disposable thread so that LLVM's fatal handler or running
 // out of memory ends that thread instead of the caller. False when it did not finish; error says
 // why, starting with "Out of memory" when that was the reason.
@@ -3221,6 +3238,8 @@ ppu_thread::ppu_thread(const ppu_thread_params& param, std::string_view name, u3
 {
 	prio.raw().prio = _prio;
 
+	g_ppu_res_cache_upstream = ppu_res_cache_upstream_title(Emu.GetTitleID());
+
 	memset(&hv_ctx, 0, sizeof(hv_ctx));
 
 	gpr[1] = stack_addr + stack_size - ppu_stack_start_offset;
@@ -3315,6 +3334,8 @@ ppu_thread::ppu_thread(utils::serial& ar)
 	, is_interrupt_thread(ar)
 {
 	[[maybe_unused]] const s32 version = GET_SERIALIZATION_VERSION(ppu);
+
+	g_ppu_res_cache_upstream = ppu_res_cache_upstream_title(Emu.GetTitleID());
 
 	struct init_pushed
 	{
@@ -3984,6 +4005,9 @@ static T ppu_load_acquire_reservation(ppu_thread& ppu, u32 addr)
 		// 0x102ed6b8, res-rtime==128 on every single one, data unchanged. 047f71b43 added a
 		// "-= 128" here to pair with the advance; the two cancel, which is presumably why the
 		// pair was dropped rather than corrected.
+		//
+		// Metal Gear Solid 4 is the exception and keeps upstream's behaviour; see the end of the
+		// success path in ppu_store_reservation.
 	}
 	else
 	{
@@ -4301,7 +4325,19 @@ static bool ppu_store_reservation(ppu_thread& ppu, u32 addr, u64 reg_value)
 		// The other half of upstream 047f71b43; see the note in ppu_load_acquire_reservation.
 		// Every success path above leaves the line's counter at rtime + 128, so this is what
 		// keeps a cached re-reservation of the same line validating against the right value.
-		ppu.rtime += 128;
+		//
+		// Except in Metal Gear Solid 4, which keeps upstream's behaviour: no advance, so the next
+		// conditional store on this line through a cached re-reservation fails once. That is what
+		// upstream's fix for MGS4 freezing at the start of a new game relies on (#16907): it lets
+		// cellSpursAddUrgentCommand queue one urgent command at a time. With the advance, MGS4 froze
+		// as Act 1's first stage loaded (tester logs, 10-27): the main and both audio threads stuck
+		// on one lock and the urgent SPURS kernel idle from the same instant. Assassin's Creed needs
+		// the advance, so it stays the default.
+		if (!g_ppu_res_cache_upstream.observe())
+		{
+			ppu.rtime += 128;
+		}
+
 		ppu.raddr = 0;
 		return true;
 	}
