@@ -336,7 +336,10 @@ object Ps3PatchRepo {
         val serial: String,
         val appVersion: String,
         val sinceRevision: Int,
-    )
+    ) {
+        /** Identifies this entry in [KEY_BUNDLED_RETRY]. */
+        val key: String get() = "$hash|$name|$serial"
+    }
 
     private val BUNDLED = listOf(
         // BLITZ: THE LEAGUE II, BLUS30203 -- ours. Its three raw SPUs park themselves when a loop
@@ -856,6 +859,9 @@ object Ps3PatchRepo {
     private const val PREFS_NAME = "ARMSX2"
     private const val KEY_BUNDLED_REVISION = "ps3_bundled_patch_revision"
 
+    /** Bundled entries that could not be turned on when their revision came round; see below. */
+    private const val KEY_BUNDLED_RETRY = "ps3_bundled_patch_retry"
+
     /**
      * Import the bundled canary patches and switch them on, once per revision.
      *
@@ -870,7 +876,8 @@ object Ps3PatchRepo {
      * the same class of bug as not having the patch at all.
      *
      * Safe to call on every boot: once the revision matches and the file is there, it is a
-     * preference read and one stat.
+     * preference read and one stat. A patch that could not be turned on (one from RPCS3's
+     * database, before that has been downloaded) is retried on its own at each boot until it is.
      *
      * The patches live in patches/armsx3_patch.yml, a file of the app's own that the core
      * applies beside the downloaded ones and that no download replaces. Until 1.0 they were
@@ -883,54 +890,64 @@ object Ps3PatchRepo {
     fun ensureBundledPatches(context: Context) {
         val prefs = prefs(context)
         val storedRevision = prefs.getInt(KEY_BUNDLED_REVISION, 0)
+        val retry = prefs.getStringSet(KEY_BUNDLED_RETRY, null).orEmpty()
         val fileMissing = !java.io.File(patchesDir(), BUNDLED_FILE).isFile
-        if (storedRevision >= BUNDLED_REVISION && !fileMissing) return
+        val needWrite = storedRevision < BUNDLED_REVISION || fileMissing
+        if (!needWrite && retry.isEmpty()) return
 
-        val yaml = runCatching {
-            context.assets.open(BUNDLED_ASSET).bufferedReader().use { it.readText() }
-        }.getOrNull()
+        var imported = 0
+        if (needWrite) {
+            val yaml = runCatching {
+                context.assets.open(BUNDLED_ASSET).bufferedReader().use { it.readText() }
+            }.getOrNull()
 
-        if (yaml.isNullOrBlank()) {
-            android.util.Log.e("ARMSX3", "canary patches: $BUNDLED_ASSET missing from assets")
-            return
-        }
+            if (yaml.isNullOrBlank()) {
+                android.util.Log.e("ARMSX3", "canary patches: $BUNDLED_ASSET missing from assets")
+                return
+            }
 
-        val imported = runCatching { RPCSX.instance.patchesWrite(BUNDLED_FILE, yaml) }.getOrDefault(-1)
-        if (imported < 0) {
-            android.util.Log.e("ARMSX3", "canary patches: could not write $BUNDLED_FILE")
-            return
+            imported = runCatching { RPCSX.instance.patchesWrite(BUNDLED_FILE, yaml) }.getOrDefault(-1)
+            if (imported < 0) {
+                android.util.Log.e("ARMSX3", "canary patches: could not write $BUNDLED_FILE")
+                return
+            }
         }
 
         // Anything at or below the stored revision has had its one chance to be turned
         // on. Re-enabling it here would silently undo a user's OFF, and patch_config.yml
         // stores "disabled" as an absent entry, so there is nothing to read back that
         // would tell us the difference between "opted out" and "never seen". So a file that
-        // was only restored enables nothing.
-        val pending = BUNDLED.filter { it.sinceRevision > storedRevision }
+        // was only restored enables nothing. The exception is a patch that could not be turned
+        // on when its chance came; it is in `retry` until it does.
+        val pending = BUNDLED.filter { it.sinceRevision > storedRevision || it.key in retry }
 
-        if (pending.isEmpty()) {
-            prefs.edit().putInt(KEY_BUNDLED_REVISION, BUNDLED_REVISION).apply()
-            return
-        }
-
-        // Only mark the revision done if every patch actually turned on. A failure
-        // here means the hash or name drifted from the YAML, and retrying next boot
-        // is better than silently shipping a game that does not render. The retry
-        // covers only `pending`, so a patch that is stuck failing cannot drag the
-        // already-settled ones back on every boot with it.
-        val allEnabled = pending.all { b ->
+        // Every pending patch gets its turn, and the revision is recorded whatever happens.
+        //
+        // This used to stop at the first patch that would not turn on and record nothing, so
+        // the revision ran again on every boot. Killzone 3's "Disable MLAA" comes from RPCS3's
+        // database, not canary_patches.yml, so it cannot turn on until that database has been
+        // downloaded. On an install without it, every patch listed after it was never switched
+        // on (the Ratchet & Clank freeze fixes, Tales of Graces f, J-Stars Victory VS+,
+        // Skylanders: Spyro's Adventure), and the ones before it were switched back on at every
+        // launch, undoing anyone's OFF. Now a failure is remembered on its own and retried on
+        // later boots, where it turns on once the database is there, without touching the rest.
+        val failed = pending.filterNot { b ->
             val ok = runCatching {
                 RPCSX.instance.patchSetEnabled(b.hash, b.name, b.serial, b.appVersion, true)
             }.getOrDefault(false)
             if (!ok) {
-                android.util.Log.e("ARMSX3", "canary patches: could not enable ${b.name} (${b.hash})")
+                android.util.Log.w("ARMSX3", "canary patches: could not enable ${b.name} (${b.hash}), will retry")
             }
             ok
         }
 
-        if (allEnabled) {
-            prefs.edit().putInt(KEY_BUNDLED_REVISION, BUNDLED_REVISION).apply()
-            android.util.Log.i("ARMSX3", "canary patches: imported $imported, enabled ${pending.size}")
-        }
+        prefs.edit()
+            .putInt(KEY_BUNDLED_REVISION, BUNDLED_REVISION)
+            .putStringSet(KEY_BUNDLED_RETRY, failed.map { it.key }.toSet())
+            .apply()
+        android.util.Log.i(
+            "ARMSX3",
+            "canary patches: imported $imported, enabled ${pending.size - failed.size}, retrying ${failed.size}",
+        )
     }
 }
