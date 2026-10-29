@@ -11,6 +11,7 @@
 #include "Emu/RSX/Core/RSXRendererFactory.h"
 #include "Emu/RSX/Host/MM.h"
 #include "Emu/RSX/Host/RSXDMAWriter.h"
+#include "Emu/RSX/Program/SPIRVCommon.h"
 #include "Emu/RSX/NV47/HW/context_accessors.define.h"
 
 [[noreturn]] extern void report_fatal_error(std::string_view _text, bool is_html = false, bool include_help_text = true);
@@ -38,6 +39,11 @@ GLGSRender::GLGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 {
 	on_bind_context(m_ctx);
 
+#ifdef RSX_GLES
+	// ARMSX3: every shader goes through glslang on its way to GLSL ES (GLSLES.cpp), as Vulkan's do
+	spirv::initialize_compiler_context();
+#endif
+
 	m_shaders_cache = std::make_unique<gl::shader_cache>(m_prog_buffer, "opengl", "v1.95");
 
 	m_config.supports_multidraw = true;
@@ -62,6 +68,10 @@ GLGSRender::~GLGSRender()
 	{
 		m_frame->reset();
 	}
+
+#ifdef RSX_GLES
+	spirv::finalize_compiler_context();
+#endif
 }
 
 std::string GLGSRender::configured_logical_id() const

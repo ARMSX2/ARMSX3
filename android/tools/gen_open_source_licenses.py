@@ -145,6 +145,8 @@ def components():
         apache("Abseil", "The Abseil Authors", "Used by the emulator core and by WebRTC."),
         c("pugixml", "MIT", read("3rdparty/pugixml/LICENSE.md")),
         c("glslang", "BSD-3-Clause and others", read("3rdparty/glslang/glslang/LICENSE.txt")),
+        apache("SPIRV-Cross", "2015-2021 Arm Limited, 2019-2021 Hans-Kristian Arntzen and contributors",
+               "Used by the OpenGL renderer to write its shaders as OpenGL ES."),
         c("libpng", "libpng-2.0", read("3rdparty/libpng/libpng/LICENSE")),
         c("RtMidi", "MIT", read("3rdparty/rtmidi/rtmidi/LICENSE")),
         c("yaml-cpp", "MIT", read("3rdparty/yaml-cpp/yaml-cpp/LICENSE")),

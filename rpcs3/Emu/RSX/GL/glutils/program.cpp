@@ -110,7 +110,7 @@ namespace gl
 			// ARMSX3: retarget the generated source at OpenGL ES. This is the one
 			// point every shader passes through, whether it came from an emitter or
 			// from a fixed GLSLSnippets file. See GLSLES.cpp.
-			gl::es::patch_glsl_for_es(source);
+			gl::es::patch_glsl_for_es(source, type);
 #endif
 
 			if (gl::get_driver_caps().vendor_INTEL)

@@ -758,6 +758,7 @@ target_link_libraries(rpcs3_emu
         Threads::Threads
     PRIVATE
         3rdparty::glslang
+        3rdparty::spirv-cross
         3rdparty::libpng
         3rdparty::rtmidi
         3rdparty::yaml-cpp

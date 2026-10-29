@@ -571,10 +571,16 @@ namespace gl::es
 
 // ---- Generated-GLSL retargeting ---------------------------------------------
 //
-// Rewrites a finished shader's #version / #extension / precision header for ES.
-// Applied from gl::glsl::shader::precompile(), the one point every generated
-// shader passes through. Implementation and its list of known gaps: GLSLES.cpp.
+// Turns a finished desktop-GLSL shader into GLSL ES 3.20: through SPIR-V (glslang,
+// then SPIRV-Cross), or by rewriting its header if that fails. Applied from
+// gl::glsl::shader::precompile(), the one point every generated shader passes
+// through. Implementation and its list of known gaps: GLSLES.cpp.
+namespace glsl
+{
+	enum program_domain : unsigned char;
+}
+
 namespace gl::es
 {
-	void patch_glsl_for_es(std::string& source);
+	void patch_glsl_for_es(std::string& source, ::glsl::program_domain domain);
 }

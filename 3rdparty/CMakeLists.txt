@@ -124,6 +124,13 @@ add_subdirectory(hidapi)
 # glslang
 add_subdirectory(glslang EXCLUDE_FROM_ALL)
 
+# SPIRV-Cross (Android only: GLSL ES for the OpenGL renderer, see spirv-cross/CMakeLists.txt)
+if(ANDROID)
+	add_subdirectory(spirv-cross EXCLUDE_FROM_ALL)
+else()
+	add_library(3rdparty_spirv_cross INTERFACE)
+endif()
+
 # yaml-cpp
 add_subdirectory(yaml-cpp)
 
@@ -428,6 +435,7 @@ add_library(3rdparty::7zip ALIAS 3rdparty_7zip)
 add_library(3rdparty::protobuf ALIAS 3rdparty_protobuf)
 add_library(3rdparty::pugixml ALIAS pugixml)
 add_library(3rdparty::glslang ALIAS 3rdparty_glslang)
+add_library(3rdparty::spirv-cross ALIAS 3rdparty_spirv_cross)
 add_library(3rdparty::yaml-cpp ALIAS yaml-cpp)
 add_library(3rdparty::hidapi ALIAS 3rdparty_hidapi)
 add_library(3rdparty::libpng ALIAS ${LIBPNG_TARGET})

@@ -192,6 +192,54 @@ namespace spirv
 		return success;
 	}
 
+#ifdef __ANDROID__
+	bool compile_glsl_to_spv_for_es(std::vector<u32>& spv, const std::string& shader, ::glsl::program_domain domain, std::string& error)
+	{
+		const EShLanguage lang = (domain == ::glsl::glsl_fragment_program)
+			? EShLangFragment
+			: (domain == ::glsl::glsl_vertex_program)
+				? EShLangVertex
+				: EShLangCompute;
+
+		const auto msg = static_cast<EShMessages>(EShMsgDefault | EShMsgSpvRules | EShMsgEnhanced);
+
+		glslang::TProgram program;
+		glslang::TShader shader_object(lang);
+
+		shader_object.setEnvInput(glslang::EShSourceGlsl, lang, glslang::EShClientOpenGL, 100);
+		shader_object.setEnvClient(glslang::EShClientOpenGL, glslang::EShTargetClientVersion::EShTargetOpenGL_450);
+		shader_object.setEnvTarget(glslang::EshTargetSpv, glslang::EShTargetLanguageVersion::EShTargetSpv_1_0);
+
+		// OpenGL SPIR-V wants a location on every default-block uniform and a binding on every
+		// opaque one. Desktop GLSL leaves those to the driver and RPCS3 relies on that, so map the
+		// missing ones rather than refuse the shader. The ones it does give are kept.
+		shader_object.setAutoMapLocations(true);
+		shader_object.setAutoMapBindings(true);
+
+		const char* shader_text = shader.c_str();
+		shader_object.setStrings(&shader_text, 1);
+
+		if (!shader_object.parse(&g_default_config, 450, EProfile::ECoreProfile, false, true, msg))
+		{
+			error = shader_object.getInfoLog();
+			return false;
+		}
+
+		program.addShader(&shader_object);
+
+		if (!program.link(msg) || !program.mapIO())
+		{
+			error = program.getInfoLog();
+			return false;
+		}
+
+		glslang::SpvOptions options;
+		options.disableOptimizer = true;
+		glslang::GlslangToSpv(*program.getIntermediate(lang), spv, &options);
+		return true;
+	}
+#endif
+
 	void initialize_compiler_context()
 	{
 		glslang::InitializeProcess();
