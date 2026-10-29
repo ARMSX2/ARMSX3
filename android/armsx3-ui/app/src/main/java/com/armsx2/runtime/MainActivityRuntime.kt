@@ -1629,11 +1629,12 @@ open class MainActivityRuntime : ComponentActivity() {
             }
         }
 
-        /** Mirrors the @@JOYCON@@ diagnostic: logcat AND emulog, so a tester's emulog file
-         *  alone answers "did ANGLE actually load?" without needing a live adb logcat. */
+        /** Logcat AND the core log, so a tester's ARMSX3.log alone answers "did ANGLE actually
+         *  load?". NativeApp.emulog only reaches logcat, which on some devices holds under a
+         *  minute of history; the core reports what it then loaded right after this line. */
         private fun angleEmit(msg: String) {
             android.util.Log.i("ARMSX2", "@@ANGLE@@ $msg")
-            runCatching { NativeApp.emulog("@@ANGLE@@ $msg") }
+            runCatching { net.rpcsx.RPCSX.instance.logAndroid("@@ANGLE@@ $msg") }
         }
 
         /** A state to boot in place of the game at this launch path, once. See [launchGameFromState]. */

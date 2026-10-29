@@ -1314,8 +1314,16 @@ namespace gl::es
 			// ANGLE or the system driver is picked per game (MainActivityRuntime.applyAngleEnv), and
 			// Apply & Restart boots the next game in this same process, so a changed pick has to be
 			// able to take over. Only once nothing made with the current library is alive.
-			if (requested == s_requested_angle || s_live_contexts)
+			if (requested == s_requested_angle)
 			{
+				return s_backend;
+			}
+
+			if (s_live_contexts)
+			{
+				// Said out loud: otherwise the game simply runs on the driver the player turned off
+				rsx_log.warning("GLES: %s was picked, but %u context(s) of the current driver are still alive, so it stays in use",
+					requested.empty() ? "The system driver" : "ANGLE", s_live_contexts);
 				return s_backend;
 			}
 
