@@ -40,7 +40,7 @@ uint linear_invocation_id()
 
 ivec2 linear_id_to_input_coord(uint index)
 {
-	return ivec2(int(index % region_size.x), int(index / output_pitch)) + region_offset;
+	return ivec2(int(index % region_size.x), int(index / region_size.x)) + region_offset;
 }
 
 uint input_coord_to_output_id(ivec2 coord)
@@ -55,7 +55,7 @@ void main()
 
 	for (int loop = 0; loop < KERNEL_SIZE; ++loop, ++index)
 	{
-		if (index > uint(region_size.x * region_size.y))
+		if (index >= uint(region_size.x * region_size.y))
 		{
 			return;
 		}

@@ -273,6 +273,45 @@ namespace gl
 					scratch_mem.remove();
 					use_driver_pixel_transform = false;
 				}
+#ifdef RSX_GLES
+				// ARMSX3: ES reads pixels back as RGBA bytes only, with no BGRA, no packed 8_8_8_8 types
+				// and no byte swap, which is how every 32-bit colour surface goes back to the PS3: the
+				// driver refused each one and the game read stale memory. The compute pass that copies
+				// RGBA8 surfaces writes exactly the bytes desktop GL produces, so these take it too.
+				else if (const bool is_8888 = (type == texture::type::uint_8_8_8_8 || type == texture::type::uint_8_8_8_8_rev || type == texture::type::ubyte);
+					is_8888 && (format == texture::format::rgba || format == texture::format::bgra) &&
+					src->get_target() == texture::target::texture2D && dynamic_cast<gl::viewable_image*>(src) &&
+					(src->get_internal_format() == texture::internal_format::rgba8 || src->get_internal_format() == texture::internal_format::bgra8))
+				{
+					buffer scratch_mem;
+					pixel_buffer_layout pack_info{};
+					image_memory_requirements mem_info{};
+
+					// The pass writes 8_8_8_8_REV order; plain 8_8_8_8 is the same word with its bytes reversed
+					pack_info.format = static_cast<GLenum>(format);
+					pack_info.type = GL_UNSIGNED_INT_8_8_8_8_REV;
+					pack_info.block_size = 4;
+					pack_info.swap_bytes = (type == texture::type::uint_8_8_8_8) != pack_unpack_swap_bytes;
+					pack_info.row_length = rsx_pitch / 4;
+
+					mem_info.image_size_in_texels = pack_info.row_length * src_area.height();
+					mem_info.image_size_in_bytes = mem_info.image_size_in_texels * 4;
+					mem_info.memory_required = 0;
+
+					void* out_offset = copy_image_to_buffer(cmd, pack_info, src, &scratch_mem, 0, 0, src_rgn, &mem_info);
+					real_pitch = rsx_pitch;
+
+					glBindBuffer(GL_SHADER_STORAGE_BUFFER, GL_NONE);
+					glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+
+					const u64 data_length = static_cast<u64>(rsx_pitch) * (src_area.height() - 1) + src_area.width() * 4;
+					ensure(data_length + pbo_offset <= static_cast<u64>(pbo.size()), "Memory allocation cannot fit image contents. Report to developers.");
+
+					scratch_mem.copy_to(&pbo, reinterpret_cast<u64>(out_offset), pbo_offset, data_length);
+					scratch_mem.remove();
+					use_driver_pixel_transform = false;
+				}
+#endif
 			}
 
 			if (use_driver_pixel_transform)
