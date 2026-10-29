@@ -552,7 +552,14 @@ namespace gl
 
 		const auto& caps = gl::get_driver_caps();
 		const bool stencil_export_supported = caps.ARB_shader_stencil_export_supported;
+#ifdef RSX_GLES
+		// ARMSX3: on ES every colour upload comes through here (see GLTexture.cpp), as on the old
+		// AMD driver, so the plain formats need decoding too. Without them nothing is written and
+		// every texture is black.
+		const bool legacy_format_support = true;
+#else
 		const bool legacy_format_support = caps.subvendor_ATI;
+#endif
 
 		std::pair<std::string_view, std::string> repl_list[] =
 		{

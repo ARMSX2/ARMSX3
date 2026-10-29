@@ -3,7 +3,11 @@
 
 #ifdef RSX_GLES
 
+#include "util/asm.hpp"
+
 #include <cstring>
+#include <mutex>
+#include <optional>
 #include <vector>
 
 #include <dlfcn.h>
@@ -819,11 +823,18 @@ namespace gl::es
 	// ---------------------------------------------------------------------
 
 	// The driver's real entry points, saved before the filters replace them.
-	static PFN_glPixelStorei    raw_glPixelStorei = nullptr;
-	static PFN_glEnable         raw_glEnable = nullptr;
-	static PFN_glDisable        raw_glDisable = nullptr;
-	static PFN_glTexParameteriv raw_glTexParameteriv = nullptr;
-	static PFN_glBindTexture    raw_glBindTexture = nullptr;
+	static PFN_glPixelStorei       raw_glPixelStorei = nullptr;
+	static PFN_glEnable            raw_glEnable = nullptr;
+	static PFN_glDisable           raw_glDisable = nullptr;
+	static PFN_glTexParameteri     raw_glTexParameteri = nullptr;
+	static PFN_glTexParameteriv    raw_glTexParameteriv = nullptr;
+	static PFN_glTexParameterf     raw_glTexParameterf = nullptr;
+	static PFN_glTexParameterfv    raw_glTexParameterfv = nullptr;
+	static PFN_glSamplerParameterf raw_glSamplerParameterf = nullptr;
+	static PFN_glBindTexture       raw_glBindTexture = nullptr;
+	static PFN_glTexSubImage2D     raw_glTexSubImage2D = nullptr;
+	static PFN_glTexSubImage3D     raw_glTexSubImage3D = nullptr;
+	static PFN_glCopyImageSubData  raw_glCopyImageSubData = nullptr;
 
 	// GL_TEXTURE_1D reaches the driver from three directions - texture creation,
 	// the per-draw sampler binding, and GLGSRender's null-texture setup - and ES
@@ -921,6 +932,51 @@ namespace gl::es
 		}
 	}
 
+	// ES has no LOD bias, on textures or on samplers. RPCS3 sets it on every sampler it makes,
+	// nearly always to zero, which is what ES does anyway. A game that asks for another value
+	// gets zero, which makes its textures a little sharper or blurrier than intended.
+	static bool drop_lod_bias(GLenum pname, GLfloat value)
+	{
+		if (pname != GL_TEXTURE_LOD_BIAS)
+		{
+			return false;
+		}
+
+		if (value != 0.f)
+		{
+			static bool warned = false;
+			warn_once(warned, "texture LOD bias");
+		}
+
+		return true;
+	}
+
+	// The texture constructor sets its parameters on whatever target it was made for, 1D
+	// included; see filter_BindTexture.
+	static void GL_APIENTRY filter_TexParameteri(GLenum target, GLenum pname, GLint param)
+	{
+		if (!drop_lod_bias(pname, static_cast<GLfloat>(param)))
+		{
+			raw_glTexParameteri(real_texture_target(target), pname, param);
+		}
+	}
+
+	static void GL_APIENTRY filter_TexParameterf(GLenum target, GLenum pname, GLfloat param)
+	{
+		if (!drop_lod_bias(pname, param))
+		{
+			raw_glTexParameterf(real_texture_target(target), pname, param);
+		}
+	}
+
+	static void GL_APIENTRY filter_TexParameterfv(GLenum target, GLenum pname, const GLfloat* params)
+	{
+		if (!drop_lod_bias(pname, params[0]))
+		{
+			raw_glTexParameterfv(real_texture_target(target), pname, params);
+		}
+	}
+
 	static void GL_APIENTRY filter_TexParameteriv(GLenum target, GLenum pname, const GLint* params)
 	{
 		if (pname == GL_TEXTURE_SWIZZLE_RGBA)
@@ -933,24 +989,203 @@ namespace gl::es
 			return;
 		}
 
-		raw_glTexParameteriv(target, pname, params);
+		if (!drop_lod_bias(pname, static_cast<GLfloat>(params[0])))
+		{
+			raw_glTexParameteriv(real_texture_target(target), pname, params);
+		}
 	}
 
-	// Swap the four filters in over the raw driver pointers. Called at the end of
+	static void GL_APIENTRY filter_SamplerParameterf(GLuint sampler, GLenum pname, GLfloat param)
+	{
+		if (!drop_lod_bias(pname, param))
+		{
+			raw_glSamplerParameterf(sampler, pname, param);
+		}
+	}
+
+	static void GL_APIENTRY filter_CopyImageSubData(GLuint src, GLenum src_target, GLint src_level, GLint src_x, GLint src_y, GLint src_z,
+		GLuint dst, GLenum dst_target, GLint dst_level, GLint dst_x, GLint dst_y, GLint dst_z, GLsizei width, GLsizei height, GLsizei depth)
+	{
+		raw_glCopyImageSubData(src, real_texture_target(src_target), src_level, src_x, src_y, src_z,
+			dst, real_texture_target(dst_target), dst_level, dst_x, dst_y, dst_z, width, height, depth);
+	}
+
+	// Desktop GL takes a texel as one packed 32-bit word (GL_UNSIGNED_INT_8_8_8_8 and _REV) and
+	// in blue-first order (GL_BGRA); ES takes neither, only bytes in R, G, B, A order. RPCS3
+	// uploads its null textures, the overlay images and frames the game drew on the CPU that way,
+	// so the driver refused them and they stayed empty. They are put in byte order here instead,
+	// which leaves the texture holding exactly what a desktop driver would have stored.
+	struct texel_bytes
+	{
+		// Where each channel sits within the four bytes of a source texel
+		u8 r, g, b, a;
+	};
+
+	static std::optional<texel_bytes> desktop_texel_layout(GLenum format, GLenum type)
+	{
+		// The host is little-endian: a packed word's low byte comes first in memory
+		switch (format)
+		{
+		case GL_RGBA:
+			switch (type)
+			{
+			case GL_UNSIGNED_INT_8_8_8_8: return texel_bytes{ 3, 2, 1, 0 };
+			case GL_UNSIGNED_INT_8_8_8_8_REV: return texel_bytes{ 0, 1, 2, 3 };
+			default: return std::nullopt;
+			}
+		case GL_BGRA:
+			switch (type)
+			{
+			case GL_UNSIGNED_BYTE:
+			case GL_UNSIGNED_INT_8_8_8_8_REV: return texel_bytes{ 2, 1, 0, 3 };
+			case GL_UNSIGNED_INT_8_8_8_8: return texel_bytes{ 1, 2, 3, 0 };
+			default: return std::nullopt;
+			}
+		default:
+			return std::nullopt;
+		}
+	}
+
+	// Reads the source the way the unpack state describes it and writes it out tightly packed,
+	// one R, G, B, A texel after another. Nullopt when the source is in a pixel buffer, which
+	// would have to be mapped first: none of the uploads above use one.
+	static std::optional<std::vector<u8>> repack_texels(const void* pixels, GLsizei width, GLsizei height, GLsizei depth, texel_bytes layout)
+	{
+		GLint unpack_buffer = 0;
+		glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &unpack_buffer);
+
+		if (unpack_buffer || !pixels)
+		{
+			static bool reported = false;
+			if (!std::exchange(reported, true))
+			{
+				rsx_log.error("GLES: an upload from a pixel buffer is in a desktop-only pixel format and was not converted.");
+			}
+			return std::nullopt;
+		}
+
+		GLint row_length = 0, image_height = 0, skip_pixels = 0, skip_rows = 0, skip_images = 0, alignment = 4;
+		glGetIntegerv(GL_UNPACK_ROW_LENGTH, &row_length);
+		glGetIntegerv(GL_UNPACK_IMAGE_HEIGHT, &image_height);
+		glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &skip_pixels);
+		glGetIntegerv(GL_UNPACK_SKIP_ROWS, &skip_rows);
+		glGetIntegerv(GL_UNPACK_SKIP_IMAGES, &skip_images);
+		glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
+
+		const usz row_pitch = utils::align<usz>(usz(row_length > 0 ? row_length : width) * 4, std::max(alignment, 1));
+		const usz image_pitch = row_pitch * usz(image_height > 0 ? image_height : height);
+		const u8* src = static_cast<const u8*>(pixels) + skip_images * image_pitch + skip_rows * row_pitch + skip_pixels * 4;
+
+		std::vector<u8> texels(usz(width) * height * depth * 4);
+		u8* dst = texels.data();
+
+		for (GLsizei z = 0; z < depth; ++z)
+		{
+			for (GLsizei y = 0; y < height; ++y)
+			{
+				const u8* row = src + z * image_pitch + y * row_pitch;
+
+				for (GLsizei x = 0; x < width; ++x, dst += 4)
+				{
+					const u8* texel = row + x * 4;
+					dst[0] = texel[layout.r];
+					dst[1] = texel[layout.g];
+					dst[2] = texel[layout.b];
+					dst[3] = texel[layout.a];
+				}
+			}
+		}
+
+		return texels;
+	}
+
+	// The repacked texels are tight, so the caller's row length, skips and alignment are set
+	// aside for the upload.
+	struct scoped_tight_unpack
+	{
+		static constexpr GLenum k_state[] = { GL_UNPACK_ROW_LENGTH, GL_UNPACK_IMAGE_HEIGHT, GL_UNPACK_SKIP_PIXELS,
+			GL_UNPACK_SKIP_ROWS, GL_UNPACK_SKIP_IMAGES, GL_UNPACK_ALIGNMENT };
+		GLint m_saved[std::size(k_state)]{};
+
+		scoped_tight_unpack()
+		{
+			for (usz i = 0; i < std::size(k_state); ++i)
+			{
+				glGetIntegerv(k_state[i], &m_saved[i]);
+				raw_glPixelStorei(k_state[i], k_state[i] == GL_UNPACK_ALIGNMENT ? 4 : 0);
+			}
+		}
+
+		~scoped_tight_unpack()
+		{
+			for (usz i = 0; i < std::size(k_state); ++i)
+			{
+				raw_glPixelStorei(k_state[i], m_saved[i]);
+			}
+		}
+	};
+
+	static void GL_APIENTRY filter_TexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
+		GLenum format, GLenum type, const void* pixels)
+	{
+		if (const auto layout = desktop_texel_layout(format, type))
+		{
+			if (const auto texels = repack_texels(pixels, width, height, 1, *layout))
+			{
+				const scoped_tight_unpack tight;
+				raw_glTexSubImage2D(target, level, xoffset, yoffset, width, height, GL_RGBA, GL_UNSIGNED_BYTE, texels->data());
+				return;
+			}
+		}
+
+		raw_glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
+	}
+
+	static void GL_APIENTRY filter_TexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+		GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels)
+	{
+		if (const auto layout = desktop_texel_layout(format, type))
+		{
+			if (const auto texels = repack_texels(pixels, width, height, depth, *layout))
+			{
+				const scoped_tight_unpack tight;
+				raw_glTexSubImage3D(target, level, xoffset, yoffset, zoffset, width, height, depth, GL_RGBA, GL_UNSIGNED_BYTE, texels->data());
+				return;
+			}
+		}
+
+		raw_glTexSubImage3D(target, level, xoffset, yoffset, zoffset, width, height, depth, format, type, pixels);
+	}
+
+	// Swap the filters in over the raw driver pointers. Called at the end of
 	// load_procs, after the generic loop has populated the table.
 	static void install_filters()
 	{
 		raw_glPixelStorei = ::glPixelStorei;
 		raw_glEnable = ::glEnable;
 		raw_glDisable = ::glDisable;
+		raw_glTexParameteri = ::glTexParameteri;
 		raw_glTexParameteriv = ::glTexParameteriv;
+		raw_glTexParameterf = ::glTexParameterf;
+		raw_glTexParameterfv = ::glTexParameterfv;
+		raw_glSamplerParameterf = ::glSamplerParameterf;
 		raw_glBindTexture = ::glBindTexture;
+		raw_glTexSubImage2D = ::glTexSubImage2D;
+		raw_glTexSubImage3D = ::glTexSubImage3D;
+		raw_glCopyImageSubData = ::glCopyImageSubData;
 
 		::glPixelStorei = &filter_PixelStorei;
 		::glEnable = &filter_Enable;
 		::glDisable = &filter_Disable;
+		::glTexParameteri = &filter_TexParameteri;
 		::glTexParameteriv = &filter_TexParameteriv;
+		::glTexParameterf = &filter_TexParameterf;
+		::glTexParameterfv = &filter_TexParameterfv;
+		::glSamplerParameterf = &filter_SamplerParameterf;
 		::glBindTexture = &filter_BindTexture;
+		::glTexSubImage2D = &filter_TexSubImage2D;
+		::glTexSubImage3D = &filter_TexSubImage3D;
+		::glCopyImageSubData = &filter_CopyImageSubData;
 	}
 }
 
@@ -1373,16 +1608,36 @@ namespace gl::es
 		void GL_APIENTRY report_error(GLenum /*source*/, GLenum /*type*/, GLuint id, GLenum /*severity*/,
 			GLsizei /*length*/, const GLchar* message, const void* /*user*/)
 		{
-			// Driver threads can call this too, and a bad call repeats every frame
-			static atomic_t<u32> s_count = 0;
+			// A bad call usually repeats every draw. Each different complaint is logged a few
+			// times and then only counted, so one that turns up later is not lost behind it.
+			// Driver threads can call this too.
+			static std::mutex s_mutex;
+			static std::unordered_map<std::string, u32> s_seen;
 
-			if (const u32 count = s_count++; count < 64)
+			const std::string text = message ? message : "";
+			u32 count = 0;
 			{
-				rsx_log.error("GLES: the driver rejected a call (0x%x): %s", id, message ? message : "");
+				std::lock_guard lock(s_mutex);
+
+				// Drivers can put changing numbers in a message; past this many, stop remembering
+				if (const auto found = s_seen.find(text); found != s_seen.end())
+				{
+					count = ++found->second;
+				}
+				else if (s_seen.size() < 256)
+				{
+					s_seen.emplace(text, 1);
+					count = 1;
+				}
 			}
-			else if ((count & (count - 1)) == 0)
+
+			if (count && count <= 3)
 			{
-				rsx_log.error("GLES: %u calls rejected so far", count);
+				rsx_log.error("GLES: the driver rejected a call (0x%x): %s", id, text);
+			}
+			else if (count && (count & (count - 1)) == 0)
+			{
+				rsx_log.error("GLES: the driver rejected the same call %u times: %s", count, text);
 			}
 		}
 	}
