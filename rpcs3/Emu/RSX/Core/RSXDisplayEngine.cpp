@@ -15,6 +15,10 @@
 #include "Emu/RSX/rsx_profiler.h"
 
 #include "util/asm.hpp"
+
+#ifdef __ANDROID__
+#include <unistd.h> // gettid, for the ADPF feed in flip()
+#endif
 #include "util/serialization.hpp"
 
 extern atomic_t<u32> g_lv2_preempts_taken;

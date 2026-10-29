@@ -53,6 +53,14 @@
 
 #undef GL_GLES_PROTOTYPES
 
+// GL_ARB_robustness, used by the renderer reset detection in glutils/common.cpp. ES 3.2 has the
+// same entry point and enums in core, with the same values and no suffix.
+#define glGetGraphicsResetStatusARB glGetGraphicsResetStatus
+#define GL_RESET_NOTIFICATION_STRATEGY_ARB GL_RESET_NOTIFICATION_STRATEGY
+#define GL_LOSE_CONTEXT_ON_RESET_ARB GL_LOSE_CONTEXT_ON_RESET
+#define GL_GUILTY_CONTEXT_RESET_ARB GL_GUILTY_CONTEXT_RESET
+#define GL_INNOCENT_CONTEXT_RESET_ARB GL_INNOCENT_CONTEXT_RESET
+
 // GLHelpers.cpp declares its debug callback `void APIENTRY log_debug(...)`.
 // glew spells it APIENTRY, Khronos ES spells it GL_APIENTRY.
 #ifndef APIENTRY

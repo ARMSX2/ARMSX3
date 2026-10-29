@@ -841,15 +841,15 @@ VKGSRender::VKGSRender(rsx::context* ctx, rsx::display_output* output) noexcept 
 		//
 		// Passthrough DMA relies on importing host memory, which no mobile driver
 		// here supports.
-		if (backend_config.supports_asynchronous_compute)
+		if (m_config.supports_asynchronous_compute)
 		{
 			rsx_log.notice("Disabling asynchronous compute on a mobile GPU: the compute queue is not independent hardware.");
-			backend_config.supports_asynchronous_compute = false;
+			m_config.supports_asynchronous_compute = false;
 		}
-		if (backend_config.supports_passthrough_dma)
+		if (m_config.supports_passthrough_dma)
 		{
 			rsx_log.notice("Disabling passthrough DMA on a mobile GPU: host memory import is not supported.");
-			backend_config.supports_passthrough_dma = false;
+			m_config.supports_passthrough_dma = false;
 		}
 		break;
 	default: break;

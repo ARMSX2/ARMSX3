@@ -373,7 +373,7 @@ namespace vk
 
 	bool reclaim_ring_memory()
 	{
-		auto renderer = dynamic_cast<VKGSRender*>(rsx::get_current_renderer());
+		auto renderer = dynamic_cast<VKGSRender*>(rsx::get_current_render_backend());
 
 		if (!renderer || is_uninterruptible())
 		{

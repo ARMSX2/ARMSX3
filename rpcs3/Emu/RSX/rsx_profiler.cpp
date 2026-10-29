@@ -1574,7 +1574,7 @@ namespace rsx::prof
 		// VSync semaphore is never posted again. Printing it says whether that has happened.
 		if (const auto r = rsx::get_current_renderer())
 		{
-			prof_log.error("\tunsent_gcm_events=0x%x  (non-zero = flip notifications are being abandoned)", r->unsent_gcm_events.load());
+			prof_log.error("\tunsent_gcm_events=%d  (1 = flip notifications are being abandoned)", r->has_unsent_gcm_events() ? 1 : 0);
 		}
 
 		// The stall PC histogram this file already keeps, surfaced from INSIDE the stall.

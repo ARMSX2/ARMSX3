@@ -438,7 +438,8 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 		vkCmdBlitImage(*cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 			target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, m_framegen_filter);
 
-		if (m_overlay_manager && m_overlay_manager->has_visible())
+		const auto overlay_manager = RSX(m_ctx)->overlay_manager();
+		if (overlay_manager && overlay_manager->has_visible())
 		{
 			vk::change_image_layout(*cmd, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 				VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, range);
@@ -454,14 +455,14 @@ vk::command_buffer_chunk* VKGSRender::present_generated_frame(VkImage src)
 			{
 				// As flip()'s render_overlays: lock to avoid modification during the run-update chain.
 				auto ui_renderer = vk::get_overlay_pass<vk::ui_overlay_renderer>();
-				std::lock_guard lock(*m_overlay_manager);
+				std::lock_guard lock(*overlay_manager);
 
 				const areau display_area = { 0, 0, static_cast<u32>(m_swapchain_dims.width), static_cast<u32>(m_swapchain_dims.height) };
 
 				// advance = false: the same overlays the real frame drew, without stepping them. The
 				// performance overlay counts a frame per step, so stepping here made its FPS read
 				// the generated rate instead of the game's.
-				for (const auto& view : m_overlay_manager->get_views())
+				for (const auto& view : overlay_manager->get_views())
 				{
 					const areau render_area = view->use_window_space ? display_area : areau(area);
 					ui_renderer->run(*cmd, render_area, fbo, single_target_pass, m_texture_upload_buffer_ring_info, *view.get(), false);

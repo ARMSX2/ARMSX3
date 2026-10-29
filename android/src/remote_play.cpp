@@ -115,8 +115,8 @@ namespace
 	// only takes over when the game restarts.
 	bool renderer_captures()
 	{
-		auto* const rsx = rsx::get_current_renderer();
-		return rsx && dynamic_cast<VKGSRender*>(rsx) != nullptr;
+		auto* const backend = rsx::get_current_render_backend();
+		return backend && dynamic_cast<VKGSRender*>(backend) != nullptr;
 	}
 
 	std::shared_ptr<remote_play_sink> current_sink()

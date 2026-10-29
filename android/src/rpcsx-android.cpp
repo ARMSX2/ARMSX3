@@ -508,6 +508,12 @@ struct GraphicsFrame : GSFrameBase {
 
   void close() override {}
   void reset() override {}
+
+  // Whichever renderer is configured right now, not the one this frame was made for: the frame is
+  // not tied to a backend. Vulkan only takes handle(), and the GL hooks below check the setting
+  // when they run. Answering this way makes a renderer swap reuse the frame through reset()
+  // instead of asking for a replacement, which Android has no second window to provide.
+  video_renderer renderer() const override { return g_cfg.video.renderer; }
   bool shown() override { return true; }
   void hide() override {}
   void show() override {}
@@ -541,7 +547,10 @@ struct GraphicsFrame : GSFrameBase {
 
   void delete_context(draw_context_t ctx) override {
 #ifdef RSX_GLES
-    if (!usingGlRenderer()) {
+    // By the context, not the setting. A swap from GL to Vulkan changes the setting before the
+    // GL backend tears down, and skipping this left its EGL surface connected to the window, where
+    // Vulkan cannot attach a swapchain. On a Vulkan boot ctx is null: make_context never made one.
+    if (!ctx) {
       return;
     }
 
@@ -2645,7 +2654,7 @@ static void setupCallbacks() {
             // ARMSX3: the GL backend targets OpenGL ES 3.2 (see
             // Emu/RSX/GL/OpenGL_ES.hpp). It is also the only path that can run on
             // ANGLE, which is why it exists on a Vulkan-capable platform at all.
-            rsx::create_render_thread(g_cfg.video.renderer.get(), ar);
+            rsx::create_render_thread(ar);
           },
       .get_audio =
           [](auto...) {
