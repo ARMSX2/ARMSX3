@@ -1010,6 +1010,13 @@ namespace rsx
 		// leads to those being destroyed.
 		rsx::prof::stop_sampler();
 
+		// The offloader goes first. The write-back below records and submits GPU work, and handed
+		// to the offloader during a stop it never completed: every Multithreaded RSX game took ten
+		// seconds to close, waiting out the fence timeout, which was then logged as a lost device.
+		// join() drains what is already queued and stops the thread; can_offload() then keeps
+		// everything after it on this thread, which is what the setting being off does anyway.
+		g_fxo->get<rsx::dma_manager>().join();
+
 		// Both of these wait on the GPU, so neither runs on a lost device: the write-back reads
 		// every surface back through fences a dead GPU never signals, and sync() blocks on
 		// occlusion query results it can never produce. Waiting here would defeat the clean
@@ -1035,7 +1042,6 @@ namespace rsx
 		std::this_thread::sleep_for(10ms);
 		do_local_task(rsx::FIFO::state::lock_wait);
 
-		g_fxo->get<rsx::dma_manager>().join();
 		m_display.stop_vblank_thread();
 		state += cpu_flag::exit;
 
