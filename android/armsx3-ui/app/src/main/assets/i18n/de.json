@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "Noch keine Speicherstände",
  "savestate.error.hardcore": "Speicherstände sind deaktiviert, während der RetroAchievements-Hardcore-Modus aktiviert ist. Schalten Sie Hardcore in den RetroAchievements-Einstellungen aus, um sie zu verwenden (dadurch verfallen die Hardcore-Punkte für diese Sitzung).",
  "savestate.error.load": "Dieser Slot konnte nicht geladen werden.",
+ "savestate.error.incompatible": "Dieser Speicherstand wurde mit einer anderen Version von ARMSX3 erstellt und kann in dieser Version nicht geladen werden.",
  "savestate.error.memcardBusy": "Das Spiel schreibt noch Speicherdaten, daher wurde kein Speicherstand erstellt. Lassen Sie das Spiel ein, zwei Sekunden weiterlaufen und versuchen Sie es dann erneut: Die Speicherkarte bleibt belegt, solange das Spiel pausiert ist.",
  "savestate.error.save": "Konnte nicht in diesem Slot speichern. Überprüfen Sie das Protokoll auf @@ANDROID_SAVESTATE@@.",
  "savestate.hint": "Wählen Sie einen Slot. Halten Sie einen Slot gedrückt oder verwenden Sie die Papierkorb-Schaltfläche, um ihn zu löschen.",

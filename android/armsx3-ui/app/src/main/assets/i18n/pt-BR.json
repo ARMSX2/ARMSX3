@@ -1185,6 +1185,7 @@
  "savestate.empty.description": "Crie um estado salvo enquanto o jogo está em execução e gerencie-o ou faça backup aqui.",
  "savestate.empty.title": "Ainda não há estados salvos",
  "savestate.error.load": "Não foi possível carregar esse slot.",
+ "savestate.error.incompatible": "Este estado foi salvo em outra versão do ARMSX3 e não pode ser carregado nesta.",
  "savestate.error.save": "Não foi possível salvar nesse slot. Verifique o log de @@ANDROID_SAVESTATE@@.",
  "savestate.hint": "Escolha um slot. Segure um slot ou use o botão de lixeira para excluí-lo.",
  "savestate.import": "Importar",

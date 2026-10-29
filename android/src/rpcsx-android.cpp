@@ -5503,6 +5503,14 @@ extern "C" bool _rpcsx_hasStateInSlot(unsigned int slot) {
   return !armsx3_slot_find(Emu.GetTitleID(), slot).empty();
 }
 
+// Whether the slot's state is in a format this build can read. An occupied slot can
+// hold one it cannot, such as a state saved before the RSX rework; the loaders refuse
+// those, and the UI asks this to say why instead of showing a bare "couldn't load".
+extern "C" bool _rpcsx_isStateSlotReadable(unsigned int slot) {
+  const std::string path = armsx3_slot_find(Emu.GetTitleID(), slot);
+  return !path.empty() && is_savestate_compatible(path);
+}
+
 // Delete a slot, both the state and its thumbnail.
 //
 // There was no delete entry point at all, so the picker deleted the string it got back from

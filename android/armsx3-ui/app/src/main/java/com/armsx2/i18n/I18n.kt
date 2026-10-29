@@ -1888,6 +1888,7 @@ val EN: Map<String, String> = mapOf(
         "long as the game is paused.",
     "savestate.error.save" to "Couldn't save to that slot. Check the log for @@ANDROID_SAVESTATE@@.",
     "savestate.error.load" to "Couldn't load that slot.",
+    "savestate.error.incompatible" to "This state was saved by a different version of ARMSX3 and can't be loaded in this one.",
     "savestate.title.save" to "Save State",
     "browse.empty" to "Nothing here.",
     "browse.emptyFiltered" to "No matching files in this folder.",

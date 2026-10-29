@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "Henüz kaydetme durumu yok",
  "savestate.error.hardcore": "RetroAchievements Zorlu Modu açıkken kaydetme durumları devre dışı bırakılır. Bunları kullanmak için RetroAchievements ayarlarından Zorlu modu kapatın (bu, oturumun zorlu mod puanlarından vazgeçmek demektir).",
  "savestate.error.load": "Bu yuva yüklenemedi.",
+ "savestate.error.incompatible": "Bu durum ARMSX3'ün farklı bir sürümüyle kaydedildi ve bu sürümde yüklenemez.",
  "savestate.error.memcardBusy": "Oyun hala kaydetme verilerini yazıyor, dolayısıyla durum kaydedilmedi. Oyunu bir iki saniye devam ettirin, ardından tekrar deneyin; oyun duraklatıldığı sürece kart meşgul kalır.",
  "savestate.error.save": "Bu yuvaya kaydedilemedi. @@ANDROID_SAVESTATE@@ için günlüğü kontrol edin.",
  "savestate.hint": "Bir yuva seçin. Silmek için bir yuvayı tutun veya çöp kutusu düğmesini kullanın.",

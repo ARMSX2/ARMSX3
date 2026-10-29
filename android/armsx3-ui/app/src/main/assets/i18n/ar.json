@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "لا توجد حالات حفظ حتى الآن",
  "savestate.error.hardcore": "يتم تعطيل حالات الحفظ أثناء تشغيل وضع RetroAchievements Hardcore. قم بإيقاف تشغيل Hardcore في إعدادات RetroAchievements لاستخدامها (سيؤدي ذلك إلى خسارة نقاط Hardcore لهذه الجلسة).",
  "savestate.error.load": "تعذر تحميل تلك الفتحة.",
+ "savestate.error.incompatible": "تم حفظ هذه الحالة بإصدار مختلف من ARMSX3 ولا يمكن تحميلها في هذا الإصدار.",
  "savestate.error.memcardBusy": "لا تزال اللعبة تكتب بيانات الحفظ، لذلك لم يتم حفظ الحالة. استأنف اللعبة لثانية أو ثانيتين، ثم حاول مرة أخرى؛ تظل بطاقة الذاكرة مشغولة طوال فترة إيقاف اللعبة مؤقتًا.",
  "savestate.error.save": "تعذر الحفظ في تلك الفتحة. تحقق من السجل بحثًا عن @@ANDROID_SAVESTATE@@.",
  "savestate.hint": "اختر فتحة. اضغط مع الاستمرار على فتحة، أو استخدم زر سلة المهملات، لحذفها.",

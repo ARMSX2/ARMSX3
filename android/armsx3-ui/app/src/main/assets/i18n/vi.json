@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "Chưa có trạng thái lưu nào",
  "savestate.error.hardcore": "Trạng thái lưu bị tắt khi Chế độ Hardcore của RetroAchievements được bật. Hãy tắt Hardcore trong cài đặt RetroAchievements để sử dụng (việc này sẽ mất điểm Hardcore của phiên chơi này).",
  "savestate.error.load": "Không thể tải vị trí đó.",
+ "savestate.error.incompatible": "Trạng thái này được lưu bằng một phiên bản ARMSX3 khác và không thể tải trong phiên bản này.",
  "savestate.error.memcardBusy": "Trò chơi vẫn đang ghi dữ liệu lưu nên trạng thái chưa được lưu. Hãy tiếp tục trò chơi trong một hai giây rồi thử lại; thẻ nhớ vẫn bận chừng nào trò chơi còn tạm dừng.",
  "savestate.error.save": "Không thể lưu vào khe đó. Kiểm tra nhật ký cho @@ANDROID_SAVESTATE@@.",
  "savestate.hint": "Chọn một khe. Giữ một khe hoặc sử dụng nút thùng rác để xóa nó.",

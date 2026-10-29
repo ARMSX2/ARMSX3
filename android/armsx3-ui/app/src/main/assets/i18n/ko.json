@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "아직 저장 상태가 없습니다.",
  "savestate.error.hardcore": "RetroAchievements 하드코어 모드가 켜져 있는 동안에는 저장 상태가 비활성화됩니다. 사용하려면 RetroAchievements 설정에서 하드코어를 끄세요(이번 세션에서는 하드코어 포인트를 받을 수 없게 됩니다).",
  "savestate.error.load": "해당 슬롯을 로드할 수 없습니다.",
+ "savestate.error.incompatible": "이 상태는 다른 버전의 ARMSX3에서 저장되어 이 버전에서는 로드할 수 없습니다.",
  "savestate.error.memcardBusy": "게임이 아직 저장 데이터를 쓰는 중이어서 상태가 저장되지 않았습니다. 게임을 1~2초 동안 재개한 다음 다시 시도하세요. 게임이 일시 중지되어 있는 동안에는 메모리 카드가 계속 사용 중 상태로 남습니다.",
  "savestate.error.save": "해당 슬롯에 저장할 수 없습니다. @@ANDROID_SAVESTATE@@ 로그를 확인하세요.",
  "savestate.hint": "슬롯을 선택하세요. 슬롯을 보류하거나 휴지통 버튼을 사용하여 삭제하세요.",

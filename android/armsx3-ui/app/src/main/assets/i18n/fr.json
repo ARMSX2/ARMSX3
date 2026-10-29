@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "Aucun état de sauvegarde pour l'instant",
  "savestate.error.hardcore": "Les états de sauvegarde sont désactivés lorsque le mode Hardcore de RetroAchievements est activé. Désactivez le mode Hardcore dans les paramètres RetroAchievements pour les utiliser (vous perdez alors les points Hardcore pour cette session).",
  "savestate.error.load": "Impossible de charger cet emplacement.",
+ "savestate.error.incompatible": "Cet état a été sauvegardé avec une autre version d'ARMSX3 et ne peut pas être chargé dans celle-ci.",
  "savestate.error.memcardBusy": "Le jeu est toujours en train d'écrire des données de sauvegarde, donc l'état n'a pas été enregistré. Reprenez le jeu une seconde ou deux, puis réessayez : la carte mémoire reste occupée tant que le jeu est en pause.",
  "savestate.error.save": "Impossible d'enregistrer sur cet emplacement. Vérifiez le journal pour @@ANDROID_SAVESTATE@@.",
  "savestate.hint": "Choisissez un emplacement. Maintenez un emplacement ou utilisez le bouton Corbeille pour le supprimer.",

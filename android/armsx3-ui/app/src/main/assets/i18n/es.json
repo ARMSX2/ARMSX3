@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "Aún no hay estados de guardado",
  "savestate.error.hardcore": "Los estados de guardado están desactivados mientras el modo Hardcore de RetroAchievements está activado. Desactive el modo Hardcore en la configuración de RetroAchievements para usarlos (esto hace perder los puntos Hardcore de la sesión).",
  "savestate.error.load": "No se pudo cargar esa ranura.",
+ "savestate.error.incompatible": "Este estado se guardó con otra versión de ARMSX3 y no se puede cargar en esta.",
  "savestate.error.memcardBusy": "El juego todavía está escribiendo datos guardados, por lo que el estado no se guardó. Reanude el juego uno o dos segundos y vuelva a intentarlo: la tarjeta de memoria permanece ocupada mientras el juego esté en pausa.",
  "savestate.error.save": "No se pudo guardar en esa ranura. Verifique el registro de @@ANDROID_SAVESTATE@@.",
  "savestate.hint": "Elija una ranura. Mantenga presionada una ranura o use el botón de la papelera para eliminarla.",

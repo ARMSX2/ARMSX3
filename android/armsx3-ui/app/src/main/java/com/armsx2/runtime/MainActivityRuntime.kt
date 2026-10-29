@@ -3645,7 +3645,11 @@ open class MainActivityRuntime : ComponentActivity() {
                 ControllerMappings.SysHotkey.LOAD_STATE -> {
                     if (down) {
                         val slot = currentSaveSlot.value
-                        kotlin.concurrent.thread { runCatching { NativeApp.loadStateFromSlot(slot) } }
+                        kotlin.concurrent.thread {
+                            if (!runCatching { NativeApp.loadStateFromSlot(slot) }.getOrDefault(false)) {
+                                reportUnreadableState(slot)
+                            }
+                        }
                     }
                     return true
                 }
@@ -3929,11 +3933,28 @@ open class MainActivityRuntime : ComponentActivity() {
         kotlin.concurrent.thread { runCatching { NativeApp.saveStateToSlot(slot) } }
     }
 
+    // A refused load says nothing on the hotkey and quick-load paths. When the slot holds a
+    // state in a format this build cannot read, which after a savestate format change is every
+    // state made before it, say so rather than leave the press looking ignored.
+    private fun reportUnreadableState(slot: Int) {
+        if (NativeApp.hasStateInSlot(slot) && !NativeApp.isStateSlotReadable(slot)) {
+            runOnUiThread {
+                android.widget.Toast.makeText(
+                    this,
+                    com.armsx2.i18n.I18n.get("savestate.error.incompatible"),
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+            }
+        }
+    }
+
     fun loadState(onLoaded: (() -> Unit)? = null) {
         if (blockedByHardcore()) return
         val slot = currentSaveSlot.value
         kotlin.concurrent.thread {
-            runCatching { NativeApp.loadStateFromSlot(slot) }
+            if (!runCatching { NativeApp.loadStateFromSlot(slot) }.getOrDefault(false)) {
+                reportUnreadableState(slot)
+            }
             // Resume/dismiss only AFTER the load lands. The caller used to resume
             // immediately, which raced the async load (the menu resumed the VM before
             // the state was restored) — that's why "Load" appeared to do nothing.

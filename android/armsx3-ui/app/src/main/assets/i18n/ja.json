@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "セーブステートはまだありません",
  "savestate.error.hardcore": "RetroAchievements のハードコアモードがオンの間は、セーブステートは無効になります。使用するには、RetroAchievements の設定でハードコアをオフにしてください（このセッションのハードコアポイントは失われます）。",
  "savestate.error.load": "そのスロットをロードできませんでした。",
+ "savestate.error.incompatible": "このステートは別のバージョンの ARMSX3 で保存されたため、このバージョンではロードできません。",
  "savestate.error.memcardBusy": "ゲームはまだセーブ データの書き込み中であるため、ステートは保存されませんでした。ゲームを 1～2 秒再開してから、もう一度お試しください。ゲームが一時停止している間は、メモリーカードが使用中のままになります。",
  "savestate.error.save": "そのスロットに保存できませんでした。 @@ANDROID_SAVESTATE@@ のログを確認してください。",
  "savestate.hint": "スロットを選択します。スロットを削除するには、スロットを長押しするか、ゴミ箱ボタンを使用します。",

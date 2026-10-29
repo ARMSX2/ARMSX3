@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "Hîn rewşên tomarkirinê tune ne",
  "savestate.error.hardcore": "Dema ku Moda Hardcore ya RetroAchievements çalak e, rewşên tomarkirinê neçalak in. Ji bo bikaranîna wan, Hardcore di mîhengên RetroAchievements de vemirînin (bi vê yekê xalên hardcore yên vê danişînê winda dibin).",
  "savestate.error.load": "Nekarî wê hêlînê bar bike.",
+ "savestate.error.incompatible": "Ev rewş bi guhertoyeke din a ARMSX3 hatiye tomarkirin û di vê guhertoyê de nayê barkirin.",
  "savestate.error.memcardBusy": "Lîstik hîn daneyên hilanînê dinivîse, ji ber vê yekê rewş nehat tomarkirin. Lîstikê çirkeyek an du bidomînin, paşê dîsa biceribînin; heta ku lîstik sekinandî be, qerta bîrê mijûl dimîne.",
  "savestate.error.save": "Nikaribû li wê hêlînê xilas bike. Têketinê ji bo @@ANDROID_SAVESTATE@@ kontrol bikin.",
  "savestate.hint": "Slotek hilbijêrin. Slotek bigire, an bişkoka çopê bikar bînin, da ku jêbirin.",

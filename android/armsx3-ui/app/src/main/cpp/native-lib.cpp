@@ -158,6 +158,7 @@ struct RPCSXApi {
   bool (*saveStateToSlot)(unsigned int slot);
   bool (*loadStateFromSlot)(unsigned int slot);
   bool (*hasStateInSlot)(unsigned int slot);
+  bool (*isStateSlotReadable)(unsigned int slot);
   bool (*deleteStateFromSlot)(unsigned int slot);
   std::string (*patchEngineVersion)();
   int (*patchesImport)(std::string_view content);
@@ -341,6 +342,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.saveStateToSlot = reinterpret_cast<decltype(saveStateToSlot)>(dlsym(handle, "_rpcsx_saveStateToSlot"));
     result.loadStateFromSlot = reinterpret_cast<decltype(loadStateFromSlot)>(dlsym(handle, "_rpcsx_loadStateFromSlot"));
     result.hasStateInSlot = reinterpret_cast<decltype(hasStateInSlot)>(dlsym(handle, "_rpcsx_hasStateInSlot"));
+    result.isStateSlotReadable = reinterpret_cast<decltype(isStateSlotReadable)>(dlsym(handle, "_rpcsx_isStateSlotReadable"));
     result.deleteStateFromSlot = reinterpret_cast<decltype(deleteStateFromSlot)>(dlsym(handle, "_rpcsx_deleteStateFromSlot"));
     result.patchEngineVersion = reinterpret_cast<decltype(patchEngineVersion)>(dlsym(handle, "_rpcsx_patchEngineVersion"));
     result.patchesImport = reinterpret_cast<decltype(patchesImport)>(dlsym(handle, "_rpcsx_patchesImport"));
@@ -1564,6 +1566,17 @@ Java_net_rpcsx_RPCSX_hasStateInSlot(JNIEnv *, jobject, jint slot) {
   }
 
   return rpcsxLib.hasStateInSlot(static_cast<unsigned int>(slot));
+}
+
+// Readable unless the core says otherwise: a core too old to answer must not make every
+// slot look like it holds a state from another version.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_net_rpcsx_RPCSX_isStateSlotReadable(JNIEnv *, jobject, jint slot) {
+  if (rpcsxLib.isStateSlotReadable == nullptr || slot < 0) {
+    return true;
+  }
+
+  return rpcsxLib.isStateSlotReadable(static_cast<unsigned int>(slot));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

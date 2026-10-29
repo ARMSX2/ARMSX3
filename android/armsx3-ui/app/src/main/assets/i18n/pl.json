@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "Nie ma jeszcze zapisanych stanów",
  "savestate.error.hardcore": "Zapisy stanu są wyłączone, gdy włączony jest tryb hardcorowy RetroAchievements. Aby z nich korzystać, wyłącz tryb hardcorowy w ustawieniach RetroAchievements (w tej sesji stracisz punkty hardcorowe).",
  "savestate.error.load": "Nie udało się wczytać tego gniazda.",
+ "savestate.error.incompatible": "Ten stan został zapisany w innej wersji ARMSX3 i nie można go wczytać w tej wersji.",
  "savestate.error.memcardBusy": "Gra wciąż zapisuje swoje dane, więc zapis stanu się nie powiódł. Wznów grę na sekundę lub dwie, a potem spróbuj ponownie: karta pozostaje zajęta przez cały czas, gdy gra jest wstrzymana.",
  "savestate.error.save": "Nie udało się zapisać w tym slocie. Sprawdź dziennik @@ANDROID_SAVESTATE@@.",
  "savestate.hint": "Wybierz miejsce. Przytrzymaj miejsce lub użyj przycisku kosza, aby je usunąć.",

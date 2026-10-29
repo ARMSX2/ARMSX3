@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "Nessuno stato di salvataggio ancora",
  "savestate.error.hardcore": "Gli stati di salvataggio sono disabilitati mentre la modalità Hardcore di RetroAchievements è attiva. Disattiva la modalità Hardcore nelle impostazioni di RetroAchievements per usarli (così perdi i punti Hardcore per questa sessione).",
  "savestate.error.load": "Impossibile caricare quello slot.",
+ "savestate.error.incompatible": "Questo stato è stato salvato con un'altra versione di ARMSX3 e non può essere caricato in questa.",
  "savestate.error.memcardBusy": "Il gioco sta ancora scrivendo i dati di salvataggio, quindi lo stato non è stato salvato. Riprendi il gioco per un secondo o due, poi riprova: la memory card resta occupata finché il gioco è in pausa.",
  "savestate.error.save": "Impossibile salvare in quello slot. Controllare il registro per @@ANDROID_SAVESTATE@@.",
  "savestate.hint": "Scegli uno slot. Tieni premuto uno slot o utilizza il pulsante del cestino per eliminarlo.",

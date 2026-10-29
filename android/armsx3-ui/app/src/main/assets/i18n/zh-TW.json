@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "尚無儲存狀態",
  "savestate.error.hardcore": "當 RetroAchievements 硬核模式開啟時，儲存狀態將會停用。要使用儲存狀態，請在 RetroAchievements 設定中關閉硬核模式（本次遊戲將因此失去硬核積分）。",
  "savestate.error.load": "無法載入該插槽。",
+ "savestate.error.incompatible": "此狀態由其他版本的 ARMSX3 儲存，無法在此版本中載入。",
  "savestate.error.memcardBusy": "遊戲仍在寫入保存資料，因此狀態未儲存。請讓遊戲繼續執行一兩秒，然後再試一次；只要遊戲處於暫停狀態，記憶卡就會一直忙碌。",
  "savestate.error.save": "無法儲存到該插槽。檢查日誌中是否有@@ANDROID_SAVESTATE@@。",
  "savestate.hint": "選擇一個插槽。按住一個插槽，或使用垃圾桶按鈕將其刪除。",

@@ -901,6 +901,11 @@ object Rpcs3Bridge {
     fun hasState(slot: Int): Boolean =
         runCatching { RPCSX.instance.hasStateInSlot(slot) }.getOrDefault(false)
 
+    /** Whether this slot's state is in a format this build can load. */
+    @JvmStatic
+    fun isStateReadable(slot: Int): Boolean =
+        runCatching { RPCSX.instance.isStateSlotReadable(slot) }.getOrDefault(true)
+
     /**
      * Delete a slot's state and its thumbnail.
      *

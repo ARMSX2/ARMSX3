@@ -234,6 +234,10 @@ fun SaveStatePickerScreen(mode: SaveMode, onBack: () -> Unit) {
                                     runCatching { NativeApp.isMemcardBusy() }.getOrDefault(false)
                                 val hardcore = !ok &&
                                     runCatching { NativeApp.isHardcoreMode() }.getOrDefault(false)
+                                val incompatible = !ok && mode == SaveMode.Load &&
+                                    runCatching {
+                                        NativeApp.hasStateInSlot(selected) && !NativeApp.isStateSlotReadable(selected)
+                                    }.getOrDefault(false)
                                 withContext(Dispatchers.Main) {
                                     if (ok) {
                                         failure = null
@@ -248,6 +252,7 @@ fun SaveStatePickerScreen(mode: SaveMode, onBack: () -> Unit) {
                                             // this JNI logs — so it surfaced as a bare "couldn't
                                             // load that slot" with nothing in logcat. Name it.
                                             hardcore -> "savestate.error.hardcore"
+                                            incompatible -> "savestate.error.incompatible"
                                             busy -> "savestate.error.memcardBusy"
                                             mode == SaveMode.Save -> "savestate.error.save"
                                             else -> "savestate.error.load"

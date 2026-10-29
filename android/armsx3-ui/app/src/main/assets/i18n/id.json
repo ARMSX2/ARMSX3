@@ -1183,6 +1183,7 @@
  "savestate.empty.title": "Belum ada status penyimpanan",
  "savestate.error.hardcore": "Status penyimpanan dinonaktifkan saat Mode RetroAchievements Hardcore aktif. Matikan Hardcore di pengaturan RetroAchievements untuk menggunakannya (poin hardcore untuk sesi ini akan hangus).",
  "savestate.error.load": "Tidak dapat memuat slot itu.",
+ "savestate.error.incompatible": "Status ini disimpan dengan versi ARMSX3 yang berbeda dan tidak dapat dimuat di versi ini.",
  "savestate.error.memcardBusy": "Game masih menulis data simpanan, jadi statusnya tidak disimpan. Lanjutkan game selama satu atau dua detik, lalu coba lagi; kartu memori tetap sibuk selama game dijeda.",
  "savestate.error.save": "Tidak dapat menyimpan ke slot itu. Periksa log untuk @@ANDROID_SAVESTATE@@.",
  "savestate.hint": "Pilih slotnya. Pegang slot, atau gunakan tombol tempat sampah, untuk menghapusnya.",
