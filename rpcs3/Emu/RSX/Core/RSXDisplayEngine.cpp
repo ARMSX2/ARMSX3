@@ -341,11 +341,17 @@ namespace rsx
 			renderer->post_present();
 		}
 
+#ifndef __ANDROID__
 		// Check for display config change
 		if (m_pump->renderer_info() != renderer->configured_logical_id())
 		{
 			m_pump->request_renderer_update();
 		}
+#else
+		// ARMSX3: the renderer is only chosen at boot on Android (_rpcsx_settingsSet). Replacing it in
+		// place wedged the GPU on 10-29 and then the whole phone, and a configured adapter name that
+		// matches no device would ask for a replacement after every flip.
+#endif
 	}
 
 	void display_engine::post_vblank_event(u64 post_event_time)

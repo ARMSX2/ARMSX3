@@ -23,6 +23,13 @@ namespace vk
 
 	static bool can_device_recover()
 	{
+#ifdef __ANDROID__
+		// ARMSX3: never on Android. Recovery replaces the renderer in place (rsx::thread::reset_renderer),
+		// and that path wedged the GPU on 10-29: a live driver switch through it hung the game, then
+		// the whole phone, which rebooted. A lost device stops the game cleanly instead, as it did
+		// before the RSX rework (rsx::request_device_lost_shutdown).
+		return false;
+#else
 		const u64 now = get_system_time();
 		const u64 prev = s_last_device_reset.exchange(now);
 
@@ -32,6 +39,7 @@ namespace vk
 		}
 
 		return !prev || (now - prev) >= c_min_time_between_resets_us;
+#endif
 	}
 
 	void arm_device_loss_protection()
@@ -242,11 +250,12 @@ namespace vk
 
 			if (!can_device_recover())
 			{
-				// ARMSX3: a device loss that cannot be recovered (during bootup, or too soon after the
-				// last recovery) stops the game cleanly instead of throwing. Throwing unwinds the RSX
-				// thread out of whatever Vulkan call saw the loss, which skips rsx::thread::on_exit()
-				// and leaves the app frozen with audio still playing; see
-				// rsx::request_device_lost_shutdown. Any other unrecoverable error still throws.
+				// ARMSX3: a device loss that cannot be recovered (any on Android; elsewhere during
+				// bootup, or too soon after the last recovery) stops the game cleanly instead of
+				// throwing. Throwing unwinds the RSX thread out of whatever Vulkan call saw the loss,
+				// which skips rsx::thread::on_exit() and leaves the app frozen with audio still
+				// playing; see rsx::request_device_lost_shutdown. Any other unrecoverable error still
+				// throws.
 				if (error_code == VK_ERROR_DEVICE_LOST)
 				{
 					rsx_log.error("%sVulkan device lost and cannot be recovered: %s%s", message, error_message, src_loc);
