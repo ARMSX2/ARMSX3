@@ -529,6 +529,13 @@ namespace gl
 				dst->aspect() == gl::image_aspect::color &&  // Cannot use image_load_store with depth images
 				caps.subvendor_ATI == false);                // The old AMD/ATI driver does not support image writeonly without format specifier
 
+#ifdef RSX_GLES
+			// ARMSX3: neither does OpenGL ES. Every image there declares a format, which has to match
+			// what is bound, and the compute pass writes eleven formats through one image2D. Its
+			// program does not compile, so it is left to the raster pass, as on that AMD driver.
+			use_compute_transform = false;
+#endif
+
 			if (use_compute_transform)
 			{
 				switch (dst->get_internal_format())

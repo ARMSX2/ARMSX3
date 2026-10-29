@@ -210,11 +210,11 @@ namespace spirv
 		shader_object.setEnvClient(glslang::EShClientOpenGL, glslang::EShTargetClientVersion::EShTargetOpenGL_450);
 		shader_object.setEnvTarget(glslang::EshTargetSpv, glslang::EShTargetLanguageVersion::EShTargetSpv_1_0);
 
-		// OpenGL SPIR-V wants a location on every default-block uniform and a binding on every
-		// opaque one. Desktop GLSL leaves those to the driver and RPCS3 relies on that, so map the
-		// missing ones rather than refuse the shader. The ones it does give are kept.
+		// OpenGL SPIR-V wants a location on every default-block uniform, which desktop GLSL leaves
+		// to the driver, so map the missing ones rather than refuse the shader. GLSLES.cpp has
+		// SPIRV-Cross drop them again. Bindings are not needed and not mapped: a made-up one
+		// could disagree between stages for a sampler both declare.
 		shader_object.setAutoMapLocations(true);
-		shader_object.setAutoMapBindings(true);
 
 		const char* shader_text = shader.c_str();
 		shader_object.setStrings(&shader_text, 1);

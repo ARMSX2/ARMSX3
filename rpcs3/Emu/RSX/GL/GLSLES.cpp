@@ -7,6 +7,8 @@
 #include "Emu/RSX/Program/SPIRVCommon.h"
 #include "spirv_to_essl.h"
 
+#include <cctype>
+
 //
 // ARMSX3: retarget RPCS3's generated GLSL at OpenGL ES.
 //
@@ -166,6 +168,57 @@ namespace gl::es
 			return upgraded;
 		}
 
+		// Uniforms the source gives a location of its own, as in
+		//   layout(location=0) uniform usamplerBuffer persistent_input_stream;
+		// RPCS3 sets some of those by number (the vertex stream samplers, uniforms[0] and [1]), so
+		// they keep it; spirv_to_essl drops every location glslang made up. RPCS3 writes these
+		// declarations one to a line.
+		std::vector<std::string> located_uniforms(const std::string& source)
+		{
+			std::vector<std::string> names;
+
+			for (usz pos = 0; pos < source.length();)
+			{
+				usz end = source.find('\n', pos);
+				end = (end == std::string::npos) ? source.length() : end;
+				const std::string_view line(source.data() + pos, end - pos);
+				pos = end + 1;
+
+				const usz open = line.find("layout");
+				const usz close = (open == std::string_view::npos) ? open : line.find(')', open);
+				if (close == std::string_view::npos || line.substr(open, close - open).find("location") == std::string_view::npos)
+				{
+					continue;
+				}
+
+				const usz keyword = line.find("uniform", close);
+				const usz stop = (keyword == std::string_view::npos) ? keyword : line.find_first_of(";[", keyword);
+				if (stop == std::string_view::npos)
+				{
+					continue;
+				}
+
+				usz name_end = stop;
+				while (name_end > keyword && line[name_end - 1] == ' ')
+				{
+					name_end--;
+				}
+
+				usz name_start = name_end;
+				while (name_start > keyword && (std::isalnum(static_cast<unsigned char>(line[name_start - 1])) || line[name_start - 1] == '_'))
+				{
+					name_start--;
+				}
+
+				if (name_start < name_end)
+				{
+					names.emplace_back(line.substr(name_start, name_end - name_start));
+				}
+			}
+
+			return names;
+		}
+
 		const char* domain_name(::glsl::program_domain domain)
 		{
 			switch (domain)
@@ -183,7 +236,8 @@ namespace gl::es
 		std::string essl;
 		std::string error;
 
-		if (spirv::compile_glsl_to_spv_for_es(spirv, source_for_glslang(source), domain, error) && spirv_to_essl(spirv, essl, error))
+		if (spirv::compile_glsl_to_spv_for_es(spirv, source_for_glslang(source), domain, error) &&
+			spirv_to_essl(spirv, located_uniforms(source), essl, error))
 		{
 			source = std::move(essl);
 			return;
