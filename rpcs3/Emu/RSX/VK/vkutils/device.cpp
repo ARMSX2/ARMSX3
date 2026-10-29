@@ -44,6 +44,7 @@ namespace vk
 		VkPhysicalDeviceFaultFeaturesEXT device_fault_info{};
 		VkPhysicalDeviceMultiDrawFeaturesEXT multidraw_info{};
 		VkPhysicalDeviceProvokingVertexFeaturesEXT provoking_vertex_info{};
+		VkPhysicalDeviceShaderDrawParametersFeatures shader_draw_parameters_info{};
 
 		// Core features
 		shader_support_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES;
@@ -53,6 +54,10 @@ namespace vk
 		descriptor_indexing_info.pNext = features2.pNext;
 		features2.pNext                = &descriptor_indexing_info;
 		descriptor_indexing_support    = true;
+
+		shader_draw_parameters_info.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
+		shader_draw_parameters_info.pNext = features2.pNext;
+		features2.pNext                   = &shader_draw_parameters_info;
 
 		// Optional features
 		if (device_extensions.is_supported(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME))
@@ -185,6 +190,7 @@ namespace vk
 		optional_features_support.extended_device_fault = !!device_fault_info.deviceFault;
 		optional_features_support.extended_dynamic_state = !!extended_dynamic_state_info.extendedDynamicState;
 		optional_features_support.provoking_vertex_last = !!provoking_vertex_info.provokingVertexLast;
+		optional_features_support.shader_draw_parameters = !!shader_draw_parameters_info.shaderDrawParameters;
 
 		// ARMSX3: Mali r44p1 faults on the attachment feedback loop path.
 		//
@@ -1214,6 +1220,15 @@ namespace vk
 			custom_border_color_features.customBorderColorWithoutFormat = VK_TRUE;
 			custom_border_color_features.pNext = const_cast<void*>(device.pNext);
 			device.pNext = &custom_border_color_features;
+		}
+
+		VkPhysicalDeviceShaderDrawParametersFeatures shader_draw_parameters_features{};
+		if (pgpu->optional_features_support.shader_draw_parameters)
+		{
+			shader_draw_parameters_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
+			shader_draw_parameters_features.shaderDrawParameters = VK_TRUE;
+			shader_draw_parameters_features.pNext = const_cast<void*>(device.pNext);
+			device.pNext = &shader_draw_parameters_features;
 		}
 
 		VkPhysicalDeviceMultiDrawFeaturesEXT multidraw_features{};
