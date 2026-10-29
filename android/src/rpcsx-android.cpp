@@ -5257,6 +5257,15 @@ extern "C" bool _rpcsx_loadState(unsigned int index) {
     return false;
   }
 
+  // Readable by this build, too, for the same reason: see loadStateFromSlot.
+  if (!is_savestate_compatible(
+          get_savestate_file(Emu.GetTitleID(), Emu.GetBoot(), index))) {
+    rpcsx_android.error("loadState: savestate %u is in a format this build "
+                        "cannot read",
+                        index);
+    return false;
+  }
+
   Emu.CallFromMainThread(
       [index]() { boot_current_game_savestate(false, index); });
   return true;
@@ -5445,6 +5454,17 @@ extern "C" bool _rpcsx_loadStateFromSlot(unsigned int slot) {
   // report back, not kill a running game and then fail to boot.
   if (path.empty()) {
     rpcsx_android.error("loadState: slot %u is empty", slot);
+    return false;
+  }
+
+  // And readable by this build. BootGame refuses a state in another savestate format,
+  // such as one saved before the RSX rework, but only once the running game is gone:
+  // the game screen then sat frozen with nothing said until the UI gave up on the
+  // boot two minutes later. Refusing here keeps the game running and lets the picker
+  // say the slot could not be loaded.
+  if (!is_savestate_compatible(path)) {
+    rpcsx_android.error("loadState: slot %u is in a format this build cannot read",
+                        slot);
     return false;
   }
 
