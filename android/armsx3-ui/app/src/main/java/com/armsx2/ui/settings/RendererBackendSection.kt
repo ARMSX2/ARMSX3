@@ -29,16 +29,20 @@ import com.armsx2.i18n.str
 @Composable
 fun RendererBackendSection(state: MutableState<Settings>) {
     val settings = state.value
-    val rendererIds = listOf("auto", "opengl", "vulkan", "software")
+    // No Software: RPCS3 has no PS3 software renderer (that was ARMSX2's PCSX2 one). A title
+    // still saved with it boots Vulkan, and shows here as Auto, which is the same thing.
+    val rendererIds = listOf("auto", "opengl", "vulkan")
     SegmentedRow(
         label = str("backend.graphicsApi.label"),
-        options = listOf(str("backend.renderer.auto"), "OpenGL", "Vulkan", str("backend.renderer.software")),
+        options = listOf(str("backend.renderer.auto"), "OpenGL", "Vulkan"),
         selectedIndex = rendererIds.indexOf(settings.renderer).coerceAtLeast(0),
+        // The Vulkan driver pick stays when another renderer is chosen. Clearing it here (an ARMSX2
+        // leftover) put a game back on the stock driver the moment someone tried OpenGL, and
+        // OpenGL never uses it.
         onChange = { index ->
             val renderer = rendererIds[index]
             InGameOverlay.saveSettings(settings.copy(renderer = renderer))
             MainActivityRuntime.renderer.value = renderer
-            if (renderer != "vulkan") selectDriver(null)
         },
         notDefault = settings.notDefault { it.renderer },
     )
@@ -68,11 +72,4 @@ fun RendererBackendSection(state: MutableState<Settings>) {
             Text(str("backend.applyRestart"))
         }
     }
-}
-
-private fun selectDriver(id: String?) {
-    // UI mirror; persist scope-aware (per-game when the settings scope is Game). The driver
-    // load itself happens at the next renderer (re)start via applyRendererPrefs.
-    MainActivityRuntime.customDriverId.value = id
-    InGameOverlay.saveSettings(InGameOverlay.settingsState.value.copy(customDriverId = id ?: ""))
 }

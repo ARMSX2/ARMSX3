@@ -31,6 +31,17 @@ namespace gl
 	// something ES genuinely does not have.
 	void capabilities::initialize()
 	{
+		// Asked before there is a context. GLGSRender's constructor reads one capability, and the
+		// RSX rework builds the renderer before on_init makes a context current. Every entry point
+		// here is a pointer that load_procs() fills in on_init, so the calls below would jump to
+		// null. Answer from the defaults, as the desktop path does when it finds no context, and
+		// stay uninitialized so the first call with a context reads the real ones. The one asked
+		// for that early, NV_depth_buffer_float, no ES driver has anyway.
+		if (!gl::es::procs_loaded())
+		{
+			return;
+		}
+
 		int ext_count = 0;
 		glGetIntegerv(GL_NUM_EXTENSIONS, &ext_count);
 

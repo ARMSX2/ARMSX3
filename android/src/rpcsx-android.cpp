@@ -585,7 +585,9 @@ struct GraphicsFrame : GSFrameBase {
       return;
     }
 
-    gl::es::make_current(ctx, getNativeWindow());
+    // The window only for the primary context, which the render thread presents with. The others
+    // belong to shader-compiler threads, and a window surface cannot be current on two threads.
+    gl::es::make_current(ctx, ctx == primaryGlContext ? getNativeWindow() : nullptr);
 #endif
   }
 
@@ -626,6 +628,13 @@ struct GraphicsFrame : GSFrameBase {
 
 #ifdef RSX_GLES
     if (!usingGlRenderer()) {
+      return;
+    }
+
+    // Android replaces the window under a running game (rotation, a trip to the background). The
+    // surface follows it here, at the flip, the way the Vulkan backend rebuilds its swapchain.
+    // A null ctx is the shader-loading dialog's flip, which presents with whatever is current.
+    if (ctx && !gl::es::present_window(ctx, getNativeWindow(), display_epoch())) {
       return;
     }
 

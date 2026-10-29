@@ -971,11 +971,24 @@ namespace gl::es
 		EGLConfig s_config = nullptr;
 		EGLSurface s_surface = EGL_NO_SURFACE;
 
+		// What the surface was made for, so present_window can tell when Android replaced the
+		// window. umax: made by make_current, which has no epoch; the next present adopts it.
+		void* s_surface_window = nullptr;
+		u64 s_surface_epoch = umax;
+
+		// Contexts made and not yet destroyed. The window is let go with the last one, and a
+		// different EGL library can only be loaded while there are none.
+		u32 s_live_contexts = 0;
+
+		// The ANGLE library egl_initialize was asked for, empty for the system driver.
+		std::string s_requested_angle;
+
 		// Only the entry points we actually need. Resolved with dlsym on whichever
 		// libEGL we opened - NOT with eglGetProcAddress, which we cannot call yet.
 		PFNEGLGETPROCADDRESSPROC      p_eglGetProcAddress = nullptr;
 		PFNEGLGETDISPLAYPROC          p_eglGetDisplay = nullptr;
 		PFNEGLINITIALIZEPROC          p_eglInitialize = nullptr;
+		PFNEGLTERMINATEPROC           p_eglTerminate = nullptr;
 		PFNEGLCHOOSECONFIGPROC        p_eglChooseConfig = nullptr;
 		PFNEGLCREATECONTEXTPROC       p_eglCreateContext = nullptr;
 		PFNEGLDESTROYCONTEXTPROC      p_eglDestroyContext = nullptr;
@@ -1006,6 +1019,28 @@ namespace gl::es
 			const auto slash = path.find_last_of('/');
 			return (slash == std::string::npos) ? std::string() : path.substr(0, slash);
 		}
+
+		// Unbind this thread's context and destroy the window surface, which lets the window go.
+		// An ANativeWindow takes one producer at a time: a surface left on it keeps a Vulkan
+		// swapchain, or the next game's surface, from attaching.
+		void release_surface()
+		{
+			if (s_display == EGL_NO_DISPLAY)
+			{
+				return;
+			}
+
+			p_eglMakeCurrent(s_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+
+			if (s_surface != EGL_NO_SURFACE)
+			{
+				p_eglDestroySurface(s_display, s_surface);
+				s_surface = EGL_NO_SURFACE;
+			}
+
+			s_surface_window = nullptr;
+			s_surface_epoch = umax;
+		}
 	}
 
 	gl_backend active_backend()
@@ -1015,19 +1050,46 @@ namespace gl::es
 
 	gl_backend egl_initialize()
 	{
+		const char* const angle_egl = std::getenv("ARMSX3_ANGLE_EGL_LIBRARY");
+		const std::string requested = (angle_egl && *angle_egl) ? angle_egl : "";
+
 		if (s_egl_ready)
 		{
-			return s_backend;
+			// ANGLE or the system driver is picked per game (MainActivityRuntime.applyAngleEnv), and
+			// Apply & Restart boots the next game in this same process, so a changed pick has to be
+			// able to take over. Only once nothing made with the current library is alive.
+			if (requested == s_requested_angle || s_live_contexts)
+			{
+				return s_backend;
+			}
+
+			release_surface();
+
+			if (s_display != EGL_NO_DISPLAY)
+			{
+				p_eglTerminate(s_display);
+				s_display = EGL_NO_DISPLAY;
+			}
+
+			// Both libraries stay loaded: a driver is not something to unload, and an idle one
+			// costs nothing. Their handles are just no longer the ones in use.
+			s_config = nullptr;
+			s_egl_handle = nullptr;
+			s_gles_handle = nullptr;
+			s_egl_ready = false;
+			rsx_log.notice("GLES: switching to %s", requested.empty() ? "the system driver" : "ANGLE");
 		}
 
+		s_requested_angle = requested;
+
 		// ANGLE first, if the app asked for it.
-		if (const char* angle_egl = std::getenv("ARMSX3_ANGLE_EGL_LIBRARY"); angle_egl && *angle_egl)
+		if (!requested.empty())
 		{
-			s_egl_handle = dlopen(angle_egl, RTLD_NOW | RTLD_LOCAL);
+			s_egl_handle = dlopen(requested.c_str(), RTLD_NOW | RTLD_LOCAL);
 			if (s_egl_handle)
 			{
 				s_backend = gl_backend::angle;
-				rsx_log.success("GLES: using ANGLE from %s", angle_egl);
+				rsx_log.success("GLES: using ANGLE from %s", requested);
 
 				// ANGLE's GLESv2 sits next to its EGL. Prefer the explicit override,
 				// then the sibling path, so we never accidentally resolve GL entry
@@ -1035,7 +1097,7 @@ namespace gl::es
 				const char* angle_gles = std::getenv("ARMSX3_ANGLE_GLES_LIBRARY");
 				const std::string gles_path = (angle_gles && *angle_gles)
 					? std::string(angle_gles)
-					: dirname_of(angle_egl) + "/libGLESv2_angle.so";
+					: dirname_of(requested) + "/libGLESv2_angle.so";
 
 				s_gles_handle = dlopen(gles_path.c_str(), RTLD_NOW | RTLD_LOCAL);
 				if (!s_gles_handle)
@@ -1047,7 +1109,7 @@ namespace gl::es
 			{
 				// Loud on purpose. A silent fall back to the system driver here is
 				// indistinguishable from "ANGLE is broken" in a user's bug report.
-				rsx_log.error("GLES: ANGLE was requested but %s could not be loaded (%s). Falling back to the system GLES driver.", angle_egl, dlerror());
+				rsx_log.error("GLES: ANGLE was requested but %s could not be loaded (%s). Falling back to the system GLES driver.", requested, dlerror());
 			}
 		}
 
@@ -1077,6 +1139,7 @@ namespace gl::es
 			resolve(s_egl_handle, p_eglGetProcAddress, "eglGetProcAddress") &&
 			resolve(s_egl_handle, p_eglGetDisplay, "eglGetDisplay") &&
 			resolve(s_egl_handle, p_eglInitialize, "eglInitialize") &&
+			resolve(s_egl_handle, p_eglTerminate, "eglTerminate") &&
 			resolve(s_egl_handle, p_eglChooseConfig, "eglChooseConfig") &&
 			resolve(s_egl_handle, p_eglCreateContext, "eglCreateContext") &&
 			resolve(s_egl_handle, p_eglDestroyContext, "eglDestroyContext") &&
@@ -1178,6 +1241,7 @@ namespace gl::es
 			{
 				rsx_log.success("GLES: created an OpenGL ES 3.%d context (%s)", minor,
 					s_backend == gl_backend::angle ? "ANGLE" : "system driver");
+				s_live_contexts++;
 				return ctx;
 			}
 		}
@@ -1192,6 +1256,13 @@ namespace gl::es
 		if (s_egl_ready && context)
 		{
 			p_eglDestroyContext(s_display, static_cast<EGLContext>(context));
+
+			// The last one goes with the renderer: let the window go too, for a Vulkan swapchain or
+			// for the next game's surface
+			if (s_live_contexts && --s_live_contexts == 0)
+			{
+				release_surface();
+			}
 		}
 	}
 
@@ -1208,10 +1279,23 @@ namespace gl::es
 			return true;
 		}
 
-		// One window surface, shared by every context. RPCS3 makes an extra
-		// context per async shader-compiler thread, but those never present - they
-		// only need a current context to compile against.
-		if (s_surface == EGL_NO_SURFACE && native_window)
+		// No window: a shader-compiler thread, one of the extra contexts RPCS3 makes. It never
+		// presents and only needs a current context to compile against. It cannot have the window
+		// surface either: a surface is current on one thread at a time, and the render thread holds
+		// it (EGL_BAD_ACCESS). So it runs without one (EGL_KHR_surfaceless_context).
+		if (!native_window)
+		{
+			if (!p_eglMakeCurrent(s_display, EGL_NO_SURFACE, EGL_NO_SURFACE, static_cast<EGLContext>(context)))
+			{
+				rsx_log.fatal("GLES: eglMakeCurrent without a surface failed (0x%x)", p_eglGetError());
+				return false;
+			}
+
+			return true;
+		}
+
+		// The one window surface, for the render thread
+		if (s_surface == EGL_NO_SURFACE)
 		{
 			s_surface = p_eglCreateWindowSurface(s_display, s_config,
 				static_cast<EGLNativeWindowType>(native_window), nullptr);
@@ -1221,6 +1305,9 @@ namespace gl::es
 				rsx_log.fatal("GLES: eglCreateWindowSurface failed (0x%x)", p_eglGetError());
 				return false;
 			}
+
+			s_surface_window = native_window;
+			s_surface_epoch = umax;
 		}
 
 		if (!p_eglMakeCurrent(s_display, s_surface, s_surface, static_cast<EGLContext>(context)))
@@ -1229,6 +1316,39 @@ namespace gl::es
 			return false;
 		}
 
+		return true;
+	}
+
+	bool present_window(void* context, void* native_window, u64 epoch)
+	{
+		if (!s_egl_ready || !context || !native_window)
+		{
+			return false;
+		}
+
+		if (s_surface != EGL_NO_SURFACE)
+		{
+			// Made by make_current, which has no epoch to give it
+			if (s_surface_epoch == umax && s_surface_window == native_window)
+			{
+				s_surface_epoch = epoch;
+			}
+
+			if (s_surface_window == native_window && s_surface_epoch == epoch)
+			{
+				return true;
+			}
+
+			rsx_log.notice("GLES: the window was replaced, making a new surface for it");
+			release_surface();
+		}
+
+		if (!make_current(context, native_window))
+		{
+			return false;
+		}
+
+		s_surface_epoch = epoch;
 		return true;
 	}
 

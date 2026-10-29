@@ -577,7 +577,7 @@ data class Settings(
      *  GLES-on-Vulkan translation (bundled libEGL_angle.so / libGLESv2_angle.so).
      *  Useful on devices with a broken native GLES driver (e.g. some MediaTek Mali).
      *  Only takes effect when the renderer is OpenGL; MainActivityRuntime.applyAngleEnv
-     *  turns it into the ARMSX2_ANGLE_EGL_LIBRARY env var that GLContextEGL reads.
+     *  turns it into the ARMSX3_ANGLE_EGL_LIBRARY env var that gl::es::egl_initialize reads.
      *  Applies on game restart. Default off. */
     val useAngleOpenGL: Boolean = false,
     /** EmuCore/GS/OverrideTextureBarriers — -1 Auto / 0 Off / 1 On. */
@@ -1993,7 +1993,7 @@ data class Settings(
         put("EmuCore/GS", "EnableAdrenoFramebufferFetch", "bool", adrenoFbFetch.toString())
         put("EmuCore/GS", "CoalesceRenderPasses", "bool", coalesceRenderPasses.toString())
         put("EmuCore/GS", "ForceMaliFramebufferFetch", "bool", forceMaliFbFetch.toString())
-        // Parity write (native reads the ARMSX2_ANGLE_EGL_LIBRARY env var set by
+        // Parity write (native reads the ARMSX3_ANGLE_EGL_LIBRARY env var set by
         // MainActivityRuntime.applyAngleEnv, not this key) — kept so the config file
         // reflects the toggle.
         put("EmuCore/GS", "AndroidUseAngleOpenGL", "bool", useAngleOpenGL.toString())

@@ -982,6 +982,9 @@ open class MainActivityRuntime : ComponentActivity() {
                     android.widget.Toast.makeText(ctx, notice, android.widget.Toast.LENGTH_LONG).show()
                 }
             }
+            // ANGLE or the system GLES driver, from this title's own settings. The launch path set it
+            // from the global ones, and a per-game OpenGL + ANGLE pick has to win before the boot.
+            ctx?.let { applyAngleEnv(it, resolved) }
             when (renderer.value) {
                 "vulkan" -> NativeApp.renderVulkan()
                 "opengl" -> NativeApp.renderOpenGL()
@@ -1578,16 +1581,20 @@ open class MainActivityRuntime : ComponentActivity() {
 
         /** ANGLE (GLES-on-Vulkan) for the OpenGL renderer. Ported from sashkinbro/EmuCoreX:
          *  when the AndroidUseAngleOpenGL setting is on AND the renderer is OpenGL, point the
-         *  ARMSX2_ANGLE_EGL_LIBRARY / _GLES_LIBRARY env vars at the bundled ANGLE .so in the
-         *  native-lib dir; GLContextEGL::LoadEGL (native) then loads ANGLE's EGL instead of the
-         *  system GLES driver — useful where the native GLES stack is broken (e.g. some MediaTek
-         *  Mali). Cleared otherwise. Env vars are read by native getenv in this same process, so
-         *  this Kotlin call is the whole hook. MUST run before the GS thread opens the GL context,
-         *  so it's invoked at emucore init and before each game launch. Renderer restart applies a
-         *  live toggle (like the GPU-profile override). Uses the GLOBAL settings; per-game renderer
-         *  overrides are out of scope for v1. */
-        fun applyAngleEnv(context: Context) {
-            val settings = runCatching { com.armsx2.config.ConfigStore.loadGlobal() }.getOrNull()
+         *  ARMSX3_ANGLE_EGL_LIBRARY / _GLES_LIBRARY env vars at the bundled ANGLE .so in the
+         *  native-lib dir; gl::es::egl_initialize (OpenGL_ES.cpp) then loads ANGLE's EGL instead
+         *  of the system GLES driver — useful where the native GLES stack is broken (e.g. some
+         *  MediaTek Mali). Cleared otherwise. Env vars are read by native getenv in this same
+         *  process, so this Kotlin call is the whole hook. MUST run before the RSX thread opens the
+         *  GL context: at emucore init, before each game launch, and from applyRendererPrefs with
+         *  the title's own [settings], which is the call that decides. A changed pick takes over
+         *  at the next boot, Apply & Restart included, once the previous GL renderer is gone.
+         *
+         *  These were set as ARMSX2_ANGLE_*, ARMSX2's names, while the native side reads
+         *  ARMSX3_ANGLE_*, so ANGLE could not have loaded even with OpenGL picked. */
+        fun applyAngleEnv(context: Context, gameSettings: com.armsx2.config.Settings? = null) {
+            val settings = gameSettings
+                ?: runCatching { com.armsx2.config.ConfigStore.loadGlobal() }.getOrNull()
             val eligible = settings?.useAngleOpenGL == true && settings.renderer == "opengl"
             val libDir = context.applicationInfo.nativeLibraryDir
             val egl = File(libDir, "libEGL_angle.so")
@@ -1598,13 +1605,13 @@ open class MainActivityRuntime : ComponentActivity() {
             val ctx = "renderer=${settings?.renderer} useAngle=${settings?.useAngleOpenGL} gsBackThread=${settings?.gsBackThreadMode}"
             try {
                 if (eligible && egl.exists() && gles.exists()) {
-                    android.system.Os.setenv("ARMSX2_ANGLE_EGL_LIBRARY", egl.absolutePath, true)
-                    android.system.Os.setenv("ARMSX2_ANGLE_GLES_LIBRARY", gles.absolutePath, true)
+                    android.system.Os.setenv("ARMSX3_ANGLE_EGL_LIBRARY", egl.absolutePath, true)
+                    android.system.Os.setenv("ARMSX3_ANGLE_GLES_LIBRARY", gles.absolutePath, true)
                     android.util.Log.i("ARMSX2", "ANGLE OpenGL enabled: ${egl.absolutePath}")
                     angleEmit("enabled $ctx egl=${egl.absolutePath}")
                 } else {
-                    runCatching { android.system.Os.unsetenv("ARMSX2_ANGLE_EGL_LIBRARY") }
-                    runCatching { android.system.Os.unsetenv("ARMSX2_ANGLE_GLES_LIBRARY") }
+                    runCatching { android.system.Os.unsetenv("ARMSX3_ANGLE_EGL_LIBRARY") }
+                    runCatching { android.system.Os.unsetenv("ARMSX3_ANGLE_GLES_LIBRARY") }
                     // Distinguish "user never picked ANGLE" from "user picked ANGLE but the
                     // bundled .so isn't in the APK". The latter silently fell back to the system
                     // GLES driver, which reads to the user as "ANGLE is broken" — that silence

@@ -47,6 +47,8 @@
 #include <GLES3/gl32.h>
 #include <GLES2/gl2ext.h>
 
+#include "util/types.hpp"
+
 // Not every GL translation unit reaches this header via stdafx.h - glutils are
 // included from state_tracker.hpp first - so do not assume <string> is in scope.
 #include <string>
@@ -533,7 +535,9 @@ namespace gl::es
 	};
 
 	// Opens libEGL + libGLESv2 (ANGLE's or the system's) and resolves the entry
-	// points needed to make a context. Idempotent. Returns which one it got.
+	// points needed to make a context. Idempotent while the choice stands; a
+	// different ANGLE choice takes over once no context is left. Returns which
+	// one it got.
 	gl_backend egl_initialize();
 
 	// Which library the last egl_initialize() actually opened. For logging and
@@ -548,11 +552,21 @@ namespace gl::es
 	// Context lifecycle. `native_window` is an ANativeWindow*. `share` may be
 	// null; RPCS3 asks for one extra context per async shader-compiler thread and
 	// they must share with the primary, which is why creation takes it.
+	//
+	// make_current with a window binds the one window surface; without one it
+	// binds no surface at all, which is what the compiler threads get. A window
+	// surface can only be current on one thread at a time.
 	void* create_context(void* native_window, void* share_context);
 	void  destroy_context(void* context);
 	bool  make_current(void* context, void* native_window);
 	void  swap_buffers();
 	void  set_swap_interval(int interval);
+
+	// Follow the window the frame presents to. Android replaces it under a
+	// running game (rotation, a trip to the background), and a surface made for
+	// the old one presents nowhere. `epoch` changes with every replacement, even
+	// one that reuses the pointer. False while there is no window.
+	bool  present_window(void* context, void* native_window, u64 epoch);
 }
 
 // ---- Generated-GLSL retargeting ---------------------------------------------

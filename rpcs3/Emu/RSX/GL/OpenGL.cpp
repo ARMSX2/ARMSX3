@@ -1,6 +1,10 @@
 #include "stdafx.h"
 #include "OpenGL.h"
 
+#if defined(RSX_GLES)
+#include "glutils/capabilities.h"
+#endif
+
 #if defined(HAVE_WAYLAND)
 #include <EGL/egl.h>
 #endif
@@ -42,6 +46,11 @@ void gl::init()
 	// ES 3.2 implementation, which is fatal - every call after this is a null
 	// function pointer.
 	ensure(gl::es::load_procs(&gl::es::default_proc_loader), "Failed to load OpenGL ES entry points");
+
+	// Capabilities belong to the driver behind this context. The previous game may have run on the
+	// other one (ANGLE or the system driver), and anything asked before this point was answered
+	// from defaults (capabilities::initialize). Read them again from here.
+	gl::reset_driver_caps();
 #elif defined(__unix__)
 	glewExperimental = true;
 	glewInit();

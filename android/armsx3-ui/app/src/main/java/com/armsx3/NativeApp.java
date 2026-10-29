@@ -319,12 +319,18 @@ public final class NativeApp {
     /** [MAPPED] RPCS3's renderer is a config enum; these set it. */
     public static void renderVulkan() { Rpcs3Settings.INSTANCE.setRenderer("Vulkan"); }
 
-    /** [PS3-N/A on Android] RPCS3's GL renderer is desktop-GL-only and is
-     *  compiled out of the Android build (WITHOUT_OPENGL=1). */
-    public static void renderOpenGL() { Unsupported.note("renderOpenGL"); }
+    /** [MAPPED] RPCS3's GL renderer on OpenGL ES 3.2 (Emu/RSX/GL/OpenGL_ES.hpp),
+     *  on the system driver or ANGLE.
+     *
+     *  This was an Unsupported stub from the port's first commit, written while
+     *  the GL renderer was still compiled out, and nothing replaced it once the
+     *  ES backend went in. So every OpenGL pick ran the game on Vulkan. */
+    public static void renderOpenGL() { Rpcs3Settings.INSTANCE.setRenderer("OpenGL"); }
 
-    /** [PS3-N/A] PCSX2 has a software rasteriser; RPCS3 does not. */
-    public static void renderSoftware() { Unsupported.note("renderSoftware"); }
+    /** [PS3-N/A] PCSX2 has a software rasteriser; RPCS3 does not. The option is
+     *  gone from the settings, and a title still saved with it boots Vulkan,
+     *  like Auto. */
+    public static void renderSoftware() { renderVulkan(); }
     public static void renderAuto() { renderVulkan(); }
     public static boolean isHardwareRenderer() { return true; }
 

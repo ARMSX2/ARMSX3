@@ -61,4 +61,8 @@ namespace gl
 
 	const capabilities& get_driver_caps();
 	const std::string get_device_name();
+
+	// Forget the capabilities read so far; the next get_driver_caps() reads them from the
+	// current context. For a renderer starting on a different driver than the last one.
+	void reset_driver_caps();
 }

@@ -167,6 +167,11 @@ namespace gl
 		return g_driver_caps;
 	}
 
+	void reset_driver_caps()
+	{
+		g_driver_caps = capabilities{};
+	}
+
 	bool is_primitive_native(rsx::primitive_type in)
 	{
 		switch (in)
