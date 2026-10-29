@@ -8,6 +8,7 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 #include <dlfcn.h>
@@ -62,21 +63,6 @@ namespace gl::es
 		GL_ES_CORE_PROCS
 #undef GL_ES_PROC
 
-		// Extensions. Absence is expected and handled; it is only the core table
-		// that has to be complete.
-		p_glBufferStorageEXT = reinterpret_cast<PFNGLBUFFERSTORAGEEXTPROC>(loader("glBufferStorageEXT"));
-
-		// EXT and OES spell texture views identically apart from the suffix.
-		p_glTextureViewEXT = reinterpret_cast<PFNGLTEXTUREVIEWEXTPROC>(loader("glTextureViewEXT"));
-		if (!p_glTextureViewEXT)
-		{
-			p_glTextureViewEXT = reinterpret_cast<PFNGLTEXTUREVIEWEXTPROC>(loader("glTextureViewOES"));
-		}
-
-		p_glMultiDrawArraysEXT = reinterpret_cast<PFNGLMULTIDRAWARRAYSEXTPROC>(loader("glMultiDrawArraysEXT"));
-		p_glMultiDrawElementsEXT = reinterpret_cast<PFNGLMULTIDRAWELEMENTSEXTPROC>(loader("glMultiDrawElementsEXT"));
-		glInsertEventMarkerEXT = reinterpret_cast<PFNGLINSERTEVENTMARKEREXTPROC>(loader("glInsertEventMarkerEXT"));
-
 		if (!missing.empty())
 		{
 			// Not an ES 3.2 implementation. Say exactly what is absent rather than
@@ -89,6 +75,41 @@ namespace gl::es
 
 			return false;
 		}
+
+		// Extensions, taken only when the driver lists them; absence is expected and handled.
+		// Android answers a lookup for any name in the Khronos headers whether the driver has it
+		// or not, and calling one it lacks does nothing but print "called unimplemented OpenGL ES
+		// API" to logcat. Adreno has texture views only as OES and no multi-draw at all, so asking
+		// for the EXT names sent every texture view and every multi-draw down that hole.
+		std::unordered_set<std::string> extensions;
+		GLint extension_count = 0;
+		glGetIntegerv(GL_NUM_EXTENSIONS, &extension_count);
+
+		for (GLint i = 0; i < extension_count; ++i)
+		{
+			if (const auto name = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, i)))
+			{
+				extensions.emplace(name);
+			}
+		}
+
+		const auto load_if = [&](const char* extension, const char* name)
+		{
+			return extensions.contains(extension) ? loader(name) : nullptr;
+		};
+
+		p_glBufferStorageEXT = reinterpret_cast<PFNGLBUFFERSTORAGEEXTPROC>(load_if("GL_EXT_buffer_storage", "glBufferStorageEXT"));
+
+		// OES and EXT spell texture views identically apart from the suffix
+		p_glTextureViewEXT = reinterpret_cast<PFNGLTEXTUREVIEWEXTPROC>(load_if("GL_OES_texture_view", "glTextureViewOES"));
+		if (!p_glTextureViewEXT)
+		{
+			p_glTextureViewEXT = reinterpret_cast<PFNGLTEXTUREVIEWEXTPROC>(load_if("GL_EXT_texture_view", "glTextureViewEXT"));
+		}
+
+		p_glMultiDrawArraysEXT = reinterpret_cast<PFNGLMULTIDRAWARRAYSEXTPROC>(load_if("GL_EXT_multi_draw_arrays", "glMultiDrawArraysEXT"));
+		p_glMultiDrawElementsEXT = reinterpret_cast<PFNGLMULTIDRAWELEMENTSEXTPROC>(load_if("GL_EXT_multi_draw_arrays", "glMultiDrawElementsEXT"));
+		glInsertEventMarkerEXT = reinterpret_cast<PFNGLINSERTEVENTMARKEREXTPROC>(load_if("GL_EXT_debug_marker", "glInsertEventMarkerEXT"));
 
 		install_filters();
 
