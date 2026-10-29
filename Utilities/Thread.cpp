@@ -1390,7 +1390,12 @@ a64_mem_info_t decode_a64_mem_inst(u32 inst)
 	// size[31:30]
 	// V[26]
 	// opc[23:22]
-	if ((inst & 0x3B200C00u) == 0x38000000u)
+	//
+	// ARMSX3: and register offset (LDR/STR Wt, [Xn, Xm{, extend}]), bit 21 set and bits 11:10 = 10.
+	// size and opc mean the same in both, and the address comes from the fault, not the instruction.
+	// LLVM emits this form for a RawSPU register write: WET (BLUS30403) stores SPU_NPC with
+	// str w12, [x22, x11] right after creating its raw SPU, and died there undecoded.
+	if ((inst & 0x3B200C00u) == 0x38000000u || (inst & 0x3B200C00u) == 0x38200800u)
 	{
 		const u32 size = (inst >> 30) & 3;
 		const u32 opc  = (inst >> 22) & 3;
