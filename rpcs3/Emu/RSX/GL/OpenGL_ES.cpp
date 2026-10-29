@@ -1367,6 +1367,46 @@ namespace gl::es
 			p_eglSwapInterval(s_display, interval);
 		}
 	}
+
+	namespace
+	{
+		void GL_APIENTRY report_error(GLenum /*source*/, GLenum /*type*/, GLuint id, GLenum /*severity*/,
+			GLsizei /*length*/, const GLchar* message, const void* /*user*/)
+		{
+			// Driver threads can call this too, and a bad call repeats every frame
+			static atomic_t<u32> s_count = 0;
+
+			if (const u32 count = s_count++; count < 64)
+			{
+				rsx_log.error("GLES: the driver rejected a call (0x%x): %s", id, message ? message : "");
+			}
+			else if ((count & (count - 1)) == 0)
+			{
+				rsx_log.error("GLES: %u calls rejected so far", count);
+			}
+		}
+	}
+
+	void enable_error_reporting()
+	{
+		GLint units = 0, fragment_units = 0, vertex_units = 0;
+		glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &units);
+		glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &fragment_units);
+		glGetIntegerv(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, &vertex_units);
+		rsx_log.notice("GLES: %d texture units (%d fragment, %d vertex), texture views %s", units, fragment_units,
+			vertex_units, p_glTextureViewEXT ? "available" : "unavailable");
+
+		if (!glDebugMessageCallback || !glDebugMessageControl)
+		{
+			rsx_log.warning("GLES: the driver has no debug output, so rejected calls go unreported");
+			return;
+		}
+
+		glEnable(GL_DEBUG_OUTPUT);
+		glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, 0, nullptr, GL_FALSE);
+		glDebugMessageControl(GL_DONT_CARE, GL_DEBUG_TYPE_ERROR, GL_DONT_CARE, 0, nullptr, GL_TRUE);
+		glDebugMessageCallback(&report_error, nullptr);
+	}
 }
 
 #endif // RSX_GLES

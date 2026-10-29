@@ -567,6 +567,11 @@ namespace gl::es
 	// the old one presents nowhere. `epoch` changes with every replacement, even
 	// one that reuses the pointer. False while there is no window.
 	bool  present_window(void* context, void* native_window, u64 epoch);
+
+	// Have the driver report every call it rejects, to the log. ES says nothing about one unless
+	// asked, so a renderer still being brought up there shows a black screen and no reason.
+	// Errors only, on the current context, the first ones in full and then a count.
+	void  enable_error_reporting();
 }
 
 // ---- Generated-GLSL retargeting ---------------------------------------------

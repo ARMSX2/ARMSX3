@@ -164,6 +164,10 @@ void GLGSRender::on_init()
 
 	if (g_cfg.video.debug_output)
 		gl::enable_debugging();
+#ifdef RSX_GLES
+	else
+		gl::es::enable_error_reporting();
+#endif
 
 	rsx_log.success("GL RENDERER: %s (%s)", reinterpret_cast<const char*>(glGetString(GL_RENDERER)), reinterpret_cast<const char*>(glGetString(GL_VENDOR)));
 	rsx_log.success("GL VERSION: %s", reinterpret_cast<const char*>(glGetString(GL_VERSION)));
