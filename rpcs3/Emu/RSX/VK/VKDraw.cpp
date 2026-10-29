@@ -1240,24 +1240,27 @@ void VKGSRender::emit_geometry(u32 sub_index)
 	// Bind the new set of descriptors for use with this draw call
 	m_ctx->stats.setup_time += m_profiler.duration();
 
+	// The vertex shader uses the instance base as the draw parameters index
+	const u32 first_instance = m_device->get_shader_draw_parameters_support() ? m_draw_parameters_index : 0;
+
 	if (!upload_info.index_info)
 	{
 		if (draw_call.is_trivial_instanced_draw)
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(draw_call.pass_count());
-			vkCmdDraw(*m_current_command_buffer, upload_info.vertex_draw_count, draw_call.pass_count(), 0, 0);
+			vkCmdDraw(*m_current_command_buffer, upload_info.vertex_draw_count, draw_call.pass_count(), 0, first_instance);
 		}
 		else if (draw_call.is_single_draw())
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(1);
-			vkCmdDraw(*m_current_command_buffer, upload_info.vertex_draw_count, 1, 0, 0);
+			vkCmdDraw(*m_current_command_buffer, upload_info.vertex_draw_count, 1, 0, first_instance);
 		}
 		else if (m_device->get_multidraw_support())
 		{
 			const auto& subranges = draw_call.get_subranges();
 			auto ptr = utils::bless<const VkMultiDrawInfoEXT>(&subranges.front().first);
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(::size32(subranges));
-			_vkCmdDrawMultiEXT(*m_current_command_buffer, ::size32(subranges), ptr, 1, 0, sizeof(rsx::draw_range_t));
+			_vkCmdDrawMultiEXT(*m_current_command_buffer, ::size32(subranges), ptr, 1, first_instance, sizeof(rsx::draw_range_t));
 		}
 		else
 		{
@@ -1266,7 +1269,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 			for (const auto& range : subranges)
 			{
 				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(1);
-				vkCmdDraw(*m_current_command_buffer, range.count, 1, vertex_offset, 0);
+				vkCmdDraw(*m_current_command_buffer, range.count, 1, vertex_offset, first_instance);
 				vertex_offset += range.count;
 			}
 		}
@@ -1281,12 +1284,12 @@ void VKGSRender::emit_geometry(u32 sub_index)
 		if (draw_call.is_trivial_instanced_draw)
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(draw_call.pass_count());
-			vkCmdDrawIndexed(*m_current_command_buffer, upload_info.vertex_draw_count, draw_call.pass_count(), 0, 0, 0);
+			vkCmdDrawIndexed(*m_current_command_buffer, upload_info.vertex_draw_count, draw_call.pass_count(), 0, 0, first_instance);
 		}
 		else if (REGS(m_ctx)->current_draw_clause.is_single_draw())
 		{
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(1);
-			vkCmdDrawIndexed(*m_current_command_buffer, upload_info.vertex_draw_count, 1, 0, 0, 0);
+			vkCmdDrawIndexed(*m_current_command_buffer, upload_info.vertex_draw_count, 1, 0, 0, first_instance);
 		}
 		else if (m_device->get_multidraw_support())
 		{
@@ -1311,7 +1314,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 				vertex_offset += count;
 			}
 			if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(subranges_count);
-			_vkCmdDrawMultiIndexedEXT(*m_current_command_buffer, subranges_count, base_ptr, 1, 0, sizeof(VkMultiDrawIndexedInfoEXT), nullptr);
+			_vkCmdDrawMultiIndexedEXT(*m_current_command_buffer, subranges_count, base_ptr, 1, first_instance, sizeof(VkMultiDrawIndexedInfoEXT), nullptr);
 		}
 		else
 		{
@@ -1321,7 +1324,7 @@ void VKGSRender::emit_geometry(u32 sub_index)
 			{
 				const auto count = get_index_count(draw_call.primitive, range.count);
 				if (rsx::prof::enabled()) [[unlikely]] rsx::prof::note_subdraws(1);
-				vkCmdDrawIndexed(*m_current_command_buffer, count, 1, vertex_offset, 0, 0);
+				vkCmdDrawIndexed(*m_current_command_buffer, count, 1, vertex_offset, 0, first_instance);
 				vertex_offset += count;
 			}
 		}
