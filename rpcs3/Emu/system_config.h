@@ -266,7 +266,18 @@ struct cfg_root : cfg::node
 			cfg::_bool asynchronous_texture_streaming{ this, "Asynchronous Texture Streaming", false };
 			cfg::_enum<vk_gpu_scheduler_mode> asynchronous_scheduler{ this, "Asynchronous Queue Scheduler", vk_gpu_scheduler_mode::safe };
 			cfg::uint<256, 65536> vram_allocation_limit{ this, "VRAM allocation limit (MB)", 65536, false };
+#ifdef __ANDROID__
+			// ARMSX3: left on. Android has no Re-BAR; the name only fits desktop cards. RPCS3 counts any
+			// device-local, host-visible, coherent memory type as "BAR", and on a phone that is plain
+			// RAM (our logs: "Detected 15995 MB of BAR memory"). So here this only picks the memory type
+			// of the upload rings: on, the first coherent type; off, the CPU-cached coherent one where
+			// the driver has it. Every build so far ran with it on and older installs keep it on in
+			// config.yml, so following upstream's new default would split users by install date.
+			// A/B it on a device before changing it.
+			cfg::_bool use_rebar_upload_heap{ this, "Use Re-BAR for GPU uploads", true, false };
+#else
 			cfg::_bool use_rebar_upload_heap{ this, "Use Re-BAR for GPU uploads", false, false };
+#endif
 
 		} vk{ this };
 
