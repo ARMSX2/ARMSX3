@@ -141,6 +141,31 @@ namespace gl::es
 			source += body;
 		}
 
+		// What glslang parses: the source as written, but at #version 450 if it says less. RPCS3's
+		// shaders lean on what desktop drivers allow below that, integer mix() at 430 among them,
+		// and glslang holds them to the letter. 450 is a superset of the versions RPCS3 writes, and
+		// only the SPIR-V that comes out of it matters.
+		std::string source_for_glslang(const std::string& source)
+		{
+			const auto version_pos = source.find("#version");
+			if (version_pos == std::string::npos)
+			{
+				return source;
+			}
+
+			const auto number_pos = source.find_first_of("0123456789", version_pos);
+			const auto number_end = source.find_first_not_of("0123456789", number_pos);
+			if (number_pos == std::string::npos || number_end == std::string::npos || number_end - number_pos != 3 ||
+				source.compare(number_pos, 3, "450") >= 0)
+			{
+				return source;
+			}
+
+			std::string upgraded = source;
+			upgraded.replace(number_pos, 3, "450");
+			return upgraded;
+		}
+
 		const char* domain_name(::glsl::program_domain domain)
 		{
 			switch (domain)
@@ -158,7 +183,7 @@ namespace gl::es
 		std::string essl;
 		std::string error;
 
-		if (spirv::compile_glsl_to_spv_for_es(spirv, source, domain, error) && spirv_to_essl(spirv, essl, error))
+		if (spirv::compile_glsl_to_spv_for_es(spirv, source_for_glslang(source), domain, error) && spirv_to_essl(spirv, essl, error))
 		{
 			source = std::move(essl);
 			return;
