@@ -18,10 +18,6 @@
 #include "util/asm.hpp"
 #include "util/logs.hpp"
 
-// Forward-declared rather than including Emu/RSX/RSXThread.h: this is a low-level vkutils
-// translation unit and pulling the RSX thread header in here would invert the dependency.
-namespace rsx { void request_device_lost_shutdown(const char* reason); }
-
 namespace vk
 {
 	namespace globals
@@ -637,17 +633,10 @@ namespace vk
 
 				if (status != VK_NOT_READY)
 				{
-					if (status == VK_ERROR_DEVICE_LOST)
-					{
-						// Measured: with only the present/event/query sites latched, the loss was
-						// latched correctly and then this fence poll killed the RSX thread 4 ms
-						// later anyway, so on_exit() was still skipped and the savestate aborted
-						// with "Aborting unsaveable state". Every wait in the RSX loop has to
-						// return rather than die, not just the ones that observe the loss first.
-						rsx::request_device_lost_shutdown("waiting on a fence");
-						return status;
-					}
-
+					// Returns, never dies, on a lost device: it either replaces the renderer or
+					// latches a clean stop. Every wait in the RSX loop has to return rather than
+					// kill the thread; that was measured here, where a fence poll 4 ms after the
+					// loss skipped on_exit() and aborted the shutdown.
 					die_with_error(status);
 					return status;
 				}
@@ -731,15 +720,8 @@ namespace vk
 			case VK_EVENT_RESET:
 				break;
 			default:
-				if (status == VK_ERROR_DEVICE_LOST)
-				{
-					// Do not die here. Killing the RSX thread from inside a wait skips
-					// rsx::thread::on_exit() and leaves the app frozen with audio playing.
-					// Latch instead and return; the RSX loop will see the stop request.
-					rsx::request_device_lost_shutdown("waiting on an event");
-					return status;
-				}
-
+				// A lost device returns here too (see the fence wait above); the RSX loop then
+				// replaces the renderer or carries out the clean stop.
 				die_with_error(status);
 				return status;
 			}

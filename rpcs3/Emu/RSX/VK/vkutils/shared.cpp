@@ -8,6 +8,10 @@
 
 extern u64 get_system_time();
 
+// Forward-declared rather than including Emu/RSX/RSXThread.h: this is a low-level vkutils
+// translation unit and pulling the RSX thread header in here would invert the dependency.
+namespace rsx { void request_device_lost_shutdown(const char* reason); }
+
 namespace vk
 {
 	extern void print_debug_markers();
@@ -237,7 +241,21 @@ namespace vk
 			if (!message.empty()) message += "\n\n";
 
 			if (!can_device_recover())
+			{
+				// ARMSX3: a device loss that cannot be recovered (during bootup, or too soon after the
+				// last recovery) stops the game cleanly instead of throwing. Throwing unwinds the RSX
+				// thread out of whatever Vulkan call saw the loss, which skips rsx::thread::on_exit()
+				// and leaves the app frozen with audio still playing; see
+				// rsx::request_device_lost_shutdown. Any other unrecoverable error still throws.
+				if (error_code == VK_ERROR_DEVICE_LOST)
+				{
+					rsx_log.error("%sVulkan device lost and cannot be recovered: %s%s", message, error_message, src_loc);
+					rsx::request_device_lost_shutdown("the renderer could not be recovered");
+					return true;
+				}
+
 				fmt::throw_exception("%sAssertion Failed! Vulkan API call failed with unrecoverable error: %s%s", message, error_message, src_loc);
+			}
 
 			rsx_log.error("%sVulkan device lost, the renderer will be replaced: %s%s", message, error_message, src_loc);
 			return true;

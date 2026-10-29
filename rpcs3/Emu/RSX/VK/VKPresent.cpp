@@ -627,10 +627,10 @@ void VKGSRender::present(vk::frame_context_t *ctx)
 			// Reported here instead, where the loss is actually observed. The acquire path already
 			// does this by falling through to die_with_error; this makes present agree with it.
 			//
-			// Latching rather than dying: die_with_error here killed the RSX thread mid-present,
-			// which skips rsx::thread::on_exit() and is why a lost device left the app frozen with
-			// audio still playing. The frame is abandoned either way.
-			rsx::request_device_lost_shutdown("presenting a frame");
+			// die_with_error no longer kills the RSX thread: it marks the device lost and either
+			// lets the core replace the renderer or, when that is not allowed, latches a clean stop.
+			// The frame is abandoned either way.
+			vk::die_with_error(error);
 			break;
 		default:
 			// Other errors not part of rpcs3. This can be caused by 3rd party injectors with bad code, of which we have no control over.

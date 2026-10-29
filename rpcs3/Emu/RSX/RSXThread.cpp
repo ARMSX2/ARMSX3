@@ -1327,7 +1327,11 @@ namespace rsx
 	{
 		// Check if we need to replace the backend.
 		// NOTE: A draw spans several commands. The new backend would not have seen its start.
-		if (!m_ctx->in_begin_end)
+		//
+		// ARMSX3: not once a lost device has been latched for a clean stop. vk::die_with_error does
+		// that when the loss cannot be recovered, and replacing the renderer underneath the
+		// shutdown would undo exactly that decision.
+		if (!m_ctx->in_begin_end && !g_gpu_device_lost)
 		{
 			if (const bool device_lost = m_renderer->check_device_status() != device_status::ok;
 				device_lost || m_renderer_switch_requested)
