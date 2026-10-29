@@ -8064,6 +8064,15 @@ extern "C" bool _rpcsx_settingsSet(std::string_view path,
     return false;
   }
 
+  // The renderer too. The RSX rework (RPCS3/rpcs3#19918) made the node dynamic, and a write under
+  // a running game makes the display engine replace the renderer at its next flip. On Android that
+  // replacement left the game on a black screen (10-29, through a driver change), so a pick in the
+  // in-game menu stays what it was before the rework: saved, and applied by Apply & Restart.
+  if (root == &g_cfg.video.renderer && !Emu.IsStopped(true) && decoded != root->to_string()) {
+    rpcsx_android.notice("settingsSet: %s changes at the next boot, not under a running game", path);
+    return false;
+  }
+
   if (!root->from_string(decoded, !Emu.IsStopped())) {
     rpcsx_android.error("settingsSet: node %s does not accept value '%s'", path,
                         decoded);
