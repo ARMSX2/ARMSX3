@@ -370,11 +370,19 @@ rsx::flags32_t GLGSRender::load_texture_env()
 
 		sampler_state->format_ex = tex.format_ex();
 
+#ifdef RSX_GLES
+		// ARMSX3: the hardware path swaps in an sRGB or SNORM view of the image and drops the shader's
+		// own conversion. Without texture views there is no such view, so the shader keeps doing it.
+		const bool hw_texel_remap = !g_cfg.video.disable_hardware_texel_remapping && gl::es::has_texture_views();
+#else
+		const bool hw_texel_remap = !g_cfg.video.disable_hardware_texel_remapping;
+#endif
+
 		if (sampler_state->format_ex.texel_remap_control &&
 			sampler_state->image_handle &&
 			sampler_state->upload_context == rsx::texture_upload_context::shader_read &&
 			(m_ctx->program.fp_metadata.bx2_texture_reads_mask & (1u << i)) == 0 &&
-			!g_cfg.video.disable_hardware_texel_remapping) [[ unlikely ]]
+			hw_texel_remap) [[ unlikely ]]
 		{
 			// Check if we need to override the view format
 			const auto gl_format = sampler_state->image_handle->view_format();

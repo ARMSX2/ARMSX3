@@ -226,6 +226,18 @@ namespace gl
 		texture(GLenum target, GLuint width, GLuint height, GLuint depth, GLuint mipmaps, GLubyte samples, GLenum sized_format, rsx::format_class format_class);
 		virtual ~texture();
 
+#ifdef RSX_GLES
+		// ARMSX3: the swizzle and depth/stencil mode an emulated texture_view last put on this image,
+		// when the driver has no texture views (see texture_view::create)
+		struct emulated_view_state
+		{
+			GLenum swizzle[4] = { GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA };
+			GLenum depth_stencil_mode = GL_DEPTH_COMPONENT;
+		};
+
+		mutable emulated_view_state m_emulated_view_state;
+#endif
+
 		// Getters/setters
 		void set_native_component_layout(const std::array<GLenum, 4>& layout)
 		{
@@ -383,6 +395,12 @@ namespace gl
 
 		std::unordered_map<GLenum, std::unique_ptr<texture_view>> m_subviews;
 		texture_view* m_root_view = nullptr;
+
+#ifdef RSX_GLES
+		// ARMSX3: set when the driver has no texture views; the view is then its image, see create()
+		bool m_emulated = false;
+		void apply_emulated_state() const;
+#endif
 
 		texture_view() = default;
 

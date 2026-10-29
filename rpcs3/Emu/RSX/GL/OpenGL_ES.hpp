@@ -310,6 +310,13 @@ namespace gl::es
 	extern PFNGLTEXTUREVIEWEXTPROC          p_glTextureViewEXT;
 	extern PFNGLMULTIDRAWARRAYSEXTPROC      p_glMultiDrawArraysEXT;
 	extern PFNGLMULTIDRAWELEMENTSEXTPROC    p_glMultiDrawElementsEXT;
+
+	// ANGLE has no texture views of either spelling. glutils/image.cpp then makes a view the
+	// image itself and applies the view's swizzle and aspect to it (texture_view::create).
+	inline bool has_texture_views()
+	{
+		return p_glTextureViewEXT != nullptr;
+	}
 }
 
 // EXT_debug_marker. RPCS3 null-tests this one before calling (glutils/common.h

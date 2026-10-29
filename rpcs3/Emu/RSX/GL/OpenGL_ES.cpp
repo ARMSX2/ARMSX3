@@ -38,6 +38,14 @@ namespace gl::es
 
 	static bool s_loaded = false;
 
+	// User clip planes need EXT_clip_cull_distance, which ANGLE does not have here
+	static bool s_has_clip_distance = false;
+
+	static bool is_unsupported_clip_distance(GLenum cap)
+	{
+		return !s_has_clip_distance && cap >= GL_CLIP_DISTANCE0 && cap < GL_CLIP_DISTANCE0 + 8;
+	}
+
 	// Defined at the bottom: swaps four core entry points for argument-filtering
 	// wrappers. See the "Filtered forwards" section.
 	static void install_filters();
@@ -110,6 +118,7 @@ namespace gl::es
 		p_glMultiDrawArraysEXT = reinterpret_cast<PFNGLMULTIDRAWARRAYSEXTPROC>(load_if("GL_EXT_multi_draw_arrays", "glMultiDrawArraysEXT"));
 		p_glMultiDrawElementsEXT = reinterpret_cast<PFNGLMULTIDRAWELEMENTSEXTPROC>(load_if("GL_EXT_multi_draw_arrays", "glMultiDrawElementsEXT"));
 		glInsertEventMarkerEXT = reinterpret_cast<PFNGLINSERTEVENTMARKEREXTPROC>(load_if("GL_EXT_debug_marker", "glInsertEventMarkerEXT"));
+		s_has_clip_distance = extensions.contains("GL_EXT_clip_cull_distance");
 
 		install_filters();
 
@@ -856,6 +865,7 @@ namespace gl::es
 	static PFN_glTexSubImage2D     raw_glTexSubImage2D = nullptr;
 	static PFN_glTexSubImage3D     raw_glTexSubImage3D = nullptr;
 	static PFN_glCopyImageSubData  raw_glCopyImageSubData = nullptr;
+	static PFN_glGetTexLevelParameteriv raw_glGetTexLevelParameteriv = nullptr;
 
 	// GL_TEXTURE_1D reaches the driver from three directions - texture creation,
 	// the per-draw sampler binding, and GLGSRender's null-texture setup - and ES
@@ -925,7 +935,10 @@ namespace gl::es
 			return;
 		}
 		default:
-			raw_glEnable(cap);
+			if (!is_unsupported_clip_distance(cap))
+			{
+				raw_glEnable(cap);
+			}
 			return;
 		}
 	}
@@ -948,7 +961,10 @@ namespace gl::es
 		case GL_SAMPLE_ALPHA_TO_ONE:
 			return;
 		default:
-			raw_glDisable(cap);
+			if (!is_unsupported_clip_distance(cap))
+			{
+				raw_glDisable(cap);
+			}
 			return;
 		}
 	}
@@ -1022,6 +1038,13 @@ namespace gl::es
 		{
 			raw_glSamplerParameterf(sampler, pname, param);
 		}
+	}
+
+	// The texture constructor works out a pitch from the channel sizes it asks for here. For a 1D
+	// texture the driver refused the question, and the pitch came from uninitialised values.
+	static void GL_APIENTRY filter_GetTexLevelParameteriv(GLenum target, GLint level, GLenum pname, GLint* params)
+	{
+		raw_glGetTexLevelParameteriv(real_texture_target(target), level, pname, params);
 	}
 
 	static void GL_APIENTRY filter_CopyImageSubData(GLuint src, GLenum src_target, GLint src_level, GLint src_x, GLint src_y, GLint src_z,
@@ -1194,6 +1217,7 @@ namespace gl::es
 		raw_glTexSubImage2D = ::glTexSubImage2D;
 		raw_glTexSubImage3D = ::glTexSubImage3D;
 		raw_glCopyImageSubData = ::glCopyImageSubData;
+		raw_glGetTexLevelParameteriv = ::glGetTexLevelParameteriv;
 
 		::glPixelStorei = &filter_PixelStorei;
 		::glEnable = &filter_Enable;
@@ -1207,6 +1231,7 @@ namespace gl::es
 		::glTexSubImage2D = &filter_TexSubImage2D;
 		::glTexSubImage3D = &filter_TexSubImage3D;
 		::glCopyImageSubData = &filter_CopyImageSubData;
+		::glGetTexLevelParameteriv = &filter_GetTexLevelParameteriv;
 	}
 }
 
@@ -1678,7 +1703,7 @@ namespace gl::es
 		glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &fragment_units);
 		glGetIntegerv(GL_MAX_VERTEX_TEXTURE_IMAGE_UNITS, &vertex_units);
 		rsx_log.notice("GLES: %d texture units (%d fragment, %d vertex), texture views %s", units, fragment_units,
-			vertex_units, p_glTextureViewEXT ? "available" : "unavailable");
+			vertex_units, p_glTextureViewEXT ? "available" : "emulated (the driver has none)");
 
 		if (!glDebugMessageCallback || !glDebugMessageControl)
 		{

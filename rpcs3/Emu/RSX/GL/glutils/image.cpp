@@ -355,6 +355,50 @@ namespace gl
 
 		ensure(m_aspect_flags);
 
+#ifdef RSX_GLES
+		if (!gl::es::has_texture_views())
+		{
+			// ARMSX3: the driver has no texture views (ANGLE). The view is the image itself, and the
+			// swizzle and depth/stencil aspect it would have carried are put on the image whenever it
+			// is bound, and right away for the callers that bind id() directly (the overlays). Another
+			// format, target or part of the image cannot be carried that way; that is reported.
+			m_id = data->id();
+			m_emulated = true;
+
+			if (argb_swizzle)
+			{
+				component_swizzle[0] = argb_swizzle[1];
+				component_swizzle[1] = argb_swizzle[2];
+				component_swizzle[2] = argb_swizzle[3];
+				component_swizzle[3] = argb_swizzle[0];
+			}
+			else
+			{
+				component_swizzle[0] = GL_RED;
+				component_swizzle[1] = GL_GREEN;
+				component_swizzle[2] = GL_BLUE;
+				component_swizzle[3] = GL_ALPHA;
+			}
+
+			const GLenum image_target = static_cast<GLenum>(data->get_target());
+			const GLenum image_format = sizedfmt_to_ifmt(static_cast<GLenum>(data->get_internal_format()));
+			if (target != image_target || m_view_format != image_format || range.min_level != 0 || range.num_levels < data->levels() ||
+				range.min_layer != 0 || range.num_layers < data->layers())
+			{
+				static atomic_t<bool> s_reported = false;
+				if (!s_reported.exchange(true))
+				{
+					rsx_log.error("GLES: without texture views an image cannot be seen as another format, target or part of itself, so it is used whole "
+						"(format 0x%x as 0x%x, target 0x%x as 0x%x, levels %u+%u of %u, layers %u+%u of %u)", image_format, m_view_format, image_target, target,
+						range.min_level, range.num_levels, data->levels(), range.min_layer, range.num_layers, data->layers());
+				}
+			}
+
+			apply_emulated_state();
+			return;
+		}
+#endif
+
 		glGenTextures(1, &m_id);
 		glTextureView(m_id, target, data->id(), m_view_format, range.min_level, range.num_levels, range.min_layer, range.num_layers);
 
@@ -386,6 +430,15 @@ namespace gl
 
 	texture_view::~texture_view()
 	{
+#ifdef RSX_GLES
+		if (m_emulated)
+		{
+			// The image's own name, which goes with the image
+			m_id = GL_NONE;
+			return;
+		}
+#endif
+
 		if (m_id)
 		{
 			gl::get_command_context()->unbind_texture(static_cast<GLenum>(m_target), m_id);
@@ -425,7 +478,43 @@ namespace gl
 	void texture_view::bind(gl::command_context& cmd, GLuint layer) const
 	{
 		cmd->bind_texture(layer, m_target, m_id);
+
+#ifdef RSX_GLES
+		if (m_emulated)
+		{
+			apply_emulated_state();
+		}
+#endif
 	}
+
+#ifdef RSX_GLES
+	// Only what differs from what the image already carries is set. Two views of one image bound
+	// for the same draw with different swizzles cannot both be honoured; the last one bound wins.
+	void texture_view::apply_emulated_state() const
+	{
+		auto& state = m_image_data->m_emulated_view_state;
+
+		static constexpr GLenum swizzle_pnames[] = { GL_TEXTURE_SWIZZLE_R, GL_TEXTURE_SWIZZLE_G, GL_TEXTURE_SWIZZLE_B, GL_TEXTURE_SWIZZLE_A };
+		for (int i = 0; i < 4; ++i)
+		{
+			if (state.swizzle[i] != component_swizzle[i])
+			{
+				DSA_CALL(TextureParameteri, m_id, m_target, swizzle_pnames[i], component_swizzle[i]);
+				state.swizzle[i] = component_swizzle[i];
+			}
+		}
+
+		if (m_image_data->aspect() & image_aspect::stencil)
+		{
+			const GLenum mode = (m_aspect_flags & image_aspect::stencil) ? GL_STENCIL_INDEX : GL_DEPTH_COMPONENT;
+			if (state.depth_stencil_mode != mode)
+			{
+				DSA_CALL(TextureParameteri, m_id, m_target, GL_DEPTH_STENCIL_TEXTURE_MODE, mode);
+				state.depth_stencil_mode = mode;
+			}
+		}
+	}
+#endif
 
 	nil_texture_view::nil_texture_view(texture* data)
 	{
