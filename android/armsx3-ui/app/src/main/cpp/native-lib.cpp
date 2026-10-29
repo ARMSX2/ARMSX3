@@ -46,6 +46,7 @@ struct RPCSXApi {
   bool (*keyboardKey)(int androidKeyCode, int unicode, bool pressed, bool repeat);
   bool (*initialize)(std::string_view rootDir, std::string_view user);
   void (*setSocInfo)(std::string_view socInfo);
+  void (*logPreviousExit)(std::string_view line);
   bool (*processCompilationQueue)(JNIEnv *env);
   bool (*startMainThreadProcessor)(JNIEnv *env);
   bool (*collectGameInfo)(JNIEnv *env, std::string_view rootDir,
@@ -225,6 +226,7 @@ struct RPCSXLibrary : RPCSXApi {
     result.keyboardKey = reinterpret_cast<decltype(keyboardKey)>(dlsym(handle, "_rpcsx_keyboardKey"));
     result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_rpcsx_initialize"));
     result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_rpcsx_setSocInfo"));
+    result.logPreviousExit = reinterpret_cast<decltype(logPreviousExit)>(dlsym(handle, "_rpcsx_logPreviousExit"));
     result.processCompilationQueue = reinterpret_cast<decltype(processCompilationQueue)>(dlsym(handle, "_rpcsx_processCompilationQueue"));
     result.startMainThreadProcessor = reinterpret_cast<decltype(startMainThreadProcessor)>(dlsym(handle, "_rpcsx_startMainThreadProcessor"));
     result.collectGameInfo = reinterpret_cast<decltype(collectGameInfo)>(dlsym(handle, "_rpcsx_collectGameInfo"));
@@ -672,6 +674,14 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_initialize(
   }
 
   return rpcsxLib.initialize(unwrap(env, rootDir), unwrap(env, user));
+}
+
+// After initialize(), once the core's log file is open. Null on cores older than this export.
+extern "C" JNIEXPORT void JNICALL
+Java_net_rpcsx_RPCSX_logPreviousExit(JNIEnv *env, jobject, jstring line) {
+  if (rpcsxLib.logPreviousExit != nullptr) {
+    rpcsxLib.logPreviousExit(unwrap(env, line));
+  }
 }
 
 extern "C" JNIEXPORT jboolean JNICALL

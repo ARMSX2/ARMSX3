@@ -8128,6 +8128,23 @@ extern "C" std::string _rpcsx_getVersion() {
   return rpcs3::get_version().to_string();
 }
 
+// How the previous process ended, as Android recorded it (ApplicationExitInfo), written at
+// startup. A session log that simply stops cannot tell the low-memory killer from a native
+// crash whose last lines never reached the file, or from the user closing a game that had
+// frozen; this line does, in the very next log a tester sends.
+extern "C" void _rpcsx_logPreviousExit(std::string_view line) {
+  rpcsx_android.warning("Previous exit: %s", line);
+}
+
+// Lets the UI glue put a driver problem where bug reports will carry it.
+//
+// The glue can only reach logcat, which nobody attaches to an issue, and the reason a
+// custom driver was refused is exactly what a report needs. Routed through the emulator
+// log channel so it lands in ARMSX3.log beside the driver identity it explains.
+extern "C" void _rpcsx_reportDriverProblem(std::string message) {
+  rpcsx_android.error("%s", message);
+}
+
 // Custom Vulkan driver (adrenotools).
 //
 // SPLIT OF RESPONSIBILITY: the JNI glue (native-lib.cpp) is what calls
@@ -8140,15 +8157,6 @@ extern "C" std::string _rpcsx_getVersion() {
 //
 // Returns the PREVIOUS handle so the caller can dlclose it. Passing nullptr
 // reverts to the system driver.
-// Lets the UI glue put a driver problem where bug reports will carry it.
-//
-// The glue can only reach logcat, which nobody attaches to an issue, and the reason a
-// custom driver was refused is exactly what a report needs. Routed through the emulator
-// log channel so it lands in ARMSX3.log beside the driver identity it explains.
-extern "C" void _rpcsx_reportDriverProblem(std::string message) {
-  rpcsx_android.error("%s", message);
-}
-
 extern "C" void *_rpcsx_setCustomDriver(void *driverHandle) {
   void *previous = vk::android::set_driver_handle(driverHandle);
 

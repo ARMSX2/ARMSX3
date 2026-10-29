@@ -205,6 +205,10 @@ object Rpcs3Bridge {
         RPCSX.instance.initialize(RPCSX.rootDirectory, "00000001", com.armsx2.DeviceTier.socIdentity())
         RPCSX.initialized = true
 
+        // Into the log that initialize() just opened, so every log a tester sends says how the
+        // run before it ended.
+        runCatching { logPreviousExit() }
+
         // Two blocking service loops the core needs someone to run for it.
         //
         // startMainThreadProcessor drains Emu.CallFromMainThread. Without it,
@@ -223,6 +227,46 @@ object Rpcs3Bridge {
             Thread({ runCatching { RPCSX.instance.processCompilationQueue() } },
                 "armsx3-compilation-queue").apply { isDaemon = true }.start()
         }
+    }
+
+    /**
+     * How the previous process ended, as Android recorded it.
+     *
+     * A session log that simply stops, with no error in it, could be the low-memory killer, a
+     * native crash whose last lines never reached the file, or the user closing a game that had
+     * frozen. Only Android knows which, and it keeps the answer (ApplicationExitInfo, API 30).
+     * The main process only: the Discord helper runs in its own process and exits on its own.
+     */
+    private fun logPreviousExit() {
+        val context = appContext ?: return
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return
+        val am = context.getSystemService(android.app.ActivityManager::class.java) ?: return
+        val info = am.getHistoricalProcessExitReasons(context.packageName, 0, 8)
+            .firstOrNull { it.processName == context.packageName } ?: return
+
+        val reason = when (info.reason) {
+            1 -> "exited by itself"
+            2 -> "killed by signal ${info.status}"
+            3 -> "killed by Android for low memory"
+            4 -> "crashed (Java)"
+            5 -> "crashed (native, signal ${info.status})"
+            6 -> "not responding (ANR)"
+            7 -> "failed to start"
+            9 -> "killed for excessive resource use"
+            10 -> "closed by the user"
+            11 -> "stopped by the user"
+            12 -> "a process it depended on died"
+            14 -> "frozen by Android, then killed"
+            16 -> "replaced by an app update"
+            else -> "reason ${info.reason}"
+        }
+        val time = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+            .format(java.util.Date(info.timestamp))
+        val detail = info.description?.takeIf { it.isNotBlank() }?.let { ", $it" } ?: ""
+
+        RPCSX.instance.logPreviousExit(
+            "$reason at $time (memory ${info.pss / 1024} MB PSS, ${info.rss / 1024} MB RSS$detail)"
+        )
     }
 
     /**
