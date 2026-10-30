@@ -1,12 +1,18 @@
 package com.armsx2.ui.news
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.ui.layout.findRootCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -148,6 +154,40 @@ private fun ReleaseContributors(people: List<News.Contributor>) {
     }
 }
 
+/**
+ * A picture from the release notes, fetched once it comes within a screen of the viewport. A release
+ * can carry dozens of full-size screenshots (1.5 has 29, about 80 MB), and every one in an opened card
+ * is laid out at once, so loading them all on opening would cost a phone's data plan for pictures
+ * nobody scrolled to. Until then the space is held at the picture's own shape.
+ */
+@Composable
+private fun NotePicture(image: News.Block.Image) {
+    var near by remember(image.url) { mutableStateOf(false) }
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .aspectRatio(image.aspectRatio)
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+            .onGloballyPositioned { coordinates ->
+                if (!near) {
+                    val windowHeight = coordinates.findRootCoordinates().size.height
+                    near = coordinates.positionInWindow().y < windowHeight * 2f
+                }
+            },
+    ) {
+        if (near) {
+            AsyncImage(
+                model = image.url,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
+        }
+    }
+}
+
 @Composable
 private fun ReleaseCard(item: News.Item, initiallyExpanded: Boolean) {
     // Keyed on the tag so it survives rotation.
@@ -215,14 +255,24 @@ private fun ReleaseCard(item: News.Item, initiallyExpanded: Boolean) {
                 ReleaseContributors(item.credited)
             }
 
-            if (item.notes.isBlank()) {
+            if (item.blocks.isEmpty()) {
                 Text(str("news.noNotes"), style = MaterialTheme.typography.bodySmall)
             } else {
-                Text(
-                    item.notes,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = if (expanded) Int.MAX_VALUE else 6,
-                )
+                if (expanded) {
+                    item.blocks.forEach { block ->
+                        when (block) {
+                            is News.Block.Text -> Text(block.text, style = MaterialTheme.typography.bodySmall)
+                            is News.Block.Image -> NotePicture(block)
+                        }
+                    }
+                } else {
+                    // The preview stays text: pictures only load once the card is opened
+                    Text(
+                        item.notes,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 6,
+                    )
+                }
                 Text(
                     str(if (expanded) "news.showLess" else "news.showMore"),
                     style = MaterialTheme.typography.labelSmall,
