@@ -502,6 +502,11 @@ open class MainActivityRuntime : ComponentActivity() {
         @Volatile private var vmStopInProgress = false
         @Volatile private var vmRestartAfterStop = false
         @Volatile private var vmRunLoopActive = false
+        // A run loop took vmRestartAfterStop and queued start(), which has not begun yet. stop()'s
+        // shutdown task finishes after the run loop on a Restart, finds the flag already taken, and
+        // must not then treat the stop as a return to the library: that cleared currentGame, so the
+        // restarted game booted on global settings, without everything set for it in-game.
+        @Volatile private var vmRestartQueued = false
 
         // Quit-after-the-VM-stops latch — set by the "Close Game & Quit" hotkey, or by
         // a frontend-launched game's Close Game. One-shot: read+cleared by
@@ -690,6 +695,7 @@ open class MainActivityRuntime : ComponentActivity() {
                     return
                 }
                 vmRunLoopActive = true
+                vmRestartQueued = false
             }
 
             invoke {
@@ -834,6 +840,7 @@ open class MainActivityRuntime : ComponentActivity() {
                         vmStopInProgress = false
                         if (vmRestartAfterStop) {
                             vmRestartAfterStop = false
+                            vmRestartQueued = true
                             true
                         } else {
                             false
@@ -1289,6 +1296,7 @@ open class MainActivityRuntime : ComponentActivity() {
                         vmStopInProgress = false
                         if (vmRestartAfterStop) {
                             vmRestartAfterStop = false
+                            vmRestartQueued = true
                             true
                         } else {
                             false
@@ -1420,8 +1428,10 @@ open class MainActivityRuntime : ComponentActivity() {
                 println("@@ANDROID_STOP_JAVA@@ shutdown_return active=${NativeApp.hasActiveVM()} runLoop=$vmRunLoopActive state=${eState.value}")
                 if (!vmRunLoopActive && (eState.value == EmuState.STOPPED || !NativeApp.hasActiveVM())) {
                     eState.value = EmuState.STOPPED
+                    var restartQueued = false
                     val restartNow = synchronized(vmLifecycleLock) {
                         vmStopInProgress = false
+                        restartQueued = vmRestartQueued
                         if (vmRestartAfterStop) {
                             vmRestartAfterStop = false
                             true
@@ -1431,7 +1441,7 @@ open class MainActivityRuntime : ComponentActivity() {
                     }
                     if (restartNow) {
                         start()
-                    } else {
+                    } else if (!restartQueued) {
                         synchronized(vmLifecycleLock) {
                             WindowImpl.toolbarVisible.value = true
                             WindowImpl.showLibrary.value = false
