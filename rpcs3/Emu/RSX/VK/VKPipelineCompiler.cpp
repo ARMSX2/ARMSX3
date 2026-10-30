@@ -106,6 +106,7 @@ namespace vk
 		// the little cluster on big.LITTLE and every core on a uniform machine, so this changes
 		// nothing on desktop.
 		thread_ctrl::set_thread_affinity_mask(thread_ctrl::get_affinity_mask(thread_class::general));
+		thread_ctrl::scoped_priority low_prio(-1);
 
 		while (thread_ctrl::state() != thread_state::aborting)
 		{
