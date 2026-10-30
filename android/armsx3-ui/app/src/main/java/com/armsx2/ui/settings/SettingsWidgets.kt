@@ -224,6 +224,27 @@ internal object SettingsControllerNav {
         registry[id] = Item(id, onConfirm, onLeft, onRight, layer, onSecondary)
         if (selectedId.value == id)
             selectedIndex.intValue = orderedIds().indexOf(id)
+        lateFocus?.let { late ->
+            when {
+                // The pad has moved since, or another layer is on top: that selection stands
+                late.layer != activeLayer.value || selectedId.value != late.fallback -> lateFocus = null
+                id == late.id && layer == late.layer -> {
+                    lateFocus = null
+                    selectById(id)
+                }
+            }
+        }
+    }
+
+    /** A control to select once it registers, for a screen whose controls compose a frame after it asks: the
+     *  in-game menu reopening on the control it was left on (MenuPlace). [fallback] is what was selected when
+     *  it was asked for; if the pad has moved off it by then, that selection stands. */
+    private class LateFocus(val layer: String?, val id: String, val fallback: String?)
+    private var lateFocus: LateFocus? = null
+
+    /** Select [id] in [layer] (null for the base screen) as soon as it registers, unless the pad moves first. */
+    fun focusWhenRegistered(layer: String?, id: String) {
+        lateFocus = LateFocus(layer, id, selectedId.value)
     }
 
     fun unregister(id: String) {

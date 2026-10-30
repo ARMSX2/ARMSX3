@@ -111,6 +111,7 @@ class EmulationMenuViewModel(application: Application) : AndroidViewModel(applic
         // Nav tick when flipping to a different in-game menu tab (bumpers via cycleTab, or a tap).
         if (tab != state.value.tab) com.armsx2.MenuSfx.play(com.armsx2.MenuSfx.Event.NAV)
         state.value = state.value.copy(tab = tab, selectedAction = 0)
+        com.armsx2.ui.MenuPlace.note(tab, inContent = false, controlId = null)
     }
 
     fun cycleTab(delta: Int) {
@@ -434,19 +435,32 @@ object EmulationMenuInputController {
 
     fun bind(viewModel: EmulationMenuViewModel) {
         owner = viewModel
-        viewModel.load(pendingTab)
+        // Where the menu was left (MenuPlace), unless it was opened for a tab
+        val place = com.armsx2.ui.MenuPlace.takeIf { pendingTab == null }
+        viewModel.load(pendingTab ?: place?.tab)
         pendingTab = null
         inContent.value = false
+        // Left by the pad inside a pane: back in it, on the control it had. The pane composes a frame after
+        // this, so the control is picked as it registers (unless the pad has moved by then).
+        val id = place?.controlId
+        if (place != null && place.inContent && id != null && place.tab == viewModel.state.value.tab) {
+            inContent.value = true
+            nav.clearSelection()
+            if (!nav.selectById(id)) nav.focusWhenRegistered(null, id)
+        }
     }
 
     fun unbind(viewModel: EmulationMenuViewModel) {
         if (owner === viewModel) owner = null
     }
 
-    fun open(tab: EmulationMenuTab = EmulationMenuTab.Session) {
-        pendingTab = tab
+    /** Opens the menu on [tab]; with none (the pad's menu button), where it was left (MenuPlace). An open menu
+     *  just switches to [tab]. */
+    fun open(tab: EmulationMenuTab? = null) {
+        val bound = owner
+        // A bound menu takes the tab now; kept for bind() it would be applied again on the next opening
+        if (bound != null) tab?.let { bound.selectTab(it) } else pendingTab = tab
         if (!com.armsx2.ui.WindowImpl.overlayVisible.value) InGameOverlay.open()
-        owner?.selectTab(tab)
         inContent.value = false
     }
 
@@ -454,11 +468,20 @@ object EmulationMenuInputController {
         inContent.value = true
         nav.clearSelection()
         nav.move(1) // select the first content control so the highlight appears
+        notePlace()
     }
 
     private fun exitContent() {
         inContent.value = false
         nav.clearSelection()
+        notePlace()
+    }
+
+    /** The pad's place in the menu, for MenuPlace: its tab, and in the pane the control it has. */
+    private fun notePlace() {
+        val viewModel = owner ?: return
+        if (overlayDismiss != null) return
+        com.armsx2.ui.MenuPlace.note(viewModel.state.value.tab, inContent.value, nav.currentSelectedId())
     }
 
     fun move(dx: Int, dy: Int): Boolean {
@@ -486,6 +509,7 @@ object EmulationMenuInputController {
             dx < 0 -> if (!nav.adjust(-1) && !nav.moveSpatial(-1, 0)) exitContent()
             dx > 0 -> if (!nav.adjust(1)) nav.moveSpatial(1, 0)
         }
+        notePlace()
         return true
     }
 
@@ -505,6 +529,7 @@ object EmulationMenuInputController {
         owner ?: return false
         if (!inContent.value) { enterContent(); return true }
         nav.confirm()
+        notePlace()
         return true
     }
 
