@@ -6,8 +6,9 @@
 //
 // Asked for from the in-game menu ("Dump this frame") or, for scripted runs, with
 // ARMSX3_DUMP_PASSES=<flip> in driver_env.txt (ARMSX3_DUMP_PRESENT_ONLY=1 for the final image only).
-// The Vulkan renderer dumps the game's next whole frame, from one of its flips to the next, and
-// writes config/captures/<title>_<date>_frame/, with frame.txt describing every image in it.
+// The Vulkan and OpenGL renderers dump the game's next whole frame, from one of its flips to the next,
+// and write config/captures/<title>_<date>_frame/, with frame.txt describing every image in it.
+// On OpenGL the screen image is the window, read back just before its swap.
 //
 // Pairs with RSX captures (.rrc): replaying a capture and dumping a frame of it shows a bug pass by
 // pass without the game.

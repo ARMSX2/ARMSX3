@@ -171,6 +171,9 @@ bool GLGSRender::present_frame(const rsx::display_flip_info_t& info)
 		return false;
 	}
 
+	// Frame dumps (GLFrameDump.cpp) start and finish on flips
+	frame_dump_on_flip(info);
+
 	if (info.skip_frame)
 	{
 		m_frame->flip(m_context, true);
@@ -258,6 +261,23 @@ bool GLGSRender::present_frame(const rsx::display_flip_info_t& info)
 
 		buffer_width = present_info.width;
 		buffer_height = present_info.height;
+	}
+
+	if (m_frame_dump.take_final) [[unlikely]]
+	{
+		m_frame_dump.take_final = false;
+
+		if (image_to_flip)
+		{
+			fmt::append(m_frame_dump.index, "The final image is display buffer %u (offset 0x%x), %ux%u, pitch %u, format %u.\n",
+				info.buffer, display_buffer.offset, buffer_width, buffer_height, buffer_pitch, av_format);
+			frame_dump_save(image_to_flip, "final", "final image",
+				fmt::format("the image this flip shows (%ux%u)", image_to_flip->width(), image_to_flip->height()), umax, 0);
+		}
+		else
+		{
+			m_frame_dump.index += "This flip had no image to show.\n";
+		}
 	}
 
 	if (info.emu_flip)
@@ -524,6 +544,13 @@ bool GLGSRender::present_frame(const rsx::display_flip_info_t& info)
 		const auto src_region = areau{ 0u, 0u, gl::debug::g_vis_texture->width(), gl::debug::g_vis_texture->height() };
 		m_vis_buffer.blit(gl::screen, static_cast<areai>(src_region), display_view, gl::buffers::color, gl::filter::linear);
 		m_vis_buffer.remove();
+	}
+
+	if (m_frame_dump.take_screen) [[unlikely]]
+	{
+		m_frame_dump.take_screen = false;
+		frame_dump_screen(static_cast<u32>(width), static_cast<u32>(height));
+		frame_dump_finish();
 	}
 
 	m_frame->flip(m_context);

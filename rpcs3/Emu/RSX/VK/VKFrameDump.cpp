@@ -26,9 +26,10 @@ namespace rsx::frame_dump
 
 	bool request(dump_mode mode)
 	{
-		// Only the Vulkan renderer implements this. Saying so is better than arming a dump that
-		// never happens.
-		if (mode == dump_mode::none || g_cfg.video.renderer != video_renderer::vulkan)
+		// The Vulkan and OpenGL renderers implement this (GLFrameDump.cpp). Saying so is better than
+		// arming a dump that never happens.
+		if (mode == dump_mode::none ||
+			(g_cfg.video.renderer != video_renderer::vulkan && g_cfg.video.renderer != video_renderer::opengl))
 		{
 			return false;
 		}

@@ -8,6 +8,7 @@
 #include "GLOverlays.h"
 #include "GLShaderInterpreter.h"
 #include "Emu/RSX/rsx_cache.h"
+#include "Emu/RSX/rsx_frame_dump.h"
 #include "util/asm.hpp"
 
 #include <optional>
@@ -187,6 +188,35 @@ private:
 	void upload_transform_constants(const rsx::io_buffer& buffer);
 
 	void update_draw_state();
+
+	// Frame dumps (rsx_frame_dump.h, GLFrameDump.cpp). Inactive and free unless one was requested.
+	struct frame_dump_state
+	{
+		rsx::frame_dump::dump_mode mode = rsx::frame_dump::dump_mode::none;
+		std::string dir;          // this dump's folder, with a trailing slash
+		std::string index;        // frame.txt, written when the dump ends
+		std::string fb_desc;      // the render target set currently bound
+		std::string stop_reason;  // set when a limit was reached; nothing more is written
+		u64 bytes = 0;            // PNG bytes written
+		u32 images = 0;           // images written
+		u32 draws = 0;            // draws since the last save
+		u32 skipped = 0;          // of those, skipped because their program was not ready
+		u32 frame_draws = 0;      // draws in the frame being dumped
+		u32 frame_skipped = 0;    // of those, skipped
+		bool armed = false;       // asked for, waiting for the game's next flip to start the frame
+		bool active = false;      // inside the frame being dumped
+		bool take_final = false;  // save the image this flip shows
+		bool take_screen = false; // read the window back on this flip
+	} m_frame_dump;
+
+	u64 m_frame_dump_flips = 0;
+
+	void frame_dump_on_flip(const rsx::display_flip_info_t& info);
+	void frame_dump_capture(const char* why);
+	void frame_dump_save(gl::texture* tex, const std::string& tag, const char* why, const std::string& desc, u32 draws, u32 skipped);
+	void frame_dump_screen(u32 width, u32 height);
+	bool frame_dump_write(const std::string& name, const std::vector<u8>& rgb, u32 width, u32 height, const std::string& line);
+	void frame_dump_finish();
 
 	rsx::flags32_t load_texture_env();
 	void bind_texture_env();

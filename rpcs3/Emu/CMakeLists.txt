@@ -605,6 +605,7 @@ if(NOT APPLE)
         RSX/GL/GLDMA.cpp
         RSX/GL/GLDraw.cpp
         RSX/GL/GLFragmentProgram.cpp
+        RSX/GL/GLFrameDump.cpp
         RSX/GL/GLGSRender.cpp
         RSX/GL/GLHelpers.cpp
         RSX/GL/GLOverlays.cpp

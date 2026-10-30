@@ -910,6 +910,11 @@ bool GLGSRender::resolve_sampler_state(rsx::flags32_t& invalidated_programs)
 
 bool GLGSRender::end_draw()
 {
+	if (m_frame_dump.active) [[unlikely]]
+	{
+		m_frame_dump.draws++;
+	}
+
 	// Groups changed since the last executed draw. Loading an interpreter program adds both programs.
 	m_interpreter_state = m_ctx->draw_state.dirty;
 
@@ -917,6 +922,11 @@ bool GLGSRender::end_draw()
 	// TODO: Implement shaders cache prediction to avoid uploading vertex data if draw is going to skip
 	if (!load_program())
 	{
+		if (m_frame_dump.active) [[unlikely]]
+		{
+			m_frame_dump.skipped++;
+		}
+
 		// Program is not ready, skip drawing this
 		std::this_thread::yield();
 		// res()->surface_cache.on_write(); - breaks games for obvious reasons
