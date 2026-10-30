@@ -176,9 +176,10 @@ void GLGSRender::frame_dump_on_flip(const rsx::display_flip_info_t& info)
 
 		d.active = true;
 		d.fb_desc = "(bound before the frame started)";
-		d.index = fmt::format("ARMSX3 frame dump (OpenGL)\nGame: %s\nMode: %s\n\n",
+		d.index = fmt::format("ARMSX3 frame dump (OpenGL)\nGame: %s\nMode: %s\n%s\n",
 			Emu.GetTitleID().empty() && Emu.GetTitle().empty() ? std::string("(capture replay)") : fmt::format("%s %s", Emu.GetTitleID(), Emu.GetTitle()),
-			mode_name(d.mode));
+			mode_name(d.mode),
+			d.mode == dump_mode::every_pass ? "Each pass is copied on the GPU as it finishes and read back after the frame, so the frame runs without waits.\n" : "");
 		rsx_log.notice("Frame dump: dumping the next frame (%s) to %s", mode_name(d.mode), d.dir);
 		return;
 	}
@@ -193,6 +194,8 @@ void GLGSRender::frame_dump_on_flip(const rsx::display_flip_info_t& info)
 	{
 		frame_dump_capture("end of frame");
 	}
+
+	frame_dump_write_snapshots();
 
 	d.frame_draws += d.draws;
 	d.frame_skipped += d.skipped;
@@ -209,23 +212,62 @@ void GLGSRender::frame_dump_capture(const char* why)
 {
 	auto& d = m_frame_dump;
 	const auto& surfaces = res()->surface_cache;
+	gl::command_context cmd{ gl_state };
+	const usz first_snapshot = m_frame_dump_snapshots.size();
 
 	for (u32 i = 0; i < rsx::limits::color_buffers_count; ++i)
 	{
-		if (const auto rtt = std::get<1>(surfaces.m_bound_render_targets[i]))
+		const auto rtt = std::get<1>(surfaces.m_bound_render_targets[i]);
+
+		if (!rtt)
 		{
-			frame_dump_save(rtt, fmt::format("pass_a%u", i), why, d.fb_desc, d.draws, d.skipped);
+			continue;
 		}
+
+		if (is_depth(rtt->get_internal_format()) || rtt->samples() > 1)
+		{
+			// Listed, not read
+			frame_dump_save(rtt, fmt::format("pass_a%u", i), why, d.fb_desc, d.draws, d.skipped);
+			continue;
+		}
+
+		// Copied in order with the draws and read back after the frame: reading it here would wait for
+		// the GPU between passes, and that wait was enough to hide South Park's missing objects.
+		auto copy = std::make_unique<gl::texture>(static_cast<GLenum>(rtt->get_target()), rtt->width(), rtt->height(), 1, 1, 1,
+			static_cast<GLenum>(rtt->get_internal_format()), rtt->format_class());
+		gl::g_hw_blitter->copy_image(cmd, rtt, copy.get(), position3u{}, position3u{}, size3u{ rtt->width(), rtt->height(), 1 });
+
+		m_frame_dump_snapshots.push_back({ std::move(copy), fmt::format("pass_a%u", i), why, d.fb_desc, {}, d.draws, d.skipped });
 	}
 
 	if (const auto ds = std::get<1>(surfaces.m_bound_depth_stencil))
 	{
-		fmt::append(d.index, "  (depth %ux%u, not saved)\n", ds->width(), ds->height());
+		const std::string note = fmt::format("  (depth %ux%u, not saved)\n", ds->width(), ds->height());
+
+		if (m_frame_dump_snapshots.size() > first_snapshot)
+		{
+			m_frame_dump_snapshots.back().after += note;
+		}
+		else
+		{
+			d.index += note;
+		}
 	}
 
 	d.frame_draws += d.draws;
 	d.frame_skipped += d.skipped;
 	d.draws = d.skipped = 0;
+}
+
+void GLGSRender::frame_dump_write_snapshots()
+{
+	for (auto& snapshot : m_frame_dump_snapshots)
+	{
+		frame_dump_save(snapshot.tex.get(), snapshot.tag, snapshot.why.c_str(), snapshot.desc, snapshot.draws, snapshot.skipped);
+		m_frame_dump.index += snapshot.after;
+	}
+
+	m_frame_dump_snapshots.clear();
 }
 
 void GLGSRender::frame_dump_save(gl::texture* tex, const std::string& tag, const char* why, const std::string& desc, u32 draws, u32 skipped)
@@ -414,5 +456,6 @@ void GLGSRender::frame_dump_finish()
 		d.stop_reason.empty() ? std::string() : fmt::format(" (stopped early: %s)", d.stop_reason));
 	rsx::overlays::queue_message(fmt::format("Frame dump saved: %u image(s) in %s", d.images, shown), 8'000'000);
 
+	m_frame_dump_snapshots.clear();
 	d = {};
 }

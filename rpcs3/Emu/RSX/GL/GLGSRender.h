@@ -211,8 +211,19 @@ private:
 
 	u64 m_frame_dump_flips = 0;
 
+	// A pass's target copied on the GPU, read back once the frame is over so the frame runs without waits
+	struct frame_dump_snapshot
+	{
+		std::unique_ptr<gl::texture> tex;
+		std::string tag, why, desc;
+		std::string after;        // frame.txt lines that follow this image's
+		u32 draws = 0, skipped = 0;
+	};
+	std::vector<frame_dump_snapshot> m_frame_dump_snapshots;
+
 	void frame_dump_on_flip(const rsx::display_flip_info_t& info);
 	void frame_dump_capture(const char* why);
+	void frame_dump_write_snapshots();
 	void frame_dump_save(gl::texture* tex, const std::string& tag, const char* why, const std::string& desc, u32 draws, u32 skipped);
 	void frame_dump_screen(u32 width, u32 height);
 	bool frame_dump_write(const std::string& name, const std::vector<u8>& rgb, u32 width, u32 height, const std::string& line);
