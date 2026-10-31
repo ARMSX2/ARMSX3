@@ -1,4 +1,4 @@
-# ARMSX3: prebuilt ffmpeg for Android.
+# ARMSX3: ffmpeg for Android.
 #
 # Upstream 3rdparty/CMakeLists.txt wraps its whole FFMPEG block in
 # `if(NOT ANDROID)` -- it deliberately does not define 3rdparty_ffmpeg on
@@ -11,61 +11,49 @@
 # OS -> prebuilt via WIN32/APPLE/UNIX/MINGW, and Android matches UNIX, so it
 # would fetch a *Linux* arm64 build and fail to link against bionic.
 #
-# Prebuilts come from RPCS3-Android/ffmpeg-android (same source RPCSX uses).
+# So android/build-ffmpeg.sh builds the version upstream ships, with upstream's
+# components and its assembly on. This used to download RPCS3-Android's 5.1
+# prebuilt, which had every component ffmpeg has and none of its NEON code.
+#
+# One build serves every variant (it targets the lowest API level any of them
+# runs on, and picks its CPU features at run time), so it lives beside the
+# variant build directories rather than in each of them, and builds once.
 
-set(FFMPEG_VERSION 5.1)
+set(FFMPEG_VERSION 8.1.1)
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
-    set(RPCS3_DOWNLOAD_ARCH "arm64-v8a")
-else()
-    set(RPCS3_DOWNLOAD_ARCH "x86-64")
+if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
+    message(FATAL_ERROR "ARMSX3: android/build-ffmpeg.sh only builds ffmpeg for arm64")
 endif()
 
-if(NOT EXISTS ${CMAKE_BINARY_DIR}/ffmpeg-${FFMPEG_VERSION}.tar.gz)
-    message(STATUS "ARMSX3: downloading ffmpeg-${FFMPEG_VERSION} for ${RPCS3_DOWNLOAD_ARCH}")
-    file(DOWNLOAD
-        https://github.com/RPCS3-Android/ffmpeg-android/releases/download/${FFMPEG_VERSION}/ffmpeg-${RPCS3_DOWNLOAD_ARCH}-Android.tar.gz
-        ${CMAKE_BINARY_DIR}/ffmpeg-${FFMPEG_VERSION}.tar.gz
-        SHOW_PROGRESS
-        STATUS FFMPEG_DOWNLOAD_STATUS
-    )
-    list(GET FFMPEG_DOWNLOAD_STATUS 0 FFMPEG_STATUS_CODE)
-    if(NOT FFMPEG_STATUS_CODE EQUAL 0)
-        # CMake leaves a 0-byte file behind on failure, which would poison the
-        # `if(NOT EXISTS ...)` guard on the next configure.
-        file(REMOVE ${CMAKE_BINARY_DIR}/ffmpeg-${FFMPEG_VERSION}.tar.gz)
-        message(FATAL_ERROR "ARMSX3: failed to download Android ffmpeg prebuilts")
-    endif()
-endif()
+# Keyed on the build script, so changing how ffmpeg is built builds it again instead of reusing
+# what the old recipe produced.
+file(SHA1 "${CMAKE_SOURCE_DIR}/android/build-ffmpeg.sh" FFMPEG_RECIPE_HASH)
+string(SUBSTRING "${FFMPEG_RECIPE_HASH}" 0 10 FFMPEG_RECIPE_HASH)
+set(FFMPEG_PATH "${CMAKE_SOURCE_DIR}/build-ffmpeg/${FFMPEG_VERSION}-arm64-v8a-${FFMPEG_RECIPE_HASH}")
 
-set(FFMPEG_PATH "${CMAKE_BINARY_DIR}/ffmpeg-${FFMPEG_VERSION}")
-
-# Unpack eagerly at configure time: the imported-library IMPORTED_LOCATION
-# paths below must exist before any target links them.
-if(NOT EXISTS "${FFMPEG_PATH}/libavcodec/libavcodec.a")
-    file(MAKE_DIRECTORY ${FFMPEG_PATH})
+# Build at configure time: the imported-library IMPORTED_LOCATION paths below
+# must exist before any target links them.
+if(NOT EXISTS "${FFMPEG_PATH}/lib/libavcodec.a")
+    message(STATUS "ARMSX3: building ffmpeg ${FFMPEG_VERSION} for arm64-v8a")
     execute_process(
-        COMMAND ${CMAKE_COMMAND} -E tar xzf ${CMAKE_BINARY_DIR}/ffmpeg-${FFMPEG_VERSION}.tar.gz
-        WORKING_DIRECTORY ${FFMPEG_PATH}
-        RESULT_VARIABLE FFMPEG_UNPACK_RESULT
+        COMMAND "${CMAKE_SOURCE_DIR}/android/build-ffmpeg.sh" "${ANDROID_NDK}" "${FFMPEG_PATH}"
+        RESULT_VARIABLE FFMPEG_BUILD_RESULT
     )
-    if(NOT FFMPEG_UNPACK_RESULT EQUAL 0)
-        message(FATAL_ERROR "ARMSX3: failed to unpack Android ffmpeg prebuilts")
+    if(NOT FFMPEG_BUILD_RESULT EQUAL 0)
+        message(FATAL_ERROR "ARMSX3: building ffmpeg failed (android/build-ffmpeg.sh)")
     endif()
 endif()
 
 function(armsx3_import_ffmpeg_library name)
     add_library(ffmpeg::${name} STATIC IMPORTED GLOBAL)
     set_property(TARGET ffmpeg::${name} PROPERTY
-        IMPORTED_LOCATION "${FFMPEG_PATH}/lib${name}/lib${name}.a")
+        IMPORTED_LOCATION "${FFMPEG_PATH}/lib/lib${name}.a")
     set_property(TARGET ffmpeg::${name} PROPERTY
-        INTERFACE_INCLUDE_DIRECTORIES "${FFMPEG_PATH}" "${FFMPEG_PATH}/src")
+        INTERFACE_INCLUDE_DIRECTORIES "${FFMPEG_PATH}/include")
 endfunction()
 
 armsx3_import_ffmpeg_library(avcodec)
 armsx3_import_ffmpeg_library(avformat)
-armsx3_import_ffmpeg_library(avfilter)
-armsx3_import_ffmpeg_library(avdevice)
 armsx3_import_ffmpeg_library(avutil)
 armsx3_import_ffmpeg_library(swscale)
 armsx3_import_ffmpeg_library(swresample)
