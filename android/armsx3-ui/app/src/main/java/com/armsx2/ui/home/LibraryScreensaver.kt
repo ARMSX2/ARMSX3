@@ -19,7 +19,7 @@ import kotlinx.coroutines.delay
 import kotlin.math.abs
 
 /**
- * The Library Screensaver: after a stretch with no input (10 minutes unless App Settings says
+ * The Library Screensaver: after a stretch with no input (5 minutes unless App Settings says
  * otherwise, 1 to 60), the library background fills the screen as View background shows it, until
  * the next touch, key or stick push. That input only wakes it: pressing A does not also start the
  * game under the cursor.
@@ -36,7 +36,7 @@ object LibraryScreensaver {
     private const val MinutesKey = "ui.library.screensaverMinutes"
     const val MIN_MINUTES = 1
     const val MAX_MINUTES = 60
-    private const val DEFAULT_MINUTES = 10
+    private const val DEFAULT_MINUTES = 5
     private const val CHECK_MS = 1000L
 
     /** Past this, a stick or trigger counts as pushed: resting sticks drift and some pads report it. */
