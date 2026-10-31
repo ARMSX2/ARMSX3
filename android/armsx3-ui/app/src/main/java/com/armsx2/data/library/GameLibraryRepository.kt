@@ -1470,7 +1470,9 @@ class GameLibraryRepository(private val context: Context) {
         // trial kept looking like the full game until something else forced a rescan.
         // 13: an unlocked trial takes its title and icon from C00, the way RPCS3 boots it; a cache
         // from before kept the trial's name ("Castlevania: Harmony of Despair Demo").
-        const val ScanSchemaVersion = 13
+        // 14: a trial's folder is read again on every scan. 13 alone was not enough: a library
+        // already on 13 kept its seeded "... Demo" title and never rescanned.
+        const val ScanSchemaVersion = 14
         /** The first scanner that looked for other games on a disc image. A cache from before it
          *  has never been asked, so its images are re-probed once. */
         const val DiscGamesSchemaVersion = 9
