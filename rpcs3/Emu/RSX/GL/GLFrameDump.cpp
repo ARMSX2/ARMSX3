@@ -231,8 +231,9 @@ void GLGSRender::frame_dump_capture(const char* why)
 			continue;
 		}
 
-		// Copied in order with the draws and read back after the frame: reading it here would wait for
-		// the GPU between passes, and that wait was enough to hide South Park's missing objects.
+		// Copied in order with the draws and read back after the frame, so the CPU never waits for the GPU
+		// between passes. Any read of a target still makes the driver finish its pass there, which is how
+		// these dumps hid South Park's missing objects on Adreno's GLES driver (see on_framebuffer_bound).
 		auto copy = std::make_unique<gl::texture>(static_cast<GLenum>(rtt->get_target()), rtt->width(), rtt->height(), 1, 1, 1,
 			static_cast<GLenum>(rtt->get_internal_format()), rtt->format_class());
 		gl::g_hw_blitter->copy_image(cmd, rtt, copy.get(), position3u{}, position3u{}, size3u{ rtt->width(), rtt->height(), 1 });
