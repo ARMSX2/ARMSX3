@@ -1,7 +1,7 @@
 package com.armsx2
 
 import android.content.Context
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import org.json.JSONArray
 
 /**
@@ -36,7 +36,7 @@ object Ps3PatchRepo {
         "https://rpcs3.net/compatibility?patch&api=v1&v=$version"
 
     // One file per source under config/patches (the layout is described where the core writes
-    // them, in rpcsx-android.cpp). Each download replaces its own file whole, so whatever its
+    // them, in armsx3-core.cpp). Each download replaces its own file whole, so whatever its
     // source renamed or withdrew is gone after the next download instead of listed beside its
     // replacement; only the user's own imports (imported_patch.yml) accumulate.
     private const val DB_FILE = "patch.yml"
@@ -48,7 +48,7 @@ object Ps3PatchRepo {
 
     private const val KEY_FILES_SPLIT = "ps3_patch_files_split"
 
-    private fun patchesDir() = java.io.File(RPCSX.rootDirectory, "config/patches")
+    private fun patchesDir() = java.io.File(ARMSX3.rootDirectory, "config/patches")
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -107,7 +107,7 @@ object Ps3PatchRepo {
      * file any more (they merge into imported_patch.yml), so replacing it costs nobody anything.
      */
     fun download(context: Context): Result {
-        val engineVersion = runCatching { RPCSX.instance.patchEngineVersion() }.getOrDefault("")
+        val engineVersion = runCatching { ARMSX3.instance.patchEngineVersion() }.getOrDefault("")
         if (engineVersion.isBlank()) return Result.Parse
 
         val res = runCatching {
@@ -147,7 +147,7 @@ object Ps3PatchRepo {
         val splitting = !prefs(context).getBoolean(KEY_FILES_SPLIT, false)
         val keptOldList = splitting && prepareSplit(context)
 
-        val n = runCatching { RPCSX.instance.patchesWrite(DB_FILE, yaml) }.getOrDefault(-1)
+        val n = runCatching { ARMSX3.instance.patchesWrite(DB_FILE, yaml) }.getOrDefault(-1)
         if (n < 0) return Result.Parse
         if (splitting) prefs(context).edit().putBoolean(KEY_FILES_SPLIT, true).apply()
         return Result.Ok(n, rebuilt = keptOldList)
@@ -243,7 +243,7 @@ object Ps3PatchRepo {
 
         if (yaml.isNullOrBlank()) return Result.Parse
 
-        val n = runCatching { RPCSX.instance.patchesWrite(ARTEMIS_FILE, yaml) }.getOrDefault(-1)
+        val n = runCatching { ARMSX3.instance.patchesWrite(ARTEMIS_FILE, yaml) }.getOrDefault(-1)
         return if (n >= 0) Result.Ok(n, rebuilt) else Result.Parse
     }
 
@@ -265,7 +265,7 @@ object Ps3PatchRepo {
         }.getOrNull()
 
         if (yaml.isNullOrBlank()) return Result.Network
-        val n = runCatching { RPCSX.instance.patchesImport(yaml) }.getOrDefault(-1)
+        val n = runCatching { ARMSX3.instance.patchesImport(yaml) }.getOrDefault(-1)
         return if (n >= 0) Result.Ok(n) else Result.Parse
     }
 
@@ -280,7 +280,7 @@ object Ps3PatchRepo {
      * what the standalone tab shows when no game is selected.
      */
     fun list(serial: String): List<Patch> = runCatching {
-        val arr = JSONArray(RPCSX.instance.patchesList(serial))
+        val arr = JSONArray(ARMSX3.instance.patchesList(serial))
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
             Patch(
@@ -298,7 +298,7 @@ object Ps3PatchRepo {
 
     fun setEnabled(patch: Patch, serial: String, enabled: Boolean): Boolean =
         runCatching {
-            RPCSX.instance.patchSetEnabled(
+            ARMSX3.instance.patchSetEnabled(
                 patch.hash, patch.name, serial, patch.appVersion, enabled,
             )
         }.getOrDefault(false)
@@ -325,7 +325,7 @@ object Ps3PatchRepo {
      * whatever the user did with the toggle afterwards is their answer.
      *
      * The exception is 14. Until then patchSetEnabled kept only the LAST serial of a patch
-     * enabled for several serials in a row (rpcsx-android.cpp explains why), so every
+     * enabled for several serials in a row (armsx3-core.cpp explains why), so every
      * earlier serial of such a group was never actually turned on, whatever the stored
      * revision says. Those entries are offered again at 14; the last of each group keeps
      * its original revision, since that one did turn on and a user's OFF there is real.
@@ -906,7 +906,7 @@ object Ps3PatchRepo {
                 return
             }
 
-            imported = runCatching { RPCSX.instance.patchesWrite(BUNDLED_FILE, yaml) }.getOrDefault(-1)
+            imported = runCatching { ARMSX3.instance.patchesWrite(BUNDLED_FILE, yaml) }.getOrDefault(-1)
             if (imported < 0) {
                 android.util.Log.e("ARMSX3", "canary patches: could not write $BUNDLED_FILE")
                 return
@@ -933,7 +933,7 @@ object Ps3PatchRepo {
         // later boots, where it turns on once the database is there, without touching the rest.
         val failed = pending.filterNot { b ->
             val ok = runCatching {
-                RPCSX.instance.patchSetEnabled(b.hash, b.name, b.serial, b.appVersion, true)
+                ARMSX3.instance.patchSetEnabled(b.hash, b.name, b.serial, b.appVersion, true)
             }.getOrDefault(false)
             if (!ok) {
                 android.util.Log.w("ARMSX3", "canary patches: could not enable ${b.name} (${b.hash}), will retry")

@@ -26,7 +26,7 @@
 #include <adrenotools/priv.h>
 #endif
 
-struct RPCSXApi {
+struct CoreApi {
   bool (*overlayPadData)(int port, int digital1, int digital2, int leftStickX,
                          int leftStickY, int rightStickX, int rightStickY);
   bool (*overlayPadPressure)(int port, const int *values, int count);
@@ -176,195 +176,195 @@ struct RPCSXApi {
                           bool enabled);
 };
 
-struct RPCSXLibrary : RPCSXApi {
+struct CoreLibrary : CoreApi {
   void *handle = nullptr;
 
-  RPCSXLibrary() = default;
-  RPCSXLibrary(const RPCSXLibrary &) = delete;
-  RPCSXLibrary(RPCSXLibrary &&other) { swap(other); }
-  RPCSXLibrary &operator=(RPCSXLibrary &&other) {
+  CoreLibrary() = default;
+  CoreLibrary(const CoreLibrary &) = delete;
+  CoreLibrary(CoreLibrary &&other) { swap(other); }
+  CoreLibrary &operator=(CoreLibrary &&other) {
     swap(other);
     return *this;
   }
-  ~RPCSXLibrary() {
+  ~CoreLibrary() {
     if (handle) {
       ::dlclose(handle);
     }
   }
 
-  void swap(RPCSXLibrary &other) noexcept {
+  void swap(CoreLibrary &other) noexcept {
     std::swap(handle, other.handle);
-    std::swap(static_cast<RPCSXApi &>(*this), static_cast<RPCSXApi &>(other));
+    std::swap(static_cast<CoreApi &>(*this), static_cast<CoreApi &>(other));
   }
 
-  static std::optional<RPCSXLibrary> Open(const char *path) {
+  static std::optional<CoreLibrary> Open(const char *path) {
     void *handle = ::dlopen(path, RTLD_LOCAL | RTLD_NOW);
     if (handle == nullptr) {
-      __android_log_print(ANDROID_LOG_ERROR, "RPCSX-UI",
-                          "Failed to open RPCSX library at %s, error %s", path,
+      __android_log_print(ANDROID_LOG_ERROR, "ARMSX3-UI",
+                          "Failed to open the core library at %s, error %s", path,
                           ::dlerror());
       return {};
     }
 
-    RPCSXLibrary result;
+    CoreLibrary result;
     result.handle = handle;
 
     // clang-format off
-    result.overlayPadData = reinterpret_cast<decltype(overlayPadData)>(dlsym(handle, "_rpcsx_overlayPadData"));
-    result.overlayPadPressure = reinterpret_cast<decltype(overlayPadPressure)>(dlsym(handle, "_rpcsx_overlayPadPressure"));
-    result.remotePlayStart = reinterpret_cast<decltype(remotePlayStart)>(dlsym(handle, "_rpcsx_remotePlayStart"));
-    result.remotePlayStop = reinterpret_cast<decltype(remotePlayStop)>(dlsym(handle, "_rpcsx_remotePlayStop"));
-    result.remotePlayPollVideo = reinterpret_cast<decltype(remotePlayPollVideo)>(dlsym(handle, "_rpcsx_remotePlayPollVideo"));
-    result.remotePlayPollAudio = reinterpret_cast<decltype(remotePlayPollAudio)>(dlsym(handle, "_rpcsx_remotePlayPollAudio"));
-    result.remotePlayCounters = reinterpret_cast<decltype(remotePlayCounters)>(dlsym(handle, "_rpcsx_remotePlayCounters"));
-    result.remotePlayReleaseFrame = reinterpret_cast<decltype(remotePlayReleaseFrame)>(dlsym(handle, "_rpcsx_remotePlayReleaseFrame"));
-    result.remotePlayHardwareBuffer = reinterpret_cast<decltype(remotePlayHardwareBuffer)>(dlsym(handle, "_rpcsx_remotePlayHardwareBuffer"));
-    result.remotePlaySetHardware = reinterpret_cast<decltype(remotePlaySetHardware)>(dlsym(handle, "_rpcsx_remotePlaySetHardware"));
-    result.remotePlayCanCapture = reinterpret_cast<decltype(remotePlayCanCapture)>(dlsym(handle, "_rpcsx_remotePlayCanCapture"));
-    result.remotePlayUpnpPrepare = reinterpret_cast<decltype(remotePlayUpnpPrepare)>(dlsym(handle, "_rpcsx_remotePlayUpnpPrepare"));
-    result.remotePlayUpnpMap = reinterpret_cast<decltype(remotePlayUpnpMap)>(dlsym(handle, "_rpcsx_remotePlayUpnpMap"));
-    result.remotePlayUpnpUnmap = reinterpret_cast<decltype(remotePlayUpnpUnmap)>(dlsym(handle, "_rpcsx_remotePlayUpnpUnmap"));
-    result.keyboardKey = reinterpret_cast<decltype(keyboardKey)>(dlsym(handle, "_rpcsx_keyboardKey"));
-    result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_rpcsx_initialize"));
-    result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_rpcsx_setSocInfo"));
-    result.logPreviousExit = reinterpret_cast<decltype(logPreviousExit)>(dlsym(handle, "_rpcsx_logPreviousExit"));
-    result.processCompilationQueue = reinterpret_cast<decltype(processCompilationQueue)>(dlsym(handle, "_rpcsx_processCompilationQueue"));
-    result.startMainThreadProcessor = reinterpret_cast<decltype(startMainThreadProcessor)>(dlsym(handle, "_rpcsx_startMainThreadProcessor"));
-    result.collectGameInfo = reinterpret_cast<decltype(collectGameInfo)>(dlsym(handle, "_rpcsx_collectGameInfo"));
-    result.shutdown = reinterpret_cast<decltype(shutdown)>(dlsym(handle, "_rpcsx_shutdown"));
-    result.boot = reinterpret_cast<decltype(boot)>(dlsym(handle, "_rpcsx_boot"));
-    result.getState = reinterpret_cast<decltype(getState)>(dlsym(handle, "_rpcsx_getState"));
-    result.kill = reinterpret_cast<decltype(kill)>(dlsym(handle, "_rpcsx_kill"));
-    result.resume = reinterpret_cast<decltype(resume)>(dlsym(handle, "_rpcsx_resume"));
-    result.pause = reinterpret_cast<decltype(pause)>(dlsym(handle, "_rpcsx_pause"));
-    result.setAppBackgrounded = reinterpret_cast<decltype(setAppBackgrounded)>(dlsym(handle, "_rpcsx_setAppBackgrounded"));
-    result.captureFrame = reinterpret_cast<decltype(captureFrame)>(dlsym(handle, "_rpcsx_captureFrame"));
-    result.dumpFrame = reinterpret_cast<decltype(dumpFrame)>(dlsym(handle, "_rpcsx_dumpFrame"));
-    result.openHomeMenu = reinterpret_cast<decltype(openHomeMenu)>(dlsym(handle, "_rpcsx_openHomeMenu"));
-    result.getTitleId = reinterpret_cast<decltype(getTitleId)>(dlsym(handle, "_rpcsx_getTitleId"));
-    result.getTitle = reinterpret_cast<decltype(getTitle)>(dlsym(handle, "_rpcsx_getTitle"));
-    result.getFramePeriodNs = reinterpret_cast<decltype(getFramePeriodNs)>(dlsym(handle, "_rpcsx_getFramePeriodNs"));
-    result.getFrameWorkNs = reinterpret_cast<decltype(getFrameWorkNs)>(dlsym(handle, "_rpcsx_getFrameWorkNs"));
-    result.getRsxThreadTid = reinterpret_cast<decltype(getRsxThreadTid)>(dlsym(handle, "_rpcsx_getRsxThreadTid"));
-    result.getCurrentTrophyName = reinterpret_cast<decltype(getCurrentTrophyName)>(dlsym(handle, "_rpcsx_getCurrentTrophyName"));
-    result.surfaceEvent = reinterpret_cast<decltype(surfaceEvent)>(dlsym(handle, "_rpcsx_surfaceEvent"));
-    result.surfaceSizeChanged = reinterpret_cast<decltype(surfaceSizeChanged)>(dlsym(handle, "_rpcsx_surfaceSizeChanged"));
-    result.setPadSensor = reinterpret_cast<decltype(setPadSensor)>(dlsym(handle, "_rpcsx_setPadSensor"));
-    result.getPadRumble = reinterpret_cast<decltype(getPadRumble)>(dlsym(handle, "_rpcsx_getPadRumble"));
-    result.setThermals = reinterpret_cast<decltype(setThermals)>(dlsym(handle, "_rpcsx_setThermals"));
+    result.overlayPadData = reinterpret_cast<decltype(overlayPadData)>(dlsym(handle, "_armsx3_overlayPadData"));
+    result.overlayPadPressure = reinterpret_cast<decltype(overlayPadPressure)>(dlsym(handle, "_armsx3_overlayPadPressure"));
+    result.remotePlayStart = reinterpret_cast<decltype(remotePlayStart)>(dlsym(handle, "_armsx3_remotePlayStart"));
+    result.remotePlayStop = reinterpret_cast<decltype(remotePlayStop)>(dlsym(handle, "_armsx3_remotePlayStop"));
+    result.remotePlayPollVideo = reinterpret_cast<decltype(remotePlayPollVideo)>(dlsym(handle, "_armsx3_remotePlayPollVideo"));
+    result.remotePlayPollAudio = reinterpret_cast<decltype(remotePlayPollAudio)>(dlsym(handle, "_armsx3_remotePlayPollAudio"));
+    result.remotePlayCounters = reinterpret_cast<decltype(remotePlayCounters)>(dlsym(handle, "_armsx3_remotePlayCounters"));
+    result.remotePlayReleaseFrame = reinterpret_cast<decltype(remotePlayReleaseFrame)>(dlsym(handle, "_armsx3_remotePlayReleaseFrame"));
+    result.remotePlayHardwareBuffer = reinterpret_cast<decltype(remotePlayHardwareBuffer)>(dlsym(handle, "_armsx3_remotePlayHardwareBuffer"));
+    result.remotePlaySetHardware = reinterpret_cast<decltype(remotePlaySetHardware)>(dlsym(handle, "_armsx3_remotePlaySetHardware"));
+    result.remotePlayCanCapture = reinterpret_cast<decltype(remotePlayCanCapture)>(dlsym(handle, "_armsx3_remotePlayCanCapture"));
+    result.remotePlayUpnpPrepare = reinterpret_cast<decltype(remotePlayUpnpPrepare)>(dlsym(handle, "_armsx3_remotePlayUpnpPrepare"));
+    result.remotePlayUpnpMap = reinterpret_cast<decltype(remotePlayUpnpMap)>(dlsym(handle, "_armsx3_remotePlayUpnpMap"));
+    result.remotePlayUpnpUnmap = reinterpret_cast<decltype(remotePlayUpnpUnmap)>(dlsym(handle, "_armsx3_remotePlayUpnpUnmap"));
+    result.keyboardKey = reinterpret_cast<decltype(keyboardKey)>(dlsym(handle, "_armsx3_keyboardKey"));
+    result.initialize = reinterpret_cast<decltype(initialize)>(dlsym(handle, "_armsx3_initialize"));
+    result.setSocInfo = reinterpret_cast<decltype(setSocInfo)>(dlsym(handle, "_armsx3_setSocInfo"));
+    result.logPreviousExit = reinterpret_cast<decltype(logPreviousExit)>(dlsym(handle, "_armsx3_logPreviousExit"));
+    result.processCompilationQueue = reinterpret_cast<decltype(processCompilationQueue)>(dlsym(handle, "_armsx3_processCompilationQueue"));
+    result.startMainThreadProcessor = reinterpret_cast<decltype(startMainThreadProcessor)>(dlsym(handle, "_armsx3_startMainThreadProcessor"));
+    result.collectGameInfo = reinterpret_cast<decltype(collectGameInfo)>(dlsym(handle, "_armsx3_collectGameInfo"));
+    result.shutdown = reinterpret_cast<decltype(shutdown)>(dlsym(handle, "_armsx3_shutdown"));
+    result.boot = reinterpret_cast<decltype(boot)>(dlsym(handle, "_armsx3_boot"));
+    result.getState = reinterpret_cast<decltype(getState)>(dlsym(handle, "_armsx3_getState"));
+    result.kill = reinterpret_cast<decltype(kill)>(dlsym(handle, "_armsx3_kill"));
+    result.resume = reinterpret_cast<decltype(resume)>(dlsym(handle, "_armsx3_resume"));
+    result.pause = reinterpret_cast<decltype(pause)>(dlsym(handle, "_armsx3_pause"));
+    result.setAppBackgrounded = reinterpret_cast<decltype(setAppBackgrounded)>(dlsym(handle, "_armsx3_setAppBackgrounded"));
+    result.captureFrame = reinterpret_cast<decltype(captureFrame)>(dlsym(handle, "_armsx3_captureFrame"));
+    result.dumpFrame = reinterpret_cast<decltype(dumpFrame)>(dlsym(handle, "_armsx3_dumpFrame"));
+    result.openHomeMenu = reinterpret_cast<decltype(openHomeMenu)>(dlsym(handle, "_armsx3_openHomeMenu"));
+    result.getTitleId = reinterpret_cast<decltype(getTitleId)>(dlsym(handle, "_armsx3_getTitleId"));
+    result.getTitle = reinterpret_cast<decltype(getTitle)>(dlsym(handle, "_armsx3_getTitle"));
+    result.getFramePeriodNs = reinterpret_cast<decltype(getFramePeriodNs)>(dlsym(handle, "_armsx3_getFramePeriodNs"));
+    result.getFrameWorkNs = reinterpret_cast<decltype(getFrameWorkNs)>(dlsym(handle, "_armsx3_getFrameWorkNs"));
+    result.getRsxThreadTid = reinterpret_cast<decltype(getRsxThreadTid)>(dlsym(handle, "_armsx3_getRsxThreadTid"));
+    result.getCurrentTrophyName = reinterpret_cast<decltype(getCurrentTrophyName)>(dlsym(handle, "_armsx3_getCurrentTrophyName"));
+    result.surfaceEvent = reinterpret_cast<decltype(surfaceEvent)>(dlsym(handle, "_armsx3_surfaceEvent"));
+    result.surfaceSizeChanged = reinterpret_cast<decltype(surfaceSizeChanged)>(dlsym(handle, "_armsx3_surfaceSizeChanged"));
+    result.setPadSensor = reinterpret_cast<decltype(setPadSensor)>(dlsym(handle, "_armsx3_setPadSensor"));
+    result.getPadRumble = reinterpret_cast<decltype(getPadRumble)>(dlsym(handle, "_armsx3_getPadRumble"));
+    result.setThermals = reinterpret_cast<decltype(setThermals)>(dlsym(handle, "_armsx3_setThermals"));
     // Optional: a core built before this simply centres the image, as it always did.
-    result.setRenderPosition = reinterpret_cast<decltype(setRenderPosition)>(dlsym(handle, "_rpcsx_setRenderPosition"));
+    result.setRenderPosition = reinterpret_cast<decltype(setRenderPosition)>(dlsym(handle, "_armsx3_setRenderPosition"));
     // Optional: a core without it reports every port as a standard pad, as it always did.
-    result.setPadDeviceClasses = reinterpret_cast<decltype(setPadDeviceClasses)>(dlsym(handle, "_rpcsx_setPadDeviceClasses"));
-    result.usbDeviceEvent = reinterpret_cast<decltype(usbDeviceEvent)>(dlsym(handle, "_rpcsx_usbDeviceEvent"));
-    result.installFw = reinterpret_cast<decltype(installFw)>(dlsym(handle, "_rpcsx_installFw"));
-    result.isInstallableFile = reinterpret_cast<decltype(isInstallableFile)>(dlsym(handle, "_rpcsx_isInstallableFile"));
-    result.getDirInstallPath = reinterpret_cast<decltype(getDirInstallPath)>(dlsym(handle, "_rpcsx_getDirInstallPath"));
+    result.setPadDeviceClasses = reinterpret_cast<decltype(setPadDeviceClasses)>(dlsym(handle, "_armsx3_setPadDeviceClasses"));
+    result.usbDeviceEvent = reinterpret_cast<decltype(usbDeviceEvent)>(dlsym(handle, "_armsx3_usbDeviceEvent"));
+    result.installFw = reinterpret_cast<decltype(installFw)>(dlsym(handle, "_armsx3_installFw"));
+    result.isInstallableFile = reinterpret_cast<decltype(isInstallableFile)>(dlsym(handle, "_armsx3_isInstallableFile"));
+    result.getDirInstallPath = reinterpret_cast<decltype(getDirInstallPath)>(dlsym(handle, "_armsx3_getDirInstallPath"));
     // Optional: a core predating the library listing uninstalled packages has no such
     // symbol, and the scan then skips .pkg files exactly as it always did.
-    result.probePkgInfo = reinterpret_cast<decltype(probePkgInfo)>(dlsym(handle, "_rpcsx_probePkgInfo"));
+    result.probePkgInfo = reinterpret_cast<decltype(probePkgInfo)>(dlsym(handle, "_armsx3_probePkgInfo"));
     // Optional: a core without it simply never reports a pending restart, which is
     // the behaviour the run loop had before this existed.
-    result.isRestartPending = reinterpret_cast<decltype(isRestartPending)>(dlsym(handle, "_rpcsx_isRestartPending"));
-    result.install = reinterpret_cast<decltype(install)>(dlsym(handle, "_rpcsx_install"));
-    result.extractPkgTo = reinterpret_cast<decltype(extractPkgTo)>(dlsym(handle, "_rpcsx_extractPkgTo"));
+    result.isRestartPending = reinterpret_cast<decltype(isRestartPending)>(dlsym(handle, "_armsx3_isRestartPending"));
+    result.install = reinterpret_cast<decltype(install)>(dlsym(handle, "_armsx3_install"));
+    result.extractPkgTo = reinterpret_cast<decltype(extractPkgTo)>(dlsym(handle, "_armsx3_extractPkgTo"));
     // Optional: a core built before the storage bridge simply has no such symbol, and
     // the Kotlin side then keeps resolving picked folders to filesystem paths.
-    result.installStorageBridge = reinterpret_cast<decltype(installStorageBridge)>(dlsym(handle, "_rpcsx_installStorageBridge"));
+    result.installStorageBridge = reinterpret_cast<decltype(installStorageBridge)>(dlsym(handle, "_armsx3_installStorageBridge"));
     // Optional: a core without it simply stays silent, as it always has.
-    result.installSoundBridge = reinterpret_cast<decltype(installSoundBridge)>(dlsym(handle, "_rpcsx_installSoundBridge"));
-    result.installKey = reinterpret_cast<decltype(installKey)>(dlsym(handle, "_rpcsx_installKey"));
-    result.systemInfo = reinterpret_cast<decltype(systemInfo)>(dlsym(handle, "_rpcsx_systemInfo"));
-    result.loginUser = reinterpret_cast<decltype(loginUser)>(dlsym(handle, "_rpcsx_loginUser"));
-    result.logAndroid = reinterpret_cast<decltype(logAndroid)>(dlsym(handle, "_rpcsx_logAndroid"));
-    result.getUser = reinterpret_cast<decltype(getUser)>(dlsym(handle, "_rpcsx_getUser"));
-    result.settingsGet = reinterpret_cast<decltype(settingsGet)>(dlsym(handle, "_rpcsx_settingsGet"));
+    result.installSoundBridge = reinterpret_cast<decltype(installSoundBridge)>(dlsym(handle, "_armsx3_installSoundBridge"));
+    result.installKey = reinterpret_cast<decltype(installKey)>(dlsym(handle, "_armsx3_installKey"));
+    result.systemInfo = reinterpret_cast<decltype(systemInfo)>(dlsym(handle, "_armsx3_systemInfo"));
+    result.loginUser = reinterpret_cast<decltype(loginUser)>(dlsym(handle, "_armsx3_loginUser"));
+    result.logAndroid = reinterpret_cast<decltype(logAndroid)>(dlsym(handle, "_armsx3_logAndroid"));
+    result.getUser = reinterpret_cast<decltype(getUser)>(dlsym(handle, "_armsx3_getUser"));
+    result.settingsGet = reinterpret_cast<decltype(settingsGet)>(dlsym(handle, "_armsx3_settingsGet"));
     // Optional like the frame-gen group above: a core predating RPCN support simply has no
     // such symbols, and the Kotlin side treats a null as "this build cannot do RPCN".
-    result.rpcnGetConfig = reinterpret_cast<decltype(rpcnGetConfig)>(dlsym(handle, "_rpcsx_rpcnGetConfig"));
-    result.rpcnSetConfig = reinterpret_cast<decltype(rpcnSetConfig)>(dlsym(handle, "_rpcsx_rpcnSetConfig"));
-    result.rpcnAddFriend = reinterpret_cast<decltype(rpcnAddFriend)>(dlsym(handle, "_rpcsx_rpcnAddFriend"));
-    result.rpcnRemoveFriend = reinterpret_cast<decltype(rpcnRemoveFriend)>(dlsym(handle, "_rpcsx_rpcnRemoveFriend"));
-    result.rpcnGetFriends = reinterpret_cast<decltype(rpcnGetFriends)>(dlsym(handle, "_rpcsx_rpcnGetFriends"));
-    result.rpcnFriendsSession = reinterpret_cast<decltype(rpcnFriendsSession)>(dlsym(handle, "_rpcsx_rpcnFriendsSession"));
-    result.rpcnGetInvites = reinterpret_cast<decltype(rpcnGetInvites)>(dlsym(handle, "_rpcsx_rpcnGetInvites"));
-    result.rpcnAcceptInvite = reinterpret_cast<decltype(rpcnAcceptInvite)>(dlsym(handle, "_rpcsx_rpcnAcceptInvite"));
-    result.rpcnDeclineInvite = reinterpret_cast<decltype(rpcnDeclineInvite)>(dlsym(handle, "_rpcsx_rpcnDeclineInvite"));
-    result.rpcnCreateAccount = reinterpret_cast<decltype(rpcnCreateAccount)>(dlsym(handle, "_rpcsx_rpcnCreateAccount"));
-    result.rpcnResendToken = reinterpret_cast<decltype(rpcnResendToken)>(dlsym(handle, "_rpcsx_rpcnResendToken"));
-    result.rpcnSendResetToken = reinterpret_cast<decltype(rpcnSendResetToken)>(dlsym(handle, "_rpcsx_rpcnSendResetToken"));
-    result.rpcnResetPassword = reinterpret_cast<decltype(rpcnResetPassword)>(dlsym(handle, "_rpcsx_rpcnResetPassword"));
-    result.rpcnTestLogin = reinterpret_cast<decltype(rpcnTestLogin)>(dlsym(handle, "_rpcsx_rpcnTestLogin"));
-    result.rpcnSignIn = reinterpret_cast<decltype(rpcnSignIn)>(dlsym(handle, "_rpcsx_rpcnSignIn"));
-    result.rpcnDeleteTrophies = reinterpret_cast<decltype(rpcnDeleteTrophies)>(dlsym(handle, "_rpcsx_rpcnDeleteTrophies"));
-    result.rpcnAddHost = reinterpret_cast<decltype(rpcnAddHost)>(dlsym(handle, "_rpcsx_rpcnAddHost"));
-    result.rpcnDelHost = reinterpret_cast<decltype(rpcnDelHost)>(dlsym(handle, "_rpcsx_rpcnDelHost"));
-    result.rpcnResetHosts = reinterpret_cast<decltype(rpcnResetHosts)>(dlsym(handle, "_rpcsx_rpcnResetHosts"));
-    result.rpcnSetIpv6 = reinterpret_cast<decltype(rpcnSetIpv6)>(dlsym(handle, "_rpcsx_rpcnSetIpv6"));
-    result.rpcnStatus = reinterpret_cast<decltype(rpcnStatus)>(dlsym(handle, "_rpcsx_rpcnStatus"));
-    result.rpcnSignedIn = reinterpret_cast<decltype(rpcnSignedIn)>(dlsym(handle, "_rpcsx_rpcnSignedIn"));
-    result.setMicDevices = reinterpret_cast<decltype(setMicDevices)>(dlsym(handle, "_rpcsx_setMicDevices"));
-    result.micTestStart = reinterpret_cast<decltype(micTestStart)>(dlsym(handle, "_rpcsx_micTestStart"));
-    result.micTestLevel = reinterpret_cast<decltype(micTestLevel)>(dlsym(handle, "_rpcsx_micTestLevel"));
-    result.micTestStop = reinterpret_cast<decltype(micTestStop)>(dlsym(handle, "_rpcsx_micTestStop"));
-    result.skylanderLoad = reinterpret_cast<decltype(skylanderLoad)>(dlsym(handle, "_rpcsx_skylanderLoad"));
-    result.skylanderRemove = reinterpret_cast<decltype(skylanderRemove)>(dlsym(handle, "_rpcsx_skylanderRemove"));
-    result.skylanderLight = reinterpret_cast<decltype(skylanderLight)>(dlsym(handle, "_rpcsx_skylanderLight"));
-    result.infinityLoad = reinterpret_cast<decltype(infinityLoad)>(dlsym(handle, "_rpcsx_infinityLoad"));
-    result.infinityRemove = reinterpret_cast<decltype(infinityRemove)>(dlsym(handle, "_rpcsx_infinityRemove"));
-    result.dimensionsLoad = reinterpret_cast<decltype(dimensionsLoad)>(dlsym(handle, "_rpcsx_dimensionsLoad"));
-    result.dimensionsRemove = reinterpret_cast<decltype(dimensionsRemove)>(dlsym(handle, "_rpcsx_dimensionsRemove"));
-    result.skylanderCreate = reinterpret_cast<decltype(skylanderCreate)>(dlsym(handle, "_rpcsx_skylanderCreate"));
-    result.infinityCreate = reinterpret_cast<decltype(infinityCreate)>(dlsym(handle, "_rpcsx_infinityCreate"));
-    result.dimensionsCreate = reinterpret_cast<decltype(dimensionsCreate)>(dlsym(handle, "_rpcsx_dimensionsCreate"));
-    result.avatarList = reinterpret_cast<decltype(avatarList)>(dlsym(handle, "_rpcsx_avatarList"));
-    result.avatarCurrent = reinterpret_cast<decltype(avatarCurrent)>(dlsym(handle, "_rpcsx_avatarCurrent"));
-    result.avatarImage = reinterpret_cast<decltype(avatarImage)>(dlsym(handle, "_rpcsx_avatarImage"));
-    result.avatarSelect = reinterpret_cast<decltype(avatarSelect)>(dlsym(handle, "_rpcsx_avatarSelect"));
-    result.avatarUseImage = reinterpret_cast<decltype(avatarUseImage)>(dlsym(handle, "_rpcsx_avatarUseImage"));
-    result.usbSetPassthrough = reinterpret_cast<decltype(usbSetPassthrough)>(dlsym(handle, "_rpcsx_usbSetPassthrough"));
-    result.usbPassedThrough = reinterpret_cast<decltype(usbPassedThrough)>(dlsym(handle, "_rpcsx_usbPassedThrough"));
-    result.takeGameError = reinterpret_cast<decltype(takeGameError)>(dlsym(handle, "_rpcsx_takeGameError"));
-    result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_rpcsx_settingsSet"));
+    result.rpcnGetConfig = reinterpret_cast<decltype(rpcnGetConfig)>(dlsym(handle, "_armsx3_rpcnGetConfig"));
+    result.rpcnSetConfig = reinterpret_cast<decltype(rpcnSetConfig)>(dlsym(handle, "_armsx3_rpcnSetConfig"));
+    result.rpcnAddFriend = reinterpret_cast<decltype(rpcnAddFriend)>(dlsym(handle, "_armsx3_rpcnAddFriend"));
+    result.rpcnRemoveFriend = reinterpret_cast<decltype(rpcnRemoveFriend)>(dlsym(handle, "_armsx3_rpcnRemoveFriend"));
+    result.rpcnGetFriends = reinterpret_cast<decltype(rpcnGetFriends)>(dlsym(handle, "_armsx3_rpcnGetFriends"));
+    result.rpcnFriendsSession = reinterpret_cast<decltype(rpcnFriendsSession)>(dlsym(handle, "_armsx3_rpcnFriendsSession"));
+    result.rpcnGetInvites = reinterpret_cast<decltype(rpcnGetInvites)>(dlsym(handle, "_armsx3_rpcnGetInvites"));
+    result.rpcnAcceptInvite = reinterpret_cast<decltype(rpcnAcceptInvite)>(dlsym(handle, "_armsx3_rpcnAcceptInvite"));
+    result.rpcnDeclineInvite = reinterpret_cast<decltype(rpcnDeclineInvite)>(dlsym(handle, "_armsx3_rpcnDeclineInvite"));
+    result.rpcnCreateAccount = reinterpret_cast<decltype(rpcnCreateAccount)>(dlsym(handle, "_armsx3_rpcnCreateAccount"));
+    result.rpcnResendToken = reinterpret_cast<decltype(rpcnResendToken)>(dlsym(handle, "_armsx3_rpcnResendToken"));
+    result.rpcnSendResetToken = reinterpret_cast<decltype(rpcnSendResetToken)>(dlsym(handle, "_armsx3_rpcnSendResetToken"));
+    result.rpcnResetPassword = reinterpret_cast<decltype(rpcnResetPassword)>(dlsym(handle, "_armsx3_rpcnResetPassword"));
+    result.rpcnTestLogin = reinterpret_cast<decltype(rpcnTestLogin)>(dlsym(handle, "_armsx3_rpcnTestLogin"));
+    result.rpcnSignIn = reinterpret_cast<decltype(rpcnSignIn)>(dlsym(handle, "_armsx3_rpcnSignIn"));
+    result.rpcnDeleteTrophies = reinterpret_cast<decltype(rpcnDeleteTrophies)>(dlsym(handle, "_armsx3_rpcnDeleteTrophies"));
+    result.rpcnAddHost = reinterpret_cast<decltype(rpcnAddHost)>(dlsym(handle, "_armsx3_rpcnAddHost"));
+    result.rpcnDelHost = reinterpret_cast<decltype(rpcnDelHost)>(dlsym(handle, "_armsx3_rpcnDelHost"));
+    result.rpcnResetHosts = reinterpret_cast<decltype(rpcnResetHosts)>(dlsym(handle, "_armsx3_rpcnResetHosts"));
+    result.rpcnSetIpv6 = reinterpret_cast<decltype(rpcnSetIpv6)>(dlsym(handle, "_armsx3_rpcnSetIpv6"));
+    result.rpcnStatus = reinterpret_cast<decltype(rpcnStatus)>(dlsym(handle, "_armsx3_rpcnStatus"));
+    result.rpcnSignedIn = reinterpret_cast<decltype(rpcnSignedIn)>(dlsym(handle, "_armsx3_rpcnSignedIn"));
+    result.setMicDevices = reinterpret_cast<decltype(setMicDevices)>(dlsym(handle, "_armsx3_setMicDevices"));
+    result.micTestStart = reinterpret_cast<decltype(micTestStart)>(dlsym(handle, "_armsx3_micTestStart"));
+    result.micTestLevel = reinterpret_cast<decltype(micTestLevel)>(dlsym(handle, "_armsx3_micTestLevel"));
+    result.micTestStop = reinterpret_cast<decltype(micTestStop)>(dlsym(handle, "_armsx3_micTestStop"));
+    result.skylanderLoad = reinterpret_cast<decltype(skylanderLoad)>(dlsym(handle, "_armsx3_skylanderLoad"));
+    result.skylanderRemove = reinterpret_cast<decltype(skylanderRemove)>(dlsym(handle, "_armsx3_skylanderRemove"));
+    result.skylanderLight = reinterpret_cast<decltype(skylanderLight)>(dlsym(handle, "_armsx3_skylanderLight"));
+    result.infinityLoad = reinterpret_cast<decltype(infinityLoad)>(dlsym(handle, "_armsx3_infinityLoad"));
+    result.infinityRemove = reinterpret_cast<decltype(infinityRemove)>(dlsym(handle, "_armsx3_infinityRemove"));
+    result.dimensionsLoad = reinterpret_cast<decltype(dimensionsLoad)>(dlsym(handle, "_armsx3_dimensionsLoad"));
+    result.dimensionsRemove = reinterpret_cast<decltype(dimensionsRemove)>(dlsym(handle, "_armsx3_dimensionsRemove"));
+    result.skylanderCreate = reinterpret_cast<decltype(skylanderCreate)>(dlsym(handle, "_armsx3_skylanderCreate"));
+    result.infinityCreate = reinterpret_cast<decltype(infinityCreate)>(dlsym(handle, "_armsx3_infinityCreate"));
+    result.dimensionsCreate = reinterpret_cast<decltype(dimensionsCreate)>(dlsym(handle, "_armsx3_dimensionsCreate"));
+    result.avatarList = reinterpret_cast<decltype(avatarList)>(dlsym(handle, "_armsx3_avatarList"));
+    result.avatarCurrent = reinterpret_cast<decltype(avatarCurrent)>(dlsym(handle, "_armsx3_avatarCurrent"));
+    result.avatarImage = reinterpret_cast<decltype(avatarImage)>(dlsym(handle, "_armsx3_avatarImage"));
+    result.avatarSelect = reinterpret_cast<decltype(avatarSelect)>(dlsym(handle, "_armsx3_avatarSelect"));
+    result.avatarUseImage = reinterpret_cast<decltype(avatarUseImage)>(dlsym(handle, "_armsx3_avatarUseImage"));
+    result.usbSetPassthrough = reinterpret_cast<decltype(usbSetPassthrough)>(dlsym(handle, "_armsx3_usbSetPassthrough"));
+    result.usbPassedThrough = reinterpret_cast<decltype(usbPassedThrough)>(dlsym(handle, "_armsx3_usbPassedThrough"));
+    result.takeGameError = reinterpret_cast<decltype(takeGameError)>(dlsym(handle, "_armsx3_takeGameError"));
+    result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_armsx3_settingsSet"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
     // symbol, and refusing to load it over a missing optional feature would be worse than the
     // feature being absent. The Kotlin side treats a null here as "unsupported".
-    result.frameGenImportShaders = reinterpret_cast<decltype(frameGenImportShaders)>(dlsym(handle, "_rpcsx_frameGenImportShaders"));
-    result.frameGenShaderCount = reinterpret_cast<decltype(frameGenShaderCount)>(dlsym(handle, "_rpcsx_frameGenShaderCount"));
-    result.getPlayCompileState = reinterpret_cast<decltype(getPlayCompileState)>(dlsym(handle, "_rpcsx_getPlayCompileState"));
-    result.frameGenShaderError = reinterpret_cast<decltype(frameGenShaderError)>(dlsym(handle, "_rpcsx_frameGenShaderError"));
-    result.settingsBeginBatch = reinterpret_cast<decltype(settingsBeginBatch)>(dlsym(handle, "_rpcsx_settingsBeginBatch"));
-    result.settingsEndBatch = reinterpret_cast<decltype(settingsEndBatch)>(dlsym(handle, "_rpcsx_settingsEndBatch"));
-    result.installSplitPkg = reinterpret_cast<decltype(installSplitPkg)>(dlsym(handle, "_rpcsx_installSplitPkg"));
-    result.uninstallGame = reinterpret_cast<decltype(uninstallGame)>(dlsym(handle, "_rpcsx_uninstallGame"));
-    result.getVersion = reinterpret_cast<decltype(getVersion)>(dlsym(handle, "_rpcsx_getVersion"));
-    result.setCustomDriver = reinterpret_cast<decltype(setCustomDriver)>(dlsym(handle, "_rpcsx_setCustomDriver"));
-    result.reportDriverProblem = reinterpret_cast<decltype(reportDriverProblem)>(dlsym(handle, "_rpcsx_reportDriverProblem"));
-    result.saveState = reinterpret_cast<decltype(saveState)>(dlsym(handle, "_rpcsx_saveState"));
-    result.loadState = reinterpret_cast<decltype(loadState)>(dlsym(handle, "_rpcsx_loadState"));
-    result.hasState = reinterpret_cast<decltype(hasState)>(dlsym(handle, "_rpcsx_hasState"));
-    result.saveStateToSlot = reinterpret_cast<decltype(saveStateToSlot)>(dlsym(handle, "_rpcsx_saveStateToSlot"));
-    result.loadStateFromSlot = reinterpret_cast<decltype(loadStateFromSlot)>(dlsym(handle, "_rpcsx_loadStateFromSlot"));
-    result.hasStateInSlot = reinterpret_cast<decltype(hasStateInSlot)>(dlsym(handle, "_rpcsx_hasStateInSlot"));
-    result.isStateSlotReadable = reinterpret_cast<decltype(isStateSlotReadable)>(dlsym(handle, "_rpcsx_isStateSlotReadable"));
-    result.deleteStateFromSlot = reinterpret_cast<decltype(deleteStateFromSlot)>(dlsym(handle, "_rpcsx_deleteStateFromSlot"));
-    result.patchEngineVersion = reinterpret_cast<decltype(patchEngineVersion)>(dlsym(handle, "_rpcsx_patchEngineVersion"));
-    result.patchesImport = reinterpret_cast<decltype(patchesImport)>(dlsym(handle, "_rpcsx_patchesImport"));
-    result.patchesWrite = reinterpret_cast<decltype(patchesWrite)>(dlsym(handle, "_rpcsx_patchesWrite"));
-    result.patchesList = reinterpret_cast<decltype(patchesList)>(dlsym(handle, "_rpcsx_patchesList"));
-    result.probeDiscInfo = reinterpret_cast<decltype(probeDiscInfo)>(dlsym(handle, "_rpcsx_probeDiscInfo"));
-    result.changeDisc = reinterpret_cast<decltype(changeDisc)>(dlsym(handle, "_rpcsx_changeDisc"));
-    result.discSwapState = reinterpret_cast<decltype(discSwapState)>(dlsym(handle, "_rpcsx_discSwapState"));
-    result.getDiscPlaylist = reinterpret_cast<decltype(getDiscPlaylist)>(dlsym(handle, "_rpcsx_getDiscPlaylist"));
-    result.gameContentId = reinterpret_cast<decltype(gameContentId)>(dlsym(handle, "_rpcsx_gameContentId"));
-    result.patchSetEnabled = reinterpret_cast<decltype(patchSetEnabled)>(dlsym(handle, "_rpcsx_patchSetEnabled"));
+    result.frameGenImportShaders = reinterpret_cast<decltype(frameGenImportShaders)>(dlsym(handle, "_armsx3_frameGenImportShaders"));
+    result.frameGenShaderCount = reinterpret_cast<decltype(frameGenShaderCount)>(dlsym(handle, "_armsx3_frameGenShaderCount"));
+    result.getPlayCompileState = reinterpret_cast<decltype(getPlayCompileState)>(dlsym(handle, "_armsx3_getPlayCompileState"));
+    result.frameGenShaderError = reinterpret_cast<decltype(frameGenShaderError)>(dlsym(handle, "_armsx3_frameGenShaderError"));
+    result.settingsBeginBatch = reinterpret_cast<decltype(settingsBeginBatch)>(dlsym(handle, "_armsx3_settingsBeginBatch"));
+    result.settingsEndBatch = reinterpret_cast<decltype(settingsEndBatch)>(dlsym(handle, "_armsx3_settingsEndBatch"));
+    result.installSplitPkg = reinterpret_cast<decltype(installSplitPkg)>(dlsym(handle, "_armsx3_installSplitPkg"));
+    result.uninstallGame = reinterpret_cast<decltype(uninstallGame)>(dlsym(handle, "_armsx3_uninstallGame"));
+    result.getVersion = reinterpret_cast<decltype(getVersion)>(dlsym(handle, "_armsx3_getVersion"));
+    result.setCustomDriver = reinterpret_cast<decltype(setCustomDriver)>(dlsym(handle, "_armsx3_setCustomDriver"));
+    result.reportDriverProblem = reinterpret_cast<decltype(reportDriverProblem)>(dlsym(handle, "_armsx3_reportDriverProblem"));
+    result.saveState = reinterpret_cast<decltype(saveState)>(dlsym(handle, "_armsx3_saveState"));
+    result.loadState = reinterpret_cast<decltype(loadState)>(dlsym(handle, "_armsx3_loadState"));
+    result.hasState = reinterpret_cast<decltype(hasState)>(dlsym(handle, "_armsx3_hasState"));
+    result.saveStateToSlot = reinterpret_cast<decltype(saveStateToSlot)>(dlsym(handle, "_armsx3_saveStateToSlot"));
+    result.loadStateFromSlot = reinterpret_cast<decltype(loadStateFromSlot)>(dlsym(handle, "_armsx3_loadStateFromSlot"));
+    result.hasStateInSlot = reinterpret_cast<decltype(hasStateInSlot)>(dlsym(handle, "_armsx3_hasStateInSlot"));
+    result.isStateSlotReadable = reinterpret_cast<decltype(isStateSlotReadable)>(dlsym(handle, "_armsx3_isStateSlotReadable"));
+    result.deleteStateFromSlot = reinterpret_cast<decltype(deleteStateFromSlot)>(dlsym(handle, "_armsx3_deleteStateFromSlot"));
+    result.patchEngineVersion = reinterpret_cast<decltype(patchEngineVersion)>(dlsym(handle, "_armsx3_patchEngineVersion"));
+    result.patchesImport = reinterpret_cast<decltype(patchesImport)>(dlsym(handle, "_armsx3_patchesImport"));
+    result.patchesWrite = reinterpret_cast<decltype(patchesWrite)>(dlsym(handle, "_armsx3_patchesWrite"));
+    result.patchesList = reinterpret_cast<decltype(patchesList)>(dlsym(handle, "_armsx3_patchesList"));
+    result.probeDiscInfo = reinterpret_cast<decltype(probeDiscInfo)>(dlsym(handle, "_armsx3_probeDiscInfo"));
+    result.changeDisc = reinterpret_cast<decltype(changeDisc)>(dlsym(handle, "_armsx3_changeDisc"));
+    result.discSwapState = reinterpret_cast<decltype(discSwapState)>(dlsym(handle, "_armsx3_discSwapState"));
+    result.getDiscPlaylist = reinterpret_cast<decltype(getDiscPlaylist)>(dlsym(handle, "_armsx3_getDiscPlaylist"));
+    result.gameContentId = reinterpret_cast<decltype(gameContentId)>(dlsym(handle, "_armsx3_gameContentId"));
+    result.patchSetEnabled = reinterpret_cast<decltype(patchSetEnabled)>(dlsym(handle, "_armsx3_patchSetEnabled"));
     // clang-format on
 
     return result;
   }
 };
 
-static RPCSXLibrary rpcsxLib;
+static CoreLibrary coreLib;
 
 static std::string unwrap(JNIEnv *env, jstring string) {
   auto resultBuffer = env->GetStringUTFChars(string, nullptr);
@@ -380,9 +380,9 @@ static jstring wrap(JNIEnv *env, const char *string) {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_openLibrary(JNIEnv *env, jobject, jstring path) {
-  if (auto library = RPCSXLibrary::Open(unwrap(env, path).c_str())) {
-    rpcsxLib = std::move(*library);
+Java_com_armsx3_core_ARMSX3_openLibrary(JNIEnv *env, jobject, jstring path) {
+  if (auto library = CoreLibrary::Open(unwrap(env, path).c_str())) {
+    coreLib = std::move(*library);
     return true;
   }
 
@@ -390,8 +390,8 @@ Java_net_rpcsx_RPCSX_openLibrary(JNIEnv *env, jobject, jstring path) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_getLibraryVersion(JNIEnv *env, jobject, jstring path) {
-  if (auto library = RPCSXLibrary::Open(unwrap(env, path).c_str())) {
+Java_com_armsx3_core_ARMSX3_getLibraryVersion(JNIEnv *env, jobject, jstring path) {
+  if (auto library = CoreLibrary::Open(unwrap(env, path).c_str())) {
     if (auto getVersion = library->getVersion) {
       return wrap(env, getVersion());
     }
@@ -400,34 +400,34 @@ Java_net_rpcsx_RPCSX_getLibraryVersion(JNIEnv *env, jobject, jstring path) {
   return {};
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_overlayPadData(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_overlayPadData(
     JNIEnv *, jobject, jint port, jint digital1, jint digital2, jint leftStickX,
     jint leftStickY, jint rightStickX, jint rightStickY) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.overlayPadData == nullptr) {
+  if (coreLib.overlayPadData == nullptr) {
       return false;
   }
 
-  return rpcsxLib.overlayPadData(port, digital1, digital2, leftStickX,
+  return coreLib.overlayPadData(port, digital1, digital2, leftStickX,
                                  leftStickY, rightStickX, rightStickY);
 }
 
 // Remote play. The streaming threads pull frames and audio from the core through these; the core
 // never calls back into Java for them. Every one fails soft on a core without the exports.
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_remotePlayStart(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_remotePlayStart(
     JNIEnv *, jobject, jint maxWidth, jint maxHeight) {
-  if (rpcsxLib.remotePlayStart == nullptr) {
+  if (coreLib.remotePlayStart == nullptr) {
     return false;
   }
 
-  return rpcsxLib.remotePlayStart(maxWidth, maxHeight);
+  return coreLib.remotePlayStart(maxWidth, maxHeight);
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayStop(JNIEnv *, jobject) {
-  if (rpcsxLib.remotePlayStop != nullptr) {
-    rpcsxLib.remotePlayStop();
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_remotePlayStop(JNIEnv *, jobject) {
+  if (coreLib.remotePlayStop != nullptr) {
+    coreLib.remotePlayStop();
   }
 }
 
@@ -435,9 +435,9 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayStop(JNIEnv *, 
 // info (6 ints): width, height, slot, generation, seq, unused. Returns 2 with a hardware frame
 // (nothing written to buffer), 1 with an NV12 frame, 0 on timeout, -1 when capture is off, -2 when
 // the buffer is too small for the frame described in info.
-extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
+extern "C" JNIEXPORT jint JNICALL Java_com_armsx3_core_ARMSX3_remotePlayPollVideo(
     JNIEnv *env, jobject, jobject buffer, jintArray info, jint timeoutMs) {
-  if (rpcsxLib.remotePlayPollVideo == nullptr || buffer == nullptr || info == nullptr ||
+  if (coreLib.remotePlayPollVideo == nullptr || buffer == nullptr || info == nullptr ||
       env->GetArrayLength(info) < 6) {
     return -1;
   }
@@ -449,7 +449,7 @@ extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
   }
 
   int32_t out[6] = {};
-  const int result = rpcsxLib.remotePlayPollVideo(dst, cap, out, timeoutMs);
+  const int result = coreLib.remotePlayPollVideo(dst, cap, out, timeoutMs);
   env->SetIntArrayRegion(info, 0, 6, out);
   return result;
 }
@@ -458,29 +458,29 @@ extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollVideo(
 // video encoder as GL textures so a frame never passes through the CPU. The two calls below that
 // touch GL need a current EGL context on the calling thread.
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayReleaseFrame(JNIEnv *, jobject, jint slot, jint seq) {
-  if (rpcsxLib.remotePlayReleaseFrame != nullptr) {
-    rpcsxLib.remotePlayReleaseFrame(slot, static_cast<uint32_t>(seq));
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_remotePlayReleaseFrame(JNIEnv *, jobject, jint slot, jint seq) {
+  if (coreLib.remotePlayReleaseFrame != nullptr) {
+    coreLib.remotePlayReleaseFrame(slot, static_cast<uint32_t>(seq));
   }
 }
 
 // Remote play online hosting: this device's address on the router's network, or null when there
 // is no router to open a port on. Blocks about two seconds the first time.
-extern "C" JNIEXPORT jstring JNICALL Java_net_rpcsx_RPCSX_remotePlayUpnpPrepare(JNIEnv *env, jobject) {
+extern "C" JNIEXPORT jstring JNICALL Java_com_armsx3_core_ARMSX3_remotePlayUpnpPrepare(JNIEnv *env, jobject) {
   char lan[64] = {};
-  if (rpcsxLib.remotePlayUpnpPrepare == nullptr || !rpcsxLib.remotePlayUpnpPrepare(lan, sizeof(lan)) || lan[0] == 0) {
+  if (coreLib.remotePlayUpnpPrepare == nullptr || !coreLib.remotePlayUpnpPrepare(lan, sizeof(lan)) || lan[0] == 0) {
     return nullptr;
   }
   return env->NewStringUTF(lan);
 }
 
 // "public address:router port" for UDP internalPort opened on the router, or null.
-extern "C" JNIEXPORT jstring JNICALL Java_net_rpcsx_RPCSX_remotePlayUpnpMap(
+extern "C" JNIEXPORT jstring JNICALL Java_com_armsx3_core_ARMSX3_remotePlayUpnpMap(
     JNIEnv *env, jobject, jint internalPort, jint externalHint, jint leaseSeconds) {
   char address[64] = {};
-  const int port = rpcsxLib.remotePlayUpnpMap == nullptr
+  const int port = coreLib.remotePlayUpnpMap == nullptr
       ? 0
-      : rpcsxLib.remotePlayUpnpMap(internalPort, externalHint, leaseSeconds, address, sizeof(address));
+      : coreLib.remotePlayUpnpMap(internalPort, externalHint, leaseSeconds, address, sizeof(address));
   if (port <= 0 || address[0] == 0) {
     return nullptr;
   }
@@ -488,22 +488,22 @@ extern "C" JNIEXPORT jstring JNICALL Java_net_rpcsx_RPCSX_remotePlayUpnpMap(
   return env->NewStringUTF(result.c_str());
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayUpnpUnmap(JNIEnv *, jobject, jint externalPort) {
-  if (rpcsxLib.remotePlayUpnpUnmap != nullptr) {
-    rpcsxLib.remotePlayUpnpUnmap(externalPort);
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_remotePlayUpnpUnmap(JNIEnv *, jobject, jint externalPort) {
+  if (coreLib.remotePlayUpnpUnmap != nullptr) {
+    coreLib.remotePlayUpnpUnmap(externalPort);
   }
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlaySetHardware(JNIEnv *, jobject, jboolean enabled) {
-  if (rpcsxLib.remotePlaySetHardware != nullptr) {
-    rpcsxLib.remotePlaySetHardware(enabled);
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_remotePlaySetHardware(JNIEnv *, jobject, jboolean enabled) {
+  if (coreLib.remotePlaySetHardware != nullptr) {
+    coreLib.remotePlaySetHardware(enabled);
   }
 }
 
 // Whether the running game can be hosted: its renderer captures frames (Vulkan only). True on a
 // core without the check, which hosted regardless.
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_remotePlayCanCapture(JNIEnv *, jobject) {
-  return rpcsxLib.remotePlayCanCapture == nullptr || rpcsxLib.remotePlayCanCapture();
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_remotePlayCanCapture(JNIEnv *, jobject) {
+  return coreLib.remotePlayCanCapture == nullptr || coreLib.remotePlayCanCapture();
 }
 
 namespace {
@@ -531,13 +531,13 @@ RemotePlayEgl remotePlayEgl;
 // Binds a hardware frame slot's buffer to texture (GL_TEXTURE_EXTERNAL_OES). Returns the EGLImage
 // to destroy later with remotePlayDestroyImage, or 0 when the slot has no buffer or the import
 // failed; the app then asks for NV12 frames instead.
-extern "C" JNIEXPORT jlong JNICALL Java_net_rpcsx_RPCSX_remotePlayImportFrame(JNIEnv *, jobject, jint slot, jint texture) {
-  if (rpcsxLib.remotePlayHardwareBuffer == nullptr || !remotePlayEgl.load()) {
+extern "C" JNIEXPORT jlong JNICALL Java_com_armsx3_core_ARMSX3_remotePlayImportFrame(JNIEnv *, jobject, jint slot, jint texture) {
+  if (coreLib.remotePlayHardwareBuffer == nullptr || !remotePlayEgl.load()) {
     return 0;
   }
 
   uint32_t generation = 0;
-  AHardwareBuffer *buffer = rpcsxLib.remotePlayHardwareBuffer(slot, &generation);
+  AHardwareBuffer *buffer = coreLib.remotePlayHardwareBuffer(slot, &generation);
   if (buffer == nullptr) {
     return 0;
   }
@@ -575,7 +575,7 @@ extern "C" JNIEXPORT jlong JNICALL Java_net_rpcsx_RPCSX_remotePlayImportFrame(JN
   return reinterpret_cast<jlong>(image);
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayDestroyImage(JNIEnv *, jobject, jlong image) {
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_remotePlayDestroyImage(JNIEnv *, jobject, jlong image) {
   if (image != 0 && remotePlayEgl.load()) {
     remotePlayEgl.destroyImage(eglGetCurrentDisplay(), reinterpret_cast<EGLImageKHR>(image));
   }
@@ -583,14 +583,14 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_remotePlayDestroyImage(JN
 
 // out (4 ints): running totals of game frames seen while capturing, frames not read back, frames
 // handed to the app and frames replaced before the app took them. False when the core lacks it.
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_remotePlayCounters(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_remotePlayCounters(
     JNIEnv *env, jobject, jintArray out) {
-  if (rpcsxLib.remotePlayCounters == nullptr || out == nullptr || env->GetArrayLength(out) < 4) {
+  if (coreLib.remotePlayCounters == nullptr || out == nullptr || env->GetArrayLength(out) < 4) {
     return false;
   }
 
   uint32_t counters[4] = {};
-  rpcsxLib.remotePlayCounters(counters);
+  coreLib.remotePlayCounters(counters);
   jint values[4];
   for (int i = 0; i < 4; i++) {
     values[i] = static_cast<jint>(counters[i]);
@@ -601,9 +601,9 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_remotePlayCounters(
 
 // buffer: a direct ByteBuffer receiving stereo s16 at 48 kHz. Returns frames written, 0 on
 // timeout, -1 when capture is off.
-extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollAudio(
+extern "C" JNIEXPORT jint JNICALL Java_com_armsx3_core_ARMSX3_remotePlayPollAudio(
     JNIEnv *env, jobject, jobject buffer, jint capFrames, jint timeoutMs) {
-  if (rpcsxLib.remotePlayPollAudio == nullptr || buffer == nullptr) {
+  if (coreLib.remotePlayPollAudio == nullptr || buffer == nullptr) {
     return -1;
   }
 
@@ -614,14 +614,14 @@ extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_remotePlayPollAudio(
   }
 
   const int frames = static_cast<int>(std::min<jlong>(capFrames, cap / 4));
-  return rpcsxLib.remotePlayPollAudio(dst, frames, timeoutMs);
+  return coreLib.remotePlayPollAudio(dst, frames, timeoutMs);
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_overlayPadPressure(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_overlayPadPressure(
     JNIEnv *env, jobject, jint port, jintArray values) {
   // Absent on a core older than this export: the pad still works, every button
   // is just digital, which is the behaviour that shipped before it existed.
-  if (rpcsxLib.overlayPadPressure == nullptr || values == nullptr) {
+  if (coreLib.overlayPadPressure == nullptr || values == nullptr) {
     return false;
   }
 
@@ -639,294 +639,294 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_overlayPadPressure(
 
   static_assert(sizeof(jint) == sizeof(int),
                 "jint and int must match for the pressure array to be passed through");
-  const bool ok = rpcsxLib.overlayPadPressure(
+  const bool ok = coreLib.overlayPadPressure(
       port, reinterpret_cast<const int *>(elems), static_cast<int>(count));
 
   env->ReleasePrimitiveArrayCritical(values, elems, JNI_ABORT);
   return ok;
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_keyboardKey(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_keyboardKey(
     JNIEnv *, jobject, jint androidKeyCode, jint unicode, jboolean pressed,
     jboolean repeat) {
   // Absent on a core older than this export. Returning false is right either
   // way: it means "nothing consumed this key", which is also what an emulator
   // with no keyboard attached reports.
-  if (rpcsxLib.keyboardKey == nullptr) {
+  if (coreLib.keyboardKey == nullptr) {
     return false;
   }
 
-  return rpcsxLib.keyboardKey(androidKeyCode, unicode, pressed == JNI_TRUE,
+  return coreLib.keyboardKey(androidKeyCode, unicode, pressed == JNI_TRUE,
                               repeat == JNI_TRUE);
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_initialize(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_initialize(
     JNIEnv *env, jobject, jstring rootDir, jstring user, jstring socInfo) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.initialize == nullptr) {
+  if (coreLib.initialize == nullptr) {
       return false;
   }
 
   // Before initialize(), which is where the core assembles its startup log.
   // Null on cores older than this export; the SoC line then reads "unknown".
-  if (rpcsxLib.setSocInfo != nullptr) {
-      rpcsxLib.setSocInfo(unwrap(env, socInfo));
+  if (coreLib.setSocInfo != nullptr) {
+      coreLib.setSocInfo(unwrap(env, socInfo));
   }
 
-  return rpcsxLib.initialize(unwrap(env, rootDir), unwrap(env, user));
+  return coreLib.initialize(unwrap(env, rootDir), unwrap(env, user));
 }
 
 // After initialize(), once the core's log file is open. Null on cores older than this export.
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_logPreviousExit(JNIEnv *env, jobject, jstring line) {
-  if (rpcsxLib.logPreviousExit != nullptr) {
-    rpcsxLib.logPreviousExit(unwrap(env, line));
+Java_com_armsx3_core_ARMSX3_logPreviousExit(JNIEnv *env, jobject, jstring line) {
+  if (coreLib.logPreviousExit != nullptr) {
+    coreLib.logPreviousExit(unwrap(env, line));
   }
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_processCompilationQueue(JNIEnv *env, jobject) {
+Java_com_armsx3_core_ARMSX3_processCompilationQueue(JNIEnv *env, jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.processCompilationQueue == nullptr) {
+  if (coreLib.processCompilationQueue == nullptr) {
       return false;
   }
 
-  return rpcsxLib.processCompilationQueue(env);
+  return coreLib.processCompilationQueue(env);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_startMainThreadProcessor(JNIEnv *env, jobject) {
+Java_com_armsx3_core_ARMSX3_startMainThreadProcessor(JNIEnv *env, jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.startMainThreadProcessor == nullptr) {
+  if (coreLib.startMainThreadProcessor == nullptr) {
       return false;
   }
 
-  return rpcsxLib.startMainThreadProcessor(env);
+  return coreLib.startMainThreadProcessor(env);
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_collectGameInfo(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_collectGameInfo(
     JNIEnv *env, jobject, jstring jrootDir, jlong progressId) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.collectGameInfo == nullptr) {
+  if (coreLib.collectGameInfo == nullptr) {
       return false;
   }
 
-  return rpcsxLib.collectGameInfo(env, unwrap(env, jrootDir), progressId);
+  return coreLib.collectGameInfo(env, unwrap(env, jrootDir), progressId);
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_shutdown(JNIEnv *env,
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_shutdown(JNIEnv *env,
                                                                 jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.shutdown == nullptr) {
+  if (coreLib.shutdown == nullptr) {
       return;
   }
 
-  return rpcsxLib.shutdown();
+  return coreLib.shutdown();
 }
 
-extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_boot(JNIEnv *env,
+extern "C" JNIEXPORT jint JNICALL Java_com_armsx3_core_ARMSX3_boot(JNIEnv *env,
                                                             jobject,
                                                             jstring jpath) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.boot == nullptr) {
+  if (coreLib.boot == nullptr) {
       return 0;
   }
 
-  return rpcsxLib.boot(unwrap(env, jpath));
+  return coreLib.boot(unwrap(env, jpath));
 }
 
-extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_getState(JNIEnv *env,
+extern "C" JNIEXPORT jint JNICALL Java_com_armsx3_core_ARMSX3_getState(JNIEnv *env,
                                                                 jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.getState == nullptr) {
+  if (coreLib.getState == nullptr) {
       return 0;
   }
 
-  return rpcsxLib.getState();
+  return coreLib.getState();
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_kill(JNIEnv *env,
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_kill(JNIEnv *env,
                                                             jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.kill == nullptr) {
+  if (coreLib.kill == nullptr) {
       return;
   }
 
-  return rpcsxLib.kill();
+  return coreLib.kill();
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_resume(JNIEnv *env,
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_resume(JNIEnv *env,
                                                               jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.resume == nullptr) {
+  if (coreLib.resume == nullptr) {
       return;
   }
 
-  return rpcsxLib.resume();
+  return coreLib.resume();
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_pause(JNIEnv *env,
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_pause(JNIEnv *env,
                                                              jobject) {
   // Same null guard as resume: the core is dlopen()ed separately and may not be
   // up yet. A missing symbol also means an older core, so an app built against
   // this cannot assume the export is there.
-  if (rpcsxLib.pause == nullptr) {
+  if (coreLib.pause == nullptr) {
       return;
   }
 
-  return rpcsxLib.pause();
+  return coreLib.pause();
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setAppBackgrounded(JNIEnv *env,
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_setAppBackgrounded(JNIEnv *env,
                                                                           jobject,
                                                                           jboolean backgrounded) {
   // Same null guard as pause: the core may not be loaded yet, and an older core lacks the export.
-  if (rpcsxLib.setAppBackgrounded == nullptr) {
+  if (coreLib.setAppBackgrounded == nullptr) {
       return;
   }
 
-  rpcsxLib.setAppBackgrounded(backgrounded == JNI_TRUE);
+  coreLib.setAppBackgrounded(backgrounded == JNI_TRUE);
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_openHomeMenu(JNIEnv *env,
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_openHomeMenu(JNIEnv *env,
                                                                     jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.openHomeMenu == nullptr) {
+  if (coreLib.openHomeMenu == nullptr) {
       return;
   }
 
-  return rpcsxLib.openHomeMenu();
+  return coreLib.openHomeMenu();
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_captureFrame(JNIEnv *env,
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_captureFrame(JNIEnv *env,
                                                                     jobject) {
-  if (rpcsxLib.captureFrame == nullptr) {
+  if (coreLib.captureFrame == nullptr) {
       return;
   }
 
-  return rpcsxLib.captureFrame();
+  return coreLib.captureFrame();
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_dumpFrame(JNIEnv *env,
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_dumpFrame(JNIEnv *env,
                                                                     jobject, jint mode) {
-  if (rpcsxLib.dumpFrame == nullptr) {
+  if (coreLib.dumpFrame == nullptr) {
       return false;
   }
 
-  return rpcsxLib.dumpFrame(mode);
+  return coreLib.dumpFrame(mode);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_getTitleId(JNIEnv *env, jobject) {
+Java_com_armsx3_core_ARMSX3_getTitleId(JNIEnv *env, jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.getTitleId == nullptr) {
+  if (coreLib.getTitleId == nullptr) {
       return nullptr;
   }
 
-  return wrap(env, rpcsxLib.getTitleId());
+  return wrap(env, coreLib.getTitleId());
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_getTitle(JNIEnv *env, jobject) {
+Java_com_armsx3_core_ARMSX3_getTitle(JNIEnv *env, jobject) {
   // Same as getTitleId: the core may not be loaded yet.
-  if (rpcsxLib.getTitle == nullptr) {
+  if (coreLib.getTitle == nullptr) {
       return nullptr;
   }
 
-  return wrap(env, rpcsxLib.getTitle());
+  return wrap(env, coreLib.getTitle());
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_getCurrentTrophyName(JNIEnv *env, jobject) {
+Java_com_armsx3_core_ARMSX3_getCurrentTrophyName(JNIEnv *env, jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
   //
   // Also null on an OLDER core that predates this export, since it is resolved
   // by dlsym: the frontend must treat null as "unknown", not as "no trophies".
-  if (rpcsxLib.getCurrentTrophyName == nullptr) {
+  if (coreLib.getCurrentTrophyName == nullptr) {
       return nullptr;
   }
 
-  return wrap(env, rpcsxLib.getCurrentTrophyName());
+  return wrap(env, coreLib.getCurrentTrophyName());
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_surfaceEvent(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_surfaceEvent(
     JNIEnv *env, jobject, jobject surface, jint event) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.surfaceEvent == nullptr) {
+  if (coreLib.surfaceEvent == nullptr) {
       return false;
   }
 
-  return rpcsxLib.surfaceEvent(env, surface, event);
+  return coreLib.surfaceEvent(env, surface, event);
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setPadSensor(
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_setPadSensor(
     JNIEnv *, jobject, jint port, jint x, jint y, jint z, jint g) {
-  if (rpcsxLib.setPadSensor == nullptr) {
+  if (coreLib.setPadSensor == nullptr) {
       return;
   }
 
-  rpcsxLib.setPadSensor(port, x, y, z, g);
+  coreLib.setPadSensor(port, x, y, z, g);
 }
 
-extern "C" JNIEXPORT jint JNICALL Java_net_rpcsx_RPCSX_getPadRumble(
+extern "C" JNIEXPORT jint JNICALL Java_com_armsx3_core_ARMSX3_getPadRumble(
     JNIEnv *, jobject, jint port) {
-  if (rpcsxLib.getPadRumble == nullptr) {
+  if (coreLib.getPadRumble == nullptr) {
       return 0;
   }
 
-  return rpcsxLib.getPadRumble(port);
+  return coreLib.getPadRumble(port);
 }
 
 // Device temperatures for the perf overlay. Discovery is the app's job -- Android exposes no
 // supported API for SoC temperatures, so it reads the thermal sysfs, whose zone naming and units
 // are vendor-specific -- and this only carries the result across.
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setThermals(
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_setThermals(
     JNIEnv *, jobject, jfloat cpu, jfloat gpu, jfloat battery, jboolean show) {
-  if (rpcsxLib.setThermals == nullptr) {
+  if (coreLib.setThermals == nullptr) {
     return;
   }
 
-  rpcsxLib.setThermals(cpu, gpu, battery, show == JNI_TRUE);
+  coreLib.setThermals(cpu, gpu, battery, show == JNI_TRUE);
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setRenderPosition(
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_setRenderPosition(
     JNIEnv *, jobject, jboolean portraitTop, jint topInset) {
-  if (rpcsxLib.setRenderPosition == nullptr) {
+  if (coreLib.setRenderPosition == nullptr) {
     return;
   }
 
-  rpcsxLib.setRenderPosition(portraitTop == JNI_TRUE, topInset);
+  coreLib.setRenderPosition(portraitTop == JNI_TRUE, topInset);
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setPadDeviceClasses(
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_setPadDeviceClasses(
     JNIEnv *env, jobject, jintArray classes) {
-  if (rpcsxLib.setPadDeviceClasses == nullptr || classes == nullptr) {
+  if (coreLib.setPadDeviceClasses == nullptr || classes == nullptr) {
     return;
   }
 
@@ -938,116 +938,116 @@ extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_setPadDeviceClasses(
 
   std::vector<int> values(static_cast<size_t>(count));
   env->GetIntArrayRegion(classes, 0, count, values.data());
-  rpcsxLib.setPadDeviceClasses(values.data(), static_cast<int>(count));
+  coreLib.setPadDeviceClasses(values.data(), static_cast<int>(count));
 }
 
-extern "C" JNIEXPORT void JNICALL Java_net_rpcsx_RPCSX_surfaceSizeChanged(
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_surfaceSizeChanged(
     JNIEnv *, jobject, jint width, jint height) {
-  if (rpcsxLib.surfaceSizeChanged == nullptr) {
+  if (coreLib.surfaceSizeChanged == nullptr) {
       return;
   }
 
-  rpcsxLib.surfaceSizeChanged(width, height);
+  coreLib.surfaceSizeChanged(width, height);
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_usbDeviceEvent(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_usbDeviceEvent(
     JNIEnv *env, jobject, jint fd, jint vendorId, jint productId, jint event) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.usbDeviceEvent == nullptr) {
+  if (coreLib.usbDeviceEvent == nullptr) {
       return false;
   }
 
-  return rpcsxLib.usbDeviceEvent(fd, vendorId, productId, event);
+  return coreLib.usbDeviceEvent(fd, vendorId, productId, event);
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_installFw(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_installFw(
     JNIEnv *env, jobject, jint fd, jlong progressId) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.installFw == nullptr) {
+  if (coreLib.installFw == nullptr) {
       return false;
   }
 
-  return rpcsxLib.installFw(env, fd, progressId);
+  return coreLib.installFw(env, fd, progressId);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_isInstallableFile(JNIEnv *env, jobject, jint fd) {
+Java_com_armsx3_core_ARMSX3_isInstallableFile(JNIEnv *env, jobject, jint fd) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.isInstallableFile == nullptr) {
+  if (coreLib.isInstallableFile == nullptr) {
       return false;
   }
 
-  return rpcsxLib.isInstallableFile(fd);
+  return coreLib.isInstallableFile(fd);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_getDirInstallPath(JNIEnv *env, jobject, jint fd) {
+Java_com_armsx3_core_ARMSX3_getDirInstallPath(JNIEnv *env, jobject, jint fd) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.getDirInstallPath == nullptr) {
+  if (coreLib.getDirInstallPath == nullptr) {
       return nullptr;
   }
 
-  return rpcsxLib.getDirInstallPath(env, fd);
+  return coreLib.getDirInstallPath(env, fd);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_install(JNIEnv *env, jobject, jint fd, jlong progressId) {
+Java_com_armsx3_core_ARMSX3_install(JNIEnv *env, jobject, jint fd, jlong progressId) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.install == nullptr) {
+  if (coreLib.install == nullptr) {
       return false;
   }
 
-  return rpcsxLib.install(env, fd, progressId);
+  return coreLib.install(env, fd, progressId);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_isRestartPending(JNIEnv *, jobject) {
-  return rpcsxLib.isRestartPending != nullptr && rpcsxLib.isRestartPending();
+Java_com_armsx3_core_ARMSX3_isRestartPending(JNIEnv *, jobject) {
+  return coreLib.isRestartPending != nullptr && coreLib.isRestartPending();
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_probePkgInfo(JNIEnv *env, jobject, jint fd) {
-  if (rpcsxLib.probePkgInfo == nullptr) {
+Java_com_armsx3_core_ARMSX3_probePkgInfo(JNIEnv *env, jobject, jint fd) {
+  if (coreLib.probePkgInfo == nullptr) {
     return nullptr;
   }
 
-  return rpcsxLib.probePkgInfo(env, fd);
+  return coreLib.probePkgInfo(env, fd);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_installSoundBridge(JNIEnv *env, jobject) {
-  if (rpcsxLib.installSoundBridge == nullptr) {
+Java_com_armsx3_core_ARMSX3_installSoundBridge(JNIEnv *env, jobject) {
+  if (coreLib.installSoundBridge == nullptr) {
     return false;
   }
 
-  rpcsxLib.installSoundBridge(env);
+  coreLib.installSoundBridge(env);
   return true;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_installStorageBridge(JNIEnv *env, jobject) {
-  if (rpcsxLib.installStorageBridge == nullptr) {
+Java_com_armsx3_core_ARMSX3_installStorageBridge(JNIEnv *env, jobject) {
+  if (coreLib.installStorageBridge == nullptr) {
     return false;
   }
 
-  rpcsxLib.installStorageBridge(env);
+  coreLib.installStorageBridge(env);
   return true;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_extractPkgTo(JNIEnv *env, jobject, jint fd, jlong progressId,
+Java_com_armsx3_core_ARMSX3_extractPkgTo(JNIEnv *env, jobject, jint fd, jlong progressId,
                                   jstring dest) {
-  if (rpcsxLib.extractPkgTo == nullptr || dest == nullptr) {
+  if (coreLib.extractPkgTo == nullptr || dest == nullptr) {
     return false;
   }
 
@@ -1056,113 +1056,113 @@ Java_net_rpcsx_RPCSX_extractPkgTo(JNIEnv *env, jobject, jint fd, jlong progressI
     return false;
   }
 
-  const bool ok = rpcsxLib.extractPkgTo(env, fd, progressId, destChars);
+  const bool ok = coreLib.extractPkgTo(env, fd, progressId, destChars);
   env->ReleaseStringUTFChars(dest, destChars);
   return ok;
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_installKey(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_installKey(
     JNIEnv *env, jobject, jint fd, jlong progressId, jstring gamePath) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.installKey == nullptr) {
+  if (coreLib.installKey == nullptr) {
       return false;
   }
 
-  return rpcsxLib.installKey(env, fd, progressId, unwrap(env, gamePath));
+  return coreLib.installKey(env, fd, progressId, unwrap(env, gamePath));
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_systemInfo(JNIEnv *env, jobject) {
+Java_com_armsx3_core_ARMSX3_systemInfo(JNIEnv *env, jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.systemInfo == nullptr) {
+  if (coreLib.systemInfo == nullptr) {
       return nullptr;
   }
 
-  return wrap(env, rpcsxLib.systemInfo());
+  return wrap(env, coreLib.systemInfo());
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_logAndroid(JNIEnv *env, jobject, jstring message) {
+Java_com_armsx3_core_ARMSX3_logAndroid(JNIEnv *env, jobject, jstring message) {
   // Silent when the core is not open yet, like every other entry point here. A diagnostic that
   // crashed the app for being early would be worse than one that is missing.
-  if (rpcsxLib.logAndroid == nullptr || message == nullptr) {
+  if (coreLib.logAndroid == nullptr || message == nullptr) {
     return;
   }
 
-  rpcsxLib.logAndroid(unwrap(env, message).c_str());
+  coreLib.logAndroid(unwrap(env, message).c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_loginUser(JNIEnv *env, jobject, jstring user_id) {
+Java_com_armsx3_core_ARMSX3_loginUser(JNIEnv *env, jobject, jstring user_id) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.loginUser == nullptr) {
+  if (coreLib.loginUser == nullptr) {
       return;
   }
 
-  return rpcsxLib.loginUser(unwrap(env, user_id));
+  return coreLib.loginUser(unwrap(env, user_id));
 }
 
-extern "C" JNIEXPORT jstring JNICALL Java_net_rpcsx_RPCSX_getUser(JNIEnv *env,
+extern "C" JNIEXPORT jstring JNICALL Java_com_armsx3_core_ARMSX3_getUser(JNIEnv *env,
                                                                   jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.getUser == nullptr) {
+  if (coreLib.getUser == nullptr) {
       return nullptr;
   }
 
-  return wrap(env, rpcsxLib.getUser());
+  return wrap(env, coreLib.getUser());
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_settingsGet(JNIEnv *env, jobject, jstring jpath) {
+Java_com_armsx3_core_ARMSX3_settingsGet(JNIEnv *env, jobject, jstring jpath) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.settingsGet == nullptr) {
+  if (coreLib.settingsGet == nullptr) {
       return nullptr;
   }
 
-  return wrap(env, rpcsxLib.settingsGet(unwrap(env, jpath)));
+  return wrap(env, coreLib.settingsGet(unwrap(env, jpath)));
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_settingsSet(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_settingsSet(
     JNIEnv *env, jobject, jstring jpath, jstring jvalue) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.settingsSet == nullptr) {
+  if (coreLib.settingsSet == nullptr) {
       return false;
   }
 
-  return rpcsxLib.settingsSet(unwrap(env, jpath), unwrap(env, jvalue));
+  return coreLib.settingsSet(unwrap(env, jpath), unwrap(env, jvalue));
 }
 
 // Defer the config file write until endBatch. Null-safe like the rest: an older core
 // .so simply has no such symbol, and every settingsSet then saves as it always did.
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_settingsBeginBatch(JNIEnv *, jobject) {
-  if (rpcsxLib.settingsBeginBatch != nullptr) {
-    rpcsxLib.settingsBeginBatch();
+Java_com_armsx3_core_ARMSX3_settingsBeginBatch(JNIEnv *, jobject) {
+  if (coreLib.settingsBeginBatch != nullptr) {
+    coreLib.settingsBeginBatch();
   }
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_settingsEndBatch(JNIEnv *, jobject) {
-  if (rpcsxLib.settingsEndBatch != nullptr) {
-    rpcsxLib.settingsEndBatch();
+Java_com_armsx3_core_ARMSX3_settingsEndBatch(JNIEnv *, jobject) {
+  if (coreLib.settingsEndBatch != nullptr) {
+    coreLib.settingsEndBatch();
   }
 }
 
-extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_installSplitPkg(
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_installSplitPkg(
     JNIEnv *env, jobject, jintArray jfds, jlong progressId) {
-  if (rpcsxLib.installSplitPkg == nullptr || jfds == nullptr) {
+  if (coreLib.installSplitPkg == nullptr || jfds == nullptr) {
     return false;
   }
 
@@ -1176,17 +1176,17 @@ extern "C" JNIEXPORT jboolean JNICALL Java_net_rpcsx_RPCSX_installSplitPkg(
   std::vector<int> fds(static_cast<std::size_t>(count));
   env->GetIntArrayRegion(jfds, 0, count, reinterpret_cast<jint *>(fds.data()));
 
-  return rpcsxLib.installSplitPkg(env, fds.data(), static_cast<int>(count),
+  return coreLib.installSplitPkg(env, fds.data(), static_cast<int>(count),
                                   static_cast<long>(progressId));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_uninstallGame(JNIEnv *env, jobject, jstring jpath) {
-  if (rpcsxLib.uninstallGame == nullptr) {
+Java_com_armsx3_core_ARMSX3_uninstallGame(JNIEnv *env, jobject, jstring jpath) {
+  if (coreLib.uninstallGame == nullptr) {
     return false;
   }
 
-  return rpcsxLib.uninstallGame(unwrap(env, jpath));
+  return coreLib.uninstallGame(unwrap(env, jpath));
 }
 
 // Whether a user-supplied Vulkan driver has a GPU kernel interface to drive here. adrenotools
@@ -1194,7 +1194,7 @@ Java_net_rpcsx_RPCSX_uninstallGame(JNIEnv *env, jobject, jstring jpath) {
 // or Arm's kbase (/dev/mali0) for Mali, which the community PanVK builds for Android talk to
 // directly. Only the driver screen's warning reads this.
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_supportsCustomDriverLoading(JNIEnv *env,
+Java_com_armsx3_core_ARMSX3_supportsCustomDriverLoading(JNIEnv *env,
                                                  jobject instance) {
   return access("/dev/kgsl-3d0", F_OK) == 0 || access("/dev/mali0", F_OK) == 0;
 }
@@ -1208,10 +1208,10 @@ Java_net_rpcsx_RPCSX_supportsCustomDriverLoading(JNIEnv *env,
 // Nothing here talks to the emulator core: adrenotools is linked into this JNI library, and
 // adrenotools_set_turbo opens /dev/kgsl-3d0 itself and silently does nothing on non-Adreno
 // hardware or if the open fails. So it is safe to call unconditionally, including before the core
-// is loaded. Ported from the RPCSX Android fork, which ships it default-off; kept default-off here
+// is loaded. Ported from an earlier Android fork, which ships it default-off; kept default-off here
 // for the same reason.
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_setGpuTurbo(JNIEnv *, jobject, jboolean on) {
+Java_com_armsx3_core_ARMSX3_setGpuTurbo(JNIEnv *, jobject, jboolean on) {
 #if defined(__aarch64__)
   adrenotools_set_turbo(on == JNI_TRUE);
 #else
@@ -1220,15 +1220,15 @@ Java_net_rpcsx_RPCSX_setGpuTurbo(JNIEnv *, jobject, jboolean on) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_getVersion(JNIEnv *env, jobject) {
+Java_com_armsx3_core_ARMSX3_getVersion(JNIEnv *env, jobject) {
   // The core is dlopen()ed separately and may not be up yet -- during
   // onboarding, or if it failed to load. Calling through a null pointer
   // is an instant SIGSEGV, so fail the call instead.
-  if (rpcsxLib.getVersion == nullptr) {
+  if (coreLib.getVersion == nullptr) {
       return nullptr;
   }
 
-  return wrap(env, rpcsxLib.getVersion());
+  return wrap(env, coreLib.getVersion());
 }
 
 #if defined(__aarch64__)
@@ -1427,10 +1427,10 @@ static std::string driver_libc_requirement_blocker(const std::string &soPath) {
 #endif // __aarch64__
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
+Java_com_armsx3_core_ARMSX3_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
                                      jstring jlibraryName, jstring jhookDir) {
 #ifdef __aarch64__
-  if (rpcsxLib.setCustomDriver == nullptr) {
+  if (coreLib.setCustomDriver == nullptr) {
     return false;
   }
 
@@ -1440,7 +1440,7 @@ Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
   if (!path.empty()) {
       auto hookDir = unwrap(env, jhookDir);
       auto libraryName = unwrap(env, jlibraryName);
-      __android_log_print(ANDROID_LOG_INFO, "RPCSX-UI", "Loading custom driver %s",
+      __android_log_print(ANDROID_LOG_INFO, "ARMSX3-UI", "Loading custom driver %s",
                           path.c_str());
 
       // Said before the attempt, because adrenotools swallows the failure: it logs to
@@ -1454,12 +1454,12 @@ Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
             "driver's own metadata does not carry this. The system driver will be used "
             "instead.";
 
-        __android_log_print(ANDROID_LOG_ERROR, "RPCSX-UI", "%s", report.c_str());
+        __android_log_print(ANDROID_LOG_ERROR, "ARMSX3-UI", "%s", report.c_str());
 
         // Also to the emulator log, which is the file that gets attached to issues.
         // logcat alone means the reason exists and no report ever contains it.
-        if (rpcsxLib.reportDriverProblem != nullptr) {
-          rpcsxLib.reportDriverProblem(report);
+        if (coreLib.reportDriverProblem != nullptr) {
+          coreLib.reportDriverProblem(report);
         }
       }
 
@@ -1475,17 +1475,17 @@ Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
               "system driver is used instead. The reason is in logcat, under hook_impl" +
               (error != nullptr ? std::string(": ") + error : std::string("."));
 
-          __android_log_print(ANDROID_LOG_ERROR, "RPCSX-UI", "%s", report.c_str());
+          __android_log_print(ANDROID_LOG_ERROR, "ARMSX3-UI", "%s", report.c_str());
 
-          if (rpcsxLib.reportDriverProblem != nullptr) {
-            rpcsxLib.reportDriverProblem(report);
+          if (coreLib.reportDriverProblem != nullptr) {
+            coreLib.reportDriverProblem(report);
           }
 
           // The system driver, bound as itself rather than left behind whatever adrenotools
           // fell back to, so every later log line names the driver that actually runs. Also
           // replaces a custom driver an earlier game left bound. false tells the caller the
           // driver it asked for is not the one in use.
-          rpcsxLib.setCustomDriver(nullptr);
+          coreLib.setCustomDriver(nullptr);
           return false;
       }
   }
@@ -1510,7 +1510,7 @@ Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
   // Leaking one handle per driver SWITCH is the cheap side of this trade: it is bounded by how
   // many times a user changes driver in a session, the mapping is shared, and dlclose on an ICD
   // is not something the loader promises to honour anyway.
-  rpcsxLib.setCustomDriver(loader);
+  coreLib.setCustomDriver(loader);
 
   return true;
 #else
@@ -1527,77 +1527,77 @@ Java_net_rpcsx_RPCSX_setCustomDriver(JNIEnv *env, jobject, jstring jpath,
 // ---------------------------------------------------------------------------
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_saveState(JNIEnv *, jobject) {
-  if (rpcsxLib.saveState == nullptr) {
+Java_com_armsx3_core_ARMSX3_saveState(JNIEnv *, jobject) {
+  if (coreLib.saveState == nullptr) {
     return false;
   }
 
-  return rpcsxLib.saveState();
+  return coreLib.saveState();
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_loadState(JNIEnv *, jobject, jint index) {
-  if (rpcsxLib.loadState == nullptr || index < 0) {
+Java_com_armsx3_core_ARMSX3_loadState(JNIEnv *, jobject, jint index) {
+  if (coreLib.loadState == nullptr || index < 0) {
     return false;
   }
 
-  return rpcsxLib.loadState(static_cast<unsigned int>(index));
+  return coreLib.loadState(static_cast<unsigned int>(index));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_hasState(JNIEnv *, jobject, jint index) {
-  if (rpcsxLib.hasState == nullptr || index < 0) {
+Java_com_armsx3_core_ARMSX3_hasState(JNIEnv *, jobject, jint index) {
+  if (coreLib.hasState == nullptr || index < 0) {
     return false;
   }
 
-  return rpcsxLib.hasState(static_cast<unsigned int>(index));
+  return coreLib.hasState(static_cast<unsigned int>(index));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_saveStateToSlot(JNIEnv *, jobject, jint slot) {
-  if (rpcsxLib.saveStateToSlot == nullptr || slot < 0) {
+Java_com_armsx3_core_ARMSX3_saveStateToSlot(JNIEnv *, jobject, jint slot) {
+  if (coreLib.saveStateToSlot == nullptr || slot < 0) {
     return false;
   }
 
-  return rpcsxLib.saveStateToSlot(static_cast<unsigned int>(slot));
+  return coreLib.saveStateToSlot(static_cast<unsigned int>(slot));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_loadStateFromSlot(JNIEnv *, jobject, jint slot) {
-  if (rpcsxLib.loadStateFromSlot == nullptr || slot < 0) {
+Java_com_armsx3_core_ARMSX3_loadStateFromSlot(JNIEnv *, jobject, jint slot) {
+  if (coreLib.loadStateFromSlot == nullptr || slot < 0) {
     return false;
   }
 
-  return rpcsxLib.loadStateFromSlot(static_cast<unsigned int>(slot));
+  return coreLib.loadStateFromSlot(static_cast<unsigned int>(slot));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_hasStateInSlot(JNIEnv *, jobject, jint slot) {
-  if (rpcsxLib.hasStateInSlot == nullptr || slot < 0) {
+Java_com_armsx3_core_ARMSX3_hasStateInSlot(JNIEnv *, jobject, jint slot) {
+  if (coreLib.hasStateInSlot == nullptr || slot < 0) {
     return false;
   }
 
-  return rpcsxLib.hasStateInSlot(static_cast<unsigned int>(slot));
+  return coreLib.hasStateInSlot(static_cast<unsigned int>(slot));
 }
 
 // Readable unless the core says otherwise: a core too old to answer must not make every
 // slot look like it holds a state from another version.
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_isStateSlotReadable(JNIEnv *, jobject, jint slot) {
-  if (rpcsxLib.isStateSlotReadable == nullptr || slot < 0) {
+Java_com_armsx3_core_ARMSX3_isStateSlotReadable(JNIEnv *, jobject, jint slot) {
+  if (coreLib.isStateSlotReadable == nullptr || slot < 0) {
     return true;
   }
 
-  return rpcsxLib.isStateSlotReadable(static_cast<unsigned int>(slot));
+  return coreLib.isStateSlotReadable(static_cast<unsigned int>(slot));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_deleteStateFromSlot(JNIEnv *, jobject, jint slot) {
-  if (rpcsxLib.deleteStateFromSlot == nullptr || slot < 0) {
+Java_com_armsx3_core_ARMSX3_deleteStateFromSlot(JNIEnv *, jobject, jint slot) {
+  if (coreLib.deleteStateFromSlot == nullptr || slot < 0) {
     return false;
   }
 
-  return rpcsxLib.deleteStateFromSlot(static_cast<unsigned int>(slot));
+  return coreLib.deleteStateFromSlot(static_cast<unsigned int>(slot));
 }
 
 // ---------------------------------------------------------------------------
@@ -1605,94 +1605,94 @@ Java_net_rpcsx_RPCSX_deleteStateFromSlot(JNIEnv *, jobject, jint slot) {
 // ---------------------------------------------------------------------------
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_patchEngineVersion(JNIEnv *env, jobject) {
+Java_com_armsx3_core_ARMSX3_patchEngineVersion(JNIEnv *env, jobject) {
   // Empty rather than a guessed version: the caller asks precisely because it
   // must not name a schema version of its own.
-  if (rpcsxLib.patchEngineVersion == nullptr) {
+  if (coreLib.patchEngineVersion == nullptr) {
     return wrap(env, "");
   }
 
-  return wrap(env, rpcsxLib.patchEngineVersion());
+  return wrap(env, coreLib.patchEngineVersion());
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_net_rpcsx_RPCSX_patchesImport(JNIEnv *env, jobject, jstring jcontent) {
-  if (rpcsxLib.patchesImport == nullptr) {
+Java_com_armsx3_core_ARMSX3_patchesImport(JNIEnv *env, jobject, jstring jcontent) {
+  if (coreLib.patchesImport == nullptr) {
     return -1;
   }
 
-  return rpcsxLib.patchesImport(unwrap(env, jcontent));
+  return coreLib.patchesImport(unwrap(env, jcontent));
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_net_rpcsx_RPCSX_patchesWrite(JNIEnv *env, jobject, jstring jfile,
+Java_com_armsx3_core_ARMSX3_patchesWrite(JNIEnv *env, jobject, jstring jfile,
                                   jstring jcontent) {
-  if (rpcsxLib.patchesWrite == nullptr) {
+  if (coreLib.patchesWrite == nullptr) {
     return -1;
   }
 
-  return rpcsxLib.patchesWrite(unwrap(env, jfile), unwrap(env, jcontent));
+  return coreLib.patchesWrite(unwrap(env, jfile), unwrap(env, jcontent));
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_probeDiscInfo(JNIEnv *env, jobject, jstring jpath,
+Java_com_armsx3_core_ARMSX3_probeDiscInfo(JNIEnv *env, jobject, jstring jpath,
                                    jstring jicon) {
-  if (rpcsxLib.probeDiscInfo == nullptr) {
+  if (coreLib.probeDiscInfo == nullptr) {
     return wrap(env, "{}");
   }
-  return wrap(env, rpcsxLib.probeDiscInfo(unwrap(env, jpath), unwrap(env, jicon)));
+  return wrap(env, coreLib.probeDiscInfo(unwrap(env, jpath), unwrap(env, jicon)));
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_net_rpcsx_RPCSX_changeDisc(JNIEnv *env, jobject, jstring jpath) {
-  if (rpcsxLib.changeDisc == nullptr) {
+Java_com_armsx3_core_ARMSX3_changeDisc(JNIEnv *env, jobject, jstring jpath) {
+  if (coreLib.changeDisc == nullptr) {
     return 1;
   }
-  return rpcsxLib.changeDisc(unwrap(env, jpath));
+  return coreLib.changeDisc(unwrap(env, jpath));
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_net_rpcsx_RPCSX_discSwapState(JNIEnv *, jobject) {
-  if (rpcsxLib.discSwapState == nullptr) {
+Java_com_armsx3_core_ARMSX3_discSwapState(JNIEnv *, jobject) {
+  if (coreLib.discSwapState == nullptr) {
     return 0;
   }
-  return rpcsxLib.discSwapState();
+  return coreLib.discSwapState();
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_gameContentId(JNIEnv *env, jobject, jstring jpath) {
-  if (rpcsxLib.gameContentId == nullptr) {
+Java_com_armsx3_core_ARMSX3_gameContentId(JNIEnv *env, jobject, jstring jpath) {
+  if (coreLib.gameContentId == nullptr) {
     return wrap(env, "");
   }
-  return wrap(env, rpcsxLib.gameContentId(unwrap(env, jpath)));
+  return wrap(env, coreLib.gameContentId(unwrap(env, jpath)));
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_getDiscPlaylist(JNIEnv *env, jobject) {
-  if (rpcsxLib.getDiscPlaylist == nullptr) {
+Java_com_armsx3_core_ARMSX3_getDiscPlaylist(JNIEnv *env, jobject) {
+  if (coreLib.getDiscPlaylist == nullptr) {
     return wrap(env, "{}");
   }
-  return wrap(env, rpcsxLib.getDiscPlaylist());
+  return wrap(env, coreLib.getDiscPlaylist());
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_patchesList(JNIEnv *env, jobject, jstring jserial) {
-  if (rpcsxLib.patchesList == nullptr) {
+Java_com_armsx3_core_ARMSX3_patchesList(JNIEnv *env, jobject, jstring jserial) {
+  if (coreLib.patchesList == nullptr) {
     return wrap(env, "[]");
   }
 
-  return wrap(env, rpcsxLib.patchesList(unwrap(env, jserial)));
+  return wrap(env, coreLib.patchesList(unwrap(env, jserial)));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_patchSetEnabled(JNIEnv *env, jobject, jstring jhash,
+Java_com_armsx3_core_ARMSX3_patchSetEnabled(JNIEnv *env, jobject, jstring jhash,
                                      jstring jdescription, jstring jserial,
                                      jstring jappVersion, jboolean enabled) {
-  if (rpcsxLib.patchSetEnabled == nullptr) {
+  if (coreLib.patchSetEnabled == nullptr) {
     return false;
   }
 
-  return rpcsxLib.patchSetEnabled(unwrap(env, jhash), unwrap(env, jdescription),
+  return coreLib.patchSetEnabled(unwrap(env, jhash), unwrap(env, jdescription),
                                   unwrap(env, jserial),
                                   unwrap(env, jappVersion), enabled);
 }
@@ -1700,53 +1700,53 @@ Java_net_rpcsx_RPCSX_patchSetEnabled(JNIEnv *env, jobject, jstring jhash,
 // ADPF telemetry. All three return 0 when unmeasured or on a core too old to export them,
 // and the Kotlin side treats 0 as "skip this update" rather than feeding the OS a bogus hint.
 extern "C" JNIEXPORT jlong JNICALL
-Java_net_rpcsx_RPCSX_getFramePeriodNs(JNIEnv *, jobject) {
-  if (rpcsxLib.getFramePeriodNs == nullptr) {
+Java_com_armsx3_core_ARMSX3_getFramePeriodNs(JNIEnv *, jobject) {
+  if (coreLib.getFramePeriodNs == nullptr) {
     return 0;
   }
-  return static_cast<jlong>(rpcsxLib.getFramePeriodNs());
+  return static_cast<jlong>(coreLib.getFramePeriodNs());
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_net_rpcsx_RPCSX_getFrameWorkNs(JNIEnv *, jobject) {
-  if (rpcsxLib.getFrameWorkNs == nullptr) {
+Java_com_armsx3_core_ARMSX3_getFrameWorkNs(JNIEnv *, jobject) {
+  if (coreLib.getFrameWorkNs == nullptr) {
     return 0;
   }
-  return static_cast<jlong>(rpcsxLib.getFrameWorkNs());
+  return static_cast<jlong>(coreLib.getFrameWorkNs());
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_net_rpcsx_RPCSX_getRsxThreadTid(JNIEnv *, jobject) {
-  if (rpcsxLib.getRsxThreadTid == nullptr) {
+Java_com_armsx3_core_ARMSX3_getRsxThreadTid(JNIEnv *, jobject) {
+  if (coreLib.getRsxThreadTid == nullptr) {
     return 0;
   }
-  return static_cast<jint>(rpcsxLib.getRsxThreadTid());
+  return static_cast<jint>(coreLib.getRsxThreadTid());
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_net_rpcsx_RPCSX_frameGenImportShaders(JNIEnv *env, jobject, jstring path) {
-  if (!rpcsxLib.frameGenImportShaders) {
+Java_com_armsx3_core_ARMSX3_frameGenImportShaders(JNIEnv *env, jobject, jstring path) {
+  if (!coreLib.frameGenImportShaders) {
     return -1;
   }
 
-  return rpcsxLib.frameGenImportShaders(unwrap(env, path));
+  return coreLib.frameGenImportShaders(unwrap(env, path));
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_net_rpcsx_RPCSX_frameGenShaderCount(JNIEnv *, jobject) {
-  return rpcsxLib.frameGenShaderCount ? rpcsxLib.frameGenShaderCount() : 0;
+Java_com_armsx3_core_ARMSX3_frameGenShaderCount(JNIEnv *, jobject) {
+  return coreLib.frameGenShaderCount ? coreLib.frameGenShaderCount() : 0;
 }
 
 // 0 while nothing compiles during play, else 1 + the PPU modules compiled so far in this stretch.
 // A core without the symbol reports nothing, like the frame generation calls above.
 extern "C" JNIEXPORT jint JNICALL
-Java_net_rpcsx_RPCSX_getPlayCompileState(JNIEnv *, jobject) {
-  return rpcsxLib.getPlayCompileState ? rpcsxLib.getPlayCompileState() : 0;
+Java_com_armsx3_core_ARMSX3_getPlayCompileState(JNIEnv *, jobject) {
+  return coreLib.getPlayCompileState ? coreLib.getPlayCompileState() : 0;
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_frameGenShaderError(JNIEnv *env, jobject) {
-  const char *msg = rpcsxLib.frameGenShaderError ? rpcsxLib.frameGenShaderError() : "";
+Java_com_armsx3_core_ARMSX3_frameGenShaderError(JNIEnv *env, jobject) {
+  const char *msg = coreLib.frameGenShaderError ? coreLib.frameGenShaderError() : "";
   return env->NewStringUTF(msg ? msg : "");
 }
 
@@ -1762,77 +1762,77 @@ static jstring rpcn_unavailable(JNIEnv *env) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnGetConfig(JNIEnv *env, jobject) {
-  if (!rpcsxLib.rpcnGetConfig) return env->NewStringUTF("");
-  const char *json = rpcsxLib.rpcnGetConfig();
+Java_com_armsx3_core_ARMSX3_rpcnGetConfig(JNIEnv *env, jobject) {
+  if (!coreLib.rpcnGetConfig) return env->NewStringUTF("");
+  const char *json = coreLib.rpcnGetConfig();
   return env->NewStringUTF(json ? json : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnStatus(JNIEnv *env, jobject) {
-  if (!rpcsxLib.rpcnStatus) return env->NewStringUTF("");
-  const char *json = rpcsxLib.rpcnStatus();
+Java_com_armsx3_core_ARMSX3_rpcnStatus(JNIEnv *env, jobject) {
+  if (!coreLib.rpcnStatus) return env->NewStringUTF("");
+  const char *json = coreLib.rpcnStatus();
   return env->NewStringUTF(json ? json : "");
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_rpcnSignedIn(JNIEnv *, jobject) {
-  if (!rpcsxLib.rpcnSignedIn) return JNI_FALSE;
-  return rpcsxLib.rpcnSignedIn() ? JNI_TRUE : JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_rpcnSignedIn(JNIEnv *, jobject) {
+  if (!coreLib.rpcnSignedIn) return JNI_FALSE;
+  return coreLib.rpcnSignedIn() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_setMicDevices(JNIEnv *env, jobject, jstring list) {
-  if (!rpcsxLib.setMicDevices) return;
+Java_com_armsx3_core_ARMSX3_setMicDevices(JNIEnv *env, jobject, jstring list) {
+  if (!coreLib.setMicDevices) return;
 
   const char *c = list ? env->GetStringUTFChars(list, nullptr) : nullptr;
   const std::string value = c ? c : "";
   if (c) env->ReleaseStringUTFChars(list, c);
 
-  rpcsxLib.setMicDevices(value);
+  coreLib.setMicDevices(value);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_micTestStart(JNIEnv *env, jobject, jstring device) {
-  if (!rpcsxLib.micTestStart) return JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_micTestStart(JNIEnv *env, jobject, jstring device) {
+  if (!coreLib.micTestStart) return JNI_FALSE;
 
   const char *c = device ? env->GetStringUTFChars(device, nullptr) : nullptr;
   const std::string value = c ? c : "";
   if (c) env->ReleaseStringUTFChars(device, c);
 
-  return rpcsxLib.micTestStart(value) ? JNI_TRUE : JNI_FALSE;
+  return coreLib.micTestStart(value) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jfloat JNICALL
-Java_net_rpcsx_RPCSX_micTestLevel(JNIEnv *, jobject) {
-  return rpcsxLib.micTestLevel ? rpcsxLib.micTestLevel() : -1.0f;
+Java_com_armsx3_core_ARMSX3_micTestLevel(JNIEnv *, jobject) {
+  return coreLib.micTestLevel ? coreLib.micTestLevel() : -1.0f;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_micTestStop(JNIEnv *, jobject) {
-  if (rpcsxLib.micTestStop) rpcsxLib.micTestStop();
+Java_com_armsx3_core_ARMSX3_micTestStop(JNIEnv *, jobject) {
+  if (coreLib.micTestStop) coreLib.micTestStop();
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_net_rpcsx_RPCSX_skylanderLoad(JNIEnv *env, jobject, jstring path) {
-  if (!rpcsxLib.skylanderLoad) return -1;
+Java_com_armsx3_core_ARMSX3_skylanderLoad(JNIEnv *env, jobject, jstring path) {
+  if (!coreLib.skylanderLoad) return -1;
 
   const char *c = path ? env->GetStringUTFChars(path, nullptr) : nullptr;
   const std::string value = c ? c : "";
   if (c) env->ReleaseStringUTFChars(path, c);
 
-  return rpcsxLib.skylanderLoad(value);
+  return coreLib.skylanderLoad(value);
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_skylanderRemove(JNIEnv *, jobject, jint slot) {
-  if (!rpcsxLib.skylanderRemove) return JNI_FALSE;
-  return rpcsxLib.skylanderRemove(slot) ? JNI_TRUE : JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_skylanderRemove(JNIEnv *, jobject, jint slot) {
+  if (!coreLib.skylanderRemove) return JNI_FALSE;
+  return coreLib.skylanderRemove(slot) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_net_rpcsx_RPCSX_skylanderLight(JNIEnv *, jobject) {
-  return rpcsxLib.skylanderLight ? rpcsxLib.skylanderLight() : 0;
+Java_com_armsx3_core_ARMSX3_skylanderLight(JNIEnv *, jobject) {
+  return coreLib.skylanderLight ? coreLib.skylanderLight() : 0;
 }
 
 static std::string jstring_to_string(JNIEnv *env, jstring value) {
@@ -1843,110 +1843,110 @@ static std::string jstring_to_string(JNIEnv *env, jstring value) {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_infinityLoad(JNIEnv *env, jobject, jstring path, jint position) {
-  if (!rpcsxLib.infinityLoad) return JNI_FALSE;
-  return rpcsxLib.infinityLoad(jstring_to_string(env, path), position) ? JNI_TRUE : JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_infinityLoad(JNIEnv *env, jobject, jstring path, jint position) {
+  if (!coreLib.infinityLoad) return JNI_FALSE;
+  return coreLib.infinityLoad(jstring_to_string(env, path), position) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_infinityRemove(JNIEnv *, jobject, jint position) {
-  if (!rpcsxLib.infinityRemove) return JNI_FALSE;
-  return rpcsxLib.infinityRemove(position) ? JNI_TRUE : JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_infinityRemove(JNIEnv *, jobject, jint position) {
+  if (!coreLib.infinityRemove) return JNI_FALSE;
+  return coreLib.infinityRemove(position) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_dimensionsLoad(JNIEnv *env, jobject, jstring path, jint index) {
-  if (!rpcsxLib.dimensionsLoad) return JNI_FALSE;
-  return rpcsxLib.dimensionsLoad(jstring_to_string(env, path), index) ? JNI_TRUE : JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_dimensionsLoad(JNIEnv *env, jobject, jstring path, jint index) {
+  if (!coreLib.dimensionsLoad) return JNI_FALSE;
+  return coreLib.dimensionsLoad(jstring_to_string(env, path), index) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_dimensionsRemove(JNIEnv *, jobject, jint index) {
-  if (!rpcsxLib.dimensionsRemove) return JNI_FALSE;
-  return rpcsxLib.dimensionsRemove(index) ? JNI_TRUE : JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_dimensionsRemove(JNIEnv *, jobject, jint index) {
+  if (!coreLib.dimensionsRemove) return JNI_FALSE;
+  return coreLib.dimensionsRemove(index) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_skylanderCreate(JNIEnv *env, jobject, jstring path, jint id, jint variant) {
-  if (!rpcsxLib.skylanderCreate) return JNI_FALSE;
-  return rpcsxLib.skylanderCreate(jstring_to_string(env, path), id, variant) ? JNI_TRUE : JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_skylanderCreate(JNIEnv *env, jobject, jstring path, jint id, jint variant) {
+  if (!coreLib.skylanderCreate) return JNI_FALSE;
+  return coreLib.skylanderCreate(jstring_to_string(env, path), id, variant) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_infinityCreate(JNIEnv *env, jobject, jstring path, jint figure, jint series) {
-  if (!rpcsxLib.infinityCreate) return JNI_FALSE;
-  return rpcsxLib.infinityCreate(jstring_to_string(env, path), figure, series) ? JNI_TRUE : JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_infinityCreate(JNIEnv *env, jobject, jstring path, jint figure, jint series) {
+  if (!coreLib.infinityCreate) return JNI_FALSE;
+  return coreLib.infinityCreate(jstring_to_string(env, path), figure, series) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_dimensionsCreate(JNIEnv *env, jobject, jstring path, jint id) {
-  if (!rpcsxLib.dimensionsCreate) return JNI_FALSE;
-  return rpcsxLib.dimensionsCreate(jstring_to_string(env, path), id) ? JNI_TRUE : JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_dimensionsCreate(JNIEnv *env, jobject, jstring path, jint id) {
+  if (!coreLib.dimensionsCreate) return JNI_FALSE;
+  return coreLib.dimensionsCreate(jstring_to_string(env, path), id) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_avatarList(JNIEnv *env, jobject) {
-  if (!rpcsxLib.avatarList) return env->NewStringUTF("");
-  const char *json = rpcsxLib.avatarList();
+Java_com_armsx3_core_ARMSX3_avatarList(JNIEnv *env, jobject) {
+  if (!coreLib.avatarList) return env->NewStringUTF("");
+  const char *json = coreLib.avatarList();
   return env->NewStringUTF(json ? json : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_avatarCurrent(JNIEnv *env, jobject) {
-  if (!rpcsxLib.avatarCurrent) return env->NewStringUTF("");
-  const char *path = rpcsxLib.avatarCurrent();
+Java_com_armsx3_core_ARMSX3_avatarCurrent(JNIEnv *env, jobject) {
+  if (!coreLib.avatarCurrent) return env->NewStringUTF("");
+  const char *path = coreLib.avatarCurrent();
   return env->NewStringUTF(path ? path : "");
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_net_rpcsx_RPCSX_avatarImage(JNIEnv *env, jobject, jstring path) {
+Java_com_armsx3_core_ARMSX3_avatarImage(JNIEnv *env, jobject, jstring path) {
   const uint8_t *data = nullptr;
   size_t size = 0;
-  if (!rpcsxLib.avatarImage || !rpcsxLib.avatarImage(jstring_to_string(env, path), &data, &size)) return nullptr;
+  if (!coreLib.avatarImage || !coreLib.avatarImage(jstring_to_string(env, path), &data, &size)) return nullptr;
   jbyteArray out = env->NewByteArray(static_cast<jsize>(size));
   if (out) env->SetByteArrayRegion(out, 0, static_cast<jsize>(size), reinterpret_cast<const jbyte *>(data));
   return out;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_avatarSelect(JNIEnv *env, jobject, jstring path) {
-  if (!rpcsxLib.avatarSelect) return JNI_FALSE;
-  return rpcsxLib.avatarSelect(jstring_to_string(env, path)) ? JNI_TRUE : JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_avatarSelect(JNIEnv *env, jobject, jstring path) {
+  if (!coreLib.avatarSelect) return JNI_FALSE;
+  return coreLib.avatarSelect(jstring_to_string(env, path)) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_net_rpcsx_RPCSX_avatarUseImage(JNIEnv *env, jobject, jbyteArray png) {
-  if (!rpcsxLib.avatarUseImage || !png) return JNI_FALSE;
+Java_com_armsx3_core_ARMSX3_avatarUseImage(JNIEnv *env, jobject, jbyteArray png) {
+  if (!coreLib.avatarUseImage || !png) return JNI_FALSE;
   std::vector<uint8_t> bytes(static_cast<size_t>(env->GetArrayLength(png)));
   env->GetByteArrayRegion(png, 0, static_cast<jsize>(bytes.size()), reinterpret_cast<jbyte *>(bytes.data()));
-  return rpcsxLib.avatarUseImage(bytes.data(), bytes.size()) ? JNI_TRUE : JNI_FALSE;
+  return coreLib.avatarUseImage(bytes.data(), bytes.size()) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_usbSetPassthrough(JNIEnv *env, jobject, jstring fds) {
-  if (!rpcsxLib.usbSetPassthrough) return;
+Java_com_armsx3_core_ARMSX3_usbSetPassthrough(JNIEnv *env, jobject, jstring fds) {
+  if (!coreLib.usbSetPassthrough) return;
 
   const char *c = fds ? env->GetStringUTFChars(fds, nullptr) : nullptr;
   const std::string value = c ? c : "";
   if (c) env->ReleaseStringUTFChars(fds, c);
 
-  rpcsxLib.usbSetPassthrough(value);
+  coreLib.usbSetPassthrough(value);
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_net_rpcsx_RPCSX_usbPassedThrough(JNIEnv *, jobject) {
-  return rpcsxLib.usbPassedThrough ? rpcsxLib.usbPassedThrough() : 0;
+Java_com_armsx3_core_ARMSX3_usbPassedThrough(JNIEnv *, jobject) {
+  return coreLib.usbPassedThrough ? coreLib.usbPassedThrough() : 0;
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_takeGameError(JNIEnv *env, jobject) {
-  const char *reason = rpcsxLib.takeGameError ? rpcsxLib.takeGameError() : nullptr;
+Java_com_armsx3_core_ARMSX3_takeGameError(JNIEnv *env, jobject) {
+  const char *reason = coreLib.takeGameError ? coreLib.takeGameError() : nullptr;
   return env->NewStringUTF(reason ? reason : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnAddHost(JNIEnv *env, jobject, jstring desc, jstring host) {
-  if (!rpcsxLib.rpcnAddHost) return rpcn_unavailable(env);
+Java_com_armsx3_core_ARMSX3_rpcnAddHost(JNIEnv *env, jobject, jstring desc, jstring host) {
+  if (!coreLib.rpcnAddHost) return rpcn_unavailable(env);
 
   auto str = [&](jstring s) -> std::string {
     if (!s) return {};
@@ -1957,13 +1957,13 @@ Java_net_rpcsx_RPCSX_rpcnAddHost(JNIEnv *env, jobject, jstring desc, jstring hos
   };
 
   const std::string d = str(desc), h = str(host);
-  const char *msg = rpcsxLib.rpcnAddHost(d, h);
+  const char *msg = coreLib.rpcnAddHost(d, h);
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnDelHost(JNIEnv *env, jobject, jstring desc, jstring host) {
-  if (!rpcsxLib.rpcnDelHost) return rpcn_unavailable(env);
+Java_com_armsx3_core_ARMSX3_rpcnDelHost(JNIEnv *env, jobject, jstring desc, jstring host) {
+  if (!coreLib.rpcnDelHost) return rpcn_unavailable(env);
 
   auto str = [&](jstring s) -> std::string {
     if (!s) return {};
@@ -1974,24 +1974,24 @@ Java_net_rpcsx_RPCSX_rpcnDelHost(JNIEnv *env, jobject, jstring desc, jstring hos
   };
 
   const std::string d = str(desc), h = str(host);
-  const char *msg = rpcsxLib.rpcnDelHost(d, h);
+  const char *msg = coreLib.rpcnDelHost(d, h);
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_rpcnResetHosts(JNIEnv *, jobject) {
-  if (rpcsxLib.rpcnResetHosts) rpcsxLib.rpcnResetHosts();
+Java_com_armsx3_core_ARMSX3_rpcnResetHosts(JNIEnv *, jobject) {
+  if (coreLib.rpcnResetHosts) coreLib.rpcnResetHosts();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_rpcnSetIpv6(JNIEnv *, jobject, jboolean enabled) {
-  if (rpcsxLib.rpcnSetIpv6) rpcsxLib.rpcnSetIpv6(enabled == JNI_TRUE);
+Java_com_armsx3_core_ARMSX3_rpcnSetIpv6(JNIEnv *, jobject, jboolean enabled) {
+  if (coreLib.rpcnSetIpv6) coreLib.rpcnSetIpv6(enabled == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_net_rpcsx_RPCSX_rpcnSetConfig(JNIEnv *env, jobject, jstring host, jstring npid,
+Java_com_armsx3_core_ARMSX3_rpcnSetConfig(JNIEnv *env, jobject, jstring host, jstring npid,
                                    jstring password, jstring token) {
-  if (!rpcsxLib.rpcnSetConfig) return;
+  if (!coreLib.rpcnSetConfig) return;
 
   auto str = [&](jstring s) -> std::string {
     if (!s) return {};
@@ -2002,78 +2002,78 @@ Java_net_rpcsx_RPCSX_rpcnSetConfig(JNIEnv *env, jobject, jstring host, jstring n
   };
 
   const std::string h = str(host), n = str(npid), p = str(password), t = str(token);
-  rpcsxLib.rpcnSetConfig(h, n, p, t);
+  coreLib.rpcnSetConfig(h, n, p, t);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnAddFriend(JNIEnv *env, jobject, jstring npid) {
-  if (!rpcsxLib.rpcnAddFriend) return rpcn_unavailable(env);
+Java_com_armsx3_core_ARMSX3_rpcnAddFriend(JNIEnv *env, jobject, jstring npid) {
+  if (!coreLib.rpcnAddFriend) return rpcn_unavailable(env);
 
   const char *c = npid ? env->GetStringUTFChars(npid, nullptr) : nullptr;
   const std::string name = c ? c : "";
   if (c) env->ReleaseStringUTFChars(npid, c);
 
-  const char *msg = rpcsxLib.rpcnAddFriend(name);
+  const char *msg = coreLib.rpcnAddFriend(name);
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnRemoveFriend(JNIEnv *env, jobject, jstring npid) {
-  if (!rpcsxLib.rpcnRemoveFriend) return rpcn_unavailable(env);
+Java_com_armsx3_core_ARMSX3_rpcnRemoveFriend(JNIEnv *env, jobject, jstring npid) {
+  if (!coreLib.rpcnRemoveFriend) return rpcn_unavailable(env);
 
   const char *c = npid ? env->GetStringUTFChars(npid, nullptr) : nullptr;
   const std::string name = c ? c : "";
   if (c) env->ReleaseStringUTFChars(npid, c);
 
-  const char *msg = rpcsxLib.rpcnRemoveFriend(name);
+  const char *msg = coreLib.rpcnRemoveFriend(name);
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnGetFriends(JNIEnv *env, jobject) {
-  if (!rpcsxLib.rpcnGetFriends) return env->NewStringUTF("{}");
+Java_com_armsx3_core_ARMSX3_rpcnGetFriends(JNIEnv *env, jobject) {
+  if (!coreLib.rpcnGetFriends) return env->NewStringUTF("{}");
 
-  const char *msg = rpcsxLib.rpcnGetFriends();
+  const char *msg = coreLib.rpcnGetFriends();
   return env->NewStringUTF(msg ? msg : "{}");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnGetInvites(JNIEnv *env, jobject) {
-  if (!rpcsxLib.rpcnGetInvites) return env->NewStringUTF("[]");
+Java_com_armsx3_core_ARMSX3_rpcnGetInvites(JNIEnv *env, jobject) {
+  if (!coreLib.rpcnGetInvites) return env->NewStringUTF("[]");
 
-  const char *msg = rpcsxLib.rpcnGetInvites();
+  const char *msg = coreLib.rpcnGetInvites();
   return env->NewStringUTF(msg ? msg : "[]");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnAcceptInvite(JNIEnv *env, jobject, jlong id) {
-  if (!rpcsxLib.rpcnAcceptInvite) return rpcn_unavailable(env);
+Java_com_armsx3_core_ARMSX3_rpcnAcceptInvite(JNIEnv *env, jobject, jlong id) {
+  if (!coreLib.rpcnAcceptInvite) return rpcn_unavailable(env);
 
-  const char *msg = rpcsxLib.rpcnAcceptInvite(static_cast<uint64_t>(id));
+  const char *msg = coreLib.rpcnAcceptInvite(static_cast<uint64_t>(id));
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnDeclineInvite(JNIEnv *env, jobject, jlong id) {
-  if (!rpcsxLib.rpcnDeclineInvite) return rpcn_unavailable(env);
+Java_com_armsx3_core_ARMSX3_rpcnDeclineInvite(JNIEnv *env, jobject, jlong id) {
+  if (!coreLib.rpcnDeclineInvite) return rpcn_unavailable(env);
 
-  const char *msg = rpcsxLib.rpcnDeclineInvite(static_cast<uint64_t>(id));
+  const char *msg = coreLib.rpcnDeclineInvite(static_cast<uint64_t>(id));
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnFriendsSession(JNIEnv *env, jobject, jboolean open) {
-  if (!rpcsxLib.rpcnFriendsSession) return rpcn_unavailable(env);
+Java_com_armsx3_core_ARMSX3_rpcnFriendsSession(JNIEnv *env, jobject, jboolean open) {
+  if (!coreLib.rpcnFriendsSession) return rpcn_unavailable(env);
 
-  const char *msg = rpcsxLib.rpcnFriendsSession(open == JNI_TRUE);
+  const char *msg = coreLib.rpcnFriendsSession(open == JNI_TRUE);
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnCreateAccount(JNIEnv *env, jobject, jstring npid,
+Java_com_armsx3_core_ARMSX3_rpcnCreateAccount(JNIEnv *env, jobject, jstring npid,
                                        jstring password, jstring onlineName,
                                        jstring email) {
-  if (!rpcsxLib.rpcnCreateAccount) return rpcn_unavailable(env);
+  if (!coreLib.rpcnCreateAccount) return rpcn_unavailable(env);
 
   auto str = [&](jstring s) -> std::string {
     if (!s) return {};
@@ -2084,14 +2084,14 @@ Java_net_rpcsx_RPCSX_rpcnCreateAccount(JNIEnv *env, jobject, jstring npid,
   };
 
   const std::string n = str(npid), p = str(password), o = str(onlineName), e = str(email);
-  const char *msg = rpcsxLib.rpcnCreateAccount(n, p, o, e);
+  const char *msg = coreLib.rpcnCreateAccount(n, p, o, e);
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnResendToken(JNIEnv *env, jobject, jstring npid,
+Java_com_armsx3_core_ARMSX3_rpcnResendToken(JNIEnv *env, jobject, jstring npid,
                                      jstring password) {
-  if (!rpcsxLib.rpcnResendToken) return rpcn_unavailable(env);
+  if (!coreLib.rpcnResendToken) return rpcn_unavailable(env);
 
   auto str = [&](jstring s) -> std::string {
     if (!s) return {};
@@ -2102,14 +2102,14 @@ Java_net_rpcsx_RPCSX_rpcnResendToken(JNIEnv *env, jobject, jstring npid,
   };
 
   const std::string n = str(npid), p = str(password);
-  const char *msg = rpcsxLib.rpcnResendToken(n, p);
+  const char *msg = coreLib.rpcnResendToken(n, p);
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnSendResetToken(JNIEnv *env, jobject, jstring npid,
+Java_com_armsx3_core_ARMSX3_rpcnSendResetToken(JNIEnv *env, jobject, jstring npid,
                                         jstring email) {
-  if (!rpcsxLib.rpcnSendResetToken) return rpcn_unavailable(env);
+  if (!coreLib.rpcnSendResetToken) return rpcn_unavailable(env);
 
   auto str = [&](jstring s) -> std::string {
     if (!s) return {};
@@ -2120,14 +2120,14 @@ Java_net_rpcsx_RPCSX_rpcnSendResetToken(JNIEnv *env, jobject, jstring npid,
   };
 
   const std::string n = str(npid), e = str(email);
-  const char *msg = rpcsxLib.rpcnSendResetToken(n, e);
+  const char *msg = coreLib.rpcnSendResetToken(n, e);
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnResetPassword(JNIEnv *env, jobject, jstring npid, jstring token,
+Java_com_armsx3_core_ARMSX3_rpcnResetPassword(JNIEnv *env, jobject, jstring npid, jstring token,
                                        jstring password) {
-  if (!rpcsxLib.rpcnResetPassword) return rpcn_unavailable(env);
+  if (!coreLib.rpcnResetPassword) return rpcn_unavailable(env);
 
   auto str = [&](jstring s) -> std::string {
     if (!s) return {};
@@ -2138,14 +2138,14 @@ Java_net_rpcsx_RPCSX_rpcnResetPassword(JNIEnv *env, jobject, jstring npid, jstri
   };
 
   const std::string n = str(npid), t = str(token), p = str(password);
-  const char *msg = rpcsxLib.rpcnResetPassword(n, t, p);
+  const char *msg = coreLib.rpcnResetPassword(n, t, p);
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnSignIn(JNIEnv *env, jobject, jstring host, jstring npid, jstring password,
+Java_com_armsx3_core_ARMSX3_rpcnSignIn(JNIEnv *env, jobject, jstring host, jstring npid, jstring password,
                                 jstring token) {
-  if (!rpcsxLib.rpcnSignIn) return rpcn_unavailable(env);
+  if (!coreLib.rpcnSignIn) return rpcn_unavailable(env);
 
   auto str = [&](jstring s) -> std::string {
     if (!s) return {};
@@ -2156,20 +2156,20 @@ Java_net_rpcsx_RPCSX_rpcnSignIn(JNIEnv *env, jobject, jstring host, jstring npid
   };
 
   const std::string h = str(host), n = str(npid), p = str(password), t = str(token);
-  const char *msg = rpcsxLib.rpcnSignIn(h, n, p, t);
+  const char *msg = coreLib.rpcnSignIn(h, n, p, t);
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnTestLogin(JNIEnv *env, jobject) {
-  if (!rpcsxLib.rpcnTestLogin) return rpcn_unavailable(env);
-  const char *msg = rpcsxLib.rpcnTestLogin();
+Java_com_armsx3_core_ARMSX3_rpcnTestLogin(JNIEnv *env, jobject) {
+  if (!coreLib.rpcnTestLogin) return rpcn_unavailable(env);
+  const char *msg = coreLib.rpcnTestLogin();
   return env->NewStringUTF(msg ? msg : "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_net_rpcsx_RPCSX_rpcnDeleteTrophies(JNIEnv *env, jobject) {
-  if (!rpcsxLib.rpcnDeleteTrophies) return rpcn_unavailable(env);
-  const char *msg = rpcsxLib.rpcnDeleteTrophies();
+Java_com_armsx3_core_ARMSX3_rpcnDeleteTrophies(JNIEnv *env, jobject) {
+  if (!coreLib.rpcnDeleteTrophies) return rpcn_unavailable(env);
+  const char *msg = coreLib.rpcnDeleteTrophies();
   return env->NewStringUTF(msg ? msg : "");
 }

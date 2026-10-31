@@ -195,7 +195,7 @@ class Sixaxis(context: Context) {
             val pad = gamepadNodeFor(dev)
             // Said once per controller, so a log shows whether its sensors found a player to feed.
             runCatching {
-                net.rpcsx.RPCSX.instance.logAndroid(
+                com.armsx3.core.ARMSX3.instance.logAndroid(
                     if (pad != null) "sixaxis: ${dev.name} motion sensors (input device ${dev.id}) pair with gamepad ${pad.id}"
                     else "sixaxis: ${dev.name} motion sensors (input device ${dev.id}) pair with no gamepad"
                 )
@@ -219,7 +219,7 @@ class Sixaxis(context: Context) {
         if (MotionButtons.overriding(port)) return
         if (source[port] != from) {
             source[port] = from
-            runCatching { net.rpcsx.RPCSX.instance.logAndroid("sixaxis: player ${port + 1} motion from $from") }
+            runCatching { com.armsx3.core.ARMSX3.instance.logAndroid("sixaxis: player ${port + 1} motion from $from") }
         }
         com.armsx3.Rpcs3Bridge.setPadMotion(port, -x, -y, -z, -yawLeft)
     }

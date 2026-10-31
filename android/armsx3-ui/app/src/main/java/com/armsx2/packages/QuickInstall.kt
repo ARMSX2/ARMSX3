@@ -7,8 +7,8 @@ import android.provider.DocumentsContract
 import com.armsx2.data.library.GameLibraryRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import net.rpcsx.ProgressRepository
-import net.rpcsx.RPCSX
+import com.armsx3.core.ProgressRepository
+import com.armsx3.core.ARMSX3
 import java.io.File
 
 /**
@@ -42,7 +42,7 @@ object QuickInstall {
             val ok = runCatching {
                 val descriptor = open(context, uri) ?: return@runCatching false
                 try {
-                    RPCSX.instance.install(descriptor.fd, id)
+                    ARMSX3.instance.install(descriptor.fd, id)
                 } finally {
                     runCatching { descriptor.close() }
                 }

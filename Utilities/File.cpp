@@ -788,7 +788,7 @@ namespace fs
 				// EINTR is benign -- a signal landed mid-syscall -- and must be retried, not treated
 				// as failure. Android app storage is FUSE-backed, where this genuinely happens, and
 				// the ensure() below turns it into a process abort. Ported in spirit from
-				// ouroboros420/rpcsx (92144f094).
+				// an earlier Android fork (92144f094).
 				if (r < 0 && errno == EINTR)
 				{
 					continue;

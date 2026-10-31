@@ -14,7 +14,7 @@
 
 namespace
 {
-	// ARMSX3: RPCSX added a vector-backed fs::virtual_dir to their Utilities/File.h.
+	// ARMSX3: an earlier Android fork added a vector-backed fs::virtual_dir to its Utilities/File.h.
 	// Upstream only ships the abstract fs::dir_base (upstream's own iso_dir
 	// implements read()/rewind() itself). Rather than diverge in a core header
 	// for one helper, keep it local -- this file is the only user.

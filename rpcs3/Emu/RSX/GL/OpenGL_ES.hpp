@@ -521,7 +521,7 @@ using namespace ::gl::es;
 //
 // RPCS3's GL backend gets its context from GSFrameBase (make_context /
 // set_current / flip). On desktop that is gl_gs_frame in rpcs3qt; on Android
-// there is nothing, so the EGL side lives here and android/src/rpcsx-android.cpp
+// there is nothing, so the EGL side lives here and android/src/armsx3-core.cpp
 // forwards to it.
 //
 // ANGLE selection: if ARMSX3_ANGLE_EGL_LIBRARY names a readable file we dlopen

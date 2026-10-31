@@ -740,7 +740,7 @@ std::string jit_compiler::cpu(std::string_view _cpu)
 		// smallest one is the wrong default -- fall back to the same wide out-of-order baseline
 		// used when detection fails outright. Only the schedule/cost model is affected: the
 		// instruction set still comes from setMAttrs (HWCAP-gated), so this can never emit an
-		// illegal instruction. Ported from ouroboros420/rpcsx (cc3a18e29), widened to the
+		// illegal instruction. Ported from an earlier Android fork (cc3a18e29), widened to the
 		// A5xx little cores that modern SoCs actually ship.
 		if (m_cpu == "cortex-a34" || m_cpu == "cortex-a35" || m_cpu == "cortex-a53" ||
 			m_cpu == "cortex-a55" || m_cpu == "cortex-a510" || m_cpu == "cortex-a520")
@@ -894,7 +894,7 @@ jit_compiler::jit_compiler(const std::unordered_map<std::string, u64>& _link, st
 		// recoverable path as the fatal handler, so a guarded compile survives and anything
 		// else at least says why it died. Allocating inside a bad-alloc handler is
 		// best-effort, but the failures here are huge single allocations, so a short log
-		// string still succeeds. Ported from ouroboros420/rpcsx (39a6a4c36).
+		// string still succeeds. Ported from an earlier Android fork (39a6a4c36).
 		llvm::remove_bad_alloc_error_handler();
 		llvm::install_bad_alloc_error_handler([](void*, const char* msg, bool)
 		{

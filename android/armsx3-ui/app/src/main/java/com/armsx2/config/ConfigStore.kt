@@ -556,7 +556,7 @@ object ConfigStore {
         // ...and put it back. The migration above moved Android off As Host because Android's
         // default 50us timer slack makes lv2.cpp's plain wait_for() branch imprecise -- but the
         // commit that shipped alongside it sets PR_SET_TIMERSLACK to 1ns at startup
-        // (rpcsx-android.cpp), which is the exact precondition that branch documents: "With
+        // (armsx3-core.cpp), which is the exact precondition that branch documents: "With
         // timerslack set low, Linux is precise for all values above". The workaround and the fix
         // for the same problem landed together, so the workaround was redundant on arrival.
         //

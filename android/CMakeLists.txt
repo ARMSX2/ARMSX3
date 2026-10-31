@@ -1,7 +1,7 @@
 # ARMSX3: the Android shared library, built on UPSTREAM RPCS3.
 #
 # NOTE ON LAYOUT (this is the important part):
-# RPCSX makes android/ the top-level CMake project and does
+# Other Android ports make android/ the top-level CMake project and do
 # `add_subdirectory(..)` to pull the emulator in. That does not work against
 # upstream, because upstream assumes CMAKE_SOURCE_DIR == repo root in at least
 # four places -- buildfiles/cmake/FindWolfSSL.cmake, buildfiles/cmake/FindZLIB.cmake,
@@ -53,8 +53,8 @@ set(ARMSX3_INPUT_SOURCES
     ${CMAKE_SOURCE_DIR}/rpcs3/Input/virtual_keyboard_handler.cpp
 )
 
-add_library(rpcsx-android SHARED
-    src/rpcsx-android.cpp
+add_library(armsx3-core SHARED
+    src/armsx3-core.cpp
     # Reaches a user-picked folder through SAF on builds with no filesystem
     # permission, as an fs::device_base. See src/saf_device.h.
     src/saf_device.cpp
@@ -62,7 +62,7 @@ add_library(rpcsx-android SHARED
     src/remote_play.cpp
     # Remote play online hosting: a port opened on the router (UPnP) for the session.
     src/remote_play_upnp.cpp
-    # Carried from RPCSX; no upstream equivalent.
+    # Carried from an earlier Android fork; no upstream equivalent.
     ${CMAKE_SOURCE_DIR}/rpcs3/dev/iso.cpp
     ${ARMSX3_INPUT_SOURCES}
     # rpcs3::get_version() and friends. Like Input/, this is compiled into the
@@ -76,9 +76,9 @@ add_library(rpcsx-android SHARED
 # the name the dynamic linker registers it under agree -- a mismatch there works
 # by luck for a plain dlopen and stops working the moment anything resolves it
 # by soname.
-set_target_properties(rpcsx-android PROPERTIES OUTPUT_NAME armsx3-core)
+set_target_properties(armsx3-core PROPERTIES OUTPUT_NAME armsx3-core)
 
-target_compile_features(rpcsx-android PRIVATE cxx_std_23)
+target_compile_features(armsx3-core PRIVATE cxx_std_23)
 
 # The librashader upscaler lives in rpcs3/Emu/RSX/VK/, i.e. it compiles into
 # rpcs3_emu -- not into this target -- so the header search path has to be added
@@ -90,11 +90,11 @@ target_include_directories(rpcs3_emu PRIVATE
     ${CMAKE_SOURCE_DIR}/3rdparty/librashader/include
 )
 
-target_include_directories(rpcsx-android PRIVATE
+target_include_directories(armsx3-core PRIVATE
     ${CMAKE_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/rpcs3
     ${CMAKE_SOURCE_DIR}/3rdparty/librashader/include
-    # rpcsx-android.cpp pulls in Input/hid_pad_handler.h (DS3/DS4/DualSense
+    # armsx3-core.cpp pulls in Input/hid_pad_handler.h (DS3/DS4/DualSense
     # over USB) and hidapi_libusb.h/libusb.h directly. rpcs3_emu links these
     # PRIVATE, so their include dirs do not propagate to us.
     ${CMAKE_SOURCE_DIR}/3rdparty/hidapi/hidapi/hidapi
@@ -105,7 +105,7 @@ target_include_directories(rpcsx-android PRIVATE
     ${CMAKE_SOURCE_DIR}/3rdparty/yaml-cpp/yaml-cpp/include
 )
 
-target_link_libraries(rpcsx-android
+target_link_libraries(armsx3-core
     rpcs3_emu
     # ps_move_tracker/ps_move_calibration use the Fusion AHRS solver. rpcs3_lib
     # links this upstream; we build those Input sources ourselves, so we need it.
@@ -122,7 +122,7 @@ target_link_libraries(rpcsx-android
 # Profile-guided optimisation
 # ---------------------------------------------------------------------------
 #
-# Scoped to rpcs3_emu and rpcsx-android deliberately, NOT to the whole build.
+# Scoped to rpcs3_emu and armsx3-core deliberately, NOT to the whole build.
 # 3rdparty is mostly LLVM, which is only hot while compiling guest code; adding
 # instrumentation to it would multiply an already 1.2GB unstripped artifact for
 # a payoff in compile speed rather than in frame time. What we measured as hot
@@ -142,18 +142,18 @@ set(ARMSX3_PGO_PROFILE "" CACHE FILEPATH "Merged .profdata, required when ARMSX3
 if(ARMSX3_PGO STREQUAL "generate")
     # -fprofile-generate on BOTH compile and link: the link is what pulls in the
     # profile runtime that writes the file.
-    foreach(pgo_target rpcs3_emu rpcsx-android)
+    foreach(pgo_target rpcs3_emu armsx3-core)
         target_compile_options(${pgo_target} PRIVATE -fprofile-generate)
         target_link_options(${pgo_target} PRIVATE -fprofile-generate)
     endforeach()
 
-    # Tells src/rpcsx-android.cpp to name the profile somewhere the app can
+    # Tells src/armsx3-core.cpp to name the profile somewhere the app can
     # actually write, and to flush it when the app goes to the background.
     # Without that the runtime writes to the process CWD, which on Android is /
     # and is not writable, so a whole play session produces nothing.
-    target_compile_definitions(rpcsx-android PRIVATE ARMSX3_PGO_GENERATE=1)
+    target_compile_definitions(armsx3-core PRIVATE ARMSX3_PGO_GENERATE=1)
 
-    message(STATUS "ARMSX3: PGO instrumentation ON for rpcs3_emu and rpcsx-android")
+    message(STATUS "ARMSX3: PGO instrumentation ON for rpcs3_emu and armsx3-core")
 elseif(ARMSX3_PGO STREQUAL "use")
     if(NOT ARMSX3_PGO_PROFILE)
         message(FATAL_ERROR "ARMSX3_PGO=use requires -DARMSX3_PGO_PROFILE=<absolute .profdata>")
@@ -162,7 +162,7 @@ elseif(ARMSX3_PGO STREQUAL "use")
         message(FATAL_ERROR "ARMSX3_PGO_PROFILE does not exist: ${ARMSX3_PGO_PROFILE}")
     endif()
 
-    foreach(pgo_target rpcs3_emu rpcsx-android)
+    foreach(pgo_target rpcs3_emu armsx3-core)
         # Drift is tolerated rather than fatal: the profile ages the moment the
         # code changes, and a warning per stale function would otherwise turn
         # into thousands of errors under -Werror. Stale enough to matter shows up

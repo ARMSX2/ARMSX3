@@ -37,7 +37,7 @@ import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.common.ConfirmOverlay
 import com.armsx2.ui.settings.SettingsControllerNav
 import com.armsx2.ui.settings.controllerFocusable
-import net.rpcsx.ProgressRepository
+import com.armsx3.core.ProgressRepository
 
 /** Names listed in the question before the rest are counted instead. */
 private const val MaxListed = 8

@@ -14,10 +14,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.armsx3.NativeApp
-import net.rpcsx.FirmwareRepository
-import net.rpcsx.FirmwareStatus
-import net.rpcsx.ProgressRepository
-import net.rpcsx.RPCSX
+import com.armsx3.core.FirmwareRepository
+import com.armsx3.core.FirmwareStatus
+import com.armsx3.core.ProgressRepository
+import com.armsx3.core.ARMSX3
 
 /** One PS3UPDAT.PUP found by the folder scan, shown in the in-app list. */
 data class FirmwareCandidate(val name: String, val uri: Uri, val sizeBytes: Long)
@@ -168,10 +168,10 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
         // MainActivityRuntime AFTER onboarding is on screen -- so during setup it
         // may not be loaded at all. Bring it up here rather than calling into a
         // core that is not there.
-        if (!RPCSX.initialized) {
+        if (!ARMSX3.initialized) {
             runCatching { NativeApp.initializeOnce(getApplication()) }
         }
-        if (!RPCSX.initialized) {
+        if (!ARMSX3.initialized) {
             state.value = state.value.copy(
                 error = "The emulator core did not load, so firmware cannot be " +
                     "installed. Reinstall ARMSX3 and try again.",
@@ -195,7 +195,7 @@ class OnboardingViewModel(application: Application) : AndroidViewModel(applicati
                         }
                     resolver.openAssetFileDescriptor(candidate.uri, "r").use { afd ->
                         val fd = afd?.parcelFileDescriptor?.fd ?: return@runCatching false
-                        RPCSX.instance.installFw(fd, progressId)
+                        ARMSX3.instance.installFw(fd, progressId)
                     }
                 }.getOrDefault(false)
             }

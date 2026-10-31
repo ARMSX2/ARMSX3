@@ -6,8 +6,8 @@ import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.armsx2.Ps3Sfo
 import com.armsx2.runtime.MainActivityRuntime
-import net.rpcsx.ProgressRepository
-import net.rpcsx.RPCSX
+import com.armsx3.core.ProgressRepository
+import com.armsx3.core.ARMSX3
 import java.io.File
 import java.io.FileOutputStream
 import java.util.zip.ZipEntry
@@ -173,7 +173,7 @@ object ModImporter {
             android.os.ParcelFileDescriptor.open(
                 pkg, android.os.ParcelFileDescriptor.MODE_READ_ONLY,
             ).use { pfd ->
-                RPCSX.instance.extractPkgTo(pfd.fd, progress, staging.absolutePath)
+                ARMSX3.instance.extractPkgTo(pfd.fd, progress, staging.absolutePath)
             }
         }.getOrElse {
             Log.w(TAG, "pkg extract threw: ${it.message}")

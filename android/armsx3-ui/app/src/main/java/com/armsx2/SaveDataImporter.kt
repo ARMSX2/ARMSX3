@@ -6,7 +6,7 @@ import android.provider.OpenableColumns
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.armsx2.data.library.ParamSfo
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -605,8 +605,8 @@ object SaveDataImporter {
      * at all, which is a genuinely fresh install.
      */
     internal fun savedataRoot(): File? {
-        val home = File(RPCSX.getHdd0Dir(), "home")
-        val preferred = runCatching { RPCSX.instance.getUser() }.getOrNull()
+        val home = File(ARMSX3.getHdd0Dir(), "home")
+        val preferred = runCatching { ARMSX3.instance.getUser() }.getOrNull()
             ?.takeIf { it.isNotBlank() }
 
         val user = preferred

@@ -17,7 +17,7 @@ WHY THIS EXISTS
     sit null unnoticed.
 
     The core does NOT talk to adrenotools. The JNI glue (native-lib.cpp) opens
-    the driver and hands the core a dlopen handle via _rpcsx_setCustomDriver,
+    the driver and hands the core a dlopen handle via _armsx3_setCustomDriver,
     which keeps adrenotools app-side and out of the emulator.
 
 REGENERATE

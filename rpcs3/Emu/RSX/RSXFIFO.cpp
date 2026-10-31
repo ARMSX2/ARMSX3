@@ -932,7 +932,7 @@ namespace rsx
 					// and the architected event stream bounds the park to tens of microseconds, so the
 					// RSX still sits on the frame's dependency chain rather than sleeping through work.
 					//
-					// The pre-spin is not optional: ouroboros420/rpcsx parked bare here (e31ef44ef) and
+					// The pre-spin is not optional: an earlier Android fork parked bare here (e31ef44ef) and
 					// had to walk it back (832c23078) when the wake latency cost frametime smoothness.
 					RSX_PROF_SCOPE(idle_fifo);
 

@@ -1794,7 +1794,7 @@ spu_runtime::spu_runtime()
 	// the HW feature bits is worse still (a -sha3 core loading a +sha3 object executes an
 	// illegal instruction). Bump SPU_OBJ_CACHE_VERSION whenever SPU codegen itself changes,
 	// including compile-time switches such as ARMSX3_SPU_ARM64_BYTE_GATHER.
-	// Ported from ouroboros420/rpcsx (8430a6558), key re-derived against our config surface.
+	// Ported from an earlier Android fork (8430a6558), key re-derived against our config surface.
 	{
 		// v3 retires every object written by the ARM64 cache while it was enabled. Those carry an
 		// absolute host address baked in as movz/movk immediates with no relocation covering them,

@@ -89,8 +89,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
-import net.rpcsx.ProgressRepository
-import net.rpcsx.RPCSX
+import com.armsx3.core.ProgressRepository
+import com.armsx3.core.ARMSX3
 import org.json.JSONObject
 
 /**
@@ -311,7 +311,7 @@ private fun installOne(context: Context, file: PickedFile): Boolean {
             return false
         }
         return try {
-            RPCSX.instance.install(opened.descriptor.fd, id)
+            ARMSX3.instance.install(opened.descriptor.fd, id)
         } finally {
             opened.close()
         }
@@ -328,7 +328,7 @@ private fun installOne(context: Context, file: PickedFile): Boolean {
             val id = ProgressRepository.create(context, "Installing ${file.name}", silent = true)
             val descriptor = ParcelFileDescriptor.open(staged, ParcelFileDescriptor.MODE_READ_ONLY)
             try {
-                RPCSX.instance.installKey(descriptor.fd, id, "")
+                ARMSX3.instance.installKey(descriptor.fd, id, "")
             } finally {
                 runCatching { descriptor.close() }
             }

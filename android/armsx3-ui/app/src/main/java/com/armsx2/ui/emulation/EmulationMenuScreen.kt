@@ -1145,7 +1145,7 @@ private fun GraphicsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
         // live, not just at the next renderer start.
         MenuSwitchRow(str("renderer.gpuTurbo.label"), settings.ps3.gpuTurbo) { v ->
             viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(gpuTurbo = v)) }
-            runCatching { net.rpcsx.RPCSX.instance.setGpuTurbo(v) }
+            runCatching { com.armsx3.core.ARMSX3.instance.setGpuTurbo(v) }
         }
     // Overlay artwork, switchable from in-game — trying bezels means seeing them ON the game, and
     // having to leave for All Settings each time made that unusable. Import still lives in the

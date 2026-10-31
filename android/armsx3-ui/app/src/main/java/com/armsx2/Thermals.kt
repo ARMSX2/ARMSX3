@@ -177,7 +177,7 @@ object Thermals {
                 if (!feeding) return
                 val interval = intervalSec.value * 1000L
                 poll(app, interval)
-                runCatching { net.rpcsx.RPCSX.instance.setThermals(cpu, gpu, battery, true) }
+                runCatching { com.armsx3.core.ARMSX3.instance.setThermals(cpu, gpu, battery, true) }
                 handler.postDelayed(this, interval)
             }
         }
@@ -188,7 +188,7 @@ object Thermals {
         feeding = false
         handler.removeCallbacksAndMessages(null)
         // Tell the overlay to stop drawing them rather than leaving the last values frozen there.
-        runCatching { net.rpcsx.RPCSX.instance.setThermals(NONE, NONE, NONE, false) }
+        runCatching { com.armsx3.core.ARMSX3.instance.setThermals(NONE, NONE, NONE, false) }
     }
 
     /** "48" degrees, or null when there is no reading. */

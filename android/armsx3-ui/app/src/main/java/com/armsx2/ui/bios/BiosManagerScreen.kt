@@ -32,10 +32,10 @@ import com.armsx2.ui.common.canBrowse
 import com.armsx2.ui.settings.controllerFocusable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import net.rpcsx.FirmwareRepository
-import net.rpcsx.FirmwareStatus
-import net.rpcsx.ProgressRepository
-import net.rpcsx.RPCSX
+import com.armsx3.core.FirmwareRepository
+import com.armsx3.core.FirmwareStatus
+import com.armsx3.core.ProgressRepository
+import com.armsx3.core.ARMSX3
 
 /**
  * PS3 firmware, replacing ARMSX2's PS2 BIOS manager.
@@ -93,7 +93,7 @@ fun BiosManagerScreen(onBack: () -> Unit) {
                         .use { afd ->
                             val fd = afd?.parcelFileDescriptor?.fd
                                 ?: return@runCatching false
-                            RPCSX.instance.installFw(fd, id)
+                            ARMSX3.instance.installFw(fd, id)
                         }
                 }.getOrDefault(false)
             }

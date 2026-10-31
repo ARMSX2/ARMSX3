@@ -2,7 +2,7 @@ package com.armsx2
 
 import androidx.core.content.edit
 import com.armsx2.runtime.MainActivityRuntime
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import java.io.File
 
 /**
@@ -31,7 +31,7 @@ object DevTools {
             runCatching { MainActivityRuntime.prefs.edit { putInt(KEY_DUMP_MODE, value) } }
         }
 
-    fun capturesDir(): File = File(RPCSX.rootDirectory, "config/captures")
+    fun capturesDir(): File = File(ARMSX3.rootDirectory, "config/captures")
 
     fun isCapture(name: String): Boolean {
         val lower = name.lowercase()

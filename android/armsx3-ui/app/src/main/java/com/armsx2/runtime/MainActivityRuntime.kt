@@ -962,7 +962,7 @@ open class MainActivityRuntime : ComponentActivity() {
             // Safe unconditionally: adrenotools no-ops on non-Adreno hardware and if /dev/kgsl-3d0
             // cannot be opened. Re-applied on every start so turning it off actually releases the
             // clocks on the next boot rather than persisting until reboot.
-            runCatching { net.rpcsx.RPCSX.instance.setGpuTurbo(resolved.ps3.gpuTurbo) }
+            runCatching { com.armsx3.core.ARMSX3.instance.setGpuTurbo(resolved.ps3.gpuTurbo) }
 
             NativeApp.renderUpscalemultiplier(upscale.value)
             // Pin custom Vulkan driver (if any) BEFORE the renderer write —
@@ -1245,7 +1245,7 @@ open class MainActivityRuntime : ComponentActivity() {
             }
             // Its own staging name: the library scan may be probing at the same time.
             val staged = com.armsx2.DiscIcons.fileFor("__external")
-            val info = org.json.JSONObject(net.rpcsx.RPCSX.instance.probeDiscInfo(target, staged.absolutePath))
+            val info = org.json.JSONObject(com.armsx3.core.ARMSX3.instance.probeDiscInfo(target, staged.absolutePath))
             val id = info.optString("titleId").takeIf { it.isNotBlank() }
             if (id != null && info.optBoolean("icon") && staged.length() > 0L && !com.armsx2.DiscIcons.has(id)) {
                 staged.renameTo(com.armsx2.DiscIcons.fileFor(id))
@@ -1644,7 +1644,7 @@ open class MainActivityRuntime : ComponentActivity() {
          *  minute of history; the core reports what it then loaded right after this line. */
         private fun angleEmit(msg: String) {
             android.util.Log.i("ARMSX2", "@@ANGLE@@ $msg")
-            runCatching { net.rpcsx.RPCSX.instance.logAndroid("@@ANGLE@@ $msg") }
+            runCatching { com.armsx3.core.ARMSX3.instance.logAndroid("@@ANGLE@@ $msg") }
         }
 
         /** A state to boot in place of the game at this launch path, once. See [launchGameFromState]. */
@@ -1738,10 +1738,10 @@ open class MainActivityRuntime : ComponentActivity() {
                     if (currentGame.value != null) return
                     // The core keeps the last game's serial and title until the next boot reads
                     // its disc, which happens while it is loading. Past that, they are this game's.
-                    val booted = when (runCatching { net.rpcsx.RPCSX.getState() }.getOrNull()) {
-                        net.rpcsx.EmulatorState.Ready, net.rpcsx.EmulatorState.Starting,
-                        net.rpcsx.EmulatorState.Running, net.rpcsx.EmulatorState.Paused,
-                        net.rpcsx.EmulatorState.Frozen -> true
+                    val booted = when (runCatching { com.armsx3.core.ARMSX3.getState() }.getOrNull()) {
+                        com.armsx3.core.EmulatorState.Ready, com.armsx3.core.EmulatorState.Starting,
+                        com.armsx3.core.EmulatorState.Running, com.armsx3.core.EmulatorState.Paused,
+                        com.armsx3.core.EmulatorState.Frozen -> true
                         else -> false
                     }
                     // "00000000" is the placeholder the core reports before the disc is
@@ -1785,10 +1785,10 @@ open class MainActivityRuntime : ComponentActivity() {
                 var attempts = 0
                 override fun run() {
                     if (vmStopInProgress || eState.value == EmuState.STOPPED) return
-                    val booted = when (runCatching { net.rpcsx.RPCSX.getState() }.getOrNull()) {
-                        net.rpcsx.EmulatorState.Ready, net.rpcsx.EmulatorState.Starting,
-                        net.rpcsx.EmulatorState.Running, net.rpcsx.EmulatorState.Paused,
-                        net.rpcsx.EmulatorState.Frozen -> true
+                    val booted = when (runCatching { com.armsx3.core.ARMSX3.getState() }.getOrNull()) {
+                        com.armsx3.core.EmulatorState.Ready, com.armsx3.core.EmulatorState.Starting,
+                        com.armsx3.core.EmulatorState.Running, com.armsx3.core.EmulatorState.Paused,
+                        com.armsx3.core.EmulatorState.Frozen -> true
                         else -> false
                     }
                     val serial = if (!booted) null else runCatching { NativeApp.getGameSerial() }.getOrNull()
@@ -2231,7 +2231,7 @@ open class MainActivityRuntime : ComponentActivity() {
             // written to Default.yml last run is overwritten with the default and the app's copy
             // is the one that survives. That part was right. What was wrong is where it ran: this
             // used to sit at the top of kickoffEmucoreInit, 125 lines before initializeOnce, and
-            // the JNI bridge resolves every _rpcsx_ entry point from a library that openLibrary
+            // the JNI bridge resolves every _armsx3_ entry point from a library that openLibrary
             // has not dlopen()ed yet. Every wrapper in native-lib.cpp null checks its function
             // pointer and returns quietly, so the call succeeded at doing nothing, with no
             // throw for runCatching to catch and no log line anywhere.
@@ -4076,7 +4076,7 @@ open class MainActivityRuntime : ComponentActivity() {
         android.util.Log.i("ARMSX3-Touch", line)
         // And into the emulator's log, which is the file testers send. logcat alone is why
         // this diagnostic has never appeared in a single report about #132.
-        runCatching { net.rpcsx.RPCSX.instance.logAndroid("touch scale: $line") }
+        runCatching { com.armsx3.core.ARMSX3.instance.logAndroid("touch scale: $line") }
     }
 
     /** Un-scaled physical display size in the current rotation. Only a SEED for the touch-space

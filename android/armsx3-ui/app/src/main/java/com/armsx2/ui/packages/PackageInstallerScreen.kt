@@ -44,14 +44,14 @@ import com.armsx2.ui.common.ArmsBackdrop
 import com.armsx2.ui.common.FileBrowserDialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import net.rpcsx.ProgressRepository
-import net.rpcsx.RPCSX
+import com.armsx3.core.ProgressRepository
+import com.armsx3.core.ARMSX3
 
 /**
  * Install a .pkg (game, update or DLC) into the emulator's own storage.
  *
- * The native side already did all of this -- _rpcsx_install dispatches on the file's
- * magic and hands a PKG to installPkg -- but RPCSX.instance.install() had ZERO callers,
+ * The native side already did all of this -- _armsx3_install dispatches on the file's
+ * magic and hands a PKG to installPkg -- but ARMSX3.instance.install() had ZERO callers,
  * so there was no way to reach it from the UI. Reported by two testers as a serious
  * oversight, and it read as a missing feature rather than a missing button.
  *
@@ -189,7 +189,7 @@ private fun installedTitleFor(dir: java.io.File): InstalledTitle {
 }
 
 private fun readInstalled(): List<InstalledTitle> =
-    java.io.File(RPCSX.rootDirectory, "config/dev_hdd0/game")
+    java.io.File(ARMSX3.rootDirectory, "config/dev_hdd0/game")
         .listFiles()
         ?.filter { it.isDirectory && isInstalledContent(it) }
         ?.map { installedTitleFor(it) }
@@ -254,7 +254,7 @@ internal fun isInstalledContent(dir: java.io.File): Boolean {
  * why uninstalling without it leaves the bulk of the disk usage behind.
  */
 private fun cacheDirFor(titleId: String): java.io.File =
-    java.io.File(RPCSX.rootDirectory, "cache/cache/$titleId")
+    java.io.File(ARMSX3.rootDirectory, "cache/cache/$titleId")
 
 private fun dirSize(dir: java.io.File): Long =
     if (!dir.isDirectory) 0L else dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
@@ -343,8 +343,8 @@ private fun usableSpaceAt(dir: java.io.File): Long {
  */
 private fun stagingDir(context: android.content.Context): java.io.File? {
     val candidates = buildList {
-        if (RPCSX.rootDirectory.isNotBlank()) {
-            add(java.io.File(RPCSX.rootDirectory, "cache/install"))
+        if (ARMSX3.rootDirectory.isNotBlank()) {
+            add(java.io.File(ARMSX3.rootDirectory, "cache/install"))
         }
         add(java.io.File(context.cacheDir, "install"))
     }
@@ -520,9 +520,9 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                                 id, 0, 0, I18n.get("packages.installingFile").format(label),
                             )
                             result = if (opened.size == 1) {
-                                RPCSX.instance.install(opened[0].descriptor.fd, id)
+                                ARMSX3.instance.install(opened[0].descriptor.fd, id)
                             } else {
-                                RPCSX.instance.installSplitPkg(
+                                ARMSX3.instance.installSplitPkg(
                                     opened.map { it.descriptor.fd }.toIntArray(), id,
                                 )
                             }
@@ -554,7 +554,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                             Licences.installRap(staged)
                         } else {
                             val d = ParcelFileDescriptor.open(staged, ParcelFileDescriptor.MODE_READ_ONLY)
-                            try { RPCSX.instance.installKey(d.fd, id, "") } finally { runCatching { d.close() } }
+                            try { ARMSX3.instance.installKey(d.fd, id, "") } finally { runCatching { d.close() } }
                         }
                         runCatching { staged.delete() }
                     }
@@ -621,9 +621,9 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                         }
                         try {
                             result = if (descriptors.size == 1) {
-                                RPCSX.instance.install(descriptors[0].fd, id)
+                                ARMSX3.instance.install(descriptors[0].fd, id)
                             } else {
-                                RPCSX.instance.installSplitPkg(
+                                ARMSX3.instance.installSplitPkg(
                                     descriptors.map { it.fd }.toIntArray(), id,
                                 )
                             }
@@ -643,7 +643,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                                 licence, ParcelFileDescriptor.MODE_READ_ONLY,
                             )
                             try {
-                                RPCSX.instance.installKey(descriptor.fd, id, "")
+                                ARMSX3.instance.installKey(descriptor.fd, id, "")
                             } finally {
                                 runCatching { descriptor.close() }
                             }
@@ -771,7 +771,7 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
                     MainActivityRuntime.invoke {
                         val ok = withContext(Dispatchers.IO) {
                             runCatching {
-                                RPCSX.instance.uninstallGame(target.dir.absolutePath)
+                                ARMSX3.instance.uninstallGame(target.dir.absolutePath)
                             }.getOrDefault(false)
                         }
                         // Only after the game itself is gone: dropping the cache for a title that

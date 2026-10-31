@@ -2,14 +2,14 @@
 // them to a friend's device (the friend plays as player 2).
 //
 // Nothing here talks to the network. The app's streaming threads pull frames and audio out through
-// the _rpcsx_remotePlay* functions below; pulling rather than calling into Java keeps JNI off the
+// the _armsx3_remotePlay* functions below; pulling rather than calling into Java keeps JNI off the
 // RSX and cellAudio threads, which must never wait on the app.
 //
 // Frames come from VKPresent's remote capture path (see g_remote_play_max_size and
 // Emu/RSX/remote_capture.h), drawn on the GPU at the stream's size and picked up here, on the app's
 // thread, as soon as the GPU marks them done. Where the device can share buffers, a frame is an
 // AHardwareBuffer the app hands straight to the video encoder and gives back afterwards
-// (_rpcsx_remotePlayReleaseFrame), so it never passes through the CPU; otherwise it is NV12 the app
+// (_armsx3_remotePlayReleaseFrame), so it never passes through the CPU; otherwise it is NV12 the app
 // copies out once. The RSX thread never touches the pixels either way. Audio comes through RPCS3's
 // recording hook (utils::video_provider), which gives every mixed audio block to the sink below.
 
@@ -40,12 +40,12 @@ atomic_t<u32> g_remote_play_max_size{0};
 
 // Counted by VKPresent.cpp while capturing: every game frame the presenter saw, and the ones it
 // could not capture because the GPU or the app still held every slot. With the two below they are
-// the host's side of the stream stats (_rpcsx_remotePlayCounters).
+// the host's side of the stream stats (_armsx3_remotePlayCounters).
 atomic_t<u32> g_remote_play_frames{0};
 atomic_t<u32> g_remote_play_skipped{0};
 
 // Read by VKPresent.cpp: frames go out as shareable buffers when the device can, unless the app has
-// said it cannot import them (_rpcsx_remotePlaySetHardware).
+// said it cannot import them (_armsx3_remotePlaySetHardware).
 atomic_t<bool> g_remote_play_hardware{false};
 
 namespace
@@ -127,7 +127,7 @@ namespace
 
 	// The newest frame the GPU has finished. Finished frames older than it are freed unread: for a
 	// live stream they are already late. A hardware frame stays with the app (its slot held) until
-	// _rpcsx_remotePlayReleaseFrame; an NV12 frame is copied to dst and its slot freed at once.
+	// _armsx3_remotePlayReleaseFrame; an NV12 frame is copied to dst and its slot freed at once.
 	// Returns 2 with a hardware frame (info: width, height, slot, generation, seq), 1 with an NV12
 	// frame in dst (info: width, height), 0 when none is finished yet, -2 when cap is too small for
 	// one. pending_since: when the oldest frame still on the GPU was recorded, or 0 for none.
@@ -263,7 +263,7 @@ namespace
 
 // Starts handing frames and audio to the app. Only while a game runs: the provider lives in the
 // game's g_fxo and goes away with it.
-extern "C" bool _rpcsx_remotePlayStart(int max_width, int max_height)
+extern "C" bool _armsx3_remotePlayStart(int max_width, int max_height)
 {
 	if (Emu.IsStopped() || !g_fxo->is_init<utils::video_provider>())
 	{
@@ -309,7 +309,7 @@ extern "C" bool _rpcsx_remotePlayStart(int max_width, int max_height)
 // Whether the running game can be hosted: a game is running, on a renderer that captures frames.
 // The app asks before it starts hosting, so the player hears why at once rather than when a friend
 // connects to a stream with no picture.
-extern "C" bool _rpcsx_remotePlayCanCapture()
+extern "C" bool _armsx3_remotePlayCanCapture()
 {
 	return !Emu.IsStopped() && renderer_captures();
 }
@@ -338,7 +338,7 @@ void remote_play_on_run()
 	rp_log.notice("remote play: capture follows the game into its restart");
 }
 
-extern "C" void _rpcsx_remotePlayStop()
+extern "C" void _armsx3_remotePlayStop()
 {
 	std::shared_ptr<remote_play_sink> sink;
 
@@ -375,12 +375,12 @@ extern "C" void _rpcsx_remotePlayStop()
 
 // Waits up to timeout_ms for a frame. Runs on the app's video thread. info has 6 ints. Returns:
 //  2: a hardware frame. info: width, height, slot, generation, seq. The slot is the app's until
-//     _rpcsx_remotePlayReleaseFrame(slot, seq); _rpcsx_remotePlayHardwareBuffer gives its buffer.
+//     _armsx3_remotePlayReleaseFrame(slot, seq); _armsx3_remotePlayHardwareBuffer gives its buffer.
 //  1: an NV12 frame written to dst: the Y plane, then the interleaved UV plane, rows packed
 //     (width x height x 3 / 2 bytes). info: width, height, -1, 0, seq.
 //  0: timeout. -1: capture is not running. -2: cap is too small (info holds the size; the frame
 //     is dropped).
-extern "C" int _rpcsx_remotePlayPollVideo(u8* dst, s64 cap, s32* info, int timeout_ms)
+extern "C" int _armsx3_remotePlayPollVideo(u8* dst, s64 cap, s32* info, int timeout_ms)
 {
 	const auto sink = current_sink();
 
@@ -434,7 +434,7 @@ extern "C" int _rpcsx_remotePlayPollVideo(u8* dst, s64 cap, s32* info, int timeo
 
 // Gives a hardware frame's slot back to the presenter, once the encoder has drawn it. seq is the
 // frame's, so a late release from an earlier session cannot free a slot that now holds another.
-extern "C" void _rpcsx_remotePlayReleaseFrame(int slot, u32 seq)
+extern "C" void _armsx3_remotePlayReleaseFrame(int slot, u32 seq)
 {
 	std::lock_guard lock(remote_capture::g_mutex);
 
@@ -451,7 +451,7 @@ extern "C" void _rpcsx_remotePlayReleaseFrame(int slot, u32 seq)
 
 // The AHardwareBuffer behind a hardware frame's slot, with a reference the caller releases, or null.
 // generation says which buffer it is: it changes when the presenter replaces the slot's buffer.
-extern "C" AHardwareBuffer* _rpcsx_remotePlayHardwareBuffer(int slot, u32* generation)
+extern "C" AHardwareBuffer* _armsx3_remotePlayHardwareBuffer(int slot, u32* generation)
 {
 	std::lock_guard lock(remote_capture::g_mutex);
 
@@ -481,14 +481,14 @@ extern "C" AHardwareBuffer* _rpcsx_remotePlayHardwareBuffer(int slot, u32* gener
 
 // Whether frames may go out as shareable buffers. The app turns it off when it cannot import them;
 // the presenter then sends NV12 from its next free slot on.
-extern "C" void _rpcsx_remotePlaySetHardware(bool enabled)
+extern "C" void _armsx3_remotePlaySetHardware(bool enabled)
 {
 	g_remote_play_hardware = enabled;
 }
 
 // Running totals for the stream stats, in out[0..3]: game frames seen while capturing, frames not
 // captured (no free slot), frames handed to the app, finished frames passed over for a newer one.
-extern "C" void _rpcsx_remotePlayCounters(u32* out)
+extern "C" void _armsx3_remotePlayCounters(u32* out)
 {
 	if (!out)
 	{
@@ -505,7 +505,7 @@ extern "C" void _rpcsx_remotePlayCounters(u32* out)
 // chunks, so each network packet carries cap_frames rather than whatever cellAudio's last block
 // held (about 5 ms, which nearly doubled the packets). On timeout it returns what there is.
 // Returns the frames written, 0 when there were none, -1 when capture is not running.
-extern "C" int _rpcsx_remotePlayPollAudio(s16* dst, int cap_frames, int timeout_ms)
+extern "C" int _armsx3_remotePlayPollAudio(s16* dst, int cap_frames, int timeout_ms)
 {
 	const auto sink = current_sink();
 

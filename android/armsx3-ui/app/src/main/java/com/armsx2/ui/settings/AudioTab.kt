@@ -45,7 +45,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import net.rpcsx.Permission
+import com.armsx3.core.Permission
 
 /**
  * SPU2 audio output settings. Volume + mute apply live to the open audio

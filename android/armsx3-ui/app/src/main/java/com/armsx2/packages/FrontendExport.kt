@@ -16,7 +16,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -423,7 +423,7 @@ object FrontendExport {
         if (MainActivityRuntime.prefs.getString("systemDir", null) != null) {
             return MainActivityRuntime.systemDirPosix()?.let(::File)?.takeIf { it.isDirectory }
         }
-        return RPCSX.rootDirectory.takeIf { it.isNotBlank() }?.let(::File)
+        return ARMSX3.rootDirectory.takeIf { it.isNotBlank() }?.let(::File)
             ?: context.getExternalFilesDir(null)
     }
 

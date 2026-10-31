@@ -267,7 +267,7 @@ namespace rsx
 		// the app can drive PerformanceHintManager. Measured at a fixed point each iteration, so
 		// the previous iteration's frame-limiter sleep lands in the idle delta and is excluded.
 		// Advisory only: these go to atomics nothing in the core reads back.
-		// Ported from ouroboros420/rpcsx (3d4ba6060).
+		// Ported from an earlier Android fork (3d4ba6060).
 		{
 			static thread_local u64 s_last_now = 0;
 			static thread_local u64 s_last_idle = 0;
@@ -348,7 +348,7 @@ namespace rsx
 			m_pump->request_renderer_update();
 		}
 #else
-		// ARMSX3: the renderer is only chosen at boot on Android (_rpcsx_settingsSet). Replacing it in
+		// ARMSX3: the renderer is only chosen at boot on Android (_armsx3_settingsSet). Replacing it in
 		// place wedged the GPU on 10-29 and then the whole phone, and a configured adapter name that
 		// matches no device would ask for a replacement after every flip.
 #endif

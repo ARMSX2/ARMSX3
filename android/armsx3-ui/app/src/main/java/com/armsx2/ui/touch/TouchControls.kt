@@ -283,7 +283,7 @@ object TouchControls {
     // under KEY_FLOATING_STICK.
     val floatingStick = mutableStateOf(false)
 
-    // Full-half invisible analog sticks (RPCSX-style): the entire LEFT half of the screen acts as
+    // Full-half invisible analog sticks: the entire LEFT half of the screen acts as
     // the left stick and the RIGHT half as the right stick, with nothing drawn — each finger drives
     // its stick from wherever it touches down (floating origin). The normal L/R stick widgets are
     // hidden while this is on. Global; persisted under KEY_FULL_HALF_STICKS.

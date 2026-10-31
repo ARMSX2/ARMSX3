@@ -9,7 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 
 /**
  * Drives Android's PerformanceHintManager from the emulator's own frame timing.
@@ -61,9 +61,9 @@ object AdpfHinter {
     }
 
     private fun tick(manager: PerformanceHintManager) {
-        val periodNs = RPCSX.instance.getFramePeriodNs()
-        val workNs = RPCSX.instance.getFrameWorkNs()
-        val tid = RPCSX.instance.getRsxThreadTid()
+        val periodNs = ARMSX3.instance.getFramePeriodNs()
+        val workNs = ARMSX3.instance.getFrameWorkNs()
+        val tid = ARMSX3.instance.getRsxThreadTid()
 
         // 0 means the core has not measured a frame yet (or is too old to export this). Feeding
         // that to the OS would be worse than staying quiet.

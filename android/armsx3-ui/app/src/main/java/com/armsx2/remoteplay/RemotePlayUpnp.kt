@@ -1,7 +1,7 @@
 package com.armsx2.remoteplay
 
 import android.util.Log
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -28,7 +28,7 @@ internal class RemotePlayUpnp {
     /** Starts looking for the router (about two seconds) while WebRTC gathers its candidates. */
     fun start() {
         thread(name = "rp-upnp", isDaemon = true) {
-            lanAddress = runCatching { RPCSX.instance.remotePlayUpnpPrepare() }.getOrNull()
+            lanAddress = runCatching { ARMSX3.instance.remotePlayUpnpPrepare() }.getOrNull()
             found.countDown()
         }
     }
@@ -79,14 +79,14 @@ internal class RemotePlayUpnp {
 
     /** The router's "public address:port" for local [port], or null. */
     private fun open(port: Int): String? {
-        val public = runCatching { RPCSX.instance.remotePlayUpnpMap(port, 0, LEASE_SECONDS) }.getOrNull() ?: return null
+        val public = runCatching { ARMSX3.instance.remotePlayUpnpMap(port, 0, LEASE_SECONDS) }.getOrNull() ?: return null
         val publicPort = public.substringAfterLast(':').toIntOrNull() ?: return null
         // The session may have ended while the router answered: then the port closes again at once.
         val kept = synchronized(this) {
             (ended.count > 0).also { if (it) opened[port] = publicPort }
         }
         if (!kept) {
-            runCatching { RPCSX.instance.remotePlayUpnpUnmap(publicPort) }
+            runCatching { ARMSX3.instance.remotePlayUpnpUnmap(publicPort) }
             return null
         }
         return public
@@ -98,7 +98,7 @@ internal class RemotePlayUpnp {
             while (!ended.await(RENEW_MS, TimeUnit.MILLISECONDS)) {
                 val ports = synchronized(this) { opened.toMap() }
                 for ((port, publicPort) in ports) {
-                    runCatching { RPCSX.instance.remotePlayUpnpMap(port, publicPort, LEASE_SECONDS) }
+                    runCatching { ARMSX3.instance.remotePlayUpnpMap(port, publicPort, LEASE_SECONDS) }
                 }
             }
         }
@@ -110,7 +110,7 @@ internal class RemotePlayUpnp {
         val ports = synchronized(this) { opened.values.toList().also { opened.clear() } }
         if (ports.isEmpty()) return
         thread(name = "rp-upnp-close", isDaemon = true) {
-            ports.forEach { runCatching { RPCSX.instance.remotePlayUpnpUnmap(it) } }
+            ports.forEach { runCatching { ARMSX3.instance.remotePlayUpnpUnmap(it) } }
         }
     }
 

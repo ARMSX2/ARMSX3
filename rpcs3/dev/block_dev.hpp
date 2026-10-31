@@ -62,7 +62,7 @@ public:
 		std::size_t blockCount) override
 	{
 		// Upstream fs::file has read_at() but no write_at() -- that was an
-		// RPCSX addition. Seek + write is the equivalent; ISO mounting is
+		// earlier Android fork's addition. Seek + write is the equivalent; ISO mounting is
 		// read-only in practice, so this path is not hot.
 		m_file.seek(block_size() * blockIndex);
 		auto result = m_file.write(data, blockCount * block_size());

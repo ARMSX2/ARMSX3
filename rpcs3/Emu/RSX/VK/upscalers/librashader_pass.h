@@ -18,7 +18,7 @@
 //   resolves the entry points. So:
 //       - this translation unit contains only the permissive header
 //       - librashader.so (MPL-2.0) ships alongside as its own .so
-//   Nothing MPL-licensed is statically linked into librpcsx/libarmsx3-core.
+//   Nothing MPL-licensed is statically linked into libarmsx3-core.
 //
 // The loader is soft-fail by design: if librashader.so is missing or a preset
 // fails to compile, `instance_loaded` is false / the create call fails, and we

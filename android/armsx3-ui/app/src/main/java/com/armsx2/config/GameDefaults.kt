@@ -1,6 +1,6 @@
 package com.armsx2.config
 
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 
 /**
  * Per-title core settings that a game needs to run, keyed by serial.
@@ -149,15 +149,15 @@ object GameDefaults {
         // see [STOCK]. A workaround for one title must not become a setting for all of them.
         val settings = STOCK + forSerial(serial)
 
-        runCatching { RPCSX.instance.settingsBeginBatch() }
+        runCatching { ARMSX3.instance.settingsBeginBatch() }
         try {
             settings.forEach { (path, value) ->
-                runCatching { RPCSX.instance.settingsSet(path, value) }
+                runCatching { ARMSX3.instance.settingsSet(path, value) }
                 val why = if (forSerial(serial).containsKey(path)) "game default for $serial" else "stock"
                 android.util.Log.i("ARMSX3", "$why: $path = $value")
             }
         } finally {
-            runCatching { RPCSX.instance.settingsEndBatch() }
+            runCatching { ARMSX3.instance.settingsEndBatch() }
         }
     }
 }

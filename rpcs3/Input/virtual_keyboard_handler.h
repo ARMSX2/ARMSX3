@@ -12,7 +12,7 @@
 // builds that map and nothing else.
 //
 // Keys arrive from the UI (a physical/Bluetooth keyboard, or the Android IME the
-// On-Screen Keyboard hotkey raises) through _rpcsx_keyboardKey.
+// On-Screen Keyboard hotkey raises) through _armsx3_keyboardKey.
 class virtual_keyboard_handler final : public KeyboardHandlerBase
 {
 	using KeyboardHandlerBase::KeyboardHandlerBase;

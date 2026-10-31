@@ -1,6 +1,6 @@
 package com.armsx2.ui.settings
 
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import com.armsx2.cache.clearRecompilerCache
 import com.armsx2.cache.formatBytes
 import com.armsx2.cache.recompilerCacheRoot
@@ -220,7 +220,7 @@ fun PerformanceTab(state: MutableState<Settings>) {
                 apply(s.copy(ps3 = s.ps3.copy(gpuTurbo = on)))
                 // Apply live as well as at the next renderer start, so it is testable without
                 // rebooting the game.
-                runCatching { net.rpcsx.RPCSX.instance.setGpuTurbo(on) }
+                runCatching { com.armsx3.core.ARMSX3.instance.setGpuTurbo(on) }
             },
             notDefault = s.notDefault { it.ps3.gpuTurbo },
         )

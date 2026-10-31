@@ -1,6 +1,6 @@
 package com.armsx3
 
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 
 /**
  * ARMSX2 UI setting -> RPCS3 config node.
@@ -10,7 +10,7 @@ import net.rpcsx.RPCSX
  * (rpcs3/Emu/system_config.h, 258 entries) and its serialisers
  * (system_config_types.cpp). They are matched LITERALLY by the core:
  *
- *   _rpcsx_settingsSet(path, jsonValue)
+ *   _armsx3_settingsSet(path, jsonValue)
  *     -> find_cfg_node() splits `path` on "@@" and compares each element
  *        against cfg node names with ==
  *     -> cfg::_enum::from_string() compares the value against the exact string
@@ -32,7 +32,7 @@ object Rpcs3Settings {
 
     private fun setRaw(path: String, jsonValue: String): Boolean {
         recording.get()?.let { it.writes[path] = jsonValue; return true }
-        return runCatching { RPCSX.instance.settingsSet(path, jsonValue) }.getOrDefault(false)
+        return runCatching { ARMSX3.instance.settingsSet(path, jsonValue) }.getOrDefault(false)
     }
 
     fun setBool(path: String, value: Boolean) = setRaw(path, if (value) "true" else "false")

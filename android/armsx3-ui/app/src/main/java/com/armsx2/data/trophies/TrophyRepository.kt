@@ -2,7 +2,7 @@ package com.armsx2.data.trophies
 
 import android.util.Log
 import java.io.File
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import org.xmlpull.v1.XmlPullParser
 import org.xmlpull.v1.XmlPullParserFactory
 
@@ -80,7 +80,7 @@ object TrophyRepository {
     }
 
     /** Root of the emulator's HDD, i.e. what RPCS3 mounts as /dev_hdd0. */
-    private fun hdd0(): File = File(RPCSX.getHdd0Dir())
+    private fun hdd0(): File = File(ARMSX3.getHdd0Dir())
 
     /**
      * The trophy directories to scan.
@@ -93,7 +93,7 @@ object TrophyRepository {
     private fun trophyRoots(): List<File> {
         val home = File(hdd0(), "home")
         val users = home.listFiles().orEmpty().filter { it.isDirectory }
-        val preferred = runCatching { RPCSX.instance.getUser() }.getOrNull()?.takeIf { it.isNotBlank() }
+        val preferred = runCatching { ARMSX3.instance.getUser() }.getOrNull()?.takeIf { it.isNotBlank() }
         val ordered = if (preferred != null) {
             users.sortedBy { it.name != preferred }
         } else {
@@ -125,7 +125,7 @@ object TrophyRepository {
      * NPWR comm id and nothing on the folder says which title it belongs to. Two sources,
      * in order:
      *
-     *  1. The core's own `current_trophy_name`, via [RPCSX.getCurrentTrophyName]. This is
+     *  1. The core's own `current_trophy_name`, via [ARMSX3.getCurrentTrophyName]. This is
      *     exactly what RPCS3's home menu uses to pick the set for its native overlay list,
      *     written by sceNpTrophyCreateContext. Authoritative, and works for disc and
      *     installed titles alike.
@@ -152,11 +152,11 @@ object TrophyRepository {
      * nothing identifies it.
      */
     private fun currentGameCommIds(): List<String> {
-        val fromCore = runCatching { RPCSX.instance.getCurrentTrophyName() }
+        val fromCore = runCatching { ARMSX3.instance.getCurrentTrophyName() }
             .getOrNull()?.trim()?.takeIf { it.isNotEmpty() }
         if (fromCore != null) return listOf(fromCore)
 
-        val titleId = runCatching { RPCSX.instance.getTitleId() }
+        val titleId = runCatching { ARMSX3.instance.getTitleId() }
             .getOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: return emptyList()
         // TROPDIR/<NPWRxxxxx_00>/TROPHY.TRP — the folder names are the comm ids.
         return File(hdd0(), "game/$titleId/TROPDIR").listFiles().orEmpty()

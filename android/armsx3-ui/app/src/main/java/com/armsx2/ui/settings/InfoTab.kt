@@ -138,7 +138,7 @@ fun InfoTab(game: GameInfo?) {
                 value = withContext(Dispatchers.IO) {
                     val own = if (game.isPsn && serial != null) {
                         com.armsx2.Ps3Sfo.installDir(serial)?.let { dir ->
-                            runCatching { net.rpcsx.RPCSX.instance.gameContentId(dir.absolutePath) }.getOrNull()
+                            runCatching { com.armsx3.core.ARMSX3.instance.gameContentId(dir.absolutePath) }.getOrNull()
                         }.orEmpty()
                     } else {
                         ""

@@ -2,8 +2,8 @@ package com.armsx2.data.library
 
 import android.content.Context
 import android.os.ParcelFileDescriptor
-import net.rpcsx.ProgressRepository
-import net.rpcsx.RPCSX
+import com.armsx3.core.ProgressRepository
+import com.armsx3.core.ARMSX3
 import java.io.File
 
 /**
@@ -19,12 +19,12 @@ object Licences {
 
     /** Where RPCS3 looks for the logged-in user's licence files. */
     fun exdataDir(): File = File(
-        RPCSX.getHdd0Dir(),
+        ARMSX3.getHdd0Dir(),
         "home/${currentUser()}/exdata",
     )
 
     private fun currentUser(): String =
-        runCatching { RPCSX.instance.getUser() }.getOrNull().orEmpty().ifBlank { "00000001" }
+        runCatching { ARMSX3.instance.getUser() }.getOrNull().orEmpty().ifBlank { "00000001" }
 
     /**
      * Copy [file] into exdata under its own name.
@@ -46,11 +46,11 @@ object Licences {
      * to the name when there is no game to ask, or when the header cannot be read.
      */
     fun installRapForGame(context: Context, file: File, gamePath: String?): Boolean {
-        if (!gamePath.isNullOrBlank() && RPCSX.initialized) {
+        if (!gamePath.isNullOrBlank() && ARMSX3.initialized) {
             val installed = runCatching {
                 val id = ProgressRepository.create(context, "Installing ${file.name}")
                 ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
-                    RPCSX.instance.installKey(fd.fd, id, gamePath)
+                    ARMSX3.instance.installKey(fd.fd, id, gamePath)
                 }
             }.getOrDefault(false)
 

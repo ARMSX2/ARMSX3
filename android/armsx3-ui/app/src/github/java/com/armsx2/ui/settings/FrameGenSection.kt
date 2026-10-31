@@ -18,7 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.armsx2.config.Settings
 import com.armsx2.i18n.str
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 
 /**
  * Frame generation. Its own section rather than folded into the GPU one because it is not a
@@ -97,7 +97,7 @@ internal fun FrameGenSection(s: Settings, apply: (Settings) -> Unit) {
 @Composable
 private fun FrameGenShaderRow() {
     val ctx = LocalContext.current
-    var count by remember { mutableStateOf(runCatching { RPCSX.instance.frameGenShaderCount() }.getOrDefault(0)) }
+    var count by remember { mutableStateOf(runCatching { ARMSX3.instance.frameGenShaderCount() }.getOrDefault(0)) }
     var error by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
@@ -119,13 +119,13 @@ private fun FrameGenShaderRow() {
                     tmp.outputStream().use { output -> input.copyTo(output) }
                 }
 
-                val n = RPCSX.instance.frameGenImportShaders(tmp.absolutePath)
+                val n = ARMSX3.instance.frameGenImportShaders(tmp.absolutePath)
                 tmp.delete()
 
                 if (n > 0) {
                     count = n
                 } else {
-                    error = RPCSX.instance.frameGenShaderError().ifEmpty { failedMsg }
+                    error = ARMSX3.instance.frameGenShaderError().ifEmpty { failedMsg }
                 }
             }.onFailure { error = it.message ?: failedMsg }
 

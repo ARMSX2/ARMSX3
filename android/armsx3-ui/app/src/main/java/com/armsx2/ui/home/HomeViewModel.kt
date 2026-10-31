@@ -223,7 +223,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     /** No game loaded, and the core itself stopped: 0 is system_state::stopped. The firmware
      *  compile runs with no game, so isVmIdle() alone reads it as idle. */
     private fun coreIdle(): Boolean =
-        MainActivityRuntime.isVmIdle() && runCatching { net.rpcsx.RPCSX.instance.getState() == 0 }.getOrDefault(false)
+        MainActivityRuntime.isVmIdle() && runCatching { com.armsx3.core.ARMSX3.instance.getState() == 0 }.getOrDefault(false)
 
     /**
      * Re-read storage after a licence install.

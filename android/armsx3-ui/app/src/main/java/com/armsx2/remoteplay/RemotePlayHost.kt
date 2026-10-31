@@ -14,7 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import com.armsx2.i18n.I18n
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx3.Rpcs3Bridge
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import org.json.JSONObject
 import org.webrtc.ArmsxVideoEncoderFactory
 import org.webrtc.CapturerObserver
@@ -252,7 +252,7 @@ object RemotePlayHost {
         }
         // Only the Vulkan renderer captures frames: on OpenGL the friend would hear the game and
         // never see it.
-        if (!runCatching { RPCSX.instance.remotePlayCanCapture() }.getOrDefault(true)) {
+        if (!runCatching { ARMSX3.instance.remotePlayCanCapture() }.getOrDefault(true)) {
             _status.value = Status.Failed(I18n.get("remoteplay.host.needsVulkan"))
             return null
         }
@@ -693,7 +693,7 @@ private class HostSession(
         val pc = peer ?: return
         val source = videoSource ?: return
 
-        if (!RPCSX.instance.remotePlayStart(RemotePlayProtocol.MAX_WIDTH, RemotePlayProtocol.MAX_HEIGHT)) {
+        if (!ARMSX3.instance.remotePlayStart(RemotePlayProtocol.MAX_WIDTH, RemotePlayProtocol.MAX_HEIGHT)) {
             fail("capture did not start")
             return
         }
@@ -743,7 +743,7 @@ private class HostSession(
 
     private fun sendHostStats() {
         val core = IntArray(4)
-        if (!RPCSX.instance.remotePlayCounters(core)) return
+        if (!ARMSX3.instance.remotePlayCounters(core)) return
         val encoder = ArmsxVideoEncoderFactory.encoderCounters()
         val peaks = ArmsxVideoEncoderFactory.takeEncoderPeaks()
         val handed = framesHanded
@@ -820,7 +820,7 @@ private class HostSession(
         var previous: ByteArray? = null
         try {
             while (streaming) {
-                val frames = RPCSX.instance.remotePlayPollAudio(pcm, RemotePlayProtocol.AUDIO_CHUNK_FRAMES, 50)
+                val frames = ARMSX3.instance.remotePlayPollAudio(pcm, RemotePlayProtocol.AUDIO_CHUNK_FRAMES, 50)
                 if (frames < 0) break
                 if (frames == 0) continue
                 val channel = audioChannel ?: break
@@ -916,7 +916,7 @@ private class HostSession(
         if (streaming) {
             streaming = false
             // Unblocks both loops at once: their polls return -1.
-            RPCSX.instance.remotePlayStop()
+            ARMSX3.instance.remotePlayStop()
         }
         // Takes no more presses from here, so none lands after the release at the end.
         inputThread.quitSafely()

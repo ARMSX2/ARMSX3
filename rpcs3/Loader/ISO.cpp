@@ -84,7 +84,7 @@ static bool is_iso_file(iso_file& file, u64* size = nullptr)
 	// Upstream's 8a6c96745 added a `!= 5` early return here, which this reverts to the 0.8
 	// behaviour. The check is sound on a desktop filesystem, but on Android the disc is read
 	// through SAF/content URIs, and this predicate decides how the game gets mounted --
-	// System.cpp:1572/1589/1764/1878 and rpcsx-android.cpp:3935 all branch on it. A single
+	// System.cpp:1572/1589/1764/1878 and armsx3-core.cpp:3935 all branch on it. A single
 	// short read there does not fail the boot outright; it silently routes the title down a
 	// different mount path, which is what a game reaching its first loading screen and never
 	// leaving it looks like.

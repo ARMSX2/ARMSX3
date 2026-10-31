@@ -2033,7 +2033,7 @@ private fun sendStickAxis(code: Int, value: Int) {
 }
 
 /* -------------------------------------------------------------------- */
-/*  Full-half invisible analog sticks (RPCSX-style)                      */
+/*  Full-half invisible analog sticks                                    */
 /* -------------------------------------------------------------------- */
 
 /** Per-finger state for [FullHalfStickLayer]: which half it owns, its floating origin, last emit. */

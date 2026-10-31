@@ -113,7 +113,7 @@ namespace
 // Looks for the router. Writes this device's address on the router's network into lan_addr and
 // returns true when there is a router to ask, with a public address of its own. Blocks for about
 // two seconds the first time: call it off the main thread.
-extern "C" bool _rpcsx_remotePlayUpnpPrepare(char* lan_addr, int lan_addr_len)
+extern "C" bool _armsx3_remotePlayUpnpPrepare(char* lan_addr, int lan_addr_len)
 {
 	std::lock_guard lock(g_mutex);
 
@@ -130,7 +130,7 @@ extern "C" bool _rpcsx_remotePlayUpnpPrepare(char* lan_addr, int lan_addr_len)
 // it the next free one up to 32 above, for lease_seconds. Asked again for the same ports it renews
 // the lease. Writes the router's public address into public_addr and returns the router's port, or
 // 0 when it refused. external_hint: the router port this one had before, to renew; 0 the first time.
-extern "C" int _rpcsx_remotePlayUpnpMap(int internal_port, int external_hint, int lease_seconds, char* public_addr, int public_addr_len)
+extern "C" int _armsx3_remotePlayUpnpMap(int internal_port, int external_hint, int lease_seconds, char* public_addr, int public_addr_len)
 {
 	std::lock_guard lock(g_mutex);
 
@@ -177,8 +177,8 @@ extern "C" int _rpcsx_remotePlayUpnpMap(int internal_port, int external_hint, in
 	return 0;
 }
 
-// Closes a router port opened by _rpcsx_remotePlayUpnpMap.
-extern "C" void _rpcsx_remotePlayUpnpUnmap(int external_port)
+// Closes a router port opened by _armsx3_remotePlayUpnpMap.
+extern "C" void _armsx3_remotePlayUpnpUnmap(int external_port)
 {
 	std::lock_guard lock(g_mutex);
 

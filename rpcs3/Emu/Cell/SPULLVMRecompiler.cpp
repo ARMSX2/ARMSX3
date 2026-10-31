@@ -91,7 +91,7 @@ void spu_llvm_set_compile_context(spu_llvm_compile_context* context) noexcept
 // Disabled: it is the one live ARM64-only SPU codegen path that the working Android
 // reference fork does not have, and it matches the SPU regfile-corruption / STOP 0x0
 // signature behind several games failing to boot. This is a SUSPICION, not a proven
-// diagnosis -- upstream ouroboros420/rpcsx (4d5a30618) disabled it on the same grounds.
+// diagnosis -- an earlier Android fork (4d5a30618) disabled it on the same grounds.
 // The scalar fallback below is what stock RPCS3 uses and the cost is negligible, since
 // GBB/GBH are rare bit-gather ops. Set to 1 to restore the vector path.
 #if defined(ARCH_ARM64)
@@ -5360,7 +5360,7 @@ public:
 				// different counter than the divisor describes gives a meaningless delta, so emit the
 				// same register the rest of the emulator uses. No isb: utils::get_tsc() does not use
 				// one either, and matching it keeps the JIT and C++ paths consistent.
-				// Ported from rfandango/rpcsx (daf4a080a).
+				// Ported from another Android fork (daf4a080a).
 				const auto tsc = m_ir->CreateCall(
 #if defined(ARCH_ARM64)
 					llvm::InlineAsm::get(llvm::FunctionType::get(get_type<u64>(), false),
@@ -6270,7 +6270,7 @@ public:
 				// different counter than the divisor describes gives a meaningless delta, so emit the
 				// same register the rest of the emulator uses. No isb: utils::get_tsc() does not use
 				// one either, and matching it keeps the JIT and C++ paths consistent.
-				// Ported from rfandango/rpcsx (daf4a080a).
+				// Ported from another Android fork (daf4a080a).
 				const auto tsc = m_ir->CreateCall(
 #if defined(ARCH_ARM64)
 					llvm::InlineAsm::get(llvm::FunctionType::get(get_type<u64>(), false),

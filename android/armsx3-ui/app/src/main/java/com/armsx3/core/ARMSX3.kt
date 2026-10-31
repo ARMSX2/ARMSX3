@@ -1,0 +1,442 @@
+package com.armsx3.core
+
+import android.view.Surface
+import androidx.compose.runtime.mutableStateOf
+
+enum class Digital1Flags(val bit: Int)
+{
+    None(0),
+    CELL_PAD_CTRL_SELECT(0x00000001),
+    CELL_PAD_CTRL_L3(0x00000002),
+    CELL_PAD_CTRL_R3(0x00000004),
+    CELL_PAD_CTRL_START(0x00000008),
+    CELL_PAD_CTRL_UP(0x00000010),
+    CELL_PAD_CTRL_RIGHT(0x00000020),
+    CELL_PAD_CTRL_DOWN(0x00000040),
+    CELL_PAD_CTRL_LEFT(0x00000080),
+    CELL_PAD_CTRL_PS(0x00000100),
+}
+
+enum class Digital2Flags(val bit: Int)
+{
+    None(0),
+    CELL_PAD_CTRL_L2(0x00000001),
+    CELL_PAD_CTRL_R2(0x00000002),
+    CELL_PAD_CTRL_L1(0x00000004),
+    CELL_PAD_CTRL_R1(0x00000008),
+    CELL_PAD_CTRL_TRIANGLE(0x00000010),
+    CELL_PAD_CTRL_CIRCLE(0x00000020),
+    CELL_PAD_CTRL_CROSS(0x00000040),
+    CELL_PAD_CTRL_SQUARE(0x00000080),
+};
+
+enum class EmulatorState {
+    Stopped,
+    Loading,
+    Stopping,
+    Running,
+    Paused,
+    Frozen, // paused but cannot resume
+    Ready,
+    Starting;
+
+    companion object {
+        fun fromInt(value: Int) = EmulatorState.entries.first { it.ordinal == value }
+    }
+}
+
+enum class BootResult
+{
+    NoErrors,
+    GenericError,
+    NothingToBoot,
+    WrongDiscLocation,
+    InvalidFileOrFolder,
+    InvalidBDvdFolder,
+    InstallFailed,
+    DecryptionError,
+    FileCreationError,
+    FirmwareMissing,
+    // Mirrors game_boot_result in Emu/System.h BY ORDINAL -- the native side sends the raw int.
+    // FirmwareVersion and DatabaseConfigMissing were missing here, so every value from this point
+    // down was reported as its neighbour (still_running surfaced as "AlreadyAdded") and the last
+    // two had no entry at all, making fromInt throw. Keep this list in step with the C++ enum.
+    FirmwareVersion,
+    UnsupportedDiscType,
+    SavestateCorrupted,
+    SavestateVersionUnsupported,
+    StillRunning,
+    AlreadyAdded,
+    CurrentlyRestricted,
+    DatabaseConfigMissing;
+
+    companion object {
+        // Total rather than throwing: an unrecognised code means the enums have drifted again,
+        // and reporting that as a generic failure beats taking the app down with it.
+        fun fromInt(value: Int) = entries.getOrNull(value) ?: GenericError
+    }
+};
+
+class ARMSX3 {
+    external fun openLibrary(path: String): Boolean
+
+    /** Extract the Lossless Scaling shaders from a real filesystem path. Returns how many were
+     *  found, or a negative value; frameGenShaderError() then explains why. */
+    external fun frameGenImportShaders(path: String): Int
+    external fun frameGenShaderCount(): Int
+    external fun frameGenShaderError(): String
+    external fun getLibraryVersion(path: String): String?
+    external fun initialize(rootDir: String, user: String, socInfo: String): Boolean
+    external fun logPreviousExit(line: String)
+    external fun installFw(fd: Int, progressId: Long): Boolean
+    external fun install(fd: Int, progressId: Long): Boolean
+
+    /** Extract a .pkg into [dest] instead of installing it into dev_hdd0. */
+    external fun extractPkgTo(fd: Int, progressId: Long, dest: String): Boolean
+
+    /**
+     * Register the SAF storage device in the core.
+     *
+     * False when the core predates it, in which case a picked folder is still resolved to a
+     * filesystem path and still fails on a build without permission to read one.
+     */
+    external fun installStorageBridge(): Boolean
+
+    /** Let the core play its overlay sounds (trophy, dialogs, on-screen keyboard) through the
+     *  app's own sound pool. False on a core that predates this, which stays silent. */
+    external fun installSoundBridge(): Boolean
+    /** Install several .pkg parts of one split package together, in order. */
+    external fun installSplitPkg(fds: IntArray, progressId: Long): Boolean
+    /** Delete an installed title's directory. Refused for paths outside dev_hdd0/game. */
+    external fun uninstallGame(path: String): Boolean
+    external fun installKey(fd: Int, requestId: Long, gamePath: String): Boolean
+    external fun boot(path: String): Int
+    external fun surfaceEvent(surface: Surface, event: Int): Boolean
+
+    /**
+     * The surface's pixel size, as SurfaceHolder reports it.
+     *
+     * Separate from surfaceEvent because rotation is a size change and nothing else: the
+     * activity keeps the same Surface, so the core has no other way to learn the window
+     * changed shape.
+     */
+    external fun surfaceSizeChanged(width: Int, height: Int)
+
+    /** SIXAXIS motion. Values are the PS3's own 0..1023 range with 512 at rest. */
+    external fun setPadSensor(port: Int, x: Int, y: Int, z: Int, g: Int)
+
+    /** What the game is asking the rumble motors to do: (large shl 8) or small, each 0..255. */
+    external fun getPadRumble(port: Int): Int
+
+    /**
+     * Device temperatures for the perf overlay, in degrees Celsius, or Thermals.NONE for a
+     * reading that could not be taken. Discovery is the app's job -- Android has no supported
+     * API for SoC temperatures -- so the core is only ever told the answer.
+     */
+    external fun setThermals(cpu: Float, gpu: Float, battery: Float, show: Boolean)
+    external fun setRenderPosition(portraitTop: Boolean, topInset: Int)
+    external fun setPadDeviceClasses(classes: IntArray)
+
+    /** Write a line into the emulator's own log, the file testers actually send.
+     *  Silently does nothing until the core is open. */
+    external fun logAndroid(message: String)
+    external fun usbDeviceEvent(fd: Int, vendorId: Int, productId: Int, event: Int): Boolean
+    external fun processCompilationQueue(): Boolean
+    external fun startMainThreadProcessor(): Boolean
+    external fun overlayPadData(port: Int, digital1: Int, digital2: Int, leftStickX: Int, leftStickY: Int, rightStickX: Int, rightStickY: Int): Boolean
+
+    // Remote play capture (native-lib.cpp, android/src/remote_play.cpp). The streaming threads
+    // pull frames and audio from the core; it never calls back for them.
+    external fun remotePlayStart(maxWidth: Int, maxHeight: Int): Boolean
+    external fun remotePlayStop()
+    external fun remotePlayPollVideo(buffer: java.nio.ByteBuffer, info: IntArray, timeoutMs: Int): Int
+    external fun remotePlayPollAudio(buffer: java.nio.ByteBuffer, capFrames: Int, timeoutMs: Int): Int
+    external fun remotePlayCounters(out: IntArray): Boolean
+    // Hardware frames (remotePlayPollVideo returned 2): the slot's buffer as a GL texture, needing a
+    // current EGL context; the slot handed back once the encoder has drawn it; and whether the core
+    // may send them at all.
+    external fun remotePlayImportFrame(slot: Int, texture: Int): Long
+    external fun remotePlayDestroyImage(image: Long)
+    external fun remotePlayReleaseFrame(slot: Int, seq: Int)
+    external fun remotePlaySetHardware(enabled: Boolean)
+    // Whether the running game can be hosted: only the Vulkan renderer captures frames.
+    external fun remotePlayCanCapture(): Boolean
+    // Online hosting, a port on the router (UPnP): this device's address on the router's network or
+    // null (blocks ~2 s the first time); "public address:port" opened for a UDP port or null; close.
+    external fun remotePlayUpnpPrepare(): String?
+    external fun remotePlayUpnpMap(internalPort: Int, externalHint: Int, leaseSeconds: Int): String?
+    external fun remotePlayUpnpUnmap(externalPort: Int)
+    /** Analog pressure per pressure-capable button, in CELL_PAD press-offset order
+     *  (RIGHT, LEFT, UP, DOWN, TRIANGLE, CIRCLE, CROSS, SQUARE, L1, R1, L2, R2),
+     *  each 1..255, or 0 to leave that button digital. */
+    external fun overlayPadPressure(port: Int, values: IntArray): Boolean
+    /** One key transition for the emulated PS3 keyboard (cellKb).
+     *
+     *  [androidKeyCode] is an android.view.KeyEvent keycode and [unicode] is what
+     *  KeyEvent.getUnicodeChar() returned for it, or 0. Returns false when nothing
+     *  consumed the key — no game running, the keyboard handler off, or a key the
+     *  PS3 keyboard has no equivalent of. */
+    external fun keyboardKey(androidKeyCode: Int, unicode: Int, pressed: Boolean, repeat: Boolean): Boolean
+    external fun collectGameInfo(rootDir: String, progressId: Long): Boolean
+    external fun systemInfo(): String
+    external fun settingsGet(path: String): String
+    external fun settingsSet(path: String, value: String): Boolean
+    // ---- RPCN ----
+    //
+    // All of these block on the network. Call them off the main thread.
+    //
+    // Each returns a human-readable failure, or an empty string on success -- the core owns
+    // the message so the two error enums (ErrorType and rpcn_state) do not have to be
+    // mirrored here and kept in step across a dlopen boundary that is allowed to skew.
+
+    /** JSON: {host, npid, hasPassword, hasToken, hosts:[{desc,host}]}. Empty if unsupported. */
+    external fun rpcnGetConfig(): String
+
+    /** Empty strings mean "leave unchanged", so a host can be saved without resending a
+     *  password the UI never displayed. */
+    external fun rpcnSetConfig(host: String, npid: String, password: String, token: String)
+
+    /** Sends a friend request. Signs in first if needed; returns "" on success or a message. */
+    external fun rpcnAddFriend(npid: String): String
+
+    /** Removes a friend. Returns "" on success or a message. */
+    external fun rpcnRemoveFriend(npid: String): String
+
+    /** Friends and pending requests as JSON: signedIn, friends, received, sent. Never signs in on its own. */
+    external fun rpcnGetFriends(): String
+
+    /** Holds a signed-in session open for a friends screen (true, signing in if needed) or lets it go (false).
+     *  Returns "" on success or a message. */
+    external fun rpcnFriendsSession(open: Boolean): String
+
+    /** Game invites received and not yet used, as JSON [{id, from, subject, body}]. Never signs in. */
+    external fun rpcnGetInvites(): String
+
+    /** Hands an invite to the running game, as the XMB would. Returns "" on success or a message. */
+    external fun rpcnAcceptInvite(id: Long): String
+
+    /** Discards an invite. Returns "" on success or a message. */
+    external fun rpcnDeclineInvite(id: Long): String
+
+    external fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String
+    external fun rpcnResendToken(npid: String, password: String): String
+    external fun rpcnSendResetToken(npid: String, email: String): String
+    external fun rpcnResetPassword(npid: String, token: String, password: String): String
+    /** Save the account and sign in, offering the password in the forms RPCN may want (RPCS3's derived one first). */
+    external fun rpcnSignIn(host: String, npid: String, password: String, token: String): String
+
+    /** Connect and authenticate with the saved account. */
+    external fun rpcnTestLogin(): String
+
+    /** Delete every trophy this account has synced to the server. Not undoable. */
+    external fun rpcnDeleteTrophies(): String
+
+    // Saved servers. The list lives in the core's own cfg_rpcn "Hosts" entry, so these are
+    // a view onto it, not a second store -- and the official server is protected from
+    // deletion there, not here.
+    external fun rpcnAddHost(desc: String, host: String): String
+    external fun rpcnDelHost(desc: String, host: String): String
+
+    /** Restore the shipped server list and select the official address. */
+    external fun rpcnResetHosts()
+
+    external fun rpcnSetIpv6(enabled: Boolean)
+
+    /** JSON: {configured, npid, connected, authentified, onlineName}. Empty if unsupported.
+     *
+     *  RPCN keeps no persistent session -- every connection re-authenticates from the saved
+     *  credentials -- so `configured` is what survives a restart, not `authentified`. */
+    external fun rpcnStatus(): String
+
+    /** Whether an RPCN session is signed in right now. Cheap enough to poll: no config reload, and
+     *  it never creates a client. */
+    external fun rpcnSignedIn(): Boolean
+
+    /** The phone's microphones for the core: one "<Android device id>\t<name>" per line (MicDevices). */
+    external fun setMicDevices(list: String)
+
+    /** Audio settings' microphone test, through the game's own capture: start, poll 0..1 (-1 stopped), stop. */
+    external fun micTestStart(device: String): Boolean
+    external fun micTestLevel(): Float
+    external fun micTestStop()
+
+    /** Puts a .sky figure file on the emulated Skylanders portal: the place it took, -1 not a figure, -2 full. */
+    external fun skylanderLoad(path: String): Int
+
+    /** Lifts the figure in that place off the emulated portal. */
+    external fun skylanderRemove(slot: Int): Boolean
+    external fun skylanderLight(): Int
+
+    /** Disney Infinity base: a 320-byte figure file at position 0 to 8 (ToyPortals.InfinityBase). */
+    external fun infinityLoad(path: String, position: Int): Boolean
+    external fun infinityRemove(position: Int): Boolean
+
+    /** Lego Dimensions toy pad: a 180-byte figure file at index 0 to 6 (ToyPortals.DimensionsToyPad). */
+    external fun dimensionsLoad(path: String, index: Int): Boolean
+    external fun dimensionsRemove(index: Int): Boolean
+    /** New figure files, as RPCS3's portal managers create them. False when the file exists. */
+    external fun skylanderCreate(path: String, id: Int, variant: Int): Boolean
+    external fun infinityCreate(path: String, figure: Int, series: Int): Boolean
+    external fun dimensionsCreate(path: String, id: Int): Boolean
+
+    /** The RPCN tab's avatar picker (np_avatar): the installed PSN avatars as JSON, the PNG inside one,
+     *  choosing one by path ("" = the default), and a picture of the player's own as a square PNG. */
+    external fun avatarList(): String
+    external fun avatarCurrent(): String
+    external fun avatarImage(path: String): ByteArray?
+    external fun avatarSelect(path: String): Boolean
+    external fun avatarUseImage(png: ByteArray): Boolean
+
+    /** Real toy portals the app opened, as comma-separated file descriptors, for the next game (UsbPassthrough). */
+    external fun usbSetPassthrough(fds: String)
+    external fun usbPassedThrough(): Int
+    external fun takeGameError(): String
+
+    /** Coalesce the config file writes of every settingsSet until [settingsEndBatch]. */
+    external fun settingsBeginBatch()
+    external fun settingsEndBatch()
+    external fun getState() : Int
+    external fun kill()
+    external fun resume()
+    external fun pause()
+    /** From the activity's onStart (false) and onStop (true); paused-game threads poll less. */
+    external fun setAppBackgrounded(backgrounded: Boolean)
+    /** 0 while nothing compiles during play, else 1 + the PPU modules compiled so far in this stretch. */
+    external fun getPlayCompileState(): Int
+    external fun openHomeMenu()
+
+    /** Arm an RSX frame capture: the next frame the emulator renders is recorded to
+     *  config/captures/ and emulation pauses. */
+    external fun captureFrame()
+
+    /** Arm a frame dump of the next frame (1 = final image, 2 = every render pass), saved as PNGs to
+     *  config/captures/. False when the renderer cannot dump frames. */
+    external fun dumpFrame(mode: Int): Boolean
+    external fun loginUser(userId: String)
+    external fun getUser(): String
+    external fun getTitleId(): String
+    /** The running game's title from its PARAM.SFO. Empty when nothing is running, null before
+     *  the core is loaded. */
+    external fun getTitle(): String?
+    /** The running game's trophy folder name (NPWR comm id, e.g. "NPWR05636_00").
+     *
+     *  Empty when no game is running, when the game has not called
+     *  sceNpTrophyCreateContext yet (many only do on reaching a menu), or when it has
+     *  no trophies. Returns null on a core too old to export it, so callers must treat
+     *  the result as nullable despite the declared type. */
+    external fun getCurrentTrophyName(): String
+    /** Pin the Adreno GPU to max clocks (no DVFS ramp) or release it. No-ops on non-Adreno.
+     *  Costs heat and battery, so it is opt-in. Safe before the core is loaded -- adrenotools
+     *  is linked into the JNI library, not the core. */
+    external fun setGpuTurbo(on: Boolean)
+    /** ADPF telemetry: flip-to-flip period, CPU work in that window, and the presenting
+     *  thread's OS tid. All return 0 when not yet measured -- treat 0 as "skip". */
+    external fun getFramePeriodNs(): Long
+    external fun getFrameWorkNs(): Long
+    external fun getRsxThreadTid(): Int
+    external fun supportsCustomDriverLoading(): Boolean
+    external fun saveState(): Boolean
+    external fun loadState(index: Int): Boolean
+    external fun hasState(index: Int): Boolean
+
+    // Numbered slots. The three above walk RPCS3's rolling history by age (1 = most
+    // recent); these address a fixed slot, which is what the ten-slot UI means.
+    external fun saveStateToSlot(slot: Int): Boolean
+    external fun loadStateFromSlot(slot: Int): Boolean
+    external fun hasStateInSlot(slot: Int): Boolean
+    external fun isStateSlotReadable(slot: Int): Boolean
+    external fun deleteStateFromSlot(slot: Int): Boolean
+    external fun patchEngineVersion(): String
+    external fun patchesImport(content: String): Int
+    /** Replace patches/[file] whole (patch.yml, artemis_patch.yml or armsx3_patch.yml only).
+     *  Patch count, or -1 when the content does not parse or the write fails. */
+    external fun patchesWrite(file: String, content: String): Int
+    external fun patchesList(serial: String): String
+    external fun probeDiscInfo(isoPath: String, iconOut: String): String
+    /** Swap the running game's disc. 0 swapped, 1 the game takes no swaps, 2 not a disc,
+     *  3 the game never released its disc, 4 the core refused the new one. */
+    external fun changeDisc(path: String): Int
+    /** 0 no disc swaps, 1 a disc is in and can be swapped, 2 the tray is empty. */
+    external fun discSwapState(): Int
+    /** {"discs":[...],"current":"..."} for the playlist the running game was booted from. */
+    external fun getDiscPlaylist(): String
+    /** The content id an installed game's own EBOOT is licensed under, or "" when it has none. */
+    external fun gameContentId(gamePath: String): String
+    external fun patchSetEnabled(
+        hash: String, description: String, serial: String,
+        appVersion: String, enabled: Boolean,
+    ): Boolean
+    external fun isInstallableFile(fd: Int) : Boolean
+    external fun getDirInstallPath(sfoFd: Int) : String?
+
+    /**
+     * What a .pkg says it is, read from the package's own PARAM.SFO without installing it.
+     *
+     * JSON with titleId, title, category and appVersion, or null when the file is not a
+     * readable package. CATEGORY is the useful part: "GD" is an update and "AC" is
+     * downloadable content, neither of which is a game.
+     */
+    external fun probePkgInfo(fd: Int): String?
+
+    /**
+     * Whether the core has armed a restart and will come back up on its own.
+     *
+     * True between the kill a save state performs and the restart that follows it. False on a
+     * core that predates this, which is the behaviour the run loop had before.
+     */
+    external fun isRestartPending(): Boolean
+    external fun getVersion(): String
+    external fun setCustomDriver(path: String, libraryName: String, hookDir: String): Boolean
+
+
+    companion object {
+        var initialized = false
+        val instance = ARMSX3()
+        var rootDirectory = ""
+        var nativeLibDirectory = ""
+        var lastPlayedGame = ""
+        var activeGame = mutableStateOf<String?>(null)
+        var state = mutableStateOf(EmulatorState.Stopped)
+        var activeLibrary = mutableStateOf<String?>(null)
+
+        fun boot(path: String): BootResult {
+            return BootResult.fromInt(instance.boot(path))
+        }
+
+        fun updateState() {
+            val newState = EmulatorState.fromInt(instance.getState())
+            if (newState != state.value) {
+                state.value = newState
+            }
+        }
+
+        fun getState(): EmulatorState {
+            updateState()
+            return state.value
+        }
+
+        fun getHdd0Dir(): String {
+            return rootDirectory + "config/dev_hdd0/"
+        }
+
+        fun openLibrary(path: String): Boolean {
+            if (!instance.openLibrary(path)) {
+                return false
+            }
+
+            activeLibrary.value = path
+            return true
+        }
+
+        init {
+            // This loads the JNI GLUE (app/src/main/cpp/native-lib.cpp), not the
+            // emulator core. The glue is what implements every external fun here;
+            // it then dlopen()s libarmsx3-core.so by path via openLibrary(), and
+            // forwards each call to the core's _armsx3_* entry points.
+            //
+            // Two libraries, two load steps -- loading the core here instead
+            // would resolve nothing, because the core exports no JNI symbols.
+            System.loadLibrary("armsx3-jni")
+        }
+    }
+}

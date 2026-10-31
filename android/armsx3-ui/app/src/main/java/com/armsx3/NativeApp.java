@@ -39,7 +39,7 @@ public final class NativeApp {
 
     // ---------------------------------------------------------------
     // Low-level binding to the RPCS3 core.
-    // The core is dlopen()ed and its _rpcsx_* entry points resolved by
+    // The core is dlopen()ed and its _armsx3_* entry points resolved by
     // the JNI bridge; see Rpcs3Bridge.
     // ---------------------------------------------------------------
 
@@ -50,33 +50,33 @@ public final class NativeApp {
         Rpcs3Bridge.initializeOnce(context);
     }
 
-    /** [MAPPED] -> _rpcsx_initialize */
+    /** [MAPPED] -> _armsx3_initialize */
     public static void initialize(String path, String biosFolder, int apiVer) {
         // biosFolder is a PS2 concept; PS3 firmware lives in dev_flash under the
         // root dir and is installed, not pointed at. apiVer is unused by RPCS3.
         Rpcs3Bridge.initialize(path);
     }
 
-    /** [MAPPED] -> _rpcsx_boot */
+    /** [MAPPED] -> _armsx3_boot */
     public static boolean runVMThread(String path) {
         return Rpcs3Bridge.boot(path);
     }
 
-    /** [MAPPED] -> _rpcsx_getState */
+    /** [MAPPED] -> _armsx3_getState */
     public static boolean hasActiveVM() {
         return Rpcs3Bridge.hasActiveVm();
     }
 
-    /** [MAPPED] -> _rpcsx_pause */
+    /** [MAPPED] -> _armsx3_pause */
     public static void pause() { Rpcs3Bridge.pause(); }
 
-    /** [MAPPED] -> _rpcsx_resume */
+    /** [MAPPED] -> _armsx3_resume */
     public static void resume() { Rpcs3Bridge.resume(); }
 
-    /** [MAPPED] -> _rpcsx_setAppBackgrounded */
+    /** [MAPPED] -> _armsx3_setAppBackgrounded */
     public static void setAppBackgrounded(boolean backgrounded) { Rpcs3Bridge.setAppBackgrounded(backgrounded); }
 
-    /** [MAPPED] -> _rpcsx_kill */
+    /** [MAPPED] -> _armsx3_kill */
     public static void shutdown() { Rpcs3Bridge.shutdown(); }
 
     /** [MAPPED] */
@@ -86,21 +86,21 @@ public final class NativeApp {
 
     // ===== Surface =====
 
-    /** [MAPPED] -> _rpcsx_surfaceEvent */
+    /** [MAPPED] -> _armsx3_surfaceEvent */
     public static void onNativeSurfaceCreated() { Rpcs3Bridge.surfaceCreated(); }
 
-    /** [MAPPED] -> _rpcsx_surfaceEvent */
+    /** [MAPPED] -> _armsx3_surfaceEvent */
     public static void onNativeSurfaceChanged(Surface surface, int w, int h) {
         Rpcs3Bridge.surfaceChanged(surface, w, h);
     }
 
-    /** [MAPPED] -> _rpcsx_surfaceEvent */
+    /** [MAPPED] -> _armsx3_surfaceEvent */
     public static void onNativeSurfaceDestroyed() { Rpcs3Bridge.surfaceDestroyed(); }
 
     // ===== Settings =====
 
     /**
-     * [MAPPED] -> _rpcsx_settingsSet
+     * [MAPPED] -> _armsx3_settingsSet
      *
      * ARMSX2 addresses settings as (section, key, type, value) against a PCSX2
      * INI. RPCS3's tree is addressed by a "@@"-joined path and takes a
@@ -154,13 +154,13 @@ public final class NativeApp {
 
     // ===== Game identity =====
 
-    /** [MAPPED] -> _rpcsx_getTitleId. PS3 title id, e.g. BLUS30443. */
+    /** [MAPPED] -> _armsx3_getTitleId. PS3 title id, e.g. BLUS30443. */
     public static String getGameSerial() { return Rpcs3Bridge.getTitleId(); }
 
     /** [TODO] */
     public static String getGameTitle(String path) { Unsupported.note("getGameTitle"); return ""; }
 
-    /** [MAPPED] -> _rpcsx_getVersion */
+    /** [MAPPED] -> _armsx3_getVersion */
     public static String getBuildVersion() { return Rpcs3Bridge.getVersion(); }
 
     /** [PS3-N/A] PCSX2 identifies discs by CRC; PS3 uses the title id. */
@@ -289,12 +289,12 @@ public final class NativeApp {
                                                 String redirectDir, String hookLibDir) {
         if (driverDir == null || driverDir.isEmpty()) {
             // Empty path clears the custom driver and reverts to the system one.
-            net.rpcsx.RPCSX.Companion.getInstance().setCustomDriver("", "", "");
+            com.armsx3.core.ARMSX3.Companion.getInstance().setCustomDriver("", "", "");
             android.util.Log.i("ARMSX3-Driver", "reverted to the system Vulkan driver");
             return true;
         }
 
-        boolean ok = net.rpcsx.RPCSX.Companion.getInstance()
+        boolean ok = com.armsx3.core.ARMSX3.Companion.getInstance()
                 .setCustomDriver(driverDir, driverName, hookLibDir);
         if (ok) {
             android.util.Log.i("ARMSX3-Driver", "custom Vulkan driver applied: " + driverName);
@@ -308,7 +308,7 @@ public final class NativeApp {
     /** Whether this device has a GPU a user-supplied Vulkan driver can drive (Adreno or Mali). */
     public static boolean supportsCustomVulkanDriver() {
         try {
-            return net.rpcsx.RPCSX.Companion.getInstance().supportsCustomDriverLoading();
+            return com.armsx3.core.ARMSX3.Companion.getInstance().supportsCustomDriverLoading();
         } catch (Throwable t) {
             return false;
         }
@@ -428,7 +428,7 @@ public final class NativeApp {
 
     private static void pushRenderPosition() {
         try {
-            net.rpcsx.RPCSX.Companion.getInstance()
+            com.armsx3.core.ARMSX3.Companion.getInstance()
                 .setRenderPosition(sPortraitRenderTop, sPortraitRenderTopInset);
         } catch (Throwable ignored) {
             // A core without the symbol centres the image, which is what it did before this.
@@ -471,7 +471,7 @@ public final class NativeApp {
 
     // ===== Input =====
 
-    /** [MAPPED] -> _rpcsx_overlayPadData (the virtual pad handler). */
+    /** [MAPPED] -> _armsx3_overlayPadData (the virtual pad handler). */
     public static void setPadButton(int index, int range, boolean pressed) {
         Rpcs3Bridge.setPadButton(0, index, range, pressed);
     }
@@ -534,7 +534,7 @@ public final class NativeApp {
         Rpcs3Bridge.setKeyboardEnabled(e);
     }
 
-    /** [MAPPED] -> _rpcsx_keyboardKey. port is ignored (single handler). */
+    /** [MAPPED] -> _armsx3_keyboardKey. port is ignored (single handler). */
     public static boolean usbKeyboardKey(int p, int k, boolean pressed) {
         return Rpcs3Bridge.keyboardKey(k, 0, pressed);
     }
@@ -588,7 +588,7 @@ public final class NativeApp {
 
     // ===== Misc =====
 
-    /** [MAPPED] -> _rpcsx_changeDisc. Use Rpcs3Bridge.changeDisc for the reason it failed. */
+    /** [MAPPED] -> _armsx3_changeDisc. Use Rpcs3Bridge.changeDisc for the reason it failed. */
     public static boolean changeDisc(String path) { return Rpcs3Bridge.changeDisc(path) == 0; }
 
     /** [TODO] */

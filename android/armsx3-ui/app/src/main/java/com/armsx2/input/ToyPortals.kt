@@ -7,7 +7,7 @@ import androidx.compose.runtime.mutableStateMapOf
 import com.armsx2.Pasx2Application
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx3.Rpcs3Bridge
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -34,7 +34,7 @@ object ToyPortals {
         MainActivityRuntime.prefs.edit().putBoolean(KEY_MENU, on).apply()
     }
 
-    internal fun folder(name: String): File = File(RPCSX.rootDirectory, name).apply { mkdirs() }
+    internal fun folder(name: String): File = File(ARMSX3.rootDirectory, name).apply { mkdirs() }
 
     internal fun figures(folder: File, extensions: Set<String>): List<File> =
         folder.listFiles { file -> file.isFile && file.extension.lowercase() in extensions }

@@ -131,7 +131,7 @@ PPUTranslator::PPUTranslator(LLVMContext& context, Module* _module, const ppu_mo
 	// Relocation logging is per-module, not per-relocation.
 	//
 	// These three sites each logged once per relocation. One Portal 2 session produced a
-	// 1.26 GB RPCSX.log that was ~100% the "relative relocation" notice alone, and the
+	// 1.26 GB log that was ~100% the "relative relocation" notice alone, and the
 	// volume does not merely waste disk: the log writer falls behind, every thread that
 	// logs blocks behind it, and the emulator parks at 0% CPU looking exactly like a
 	// deadlock. Two of the three were at error level, which no log-level setting filters.

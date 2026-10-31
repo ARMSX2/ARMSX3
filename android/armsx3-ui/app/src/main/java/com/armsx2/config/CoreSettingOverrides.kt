@@ -2,7 +2,7 @@ package com.armsx2.config
 
 import androidx.core.content.edit
 import com.armsx2.runtime.MainActivityRuntime
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -129,22 +129,22 @@ object CoreSettingOverrides {
 
         val defaults = runCatching { coreDefaults() }.getOrDefault(emptyMap())
         if (defaults.isEmpty()) return
-        runCatching { RPCSX.instance.settingsBeginBatch() }
+        runCatching { ARMSX3.instance.settingsBeginBatch() }
         try {
             for (path in paths) {
                 val value = defaults[path] ?: continue
-                val ok = runCatching { RPCSX.instance.settingsSet(path, value) }.getOrDefault(false)
+                val ok = runCatching { ARMSX3.instance.settingsSet(path, value) }.getOrDefault(false)
                 android.util.Log.i("ARMSX3-Override", "reset $path = $value -> $ok")
             }
         } finally {
-            runCatching { RPCSX.instance.settingsEndBatch() }
+            runCatching { ARMSX3.instance.settingsEndBatch() }
         }
     }
 
     /** Every leaf's default from the core's own tree, keyed by path and encoded the way
      *  settingsSet takes it: the same walk and encoding the All Core Settings screen uses. */
     private fun coreDefaults(): Map<String, String> {
-        val raw = RPCSX.instance.settingsGet("")
+        val raw = ARMSX3.instance.settingsGet("")
         if (raw.isBlank()) return emptyMap()
         val out = HashMap<String, String>()
         fun walk(node: JSONObject, prefix: String) {
@@ -198,19 +198,19 @@ object CoreSettingOverrides {
         // unchanged list as a no-op, so this costs nothing on the pushes that change nothing.
         if (LIBRARIES_CONTROL !in merged) merged[LIBRARIES_CONTROL] = "[]"
 
-        runCatching { RPCSX.instance.settingsBeginBatch() }
+        runCatching { ARMSX3.instance.settingsBeginBatch() }
         try {
             merged.forEach { (path, value) ->
                 // Report per setting rather than assuming. A stored override that silently
                 // fails to apply looks identical to one that was never recorded, which is
                 // exactly the confusion Vblank Rate caused. The tier goes in the line too:
                 // "why is this game different" is answered by which set the value came from.
-                val ok = runCatching { RPCSX.instance.settingsSet(path, value) }.getOrDefault(false)
+                val ok = runCatching { ARMSX3.instance.settingsSet(path, value) }.getOrDefault(false)
                 val tier = if (path in perGame) "game" else "global"
                 android.util.Log.i("ARMSX3-Override", "replay [$tier] $path = $value -> $ok")
             }
         } finally {
-            runCatching { RPCSX.instance.settingsEndBatch() }
+            runCatching { ARMSX3.instance.settingsEndBatch() }
         }
     }
 }

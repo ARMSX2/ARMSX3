@@ -18,7 +18,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # rpcs3_emu (SPUThread.{h,cpp}, SPULLVMRecompiler.cpp, SPUCommonRecompiler.cpp,
 # lv2.cpp) at 2510/3123. Verified: all 4 compile with 0 errors under clang 21.
 # Do NOT "fix" this with -Wno-error=return-type; the code is fine, the old
-# compiler was not. rpcsx-ui-android pins the NDK 29 line for the same reason.
+# compiler was not. Other Android ports pin the NDK 29 line for the same reason.
 : "${NDK_VERSION:=29.0.14206865}"
 : "${CMAKE_VERSION:=3.30.5}"
 : "${ANDROID_API:=33}"          # keep in step with armsx3-ui minSdk

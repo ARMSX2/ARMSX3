@@ -6,7 +6,7 @@ import android.opengl.GLES20
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import org.webrtc.ArmsxNV12Buffer
 import org.webrtc.ArmsxVideoEncoderFactory
 import org.webrtc.EglBase
@@ -76,7 +76,7 @@ internal class RemotePlayFrames(textureInput: Boolean) {
             } == true
             if (!hardware) Log.w(TAG, "remote play: no GL context for texture frames")
         }
-        RPCSX.instance.remotePlaySetHardware(hardware)
+        ARMSX3.instance.remotePlaySetHardware(hardware)
         Log.i(TAG, "remote play: frames go to the encoder as " + if (hardware) "GPU textures" else "NV12 copies")
     }
 
@@ -85,7 +85,7 @@ internal class RemotePlayFrames(textureInput: Boolean) {
         if (hardware && ArmsxVideoEncoderFactory.textureInputFailed()) disableHardware()
 
         val buffer = pool.poll() ?: ByteBuffer.allocateDirect(FRAME_BYTES)
-        val result = RPCSX.instance.remotePlayPollVideo(buffer, info, timeoutMs)
+        val result = ARMSX3.instance.remotePlayPollVideo(buffer, info, timeoutMs)
         if (result != 1) pool.offer(buffer)
 
         return when (result) {
@@ -100,13 +100,13 @@ internal class RemotePlayFrames(textureInput: Boolean) {
         val handler = gl
         val converter = yuvConverter
         if (!hardware || released || handler == null || converter == null || slot !in 0 until SLOTS) {
-            RPCSX.instance.remotePlayReleaseFrame(slot, seq)
+            ARMSX3.instance.remotePlayReleaseFrame(slot, seq)
             return Poll.Timeout
         }
 
         if (generations[slot] != generation) {
             if (onGl { import(slot) } != true) {
-                RPCSX.instance.remotePlayReleaseFrame(slot, seq)
+                ARMSX3.instance.remotePlayReleaseFrame(slot, seq)
                 disableHardware()
                 return Poll.Timeout
             }
@@ -115,19 +115,19 @@ internal class RemotePlayFrames(textureInput: Boolean) {
 
         val texture = TextureBufferImpl(
             width, height, VideoFrame.TextureBuffer.Type.OES, textures[slot], Matrix(FLIP), handler, converter,
-        ) { RPCSX.instance.remotePlayReleaseFrame(slot, seq) }
+        ) { ARMSX3.instance.remotePlayReleaseFrame(slot, seq) }
         return Poll.Frame(VideoFrame(texture, 0, System.nanoTime()))
     }
 
     // GL thread.
     private fun import(slot: Int): Boolean {
         if (images[slot] != 0L) {
-            RPCSX.instance.remotePlayDestroyImage(images[slot])
+            ARMSX3.instance.remotePlayDestroyImage(images[slot])
             images[slot] = 0L
         }
         if (textures[slot] == 0) textures[slot] = GlUtil.generateTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES)
 
-        val image = RPCSX.instance.remotePlayImportFrame(slot, textures[slot])
+        val image = ARMSX3.instance.remotePlayImportFrame(slot, textures[slot])
         if (image == 0L) {
             Log.w(TAG, "remote play: frame buffer $slot could not be imported")
             return false
@@ -168,7 +168,7 @@ internal class RemotePlayFrames(textureInput: Boolean) {
     private fun disableHardware() {
         if (!hardware) return
         hardware = false
-        RPCSX.instance.remotePlaySetHardware(false)
+        ARMSX3.instance.remotePlaySetHardware(false)
         Log.w(TAG, "remote play: texture frames off, sending NV12 copies")
     }
 
@@ -179,7 +179,7 @@ internal class RemotePlayFrames(textureInput: Boolean) {
         gl = null
         handler.post {
             for (slot in 0 until SLOTS) {
-                if (images[slot] != 0L) RPCSX.instance.remotePlayDestroyImage(images[slot])
+                if (images[slot] != 0L) ARMSX3.instance.remotePlayDestroyImage(images[slot])
                 if (textures[slot] != 0) GLES20.glDeleteTextures(1, intArrayOf(textures[slot]), 0)
                 images[slot] = 0L
                 textures[slot] = 0

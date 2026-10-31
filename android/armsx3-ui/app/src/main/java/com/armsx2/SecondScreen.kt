@@ -223,7 +223,7 @@ object SecondScreen {
                 // Resume() ignores Frozen. Setting eState to PAUSED instead would wake the
                 // stuck-paused backstop in MainActivityRuntime, which resumes any pause that has
                 // no menu over it — including this one.
-                val paused = net.rpcsx.RPCSX.getState() == net.rpcsx.EmulatorState.Paused
+                val paused = com.armsx3.core.ARMSX3.getState() == com.armsx3.core.EmulatorState.Paused
                 if (paused) MainActivityRuntime.resume() else MainActivityRuntime.pause()
             }, rowLp())
             row2.addView(action(I18n.get("touch.stateAction.screenshot")) {

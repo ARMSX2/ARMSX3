@@ -26,7 +26,7 @@ around 1.3 GB:
       -DCMAKE_TOOLCHAIN_FILE=$ANDROID_HOME/ndk/<version>/build/cmake/android.toolchain.cmake \
       -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-31 \
       -DCMAKE_BUILD_TYPE=RelWithDebInfo
-    cmake --build build-android --target rpcsx-android -j8
+    cmake --build build-android --target armsx3-core -j8
 
 Strip it and put it where the app expects it:
 

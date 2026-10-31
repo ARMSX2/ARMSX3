@@ -7448,7 +7448,7 @@ s64 spu_thread::get_ch_value(u32 ch)
 						// sub_saturate(8, 10) is 0, so this throttle fires on EVERY background SPU
 						// compile and sleeps productive reservation waiters through scene warm-up.
 						// Keep the desktop behaviour above 10 threads, give low-core devices a sane
-						// non-zero floor. Ported from ouroboros420/rpcsx (d8a19e2c8).
+						// non-zero floor. Ported from an earlier Android fork (d8a19e2c8).
 						const u32 hw_threads = utils::get_thread_count();
 						const u32 true_free = hw_threads > 10 ? (hw_threads - 10) : (hw_threads / 2);
 

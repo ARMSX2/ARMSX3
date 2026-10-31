@@ -3,12 +3,12 @@
 # ---------------------------------------------------------------------------
 # JNI callback surface -- DO NOT REMOVE
 # ---------------------------------------------------------------------------
-# The core (librpcsx-android.so) reaches back into Java by NAME STRING:
+# The core (libarmsx3-core.so) reaches back into Java by NAME STRING:
 #
-#   rpcsx-android.cpp:603  FindClass("net/rpcsx/ProgressRepository")
-#   rpcsx-android.cpp:626  FindClass("net/rpcsx/FirmwareRepository")
-#   rpcsx-android.cpp:644  FindClass("net/rpcsx/GameRepository")
-#   rpcsx-android.cpp:647  FindClass("net/rpcsx/GameInfo")  + GetMethodID ctor
+#   armsx3-core.cpp:603  FindClass("com/armsx3/core/ProgressRepository")
+#   armsx3-core.cpp:626  FindClass("com/armsx3/core/FirmwareRepository")
+#   armsx3-core.cpp:644  FindClass("com/armsx3/core/GameRepository")
+#   armsx3-core.cpp:647  FindClass("com/armsx3/core/GameInfo")  + GetMethodID ctor
 #                                                           + NewObject
 #
 # These classes carry @Keep on some members, but AndroidX's default rule for it
@@ -16,22 +16,22 @@
 # RENAME THE CLASS. A renamed class makes FindClass return null, so the app
 # works in debug and dies the moment you ship a minified release -- the worst
 # possible failure shape. Keep the classes themselves, by name.
--keep class net.rpcsx.ProgressRepository { *; }
--keep class net.rpcsx.FirmwareRepository { *; }
--keep class net.rpcsx.GameRepository { *; }
--keep class net.rpcsx.GameInfo { *; }
+-keep class com.armsx3.core.ProgressRepository { *; }
+-keep class com.armsx3.core.FirmwareRepository { *; }
+-keep class com.armsx3.core.GameRepository { *; }
+-keep class com.armsx3.core.GameInfo { *; }
 
 # GameInfo is constructed from native via GetMethodID("<init>", ...) with an
 # exact JVM signature, and is also kotlinx-serialized. Keep its shape intact.
--keepclassmembers class net.rpcsx.GameInfo {
+-keepclassmembers class com.armsx3.core.GameInfo {
     <init>(...);
     <fields>;
 }
 
-# RPCSX declares the dlsym'd entry points as `external fun`. The default
+# ARMSX3 declares the dlsym'd entry points as `external fun`. The default
 # android-optimize config keeps native method names, but the DECLARING class
 # must survive too or JNI has nothing to bind to.
--keep class net.rpcsx.RPCSX { *; }
+-keep class com.armsx3.core.ARMSX3 { *; }
 -keepclasseswithmembernames,includedescriptorclasses class * {
     native <methods>;
 }
@@ -83,7 +83,7 @@
 #       JNI DETECTED ERROR IN APPLICATION: java_class == null
 #    which is what it did.
 #
-# Same failure mode as the net/rpcsx keeps above: invisible in debug (no R8),
+# Same failure mode as the com/armsx3/core keeps above: invisible in debug (no R8),
 # fatal in release.
 -keep class com.armsx2.discord.DiscordNative { *; }
 -keep class com.discord.** { *; }

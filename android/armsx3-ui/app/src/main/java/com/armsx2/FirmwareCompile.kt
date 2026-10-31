@@ -2,7 +2,7 @@ package com.armsx2
 
 import androidx.compose.runtime.mutableStateOf
 import com.armsx2.i18n.I18n
-import net.rpcsx.ProgressUpdateEntry
+import com.armsx3.core.ProgressUpdateEntry
 
 /**
  * The firmware compile that follows an install, for the library to show.

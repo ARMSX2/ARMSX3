@@ -2,7 +2,7 @@ package com.armsx2.config
 
 import androidx.core.content.edit
 import com.armsx2.runtime.MainActivityRuntime
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -388,7 +388,7 @@ object ConfigDatabase {
         val title = serial?.trim().orEmpty()
         if (title.isEmpty()) return
 
-        val dir = File(RPCSX.rootDirectory, "config/config_db_user")
+        val dir = File(ARMSX3.rootDirectory, "config/config_db_user")
         val file = File(dir, "$title.keys")
         // Only keys this title's entry actually sets: withholding a key it never had would be a
         // line of noise in the file and in the log.
@@ -409,7 +409,7 @@ object ConfigDatabase {
      * Where the native side looks. get_database_config reads config/config_db/<TITLE>.yml
      * on the boot path, so this exact name is what makes the database live.
      */
-    private fun liveDir(): File = File(RPCSX.rootDirectory, "config/config_db")
+    private fun liveDir(): File = File(ARMSX3.rootDirectory, "config/config_db")
 
     /**
      * Where the split files sit while the database is switched off.
@@ -418,7 +418,7 @@ object ConfigDatabase {
      * database on and off across boots to compare without re-downloading 2000-odd titles
      * each time, which is the whole point of having the switch.
      */
-    private fun parkedDir(): File = File(RPCSX.rootDirectory, "config/config_db_off")
+    private fun parkedDir(): File = File(ARMSX3.rootDirectory, "config/config_db_off")
 
     private fun directory(): File =
         (if (isEnabled()) liveDir() else parkedDir()).apply { mkdirs() }

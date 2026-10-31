@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.10)
 # The JNI GLUE, not the emulator core. Produces libarmsx3-jni.so, which
 # System.loadLibrary("armsx3-jni") brings up; it then dlopen()s the core
 # (libarmsx3-core.so, shipped as a prebuilt in jniLibs) and forwards to its
-# _rpcsx_* entry points. adrenotools lives HERE rather than in the core, so the
+# _armsx3_* entry points. adrenotools lives HERE rather than in the core, so the
 # emulator stays free of a Qualcomm-specific dependency.
 project("armsx3-jni")
 

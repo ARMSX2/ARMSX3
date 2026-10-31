@@ -9,15 +9,15 @@ addresses, argument values, pointer widths). Diff the output of two runs and the
 in a thread's sequence is the call that behaved differently.
 
 Both emulators write the same log format, so the same normalisation applies to a desktop RPCS3.log
-and an Android RPCSX.log with no flags to remember.
+and an Android ARMSX3.log with no flags to remember.
 
 Usage:
-  normalise-log.py RPCSX.log                        > arm.trace
+  normalise-log.py ARMSX3.log                        > arm.trace
   normalise-log.py RPCS3.log --tail 90              > x86.trace     # last 90s only
   diff -u x86.trace arm.trace | head -40
 
   # then, to see it per thread:
-  normalise-log.py RPCSX.log --thread PhysWISESpursHdlr0
+  normalise-log.py ARMSX3.log --thread PhysWISESpursHdlr0
 """
 
 import argparse

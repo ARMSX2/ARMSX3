@@ -75,7 +75,7 @@ import org.json.JSONObject
  * five text boxes and seven buttons, which people read as a puzzle.
  *
  * Passwords go to the core as typed, and the core hands RPCN what RPCS3 would: a password derived
- * from it (_rpcsx_rpcnSignIn). So the password someone uses in RPCS3 works here as they know it;
+ * from it (_armsx3_rpcnSignIn). So the password someone uses in RPCS3 works here as they know it;
  * pasting the long string out of RPCS3's rpcn.yml, which is what people had to do, is not needed
  * (and still works).
  *

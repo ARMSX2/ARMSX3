@@ -1,7 +1,7 @@
 package com.armsx2
 
 import com.armsx2.runtime.MainActivityRuntime
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import java.io.File
 
 /**
@@ -84,7 +84,7 @@ object Ps3Sfo {
     /**
      * Every plausible emulator root, best first.
      *
-     * RPCSX.rootDirectory alone is not safe to rely on here. It is empty until
+     * ARMSX3.rootDirectory alone is not safe to rely on here. It is empty until
      * Rpcs3Bridge.initialize runs, and that only happens when the NATIVE CORE initialises -- so
      * anything asking this question before a game has been booted resolved "config/dev_hdd0/..."
      * as a RELATIVE path, found nothing, and reported every title as having no update installed.
@@ -96,7 +96,7 @@ object Ps3Sfo {
      * never had a custom root set.
      */
     private fun hdd0Roots(): List<File> = buildList {
-        RPCSX.rootDirectory.takeIf { it.isNotBlank() }?.let { add(File(it)) }
+        ARMSX3.rootDirectory.takeIf { it.isNotBlank() }?.let { add(File(it)) }
         runCatching { MainActivityRuntime.systemDirPosix() }.getOrNull()?.let { add(File(it)) }
         runCatching {
             MainActivityRuntime.instance?.applicationContext?.getExternalFilesDir(null)

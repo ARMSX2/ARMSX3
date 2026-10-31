@@ -369,7 +369,7 @@ namespace rsx::prof
 			// on this project before.
 			//
 			// Function-local on purpose: a namespace-scope initialiser runs before
-			// rpcsx-android.cpp parses driver_env.txt and setenv()s it, so the lever would
+			// armsx3-core.cpp parses driver_env.txt and setenv()s it, so the lever would
 			// always read as unset. Same trap as the other ARMSX3_* switches.
 			static const bool s_watch_scv_label = []
 			{

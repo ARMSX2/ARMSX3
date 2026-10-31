@@ -28,7 +28,7 @@ import com.armsx2.ui.settings.controllerFocusable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 import java.io.File
 
 /** One game's add-ons, as the DLC tab lists them. */
@@ -100,7 +100,7 @@ fun DlcTab() {
  * licence file's content id, and the TITLE_ID of any folder that is not named for itself.
  */
 private fun readDlcGroups(): List<DlcGroup> {
-    val hdd0 = File(RPCSX.getHdd0Dir())
+    val hdd0 = File(ARMSX3.getHdd0Dir())
     val ids = linkedSetOf<String>()
 
     File(hdd0, "home").listFiles()?.filter { it.isDirectory }?.forEach { user ->
@@ -124,7 +124,7 @@ private fun readDlcGroups(): List<DlcGroup> {
         val installed = Ps3Sfo.installDir(id)
         // A PSN game's own licence carries its title id too; leave it out (see Ps3Sfo.installedDlc).
         val own = if (id.startsWith("N") && installed != null) {
-            runCatching { RPCSX.instance.gameContentId(installed.absolutePath) }.getOrNull().orEmpty()
+            runCatching { ARMSX3.instance.gameContentId(installed.absolutePath) }.getOrNull().orEmpty()
         } else {
             ""
         }

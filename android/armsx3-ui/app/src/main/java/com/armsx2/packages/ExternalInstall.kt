@@ -23,8 +23,8 @@ import com.armsx2.ui.packages.openForInstall
 import com.armsx2.ui.packages.stagedName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import net.rpcsx.ProgressRepository
-import net.rpcsx.RPCSX
+import com.armsx3.core.ProgressRepository
+import com.armsx3.core.ARMSX3
 import java.io.File
 import java.util.UUID
 
@@ -286,9 +286,9 @@ object ExternalInstall {
                     }
                     ProgressRepository.onProgressEvent(id, 0, 0, I18n.get("packages.installingFile").format(label))
                     if (opened.size == 1) {
-                        RPCSX.instance.install(opened[0].descriptor.fd, id)
+                        ARMSX3.instance.install(opened[0].descriptor.fd, id)
                     } else {
-                        RPCSX.instance.installSplitPkg(opened.map { it.descriptor.fd }.toIntArray(), id)
+                        ARMSX3.instance.installSplitPkg(opened.map { it.descriptor.fd }.toIntArray(), id)
                     }
                 } catch (failure: ExternalPickFailure) {
                     reason = failure.message
@@ -351,7 +351,7 @@ object ExternalInstall {
         val id = ProgressRepository.create(context, "Installing ${file.name}", silent = true)
         val ok = runCatching {
             ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { descriptor ->
-                RPCSX.instance.installKey(descriptor.fd, id, "")
+                ARMSX3.instance.installKey(descriptor.fd, id, "")
             }
         }.getOrDefault(false)
         ProgressRepository.cancel(id)

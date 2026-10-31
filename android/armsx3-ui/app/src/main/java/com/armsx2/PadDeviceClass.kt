@@ -126,7 +126,7 @@ object PadDeviceClass {
      */
     fun push() {
         runCatching {
-            net.rpcsx.RPCSX.instance.setPadDeviceClasses(classes.toIntArray())
+            com.armsx3.core.ARMSX3.instance.setPadDeviceClasses(classes.toIntArray())
         }
     }
 }

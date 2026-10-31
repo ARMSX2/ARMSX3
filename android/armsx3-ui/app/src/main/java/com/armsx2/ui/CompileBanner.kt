@@ -31,7 +31,7 @@ import com.armsx2.EmuState
 import com.armsx2.i18n.I18n
 import com.armsx2.runtime.MainActivityRuntime
 import kotlinx.coroutines.delay
-import net.rpcsx.RPCSX
+import com.armsx3.core.ARMSX3
 
 /**
  * "Compiling PPU modules" while a game compiles PPU code during play.
@@ -39,7 +39,7 @@ import net.rpcsx.RPCSX
  * The boot-time compile has its own progress popup, but code a game loads later only had the
  * core's small corner notice, which on a loading screen reads as a hang. Castlevania: Harmony of
  * Despair compiles its DLC modules after a save is loaded, 61 of them in 15 minutes on the first
- * load. The core bridges the gaps between such modules (_rpcsx_getPlayCompileState), so this
+ * load. The core bridges the gaps between such modules (_armsx3_getPlayCompileState), so this
  * stays up for the whole stretch instead of flashing once per module.
  *
  * The core reports a stretch only once compiling has gone on for ten seconds without a break, the
@@ -58,12 +58,12 @@ fun CompileBannerOverlay(scope: BoxScope) {
 
         while (true) {
             delay(500)
-            state = runCatching { RPCSX.instance.getPlayCompileState() }.getOrDefault(0)
+            state = runCatching { ARMSX3.instance.getPlayCompileState() }.getOrDefault(0)
         }
     }
 
     // 0 = nothing to show. Otherwise the low 16 bits are 1 + the modules done, and bits 16 to 30
-    // how many there are when the core knows (_rpcsx_getPlayCompileState).
+    // how many there are when the core knows (_armsx3_getPlayCompileState).
     if (state <= 0) return
     val done = (state and 0xffff) - 1
     val total = (state ushr 16) and 0x7fff

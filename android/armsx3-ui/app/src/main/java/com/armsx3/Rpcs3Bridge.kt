@@ -6,12 +6,12 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
 import android.view.Surface
-import net.rpcsx.BootResult
-import net.rpcsx.Digital1Flags
-import net.rpcsx.Digital2Flags
+import com.armsx3.core.BootResult
+import com.armsx3.core.Digital1Flags
+import com.armsx3.core.Digital2Flags
 import android.view.KeyEvent
-import net.rpcsx.EmulatorState
-import net.rpcsx.RPCSX
+import com.armsx3.core.EmulatorState
+import com.armsx3.core.ARMSX3
 import java.io.File
 import com.armsx2.input.PadRouter
 
@@ -104,14 +104,14 @@ object Rpcs3Bridge {
     fun initializeOnce(context: Context) {
         appContext = context.applicationContext
 
-        // Bring up the emulator core. System.loadLibrary in RPCSX's companion
+        // Bring up the emulator core. System.loadLibrary in ARMSX3's companion
         // only loads the JNI GLUE; the core is a separate .so that the glue
-        // dlopen()s by absolute path. Until this runs, every _rpcsx_* forwarder
+        // dlopen()s by absolute path. Until this runs, every _armsx3_* forwarder
         // is a null pointer and the glue answers false to everything -- which
         // looks like "the emulator does nothing" rather than "it was not loaded".
-        if (RPCSX.activeLibrary.value == null) {
+        if (ARMSX3.activeLibrary.value == null) {
             val libDir = context.applicationInfo.nativeLibraryDir
-            RPCSX.nativeLibDirectory = libDir
+            ARMSX3.nativeLibDirectory = libDir
             // Before the dlopen, which is where an unsupported CPU dies with no explanation.
             unsupportedCpuReason()?.let { reason ->
                 unsupportedCpuMessage = reason
@@ -125,7 +125,7 @@ object Rpcs3Bridge {
                 android.util.Log.e("ARMSX3", "core missing at ${'$'}{core.absolutePath}")
                 return
             }
-            if (!RPCSX.openLibrary(core.absolutePath)) {
+            if (!ARMSX3.openLibrary(core.absolutePath)) {
                 android.util.Log.e("ARMSX3", "core failed to load: ${'$'}{core.absolutePath}")
                 return
             }
@@ -150,16 +150,16 @@ object Rpcs3Bridge {
         // and from here rather than from core startup: the bridge looks up a Kotlin class, and
         // that only resolves on a thread Java started.
         com.armsx2.storage.ContentUri.attach(context)
-        runCatching { RPCSX.instance.installStorageBridge() }
-        runCatching { RPCSX.instance.installSoundBridge() }
+        runCatching { ARMSX3.instance.installStorageBridge() }
+        runCatching { ARMSX3.instance.installSoundBridge() }
 
         // Restore firmware state from <root>/fw.json. Without this the version
         // and status start at None on every launch, so setup would demand a PUP
         // again even though dev_flash is already populated.
         //
-        // Must run AFTER initialize(), which is what sets RPCSX.rootDirectory --
+        // Must run AFTER initialize(), which is what sets ARMSX3.rootDirectory --
         // load() reads that path, so calling it earlier silently reads "/fw.json".
-        runCatching { net.rpcsx.FirmwareRepository.load() }
+        runCatching { com.armsx3.core.FirmwareRepository.load() }
     }
 
     @Volatile
@@ -193,17 +193,17 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun initialize(rootPath: String) {
-        if (RPCSX.initialized) return
+        if (ARMSX3.initialized) return
 
-        RPCSX.rootDirectory = if (rootPath.endsWith("/")) rootPath else "$rootPath/"
-        shieldFromMediaScanner(RPCSX.rootDirectory)
+        ARMSX3.rootDirectory = if (rootPath.endsWith("/")) rootPath else "$rootPath/"
+        shieldFromMediaScanner(ARMSX3.rootDirectory)
         // Discard database configs split by an older build, so a setting later found to
         // break a game is not left applying forever on machines that already downloaded.
         runCatching { com.armsx2.config.ConfigDatabase.purgeIfStale() }
         // Applies whether or not the database was ever downloaded.
         runCatching { com.armsx2.config.ConfigDatabase.ensureLocalOverrides() }
-        RPCSX.instance.initialize(RPCSX.rootDirectory, "00000001", com.armsx2.DeviceTier.socIdentity())
-        RPCSX.initialized = true
+        ARMSX3.instance.initialize(ARMSX3.rootDirectory, "00000001", com.armsx2.DeviceTier.socIdentity())
+        ARMSX3.initialized = true
 
         // Into the log that initialize() just opened, so every log a tester sends says how the
         // run before it ended.
@@ -222,9 +222,9 @@ object Rpcs3Bridge {
         // thread -- a coroutine scope would tie up a dispatcher permanently.
         if (!pumpsStarted) {
             pumpsStarted = true
-            Thread({ runCatching { RPCSX.instance.startMainThreadProcessor() } },
+            Thread({ runCatching { ARMSX3.instance.startMainThreadProcessor() } },
                 "armsx3-main-thread-processor").apply { isDaemon = true }.start()
-            Thread({ runCatching { RPCSX.instance.processCompilationQueue() } },
+            Thread({ runCatching { ARMSX3.instance.processCompilationQueue() } },
                 "armsx3-compilation-queue").apply { isDaemon = true }.start()
         }
     }
@@ -264,7 +264,7 @@ object Rpcs3Bridge {
             .format(java.util.Date(info.timestamp))
         val detail = info.description?.takeIf { it.isNotBlank() }?.let { ", $it" } ?: ""
 
-        RPCSX.instance.logPreviousExit(
+        ARMSX3.instance.logPreviousExit(
             "$reason at $time (memory ${info.pss / 1024} MB PSS, ${info.rss / 1024} MB RSS$detail)"
         )
     }
@@ -299,7 +299,7 @@ object Rpcs3Bridge {
         // through the same grant. Anything already a path is returned unchanged.
         val requested = com.armsx2.storage.ContentUri.bootPathFor(path)
         val target = if (requested.isNotEmpty()) requested else {
-            val vsh = File(RPCSX.rootDirectory + "config/dev_flash/vsh/module/vsh.self")
+            val vsh = File(ARMSX3.rootDirectory + "config/dev_flash/vsh/module/vsh.self")
             if (!vsh.isFile) {
                 lastBootError = "firmware not installed"
                 android.util.Log.e("ARMSX3", "XMB requested but ${'$'}{vsh.absolutePath} is missing - install firmware first")
@@ -323,7 +323,7 @@ object Rpcs3Bridge {
         // now, and it is a preference read once staged.
         appContext?.let { com.armsx2.OverlayIcons.ensureBundled(it) }
 
-        val result = RPCSX.boot(target)
+        val result = ARMSX3.boot(target)
         // AlreadyAdded is not a failure: it says the title was already in games.yml, which is
         // the normal case for anything booted before. RPCS3's own front-end passes it through
         // for that reason. Treating it as an error turned a re-boot into "Game failed to
@@ -357,7 +357,7 @@ object Rpcs3Bridge {
         stopRequested = false
 
         var settleMs = 0L
-        while (!stopRequested && RPCSX.getState() == EmulatorState.Stopped &&
+        while (!stopRequested && ARMSX3.getState() == EmulatorState.Stopped &&
             settleMs < BOOT_SETTLE_TIMEOUT_MS
         ) {
             Thread.sleep(POLL_INTERVAL_MS)
@@ -381,7 +381,7 @@ object Rpcs3Bridge {
 
         try {
             while (!stopRequested) {
-                if (RPCSX.getState() != EmulatorState.Stopped) {
+                if (ARMSX3.getState() != EmulatorState.Stopped) {
                     // Once a second out of sight: ten checks a second ran on in a locked device.
                     Thread.sleep(if (appBackgrounded) 1000L else POLL_INTERVAL_MS)
                     continue
@@ -399,14 +399,14 @@ object Rpcs3Bridge {
                 // teardown and reload of a PS3 title and a savestate cycle has been measured
                 // at over a minute on a large game.
                 var waited = 0L
-                while (!stopRequested && RPCSX.getState() == EmulatorState.Stopped &&
+                while (!stopRequested && ARMSX3.getState() == EmulatorState.Stopped &&
                     waited < RESTART_SETTLE_TIMEOUT_MS
                 ) {
                     Thread.sleep(POLL_INTERVAL_MS)
                     waited += POLL_INTERVAL_MS
                 }
 
-                if (RPCSX.getState() == EmulatorState.Stopped) {
+                if (ARMSX3.getState() == EmulatorState.Stopped) {
                     android.util.Log.w(
                         "ARMSX3",
                         "restart was armed but the core is still stopped after ${waited}ms",
@@ -426,7 +426,7 @@ object Rpcs3Bridge {
     }
 
     private fun restartPending(): Boolean =
-        runCatching { RPCSX.instance.isRestartPending() }.getOrDefault(false)
+        runCatching { ARMSX3.instance.isRestartPending() }.getOrDefault(false)
 
     /**
      * How long to wait for a save-state restart to bring the emulator back up. A savestate
@@ -444,12 +444,12 @@ object Rpcs3Bridge {
     private const val POLL_INTERVAL_MS = 100L
 
     @JvmStatic
-    fun hasActiveVm(): Boolean = RPCSX.getState() != EmulatorState.Stopped
+    fun hasActiveVm(): Boolean = ARMSX3.getState() != EmulatorState.Stopped
 
     /** What Swap Disc may do right now: 0 the game takes no disc swaps, 1 a disc is in and can
      *  be swapped, 2 the tray is empty and the game is waiting for one. */
     @JvmStatic
-    fun discSwapState(): Int = runCatching { RPCSX.instance.discSwapState() }.getOrDefault(0)
+    fun discSwapState(): Int = runCatching { ARMSX3.instance.discSwapState() }.getOrDefault(0)
 
     /** The discs of the playlist the running game was booted from, and the one in the drive.
      *  Empty for a game that was not booted from an .m3u. */
@@ -457,7 +457,7 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun discPlaylist(): DiscPlaylist = runCatching {
-        val o = org.json.JSONObject(RPCSX.instance.getDiscPlaylist())
+        val o = org.json.JSONObject(ARMSX3.instance.getDiscPlaylist())
         val array = o.optJSONArray("discs")
         DiscPlaylist(
             List(array?.length() ?: 0) { array!!.getString(it) },
@@ -468,7 +468,7 @@ object Rpcs3Bridge {
     /**
      * Swap the running game's disc. Blocks for as long as the game takes to let go of the old
      * one, so call it off the UI thread, with the game RESUMED: the eject completes on the
-     * game's own callback, which does not run while it is paused. See _rpcsx_changeDisc for
+     * game's own callback, which does not run while it is paused. See _armsx3_changeDisc for
      * the result codes; -1 means [path] could not be turned into anything the core can open.
      *
      * [path] may be a document from the system file picker. One inside a picked games folder
@@ -479,7 +479,7 @@ object Rpcs3Bridge {
     fun changeDisc(path: String): Int {
         val target = com.armsx2.storage.ContentUri.bootPathFor(path)
         if (target.startsWith("content://")) return -1
-        return runCatching { RPCSX.instance.changeDisc(target) }.getOrDefault(-1)
+        return runCatching { ARMSX3.instance.changeDisc(target) }.getOrDefault(-1)
     }
 
     @JvmStatic
@@ -490,7 +490,7 @@ object Rpcs3Bridge {
         // in-game pause menu left the game running underneath it. resume() reached the core and
         // pause() did not, so the pair was asymmetric and "Pause" was decorative.
         paused = true
-        RPCSX.instance.pause()
+        ARMSX3.instance.pause()
         // Motion goes off with the game. A paused game reads none, and the phone's accelerometer
         // and gyro otherwise kept streaming fifty samples a second each into an app that had been
         // put in the background or locked (#196).
@@ -500,7 +500,7 @@ object Rpcs3Bridge {
     @JvmStatic
     fun resume() {
         paused = false
-        RPCSX.instance.resume()
+        ARMSX3.instance.resume()
         sixaxis?.start()
     }
 
@@ -515,7 +515,7 @@ object Rpcs3Bridge {
     @JvmStatic
     fun setAppBackgrounded(backgrounded: Boolean) {
         appBackgrounded = backgrounded
-        runCatching { RPCSX.instance.setAppBackgrounded(backgrounded) }
+        runCatching { ARMSX3.instance.setAppBackgrounded(backgrounded) }
     }
 
     /** Set by shutdown() to release boot()'s wait; see the loop there. */
@@ -528,7 +528,7 @@ object Rpcs3Bridge {
         // it never reports as Stopped, and the app's stop path is synchronous --
         // if boot() is still parked when this returns, Close does nothing.
         stopRequested = true
-        runCatching { RPCSX.instance.kill() }
+        runCatching { ARMSX3.instance.kill() }
         resetPadState()
 
         // Then WAIT for the core to actually be stopped, because kill() does not guarantee it.
@@ -545,15 +545,15 @@ object Rpcs3Bridge {
         // the second loop in boot() for the same hazard), and a stop that gives up after a few
         // seconds is far better than one that hangs the app forever.
         var waited = 0L
-        while (RPCSX.getState() != EmulatorState.Stopped && waited < SHUTDOWN_SETTLE_TIMEOUT_MS) {
+        while (ARMSX3.getState() != EmulatorState.Stopped && waited < SHUTDOWN_SETTLE_TIMEOUT_MS) {
             Thread.sleep(POLL_INTERVAL_MS)
             waited += POLL_INTERVAL_MS
         }
 
-        if (RPCSX.getState() != EmulatorState.Stopped) {
+        if (ARMSX3.getState() != EmulatorState.Stopped) {
             android.util.Log.w(
                 "ARMSX3-VM",
-                "shutdown: core still ${RPCSX.getState()} after ${waited}ms; proceeding anyway",
+                "shutdown: core still ${ARMSX3.getState()} after ${waited}ms; proceeding anyway",
             )
         }
     }
@@ -583,7 +583,7 @@ object Rpcs3Bridge {
         // BEFORE the event. The core reads the size off the renderer thread as soon as it
         // has a live window, and a window whose size it has not been told yet is the case
         // this whole path exists to avoid.
-        runCatching { RPCSX.instance.surfaceSizeChanged(width, height) }
+        runCatching { ARMSX3.instance.surfaceSizeChanged(width, height) }
 
         // Read the previous surface first. This assigned currentSurface and THEN tested it
         // for null, so the test could never be true and the event was always CHANGED --
@@ -591,12 +591,12 @@ object Rpcs3Bridge {
         // after a surface came back.
         val event = if (currentSurface == null) SURFACE_CREATED else SURFACE_CHANGED
         currentSurface = surface
-        RPCSX.instance.surfaceEvent(surface, event)
+        ARMSX3.instance.surfaceEvent(surface, event)
     }
 
     @JvmStatic
     fun surfaceDestroyed() {
-        currentSurface?.let { RPCSX.instance.surfaceEvent(it, SURFACE_DESTROYED) }
+        currentSurface?.let { ARMSX3.instance.surfaceEvent(it, SURFACE_DESTROYED) }
         currentSurface = null
     }
 
@@ -929,26 +929,26 @@ object Rpcs3Bridge {
      *
      * The history is still RPCS3's to manage. The core now also parks a COPY of each save
      * under its slot number, so a slot holds what was put in it until it is overwritten.
-     * See _rpcsx_saveStateToSlot in rpcsx-android.cpp. Slot numbers are 0-based on both
+     * See _armsx3_saveStateToSlot in armsx3-core.cpp. Slot numbers are 0-based on both
      * sides now, with no index arithmetic in between.
      */
     @JvmStatic
     fun saveState(slot: Int): Boolean =
-        runCatching { RPCSX.instance.saveStateToSlot(slot) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.saveStateToSlot(slot) }.getOrDefault(false)
 
     @JvmStatic
     fun loadState(slot: Int): Boolean =
-        runCatching { RPCSX.instance.loadStateFromSlot(slot) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.loadStateFromSlot(slot) }.getOrDefault(false)
 
     /** Whether this slot holds a state. */
     @JvmStatic
     fun hasState(slot: Int): Boolean =
-        runCatching { RPCSX.instance.hasStateInSlot(slot) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.hasStateInSlot(slot) }.getOrDefault(false)
 
     /** Whether this slot's state is in a format this build can load. */
     @JvmStatic
     fun isStateReadable(slot: Int): Boolean =
-        runCatching { RPCSX.instance.isStateSlotReadable(slot) }.getOrDefault(true)
+        runCatching { ARMSX3.instance.isStateSlotReadable(slot) }.getOrDefault(true)
 
     /**
      * Delete a slot's state and its thumbnail.
@@ -960,7 +960,7 @@ object Rpcs3Bridge {
      */
     @JvmStatic
     fun deleteState(slot: Int): Boolean =
-        runCatching { RPCSX.instance.deleteStateFromSlot(slot) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.deleteStateFromSlot(slot) }.getOrDefault(false)
 
     /**
      * The auto-save lives one slot above the ten the picker shows.
@@ -992,7 +992,7 @@ object Rpcs3Bridge {
      */
     @JvmStatic
     fun slotFilePath(slot: Int): String? = runCatching {
-        val title = RPCSX.instance.getTitleId().takeIf { it.isNotEmpty() } ?: return null
+        val title = ARMSX3.instance.getTitleId().takeIf { it.isNotEmpty() } ?: return null
         val root = com.armsx2.runtime.MainActivityRuntime.systemDirPosix()
             ?: com.armsx2.runtime.MainActivityRuntime.instance
                 ?.applicationContext?.getExternalFilesDir(null)?.absolutePath
@@ -1036,7 +1036,7 @@ object Rpcs3Bridge {
      */
     @JvmStatic
     fun thumbnailForSlot(slot: Int): ByteArray? = runCatching {
-        val title = RPCSX.instance.getTitleId().takeIf { it.isNotEmpty() } ?: return null
+        val title = ARMSX3.instance.getTitleId().takeIf { it.isNotEmpty() } ?: return null
         // systemDirPosix() is null on the DEFAULT install, where no folder was ever picked,
         // so this returned no thumbnail at all for most setups -- the tiles read as empty
         // while the files sat on disk beside the states they belong to. Same fallback
@@ -1088,7 +1088,7 @@ object Rpcs3Bridge {
     @JvmStatic
     fun gamePathForSlot(slot: Int): String {
         if (!hasState(slot)) return ""
-        return runCatching { RPCSX.instance.getTitleId() }.getOrDefault("").ifEmpty { "SAVESTATE" }
+        return runCatching { ARMSX3.instance.getTitleId() }.getOrDefault("").ifEmpty { "SAVESTATE" }
     }
 
     // ---------------------------------------------------------------
@@ -1096,13 +1096,13 @@ object Rpcs3Bridge {
     // ---------------------------------------------------------------
 
     @JvmStatic
-    fun getTitleId(): String = runCatching { RPCSX.instance.getTitleId() }.getOrDefault("")
+    fun getTitleId(): String = runCatching { ARMSX3.instance.getTitleId() }.getOrDefault("")
 
     @JvmStatic
-    fun getTitle(): String = runCatching { RPCSX.instance.getTitle() }.getOrNull().orEmpty()
+    fun getTitle(): String = runCatching { ARMSX3.instance.getTitle() }.getOrNull().orEmpty()
 
     @JvmStatic
-    fun getVersion(): String = runCatching { RPCSX.instance.getVersion() }.getOrDefault("")
+    fun getVersion(): String = runCatching { ARMSX3.instance.getVersion() }.getOrDefault("")
 
     @JvmStatic
     fun getFps(): Float {
@@ -1378,69 +1378,69 @@ object Rpcs3Bridge {
 
     @JvmStatic
     fun rpcnGetConfig(): String =
-        runCatching { RPCSX.instance.rpcnGetConfig() }.getOrDefault("")
+        runCatching { ARMSX3.instance.rpcnGetConfig() }.getOrDefault("")
 
     @JvmStatic
     fun rpcnSetConfig(host: String, npid: String, password: String, token: String) {
-        runCatching { RPCSX.instance.rpcnSetConfig(host, npid, password, token) }
+        runCatching { ARMSX3.instance.rpcnSetConfig(host, npid, password, token) }
     }
 
     @JvmStatic
     fun rpcnAddFriend(npid: String): String =
-        runCatching { RPCSX.instance.rpcnAddFriend(npid) }.getOrElse { it.message ?: "" }
+        runCatching { ARMSX3.instance.rpcnAddFriend(npid) }.getOrElse { it.message ?: "" }
 
     fun rpcnRemoveFriend(npid: String): String =
-        runCatching { RPCSX.instance.rpcnRemoveFriend(npid) }.getOrElse { it.message ?: "" }
+        runCatching { ARMSX3.instance.rpcnRemoveFriend(npid) }.getOrElse { it.message ?: "" }
 
     fun rpcnGetFriends(): String =
-        runCatching { RPCSX.instance.rpcnGetFriends() }.getOrElse { "{}" }
+        runCatching { ARMSX3.instance.rpcnGetFriends() }.getOrElse { "{}" }
 
     fun rpcnFriendsSession(open: Boolean): String =
-        runCatching { RPCSX.instance.rpcnFriendsSession(open) }.getOrElse { it.message ?: "" }
+        runCatching { ARMSX3.instance.rpcnFriendsSession(open) }.getOrElse { it.message ?: "" }
 
     fun rpcnGetInvites(): String =
-        runCatching { RPCSX.instance.rpcnGetInvites() }.getOrElse { "[]" }
+        runCatching { ARMSX3.instance.rpcnGetInvites() }.getOrElse { "[]" }
 
     fun rpcnAcceptInvite(id: Long): String =
-        runCatching { RPCSX.instance.rpcnAcceptInvite(id) }.getOrElse { it.message ?: "" }
+        runCatching { ARMSX3.instance.rpcnAcceptInvite(id) }.getOrElse { it.message ?: "" }
 
     fun rpcnDeclineInvite(id: Long): String =
-        runCatching { RPCSX.instance.rpcnDeclineInvite(id) }.getOrElse { it.message ?: "" }
+        runCatching { ARMSX3.instance.rpcnDeclineInvite(id) }.getOrElse { it.message ?: "" }
 
     fun rpcnCreateAccount(npid: String, password: String, onlineName: String, email: String): String =
-        runCatching { RPCSX.instance.rpcnCreateAccount(npid, password, onlineName, email) }
+        runCatching { ARMSX3.instance.rpcnCreateAccount(npid, password, onlineName, email) }
             .getOrElse { "Could not reach the emulator core." }
 
     @JvmStatic
     fun rpcnResendToken(npid: String, password: String): String =
-        runCatching { RPCSX.instance.rpcnResendToken(npid, password) }
+        runCatching { ARMSX3.instance.rpcnResendToken(npid, password) }
             .getOrElse { "Could not reach the emulator core." }
 
     @JvmStatic
     fun rpcnSendResetToken(npid: String, email: String): String =
-        runCatching { RPCSX.instance.rpcnSendResetToken(npid, email) }
+        runCatching { ARMSX3.instance.rpcnSendResetToken(npid, email) }
             .getOrElse { "Could not reach the emulator core." }
 
     @JvmStatic
     fun rpcnResetPassword(npid: String, token: String, password: String): String =
-        runCatching { RPCSX.instance.rpcnResetPassword(npid, token, password) }
+        runCatching { ARMSX3.instance.rpcnResetPassword(npid, token, password) }
             .getOrElse { "Could not reach the emulator core." }
 
     @JvmStatic
     fun rpcnSignIn(host: String, npid: String, password: String, token: String): String =
-        runCatching { RPCSX.instance.rpcnSignIn(host, npid, password, token) }
+        runCatching { ARMSX3.instance.rpcnSignIn(host, npid, password, token) }
             .getOrElse { "Could not reach the emulator core." }
 
     @JvmStatic
     fun rpcnTestLogin(): String =
-        runCatching { RPCSX.instance.rpcnTestLogin() }
+        runCatching { ARMSX3.instance.rpcnTestLogin() }
             .getOrElse { "Could not reach the emulator core." }
 
     /** Arm an RSX frame capture. The RSX thread acts on it at the next frame boundary, so
      *  nothing happens until a frame is actually rendered -- close the pause menu first. */
     @JvmStatic
     fun captureFrame() {
-        runCatching { RPCSX.instance.captureFrame() }
+        runCatching { ARMSX3.instance.captureFrame() }
     }
 
     /** Arm a frame dump: the next frame with real drawing is saved as PNGs to config/captures/.
@@ -1448,140 +1448,140 @@ object Rpcs3Bridge {
      *  the active renderer cannot do it. */
     @JvmStatic
     fun dumpFrame(mode: Int): Boolean =
-        runCatching { RPCSX.instance.dumpFrame(mode) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.dumpFrame(mode) }.getOrDefault(false)
 
     @JvmStatic
     fun rpcnDeleteTrophies(): String =
-        runCatching { RPCSX.instance.rpcnDeleteTrophies() }
+        runCatching { ARMSX3.instance.rpcnDeleteTrophies() }
             .getOrElse { "Could not reach the emulator core." }
 
     @JvmStatic
     fun rpcnAddHost(desc: String, host: String): String =
-        runCatching { RPCSX.instance.rpcnAddHost(desc, host) }
+        runCatching { ARMSX3.instance.rpcnAddHost(desc, host) }
             .getOrElse { "Could not reach the emulator core." }
 
     @JvmStatic
     fun rpcnDelHost(desc: String, host: String): String =
-        runCatching { RPCSX.instance.rpcnDelHost(desc, host) }
+        runCatching { ARMSX3.instance.rpcnDelHost(desc, host) }
             .getOrElse { "Could not reach the emulator core." }
 
     @JvmStatic
     fun rpcnResetHosts() {
-        runCatching { RPCSX.instance.rpcnResetHosts() }
+        runCatching { ARMSX3.instance.rpcnResetHosts() }
     }
 
     @JvmStatic
     fun rpcnSetIpv6(enabled: Boolean) {
-        runCatching { RPCSX.instance.rpcnSetIpv6(enabled) }
+        runCatching { ARMSX3.instance.rpcnSetIpv6(enabled) }
     }
 
     @JvmStatic
     fun rpcnStatus(): String =
-        runCatching { RPCSX.instance.rpcnStatus() }.getOrDefault("")
+        runCatching { ARMSX3.instance.rpcnStatus() }.getOrDefault("")
 
     @JvmStatic
     fun rpcnSignedIn(): Boolean =
-        runCatching { RPCSX.instance.rpcnSignedIn() }.getOrDefault(false)
+        runCatching { ARMSX3.instance.rpcnSignedIn() }.getOrDefault(false)
 
     @JvmStatic
     fun setMicDevices(list: String) {
-        runCatching { RPCSX.instance.setMicDevices(list) }
+        runCatching { ARMSX3.instance.setMicDevices(list) }
     }
 
     @JvmStatic
     fun micTestStart(device: String): Boolean =
-        runCatching { RPCSX.instance.micTestStart(device) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.micTestStart(device) }.getOrDefault(false)
 
     @JvmStatic
     fun micTestLevel(): Float =
-        runCatching { RPCSX.instance.micTestLevel() }.getOrDefault(-1f)
+        runCatching { ARMSX3.instance.micTestLevel() }.getOrDefault(-1f)
 
     @JvmStatic
     fun micTestStop() {
-        runCatching { RPCSX.instance.micTestStop() }
+        runCatching { ARMSX3.instance.micTestStop() }
     }
 
     @JvmStatic
     fun skylanderLoad(path: String): Int =
-        runCatching { RPCSX.instance.skylanderLoad(path) }.getOrDefault(-1)
+        runCatching { ARMSX3.instance.skylanderLoad(path) }.getOrDefault(-1)
 
     @JvmStatic
     fun skylanderRemove(slot: Int): Boolean =
-        runCatching { RPCSX.instance.skylanderRemove(slot) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.skylanderRemove(slot) }.getOrDefault(false)
 
     /** The colour the game lit the Skylanders portal, 0xRRGGBB, or 0 before it sets one. */
     @JvmStatic
     fun skylanderLight(): Int =
-        runCatching { RPCSX.instance.skylanderLight() }.getOrDefault(0)
+        runCatching { ARMSX3.instance.skylanderLight() }.getOrDefault(0)
 
     @JvmStatic
     fun infinityLoad(path: String, position: Int): Boolean =
-        runCatching { RPCSX.instance.infinityLoad(path, position) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.infinityLoad(path, position) }.getOrDefault(false)
 
     @JvmStatic
     fun infinityRemove(position: Int): Boolean =
-        runCatching { RPCSX.instance.infinityRemove(position) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.infinityRemove(position) }.getOrDefault(false)
 
     @JvmStatic
     fun dimensionsLoad(path: String, index: Int): Boolean =
-        runCatching { RPCSX.instance.dimensionsLoad(path, index) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.dimensionsLoad(path, index) }.getOrDefault(false)
 
     @JvmStatic
     fun dimensionsRemove(index: Int): Boolean =
-        runCatching { RPCSX.instance.dimensionsRemove(index) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.dimensionsRemove(index) }.getOrDefault(false)
 
     @JvmStatic
     fun skylanderCreate(path: String, id: Int, variant: Int): Boolean =
-        runCatching { RPCSX.instance.skylanderCreate(path, id, variant) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.skylanderCreate(path, id, variant) }.getOrDefault(false)
 
     @JvmStatic
     fun infinityCreate(path: String, figure: Int, series: Int): Boolean =
-        runCatching { RPCSX.instance.infinityCreate(path, figure, series) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.infinityCreate(path, figure, series) }.getOrDefault(false)
 
     @JvmStatic
     fun dimensionsCreate(path: String, id: Int): Boolean =
-        runCatching { RPCSX.instance.dimensionsCreate(path, id) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.dimensionsCreate(path, id) }.getOrDefault(false)
 
     @JvmStatic
     fun avatarList(): String =
-        runCatching { RPCSX.instance.avatarList() }.getOrDefault("")
+        runCatching { ARMSX3.instance.avatarList() }.getOrDefault("")
 
     @JvmStatic
     fun avatarCurrent(): String =
-        runCatching { RPCSX.instance.avatarCurrent() }.getOrDefault("")
+        runCatching { ARMSX3.instance.avatarCurrent() }.getOrDefault("")
 
     @JvmStatic
     fun avatarImage(path: String): ByteArray? =
-        runCatching { RPCSX.instance.avatarImage(path) }.getOrNull()
+        runCatching { ARMSX3.instance.avatarImage(path) }.getOrNull()
 
     @JvmStatic
     fun avatarSelect(path: String): Boolean =
-        runCatching { RPCSX.instance.avatarSelect(path) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.avatarSelect(path) }.getOrDefault(false)
 
     @JvmStatic
     fun avatarUseImage(png: ByteArray): Boolean =
-        runCatching { RPCSX.instance.avatarUseImage(png) }.getOrDefault(false)
+        runCatching { ARMSX3.instance.avatarUseImage(png) }.getOrDefault(false)
 
     @JvmStatic
     fun usbSetPassthrough(fds: String) {
-        runCatching { RPCSX.instance.usbSetPassthrough(fds) }
+        runCatching { ARMSX3.instance.usbSetPassthrough(fds) }
     }
 
     /** Which real portals the running game's USB scan took: bits 1 Skylanders, 2 Infinity, 4 Dimensions. */
     @JvmStatic
     fun usbPassedThrough(): Int =
-        runCatching { RPCSX.instance.usbPassedThrough() }.getOrDefault(0)
+        runCatching { ARMSX3.instance.usbPassedThrough() }.getOrDefault(0)
 
     /** Why a game thread died of a fatal error since the last call, or "" (GameErrorBanner). */
     @JvmStatic
     fun takeGameError(): String =
-        runCatching { RPCSX.instance.takeGameError() }.getOrDefault("")
+        runCatching { ARMSX3.instance.takeGameError() }.getOrDefault("")
 
-    /** One key transition for cellKb. See RPCSX.keyboardKey. */
+    /** One key transition for cellKb. See ARMSX3.keyboardKey. */
     @JvmStatic
     fun keyboardKey(androidKeyCode: Int, unicode: Int, pressed: Boolean): Boolean =
         runCatching {
-            RPCSX.instance.keyboardKey(androidKeyCode, unicode, pressed, false)
+            ARMSX3.instance.keyboardKey(androidKeyCode, unicode, pressed, false)
         }.getOrDefault(false)
 
     @JvmStatic
@@ -1645,11 +1645,11 @@ object Rpcs3Bridge {
             // Pressure first: overlayPadData is what writes each button's value, so
             // it has to see the current pressure to apply it in the same push.
             if (!pad.pressure.contentEquals(pad.pressureSent)) {
-                if (RPCSX.instance.overlayPadPressure(port, pad.pressure)) {
+                if (ARMSX3.instance.overlayPadPressure(port, pad.pressure)) {
                     pad.pressure.copyInto(pad.pressureSent)
                 }
             }
-            RPCSX.instance.overlayPadData(
+            ARMSX3.instance.overlayPadData(
                 port, pad.digital1, pad.digital2,
                 pad.leftX(), pad.leftY(), pad.rightX(), pad.rightY(),
             )
@@ -1995,7 +1995,7 @@ object Rpcs3Bridge {
      */
     @JvmStatic
     fun remoteRumble(port: Int): Int =
-        if (paused) 0 else runCatching { RPCSX.instance.getPadRumble(port) }.getOrDefault(0)
+        if (paused) 0 else runCatching { ARMSX3.instance.getPadRumble(port) }.getOrDefault(0)
 
     /** Host: whether the game is paused, for the friend's screen to say so. */
     @JvmStatic
@@ -2067,7 +2067,7 @@ object Rpcs3Bridge {
                     // them, so a single-player session does not poll seven ports for silence.
                     if (port != 0 && PadRouter.deviceIdForPort(port) < 0) continue
 
-                    val packed = runCatching { RPCSX.instance.getPadRumble(port) }.getOrDefault(0)
+                    val packed = runCatching { ARMSX3.instance.getPadRumble(port) }.getOrDefault(0)
                     val large = (packed shr 8) and 0xFF
                     val small = packed and 0xFF
 
@@ -2220,7 +2220,7 @@ object Rpcs3Bridge {
         // number just misreports the rate to the game.
         val perRadPerSec = 78.31f
         val g = (center + (gyro * perRadPerSec)).toInt().coerceIn(0, 1023)
-        runCatching { RPCSX.instance.setPadSensor(port, axis(ax), axis(ay), axis(az), g) }
+        runCatching { ARMSX3.instance.setPadSensor(port, axis(ax), axis(ay), axis(az), g) }
     }
 
     @JvmStatic

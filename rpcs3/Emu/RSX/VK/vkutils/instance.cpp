@@ -91,7 +91,7 @@ namespace vk
 	{
 #ifdef __ANDROID__
 		// Bind the dispatch table before the first Vulkan call. If the user picked
-		// a custom driver it was already staged by _rpcsx_setCustomDriver; if not,
+		// a custom driver it was already staged by _armsx3_setCustomDriver; if not,
 		// this opens the system libvulkan.so. Everything below -- including the
 		// extension enumeration above -- calls through pointers this fills in.
 		if (!vk::android::ensure_loaded())
