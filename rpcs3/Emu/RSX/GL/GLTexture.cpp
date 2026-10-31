@@ -11,6 +11,9 @@
 
 #include "util/asm.hpp"
 
+#include <deque>
+#include <optional>
+
 namespace gl
 {
 	namespace debug
@@ -18,8 +21,94 @@ namespace gl
 		extern void set_vis_texture(texture*);
 	}
 
+	// Texture uploads are written here by the CPU, and the GPU reads each range back out with a buffer copy
+	// issued right after. legacy_ring_buffer maps a range for every upload, and Adreno's own GLES driver turns
+	// each of those maps into a new allocation plus a copy of the buffer's contents (gsl_memory_alloc and a
+	// large memcpy inside glMapBufferRange, UNSYNCHRONIZED or not). That was 84% of the RSX thread in the XMB.
+	// This ring stays persistently mapped instead. Each range is fenced once the copy reading it is issued,
+	// and an allocation waits only for the fences of the ranges it overwrites.
+	class fenced_upload_ring final : public ring_buffer
+	{
+		struct in_flight
+		{
+			utils::address_range32 range;
+			fence signal;
+		};
+
+		std::optional<utils::address_range32> m_unfenced;
+		std::deque<in_flight> m_in_flight;
+
+	public:
+		std::pair<void*, u32> alloc_from_heap(u32 alloc_size, u16 alignment) override
+		{
+			ensure(alloc_size <= m_size);
+
+			// The copy reading the previous allocation has been issued by now
+			notify();
+
+			u32 offset = utils::align(m_data_loc, alignment);
+			if ((offset + alloc_size) > m_size)
+			{
+				offset = 0;
+			}
+
+			const auto range = utils::address_range32::start_length(offset, alloc_size);
+			for (auto it = m_in_flight.begin(); it != m_in_flight.end();)
+			{
+				if (!it->range.overlaps(range))
+				{
+					++it;
+					continue;
+				}
+
+				it->signal.wait_for_signal();
+				it = m_in_flight.erase(it);
+			}
+
+			m_unfenced = range;
+			m_data_loc = offset + alloc_size;
+			return { static_cast<char*>(m_memory_mapping) + offset, offset };
+		}
+
+		void notify() override
+		{
+			// Fences signal in order, so the finished ones are at the front. Only look once enough have piled
+			// up: by then the front one is old, and checking it rarely needs a flush.
+			while (m_in_flight.size() > 64 && m_in_flight.front().signal.check_signaled())
+			{
+				m_in_flight.front().signal.destroy();
+				m_in_flight.pop_front();
+			}
+
+			if (!m_unfenced)
+			{
+				return;
+			}
+
+			in_flight& entry = m_in_flight.emplace_back();
+			entry.range = *m_unfenced;
+			entry.signal.create();
+			m_unfenced.reset();
+		}
+
+		void remove() override
+		{
+			for (in_flight& entry : m_in_flight)
+			{
+				if (!entry.signal.is_empty())
+				{
+					entry.signal.destroy();
+				}
+			}
+
+			m_in_flight.clear();
+			m_unfenced.reset();
+			ring_buffer::remove();
+		}
+	};
+
 	scratch_ring_buffer g_typeless_transfer_buffer;
-	legacy_ring_buffer g_upload_transfer_buffer;
+	std::unique_ptr<ring_buffer> g_upload_transfer_buffer;
 	scratch_ring_buffer g_compute_decode_buffer;
 	scratch_ring_buffer g_deswizzle_scratch_buffer;
 	blitter g_blitter;
@@ -33,7 +122,13 @@ namespace gl
 	void destroy_global_texture_resources()
 	{
 		g_typeless_transfer_buffer.remove();
-		g_upload_transfer_buffer.remove();
+
+		if (g_upload_transfer_buffer)
+		{
+			g_upload_transfer_buffer->remove();
+			g_upload_transfer_buffer.reset();
+		}
+
 		g_compute_decode_buffer.remove();
 		g_deswizzle_scratch_buffer.remove();
 		g_blitter.destroy();
@@ -784,10 +879,22 @@ namespace gl
 
 		if (driver_caps.ARB_compute_shader_supported)
 		{
-			if (g_upload_transfer_buffer.size() < static_cast<GLsizeiptr>(min_required_buffer_size))
+			if (!g_upload_transfer_buffer)
 			{
-				g_upload_transfer_buffer.remove();
-				g_upload_transfer_buffer.create(gl::buffer::target::pixel_unpack, min_required_buffer_size);
+				if (driver_caps.vendor_QUALCOMM_GLES && driver_caps.ARB_buffer_storage_supported)
+				{
+					g_upload_transfer_buffer = std::make_unique<fenced_upload_ring>();
+				}
+				else
+				{
+					g_upload_transfer_buffer = std::make_unique<legacy_ring_buffer>();
+				}
+			}
+
+			if (g_upload_transfer_buffer->size() < static_cast<GLsizeiptr>(min_required_buffer_size))
+			{
+				g_upload_transfer_buffer->remove();
+				g_upload_transfer_buffer->create(gl::buffer::target::pixel_unpack, min_required_buffer_size);
 			}
 
 			if (g_compute_decode_buffer.size() < min_required_buffer_size)
@@ -819,8 +926,8 @@ namespace gl
 				compute_scratch_mem = { nullptr, g_compute_decode_buffer.alloc(static_cast<u32>(image_linear_size), 256) };
 				compute_scratch_mem.first = reinterpret_cast<void*>(static_cast<uintptr_t>(compute_scratch_mem.second));
 
-				g_upload_transfer_buffer.reserve_storage_on_heap(static_cast<u32>(image_linear_size));
-				upload_scratch_mem = g_upload_transfer_buffer.alloc_from_heap(static_cast<u32>(image_linear_size), 256);
+				g_upload_transfer_buffer->reserve_storage_on_heap(static_cast<u32>(image_linear_size));
+				upload_scratch_mem = g_upload_transfer_buffer->alloc_from_heap(static_cast<u32>(image_linear_size), 256);
 				dst_buffer = { reinterpret_cast<std::byte*>(upload_scratch_mem.first), image_linear_size };
 			}
 
@@ -854,8 +961,8 @@ namespace gl
 			// 2. Upload memory to GPU
 			if (!op.require_deswizzle)
 			{
-				g_upload_transfer_buffer.unmap();
-				g_upload_transfer_buffer.copy_to(&g_compute_decode_buffer.get(), upload_scratch_mem.second, compute_scratch_mem.second, image_linear_size);
+				g_upload_transfer_buffer->unmap();
+				g_upload_transfer_buffer->copy_to(&g_compute_decode_buffer.get(), upload_scratch_mem.second, compute_scratch_mem.second, image_linear_size);
 			}
 			else
 			{
@@ -867,8 +974,8 @@ namespace gl
 				}
 
 				u32 deswizzle_data_offset = g_deswizzle_scratch_buffer.alloc(static_cast<u32>(image_linear_size), 256);
-				g_upload_transfer_buffer.unmap();
-				g_upload_transfer_buffer.copy_to(&g_deswizzle_scratch_buffer.get(), upload_scratch_mem.second, deswizzle_data_offset, static_cast<u32>(image_linear_size));
+				g_upload_transfer_buffer->unmap();
+				g_upload_transfer_buffer->copy_to(&g_deswizzle_scratch_buffer.get(), upload_scratch_mem.second, deswizzle_data_offset, static_cast<u32>(image_linear_size));
 
 				// 2.2 Apply compute transform to deswizzle input and dump it in compute_scratch_mem
 				const auto block_size = op.element_size * op.block_length;
@@ -925,6 +1032,9 @@ namespace gl
 				// Barrier
 				g_deswizzle_scratch_buffer.push_barrier(deswizzle_data_offset, static_cast<u32>(image_linear_size));
 			}
+
+			// The copy out of the upload buffer is issued, so fence its range
+			g_upload_transfer_buffer->notify();
 
 			// 3. Update configuration
 			mem_info.image_size_in_texels = image_linear_size / block_size_in_bytes;
