@@ -6,9 +6,10 @@ import java.io.File
 
 // Recompiler and shader cache locations, and the deletes over them.
 //
-// These were private to PerformanceTab, which clears every game at once. The long-press menu in
-// the library needs the same deletes scoped to one title, and a second copy of the layout
-// knowledge is exactly the thing that goes stale, so they live here and both callers share them.
+// These were private to PerformanceTab, which clears every game at once, or one game when the
+// settings are opened for it. The long-press menu in the library needs the same deletes scoped to
+// one title, and a second copy of the layout knowledge is exactly the thing that goes stale, so
+// they live here and both callers share them.
 
 /**
  * Root of RPCS3's compiled-code cache: `<files>/cache/cache/`.

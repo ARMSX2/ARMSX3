@@ -1014,7 +1014,7 @@ fun HomeScreen(
                 // shaders_cache/ and the SPU caches live INSIDE ppu-<hash>-EBOOT.BIN, so clearing
                 // this game's PPU necessarily takes its SPU and shaders with it. Splitting them
                 // here would offer two buttons that cannot do what their names imply. The settings
-                // screen keeps its separate PPU/SPU rows, where the scope is every game at once.
+                // screen keeps its separate PPU/SPU rows, where SPU alone can still be cleared.
                 GameMenuAction("\uD83E\uDDF9", str("games.clearCache")) {
                     menuGame = null
                     clearGameCache { com.armsx2.cache.clearRecompilerCache(it, spuOnly = false) }

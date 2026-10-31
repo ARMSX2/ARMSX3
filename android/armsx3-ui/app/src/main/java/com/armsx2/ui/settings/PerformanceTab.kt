@@ -4,6 +4,8 @@ import net.rpcsx.RPCSX
 import com.armsx2.cache.clearRecompilerCache
 import com.armsx2.cache.formatBytes
 import com.armsx2.cache.recompilerCacheRoot
+import com.armsx2.cache.titleCacheDir
+import com.armsx2.config.SettingsScope
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -445,8 +447,45 @@ fun PerformanceTab(state: MutableState<Settings>) {
 private fun ClearCacheRow(spuOnly: Boolean) {
     val context = LocalContext.current
     val status = remember { mutableStateOf("") }
+    val confirming = remember { mutableStateOf(false) }
+    // Settings opened for one game (from the library or in game) clear only that game's caches.
+    // This used to clear every game's from either place, which a tester lost all of theirs to.
+    val gameSerial = InGameOverlay.currentSerial.value
+        ?.takeIf { InGameOverlay.settingsScope.value == SettingsScope.Game && it.isNotBlank() }
+    val forGame = gameSerial != null
     val labelKey = if (spuOnly) "perf.clearSpuCache.label" else "perf.clearPpuCache.label"
-    val descKey = if (spuOnly) "perf.clearSpuCache.description" else "perf.clearPpuCache.description"
+    val descKey = when {
+        spuOnly && forGame -> "perf.clearSpuCache.descriptionGame"
+        spuOnly -> "perf.clearSpuCache.description"
+        forGame -> "perf.clearPpuCache.descriptionGame"
+        else -> "perf.clearPpuCache.description"
+    }
+    val confirmKey = when {
+        spuOnly && forGame -> "perf.clearSpuCache.confirmGame"
+        spuOnly -> "perf.clearSpuCache.confirm"
+        forGame -> "perf.clearPpuCache.confirmGame"
+        else -> "perf.clearPpuCache.confirm"
+    }
+
+    if (confirming.value) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirming.value = false },
+            title = { Text(str(labelKey)) },
+            text = { Text(str(confirmKey)) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    confirming.value = false
+                    status.value = clearCompiledCode(context, spuOnly, gameSerial)
+                    Toast.makeText(context, status.value, Toast.LENGTH_SHORT).show()
+                }) { Text(str("action.delete")) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirming.value = false }) {
+                    Text(str("action.cancel"))
+                }
+            },
+        )
+    }
 
     Box(
         Modifier
@@ -459,15 +498,10 @@ private fun ClearCacheRow(spuOnly: Boolean) {
                 // and risks a half-written cache on the next boot.
                 if (MainActivityRuntime.eState.value != EmuState.STOPPED) {
                     status.value = I18n.get("perf.clearCache.stopFirst")
+                    Toast.makeText(context, status.value, Toast.LENGTH_SHORT).show()
                 } else {
-                    val (count, bytes) = clearRecompilerCache(recompilerCacheRoot(context), spuOnly)
-                    status.value = if (count > 0) {
-                        I18n.get("perf.clearCache.done").format(count, formatBytes(bytes))
-                    } else {
-                        I18n.get("perf.clearCache.alreadyEmpty")
-                    }
+                    confirming.value = true
                 }
-                Toast.makeText(context, status.value, Toast.LENGTH_SHORT).show()
             }
             .padding(horizontal = 6.dp, vertical = 5.dp),
         contentAlignment = Alignment.CenterStart,
@@ -488,6 +522,21 @@ private fun ClearCacheRow(spuOnly: Boolean) {
             )
         }
     }
+}
+
+/** Clears the compiled code of every game, or of [serial] only, and returns the message to show. */
+private fun clearCompiledCode(context: Context, spuOnly: Boolean, serial: String?): String {
+    // Again at confirm time, in case a game started while the dialog was open.
+    if (MainActivityRuntime.eState.value != EmuState.STOPPED) return I18n.get("perf.clearCache.stopFirst")
+
+    // One game's caches all sit under its title directory; the firmware modules' PPU caches at
+    // the top level are shared by every game, so a per-game clear leaves them alone.
+    val root = if (serial != null) titleCacheDir(context, serial) else recompilerCacheRoot(context)
+    if (root == null || !root.isDirectory) return I18n.get("perf.clearCache.alreadyEmpty")
+
+    val (count, bytes) = clearRecompilerCache(root, spuOnly)
+    return if (count > 0) I18n.get("perf.clearCache.done").format(count, formatBytes(bytes))
+    else I18n.get("perf.clearCache.alreadyEmpty")
 }
 
 
