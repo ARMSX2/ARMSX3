@@ -5112,6 +5112,50 @@ extern "C" void _rpcsx_setAppBackgrounded(bool backgrounded) {
   g_android_app_backgrounded = backgrounded;
 }
 
+// For the app's "Compiling PPU modules" banner, polled twice a second while a game runs: 0, or
+// 1 + the modules compiled so far once compiling has gone on for ten seconds without a two-second
+// break. See Emu/android_app_state.h.
+extern "C" int _rpcsx_getPlayCompileState() {
+  // Only the app's UI thread calls this, so plain statics are enough.
+  static u64 stretch_start = 0;
+  static u64 idle_since = 0;
+  static u64 last_poll = 0;
+
+  const u64 now = std::chrono::duration_cast<std::chrono::microseconds>(
+                      std::chrono::steady_clock::now().time_since_epoch())
+                      .count();
+
+  // A gap in the polling means the game stopped or paused in between: start over.
+  if (now - last_poll > 2'000'000) {
+    stretch_start = 0;
+    idle_since = 0;
+  }
+
+  last_poll = now;
+
+  if (g_android_play_compiling > 0) {
+    if (!stretch_start) {
+      stretch_start = now;
+      g_android_play_compile_done = 0;
+    }
+
+    idle_since = 0;
+  } else if (stretch_start) {
+    if (!idle_since) {
+      idle_since = now;
+    } else if (now - idle_since >= 2'000'000) {
+      stretch_start = 0;
+      idle_since = 0;
+    }
+  }
+
+  if (!stretch_start || now - stretch_start < 10'000'000) {
+    return 0;
+  }
+
+  return 1 + static_cast<int>(g_android_play_compile_done.load());
+}
+
 // The counterpart to _rpcsx_resume, which had none. Rpcs3Bridge.pause() set a bool and returned,
 // on the belief that "RPCS3 has no explicit pause entry point" -- but Emu.Pause() is right here,
 // and _rpcsx_surfaceEvent has always called it on surface loss. That is why BACKGROUNDING the app

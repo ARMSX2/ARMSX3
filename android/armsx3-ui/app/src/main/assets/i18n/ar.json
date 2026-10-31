@@ -289,6 +289,8 @@
  "backend.renderer.auto": "تلقائي",
  "backend.renderer.software": "برمجي",
  "battery.hot.warn": "أصبح الجهاز ساخنًا: %d درجة مئوية",
+ "ingame.compiling.title": "جارٍ تجميع وحدات PPU",
+ "ingame.compiling.detail": "اكتمل %d. يحدث هذا في المرة الأولى فقط.",
  "battery.low.warn": "البطارية منخفضة: %d%%",
  "bios.boot.title": "التمهيد XMB",
  "bios.firmware.failed": "لا يمكن تثبيت هذا الملف. يجب أن يكون PS3UPDAT.PUP الرسمي، وليس إعادة حزم.",

@@ -289,6 +289,8 @@
  "backend.renderer.auto": "自動",
  "backend.renderer.software": "ソフトウェア",
  "battery.hot.warn": "デバイスが熱くなっています：%d°C",
+ "ingame.compiling.title": "PPUモジュールをコンパイル中",
+ "ingame.compiling.detail": "%d 件完了。これは初回のみです。",
  "battery.low.warn": "バッテリー残量が少なくなっています：%d%%",
  "bios.boot.title": "XMBを起動する",
  "bios.firmware.failed": "そのファイルはインストールできませんでした。リパックではなく、公式の PS3UPDAT.PUP である必要があります。",

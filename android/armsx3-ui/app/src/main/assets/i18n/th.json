@@ -289,6 +289,8 @@
  "backend.renderer.auto": "อัตโนมัติ",
  "backend.renderer.software": "ซอฟต์แวร์",
  "battery.hot.warn": "อุปกรณ์เริ่มร้อน: %d°C",
+ "ingame.compiling.title": "กำลังคอมไพล์โมดูล PPU",
+ "ingame.compiling.detail": "เสร็จแล้ว %d รายการ เกิดขึ้นเฉพาะครั้งแรกเท่านั้น",
  "battery.low.warn": "แบตเตอรี่เหลือน้อย: %d%%",
  "bios.boot.title": "บูต XMB",
  "bios.firmware.failed": "ไม่สามารถติดตั้งไฟล์นั้นได้ จะต้องเป็น PS3UPDAT.PUP อย่างเป็นทางการ ไม่ใช่การแพ็ก",

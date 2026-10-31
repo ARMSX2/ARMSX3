@@ -301,6 +301,8 @@ class RPCSX {
     external fun pause()
     /** From the activity's onStart (false) and onStop (true); paused-game threads poll less. */
     external fun setAppBackgrounded(backgrounded: Boolean)
+    /** 0 while nothing compiles during play, else 1 + the PPU modules compiled so far in this stretch. */
+    external fun getPlayCompileState(): Int
     external fun openHomeMenu()
 
     /** Arm an RSX frame capture: the next frame the emulator renders is recorded to

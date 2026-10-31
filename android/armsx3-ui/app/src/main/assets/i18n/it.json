@@ -289,6 +289,8 @@
  "backend.renderer.auto": "Automatico",
  "backend.renderer.software": "Software",
  "battery.hot.warn": "Il dispositivo si sta surriscaldando: %d°C",
+ "ingame.compiling.title": "Compilazione dei moduli PPU",
+ "ingame.compiling.detail": "%d completati. Succede solo la prima volta.",
  "battery.low.warn": "Batteria scarica: %d%%",
  "bios.boot.title": "Avvia XMB",
  "bios.firmware.failed": "Impossibile installare il file. Deve essere il PS3UPDAT.PUP ufficiale, non un repack.",

@@ -251,6 +251,9 @@ object WindowImpl {
                 // here for the same reason as the keyboard: reachable above every surface.
                 com.armsx2.ui.WelcomeBannerOverlay(this)
 
+                // "Compiling PPU modules" while a game compiles code during play (CompileBanner.kt).
+                com.armsx2.ui.CompileBannerOverlay(this)
+
                 // App-wide confirmation prompts. Hosted last so the scrim covers everything,
                 // and here rather than at the call site because a prompt raised from inside a
                 // scrolling settings tab would clip to that tab and scroll away with it.

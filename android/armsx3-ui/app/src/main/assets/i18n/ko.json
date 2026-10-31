@@ -289,6 +289,8 @@
  "backend.renderer.auto": "자동",
  "backend.renderer.software": "소프트웨어",
  "battery.hot.warn": "장치가 뜨거워지고 있습니다: %d°C",
+ "ingame.compiling.title": "PPU 모듈 컴파일 중",
+ "ingame.compiling.detail": "%d개 완료. 처음 한 번만 진행됩니다.",
  "battery.low.warn": "배터리 부족: %d%%",
  "bios.boot.title": "XMB 부팅",
  "bios.firmware.failed": "해당 파일을 설치할 수 없습니다. 재포장이 아닌 공식 PS3UPDAT.PUP이어야 합니다.",

@@ -94,6 +94,7 @@ struct RPCSXApi {
   bool (*settingsSet)(std::string_view path, std::string_view valueString);
   int (*frameGenImportShaders)(std::string_view path);
   int (*frameGenShaderCount)();
+  int (*getPlayCompileState)();
   const char *(*frameGenShaderError)();
   const char *(*rpcnGetConfig)();
   void (*rpcnSetConfig)(std::string_view host, std::string_view npid,
@@ -330,6 +331,7 @@ struct RPCSXLibrary : RPCSXApi {
     // feature being absent. The Kotlin side treats a null here as "unsupported".
     result.frameGenImportShaders = reinterpret_cast<decltype(frameGenImportShaders)>(dlsym(handle, "_rpcsx_frameGenImportShaders"));
     result.frameGenShaderCount = reinterpret_cast<decltype(frameGenShaderCount)>(dlsym(handle, "_rpcsx_frameGenShaderCount"));
+    result.getPlayCompileState = reinterpret_cast<decltype(getPlayCompileState)>(dlsym(handle, "_rpcsx_getPlayCompileState"));
     result.frameGenShaderError = reinterpret_cast<decltype(frameGenShaderError)>(dlsym(handle, "_rpcsx_frameGenShaderError"));
     result.settingsBeginBatch = reinterpret_cast<decltype(settingsBeginBatch)>(dlsym(handle, "_rpcsx_settingsBeginBatch"));
     result.settingsEndBatch = reinterpret_cast<decltype(settingsEndBatch)>(dlsym(handle, "_rpcsx_settingsEndBatch"));
@@ -1733,6 +1735,13 @@ Java_net_rpcsx_RPCSX_frameGenImportShaders(JNIEnv *env, jobject, jstring path) {
 extern "C" JNIEXPORT jint JNICALL
 Java_net_rpcsx_RPCSX_frameGenShaderCount(JNIEnv *, jobject) {
   return rpcsxLib.frameGenShaderCount ? rpcsxLib.frameGenShaderCount() : 0;
+}
+
+// 0 while nothing compiles during play, else 1 + the PPU modules compiled so far in this stretch.
+// A core without the symbol reports nothing, like the frame generation calls above.
+extern "C" JNIEXPORT jint JNICALL
+Java_net_rpcsx_RPCSX_getPlayCompileState(JNIEnv *, jobject) {
+  return rpcsxLib.getPlayCompileState ? rpcsxLib.getPlayCompileState() : 0;
 }
 
 extern "C" JNIEXPORT jstring JNICALL

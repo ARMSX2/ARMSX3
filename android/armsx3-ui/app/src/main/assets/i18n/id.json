@@ -289,6 +289,8 @@
  "backend.renderer.auto": "Otomatis",
  "backend.renderer.software": "Perangkat lunak",
  "battery.hot.warn": "Perangkat menjadi panas: %d°C",
+ "ingame.compiling.title": "Mengompilasi modul PPU",
+ "ingame.compiling.detail": "%d selesai. Ini hanya terjadi pertama kali.",
  "battery.low.warn": "Baterai lemah: %d%%",
  "bios.boot.title": "Boot XMB",
  "bios.firmware.failed": "File itu tidak dapat diinstal. Harus PS3UPDAT.PUP resmi, bukan repack.",

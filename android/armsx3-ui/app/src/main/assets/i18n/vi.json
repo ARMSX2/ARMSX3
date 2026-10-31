@@ -289,6 +289,8 @@
  "backend.renderer.auto": "Tự động",
  "backend.renderer.software": "Phần mềm",
  "battery.hot.warn": "Thiết bị đang nóng lên: %d°C",
+ "ingame.compiling.title": "Đang biên dịch mô-đun PPU",
+ "ingame.compiling.detail": "Đã xong %d. Việc này chỉ diễn ra lần đầu.",
  "battery.low.warn": "Pin yếu: %d%%",
  "bios.boot.title": "Khởi động XMB",
  "bios.firmware.failed": "Không thể cài đặt tập tin đó. Nó phải là PS3UPDAT.PUP chính thức, không phải là bản repack.",

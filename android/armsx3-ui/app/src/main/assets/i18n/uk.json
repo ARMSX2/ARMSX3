@@ -289,6 +289,8 @@
  "backend.renderer.auto": "Авто",
  "backend.renderer.software": "Програмний",
  "battery.hot.warn": "Пристрій нагрівається: %d°C",
+ "ingame.compiling.title": "Компіляція модулів PPU",
+ "ingame.compiling.detail": "Готово: %d. Це відбувається лише першого разу.",
  "battery.low.warn": "Низький заряд батареї: %d%%",
  "bios.boot.title": "Завантажте XMB",
  "bios.firmware.failed": "Цей файл не вдалося встановити. Це має бути офіційний PS3UPDAT.PUP, а не репак.",

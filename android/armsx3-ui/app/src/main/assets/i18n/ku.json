@@ -289,6 +289,8 @@
  "backend.renderer.auto": "Auto",
  "backend.renderer.software": "Nivîsbarî",
  "battery.hot.warn": "Amûr germ dibe: %d°C",
+ "ingame.compiling.title": "Modûlên PPU têne berhevkirin",
+ "ingame.compiling.detail": "%d qediyan. Ev tenê cara yekem dibe.",
  "battery.low.warn": "Pîl kêm e: %d%%",
  "bios.boot.title": "Boot XMB",
  "bios.firmware.failed": "Ew pel nehat sazkirin. Divê ew PS3UPDAT.PUP-a fermî be, ne guhertoyeke ji nû ve pakkirî.",

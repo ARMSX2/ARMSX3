@@ -289,6 +289,8 @@
  "backend.renderer.auto": "自動",
  "backend.renderer.software": "軟體",
  "battery.hot.warn": "裝置正在發熱：%d°C",
+ "ingame.compiling.title": "正在編譯 PPU 模組",
+ "ingame.compiling.detail": "已完成 %d 個。僅首次需要。",
  "battery.low.warn": "電池電量低：%d%%",
  "bios.boot.title": "啟動XMB",
  "bios.firmware.failed": "無法安裝該檔案。它必須是官方的 PS3UPDAT.PUP，而不是重新包裝。",

@@ -15,6 +15,7 @@
 #include "Emu/RSX/Overlays/overlay_message.h"
 #include "Emu/VFS.h"
 #include "Emu/system_progress.hpp"
+#include "Emu/android_app_state.h"
 #include "Emu/system_utils.hpp"
 #include "Emu/System.h"
 #include "PPUThread.h"
@@ -6671,6 +6672,22 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 	// Create worker threads for compilation
 	if (!workload.empty())
 	{
+		// ARMSX3: a compile in flight during play, for the app's banner (Emu/android_app_state.h)
+		struct play_compile_scope
+		{
+			bool on;
+
+			explicit play_compile_scope(bool on_) : on(on_)
+			{
+				if (on) g_android_play_compiling++;
+			}
+
+			~play_compile_scope()
+			{
+				if (on) g_android_play_compiling--;
+			}
+		} play_compile{g_fxo->get<progress_dialog_workaround>().show_overlay_message_only};
+
 		// Sync variable to acquire workloads
 		atomic_t<u64> work_cv = 0;
 		atomic_t<u64> work_done = 0;
@@ -7357,6 +7374,12 @@ bool ppu_initialize(const ppu_module<lv2_obj>& info, bool check_only, u64 file_s
 	{
 		// Done
 		g_progr_pdone++;
+	}
+
+	// ARMSX3: one more module compiled during play, for the app's banner (Emu/android_app_state.h)
+	if (compiled_new && g_fxo->get<progress_dialog_workaround>().show_overlay_message_only)
+	{
+		g_android_play_compile_done++;
 	}
 
 	return compiled_new;
