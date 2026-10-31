@@ -159,6 +159,8 @@ fun HomeScreen(
     // The game whose categories are being edited. Its own sheet rather than a submenu, because
     // filing a game usually means ticking more than one box.
     var categoriesGame by remember { mutableStateOf<GameInfo?>(null) }
+    // The game whose caches the long-press menu is about to clear, while the user confirms.
+    var clearCacheGame by remember { mutableStateOf<GameInfo?>(null) }
     var categoryPicker by remember { mutableStateOf(false) }
     // The category being renamed, if any. Long-press a row in the picker.
     var renameCategory by remember { mutableStateOf<String?>(null) }
@@ -983,41 +985,24 @@ fun HomeScreen(
                         menuGame = null
                     }
                 }
-                // Per-game cache clears. The settings screen only offers "clear everything",
-                // which is the wrong tool when one title is misbehaving and another has an hour of
-                // PPU compilation banked. Shaders are offered separately because shaders_cache/
-                // sits INSIDE the ppu-* directory: clearing PPU already takes the shaders, but not
-                // the reverse, and a driver change usually only invalidates the shaders.
-                val cacheStopFirst = str("perf.clearCache.stopFirst")
-                val cacheNoSerial = str("games.clearCache.noSerial")
-                val cacheEmpty = str("games.clearCache.empty")
-                val cacheDone = str("perf.clearCache.done")
-
-                // All three share this: refuse while anything is running, because the live VM
-                // holds these files open and is still writing to them.
-                val clearGameCache = { clear: (java.io.File) -> Pair<Int, Long> ->
-                    val dir = com.armsx2.cache.titleCacheDir(context, game.serial)
-                    val message = when {
-                        MainActivityRuntime.eState.value != EmuState.STOPPED -> cacheStopFirst
-                        dir == null -> cacheNoSerial
-                        !dir.isDirectory -> cacheEmpty
-                        else -> {
-                            val (count, bytes) = clear(dir)
-                            if (count > 0) cacheDone.format(count, com.armsx2.cache.formatBytes(bytes))
-                            else cacheEmpty
-                        }
-                    }
-                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                }
-
+                // Per-game cache clear, the quick way to reset one misbehaving title without
+                // touching another that has an hour of PPU compilation banked.
+                //
                 // One action, because for a single title the three caches are one thing on disk:
                 // shaders_cache/ and the SPU caches live INSIDE ppu-<hash>-EBOOT.BIN, so clearing
                 // this game's PPU necessarily takes its SPU and shaders with it. Splitting them
                 // here would offer two buttons that cannot do what their names imply. The settings
                 // screen keeps its separate PPU/SPU rows, where SPU alone can still be cleared.
+                val cacheStopFirst = str("perf.clearCache.stopFirst")
                 GameMenuAction("\uD83E\uDDF9", str("games.clearCache")) {
                     menuGame = null
-                    clearGameCache { com.armsx2.cache.clearRecompilerCache(it, spuOnly = false) }
+                    // Refuse while anything is running, before asking: the live VM holds these
+                    // files open and is still writing to them.
+                    if (MainActivityRuntime.eState.value != EmuState.STOPPED) {
+                        Toast.makeText(context, cacheStopFirst, Toast.LENGTH_SHORT).show()
+                    } else {
+                        clearCacheGame = game
+                    }
                 }
                 val addToHomeFailed = str("games.addToHome.unsupported")
                 GameMenuAction("📌", str("games.addToHome")) {
@@ -1051,6 +1036,41 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    // The long-press menu's cache clear asks first, like the settings rows: the game's next boot
+    // recompiles everything, which can take a long while.
+    clearCacheGame?.let { game ->
+        val cacheStopFirst = str("perf.clearCache.stopFirst")
+        val cacheNoSerial = str("games.clearCache.noSerial")
+        val cacheEmpty = str("games.clearCache.empty")
+        val cacheDone = str("perf.clearCache.done")
+        AlertDialog(
+            onDismissRequest = { clearCacheGame = null },
+            title = { Text(game.displayTitle(EnglishTitles.enabled.value)) },
+            text = { Text(str("perf.clearPpuCache.confirmGame")) },
+            confirmButton = {
+                TextButton(onClick = {
+                    clearCacheGame = null
+                    val dir = com.armsx2.cache.titleCacheDir(context, game.serial)
+                    val message = when {
+                        // Again here, in case a game started while the dialog was open.
+                        MainActivityRuntime.eState.value != EmuState.STOPPED -> cacheStopFirst
+                        dir == null -> cacheNoSerial
+                        !dir.isDirectory -> cacheEmpty
+                        else -> {
+                            val (count, bytes) = com.armsx2.cache.clearRecompilerCache(dir, spuOnly = false)
+                            if (count > 0) cacheDone.format(count, com.armsx2.cache.formatBytes(bytes))
+                            else cacheEmpty
+                        }
+                    }
+                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                }) { Text(str("action.delete")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { clearCacheGame = null }) { Text(str("action.cancel")) }
+            },
+        )
     }
 
     // The game IS needed, when we have it. A RAP's filename is only conventionally the content
