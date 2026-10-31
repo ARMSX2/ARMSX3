@@ -336,6 +336,13 @@ class GameLibraryRepository(private val context: Context) {
                 android.util.Log.i(ScanTag, "re-probing folder '$serial': no usable disc icon on disk")
                 return@forEach
             }
+            // A trial's folder is read again on every scan. Installing its unlock key moves its title
+            // and icon to the full game's (C00) without changing anything the cache keys on, so
+            // Castlevania: Harmony of Despair kept its "Demo" name after the unlock.
+            if (isFolder && File(path, "C00").isDirectory) {
+                android.util.Log.i(ScanTag, "re-probing folder '$serial': trial (C00)")
+                return@forEach
+            }
             if (reprobeImages && game.extension.lowercase() in probeExtensions) {
                 android.util.Log.i(ScanTag, "re-probing image '$serial' for other games on the disc")
                 reprobeFallback[path] = DiscInfo(serial, game.title)
