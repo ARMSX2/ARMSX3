@@ -7,6 +7,8 @@
 
 LOG_CHANNEL(trp_log, "Trophy");
 
+extern bool savedata_commit_by_copy(const std::string& from, const std::string& to); // ARMSX3, cellSaveData.cpp
+
 static std::string get_entry_name(const TRPEntry& entry)
 {
 	const std::string_view name{entry.name, sizeof(entry.name)};
@@ -86,7 +88,20 @@ bool TRPLoader::Install(std::string_view dest, bool /*show*/)
 			success = fs::rename(temp, local_path, false);
 			if (!success)
 			{
-				trp_log.error("Failed to move directory '%s' to '%s' (error=%s)", temp, local_path, fs::g_tls_error);
+				// ARMSX3: Android's shared storage can refuse this rename with errno 1 (EPERM), as it
+				// does for saves (Midnight Club: Los Angeles, 2026-10-31), and the game then runs with
+				// no trophies. The trophy files are copied into place instead, the way saves are.
+				const fs::error rename_error = fs::g_tls_error;
+				success = savedata_commit_by_copy(temp, local_path);
+
+				if (success)
+				{
+					trp_log.warning("Could not rename '%s' to '%s' (error=%s), copied it instead", temp, local_path, rename_error);
+				}
+				else
+				{
+					trp_log.error("Failed to move directory '%s' to '%s' (error=%s)", temp, local_path, rename_error);
+				}
 			}
 		}
 		else
