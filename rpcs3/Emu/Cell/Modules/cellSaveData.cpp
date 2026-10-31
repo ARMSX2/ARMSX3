@@ -724,6 +724,9 @@ static s32 savedata_check_args(u32 operation, u32 version, vm::cptr<char> dirNam
 // so the save is copied into place file by file instead (save folders hold files only), and the
 // working folder goes once all of it is across. Through fs::file rather than fs::copy_file, which
 // does not handle a folder reached through the storage device (saf_device).
+//
+// Other storage refuses the step before it, renaming the old save to its .backup_ name (Midnight
+// Club: Los Angeles, 2026-10-31), so savedata_op copies the old save aside with this too.
 bool savedata_commit_by_copy(const std::string& from, const std::string& to)
 {
 	const std::string src = from.ends_with('/') ? from : from + '/';
@@ -1260,7 +1263,17 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 				// Remove savedata by renaming
 				if (!vfs::host::rename(del_path, old_path, &g_mp_sys_dev_hdd0, false))
 				{
-					fmt::throw_exception("Failed to move directory %s (%s)", del_path, fs::g_tls_error);
+					// ARMSX3: Android storage can refuse this rename with errno 1 (EPERM), as it does
+					// when saving (see savedata_commit_by_copy). The rename only exists on the way to
+					// deleting the folder, so the folder is deleted where it is instead.
+					const fs::error rename_error = fs::g_tls_error;
+
+					if (!fs::remove_all(del_path))
+					{
+						fmt::throw_exception("Failed to move directory %s (%s)", del_path, rename_error);
+					}
+
+					cellSaveData.warning("savedata_op(): Could not rename %s for deletion (%s), deleted it in place", del_path, rename_error);
 				}
 
 				// Cleanup
@@ -2275,7 +2288,18 @@ static NEVER_INLINE error_code savedata_op(ppu_thread& ppu, u32 operation, u32 v
 		// Backup old savedata
 		if (!vfs::host::rename(dir_path, old_path, &g_mp_sys_dev_hdd0, false))
 		{
-			fmt::throw_exception("Failed to move directory %s (%s)", dir_path, fs::g_tls_error);
+			// ARMSX3: the same refusal can come a step earlier, for the old save's own folder
+			// (Midnight Club: Los Angeles, Android shared storage, 2026-10-31), so it is copied aside
+			// instead. If the old folder cannot be removed afterwards, the commit below finds it still
+			// there and copies the new save over it.
+			const fs::error rename_error = fs::g_tls_error;
+
+			if (!savedata_commit_by_copy(dir_path, old_path))
+			{
+				fmt::throw_exception("Failed to move directory %s (%s)", dir_path, rename_error);
+			}
+
+			cellSaveData.warning("savedata_op(): Could not rename %s aside (%s), copied it instead", dir_path, rename_error);
 		}
 
 		// Commit new savedata
