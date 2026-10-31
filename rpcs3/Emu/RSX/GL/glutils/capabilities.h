@@ -51,6 +51,7 @@ namespace gl
 		bool vendor_AMD = false;    // has broken ARB_multidraw
 		bool vendor_NVIDIA = false; // has NaN poisoning issues
 		bool vendor_MESA = false;   // requires CLIENT_STORAGE bit set for streaming buffers
+		bool vendor_QUALCOMM_GLES = false; // Adreno's own ES driver: needs each pass submitted at a target switch
 
 		bool subvendor_RADEONSI = false;
 		bool subvendor_NOUVEAU = false;

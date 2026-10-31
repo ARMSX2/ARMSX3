@@ -119,6 +119,17 @@ bool GLGSRender::on_framebuffer_bound(const rsx::framebuffer_layout& layout)
 		return true;
 	}
 
+#ifdef RSX_GLES
+	// Adreno's own GLES driver lost a depth-only pass between two passes on the same colour target: in
+	// South Park: The Stick of Truth the characters and props drawn after it were missing from most
+	// frames, while every frame dump, which read the target back at each switch, came out whole.
+	// Submitting each finished pass at the switch keeps them in order.
+	if (m_draw_fbo && gl::get_driver_caps().vendor_QUALCOMM_GLES)
+	{
+		glFlush();
+	}
+#endif
+
 	gl::command_context cmd{ gl_state };
 	res()->surface_cache.prepare_render_target(cmd,
 		m_ctx->fb.layout.color_format, m_ctx->fb.layout.depth_format,

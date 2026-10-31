@@ -144,8 +144,10 @@ namespace gl
 
 		// Vendor identification. The desktop paths key off Mesa/NVIDIA/AMD/Intel;
 		// on Android it is Qualcomm, ARM, Imagination or ANGLE-over-Vulkan. None of
-		// the desktop vendor workarounds apply, so leave every vendor_* flag false
-		// and just record what we are on.
+		// the desktop vendor workarounds apply, so those flags stay false. Qualcomm's
+		// own driver reports plain "Qualcomm"; ANGLE on an Adreno reports
+		// "Google Inc. (Qualcomm)" and is not that driver.
+		vendor_QUALCOMM_GLES = vendor_string == "qualcomm";
 		rsx_log.notice("[CAPS] GLES vendor='%s' renderer='%s' glsl=%d extensions=%d",
 			vendor_string, renderer_string, glsl_version.version, ext_count);
 
