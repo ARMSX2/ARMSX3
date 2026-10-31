@@ -5956,7 +5956,11 @@ extern "C" std::string _rpcsx_probeDiscInfo(std::string_view isoPath,
     try {
       result = read_sfo_game_info(path + "/PS3_GAME", iconOut);
       if (result == "{}") {
-        result = read_sfo_game_info(path, iconOut);
+        // An installed PSN trial whose unlock key is in place takes its title and icon from C00,
+        // the folder RPCS3 boots it from (get_sfo_dir_from_game_path). Castlevania: Harmony of
+        // Despair's own PARAM.SFO says "... Demo", which the library and Discord kept showing
+        // after the full game was unlocked.
+        result = read_sfo_game_info(rpcs3::utils::get_sfo_dir_from_game_path(path), iconOut);
       }
     } catch (const std::exception &e) {
       rpcsx_android.error("probeDiscInfo('%s') [folder] failed: %s", path,
