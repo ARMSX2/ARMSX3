@@ -1082,7 +1082,10 @@ struct atomic_storage<T, 16> : atomic_storage<T, 0>
 
 		// One CASPAL that compares and swaps a register pair with itself: whatever the comparison
 		// finds, it writes back only the value already there, and returns the current value.
-		return std::bit_cast<T>(__atomic_load_n(reinterpret_cast<const u128*>(&dest), __ATOMIC_SEQ_CST));
+		const u128 data = __atomic_load_n(reinterpret_cast<const u128*>(&dest), __ATOMIC_SEQ_CST);
+		T result;
+		std::memcpy(&result, &data, 16);
+		return result;
 	}
 
 	static inline T observe(const T& dest)
@@ -1094,21 +1097,36 @@ struct atomic_storage<T, 16> : atomic_storage<T, 0>
 	static inline bool compare_exchange(T& dest, T& comp, T exch)
 	{
 		// One CASPAL where there used to be an LDAXP/STLXP loop.
-		u128 cmp = std::bit_cast<u128>(comp);
+		//
+		// The values go through memcpy, never std::bit_cast. bit_cast leaves a struct's padding bits
+		// unspecified, and clang took that literally: in rsxaudio's callback_config (two padding bytes)
+		// it zeroed them in the comparand while the value it stored kept stack garbage there. From the
+		// first such store on, every CAS failed on the padding alone, atomic_op handed back the same
+		// value and tried again, and the thread spun for good: the XMB's AV thread, in AUDIO_INIT or
+		// AV_AUDIO_MUTE, which left it black on some boots. memcpy carries the bytes exactly, so a
+		// failed comparand comes back as exactly what memory holds and the next attempt matches.
+		u128 cmp, desired;
+		std::memcpy(&cmp, &comp, 16);
+		std::memcpy(&desired, &exch, 16);
 
-		if (__atomic_compare_exchange_n(reinterpret_cast<u128*>(&dest), &cmp, std::bit_cast<u128>(exch), false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+		if (__atomic_compare_exchange_n(reinterpret_cast<u128*>(&dest), &cmp, desired, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
 		{
 			return true;
 		}
 
-		comp = std::bit_cast<T>(cmp);
+		std::memcpy(&comp, &cmp, 16);
 		return false;
 	}
 
 	static inline T exchange(T& dest, T value)
 	{
 		// A CASPAL loop, which only goes round again when another core changed the value in between.
-		return std::bit_cast<T>(__atomic_exchange_n(reinterpret_cast<u128*>(&dest), std::bit_cast<u128>(value), __ATOMIC_SEQ_CST));
+		u128 desired;
+		std::memcpy(&desired, &value, 16);
+		const u128 old = __atomic_exchange_n(reinterpret_cast<u128*>(&dest), desired, __ATOMIC_SEQ_CST);
+		T result;
+		std::memcpy(&result, &old, 16);
+		return result;
 	}
 
 	static inline void store(T& dest, T value)
