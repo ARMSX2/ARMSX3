@@ -2097,7 +2097,9 @@ bool VKGSRender::load_program()
 		m_pipeline_properties.state.ia.topology == pipeline_topology &&
 		m_pipeline_properties.state.ia.primitiveRestartEnable == vertex_state.restart_index_enabled)
 	{
-		if (!m_shader_interpreter.is_interpreter(m_program)) [[ likely ]]
+		if (!m_shader_interpreter.is_interpreter(m_program) &&
+			m_ctx->program.cache_hint.has_vertex_program() &&
+			m_ctx->program.cache_hint.has_fragment_program()) [[likely]]
 		{
 			return true;
 		}
