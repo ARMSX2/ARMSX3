@@ -291,6 +291,7 @@
  "battery.hot.warn": "设备正在发热：%d°C",
  "ingame.compiling.title": "正在编译 PPU 模块",
  "ingame.compiling.detail": "已完成 %d 个。仅首次需要。",
+ "ingame.compiling.detailOf": "已完成 %1$d / %2$d 个。仅首次需要。",
  "battery.low.warn": "电池电量低：%d%%",
  "bios.boot.title": "启动XMB",
  "bios.firmware.failed": "无法安装该文件。它必须是官方的 PS3UPDAT.PUP，而不是重新包装。",

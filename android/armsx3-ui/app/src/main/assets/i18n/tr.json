@@ -291,6 +291,7 @@
  "battery.hot.warn": "Cihaz ısınıyor: %d°C",
  "ingame.compiling.title": "PPU modülleri derleniyor",
  "ingame.compiling.detail": "%d tamamlandı. Bu yalnızca ilk seferde olur.",
+ "ingame.compiling.detailOf": "%1$d/%2$d tamamlandı. Bu yalnızca ilk seferde olur.",
  "battery.low.warn": "Pil zayıf: %d%%",
  "bios.boot.title": "XMB'yi başlat",
  "bios.firmware.failed": "Bu dosya yüklenemedi. Bu bir yeniden paketleme değil, resmi PS3UPDAT.PUP olmalıdır.",

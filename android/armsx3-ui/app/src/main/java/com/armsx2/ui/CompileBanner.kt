@@ -62,8 +62,11 @@ fun CompileBannerOverlay(scope: BoxScope) {
         }
     }
 
-    // 0 = nothing compiling, otherwise 1 + the modules finished so far in this stretch
+    // 0 = nothing to show. Otherwise the low 16 bits are 1 + the modules done, and bits 16 to 30
+    // how many there are when the core knows (_rpcsx_getPlayCompileState).
     if (state <= 0) return
+    val done = (state and 0xffff) - 1
+    val total = (state ushr 16) and 0x7fff
 
     with(scope) {
         Surface(
@@ -85,10 +88,21 @@ fun CompileBannerOverlay(scope: BoxScope) {
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(8.dp))
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                if (total > 0) {
+                    LinearProgressIndicator(
+                        progress = { done.toFloat() / total },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = I18n.get("ingame.compiling.detail").format(state - 1),
+                    text = if (total > 0) {
+                        I18n.get("ingame.compiling.detailOf").format(done, total)
+                    } else {
+                        I18n.get("ingame.compiling.detail").format(done)
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 13.sp,
                 )

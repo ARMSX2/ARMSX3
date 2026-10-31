@@ -4447,8 +4447,94 @@ extern "C" void _rpcsx_setSocInfo(std::string_view socInfo) {
   g_android_soc_info = std::string(socInfo);
 }
 
+// The "N of M" half of the compile banner. A game whose long compile during play is a known set of
+// modules gets a path fragment here; every module it loads with that fragment counts towards N,
+// compiled or straight from the cache, and M is how many such files it has. Castlevania: Harmony of
+// Despair loads every DLC shot module (USRDIR/dlc/*/dll/dllshot, 61 of them) once a save is loaded,
+// and compiles each the first time, which took 15 minutes on an Odin 3. Any other game keeps the
+// plain count of modules compiled.
+static std::string_view play_watch_fragment(std::string_view title_id) {
+  // Castlevania: Harmony of Despair (US, EU)
+  if (title_id == "NPUB30505" || title_id == "NPEB00563") {
+    return "/dll/dllshot/";
+  }
+
+  return {};
+}
+
+static u32 count_play_watch_files(const std::string &dir, std::string_view fragment, int depth) {
+  fs::dir folder(dir);
+
+  if (!folder) {
+    return 0;
+  }
+
+  u32 count = 0;
+
+  for (const auto &entry : folder) {
+    if (entry.name == "." || entry.name == "..") {
+      continue;
+    }
+
+    const std::string path = dir + "/" + entry.name;
+
+    if (entry.is_directory) {
+      if (depth < 8) {
+        count += count_play_watch_files(path, fragment, depth + 1);
+      }
+    } else if (path.find(fragment) != std::string::npos && path.ends_with(".sprx")) {
+      count++;
+    }
+  }
+
+  return count;
+}
+
+struct play_watch_state {
+  std::mutex mutex;
+  u64 session = umax;
+  std::string fragment;
+  u32 loaded = 0;
+  u32 total = 0;
+};
+
+static play_watch_state s_play_watch;
+
+// With s_play_watch.mutex held. Starts over for each emulation session.
+static void play_watch_refresh() {
+  const u64 session = static_cast<u64>(Emu.GetEmulationIdentifier());
+
+  if (s_play_watch.session == session) {
+    return;
+  }
+
+  s_play_watch.session = session;
+  s_play_watch.loaded = 0;
+  s_play_watch.total = 0;
+
+  const std::string title_id = Emu.GetTitleID();
+  s_play_watch.fragment = std::string(play_watch_fragment(title_id));
+
+  if (!s_play_watch.fragment.empty()) {
+    s_play_watch.total = count_play_watch_files(
+        rpcs3::utils::get_hdd0_dir() + "game/" + title_id + "/USRDIR", s_play_watch.fragment, 0);
+  }
+}
+
+static void play_watch_on_prx_loaded(std::string_view vpath) {
+  std::lock_guard lock(s_play_watch.mutex);
+  play_watch_refresh();
+
+  if (!s_play_watch.fragment.empty() && vpath.find(s_play_watch.fragment) != std::string_view::npos) {
+    s_play_watch.loaded++;
+  }
+}
+
 extern "C" bool _rpcsx_initialize(std::string_view rootDir,
                                   std::string_view user) {
+  // The compile banner's "N of M" counts the modules a game loads (play_watch_on_prx_loaded).
+  g_android_on_prx_loaded = play_watch_on_prx_loaded;
+
   // Ask for precise timers, the way every other RPCS3 frontend does.
   //
   // rpcs3.cpp sets this in main() under __linux__ with the comment "we value precise timers",
@@ -5112,9 +5198,10 @@ extern "C" void _rpcsx_setAppBackgrounded(bool backgrounded) {
   g_android_app_backgrounded = backgrounded;
 }
 
-// For the app's "Compiling PPU modules" banner, polled twice a second while a game runs: 0, or
-// 1 + the modules compiled so far once compiling has gone on for ten seconds without a two-second
-// break. See Emu/android_app_state.h.
+// For the app's "Compiling PPU modules" banner, polled twice a second while a game runs. 0 until
+// compiling has gone on for ten seconds without a two-second break; then the low 16 bits are
+// 1 + the modules done, and bits 16 to 30 how many there are when that is known (see
+// play_watch_fragment). See Emu/android_app_state.h.
 extern "C" int _rpcsx_getPlayCompileState() {
   // Only the app's UI thread calls this, so plain statics are enough.
   static u64 stretch_start = 0;
@@ -5153,7 +5240,20 @@ extern "C" int _rpcsx_getPlayCompileState() {
     return 0;
   }
 
-  return 1 + static_cast<int>(g_android_play_compile_done.load());
+  u32 done = g_android_play_compile_done.load();
+  u32 total = 0;
+
+  {
+    std::lock_guard lock(s_play_watch.mutex);
+    play_watch_refresh();
+
+    if (s_play_watch.total) {
+      done = std::min(s_play_watch.loaded, s_play_watch.total);
+      total = s_play_watch.total;
+    }
+  }
+
+  return static_cast<int>(std::min<u32>(done + 1, 0xffff) | (std::min<u32>(total, 0x7fff) << 16));
 }
 
 // The counterpart to _rpcsx_resume, which had none. Rpcs3Bridge.pause() set a bool and returned,

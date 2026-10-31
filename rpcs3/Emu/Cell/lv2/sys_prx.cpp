@@ -3,6 +3,7 @@
 
 #include "Emu/System.h"
 #include "Emu/system_config.h"
+#include "Emu/android_app_state.h"
 #include "Emu/VFS.h"
 #include "Emu/IdManager.h"
 #include "Crypto/unself.h"
@@ -318,6 +319,12 @@ static error_code prx_load_module(const std::string& vpath, u64 flags, vm::ptr<s
 	ppu_initialize(*prx);
 
 	sys_prx.success("Loaded module: \"%s\" (id=0x%x)", vpath, idm::last_id());
+
+	// ARMSX3: lets the app's compile banner count the modules it is watching (Emu/android_app_state.h)
+	if (const auto on_loaded = g_android_on_prx_loaded)
+	{
+		on_loaded(vpath);
+	}
 
 	return not_an_error(idm::last_id<lv2_prx>());
 }

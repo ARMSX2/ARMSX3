@@ -291,6 +291,7 @@
  "battery.hot.warn": "L'appareil devient chaud : %d°C",
  "ingame.compiling.title": "Compilation des modules PPU",
  "ingame.compiling.detail": "%d terminés. Cela n'arrive que la première fois.",
+ "ingame.compiling.detailOf": "%1$d sur %2$d terminés. Cela n'arrive que la première fois.",
  "battery.low.warn": "Batterie faible : %d%%",
  "bios.boot.title": "Démarrer XMB",
  "bios.firmware.failed": "Ce fichier n'a pas pu être installé. Il doit s'agir du PS3UPDAT.PUP officiel, pas d'un repack.",

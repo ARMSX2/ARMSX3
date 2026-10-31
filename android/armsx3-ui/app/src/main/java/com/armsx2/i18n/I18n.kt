@@ -1659,6 +1659,7 @@ val EN: Map<String, String> = mapOf(
     "battery.hot.warn" to "Device is getting hot: %d°C",
     "ingame.compiling.title" to "Compiling PPU modules",
     "ingame.compiling.detail" to "%d done. This only happens the first time.",
+    "ingame.compiling.detailOf" to "%1\$d of %2\$d done. This only happens the first time.",
     "app.batteryWarnings" to "Battery warnings",
     "app.batteryWarnings.desc" to "Show a brief banner when the battery drops to 20% or the battery temperature reaches 35°C. Each warning appears once and re-arms after the reading recovers.",
     "network.localLink.notSet" to "Not set",

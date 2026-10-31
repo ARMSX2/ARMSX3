@@ -291,6 +291,7 @@
  "battery.hot.warn": "Perangkat menjadi panas: %d°C",
  "ingame.compiling.title": "Mengompilasi modul PPU",
  "ingame.compiling.detail": "%d selesai. Ini hanya terjadi pertama kali.",
+ "ingame.compiling.detailOf": "%1$d dari %2$d selesai. Ini hanya terjadi pertama kali.",
  "battery.low.warn": "Baterai lemah: %d%%",
  "bios.boot.title": "Boot XMB",
  "bios.firmware.failed": "File itu tidak dapat diinstal. Harus PS3UPDAT.PUP resmi, bukan repack.",

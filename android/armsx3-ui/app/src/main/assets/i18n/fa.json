@@ -291,6 +291,7 @@
  "battery.hot.warn": "دستگاه در حال گرم شدن است: %d°C",
  "ingame.compiling.title": "در حال کامپایل ماژول‌های PPU",
  "ingame.compiling.detail": "%d انجام شد. این فقط بار اول اتفاق می‌افتد.",
+ "ingame.compiling.detailOf": "%1$d از %2$d انجام شد. این فقط بار اول اتفاق می‌افتد.",
  "battery.low.warn": "باتری کم: %d%%",
  "bios.boot.title": "XMB را بوت کنید",
  "bios.firmware.failed": "آن فایل نصب نشد. باید PS3UPDAT.PUP رسمی باشد نه بسته بندی مجدد.",

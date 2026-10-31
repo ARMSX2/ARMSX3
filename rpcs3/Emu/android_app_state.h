@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <string_view>
 
 // ARMSX3: the Android app is out of sight (its activity is stopped: home, recents, another app,
 // or the screen locked). Set through _rpcsx_setAppBackgrounded. Threads that keep polling while a
@@ -16,3 +17,7 @@ inline std::atomic<bool> g_android_app_backgrounded{false};
 // compiling and does not count.
 inline std::atomic<int> g_android_play_compiling{0};
 inline std::atomic<unsigned> g_android_play_compile_done{0};
+
+// ARMSX3: called by sys_prx with the guest path of every module a game loads. rpcsx-android.cpp sets
+// it to count the modules the compile banner is watching, so the banner can say "N of M".
+inline void (*g_android_on_prx_loaded)(std::string_view vpath) = nullptr;
