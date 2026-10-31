@@ -460,6 +460,9 @@ protected:
 	void clear() override;
 	void begin_draw() override;
 	bool resolve_sampler_state(rsx::flags32_t& invalidated_programs) override;
+	// ARMSX3: no frame context means no swapchain right now (a failed rebuild after the surface
+	// went away) or a torn-down renderer; see rsx::render_backend::can_draw.
+	bool can_draw() const override { return m_current_frame != nullptr; }
 	bool end_draw() override;
 	void emit_geometry(u32 sub_index) override;
 

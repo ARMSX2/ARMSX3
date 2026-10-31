@@ -772,9 +772,13 @@ namespace rsx
 
 	bool core_renderer::should_skip_draw() const
 	{
+		// ARMSX3: can_draw() stands in for the swapchain_unavailable check the old VKGSRender::end()
+		// made. Without it, resolve_programs() reached the Vulkan sampler setup with no frame context
+		// and the XMB crashed on a null m_current_frame after a failed swapchain rebuild.
 		if (m_ctx->frame_skip.skip_current_frame ||
 			!m_ctx->graphics_state.test(rsx::rtt_config_valid) ||
-			m_ctx->cond_render.disable_rendering())
+			m_ctx->cond_render.disable_rendering() ||
+			!RSX(m_ctx)->renderer()->can_draw())
 		{
 			return true;
 		}

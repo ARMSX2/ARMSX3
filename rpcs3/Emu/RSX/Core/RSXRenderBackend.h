@@ -76,6 +76,11 @@ namespace rsx
 		virtual void on_shutdown() {}
 		virtual device_status check_device_status() const { return device_status::ok; }
 
+		// ARMSX3: false while the backend has nowhere to draw. The core then skips the draw the way it
+		// skips a frame. Vulkan is without a frame context between losing its surface and building a
+		// working swapchain again, which on Android is any app switch, screen-off or rotation.
+		virtual bool can_draw() const { return true; }
+
 		// Create per-context resources.
 		virtual std::unique_ptr<context_resources> create_context_resources(context* ctx) = 0;
 
