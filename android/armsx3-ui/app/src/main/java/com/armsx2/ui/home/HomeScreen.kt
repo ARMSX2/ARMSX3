@@ -104,6 +104,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -154,6 +156,8 @@ fun HomeScreen(
     var overflowMenu by remember { mutableStateOf(false) }
     var showExitConfirm by remember { mutableStateOf(false) }
     var menuGame by remember { mutableStateOf<GameInfo?>(null) }
+    // The menu was opened with the controller (Triangle), so its first row takes focus.
+    var menuFromPad by remember { mutableStateOf(false) }
     // Set by the context menu's "Install licence" entry; drives the .rap file browser.
     var licenceGame by remember { mutableStateOf<GameInfo?>(null) }
     // The game whose categories are being edited. Its own sheet rather than a submenu, because
@@ -237,7 +241,10 @@ fun HomeScreen(
         viewModel.checkForChanges()
     }
     DisposableEffect(viewModel, onOpenMenu) {
-        HomeInputController.bind(viewModel, onOpenMenu)
+        HomeInputController.bind(viewModel, onOpenMenu) { game ->
+            menuFromPad = true
+            menuGame = game
+        }
         onDispose { HomeInputController.unbind(viewModel) }
     }
 
@@ -326,7 +333,7 @@ fun HomeScreen(
                 emptyList()
             }
             LaunchedEffect(shownRecents) {
-                HomeInputController.setRecents(shownRecents.size) { i ->
+                HomeInputController.setRecents(shownRecents.size, game = { shownRecents.getOrNull(it) }) { i ->
                     shownRecents.getOrNull(i)?.let(viewModel::launch)
                 }
             }
@@ -951,7 +958,17 @@ fun HomeScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 8.dp),
                 )
-                GameMenuAction("▶", str("action.play")) {
+                // Opened with the controller: focus the first row, so the D-pad starts here
+                // instead of spending its first press finding the menu.
+                val playFocus = remember { FocusRequester() }
+                LaunchedEffect(game.uri) {
+                    if (menuFromPad) {
+                        menuFromPad = false
+                        withFrameNanos { }
+                        runCatching { playFocus.requestFocus() }
+                    }
+                }
+                GameMenuAction("▶", str("action.play"), Modifier.focusRequester(playFocus)) {
                     menuGame = null
                     viewModel.launch(game)
                 }
@@ -1347,13 +1364,17 @@ fun HomeScreen(
 }
 
 @Composable
-private fun GameMenuAction(glyph: String, label: String, onClick: () -> Unit) {
+private fun GameMenuAction(glyph: String, label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    // A controller moves focus through these rows (Triangle opens the menu); the focused one
+    // takes the accent outline, since the default focus tint is too faint to follow.
+    var focused by remember { mutableStateOf(false) }
     Surface(
         onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
+        border = if (focused) BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+        else BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
@@ -2293,6 +2314,8 @@ enum class HomeZone { Toolbar, Search, Recents, Grid }
 object HomeInputController {
     private var owner: HomeViewModel? = null
     private var openMenu: (() -> Unit)? = null
+    // Opens a game's long-press menu (Triangle).
+    private var gameMenu: ((GameInfo) -> Unit)? = null
     private var columns = 3
     val scrollVelocity = mutableFloatStateOf(0f)
 
@@ -2310,6 +2333,7 @@ object HomeInputController {
     private var toolbarActions: List<() -> Unit> = emptyList()
     private var recentCount = 0
     private var recentLauncher: ((Int) -> Unit)? = null
+    private var recentGame: ((Int) -> GameInfo?)? = null
     private var searchAvailable = false
     private var searchConfirm: (() -> Unit)? = null
     private var toolbarAtBottom = false
@@ -2321,9 +2345,10 @@ object HomeInputController {
      *  time the library (re)opens it starts at the top again. */
     var userNavigated = false
 
-    fun bind(viewModel: HomeViewModel, onOpenMenu: () -> Unit) {
+    fun bind(viewModel: HomeViewModel, onOpenMenu: () -> Unit, onGameMenu: (GameInfo) -> Unit) {
         owner = viewModel
         openMenu = onOpenMenu
+        gameMenu = onGameMenu
         userNavigated = false
     }
 
@@ -2331,6 +2356,7 @@ object HomeInputController {
         if (owner === viewModel) {
             owner = null
             openMenu = null
+            gameMenu = null
             scrollVelocity.floatValue = 0f
             zone.value = HomeZone.Grid
         }
@@ -2345,8 +2371,9 @@ object HomeInputController {
 
     /** HomeScreen registers the currently-shown Recently-Played games (0 when the
      *  shelf is hidden, e.g. while searching). */
-    fun setRecents(count: Int, launcher: (Int) -> Unit) {
+    fun setRecents(count: Int, game: (Int) -> GameInfo?, launcher: (Int) -> Unit) {
         recentCount = count
+        recentGame = game
         recentLauncher = launcher
         if (recentIndex.intValue >= count) recentIndex.intValue = (count - 1).coerceAtLeast(0)
         if (count == 0 && zone.value == HomeZone.Recents) zone.value = HomeZone.Grid
@@ -2464,6 +2491,20 @@ object HomeInputController {
     fun openSelectedSettings(): Boolean {
         val game = owner?.selectedGame() ?: return false
         com.armsx2.navigation.UiNavigator.navigate(com.armsx2.navigation.AppRoute.Settings(game = game))
+        return true
+    }
+
+    /** Triangle: the highlighted game's long-press menu (play, load state, settings, categories,
+     *  clearing its caches...), which a controller had no way to open. The game is the one
+     *  highlighted in the grid, or in the Recently Played row when that has the selector. */
+    fun openSelectedMenu(): Boolean {
+        val viewModel = owner ?: return false
+        val game = when (zone.value) {
+            HomeZone.Grid -> viewModel.selectedGame()
+            HomeZone.Recents -> recentGame?.invoke(recentIndex.intValue)
+            else -> null
+        } ?: return false
+        gameMenu?.invoke(game) ?: return false
         return true
     }
 
