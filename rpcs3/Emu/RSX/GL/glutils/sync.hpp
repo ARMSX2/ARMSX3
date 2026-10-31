@@ -25,6 +25,11 @@ namespace gl
 		{
 			m_value = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 			flags = GL_SYNC_FLUSH_COMMANDS_BIT;
+
+			// ARMSX3: a re-armed fence starts unsignaled. ring_buffer::notify() and the texture cache reuse
+			// one fence object through reset(), and once a wait found it already signaled, every later wait
+			// on that object returned at once: persistent ring buffers stopped waiting for the GPU on wrap.
+			signaled = false;
 		}
 
 		void destroy()
