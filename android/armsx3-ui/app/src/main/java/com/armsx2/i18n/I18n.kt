@@ -2066,6 +2066,7 @@ val EN: Map<String, String> = mapOf(
     "xmb.playlist.desc" to "Make a playlist, then add to it",
     "xmb.playlist.addSongs" to "Add Songs",
     "xmb.playlist.addPictures" to "Add Pictures",
+    "xmb.configDb.none" to "RPCS3's database has no settings for this game.",
     "xmb.invite.howTo" to "Join it from RPCN in the XMB.",
     "setup.step.rom.description" to "Pick one or more folders where you keep your PS3 games. Supports extracted game folders (with a PS3_GAME directory), .iso/.chd disc images, and .pkg installers.",
     "setup.step.rom.title" to "Games Folder",

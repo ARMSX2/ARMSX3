@@ -1496,5 +1496,6 @@
  "xmb.playlist.title": "Playlist",
  "xmb.playlist.desc": "Crea una playlist e aggiungi elementi",
  "xmb.playlist.addSongs": "Aggiungi brani",
- "xmb.playlist.addPictures": "Aggiungi immagini"
+ "xmb.playlist.addPictures": "Aggiungi immagini",
+ "xmb.configDb.none": "Il database di RPCS3 non ha impostazioni per questo gioco."
 }

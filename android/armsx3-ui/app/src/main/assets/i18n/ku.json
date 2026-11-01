@@ -1496,5 +1496,6 @@
  "xmb.playlist.title": "Lîsteyên lêdanê",
  "xmb.playlist.desc": "Lîsteyeke lêdanê çêke, paşê lê zêde bike",
  "xmb.playlist.addSongs": "Stran zêde bike",
- "xmb.playlist.addPictures": "Wêne zêde bike"
+ "xmb.playlist.addPictures": "Wêne zêde bike",
+ "xmb.configDb.none": "Danegeha RPCS3 ji bo vê lîstikê ti mîhengan nîne."
 }

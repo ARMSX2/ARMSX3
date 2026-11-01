@@ -1496,5 +1496,6 @@
  "xmb.playlist.title": "Çalma listeleri",
  "xmb.playlist.desc": "Bir çalma listesi oluştur, sonra ekle",
  "xmb.playlist.addSongs": "Şarkı ekle",
- "xmb.playlist.addPictures": "Resim ekle"
+ "xmb.playlist.addPictures": "Resim ekle",
+ "xmb.configDb.none": "RPCS3 veritabanında bu oyun için ayar yok."
 }

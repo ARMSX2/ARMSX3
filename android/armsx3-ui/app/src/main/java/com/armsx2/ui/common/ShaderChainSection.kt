@@ -315,6 +315,14 @@ private fun ShaderPresetPicker(preset: String, onPresetChange: (String) -> Unit)
                 "xmb pick '$path' scope=${com.armsx2.ui.InGameOverlay.settingsScope.value} serial=${com.armsx2.ui.InGameOverlay.currentSerial.value}",
             )
             change.value(path)
+            // A game running takes it at once, as the renderer reads the preset each frame: pushed
+            // here as well as saved, so it shows whatever tier of settings the save landed in.
+            if (com.armsx2.runtime.MainActivityRuntime.eState.value != com.armsx2.EmuState.STOPPED) {
+                runCatching {
+                    com.armsx3.Rpcs3Settings.setShaderPresetPath(path)
+                    if (path.isNotBlank()) com.armsx3.Rpcs3Settings.setOutputScaling("Shader chain (librashader)")
+                }
+            }
             // Back to the list the presets hang from, where Shader Preset now reads the one picked.
             com.armsx2.ui.xmb.XmbDialogs.target()?.let { x ->
                 val at = x.levels.indexOfLast { it.node.key == "xmb.shader.presets" }

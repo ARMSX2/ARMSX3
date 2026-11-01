@@ -1496,5 +1496,6 @@
  "xmb.playlist.title": "播放列表",
  "xmb.playlist.desc": "新建播放列表并添加内容",
  "xmb.playlist.addSongs": "添加歌曲",
- "xmb.playlist.addPictures": "添加图片"
+ "xmb.playlist.addPictures": "添加图片",
+ "xmb.configDb.none": "RPCS3 数据库中没有此游戏的设置。"
 }

@@ -1496,5 +1496,6 @@
  "xmb.playlist.title": "Danh sách phát",
  "xmb.playlist.desc": "Tạo danh sách phát rồi thêm vào",
  "xmb.playlist.addSongs": "Thêm bài hát",
- "xmb.playlist.addPictures": "Thêm hình ảnh"
+ "xmb.playlist.addPictures": "Thêm hình ảnh",
+ "xmb.configDb.none": "Cơ sở dữ liệu của RPCS3 không có cài đặt cho trò chơi này."
 }

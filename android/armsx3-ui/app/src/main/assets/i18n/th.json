@@ -1496,5 +1496,6 @@
  "xmb.playlist.title": "เพลย์ลิสต์",
  "xmb.playlist.desc": "สร้างเพลย์ลิสต์ แล้วเพิ่มรายการ",
  "xmb.playlist.addSongs": "เพิ่มเพลง",
- "xmb.playlist.addPictures": "เพิ่มรูปภาพ"
+ "xmb.playlist.addPictures": "เพิ่มรูปภาพ",
+ "xmb.configDb.none": "ฐานข้อมูลของ RPCS3 ไม่มีการตั้งค่าสำหรับเกมนี้"
 }

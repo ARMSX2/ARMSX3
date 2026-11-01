@@ -1496,5 +1496,6 @@
  "xmb.playlist.title": "재생 목록",
  "xmb.playlist.desc": "재생 목록을 만들고 추가하세요",
  "xmb.playlist.addSongs": "곡 추가",
- "xmb.playlist.addPictures": "사진 추가"
+ "xmb.playlist.addPictures": "사진 추가",
+ "xmb.configDb.none": "RPCS3 데이터베이스에 이 게임의 설정이 없습니다."
 }

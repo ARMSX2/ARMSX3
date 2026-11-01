@@ -1496,5 +1496,6 @@
  "xmb.playlist.title": "فهرست‌های پخش",
  "xmb.playlist.desc": "یک فهرست پخش بسازید و به آن بیفزایید",
  "xmb.playlist.addSongs": "افزودن آهنگ",
- "xmb.playlist.addPictures": "افزودن تصویر"
+ "xmb.playlist.addPictures": "افزودن تصویر",
+ "xmb.configDb.none": "پایگاه داده RPCS3 تنظیمی برای این بازی ندارد."
 }

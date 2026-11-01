@@ -1496,5 +1496,6 @@
  "xmb.playlist.title": "قوائم التشغيل",
  "xmb.playlist.desc": "أنشئ قائمة تشغيل ثم أضف إليها",
  "xmb.playlist.addSongs": "إضافة أغانٍ",
- "xmb.playlist.addPictures": "إضافة صور"
+ "xmb.playlist.addPictures": "إضافة صور",
+ "xmb.configDb.none": "لا تحتوي قاعدة بيانات RPCS3 على إعدادات لهذه اللعبة."
 }

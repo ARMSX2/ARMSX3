@@ -1496,5 +1496,6 @@
  "xmb.playlist.title": "播放清單",
  "xmb.playlist.desc": "新增播放清單並加入內容",
  "xmb.playlist.addSongs": "加入歌曲",
- "xmb.playlist.addPictures": "加入圖片"
+ "xmb.playlist.addPictures": "加入圖片",
+ "xmb.configDb.none": "RPCS3 資料庫中沒有此遊戲的設定。"
 }

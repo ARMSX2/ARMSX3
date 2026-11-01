@@ -231,6 +231,7 @@ private fun xmbInGameColumns(controller: XmbController, game: GameInfo?): List<X
         // just below and the Settings column hold all of it.
         add(xmbPauseNode(com.armsx2.ui.emulation.EmulationMenuTab.Graphics, "tex_display", "\u25a3"))
         add(xmbPauseNode(com.armsx2.ui.emulation.EmulationMenuTab.Performance, "tex_power", "\u26a1"))
+        add(xmbConfigDbNode())
         // The pause menu's wrench tab: this title's config database entries, each switchable, and the fixes.
         add(xmbPauseNode(com.armsx2.ui.emulation.EmulationMenuTab.Fixes, "tex_security", "\ud83d\udd27"))
         add(xmbPauseNode(com.armsx2.ui.emulation.EmulationMenuTab.Controls, "tex_pd", "\ud83c\udfae"))
@@ -388,4 +389,53 @@ private fun xmbPauseNode(tab: com.armsx2.ui.emulation.EmulationMenuTab, tex: Str
             }
         },
     ) { collector.nodes }
+}
+
+/**
+ * The running title's RPCS3 config database entries, as the pause menu's wrench tab lists them:
+ * each one a switch, on to use the database's value, off to keep yours. Turning one on clears a
+ * value you set for this game yourself, as the core gives yours priority.
+ */
+@Composable
+private fun xmbConfigDbNode(): XmbNode {
+    val serial = InGameOverlay.currentSerial.value?.takeIf { it.isNotBlank() }
+    val (on, off) = xmbOnOff()
+    val title = str("perf.configDb.title")
+    val help = str("perf.configDb.help")
+    val yoursText = str("perf.configDb.yours")
+    val offText = str("perf.configDb.off")
+    val none = str("xmb.configDb.none")
+    val icon = XmbIcon("explore_category_sysconf", "tex_update", "\u2699")
+    val entries = remember(serial) { serial?.let { com.armsx2.config.ConfigDatabase.entriesFor(it) }.orEmpty() }
+    val revision = remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    return XmbNode.Folder("ingame.configdb", title, icon, if (entries.isEmpty()) none else help, live = true) {
+        @Suppress("UNUSED_EXPRESSION") revision.intValue
+        if (serial == null || entries.isEmpty()) return@Folder listOf(XmbNode.Action("configdb.none", none, icon) {})
+        val ignored = com.armsx2.config.ConfigDatabase.ignoredFor(serial)
+        val yours = com.armsx2.config.CoreSettingOverrides.load(com.armsx2.config.SettingsScope.Game, serial).keys
+        entries.map { (path, value) ->
+            val withheld = path in ignored || path in yours
+            XmbNode.Setting(
+                "configdb.$path",
+                "${path.replace("@@", " / ")}: $value",
+                icon,
+                XmbEditor.Toggle({ !withheld }) { applyThis ->
+                    com.armsx2.config.ConfigDatabase.setIgnored(serial, path, !applyThis)
+                    if (applyThis) {
+                        com.armsx2.config.CoreSettingOverrides.forget(com.armsx2.config.SettingsScope.Game, serial, path)
+                    }
+                    val now = com.armsx2.config.CoreSettingOverrides.load(com.armsx2.config.SettingsScope.Game, serial).keys
+                    com.armsx2.config.ConfigDatabase.writeUserKeys(serial, now)
+                    revision.intValue++
+                },
+                { if (!withheld) on else off },
+                description = when {
+                    path in yours -> yoursText
+                    withheld -> offText
+                    else -> null
+                },
+                changed = { withheld },
+            )
+        }
+    }
 }

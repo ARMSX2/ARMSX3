@@ -1495,5 +1495,6 @@
  "xmb.playlist.title": "Плейлисты",
  "xmb.playlist.desc": "Создайте плейлист и добавьте в него",
  "xmb.playlist.addSongs": "Добавить песни",
- "xmb.playlist.addPictures": "Добавить картинки"
+ "xmb.playlist.addPictures": "Добавить картинки",
+ "xmb.configDb.none": "В базе данных RPCS3 нет настроек для этой игры."
 }

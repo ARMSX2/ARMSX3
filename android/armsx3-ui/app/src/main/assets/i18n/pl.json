@@ -1496,5 +1496,6 @@
  "xmb.playlist.title": "Listy odtwarzania",
  "xmb.playlist.desc": "Utwórz listę odtwarzania i dodawaj do niej",
  "xmb.playlist.addSongs": "Dodaj utwory",
- "xmb.playlist.addPictures": "Dodaj obrazy"
+ "xmb.playlist.addPictures": "Dodaj obrazy",
+ "xmb.configDb.none": "Baza danych RPCS3 nie ma ustawień dla tej gry."
 }
