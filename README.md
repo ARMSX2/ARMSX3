@@ -50,7 +50,26 @@ Discord's developer portal and drop it in app/libs/ and
 app/src/main/cpp/discord_sdk/ if you want that feature. The build skips it
 otherwise.
 
-Running it needs PS3 firmware, which is not included. 
+Running it needs PS3 firmware, which is not included.
+
+Legal
+-----
+
+ARMSX3 includes no PS3 firmware, games or other files of Sony's. Install your own
+copy of the PS3 firmware and play games you own.
+
+Installing the firmware decrypts Sony's official update and unpacks the console's
+internal flash (dev_flash) into ARMSX3's data folder, as RPCS3 does on every platform.
+Boot XMB runs the PS3's own system software from there. XMB Mode runs none of Sony's
+code: it is ARMSX3's own interface, which reads the PS3's words, icons, fonts, startup
+sound and the settings behind its wave from that firmware install. None of those
+files ship with ARMSX3.
+
+ARMSX3 is not affiliated with, endorsed by or sponsored by Sony Interactive
+Entertainment. PlayStation, PS3 and XMB (XrossMediaBar) are trademarks or registered
+trademarks of Sony Interactive Entertainment Inc., used here only to say what ARMSX3
+is compatible with.
+
 License
 -------
 
