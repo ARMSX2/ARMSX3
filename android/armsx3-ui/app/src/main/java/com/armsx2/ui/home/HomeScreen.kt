@@ -2407,7 +2407,9 @@ object HomeInputController {
      *  rows then move with the same registry as everywhere else. */
     private fun xmb(): Boolean = com.armsx2.ui.xmb.XmbMode.active.value && com.armsx2.ui.xmb.XmbInput.active()
 
-    fun active(): Boolean = owner != null && com.armsx2.ui.xmb.XmbInput.controller?.panel == null
+    fun active(): Boolean = owner != null && com.armsx2.ui.xmb.XmbInput.controller?.panel == null &&
+        // The avatar picker, opened from the XMB's RPCN column, takes the pad as settings does
+        !com.armsx2.ui.settings.RpcnAvatarPicker.open.value
 
     /** HomeScreen registers the toolbar button actions here, in visual left→right
      *  order (leading menu button first). */

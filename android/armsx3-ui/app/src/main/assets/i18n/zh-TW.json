@@ -1419,5 +1419,20 @@
  "xmb.on": "開",
  "xmb.off": "關",
  "xmb.core.desc": "所有核心設定，依區段排列",
- "xmb.core.count": "%d 項設定"
+ "xmb.core.count": "%d 項設定",
+ "xmb.ok": "確定",
+ "xmb.exit.ask": "結束 XMB 模式並返回一般遊戲庫？",
+ "xmb.state.empty": "空",
+ "xmb.state.overwrite": "覆寫此欄位中儲存的狀態？",
+ "xmb.rpcn.avatar": "頭像",
+ "xmb.rpcn.more": "RPCN 帳號設定",
+ "xmb.rpcn.more.desc": "建立帳號、重設密碼或選擇伺服器",
+ "xmb.music.import": "匯入音樂",
+ "xmb.music.import.desc": "將歌曲加入音樂資料夾",
+ "xmb.music.imported": "已匯入曲目：%d",
+ "xmb.music.asPause": "用作暫停選單音樂",
+ "xmb.music.delete.ask": "刪除 %s？",
+ "xmb.photo.screenshots": "螢幕截圖",
+ "xmb.photo.frameDump": "畫面傾印",
+ "xmb.photo.count": "%d 張圖片"
 }

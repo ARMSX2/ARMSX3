@@ -1419,5 +1419,20 @@
  "xmb.on": "Aktif",
  "xmb.off": "Nonaktif",
  "xmb.core.desc": "Setiap pengaturan inti, per bagian",
- "xmb.core.count": "%d pengaturan"
+ "xmb.core.count": "%d pengaturan",
+ "xmb.ok": "OK",
+ "xmb.exit.ask": "Keluar dari Mode XMB dan kembali ke pustaka biasa?",
+ "xmb.state.empty": "Kosong",
+ "xmb.state.overwrite": "Timpa status yang tersimpan di slot ini?",
+ "xmb.rpcn.avatar": "Avatar",
+ "xmb.rpcn.more": "Pengaturan Akun RPCN",
+ "xmb.rpcn.more.desc": "Buat akun, atur ulang kata sandi, atau pilih server",
+ "xmb.music.import": "Impor Musik",
+ "xmb.music.import.desc": "Tambahkan lagu ke folder musik",
+ "xmb.music.imported": "Trek diimpor: %d",
+ "xmb.music.asPause": "Gunakan sebagai Musik Menu Jeda",
+ "xmb.music.delete.ask": "Hapus %s?",
+ "xmb.photo.screenshots": "Tangkapan Layar",
+ "xmb.photo.frameDump": "Dump Bingkai",
+ "xmb.photo.count": "%d gambar"
 }

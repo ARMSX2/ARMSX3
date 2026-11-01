@@ -1419,5 +1419,20 @@
  "xmb.on": "تشغيل",
  "xmb.off": "إيقاف",
  "xmb.core.desc": "كل إعدادات النواة، قسمًا تلو الآخر",
- "xmb.core.count": "%d إعدادات"
+ "xmb.core.count": "%d إعدادات",
+ "xmb.ok": "موافق",
+ "xmb.exit.ask": "هل تريد الخروج من وضع XMB والعودة إلى المكتبة العادية؟",
+ "xmb.state.empty": "فارغ",
+ "xmb.state.overwrite": "هل تريد الكتابة فوق الحالة المحفوظة في هذه الخانة؟",
+ "xmb.rpcn.avatar": "الصورة الرمزية",
+ "xmb.rpcn.more": "إعدادات حساب RPCN",
+ "xmb.rpcn.more.desc": "أنشئ حسابا أو أعد تعيين كلمة المرور أو اختر خادما",
+ "xmb.music.import": "استيراد الموسيقى",
+ "xmb.music.import.desc": "أضف أغاني إلى مجلد الموسيقى",
+ "xmb.music.imported": "المقاطع المستوردة: %d",
+ "xmb.music.asPause": "استخدامها كموسيقى قائمة الإيقاف المؤقت",
+ "xmb.music.delete.ask": "حذف %s؟",
+ "xmb.photo.screenshots": "لقطات الشاشة",
+ "xmb.photo.frameDump": "تفريغ الإطار",
+ "xmb.photo.count": "%d صورة"
 }

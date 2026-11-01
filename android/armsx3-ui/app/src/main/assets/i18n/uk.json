@@ -1419,5 +1419,20 @@
  "xmb.on": "Увімк.",
  "xmb.off": "Вимк.",
  "xmb.core.desc": "Усі налаштування ядра, розділ за розділом",
- "xmb.core.count": "Налаштувань: %d"
+ "xmb.core.count": "Налаштувань: %d",
+ "xmb.ok": "OK",
+ "xmb.exit.ask": "Вийти з режиму XMB і повернутися до звичайної бібліотеки?",
+ "xmb.state.empty": "Порожньо",
+ "xmb.state.overwrite": "Перезаписати стан у цьому слоті?",
+ "xmb.rpcn.avatar": "Аватар",
+ "xmb.rpcn.more": "Налаштування облікового запису RPCN",
+ "xmb.rpcn.more.desc": "Створити обліковий запис, скинути пароль або вибрати сервер",
+ "xmb.music.import": "Імпорт музики",
+ "xmb.music.import.desc": "Додати пісні до теки з музикою",
+ "xmb.music.imported": "Імпортовано треків: %d",
+ "xmb.music.asPause": "Використовувати як музику меню паузи",
+ "xmb.music.delete.ask": "Видалити %s?",
+ "xmb.photo.screenshots": "Знімки екрана",
+ "xmb.photo.frameDump": "Дамп кадру",
+ "xmb.photo.count": "Зображень: %d"
 }

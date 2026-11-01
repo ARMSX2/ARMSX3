@@ -1419,5 +1419,20 @@
  "xmb.on": "入",
  "xmb.off": "切",
  "xmb.core.desc": "すべてのコア設定（セクション別）",
- "xmb.core.count": "%d件の設定"
+ "xmb.core.count": "%d件の設定",
+ "xmb.ok": "OK",
+ "xmb.exit.ask": "XMBモードを終了して通常のライブラリに戻りますか？",
+ "xmb.state.empty": "空き",
+ "xmb.state.overwrite": "このスロットのステートを上書きしますか？",
+ "xmb.rpcn.avatar": "アバター",
+ "xmb.rpcn.more": "RPCNアカウント設定",
+ "xmb.rpcn.more.desc": "アカウント作成、パスワードの再設定、サーバーの選択",
+ "xmb.music.import": "ミュージックを取り込む",
+ "xmb.music.import.desc": "ミュージックフォルダーに曲を追加します",
+ "xmb.music.imported": "取り込んだ曲: %d",
+ "xmb.music.asPause": "ポーズメニューの音楽にする",
+ "xmb.music.delete.ask": "%sを削除しますか？",
+ "xmb.photo.screenshots": "スクリーンショット",
+ "xmb.photo.frameDump": "フレームダンプ",
+ "xmb.photo.count": "%d枚"
 }

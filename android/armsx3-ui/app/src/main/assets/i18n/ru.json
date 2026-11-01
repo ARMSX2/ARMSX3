@@ -1418,5 +1418,20 @@
  "xmb.on": "Вкл.",
  "xmb.off": "Выкл.",
  "xmb.core.desc": "Все настройки ядра, раздел за разделом",
- "xmb.core.count": "Настроек: %d"
+ "xmb.core.count": "Настроек: %d",
+ "xmb.ok": "OK",
+ "xmb.exit.ask": "Выйти из режима XMB и вернуться к обычной библиотеке?",
+ "xmb.state.empty": "Пусто",
+ "xmb.state.overwrite": "Перезаписать состояние в этом слоте?",
+ "xmb.rpcn.avatar": "Аватар",
+ "xmb.rpcn.more": "Настройки аккаунта RPCN",
+ "xmb.rpcn.more.desc": "Создать аккаунт, сбросить пароль или выбрать сервер",
+ "xmb.music.import": "Импорт музыки",
+ "xmb.music.import.desc": "Добавить песни в папку с музыкой",
+ "xmb.music.imported": "Импортировано треков: %d",
+ "xmb.music.asPause": "Использовать как музыку меню паузы",
+ "xmb.music.delete.ask": "Удалить %s?",
+ "xmb.photo.screenshots": "Скриншоты",
+ "xmb.photo.frameDump": "Дамп кадра",
+ "xmb.photo.count": "Изображений: %d"
 }

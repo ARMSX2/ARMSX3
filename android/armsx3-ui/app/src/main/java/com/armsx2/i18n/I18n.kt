@@ -130,6 +130,9 @@ object I18n {
         tables[code] = map
     }
 
+    /** A key's string, or null when there is no such key. */
+    fun find(key: String): String? = if (EN.containsKey(key)) get(key) else null
+
     /** Look up a key. Falls back to the English string, then to the key itself. */
     fun get(key: String): String {
         if (current != "en") tables[current]?.get(key)?.let { if (it.isNotEmpty()) return it }
@@ -1987,6 +1990,21 @@ val EN: Map<String, String> = mapOf(
     "xmb.off" to "Off",
     "xmb.core.desc" to "Every core setting, section by section",
     "xmb.core.count" to "%d settings",
+    "xmb.ok" to "OK",
+    "xmb.exit.ask" to "Exit XMB Mode and go back to the regular library?",
+    "xmb.state.empty" to "Empty",
+    "xmb.state.overwrite" to "Overwrite the state saved in this slot?",
+    "xmb.rpcn.avatar" to "Avatar",
+    "xmb.rpcn.more" to "RPCN Account Settings",
+    "xmb.rpcn.more.desc" to "Create an account, reset a password or choose a server",
+    "xmb.music.import" to "Import Music",
+    "xmb.music.import.desc" to "Add songs to the music folder",
+    "xmb.music.imported" to "Tracks imported: %d",
+    "xmb.music.asPause" to "Use as Pause Menu Music",
+    "xmb.music.delete.ask" to "Delete %s?",
+    "xmb.photo.screenshots" to "Screenshots",
+    "xmb.photo.frameDump" to "Frame Dump",
+    "xmb.photo.count" to "%d pictures",
     "setup.step.rom.description" to "Pick one or more folders where you keep your PS3 games. Supports extracted game folders (with a PS3_GAME directory), .iso/.chd disc images, and .pkg installers.",
     "setup.step.rom.title" to "Games Folder",
     "setup.storageChooser.customShort" to "Custom folder",

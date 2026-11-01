@@ -1419,5 +1419,20 @@
  "xmb.on": "Açık",
  "xmb.off": "Kapalı",
  "xmb.core.desc": "Tüm çekirdek ayarları, bölüm bölüm",
- "xmb.core.count": "%d ayar"
+ "xmb.core.count": "%d ayar",
+ "xmb.ok": "Tamam",
+ "xmb.exit.ask": "XMB Modundan çıkıp normal kütüphaneye dönülsün mü?",
+ "xmb.state.empty": "Boş",
+ "xmb.state.overwrite": "Bu yuvadaki kayıtlı durumun üzerine yazılsın mı?",
+ "xmb.rpcn.avatar": "Avatar",
+ "xmb.rpcn.more": "RPCN Hesap Ayarları",
+ "xmb.rpcn.more.desc": "Hesap oluştur, parola sıfırla veya sunucu seç",
+ "xmb.music.import": "Müzik İçe Aktar",
+ "xmb.music.import.desc": "Müzik klasörüne şarkı ekle",
+ "xmb.music.imported": "İçe aktarılan parça: %d",
+ "xmb.music.asPause": "Duraklatma Menüsü Müziği Olarak Kullan",
+ "xmb.music.delete.ask": "%s silinsin mi?",
+ "xmb.photo.screenshots": "Ekran Görüntüleri",
+ "xmb.photo.frameDump": "Kare Dökümü",
+ "xmb.photo.count": "%d resim"
 }

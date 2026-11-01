@@ -1419,5 +1419,20 @@
  "xmb.on": "Vekirî",
  "xmb.off": "Girtî",
  "xmb.core.desc": "Hemû mîhengên bingehê, beş bi beş",
- "xmb.core.count": "%d mîheng"
+ "xmb.core.count": "%d mîheng",
+ "xmb.ok": "Baş e",
+ "xmb.exit.ask": "Ji Moda XMB derkeve û vegere pirtûkxaneya asayî?",
+ "xmb.state.empty": "Vala",
+ "xmb.state.overwrite": "Rewşa ku di vê cihê de hatiye tomarkirin were ser-nivîsandin?",
+ "xmb.rpcn.avatar": "Avatar",
+ "xmb.rpcn.more": "Mîhengên Hesabê RPCN",
+ "xmb.rpcn.more.desc": "Hesabek biafirîne, şîfreyê ji nû ve saz bike an serverekê hilbijêre",
+ "xmb.music.import": "Muzîkê Têxe",
+ "xmb.music.import.desc": "Stranan li peldanka muzîkê zêde bike",
+ "xmb.music.imported": "Stranên hatin têxistin: %d",
+ "xmb.music.asPause": "Wekî Muzîka Menuya Rawestanê Bikar Bîne",
+ "xmb.music.delete.ask": "%s were jêbirin?",
+ "xmb.photo.screenshots": "Wêneyên Ekranê",
+ "xmb.photo.frameDump": "Dump a Çarçoveyê",
+ "xmb.photo.count": "%d wêne"
 }

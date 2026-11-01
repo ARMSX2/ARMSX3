@@ -174,7 +174,8 @@ object InGameOverlay {
         frameLimitOn.value = settingsState.value.frameLimitEnable
         hardcoreOn.value = runCatching { NativeApp.isHardcoreMode() }.getOrDefault(false)
         if (MainActivityRuntime.eState.value != EmuState.STOPPED) MainActivityRuntime.pauseForOverlay()
-        com.armsx2.MenuSfx.play(com.armsx2.MenuSfx.Event.MENU_OPEN)
+        // The pause chime is the regular menu's; the XMB comes up quietly, as the console's does.
+        if (!com.armsx2.ui.xmb.XmbMode.active.value) com.armsx2.MenuSfx.play(com.armsx2.MenuSfx.Event.MENU_OPEN)
         WindowImpl.overlayVisible.value = true
     }
 

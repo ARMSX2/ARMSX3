@@ -1419,5 +1419,20 @@
  "xmb.on": "Bật",
  "xmb.off": "Tắt",
  "xmb.core.desc": "Mọi cài đặt lõi, theo từng phần",
- "xmb.core.count": "%d cài đặt"
+ "xmb.core.count": "%d cài đặt",
+ "xmb.ok": "OK",
+ "xmb.exit.ask": "Thoát Chế độ XMB và quay lại thư viện thường?",
+ "xmb.state.empty": "Trống",
+ "xmb.state.overwrite": "Ghi đè trạng thái đã lưu trong ô này?",
+ "xmb.rpcn.avatar": "Ảnh đại diện",
+ "xmb.rpcn.more": "Cài đặt tài khoản RPCN",
+ "xmb.rpcn.more.desc": "Tạo tài khoản, đặt lại mật khẩu hoặc chọn máy chủ",
+ "xmb.music.import": "Nhập nhạc",
+ "xmb.music.import.desc": "Thêm bài hát vào thư mục nhạc",
+ "xmb.music.imported": "Đã nhập bản nhạc: %d",
+ "xmb.music.asPause": "Dùng làm nhạc menu tạm dừng",
+ "xmb.music.delete.ask": "Xóa %s?",
+ "xmb.photo.screenshots": "Ảnh chụp màn hình",
+ "xmb.photo.frameDump": "Kết xuất khung hình",
+ "xmb.photo.count": "%d ảnh"
 }

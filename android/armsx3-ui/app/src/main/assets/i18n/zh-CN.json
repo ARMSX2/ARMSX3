@@ -1419,5 +1419,20 @@
  "xmb.on": "开",
  "xmb.off": "关",
  "xmb.core.desc": "所有核心设置，按分区排列",
- "xmb.core.count": "%d 项设置"
+ "xmb.core.count": "%d 项设置",
+ "xmb.ok": "确定",
+ "xmb.exit.ask": "退出 XMB 模式并返回普通游戏库？",
+ "xmb.state.empty": "空",
+ "xmb.state.overwrite": "覆盖此栏位中保存的状态？",
+ "xmb.rpcn.avatar": "头像",
+ "xmb.rpcn.more": "RPCN 账户设置",
+ "xmb.rpcn.more.desc": "创建账户、重置密码或选择服务器",
+ "xmb.music.import": "导入音乐",
+ "xmb.music.import.desc": "将歌曲添加到音乐文件夹",
+ "xmb.music.imported": "已导入曲目：%d",
+ "xmb.music.asPause": "用作暂停菜单音乐",
+ "xmb.music.delete.ask": "删除 %s？",
+ "xmb.photo.screenshots": "截图",
+ "xmb.photo.frameDump": "帧转储",
+ "xmb.photo.count": "%d 张图片"
 }

@@ -197,6 +197,10 @@ fun XmbView(
                     }
                 }
             }
+            // The settings tabs behind the open lists, composed out of sight (see XmbCollector).
+            controller.levels.forEach { level ->
+                (level.node as? XmbNode.Folder)?.host?.let { host -> key("host-" + level.node.key) { XmbHiddenHost(host) } }
+            }
             controller.levels.lastOrNull()?.let { level ->
                 key("level-$depth-${level.node.key}") { SubList(level, m, font, quiet = controller.editing != null) }
             }
@@ -227,7 +231,12 @@ fun XmbView(
 
         controller.panel?.let { panel -> PanelHost(controller, panel, m, font) }
         controller.dialog?.let { d -> key(d) { DialogBox(controller, d, m, font) } }
+        // The RPCN avatar picker, opened from Account Management: the app's own, as it is.
+        if (com.armsx2.ui.settings.RpcnAvatarPicker.open.value && controller.panel == null) {
+            com.armsx2.ui.settings.RpcnAvatarPickerOverlay()
+        }
     }
+    XmbKeyboardWatcher()
 }
 
 private val CircleRed = Color(0xFFE85C5C)
@@ -606,8 +615,9 @@ private fun SubList(level: XmbController.Level, m: Metrics, font: FontFamily, qu
     val others by animateFloatAsState(if (quiet) 0f else 1f, tween(160), label = "xmb-sub-quiet")
     val iconX = m.focusX
     val textX = m.focusX + 34f * m.u
+    val children = level.children
     val first = (level.focus - 6).coerceAtLeast(0)
-    val last = (level.focus + 10).coerceAtMost(level.children.size - 1)
+    val last = (level.focus + 10).coerceAtMost(children.size - 1)
 
     // The arrow back to the item the list belongs to.
     Text(
@@ -618,7 +628,7 @@ private fun SubList(level: XmbController.Level, m: Metrics, font: FontFamily, qu
             .graphicsLayer { alpha = appear.value },
     )
     for (i in first..last) {
-        val node = level.children[i]
+        val node = children[i]
         key(node.key) {
             val focused = i == level.focus
             fun near() = (1f - abs(i - anim.value)).coerceIn(0f, 1f)

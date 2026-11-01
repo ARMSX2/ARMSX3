@@ -59,9 +59,12 @@ object XmbInGame {
 
     private val nav get() = com.armsx2.ui.settings.SettingsControllerNav
 
+    /** An app screen over the XMB (a panel, or the RPCN avatar picker): the pad drives it as settings. */
+    private fun appScreen() = controller.panel != null || com.armsx2.ui.settings.RpcnAvatarPicker.open.value
+
     fun move(dx: Int, dy: Int) {
         val c = controller
-        if (c.panel != null) {
+        if (appScreen()) {
             when {
                 dy != 0 -> nav.moveSpatial(0, dy)
                 dx != 0 -> if (!nav.adjust(dx)) nav.moveSpatial(dx, 0)
@@ -72,20 +75,23 @@ object XmbInGame {
     }
 
     fun confirm() {
-        if (controller.panel != null) nav.confirm() else controller.confirm()
+        if (appScreen()) nav.confirm() else controller.confirm()
     }
 
-    fun back() = controller.back()
+    fun back() {
+        val picker = com.armsx2.ui.settings.RpcnAvatarPicker.open
+        if (picker.value) picker.value = false else controller.back()
+    }
 
     /** L1 / R1: a page of items at a time. */
     fun page(dir: Int) {
         val c = controller
-        if (c.panel == null && !c.busy) repeat(5) { c.move(0, dir) }
+        if (!appScreen() && !c.busy) repeat(5) { c.move(0, dir) }
     }
 
     /** Triangle: the focused item's options. */
     fun options() {
-        if (controller.panel == null) controller.openOptions()
+        if (!appScreen()) controller.openOptions()
     }
 }
 
@@ -180,27 +186,129 @@ private fun xmbInGameColumns(controller: XmbController, game: GameInfo?): List<X
             mediaDir = dir,
         )
     }
-    val gameItems = listOfNotNull(running) + listOf(
-        XmbNode.Action("ingame.save", str("savestate.title.save"), XmbIcon("explore_category_game", "item_tex_ps3util", "↥")) {
-            open(InGameScreen.SaveState)
-        },
-        XmbNode.Action("ingame.load", str("xmb.loadState"), XmbIcon("explore_category_game", "item_tex_ps3util", "↧")) {
-            open(InGameScreen.LoadState)
-        },
-        XmbNode.Action("ingame.trophies", fw(full, "msg_trophy_collection", "trophies.title"), XmbIcon("explore_category_psn", "item_tex_trophy", "🏆")) {
-            open(InGameScreen.Trophies)
-        },
-        XmbNode.Action("ingame.quick", str("xmb.quickMenu"), XmbIcon("explore_category_sysconf", "tex_sett", "☰"), str("xmb.quickMenu.desc")) {
-            XmbInGame.classic.value = true
-        },
-        XmbNode.Action("ingame.restart", restart, XmbIcon("explore_category_game", "tex_quit", "↻")) { askRestart() },
-        XmbNode.Action("ingame.quit", quit, XmbIcon("explore_category_game", "tex_quit", "■")) { askQuit() },
-    )
+    // The pause menu's first tab, in its order: the game itself, then the on-screen display, and
+    // save states last, as they do not work in every game.
+    val gameItems = buildList {
+        running?.let(::add)
+        add(XmbNode.Action("ingame.restart", restart, XmbIcon("explore_category_game", "tex_quit", "↻")) { askRestart() })
+        add(xmbDiscNode(swap = false))
+        if (com.armsx3.Rpcs3Bridge.discSwapState() != 0) add(xmbDiscNode(swap = true))
+        if (com.armsx2.input.ToyPortals.menuEnabled()) add(xmbPortalNode(controller))
+        add(XmbNode.Action("ingame.quit", quit, XmbIcon("explore_category_game", "tex_quit", "■")) { askQuit() })
+        add(xmbOnScreenNode())
+        add(xmbCoreSettingsNode(InGameOverlay.settingsScope.value, InGameOverlay.currentSerial.value))
+        add(
+            XmbNode.Action("ingame.trophies", fw(full, "msg_trophy_collection", "trophies.title"), XmbIcon("explore_category_psn", "item_tex_trophy", "🏆")) {
+                open(InGameScreen.Trophies)
+            },
+        )
+        addAll(xmbStateNodes(controller))
+    }
     val gameColumn = XmbColumn(
         key = "game",
         title = fw("xmb_ingame", "msg_game", "xmb.cat.game"),
         icon = XmbIcon("xmb_ingame", "tex_game", "🎮"),
         items = gameItems,
     )
-    return listOf(users, settings, gameColumn)
+
+    // Friends: RPCN, read while it is the column shown, with this game's invites.
+    val rpcnShown by remember(controller) { androidx.compose.runtime.derivedStateOf { controller.currentColumn()?.key == "rpcn" } }
+    val friends = xmbRpcnColumn(controller, rpcnShown, inGame = true)
+
+    return listOf(users, settings, xmbPhotoColumn(controller), xmbMusicColumn(controller), gameColumn, friends)
+}
+
+/**
+ * Change Disc (or Swap Disc, while the game takes one): the discs of the game's playlist, the one
+ * in the drive marked, and a file to choose. The same calls as the pause menu's disc card.
+ */
+@Composable
+private fun xmbDiscNode(swap: Boolean): XmbNode {
+    val title = str(if (swap) "action.swapDisc" else "action.changeDisc")
+    val sub = str(if (swap) "action.swapDisc.detail" else "action.changeDisc.detail")
+    val inDrive = str("disc.swap.inDrive")
+    val discN = str("disc.swap.discN")
+    val pick = str("disc.swap.pickFile")
+    val pickDesc = str("disc.swap.pickFile.desc")
+    val icon = XmbIcon("explore_category_game", "item_tex_disc_icon", "⏏")
+    return XmbNode.Folder(if (swap) "ingame.swapDisc" else "ingame.changeDisc", title, icon, sub) {
+        val playlist = com.armsx3.Rpcs3Bridge.discPlaylist()
+        buildList {
+            playlist.discs.forEachIndexed { index, disc ->
+                val current = disc == playlist.current
+                add(
+                    XmbNode.Action("disc.$index", disc.substringAfterLast('/'), icon, if (current) inDrive else discN.format(index + 1)) {
+                        if (!current) {
+                            InGameOverlay.toggle()
+                            if (swap) MainActivityRuntime.swapDiscTo(disc) else MainActivityRuntime.bootInstead(disc)
+                        }
+                    },
+                )
+            }
+            add(XmbNode.Action("disc.pick", pick, icon, pickDesc) { MainActivityRuntime.promptDiscFile(swap) })
+        }
+    }
+}
+
+/**
+ * On-Screen Display, as the pause menu's first tab has it: the stats overlay's mode, colour and
+ * place, the compile notices, the pause button's tap to reveal, and the on-screen controls with
+ * their layout.
+ */
+@Composable
+private fun xmbOnScreenNode(): XmbNode {
+    val (on, off) = xmbOnOff()
+    val icon = XmbIcon("explore_category_sysconf", "tex_display", "▤")
+    val modes = InGameOverlay.OsdMode.entries
+    val modeLabels = modes.map { InGameOverlay.osdModeLabel(it) }
+    val colorLabels = com.armsx2.ui.settings.OSD_COLOR_LABEL_KEYS.map { str(it) }
+    val custom = str("overlay.osdColor.custom")
+    val positionLabels = listOf(
+        "overlay.position.topLeft", "overlay.position.topRight",
+        "overlay.position.bottomLeft", "overlay.position.bottomRight",
+    ).map { str(it) }
+    val tapReveal = str("overlay.pauseTapReveal.label")
+    val tapRevealDesc = str("overlay.pauseTapReveal.desc")
+    val master = str("overlay.master.label")
+    val colour = str("overlay.osdColor.label")
+    val shaderHint = str("overlay.shaderHint.label")
+    val shaderHintDesc = str("overlay.shaderHint.desc")
+    val spuHint = str("overlay.spuHint.label")
+    val spuHintDesc = str("overlay.spuHint.desc")
+    val position = str("overlay.position.label")
+    val touch = str("pad.onScreenControls.label")
+    val editLayout = str("pad.editTouchLayout")
+    fun ps3() = InGameOverlay.settingsState.value.ps3
+    fun update(change: (com.armsx2.config.Ps3Settings) -> com.armsx2.config.Ps3Settings) {
+        val s = InGameOverlay.settingsState.value
+        InGameOverlay.saveSettings(s.copy(ps3 = change(s.ps3)))
+    }
+    fun toggle(key: String, title: String, desc: String?, get: () -> Boolean, set: (Boolean) -> Unit) = XmbNode.Setting(
+        key = key, title = title, icon = icon, editor = XmbEditor.Toggle(get, set), value = { if (get()) on else off }, description = desc,
+    )
+    fun choice(key: String, title: String, labels: List<String>, get: () -> Int, set: (Int) -> Unit, value: () -> String = { labels.getOrElse(get()) { "" } }) = XmbNode.Setting(
+        key = key, title = title, icon = icon, editor = XmbEditor.Choice(labels, get, set), value = value,
+    )
+    return XmbNode.Folder("ingame.osd", str("tab.overlay"), icon, live = true) {
+        listOf(
+            choice("osd.mode", master, modeLabels, { modes.indexOf(InGameOverlay.osdMode.value).coerceAtLeast(0) }, { InGameOverlay.setOsdMode(modes[it]) }),
+            choice(
+                "osd.colour",
+                colour,
+                colorLabels,
+                { com.armsx2.ui.settings.osdPresetIndex(ps3().overlayBodyColor).coerceAtLeast(0) },
+                { i -> update { it.copy(overlayBodyColor = com.armsx2.ui.settings.OSD_COLORS[i]) } },
+            ) { com.armsx2.ui.settings.osdPresetIndex(ps3().overlayBodyColor).let { if (it >= 0) colorLabels[it] else custom } },
+            choice("osd.position", position, positionLabels, { ps3().overlayPosition.coerceIn(0, 3) }, { i -> update { it.copy(overlayPosition = i) } }),
+            toggle("osd.shaderHint", shaderHint, shaderHintDesc, { ps3().showShaderCompileHint }) { v -> update { it.copy(showShaderCompileHint = v) } },
+            toggle("osd.spuHint", spuHint, spuHintDesc, { ps3().showSpuCompileHint }) { v -> update { it.copy(showSpuCompileHint = v) } },
+            toggle("osd.tapReveal", tapReveal, tapRevealDesc, { com.armsx2.ui.touch.TouchControls.pauseTapToReveal.value }) {
+                com.armsx2.ui.touch.TouchControls.setPauseTapToReveal(it)
+            },
+            toggle("osd.touch", touch, null, { com.armsx2.ui.touch.TouchControls.visible.value }) {
+                com.armsx2.ui.touch.TouchControls.visible.value = it
+            },
+            XmbNode.Action("osd.editLayout", editLayout, icon) { InGameOverlay.editTouchLayout() },
+        )
+    }
 }

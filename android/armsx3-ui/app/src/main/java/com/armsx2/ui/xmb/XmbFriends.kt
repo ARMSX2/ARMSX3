@@ -1,0 +1,310 @@
+package com.armsx2.ui.xmb
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import com.armsx2.i18n.I18n
+import com.armsx2.i18n.str
+import com.armsx2.ui.home.LibraryKeyboard
+import com.armsx2.ui.settings.RpcnAvatarPicker
+import com.armsx2.ui.settings.RpcnFriends
+import com.armsx2.ui.settings.RpcnInvite
+import com.armsx2.ui.settings.parseRpcnFriends
+import com.armsx2.ui.settings.parseRpcnInvites
+import com.armsx2.ui.settings.rpcnSessionDispatcher
+import com.armsx2.ui.settings.rpcnSessionExecutor
+import com.armsx3.Rpcs3Bridge
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+
+/**
+ * Typing in the XMB, on the app's pad keyboard (LibraryKeyboard), as the console types on its own
+ * on-screen keyboard: [ask] opens it, and what was typed is handed over when it closes.
+ */
+object XmbKeyboard {
+    private var pending: ((String) -> Unit)? = null
+    private var typed = ""
+
+    fun ask(label: String, initial: String = "", masked: Boolean = false, onDone: (String) -> Unit) {
+        typed = initial
+        pending = onDone
+        LibraryKeyboard.open(initial, { typed = it }, label, masked)
+    }
+
+    /** The keyboard has closed: what was typed goes to whoever asked. */
+    internal fun closed() {
+        val done = pending ?: return
+        pending = null
+        done(typed)
+    }
+}
+
+/** Hands the XMB's typing over as the keyboard closes; composed with every XMB. */
+@Composable
+internal fun XmbKeyboardWatcher() {
+    LaunchedEffect(Unit) {
+        snapshotFlow { LibraryKeyboard.visible.value }.collect { visible -> if (!visible) XmbKeyboard.closed() }
+    }
+}
+
+/** RPCN as the XMB reads it, kept between showings so the column does not empty each time. */
+internal object XmbRpcn {
+    val friends = mutableStateOf<RpcnFriends?>(null)
+    val invites = mutableStateOf<List<RpcnInvite>>(emptyList())
+
+    /** Account state: whether one is saved, who is signed in, and the server. */
+    val configured = mutableStateOf(false)
+    val signedInAs = mutableStateOf("")
+    val savedName = mutableStateOf("")
+    val host = mutableStateOf("np.rpcs3.net")
+
+    /** Read the account. IO thread. */
+    fun readAccount() {
+        runCatching {
+            val o = JSONObject(Rpcs3Bridge.rpcnStatus())
+            configured.value = o.optBoolean("configured", false)
+            signedInAs.value = if (o.optBoolean("authentified", false)) o.optString("onlineName", "") else ""
+        }
+        runCatching {
+            val o = JSONObject(Rpcs3Bridge.rpcnGetConfig())
+            host.value = o.optString("host").ifBlank { "np.rpcs3.net" }
+            savedName.value = o.optString("npid", "")
+        }
+    }
+}
+
+/**
+ * RPCN, where the console's Friends column was, at home and over a game: Account Management,
+ * Add a Friend (typed on the pad keyboard), friend requests to accept or decline, game invites to
+ * join (in a game, for that game), and every friend with whether they are online and what they
+ * are playing. Read every two seconds while [shown], with a friends session held open as the
+ * Friends screen holds one.
+ */
+@Composable
+internal fun xmbRpcnColumn(controller: XmbController, shown: Boolean, inGame: Boolean): XmbColumn {
+    val scope = rememberCoroutineScope()
+    val full = "explore_plugin_full"
+    rememberRpcnPolling(shown, inGame)
+    val friends = XmbRpcn.friends.value
+    val ok = fw(full, "msg_ok", "xmb.ok")
+    val yes = fw(full, "msg_yes", "xmb.yes")
+    val no = fw(full, "msg_no", "xmb.no")
+    val online = fw(full, "msg_online", "xmb.rpcn.online")
+    val offline = str("xmb.rpcn.offline")
+    val playing = str("rpcn.friends.playing")
+    val wantsToAdd = str("rpcn.friends.wantsToAdd")
+    val waiting = str("rpcn.friends.waiting")
+    val accept = str("rpcn.friends.accept")
+    val decline = str("rpcn.friends.decline")
+    val cancel = str("rpcn.friends.cancel")
+    val remove = str("rpcn.friends.remove")
+    val removeAsk = str("rpcn.friends.removeConfirm")
+    val addTitle = fw(full, "msg_friend_register", "xmb.rpcn.add")
+    val userLabel = str("rpcn.friends.username")
+    val needName = str("rpcn.friends.need.name")
+    val msgAdded = str("rpcn.friends.added")
+    val msgAccepted = str("rpcn.friends.accepted")
+    val msgDeclined = str("rpcn.friends.declined")
+    val msgCancelled = str("rpcn.friends.cancelled")
+    val msgRemoved = str("rpcn.friends.removed")
+    val inviteFrom = str("rpcn.invites.from")
+    val join = str("rpcn.invites.join")
+    val msgJoining = str("rpcn.invites.joining")
+    val msgInviteDeclined = str("rpcn.invites.declined")
+    val friendIcon = XmbIcon("explore_category_friend", "tex_Avatar_Default", "🙂")
+    val requestIcon = XmbIcon("explore_category_friend", "item_tex_NewFriend", "➕")
+    val inviteIcon = XmbIcon("explore_category_friend", "item_tex_Invitation", "✉")
+
+    // "" from the core is success; anything else is its own message, which says more than ours would.
+    fun act(done: String, call: () -> String) {
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching(call).getOrElse { it.message.orEmpty() } }
+            controller.tell(result.ifBlank { done }, ok)
+            XmbRpcn.friends.value = parseRpcnFriends(withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetFriends() })
+        }
+    }
+
+    val items = buildList {
+        add(xmbRpcnAccount(controller))
+        add(
+            XmbNode.Action("rpcn.add", addTitle, requestIcon) {
+                XmbKeyboard.ask(userLabel) { typed ->
+                    val name = typed.trim()
+                    if (name.isEmpty()) {
+                        controller.tell(needName, ok)
+                    } else {
+                        // Adding someone who already asked is accepting them, and the server says so.
+                        val asked = friends?.received?.contains(name) == true
+                        act(if (asked) msgAccepted.format(name) else msgAdded.format(name)) { Rpcs3Bridge.rpcnAddFriend(name) }
+                    }
+                }
+            },
+        )
+        // Game invites, for the game that is running: join or decline.
+        if (inGame) XmbRpcn.invites.value.forEach { invite ->
+            add(
+                XmbNode.Action("rpcn.invite.${invite.id}", inviteFrom.format(invite.from), inviteIcon, invite.subject.ifBlank { invite.body }) {
+                    controller.dialog = XmbController.Dialog(
+                        listOf(inviteFrom.format(invite.from), invite.subject, invite.body).filter { it.isNotBlank() }.joinToString("\n"),
+                        listOf(
+                            XmbOption(join) { act(msgJoining.format(invite.from)) { Rpcs3Bridge.rpcnAcceptInvite(invite.id) } },
+                            XmbOption(decline) { act(msgInviteDeclined.format(invite.from)) { Rpcs3Bridge.rpcnDeclineInvite(invite.id) } },
+                        ),
+                    )
+                    XmbSounds.play(XmbSounds.Sfx.OPTION)
+                },
+            )
+        }
+        // Requests from others: accept or decline. Requests this account sent: cancel.
+        friends?.received?.forEach { name ->
+            add(
+                XmbNode.Action("rpcn.received.$name", name, requestIcon, wantsToAdd) {
+                    controller.dialog = XmbController.Dialog(
+                        "$name\n$wantsToAdd",
+                        listOf(
+                            XmbOption(accept) { act(msgAccepted.format(name)) { Rpcs3Bridge.rpcnAddFriend(name) } },
+                            XmbOption(decline) { act(msgDeclined.format(name)) { Rpcs3Bridge.rpcnRemoveFriend(name) } },
+                        ),
+                    )
+                    XmbSounds.play(XmbSounds.Sfx.OPTION)
+                },
+            )
+        }
+        friends?.sent?.forEach { name ->
+            add(
+                XmbNode.Action("rpcn.sent.$name", name, requestIcon, waiting, options = listOf(XmbOption(cancel) {
+                    act(msgCancelled.format(name)) { Rpcs3Bridge.rpcnRemoveFriend(name) }
+                })) {},
+            )
+        }
+        friends?.friends?.forEach { f ->
+            val sub = when {
+                !f.online -> offline
+                f.title.isNotBlank() -> playing.format(f.title)
+                else -> online
+            }
+            val removeOption = XmbOption(remove) {
+                controller.ask(removeAsk.format(f.name), yes, no, focusNo = true) {
+                    act(msgRemoved.format(f.name)) { Rpcs3Bridge.rpcnRemoveFriend(f.name) }
+                }
+            }
+            add(XmbNode.Action("rpcn.friend.${f.name}", f.name, friendIcon, sub, options = listOf(removeOption)) {
+                controller.options = XmbController.Options(f.name, listOf(removeOption))
+            })
+        }
+    }
+    return XmbColumn(
+        key = "rpcn",
+        title = str("rpcn.screen.title"),
+        icon = XmbIcon("xmb_ingame", "tex_friend", "👥"),
+        items = items,
+    )
+}
+
+/**
+ * Account Management: who is signed in and on which server, Sign In (typed on the pad keyboard),
+ * the avatar (the app's own picker, kept as it is), and the RPCN screen for creating an account,
+ * a forgotten password and servers.
+ */
+@Composable
+private fun xmbRpcnAccount(controller: XmbController): XmbNode {
+    val scope = rememberCoroutineScope()
+    val ok = fw("explore_plugin_full", "msg_ok", "xmb.ok")
+    val title = fw("explore_plugin_full", "msg_account_manage", "xmb.rpcn.account")
+    val icon = XmbIcon("explore_category_psn", "item_tex_account", "🛰")
+    val none = str("rpcn.profile.none")
+    val signedIn = str("rpcn.profile.signedIn")
+    val saved = str("rpcn.profile.saved")
+    val notSetUp = str("rpcn.profile.notSetUp")
+    val server = str("rpcn.profile.server")
+    val check = str("rpcn.action.check")
+    val signInTitle = str("rpcn.action.signIn")
+    val switchTitle = str("rpcn.action.switch")
+    val userLabel = str("rpcn.username")
+    val passLabel = str("rpcn.password")
+    val avatarTitle = str("xmb.rpcn.avatar")
+    val avatarDesc = str("rpcn.profile.avatarHint")
+    val moreTitle = str("xmb.rpcn.more")
+    val moreDesc = str("xmb.rpcn.more.desc")
+
+    fun run(done: String, call: () -> String) {
+        scope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching(call).getOrElse { it.message.orEmpty() } }
+            withContext(Dispatchers.IO) { XmbRpcn.readAccount() }
+            controller.tell(result.ifBlank { done }, ok)
+        }
+    }
+
+    fun signIn() {
+        XmbKeyboard.ask(userLabel, XmbRpcn.savedName.value) { user ->
+            if (user.isBlank()) return@ask
+            XmbKeyboard.ask(passLabel, masked = true) { pass ->
+                if (pass.isEmpty()) return@ask
+                run(signedIn) { Rpcs3Bridge.rpcnSignIn(XmbRpcn.host.value.trim(), user.trim(), pass, "") }
+            }
+        }
+    }
+
+    val reader: @Composable () -> Unit = {
+        LaunchedEffect(Unit) { withContext(Dispatchers.IO) { XmbRpcn.readAccount() } }
+    }
+    return XmbNode.Folder("rpcn.account", title, icon, live = true, host = reader) {
+        val who = XmbRpcn.signedInAs.value.ifBlank { XmbRpcn.savedName.value }
+        val state = when {
+            XmbRpcn.signedInAs.value.isNotBlank() -> signedIn
+            XmbRpcn.configured.value -> saved
+            else -> notSetUp
+        }
+        listOf(
+            XmbNode.Action("rpcn.account.who", who.ifBlank { none }, icon, "$state   ${server.format(XmbRpcn.host.value)}") {
+                if (XmbRpcn.configured.value) run(signedIn) { Rpcs3Bridge.rpcnTestLogin() } else signIn()
+            }.withOptions(if (XmbRpcn.configured.value) listOf(XmbOption(check) { run(signedIn) { Rpcs3Bridge.rpcnTestLogin() } }) else emptyList()),
+            XmbNode.Action("rpcn.account.signIn", if (XmbRpcn.configured.value) switchTitle else signInTitle, icon) { signIn() },
+            XmbNode.Action("rpcn.account.avatar", avatarTitle, icon, avatarDesc) { RpcnAvatarPicker.open.value = true },
+            XmbNode.Panel("rpcn.account.more", moreTitle, icon, moreDesc) { close ->
+                XmbPanelTheme { com.armsx2.ui.settings.RpcnScreen(onBack = close) }
+            },
+        )
+    }
+}
+
+private fun XmbNode.Action.withOptions(options: List<XmbOption>): XmbNode.Action =
+    if (options.isEmpty()) this else XmbNode.Action(key, title, icon, subtitle, options, onConfirm)
+
+/**
+ * The friend list (and, in a game, its invites) while [shown]: with an account saved, a session
+ * held open for as long as the column is shown (one open and one close per showing, as the
+ * Friends screen does), and everything read every two seconds.
+ */
+@Composable
+private fun rememberRpcnPolling(shown: Boolean, inGame: Boolean) {
+    LaunchedEffect(shown) {
+        if (!shown) return@LaunchedEffect
+        withContext(Dispatchers.IO) { XmbRpcn.readAccount() }
+        if (!XmbRpcn.configured.value) {
+            XmbRpcn.friends.value = null
+            return@LaunchedEffect
+        }
+        try {
+            // Runs to the end even when the column is left meanwhile, so the close below always
+            // has an open to match.
+            withContext(NonCancellable + rpcnSessionDispatcher) { Rpcs3Bridge.rpcnFriendsSession(true) }
+            while (true) {
+                XmbRpcn.friends.value = parseRpcnFriends(withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetFriends() })
+                if (inGame) XmbRpcn.invites.value = parseRpcnInvites(withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetInvites() })
+                delay(2_000)
+            }
+        } finally {
+            rpcnSessionExecutor.execute { Rpcs3Bridge.rpcnFriendsSession(false) }
+        }
+    }
+}

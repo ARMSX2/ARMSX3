@@ -1419,5 +1419,20 @@
  "xmb.on": "روشن",
  "xmb.off": "خاموش",
  "xmb.core.desc": "همهٔ تنظیمات هسته، بخش به بخش",
- "xmb.core.count": "%d تنظیم"
+ "xmb.core.count": "%d تنظیم",
+ "xmb.ok": "تأیید",
+ "xmb.exit.ask": "از حالت XMB خارج شوید و به کتابخانه معمولی برگردید؟",
+ "xmb.state.empty": "خالی",
+ "xmb.state.overwrite": "وضعیت ذخیره‌شده در این جایگاه بازنویسی شود؟",
+ "xmb.rpcn.avatar": "آواتار",
+ "xmb.rpcn.more": "تنظیمات حساب RPCN",
+ "xmb.rpcn.more.desc": "ساخت حساب، بازنشانی گذرواژه یا انتخاب سرور",
+ "xmb.music.import": "وارد کردن موسیقی",
+ "xmb.music.import.desc": "افزودن آهنگ به پوشه موسیقی",
+ "xmb.music.imported": "آهنگ‌های واردشده: %d",
+ "xmb.music.asPause": "استفاده به‌عنوان موسیقی منوی توقف",
+ "xmb.music.delete.ask": "%s حذف شود؟",
+ "xmb.photo.screenshots": "اسکرین‌شات‌ها",
+ "xmb.photo.frameDump": "تخلیه فریم",
+ "xmb.photo.count": "%d تصویر"
 }

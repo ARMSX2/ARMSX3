@@ -1419,5 +1419,20 @@
  "xmb.on": "켜기",
  "xmb.off": "끄기",
  "xmb.core.desc": "모든 코어 설정, 섹션별",
- "xmb.core.count": "설정 %d개"
+ "xmb.core.count": "설정 %d개",
+ "xmb.ok": "확인",
+ "xmb.exit.ask": "XMB 모드를 끝내고 일반 라이브러리로 돌아갈까요?",
+ "xmb.state.empty": "비어 있음",
+ "xmb.state.overwrite": "이 슬롯에 저장된 상태를 덮어쓸까요?",
+ "xmb.rpcn.avatar": "아바타",
+ "xmb.rpcn.more": "RPCN 계정 설정",
+ "xmb.rpcn.more.desc": "계정 만들기, 비밀번호 재설정 또는 서버 선택",
+ "xmb.music.import": "음악 가져오기",
+ "xmb.music.import.desc": "음악 폴더에 곡을 추가합니다",
+ "xmb.music.imported": "가져온 곡: %d",
+ "xmb.music.asPause": "일시정지 메뉴 음악으로 사용",
+ "xmb.music.delete.ask": "%s을(를) 삭제할까요?",
+ "xmb.photo.screenshots": "스크린샷",
+ "xmb.photo.frameDump": "프레임 덤프",
+ "xmb.photo.count": "사진 %d장"
 }

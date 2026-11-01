@@ -68,12 +68,19 @@ sealed class XmbNode(val key: String, val title: String, val icon: XmbIcon) {
         override val subtitle: String? get() = sub
     }
 
-    /** Opens a list of its own, beside the item, as the console's settings do. */
+    /**
+     * Opens a list of its own, beside the item, as the console's settings do. A [live] list is
+     * read again as it is drawn, so it follows what it shows (a settings tab's rows appearing and
+     * going as they are set); [host] is composed out of sight while the list is open, for the
+     * settings tab whose rows the list shows (see [XmbCollector]).
+     */
     class Folder(
         key: String,
         title: String,
         icon: XmbIcon,
         private val sub: String? = null,
+        val live: Boolean = false,
+        val host: (@Composable () -> Unit)? = null,
         val children: () -> List<XmbNode>,
     ) : XmbNode(key, title, icon) {
         override val subtitle: String? get() = sub
@@ -132,7 +139,9 @@ class XmbColumn(
  * any change and the pad, touch and code can all drive it.
  */
 class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int> = emptyMap()) {
-    class Level(val node: XmbNode, val children: List<XmbNode>, focus: Int) {
+    class Level(val node: XmbNode, children: List<XmbNode>, focus: Int, private val live: (() -> List<XmbNode>)? = null) {
+        private val fixed = children
+        val children: List<XmbNode> get() = live?.invoke() ?: fixed
         var focus by mutableIntStateOf(focus)
     }
 
@@ -183,7 +192,11 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
     fun rootNode(): XmbNode? = currentColumn()?.let { it.items.getOrNull(focusOf(it)) }
 
     /** The item the cursor is on, at whatever depth. */
-    fun focusedNode(): XmbNode? = levels.lastOrNull()?.let { it.children.getOrNull(it.focus) } ?: rootNode()
+    fun focusedNode(): XmbNode? {
+        val level = levels.lastOrNull() ?: return rootNode()
+        val children = level.children
+        return children.getOrNull(level.focus.coerceAtMost(children.lastIndex))
+    }
 
     val busy: Boolean get() = editing != null || options != null || panel != null || dialog != null
 
@@ -323,6 +336,12 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
                 node.onConfirm()
             }
             is XmbNode.Folder -> {
+                if (node.live) {
+                    // Filled as its tab is composed, a frame from now.
+                    XmbSounds.play(XmbSounds.Sfx.DECIDE)
+                    levels.add(Level(node, emptyList(), 0, node.children))
+                    return
+                }
                 val children = node.children()
                 if (children.isEmpty()) {
                     XmbSounds.play(XmbSounds.Sfx.ERROR)

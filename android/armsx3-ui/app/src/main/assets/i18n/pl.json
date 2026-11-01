@@ -1419,5 +1419,20 @@
  "xmb.on": "Wł.",
  "xmb.off": "Wył.",
  "xmb.core.desc": "Każde ustawienie rdzenia, sekcja po sekcji",
- "xmb.core.count": "Ustawienia: %d"
+ "xmb.core.count": "Ustawienia: %d",
+ "xmb.ok": "OK",
+ "xmb.exit.ask": "Wyjść z trybu XMB i wrócić do zwykłej biblioteki?",
+ "xmb.state.empty": "Pusty",
+ "xmb.state.overwrite": "Nadpisać stan zapisany w tym slocie?",
+ "xmb.rpcn.avatar": "Awatar",
+ "xmb.rpcn.more": "Ustawienia konta RPCN",
+ "xmb.rpcn.more.desc": "Utwórz konto, zresetuj hasło lub wybierz serwer",
+ "xmb.music.import": "Importuj muzykę",
+ "xmb.music.import.desc": "Dodaj utwory do folderu z muzyką",
+ "xmb.music.imported": "Zaimportowane utwory: %d",
+ "xmb.music.asPause": "Użyj jako muzyki menu pauzy",
+ "xmb.music.delete.ask": "Usunąć %s?",
+ "xmb.photo.screenshots": "Zrzuty ekranu",
+ "xmb.photo.frameDump": "Zrzut klatki",
+ "xmb.photo.count": "Obrazy: %d"
 }

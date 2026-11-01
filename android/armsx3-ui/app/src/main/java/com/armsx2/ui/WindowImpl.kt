@@ -253,6 +253,10 @@ object WindowImpl {
                 // above the one other full-screen layer that opens it.
                 com.armsx2.ui.home.LibraryKeyboard.Overlay(this)
 
+                // Leaving XMB mode: the XMB powering down and ARMSX3's intro, over every screen,
+                // since the XMB itself goes away behind it.
+                com.armsx2.ui.xmb.XmbShutdownOverlay()
+
                 // Transient top-left "Welcome Back!" banner (and any future brief note) — hosted
                 // here for the same reason as the keyboard: reachable above every surface.
                 com.armsx2.ui.WelcomeBannerOverlay(this)

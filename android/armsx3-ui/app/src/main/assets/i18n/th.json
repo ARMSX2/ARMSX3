@@ -1419,5 +1419,20 @@
  "xmb.on": "เปิด",
  "xmb.off": "ปิด",
  "xmb.core.desc": "การตั้งค่าแกนทั้งหมด แยกตามหมวด",
- "xmb.core.count": "%d การตั้งค่า"
+ "xmb.core.count": "%d การตั้งค่า",
+ "xmb.ok": "ตกลง",
+ "xmb.exit.ask": "ออกจากโหมด XMB และกลับไปที่คลังเกมปกติไหม",
+ "xmb.state.empty": "ว่าง",
+ "xmb.state.overwrite": "เขียนทับสถานะที่บันทึกในช่องนี้ไหม",
+ "xmb.rpcn.avatar": "อวตาร",
+ "xmb.rpcn.more": "การตั้งค่าบัญชี RPCN",
+ "xmb.rpcn.more.desc": "สร้างบัญชี รีเซ็ตรหัสผ่าน หรือเลือกเซิร์ฟเวอร์",
+ "xmb.music.import": "นำเข้าเพลง",
+ "xmb.music.import.desc": "เพิ่มเพลงลงในโฟลเดอร์เพลง",
+ "xmb.music.imported": "นำเข้าแทร็กแล้ว: %d",
+ "xmb.music.asPause": "ใช้เป็นเพลงเมนูหยุดชั่วคราว",
+ "xmb.music.delete.ask": "ลบ %s ไหม",
+ "xmb.photo.screenshots": "ภาพหน้าจอ",
+ "xmb.photo.frameDump": "ดัมพ์เฟรม",
+ "xmb.photo.count": "%d ภาพ"
 }

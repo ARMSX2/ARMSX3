@@ -36,14 +36,11 @@ import com.armsx2.navigation.openExternalUrl
 import com.armsx2.runtime.MainActivityRuntime
 import com.armsx2.ui.home.HomeUiState
 import com.armsx2.ui.home.HomeViewModel
-import com.armsx2.ui.settings.RpcnFriends
-import com.armsx2.ui.settings.parseRpcnFriends
-import com.armsx2.ui.settings.rpcnSessionDispatcher
-import com.armsx2.ui.settings.rpcnSessionExecutor
+import com.armsx2.ui.settings.controllerFocusable
 import com.armsx3.Rpcs3Bridge
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
@@ -141,6 +138,7 @@ private fun xmbHomeColumns(
     val no = fw(full, "msg_no", "xmb.no")
 
     val turnOffAsk = fw(full, "msg_turnoff_system_ask", "xmb.turnOff.ask")
+    val exitAsk = str("xmb.exit.ask")
     // The ARMSX3 mark, white like the console's item icons, and on a round badge where the console's
     // PlayStation Network badge stood.
     val markIcon = remember { XmbWordmark.markIcon(192).asImageBitmap() }
@@ -154,7 +152,7 @@ private fun xmbHomeColumns(
                 controller.ask(turnOffAsk, yes, no) { MainActivityRuntime.exitApp() }
             },
             XmbNode.Action("users.exit", str("xmb.exit"), XmbIcon(bitmap = markIcon), str("xmb.exit.desc")) {
-                XmbMode.exit()
+                controller.ask(exitAsk, yes, no) { XmbShutdown.start() }
             },
         ),
         defaultFocus = 1,
@@ -168,7 +166,7 @@ private fun xmbHomeColumns(
     )
 
     val photo = xmbPhotoColumn(controller)
-    val music = xmbMusicColumn()
+    val music = xmbMusicColumn(controller)
 
     val utilities = listOf(
         XmbNode.Action("game.install", fw(full, "msg_tool_install_file", "xmb.installPackages"), XmbIcon("explore_category_game", "item_tex_disc_install", "📦")) {
@@ -262,7 +260,7 @@ private fun xmbHomeColumns(
     val rpcnShown by remember(controller) {
         derivedStateOf { controller.currentColumn()?.key == "rpcn" && !XmbMode.booting.value }
     }
-    val rpcn = xmbRpcnColumn(rpcnShown)
+    val rpcn = xmbRpcnColumn(controller, rpcnShown, inGame = false)
 
     return listOf(users, settings, photo, music, game, network, armsx3, rpcn)
 }
@@ -275,30 +273,45 @@ private fun lastPlayedFormat(context: android.content.Context, locale: java.util
 }
 
 /**
- * Photo: the screenshots taken in ARMSX3, newest first, each opening full screen. The console's
- * "There are no images." when there are none.
+ * Photo: ARMSX3's pictures in albums, newest first, as the console's Photo column lists folders:
+ * the screenshots, and each frame dumped from a game into config/captures (Dump this frame), by
+ * when it was taken. Each picture opens full screen, and Left and Right go through its album.
+ * The console's "There are no images." when there are none.
  */
 @Composable
-private fun xmbPhotoColumn(controller: XmbController): XmbColumn {
+internal fun xmbPhotoColumn(controller: XmbController): XmbColumn {
     val context = LocalContext.current
-    val shots by produceState(emptyList<File>()) {
-        value = withContext(Dispatchers.IO) { XmbPhotos.list(context) }
+    val albums by produceState(emptyList<XmbPhotos.Album>()) {
+        value = withContext(Dispatchers.IO) { XmbPhotos.albums(context) }
     }
     val full = "explore_plugin_full"
     val locale = remember(I18n.current) { java.util.Locale.forLanguageTag(I18n.current) }
     val taken = remember(locale) { lastPlayedFormat(context, locale) }
-    val items = if (shots.isEmpty()) {
+    val screenshots = str("xmb.photo.screenshots")
+    val frameDump = str("xmb.photo.frameDump")
+    val count = str("xmb.photo.count")
+    val folderIcon = XmbIcon("explore_category_photo", "photo_tex_folder", "🖼")
+    val items = if (albums.isEmpty()) {
         listOf(
             XmbNode.Action("photo.none", fw(full, "msg_error_no_image", "xmb.photo.none"), XmbIcon("explore_category_photo", "photo_tex_default", "🖼")) {},
         )
     } else {
-        shots.map { file ->
-            val title = taken.format(java.util.Date(file.lastModified()))
-            val viewer = XmbNode.Panel("photo.view.${file.name}", title, XmbIcon("explore_category_photo", "tex_screenshot", "🖼")) { _ ->
-                XmbPhotoViewer(file)
+        albums.map { album ->
+            val title = when (album.kind) {
+                XmbPhotos.Kind.Screenshots -> screenshots
+                XmbPhotos.Kind.FrameDump -> "$frameDump  ${taken.format(java.util.Date(album.taken))}"
             }
-            XmbNode.Action("photo.${file.name}", title, XmbIcon(file = file, glyph = "🖼"), file.name) {
-                controller.panel = viewer
+            val sub = listOfNotNull(album.serial, count.format(album.files.size)).joinToString("   ")
+            XmbNode.Folder("photo.album.${album.key}", title, XmbIcon(file = album.files.first(), glyph = "🖼"), sub) {
+                album.files.mapIndexed { i, file ->
+                    val name = taken.format(java.util.Date(file.lastModified()))
+                    val viewer = XmbNode.Panel("photo.view.${album.key}.${file.name}", title, folderIcon) { _ ->
+                        XmbPhotoViewer(album.files, i)
+                    }
+                    XmbNode.Action("photo.${album.key}.${file.name}", file.nameWithoutExtension, XmbIcon(file = file, glyph = "🖼"), name) {
+                        controller.panel = viewer
+                    }
+                }
             }
         }
     }
@@ -310,125 +323,66 @@ private fun xmbPhotoColumn(controller: XmbController): XmbColumn {
     )
 }
 
-/** A screenshot as large as the panel allows, on black. */
+/** An album's pictures, one at a time as large as the panel allows, on black; Left and Right page. */
 @Composable
-private fun XmbPhotoViewer(file: File) {
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AsyncImage(model = file, contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+private fun XmbPhotoViewer(files: List<File>, start: Int) {
+    val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = start) { files.size }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    fun go(step: Int) {
+        val next = (pager.currentPage + step).coerceIn(0, files.lastIndex)
+        if (next != pager.currentPage) scope.launch { pager.animateScrollToPage(next) }
+    }
+    // The pad's Left and Right page through it: the viewer is the one control, selected as it opens.
+    LaunchedEffect(Unit) {
+        var tries = 0
+        while (!com.armsx2.ui.settings.SettingsControllerNav.selectById("xmb.photo.viewer") && tries++ < 10) {
+            androidx.compose.runtime.withFrameNanos {}
+        }
+    }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .controllerFocusable("xmb.photo.viewer", ring = false, onLeft = { go(-1) }, onRight = { go(1) }),
+    ) {
+        androidx.compose.foundation.pager.HorizontalPager(pager, Modifier.fillMaxSize(), key = { files[it].absolutePath }) { page ->
+            AsyncImage(model = files[page], contentDescription = null, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize())
+        }
     }
 }
 
-/** Screenshots ARMSX3 has taken. */
+/** ARMSX3's pictures: screenshots, and frames dumped into config/captures. */
 object XmbPhotos {
-    fun list(context: android.content.Context): List<File> {
-        val root = runCatching { MainActivityRuntime.assetCopyRoot(context) }.getOrNull() ?: return emptyList()
-        return listOf("snaps", "screenshots")
-            .flatMap { File(root, it).listFiles()?.toList() ?: emptyList() }
-            .filter { it.isFile && it.length() > 0 && it.extension.lowercase() in setOf("png", "jpg", "jpeg") }
+    enum class Kind { Screenshots, FrameDump }
+
+    class Album(val key: String, val kind: Kind, val taken: Long, val serial: String?, val files: List<File>)
+
+    private val IMAGES = setOf("png", "jpg", "jpeg", "webp")
+
+    private fun images(dir: File?): List<File> =
+        dir?.listFiles()?.filter { it.isFile && it.length() > 0 && it.extension.lowercase() in IMAGES } ?: emptyList()
+
+    fun albums(context: android.content.Context): List<Album> = buildList {
+        val root = runCatching { MainActivityRuntime.assetCopyRoot(context) }.getOrNull()
+        val shots = listOf("snaps", "screenshots").flatMap { images(root?.let { r -> File(r, it) }) }
             .sortedByDescending { it.lastModified() }
-    }
-}
-
-/**
- * Music: the library's track, playing or stopped with Cross, as the console's Music column plays
- * what it lists. The track itself is chosen in System Settings, with the rest of the app's.
- */
-@Composable
-private fun xmbMusicColumn(): XmbColumn {
-    val context = LocalContext.current.applicationContext
-    val full = "explore_plugin_full"
-    val playing = LibraryMusic.enabled.value
-    val track = LibraryMusic.customName.value ?: str("xmb.music.builtin")
-    val status = if (playing) fw(full, "msg_play", "action.play") else fw(full, "msg_pause", "xmb.music.paused")
-    return XmbColumn(
-        key = "music",
-        title = fw("xmb_ingame", "msg_music", "xmb.cat.music"),
-        icon = XmbIcon("xmb_ingame", "tex_music", "♫"),
-        items = listOf(
-            XmbNode.Action(
-                "music.library",
-                track,
-                XmbIcon("explore_category_music", if (playing) "music_tex_default" else "music_tex_album_default", "♫"),
-                status,
-            ) { LibraryMusic.set(context, !playing) },
-        ),
-    )
-}
-
-/**
- * RPCN, where the console's Friends column was: the account, adding a friend, and every friend
- * with whether they are online and what they are playing, read every two seconds while the
- * column is the one shown.
- */
-@Composable
-private fun xmbRpcnColumn(rpcnShown: Boolean): XmbColumn {
-    val full = "explore_plugin_full"
-    val friends = rememberRpcnFriends(rpcnShown)
-    val online = fw(full, "msg_online", "xmb.rpcn.online")
-    val offline = str("xmb.rpcn.offline")
-    val items = buildList {
-        add(
-            XmbNode.Action("rpcn.account", fw(full, "msg_account_manage", "xmb.rpcn.account"), XmbIcon("explore_category_psn", "item_tex_account", "🛰")) {
-                UiNavigator.navigate(AppRoute.Rpcn)
-            },
-        )
-        add(
-            XmbNode.Action("rpcn.add", fw(full, "msg_friend_register", "xmb.rpcn.add"), XmbIcon("explore_category_friend", "item_tex_NewFriend", "➕")) {
-                UiNavigator.navigate(AppRoute.Friends)
-            },
-        )
-        friends?.friends?.forEach { f ->
-            val sub = when {
-                !f.online -> offline
-                f.title.isNotBlank() -> f.title
-                else -> online
+        if (shots.isNotEmpty()) add(Album("screenshots", Kind.Screenshots, shots.first().lastModified(), null, shots))
+        // A dump is a folder named <serial>_<yyyyMMddHHmmss>_frame holding the frame's pictures.
+        val stamp = java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.US)
+        runCatching { com.armsx2.DevTools.capturesDir().listFiles() }.getOrNull()
+            ?.filter { it.isDirectory }
+            ?.mapNotNull { dir ->
+                val files = images(dir).sortedBy { it.name }
+                if (files.isEmpty()) return@mapNotNull null
+                val parts = dir.name.split('_')
+                val serial = parts.getOrNull(0)?.takeIf { it.isNotBlank() && parts.size >= 3 }
+                val taken = parts.getOrNull(1)?.let { runCatching { stamp.parse(it)?.time }.getOrNull() } ?: dir.lastModified()
+                Album("dump.${dir.name}", Kind.FrameDump, taken, serial, files)
             }
-            add(
-                XmbNode.Action(
-                    "rpcn.friend.${f.name}",
-                    f.name,
-                    XmbIcon("explore_category_friend", "tex_Avatar_Default", "🙂"),
-                    sub,
-                ) { UiNavigator.navigate(AppRoute.Friends) },
-            )
-        }
+            ?.sortedByDescending { it.taken }
+            ?.let(::addAll)
+        // Pictures left loose in config/captures, if any.
+        val loose = images(runCatching { com.armsx2.DevTools.capturesDir() }.getOrNull()).sortedByDescending { it.lastModified() }
+        if (loose.isNotEmpty()) add(Album("captures", Kind.FrameDump, loose.first().lastModified(), null, loose))
     }
-    return XmbColumn(
-        key = "rpcn",
-        title = str("rpcn.screen.title"),
-        icon = XmbIcon("xmb_ingame", "tex_friend", "👥"),
-        items = items,
-    )
-}
-
-/**
- * The RPCN friend list while [shown]: with an account saved, a session held open for as long as the
- * column is shown (as the Friends screen does, one open and one close per showing), and the list
- * read every two seconds. Null without an account.
- */
-@Composable
-private fun rememberRpcnFriends(shown: Boolean): RpcnFriends? {
-    var data by remember { mutableStateOf<RpcnFriends?>(null) }
-    LaunchedEffect(shown) {
-        if (!shown) return@LaunchedEffect
-        val configured = withContext(Dispatchers.IO) {
-            runCatching { JSONObject(Rpcs3Bridge.rpcnStatus()).optBoolean("configured") }.getOrDefault(false)
-        }
-        if (!configured) {
-            data = null
-            return@LaunchedEffect
-        }
-        try {
-            // Runs to the end even when the column is left meanwhile, so the close below always
-            // has an open to match.
-            withContext(NonCancellable + rpcnSessionDispatcher) { Rpcs3Bridge.rpcnFriendsSession(true) }
-            while (true) {
-                data = parseRpcnFriends(withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetFriends() })
-                delay(2_000)
-            }
-        } finally {
-            rpcnSessionExecutor.execute { Rpcs3Bridge.rpcnFriendsSession(false) }
-        }
-    }
-    return data
 }
