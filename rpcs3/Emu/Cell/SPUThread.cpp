@@ -6380,6 +6380,7 @@ bool spu_thread::process_mfc_cmd()
 			}
 
 			mov_rdata(rdata, data);
+			atomic_fence_acquire();
 
 			// The snapshot is only valid if these loads are bracketed by the two timestamp
 			// reads. x86-TSO gives that for free; on a weakly ordered machine the copy above
