@@ -6143,7 +6143,9 @@ extern "C" bool _armsx3_xmbDiscMedia(std::string_view isoPath, std::string_view 
     load_iso(path);
     const std::string root = iso_device::virtual_device_name + "/PS3_GAME/";
 
-    for (const char *name : {"PIC1.PNG", "PIC0.PNG", "SND0.AT3", "ICON1.PAM"}) {
+    // PARAM.SFO too: the app checks its TITLE_ID against the game it asked for, so media read
+    // from the wrong image can never be filed under another game.
+    for (const char *name : {"PARAM.SFO", "PIC1.PNG", "PIC0.PNG", "SND0.AT3", "ICON1.PAM"}) {
       if (!fs::is_file(root + name)) {
         continue;
       }

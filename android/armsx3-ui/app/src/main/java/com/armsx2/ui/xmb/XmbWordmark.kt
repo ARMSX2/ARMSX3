@@ -42,8 +42,6 @@ object XmbWordmark {
     private const val MID_TOP = 0.5f - T / 2f
     private const val MID_BOTTOM = 0.5f + T / 2f
     private const val GAP = 0.42f
-    private const val MARK_SCALE = 1.12f
-    private const val MARK_GAP = 0.9f
     private const val PAD = 0.15f
 
     /** A glyph's outline at [x], one letter high, with its width. */

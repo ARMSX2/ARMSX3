@@ -28,25 +28,48 @@ import java.io.File
  * installed title, or in the cache when [XmbMediaCache] has taken them out of a disc image.
  */
 object XmbMedia {
-    /** The folder holding [game]'s PARAM.SFO and its media, when there is one on disk. */
+    /**
+     * The folder holding [game]'s PARAM.SFO and its media, when there is one: a disc in folder
+     * form (picked by path, or through the system's picker on an SD card), media taken out of a
+     * disc image, or an installed title's own folder.
+     */
     fun dirOf(context: Context, game: GameInfo): File? {
-        if (game.uri.scheme == "file") {
-            val path = game.uri.path
-            if (path != null) {
-                val f = File(path)
-                if (f.isDirectory) {
-                    File(f, game.discGameDir ?: "PS3_GAME").takeIf { File(it, "PARAM.SFO").isFile }?.let { return it }
-                    if (File(f, "PARAM.SFO").isFile) return f
-                }
+        localPath(game)?.let { File(it) }?.let { f ->
+            // The folder itself, or its EBOOT.BIN two folders down.
+            val top = if (f.isFile && f.name.equals("EBOOT.BIN", ignoreCase = true)) f.parentFile?.parentFile?.parentFile else f
+            if (top != null && top.isDirectory) {
+                File(top, game.discGameDir ?: "PS3_GAME").takeIf { File(it, "PARAM.SFO").isFile }?.let { return it }
+                if (File(top, "PARAM.SFO").isFile) return top
             }
         }
         game.serial?.takeIf { it.isNotBlank() }?.let { serial ->
-            Ps3Sfo.installDir(serial)?.takeIf { File(it, "PIC1.PNG").isFile || File(it, "ICON0.PNG").isFile }?.let { return it }
             XmbMediaCache.dirFor(context, serial)?.let { return it }
             // A disc image keeps its media inside it: taken out once, into the cache.
             XmbMediaCache.extract(context, game)?.let { return it }
+            // An installed title keeps its own. A disc game's installed update has a folder too,
+            // usually without the disc's background and music, so it comes after the disc's.
+            Ps3Sfo.installDir(serial)?.takeIf { d -> MEDIA.any { File(d, it).isFile } || File(d, "ICON0.PNG").isFile }?.let { return it }
         }
         return null
+    }
+
+    private val MEDIA = listOf("PIC1.PNG", "SND0.AT3", "ICON1.PAM")
+
+    /**
+     * Where [game] is on this device's storage as a path: its own, or for a pick through the
+     * system's picker the path its document stands for (`<volume>:<path>`), readable here with
+     * all-files access. Null when it cannot be read by path.
+     */
+    private fun localPath(game: GameInfo): String? = when (game.uri.scheme) {
+        "file" -> game.uri.path
+        "content" -> runCatching {
+            val id = android.provider.DocumentsContract.getDocumentId(game.uri)
+            val volume = id.substringBefore(':')
+            val rel = id.substringAfter(':', "")
+            val base = if (volume.equals("primary", ignoreCase = true)) android.os.Environment.getExternalStorageDirectory() else File("/storage", volume)
+            File(base, rel).takeIf { it.exists() }?.absolutePath
+        }.getOrNull()
+        else -> null
     }
 
     fun icon0(game: GameInfo, dir: File?): Any? =
@@ -93,7 +116,19 @@ object XmbMedia {
  * mounts the image as it does to read its icon. A disc with none of it is remembered as such.
  */
 object XmbMediaCache {
-    fun root(context: Context): File = File(context.filesDir, "xmb-media")
+    // A second cache: the first could hold another game's media, read before each disc's own
+    // PARAM.SFO came out with it to be checked. It goes the first time this one is used.
+    fun root(context: Context): File = File(context.filesDir, "xmb-media2").also {
+        if (!dropped) {
+            dropped = true
+            runCatching { File(context.filesDir, "xmb-media").deleteRecursively() }
+        }
+    }
+
+    @Volatile private var dropped = false
+
+    /** The disc images the core can open to read (a CHD reads as the image it was made from). */
+    private val IMAGES = setOf("ISO", "CHD", "BIN", "IMG", "MDF", "NRG", "DUMP")
 
     fun dirFor(context: Context, serial: String): File? =
         File(root(context), serial).takeIf { File(it, "PIC1.PNG").isFile || File(it, "SND0.AT3").isFile || File(it, "ICON1.PAM").isFile }
@@ -101,7 +136,7 @@ object XmbMediaCache {
     /** [game]'s media out of its disc image, into the cache; null when it has none. IO thread. */
     fun extract(context: Context, game: GameInfo): File? {
         val serial = game.serial?.takeIf { it.isNotBlank() } ?: return null
-        if (!game.extension.equals("ISO", ignoreCase = true)) return null
+        if (game.extension.uppercase() !in IMAGES) return null
         val none = File(root(context), "$serial.none")
         if (none.isFile) return null
         // The core mounts the image only while nothing runs; asked again later otherwise.
@@ -116,7 +151,11 @@ object XmbMediaCache {
             mkdirs()
         }
         val copied = runCatching { com.armsx3.core.ARMSX3.instance.xmbDiscMedia(path, staging.absolutePath) }.getOrDefault(false)
-        if (!copied) {
+        // Only this game's: the image read has to say it is the game asked for.
+        val found = Ps3Sfo.read(File(staging, "PARAM.SFO"))["TITLE_ID"]?.trim().orEmpty()
+        val mine = found.replace("-", "").equals(serial.replace("-", ""), ignoreCase = true)
+        if (copied && !mine) android.util.Log.w("ARMSX3", "xmb media: $path says $found, not $serial; not kept")
+        if (!copied || !mine) {
             staging.deleteRecursively()
             runCatching { none.createNewFile() }
             return null
