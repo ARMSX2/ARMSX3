@@ -95,6 +95,7 @@ struct CoreApi {
   bool (*settingsSet)(std::string_view path, std::string_view valueString);
   // XMB mode (src/xmb-media.cpp): the boot sound and a game's SND0 and ICON1.
   bool (*xmbDecodeAudio)(std::string_view in, std::string_view out);
+  bool (*xmbDecodePamAudio)(std::string_view in, std::string_view out);
   std::int64_t (*xmbPamOpen)(std::string_view path);
   std::int32_t (*xmbPamSize)(std::int64_t handle);
   std::int64_t (*xmbPamFrame)(std::int64_t handle, std::uint8_t *dst, std::int64_t capacity);
@@ -334,6 +335,7 @@ struct CoreLibrary : CoreApi {
     result.takeGameError = reinterpret_cast<decltype(takeGameError)>(dlsym(handle, "_armsx3_takeGameError"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_armsx3_settingsSet"));
     result.xmbDecodeAudio = reinterpret_cast<decltype(xmbDecodeAudio)>(dlsym(handle, "_armsx3_xmbDecodeAudio"));
+    result.xmbDecodePamAudio = reinterpret_cast<decltype(xmbDecodePamAudio)>(dlsym(handle, "_armsx3_xmbDecodePamAudio"));
     result.xmbPamOpen = reinterpret_cast<decltype(xmbPamOpen)>(dlsym(handle, "_armsx3_xmbPamOpen"));
     result.xmbPamSize = reinterpret_cast<decltype(xmbPamSize)>(dlsym(handle, "_armsx3_xmbPamSize"));
     result.xmbPamFrame = reinterpret_cast<decltype(xmbPamFrame)>(dlsym(handle, "_armsx3_xmbPamFrame"));
@@ -1164,6 +1166,14 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_xmbDecodeAudio
       return false;
   }
   return coreLib.xmbDecodeAudio(unwrap(env, jin), unwrap(env, jout));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_xmbDecodePamAudio(
+    JNIEnv *env, jobject, jstring jin, jstring jout) {
+  if (coreLib.xmbDecodePamAudio == nullptr) {
+      return false;
+  }
+  return coreLib.xmbDecodePamAudio(unwrap(env, jin), unwrap(env, jout));
 }
 
 extern "C" JNIEXPORT jlong JNICALL Java_com_armsx3_core_ARMSX3_xmbPamOpen(

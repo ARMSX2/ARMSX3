@@ -1,11 +1,12 @@
 // XMB mode's media: the console's boot sound from the user's firmware (AC3), and a game's own
-// music (SND0.AT3, ATRAC3 in a RIFF WAVE) and animated icon (ICON1.PAM, H.264 in PAMF), decoded with
+// music (SND0.AT3, ATRAC3 in a RIFF WAVE) and animated icon (ICON1.PAM, H.264 and ATRAC3plus in PAMF), decoded with
 // the FFmpeg the core already carries. Android itself has no ATRAC3 decoder and no PAMF demuxer, and
 // AC3 only on some devices.
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -114,6 +115,122 @@ extern "C" bool _armsx3_xmbDecodeAudio(std::string_view in_path, std::string_vie
   av_frame_free(&frame);
   av_packet_free(&pkt);
   avformat_close_input(&fmt);
+  return ok;
+}
+
+// The audio track of an ICON1.PAM as a 16-bit stereo WAV at out_path: ATRAC3plus in the PAMF's
+// private stream 1, which the console plays with the animated icon. Some games have no SND0 and this
+// is their music (THE iDOLM@STER 2). FFmpeg's program stream demuxer does not know Sony's sub-stream,
+// so the packets are taken out here: each payload is the sub-stream id (0 for the first ATRAC3plus
+// stream), three bytes, then the stream; the stream is frames of 0x0FD0, two bytes of attributes
+// (sample rate, channels, frame size), four of padding, and the frame.
+extern "C" bool _armsx3_xmbDecodePamAudio(std::string_view in_path, std::string_view out_path) {
+  std::vector<std::uint8_t> file;
+  {
+    FILE* f = std::fopen(std::string(in_path).c_str(), "rb");
+    if (!f) return false;
+    std::fseek(f, 0, SEEK_END);
+    const long size = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (size < 2048 + 16 || size > (64L << 20)) {
+      std::fclose(f);
+      return false;
+    }
+    file.resize(static_cast<std::size_t>(size));
+    const bool read = std::fread(file.data(), 1, file.size(), f) == file.size();
+    std::fclose(f);
+    if (!read || std::memcmp(file.data(), "PAMF", 4) != 0) return false;
+  }
+  auto be16 = [&](std::size_t at) { return static_cast<std::uint32_t>(file[at] << 8 | file[at + 1]); };
+  const std::uint32_t blocks = be16(8) << 16 | be16(10);
+  std::size_t pos = static_cast<std::size_t>(blocks == 0 || blocks > 64 ? 1 : blocks) * 2048;
+  std::vector<std::uint8_t> es;
+  while (pos + 6 <= file.size()) {
+    if (file[pos] != 0 || file[pos + 1] != 0 || file[pos + 2] != 1) {
+      pos++;
+      continue;
+    }
+    const std::uint8_t id = file[pos + 3];
+    if (id == 0xBA) {
+      if (pos + 14 > file.size()) break;
+      pos += 14 + (file[pos + 13] & 7);
+      continue;
+    }
+    if (id < 0xBB) {
+      pos++;
+      continue;
+    }
+    const std::size_t end = pos + 6 + be16(pos + 4);
+    if (end > file.size()) break;
+    if (id == 0xBD && pos + 9 <= end) {
+      const std::size_t payload = pos + 9 + file[pos + 8];
+      if (payload + 4 <= end && file[payload] == 0x00) es.insert(es.end(), file.begin() + payload + 4, file.begin() + end);
+    }
+    pos = end;
+  }
+  // The first frame's attributes describe the stream.
+  std::size_t at = 0;
+  while (at + 8 <= es.size() && !(es[at] == 0x0F && es[at + 1] == 0xD0)) at++;
+  if (at + 8 > es.size()) return false;
+  const std::uint32_t attributes = static_cast<std::uint32_t>(es[at + 2] << 8 | es[at + 3]);
+  static constexpr int kRates[8] = {32000, 44100, 48000, 88200, 96000, 0, 0, 0};
+  static constexpr int kChannels[8] = {0, 1, 2, 3, 4, 6, 7, 8};
+  const int rate = kRates[(attributes >> 13) & 7];
+  const int channels = kChannels[(attributes >> 10) & 7];
+  const std::size_t frame_size = ((attributes & 0x3FF) + 1) * 8;
+  if (rate == 0 || channels == 0) return false;
+
+  const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_ATRAC3P);
+  if (!codec) return false;
+  AVCodecContext* ctx = avcodec_alloc_context3(codec);
+  SwrContext* swr = nullptr;
+  AVPacket* pkt = av_packet_alloc();
+  AVFrame* frame = av_frame_alloc();
+  std::vector<std::int16_t> pcm;
+  bool ok = false;
+  do {
+    if (!ctx || !pkt || !frame) break;
+    ctx->sample_rate = rate;
+    av_channel_layout_default(&ctx->ch_layout, channels);
+    ctx->block_align = static_cast<int>(frame_size);
+    if (avcodec_open2(ctx, codec, nullptr) < 0) break;
+    AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
+    if (swr_alloc_set_opts2(&swr, &stereo, AV_SAMPLE_FMT_S16, rate, &ctx->ch_layout, ctx->sample_fmt, rate, 0, nullptr) < 0 ||
+        swr_init(swr) < 0) {
+      break;
+    }
+    auto drain = [&]() {
+      while (avcodec_receive_frame(ctx, frame) == 0) {
+        const int room = swr_get_out_samples(swr, frame->nb_samples);
+        if (room > 0 && pcm.size() < kMaxSamples) {
+          const std::size_t base = pcm.size();
+          pcm.resize(base + static_cast<std::size_t>(room) * 2);
+          std::uint8_t* out[1] = {reinterpret_cast<std::uint8_t*>(pcm.data() + base)};
+          const int got = swr_convert(swr, out, room, const_cast<const std::uint8_t**>(frame->extended_data), frame->nb_samples);
+          pcm.resize(base + static_cast<std::size_t>(std::max(got, 0)) * 2);
+        }
+        av_frame_unref(frame);
+      }
+    };
+    while (at + 8 + frame_size <= es.size() && pcm.size() < kMaxSamples) {
+      if (es[at] != 0x0F || es[at + 1] != 0xD0) {
+        at++;
+        continue;
+      }
+      if (av_new_packet(pkt, static_cast<int>(frame_size)) < 0) break;
+      std::memcpy(pkt->data, es.data() + at + 8, frame_size);
+      if (avcodec_send_packet(ctx, pkt) == 0) drain();
+      av_packet_unref(pkt);
+      at += 8 + frame_size;
+    }
+    avcodec_send_packet(ctx, nullptr);
+    drain();
+    ok = !pcm.empty() && write_wav(std::string(out_path), pcm, rate);
+  } while (false);
+  swr_free(&swr);
+  avcodec_free_context(&ctx);
+  av_frame_free(&frame);
+  av_packet_free(&pkt);
   return ok;
 }
 

@@ -56,6 +56,22 @@ object XmbMedia {
     fun icon1(dir: File?): File? = dir?.let { File(it, "ICON1.PAM") }?.takeIf { it.isFile }
 
     /**
+     * The audio track of the animated icon [pam], decoded into a WAV, cached by its folder and size;
+     * null when it has none. Some games have no SND0 and this is their music (THE iDOLM@STER 2).
+     */
+    fun decodedPamAudio(context: Context, pam: File): File? {
+        val out = File(context.cacheDir, "xmb-audio/${pam.parentFile?.name}-ICON1-${pam.length()}.wav")
+        if (out.isFile && out.length() > 44) return out
+        val none = File(out.path + ".none")
+        if (none.isFile) return null
+        out.parentFile?.mkdirs()
+        val ok = runCatching { com.armsx3.core.ARMSX3.instance.xmbDecodePamAudio(pam.absolutePath, out.absolutePath) }
+            .getOrDefault(false)
+        if (!ok) runCatching { none.createNewFile() }
+        return out.takeIf { ok && it.isFile && it.length() > 44 }
+    }
+
+    /**
      * [source] decoded into a WAV the platform can play, cached by name and size. Null when the
      * core cannot decode it (or is not loaded), so the caller can try the file as it is.
      */
@@ -113,9 +129,12 @@ fun XmbSnd0Preview(controller: XmbController) {
     val quiet = controller.busy || controller.levels.isNotEmpty() || XmbMode.booting.value || !resumed || !XmbMode.gameMusic.value
     androidx.compose.runtime.LaunchedEffect(node?.key, quiet) {
         if (node == null || quiet) return@LaunchedEffect
-        kotlinx.coroutines.delay(1200)
+        // SND0, or failing that the animated icon's own sound, which starts with the icon.
+        val snd0 = withContext(Dispatchers.IO) { XmbMedia.snd0(node.mediaDir) }
+        val pam = if (snd0 == null && XmbMode.animatedIcons.value) withContext(Dispatchers.IO) { XmbMedia.icon1(node.mediaDir) } else null
+        kotlinx.coroutines.delay(if (snd0 != null) 1200 else 500)
         val audio = withContext(Dispatchers.IO) {
-            XmbMedia.snd0(node.mediaDir)?.let { XmbMedia.decodedAudio(context, it) }
+            snd0?.let { XmbMedia.decodedAudio(context, it) } ?: pam?.let { XmbMedia.decodedPamAudio(context, it) }
         } ?: return@LaunchedEffect
         val player = runCatching {
             android.media.MediaPlayer().apply {

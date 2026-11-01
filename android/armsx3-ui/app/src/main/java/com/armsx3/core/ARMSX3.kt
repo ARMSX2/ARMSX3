@@ -186,6 +186,9 @@ class ARMSX3 {
      *  SND0) as a 16-bit stereo WAV at [outPath], with the core's FFmpeg. */
     external fun xmbDecodeAudio(inPath: String, outPath: String): Boolean
 
+    /** An ICON1.PAM's audio track (ATRAC3plus) as a WAV; false when it has none or it will not decode. */
+    external fun xmbDecodePamAudio(inPath: String, outPath: String): Boolean
+
     /** XMB mode: a game's animated icon (ICON1.PAM) opened for playback; a handle, or 0. */
     external fun xmbPamOpen(path: String): Long
 
