@@ -4,6 +4,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Spacer
@@ -76,7 +81,9 @@ object XmbNews {
 fun xmbNewsNode(): XmbNode {
     val context = LocalContext.current
     val title = str("news.title")
-    val icon = XmbIcon("explore_category_network", "tex_onlinemanual", "📰")
+    // The ARMSX3 mark: the firmware's Online Manuals icon, used here before, is a question mark.
+    val mark = androidx.compose.runtime.remember { XmbWordmark.markIcon(192).asImageBitmap() }
+    val icon = XmbIcon(bitmap = mark)
     val loading = str("news.loading")
     val none = str("news.unavailable")
     val reader: @Composable () -> Unit = {
@@ -97,10 +104,13 @@ fun xmbNewsNode(): XmbNode {
             else -> items.map { item ->
                 val heading = listOf(item.tag, item.title).filter { it.isNotBlank() }.distinct().joinToString("  ")
                 val text = item.blocks.filterIsInstance<News.Block.Text>().joinToString("\n\n") { it.text }.ifBlank { item.notes }
-                // The notes as written, their pictures too.
+                // The notes as written, their pictures too, under who published and who is credited.
                 val blocks = item.blocks.ifEmpty { listOf(News.Block.Text(text)) }
-                XmbNode.Panel("news.${item.tag}", heading, icon, item.published.take(10)) { _ ->
-                    XmbBlocksPanel(blocks)
+                // Each release with its publisher's GitHub picture, as the normal screen shows it.
+                val picture = if (item.authorAvatar.isNotBlank()) XmbIcon(model = item.authorAvatar, bitmap = null, shadow = false) else icon
+                val sub = listOf(item.published.take(10), item.authorLogin).filter { it.isNotBlank() }.joinToString("   ")
+                XmbNode.Panel("news.${item.tag}", heading, picture, sub) { _ ->
+                    XmbBlocksPanel(blocks) { XmbReleaseHeader(item) }
                 }
             }
         }
@@ -299,5 +309,61 @@ internal fun XmbPanelButton(id: String, label: String, font: androidx.compose.ui
             .padding(horizontal = 22.dp, vertical = 10.dp),
     ) {
         Text(label, style = TextStyle(fontFamily = font, fontSize = 17.sp, color = Color.White))
+    }
+}
+
+/**
+ * Who a release is from and who it credits, at the head of its notes: the publisher's GitHub
+ * picture and name with the date, then each contributor the notes thank with their picture, as
+ * the normal What's New shows them.
+ */
+@Composable
+private fun XmbReleaseHeader(item: News.Item) {
+    val font = rememberXmbFont()
+    val contributors = str("news.contributors")
+    val prerelease = str("news.prerelease")
+    val ring = androidx.compose.foundation.shape.CircleShape
+    Column(Modifier.padding(vertical = 6.dp), verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+        androidx.compose.foundation.layout.Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            if (item.authorAvatar.isNotBlank()) {
+                coil.compose.AsyncImage(
+                    model = item.authorAvatar,
+                    contentDescription = item.authorLogin,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.size(38.dp).clip(ring).border(1.dp, Color.White.copy(alpha = 0.6f), ring),
+                )
+                Spacer(Modifier.width(10.dp))
+            }
+            Text(
+                listOfNotNull(item.authorLogin.takeIf { it.isNotBlank() }, item.published.take(10), prerelease.takeIf { item.prerelease })
+                    .joinToString("   "),
+                style = TextStyle(fontFamily = font, fontSize = 16.sp, color = Color.White.copy(alpha = 0.9f)),
+            )
+        }
+        if (item.credited.isNotEmpty()) {
+            Text(contributors, style = TextStyle(fontFamily = font, fontSize = 14.sp, color = Color.White.copy(alpha = 0.7f)))
+            androidx.compose.foundation.layout.Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(14.dp),
+            ) {
+                item.credited.forEach { person ->
+                    Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally, modifier = Modifier.width(66.dp)) {
+                        coil.compose.AsyncImage(
+                            model = person.avatar,
+                            contentDescription = person.login,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            modifier = Modifier.size(42.dp).clip(ring).border(1.dp, Color.White.copy(alpha = 0.6f), ring),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            person.login,
+                            style = TextStyle(fontFamily = font, fontSize = 12.sp, color = Color.White.copy(alpha = 0.85f)),
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
