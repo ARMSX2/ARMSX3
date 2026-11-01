@@ -182,6 +182,14 @@ fun HomeScreen(
         LibraryBackground.ensureLoaded()
         // The saved backgrounds, and what an older version left as the background, kept now.
         withContext(Dispatchers.IO) { LibraryBackground.loadSaved(context) }?.let(LibraryBackground::select)
+        // Themes kept before their XMB icons and sounds were read get them from their .p3t now, and
+        // XMB mode shows them straight away when it is using one.
+        withContext(Dispatchers.IO) {
+            val restored = LibraryBackground.restoreXmbAssets(context)
+            if (restored.any { it.folder.name == com.armsx2.ui.xmb.XmbTheme.selected.value }) {
+                com.armsx2.ui.xmb.XmbTheme.reapply(context)
+            }
+        }
     }
     // The animated background switched itself off because the last run died with it on screen
     // (LibraryBackground.armSaver). Say so -- silently reverting a setting the user chose reads

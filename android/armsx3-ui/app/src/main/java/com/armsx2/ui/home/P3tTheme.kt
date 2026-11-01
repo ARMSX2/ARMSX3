@@ -109,6 +109,20 @@ object P3tTheme {
         Result(null, false, Failure.DAMAGED)
     }
 
+    /**
+     * The theme's own title ([Result.name]), read from its tables alone, so a folder of themes can be
+     * named without reading their pictures. Null when it has none or is damaged.
+     */
+    fun name(src: Bytes): String? = try {
+        parseName(src)
+    } catch (_: Damaged) {
+        null
+    } catch (_: IOException) {
+        null
+    } catch (_: RuntimeException) {
+        null
+    }
+
     /** The icons and system sounds [src] carries for the XMB (see [Asset]); empty when it is damaged. */
     fun assets(src: Bytes): List<Asset> = try {
         parseAssets(src)
@@ -193,6 +207,45 @@ object P3tTheme {
         return out
     }
 
+    private fun parseName(src: Bytes): String? {
+        if (src.size < HEADER_BYTES) return null
+        val header = src.read(0, HEADER_BYTES.toInt())
+        if (be32(header, 0) != MAGIC) return null
+        val tables = List(6) { i ->
+            val offset = be32(header, 8 + i * 8)
+            val size = be32(header, 12 + i * 8)
+            if (offset > src.size || size > src.size - offset) throw Damaged()
+            Table(offset, size)
+        }
+        val elementTable = tables[0]
+        val stringTable = tables[2]
+        if (elementTable.size > MAX_TABLE_BYTES || stringTable.size > MAX_TABLE_BYTES) throw Damaged()
+        val elements = src.read(elementTable.offset, elementTable.size.toInt())
+        val strings = src.read(stringTable.offset, stringTable.size.toInt())
+        var pos = 0L
+        while (pos + ELEMENT_BYTES <= elements.size) {
+            val name = cString(strings, be32(elements, pos.toInt()))
+            val count = be32(elements, pos.toInt() + 4)
+            if (count > (elements.size - pos - ELEMENT_BYTES) / ATTRIBUTE_BYTES) throw Damaged()
+            if (name == "info") for (i in 0L until count) {
+                val at = (pos + ELEMENT_BYTES + i * ATTRIBUTE_BYTES).toInt()
+                if (be32(elements, at + 4) == TYPE_STRING && cString(strings, be32(elements, at)) == "name") {
+                    return infoName(elements, strings, at)
+                }
+            }
+            pos += ELEMENT_BYTES + count * ATTRIBUTE_BYTES
+        }
+        return null
+    }
+
+    /** info's name, the attribute at [at]: UTF-8 at (offset, length) in the string table. */
+    private fun infoName(elements: ByteArray, strings: ByteArray, at: Int): String? {
+        val offset = be32(elements, at + 8)
+        val length = be32(elements, at + 12)
+        if (offset > strings.size || length > minOf(strings.size - offset, MAX_NAME_BYTES.toLong())) return null
+        return String(strings, offset.toInt(), length.toInt(), Charsets.UTF_8).trimEnd('\u0000').trim().ifEmpty { null }
+    }
+
     /** Anything structurally wrong with the file. Thrown by every bounds check. */
     private class Damaged : Exception() {
         override fun fillInStackTrace(): Throwable = this
@@ -248,13 +301,8 @@ object P3tTheme {
             val wanted = name == "bgimage" || name == "info"
             if (wanted) for (i in 0L until count) {
                 val at = (pos + ELEMENT_BYTES + i * ATTRIBUTE_BYTES).toInt()
-                // info's name: UTF-8 at (offset, length) in the string table.
                 if (name == "info" && be32(elements, at + 4) == TYPE_STRING && cString(strings, be32(elements, at)) == "name") {
-                    val offset = be32(elements, at + 8)
-                    val length = be32(elements, at + 12)
-                    if (offset <= strings.size && length <= minOf(strings.size - offset, MAX_NAME_BYTES.toLong())) {
-                        title = String(strings, offset.toInt(), length.toInt(), Charsets.UTF_8).trimEnd('\u0000').trim().ifEmpty { null }
-                    }
+                    infoName(elements, strings, at)?.let { title = it }
                     continue
                 }
                 if (be32(elements, at + 4) != TYPE_FILE) continue

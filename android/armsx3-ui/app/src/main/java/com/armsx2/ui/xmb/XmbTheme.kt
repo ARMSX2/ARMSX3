@@ -19,7 +19,8 @@ import java.io.File
  * and system sounds. The themes are the library's saved backgrounds ([LibraryBackground.saved]),
  * so one imported for the library is here too; the theme's icons and sounds are kept beside its
  * background in [LibraryBackground.XMB_DIR] when it is imported. A theme imported before that was
- * kept brings its background alone until it is imported again.
+ * kept gets them from its .p3t on the device at the next start ([LibraryBackground.restoreXmbAssets]),
+ * and brings its background alone only when that file is gone, until it is imported again.
  *
  * The library's own background stays its own: picking a theme here changes only XMB mode, where
  * the theme's sounds can play too (the library has its music and menu sounds).
@@ -86,6 +87,18 @@ object XmbTheme {
         revision.intValue++
     }
 
+    /**
+     * Read the theme in use again, its icons or sounds having changed on disk, when XMB mode has
+     * read it already; otherwise XMB mode reads it as it is when it starts. Off the main thread.
+     */
+    fun reapply(context: Context) {
+        synchronized(this) {
+            if (applied == null) return
+            applied = null
+        }
+        apply(context, entry())
+    }
+
     /** The theme's picture for the firmware icon [rco]/[name], decoded, or null. Off the main thread. */
     fun image(rco: String, name: String): ImageBitmap? {
         val file = icons["$rco/$name"] ?: return null
@@ -98,9 +111,12 @@ object XmbTheme {
     /** The theme's sound for the firmware's [name] (snd_cursor), as a WAV file, or null. */
     fun sound(name: String): File? = sounds[name]
 
-    /** How many icons and sounds were kept with [entry] when it was imported. Blocking, but small. */
-    fun assetCounts(entry: LibraryBackground.Saved): Pair<Int, Int> {
-        val xmb = File(entry.folder, LibraryBackground.XMB_DIR)
+    /**
+     * How many icons and sounds were kept with [entry], or null when none were ever read for it: a
+     * picture, or a theme that [LibraryBackground.lacksXmbAssets]. Blocking, but small.
+     */
+    fun assetCounts(entry: LibraryBackground.Saved): Pair<Int, Int>? {
+        val xmb = File(entry.folder, LibraryBackground.XMB_DIR).takeIf { it.isDirectory } ?: return null
         return (File(xmb, "icons").list()?.size ?: 0) to (File(xmb, "sounds").list()?.size ?: 0)
     }
 

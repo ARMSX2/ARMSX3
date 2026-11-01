@@ -329,13 +329,18 @@ private fun xmbThemeSettings(): XmbNode {
     val importDesc = str("xmb.theme.import.desc")
     val importTheme = rememberXmbThemeImport()
     // What the theme in use brought for the XMB: its icons and its sounds, counted, or word that a
-    // theme added before ARMSX3 read them has only its picture until it is installed again.
+    // theme added before ARMSX3 read them, whose .p3t was not found at startup to read them from
+    // (LibraryBackground.restoreXmbAssets), has only its picture until it is installed again.
     val assetsFormat = str("xmb.theme.assets")
     val noAssets = str("xmb.theme.noAssets")
     val selectedTheme = XmbTheme.selected.value
-    val assets = remember(selectedTheme, themes) { XmbTheme.entry()?.let(XmbTheme::assetCounts) }
+    // Read again when the theme is: its icons found at startup move the revision on.
+    val revision = XmbTheme.revision.intValue
+    val inUse = remember(selectedTheme, themes) { XmbTheme.entry() }
+    val unread = remember(inUse, revision) { inUse?.let(LibraryBackground::lacksXmbAssets) == true }
+    val assets = remember(inUse, revision) { inUse?.let(XmbTheme::assetCounts) }
     val ok = str("action.ok")
-    val assetsLine = assets?.let { (i, s) -> if (i + s == 0) noAssets else assetsFormat.format(i, s) }
+    val assetsLine = if (unread) noAssets else assets?.let { (i, s) -> assetsFormat.format(i, s) }
     val colorTitle = str("xmb.theme.color")
     val colorDesc = str("xmb.theme.color.desc")
     val colorDefault = str("xmb.theme.color.default")
@@ -418,7 +423,7 @@ private fun xmbThemeSettings(): XmbNode {
                     XmbTheme.select(picked)
                     // Said as it is picked, not only in the description: a theme added before its
                     // icons were read otherwise just looks like one whose icons do not work.
-                    if (picked != null && XmbTheme.assetCounts(picked).let { it.first + it.second } == 0) {
+                    if (picked != null && LibraryBackground.lacksXmbAssets(picked)) {
                         XmbDialogs.target()?.tell(noAssets, ok, error = false)
                     }
                 },
