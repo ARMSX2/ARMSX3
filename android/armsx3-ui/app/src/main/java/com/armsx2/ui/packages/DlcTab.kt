@@ -185,6 +185,28 @@ private fun readDlcGroups(): List<DlcGroup> {
 @Composable
 internal fun DlcRows(items: List<Ps3Sfo.Dlc>, onChanged: () -> Unit) {
     val scope = rememberCoroutineScope()
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        val remove = str("info.dlc.remove")
+        val removeAsk = str("xmb.removeAsk")
+        val cancel = str("action.cancel")
+        items.forEach { item ->
+            val ask = {
+                com.armsx2.ui.xmb.XmbDialogs.target()?.ask(removeAsk.format(item.name), remove, cancel, focusNo = true) {
+                    scope.launch {
+                        withContext(Dispatchers.IO) { Ps3Sfo.removeDlc(item) }
+                        onChanged()
+                    }
+                }
+                Unit
+            }
+            com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action(
+                "dlc.row.${item.file.absolutePath}", item.name, c.icon,
+                str(if (item.isLicence) "info.dlc.licence" else "info.dlc.content"),
+                options = listOf(com.armsx2.ui.xmb.XmbOption(remove) { ask() }),
+            ) { ask() })
+        }
+        return
+    }
     var armed by remember(items) { mutableStateOf<String?>(null) }
     var busy by remember(items) { mutableStateOf(false) }
 

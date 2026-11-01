@@ -276,7 +276,7 @@ private fun xmbSystemIcons(): (XmbNode) -> XmbIcon? {
 }
 
 /** Tabs that are not rows of settings, shown as the app's own screens in a panel. */
-private val PANEL_TABS = setOf(SettingsCategory.Info, SettingsCategory.Patches)
+private val PANEL_TABS = emptySet<SettingsCategory>()
 
 /** All Core Settings: every setting the core has, by section, from its own config tree. */
 @Composable

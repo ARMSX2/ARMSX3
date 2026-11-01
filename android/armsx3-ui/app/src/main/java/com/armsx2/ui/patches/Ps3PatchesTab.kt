@@ -108,6 +108,106 @@ fun Ps3PatchesTab(serial: String = "") {
 
     LaunchedEffect(serial) { reload() }
 
+    fun download() {
+        if (busy) return
+        busy = true
+        message = null
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { Ps3PatchRepo.download(context) }
+            busy = false
+            message = when (r) {
+                is Ps3PatchRepo.Result.Ok -> {
+                    reload()
+                    // The rebuild dropped whatever Artemis patches the old merged list
+                    // held, so say how to get them back. Not needed on the Artemis
+                    // button's own rebuild, which downloads the collection anyway.
+                    "${r.count} " + str2("patches.ps3.imported") +
+                        if (r.rebuilt) "\n" + str2("patches.ps3.rebuilt") + " " +
+                            str2("patches.ps3.rebuiltArtemis") else ""
+                }
+                // Named separately so a server or format problem does not
+                // send people to check their wifi.
+                Ps3PatchRepo.Result.Network -> str2("patches.ps3.downloadFailed")
+                is Ps3PatchRepo.Result.Server ->
+                    str2("patches.ps3.serverError") + " (${r.code})"
+                Ps3PatchRepo.Result.Parse -> str2("patches.ps3.parseFailed")
+                Ps3PatchRepo.Result.Checksum -> str2("patches.ps3.checksumFailed")
+            }
+        }
+    }
+
+    fun downloadArtemis() {
+        if (busy) return
+        busy = true
+        message = null
+        scope.launch {
+            val r = withContext(Dispatchers.IO) { Ps3PatchRepo.downloadArtemis(context) }
+            busy = false
+            message = when (r) {
+                is Ps3PatchRepo.Result.Ok -> {
+                    reload()
+                    "${r.count} " + str2("patches.ps3.imported") +
+                        if (r.rebuilt) "\n" + str2("patches.ps3.rebuilt") else ""
+                }
+                Ps3PatchRepo.Result.Network -> str2("patches.ps3.downloadFailed")
+                is Ps3PatchRepo.Result.Server ->
+                    str2("patches.ps3.serverError") + " (${r.code})"
+                Ps3PatchRepo.Result.Parse -> str2("patches.ps3.parseFailed")
+                Ps3PatchRepo.Result.Checksum -> str2("patches.ps3.checksumFailed")
+            }
+        }
+    }
+
+    // XMB mode: the patches as XMB lists, each a switch that saves as the rows do, each game's a
+    // list of its own when every game's are shown; the downloads, Import File and Search first.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        val ok = str("action.ok")
+        LaunchedEffect(message) {
+            val m = message ?: return@LaunchedEffect
+            com.armsx2.ui.xmb.XmbDialogs.target()?.tell(m, ok, error = false)
+            message = null
+        }
+        fun node(patch: Ps3PatchRepo.Patch): com.armsx2.ui.xmb.XmbNode = com.armsx2.ui.xmb.XmbNode.Setting(
+            "patch.${patch.game}.${patch.name}.${patch.version}.${patch.author}",
+            patch.name,
+            c.icon,
+            com.armsx2.ui.xmb.XmbEditor.Toggle({ patch.enabled }) { on ->
+                scope.launch {
+                    val done = withContext(Dispatchers.IO) { Ps3PatchRepo.setEnabled(patch, serial, on) }
+                    if (done) reload() else message = str2("patches.ps3.toggleFailed")
+                }
+            },
+            { if (patch.enabled) c.on else c.off },
+            description = listOfNotNull(
+                patch.author.takeIf { it.isNotBlank() },
+                patch.version.takeIf { it.isNotBlank() }?.let { "v$it" },
+                patch.notes.takeIf { it.isNotBlank() },
+            ).joinToString(" \u2022 ").ifBlank { null },
+            changed = { patch.enabled },
+        )
+        Column {
+            com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action("patches.download", str("patches.ps3.download"), c.icon, if (busy) str("patches.ps3.downloading") else str("patches.ps3.restartNeeded")) { download() })
+            com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action("patches.artemis", str("patches.ps3.downloadArtemis"), c.icon) { downloadArtemis() })
+            com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action("patches.import", str("patches.ps3.importFile"), c.icon) { if (!busy) patchPicker.launch(arrayOf("*/*")) })
+            com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.xmbSearchNode("patches") { patches.map(::node) })
+            when {
+                patches.isEmpty() -> com.armsx2.ui.xmb.XmbCollected(
+                    c,
+                    com.armsx2.ui.xmb.XmbNode.Action("patches.none", str(if (serial.isBlank()) "patches.ps3.emptyAll" else "patches.ps3.emptyGame"), c.icon) {},
+                )
+                serial.isNotBlank() -> patches.forEach { com.armsx2.ui.xmb.XmbCollected(c, node(it)) }
+                else -> grouped.forEach { (game, list) ->
+                    com.armsx2.ui.xmb.XmbCollected(
+                        c,
+                        com.armsx2.ui.xmb.XmbNode.Folder("patches.game.$game", game, c.icon, "${list.count { it.enabled }}/${list.size}", live = true) { list.map(::node) },
+                    )
+                }
+            }
+        }
+        return
+    }
+
+
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
             str("patches.ps3.header"),
@@ -118,31 +218,7 @@ fun Ps3PatchesTab(serial: String = "") {
 
         OutlinedButton(
             onClick = {
-                if (busy) return@OutlinedButton
-                busy = true
-                message = null
-                scope.launch {
-                    val r = withContext(Dispatchers.IO) { Ps3PatchRepo.download(context) }
-                    busy = false
-                    message = when (r) {
-                        is Ps3PatchRepo.Result.Ok -> {
-                            reload()
-                            // The rebuild dropped whatever Artemis patches the old merged list
-                            // held, so say how to get them back. Not needed on the Artemis
-                            // button's own rebuild, which downloads the collection anyway.
-                            "${r.count} " + str2("patches.ps3.imported") +
-                                if (r.rebuilt) "\n" + str2("patches.ps3.rebuilt") + " " +
-                                    str2("patches.ps3.rebuiltArtemis") else ""
-                        }
-                        // Named separately so a server or format problem does not
-                        // send people to check their wifi.
-                        Ps3PatchRepo.Result.Network -> str2("patches.ps3.downloadFailed")
-                        is Ps3PatchRepo.Result.Server ->
-                            str2("patches.ps3.serverError") + " (${r.code})"
-                        Ps3PatchRepo.Result.Parse -> str2("patches.ps3.parseFailed")
-                        Ps3PatchRepo.Result.Checksum -> str2("patches.ps3.checksumFailed")
-                    }
-                }
+                download()
             },
             modifier = Modifier
                 .fillMaxWidth()
@@ -156,25 +232,7 @@ fun Ps3PatchesTab(serial: String = "") {
         // download replaces, so having both is having more patches.
         OutlinedButton(
             onClick = {
-                if (busy) return@OutlinedButton
-                busy = true
-                message = null
-                scope.launch {
-                    val r = withContext(Dispatchers.IO) { Ps3PatchRepo.downloadArtemis(context) }
-                    busy = false
-                    message = when (r) {
-                        is Ps3PatchRepo.Result.Ok -> {
-                            reload()
-                            "${r.count} " + str2("patches.ps3.imported") +
-                                if (r.rebuilt) "\n" + str2("patches.ps3.rebuilt") else ""
-                        }
-                        Ps3PatchRepo.Result.Network -> str2("patches.ps3.downloadFailed")
-                        is Ps3PatchRepo.Result.Server ->
-                            str2("patches.ps3.serverError") + " (${r.code})"
-                        Ps3PatchRepo.Result.Parse -> str2("patches.ps3.parseFailed")
-                        Ps3PatchRepo.Result.Checksum -> str2("patches.ps3.checksumFailed")
-                    }
-                }
+                downloadArtemis()
             },
             modifier = Modifier
                 .fillMaxWidth()

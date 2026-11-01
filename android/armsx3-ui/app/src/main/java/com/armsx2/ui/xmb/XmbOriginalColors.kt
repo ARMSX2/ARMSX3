@@ -15,10 +15,11 @@ import kotlin.math.sin
  * the red one. Each is a CSS-style linear gradient: an angle (0 points up, 90 to the right) from
  * [Gradient.start] to [Gradient.end].
  *
- * The time of day dims the same colour rather than swapping it for another: a recording of a
- * real console shows October still in full colour at 23:08, where linkev's night gradients (fading
- * to black) had it nearly black from 20:00. Full from 07:00 to 22:00, easing down to [NIGHT] by
- * midnight and back up from 04:00. The month changes on the 1st, as it does on the console.
+ * The time of day darkens the same colour rather than swapping it for another: a recording of a
+ * real console shows October still in full colour at 23:08, and the console in the small hours is
+ * near black at the top and a dark brown at the foot. So full until 23:00, down to the night's
+ * level by midnight (the top much darker than the foot, as the console's is), and back up from
+ * 04:00 to full by 06:30. The month changes on the 1st, as it does on the console.
  */
 object XmbOriginalColors {
     /** Linear 0..1 RGB stops, the angle in degrees. */
@@ -56,28 +57,31 @@ object XmbOriginalColors {
         return FloatArray(3) { (day.start[it] + day.end[it]) / 2f }
     }
 
-    /** How bright the colour is in the small hours. */
-    private const val NIGHT = 0.6f
+    /** How bright the gradient's start (the top) and its end (the foot) are in the small hours. */
+    private const val NIGHT_START = 0.10f
+    private const val NIGHT_END = 0.30f
 
-    /** How bright the month's colour is at [hour] (0..24, fractional). */
-    fun brightness(hour: Float): Float {
+    /** How far into the night it is at [hour] (0..24, fractional): 0 by day, 1 in the small hours. */
+    fun night(hour: Float): Float {
         fun ease(x: Float): Float {
             val t = x.coerceIn(0f, 1f)
             return t * t * (3f - 2f * t)
         }
         return when {
-            hour < 4f -> NIGHT
-            hour < 7f -> NIGHT + (1f - NIGHT) * ease((hour - 4f) / 3f)
-            hour < 22f -> 1f
-            else -> 1f - (1f - NIGHT) * ease((hour - 22f) / 2f)
+            hour < 4f -> 1f
+            hour < 6.5f -> 1f - ease((hour - 4f) / 2.5f)
+            hour < 23f -> 0f
+            else -> ease(hour - 23f)
         }
     }
 
     /** The gradient for [month] (0 = January) at [hour]. */
     fun at(month: Int, hour: Float): Gradient {
         val day = DAY[month.coerceIn(0, 11)]
-        val b = brightness(hour)
-        return Gradient(day.angleDeg, FloatArray(3) { day.start[it] * b }, FloatArray(3) { day.end[it] * b })
+        val n = night(hour)
+        val s = 1f + (NIGHT_START - 1f) * n
+        val e = 1f + (NIGHT_END - 1f) * n
+        return Gradient(day.angleDeg, FloatArray(3) { day.start[it] * s }, FloatArray(3) { day.end[it] * e })
     }
 
     /**

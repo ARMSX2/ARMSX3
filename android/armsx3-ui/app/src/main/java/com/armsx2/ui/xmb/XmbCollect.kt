@@ -135,3 +135,19 @@ internal fun XmbHiddenHost(content: @Composable () -> Unit) {
         }
     }
 }
+
+/**
+ * A settings tab as an XMB list of its own: [content] composed out of sight while the list is
+ * open, its rows handed over (see [XmbCollector]). For a tab reached from somewhere other than
+ * the Settings column, as the in-game Controls tab reaches Skins and Hotkeys.
+ */
+@Composable
+fun xmbTabFolder(key: String, title: String, tex: String, content: @Composable () -> Unit): XmbNode {
+    val (on, off) = xmbOnOff()
+    val icon = XmbIcon("explore_category_sysconf", tex, "\u2699")
+    val collector = remember(key, on, off) { XmbCollector(on, off, icon) }
+    return XmbNode.Folder(
+        key, title, icon, live = true,
+        host = { CompositionLocalProvider(LocalXmbCollector provides collector) { content() } },
+    ) { collector.nodes }
+}

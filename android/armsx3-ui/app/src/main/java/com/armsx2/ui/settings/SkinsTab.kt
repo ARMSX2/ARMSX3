@@ -142,6 +142,112 @@ fun SkinsTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
         }
     }
 
+    // XMB mode: the skins as XMB lists, each shown as its own picture. Cross puts one on, Triangle
+    // deletes an imported one; Browse Skins lists the ones to download, and Cross gets one.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        val ok = str("action.ok")
+        val deleteWord = str("action.delete")
+        val loadingText = str("skins.browse.loading")
+        val failedText = str("skins.browse.failed")
+        val installingText = str("skins.importing")
+        val defaultTag = str("skins.defaultTag")
+        val byTag = str("skins.byAuthor")
+        val selectedText = if (perGame) str("skins.activeSkin.game") else str("skins.activeSkin")
+        val builtinPicture = ImageBitmap.imageResource(R.drawable.skin_preview_builtin)
+        val builtinPreviews = remember { ControllerSkinStore.BUILTIN.associate { it.id to ControllerSkinStore.builtinPreview(ctx, it) } }
+        androidx.compose.runtime.LaunchedEffect(status.value) {
+            val m = status.value ?: return@LaunchedEffect
+            com.armsx2.ui.xmb.XmbDialogs.target()?.tell(m, ok, error = false)
+            status.value = null
+        }
+        fun pick(id: String?) {
+            ControllerSkinStore.setActive(ctx, id, editSerial)
+            refresh.intValue++
+        }
+        fun install(r: SkinRepo.RemoteSkin) {
+            if (installing.value != null) return
+            installing.value = r.filePath
+            scope.launch {
+                val id = withContext(Dispatchers.IO) { SkinRepo.install(ctx, r) }
+                installing.value = null
+                if (id != null) {
+                    pick(id)
+                    status.value = I18n.get("skins.status.importedAndSelected")
+                } else {
+                    status.value = I18n.get("skins.browse.installFailed")
+                }
+            }
+        }
+        fun skin(key: String, name: String, picture: ImageBitmap?, on: Boolean, delete: (() -> Unit)?, select: () -> Unit) =
+            com.armsx2.ui.xmb.XmbNode.Action(
+                "skin.$key",
+                name,
+                if (picture != null) com.armsx2.ui.xmb.XmbIcon(bitmap = picture, shadow = false) else c.icon,
+                if (on) selectedText else null,
+                options = if (delete != null) listOf(com.armsx2.ui.xmb.XmbOption(deleteWord) { delete() }) else emptyList(),
+            ) { select() }
+        Column {
+            com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action("skins.folder", str("skins.importFolder"), c.icon) { folderLauncher.launch(null) })
+            com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action("skins.zip", str("skins.importZip"), c.icon) {
+                zipLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+            })
+            com.armsx2.ui.xmb.XmbCollected(
+                c,
+                com.armsx2.ui.xmb.XmbNode.Folder(
+                    "skins.browse", str("skins.browse"), c.icon, live = true,
+                    host = {
+                        androidx.compose.runtime.LaunchedEffect(Unit) {
+                            if (remote.value == null && !loadingRemote.value) {
+                                loadingRemote.value = true
+                                val list = withContext(Dispatchers.IO) { SkinRepo.fetch() }
+                                remote.value = list
+                                loadingRemote.value = false
+                            }
+                        }
+                    },
+                ) {
+                    val list = remote.value
+                    when {
+                        list == null -> listOf(com.armsx2.ui.xmb.XmbNode.Action("skins.browse.loading", loadingText, c.icon) {})
+                        list.isEmpty() -> listOf(com.armsx2.ui.xmb.XmbNode.Action("skins.browse.failed", failedText, c.icon) {})
+                        else -> list.map { r ->
+                            com.armsx2.ui.xmb.XmbNode.Action(
+                                "skins.remote.${r.filePath}",
+                                r.name,
+                                previews[r.filePath]?.let { com.armsx2.ui.xmb.XmbIcon(bitmap = it, shadow = false) } ?: c.icon,
+                                if (installing.value == r.filePath) installingText else listOf(byTag, r.author).joinToString(" ").takeIf { r.author.isNotBlank() },
+                            ) { install(r) }
+                        }
+                    }
+                },
+            )
+            if (gameScope && skinSerial != null) {
+                ToggleRow(str("skins.perGame.label"), perGame, description = str("skins.perGame.description")) { on ->
+                    if (on) ControllerSkinStore.setActive(ctx, ControllerSkinStore.activeForScope(ctx, null), skinSerial)
+                    else ControllerSkinStore.clearGameOverride(ctx, skinSerial)
+                    refresh.intValue++
+                }
+            }
+            ControllerSkinStore.BUILTIN.firstOrNull()?.let { first ->
+                com.armsx2.ui.xmb.XmbCollected(c, skin(first.id, "${first.name}  \u00B7  $defaultTag", builtinPreviews[first.id], activeId == first.id, null) { pick(first.id) })
+            }
+            com.armsx2.ui.xmb.XmbCollected(c, skin("builtin", "ARMSX2", builtinPicture, activeId == null, null) { pick(null) })
+            for (bs in ControllerSkinStore.BUILTIN.drop(1)) {
+                com.armsx2.ui.xmb.XmbCollected(c, skin(bs.id, bs.name, builtinPreviews[bs.id], activeId == bs.id, null) { pick(bs.id) })
+            }
+            for (s in skins) {
+                com.armsx2.ui.xmb.XmbCollected(
+                    c,
+                    skin(s.id, s.name, null, activeId == s.id, {
+                        ControllerSkinStore.delete(ctx, s.id)
+                        refresh.intValue++
+                    }) { pick(s.id) },
+                )
+            }
+        }
+        return
+    }
+
     Column(
         Modifier
             .fillMaxWidth()
