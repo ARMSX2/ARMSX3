@@ -59,7 +59,8 @@ object XmbTheme {
      */
     @Synchronized
     fun apply(context: Context, entry: LibraryBackground.Saved?) {
-        val key = entry?.folder?.path ?: ""
+        // Again once the firmware turns up: until then the sounds are the app's own.
+        val key = (entry?.folder?.path ?: "") + "|" + (XmbFirmware.devFlash() != null)
         if (key == applied && XmbSounds.loaded()) return
         applied = key
         val xmb = entry?.folder?.let { File(it, LibraryBackground.XMB_DIR) }?.takeIf { it.isDirectory }

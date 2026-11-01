@@ -41,15 +41,52 @@ object XmbFirmware {
     private val rcos = HashMap<String, Rco?>()
     private val images = HashMap<String, ImageBitmap?>()
 
+    // Nothing is remembered as missing while the firmware cannot be found at all: that is the case
+    // for a moment after launch, until the core has its data folder, and a miss remembered then
+    // kept the XMB on the app's own icons, font and sounds for the whole run.
+
     @Synchronized
-    private fun rco(name: String): Rco? = rcos.getOrPut(name) {
-        devFlash()?.let { Rco.open(File(it, "vsh/resource/$name.rco")) }
+    private fun rco(name: String): Rco? {
+        if (rcos.containsKey(name)) return rcos[name]
+        val dir = devFlash() ?: return null
+        return Rco.open(File(dir, "vsh/resource/$name.rco")).also { rcos[name] = it }
     }
 
-    /** The image [name] from the firmware's [rco] (no extension), decoded, or null. */
+    /**
+     * The image [name] from the firmware's [rco] (no extension), decoded, or null; over a soft dark
+     * shadow of itself with [shadow], as the XMB sets its icons off from the colour behind them
+     * (the firmware keeps such shadows for some, tex_game_shadow and the like, and makes the rest).
+     */
     @Synchronized
-    fun image(rco: String, name: String): ImageBitmap? = images.getOrPut("$rco/$name") {
-        rco(rco)?.image(name)?.let(Gim::decode)?.asImageBitmap()
+    fun image(rco: String, name: String, shadow: Boolean = false): ImageBitmap? {
+        val key = "$rco/$name" + if (shadow) "#shadow" else ""
+        if (images.containsKey(key)) return images[key]
+        val container = rco(rco) ?: return null
+        val decoded = container.image(name)?.let(Gim::decode)?.let { if (shadow) withShadow(it) else it }
+        return decoded?.asImageBitmap().also { images[key] = it }
+    }
+
+    private fun withShadow(icon: android.graphics.Bitmap): android.graphics.Bitmap {
+        val offset = IntArray(2)
+        val blur = android.graphics.Paint().apply {
+            maskFilter = android.graphics.BlurMaskFilter((icon.width * 0.05f).coerceAtLeast(2f), android.graphics.BlurMaskFilter.Blur.NORMAL)
+        }
+        val alpha = icon.extractAlpha(blur, offset)
+        val out = android.graphics.Bitmap.createBitmap(icon.width, icon.height, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(out)
+        canvas.drawBitmap(
+            alpha,
+            offset[0].toFloat(),
+            offset[1] + icon.height * 0.02f,
+            android.graphics.Paint().apply {
+                color = android.graphics.Color.BLACK
+                this.alpha = 100
+            },
+        )
+        canvas.drawBitmap(icon, 0f, 0f, null)
+        alpha.recycle()
+        icon.recycle()
+        return out
     }
 
     /** The sound [name] from system_plugin.rco as channels of PCM, or null. */
@@ -65,9 +102,12 @@ object XmbFirmware {
      * only for its words is not kept: explore_plugin_full.rco alone is 2.4 MB.
      */
     @Synchronized
-    fun strings(rco: String, language: Int): Map<String, String> = texts.getOrPut("$rco/$language") {
-        val container = rcos[rco] ?: devFlash()?.let { Rco.open(File(it, "vsh/resource/$rco.rco")) }
-        container?.strings(language) ?: emptyMap()
+    fun strings(rco: String, language: Int): Map<String, String> {
+        val key = "$rco/$language"
+        texts[key]?.let { return it }
+        val dir = devFlash() ?: return emptyMap()
+        val container = rcos[rco] ?: Rco.open(File(dir, "vsh/resource/$rco.rco"))
+        return (container?.strings(language) ?: emptyMap()).also { texts[key] = it }
     }
 
     /** The console's number for the app's language [code], or null for one the console never had. */
@@ -101,8 +141,9 @@ object XmbFirmware {
      */
     fun typeface(): Typeface? {
         if (typefaceLoaded) return cachedTypeface
+        // Not remembered as missing until the firmware can be found (see rco above).
+        val fontDir = devFlash()?.let { File(it, "data/font") } ?: return null
         val made = runCatching {
-            val fontDir = devFlash()?.let { File(it, "data/font") } ?: return@runCatching null
             fun family(name: String): FontFamily? = File(fontDir, name).takeIf { it.isFile }
                 ?.let { runCatching { FontFamily.Builder(Font.Builder(it).build()).build() }.getOrNull() }
             val latin = family("SCE-PS3-RD-R-LATIN.TTF") ?: return@runCatching null
@@ -114,6 +155,36 @@ object XmbFirmware {
         cachedTypeface = made
         typefaceLoaded = true
         return made
+    }
+}
+
+/**
+ * Loading what the XMB takes from the firmware once the firmware can be found. That is a moment
+ * after launch, once the core has its data folder, so the XMB waits for it a while rather than
+ * settling for the app's own words, icons and sounds.
+ */
+object XmbFirmwareReady {
+    private const val WAIT_MS = 20_000L
+    private const val STEP_MS = 250L
+
+    /** The firmware's words for [language], and [theme]'s icons and sounds (or the firmware's). */
+    suspend fun load(context: Context, language: String, theme: com.armsx2.ui.home.LibraryBackground.Saved?) {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            awaitFirmware()
+            XmbText.load(language)
+            XmbTheme.apply(context, theme)
+        }
+    }
+
+    /** Wait for the firmware, up to [WAIT_MS]: true once it is there, false without it. */
+    suspend fun awaitFirmware(limit: Long = WAIT_MS): Boolean {
+        var waited = 0L
+        while (XmbFirmware.devFlash() == null) {
+            if (waited >= limit) return false
+            kotlinx.coroutines.delay(STEP_MS)
+            waited += STEP_MS
+        }
+        return true
     }
 }
 
@@ -137,6 +208,7 @@ object XmbText {
     fun load(code: String) {
         if (loadedFor == code) return
         val language = XmbFirmware.consoleLanguage(code)
+        if (language != null && XmbFirmware.devFlash() == null) return
         table.value = if (language == null) emptyMap() else SOURCES.associateWith { XmbFirmware.strings(it, language) }
         loadedFor = code
     }
@@ -144,8 +216,13 @@ object XmbText {
     /** The firmware's [id] from [rco], or [fallback]. Reading it in composition follows [load]. */
     fun get(rco: String, id: String, fallback: String): String = find(rco, id) ?: fallback
 
-    /** The firmware's [id] from [rco], or null. */
-    fun find(rco: String, id: String): String? = table.value[rco]?.get(id)?.takeIf { it.isNotBlank() }
+    /**
+     * The firmware's [id] from [rco], or null. The console's button marks (private-use characters
+     * its own font draws as the Triangle or Circle) are left out: the XMB draws its own beside the
+     * words, and any other font draws them as empty boxes.
+     */
+    fun find(rco: String, id: String): String? =
+        table.value[rco]?.get(id)?.filterNot { it in '\uE000'..'\uF8FF' }?.trim()?.takeIf { it.isNotBlank() }
 }
 
 /** The firmware's words for [id] in [rco], or the app's string [key]. */

@@ -21,7 +21,8 @@ import java.util.zip.Inflater
  *  - A table entry is a 0x28-byte header (label offset at +4, child count at +0x10, distance to
  *    the next sibling at +0x14) followed by its own fields:
  *      image: u16 format (5 = GIM), u16 compression (1 = zlib), u32 packed size, u32 offset into
- *             the image data, and the unpacked size when compressed;
+ *             the image data, a word (1), and the unpacked size when compressed (checked against all
+ *             764 compressed images in the firmware's XMB containers);
  *      sound: u16 format (1 = VAG), u8 channel count, a pad byte, u32 total, u32 offset, then a
  *             (size, offset) pair per channel, each channel a whole VAG file;
  *      text:  one entry per language: u16 language, u16 encoding (1 = UTF-16), u32 count, then
@@ -75,7 +76,7 @@ class Rco private constructor(private val file: ByteArray, private val table: By
                 val compression = be16(table, entry + 0x2A)
                 val packed = be32(table, entry + 0x2C)
                 val offset = be32(table, entry + 0x30)
-                val size = if (compression != 0) be32(table, entry + 0x34) else packed
+                val size = if (compression != 0) be32(table, entry + 0x38) else packed
                 if (packed in 1..MAX_IMAGE && size in 1..MAX_IMAGE) {
                     images[label(labels, name)] = ImageEntry(compression, packed.toInt(), offset, size.toInt())
                 }

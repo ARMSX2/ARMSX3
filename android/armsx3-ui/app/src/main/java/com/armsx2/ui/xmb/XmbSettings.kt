@@ -57,7 +57,7 @@ import kotlin.math.roundToInt
  * are where edits are remembered: global from the library, the running title in game.
  */
 @Composable
-fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = null): List<XmbNode> {
+fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = null, inGame: Boolean = false): List<XmbNode> {
     val forGame = game != null
     fun tab(category: SettingsCategory, title: String, icon: String) = XmbNode.Panel(
         key = "settings.tab.${category.name}",
@@ -82,7 +82,7 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
             add(tab(SettingsCategory.Patches, patches, "tex_update"))
             if (forGame) {
                 add(tab(SettingsCategory.Mods, mods, "tex_edyviewer"))
-            } else {
+            } else if (!inGame) {
                 add(XmbNode.Action("settings.underclock", underclock, XmbIcon("explore_category_sysconf", "tex_power", "\u2699")) {
                     UiNavigator.navigate(AppRoute.Underclocking)
                 })
@@ -134,7 +134,8 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
         )
     }
 
-    if (forGame) return listOf(gameSettings, display, sound, accessory, network, debug)
+    // In a game, the running title's settings only: the app's own and the firmware are for the library.
+    if (forGame || inGame) return listOf(gameSettings, display, sound, accessory, network, debug)
 
     val update = XmbNode.Action(
         "settings.update",
@@ -253,7 +254,13 @@ private fun xmbThemeSettings(): XmbNode {
                 key = "theme.color",
                 title = colorTitle,
                 icon = icon,
-                editor = XmbEditor.Choice(colorLabels, { XmbMode.themeColor.value + 1 }) { XmbMode.setThemeColor(it - 1) },
+                editor = XmbEditor.Choice(colorLabels, { XmbMode.themeColor.value + 1 }) { XmbMode.setThemeColor(it - 1) }.apply {
+                    // Default as the console marks it, in silver; then each month's own colour.
+                    swatches = listOf(androidx.compose.ui.graphics.Color(0xFFC0C0C0)) + (0 until 12).map { month ->
+                        val c = XmbOriginalColors.swatch(month)
+                        androidx.compose.ui.graphics.Color(c[0], c[1], c[2])
+                    }
+                },
                 value = { colorLabels.getOrElse(XmbMode.themeColor.value + 1) { colorDefault } },
                 description = colorDesc,
             ),
@@ -486,7 +493,12 @@ object XmbCoreSettings {
                 icon = icon,
                 sub = current(s).take(48),
             ) {
-                com.armsx2.navigation.UiNavigator.navigate(com.armsx2.navigation.AppRoute.CoreSettings)
+                // The full screen for what has no picker here: over the game when in one.
+                if (com.armsx2.ui.WindowImpl.overlayVisible.value) {
+                    com.armsx2.ui.WindowImpl.openInGameScreen(com.armsx2.ui.InGameScreen.CoreSettings)
+                } else {
+                    com.armsx2.navigation.UiNavigator.navigate(com.armsx2.navigation.AppRoute.CoreSettings)
+                }
             }
         }
     }

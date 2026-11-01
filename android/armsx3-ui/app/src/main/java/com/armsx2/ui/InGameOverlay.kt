@@ -157,6 +157,8 @@ object InGameOverlay {
 
     fun open() {
         if (WindowImpl.overlayVisible.value) return
+        // XMB mode opens on the XMB each time, even after Quick Menu showed this pause menu.
+        com.armsx2.ui.xmb.XmbInGame.classic.value = false
         // getPauseGameSerial() formats as "SLUS-21621 (A422BB13)", but GameInfo.settingsKey — what
         // every other reader and writer keys on — is the BARE serial. Used raw, this stored
         // settings under "SLUS-21621 (A422BB13)" while boot looked up "SLUS-21621", so per-game

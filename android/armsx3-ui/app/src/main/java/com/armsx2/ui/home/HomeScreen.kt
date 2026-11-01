@@ -1411,7 +1411,8 @@ internal fun LibraryBackdrop() {
     val context = LocalContext.current
     // XMB mode has a background of its own: the XMB theme's, or the console's wave in its colour.
     if (com.armsx2.ui.xmb.XmbMode.active.value) {
-        val theme = com.armsx2.ui.xmb.XmbTheme.entry()
+        // The boot animation is the console's own, on its wave, whatever the theme.
+        val theme = com.armsx2.ui.xmb.XmbTheme.entry()?.takeUnless { com.armsx2.ui.xmb.XmbMode.booting.value }
         if (theme == null) {
             if (LibraryBackground.animated2D.value) LibraryWaveBackground(Modifier.fillMaxSize()) else XmbWave()
         } else {

@@ -158,7 +158,13 @@ object WindowImpl {
             }
 
             if (overlayVisible.value) {
-                com.armsx2.ui.emulation.EmulationMenuScreen()
+                // XMB mode: the XMB, as the console shows it over a game; Quick Menu there opens this
+                // pause menu instead until it next closes.
+                if (com.armsx2.ui.xmb.XmbMode.active.value && !com.armsx2.ui.xmb.XmbInGame.classic.value) {
+                    com.armsx2.ui.xmb.XmbInGameMenu()
+                } else {
+                    com.armsx2.ui.emulation.EmulationMenuScreen()
+                }
             }
 
             // Full manager screen over the paused game; dismiss (back or the screen's

@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.edit
@@ -92,11 +93,11 @@ fun XmbHome(
         // A search typed in the library would otherwise hide games here, with no search box to clear it.
         if (viewModel.state.value.query.isNotEmpty()) viewModel.setQuery("")
     }
-    // The theme's icons and sounds, or the firmware's, read again whenever the theme changes.
-    val theme = XmbTheme.entry()
-    LaunchedEffect(theme?.folder) { withContext(Dispatchers.IO) { XmbTheme.apply(context.applicationContext, theme) } }
+    // The firmware's words, and the theme's icons and sounds or the firmware's, read again whenever
+    // the language or the theme changes.
     val language = I18n.current
-    LaunchedEffect(language) { withContext(Dispatchers.IO) { XmbText.load(language) } }
+    val theme = XmbTheme.entry()
+    LaunchedEffect(language, theme?.folder) { XmbFirmwareReady.load(context.applicationContext, language, theme) }
     LaunchedEffect(controller) {
         snapshotFlow { controller.column to controller.focus.toMap() }.collect { XmbHomeState.save() }
     }
@@ -140,6 +141,10 @@ private fun xmbHomeColumns(
     val no = fw(full, "msg_no", "xmb.no")
 
     val turnOffAsk = fw(full, "msg_turnoff_system_ask", "xmb.turnOff.ask")
+    // The ARMSX3 mark, white like the console's item icons, and on a round badge where the console's
+    // PlayStation Network badge stood.
+    val markIcon = remember { XmbWordmark.markIcon(192).asImageBitmap() }
+    val markBadge = remember { XmbWordmark.markBadge(192).asImageBitmap() }
     val users = XmbColumn(
         key = "users",
         title = fw("xmb_ingame", "msg_user", "xmb.cat.users"),
@@ -148,7 +153,7 @@ private fun xmbHomeColumns(
             XmbNode.Action("users.off", fw(full, "msg_power_off_console2", "xmb.turnOff"), XmbIcon("explore_category_user", "tex_power_off", "⏻")) {
                 controller.ask(turnOffAsk, yes, no) { MainActivityRuntime.exitApp() }
             },
-            XmbNode.Action("users.exit", str("xmb.exit"), XmbIcon(model = R.drawable.ic_armsx3_mark), str("xmb.exit.desc")) {
+            XmbNode.Action("users.exit", str("xmb.exit"), XmbIcon(bitmap = markIcon), str("xmb.exit.desc")) {
                 XmbMode.exit()
             },
         ),
@@ -236,7 +241,7 @@ private fun xmbHomeColumns(
     val armsx3 = XmbColumn(
         key = "armsx3",
         title = "ARMSX3",
-        icon = XmbIcon(model = R.mipmap.ic_launcher_round, glyph = "◉"),
+        icon = XmbIcon(bitmap = markBadge, glyph = "◉"),
         items = listOf(
             XmbNode.Action("armsx3.news", str("news.title"), XmbIcon("explore_category_network", "tex_onlinemanual", "📰")) {
                 go(AppRoute.News)
@@ -247,7 +252,7 @@ private fun xmbHomeColumns(
             XmbNode.Action("armsx3.github", str("about.github"), XmbIcon(model = R.drawable.ic_github, glyph = "🐙")) {
                 openExternalUrl(context, GithubUrl)
             },
-            XmbNode.Action("armsx3.about", str("about.title"), XmbIcon(model = R.drawable.ic_armsx3_mark)) {
+            XmbNode.Action("armsx3.about", str("about.title"), XmbIcon(bitmap = markIcon)) {
                 go(AppRoute.About)
             },
         ),

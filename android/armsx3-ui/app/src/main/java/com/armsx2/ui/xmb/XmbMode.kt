@@ -50,6 +50,8 @@ object XmbMode {
         active.value = on
         booting.value = on
         LibraryBackgroundColorPreferences.xmbModeGl = on
+        // The boot animation brings the wave and the colour up from black; dark from the first frame.
+        if (on) holdForBoot()
         themeColor.value = prefs.getInt(ColorKey, -1).coerceIn(-1, 11)
         pinnedMonth = themeColor.value
         gameBackgrounds.value = prefs.getBoolean(BackgroundsKey, true)
@@ -86,6 +88,7 @@ object XmbMode {
         active.value = true
         booting.value = true
         LibraryBackgroundColorPreferences.xmbModeGl = true
+        holdForBoot()
         MainActivityRuntime.prefs.edit { putBoolean(PREF_KEY, true) }
         com.armsx2.navigation.UiNavigator.home()
     }
@@ -94,11 +97,20 @@ object XmbMode {
     fun exit() {
         active.value = false
         booting.value = false
+        XmbOriginalColors.bootWave = 1f
+        XmbOriginalColors.bootColor = 1f
         LibraryBackgroundColorPreferences.xmbModeGl = false
         MainActivityRuntime.prefs.edit { putBoolean(PREF_KEY, false) }
     }
 
     fun bootFinished() {
         booting.value = false
+        XmbOriginalColors.bootWave = 1f
+        XmbOriginalColors.bootColor = 1f
+    }
+
+    private fun holdForBoot() {
+        XmbOriginalColors.bootWave = 0f
+        XmbOriginalColors.bootColor = 0f
     }
 }

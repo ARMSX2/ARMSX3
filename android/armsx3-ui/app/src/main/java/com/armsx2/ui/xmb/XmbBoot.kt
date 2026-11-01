@@ -43,37 +43,43 @@ import kotlin.math.sqrt
 /**
  * The console's boot animation, with ARMSX3 where it said PS3.
  *
- * The timing is the firmware's own (coldboot.raf's script, coldboot.jsx, read out of the user's
- * dev_flash): the logo is lit by a point light that sweeps in from the left over 1.3 s from 1.5 s,
- * a glow of it rises at 2.55 s for half a second and falls at 3.3 s as the footer line comes in, and
- * everything fades over 1.2 s from 4.3 s. The light's falloff uses the script's attenuation, so the
- * logo lights from the side the light comes from, as on the console.
+ * The order and timing are the console's, measured off a recording of a real PS3 starting (less the
+ * two and a half seconds of black from power-on): the wave comes up on its own over black, the
+ * logo is lit from left to right at the right of the screen, the small line comes in under it, the
+ * colour rises behind them from black to the month's own, the logo goes, and the XMB's icons come
+ * in as the colour arrives. The light that sweeps the logo uses the falloff of the firmware's own
+ * coldboot script (coldboot.jsx), so the logo lights from the side the light comes from.
  *
- * Behind it the XMB comes up from black: dim while the logo shows, then full as the logo fades, and
- * the icons last. [onProgress] reports the seconds for that last part.
+ * The wave and the colour are XmbGlView's own, held down through [XmbOriginalColors.bootWave] and
+ * [XmbOriginalColors.bootColor]. [onProgress] reports the seconds, for the icons at the end.
  */
 object XmbBootTimeline {
-    const val LIGHT_START = 1.5f
-    const val LIGHT_TIME = 1.3f
-    const val GLOW_START = 2.55f
-    const val GLOW_TIME = 0.5f
-    const val WHOLE_START = 3.3f
-    const val WHOLE_TIME = 0.5f
-    const val FADE_START = 4.3f
-    const val FADE_TIME = 1.2f
-    const val REVEAL_START = 5.2f
-    const val REVEAL_TIME = 1.0f
-    const val END = REVEAL_START + REVEAL_TIME
+    const val BLACK_TIME = 0.5f
+    const val WAVE_START = 0.5f
+    const val WAVE_TIME = 1.5f
+    const val LIGHT_START = 2.0f
+    const val LIGHT_TIME = 0.75f
+    const val CAPTION_START = 2.7f
+    const val CAPTION_TIME = 0.35f
+    const val COLOR_START = 2.5f
+    const val COLOR_TIME = 4.0f
+    const val FADE_START = 4.75f
+    const val FADE_TIME = 0.5f
+    const val REVEAL_START = 5.6f
+    const val REVEAL_TIME = 0.9f
+    const val END = 6.5f
 
     fun clamp01(x: Float) = x.coerceIn(0f, 1f)
     fun ease(x: Float): Float = clamp01(x).let { it * it * (3f - 2f * it) }
 
-    /** How dark the XMB behind is: black, then dim while the logo is lit, then gone. */
-    fun darkness(t: Float): Float = when {
-        t < LIGHT_START -> 1f
-        t < FADE_START -> 1f - 0.5f * ease((t - LIGHT_START) / (FADE_START - LIGHT_START))
-        else -> 0.5f * (1f - ease((t - FADE_START) / (FADE_TIME + 0.6f)))
-    }
+    /** The black in front of everything before the wave starts (and the GL view has drawn). */
+    fun black(t: Float): Float = 1f - ease((t - BLACK_TIME) / 0.25f)
+
+    /** How much of the wave shows. */
+    fun wave(t: Float): Float = ease((t - WAVE_START) / WAVE_TIME)
+
+    /** How much of the colour shows. */
+    fun color(t: Float): Float = ease((t - COLOR_START) / COLOR_TIME)
 
     /** 0..1 as the XMB's own icons come in, at the end. */
     fun reveal(t: Float): Float = ease((t - REVEAL_START) / REVEAL_TIME)
@@ -82,37 +88,59 @@ object XmbBootTimeline {
 @Composable
 fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
     val context = LocalContext.current
-    val layers by produceState<XmbWordmark.Layers?>(null) {
-        value = withContext(Dispatchers.Default) {
-            runCatching { XmbWordmark.render(1400, withContext(Dispatchers.IO) { XmbFirmware.typeface() }) }.getOrNull()
+    // The firmware's font and boot sound, found a moment after launch (once the core has its data
+    // folder), then the logo drawn in that font and the sound made ready, so the two start together.
+    val ready by produceState<BootReady?>(null) {
+        value = withContext(Dispatchers.IO) {
+            XmbFirmwareReady.awaitFirmware(FIRMWARE_WAIT_MS)
+            val layers = runCatching { XmbWordmark.render(LOGO_LETTER_PX, XmbFirmware.typeface()) }.getOrNull()
+            BootReady(layers, if (layers != null) XmbBootSound.prepare(context) else null)
         }
     }
+    val layers = ready?.layers
     var t by remember { mutableFloatStateOf(0f) }
     var skipped by remember { mutableStateOf(false) }
     val finished by rememberUpdatedState(onFinished)
     val progress by rememberUpdatedState(onProgress)
 
     DisposableEffect(Unit) {
-        val sound = XmbBootSound.start(context)
         XmbInput.blocked = true
         XmbInput.skip = { skipped = true }
         com.armsx2.LibraryMusic.pause()
+        XmbOriginalColors.bootWave = 0f
+        XmbOriginalColors.bootColor = 0f
         onDispose {
-            sound?.let { runCatching { it.stop(); it.release() } }
             XmbInput.blocked = false
             XmbInput.skip = null
+            XmbOriginalColors.bootWave = 1f
+            XmbOriginalColors.bootColor = 1f
             com.armsx2.LibraryMusic.resume()
         }
     }
-    LaunchedEffect(layers != null) {
-        // The clock starts once the logo is ready, so a slow first frame cannot eat the sweep.
-        if (layers == null) return@LaunchedEffect
+    DisposableEffect(ready) {
+        val sound = ready?.sound
+        onDispose { sound?.let { runCatching { it.stop(); it.release() } } }
+    }
+    LaunchedEffect(ready) {
+        val r = ready ?: return@LaunchedEffect
+        // Without a logo to draw there is nothing to show: straight to the XMB.
+        if (r.layers == null) {
+            XmbOriginalColors.bootWave = 1f
+            XmbOriginalColors.bootColor = 1f
+            finished()
+            return@LaunchedEffect
+        }
+        // The clock and the sound start together, once the logo is ready, so a slow first frame
+        // cannot eat the sweep or put the sound ahead of it.
+        r.sound?.let { runCatching { it.start() } }
         val start = withFrameNanos { it }
         while (true) {
             val now = withFrameNanos { it }
             var seconds = (now - start) / 1_000_000_000f
             if (skipped) seconds = maxOf(seconds, XmbBootTimeline.FADE_START + XmbBootTimeline.FADE_TIME)
             t = seconds
+            XmbOriginalColors.bootWave = XmbBootTimeline.wave(seconds)
+            XmbOriginalColors.bootColor = XmbBootTimeline.color(seconds)
             progress(seconds)
             if (seconds >= XmbBootTimeline.END) break
         }
@@ -130,30 +158,35 @@ fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
             .fillMaxSize()
             .pointerInput(Unit) { detectTapGestures { skipped = true } },
     ) {
-        // The XMB behind, from black to bright.
-        Box(Modifier.fillMaxSize().graphicsLayer { alpha = XmbBootTimeline.darkness(t) }.background(Color.Black))
+        // Black until the wave starts, so nothing of the library shows while GL comes up.
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = XmbBootTimeline.black(t) }.background(Color.Black))
         val l = layers ?: return@BoxWithConstraints
         val logo = remember(l) { l.logo.asImageBitmap() }
-        val footer = remember(l) { l.footer.asImageBitmap() }
-        val glow = remember(l) { l.glow.asImageBitmap() }
+        val caption = remember(l) { l.caption.asImageBitmap() }
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
-        // The scene's logo plane is 0.32 of the screen's height at 16:9; keep that, narrower on a
-        // tall screen so the word fits across it.
-        val boxW = minOf(0.64f * h, 0.86f * w)
-        val boxH = boxW / 2f
-        val left = (w - boxW) / 2f
-        val top = (h - boxH) / 2f
+        // Where the console puts its logo, in a 16:9 frame fitted to the screen: the word's letters
+        // 0.066 of the frame high (the PS3 letters were 0.078; ARMSX3 has twice as many), its middle
+        // 0.495 down, the whole ending 0.925 across.
+        val frameW = minOf(w, h * 16f / 9f)
+        val frameH = frameW * 9f / 16f
+        val frameLeft = (w - frameW) / 2f
+        val frameTop = (h - frameH) / 2f
+        val unit = 0.066f * frameH
+        val boxW = l.unitsWide * unit
+        val boxH = l.unitsHigh * unit
+        val left = frameLeft + 0.925f * frameW - boxW
+        val top = frameTop + 0.495f * frameH - (l.wordTop + 0.5f) * unit
 
         // The logo, lit. Drawn into its own layer so the light can mask it.
         Canvas(Modifier.fillMaxSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }) {
             val light = light(t)
-            val logoAlpha = XmbBootTimeline.ease(t / XmbBootTimeline.LIGHT_START) * (1f - fade(t))
+            val logoAlpha = 1f - fade(t)
             if (light == null || logoAlpha <= 0f) return@Canvas
             drawLayer(logo, left, top, boxW, boxH, logoAlpha)
-            // Scene units to pixels: the plane is 2.56 units wide.
+            // Scene units to pixels: the script's logo plane is 2.56 units wide.
             val s = boxW / 2.56f
-            val centre = Offset(w / 2f + light.x * s, h / 2f - light.y * s)
+            val centre = Offset(left + boxW / 2f + light.x * s, top + boxH / 2f - light.y * s)
             drawRect(
                 Brush.radialGradient(
                     *light.stops,
@@ -164,11 +197,8 @@ fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
             )
         }
         Canvas(Modifier.fillMaxSize()) {
-            val glowAlpha = XmbBootTimeline.ease((t - XmbBootTimeline.GLOW_START) / XmbBootTimeline.GLOW_TIME) *
-                (1f - XmbBootTimeline.ease((t - XmbBootTimeline.WHOLE_START) / XmbBootTimeline.WHOLE_TIME))
-            if (glowAlpha > 0f) drawLayer(glow, left, top, boxW, boxH, glowAlpha)
-            val footerAlpha = XmbBootTimeline.clamp01((t - XmbBootTimeline.WHOLE_START) / XmbBootTimeline.WHOLE_TIME) * (1f - fade(t))
-            if (footerAlpha > 0f) drawLayer(footer, left, top, boxW, boxH, footerAlpha)
+            val captionAlpha = XmbBootTimeline.ease((t - XmbBootTimeline.CAPTION_START) / XmbBootTimeline.CAPTION_TIME) * (1f - fade(t))
+            if (captionAlpha > 0f) drawLayer(caption, left, top, boxW, boxH, captionAlpha)
         }
     }
 }
@@ -234,23 +264,34 @@ private fun light(t: Float): Light? {
  * The console's startup sound, from the user's firmware (coldboot_stereo.ac3). Played by the
  * platform where it decodes AC3, and through the core's FFmpeg where it does not.
  */
+/** What the boot needs before its clock starts: the logo, and the boot sound when there is one. */
+private class BootReady(val layers: XmbWordmark.Layers?, val sound: MediaPlayer?)
+
+/** How long the boot waits for the firmware's font and sound before going on without them. */
+private const val FIRMWARE_WAIT_MS = 1500L
+
+/** The logo is drawn with letters this tall, then scaled to the screen. */
+private const val LOGO_LETTER_PX = 120f
+
 object XmbBootSound {
-    fun start(context: Context): MediaPlayer? {
+    /** The firmware's boot sound, decoded and prepared to start at once, or null. Off the main thread. */
+    fun prepare(context: Context): MediaPlayer? {
         val ac3 = XmbFirmware.file("vsh/resource/coldboot_stereo.ac3") ?: return null
         val source = XmbMedia.decodedAudio(context, ac3) ?: ac3
-        return runCatching {
-            MediaPlayer().apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_GAME)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build(),
-                )
-                setDataSource(source.absolutePath)
-                setOnPreparedListener { it.start() }
-                setOnErrorListener { _, _, _ -> true }
-                prepareAsync()
-            }
-        }.getOrNull()
+        val player = MediaPlayer()
+        return try {
+            player.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_GAME)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build(),
+            )
+            player.setDataSource(source.absolutePath)
+            player.prepare()
+            player
+        } catch (_: Exception) {
+            player.release()
+            null
+        }
     }
 }

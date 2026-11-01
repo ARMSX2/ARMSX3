@@ -99,6 +99,8 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
         private var bgProg = 0
         private var waveProg = 0
         private var bgVao = 0
+        private var sparkProg = 0
+        private var sparkVao = 0
         private var gridVao = 0
         private var gridIndexCount = 0
         private var splineTex = 0
@@ -174,8 +176,10 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
                 // The PS3's "Original" colour for this month and time of day (XMB mode, or the
                 // Monthly setting). Linear, as the CSS gradients it was measured into are.
                 val month = com.armsx2.ui.xmb.XmbOriginalColors.now()
-                top = month.start
-                bot = month.end
+                // From black while XMB mode's boot animation brings the colour up (1 otherwise).
+                val level = com.armsx2.ui.xmb.XmbOriginalColors.bootColor
+                top = FloatArray(3) { month.start[it] * level }
+                bot = FloatArray(3) { month.end[it] * level }
                 val d = com.armsx2.ui.xmb.XmbOriginalColors.shaderDirection(month.angleDeg, width, height)
                 dirX = d[0]
                 dirY = d[1]
@@ -223,13 +227,30 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             GLES30.glUniform1f(u("ffdYAmp"), FFD_Y_AMP)
             GLES30.glUniform1f(u("ffdZAmp"), FFD_Z_AMP)
             GLES30.glUniform1f(u("zDetailScale"), Z_DETAIL_SCALE)
-            GLES30.glUniform1f(u("opacity"), OPACITY)
+            // XMB mode: the console's band, lower on the screen and fanning out at the edges.
+            GLES30.glUniform1f(u("uXmb"), if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl) 1f else 0f)
+            // The wave comes up on its own, over black, at the start of XMB mode's boot animation.
+            val waveLevel = if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.useMonthlyGl) com.armsx2.ui.xmb.XmbOriginalColors.bootWave else 1f
+            GLES30.glUniform1f(u("opacity"), OPACITY * waveLevel)
             GLES30.glUniform1f(u("brightness"), BRIGHTNESS)
             GLES30.glUniform1f(u("fresnelPower"), FRESNEL_POWER)
             GLES30.glUniform1f(u("fresnelScale"), FRESNEL_SCALE)
             GLES30.glBindVertexArray(gridVao)
             GLES30.glDrawElements(GLES30.GL_TRIANGLE_STRIP, gridIndexCount, GLES30.GL_UNSIGNED_SHORT, 0)
             GLES30.glBindVertexArray(0)
+
+            // XMB mode: the console's sparkles, specks of light drifting and twinkling about the wave.
+            if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl) {
+                GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE)
+                GLES30.glUseProgram(sparkProg)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uTime"), timeSec)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uSize"), height / 360f)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uLevel"), com.armsx2.ui.xmb.XmbOriginalColors.bootWave)
+                GLES30.glBindVertexArray(sparkVao)
+                GLES30.glDrawArrays(GLES30.GL_POINTS, 0, SPARKS)
+                GLES30.glBindVertexArray(0)
+                GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+            }
         }
 
         /** Port of linkev writeDisplacementTexture: 28 control points per row from band + legacy
@@ -274,6 +295,8 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             bgProg = link(BG_VS, BG_FS)
             waveProg = link(WAVE_VS, WAVE_FS)
             bgVao = makeFullscreenQuad()
+            sparkProg = link(SPARK_VS, SPARK_FS)
+            sparkVao = makeSparks()
             makeGrid(100)
             makeSplineTexture()
         }
@@ -312,6 +335,30 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             val loc = GLES30.glGetAttribLocation(bgProg, "aPos")
             GLES30.glEnableVertexAttribArray(loc)
             GLES30.glVertexAttribPointer(loc, 2, GLES30.GL_FLOAT, false, 0, 0)
+            GLES30.glBindVertexArray(0)
+            return vao[0]
+        }
+
+        /** Each speck: where it starts (x, y in clip space, gathered about the wave), its drift, a phase. */
+        private fun makeSparks(): Int {
+            val rnd = java.util.Random(0x5EEDL)
+            val data = FloatArray(SPARKS * 4)
+            for (i in 0 until SPARKS) {
+                data[i * 4] = rnd.nextFloat() * 2.4f - 1.2f
+                // About the wave, which XMB mode draws lower (see the wave's uXmb).
+                data[i * 4 + 1] = (rnd.nextGaussian().toFloat() * 0.32f - 0.15f).coerceIn(-0.9f, 0.8f)
+                data[i * 4 + 2] = 0.006f + rnd.nextFloat() * 0.018f
+                data[i * 4 + 3] = rnd.nextFloat()
+            }
+            val vao = IntArray(1); GLES30.glGenVertexArrays(1, vao, 0); GLES30.glBindVertexArray(vao[0])
+            val buf = IntArray(1); GLES30.glGenBuffers(1, buf, 0)
+            GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, buf[0])
+            val fb = ByteBuffer.allocateDirect(data.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+            fb.put(data).position(0)
+            GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, data.size * 4, fb, GLES30.GL_STATIC_DRAW)
+            val loc = GLES30.glGetAttribLocation(sparkProg, "aSpark")
+            GLES30.glEnableVertexAttribArray(loc)
+            GLES30.glVertexAttribPointer(loc, 4, GLES30.GL_FLOAT, false, 0, 0)
             GLES30.glBindVertexArray(0)
             return vao[0]
         }
@@ -474,6 +521,34 @@ void main() {
   gl_Position = vec4(aPos, 0.0, 1.0);
 }"""
 
+        private const val SPARKS = 56
+
+
+        private const val SPARK_VS = """#version 300 es
+precision highp float;
+in vec4 aSpark;
+uniform float uTime;
+uniform float uSize;
+out float vAlpha;
+void main() {
+  float x = mod(aSpark.x - uTime * aSpark.z + 1.2, 2.4) - 1.2;
+  float y = aSpark.y + 0.025 * sin(uTime * 0.5 + aSpark.w * 6.2832);
+  gl_Position = vec4(x, y, 0.0, 1.0);
+  float tw = 0.5 + 0.5 * sin(uTime * (0.7 + aSpark.w * 1.6) + aSpark.w * 40.0);
+  vAlpha = tw * tw * tw;
+  gl_PointSize = uSize * (1.0 + fract(aSpark.w * 7.31) * 1.6);
+}"""
+
+        private const val SPARK_FS = """#version 300 es
+precision mediump float;
+in float vAlpha;
+out vec4 oColor;
+uniform float uLevel;
+void main() {
+  float a = smoothstep(0.5, 0.0, length(gl_PointCoord - vec2(0.5)));
+  oColor = vec4(1.0, 1.0, 1.0, a * a * vAlpha * 0.8 * uLevel);
+}"""
+
         private const val BG_FS = """#version 300 es
 precision highp float;
 in vec2 vUvYDown;
@@ -517,11 +592,16 @@ uniform float zDetailScale;
 uniform vec3 ffdScale1;
 uniform vec3 ffdScale2;
 uniform vec3 ffdOffset;
+uniform float uXmb;
 out vec3 vPos;
 void main() {
   vec3 p = vec3(aPos.x, 0.0, aPos.y);
   vec2 uv = (aPos + 1.0) * 0.5;
   p.y = texture(uSplineTex, uv).r;
+  // XMB mode: measured against a capture of the console's XMB, its band sits 9% of the screen lower
+  // and fans out toward the edges, to twice this one's height at the left and half again at the right.
+  float fan = 0.07 * aPos.x * aPos.x - 0.02 * aPos.x;
+  p.y += uXmb * (aPos.y * fan - 0.18);
   vec3 ffd1 = p * ffdScale1 + ffdOffset;
   vec3 ffd2 = p * ffdScale2 + ffdOffset;
   p.y += sin(ffd1.x + uTime * flowSpeed) * ffdYAmp;

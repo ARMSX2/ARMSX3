@@ -17,13 +17,18 @@ import java.io.File
  * [XmbView] draws it and feeds it touch; [XmbInput] feeds it the pad.
  */
 
-/** An icon: a firmware image when the firmware has it ([rco]/[name]), a file or a Coil model, else [glyph]. */
+/**
+ * An icon: a firmware image when the firmware has it ([rco]/[name]), drawn over a soft shadow of
+ * itself unless [shadow] is off; else [bitmap], a file or a Coil model, else [glyph].
+ */
 class XmbIcon(
     val rco: String? = null,
     val name: String? = null,
     val glyph: String = "",
     val file: File? = null,
     val model: Any? = null,
+    val bitmap: androidx.compose.ui.graphics.ImageBitmap? = null,
+    val shadow: Boolean = true,
 )
 
 /** A pick in an options panel (Triangle) or a choice in a setting. */
@@ -33,7 +38,10 @@ class XmbOption(val title: String, val action: () -> Unit)
 sealed class XmbEditor {
     class Toggle(val get: () -> Boolean, val set: (Boolean) -> Unit) : XmbEditor()
 
-    class Choice(val labels: List<String>, val get: () -> Int, val set: (Int) -> Unit) : XmbEditor()
+    class Choice(val labels: List<String>, val get: () -> Int, val set: (Int) -> Unit) : XmbEditor() {
+        /** A colour beside each choice, as Theme Settings > Color shows its colours. */
+        var swatches: List<androidx.compose.ui.graphics.Color>? = null
+    }
 
     class Range(
         val min: Float,

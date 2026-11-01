@@ -128,6 +128,9 @@ fun XmbView(
         }
         val depth = controller.levels.size
         val levelFade by animateFloatAsState(if (depth == 0) 1f else 0f, tween(180), label = "xmb-level")
+        // Into a list, the console slides the bar and the column left and the list takes the
+        // column's place.
+        val levelAnim by animateFloatAsState(if (depth == 0) 0f else 1f, tween(240, easing = FastOutSlowInEasing), label = "xmb-shift")
 
         // The focused top-level item once it has stayed focused a moment: a game's background waits,
         // as on the console, rather than flashing past while scrolling.
@@ -183,20 +186,22 @@ fun XmbView(
         ) {
             if (showClock) XmbClock(m, font)
 
-            columns.forEachIndexed { c, column ->
-                key(column.key) { CategoryIcon(column, c, colAnim, m, font, levelFade) }
-            }
-            // Items of the columns on screen: the focused one, and the one it is sliding to.
-            columns.forEachIndexed { c, column ->
-                if (abs(c - controller.column) <= 1) {
-                    key("items-" + column.key) { ColumnItems(controller, column, c, colAnim, focusAnim, m, font, levelFade) }
+            Box(Modifier.fillMaxSize().graphicsLayer { translationX = -m.levelShift * levelAnim * px }) {
+                columns.forEachIndexed { c, column ->
+                    key(column.key) { CategoryIcon(column, c, colAnim, m, font, levelFade, levelAnim) }
+                }
+                // Items of the columns on screen: the focused one, and the one it is sliding to.
+                columns.forEachIndexed { c, column ->
+                    if (abs(c - controller.column) <= 1) {
+                        key("items-" + column.key) { ColumnItems(controller, column, c, colAnim, focusAnim, m, font, levelFade) }
+                    }
                 }
             }
             controller.levels.lastOrNull()?.let { level ->
-                key("level-$depth-${level.node.key}") { SubList(level, m, font) }
+                key("level-$depth-${level.node.key}") { SubList(level, m, font, quiet = controller.editing != null) }
             }
-            controller.editing?.let { e -> EditorBox(e, m, font) }
-            controller.options?.let { o -> OptionsPanel(o, m, font) }
+            controller.editing?.let { e -> key(e) { PickerPanel(e, m, font) } }
+            controller.options?.let { o -> key(o) { OptionsPanel(o, m, font) } }
 
             // The corner hint: Back while something is open, the focused item's options otherwise.
             val node = controller.focusedNode()
@@ -251,6 +256,12 @@ internal class Metrics(val u: Float, val width: Float, val height: Float) {
     val smallTitleSp = 19f * u
     val textGap = 28f * u
     val badgeX = focusX + 411f * u
+    /** How far the bar and column slide left as a list opens. */
+    val levelShift = 168f * u
+    /** The left edge of the side panel the console opens on the right for a choice or options. */
+    val panelLeft = width * 0.69f
+    /** A row of that panel. */
+    val panelRow = 30f * u
 
     fun colX(c: Float, anim: Float) = focusX + (c - anim) * catSpacing
 
@@ -272,12 +283,11 @@ private class Gestures(val controller: XmbController, val m: Metrics, val column
             return
         }
         controller.options?.let { o ->
-            val left = m.width * 0.62f
-            if (x < left) {
+            if (x < m.panelLeft) {
                 controller.back()
                 return
             }
-            val row = ((y - optionsTop(m)) / OPTION_ROW(m)).toInt()
+            val row = o.focus + ((y - m.focusedY) / m.panelRow).roundToInt()
             if (row in o.options.indices) {
                 o.focus = row
                 controller.confirm()
@@ -285,21 +295,22 @@ private class Gestures(val controller: XmbController, val m: Metrics, val column
             return
         }
         controller.editing?.let { e ->
-            val box = editorRect(e, m)
-            if (x < box[0] || x > box[2] || y < box[1] || y > box[3]) {
+            if (x < m.panelLeft) {
                 controller.back()
                 return
             }
             val ed = e.node.editor
             if (ed is XmbEditor.Range) {
-                val f = ((x - box[0] - 24f * m.u) / (box[2] - box[0] - 48f * m.u)).coerceIn(0f, 1f)
+                val left = m.panelLeft + 28f * m.u
+                val right = m.width - 36f * m.u
+                val f = ((x - left) / (right - left)).coerceIn(0f, 1f)
                 val raw = ed.min + f * (ed.max - ed.min)
                 e.value = (Math.round(raw / ed.step) * ed.step).coerceIn(ed.min, ed.max)
                 ed.set(e.value)
                 return
             }
-            val row = ((y - box[1] - 12f * m.u) / EDITOR_ROW(m)).toInt()
             val count = if (ed is XmbEditor.Choice) ed.labels.size else 2
+            val row = e.choice + ((y - m.focusedY) / m.panelRow).roundToInt()
             if (row in 0 until count) {
                 e.choice = row
                 controller.confirm()
@@ -318,14 +329,13 @@ private class Gestures(val controller: XmbController, val m: Metrics, val column
         }
         val level = controller.levels.lastOrNull()
         if (level != null) {
-            if (x < subListX(m) - 20f * m.u) {
+            // Left of the list is the column it came from: back to it.
+            if (x < m.focusX - 40f * m.u) {
                 controller.back()
                 return
             }
-            val i = level.focus + ((y - m.focusedY) / SUB_ROW(m)).roundToInt()
-            if (i in level.children.indices) {
-                if (i == level.focus) controller.confirm() else controller.setFocus(i)
-            }
+            val i = hitItem(y, level.focus, level.children.size, square = true) ?: return
+            if (i == level.focus) controller.confirm() else controller.setFocus(i)
             return
         }
         val column = controller.currentColumn() ?: return
@@ -344,7 +354,7 @@ private class Gestures(val controller: XmbController, val m: Metrics, val column
 
     private fun inCorner(x: Float, y: Float) = x > m.width - 230f * m.u && y > m.height - 110f * m.u
 
-    private fun hitItem(y: Float, focus: Int, count: Int): Int? {
+    private fun hitItem(y: Float, focus: Int, count: Int, square: Boolean = false): Int? {
         var best: Int? = null
         var bestDist = Float.MAX_VALUE
         for (i in 0 until count) {
@@ -354,33 +364,7 @@ private class Gestures(val controller: XmbController, val m: Metrics, val column
                 best = i
             }
         }
-        return best?.takeIf { bestDist < (if (it == focus) m.gameH * 0.6f else m.itemSpacing * 0.55f) }
-    }
-}
-
-private fun SUB_ROW(m: Metrics) = 50f * m.u
-private fun EDITOR_ROW(m: Metrics) = 44f * m.u
-private fun OPTION_ROW(m: Metrics) = 46f * m.u
-private fun subListX(m: Metrics) = m.focusX + 120f * m.u
-private fun optionsTop(m: Metrics) = m.height * 0.3f
-
-/** Left, top, right, bottom of a setting's picker, in dp. */
-private fun editorRect(e: XmbController.Editing, m: Metrics): FloatArray {
-    val ed = e.node.editor
-    val rows = when (ed) {
-        is XmbEditor.Choice -> ed.labels.size
-        is XmbEditor.Toggle -> 2
-        is XmbEditor.Range -> 0
-    }
-    val left = m.width * 0.6f
-    val right = m.width - 40f * m.u
-    return if (ed is XmbEditor.Range) {
-        floatArrayOf(left, m.focusedY - 46f * m.u, right, m.focusedY + 46f * m.u)
-    } else {
-        val visible = minOf(rows, 9)
-        val height = 24f * m.u + visible * EDITOR_ROW(m)
-        val top = (m.focusedY - 34f * m.u).coerceAtMost(m.height - height - 20f * m.u).coerceAtLeast(20f * m.u)
-        floatArrayOf(left, top, right, top + height)
+        return best?.takeIf { bestDist < (if (it == focus && !square) m.gameH * 0.6f else if (it == focus) m.square * 0.6f else m.itemSpacing * 0.55f) }
     }
 }
 
@@ -388,7 +372,8 @@ internal val XmbShadow = Shadow(color = Color.Black.copy(alpha = 0.6f), offset =
 
 @Composable
 internal fun rememberXmbFont(): FontFamily {
-    val typeface by produceState<android.graphics.Typeface?>(null) {
+    // Asked again when the theme is applied, which is once the firmware can be found.
+    val typeface by produceState<android.graphics.Typeface?>(null, XmbTheme.revision.intValue) {
         value = withContext(Dispatchers.IO) { XmbFirmware.typeface() }
     }
     return remember(typeface) {
@@ -408,13 +393,13 @@ internal fun XmbIconView(icon: XmbIcon, size: Dp, modifier: Modifier = Modifier,
         val rco = icon.rco
         val name = icon.name
         value = if (rco != null && name != null) {
-            withContext(Dispatchers.IO) { XmbTheme.image(rco, name) ?: XmbFirmware.image(rco, name) }
+            withContext(Dispatchers.IO) { XmbTheme.image(rco, name) ?: XmbFirmware.image(rco, name, icon.shadow) }
         } else {
             null
         }
     }
     Box(modifier.width(width).height(size), contentAlignment = Alignment.Center) {
-        val fw = firmware
+        val fw = firmware ?: icon.bitmap
         when {
             fw != null -> Image(fw, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             icon.file != null || icon.model != null -> AsyncImage(
@@ -439,6 +424,7 @@ private fun CategoryIcon(
     m: Metrics,
     font: FontFamily,
     levelFade: Float,
+    levelAnim: Float,
 ) {
     val box = m.catIcon
     Box(
@@ -453,10 +439,18 @@ private fun CategoryIcon(
                 val scale = (m.catIconSmall + (m.catIcon - m.catIconSmall) * near) / m.catIcon
                 scaleX = scale
                 scaleY = scale
-                alpha = 0.78f + 0.22f * near
+                // In a list only the category it is in stays, as on the console.
+                alpha = (0.78f + 0.22f * near) * (1f - levelAnim * (1f - near))
             },
     ) {
         XmbIconView(column.icon, box.dp)
+        // The firmware's icons are a little see-through by design; the console draws the focused
+        // one solid white, so it is drawn again over itself as it comes into focus.
+        XmbIconView(
+            column.icon,
+            box.dp,
+            Modifier.graphicsLayer { alpha = (1f - abs(index - colAnim.value)).coerceIn(0f, 1f) },
+        )
     }
     Text(
         column.title,
@@ -501,7 +495,8 @@ private fun ColumnItems(
             fun alphaOf(f: Float): Float {
                 val d = i - f
                 val columnAlpha = (1f - abs(index - colAnim.value)).coerceIn(0f, 1f)
-                val depthAlpha = if (i == focus) 1f else levelFade
+                // Behind a list the column stays, dimmed, as the console leaves it.
+                val depthAlpha = if (i == focus) 1f else 1f - 0.55f * (1f - levelFade)
                 // The ones before the focused item fade as they climb past the bar.
                 val far = if (d < -1f) (1f + (d + 1f) * 0.5f).coerceIn(0f, 1f) else 1f
                 return columnAlpha * depthAlpha * far
@@ -533,6 +528,17 @@ private fun ColumnItems(
                     XmbAnimatedIcon(pam, Modifier.fillMaxSize()) { XmbIconView(node.icon, iconH.dp, width = iconW.dp) }
                 } else {
                     XmbIconView(node.icon, iconH.dp, width = iconW.dp)
+                    // Solid white as it comes into focus, as the category icons are (see CategoryIcon).
+                    if (!isGame) {
+                        XmbIconView(
+                            node.icon,
+                            iconH.dp,
+                            Modifier.graphicsLayer {
+                                alpha = nearOf(if (isCurrent) focusAnim.value else focus.toFloat())
+                            },
+                            width = iconW.dp,
+                        )
+                    }
                 }
             }
 
@@ -553,7 +559,7 @@ private fun ColumnItems(
                         .widthIn(max = (m.width - m.focusX - 160f * m.u).coerceAtLeast(120f).dp)
                         .graphicsLayer {
                             val f = if (isCurrent) focusAnim.value else focus.toFloat()
-                            alpha = alphaOf(f) * (if (focused) levelFade else 0.82f)
+                            alpha = alphaOf(f) * levelFade * (if (focused) 1f else 0.82f)
                         },
                 ) {
                     Text(
@@ -570,7 +576,7 @@ private fun ColumnItems(
                 // The format badge on the focused game's second line, as the console marks a PS3 title.
                 if (focused && isGame) {
                     XmbIconView(
-                        XmbIcon("explore_category_game", "item_tex_ps3format"),
+                        XmbIcon("explore_category_game", "item_tex_ps3format", shadow = false),
                         (14f * m.u).dp,
                         width = (52f * m.u).dp,
                         modifier = Modifier
@@ -585,132 +591,82 @@ private fun ColumnItems(
     }
 }
 
+/**
+ * A list opened from an item, where the column was (the column has slid left): its rows laid out
+ * as the column's are, a small icon and the name, the focused one with its explanation under it,
+ * and a small arrow pointing back to the item it came from. With a picker open ([quiet]) only the
+ * focused row keeps its name, as on the console.
+ */
 @Composable
-private fun SubList(level: XmbController.Level, m: Metrics, font: FontFamily) {
+private fun SubList(level: XmbController.Level, m: Metrics, font: FontFamily, quiet: Boolean) {
     val anim = remember(level) { Animatable(level.focus.toFloat()) }
     LaunchedEffect(level, level.focus) { anim.animateTo(level.focus.toFloat(), tween(150, easing = FastOutSlowInEasing)) }
     val appear = remember(level) { Animatable(0f) }
-    LaunchedEffect(level) { appear.animateTo(1f, tween(200, easing = FastOutSlowInEasing)) }
-    val row = SUB_ROW(m)
-    val listX = subListX(m)
-    val first = (level.focus - 8).coerceAtLeast(0)
-    val last = (level.focus + 12).coerceAtMost(level.children.size - 1)
-    // The focused row's bar, as the console highlights a sub-list row.
-    Box(
-        Modifier
-            .offset { IntOffset(((listX - 14f * m.u) * density).roundToInt(), ((m.focusedY - row / 2f) * density).roundToInt()) }
-            .width((m.width - listX - 30f * m.u).dp)
-            .height(row.dp)
-            .graphicsLayer { alpha = appear.value }
-            .background(
-                Brush.horizontalGradient(listOf(Color.White.copy(alpha = 0.18f), Color.White.copy(alpha = 0.03f))),
-                RoundedCornerShape((6f * m.u).dp),
-            ),
-    )
+    LaunchedEffect(level) { appear.animateTo(1f, tween(220, easing = FastOutSlowInEasing)) }
+    val others by animateFloatAsState(if (quiet) 0f else 1f, tween(160), label = "xmb-sub-quiet")
+    val iconX = m.focusX
+    val textX = m.focusX + 34f * m.u
+    val first = (level.focus - 6).coerceAtLeast(0)
+    val last = (level.focus + 10).coerceAtMost(level.children.size - 1)
+
+    // The arrow back to the item the list belongs to.
     Text(
-        level.node.title,
-        style = xmbText(font, m.subtitleSp, 0.75f),
-        maxLines = 1,
+        "\u25C2",
+        style = xmbText(font, m.smallTitleSp, 0.85f),
         modifier = Modifier
-            .offset { IntOffset((listX * density).roundToInt(), ((m.catY + m.catIcon * 0.5f + 6f * m.u) * density).roundToInt()) }
+            .offset { IntOffset(((m.focusX - 58f * m.u) * density).roundToInt(), ((m.focusedY - m.smallTitleSp * 0.7f) * density).roundToInt()) }
             .graphicsLayer { alpha = appear.value },
     )
     for (i in first..last) {
         val node = level.children[i]
         key(node.key) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
+            val focused = i == level.focus
+            fun near() = (1f - abs(i - anim.value)).coerceIn(0f, 1f)
+            fun alpha(): Float {
+                val d = i - anim.value
+                // Rows climbing past the bar fade, as the column's do.
+                val far = if (d < -1f) (1f + (d + 1f) * 0.5f).coerceIn(0f, 1f) else 1f
+                return appear.value * far
+            }
+            val icon = 26f * m.u
+            Box(
+                Modifier
                     .offset {
-                        val y = m.focusedY + (i - anim.value) * row - row / 2f
-                        IntOffset(((listX + (1f - appear.value) * 40f * m.u) * density).roundToInt(), (y * density).roundToInt())
+                        val y = m.itemY(i - anim.value)
+                        IntOffset(((iconX - icon / 2f + (1f - appear.value) * 30f * m.u) * density).roundToInt(), ((y - icon / 2f) * density).roundToInt())
                     }
-                    .width((m.width - listX - 50f * m.u).dp)
-                    .height(row.dp)
+                    .size(icon.dp)
                     .graphicsLayer {
-                        val y = m.focusedY + (i - anim.value) * row
-                        // Rows pass under the bar's line rather than over the category icons.
-                        val visible = ((y - (m.catY + m.catIcon * 0.6f)) / row).coerceIn(0f, 1f)
-                        alpha = appear.value * visible * (if (abs(i - anim.value) < 0.5f) 1f else 0.62f)
+                        val s = 1f + 0.35f * near()
+                        scaleX = s
+                        scaleY = s
+                        alpha = alpha() * (0.7f + 0.3f * near())
                     },
             ) {
-                if (node.icon.rco != null || node.icon.file != null || node.icon.model != null || node.icon.glyph.isNotEmpty()) {
-                    XmbIconView(node.icon, (36f * m.u).dp)
-                    Spacer(Modifier.width((14f * m.u).dp))
-                }
-                Text(
-                    node.title,
-                    style = xmbText(font, m.smallTitleSp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
-                )
-                val value = (node as? XmbNode.Setting)?.value?.invoke() ?: node.subtitle?.takeIf { node is XmbNode.Folder }
-                if (value != null) {
-                    Spacer(Modifier.width((16f * m.u).dp))
+                XmbIconView(node.icon, icon.dp)
+            }
+            if (focused || others > 0f) {
+                Column(
+                    modifier = Modifier
+                        .offset {
+                            val y = m.itemY(i - anim.value)
+                            val lineH = (if (focused) m.titleSp else m.smallTitleSp) * 1.25f
+                            IntOffset(((textX + (1f - appear.value) * 30f * m.u) * density).roundToInt(), ((y - lineH * 0.6f) * density).roundToInt())
+                        }
+                        .widthIn(max = (m.panelLeft - textX - 20f * m.u).coerceAtLeast(120f).dp)
+                        .graphicsLayer { alpha = alpha() * (if (focused) 1f else 0.75f * others) },
+                ) {
                     Text(
-                        value,
-                        style = xmbText(font, m.smallTitleSp * 0.88f, 0.82f),
+                        node.title,
+                        style = xmbText(font, if (focused) m.titleSp else m.smallTitleSp),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = (300f * m.u).dp),
                     )
-                }
-            }
-        }
-    }
-    (level.children.getOrNull(level.focus) as? XmbNode.Setting)?.description?.let { text ->
-        Text(
-            text,
-            style = xmbText(font, m.subtitleSp, 0.8f),
-            maxLines = 3,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier
-                .offset { IntOffset((listX * density).roundToInt(), ((m.height - 120f * m.u) * density).roundToInt()) }
-                .width((m.width - listX - 260f * m.u).coerceAtLeast(120f).dp),
-        )
-    }
-}
-
-@Composable
-private fun EditorBox(e: XmbController.Editing, m: Metrics, font: FontFamily) {
-    val r = editorRect(e, m)
-    val shape = RoundedCornerShape((8f * m.u).dp)
-    Box(
-        Modifier
-            .offset { IntOffset((r[0] * density).roundToInt(), (r[1] * density).roundToInt()) }
-            .size((r[2] - r[0]).dp, (r[3] - r[1]).dp)
-            .background(Color(0xE60C0C12), shape)
-            .border(1.dp, Color.White.copy(alpha = 0.22f), shape),
-    ) {
-        when (val ed = e.node.editor) {
-            is XmbEditor.Range -> Column(
-                Modifier.fillMaxSize().padding(horizontal = (24f * m.u).dp),
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(ed.format(e.value), style = xmbText(font, m.titleSp * 0.9f))
-                Spacer(Modifier.height((10f * m.u).dp))
-                Box(Modifier.fillMaxWidth().height((5f * m.u).dp).background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(50))) {
-                    val f = if (ed.max > ed.min) (e.value - ed.min) / (ed.max - ed.min) else 0f
-                    Box(Modifier.fillMaxWidth(f.coerceIn(0f, 1f)).fillMaxHeight().background(Color.White, RoundedCornerShape(50)))
-                }
-            }
-            else -> {
-                val labels = if (ed is XmbEditor.Choice) ed.labels else listOf(com.armsx2.i18n.I18n.get("xmb.on"), com.armsx2.i18n.I18n.get("xmb.off"))
-                // A long list scrolls with the choice, nine rows at a time.
-                val firstRow = (e.choice - 4).coerceIn(0, (labels.size - 9).coerceAtLeast(0))
-                Column(Modifier.fillMaxSize().padding(vertical = (12f * m.u).dp)) {
-                    labels.drop(firstRow).take(9).forEachIndexed { k, label ->
-                        val focused = firstRow + k == e.choice
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(EDITOR_ROW(m).dp)
-                                .background(if (focused) Color.White.copy(alpha = 0.16f) else Color.Transparent)
-                                .padding(horizontal = (20f * m.u).dp),
-                            contentAlignment = Alignment.CenterStart,
-                        ) {
-                            Text(label, style = xmbText(font, m.smallTitleSp, if (focused) 1f else 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (focused) {
+                        val setting = node as? XmbNode.Setting
+                        val line = setting?.let { listOfNotNull(it.value(), it.description).joinToString("   ") } ?: node.subtitle
+                        if (!line.isNullOrBlank()) {
+                            Text(line, style = xmbText(font, m.subtitleSp, 0.92f), maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                     }
                 }
@@ -719,40 +675,105 @@ private fun EditorBox(e: XmbController.Editing, m: Metrics, font: FontFamily) {
     }
 }
 
+/**
+ * The console's side panel: a band of light down the right of the screen, sliding in, in which a
+ * setting's choices or an item's options are listed with the focused one level with the row it
+ * belongs to.
+ */
 @Composable
-private fun OptionsPanel(o: XmbController.Options, m: Metrics, font: FontFamily) {
-    val slide = remember(o) { Animatable(1f) }
-    LaunchedEffect(o) { slide.animateTo(0f, tween(180, easing = FastOutSlowInEasing)) }
-    val left = m.width * 0.62f
+private fun SidePanel(m: Metrics, content: @Composable (slide: Float) -> Unit) {
+    val slide = remember { Animatable(1f) }
+    LaunchedEffect(Unit) { slide.animateTo(0f, tween(200, easing = FastOutSlowInEasing)) }
     Box(
         Modifier
-            .offset { IntOffset(((left + slide.value * (m.width - left)) * density).roundToInt(), 0) }
-            .width((m.width - left).dp)
+            .offset { IntOffset(((m.panelLeft + slide.value * (m.width - m.panelLeft)) * density).roundToInt(), 0) }
+            .width((m.width - m.panelLeft).dp)
             .fillMaxHeight()
-            .background(Brush.horizontalGradient(listOf(Color(0xC008080C), Color(0xF008080C)))),
+            .background(
+                Brush.horizontalGradient(
+                    listOf(Color.White.copy(alpha = 0.05f), Color.White.copy(alpha = 0.16f), Color.White.copy(alpha = 0.10f)),
+                ),
+            ),
     ) {
-        Column(Modifier.padding(top = (optionsTop(m) - OPTION_ROW(m)).dp)) {
-            Text(
-                o.title,
-                style = xmbText(font, m.subtitleSp, 0.7f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(horizontal = (28f * m.u).dp).height(OPTION_ROW(m).dp),
-            )
-            o.options.forEachIndexed { i, opt ->
-                val focused = i == o.focus
+        Box(Modifier.width(1.dp).fillMaxHeight().background(Color.White.copy(alpha = 0.28f)))
+        content(slide.value)
+    }
+}
+
+/** A list of [labels] in the side panel, [focus] level with the focused row; [swatches] beside them. */
+@Composable
+private fun PanelList(
+    labels: List<String>,
+    focus: Int,
+    m: Metrics,
+    font: FontFamily,
+    swatches: List<Color>? = null,
+) {
+    val anim = remember { Animatable(focus.toFloat()) }
+    LaunchedEffect(focus) { anim.animateTo(focus.toFloat(), tween(120, easing = FastOutSlowInEasing)) }
+    labels.forEachIndexed { k, label ->
+        val focused = k == focus
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .offset {
+                    val y = m.focusedY + (k - anim.value) * m.panelRow - m.panelRow / 2f
+                    IntOffset(((24f * m.u) * density).roundToInt(), (y * density).roundToInt())
+                }
+                .width((m.width - m.panelLeft - 40f * m.u).coerceAtLeast(60f).dp)
+                .height(m.panelRow.dp)
+                .graphicsLayer {
+                    val y = m.focusedY + (k - anim.value) * m.panelRow
+                    alpha = if (y < m.catY + m.catIcon || y > m.height - 30f * m.u) 0f else 1f
+                }
+                .background(if (focused) Color.White.copy(alpha = 0.16f) else Color.Transparent, RoundedCornerShape((3f * m.u).dp))
+                .padding(horizontal = (8f * m.u).dp),
+        ) {
+            swatches?.getOrNull(k)?.let { c ->
                 Box(
                     Modifier
-                        .fillMaxWidth()
-                        .height(OPTION_ROW(m).dp)
-                        .background(if (focused) Color.White.copy(alpha = 0.16f) else Color.Transparent)
-                        .padding(horizontal = (28f * m.u).dp),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    Text(opt.title, style = xmbText(font, m.smallTitleSp, if (focused) 1f else 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        .size((16f * m.u).dp)
+                        .background(c, RoundedCornerShape((2f * m.u).dp))
+                        .border(1.dp, Color.White.copy(alpha = if (focused) 0.9f else 0.35f), RoundedCornerShape((2f * m.u).dp)),
+                )
+                Spacer(Modifier.width((10f * m.u).dp))
+            }
+            Text(label, style = xmbText(font, m.smallTitleSp, if (focused) 1f else 0.62f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/** A setting's picker, in the side panel: its choices, On and Off, or a slider. */
+@Composable
+private fun PickerPanel(e: XmbController.Editing, m: Metrics, font: FontFamily) {
+    SidePanel(m) { _ ->
+        when (val ed = e.node.editor) {
+            is XmbEditor.Range -> Column(
+                Modifier
+                    .offset { IntOffset(((28f * m.u) * density).roundToInt(), ((m.focusedY - 34f * m.u) * density).roundToInt()) }
+                    .width((m.width - m.panelLeft - 64f * m.u).coerceAtLeast(60f).dp),
+            ) {
+                Text(ed.format(e.value), style = xmbText(font, m.titleSp * 0.9f))
+                Spacer(Modifier.height((10f * m.u).dp))
+                Box(Modifier.fillMaxWidth().height((5f * m.u).dp).background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(50))) {
+                    val f = if (ed.max > ed.min) (e.value - ed.min) / (ed.max - ed.min) else 0f
+                    Box(Modifier.fillMaxWidth(f.coerceIn(0f, 1f)).fillMaxHeight().background(Color.White, RoundedCornerShape(50)))
                 }
             }
+            is XmbEditor.Choice -> PanelList(ed.labels, e.choice, m, font, ed.swatches)
+            is XmbEditor.Toggle -> {
+                val (on, off) = xmbOnOff()
+                PanelList(listOf(on, off), e.choice, m, font)
+            }
         }
+    }
+}
+
+/** An item's options (Triangle), in the side panel. */
+@Composable
+private fun OptionsPanel(o: XmbController.Options, m: Metrics, font: FontFamily) {
+    SidePanel(m) { _ ->
+        PanelList(o.options.map { it.title }, o.focus, m, font)
     }
 }
 
@@ -897,11 +918,12 @@ private fun XmbClock(m: Metrics, font: FontFamily) {
             .offset { IntOffset((barLeft * density).roundToInt(), ((50f * m.u) * density).roundToInt()) }
             .width((m.width - barLeft).dp)
             .height((37f * m.u).dp)
+            // The console's is mostly an outline: a faint fill and a light edge.
             .background(
-                Brush.horizontalGradient(listOf(Color.White.copy(alpha = 0.10f), Color.White.copy(alpha = 0.16f))),
+                Brush.horizontalGradient(listOf(Color.White.copy(alpha = 0.04f), Color.White.copy(alpha = 0.08f))),
                 RoundedCornerShape(topStart = (4f * m.u).dp, bottomStart = (4f * m.u).dp),
             )
-            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(topStart = (4f * m.u).dp, bottomStart = (4f * m.u).dp)),
+            .border(1.dp, Color.White.copy(alpha = 0.34f), RoundedCornerShape(topStart = (4f * m.u).dp, bottomStart = (4f * m.u).dp)),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,

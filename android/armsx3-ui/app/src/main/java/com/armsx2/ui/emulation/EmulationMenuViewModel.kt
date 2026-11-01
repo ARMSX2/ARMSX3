@@ -456,7 +456,15 @@ object EmulationMenuInputController {
 
     /** Opens the menu on [tab]; with none (the pad's menu button), where it was left (MenuPlace). An open menu
      *  just switches to [tab]. */
+    /** XMB mode's in-game menu is the XMB (XmbInGame), which then takes every press. */
+    private val xmb get() = com.armsx2.ui.xmb.XmbInGame
+
     fun open(tab: EmulationMenuTab? = null) {
+        // Triangle while the XMB is up: the focused item's options, as on the console.
+        if (tab != null && xmb.takesPad()) {
+            xmb.options()
+            return
+        }
         val bound = owner
         // A bound menu takes the tab now; kept for bind() it would be applied again on the next opening
         if (bound != null) tab?.let { bound.selectTab(it) } else pendingTab = tab
@@ -485,6 +493,10 @@ object EmulationMenuInputController {
     }
 
     fun move(dx: Int, dy: Int): Boolean {
+        if (xmb.takesPad()) {
+            xmb.move(dx, dy)
+            return true
+        }
         // A panel is over the menu: everything is registry nav, there is no tab column to walk.
         if (overlayDismiss != null) {
             when {
@@ -515,6 +527,10 @@ object EmulationMenuInputController {
 
     /** L1 / R1 always cycle tabs, snapping back to the tab column. */
     fun tab(delta: Int): Boolean {
+        if (xmb.takesPad()) {
+            xmb.page(delta)
+            return true
+        }
         // Swallowed while a panel is up: the tabs are behind it, and silently switching the pane
         // you cannot see is worse than doing nothing.
         if (overlayDismiss != null) return true
@@ -525,6 +541,10 @@ object EmulationMenuInputController {
     }
 
     fun confirm(): Boolean {
+        if (xmb.takesPad()) {
+            xmb.confirm()
+            return true
+        }
         if (overlayDismiss != null) { nav.confirm(); return true }
         owner ?: return false
         if (!inContent.value) { enterContent(); return true }
@@ -534,6 +554,10 @@ object EmulationMenuInputController {
     }
 
     fun back(): Boolean {
+        if (xmb.takesPad()) {
+            xmb.back()
+            return true
+        }
         // Back closes the panel, not the menu behind it.
         overlayDismiss?.let { dismiss -> dismiss(); return true }
         if (inContent.value) { exitContent(); return true }
