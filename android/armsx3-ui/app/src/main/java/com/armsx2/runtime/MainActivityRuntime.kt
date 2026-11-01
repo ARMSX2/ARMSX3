@@ -5735,7 +5735,7 @@ open class MainActivityRuntime : ComponentActivity() {
             wasAsleep = false
             com.armsx2.MenuSfx.play(com.armsx2.MenuSfx.Event.WAKE)
             if (prefs.getBoolean("ui.hotkeyToasts", true))
-                com.armsx2.ui.WelcomeBanner.show(com.armsx2.i18n.I18n.get("app.welcomeBack"))
+                com.armsx2.ui.WelcomeBanner.show(com.armsx2.i18n.I18n.get("app.welcomeBack"), welcome = true)
         }
         // #394 backstop: a controller that slept and woke returns with a NEW deviceId, so drop any
         // pad slot whose device is no longer connected — the re-enumerated pad then re-claims Player 1

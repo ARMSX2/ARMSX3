@@ -258,8 +258,10 @@ object WindowImpl {
                 com.armsx2.ui.xmb.XmbShutdownOverlay()
 
                 // Transient top-left "Welcome Back!" banner (and any future brief note) — hosted
-                // here for the same reason as the keyboard: reachable above every surface.
-                com.armsx2.ui.WelcomeBannerOverlay(this)
+                // here for the same reason as the keyboard: reachable above every surface. In XMB
+                // mode, the console's notice in the top right instead.
+                if (com.armsx2.ui.xmb.XmbMode.active.value) com.armsx2.ui.xmb.XmbNotice()
+                else com.armsx2.ui.WelcomeBannerOverlay(this)
 
                 // "Compiling PPU modules" while a game compiles code during play (CompileBanner.kt).
                 com.armsx2.ui.CompileBannerOverlay(this)
