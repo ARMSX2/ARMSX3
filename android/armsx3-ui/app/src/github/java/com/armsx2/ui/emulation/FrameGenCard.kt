@@ -47,7 +47,16 @@ internal fun FrameGenCard(settings: Settings, viewModel: EmulationMenuViewModel)
         // Motion detail is continuous, so it gets a slider rather than three stops -- the
         // useful values are wherever the picture stops improving on a given game, not a set
         // someone picked in advance. 25 is the floor the core clamps to.
-        Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp)) {
+        if (com.armsx2.ui.xmb.LocalXmbCollector.current != null) {
+            com.armsx2.ui.settings.IntSliderRow(
+                label = str("perf.framegen.flowScale.label"),
+                value = settings.ps3.frameGenFlowScale.coerceIn(25, 100),
+                min = 25,
+                max = 100,
+                valueFormatter = { "$it%" },
+                onChange = { v -> viewModel.updateSettings { it.copy(ps3 = it.ps3.copy(frameGenFlowScale = v.coerceIn(25, 100))) } },
+            )
+        } else Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp)) {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,

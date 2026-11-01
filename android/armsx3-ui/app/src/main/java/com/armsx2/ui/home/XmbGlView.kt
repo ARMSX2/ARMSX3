@@ -53,7 +53,7 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
     }
 
     override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-        thread = RenderThread(st, w, h) { ok -> post { onGlStatus?.invoke(ok) } }.also {
+        thread = RenderThread(st, w, h, context.applicationContext) { ok -> post { onGlStatus?.invoke(ok) } }.also {
             it.paused = windowVisibility != VISIBLE
             it.start()
         }
@@ -85,6 +85,7 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
         private val surfaceTexture: SurfaceTexture,
         private var width: Int,
         private var height: Int,
+        private val appContext: Context,
         private val onStatus: (Boolean) -> Unit,
     ) : Thread("xmb-gl") {
         @Volatile private var running = true
@@ -109,6 +110,10 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             ByteBuffer.allocateDirect(STEX_W * STEX_H * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         private val cp = FloatArray(28)
         private var startNanos = 0L
+
+        /** XMB mode's wave, as the console's firmware makes it; made the first time XMB mode shows. */
+        private var firmwareWave: XmbFirmwareWave? = null
+        private var firmwareWaveFailed = false
 
         /** Parks the loop while set. Parked, not polled: a hidden wave costs no wakeups at all. */
         @Volatile var paused = false
@@ -150,11 +155,14 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
 
         // ---- rendering ----
         private fun drawFrame(timeSec: Float) {
-            fillSpline(timeSec)
-            splineBuf.clear(); splineBuf.put(splineData); splineBuf.position(0)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, splineTex)
-            GLES30.glTexSubImage2D(GLES30.GL_TEXTURE_2D, 0, 0, 0, STEX_W, STEX_H,
-                GLES30.GL_RED, GLES30.GL_FLOAT, splineBuf)
+            // The library's wave; XMB mode draws the console's (below) and has no use for it.
+            if (!com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl || firmwareWaveFailed) {
+                fillSpline(timeSec)
+                splineBuf.clear(); splineBuf.put(splineData); splineBuf.position(0)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, splineTex)
+                GLES30.glTexSubImage2D(GLES30.GL_TEXTURE_2D, 0, 0, 0, STEX_W, STEX_H,
+                    GLES30.GL_RED, GLES30.GL_FLOAT, splineBuf)
+            }
 
             GLES30.glDisable(GLES30.GL_DEPTH_TEST)
             GLES30.glDisable(GLES30.GL_BLEND)
@@ -200,9 +208,21 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uSmooth"), smooth)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
 
+            // XMB mode: the console's own wave (XmbFirmwareWave), in place of the library's.
+            val xmb = com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl
+            if (xmb && !firmwareWaveFailed) {
+                val wave = firmwareWave ?: runCatching { XmbFirmwareWave(appContext).also { it.init() } }
+                    .onFailure { Log.w(TAG, "XMB wave init failed", it); firmwareWaveFailed = true }
+                    .getOrNull()?.also { firmwareWave = it }
+                if (wave != null) {
+                    wave.draw(timeSec, width, height, com.armsx2.ui.xmb.XmbOriginalColors.bootWave)
+                    drawSparks(timeSec)
+                    return
+                }
+            }
+
             // wave mesh, alpha-blended over the gradient
             GLES30.glEnable(GLES30.GL_BLEND)
-            val xmb = com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl
             if (xmb) {
                 // The view is not opaque, and a plain blend lowers the surface's alpha under the wave,
                 // which let the still picture behind the view tint it blue (seen over the black at the
@@ -248,17 +268,20 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             GLES30.glBindVertexArray(0)
 
             // XMB mode: the console's sparkles, specks of light drifting and twinkling about the wave.
-            if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl) {
-                GLES30.glBlendFuncSeparate(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE, GLES30.GL_ZERO, GLES30.GL_ONE)
-                GLES30.glUseProgram(sparkProg)
-                GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uTime"), timeSec)
-                GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uSize"), height / 360f)
-                GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uLevel"), com.armsx2.ui.xmb.XmbOriginalColors.bootWave)
-                GLES30.glBindVertexArray(sparkVao)
-                GLES30.glDrawArrays(GLES30.GL_POINTS, 0, SPARKS)
-                GLES30.glBindVertexArray(0)
-                GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
-            }
+            if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl) drawSparks(timeSec)
+        }
+
+        private fun drawSparks(timeSec: Float) {
+            GLES30.glEnable(GLES30.GL_BLEND)
+            GLES30.glBlendFuncSeparate(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE, GLES30.GL_ZERO, GLES30.GL_ONE)
+            GLES30.glUseProgram(sparkProg)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uTime"), timeSec)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uSize"), height / 360f)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uLevel"), com.armsx2.ui.xmb.XmbOriginalColors.bootWave)
+            GLES30.glBindVertexArray(sparkVao)
+            GLES30.glDrawArrays(GLES30.GL_POINTS, 0, SPARKS)
+            GLES30.glBindVertexArray(0)
+            GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
         }
 
         /** Port of linkev writeDisplacementTexture: 28 control points per row from band + legacy

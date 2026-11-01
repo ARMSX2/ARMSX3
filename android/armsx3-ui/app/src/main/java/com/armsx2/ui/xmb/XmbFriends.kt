@@ -420,8 +420,21 @@ private fun xmbRemotePlayNode(controller: XmbController): XmbNode {
     val explain = str("remoteplay.host.explain")
     val host = com.armsx2.remoteplay.RemotePlayHost
 
-    fun hostWifi() = localNetwork { allowed -> if (allowed) host.startWifi(context) else host.refuseLocalNetwork() }
-    fun hostOnline() = localNetwork { host.createInvite(context) }
+    // A failure from a press here is said in a dialog: the folder's own line is out of sight while
+    // its list is open.
+    val asked = androidx.compose.runtime.remember { booleanArrayOf(false) }
+    androidx.compose.runtime.LaunchedEffect(status) {
+        if (status is com.armsx2.remoteplay.RemotePlayHost.Status.Failed && asked[0]) controller.tell(status.message, ok)
+        if (status !is com.armsx2.remoteplay.RemotePlayHost.Status.Off) asked[0] = false
+    }
+    fun hostWifi() {
+        asked[0] = true
+        localNetwork { allowed -> if (allowed) host.startWifi(context) else host.refuseLocalNetwork() }
+    }
+    fun hostOnline() {
+        asked[0] = true
+        localNetwork { host.createInvite(context) }
+    }
     fun copy(text: String) {
         val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
         clipboard?.setPrimaryClip(android.content.ClipData.newPlainText(title, text))
@@ -429,50 +442,58 @@ private fun xmbRemotePlayNode(controller: XmbController): XmbNode {
     val startWifi = XmbNode.Action("remote.wifi", wifi, icon) { hostWifi() }
     val startOnline = XmbNode.Action("remote.invite", invite, icon) { hostOnline() }
     val stopNode = XmbNode.Action("remote.stop", stop, icon) { host.stop() }
+    // Where hosting stands, at the top of the list: the address to give, the code, or what went wrong.
+    fun line(text: String) = XmbNode.Action("remote.state", text.lineSequence().first(), icon, text.lines().drop(1).joinToString(" ").ifBlank { null }) {
+        controller.tell(text, ok)
+    }
 
-    return when (status) {
-        com.armsx2.remoteplay.RemotePlayHost.Status.Off -> XmbNode.Folder("remote", title, icon, explain.substringBefore(". ") + ".") { listOf(startWifi, startOnline) }
-        is com.armsx2.remoteplay.RemotePlayHost.Status.Failed -> XmbNode.Folder("remote", title, icon, status.message) { listOf(startWifi, startOnline) }
-        is com.armsx2.remoteplay.RemotePlayHost.Status.Waiting -> XmbNode.Folder(
-            "remote",
-            title,
-            icon,
-            listOfNotNull(waiting, status.address?.let { address.format(it) }).joinToString("   "),
-        ) { listOf(startOnline, stopNode) }
+    // One list that reads where hosting stands each time it is drawn, so it follows a press made in it
+    // (an open list keeps the folder it was opened from).
+    fun items(st: com.armsx2.remoteplay.RemotePlayHost.Status): List<XmbNode> = when (st) {
+        com.armsx2.remoteplay.RemotePlayHost.Status.Off -> listOf(startWifi, startOnline)
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Failed -> listOf(line(st.message), startWifi, startOnline)
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Waiting ->
+            listOf(line(listOfNotNull(waiting, st.address?.let { address.format(it) }).joinToString("   ")), startOnline, stopNode)
         is com.armsx2.remoteplay.RemotePlayHost.Status.Inviting -> {
-            val code = status.lobbyCode
-            val long = status.code
+            val code = st.lobbyCode
+            val long = st.code
             when {
-                code != null -> XmbNode.Folder("remote", title, icon, "$lobbyCode $code") {
-                    listOf(
-                        XmbNode.Action("remote.code", code, icon, lobbyCode) { controller.tell("$lobbyCode\n$code", ok) },
-                        XmbNode.Action("remote.share", share, icon) { com.armsx2.remoteplay.shareText(context, lobbyShare.format(code)) },
-                        XmbNode.Action("remote.copy", copy, icon) { copy(code) },
-                        XmbNode.Action("remote.cancel", cancel, icon) { host.stop() },
-                    )
-                }
-                long != null -> XmbNode.Folder("remote", title, icon, step1) {
-                    listOf(
-                        XmbNode.Action("remote.share", share, icon) { com.armsx2.remoteplay.shareText(context, longShare.format(long)) },
-                        XmbNode.Action("remote.copy", copy, icon) { copy(long) },
-                        XmbNode.Action("remote.reply", reply, icon) {
-                            XmbKeyboard.ask(reply) { typed -> if (typed.isNotBlank() && !host.acceptReply(typed)) controller.tell(badReply, ok) }
-                        },
-                        XmbNode.Action("remote.cancel", cancel, icon) { host.stop() },
-                    )
-                }
-                else -> XmbNode.Folder("remote", title, icon, preparing) { listOf(XmbNode.Action("remote.cancel", cancel, icon) { host.stop() }) }
+                code != null -> listOf(
+                    XmbNode.Action("remote.code", code, icon, lobbyCode) { controller.tell("$lobbyCode\n$code", ok) },
+                    XmbNode.Action("remote.share", share, icon) { com.armsx2.remoteplay.shareText(context, lobbyShare.format(code)) },
+                    XmbNode.Action("remote.copy", copy, icon) { copy(code) },
+                    XmbNode.Action("remote.cancel", cancel, icon) { host.stop() },
+                )
+                long != null -> listOf(
+                    line(step1),
+                    XmbNode.Action("remote.share", share, icon) { com.armsx2.remoteplay.shareText(context, longShare.format(long)) },
+                    XmbNode.Action("remote.copy", copy, icon) { copy(long) },
+                    XmbNode.Action("remote.reply", reply, icon) {
+                        XmbKeyboard.ask(reply) { typed -> if (typed.isNotBlank() && !host.acceptReply(typed)) controller.tell(badReply, ok) }
+                    },
+                    XmbNode.Action("remote.cancel", cancel, icon) { host.stop() },
+                )
+                else -> listOf(line(preparing), XmbNode.Action("remote.cancel", cancel, icon) { host.stop() })
             }
         }
-        is com.armsx2.remoteplay.RemotePlayHost.Status.Connecting -> XmbNode.Folder("remote", title, icon, connecting.format(status.viewer)) { listOf(stopNode) }
-        is com.armsx2.remoteplay.RemotePlayHost.Status.Asking -> XmbNode.Action("remote", title, icon, asking.format(status.viewer)) {
-            controller.dialog = XmbController.Dialog(
-                asking.format(status.viewer),
-                listOf(XmbOption(accept) { host.accept() }, XmbOption(decline) { host.decline() }),
-            )
-        }
-        is com.armsx2.remoteplay.RemotePlayHost.Status.Playing -> XmbNode.Folder("remote", title, icon, playing.format(status.viewer)) { listOf(stopNode) }
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Asking -> listOf(
+            line(asking.format(st.viewer)),
+            XmbNode.Action("remote.accept", accept, icon) { host.accept() },
+            XmbNode.Action("remote.decline", decline, icon) { host.decline() },
+        )
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Connecting -> listOf(line(connecting.format(st.viewer)), stopNode)
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Playing -> listOf(line(playing.format(st.viewer)), stopNode)
     }
+    val summary = when (status) {
+        com.armsx2.remoteplay.RemotePlayHost.Status.Off -> explain.substringBefore(". ") + "."
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Failed -> status.message
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Waiting -> listOfNotNull(waiting, status.address?.let { address.format(it) }).joinToString("   ")
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Inviting -> status.lobbyCode?.let { "$lobbyCode $it" } ?: if (status.code != null) step1 else preparing
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Asking -> asking.format(status.viewer)
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Connecting -> connecting.format(status.viewer)
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Playing -> playing.format(status.viewer)
+    }
+    return XmbNode.Folder("remote", title, icon, summary, live = true) { items(host.status.value) }
 }
 
 /**

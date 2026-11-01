@@ -210,7 +210,8 @@ private fun xmbInGameColumns(controller: XmbController, game: GameInfo?): List<X
     // save states last, as they do not work in every game.
     val gameItems = buildList {
         running?.let(::add)
-        add(XmbNode.Action("ingame.restart", restart, XmbIcon("explore_category_game", "tex_quit", "↻")) { askRestart() })
+        // Restart has no firmware icon; it is drawn from Quit's ring (XmbFirmware.restartFrom).
+        add(XmbNode.Action("ingame.restart", restart, XmbIcon("explore_category_game", "tex_quit#restart", "↻")) { askRestart() })
         add(xmbDiscNode(swap = false))
         if (com.armsx3.Rpcs3Bridge.discSwapState() != 0) add(xmbDiscNode(swap = true))
         if (com.armsx2.input.ToyPortals.menuEnabled()) add(xmbPortalNode(controller))
@@ -225,6 +226,12 @@ private fun xmbInGameColumns(controller: XmbController, game: GameInfo?): List<X
         )
         // The graphics API and driver, here as well as in Display Settings: a game is where they get changed.
         add(xmbGraphicsNode())
+        // The pause menu's other tabs, as it has them: the picture, performance (speed, the CPU
+        // decoders, frame captures) and controls. Its Settings tab is not here: All Core Settings
+        // just below and the Settings column hold all of it.
+        add(xmbPauseNode(com.armsx2.ui.emulation.EmulationMenuTab.Graphics, "tex_display", "\u25a3"))
+        add(xmbPauseNode(com.armsx2.ui.emulation.EmulationMenuTab.Performance, "tex_power", "\u26a1"))
+        add(xmbPauseNode(com.armsx2.ui.emulation.EmulationMenuTab.Controls, "tex_pd", "\ud83c\udfae"))
         add(xmbCoreSettingsNode(InGameOverlay.settingsScope.value, InGameOverlay.currentSerial.value))
         add(xmbTrophiesNode(inGame = true))
         addAll(xmbStateNodes(controller))
@@ -357,6 +364,25 @@ private fun xmbGraphicsNode(): XmbNode {
         host = {
             androidx.compose.runtime.CompositionLocalProvider(LocalXmbCollector provides collector) {
                 com.armsx2.ui.settings.RendererBackendSection(InGameOverlay.settingsState)
+            }
+        },
+    ) { collector.nodes }
+}
+
+/** A tab of the pause menu, composed for the XMB (see XmbPauseTab): the rows it shows, as lists. */
+@Composable
+private fun xmbPauseNode(tab: com.armsx2.ui.emulation.EmulationMenuTab, tex: String, glyph: String): XmbNode {
+    val (on, off) = xmbOnOff()
+    val icon = XmbIcon("explore_category_sysconf", tex, glyph)
+    val collector = remember(tab) { XmbCollector(on, off, icon) }
+    return XmbNode.Folder(
+        key = "ingame.pause.${tab.name}",
+        title = str(tab.titleKey),
+        icon = icon,
+        live = true,
+        host = {
+            androidx.compose.runtime.CompositionLocalProvider(LocalXmbCollector provides collector) {
+                com.armsx2.ui.emulation.XmbPauseTab(tab)
             }
         },
     ) { collector.nodes }

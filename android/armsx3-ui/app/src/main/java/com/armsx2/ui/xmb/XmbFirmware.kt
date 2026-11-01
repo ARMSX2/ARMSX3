@@ -62,8 +62,91 @@ object XmbFirmware {
         val key = "$rco/$name" + if (shadow) "#shadow" else ""
         if (images.containsKey(key)) return images[key]
         val container = rco(rco) ?: return null
-        val decoded = container.image(name)?.let(Gim::decode)?.let { if (shadow) withShadow(it) else it }
+        val base = name.substringBefore('#')
+        val decoded = container.image(base)?.let(Gim::decode)
+            ?.let { if (name.endsWith("#restart")) restartFrom(it) else it }
+            ?.let { if (shadow) withShadow(it) else it }
         return decoded?.asImageBitmap().also { images[key] = it }
+    }
+
+    /**
+     * Restart, which the firmware has no icon for, made from its Quit icon (a ring crossed out): the
+     * ring alone, opened at the top right with an arrowhead going round, in the ring's own shades.
+     * Asked for as "tex_quit#restart".
+     */
+    private fun restartFrom(quit: android.graphics.Bitmap): android.graphics.Bitmap {
+        val w = quit.width
+        val h = quit.height
+        val px = IntArray(w * h)
+        quit.getPixels(px, 0, w, 0, 0, w, h)
+        val cx = w / 2f
+        val cy = h / 2f
+        // The ring's edges, along the middle row in from the left.
+        val mid = (h / 2) * w
+        val outer = (0 until w / 2).firstOrNull { (px[mid + it] ushr 24) > 96 } ?: return quit
+        var inner = outer
+        while (inner < w / 2 && (px[mid + inner] ushr 24) > 96) inner++
+        val rOut = cx - outer
+        val rIn = cx - inner
+        val thick = rOut - rIn
+        if (thick < 2f) return quit
+        fun at(r: Float, deg: Float): Int {
+            val a = Math.toRadians(deg.toDouble())
+            val x = (cx + r * kotlin.math.cos(a)).toInt().coerceIn(0, w - 1)
+            val y = (cy + r * kotlin.math.sin(a)).toInt().coerceIn(0, h - 1)
+            return px[y * w + x]
+        }
+        // Where the cross-bars meet the ring (opaque just inside it), so as to fill those with ring.
+        val joints = BooleanArray(360) { d -> (at(rIn - 2f, d.toFloat()) ushr 24) > 96 }
+        fun nearJoint(deg: Float): Boolean {
+            val d = ((deg.toInt() % 360) + 360) % 360
+            return (-14..14).any { joints[(d + it + 360) % 360] }
+        }
+        val out = IntArray(w * h)
+        val gapFrom = -80f
+        val gapTo = -22f
+        for (y in 0 until h) for (x in 0 until w) {
+            val dx = x + 0.5f - cx
+            val dy = y + 0.5f - cy
+            val r = kotlin.math.sqrt(dx * dx + dy * dy)
+            if (r < rIn - 1.5f || r > rOut + 1.5f) continue
+            val deg = Math.toDegrees(kotlin.math.atan2(dy, dx).toDouble()).toFloat()
+            if (deg in gapFrom..gapTo) continue
+            out[y * w + x] = if (nearJoint(deg)) {
+                var d = deg + 40f
+                while (nearJoint(d)) d += 20f
+                at(r, d)
+            } else px[y * w + x]
+        }
+        val bmp = android.graphics.Bitmap.createBitmap(out, w, h, android.graphics.Bitmap.Config.ARGB_8888)
+            .copy(android.graphics.Bitmap.Config.ARGB_8888, true)
+        // The arrowhead at the ring's end by the gap, going round clockwise.
+        val t0 = Math.toRadians(gapFrom.toDouble())
+        val rm = (rIn + rOut) / 2f
+        val bx = cx + rm * kotlin.math.cos(t0).toFloat()
+        val by = cy + rm * kotlin.math.sin(t0).toFloat()
+        val radX = kotlin.math.cos(t0).toFloat()
+        val radY = kotlin.math.sin(t0).toFloat()
+        val tanX = -radY
+        val tanY = radX
+        val half = thick * 1.25f
+        val len = thick * 1.9f
+        val path = android.graphics.Path().apply {
+            moveTo(bx + radX * half, by + radY * half)
+            lineTo(bx - radX * half, by - radY * half)
+            lineTo(bx + tanX * len, by + tanY * len)
+            close()
+        }
+        val light = at(rm + thick * 0.3f, -110f) or (0xff shl 24)
+        val dark = at(rm - thick * 0.3f, -110f) or (0xff shl 24)
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            shader = android.graphics.LinearGradient(
+                bx + radX * half, by + radY * half, bx - radX * half, by - radY * half,
+                light, dark, android.graphics.Shader.TileMode.CLAMP,
+            )
+        }
+        android.graphics.Canvas(bmp).drawPath(path, paint)
+        return bmp
     }
 
     private fun withShadow(icon: android.graphics.Bitmap): android.graphics.Bitmap {

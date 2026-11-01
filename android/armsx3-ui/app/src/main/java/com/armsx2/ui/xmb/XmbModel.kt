@@ -148,10 +148,46 @@ class XmbColumn(
  * any change and the pad, touch and code can all drive it.
  */
 class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int> = emptyMap()) {
-    class Level(val node: XmbNode, children: List<XmbNode>, focus: Int, private val live: (() -> List<XmbNode>)? = null) {
-        private val fixed = children
-        val children: List<XmbNode> get() = live?.invoke() ?: fixed
+    /**
+     * An open list. It keeps the folder it was opened from only until the columns are built again:
+     * reading [children] first finds the folder anew by its key, so a list follows what it shows
+     * (a download's progress, a list that has just arrived, hosting that has just started) without
+     * being closed and opened again.
+     */
+    class Level(node: XmbNode, children: List<XmbNode>, focus: Int, live: (() -> List<XmbNode>)? = null) {
+        var node: XmbNode = node
+            private set
+        private var fixed = children
+        private var live = live
+        internal var owner: XmbController? = null
+        val children: List<XmbNode>
+            get() {
+                owner?.refresh(this)
+                return own
+            }
+        internal val own: List<XmbNode> get() = live?.invoke() ?: fixed
         var focus by mutableIntStateOf(focus)
+
+        internal fun adopt(fresh: XmbNode) {
+            if (fresh === node) return
+            node = fresh
+            if (fresh is XmbNode.Folder) {
+                if (fresh.live) live = fresh.children else { live = null; fixed = fresh.children() }
+            }
+        }
+    }
+
+    /** Point [level] and the lists above it at the folders as the columns have them now. */
+    internal fun refresh(level: Level) {
+        val depth = levels.indexOf(level)
+        if (depth < 0) return
+        var list: List<XmbNode> = currentColumn()?.items ?: return
+        for (i in 0..depth) {
+            val l = levels[i]
+            val fresh = list.firstOrNull { it.key == l.node.key } ?: return
+            l.adopt(fresh)
+            if (i < depth) list = l.own
+        }
     }
 
     class Editing(val node: XmbNode.Setting, choice: Int, value: Float) {
@@ -351,7 +387,7 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
                 if (node.live) {
                     // Filled as its tab is composed, a frame from now.
                     XmbSounds.play(XmbSounds.Sfx.DECIDE)
-                    levels.add(Level(node, emptyList(), 0, node.children))
+                    levels.add(Level(node, emptyList(), 0, node.children).also { it.owner = this })
                     return
                 }
                 val children = node.children()
@@ -360,7 +396,7 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
                     return
                 }
                 XmbSounds.play(XmbSounds.Sfx.DECIDE)
-                levels.add(Level(node, children, 0))
+                levels.add(Level(node, children, 0).also { it.owner = this })
             }
             is XmbNode.Panel -> {
                 XmbSounds.play(XmbSounds.Sfx.DECIDE)
