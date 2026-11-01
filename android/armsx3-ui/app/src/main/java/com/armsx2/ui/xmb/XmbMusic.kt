@@ -59,8 +59,12 @@ object XmbMusicLibrary {
     }
 }
 
+/**
+ * The Music column. At home it plays the library's music; over a game, the pause menu's, which
+ * is the music playing there, so picking a track changes what plays behind the in-game XMB.
+ */
 @Composable
-fun xmbMusicColumn(controller: XmbController): XmbColumn {
+fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false): XmbColumn {
     val context = LocalContext.current.applicationContext
     val scope = rememberCoroutineScope()
     val full = "explore_plugin_full"
@@ -71,15 +75,24 @@ fun xmbMusicColumn(controller: XmbController): XmbColumn {
     val tracks by produceState(emptyList<File>(), refresh) {
         value = withContext(Dispatchers.IO) { XmbMusicLibrary.tracks() }
     }
-    val playing = LibraryMusic.enabled.value
-    val current = LibraryMusic.customName.value
+    // The player this column drives: the library's music, or over a game the pause menu's.
+    val playing = if (inGame) PauseMusic.enabled.value else LibraryMusic.enabled.value
+    val current = if (inGame) PauseMusic.customName.value else LibraryMusic.customName.value
+    fun play(on: Boolean) = if (inGame) PauseMusic.set(context, on) else LibraryMusic.set(context, on)
+    fun useBuiltin() = if (inGame) PauseMusic.clearCustomTrack(context) else LibraryMusic.clearCustomTrack(context)
+    fun useTrack(file: File) {
+        if (inGame) PauseMusic.setCustomTrack(context, Uri.fromFile(file), file.name)
+        else LibraryMusic.setCustomTrack(context, Uri.fromFile(file), file.name)
+    }
+    fun enabledNow() = if (inGame) PauseMusic.enabled.value else LibraryMusic.enabled.value
     val nowPlaying = fw(full, "msg_play", "action.play")
     val paused = fw(full, "msg_pause", "xmb.music.paused")
     val builtin = str("xmb.music.builtin")
     val importTitle = str("xmb.music.import")
     val importDesc = str("xmb.music.import.desc")
     val imported = str("xmb.music.imported")
-    val asPause = str("xmb.music.asPause")
+    // Triangle offers the other player: the pause menu's at home, the library's over a game.
+    val asOther = str(if (inGame) "xmb.music.asLibrary" else "xmb.music.asPause")
     val deleteTitle = str("action.delete")
     val deleteAsk = str("xmb.music.delete.ask")
     val trackIcon = XmbIcon("explore_category_music", "music_tex_default", "♪")
@@ -107,10 +120,10 @@ fun xmbMusicColumn(controller: XmbController): XmbColumn {
         add(
             XmbNode.Action("music.builtin", builtin, if (builtinCurrent && playing) trackIcon else pausedIcon, status(builtinCurrent)) {
                 if (builtinCurrent) {
-                    LibraryMusic.set(context, !playing)
+                    play(!playing)
                 } else {
-                    LibraryMusic.clearCustomTrack(context)
-                    if (!playing) LibraryMusic.set(context, true)
+                    useBuiltin()
+                    if (!playing) play(true)
                 }
             },
         )
@@ -118,17 +131,21 @@ fun xmbMusicColumn(controller: XmbController): XmbColumn {
             val isCurrent = current == file.name
             val title = file.name.substringBeforeLast('.')
             val options = listOf(
-                XmbOption(asPause) {
+                XmbOption(asOther) {
                     scope.launch(Dispatchers.IO) {
-                        PauseMusic.setCustomTrack(context, Uri.fromFile(file), file.name)
-                        if (!PauseMusic.enabled.value) withContext(Dispatchers.Main) { PauseMusic.set(context, true) }
+                        if (inGame) {
+                            LibraryMusic.setCustomTrack(context, Uri.fromFile(file), file.name)
+                        } else {
+                            PauseMusic.setCustomTrack(context, Uri.fromFile(file), file.name)
+                            if (!PauseMusic.enabled.value) withContext(Dispatchers.Main) { PauseMusic.set(context, true) }
+                        }
                     }
                 },
                 XmbOption(deleteTitle) {
                     controller.ask(deleteAsk.format(title), yes, no, focusNo = true) {
                         scope.launch {
                             withContext(Dispatchers.IO) { file.delete() }
-                            if (isCurrent) LibraryMusic.clearCustomTrack(context)
+                            if (isCurrent) useBuiltin()
                             refresh++
                         }
                     }
@@ -137,11 +154,11 @@ fun xmbMusicColumn(controller: XmbController): XmbColumn {
             add(
                 XmbNode.Action("music.track.${file.name}", title, if (isCurrent && playing) trackIcon else pausedIcon, status(isCurrent), options) {
                     if (isCurrent) {
-                        LibraryMusic.set(context, !playing)
+                        play(!playing)
                     } else {
                         scope.launch {
-                            withContext(Dispatchers.IO) { LibraryMusic.setCustomTrack(context, Uri.fromFile(file), file.name) }
-                            if (!LibraryMusic.enabled.value) LibraryMusic.set(context, true)
+                            withContext(Dispatchers.IO) { useTrack(file) }
+                            if (!enabledNow()) play(true)
                         }
                     }
                 },

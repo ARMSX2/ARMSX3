@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -203,6 +204,25 @@ fun XmbView(
             }
             controller.levels.lastOrNull()?.let { level ->
                 key("level-$depth-${level.node.key}") { SubList(level, m, font, quiet = controller.editing != null) }
+            }
+            // A preview beside the open list (the toy portals' pictures), out of the way of a picker.
+            val asideLevel = controller.levels.lastOrNull { (it.node as? XmbNode.Folder)?.aside != null }
+            if (asideLevel != null && controller.editing == null && controller.options == null) {
+                val keys = buildList {
+                    controller.focusedNode()?.key?.let(::add)
+                    controller.levels.asReversed().forEach { add(it.node.key) }
+                }
+                val appear = remember(asideLevel) { Animatable(0f) }
+                LaunchedEffect(asideLevel) { appear.animateTo(1f, tween(260, easing = FastOutSlowInEasing)) }
+                Box(
+                    Modifier
+                        .offset { IntOffset(((m.width * 0.58f) * density).roundToInt(), ((m.catY + 64f * m.u) * density).roundToInt()) }
+                        .size((m.width * 0.38f).dp, (m.height - m.catY - 120f * m.u).coerceAtLeast(80f).dp)
+                        .graphicsLayer { alpha = appear.value },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    (asideLevel.node as XmbNode.Folder).aside?.invoke(keys)
+                }
             }
             controller.editing?.let { e -> key(e) { PickerPanel(e, m, font) } }
             controller.options?.let { o -> key(o) { OptionsPanel(o, m, font) } }
@@ -420,6 +440,19 @@ internal fun XmbIconView(icon: XmbIcon, size: Dp, modifier: Modifier = Modifier,
             icon.glyph.isNotEmpty() -> Text(
                 icon.glyph,
                 style = TextStyle(fontSize = (size.value * 0.5f).sp, color = Color.White, shadow = XmbShadow),
+            )
+        }
+        icon.inset?.let { inset ->
+            AsyncImage(
+                model = inset,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .offset(x = size * 0.14f, y = size * 0.08f)
+                    .size(size * 0.62f)
+                    .border(1.dp, Color.White.copy(alpha = 0.7f), androidx.compose.foundation.shape.RoundedCornerShape(3.dp))
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(3.dp)),
             )
         }
     }
@@ -678,6 +711,22 @@ private fun SubList(level: XmbController.Level, m: Metrics, font: FontFamily, qu
                         if (!line.isNullOrBlank()) {
                             Text(line, style = xmbText(font, m.subtitleSp, 0.92f), maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
+                        (node as? XmbNode.Action)?.meter?.let { level ->
+                            Box(
+                                Modifier
+                                    .padding(top = (6f * m.u).dp)
+                                    .width((240f * m.u).dp)
+                                    .height((6f * m.u).dp)
+                                    .background(Color.White.copy(alpha = 0.22f), RoundedCornerShape(50)),
+                            ) {
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth(level().coerceIn(0f, 1f))
+                                        .fillMaxHeight()
+                                        .background(Color.White, RoundedCornerShape(50)),
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -916,6 +965,13 @@ private fun XmbClock(m: Metrics, font: FontFamily) {
             delay(10_000)
         }
     }
+    val battery by produceState(readBattery(context)) {
+        while (true) {
+            value = withContext(Dispatchers.IO) { readBattery(context) }
+            delay(30_000)
+        }
+    }
+    val avatar = com.armsx2.ui.settings.rememberCurrentAvatar()
     val text = remember(now) {
         val locale = java.util.Locale.getDefault()
         val date = android.text.format.DateFormat.getBestDateTimePattern(locale, "dM")
@@ -937,11 +993,73 @@ private fun XmbClock(m: Metrics, font: FontFamily) {
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.align(Alignment.CenterEnd).padding(end = (90f * m.u).dp),
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = (60f * m.u).dp),
         ) {
+            // The player's RPCN avatar before the date, as the console shows its user.
+            avatar?.let {
+                Image(
+                    it,
+                    contentDescription = null,
+                    modifier = Modifier.size((27f * m.u).dp).clip(RoundedCornerShape((4f * m.u).dp)).border(1.dp, Color.White.copy(alpha = 0.6f), RoundedCornerShape((4f * m.u).dp)),
+                )
+                Spacer(Modifier.width((12f * m.u).dp))
+            }
             Text(text, style = xmbText(font, m.labelSp * 1.2f), maxLines = 1)
-            Spacer(Modifier.width((10f * m.u).dp))
-            Text("◔", style = xmbText(font, m.labelSp * 1.15f))
+            if (battery.first >= 0) {
+                Spacer(Modifier.width((16f * m.u).dp))
+                XmbBatteryGlyph(battery.first, battery.second, m)
+                Spacer(Modifier.width((6f * m.u).dp))
+                Text("${battery.first}%", style = xmbText(font, m.labelSp * 1.05f), maxLines = 1)
+            }
         }
     }
+}
+
+/** The battery as the bar shows it: an outline filled to its level, a bolt over it while charging. */
+@Composable
+private fun XmbBatteryGlyph(level: Int, charging: Boolean, m: Metrics) {
+    androidx.compose.foundation.Canvas(Modifier.width((28f * m.u).dp).height((14f * m.u).dp)) {
+        val nub = size.width * 0.09f
+        val body = androidx.compose.ui.geometry.Size(size.width - nub, size.height)
+        val stroke = size.height * 0.12f
+        val r = androidx.compose.ui.geometry.CornerRadius(size.height * 0.22f)
+        drawRoundRect(Color.White, size = body, cornerRadius = r, style = androidx.compose.ui.graphics.drawscope.Stroke(stroke))
+        drawRect(Color.White, topLeft = androidx.compose.ui.geometry.Offset(body.width, size.height * 0.3f), size = androidx.compose.ui.geometry.Size(nub, size.height * 0.4f))
+        val inset = stroke * 1.8f
+        val fill = (level.coerceIn(0, 100) / 100f) * (body.width - inset * 2f)
+        val low = level <= 15 && !charging
+        drawRoundRect(
+            if (low) Color(0xFFFF6B5E) else Color.White,
+            topLeft = androidx.compose.ui.geometry.Offset(inset, inset),
+            size = androidx.compose.ui.geometry.Size(fill.coerceAtLeast(0f), body.height - inset * 2f),
+            cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height * 0.08f),
+        )
+        if (charging) {
+            val bolt = androidx.compose.ui.graphics.Path().apply {
+                val w = body.width
+                val h = body.height
+                moveTo(w * 0.55f, h * 0.08f)
+                lineTo(w * 0.32f, h * 0.56f)
+                lineTo(w * 0.5f, h * 0.56f)
+                lineTo(w * 0.42f, h * 0.92f)
+                lineTo(w * 0.7f, h * 0.42f)
+                lineTo(w * 0.52f, h * 0.42f)
+                close()
+            }
+            drawPath(bolt, Color(0xFF2A2A2A))
+            drawPath(bolt, Color.White, style = androidx.compose.ui.graphics.drawscope.Stroke(size.height * 0.06f))
+        }
+    }
+}
+
+/** The battery's level (0..100, or -1 when unknown) and whether it is charging, from the sticky broadcast. */
+private fun readBattery(context: android.content.Context): Pair<Int, Boolean> {
+    val intent = runCatching {
+        context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+    }.getOrNull() ?: return -1 to false
+    val level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+    val scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
+    val status = intent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+    val charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
+    return (if (level >= 0 && scale > 0) level * 100 / scale else -1) to charging
 }

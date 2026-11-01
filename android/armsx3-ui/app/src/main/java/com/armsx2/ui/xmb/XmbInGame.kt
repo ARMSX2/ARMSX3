@@ -108,6 +108,26 @@ fun XmbInGameMenu() {
     LaunchedEffect(language, theme?.folder) { XmbFirmwareReady.load(context.applicationContext, language, theme) }
     androidx.activity.compose.BackHandler(enabled = !controller.busy && controller.levels.isEmpty()) { controller.back() }
 
+    // A friend asking to join the game being hosted: the XMB comes up on RPCN with the question,
+    // as the pause menu opens on its Friends panel for it.
+    val hosting by com.armsx2.remoteplay.RemotePlayHost.status
+    val askTitle = str("remoteplay.request.title")
+    val askAccept = str("remoteplay.request.accept")
+    val askDecline = str("remoteplay.request.decline")
+    LaunchedEffect(hosting) {
+        val ask = hosting as? com.armsx2.remoteplay.RemotePlayHost.Status.Asking ?: return@LaunchedEffect
+        controller.closeAll()
+        controller.columns.indexOfFirst { it.key == "rpcn" }.takeIf { it >= 0 }?.let { controller.selectColumn(it) }
+        controller.dialog = XmbController.Dialog(
+            askTitle.format(ask.viewer),
+            listOf(
+                XmbOption(askAccept) { com.armsx2.remoteplay.RemotePlayHost.accept() },
+                XmbOption(askDecline) { com.armsx2.remoteplay.RemotePlayHost.decline() },
+            ),
+        )
+        XmbSounds.play(XmbSounds.Sfx.OPTION)
+    }
+
     // The game dims behind and the XMB fades in over it.
     val appear = remember { Animatable(0f) }
     LaunchedEffect(Unit) { appear.animateTo(1f, tween(220)) }
@@ -196,12 +216,17 @@ private fun xmbInGameColumns(controller: XmbController, game: GameInfo?): List<X
         if (com.armsx2.input.ToyPortals.menuEnabled()) add(xmbPortalNode(controller))
         add(XmbNode.Action("ingame.quit", quit, XmbIcon("explore_category_game", "tex_quit", "■")) { askQuit() })
         add(xmbOnScreenNode())
-        add(xmbCoreSettingsNode(InGameOverlay.settingsScope.value, InGameOverlay.currentSerial.value))
+        // A screenshot of the game, without the XMB: it closes, and the shot is taken a moment later.
         add(
-            XmbNode.Action("ingame.trophies", fw(full, "msg_trophy_collection", "trophies.title"), XmbIcon("explore_category_psn", "item_tex_trophy", "🏆")) {
-                open(InGameScreen.Trophies)
+            XmbNode.Action("ingame.screenshot", str("xmb.screenshot"), XmbIcon("explore_category_photo", "tex_screenshot", "\uD83D\uDCF7"), str("xmb.screenshot.desc")) {
+                InGameOverlay.toggle()
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ com.armsx2.Screenshots.capture(context.applicationContext) }, 600)
             },
         )
+        // The graphics API and driver, here as well as in Display Settings: a game is where they get changed.
+        add(xmbGraphicsNode())
+        add(xmbCoreSettingsNode(InGameOverlay.settingsScope.value, InGameOverlay.currentSerial.value))
+        add(xmbTrophiesNode(inGame = true))
         addAll(xmbStateNodes(controller))
     }
     val gameColumn = XmbColumn(
@@ -215,7 +240,7 @@ private fun xmbInGameColumns(controller: XmbController, game: GameInfo?): List<X
     val rpcnShown by remember(controller) { androidx.compose.runtime.derivedStateOf { controller.currentColumn()?.key == "rpcn" } }
     val friends = xmbRpcnColumn(controller, rpcnShown, inGame = true)
 
-    return listOf(users, settings, xmbPhotoColumn(controller), xmbMusicColumn(controller), gameColumn, friends)
+    return listOf(users, settings, xmbPhotoColumn(controller), xmbMusicColumn(controller, inGame = true), gameColumn, friends)
 }
 
 /**
@@ -311,4 +336,28 @@ private fun xmbOnScreenNode(): XmbNode {
             XmbNode.Action("osd.editLayout", editLayout, icon) { InGameOverlay.editTouchLayout() },
         )
     }
+}
+
+/**
+ * Graphics API and Driver, in the in-game Game column: the renderer backend rows of Display
+ * Settings (the API, the Vulkan driver with its downloads, ANGLE for OpenGL, Apply and Restart),
+ * composed for the XMB as Display Settings composes them.
+ */
+@Composable
+private fun xmbGraphicsNode(): XmbNode {
+    val (on, off) = xmbOnOff()
+    val icon = XmbIcon("explore_category_sysconf", "tex_display", "\u2699")
+    val collector = remember { XmbCollector(on, off, icon) }
+    return XmbNode.Folder(
+        key = "ingame.graphics",
+        title = str("xmb.graphics"),
+        icon = icon,
+        sub = str("xmb.graphics.desc"),
+        live = true,
+        host = {
+            androidx.compose.runtime.CompositionLocalProvider(LocalXmbCollector provides collector) {
+                com.armsx2.ui.settings.RendererBackendSection(InGameOverlay.settingsState)
+            }
+        },
+    ) { collector.nodes }
 }

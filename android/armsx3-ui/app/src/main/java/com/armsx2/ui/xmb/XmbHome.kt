@@ -169,23 +169,22 @@ private fun xmbHomeColumns(
     val music = xmbMusicColumn(controller)
 
     val utilities = listOf(
-        XmbNode.Action("game.install", fw(full, "msg_tool_install_file", "xmb.installPackages"), XmbIcon("explore_category_game", "item_tex_disc_install", "📦")) {
-            go(AppRoute.PackageInstaller)
+        // The PKG/Data Manager: packages and licences, game updates and DLC, over the XMB.
+        XmbNode.Panel("game.install", str("packages.title"), XmbIcon("explore_category_game", "item_tex_disc_install", "📦"), str("xmb.packages.desc")) { close ->
+            XmbPanelTheme { com.armsx2.ui.packages.PackageInstallerScreen(onBack = close) }
         },
-        XmbNode.Action("game.saves", str("savestate.title.loadManage"), XmbIcon("explore_category_game", "item_tex_ps3util", "💾")) {
-            go(AppRoute.SaveManager())
-        },
-        XmbNode.Action("game.trophies", fw(full, "msg_trophy_collection", "trophies.title"), XmbIcon("explore_category_psn", "item_tex_trophy", "🏆")) {
-            go(AppRoute.Trophies)
-        },
-        XmbNode.Action("game.mods", str("mods.library.title"), XmbIcon("explore_category_game", "item_tex_ps3game_folder", "🛠")) {
-            go(AppRoute.ModLibrary)
+        XmbNode.Action("game.file", str("action.launchGame"), XmbIcon("explore_category_game", "item_tex_plain_folder", "📂")) {
+            MainActivityRuntime.promptLaunchGame()
         },
         XmbNode.Action("game.xmb", str("bios.boot.title"), XmbIcon("explore_category_game", "item_tex_ps3logo", "▶")) {
             MainActivityRuntime.startBios()
         },
-        XmbNode.Action("game.file", str("action.launchGame"), XmbIcon("explore_category_game", "item_tex_plain_folder", "📂")) {
-            MainActivityRuntime.promptLaunchGame()
+        xmbTrophiesNode(inGame = false),
+        XmbNode.Action("game.saves", str("savestate.title.loadManage"), XmbIcon("explore_category_game", "item_tex_ps3util", "💾")) {
+            go(AppRoute.SaveManager())
+        },
+        XmbNode.Action("game.mods", str("mods.library.title"), XmbIcon("explore_category_game", "item_tex_ps3game_folder", "🛠")) {
+            go(AppRoute.ModLibrary)
         },
     )
     // Where each game's media is, worked out off the main thread: a stat or three per game adds up
@@ -212,13 +211,20 @@ private fun xmbHomeColumns(
             mediaDir = dir,
         )
     }
+    // The tools have a column of their own, before the games, so the Game column is the games.
+    val tools = XmbColumn(
+        key = "tools",
+        title = str("xmb.cat.tools"),
+        icon = XmbIcon("explore_category_game", "item_tex_ps3util", "🧰"),
+        items = utilities,
+    )
     val game = XmbColumn(
         key = "game",
         title = fw("xmb_ingame", "msg_game", "xmb.cat.game"),
         icon = XmbIcon("xmb_ingame", "tex_game", "🎮"),
-        items = utilities + games,
-        // The first game, as the console lands on its newest title rather than on the utilities.
-        defaultFocus = if (games.isEmpty()) 0 else utilities.size,
+        items = games.ifEmpty {
+            listOf(XmbNode.Action("game.none", str("xmb.game.none"), XmbIcon("explore_category_game", "item_tex_ps3game_folder", "🎮"), str("xmb.game.none.desc")) {})
+        },
     )
 
     val network = XmbColumn(
@@ -226,9 +232,7 @@ private fun xmbHomeColumns(
         title = fw("xmb_ingame", "msg_net", "xmb.cat.network"),
         icon = XmbIcon("xmb_ingame", "tex_network", "🌐"),
         items = listOf(
-            XmbNode.Action("net.remote", fw(full, "msg_psp_connection", "remoteplay.title"), XmbIcon("explore_category_network", "tex_premo", "📡")) {
-                go(AppRoute.RemotePlay)
-            },
+            com.armsx2.remoteplay.xmbRemotePlayJoin(),
             XmbNode.Action("net.browser", fw(full, "msg_browser", "xmb.browser"), XmbIcon("explore_category_network", "tex_browser", "🌐"), WebsiteUrl.removePrefix("https://").trimEnd('/')) {
                 openExternalUrl(context, WebsiteUrl)
             },
@@ -241,18 +245,14 @@ private fun xmbHomeColumns(
         title = "ARMSX3",
         icon = XmbIcon(bitmap = markBadge, glyph = "◉"),
         items = listOf(
-            XmbNode.Action("armsx3.news", str("news.title"), XmbIcon("explore_category_network", "tex_onlinemanual", "📰")) {
-                go(AppRoute.News)
-            },
+            xmbNewsNode(),
             XmbNode.Action("armsx3.discord", str("about.discord"), XmbIcon(model = R.drawable.ic_discord, glyph = "💬")) {
                 openExternalUrl(context, DiscordUrl)
             },
             XmbNode.Action("armsx3.github", str("about.github"), XmbIcon(model = R.drawable.ic_github, glyph = "🐙")) {
                 openExternalUrl(context, GithubUrl)
             },
-            XmbNode.Action("armsx3.about", str("about.title"), XmbIcon(bitmap = markIcon)) {
-                go(AppRoute.About)
-            },
+            xmbAboutNode(XmbIcon(bitmap = markIcon)),
         ),
     )
 
@@ -262,7 +262,7 @@ private fun xmbHomeColumns(
     }
     val rpcn = xmbRpcnColumn(controller, rpcnShown, inGame = false)
 
-    return listOf(users, settings, photo, music, game, network, armsx3, rpcn)
+    return listOf(users, settings, photo, music, tools, game, network, armsx3, rpcn)
 }
 
 /** The console's date and time for "last played": the locale's day, month and year, and the time. */
@@ -273,10 +273,10 @@ private fun lastPlayedFormat(context: android.content.Context, locale: java.util
 }
 
 /**
- * Photo: ARMSX3's pictures in albums, newest first, as the console's Photo column lists folders:
- * the screenshots, and each frame dumped from a game into config/captures (Dump this frame), by
- * when it was taken. Each picture opens full screen, and Left and Right go through its album.
- * The console's "There are no images." when there are none.
+ * Photo: the screenshots taken in ARMSX3 (the screenshot hotkey, or Take Screenshot in the in-game
+ * XMB), newest first, in an album as the console's Photo column lists folders. Each picture opens
+ * full screen, and Left and Right go through the album. The console's "There are no images." when
+ * there are none.
  */
 @Composable
 internal fun xmbPhotoColumn(controller: XmbController): XmbColumn {
@@ -288,7 +288,6 @@ internal fun xmbPhotoColumn(controller: XmbController): XmbColumn {
     val locale = remember(I18n.current) { java.util.Locale.forLanguageTag(I18n.current) }
     val taken = remember(locale) { lastPlayedFormat(context, locale) }
     val screenshots = str("xmb.photo.screenshots")
-    val frameDump = str("xmb.photo.frameDump")
     val count = str("xmb.photo.count")
     val folderIcon = XmbIcon("explore_category_photo", "photo_tex_folder", "🖼")
     val items = if (albums.isEmpty()) {
@@ -299,7 +298,6 @@ internal fun xmbPhotoColumn(controller: XmbController): XmbColumn {
         albums.map { album ->
             val title = when (album.kind) {
                 XmbPhotos.Kind.Screenshots -> screenshots
-                XmbPhotos.Kind.FrameDump -> "$frameDump  ${taken.format(java.util.Date(album.taken))}"
             }
             val sub = listOfNotNull(album.serial, count.format(album.files.size)).joinToString("   ")
             XmbNode.Folder("photo.album.${album.key}", title, XmbIcon(file = album.files.first(), glyph = "🖼"), sub) {
@@ -351,9 +349,9 @@ private fun XmbPhotoViewer(files: List<File>, start: Int) {
     }
 }
 
-/** ARMSX3's pictures: screenshots, and frames dumped into config/captures. */
+/** ARMSX3's pictures: its screenshots. */
 object XmbPhotos {
-    enum class Kind { Screenshots, FrameDump }
+    enum class Kind { Screenshots }
 
     class Album(val key: String, val kind: Kind, val taken: Long, val serial: String?, val files: List<File>)
 
@@ -367,22 +365,5 @@ object XmbPhotos {
         val shots = listOf("snaps", "screenshots").flatMap { images(root?.let { r -> File(r, it) }) }
             .sortedByDescending { it.lastModified() }
         if (shots.isNotEmpty()) add(Album("screenshots", Kind.Screenshots, shots.first().lastModified(), null, shots))
-        // A dump is a folder named <serial>_<yyyyMMddHHmmss>_frame holding the frame's pictures.
-        val stamp = java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.US)
-        runCatching { com.armsx2.DevTools.capturesDir().listFiles() }.getOrNull()
-            ?.filter { it.isDirectory }
-            ?.mapNotNull { dir ->
-                val files = images(dir).sortedBy { it.name }
-                if (files.isEmpty()) return@mapNotNull null
-                val parts = dir.name.split('_')
-                val serial = parts.getOrNull(0)?.takeIf { it.isNotBlank() && parts.size >= 3 }
-                val taken = parts.getOrNull(1)?.let { runCatching { stamp.parse(it)?.time }.getOrNull() } ?: dir.lastModified()
-                Album("dump.${dir.name}", Kind.FrameDump, taken, serial, files)
-            }
-            ?.sortedByDescending { it.taken }
-            ?.let(::addAll)
-        // Pictures left loose in config/captures, if any.
-        val loose = images(runCatching { com.armsx2.DevTools.capturesDir() }.getOrNull()).sortedByDescending { it.lastModified() }
-        if (loose.isNotEmpty()) add(Album("captures", Kind.FrameDump, loose.first().lastModified(), null, loose))
     }
 }

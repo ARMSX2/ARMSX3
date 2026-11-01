@@ -1414,7 +1414,13 @@ internal fun LibraryBackdrop() {
         // The boot animation is the console's own, on its wave, whatever the theme.
         val theme = com.armsx2.ui.xmb.XmbTheme.entry()?.takeUnless { com.armsx2.ui.xmb.XmbMode.booting.value }
         if (theme == null) {
-            if (LibraryBackground.animated2D.value) LibraryWaveBackground(Modifier.fillMaxSize()) else XmbWave()
+            when {
+                // The boot animation is the console's, on its wave, whatever the background.
+                com.armsx2.ui.xmb.XmbMode.booting.value -> XmbWave()
+                LibraryBackground.flurry.value -> SaverBackdrop()
+                LibraryBackground.animated2D.value -> LibraryWaveBackground(Modifier.fillMaxSize())
+                else -> XmbWave()
+            }
         } else {
             SavedBackdrop(Uri.fromFile(theme.picture).toString(), theme.slideshow, theme.scene)
         }
@@ -1431,29 +1437,7 @@ internal fun LibraryBackdrop() {
         // bundled still is the cheap floor shown during GL startup (and, once the wave is up,
         // sits hidden behind it). Custom backgrounds below override all of this.
         if (LibraryBackground.flurry.value) {
-            // Flurry, in the same shell as the XMB wave: if GL cannot come up we get the
-            // 2D backdrop rather than a hole, exactly as XmbGlView does below.
-            // Keyed on the selection: an AndroidView factory runs once, so without this
-            // switching saver or preset would leave the old one running.
-            val kind = LibraryBackground.saverKind.value
-            val preset = if (kind == 0) LibraryBackground.flurryPreset.value
-                         else LibraryBackground.rssPreset.value
-            androidx.compose.runtime.key(kind, preset) {
-                var saverGl by remember { mutableStateOf<Boolean?>(null) }
-                if (saverGl == false) {
-                    LibraryWaveBackground(Modifier.fillMaxSize())
-                } else {
-                    AndroidView(
-                        factory = {
-                            SaverGlView(it, LibraryBackground.currentSpec()).apply {
-                                onGlStatus = { ok -> saverGl = ok }
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                        onRelease = { it.stop() },
-                    )
-                }
-            }
+            SaverBackdrop()
         } else if (LibraryBackground.animated2D.value) {
             // User opted into the lightweight 2D animated wave everywhere (#Luminz) — the same
             // backdrop GL-fail devices get; skip the GLES3 XmbGlView entirely.
@@ -1463,6 +1447,34 @@ internal fun LibraryBackdrop() {
         }
     } else {
         SavedBackdrop(libraryBg, LibraryBackground.slideshow.value, LibraryBackground.scene.value)
+    }
+}
+
+/**
+ * The chosen screensaver (Flurry and the rest), in the same shell as the XMB wave: if GL cannot
+ * come up we get the 2D backdrop rather than a hole, exactly as XmbGlView does. Keyed on the
+ * selection: an AndroidView factory runs once, so without this switching saver or preset would
+ * leave the old one running.
+ */
+@Composable
+private fun SaverBackdrop() {
+    val kind = LibraryBackground.saverKind.value
+    val preset = if (kind == 0) LibraryBackground.flurryPreset.value else LibraryBackground.rssPreset.value
+    androidx.compose.runtime.key(kind, preset) {
+        var saverGl by remember { mutableStateOf<Boolean?>(null) }
+        if (saverGl == false) {
+            LibraryWaveBackground(Modifier.fillMaxSize())
+        } else {
+            AndroidView(
+                factory = {
+                    SaverGlView(it, LibraryBackground.currentSpec()).apply {
+                        onGlStatus = { ok -> saverGl = ok }
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+                onRelease = { it.stop() },
+            )
+        }
     }
 }
 

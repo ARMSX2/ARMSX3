@@ -602,14 +602,17 @@ uniform vec3 ffdScale2;
 uniform vec3 ffdOffset;
 uniform float uXmb;
 out vec3 vPos;
+out float vDepth;
 void main() {
   vec3 p = vec3(aPos.x, 0.0, aPos.y);
   vec2 uv = (aPos + 1.0) * 0.5;
   p.y = texture(uSplineTex, uv).r;
-  // XMB mode: measured against a capture of the console's XMB, its band sits 9% of the screen lower
-  // and fans out toward the edges, to twice this one's height at the left and half again at the right.
-  float fan = 0.07 * aPos.x * aPos.x - 0.02 * aPos.x;
-  p.y += uXmb * (aPos.y * fan - 0.18);
+  // XMB mode: measured against frames of the console's boot and XMB (1080p). Its band is a fifth of
+  // the screen tall at the left edge, a ninth in the middle and a sixth at the right, sits a little
+  // below the middle and drops toward the right; this one was half that and level.
+  float fan = 0.05 + 0.11 * aPos.x * aPos.x - 0.02 * aPos.x;
+  p.y += uXmb * (aPos.y * fan - 0.15 - 0.08 * aPos.x);
+  vDepth = aPos.y;
   vec3 ffd1 = p * ffdScale1 + ffdOffset;
   vec3 ffd2 = p * ffdScale2 + ffdOffset;
   p.y += sin(ffd1.x + uTime * flowSpeed) * ffdYAmp;
@@ -634,16 +637,21 @@ void main() {
         private const val WAVE_FS = """#version 300 es
 precision highp float;
 in vec3 vPos;
+in float vDepth;
 out vec4 oColor;
 uniform float opacity;
 uniform float brightness;
 uniform float fresnelPower;
 uniform float fresnelScale;
+uniform float uXmb;
 void main() {
   vec3 dx = dFdx(vPos);
   vec3 dy = dFdy(vPos);
   vec3 N = normalize(cross(dx, dy));
   float F = fresnelScale * pow(1.0 + dot(vec3(0.0, 0.0, -1.0), N), fresnelPower);
+  // XMB mode: the console's band is a sheet of light, milky across its whole depth and brightest
+  // along its upper edge, not only lit where it turns edge-on.
+  F += uXmb * (0.10 + 0.24 * smoothstep(-0.6, 1.0, vDepth));
   oColor = vec4(vec3(1.0), F * opacity * brightness);
 }"""
     }

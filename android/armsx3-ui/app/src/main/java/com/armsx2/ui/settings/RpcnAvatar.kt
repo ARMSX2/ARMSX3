@@ -409,6 +409,19 @@ internal fun RpcnAvatarImage(modifier: Modifier) {
     AvatarPicture(path, modifier, AvatarPixels)
 }
 
+/** The picture games are given for the player now, as an image: for the XMB's RPCN column. */
+@Composable
+internal fun rememberCurrentAvatar(): ImageBitmap? {
+    val fallback = rememberDefaultAvatar()
+    val image by produceState<ImageBitmap?>(null, RpcnAvatarPicker.open.value) {
+        if (!RpcnAvatarPicker.open.value) {
+            val path = withContext(Dispatchers.IO) { Rpcs3Bridge.avatarCurrent().ifBlank { null } }
+            value = path?.let { withContext(Dispatchers.IO) { AvatarImages.load(it, AvatarPixels) } }
+        }
+    }
+    return image ?: fallback
+}
+
 /** The picker: every usable avatar in a grid, a picture of the player's own, or the default. */
 @Composable
 fun RpcnAvatarPickerOverlay() {

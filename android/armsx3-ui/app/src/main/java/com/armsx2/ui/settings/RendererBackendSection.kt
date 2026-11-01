@@ -29,6 +29,25 @@ import com.armsx2.i18n.str
 @Composable
 fun RendererBackendSection(state: MutableState<Settings>) {
     val settings = state.value
+    // In the XMB over a game: a change of API or driver asks straight away whether to restart the
+    // game with it, as it only takes effect then.
+    if (com.armsx2.ui.xmb.LocalXmbCollector.current != null && MainActivityRuntime.currentGame.value != null) {
+        val choice = Triple(settings.renderer, settings.customDriverId, settings.useAngleOpenGL)
+        val asked = androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(choice) }
+        val title = str("backend.applyRestart")
+        val message = str("xmb.restartToApply")
+        val later = str("xmb.later")
+        LaunchedEffect(choice) {
+            if (choice == asked.value) return@LaunchedEffect
+            asked.value = choice
+            com.armsx2.ui.xmb.XmbDialogs.target()?.let { x ->
+                com.armsx2.ui.xmb.XmbDialogs.ask(x, title, message, title, later, {
+                    if (com.armsx2.ui.WindowImpl.overlayVisible.value) InGameOverlay.toggle()
+                    MainActivityRuntime.restart()
+                }, {})
+            }
+        }
+    }
     // No Software: RPCS3 has no PS3 software renderer (that was ARMSX2's PCSX2 one). A title
     // still saved with it boots Vulkan, and shows here as Auto, which is the same thing.
     val rendererIds = listOf("auto", "opengl", "vulkan")
@@ -64,6 +83,19 @@ fun RendererBackendSection(state: MutableState<Settings>) {
     // display options where nobody could find it. It is on the Performance tab now.
 
     SettingsDivider()
+    // In the XMB: Apply and Restart while a game runs, the only time it does anything.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        if (MainActivityRuntime.currentGame.value != null) {
+            com.armsx2.ui.xmb.XmbCollected(
+                c,
+                com.armsx2.ui.xmb.XmbNode.Action("xmb.backend.restart", str("backend.applyRestart"), c.icon) {
+                    if (com.armsx2.ui.WindowImpl.overlayVisible.value) com.armsx2.ui.InGameOverlay.toggle()
+                    MainActivityRuntime.restart()
+                },
+            )
+        }
+        return
+    }
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.End,

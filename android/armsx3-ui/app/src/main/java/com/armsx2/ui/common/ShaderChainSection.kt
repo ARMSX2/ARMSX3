@@ -301,6 +301,43 @@ private fun ShaderPresetPicker(preset: String, onPresetChange: (String) -> Unit)
         }
     }
 
+    // In the XMB: the presets as a tree of lists, None first, scanned as the list opens.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        val title = str("renderer.shaderChain.preset.label")
+        val noneLabel = str("renderer.shaderChain.preset.none")
+        val emptyLabel = str("renderer.shaderChain.empty")
+        fun folderNode(dir: ShaderDirectory): com.armsx2.ui.xmb.XmbNode = com.armsx2.ui.xmb.XmbNode.Folder(
+            "xmb.shader.dir.${dir.key}", dir.label, c.icon, "${dir.count}",
+        ) {
+            dir.folders.map { folderNode(it) } + dir.presets.map { p ->
+                com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.preset.${p.path}", p.label, c.icon, p.passes?.let { "$it" }) { onPresetChange(p.path) }
+            }
+        }
+        com.armsx2.ui.xmb.XmbCollected(
+            c,
+            com.armsx2.ui.xmb.XmbNode.Folder(
+                "xmb.shader.presets", title, c.icon, if (preset.isBlank()) noneLabel else File(preset).nameWithoutExtension,
+                live = true,
+                host = { LaunchedEffect(Unit) { expanded.value = true } },
+            ) {
+                val r = scan.value?.root
+                when {
+                    r == null -> listOf(com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.scanning", "...", c.icon) {})
+                    r.folders.isEmpty() && r.presets.isEmpty() -> listOf(
+                        com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.none", noneLabel, c.icon) { onPresetChange("") },
+                        com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.empty", emptyLabel, c.icon, scan.value?.dir) {},
+                    )
+                    else -> listOf<com.armsx2.ui.xmb.XmbNode>(
+                        com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.none", noneLabel, c.icon) { onPresetChange("") },
+                    ) + r.folders.map { folderNode(it) } + r.presets.map { p ->
+                        com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.preset.${p.path}", p.label, c.icon) { onPresetChange(p.path) }
+                    }
+                }
+            },
+        )
+        return
+    }
+
     val root = scan.value?.root
     val currentFolder = remember(root, currentFolderKey.value) {
         root?.findDirectory(currentFolderKey.value) ?: root

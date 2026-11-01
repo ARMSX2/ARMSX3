@@ -1394,3 +1394,45 @@ private fun FigureRow(
         ) { Text(action) }
     }
 }
+
+/**
+ * The portals' pictures for the XMB's Portal lists, beside the list as the console shows a
+ * preview: the art alone, with what stands on it, and the pad of the [focus]ed position ringed.
+ */
+@Composable
+internal fun XmbSkylanderArt(placed: Map<Int, String>, modifier: Modifier) {
+    val light by produceState(PortalLight) {
+        while (true) {
+            val rgb = withContext(Dispatchers.IO) { Rpcs3Bridge.skylanderLight() }
+            value = if (rgb != 0) Color(0xFF000000.toInt() or rgb) else PortalLight
+            delay(250)
+        }
+    }
+    SkylanderPortalArt(placed.keys.sorted(), light, modifier)
+}
+
+@Composable
+internal fun XmbInfinityArt(placed: Map<Int, String>, focus: Int?, modifier: Modifier) {
+    val grows = listOf(0, 3, 6).associateWith { animateFloatAsState(if (placed[it] != null) 1f else 0f, SetDown, label = "xmb-on$it").value }
+    val pad = when (focus) {
+        0, 1, 2 -> 0
+        3, 4, 5 -> 3
+        6, 7, 8 -> 6
+        else -> null
+    }
+    InfinityBaseArt(placed[0] != null, placed[3] != null, placed[6] != null, pad, grows, modifier)
+}
+
+@Composable
+internal fun XmbDimensionsArt(placed: Map<Int, String>, focus: Int?, modifier: Modifier) {
+    val left = listOf(0, 3, 4)
+    val right = listOf(2, 5, 6)
+    val pad = when (focus) {
+        1 -> 1
+        in left -> 0
+        in right -> 2
+        else -> null
+    }
+    val grows = (0..6).map { animateFloatAsState(if (placed[it] != null) 1f else 0f, SetDown, label = "xmb-toy$it").value }
+    ToyPadArt(placed[1] != null, left.count { placed[it] != null } / 3f, right.count { placed[it] != null } / 3f, pad, grows, modifier)
+}

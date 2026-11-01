@@ -87,6 +87,42 @@ fun DriverManagerSection() {
         }
     }
 
+    // In the XMB: the driver as an XMB list, with downloads as lists of their own and the outcome
+    // in the XMB's dialog.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        XmbDriverNodes(
+            c, installed, remote, loadingRemote,
+            fetch = {
+                if (remote == null && !loadingRemote) {
+                    loadingRemote = true
+                    scope.launch {
+                        val r = withContext(Dispatchers.IO) { CustomDriver.fetchRemote() }
+                        remote = r; loadingRemote = false
+                    }
+                }
+            },
+            download = { rd ->
+                scope.launch {
+                    val x = com.armsx2.ui.xmb.XmbDialogs.target()
+                    busyId = rd.id
+                    val d = withContext(Dispatchers.IO) { CustomDriver.download(context, rd) }
+                    busyId = null
+                    if (d != null) { refreshInstalled(); selectDriver(d.id) }
+                    x?.tell(if (d != null) "$installedOkMsg ${d.name}" else downloadFailedMsg, str0("action.ok"))
+                }
+            },
+            import = { importLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*")) },
+            delete = { driver ->
+                val wasSelected = InGameOverlay.settingsState.value.customDriverId == driver.id
+                CustomDriver.delete(driver)
+                if (wasSelected) selectDriver(null)
+                refreshInstalled()
+            },
+            busyId = busyId,
+        )
+        return
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle(str("backend.gpuDriver.label"), str("backend.gpuDriver.description"))
 
@@ -287,6 +323,20 @@ private fun TurnipOptions() {
  */
 @Composable
 fun AngleDriverSection(useAngle: Boolean, onSelect: (Boolean) -> Unit) {
+    // In the XMB: the system's OpenGL ES or ANGLE, as a choice.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        val labels = listOf(str("backend.driver.systemGl"), "ANGLE")
+        com.armsx2.ui.xmb.XmbCollected(
+            c,
+            com.armsx2.ui.xmb.XmbNode.Setting(
+                "xmb.gldriver", str("backend.glDriver.label"), c.icon,
+                com.armsx2.ui.xmb.XmbEditor.Choice(labels, { if (useAngle) 1 else 0 }) { onSelect(it == 1) },
+                { labels[if (useAngle) 1 else 0] },
+                str("backend.glDriver.description"),
+            ),
+        )
+        return
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle(str("backend.glDriver.label"), str("backend.glDriver.description"))
         DriverRow(
@@ -389,4 +439,109 @@ private fun selectDriver(id: String?) {
     // settings scope is Game) so a title can pin the driver it needs.
     MainActivityRuntime.customDriverId.value = id
     InGameOverlay.saveSettings(InGameOverlay.settingsState.value.copy(customDriverId = id ?: ""))
+}
+
+private fun str0(key: String) = com.armsx2.i18n.I18n.get(key)
+
+/**
+ * The Vulkan driver in the XMB: GPU Driver as a choice of the system's and every installed one
+ * (Triangle on an installed one deletes it), Download Drivers by source, Import, and Turnip's
+ * options once a custom driver is installed.
+ */
+@Composable
+private fun XmbDriverNodes(
+    c: com.armsx2.ui.xmb.XmbCollector,
+    installed: List<CustomDriver.InstalledDriver>,
+    remote: List<CustomDriver.RemoteDriver>?,
+    loading: Boolean,
+    fetch: () -> Unit,
+    download: (CustomDriver.RemoteDriver) -> Unit,
+    import: () -> Unit,
+    delete: (CustomDriver.InstalledDriver) -> Unit,
+    busyId: String?,
+) {
+    val title = str("backend.gpuDriver.label")
+    val desc = str("backend.gpuDriver.description")
+    val system = str("backend.driver.systemVulkan")
+    val downloadTitle = str("backend.driver.download")
+    val importTitle = str("backend.driver.import")
+    val fetching = str("backend.driver.fetching")
+    val none = str("backend.driver.none")
+    val installing = str("backend.driver.installing")
+    val deleteTitle = str("action.delete")
+    val gpuModel = remember { com.armsx2.GpuInfo.rendererName() }
+    val gpuRec = remember(gpuModel) { com.armsx2.GpuInfo.recommendation(gpuModel) }
+    val recommended = "${str("backend.driver.gpuModel")} ${gpuModel ?: str("backend.driver.gpuUnknown")}   " +
+        "${str("backend.driver.recommended")} ${gpuRec?.sourceLabel ?: str("backend.driver.recommendSystem")}"
+    val labels = listOf(system) + installed.map { it.name }
+    val ids = listOf("") + installed.map { it.id }
+    val selected = { ids.indexOf(InGameOverlay.settingsState.value.customDriverId).coerceAtLeast(0) }
+    com.armsx2.ui.xmb.XmbCollected(
+        c,
+        com.armsx2.ui.xmb.XmbNode.Setting(
+            "xmb.driver", title, c.icon,
+            com.armsx2.ui.xmb.XmbEditor.Choice(labels, selected) { i -> selectDriver(ids.getOrNull(i)?.ifBlank { null }) },
+            { labels.getOrElse(selected()) { system } },
+            "$recommended   $desc",
+        ),
+    )
+    if (installed.isNotEmpty()) {
+        com.armsx2.ui.xmb.XmbCollected(
+            c,
+            com.armsx2.ui.xmb.XmbNode.Folder("xmb.driver.installed", deleteTitle, c.icon, installed.joinToString { it.name }) {
+                installed.map { d ->
+                    com.armsx2.ui.xmb.XmbNode.Action("xmb.driver.del.${d.id}", d.name, c.icon, listOf(d.vendor, d.version).filter(String::isNotBlank).joinToString(" \u00B7 ")) {
+                        com.armsx2.ui.xmb.XmbDialogs.target()?.let { x ->
+                            com.armsx2.ui.xmb.XmbDialogs.ask(x, deleteTitle, d.name, deleteTitle, str0("action.cancel"), { delete(d) }, {})
+                        }
+                    }
+                }
+            },
+        )
+    }
+    com.armsx2.ui.xmb.XmbCollected(
+        c,
+        com.armsx2.ui.xmb.XmbNode.Folder(
+            "xmb.driver.download", downloadTitle, c.icon, if (busyId != null) installing else null, live = true,
+            host = { androidx.compose.runtime.LaunchedEffect(Unit) { fetch() } },
+        ) {
+            when {
+                loading || remote == null -> listOf(com.armsx2.ui.xmb.XmbNode.Action("xmb.driver.fetching", fetching, c.icon) {})
+                remote.isEmpty() -> listOf(com.armsx2.ui.xmb.XmbNode.Action("xmb.driver.none", none, c.icon) {})
+                else -> remote.groupBy { it.source }.map { (source, drivers) ->
+                    com.armsx2.ui.xmb.XmbNode.Folder("xmb.driver.src.$source", source.ifBlank { downloadTitle }, c.icon, "${drivers.size}") {
+                        drivers.map { rd ->
+                            com.armsx2.ui.xmb.XmbNode.Action(
+                                "xmb.driver.remote.${rd.id}",
+                                rd.releaseName.ifBlank { rd.assetName },
+                                c.icon,
+                                listOf(rd.tagName, rd.publishedAt.take(10)).filter(String::isNotBlank).joinToString(" \u00B7 "),
+                            ) { download(rd) }
+                        }
+                    }
+                }
+            }
+        },
+    )
+    com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action("xmb.driver.import", importTitle, c.icon) { import() })
+    if (installed.isNotEmpty()) {
+        var ubwcHint by remember { mutableStateOf(CustomDriver.ubwcFlagHint()) }
+        var envText by remember { mutableStateOf(CustomDriver.driverEnvText()) }
+        val envTitle = str("backend.turnip.env")
+        com.armsx2.ui.xmb.XmbCollected(
+            c,
+            com.armsx2.ui.xmb.XmbNode.Setting(
+                "xmb.turnip.ubwc", str("backend.turnip.ubwcHint"), c.icon,
+                com.armsx2.ui.xmb.XmbEditor.Toggle({ ubwcHint }) { ubwcHint = it; CustomDriver.setUbwcFlagHint(it) },
+                { if (ubwcHint) c.on else c.off },
+                str("backend.turnip.ubwcHint.desc"),
+            ),
+        )
+        com.armsx2.ui.xmb.XmbCollected(
+            c,
+            com.armsx2.ui.xmb.XmbNode.Action("xmb.turnip.env", envTitle, c.icon, envText.ifBlank { "TU_DEBUG=sysmem" } + "   " + str("backend.turnip.env.desc")) {
+                com.armsx2.ui.xmb.XmbKeyboard.ask(envTitle, envText) { typed -> envText = typed; CustomDriver.setDriverEnvText(typed) }
+            },
+        )
+    }
 }

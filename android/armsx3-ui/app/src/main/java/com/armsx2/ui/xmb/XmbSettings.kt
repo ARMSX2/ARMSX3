@@ -220,16 +220,67 @@ private fun xmbThemeSettings(): XmbNode {
     val months = remember(locale) {
         java.text.DateFormatSymbols.getInstance(locale).months.take(12).map { m -> m.replaceFirstChar { it.titlecase(locale) } }
     }
-    val colorLabels = listOf(colorDefault) + months
+    val colorLabels = listOf(colorDefault) + months + str("xmb.theme.color.cycle")
     val backgrounds = str("xmb.theme.backgrounds")
     val backgroundsDesc = str("xmb.theme.backgrounds.desc")
     val icons = str("xmb.theme.icons")
     val iconsDesc = str("xmb.theme.icons.desc")
+    // What moves behind the XMB with no theme: the console's wave, the simple 2D wave, or one of
+    // the library's screensavers. The same choice the library makes, so both stay in step.
+    val bgLabels = listOf(str("xmb.theme.background.wave"), str("xmb.theme.background.simple"), str("xmb.theme.background.saver"))
+    val background = XmbNode.Setting(
+        key = "theme.background",
+        title = str("xmb.theme.background"),
+        icon = icon,
+        editor = XmbEditor.Choice(bgLabels, { xmbBackground() }) { i ->
+            com.armsx2.ui.home.LibraryBackground.setFlurry(i == 2)
+            com.armsx2.ui.home.LibraryBackground.setAnimated2D(i == 1)
+        },
+        value = { bgLabels[xmbBackground()] },
+        description = str("xmb.theme.background.desc"),
+    )
+    val saverTitle = str("app.bg.saver")
+    val flurryPreset = str("app.bg.flurry.preset")
+    val fluxPreset = str("app.bg.flux.preset")
+    val random = str("app.bg.flurry.random")
+    fun saverNodes(): List<XmbNode> {
+        if (xmbBackground() != 2) return emptyList()
+        val lb = com.armsx2.ui.home.LibraryBackground
+        val kinds = listOf("Flurry", "Flux", "Plasma", "SolarWinds", "Hyperspace", "Lattice", "Skyrocket")
+        val kind = lb.saverKind.value
+        val nodes = mutableListOf<XmbNode>(
+            XmbNode.Setting("theme.saver", saverTitle, icon, XmbEditor.Choice(kinds, { lb.saverKind.value }) { lb.setSaverKind(it) }, { kinds.getOrElse(lb.saverKind.value) { "" } }),
+        )
+        if (kind == 0) {
+            val values = listOf(99, 0, 1, 2, 3, 4, 5, -1)
+            val names = listOf(random, "Water", "Fire", "Psychedelic", "RGB", "Binary", "Classic", "Insane")
+            nodes += XmbNode.Setting(
+                "theme.saver.flurry", flurryPreset, icon,
+                XmbEditor.Choice(names, { values.indexOf(lb.flurryPreset.value).coerceAtLeast(0) }) { lb.setFlurryPreset(values[it]) },
+                { names[values.indexOf(lb.flurryPreset.value).coerceAtLeast(0)] },
+            )
+        } else if (kind != 4 && kind != 6) {
+            val values = listOf(99, 1, 2, 3, 4, 5, 6)
+            val names = listOf(random) + when (kind) {
+                1 -> listOf("Regular", "Hypnotic", "Insane", "Sparklers", "Paradigm", "Galactic")
+                2 -> listOf("Classic", "Tight", "Wide", "Fast", "Slow drift", "Coarse")
+                5 -> listOf("Regular", "Chainmail", "Brass Mesh", "Computer", "Slick", "Tasty")
+                else -> listOf("Regular", "Cosmic Strings", "Cold Pricklies", "Space Fur", "Jiggly", "Undertow")
+            }
+            nodes += XmbNode.Setting(
+                "theme.saver.preset", fluxPreset, icon,
+                XmbEditor.Choice(names, { values.indexOf(lb.rssPreset.value).coerceAtLeast(0) }) { lb.setRssPreset(values[it]) },
+                { names[values.indexOf(lb.rssPreset.value).coerceAtLeast(0)] },
+            )
+        }
+        return nodes
+    }
     return XmbNode.Folder(
         key = "settings.theme",
         title = sysconf("msg_theme_settings", "xmb.set.theme"),
         icon = icon,
         sub = explanation("msg_theme_settings_explanation"),
+        live = true,
     ) {
         listOf(
             XmbNode.Setting(
@@ -253,11 +304,13 @@ private fun xmbThemeSettings(): XmbNode {
                     swatches = listOf(androidx.compose.ui.graphics.Color(0xFFC0C0C0)) + (0 until 12).map { month ->
                         val c = XmbOriginalColors.swatch(month)
                         androidx.compose.ui.graphics.Color(c[0], c[1], c[2])
-                    }
+                    } + androidx.compose.ui.graphics.Color(0xFFF2F2F2)
                 },
                 value = { colorLabels.getOrElse(XmbMode.themeColor.value + 1) { colorDefault } },
                 description = colorDesc,
             ),
+            background,
+        ) + saverNodes() + listOf(
             toggle("theme.backgrounds", backgrounds, icon, on, off, backgroundsDesc, { XmbMode.gameBackgrounds.value }) { XmbMode.setGameBackgrounds(it) },
             toggle("theme.icons", icons, icon, on, off, iconsDesc, { XmbMode.animatedIcons.value }) { XmbMode.setAnimatedIcons(it) },
         )
@@ -389,7 +442,28 @@ object XmbCoreSettings {
     fun sections(scope: SettingsScope, serial: String?): List<XmbNode> {
         val all = load()
         all.forEach { values[it.path] = it.value }
-        return all.groupBy { it.section }.map { (section, settings) ->
+        // Search first: typed on the pad keyboard, the matches open as a list of their own.
+        val searchTitle = I18n.get("xmb.core.search")
+        val search = XmbNode.Action("core.search", searchTitle, XmbIcon("explore_category_sysconf", "tex_sett", "\uD83D\uDD0D"), I18n.get("xmb.core.search.desc")) {
+            XmbKeyboard.ask(searchTitle) { typed ->
+                val query = typed.trim()
+                if (query.isEmpty()) return@ask
+                val words = query.lowercase().split(' ').filter { it.isNotBlank() }
+                val hits = all.filter { s ->
+                    val hay = "${s.label} ${s.path} ${s.section}".lowercase()
+                    words.all { it in hay }
+                }.mapNotNull { node(it, scope, serial) }
+                val c = XmbDialogs.target() ?: return@ask
+                if (hits.isEmpty()) {
+                    c.tell(I18n.get("xmb.core.noResults").format(query), I18n.get("xmb.ok"))
+                } else {
+                    val results = XmbNode.Folder("core.results", "\u201C$query\u201D", XmbIcon("explore_category_sysconf", "tex_sett", "\uD83D\uDD0D"), "${hits.size}") { hits }
+                    XmbSounds.play(XmbSounds.Sfx.DECIDE)
+                    c.levels.add(XmbController.Level(results, hits, 0))
+                }
+            }
+        }
+        return listOf(search) + all.groupBy { it.section }.map { (section, settings) ->
             XmbNode.Folder(
                 key = "core.$section",
                 title = section,
@@ -488,4 +562,11 @@ object XmbCoreSettings {
             }
         }
     }
+}
+
+/** XMB mode's background with no theme: 0 the console's wave, 1 the simple 2D wave, 2 a screensaver. */
+internal fun xmbBackground(): Int = when {
+    com.armsx2.ui.home.LibraryBackground.flurry.value -> 2
+    com.armsx2.ui.home.LibraryBackground.animated2D.value -> 1
+    else -> 0
 }

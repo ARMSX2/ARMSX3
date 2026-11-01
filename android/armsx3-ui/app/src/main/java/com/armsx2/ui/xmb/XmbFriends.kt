@@ -67,6 +67,9 @@ internal object XmbRpcn {
     val savedName = mutableStateOf("")
     val host = mutableStateOf("np.rpcs3.net")
 
+    /** The saved servers, as (name, address). */
+    val hosts = mutableStateOf<List<Pair<String, String>>>(emptyList())
+
     /** Read the account. IO thread. */
     fun readAccount() {
         runCatching {
@@ -78,6 +81,13 @@ internal object XmbRpcn {
             val o = JSONObject(Rpcs3Bridge.rpcnGetConfig())
             host.value = o.optString("host").ifBlank { "np.rpcs3.net" }
             savedName.value = o.optString("npid", "")
+            val list = o.optJSONArray("hosts")
+            hosts.value = (0 until (list?.length() ?: 0)).mapNotNull { i ->
+                val e = list?.optJSONObject(i) ?: return@mapNotNull null
+                val desc = e.optString("desc", "")
+                val addr = e.optString("host", "")
+                if (addr.isBlank()) null else (desc.ifBlank { addr } to addr)
+            }
         }
     }
 }
@@ -135,6 +145,8 @@ internal fun xmbRpcnColumn(controller: XmbController, shown: Boolean, inGame: Bo
 
     val items = buildList {
         add(xmbRpcnAccount(controller))
+        // Hosting belongs to the game being played: only over a game.
+        if (inGame) add(xmbRemotePlayNode(controller))
         add(
             XmbNode.Action("rpcn.add", addTitle, requestIcon) {
                 XmbKeyboard.ask(userLabel) { typed ->
@@ -201,6 +213,8 @@ internal fun xmbRpcnColumn(controller: XmbController, shown: Boolean, inGame: Bo
                 controller.options = XmbController.Options(f.name, listOf(removeOption))
             })
         }
+        // Discord friends in ARMSX3 now, after the RPCN ones, and Discord itself.
+        addAll(xmbDiscordNodes())
     }
     return XmbColumn(
         key = "rpcn",
@@ -231,12 +245,24 @@ private fun xmbRpcnAccount(controller: XmbController): XmbNode {
     val switchTitle = str("rpcn.action.switch")
     val userLabel = str("rpcn.username")
     val passLabel = str("rpcn.password")
+    val avatar = com.armsx2.ui.settings.rememberCurrentAvatar()
     val avatarTitle = str("xmb.rpcn.avatar")
     val avatarDesc = str("rpcn.profile.avatarHint")
+    val serversTitle = str("rpcn.hosts.title")
+    val serversDesc = str("rpcn.hosts.description")
+    val addServer = str("rpcn.hosts.add")
+    val serverName = str("rpcn.hosts.name")
+    val serverAddress = str("rpcn.hosts.address")
+    val serverAdded = str("rpcn.hosts.added")
+    val serverSelected = str("rpcn.hosts.selected")
+    val resetServers = str("rpcn.hosts.reset")
+    val resetDone = str("rpcn.hosts.resetDone")
+    val removeServer = str("rpcn.hosts.remove")
+    val removed = str("rpcn.hosts.removed")
     val moreTitle = str("xmb.rpcn.more")
     val moreDesc = str("xmb.rpcn.more.desc")
 
-    fun run(done: String, call: () -> String) {
+    fun perform(done: String, call: () -> String) {
         scope.launch {
             val result = withContext(Dispatchers.IO) { runCatching(call).getOrElse { it.message.orEmpty() } }
             withContext(Dispatchers.IO) { XmbRpcn.readAccount() }
@@ -249,7 +275,7 @@ private fun xmbRpcnAccount(controller: XmbController): XmbNode {
             if (user.isBlank()) return@ask
             XmbKeyboard.ask(passLabel, masked = true) { pass ->
                 if (pass.isEmpty()) return@ask
-                run(signedIn) { Rpcs3Bridge.rpcnSignIn(XmbRpcn.host.value.trim(), user.trim(), pass, "") }
+                perform(signedIn) { Rpcs3Bridge.rpcnSignIn(XmbRpcn.host.value.trim(), user.trim(), pass, "") }
             }
         }
     }
@@ -257,7 +283,18 @@ private fun xmbRpcnAccount(controller: XmbController): XmbNode {
     val reader: @Composable () -> Unit = {
         LaunchedEffect(Unit) { withContext(Dispatchers.IO) { XmbRpcn.readAccount() } }
     }
-    return XmbNode.Folder("rpcn.account", title, icon, live = true, host = reader) {
+    // The player's own avatar and name on it, as the console's column leads with its user.
+    val who = XmbRpcn.signedInAs.value.ifBlank { XmbRpcn.savedName.value }
+    val itemIcon = avatar?.let { XmbIcon(bitmap = it, glyph = icon.glyph, shadow = false) } ?: icon
+    val sub = listOfNotNull(
+        who.takeIf { it.isNotBlank() },
+        when {
+            XmbRpcn.signedInAs.value.isNotBlank() -> signedIn
+            XmbRpcn.configured.value -> saved
+            else -> notSetUp
+        },
+    ).joinToString("   ")
+    return XmbNode.Folder("rpcn.account", title, itemIcon, sub, live = true, host = reader) {
         val who = XmbRpcn.signedInAs.value.ifBlank { XmbRpcn.savedName.value }
         val state = when {
             XmbRpcn.signedInAs.value.isNotBlank() -> signedIn
@@ -266,10 +303,47 @@ private fun xmbRpcnAccount(controller: XmbController): XmbNode {
         }
         listOf(
             XmbNode.Action("rpcn.account.who", who.ifBlank { none }, icon, "$state   ${server.format(XmbRpcn.host.value)}") {
-                if (XmbRpcn.configured.value) run(signedIn) { Rpcs3Bridge.rpcnTestLogin() } else signIn()
-            }.withOptions(if (XmbRpcn.configured.value) listOf(XmbOption(check) { run(signedIn) { Rpcs3Bridge.rpcnTestLogin() } }) else emptyList()),
+                if (XmbRpcn.configured.value) perform(signedIn) { Rpcs3Bridge.rpcnTestLogin() } else signIn()
+            }.withOptions(if (XmbRpcn.configured.value) listOf(XmbOption(check) { perform(signedIn) { Rpcs3Bridge.rpcnTestLogin() } }) else emptyList()),
             XmbNode.Action("rpcn.account.signIn", if (XmbRpcn.configured.value) switchTitle else signInTitle, icon) { signIn() },
             XmbNode.Action("rpcn.account.avatar", avatarTitle, icon, avatarDesc) { RpcnAvatarPicker.open.value = true },
+            // The server, from the saved ones; adding one is typed on the pad keyboard.
+            run {
+                val hosts = XmbRpcn.hosts.value
+                val labels = hosts.map { (desc, addr) -> if (desc == addr) addr else "$desc ($addr)" }
+                XmbNode.Folder("rpcn.account.servers", serversTitle, icon, server.format(XmbRpcn.host.value) + "   " + serversDesc, live = true) {
+                    buildList {
+                        val now = XmbRpcn.hosts.value
+                        if (now.isNotEmpty()) add(
+                            XmbNode.Setting(
+                                "rpcn.server", serversTitle, icon,
+                                XmbEditor.Choice(labels, { now.indexOfFirst { it.second.equals(XmbRpcn.host.value.trim(), true) }.coerceAtLeast(0) }) { i ->
+                                    val addr = now.getOrNull(i)?.second ?: return@Choice
+                                    perform(serverSelected) { Rpcs3Bridge.rpcnSetConfig(addr, "", "", ""); "" }
+                                },
+                                { server.format(XmbRpcn.host.value) },
+                            ),
+                        )
+                        add(XmbNode.Action("rpcn.server.add", addServer, icon) {
+                            XmbKeyboard.ask(serverName) { name ->
+                                if (name.isBlank()) return@ask
+                                XmbKeyboard.ask(serverAddress) { addr ->
+                                    if (addr.isBlank()) return@ask
+                                    perform(serverAdded) { Rpcs3Bridge.rpcnAddHost(name.trim(), addr.trim()) }
+                                }
+                            }
+                        })
+                        now.filterNot { it.second.equals("np.rpcs3.net", true) }.forEach { (desc, addr) ->
+                            add(XmbNode.Action("rpcn.server.remove.$addr", "$removeServer: $desc", icon, addr) {
+                                perform(removed) { Rpcs3Bridge.rpcnDelHost(desc, addr) }
+                            })
+                        }
+                        add(XmbNode.Action("rpcn.server.reset", resetServers, icon) {
+                            perform(resetDone) { Rpcs3Bridge.rpcnResetHosts(); "" }
+                        })
+                    }
+                }
+            },
             XmbNode.Panel("rpcn.account.more", moreTitle, icon, moreDesc) { close ->
                 XmbPanelTheme { com.armsx2.ui.settings.RpcnScreen(onBack = close) }
             },
@@ -278,7 +352,7 @@ private fun xmbRpcnAccount(controller: XmbController): XmbNode {
 }
 
 private fun XmbNode.Action.withOptions(options: List<XmbOption>): XmbNode.Action =
-    if (options.isEmpty()) this else XmbNode.Action(key, title, icon, subtitle, options, onConfirm)
+    if (options.isEmpty()) this else XmbNode.Action(key, title, icon, subtitle, options, onConfirm = onConfirm)
 
 /**
  * The friend list (and, in a game, its invites) while [shown]: with an account saved, a session
@@ -306,5 +380,174 @@ private fun rememberRpcnPolling(shown: Boolean, inGame: Boolean) {
         } finally {
             rpcnSessionExecutor.execute { Rpcs3Bridge.rpcnFriendsSession(false) }
         }
+    }
+}
+
+/**
+ * Remote Play hosting, in the in-game RPCN column, as the pause menu's Friends panel has it: host on
+ * this Wi-Fi or invite online (a short code to share, or a long one with the friend's reply typed
+ * back), let a friend in or not, and stop. A friend asking to join is also asked in a dialog as the
+ * XMB comes up (XmbInGameMenu).
+ */
+@Composable
+private fun xmbRemotePlayNode(controller: XmbController): XmbNode {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val status = com.armsx2.remoteplay.RemotePlayHost.status.value
+    val localNetwork = com.armsx2.remoteplay.rememberLocalNetworkAccess()
+    val ok = fw("explore_plugin_full", "msg_ok", "xmb.ok")
+    val title = str("remoteplay.title")
+    val icon = XmbIcon("explore_category_network", "tex_premo", "\uD83D\uDCE1")
+    val wifi = str("remoteplay.host.wifi")
+    val invite = str("remoteplay.host.invite")
+    val stop = str("remoteplay.host.stop")
+    val waiting = str("remoteplay.host.waiting")
+    val address = str("remoteplay.host.address")
+    val connecting = str("remoteplay.host.connecting")
+    val playing = str("remoteplay.host.playing")
+    val preparing = str("remoteplay.invite.preparing")
+    val step1 = str("remoteplay.invite.step1")
+    val lobbyCode = str("remoteplay.invite.lobbyCode")
+    val lobbyShare = str("remoteplay.invite.lobbyShare")
+    val longShare = str("remoteplay.invite.share")
+    val share = str("remoteplay.code.share")
+    val copy = str("remoteplay.code.copy")
+    val cancel = str("remoteplay.invite.cancel")
+    val reply = str("remoteplay.invite.reply")
+    val badReply = str("remoteplay.invite.badReply")
+    val asking = str("remoteplay.request.title")
+    val accept = str("remoteplay.request.accept")
+    val decline = str("remoteplay.request.decline")
+    val explain = str("remoteplay.host.explain")
+    val host = com.armsx2.remoteplay.RemotePlayHost
+
+    fun hostWifi() = localNetwork { allowed -> if (allowed) host.startWifi(context) else host.refuseLocalNetwork() }
+    fun hostOnline() = localNetwork { host.createInvite(context) }
+    fun copy(text: String) {
+        val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(android.content.ClipData.newPlainText(title, text))
+    }
+    val startWifi = XmbNode.Action("remote.wifi", wifi, icon) { hostWifi() }
+    val startOnline = XmbNode.Action("remote.invite", invite, icon) { hostOnline() }
+    val stopNode = XmbNode.Action("remote.stop", stop, icon) { host.stop() }
+
+    return when (status) {
+        com.armsx2.remoteplay.RemotePlayHost.Status.Off -> XmbNode.Folder("remote", title, icon, explain.substringBefore(". ") + ".") { listOf(startWifi, startOnline) }
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Failed -> XmbNode.Folder("remote", title, icon, status.message) { listOf(startWifi, startOnline) }
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Waiting -> XmbNode.Folder(
+            "remote",
+            title,
+            icon,
+            listOfNotNull(waiting, status.address?.let { address.format(it) }).joinToString("   "),
+        ) { listOf(startOnline, stopNode) }
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Inviting -> {
+            val code = status.lobbyCode
+            val long = status.code
+            when {
+                code != null -> XmbNode.Folder("remote", title, icon, "$lobbyCode $code") {
+                    listOf(
+                        XmbNode.Action("remote.code", code, icon, lobbyCode) { controller.tell("$lobbyCode\n$code", ok) },
+                        XmbNode.Action("remote.share", share, icon) { com.armsx2.remoteplay.shareText(context, lobbyShare.format(code)) },
+                        XmbNode.Action("remote.copy", copy, icon) { copy(code) },
+                        XmbNode.Action("remote.cancel", cancel, icon) { host.stop() },
+                    )
+                }
+                long != null -> XmbNode.Folder("remote", title, icon, step1) {
+                    listOf(
+                        XmbNode.Action("remote.share", share, icon) { com.armsx2.remoteplay.shareText(context, longShare.format(long)) },
+                        XmbNode.Action("remote.copy", copy, icon) { copy(long) },
+                        XmbNode.Action("remote.reply", reply, icon) {
+                            XmbKeyboard.ask(reply) { typed -> if (typed.isNotBlank() && !host.acceptReply(typed)) controller.tell(badReply, ok) }
+                        },
+                        XmbNode.Action("remote.cancel", cancel, icon) { host.stop() },
+                    )
+                }
+                else -> XmbNode.Folder("remote", title, icon, preparing) { listOf(XmbNode.Action("remote.cancel", cancel, icon) { host.stop() }) }
+            }
+        }
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Connecting -> XmbNode.Folder("remote", title, icon, connecting.format(status.viewer)) { listOf(stopNode) }
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Asking -> XmbNode.Action("remote", title, icon, asking.format(status.viewer)) {
+            controller.dialog = XmbController.Dialog(
+                asking.format(status.viewer),
+                listOf(XmbOption(accept) { host.accept() }, XmbOption(decline) { host.decline() }),
+            )
+        }
+        is com.armsx2.remoteplay.RemotePlayHost.Status.Playing -> XmbNode.Folder("remote", title, icon, playing.format(status.viewer)) { listOf(stopNode) }
+    }
+}
+
+/**
+ * Discord, as the Friends panel has it: friends of the player's who are in ARMSX3 now, each with
+ * what they are playing, then Discord itself (connect or disconnect, and the two status settings).
+ * Nothing when the build has no Discord.
+ */
+@Composable
+private fun xmbDiscordNodes(): List<XmbNode> {
+    if (!com.armsx2.DiscordPresence.available()) return emptyList()
+    val (on, off) = xmbOnOff()
+    val status = com.armsx2.DiscordPresence.status.value
+    val friends = com.armsx2.DiscordPresence.friends.value
+    val me = com.armsx2.DiscordPresence.self.value
+    val icon = XmbIcon(model = com.armsx2.R.drawable.ic_discord, glyph = "\uD83D\uDCAC")
+    val inLibrary = str("friends.inLibrary")
+    val inGame = str("friends.playing")
+    val connected = str("friends.connected")
+    val connecting = str("friends.connecting")
+    val connect = str("friends.connect")
+    val disconnect = str("friends.disconnect")
+    val explain = str("friends.explain")
+    val notify = str("friends.notify")
+    val notifyDesc = str("friends.notify.desc")
+    val showGame = str("friends.showGame")
+    val showGameDesc = str("friends.showGame.desc")
+    val nobody = str("friends.nobody")
+    return buildList {
+        friends.forEach { f ->
+            add(
+                XmbNode.Action(
+                    "discord.friend.${f.name}",
+                    f.name,
+                    // Their picture, and the cover of the game they are playing in its corner.
+                    if (f.avatarUrl.isNotBlank()) XmbIcon(model = f.avatarUrl, glyph = "\uD83D\uDE42", shadow = false, inset = f.coverUrl)
+                    else XmbIcon(model = com.armsx2.R.drawable.ic_discord, glyph = "\uD83D\uDCAC", inset = f.coverUrl),
+                    "Discord   " + when {
+                        f.inLibrary -> inLibrary
+                        f.game.isNotBlank() -> f.game
+                        else -> inGame
+                    },
+                ) {},
+            )
+        }
+        val sub = when (status) {
+            com.armsx2.DiscordPresence.CONNECTED -> listOfNotNull(me?.name, connected).joinToString("   ")
+            com.armsx2.DiscordPresence.AUTHORIZING, com.armsx2.DiscordPresence.CONNECTING -> connecting
+            else -> com.armsx2.DiscordPresence.error.value ?: explain.substringBefore(". ") + "."
+        }
+        add(
+            XmbNode.Folder("discord", "Discord", me?.avatarUrl?.takeIf { it.isNotBlank() }?.let { XmbIcon(model = it, glyph = icon.glyph, shadow = false) } ?: icon, sub, live = true) {
+                val connectedNow = com.armsx2.DiscordPresence.status.value == com.armsx2.DiscordPresence.CONNECTED
+                buildList {
+                    if (connectedNow) {
+                        add(
+                            XmbNode.Setting(
+                                "discord.notify", notify, icon,
+                                XmbEditor.Toggle({ com.armsx2.DiscordPresence.notifyInGame }) { com.armsx2.DiscordPresence.notifyInGame = it },
+                                { if (com.armsx2.DiscordPresence.notifyInGame) on else off }, notifyDesc,
+                            ),
+                        )
+                        add(
+                            XmbNode.Setting(
+                                "discord.showGame", showGame, icon,
+                                XmbEditor.Toggle({ com.armsx2.DiscordPresence.showGameInStatus }) { com.armsx2.DiscordPresence.showGameInStatus = it },
+                                { if (com.armsx2.DiscordPresence.showGameInStatus) on else off }, showGameDesc,
+                            ),
+                        )
+                        if (com.armsx2.DiscordPresence.friends.value.isEmpty()) add(XmbNode.Action("discord.nobody", nobody, icon) {})
+                        add(XmbNode.Action("discord.disconnect", disconnect, icon) { com.armsx2.DiscordPresence.signOut() })
+                    } else {
+                        add(XmbNode.Action("discord.connect", connect, icon, explain) { com.armsx2.DiscordPresence.authorize() })
+                    }
+                }
+            },
+        )
     }
 }

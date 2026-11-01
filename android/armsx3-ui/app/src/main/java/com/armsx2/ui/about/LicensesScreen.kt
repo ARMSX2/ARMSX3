@@ -180,3 +180,26 @@ private fun parse(array: JSONArray, texts: JSONObject?): List<License> =
             children = item.optJSONArray("children")?.let { parse(it, texts) } ?: emptyList(),
         )
     }
+
+/** The open-source licences as XMB lists: each component opening its licence to read. */
+@Composable
+internal fun xmbLicenseNodes(): List<com.armsx2.ui.xmb.XmbNode> {
+    val context = LocalContext.current
+    val entries by produceState<List<License>?>(initialValue = null) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { runCatching { loadLicenses(context) }.getOrDefault(emptyList()) }
+    }
+    val icon = com.armsx2.ui.xmb.XmbIcon("explore_category_sysconf", "tex_console", "\u2139")
+    fun node(l: License, id: String): com.armsx2.ui.xmb.XmbNode = if (l.children.isNotEmpty() && l.text == null) {
+        com.armsx2.ui.xmb.XmbNode.Folder("lic.$id", l.name, icon, l.license) {
+            l.children.mapIndexed { i, c -> node(c, "$id.$i") }
+        }
+    } else {
+        com.armsx2.ui.xmb.XmbNode.Panel("lic.$id", l.name, icon, l.license) { _ ->
+            com.armsx2.ui.xmb.XmbTextPanel(
+                listOfNotNull(l.license, l.notice) + com.armsx2.ui.xmb.paragraphsOf(l.text.orEmpty()) +
+                    l.children.flatMap { c -> listOfNotNull(c.name, c.license, c.notice) },
+            )
+        }
+    }
+    return entries.orEmpty().mapIndexed { i, l -> node(l, "$i") }
+}

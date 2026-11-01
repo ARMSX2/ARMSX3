@@ -1,5 +1,9 @@
 package com.armsx2.ui.home
 
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.border
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -175,6 +179,11 @@ object LibraryKeyboard {
     @Composable
     fun Overlay(scope: BoxScope) {
         if (!visible.value) return
+        // XMB mode types on a keyboard drawn as the console's: the same keys and the same pad.
+        if (com.armsx2.ui.xmb.XmbMode.active.value && !useSystemIme.value) {
+            XmbPanel(scope)
+            return
+        }
         with(scope) {
         // Dim the library behind, and swallow stray taps so they don't hit covers.
         Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.5f)).clickable(enabled = false) {})
@@ -228,6 +237,100 @@ object LibraryKeyboard {
                 }
             }
         }
+        }
+    }
+
+    /**
+     * The key grid drawn as the PS3's on-screen keyboard, for XMB mode: a dark glass panel over the
+     * dimmed XMB, the text in a light field at its head, and the keys as soft panes in the XMB's
+     * font, the selected one lit. Same keys, same pad handling, same touch.
+     */
+    @Composable
+    private fun XmbPanel(scope: BoxScope) {
+        val font = com.armsx2.ui.xmb.rememberXmbFont()
+        val caret = androidx.compose.animation.core.rememberInfiniteTransition(label = "xmb-osk")
+            .animateFloat(1f, 0f, androidx.compose.animation.core.infiniteRepeatable(androidx.compose.animation.core.tween(530), androidx.compose.animation.core.RepeatMode.Reverse), label = "caret")
+        with(scope) {
+            Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f)).clickable(enabled = false) {})
+            Column(
+                Modifier
+                    .align(Alignment.Center)
+                    .fillMaxWidth(0.86f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            listOf(Color(0xE6303036), Color(0xE6141418)),
+                        ),
+                    )
+                    .border(1.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(10.dp))
+                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp),
+            ) {
+                Text(
+                    placeholder.value,
+                    color = Color.White.copy(alpha = 0.75f),
+                    fontFamily = font,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(Color.White.copy(alpha = 0.92f))
+                        .padding(horizontal = 10.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        if (masked.value) "\u2022".repeat(text.value.length) else text.value,
+                        color = Color(0xFF101014),
+                        fontFamily = font,
+                        fontSize = 19.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.StartEllipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Box(Modifier.padding(start = 1.dp).size(2.dp, 22.dp).background(Color(0xFF101014).copy(alpha = caret.value)))
+                }
+                Spacer(Modifier.height(4.dp))
+                rows.forEachIndexed { r, keys ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        keys.forEachIndexed { c, key ->
+                            val selected = row.intValue == r && col.intValue == c
+                            val on = key == SHIFT && shifted.value
+                            val label = glyphOf(key)
+                            Box(
+                                modifier = Modifier
+                                    .weight(weightOf(key))
+                                    .height(44.dp)
+                                    .clip(RoundedCornerShape(5.dp))
+                                    .background(
+                                        when {
+                                            selected -> androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.62f), Color.White.copy(alpha = 0.34f)))
+                                            on -> androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.30f), Color.White.copy(alpha = 0.18f)))
+                                            else -> androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.14f), Color.White.copy(alpha = 0.06f)))
+                                        },
+                                    )
+                                    .border(1.dp, Color.White.copy(alpha = if (selected) 0.85f else 0.16f), RoundedCornerShape(5.dp))
+                                    .clickable {
+                                        row.intValue = r
+                                        col.intValue = c
+                                        pressKey(key)
+                                    },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    label,
+                                    color = if (selected) Color(0xFF0C0C10) else Color.White,
+                                    fontFamily = font,
+                                    fontSize = if (label.length > 1) 14.sp else 18.sp,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 

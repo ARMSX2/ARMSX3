@@ -1,5 +1,12 @@
 package com.armsx2.ui.settings
 
+import com.armsx2.ui.xmb.XmbOption
+import com.armsx2.ui.xmb.XmbController
+import com.armsx2.ui.xmb.XmbDialogs
+import com.armsx2.ui.xmb.XmbEditor
+import com.armsx2.ui.xmb.XmbNode
+import com.armsx2.ui.xmb.XmbCollected
+import com.armsx2.ui.xmb.LocalXmbCollector
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.text.style.TextOverflow
@@ -85,6 +92,68 @@ private fun ConfigDatabaseRow() {
         val count = stored.value
         if (count > 0) I18n.get("perf.configDb.have").format(count)
         else I18n.get("perf.configDb.description")
+    }
+
+    // In the XMB: download (or update), apply, and remove, each an item, with the outcome in the
+    // XMB's own dialog.
+    LocalXmbCollector.current?.let { c ->
+        val title = str("perf.configDb.label")
+        val applyTitle = str("perf.configDb.apply")
+        val applyOn = str("perf.configDb.applyOn")
+        val applyOff = str("perf.configDb.applyOff")
+        val removeTitle = str("perf.configDb.remove")
+        val removeSummary = str("perf.configDb.removeSummary")
+        val ok = str("action.ok")
+        val cancel = str("action.cancel")
+        XmbCollected(
+            c,
+            XmbNode.Action("xmb.configDb.download", title, c.icon, summary) {
+                if (busy.value) return@Action
+                busy.value = true
+                status.value = I18n.get("perf.configDb.downloading")
+                MainActivityRuntime.invoke {
+                    val written = withContext(kotlinx.coroutines.Dispatchers.IO) { com.armsx2.config.ConfigDatabase.refresh() }
+                    busy.value = false
+                    val message = if (written >= 0) {
+                        stored.value = written
+                        I18n.get("perf.configDb.done").format(written)
+                    } else {
+                        I18n.get("perf.configDb.failed")
+                    }
+                    status.value = message
+                    withContext(kotlinx.coroutines.Dispatchers.Main) { XmbDialogs.target()?.tell(message, ok) }
+                }
+            },
+        )
+        if (stored.value > 0) {
+            XmbCollected(
+                c,
+                XmbNode.Setting(
+                    "xmb.configDb.apply", applyTitle, c.icon,
+                    XmbEditor.Toggle({ applying.value }) {
+                        com.armsx2.config.ConfigDatabase.setEnabled(it)
+                        applying.value = it
+                        status.value = ""
+                    },
+                    { if (applying.value) c.on else c.off },
+                    if (applying.value) applyOn else applyOff,
+                ),
+            )
+            XmbCollected(
+                c,
+                XmbNode.Action("xmb.configDb.remove", removeTitle, c.icon, removeSummary) {
+                    XmbDialogs.target()?.let { x ->
+                        XmbDialogs.ask(x, removeTitle, I18n.get("perf.configDb.removeConfirm").format(stored.value), removeTitle, cancel, {
+                            com.armsx2.config.ConfigDatabase.remove()
+                            stored.value = 0
+                            applying.value = true
+                            status.value = I18n.get("perf.configDb.removed")
+                        }, {})
+                    }
+                },
+            )
+        }
+        return
     }
 
     if (confirmRemove.value) {
@@ -216,7 +285,23 @@ fun AppTab() {
             description = str("app.shareInstalled.desc"),
             onChange = { com.armsx2.packages.ShareInstalled.set(it) },
         )
-        Surface(
+        // In the XMB: the languages as a choice, as the console's System Settings lists them.
+        LocalXmbCollector.current?.let { c ->
+            val languages = I18n.languages
+            val labels = languages.map { if (it.code == I18n.SYSTEM_CODE) str("app.language.system") else it.nativeName }
+            XmbCollected(
+                c,
+                XmbNode.Setting(
+                    "xmb.language", str("app.language"), c.icon,
+                    XmbEditor.Choice(labels, { languages.indexOfFirst { it.code == I18n.selected }.coerceAtLeast(0) }) { i ->
+                        languages.getOrNull(i)?.let { I18n.setLanguage(appContext, it.code) }
+                    },
+                    { labels.getOrNull(languages.indexOfFirst { it.code == I18n.selected }).orEmpty() },
+                    str("app.language.desc"),
+                ),
+            )
+        }
+        if (LocalXmbCollector.current == null) Surface(
             onClick = { UiNavigator.navigate(AppRoute.Language) },
             modifier = Modifier.fillMaxWidth()
                 .controllerFocusable("app.language", RoundedCornerShape(20.dp), onConfirm = { UiNavigator.navigate(AppRoute.Language) }),
@@ -250,6 +335,17 @@ fun AppTab() {
             }
         }
 
+        // The library's look (theme colours, its background and bar) is not the XMB's: XMB mode has
+        // Theme Settings for its own, so these stay off its lists.
+        if (LocalXmbCollector.current == null) LibraryLookRows()
+        AppTabRest()
+    }
+}
+
+/** The library's own look: the app theme, and the library background's colour, kind and bar. */
+@Composable
+private fun LibraryLookRows() {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         // Theme picker. NOT a SegmentedRow: that's a fixed-width Box, so eleven options would
         // squeeze into unreadable slivers — this wraps instead. Driven straight off the enum so
         // adding a colour needs no index bookkeeping; the old version mapped index<->mode by hand
@@ -613,7 +709,17 @@ fun AppTab() {
             }
             }
         }
+    }
+}
 
+/** The rest of the App tab, after the library's look. */
+@Composable
+private fun AppTabRest() {
+    val appContext = LocalContext.current
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         ToggleRow(
             label = str("app.bootLogo"),
             value = BootLogoPreferences.enabled.value,
@@ -1067,6 +1173,28 @@ private fun GameFoldersRow() {
         onPath = { MainActivityRuntime.setRomsDirs((dirs + it.absolutePath).distinct()) },
     )
 
+    // In the XMB: a list of its own, each folder (Triangle removes it) and Add Folder.
+    LocalXmbCollector.current?.let { c ->
+        val title = str("app.gameFolders")
+        val hint = str("app.gameFolders.hint")
+        val addTitle = str("app.gameFolders.add")
+        val removeTitle = str("app.gameFolders.remove")
+        val count = if (dirs.isEmpty()) str("app.gameFolders.none") else I18n.get("app.gameFolders.count").format(dirs.size)
+        XmbCollected(
+            c,
+            XmbNode.Folder("xmb.gameFolders", title, c.icon, "$count   $hint", live = true) {
+                val now = MainActivityRuntime.romsDirs.value
+                now.map { raw ->
+                    val remove = XmbOption(removeTitle) { MainActivityRuntime.setRomsDirs(MainActivityRuntime.romsDirs.value - raw) }
+                    XmbNode.Action("xmb.gameFolders.$raw", com.armsx2.storage.StorageLabel.forFolder(context, raw), c.icon, raw, listOf(remove)) {
+                        XmbDialogs.target()?.let { x -> x.options = XmbController.Options(com.armsx2.storage.StorageLabel.forFolder(context, raw), listOf(remove)) }
+                    }
+                } + XmbNode.Action("xmb.gameFolders.add", addTitle, c.icon, hint) { picker() }
+            },
+        )
+        return
+    }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -1164,6 +1292,48 @@ private fun FrontendExportRow() {
             )
         }
         FrontendExport.addFolder(context, uri)
+    }
+
+    // In the XMB: a list of its own, with what it is for under it: the folders (each with its
+    // file format, Triangle removes it), Add Folder and Export Now.
+    LocalXmbCollector.current?.let { c ->
+        val title = str("app.frontendExport")
+        val hint = str("app.frontendExport.hint")
+        val addTitle = str("app.frontendExport.add")
+        val nowTitle = str("app.frontendExport.now")
+        val removeTitle = str("app.frontendExport.remove")
+        val formatTitle = str("app.frontendExport.format")
+        val off = str("common.off")
+        XmbCollected(
+            c,
+            XmbNode.Folder(
+                "xmb.frontendExport", title, c.icon,
+                if (targets.isEmpty()) "$off   $hint" else I18n.get("app.frontendExport.folders").format(targets.size),
+                live = true,
+            ) {
+                buildList {
+                    FrontendExport.targets.value.forEach { target ->
+                        val label = com.armsx2.storage.StorageLabel.forFolder(context, target.uri)
+                        val formats = FrontendExport.Format.entries
+                        add(
+                            XmbNode.Setting(
+                                "xmb.frontendExport.${target.uri}", label, c.icon,
+                                XmbEditor.Choice(formats.map { it.sample }, { formats.indexOf(target.format).coerceAtLeast(0) }) { i ->
+                                    FrontendExport.setFormat(context, target.uri, formats[i])
+                                },
+                                { "$formatTitle: ${target.format.sample}   " + I18n.get("app.frontendExport.count").format(FrontendExport.exported[target.uri] ?: 0) },
+                            ),
+                        )
+                        add(XmbNode.Action("xmb.frontendExport.${target.uri}.remove", "$removeTitle: $label", c.icon) { FrontendExport.removeFolder(target.uri) })
+                    }
+                    add(XmbNode.Action("xmb.frontendExport.add", addTitle, c.icon, hint) { runCatching { picker.launch(null) } })
+                    if (FrontendExport.targets.value.isNotEmpty()) {
+                        add(XmbNode.Action("xmb.frontendExport.now", nowTitle, c.icon) { FrontendExport.requestSync(context, force = true) })
+                    }
+                }
+            },
+        )
+        return
     }
 
     Surface(

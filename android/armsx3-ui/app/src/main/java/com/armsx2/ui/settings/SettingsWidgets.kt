@@ -632,7 +632,7 @@ fun CollapsibleSection(
 ) {
     // In the XMB: a list of its own, holding the section's rows.
     com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
-        com.armsx2.ui.xmb.XmbCollectedSection(c, "c${androidx.compose.runtime.currentCompositeKeyHash}", title, content)
+        com.armsx2.ui.xmb.XmbCollectedSection(c, "c${androidx.compose.runtime.currentCompositeKeyHash}", title, content = content)
         return
     }
     var expanded by androidx.compose.runtime.saveable.rememberSaveable(title) {

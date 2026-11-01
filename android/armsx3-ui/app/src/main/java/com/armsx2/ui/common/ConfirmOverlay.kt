@@ -66,6 +66,18 @@ fun ConfirmOverlay(
      *  SettingsControllerNav under the layer this overlay is given, or the pad will skip it. */
     extra: (@Composable (layer: String) -> Unit)? = null,
 ) {
+    // Asked from a settings tab composed for the XMB's lists: the question goes in the XMB's own
+    // dialog. Drawn here it would be out of sight, holding the pad's layer, and the XMB would stop
+    // answering the pad.
+    if (com.armsx2.ui.xmb.LocalXmbCollector.current != null && extra == null) {
+        val xmb = com.armsx2.ui.xmb.XmbDialogs.target()
+        if (xmb != null) {
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                com.armsx2.ui.xmb.XmbDialogs.ask(xmb, title, message, confirmLabel, dismissLabel, onConfirm, onDismiss)
+            }
+            return
+        }
+    }
     val layer = "confirm-overlay:$idPrefix"
     DisposableEffect(layer) {
         val previous = SettingsControllerNav.activeLayer.value
@@ -205,6 +217,23 @@ object GlobalConfirm {
     @Composable
     fun Host() {
         val request = pending.value ?: return
+        // Raised from the XMB (a settings list, say): asked in the XMB's own dialog.
+        val xmb = com.armsx2.ui.xmb.XmbDialogs.target()
+        if (xmb != null && request.extra == null) {
+            val ok = request.confirmLabel ?: str("action.ok")
+            val cancel = str("action.cancel")
+            androidx.compose.runtime.LaunchedEffect(request) {
+                com.armsx2.ui.xmb.XmbDialogs.ask(
+                    xmb, request.title, request.message, ok, cancel,
+                    onConfirm = {
+                        pending.value = null
+                        request.onConfirm()
+                    },
+                    onDismiss = { pending.value = null },
+                )
+            }
+            return
+        }
         ConfirmOverlay(
             title = request.title,
             message = request.message,

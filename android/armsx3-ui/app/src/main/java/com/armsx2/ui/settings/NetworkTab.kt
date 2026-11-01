@@ -84,7 +84,21 @@ fun NetworkTab(state: MutableState<Settings>) {
         // otherwise it invites people to set up an account the emulator will not use.
         if (s.ps3.psnStatus == 2) {
             SettingsDivider()
-            RpcnAccountSection(friends = { RpcnFriendsSection() })
+            // In the XMB the account, friends and servers are the RPCN column's: this leads there.
+            val xmb = com.armsx2.ui.xmb.LocalXmbCollector.current
+            if (xmb != null) {
+                com.armsx2.ui.xmb.XmbCollected(
+                    xmb,
+                    com.armsx2.ui.xmb.XmbNode.Action("xmb.net.rpcn", str("rpcn.screen.title"), xmb.icon, str("xmb.rpcn.column")) {
+                        com.armsx2.ui.xmb.XmbDialogs.target()?.let { x ->
+                            x.closeAll()
+                            x.columns.indexOfFirst { it.key == "rpcn" }.takeIf { it >= 0 }?.let(x::selectColumn)
+                        }
+                    },
+                )
+            } else {
+                RpcnAccountSection(friends = { RpcnFriendsSection() })
+            }
         }
         SettingsDivider()
         ToggleRow(
@@ -374,6 +388,16 @@ private fun EditableTextRow(
     // Last, so callers can pass it as a trailing lambda like every other row here.
     onChange: (String) -> Unit,
 ) {
+    // In the XMB: an item showing the value, typed on the pad keyboard.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        com.armsx2.ui.xmb.XmbCollected(
+            c,
+            com.armsx2.ui.xmb.XmbNode.Action("xmb.$controllerId", label, c.icon, listOf(value.ifEmpty { placeholder }, description).joinToString("   ")) {
+                com.armsx2.ui.xmb.XmbKeyboard.ask(label, value.ifEmpty { placeholder }) { typed -> if (typed != value) onChange(typed) }
+            },
+        )
+        return
+    }
     var editing by remember(label) { mutableStateOf(false) }
     var draft by remember(label, value) { mutableStateOf(value.ifEmpty { placeholder }) }
     val open = { draft = value.ifEmpty { placeholder }; editing = true }

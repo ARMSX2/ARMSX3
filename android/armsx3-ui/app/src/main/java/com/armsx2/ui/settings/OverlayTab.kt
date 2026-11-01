@@ -274,6 +274,22 @@ fun OverlayTab(state: MutableState<Settings>) {
  */
 @Composable
 private fun OsdColorRow(label: String, argb: Int, onChange: (Int) -> Unit) {
+    // In the XMB: a list of its own, named for the colour, with its four channels in words.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        val names = listOf(str("xmb.color.red"), str("xmb.color.green"), str("xmb.color.blue"), str("xmb.color.alpha"))
+        com.armsx2.ui.xmb.XmbCollectedSection(c, "xmb.osdColor.$label", label, "#%08X".format(argb)) {
+            listOf(16, 8, 0, 24).forEachIndexed { i, shift ->
+                IntSliderRow(
+                    label = names[i],
+                    value = (argb ushr shift) and 0xFF,
+                    min = 0,
+                    max = 255,
+                    onChange = { channel -> onChange((argb and (0xFF shl shift).inv()) or (channel shl shift)) },
+                )
+            }
+        }
+        return
+    }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 4.dp)) {
         Surface(
             modifier = Modifier.size(30.dp),

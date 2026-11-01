@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -104,7 +105,8 @@ fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
     DisposableEffect(Unit) {
         XmbInput.blocked = true
         XmbInput.skip = { skipped = true }
-        com.armsx2.LibraryMusic.pause()
+        // The app's music waits, silent, for the boot sound to finish (XmbBootMusic).
+        XmbBootMusic.hold()
         XmbOriginalColors.bootWave = 0f
         XmbOriginalColors.bootColor = 0f
         onDispose {
@@ -112,12 +114,13 @@ fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
             XmbInput.skip = null
             XmbOriginalColors.bootWave = 1f
             XmbOriginalColors.bootColor = 1f
-            com.armsx2.LibraryMusic.resume()
+            // The sound plays on past the animation, as the console's does; with none, the music
+            // comes in now.
+            if (ready?.sound == null) XmbBootMusic.release()
         }
     }
-    DisposableEffect(ready) {
-        val sound = ready?.sound
-        onDispose { sound?.let { runCatching { it.stop(); it.release() } } }
+    LaunchedEffect(skipped) {
+        if (skipped) XmbBootMusic.skip()
     }
     LaunchedEffect(ready) {
         val r = ready ?: return@LaunchedEffect
@@ -130,7 +133,7 @@ fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
         }
         // The clock and the sound start together, once the logo is ready, so a slow first frame
         // cannot eat the sweep or put the sound ahead of it.
-        r.sound?.let { runCatching { it.start() } }
+        XmbBootMusic.play(r.sound)
         val start = withFrameNanos { it }
         while (true) {
             val now = withFrameNanos { it }
@@ -265,6 +268,81 @@ private const val FIRMWARE_WAIT_MS = 1500L
 
 /** The logo is drawn with letters this tall, then scaled to the screen. */
 private const val LOGO_LETTER_PX = 120f
+
+/**
+ * The boot sound handing over to the app's music. The console's boot sound runs ten seconds, on
+ * past the animation into the XMB, so it plays to its end rather than stopping with the animation;
+ * the app's music waits silent until then ([hold]), and after a moment of quiet fades in. Skipping
+ * the boot fades the sound out first. This is the app's handover for music that does not blend:
+ * out over 1.5 s, 0.6 s of quiet, in over 2 s.
+ */
+object XmbBootMusic {
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main.immediate)
+    private var player: MediaPlayer? = null
+    private var job: kotlinx.coroutines.Job? = null
+
+    /** The app's music quiet until [release]. */
+    fun hold() {
+        job?.cancel()
+        com.armsx2.LibraryMusic.setShare(0f)
+    }
+
+    /** Start the boot sound; the music follows when it ends. */
+    fun play(sound: MediaPlayer?) {
+        if (sound == null) {
+            release()
+            return
+        }
+        player = sound
+        sound.setOnCompletionListener { release() }
+        runCatching { sound.start() }.onFailure { release() }
+    }
+
+    /** The boot was skipped: the sound fades out, then the music comes in. */
+    fun skip() {
+        val p = player ?: return
+        job?.cancel()
+        job = scope.launch {
+            fade(1500) { v -> runCatching { p.setVolume(1f - v, 1f - v) } }
+            release()
+        }
+    }
+
+    /** The sound is over: quiet a moment, then the music fades in. */
+    fun release() {
+        player?.let { p -> runCatching { p.stop() }; runCatching { p.release() } }
+        player = null
+        job?.cancel()
+        job = scope.launch { fadeInMusic() }
+    }
+
+    /** The app's music in, as after the boot sound, on its own: nothing that leaves cuts it short. */
+    fun fadeIn() {
+        job?.cancel()
+        job = scope.launch { fadeInMusic() }
+    }
+
+    /** After 0.6 s of quiet, the app's music in over 2 s, from wherever it was held. */
+    private suspend fun fadeInMusic() {
+        try {
+            com.armsx2.LibraryMusic.setShare(0f)
+            kotlinx.coroutines.delay(600)
+            fade(2000) { v -> com.armsx2.LibraryMusic.setShare(maxOf(v, 0.01f)) }
+        } finally {
+            com.armsx2.LibraryMusic.setShare(1f)
+        }
+    }
+
+    private suspend fun fade(ms: Long, step: (Float) -> Unit) {
+        val start = android.os.SystemClock.uptimeMillis()
+        while (true) {
+            val v = ((android.os.SystemClock.uptimeMillis() - start).toFloat() / ms).coerceIn(0f, 1f)
+            step(v)
+            if (v >= 1f) break
+            kotlinx.coroutines.delay(30)
+        }
+    }
+}
 
 object XmbBootSound {
     /** The firmware's boot sound, decoded and prepared to start at once, or null. Off the main thread. */

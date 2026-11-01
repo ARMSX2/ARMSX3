@@ -189,6 +189,9 @@ class ARMSX3 {
     /** An ICON1.PAM's audio track (ATRAC3plus) as a WAV; false when it has none or it will not decode. */
     external fun xmbDecodePamAudio(inPath: String, outPath: String): Boolean
 
+    /** XMB mode: a disc image's PIC1, PIC0, SND0 and ICON1 copied into [outDir]; true when any were. */
+    external fun xmbDiscMedia(isoPath: String, outDir: String): Boolean
+
     /** XMB mode: a game's animated icon (ICON1.PAM) opened for playback; a handle, or 0. */
     external fun xmbPamOpen(path: String): Long
 

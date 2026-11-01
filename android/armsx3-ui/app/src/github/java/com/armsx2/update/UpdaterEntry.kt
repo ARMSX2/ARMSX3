@@ -86,6 +86,80 @@ fun UpdaterEntry() {
     val checkFailedPrefix = str("update.checkFailed")
     val downloadFailedPrefix = str("update.downloadFailed")
 
+    // In the XMB (the App tab composed for its lists): Check for Updates as an item, the answer in
+    // the XMB's own dialog, and Check on Launch as a setting.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        val title = str("update.check")
+        val current = "${str("update.currentVersion")}: ${BuildConfig.VERSION_NAME}"
+        val checking = str("update.checking")
+        val upToDate = str("update.upToDate")
+        val available = str("update.available")
+        val install = str("update.install")
+        val cancel = str("action.cancel")
+        val ok = str("action.ok")
+        val notesUnavailable = str("update.notesUnavailable")
+        val downloading = str("update.downloading")
+        val onLaunch = str("update.checkOnLaunch")
+        val onLaunchDesc = str("update.checkOnLaunch.desc")
+        var checkOnLaunch by remember { mutableStateOf(MainActivityRuntime.prefs.getBoolean("update.checkOnLaunch", false)) }
+        val sub = when (val s = state) {
+            is UpdateState.Checking -> checking
+            is UpdateState.Downloading -> "$downloading ${s.pct}%"
+            is UpdateState.Error -> s.msg
+            is UpdateState.UpToDate -> upToDate
+            else -> current
+        }
+        com.armsx2.ui.xmb.XmbCollected(
+            c,
+            com.armsx2.ui.xmb.XmbNode.Action("xmb.update.check", title, c.icon, sub) {
+                if (state is UpdateState.Checking || state is UpdateState.Downloading) return@Action
+                scope.launch {
+                    state = UpdateState.Checking
+                    val result = checkForUpdate(checkFailedPrefix)
+                    state = result
+                    val xmb = com.armsx2.ui.xmb.XmbDialogs.target() ?: return@launch
+                    when (result) {
+                        is UpdateState.Available -> com.armsx2.ui.xmb.XmbDialogs.ask(
+                            xmb,
+                            "$available  ${result.version}",
+                            result.notes.ifBlank { notesUnavailable }.take(600),
+                            install,
+                            cancel,
+                            onConfirm = {
+                                scope.launch {
+                                    try {
+                                        downloadAndInstall(context, result) { pct -> state = UpdateState.Downloading(pct) }
+                                        state = UpdateState.Idle
+                                    } catch (e: Exception) {
+                                        state = UpdateState.Error("$downloadFailedPrefix: ${e.message}")
+                                        xmb.tell((state as UpdateState.Error).msg, ok)
+                                    }
+                                }
+                            },
+                            onDismiss = { state = UpdateState.Idle },
+                        )
+                        is UpdateState.UpToDate -> xmb.tell("$upToDate\n$current", ok)
+                        is UpdateState.Error -> xmb.tell(result.msg, ok)
+                        else -> {}
+                    }
+                }
+            },
+        )
+        com.armsx2.ui.xmb.XmbCollected(
+            c,
+            com.armsx2.ui.xmb.XmbNode.Setting(
+                "xmb.update.onLaunch", onLaunch, c.icon,
+                com.armsx2.ui.xmb.XmbEditor.Toggle({ checkOnLaunch }) {
+                    checkOnLaunch = it
+                    MainActivityRuntime.prefs.edit().putBoolean("update.checkOnLaunch", it).apply()
+                },
+                { if (checkOnLaunch) c.on else c.off },
+                onLaunchDesc,
+            ),
+        )
+        return
+    }
+
     GlassPanel(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp)) {
         Column(Modifier.padding(4.dp)) {
             Text(str("update.title"), style = MaterialTheme.typography.titleMedium)

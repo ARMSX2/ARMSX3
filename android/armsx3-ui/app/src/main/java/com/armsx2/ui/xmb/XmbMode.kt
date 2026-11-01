@@ -27,8 +27,13 @@ object XmbMode {
     private const val IconsKey = "xmb.theme.icons"
     private const val GameMusicKey = "xmb.music.game"
 
-    /** Theme Settings > Color: -1 follows the month, as the console's Default does; 0..11 keeps that month's. */
+    /**
+     * Theme Settings > Color: -1 follows the month, as the console's Default does; 0..11 keeps that
+     * month's; [CYCLE] goes through them all in turn.
+     */
     val themeColor = mutableStateOf(-1)
+
+    const val CYCLE = 12
 
     /** The GL thread's copy of [themeColor]. */
     @Volatile var pinnedMonth = -1
@@ -52,7 +57,7 @@ object XmbMode {
         LibraryBackgroundColorPreferences.xmbModeGl = on
         // The boot animation brings the wave and the colour up from black; dark from the first frame.
         if (on) holdForBoot()
-        themeColor.value = prefs.getInt(ColorKey, -1).coerceIn(-1, 11)
+        themeColor.value = prefs.getInt(ColorKey, -1).coerceIn(-1, CYCLE)
         pinnedMonth = themeColor.value
         gameBackgrounds.value = prefs.getBoolean(BackgroundsKey, true)
         animatedIcons.value = prefs.getBoolean(IconsKey, true)
@@ -61,7 +66,7 @@ object XmbMode {
     }
 
     fun setThemeColor(month: Int) {
-        val m = month.coerceIn(-1, 11)
+        val m = month.coerceIn(-1, CYCLE)
         themeColor.value = m
         pinnedMonth = m
         XmbOriginalColors.invalidate()

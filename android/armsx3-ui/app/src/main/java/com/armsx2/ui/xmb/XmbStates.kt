@@ -1,5 +1,12 @@
 package com.armsx2.ui.xmb
 
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
 import android.graphics.BitmapFactory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -130,7 +137,16 @@ fun xmbStateNodes(controller: XmbController): List<XmbNode> {
     // Read while either list is open, so what was saved shows straight away.
     val reader: @Composable () -> Unit = { LaunchedEffect(Unit) { withContext(Dispatchers.IO) { XmbStates.read() } } }
 
-    val save = XmbNode.Folder("ingame.save", saveTitle, saveIcon, live = true, host = reader) {
+    // The focused slot's picture beside the list, large, with when it was saved under it.
+    val preview: @Composable (List<String>) -> Unit = { keys ->
+        val slot = keys.firstNotNullOfOrNull { k ->
+            k.takeIf { it.startsWith("save.slot.") || it.startsWith("load.slot.") }?.substringAfterLast('.')?.toIntOrNull()
+        }
+        val s = slot?.let { XmbStates.slots.value?.getOrNull(it) }
+        XmbStatePreview(s, s?.let { "$slotWord ${it.index + 1}" }, s?.let { date(it.savedAt) } ?: empty)
+    }
+
+    val save = XmbNode.Folder("ingame.save", saveTitle, saveIcon, live = true, host = reader, aside = preview) {
         XmbStates.slots.value.orEmpty().map { s ->
             XmbNode.Action(
                 "save.slot.${s.index}",
@@ -144,7 +160,7 @@ fun xmbStateNodes(controller: XmbController): List<XmbNode> {
             }
         }
     }
-    val load = XmbNode.Folder("ingame.load", loadTitle, loadIcon, live = true, host = reader) {
+    val load = XmbNode.Folder("ingame.load", loadTitle, loadIcon, live = true, host = reader, aside = preview) {
         val slots = XmbStates.slots.value.orEmpty()
         if (XmbStates.slots.value == null) emptyList() else buildList {
             if (XmbStates.autosave.value) {
@@ -170,4 +186,46 @@ fun xmbStateNodes(controller: XmbController): List<XmbNode> {
         }
     }
     return listOf(save, load)
+}
+
+/** A slot's picture as the console previews saved data: 16:9, framed, its name and date under it. */
+@Composable
+private fun XmbStatePreview(slot: XmbStates.Slot?, title: String?, sub: String?) {
+    val font = rememberXmbFont()
+    androidx.compose.foundation.layout.Column(
+        horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+    ) {
+        androidx.compose.foundation.layout.Box(
+            androidx.compose.ui.Modifier
+                .fillMaxWidth(0.92f)
+                .aspectRatio(16f / 9f)
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.45f))
+                .border(1.dp, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.55f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
+            val picture = slot?.picture
+            if (picture != null) {
+                androidx.compose.foundation.Image(
+                    picture,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = androidx.compose.ui.Modifier.matchParentSize(),
+                )
+            } else {
+                XmbIconView(XmbIcon("explore_category_game", "item_tex_ps3util", "\u21A5"), 64.dp)
+            }
+        }
+        if (title != null) {
+            androidx.compose.material3.Text(
+                title,
+                style = xmbText(font, 20f),
+                modifier = androidx.compose.ui.Modifier.padding(top = 10.dp),
+            )
+        }
+        if (!sub.isNullOrBlank()) {
+            androidx.compose.material3.Text(sub, style = xmbText(font, 14f, 0.85f))
+        }
+    }
 }

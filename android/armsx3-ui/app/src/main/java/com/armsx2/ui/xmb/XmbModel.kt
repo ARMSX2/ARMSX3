@@ -29,6 +29,8 @@ class XmbIcon(
     val model: Any? = null,
     val bitmap: androidx.compose.ui.graphics.ImageBitmap? = null,
     val shadow: Boolean = true,
+    /** A second picture in the corner: the cover of the game a friend is playing, say. */
+    val inset: Any? = null,
 )
 
 /** A pick in an options panel (Triangle) or a choice in a setting. */
@@ -63,6 +65,8 @@ sealed class XmbNode(val key: String, val title: String, val icon: XmbIcon) {
         icon: XmbIcon,
         private val sub: String? = null,
         val options: List<XmbOption> = emptyList(),
+        /** A level shown as a bar under the focused item, 0..1: a microphone's, say. */
+        val meter: (() -> Float)? = null,
         val onConfirm: () -> Unit,
     ) : XmbNode(key, title, icon) {
         override val subtitle: String? get() = sub
@@ -81,6 +85,11 @@ sealed class XmbNode(val key: String, val title: String, val icon: XmbIcon) {
         private val sub: String? = null,
         val live: Boolean = false,
         val host: (@Composable () -> Unit)? = null,
+        /**
+         * Drawn beside the list while it (or a list inside it) is open, as the console shows a
+         * preview: given the keys of the focused item and of the open lists, innermost first.
+         */
+        val aside: (@Composable (keys: List<String>) -> Unit)? = null,
         val children: () -> List<XmbNode>,
     ) : XmbNode(key, title, icon) {
         override val subtitle: String? get() = sub
@@ -154,8 +163,11 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
         var focus by mutableIntStateOf(0)
     }
 
-    /** A question in the console's dialog: [message] over [buttons] side by side (Yes, No). */
-    class Dialog(val message: String, val buttons: List<XmbOption>, focus: Int = 0) {
+    /**
+     * A question in the console's dialog: [message] over [buttons] side by side (Yes, No).
+     * [onDismiss] runs when it is backed out of with no button chosen.
+     */
+    class Dialog(val message: String, val buttons: List<XmbOption>, focus: Int = 0, val onDismiss: (() -> Unit)? = null) {
         var focus by mutableIntStateOf(focus)
     }
 
@@ -371,7 +383,11 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
 
     fun back() {
         when {
-            dialog != null -> dialog = null
+            dialog != null -> {
+                val d = dialog
+                dialog = null
+                d?.onDismiss?.invoke()
+            }
             options != null -> options = null
             editing != null -> {
                 // A range applies as it moves, so backing out keeps where it was left; a list
@@ -417,7 +433,10 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
     }
 
     fun closeAll() {
-        dialog = null
+        dialog?.let { d ->
+            dialog = null
+            d.onDismiss?.invoke()
+        }
         options = null
         editing = null
         panel = null
@@ -473,5 +492,43 @@ object XmbInput {
         val c = controller ?: return false
         if (!blocked && !c.busy) repeat(5) { c.move(0, dir) }
         return true
+    }
+}
+
+/**
+ * Questions asked from inside the XMB, put in the XMB's own dialog. A settings tab composed for
+ * an XMB list (XmbCollector) asks its questions this way, as does an app-wide prompt raised from
+ * the XMB (GlobalConfirm), so the question is seen and answered in the XMB and nothing out of sight
+ * takes the pad.
+ */
+object XmbDialogs {
+    /** The XMB on screen now, at home or over a game, when nothing of the app's is open over it. */
+    fun target(): XmbController? {
+        if (!XmbMode.active.value) return null
+        val c = if (com.armsx2.ui.WindowImpl.overlayVisible.value) {
+            if (XmbInGame.takesPad()) XmbInGame.controller else null
+        } else {
+            XmbInput.controller
+        }
+        return c?.takeIf { it.panel == null }
+    }
+
+    /** Ask [title] / [message] with [confirmLabel] and [dismissLabel] (focused, the safe one). */
+    fun ask(
+        c: XmbController,
+        title: String,
+        message: String,
+        confirmLabel: String,
+        dismissLabel: String,
+        onConfirm: () -> Unit,
+        onDismiss: () -> Unit,
+    ) {
+        c.dialog = XmbController.Dialog(
+            listOf(title, message).filter { it.isNotBlank() }.joinToString("\n"),
+            listOf(XmbOption(confirmLabel, onConfirm), XmbOption(dismissLabel, onDismiss)),
+            focus = 1,
+            onDismiss = onDismiss,
+        )
+        XmbSounds.play(XmbSounds.Sfx.OPTION)
     }
 }

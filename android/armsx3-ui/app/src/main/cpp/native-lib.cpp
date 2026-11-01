@@ -175,6 +175,7 @@ struct CoreApi {
   int (*patchesWrite)(std::string_view file, std::string_view content);
   std::string (*patchesList)(std::string_view serial);
   std::string (*probeDiscInfo)(std::string_view isoPath, std::string_view iconOut);
+  bool (*xmbDiscMedia)(std::string_view isoPath, std::string_view outDir);
   int (*changeDisc)(std::string_view path);
   int (*discSwapState)();
   std::string (*getDiscPlaylist)();
@@ -367,6 +368,7 @@ struct CoreLibrary : CoreApi {
     result.patchesWrite = reinterpret_cast<decltype(patchesWrite)>(dlsym(handle, "_armsx3_patchesWrite"));
     result.patchesList = reinterpret_cast<decltype(patchesList)>(dlsym(handle, "_armsx3_patchesList"));
     result.probeDiscInfo = reinterpret_cast<decltype(probeDiscInfo)>(dlsym(handle, "_armsx3_probeDiscInfo"));
+    result.xmbDiscMedia = reinterpret_cast<decltype(xmbDiscMedia)>(dlsym(handle, "_armsx3_xmbDiscMedia"));
     result.changeDisc = reinterpret_cast<decltype(changeDisc)>(dlsym(handle, "_armsx3_changeDisc"));
     result.discSwapState = reinterpret_cast<decltype(discSwapState)>(dlsym(handle, "_armsx3_discSwapState"));
     result.getDiscPlaylist = reinterpret_cast<decltype(getDiscPlaylist)>(dlsym(handle, "_armsx3_getDiscPlaylist"));
@@ -1709,6 +1711,14 @@ Java_com_armsx3_core_ARMSX3_probeDiscInfo(JNIEnv *env, jobject, jstring jpath,
     return wrap(env, "{}");
   }
   return wrap(env, coreLib.probeDiscInfo(unwrap(env, jpath), unwrap(env, jicon)));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_armsx3_core_ARMSX3_xmbDiscMedia(JNIEnv *env, jobject, jstring jpath, jstring jout) {
+  if (coreLib.xmbDiscMedia == nullptr) {
+    return false;
+  }
+  return coreLib.xmbDiscMedia(unwrap(env, jpath), unwrap(env, jout));
 }
 
 extern "C" JNIEXPORT jint JNICALL

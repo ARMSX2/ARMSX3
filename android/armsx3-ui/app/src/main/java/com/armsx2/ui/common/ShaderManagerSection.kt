@@ -126,6 +126,7 @@ fun ShaderManagerSection() {
     }
     LaunchedEffect(Unit) { refreshInstalled() }
 
+
     fun startDownload(source: ShaderRepo.ShaderSource) {
         cancelFlag.set(false)
         scope.launch {
@@ -152,6 +153,57 @@ fun ShaderManagerSection() {
             }
             if (pack != null) refreshInstalled()
         }
+    }
+
+    // In the XMB: Shader Packs as a list: each installed pack (Triangle deletes it), the packs to
+    // download, with their progress under them, and the two imports.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        val title = str("renderer.shaderPack.label")
+        val desc = str("renderer.shaderPack.description")
+        val presetsWord = str("renderer.shaderPack.presets")
+        val deleteTitle = str("action.delete")
+        val downloadTitle = str("backend.driver.download")
+        val importFolder = str("renderer.shaderPack.import.folder")
+        val importZip = str("renderer.shaderPack.import.zip")
+        val progress = when {
+            extracted != null -> extracted!!.let { (d, t) -> "${(d * 100L / t.coerceAtLeast(1))}%" }
+            downloaded != null -> downloaded!!.let { (d, t) -> if (t > 0) "${(d * 100L / t)}%" else "${d / (1024 * 1024)} MB" }
+            else -> null
+        }
+        com.armsx2.ui.xmb.XmbCollected(
+            c,
+            com.armsx2.ui.xmb.XmbNode.Folder("xmb.shaderPacks", title, c.icon, message ?: desc, live = true) {
+                buildList {
+                    installed.forEach { pack ->
+                        val delete = com.armsx2.ui.xmb.XmbOption(deleteTitle) {
+                            scope.launch {
+                                withContext(Dispatchers.IO) { ShaderRepo.delete(pack) }
+                                refreshInstalled()
+                            }
+                        }
+                        add(com.armsx2.ui.xmb.XmbNode.Action("xmb.shaderPack.${pack.id}", pack.name, c.icon, "${pack.presetCount} $presetsWord", listOf(delete)) {})
+                    }
+                    (ShaderRepo.baseSources() + ShaderRepo.companionSources()).forEach { source ->
+                        val busy = busyId == source.id
+                        add(
+                            com.armsx2.ui.xmb.XmbNode.Action(
+                                "xmb.shaderPack.dl.${source.id}",
+                                "$downloadTitle: ${source.name}",
+                                c.icon,
+                                if (busy) progress ?: "..." else source.description,
+                            ) {
+                                if (busyId == null && ShaderRepo.requirementMet(context, source)) startDownload(source)
+                            },
+                        )
+                    }
+                    add(com.armsx2.ui.xmb.XmbNode.Action("xmb.shaderPack.importFolder", importFolder, c.icon) { if (busyId == null) folderLauncher.launch(null) })
+                    add(com.armsx2.ui.xmb.XmbNode.Action("xmb.shaderPack.importZip", importZip, c.icon) {
+                        if (busyId == null) zipLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream"))
+                    })
+                }
+            },
+        )
+        return
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

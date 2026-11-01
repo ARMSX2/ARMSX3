@@ -43,6 +43,8 @@ object XmbMedia {
         game.serial?.takeIf { it.isNotBlank() }?.let { serial ->
             Ps3Sfo.installDir(serial)?.takeIf { File(it, "PIC1.PNG").isFile || File(it, "ICON0.PNG").isFile }?.let { return it }
             XmbMediaCache.dirFor(context, serial)?.let { return it }
+            // A disc image keeps its media inside it: taken out once, into the cache.
+            XmbMediaCache.extract(context, game)?.let { return it }
         }
         return null
     }
@@ -85,12 +87,45 @@ object XmbMedia {
     }
 }
 
-/** Media taken out of disc images, which have no folder to read it from. Filled by the library scan. */
+/**
+ * Media taken out of disc images, which have no folder to read it from: copied out of the image
+ * (PS3_GAME's PIC1, PIC0, SND0 and ICON1) the first time its game is looked up, by the core, which
+ * mounts the image as it does to read its icon. A disc with none of it is remembered as such.
+ */
 object XmbMediaCache {
     fun root(context: Context): File = File(context.filesDir, "xmb-media")
 
     fun dirFor(context: Context, serial: String): File? =
         File(root(context), serial).takeIf { File(it, "PIC1.PNG").isFile || File(it, "SND0.AT3").isFile || File(it, "ICON1.PAM").isFile }
+
+    /** [game]'s media out of its disc image, into the cache; null when it has none. IO thread. */
+    fun extract(context: Context, game: GameInfo): File? {
+        val serial = game.serial?.takeIf { it.isNotBlank() } ?: return null
+        if (!game.extension.equals("ISO", ignoreCase = true)) return null
+        val none = File(root(context), "$serial.none")
+        if (none.isFile) return null
+        // The core mounts the image only while nothing runs; asked again later otherwise.
+        if (com.armsx2.runtime.MainActivityRuntime.eState.value != com.armsx2.EmuState.STOPPED) return null
+        val path = when (game.uri.scheme) {
+            "file" -> game.uri.path
+            "content" -> com.armsx2.storage.ContentUri.devicePathForDocument(game.uri)
+            else -> null
+        } ?: return null
+        val staging = File(root(context), "$serial.part").apply {
+            deleteRecursively()
+            mkdirs()
+        }
+        val copied = runCatching { com.armsx3.core.ARMSX3.instance.xmbDiscMedia(path, staging.absolutePath) }.getOrDefault(false)
+        if (!copied) {
+            staging.deleteRecursively()
+            runCatching { none.createNewFile() }
+            return null
+        }
+        val dir = File(root(context), serial)
+        dir.deleteRecursively()
+        if (!staging.renameTo(dir)) staging.copyRecursively(dir, overwrite = true).also { staging.deleteRecursively() }
+        return dirFor(context, serial)
+    }
 }
 
 /** The focused game's PIC1 behind the XMB, faded in after it has stayed focused a moment. */

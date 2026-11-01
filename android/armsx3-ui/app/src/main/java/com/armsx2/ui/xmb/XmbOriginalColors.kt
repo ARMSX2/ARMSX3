@@ -103,15 +103,38 @@ object XmbOriginalColors {
      */
     fun now(): Gradient {
         val nowMs = System.currentTimeMillis()
+        val pinned = XmbMode.pinnedMonth
+        val cycling = pinned == XmbMode.CYCLE && com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl
+        if (cycling) return cycle(nowMs)
         cached?.let { if (nowMs - cachedAt < 60_000L) return it }
         val cal = Calendar.getInstance()
         val hour = cal.get(Calendar.HOUR_OF_DAY) + cal.get(Calendar.MINUTE) / 60f
-        val pinned = XmbMode.pinnedMonth
         val month = if (pinned in 0..11 && com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl) pinned else cal.get(Calendar.MONTH)
         return at(month, hour).also {
             cached = it
             cachedAt = nowMs
         }
+    }
+
+    /** How long Color's Cycle stays on each month before easing into the next. */
+    private const val CYCLE_MONTH_MS = 20_000L
+
+    /** Theme Settings > Color > Cycle: each month's colour in turn, easing from one to the next. */
+    private fun cycle(nowMs: Long): Gradient {
+        val cal = Calendar.getInstance()
+        val hour = cal.get(Calendar.HOUR_OF_DAY) + cal.get(Calendar.MINUTE) / 60f
+        val t = (nowMs % (12 * CYCLE_MONTH_MS)).toFloat() / CYCLE_MONTH_MS
+        val month = t.toInt() % 12
+        // Most of each month held, the last quarter easing into the next.
+        val x = ((t - month - 0.75f) / 0.25f).coerceIn(0f, 1f)
+        val f = x * x * (3f - 2f * x)
+        val a = at(month, hour)
+        val b = at((month + 1) % 12, hour)
+        return Gradient(
+            a.angleDeg + (b.angleDeg - a.angleDeg) * f,
+            FloatArray(3) { a.start[it] + (b.start[it] - a.start[it]) * f },
+            FloatArray(3) { a.end[it] + (b.end[it] - a.end[it]) * f },
+        )
     }
 
     /**

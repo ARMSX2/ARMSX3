@@ -130,6 +130,8 @@ object XmbTheme {
         "icon_network_setting" to listOf("explore_category_sysconf/tex_network"),
         "icon_setting_item" to listOf("explore_category_sysconf/tex_sett"),
         "icon_savedata" to listOf("explore_category_game/item_tex_ps3util"),
+        // Game Data Utility's: the PKG/Data Manager stands where it was.
+        "icon_gamedata" to listOf("explore_category_game/item_tex_disc_install"),
         "icon_trophy" to listOf("explore_category_psn/item_tex_trophy"),
         "icon_browser" to listOf("explore_category_network/tex_browser"),
         "icon_remoteplay" to listOf("explore_category_network/tex_premo"),
@@ -140,6 +142,7 @@ object XmbTheme {
         "icon_addfriend" to listOf("explore_category_friend/item_tex_NewFriend"),
         "icon_playermet" to listOf("explore_category_friend/item_tex_Players"),
         "icon_photo_default" to listOf("explore_category_photo/photo_tex_default"),
+        "icon_photo_album_default" to listOf("explore_category_photo/photo_tex_folder"),
         "icon_music_default" to listOf("explore_category_music/music_tex_default"),
         "icon_music_album_default" to listOf("explore_category_music/music_tex_album_default"),
         "icon_video_default" to listOf("explore_category_video/video_tex_default"),

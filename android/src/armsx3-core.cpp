@@ -6023,6 +6023,68 @@ extern "C" std::string _armsx3_probeDiscInfo(std::string_view isoPath,
   return result;
 }
 
+// XMB mode's media for a disc image: PS3_GAME's PIC1 (the background), PIC0, SND0 (the music) and
+// ICON1 (the animated icon) copied into [outDir], which a folder game has on disk already. Mounted
+// and unmounted exactly as _armsx3_probeDiscInfo does, and only while the core is stopped. True when
+// anything was copied.
+extern "C" bool _armsx3_xmbDiscMedia(std::string_view isoPath, std::string_view outDir) {
+  if (isoPath.empty() || outDir.empty() || !Emu.IsStopped()) {
+    return false;
+  }
+
+  const std::string path(isoPath);
+
+  if (!is_iso_file(path)) {
+    return false;
+  }
+
+  std::lock_guard vfs_lock(g_emu_lifecycle_mutex);
+
+  if (!Emu.IsStopped()) {
+    return false;
+  }
+
+  const bool fxo_needs_setup = !g_fxo->is_init();
+
+  if (fxo_needs_setup) {
+    g_fxo->reset();
+  }
+
+  bool copied = false;
+
+  try {
+    load_iso(path);
+    const std::string root = iso_device::virtual_device_name + "/PS3_GAME/";
+
+    for (const char *name : {"PIC1.PNG", "PIC0.PNG", "SND0.AT3", "ICON1.PAM"}) {
+      if (!fs::is_file(root + name)) {
+        continue;
+      }
+
+      if (fs::file in{root + name}) {
+        const auto bytes = in.to_vector<u8>();
+
+        if (!bytes.empty()) {
+          if (fs::file out{std::string(outDir) + "/" + name, fs::rewrite}) {
+            out.write(bytes.data(), bytes.size());
+            copied = true;
+          }
+        }
+      }
+    }
+  } catch (const std::exception &e) {
+    armsx3_android.error("xmbDiscMedia('%s') failed: %s", path, e.what());
+  }
+
+  unload_iso();
+
+  if (fxo_needs_setup) {
+    g_fxo->clear();
+  }
+
+  return copied;
+}
+
 // What Swap Disc may do right now: 0 the game takes no disc swaps, 1 a disc is in and can be
 // swapped, 2 the tray is empty and the game is waiting for one.
 extern "C" int _armsx3_discSwapState() {

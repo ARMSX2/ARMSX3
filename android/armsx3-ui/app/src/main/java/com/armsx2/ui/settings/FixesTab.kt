@@ -263,7 +263,55 @@ private fun DeveloperSection() {
 
         // Listed when the section is drawn, so a capture made since shows up on the next visit.
         val captures = remember { DevTools.captures() }
-        DevActionRow(
+        // In the XMB: Replay a Capture as a list of the captures, newest first, each replayed with
+        // Cross; and over a game, Capture RSX Frame and Dump This Frame, as the pause menu has them.
+        com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+            val replayTitle = str("adv.replayCapture.label")
+            val none = str("adv.replayCapture.none")
+            val count = if (captures.isEmpty()) none else str("adv.replayCapture.count").replace("%d", captures.size.toString())
+            com.armsx2.ui.xmb.XmbCollected(
+                c,
+                com.armsx2.ui.xmb.XmbNode.Folder("xmb.replayCapture", replayTitle, c.icon, count, live = true) {
+                    val now = DevTools.captures()
+                    if (now.isEmpty()) {
+                        listOf(com.armsx2.ui.xmb.XmbNode.Action("xmb.replayCapture.none", none, c.icon) {})
+                    } else {
+                        now.map { f ->
+                            com.armsx2.ui.xmb.XmbNode.Action(
+                                "xmb.replay.${f.name}", f.name.substringBefore('.'), c.icon,
+                                java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT).format(java.util.Date(f.lastModified())) +
+                                    "   " + "%.1f MB".format(f.length() / 1048576.0),
+                            ) { DevTools.replay(f) }
+                        }
+                    }
+                },
+            )
+            if (com.armsx2.runtime.MainActivityRuntime.currentGame.value != null) {
+                val rsx = str("capture.rsx")
+                val rsxArmed = str("capture.rsx.armed")
+                val rsxDetail = str("capture.rsx.detail")
+                val dump = str("capture.frameDump")
+                val dumpArmed = str("capture.frameDump.armed")
+                val dumpUnsupported = str("capture.frameDump.unsupported")
+                val dumpDetail = str("capture.frameDump.detail")
+                val ok = str("action.ok")
+                com.armsx2.ui.xmb.XmbCollected(
+                    c,
+                    com.armsx2.ui.xmb.XmbNode.Action("xmb.capture.rsx", rsx, c.icon, rsxDetail) {
+                        com.armsx3.Rpcs3Bridge.captureFrame()
+                        com.armsx2.ui.xmb.XmbDialogs.target()?.tell(rsxArmed, ok)
+                    },
+                )
+                com.armsx2.ui.xmb.XmbCollected(
+                    c,
+                    com.armsx2.ui.xmb.XmbNode.Action("xmb.capture.dump", dump, c.icon, dumpDetail) {
+                        val armed = com.armsx3.Rpcs3Bridge.dumpFrame(DevTools.frameDumpMode)
+                        com.armsx2.ui.xmb.XmbDialogs.target()?.tell(if (armed) dumpArmed else dumpUnsupported, ok)
+                    },
+                )
+            }
+        }
+        if (com.armsx2.ui.xmb.LocalXmbCollector.current == null) DevActionRow(
             label = str("adv.replayCapture.label"),
             description = if (captures.isEmpty()) str("adv.replayCapture.none")
             else str("adv.replayCapture.count").replace("%d", captures.size.toString()),

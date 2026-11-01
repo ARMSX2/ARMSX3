@@ -92,9 +92,9 @@ fun XmbCollected(collector: XmbCollector, node: XmbNode) {
 
 /** A section of a hidden tab: a list of its own, holding what [content] hands over. */
 @Composable
-fun XmbCollectedSection(collector: XmbCollector, key: String, title: String, content: @Composable () -> Unit) {
+fun XmbCollectedSection(collector: XmbCollector, key: String, title: String, sub: String? = null, content: @Composable () -> Unit) {
     val child = remember(collector) { collector.child() }
-    XmbCollected(collector, XmbNode.Folder(key, title, collector.icon, live = true) { child.nodes })
+    XmbCollected(collector, XmbNode.Folder(key, title, collector.icon, sub, live = true) { child.nodes })
     CompositionLocalProvider(LocalXmbCollector provides child) {
         Column { content() }
     }

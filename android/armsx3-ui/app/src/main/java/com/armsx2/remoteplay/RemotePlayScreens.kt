@@ -723,3 +723,108 @@ fun RemotePlayNoticeBanner() {
         }
     }
 }
+
+/**
+ * Remote play from the XMB's Network column, as XMB lists: join with a code (typed on the pad
+ * keyboard, or pasted), the friends hosting on this Wi-Fi (looked for while that list is open),
+ * join by address, and how the screen behaves while playing a friend's game. The same calls as
+ * the Remote Play screen.
+ */
+@Composable
+internal fun xmbRemotePlayJoin(): com.armsx2.ui.xmb.XmbNode {
+    val context = LocalContext.current
+    val localNetwork = rememberLocalNetworkAccess()
+    val icon = com.armsx2.ui.xmb.XmbIcon("explore_category_network", "tex_premo", "\uD83D\uDCE1")
+    val title = str("remoteplay.title")
+    val explain = str("remoteplay.explain")
+    val codeTitle = str("remoteplay.join.code")
+    val codeHint = str("remoteplay.join.codeHint")
+    val codeField = str("remoteplay.join.codeField")
+    val badCode = str("remoteplay.join.badCode")
+    val paste = str("remoteplay.code.paste")
+    val wifiTitle = str("remoteplay.join.title")
+    val searching = str("remoteplay.join.searching")
+    val scanHint = str("remoteplay.join.scanHint")
+    val howToHost = str("remoteplay.join.howToHost")
+    val manual = str("remoteplay.join.manual")
+    val addressField = str("remoteplay.join.address")
+    val screenTitle = str("remoteplay.screen.title")
+    val screenNote = str("remoteplay.screen.note")
+    val modes = RevealMode.entries
+    val modeLabels = listOf(str("remoteplay.screen.tap"), str("remoteplay.screen.on"), str("remoteplay.screen.off"))
+    val exitTitle = str("remoteplay.screen.exit")
+    val exitDesc = str("remoteplay.screen.exitDesc")
+    val touchTitle = str("remoteplay.screen.touch")
+    val touchDesc = str("remoteplay.screen.touchDesc")
+    val statsTitle = str("remoteplay.screen.stats")
+    val statsDesc = str("remoteplay.screen.statsDesc")
+    val qosTitle = str("remoteplay.screen.qos")
+    val qosDesc = str("remoteplay.screen.qosDesc")
+    val ok = str("action.ok")
+    val (on, off) = com.armsx2.ui.xmb.xmbOnOff()
+    var hosts by remember { mutableStateOf(emptyList<RemotePlayHostInfo>()) }
+
+    fun join(text: String) {
+        val lobbyCode = RemotePlayLobby.normalize(text)
+        val offer = if (lobbyCode == null) RemotePlayProtocol.decodeCode(text) else null
+        when {
+            lobbyCode != null -> localNetwork { RemotePlayViewerActivity.startWithLobby(context, lobbyCode) }
+            offer != null && offer.optString("t") == "offer" -> localNetwork { RemotePlayViewerActivity.startWithInvite(context, offer) }
+            else -> com.armsx2.ui.xmb.XmbDialogs.target()?.tell(badCode, ok)
+        }
+    }
+    // Looked for while the list is open, as the screen's search runs while it is shown.
+    val finder: @Composable () -> Unit = {
+        DisposableEffect(Unit) {
+            var browser: HostBrowser? = null
+            localNetwork { allowed ->
+                if (allowed) browser = HostBrowser(context) { hosts = it }.also { it.start() }
+            }
+            onDispose { browser?.stop() }
+        }
+    }
+    return com.armsx2.ui.xmb.XmbNode.Folder("net.remote", title, icon, explain.substringBefore(". ") + ".") {
+        listOf(
+            com.armsx2.ui.xmb.XmbNode.Action("net.remote.code", codeTitle, icon, codeHint) {
+                com.armsx2.ui.xmb.XmbKeyboard.ask(codeField) { typed -> if (typed.isNotBlank()) join(typed.trim()) }
+            },
+            com.armsx2.ui.xmb.XmbNode.Action("net.remote.paste", paste, icon, codeHint) {
+                clipboardText(context)?.takeIf { it.isNotBlank() }?.let { join(it.trim()) } ?: com.armsx2.ui.xmb.XmbDialogs.target()?.tell(badCode, ok)
+            },
+            com.armsx2.ui.xmb.XmbNode.Folder("net.remote.wifi", wifiTitle, icon, scanHint, live = true, host = finder) {
+                hosts.map { h ->
+                    com.armsx2.ui.xmb.XmbNode.Action("net.remote.host.${h.address}:${h.port}", h.name, icon, listOf(h.game, h.address).filter(String::isNotBlank).joinToString("   ")) {
+                        RemotePlayViewerActivity.start(context, h.address, h.port, h.name)
+                    }
+                }.ifEmpty { listOf(com.armsx2.ui.xmb.XmbNode.Action("net.remote.searching", searching, icon, howToHost) {}) }
+            },
+            com.armsx2.ui.xmb.XmbNode.Action("net.remote.address", manual, icon, addressField) {
+                com.armsx2.ui.xmb.XmbKeyboard.ask(addressField) { typed -> localNetwork { allowed -> if (allowed) joinAddress(context, typed) } }
+            },
+            com.armsx2.ui.xmb.XmbNode.Folder("net.remote.screen", screenTitle, icon, screenNote, live = true) {
+                listOf(
+                    com.armsx2.ui.xmb.XmbNode.Setting(
+                        "net.remote.exit", exitTitle, icon,
+                        com.armsx2.ui.xmb.XmbEditor.Choice(modeLabels, { modes.indexOf(RemotePlayPrefs.exitButton(context)).coerceAtLeast(0) }) { RemotePlayPrefs.setExitButton(context, modes[it]) },
+                        { modeLabels[modes.indexOf(RemotePlayPrefs.exitButton(context)).coerceAtLeast(0)] }, exitDesc,
+                    ),
+                    com.armsx2.ui.xmb.XmbNode.Setting(
+                        "net.remote.touch", touchTitle, icon,
+                        com.armsx2.ui.xmb.XmbEditor.Choice(modeLabels, { modes.indexOf(RemotePlayPrefs.touchControls(context)).coerceAtLeast(0) }) { RemotePlayPrefs.setTouchControls(context, modes[it]) },
+                        { modeLabels[modes.indexOf(RemotePlayPrefs.touchControls(context)).coerceAtLeast(0)] }, touchDesc,
+                    ),
+                    com.armsx2.ui.xmb.XmbNode.Setting(
+                        "net.remote.stats", statsTitle, icon,
+                        com.armsx2.ui.xmb.XmbEditor.Toggle({ RemotePlayPrefs.streamStats(context) }) { RemotePlayPrefs.setStreamStats(context, it) },
+                        { if (RemotePlayPrefs.streamStats(context)) on else off }, statsDesc,
+                    ),
+                    com.armsx2.ui.xmb.XmbNode.Setting(
+                        "net.remote.qos", qosTitle, icon,
+                        com.armsx2.ui.xmb.XmbEditor.Toggle({ RemotePlayPrefs.wifiQos(context) }) { RemotePlayPrefs.setWifiQos(context, it) },
+                        { if (RemotePlayPrefs.wifiQos(context)) on else off }, qosDesc,
+                    ),
+                )
+            },
+        )
+    }
+}

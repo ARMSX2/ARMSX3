@@ -65,7 +65,12 @@ fun XmbShutdownOverlay() {
     }
     LaunchedEffect(Unit) {
         XmbSounds.play(XmbSounds.Sfx.CANCEL)
-        LibraryMusic.pause()
+        // The music goes down with the screen.
+        launch {
+            val down = Animatable(1f)
+            down.animateTo(0f, tween(1200, easing = LinearEasing)) { LibraryMusic.setShare(maxOf(value, 0.01f)) }
+            LibraryMusic.setShare(0f)
+        }
         // The wave and its colour sink with the screen, as the console's do.
         launch {
             val sink = Animatable(1f)
@@ -82,7 +87,10 @@ fun XmbShutdownOverlay() {
     }
     LaunchedEffect(introDone) {
         if (!introDone) return@LaunchedEffect
+        // The library's music comes in after the intro's, quiet first, as at startup.
+        LibraryMusic.setShare(0f)
         LibraryMusic.start(context)
+        XmbBootMusic.fadeIn()
         dark.animateTo(0f, tween(700, easing = FastOutSlowInEasing))
         XmbShutdown.running.value = false
     }

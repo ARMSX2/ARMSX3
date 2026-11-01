@@ -17,6 +17,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.Modifier
 
 /**
  * The toy portals as XMB lists, for the in-game Game column: the Skylanders portal, the Disney
@@ -85,7 +88,10 @@ fun xmbPortalNode(controller: XmbController): XmbNode {
             }
         }
 
-    val skylanders = XmbNode.Folder("portal.skylanders", "Skylanders", icon, live = true) {
+    val skylanders = XmbNode.Folder(
+        "portal.skylanders", "Skylanders", icon, live = true,
+        aside = { _ -> com.armsx2.ui.emulation.XmbSkylanderArt(SkylanderPortal.placed, Modifier.fillMaxWidth(0.8f).aspectRatio(1f)) },
+    ) {
         buildList {
             SkylanderPortal.placed.toSortedMap().forEach { (slot, file) ->
                 add(XmbNode.Action("portal.sky.placed.$slot", name(file), figureIcon, "$onPortal: $liftTitle", options = listOf(XmbOption(liftTitle) { SkylanderPortal.lift(slot) })) {
@@ -116,7 +122,14 @@ fun xmbPortalNode(controller: XmbController): XmbNode {
         }
     }
 
-    fun positional(key: String, title: String, portal: PositionPortal) = XmbNode.Folder(key, title, icon, live = true) {
+    /** The position a list is about, from the keys of the focused item and the open lists. */
+    fun focusOf(keys: List<String>): Int? =
+        keys.firstNotNullOfOrNull { k -> k.substringAfter("$KEY_POS", "").takeIf { k.contains(KEY_POS) }?.substringBefore('.')?.toIntOrNull() }
+
+    fun positional(key: String, title: String, portal: PositionPortal, art: @Composable (Map<Int, String>, Int?) -> Unit) = XmbNode.Folder(
+        key, title, icon, live = true,
+        aside = { keys -> art(portal.placed, focusOf(keys)) },
+    ) {
         buildList {
             portal.positions.forEach { (position, label) ->
                 val (labelKey, arg) = label
@@ -158,8 +171,15 @@ fun xmbPortalNode(controller: XmbController): XmbNode {
     return XmbNode.Folder("ingame.portal", portalTitle, icon, "Skylanders, Disney Infinity, LEGO Dimensions") {
         listOf(
             skylanders,
-            positional("portal.infinity", "Disney Infinity", InfinityBase),
-            positional("portal.dimensions", "LEGO Dimensions", DimensionsToyPad),
+            positional("portal.infinity", "Disney Infinity", InfinityBase) { placed, focus ->
+                com.armsx2.ui.emulation.XmbInfinityArt(placed, focus, Modifier.fillMaxWidth().aspectRatio(1f / 0.74f))
+            },
+            positional("portal.dimensions", "LEGO Dimensions", DimensionsToyPad) { placed, focus ->
+                com.armsx2.ui.emulation.XmbDimensionsArt(placed, focus, Modifier.fillMaxWidth().aspectRatio(1f / 0.74f))
+            },
         )
     }
 }
+
+/** The part of a position item's key before its number ("portal.infinity.pos.3"). */
+private const val KEY_POS = ".pos."
