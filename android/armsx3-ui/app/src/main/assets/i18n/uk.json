@@ -1497,5 +1497,7 @@
  "xmb.playlist.desc": "Створіть плейлист і додайте до нього",
  "xmb.playlist.addSongs": "Додати пісні",
  "xmb.playlist.addPictures": "Додати зображення",
- "xmb.configDb.none": "У базі даних RPCS3 немає налаштувань для цієї гри."
+ "xmb.configDb.none": "У базі даних RPCS3 немає налаштувань для цієї гри.",
+ "renderer.shaderChain.scale.label": "Роздільність шейдера",
+ "renderer.shaderChain.scale.description": "Запускає шейдер у меншій роздільності, а потім масштабує його зображення на екран. Нижче працює набагато швидше з важкими пресетами й виглядає трохи м'якше."
 }

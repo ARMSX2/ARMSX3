@@ -41,6 +41,8 @@ import com.armsx2.ShaderRepo
 import com.armsx2.i18n.str
 import com.armsx2.ui.settings.HelpText
 import com.armsx2.ui.settings.IntSliderRow
+import com.armsx2.ui.settings.SegmentedRow
+import com.armsx2.ui.settings.StockSettings
 import com.armsx2.ui.settings.SettingsControllerNav
 import com.armsx2.ui.settings.SettingsDivider
 import com.armsx2.ui.settings.ToggleRow
@@ -157,6 +159,8 @@ fun ShaderChainSection(
     onEnabledChange: (Boolean) -> Unit,
     onPresetChange: (String) -> Unit,
     onParamsChange: (Map<String, Map<String, Float>>) -> Unit,
+    scale: Int,
+    onScaleChange: (Int) -> Unit,
 ) {
     ToggleRow(
         str("renderer.shaderChain.label"),
@@ -175,7 +179,39 @@ fun ShaderChainSection(
         // section would be a row that opens onto an empty list.
         if (preset.isNotBlank()) {
             SettingsDivider()
+            ShaderScaleRow(scale, onScaleChange)
+            SettingsDivider()
             ShaderParamPicker(preset, params, onParamsChange, onPresetChange)
+        }
+    }
+}
+
+/** What Shader Resolution offers, in percent of full size; see Settings.shaderChainScale. */
+private val SHADER_SCALES = listOf(100, 75, 67, 50)
+
+/**
+ * The share of full size the chain runs at, the game's picture going in and the chain's coming
+ * out, before it is scaled up to the screen. Saved through the caller's tier like the rows above,
+ * and pushed at a running game too, as the renderer reads it each frame.
+ */
+@Composable
+private fun ShaderScaleRow(scale: Int, onScaleChange: (Int) -> Unit) {
+    val change = androidx.compose.runtime.rememberUpdatedState(onScaleChange)
+    // A value set by hand in a config file shows as the nearest choice at or below it.
+    val index = SHADER_SCALES.indexOf(scale).takeIf { it >= 0 }
+        ?: SHADER_SCALES.indexOfFirst { it <= scale }.takeIf { it >= 0 }
+        ?: SHADER_SCALES.lastIndex
+    SegmentedRow(
+        label = str("renderer.shaderChain.scale.label"),
+        options = SHADER_SCALES.map { "$it%" },
+        selectedIndex = index,
+        description = str("renderer.shaderChain.scale.description"),
+        notDefault = scale != StockSettings.shaderChainScale,
+    ) { i ->
+        val percent = SHADER_SCALES[i]
+        change.value(percent)
+        if (com.armsx2.runtime.MainActivityRuntime.eState.value != com.armsx2.EmuState.STOPPED) {
+            runCatching { com.armsx3.Rpcs3Settings.setShaderPresetScale(percent) }
         }
     }
 }

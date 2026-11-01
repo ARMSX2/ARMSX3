@@ -54,6 +54,7 @@ internal val SETTINGS_CATEGORY_FIELDS: Map<SettingsCategory, List<String>> = map
         "ps3VramLimitMb", "ps3WriteColorBuffers", "ps3WriteDepthBuffer", "renderer",
         "shadeBoost", "shadeBoostBrightness", "shadeBoostContrast", "shadeBoostGamma",
         "shadeBoostSaturation", "shaderChainEnabled", "shaderChainParams", "shaderChainPreset",
+        "shaderChainScale",
         "textureFiltering", "triFilter", "tvShader", "upscaleFloat", "useAngleOpenGL",
         "vsyncEnable",
     ),

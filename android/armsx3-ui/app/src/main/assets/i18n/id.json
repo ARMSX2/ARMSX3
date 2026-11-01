@@ -1497,5 +1497,7 @@
  "xmb.playlist.desc": "Buat daftar putar, lalu isi",
  "xmb.playlist.addSongs": "Tambah Lagu",
  "xmb.playlist.addPictures": "Tambah Gambar",
- "xmb.configDb.none": "Basis data RPCS3 tidak punya pengaturan untuk game ini."
+ "xmb.configDb.none": "Basis data RPCS3 tidak punya pengaturan untuk game ini.",
+ "renderer.shaderChain.scale.label": "Resolusi Shader",
+ "renderer.shaderChain.scale.description": "Menjalankan shader pada resolusi lebih rendah, lalu memperbesar gambarnya ke layar. Lebih rendah jauh lebih cepat untuk preset berat dan sedikit lebih lembut."
 }

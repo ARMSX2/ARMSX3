@@ -404,6 +404,8 @@ fun RendererTab(state: MutableState<Settings>) {
                 onEnabledChange = { on -> apply(s.copy(shaderChainEnabled = on)) },
                 onPresetChange = { path -> apply(s.copy(shaderChainPreset = path)) },
                 onParamsChange = { next -> apply(s.copy(shaderChainParams = next)) },
+                scale = s.shaderChainScale,
+                onScaleChange = { percent -> apply(s.copy(shaderChainScale = percent)) },
             )
             com.armsx2.ui.common.ShaderManagerSection()
         }

@@ -1497,5 +1497,7 @@
  "xmb.playlist.desc": "Bir çalma listesi oluştur, sonra ekle",
  "xmb.playlist.addSongs": "Şarkı ekle",
  "xmb.playlist.addPictures": "Resim ekle",
- "xmb.configDb.none": "RPCS3 veritabanında bu oyun için ayar yok."
+ "xmb.configDb.none": "RPCS3 veritabanında bu oyun için ayar yok.",
+ "renderer.shaderChain.scale.label": "Gölgelendirici Çözünürlüğü",
+ "renderer.shaderChain.scale.description": "Gölgelendiriciyi daha düşük çözünürlükte çalıştırır, ardından görüntüsünü ekrana büyütür. Düşük değer ağır ön ayarlarda çok daha hızlıdır ve biraz daha yumuşak görünür."
 }

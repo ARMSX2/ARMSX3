@@ -1497,5 +1497,7 @@
  "xmb.playlist.desc": "Lîsteyeke lêdanê çêke, paşê lê zêde bike",
  "xmb.playlist.addSongs": "Stran zêde bike",
  "xmb.playlist.addPictures": "Wêne zêde bike",
- "xmb.configDb.none": "Danegeha RPCS3 ji bo vê lîstikê ti mîhengan nîne."
+ "xmb.configDb.none": "Danegeha RPCS3 ji bo vê lîstikê ti mîhengan nîne.",
+ "renderer.shaderChain.scale.label": "Rezolûsyona shader",
+ "renderer.shaderChain.scale.description": "Shader bi rezolûsyoneke kêmtir dimeşîne, paşê wêneya wê li ser dîmenderê mezin dike. Kêmtir bi presetên giran pir zûtir e û hinekî nermtir xuya dike."
 }

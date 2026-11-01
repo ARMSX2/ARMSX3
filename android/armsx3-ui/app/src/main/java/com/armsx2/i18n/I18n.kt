@@ -1830,6 +1830,8 @@ val EN: Map<String, String> = mapOf(
     "renderer.shaderChain.passes" to "passes",
     "renderer.shaderChain.passesUnknown" to "cost unknown",
     "renderer.shaderChain.preset.label" to "Shader Preset",
+    "renderer.shaderChain.scale.label" to "Shader Resolution",
+    "renderer.shaderChain.scale.description" to "Runs the shader at a lower resolution, then scales its picture up to the screen. Lower is much faster with heavy presets and looks a little softer.",
     "renderer.shaderChain.preset.none" to "None",
     "renderer.shaderPack.cancelled" to "Download cancelled",
     "renderer.shaderPack.companion.description" to "Ready-made presets built on top of the RetroArch pack's shaders. They install into it and need it first; they contain no shaders of their own.",

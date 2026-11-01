@@ -333,12 +333,8 @@ private fun xmbThemeSettings(): XmbNode {
     val assetsFormat = str("xmb.theme.assets")
     val noAssets = str("xmb.theme.noAssets")
     val selectedTheme = XmbTheme.selected.value
-    val assets = remember(selectedTheme, themes) {
-        XmbTheme.entry()?.let { e ->
-            val xmb = java.io.File(e.folder, LibraryBackground.XMB_DIR)
-            (java.io.File(xmb, "icons").list()?.size ?: 0) to (java.io.File(xmb, "sounds").list()?.size ?: 0)
-        }
-    }
+    val assets = remember(selectedTheme, themes) { XmbTheme.entry()?.let(XmbTheme::assetCounts) }
+    val ok = str("action.ok")
     val assetsLine = assets?.let { (i, s) -> if (i + s == 0) noAssets else assetsFormat.format(i, s) }
     val colorTitle = str("xmb.theme.color")
     val colorDesc = str("xmb.theme.color.desc")
@@ -417,7 +413,15 @@ private fun xmbThemeSettings(): XmbNode {
                 editor = XmbEditor.Choice(
                     themeLabels,
                     { themes.indexOfFirst { it.folder.name == XmbTheme.selected.value } + 1 },
-                ) { XmbTheme.select(themes.getOrNull(it - 1)) },
+                ) { i ->
+                    val picked = themes.getOrNull(i - 1)
+                    XmbTheme.select(picked)
+                    // Said as it is picked, not only in the description: a theme added before its
+                    // icons were read otherwise just looks like one whose icons do not work.
+                    if (picked != null && XmbTheme.assetCounts(picked).let { it.first + it.second } == 0) {
+                        XmbDialogs.target()?.tell(noAssets, ok, error = false)
+                    }
+                },
                 value = { XmbTheme.entry()?.name ?: original },
                 description = listOfNotNull(assetsLine, themeDesc).joinToString("\n"),
             ),
@@ -467,6 +471,8 @@ private fun rememberXmbThemeImport(): () -> Unit {
             kept?.let {
                 LibraryBackground.add(it)
                 XmbTheme.select(it)
+                val gone = LibraryBackground.replaceOlder(it)
+                withContext(Dispatchers.IO) { gone.forEach { f -> runCatching { f.deleteRecursively() } } }
             }
             message?.let { android.widget.Toast.makeText(context, I18n.get(it), android.widget.Toast.LENGTH_LONG).show() }
         }

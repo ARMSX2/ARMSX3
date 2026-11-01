@@ -255,6 +255,23 @@ object LibraryBackground {
         runCatching { MainActivityRuntime.prefs.edit().remove(PREF).remove(PREF_SLIDESHOW).remove(PREF_SCENE).apply() }
     }
 
+    /**
+     * After the theme [entry] is imported: an older copy of it (the same title) is dropped, and
+     * whatever showed that copy, the library's background or XMB mode's theme, shows [entry]
+     * instead. Importing a theme again is how one added before its icons and sounds were read gets
+     * them, and that should not leave two of it. Returns the old folders, for the caller to delete
+     * off the main thread.
+     */
+    fun replaceOlder(entry: Saved): List<File> {
+        val older = saved.value.filter { it.folder != entry.folder && it.name == entry.name }
+        for (old in older) {
+            if (current()?.folder == old.folder) setImported(entry.picture, entry.slideshow, entry.scene)
+            if (com.armsx2.ui.xmb.XmbTheme.selected.value == old.folder.name) com.armsx2.ui.xmb.XmbTheme.select(entry)
+        }
+        if (older.isNotEmpty()) saved.value = saved.value.filter { s -> older.none { it.folder == s.folder } }
+        return older.map { it.folder }
+    }
+
     /** Delete [entry]'s files; the default background comes back when it was on show. */
     fun remove(entry: Saved) {
         if (current()?.folder == entry.folder) useDefault()

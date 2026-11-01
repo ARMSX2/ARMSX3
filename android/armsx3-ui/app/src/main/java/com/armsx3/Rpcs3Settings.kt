@@ -353,6 +353,9 @@ object Rpcs3Settings {
 
     fun setShaderPresetPath(path: String) = setString("$VIDEO@@Shader Preset Path", path)
 
+    /** The share of full size the shader chain runs at, in percent (25..100). */
+    fun setShaderPresetScale(percent: Int) = setInt("$VIDEO@@Shader Preset Resolution", percent.coerceIn(25, 100))
+
     /** FidelityFX CAS sharpening, 0..100. Only applies with FSR output scaling. */
     fun setCasSharpening(percent: Int) =
         setInt("$VIDEO@@FidelityFX CAS Sharpening Intensity", percent.coerceIn(0, 100))

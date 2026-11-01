@@ -1497,5 +1497,7 @@
  "xmb.playlist.desc": "یک فهرست پخش بسازید و به آن بیفزایید",
  "xmb.playlist.addSongs": "افزودن آهنگ",
  "xmb.playlist.addPictures": "افزودن تصویر",
- "xmb.configDb.none": "پایگاه داده RPCS3 تنظیمی برای این بازی ندارد."
+ "xmb.configDb.none": "پایگاه داده RPCS3 تنظیمی برای این بازی ندارد.",
+ "renderer.shaderChain.scale.label": "وضوح سایه‌زن",
+ "renderer.shaderChain.scale.description": "سایه‌زن را با وضوح کمتر اجرا می‌کند و سپس تصویرش را تا اندازه صفحه بزرگ می‌کند. مقدار کمتر با پیش‌تنظیم‌های سنگین بسیار سریع‌تر است و کمی نرم‌تر دیده می‌شود."
 }

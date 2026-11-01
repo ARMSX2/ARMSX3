@@ -75,6 +75,13 @@ object XmbTheme {
         synchronized(bitmaps) { bitmaps.clear() }
         icons = found
         sounds = heard
+        if (entry != null) {
+            android.util.Log.i(
+                "ARMSX3-Theme",
+                if (xmb == null) "'${entry.name}': no icons or sounds were kept with it, only its background"
+                else "'${entry.name}': ${found.size} XMB icons and ${heard.size} sounds replaced",
+            )
+        }
         XmbSounds.reload(context)
         revision.intValue++
     }
@@ -90,6 +97,12 @@ object XmbTheme {
 
     /** The theme's sound for the firmware's [name] (snd_cursor), as a WAV file, or null. */
     fun sound(name: String): File? = sounds[name]
+
+    /** How many icons and sounds were kept with [entry] when it was imported. Blocking, but small. */
+    fun assetCounts(entry: LibraryBackground.Saved): Pair<Int, Int> {
+        val xmb = File(entry.folder, LibraryBackground.XMB_DIR)
+        return (File(xmb, "icons").list()?.size ?: 0) to (File(xmb, "sounds").list()?.size ?: 0)
+    }
 
     /** A saved theme's own icon, when it has one. */
     fun iconOf(entry: LibraryBackground.Saved): File? =

@@ -1220,6 +1220,8 @@ private fun GraphicsPaneRest(settings: com.armsx2.config.Settings, viewModel: Em
         onEnabledChange = { on -> viewModel.updateSettings { it.copy(shaderChainEnabled = on) } },
         onPresetChange = { path -> viewModel.updateSettings { it.copy(shaderChainPreset = path) } },
         onParamsChange = { next -> viewModel.updateSettings { it.copy(shaderChainParams = next) } },
+        scale = settings.shaderChainScale,
+        onScaleChange = { percent -> viewModel.updateSettings { it.copy(shaderChainScale = percent) } },
     )
     com.armsx2.ui.common.ShaderManagerSection()
 }

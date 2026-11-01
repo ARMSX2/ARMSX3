@@ -204,10 +204,12 @@ fun HomeScreen(
             // is used as picked, as before, provided it is a picture: .p3t files have no image type,
             // so the picker now lists other files too.
             // Either way it is kept (LibraryBackground.saved), so the menu can bring it back later.
+            var theme = false
             val kept = withContext(Dispatchers.IO) {
                 val name = LibraryBackground.displayName(context, picked)
                 when {
                     LibraryBackground.isTheme(context, picked) -> LibraryBackground.importTheme(context, picked).let { outcome ->
+                        theme = true
                         outcome.messageKey to outcome.file?.let {
                             LibraryBackground.keep(context, outcome, outcome.name ?: name ?: "PS3 theme")
                         }
@@ -219,6 +221,11 @@ fun HomeScreen(
                 }
             }
             kept.second?.let(LibraryBackground::select)
+            // The same theme imported again replaces the copy that was there.
+            if (theme) kept.second?.let { entry ->
+                val gone = LibraryBackground.replaceOlder(entry)
+                withContext(Dispatchers.IO) { gone.forEach { runCatching { it.deleteRecursively() } } }
+            }
             kept.first?.let { Toast.makeText(context, I18n.get(it), Toast.LENGTH_LONG).show() }
         }
     }

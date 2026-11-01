@@ -1497,5 +1497,7 @@
  "xmb.playlist.desc": "Créez une liste de lecture, puis ajoutez-y des éléments",
  "xmb.playlist.addSongs": "Ajouter des morceaux",
  "xmb.playlist.addPictures": "Ajouter des images",
- "xmb.configDb.none": "La base de données de RPCS3 n'a aucun réglage pour ce jeu."
+ "xmb.configDb.none": "La base de données de RPCS3 n'a aucun réglage pour ce jeu.",
+ "renderer.shaderChain.scale.label": "Résolution du shader",
+ "renderer.shaderChain.scale.description": "Fait tourner le shader à une résolution plus basse, puis agrandit son image à l'écran. Plus bas est bien plus rapide avec les préréglages lourds et un peu plus doux."
 }

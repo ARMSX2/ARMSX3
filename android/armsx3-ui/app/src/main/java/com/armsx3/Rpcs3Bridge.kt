@@ -696,6 +696,7 @@ object Rpcs3Bridge {
                 "ShaderChainEnabled" ->
                     if (asBool(value)) Rpcs3Settings.setOutputScaling("Shader chain (librashader)")
                 "ShaderChainPreset" -> Rpcs3Settings.setShaderPresetPath(value)
+                "ShaderChainScale" -> Rpcs3Settings.setShaderPresetScale(asInt(value))
                 // The 12 OsdShow* flags are aggregated by NativeApp.osdApplyFlags,
                 // which maps them onto RPCS3's single Enabled + detail_level pair.
                 // Handling them one at a time here would fight that, since each

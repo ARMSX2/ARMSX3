@@ -1497,5 +1497,7 @@
  "xmb.playlist.desc": "新增播放清單並加入內容",
  "xmb.playlist.addSongs": "加入歌曲",
  "xmb.playlist.addPictures": "加入圖片",
- "xmb.configDb.none": "RPCS3 資料庫中沒有此遊戲的設定。"
+ "xmb.configDb.none": "RPCS3 資料庫中沒有此遊戲的設定。",
+ "renderer.shaderChain.scale.label": "著色器解析度",
+ "renderer.shaderChain.scale.description": "以較低的解析度執行著色器，再將畫面放大到螢幕。越低在重型預設下執行越快，畫面會稍微柔和一些。"
 }
