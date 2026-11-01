@@ -290,6 +290,7 @@ void main() {
         // 127/5/0/0 by how small the band is on screen) and the strands, where the band turns edge on.
         private const val LINE_FS = """#version 300 es
 precision highp float;
+precision highp sampler2D;
 in vec2 vTc0;
 in vec4 vTc1;
 uniform sampler2D uStrands;
@@ -315,6 +316,7 @@ void main() {
         // in the line colour, from colour 3 at the left to colour 4 at the right.
         private const val COMP_FS = """#version 300 es
 precision highp float;
+precision highp sampler2D;
 in vec2 vUv;
 uniform sampler2D uLines;
 uniform vec3 uCol3;

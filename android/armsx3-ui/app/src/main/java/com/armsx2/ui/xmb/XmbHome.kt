@@ -183,17 +183,26 @@ private fun xmbHomeColumns(
     )
     // Where each game's media is, worked out off the main thread: a stat or three per game adds up
     // over a whole library on an SD card.
-    val dirs by produceState<Map<String, File?>>(emptyMap(), state.visibleGames) {
+    // Each game's media folder and icon, worked out off the main thread: what is on disk already
+    // at once, then the disc images still without any, read one by one and handed over in batches,
+    // so the column is not rebuilt (and every icon looked up again) for each game as it lands.
+    val media by produceState<Map<String, GameMedia>>(emptyMap(), state.visibleGames) {
         val games = state.visibleGames
-        // First what is on disk already: folders, installed titles and the cache. Quick.
-        value = withContext(Dispatchers.IO) { games.associate { it.uri.toString() to XmbMedia.dirOf(context, it, extract = false) } }
-        // Then the disc images still without any, read one by one, each in as soon as it is out.
+        fun of(game: GameInfo, dir: File?) = GameMedia(dir, XmbMedia.icon0(game, dir))
+        value = withContext(Dispatchers.IO) { games.associate { it.uri.toString() to of(it, XmbMedia.dirOf(context, it, extract = false)) } }
+        var found = value
+        var shown = android.os.SystemClock.uptimeMillis()
         for (game in games) {
             val key = game.uri.toString()
-            if (value[key] != null) continue
-            val found = withContext(Dispatchers.IO) { XmbMedia.dirOf(context, game) } ?: continue
-            value = value + (key to found)
+            if (found[key]?.dir != null) continue
+            val media = withContext(Dispatchers.IO) { XmbMedia.dirOf(context, game)?.let { of(game, it) } } ?: continue
+            found = found + (key to media)
+            if (android.os.SystemClock.uptimeMillis() - shown > 1_500L) {
+                value = found
+                shown = android.os.SystemClock.uptimeMillis()
+            }
         }
+        value = found
     }
     val locale = remember(I18n.current) { java.util.Locale.forLanguageTag(I18n.current) }
     val lastPlayed = remember(locale) { lastPlayedFormat(context, locale) }
@@ -261,20 +270,24 @@ private fun xmbHomeColumns(
         )
     }
 
-    val games = state.visibleGames.map { game ->
-        val dir = dirs[game.uri.toString()]
+    // Built again only when the games, their media or the words change, not on every redraw.
+    val games = remember(state.visibleGames, media, forceEn, lastPlayed) {
+        state.visibleGames.map { game ->
+        val found = media[game.uri.toString()]
+        val dir = found?.dir
         // Under the focused game, when it was last played, as the console shows it.
         val played = PlayTime.lastPlayedMillis(game.serial)
         XmbNode.Game(
             game = game,
             title = game.displayTitle(forceEn),
-            icon = XmbIcon(model = XmbMedia.icon0(game, dir), glyph = "🎮"),
+            icon = XmbIcon(model = found?.icon ?: game.coverModel, glyph = "🎮"),
             sub = if (played > 0L) lastPlayed.format(java.util.Date(played)) else game.serial?.takeIf { it.isNotBlank() },
             onLaunch = { viewModel.launch(game) },
             onOptions = { gameOptions(game, game.displayTitle(forceEn)) },
             onSettings = { openSettings(game) },
             mediaDir = dir,
         )
+        }
     }
     // The tools have a column of their own, before the games, so the Game column is the games.
     val tools = XmbColumn(
@@ -511,3 +524,6 @@ object XmbPhotos {
         if (shots.isNotEmpty()) add(Album("screenshots", Kind.Screenshots, shots.first().lastModified(), null, shots))
     }
 }
+
+/** Where a game's media is, and its icon (a file or the cover), found off the main thread. */
+private class GameMedia(val dir: File?, val icon: Any?)
