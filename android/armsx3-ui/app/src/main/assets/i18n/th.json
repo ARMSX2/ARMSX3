@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "เล่นทั้งหมด",
  "xmb.playlist.slideshow": "สไลด์โชว์",
  "xmb.playlist.tracks": "%d เพลง",
- "xmb.playlist.empty": "เพลย์ลิสต์นี้ว่างอยู่"
+ "xmb.playlist.empty": "เพลย์ลิสต์นี้ว่างอยู่",
+ "xmb.theme.assets": "ไอคอน: %d   เสียง: %d",
+ "xmb.theme.noAssets": "เพิ่มไว้ก่อนที่จะอ่านไอคอนและเสียงของธีม ติดตั้งธีมอีกครั้งเพื่อใช้งาน",
+ "xmb.invite.howTo": "เข้าร่วมได้จาก RPCN ใน XMB",
+ "xmb.playlist.title": "เพลย์ลิสต์",
+ "xmb.playlist.desc": "สร้างเพลย์ลิสต์ แล้วเพิ่มรายการ",
+ "xmb.playlist.addSongs": "เพิ่มเพลง",
+ "xmb.playlist.addPictures": "เพิ่มรูปภาพ"
 }

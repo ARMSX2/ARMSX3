@@ -2320,6 +2320,10 @@ internal fun XmbPauseTab(tab: EmulationMenuTab) {
         EmulationMenuTab.Performance -> PerformancePane(state, viewModel)
         EmulationMenuTab.Controls -> ControlsPane(state, viewModel)
         EmulationMenuTab.Options -> OptionsPane(state, viewModel)
+        EmulationMenuTab.Fixes -> {
+            DatabaseSection()
+            com.armsx2.ui.settings.FixesTab(InGameOverlay.settingsState)
+        }
         else -> Unit
     }
 }

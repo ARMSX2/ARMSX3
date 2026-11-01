@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "Tout lire",
  "xmb.playlist.slideshow": "Diaporama",
  "xmb.playlist.tracks": "%d titres",
- "xmb.playlist.empty": "Cette liste de lecture est vide."
+ "xmb.playlist.empty": "Cette liste de lecture est vide.",
+ "xmb.theme.assets": "Icônes : %d   Sons : %d",
+ "xmb.theme.noAssets": "Ajouté avant la lecture de ses icônes et sons : réinstallez le thème pour les utiliser.",
+ "xmb.invite.howTo": "Rejoignez-la depuis RPCN dans le XMB.",
+ "xmb.playlist.title": "Listes de lecture",
+ "xmb.playlist.desc": "Créez une liste de lecture, puis ajoutez-y des éléments",
+ "xmb.playlist.addSongs": "Ajouter des morceaux",
+ "xmb.playlist.addPictures": "Ajouter des images"
 }

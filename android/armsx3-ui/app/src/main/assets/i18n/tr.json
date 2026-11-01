@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "Tümünü çal",
  "xmb.playlist.slideshow": "Slayt gösterisi",
  "xmb.playlist.tracks": "%d parça",
- "xmb.playlist.empty": "Bu çalma listesi boş."
+ "xmb.playlist.empty": "Bu çalma listesi boş.",
+ "xmb.theme.assets": "Simgeler: %d   Sesler: %d",
+ "xmb.theme.noAssets": "Simgeleri ve sesleri okunmadan önce eklenmiş: kullanmak için temayı yeniden yükle.",
+ "xmb.invite.howTo": "XMB'deki RPCN'den katıl.",
+ "xmb.playlist.title": "Çalma listeleri",
+ "xmb.playlist.desc": "Bir çalma listesi oluştur, sonra ekle",
+ "xmb.playlist.addSongs": "Şarkı ekle",
+ "xmb.playlist.addPictures": "Resim ekle"
 }

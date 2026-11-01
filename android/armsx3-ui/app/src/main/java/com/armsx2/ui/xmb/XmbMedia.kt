@@ -33,7 +33,7 @@ object XmbMedia {
      * form (picked by path, or through the system's picker on an SD card), media taken out of a
      * disc image, or an installed title's own folder.
      */
-    fun dirOf(context: Context, game: GameInfo): File? {
+    fun dirOf(context: Context, game: GameInfo, extract: Boolean = true): File? {
         localPath(game)?.let { File(it) }?.let { f ->
             // The folder itself, or its EBOOT.BIN two folders down.
             val top = if (f.isFile && f.name.equals("EBOOT.BIN", ignoreCase = true)) f.parentFile?.parentFile?.parentFile else f
@@ -45,7 +45,7 @@ object XmbMedia {
         game.serial?.takeIf { it.isNotBlank() }?.let { serial ->
             XmbMediaCache.dirFor(context, serial)?.let { return it }
             // A disc image keeps its media inside it: taken out once, into the cache.
-            XmbMediaCache.extract(context, game)?.let { return it }
+            if (extract) XmbMediaCache.extract(context, game)?.let { return it }
             // An installed title keeps its own. A disc game's installed update has a folder too,
             // usually without the disc's background and music, so it comes after the disc's.
             Ps3Sfo.installDir(serial)?.takeIf { d -> MEDIA.any { File(d, it).isFile } || File(d, "ICON0.PNG").isFile }?.let { return it }
@@ -139,8 +139,10 @@ object XmbMediaCache {
         if (game.extension.uppercase() !in IMAGES) return null
         val none = File(root(context), "$serial.none")
         if (none.isFile) return null
-        // The core mounts the image only while nothing runs; asked again later otherwise.
+        // The core mounts the image only while nothing runs, and only once it is loaded; asked
+        // again later otherwise, rather than the disc being marked as having nothing.
         if (com.armsx2.runtime.MainActivityRuntime.eState.value != com.armsx2.EmuState.STOPPED) return null
+        if (!com.armsx2.runtime.MainActivityRuntime.nativeReady.value) return null
         val path = when (game.uri.scheme) {
             "file" -> game.uri.path
             "content" -> com.armsx2.storage.ContentUri.devicePathForDocument(game.uri)

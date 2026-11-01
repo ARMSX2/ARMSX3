@@ -328,6 +328,18 @@ private fun xmbThemeSettings(): XmbNode {
     val importTitle = str("xmb.theme.import")
     val importDesc = str("xmb.theme.import.desc")
     val importTheme = rememberXmbThemeImport()
+    // What the theme in use brought for the XMB: its icons and its sounds, counted, or word that a
+    // theme added before ARMSX3 read them has only its picture until it is installed again.
+    val assetsFormat = str("xmb.theme.assets")
+    val noAssets = str("xmb.theme.noAssets")
+    val selectedTheme = XmbTheme.selected.value
+    val assets = remember(selectedTheme, themes) {
+        XmbTheme.entry()?.let { e ->
+            val xmb = java.io.File(e.folder, LibraryBackground.XMB_DIR)
+            (java.io.File(xmb, "icons").list()?.size ?: 0) to (java.io.File(xmb, "sounds").list()?.size ?: 0)
+        }
+    }
+    val assetsLine = assets?.let { (i, s) -> if (i + s == 0) noAssets else assetsFormat.format(i, s) }
     val colorTitle = str("xmb.theme.color")
     val colorDesc = str("xmb.theme.color.desc")
     val colorDefault = str("xmb.theme.color.default")
@@ -407,7 +419,7 @@ private fun xmbThemeSettings(): XmbNode {
                     { themes.indexOfFirst { it.folder.name == XmbTheme.selected.value } + 1 },
                 ) { XmbTheme.select(themes.getOrNull(it - 1)) },
                 value = { XmbTheme.entry()?.name ?: original },
-                description = themeDesc,
+                description = listOfNotNull(assetsLine, themeDesc).joinToString("\n"),
             ),
             XmbNode.Action("theme.import", importTitle, icon, importDesc) { importTheme() },
             XmbNode.Setting(

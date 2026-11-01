@@ -279,13 +279,16 @@ private fun ShaderPresetPicker(preset: String, onPresetChange: (String) -> Unit)
     // The path relative to the shader root. An empty key is the root itself. Keeping one
     // current location is what makes this a browser rather than a set of nested accordions.
     val currentFolderKey = remember { mutableStateOf("") }
+    // Bumped each time the XMB's list opens: there it never closes and opens the way the screen's
+    // does, and a pack downloaded after the first look was never found, leaving only None.
+    val rescan = remember { androidx.compose.runtime.mutableIntStateOf(0) }
 
     // Rescan on every open: packs get dropped in with a file manager (or the Shader Packs
     // downloader) while the app is alive, so a one-shot scan at first composition goes
     // stale. Off the UI thread — a slang-shaders pack is a deep tree of thousands of files,
     // and the costing/grouping/sorting rides the same IO hop rather than landing in
     // composition.
-    LaunchedEffect(expanded.value) {
+    LaunchedEffect(expanded.value, rescan.intValue) {
         if (!expanded.value) return@LaunchedEffect
         scanning.value = true
         try {
@@ -318,11 +321,17 @@ private fun ShaderPresetPicker(preset: String, onPresetChange: (String) -> Unit)
             com.armsx2.ui.xmb.XmbNode.Folder(
                 "xmb.shader.presets", title, c.icon, if (preset.isBlank()) noneLabel else File(preset).nameWithoutExtension,
                 live = true,
-                host = { LaunchedEffect(Unit) { expanded.value = true } },
+                host = {
+                    LaunchedEffect(Unit) {
+                        expanded.value = true
+                        rescan.intValue++
+                    }
+                },
             ) {
                 val r = scan.value?.root
                 when {
-                    r == null -> listOf(com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.scanning", "...", c.icon) {})
+                    r == null || (scanning.value && r.folders.isEmpty() && r.presets.isEmpty()) ->
+                        listOf(com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.scanning", "...", c.icon) {})
                     r.folders.isEmpty() && r.presets.isEmpty() -> listOf(
                         com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.none", noneLabel, c.icon) { onPresetChange("") },
                         com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.empty", emptyLabel, c.icon, scan.value?.dir) {},

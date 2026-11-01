@@ -184,8 +184,15 @@ private fun xmbHomeColumns(
     // Where each game's media is, worked out off the main thread: a stat or three per game adds up
     // over a whole library on an SD card.
     val dirs by produceState<Map<String, File?>>(emptyMap(), state.visibleGames) {
-        value = withContext(Dispatchers.IO) {
-            state.visibleGames.associate { it.uri.toString() to XmbMedia.dirOf(context, it) }
+        val games = state.visibleGames
+        // First what is on disk already: folders, installed titles and the cache. Quick.
+        value = withContext(Dispatchers.IO) { games.associate { it.uri.toString() to XmbMedia.dirOf(context, it, extract = false) } }
+        // Then the disc images still without any, read one by one, each in as soon as it is out.
+        for (game in games) {
+            val key = game.uri.toString()
+            if (value[key] != null) continue
+            val found = withContext(Dispatchers.IO) { XmbMedia.dirOf(context, game) } ?: continue
+            value = value + (key to found)
         }
     }
     val locale = remember(I18n.current) { java.util.Locale.forLanguageTag(I18n.current) }
@@ -357,8 +364,16 @@ internal fun xmbPhotoColumn(controller: XmbController): XmbColumn {
     val deleteAsk = str("xmb.music.delete.ask")
     val yes = fw(full, "msg_yes", "xmb.yes")
     val no = fw(full, "msg_no", "xmb.no")
+    val playlistsTitle = str("xmb.playlist.title")
+    val playlistsDesc = str("xmb.playlist.desc")
+    val newList = str("xmb.playlist.new")
+    val listName = str("xmb.playlist.name")
+    val addPictures = str("xmb.playlist.addPictures")
+    val (onWord, offWord) = xmbOnOff()
     LaunchedEffect(Unit) { withContext(Dispatchers.IO) { XmbPlaylists.load() } }
-    // The playlists, each a list of its own: Slideshow, its pictures, and Delete Playlist.
+    // Playlists: New Playlist, then each one a list of its own: Slideshow, Add Pictures (every
+    // picture with a switch), its pictures, and Delete Playlist.
+    val allPictures = albums.flatMap { it.files }
     val playlists = XmbPlaylists.photo.value.keys.map { name ->
         XmbNode.Folder("photo.playlist.$name", name, listIcon, count.format(XmbPlaylists.photo.value[name].orEmpty().size), live = true) {
             val files = XmbPlaylists.files(XmbPlaylists.Kind.Photo, name)
@@ -370,6 +385,21 @@ internal fun xmbPhotoColumn(controller: XmbController): XmbColumn {
                         controller.panel = XmbNode.Panel("photo.slideshow.$name", name, listIcon) { _ -> XmbPhotoViewer(files, 0, slideshow = true) }
                     })
                 }
+                add(
+                    XmbNode.Folder("photo.playlist.$name.add", addPictures, listIcon, live = true) {
+                        allPictures.map { f ->
+                            val inList = { f.absolutePath in XmbPlaylists.photo.value[name].orEmpty() }
+                            XmbNode.Setting(
+                                "photo.playlist.$name.add.${f.name}", f.nameWithoutExtension, XmbIcon(file = f, glyph = "\uD83D\uDDBC"),
+                                XmbEditor.Toggle(inList) { on ->
+                                    if (on) XmbPlaylists.add(XmbPlaylists.Kind.Photo, name, f.absolutePath)
+                                    else XmbPlaylists.remove(XmbPlaylists.Kind.Photo, name, f.absolutePath)
+                                },
+                                { if (inList()) onWord else offWord },
+                            )
+                        }
+                    },
+                )
                 files.forEachIndexed { i, f ->
                     add(
                         XmbNode.Action(
@@ -385,7 +415,14 @@ internal fun xmbPhotoColumn(controller: XmbController): XmbColumn {
             }
         }
     }
-    val items = playlists + if (albums.isEmpty()) {
+    val playlistsFolder = XmbNode.Folder("photo.playlists", playlistsTitle, listIcon, playlistsDesc, live = true) {
+        listOf<XmbNode>(
+            XmbNode.Action("photo.playlists.new", newList, listIcon) {
+                XmbKeyboard.ask(listName) { typed -> typed.trim().takeIf { it.isNotEmpty() }?.let { XmbPlaylists.create(XmbPlaylists.Kind.Photo, it) } }
+            },
+        ) + playlists
+    }
+    val items = listOf<XmbNode>(playlistsFolder) + if (albums.isEmpty()) {
         listOf(
             XmbNode.Action("photo.none", fw(full, "msg_error_no_image", "xmb.photo.none"), XmbIcon("explore_category_photo", "photo_tex_default", "🖼")) {},
         )

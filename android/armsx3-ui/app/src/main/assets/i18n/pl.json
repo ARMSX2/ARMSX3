@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "Odtwórz wszystko",
  "xmb.playlist.slideshow": "Pokaz slajdów",
  "xmb.playlist.tracks": "Utwory: %d",
- "xmb.playlist.empty": "Ta lista odtwarzania jest pusta."
+ "xmb.playlist.empty": "Ta lista odtwarzania jest pusta.",
+ "xmb.theme.assets": "Ikony: %d   Dźwięki: %d",
+ "xmb.theme.noAssets": "Dodano, zanim odczytano jego ikony i dźwięki: zainstaluj motyw ponownie, aby ich użyć.",
+ "xmb.invite.howTo": "Dołącz z RPCN w XMB.",
+ "xmb.playlist.title": "Listy odtwarzania",
+ "xmb.playlist.desc": "Utwórz listę odtwarzania i dodawaj do niej",
+ "xmb.playlist.addSongs": "Dodaj utwory",
+ "xmb.playlist.addPictures": "Dodaj obrazy"
 }

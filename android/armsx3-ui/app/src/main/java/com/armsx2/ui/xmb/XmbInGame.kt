@@ -231,6 +231,8 @@ private fun xmbInGameColumns(controller: XmbController, game: GameInfo?): List<X
         // just below and the Settings column hold all of it.
         add(xmbPauseNode(com.armsx2.ui.emulation.EmulationMenuTab.Graphics, "tex_display", "\u25a3"))
         add(xmbPauseNode(com.armsx2.ui.emulation.EmulationMenuTab.Performance, "tex_power", "\u26a1"))
+        // The pause menu's wrench tab: this title's config database entries, each switchable, and the fixes.
+        add(xmbPauseNode(com.armsx2.ui.emulation.EmulationMenuTab.Fixes, "tex_security", "\ud83d\udd27"))
         add(xmbPauseNode(com.armsx2.ui.emulation.EmulationMenuTab.Controls, "tex_pd", "\ud83c\udfae"))
         add(xmbCoreSettingsNode(InGameOverlay.settingsScope.value, InGameOverlay.currentSerial.value))
         add(xmbTrophiesNode(inGame = true))

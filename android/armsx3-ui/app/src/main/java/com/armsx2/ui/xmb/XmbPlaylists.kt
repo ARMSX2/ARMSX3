@@ -63,6 +63,12 @@ object XmbPlaylists {
         return true
     }
 
+    /** A new, empty playlist called [name]; nothing when there is one already. */
+    fun create(kind: Kind, name: String) {
+        if (name in state(kind).value) return
+        save(kind, LinkedHashMap(state(kind).value).apply { put(name, emptyList()) })
+    }
+
     fun remove(kind: Kind, name: String, path: String) {
         val now = LinkedHashMap(state(kind).value)
         now[name] = now[name].orEmpty() - path

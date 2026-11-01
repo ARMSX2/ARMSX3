@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "Phát tất cả",
  "xmb.playlist.slideshow": "Trình chiếu",
  "xmb.playlist.tracks": "%d bài",
- "xmb.playlist.empty": "Danh sách phát này trống."
+ "xmb.playlist.empty": "Danh sách phát này trống.",
+ "xmb.theme.assets": "Biểu tượng: %d   Âm thanh: %d",
+ "xmb.theme.noAssets": "Được thêm trước khi biểu tượng và âm thanh được đọc: hãy cài lại chủ đề để dùng chúng.",
+ "xmb.invite.howTo": "Tham gia từ RPCN trong XMB.",
+ "xmb.playlist.title": "Danh sách phát",
+ "xmb.playlist.desc": "Tạo danh sách phát rồi thêm vào",
+ "xmb.playlist.addSongs": "Thêm bài hát",
+ "xmb.playlist.addPictures": "Thêm hình ảnh"
 }

@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "Hemûyan lê bide",
  "xmb.playlist.slideshow": "Pêşandana wêneyan",
  "xmb.playlist.tracks": "%d stran",
- "xmb.playlist.empty": "Ev lîsteya lêdanê vala ye."
+ "xmb.playlist.empty": "Ev lîsteya lêdanê vala ye.",
+ "xmb.theme.assets": "Îkon: %d   Deng: %d",
+ "xmb.theme.noAssets": "Berî ku îkon û dengên wê bên xwendin hate zêdekirin: ji bo bikaranîna wan temayê dîsa saz bike.",
+ "xmb.invite.howTo": "Ji RPCN-ê di XMB-ê de beşdar bibe.",
+ "xmb.playlist.title": "Lîsteyên lêdanê",
+ "xmb.playlist.desc": "Lîsteyeke lêdanê çêke, paşê lê zêde bike",
+ "xmb.playlist.addSongs": "Stran zêde bike",
+ "xmb.playlist.addPictures": "Wêne zêde bike"
 }

@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "تشغيل الكل",
  "xmb.playlist.slideshow": "عرض الشرائح",
  "xmb.playlist.tracks": "%d مقاطع",
- "xmb.playlist.empty": "قائمة التشغيل هذه فارغة."
+ "xmb.playlist.empty": "قائمة التشغيل هذه فارغة.",
+ "xmb.theme.assets": "أيقوناته: %d   أصواته: %d",
+ "xmb.theme.noAssets": "أُضيف قبل قراءة أيقوناته وأصواته: ثبّت السمة مرة أخرى لاستخدامها.",
+ "xmb.invite.howTo": "انضم إليها من RPCN في XMB.",
+ "xmb.playlist.title": "قوائم التشغيل",
+ "xmb.playlist.desc": "أنشئ قائمة تشغيل ثم أضف إليها",
+ "xmb.playlist.addSongs": "إضافة أغانٍ",
+ "xmb.playlist.addPictures": "إضافة صور"
 }

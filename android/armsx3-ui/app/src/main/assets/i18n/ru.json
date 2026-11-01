@@ -1488,5 +1488,12 @@
  "xmb.playlist.playAll": "Воспроизвести все",
  "xmb.playlist.slideshow": "Слайд-шоу",
  "xmb.playlist.tracks": "Треков: %d",
- "xmb.playlist.empty": "Этот плейлист пуст."
+ "xmb.playlist.empty": "Этот плейлист пуст.",
+ "xmb.theme.assets": "Значков: %d   Звуков: %d",
+ "xmb.theme.noAssets": "Добавлена до того, как читались её значки и звуки: установите тему заново, чтобы их использовать.",
+ "xmb.invite.howTo": "Присоединитесь через RPCN в XMB.",
+ "xmb.playlist.title": "Плейлисты",
+ "xmb.playlist.desc": "Создайте плейлист и добавьте в него",
+ "xmb.playlist.addSongs": "Добавить песни",
+ "xmb.playlist.addPictures": "Добавить картинки"
 }

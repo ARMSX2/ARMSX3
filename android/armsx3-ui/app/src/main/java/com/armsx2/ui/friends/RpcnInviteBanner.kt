@@ -8,6 +8,14 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.wrapContentWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
@@ -76,6 +84,57 @@ fun RpcnInviteBanner() {
             kotlinx.coroutines.delay(8000)
             RpcnInviteNotice.from.value = null
         }
+    }
+
+    // XMB mode: the console's notification, at the top right in the XMB's glass and font, saying
+    // the invite is in RPCN in the in-game XMB.
+    if (com.armsx2.ui.xmb.XmbMode.active.value) {
+        val font = com.armsx2.ui.xmb.rememberXmbFont()
+        val shown = remember(sender) { sender }
+        AnimatedVisibility(
+            visible = sender != null,
+            enter = fadeIn(tween(220)),
+            exit = fadeOut(tween(220)),
+            modifier = Modifier.fillMaxWidth().wrapContentWidth(androidx.compose.ui.Alignment.End),
+        ) {
+            Row(
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                modifier = Modifier
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                    .padding(horizontal = 18.dp, vertical = 14.dp)
+                    .background(
+                        androidx.compose.ui.graphics.Brush.verticalGradient(
+                            listOf(androidx.compose.ui.graphics.Color(0xE0303036), androidx.compose.ui.graphics.Color(0xE0141418)),
+                        ),
+                        RoundedCornerShape(6.dp),
+                    )
+                    .border(1.dp, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+            ) {
+                com.armsx2.ui.xmb.XmbIconView(
+                    com.armsx2.ui.xmb.XmbIcon("explore_category_friend", "item_tex_Invitation", "\u2709"),
+                    32.dp,
+                )
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text(
+                        str("rpcn.invite.banner").format(shown.orEmpty()),
+                        fontFamily = font,
+                        fontSize = 16.sp,
+                        color = androidx.compose.ui.graphics.Color.White,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        str("xmb.invite.howTo"),
+                        fontFamily = font,
+                        fontSize = 13.sp,
+                        color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.75f),
+                    )
+                }
+            }
+        }
+        return
     }
 
     AnimatedVisibility(

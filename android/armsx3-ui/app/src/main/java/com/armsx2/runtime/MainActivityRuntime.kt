@@ -5701,7 +5701,9 @@ open class MainActivityRuntime : ComponentActivity() {
 
                     if (invites != null) {
                         com.armsx2.online.OnlineSession.keepAlive(applicationContext)
-                        com.armsx2.ui.friends.RpcnInviteNotice.update(com.armsx2.ui.settings.parseRpcnInvites(invites))
+                        val parsed = com.armsx2.ui.settings.parseRpcnInvites(invites)
+                        com.armsx2.ui.friends.RpcnInviteNotice.update(parsed)
+                        com.armsx2.ui.xmb.XmbRpcn.invites.value = parsed
                     }
                 } else {
                     com.armsx2.ui.friends.RpcnInviteNotice.reset()

@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "Alle abspielen",
  "xmb.playlist.slideshow": "Diashow",
  "xmb.playlist.tracks": "%d Titel",
- "xmb.playlist.empty": "Diese Wiedergabeliste ist leer."
+ "xmb.playlist.empty": "Diese Wiedergabeliste ist leer.",
+ "xmb.theme.assets": "Symbole: %d   Töne: %d",
+ "xmb.theme.noAssets": "Hinzugefügt, bevor Symbole und Töne gelesen wurden: Installiere das Design erneut, um sie zu nutzen.",
+ "xmb.invite.howTo": "Tritt über RPCN im XMB bei.",
+ "xmb.playlist.title": "Wiedergabelisten",
+ "xmb.playlist.desc": "Erstelle eine Wiedergabeliste und füge etwas hinzu",
+ "xmb.playlist.addSongs": "Titel hinzufügen",
+ "xmb.playlist.addPictures": "Bilder hinzufügen"
 }

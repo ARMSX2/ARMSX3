@@ -1490,5 +1490,12 @@
  "xmb.playlist.playAll": "Tocar tudo",
  "xmb.playlist.slideshow": "Apresentação de slides",
  "xmb.playlist.tracks": "%d faixas",
- "xmb.playlist.empty": "Esta playlist está vazia."
+ "xmb.playlist.empty": "Esta playlist está vazia.",
+ "xmb.theme.assets": "Ícones: %d   Sons: %d",
+ "xmb.theme.noAssets": "Adicionado antes de seus ícones e sons serem lidos: instale o tema de novo para usá-los.",
+ "xmb.invite.howTo": "Entre pelo RPCN no XMB.",
+ "xmb.playlist.title": "Playlists",
+ "xmb.playlist.desc": "Crie uma playlist e adicione itens",
+ "xmb.playlist.addSongs": "Adicionar músicas",
+ "xmb.playlist.addPictures": "Adicionar imagens"
 }

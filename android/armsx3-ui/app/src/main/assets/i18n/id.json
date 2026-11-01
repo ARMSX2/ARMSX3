@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "Putar Semua",
  "xmb.playlist.slideshow": "Tayangan Slide",
  "xmb.playlist.tracks": "%d lagu",
- "xmb.playlist.empty": "Daftar putar ini kosong."
+ "xmb.playlist.empty": "Daftar putar ini kosong.",
+ "xmb.theme.assets": "Ikon: %d   Suara: %d",
+ "xmb.theme.noAssets": "Ditambahkan sebelum ikon dan suaranya dibaca: pasang ulang tema untuk memakainya.",
+ "xmb.invite.howTo": "Bergabung dari RPCN di XMB.",
+ "xmb.playlist.title": "Daftar Putar",
+ "xmb.playlist.desc": "Buat daftar putar, lalu isi",
+ "xmb.playlist.addSongs": "Tambah Lagu",
+ "xmb.playlist.addPictures": "Tambah Gambar"
 }

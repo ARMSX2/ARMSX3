@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "پخش همه",
  "xmb.playlist.slideshow": "نمایش اسلاید",
  "xmb.playlist.tracks": "%d قطعه",
- "xmb.playlist.empty": "این فهرست پخش خالی است."
+ "xmb.playlist.empty": "این فهرست پخش خالی است.",
+ "xmb.theme.assets": "نمادها: %d   صداها: %d",
+ "xmb.theme.noAssets": "پیش از خوانده شدن نمادها و صداهایش افزوده شده است: برای استفاده از آن‌ها، پوسته را دوباره نصب کنید.",
+ "xmb.invite.howTo": "از RPCN در XMB به آن بپیوندید.",
+ "xmb.playlist.title": "فهرست‌های پخش",
+ "xmb.playlist.desc": "یک فهرست پخش بسازید و به آن بیفزایید",
+ "xmb.playlist.addSongs": "افزودن آهنگ",
+ "xmb.playlist.addPictures": "افزودن تصویر"
 }

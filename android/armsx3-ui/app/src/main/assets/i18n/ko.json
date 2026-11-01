@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "모두 재생",
  "xmb.playlist.slideshow": "슬라이드 쇼",
  "xmb.playlist.tracks": "%d곡",
- "xmb.playlist.empty": "이 재생 목록은 비어 있습니다."
+ "xmb.playlist.empty": "이 재생 목록은 비어 있습니다.",
+ "xmb.theme.assets": "아이콘: %d   사운드: %d",
+ "xmb.theme.noAssets": "아이콘과 사운드를 읽기 전에 추가된 테마입니다. 사용하려면 테마를 다시 설치하세요.",
+ "xmb.invite.howTo": "XMB의 RPCN에서 참가하세요.",
+ "xmb.playlist.title": "재생 목록",
+ "xmb.playlist.desc": "재생 목록을 만들고 추가하세요",
+ "xmb.playlist.addSongs": "곡 추가",
+ "xmb.playlist.addPictures": "사진 추가"
 }

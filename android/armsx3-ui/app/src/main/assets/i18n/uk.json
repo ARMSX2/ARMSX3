@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "Відтворити все",
  "xmb.playlist.slideshow": "Слайд-шоу",
  "xmb.playlist.tracks": "Треків: %d",
- "xmb.playlist.empty": "Цей плейлист порожній."
+ "xmb.playlist.empty": "Цей плейлист порожній.",
+ "xmb.theme.assets": "Значків: %d   Звуків: %d",
+ "xmb.theme.noAssets": "Додано до того, як читалися її значки та звуки: установіть тему ще раз, щоб їх використати.",
+ "xmb.invite.howTo": "Приєднайтеся через RPCN у XMB.",
+ "xmb.playlist.title": "Плейлисти",
+ "xmb.playlist.desc": "Створіть плейлист і додайте до нього",
+ "xmb.playlist.addSongs": "Додати пісні",
+ "xmb.playlist.addPictures": "Додати зображення"
 }

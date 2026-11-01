@@ -1489,5 +1489,12 @@
  "xmb.playlist.playAll": "全部播放",
  "xmb.playlist.slideshow": "幻灯片放映",
  "xmb.playlist.tracks": "%d 首",
- "xmb.playlist.empty": "此播放列表为空。"
+ "xmb.playlist.empty": "此播放列表为空。",
+ "xmb.theme.assets": "图标：%d   声音：%d",
+ "xmb.theme.noAssets": "添加时尚未读取其图标和声音：重新安装主题即可使用。",
+ "xmb.invite.howTo": "可在 XMB 的 RPCN 中加入。",
+ "xmb.playlist.title": "播放列表",
+ "xmb.playlist.desc": "新建播放列表并添加内容",
+ "xmb.playlist.addSongs": "添加歌曲",
+ "xmb.playlist.addPictures": "添加图片"
 }
