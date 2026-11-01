@@ -1479,5 +1479,15 @@
  "xmb.core.forgetAllAsk": "ลืมการตั้งค่าทั้งหมดที่จดจำไว้ที่นี่ไหม แต่ละรายการจะกลับเป็นค่าเริ่มต้น",
  "xmb.pad.turbo": "เทอร์โบ",
  "xmb.pad.resetAsk": "คืนค่าการกำหนดปุ่มเหล่านี้กลับเป็นแบบเริ่มต้นไหม",
- "xmb.update.storage": "อัปเดตผ่านสื่อจัดเก็บข้อมูล"
+ "xmb.update.storage": "อัปเดตผ่านสื่อจัดเก็บข้อมูล",
+ "xmb.playlist.add": "เพิ่มลงในเพลย์ลิสต์",
+ "xmb.playlist.new": "เพลย์ลิสต์ใหม่",
+ "xmb.playlist.name": "ชื่อเพลย์ลิสต์",
+ "xmb.playlist.added": "เพิ่มลงใน %s แล้ว",
+ "xmb.playlist.remove": "นำออกจากเพลย์ลิสต์",
+ "xmb.playlist.delete": "ลบเพลย์ลิสต์",
+ "xmb.playlist.playAll": "เล่นทั้งหมด",
+ "xmb.playlist.slideshow": "สไลด์โชว์",
+ "xmb.playlist.tracks": "%d เพลง",
+ "xmb.playlist.empty": "เพลย์ลิสต์นี้ว่างอยู่"
 }

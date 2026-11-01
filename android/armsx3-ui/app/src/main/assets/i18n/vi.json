@@ -1479,5 +1479,15 @@
  "xmb.core.forgetAllAsk": "Quên mọi cài đặt được ghi nhớ ở đây? Mỗi cài đặt sẽ trở về mặc định.",
  "xmb.pad.turbo": "Bắn liên tục",
  "xmb.pad.resetAsk": "Đưa cách gán nút này về như ban đầu?",
- "xmb.update.storage": "Cập nhật qua phương tiện lưu trữ"
+ "xmb.update.storage": "Cập nhật qua phương tiện lưu trữ",
+ "xmb.playlist.add": "Thêm vào danh sách phát",
+ "xmb.playlist.new": "Danh sách phát mới",
+ "xmb.playlist.name": "Tên danh sách phát",
+ "xmb.playlist.added": "Đã thêm vào %s.",
+ "xmb.playlist.remove": "Xóa khỏi danh sách phát",
+ "xmb.playlist.delete": "Xóa danh sách phát",
+ "xmb.playlist.playAll": "Phát tất cả",
+ "xmb.playlist.slideshow": "Trình chiếu",
+ "xmb.playlist.tracks": "%d bài",
+ "xmb.playlist.empty": "Danh sách phát này trống."
 }

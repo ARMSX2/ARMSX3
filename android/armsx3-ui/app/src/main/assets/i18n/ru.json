@@ -1478,5 +1478,15 @@
  "xmb.core.forgetAllAsk": "Забыть все запомненные здесь настройки? Каждая вернётся к значению по умолчанию.",
  "xmb.pad.turbo": "Турбо",
  "xmb.pad.resetAsk": "Вернуть эти назначения кнопок к исходным?",
- "xmb.update.storage": "Обновить с носителя данных"
+ "xmb.update.storage": "Обновить с носителя данных",
+ "xmb.playlist.add": "Добавить в плейлист",
+ "xmb.playlist.new": "Новый плейлист",
+ "xmb.playlist.name": "Название плейлиста",
+ "xmb.playlist.added": "Добавлено в %s.",
+ "xmb.playlist.remove": "Убрать из плейлиста",
+ "xmb.playlist.delete": "Удалить плейлист",
+ "xmb.playlist.playAll": "Воспроизвести все",
+ "xmb.playlist.slideshow": "Слайд-шоу",
+ "xmb.playlist.tracks": "Треков: %d",
+ "xmb.playlist.empty": "Этот плейлист пуст."
 }

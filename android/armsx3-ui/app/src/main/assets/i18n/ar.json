@@ -1479,5 +1479,15 @@
  "xmb.core.forgetAllAsk": "هل تريد نسيان كل الإعدادات المحفوظة هنا؟ سيعود كل إعداد إلى قيمته الافتراضية.",
  "xmb.pad.turbo": "تيربو",
  "xmb.pad.resetAsk": "هل تريد إعادة تعيينات الأزرار هذه إلى ما كانت عليه في البداية؟",
- "xmb.update.storage": "التحديث عبر وسائط التخزين"
+ "xmb.update.storage": "التحديث عبر وسائط التخزين",
+ "xmb.playlist.add": "إضافة إلى قائمة تشغيل",
+ "xmb.playlist.new": "قائمة تشغيل جديدة",
+ "xmb.playlist.name": "اسم قائمة التشغيل",
+ "xmb.playlist.added": "أُضيف إلى %s.",
+ "xmb.playlist.remove": "إزالة من قائمة التشغيل",
+ "xmb.playlist.delete": "حذف قائمة التشغيل",
+ "xmb.playlist.playAll": "تشغيل الكل",
+ "xmb.playlist.slideshow": "عرض الشرائح",
+ "xmb.playlist.tracks": "%d مقاطع",
+ "xmb.playlist.empty": "قائمة التشغيل هذه فارغة."
 }

@@ -348,7 +348,44 @@ internal fun xmbPhotoColumn(controller: XmbController): XmbColumn {
     val screenshots = str("xmb.photo.screenshots")
     val count = str("xmb.photo.count")
     val folderIcon = XmbIcon("explore_category_photo", "photo_tex_folder", "🖼")
-    val items = if (albums.isEmpty()) {
+    val listIcon = XmbIcon("explore_category_photo", "tex_playlist", "🖼")
+    val addToList = str("xmb.playlist.add")
+    val removeFromList = str("xmb.playlist.remove")
+    val deleteList = str("xmb.playlist.delete")
+    val slideshow = str("xmb.playlist.slideshow")
+    val emptyList = str("xmb.playlist.empty")
+    val deleteAsk = str("xmb.music.delete.ask")
+    val yes = fw(full, "msg_yes", "xmb.yes")
+    val no = fw(full, "msg_no", "xmb.no")
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { XmbPlaylists.load() } }
+    // The playlists, each a list of its own: Slideshow, its pictures, and Delete Playlist.
+    val playlists = XmbPlaylists.photo.value.keys.map { name ->
+        XmbNode.Folder("photo.playlist.$name", name, listIcon, count.format(XmbPlaylists.photo.value[name].orEmpty().size), live = true) {
+            val files = XmbPlaylists.files(XmbPlaylists.Kind.Photo, name)
+            buildList {
+                if (files.isEmpty()) {
+                    add(XmbNode.Action("photo.playlist.$name.none", emptyList, listIcon) {})
+                } else {
+                    add(XmbNode.Action("photo.playlist.$name.show", slideshow, listIcon) {
+                        controller.panel = XmbNode.Panel("photo.slideshow.$name", name, listIcon) { _ -> XmbPhotoViewer(files, 0, slideshow = true) }
+                    })
+                }
+                files.forEachIndexed { i, f ->
+                    add(
+                        XmbNode.Action(
+                            "photo.playlist.$name.$i.${f.name}", f.nameWithoutExtension, XmbIcon(file = f, glyph = "🖼"),
+                            taken.format(java.util.Date(f.lastModified())),
+                            listOf(XmbOption(removeFromList) { XmbPlaylists.remove(XmbPlaylists.Kind.Photo, name, f.absolutePath) }),
+                        ) { controller.panel = XmbNode.Panel("photo.view.$name.${f.name}", name, listIcon) { _ -> XmbPhotoViewer(files, i) } },
+                    )
+                }
+                add(XmbNode.Action("photo.playlist.$name.delete", deleteList, listIcon) {
+                    controller.ask(deleteAsk.format(name), yes, no, focusNo = true) { XmbPlaylists.delete(XmbPlaylists.Kind.Photo, name) }
+                })
+            }
+        }
+    }
+    val items = playlists + if (albums.isEmpty()) {
         listOf(
             XmbNode.Action("photo.none", fw(full, "msg_error_no_image", "xmb.photo.none"), XmbIcon("explore_category_photo", "photo_tex_default", "🖼")) {},
         )
@@ -364,7 +401,10 @@ internal fun xmbPhotoColumn(controller: XmbController): XmbColumn {
                     val viewer = XmbNode.Panel("photo.view.${album.key}.${file.name}", title, folderIcon) { _ ->
                         XmbPhotoViewer(album.files, i)
                     }
-                    XmbNode.Action("photo.${album.key}.${file.name}", file.nameWithoutExtension, XmbIcon(file = file, glyph = "🖼"), name) {
+                    XmbNode.Action(
+                        "photo.${album.key}.${file.name}", file.nameWithoutExtension, XmbIcon(file = file, glyph = "🖼"), name,
+                        listOf(XmbOption(addToList) { XmbPlaylists.offer(controller, XmbPlaylists.Kind.Photo, file.absolutePath) }),
+                    ) {
                         controller.panel = viewer
                     }
                 }
@@ -381,9 +421,18 @@ internal fun xmbPhotoColumn(controller: XmbController): XmbColumn {
 
 /** An album's pictures, one at a time as large as the panel allows, on black; Left and Right page. */
 @Composable
-private fun XmbPhotoViewer(files: List<File>, start: Int) {
+private fun XmbPhotoViewer(files: List<File>, start: Int, slideshow: Boolean = false) {
     val pager = androidx.compose.foundation.pager.rememberPagerState(initialPage = start) { files.size }
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    // A slideshow goes on by itself, a picture every five seconds, round again at the end.
+    if (slideshow && files.size > 1) {
+        LaunchedEffect(Unit) {
+            while (true) {
+                delay(5_000)
+                pager.animateScrollToPage((pager.currentPage + 1) % files.size)
+            }
+        }
+    }
     fun go(step: Int) {
         val next = (pager.currentPage + step).coerceIn(0, files.lastIndex)
         if (next != pager.currentPage) scope.launch { pager.animateScrollToPage(next) }

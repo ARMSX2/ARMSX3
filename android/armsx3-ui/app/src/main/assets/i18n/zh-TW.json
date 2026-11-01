@@ -1479,5 +1479,15 @@
  "xmb.core.forgetAllAsk": "要忘記這裡記住的所有設定嗎？每項都會恢復為預設值。",
  "xmb.pad.turbo": "連發",
  "xmb.pad.resetAsk": "要將這些按鍵對應恢復為初始狀態嗎？",
- "xmb.update.storage": "透過儲存媒體更新"
+ "xmb.update.storage": "透過儲存媒體更新",
+ "xmb.playlist.add": "加入播放清單",
+ "xmb.playlist.new": "新增播放清單",
+ "xmb.playlist.name": "播放清單名稱",
+ "xmb.playlist.added": "已加入%s。",
+ "xmb.playlist.remove": "從播放清單中移除",
+ "xmb.playlist.delete": "刪除播放清單",
+ "xmb.playlist.playAll": "全部播放",
+ "xmb.playlist.slideshow": "投影片播放",
+ "xmb.playlist.tracks": "%d 首",
+ "xmb.playlist.empty": "此播放清單是空的。"
 }

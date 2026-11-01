@@ -1480,5 +1480,15 @@
  "xmb.core.forgetAllAsk": "Esquecer todas as configurações memorizadas aqui? Cada uma volta ao padrão.",
  "xmb.pad.turbo": "Turbo",
  "xmb.pad.resetAsk": "Voltar este mapeamento de botões ao estado inicial?",
- "xmb.update.storage": "Atualizar via mídia de armazenamento"
+ "xmb.update.storage": "Atualizar via mídia de armazenamento",
+ "xmb.playlist.add": "Adicionar à playlist",
+ "xmb.playlist.new": "Nova playlist",
+ "xmb.playlist.name": "Nome da playlist",
+ "xmb.playlist.added": "Adicionado a %s.",
+ "xmb.playlist.remove": "Remover da playlist",
+ "xmb.playlist.delete": "Excluir playlist",
+ "xmb.playlist.playAll": "Tocar tudo",
+ "xmb.playlist.slideshow": "Apresentação de slides",
+ "xmb.playlist.tracks": "%d faixas",
+ "xmb.playlist.empty": "Esta playlist está vazia."
 }

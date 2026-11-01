@@ -1479,5 +1479,15 @@
  "xmb.core.forgetAllAsk": "Lupakan semua pengaturan yang diingat di sini? Masing-masing kembali ke bawaannya.",
  "xmb.pad.turbo": "Turbo",
  "xmb.pad.resetAsk": "Kembalikan pemetaan tombol ini ke awal?",
- "xmb.update.storage": "Perbarui melalui Media Penyimpanan"
+ "xmb.update.storage": "Perbarui melalui Media Penyimpanan",
+ "xmb.playlist.add": "Tambahkan ke Daftar Putar",
+ "xmb.playlist.new": "Daftar Putar Baru",
+ "xmb.playlist.name": "Nama Daftar Putar",
+ "xmb.playlist.added": "Ditambahkan ke %s.",
+ "xmb.playlist.remove": "Hapus dari Daftar Putar",
+ "xmb.playlist.delete": "Hapus Daftar Putar",
+ "xmb.playlist.playAll": "Putar Semua",
+ "xmb.playlist.slideshow": "Tayangan Slide",
+ "xmb.playlist.tracks": "%d lagu",
+ "xmb.playlist.empty": "Daftar putar ini kosong."
 }

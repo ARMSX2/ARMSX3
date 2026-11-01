@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -79,13 +80,30 @@ object LibraryKeyboard {
     // name need: "." and ":" (a port), plus "/" "-" "_". They sit where a physical keyboard puts
     // them where possible (". /" after "m") and fill the short rows, so the grid keeps its five
     // rows and still fits a landscape handheld.
-    val rows: List<List<String>> = listOf(
+    private val padRows: List<List<String>> = listOf(
         listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
         listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p"),
         listOf("a", "s", "d", "f", "g", "h", "j", "k", "l", ":"),
         listOf(SHIFT, "z", "x", "c", "v", "b", "n", "m", ".", "/"),
         listOf("-", "_", SPACE, BACKSPACE, CLEAR, DONE),
     )
+
+    /**
+     * XMB mode's keys, laid out as the console's keyboard: the characters in a block, with the
+     * keys that do something down the right, one a row. A row of symbols too, "@" among them, as
+     * an email address (an RPCN account) has to be typed here.
+     */
+    private val xmbRows: List<List<String>> = listOf(
+        listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0", BACKSPACE),
+        listOf("q", "w", "e", "r", "t", "y", "u", "i", "o", "p", SPACE),
+        listOf("a", "s", "d", "f", "g", "h", "j", "k", "l", ":", SHIFT),
+        listOf("z", "x", "c", "v", "b", "n", "m", ".", "/", "-", CLEAR),
+        listOf("@", "_", "!", "?", "#", "&", "'", "+", "=", "~", DONE),
+    )
+
+    private fun xmbKeys(): Boolean = com.armsx2.ui.xmb.XmbMode.active.value && !useSystemIme.value
+
+    val rows: List<List<String>> get() = if (xmbKeys()) xmbRows else padRows
 
     /** Use the Android system IME instead of these on-screen keys. Opt-in: the built-in keyboard
      *  stays the default because it is fully gamepad-navigable, whereas the system IME is not (and
@@ -138,7 +156,7 @@ object LibraryKeyboard {
 
     /** Press the currently-highlighted key. */
     fun press() {
-        val key = rows[row.intValue].getOrNull(col.intValue) ?: return
+        val key = rows.getOrNull(row.intValue)?.getOrNull(col.intValue) ?: return
         pressKey(key)
     }
 
@@ -299,9 +317,12 @@ object LibraryKeyboard {
                             val selected = row.intValue == r && col.intValue == c
                             val on = key == SHIFT && shifted.value
                             val label = glyphOf(key)
+                            // The keys that do something stand apart down the right, as the console's do.
+                            val action = key == BACKSPACE || key == SPACE || key == SHIFT || key == CLEAR || key == DONE
+                            if (action) Spacer(Modifier.width(6.dp))
                             Box(
                                 modifier = Modifier
-                                    .weight(weightOf(key))
+                                    .weight(if (action) 2.4f else 1f)
                                     .height(44.dp)
                                     .clip(RoundedCornerShape(5.dp))
                                     .background(
@@ -327,6 +348,24 @@ object LibraryKeyboard {
                                     maxLines = 1,
                                 )
                             }
+                        }
+                    }
+                }
+                // The console's guide along the foot: what the face buttons do here.
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    listOf(
+                        "\u25B3" to Color(0xFF3DDC84) to glyphOf(SPACE),
+                        "\u25A1" to Color(0xFFE88BD5) to glyphOf(BACKSPACE),
+                        "\u25CB" to Color(0xFFFF5A5A) to com.armsx2.i18n.I18n.get("xmb.back"),
+                        "START" to Color.White to glyphOf(DONE),
+                    ).forEach { (button, label) ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(button.first, color = button.second, fontFamily = font, fontSize = 14.sp)
+                            Text(" $label", color = Color.White.copy(alpha = 0.85f), fontFamily = font, fontSize = 13.sp)
                         }
                     }
                 }

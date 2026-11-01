@@ -1479,5 +1479,15 @@
  "xmb.core.forgetAllAsk": "همهٔ تنظیم‌هایی که این‌جا به خاطر سپرده شده‌اند فراموش شوند؟ هر کدام به پیش‌فرض خود برمی‌گردد.",
  "xmb.pad.turbo": "توربو",
  "xmb.pad.resetAsk": "این نگاشت دکمه‌ها به حالت اول برگردد؟",
- "xmb.update.storage": "به‌روزرسانی از طریق رسانهٔ ذخیره‌سازی"
+ "xmb.update.storage": "به‌روزرسانی از طریق رسانهٔ ذخیره‌سازی",
+ "xmb.playlist.add": "افزودن به فهرست پخش",
+ "xmb.playlist.new": "فهرست پخش جدید",
+ "xmb.playlist.name": "نام فهرست پخش",
+ "xmb.playlist.added": "به %s افزوده شد.",
+ "xmb.playlist.remove": "حذف از فهرست پخش",
+ "xmb.playlist.delete": "حذف فهرست پخش",
+ "xmb.playlist.playAll": "پخش همه",
+ "xmb.playlist.slideshow": "نمایش اسلاید",
+ "xmb.playlist.tracks": "%d قطعه",
+ "xmb.playlist.empty": "این فهرست پخش خالی است."
 }

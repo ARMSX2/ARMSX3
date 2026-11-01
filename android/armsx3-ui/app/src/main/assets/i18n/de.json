@@ -1479,5 +1479,15 @@
  "xmb.core.forgetAllAsk": "Alle hier gespeicherten Einstellungen vergessen? Jede kehrt zu ihrem Standard zurück.",
  "xmb.pad.turbo": "Turbo",
  "xmb.pad.resetAsk": "Diese Tastenbelegung auf den Ausgangszustand zurücksetzen?",
- "xmb.update.storage": "Über Speichermedium aktualisieren"
+ "xmb.update.storage": "Über Speichermedium aktualisieren",
+ "xmb.playlist.add": "Zur Wiedergabeliste hinzufügen",
+ "xmb.playlist.new": "Neue Wiedergabeliste",
+ "xmb.playlist.name": "Name der Wiedergabeliste",
+ "xmb.playlist.added": "Zu %s hinzugefügt.",
+ "xmb.playlist.remove": "Aus Wiedergabeliste entfernen",
+ "xmb.playlist.delete": "Wiedergabeliste löschen",
+ "xmb.playlist.playAll": "Alle abspielen",
+ "xmb.playlist.slideshow": "Diashow",
+ "xmb.playlist.tracks": "%d Titel",
+ "xmb.playlist.empty": "Diese Wiedergabeliste ist leer."
 }

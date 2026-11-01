@@ -1479,5 +1479,15 @@
  "xmb.core.forgetAllAsk": "Burada hatırlanan tüm ayarlar unutulsun mu? Her biri varsayılanına döner.",
  "xmb.pad.turbo": "Turbo",
  "xmb.pad.resetAsk": "Bu tuş atamaları başlangıçtaki hâline döndürülsün mü?",
- "xmb.update.storage": "Depolama ortamıyla güncelle"
+ "xmb.update.storage": "Depolama ortamıyla güncelle",
+ "xmb.playlist.add": "Çalma listesine ekle",
+ "xmb.playlist.new": "Yeni çalma listesi",
+ "xmb.playlist.name": "Çalma listesi adı",
+ "xmb.playlist.added": "%s listesine eklendi.",
+ "xmb.playlist.remove": "Çalma listesinden kaldır",
+ "xmb.playlist.delete": "Çalma listesini sil",
+ "xmb.playlist.playAll": "Tümünü çal",
+ "xmb.playlist.slideshow": "Slayt gösterisi",
+ "xmb.playlist.tracks": "%d parça",
+ "xmb.playlist.empty": "Bu çalma listesi boş."
 }

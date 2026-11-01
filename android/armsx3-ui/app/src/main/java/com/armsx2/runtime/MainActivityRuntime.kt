@@ -3362,6 +3362,10 @@ open class MainActivityRuntime : ComponentActivity() {
                         if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.press()
                     KeyEvent.KEYCODE_BUTTON_X ->
                         if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.backspace()
+                    KeyEvent.KEYCODE_BUTTON_Y ->
+                        if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.pressKey(com.armsx2.ui.home.LibraryKeyboard.SPACE)
+                    KeyEvent.KEYCODE_BUTTON_START ->
+                        if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.pressKey(com.armsx2.ui.home.LibraryKeyboard.DONE)
                     KeyEvent.KEYCODE_BUTTON_B, KeyEvent.KEYCODE_BACK ->
                         if (event.repeatCount == 0) com.armsx2.ui.home.LibraryKeyboard.close()
                 }

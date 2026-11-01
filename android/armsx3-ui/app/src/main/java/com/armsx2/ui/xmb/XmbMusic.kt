@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
@@ -97,6 +98,26 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false): XmbColum
     val deleteAsk = str("xmb.music.delete.ask")
     val trackIcon = XmbIcon("explore_category_music", "music_tex_default", "♪")
     val pausedIcon = XmbIcon("explore_category_music", "music_tex_album_default", "♪")
+    val listIcon = XmbIcon("explore_category_music", "tex_playlist", "♫")
+    val addToList = str("xmb.playlist.add")
+    val removeFromList = str("xmb.playlist.remove")
+    val deleteList = str("xmb.playlist.delete")
+    val playAll = str("xmb.playlist.playAll")
+    val trackCount = str("xmb.playlist.tracks")
+    val emptyList = str("xmb.playlist.empty")
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { XmbPlaylists.load() } }
+    // A playlist plays in order at home; over a game the pause menu's music has one track, the one picked.
+    fun playList(files: List<File>, start: Int) {
+        val file = files.getOrNull(start) ?: return
+        if (inGame) {
+            scope.launch {
+                withContext(Dispatchers.IO) { useTrack(file) }
+                if (!enabledNow()) play(true)
+            }
+        } else {
+            LibraryMusic.playQueue(context, files, start)
+        }
+    }
 
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
@@ -127,10 +148,36 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false): XmbColum
                 }
             },
         )
+        // The playlists, each a list of its own: Play All, its songs, and Delete Playlist.
+        XmbPlaylists.music.value.keys.forEach { name ->
+            add(
+                XmbNode.Folder("music.playlist.$name", name, listIcon, trackCount.format(XmbPlaylists.music.value[name].orEmpty().size), live = true) {
+                    val files = XmbPlaylists.files(XmbPlaylists.Kind.Music, name)
+                    buildList {
+                        if (files.isEmpty()) add(XmbNode.Action("music.playlist.$name.none", emptyList, listIcon) {})
+                        else add(XmbNode.Action("music.playlist.$name.all", playAll, trackIcon) { playList(files, 0) })
+                        files.forEachIndexed { i, f ->
+                            val on = current == f.name
+                            add(
+                                XmbNode.Action(
+                                    "music.playlist.$name.$i.${f.name}", f.nameWithoutExtension,
+                                    if (on && playing) trackIcon else pausedIcon, status(on),
+                                    listOf(XmbOption(removeFromList) { XmbPlaylists.remove(XmbPlaylists.Kind.Music, name, f.absolutePath) }),
+                                ) { if (on) play(!playing) else playList(files, i) },
+                            )
+                        }
+                        add(XmbNode.Action("music.playlist.$name.delete", deleteList, listIcon) {
+                            controller.ask(deleteAsk.format(name), yes, no, focusNo = true) { XmbPlaylists.delete(XmbPlaylists.Kind.Music, name) }
+                        })
+                    }
+                },
+            )
+        }
         tracks.forEach { file ->
             val isCurrent = current == file.name
             val title = file.name.substringBeforeLast('.')
             val options = listOf(
+                XmbOption(addToList) { XmbPlaylists.offer(controller, XmbPlaylists.Kind.Music, file.absolutePath) },
                 XmbOption(asOther) {
                     scope.launch(Dispatchers.IO) {
                         if (inGame) {
@@ -171,7 +218,7 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false): XmbColum
         icon = XmbIcon("xmb_ingame", "tex_music", "♫"),
         items = items,
         // The track playing, as the console's player opens on it.
-        defaultFocus = 2 + (tracks.indexOfFirst { it.name == current } + 1).coerceAtLeast(0),
+        defaultFocus = 2 + XmbPlaylists.music.value.size + (tracks.indexOfFirst { it.name == current } + 1).coerceAtLeast(0),
     )
 }
 

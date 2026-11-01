@@ -1479,5 +1479,15 @@
  "xmb.core.forgetAllAsk": "Hemû mîhengên li vir hatine bîranîn ji bîr bike? Her yek vedigere nirxa xwe ya destpêkê.",
  "xmb.pad.turbo": "Turbo",
  "xmb.pad.resetAsk": "Van nexşeyên bişkokan vegerîne rewşa destpêkê?",
- "xmb.update.storage": "Bi navgîniya bîrê nûve bike"
+ "xmb.update.storage": "Bi navgîniya bîrê nûve bike",
+ "xmb.playlist.add": "Li lîsteya lêdanê zêde bike",
+ "xmb.playlist.new": "Lîsteya lêdanê ya nû",
+ "xmb.playlist.name": "Navê lîsteya lêdanê",
+ "xmb.playlist.added": "Li %s hate zêdekirin.",
+ "xmb.playlist.remove": "Ji lîsteya lêdanê rake",
+ "xmb.playlist.delete": "Lîsteya lêdanê jê bibe",
+ "xmb.playlist.playAll": "Hemûyan lê bide",
+ "xmb.playlist.slideshow": "Pêşandana wêneyan",
+ "xmb.playlist.tracks": "%d stran",
+ "xmb.playlist.empty": "Ev lîsteya lêdanê vala ye."
 }

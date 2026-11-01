@@ -34,6 +34,8 @@ object LibraryMusic {
      *  slider in App settings; 0 = silent (the toggle is the real off switch). */
     private const val VolumeKey = "ui.libraryMusic.volume"
     private const val CustomNameKey = "ui.libraryMusic.customName"
+    private const val QueueKey = "ui.libraryMusic.queue"
+    private const val QueueIndexKey = "ui.libraryMusic.queueIndex"
     private const val DefaultVolumePercent = 15
 
     val enabled = mutableStateOf(true)
@@ -76,6 +78,11 @@ object LibraryMusic {
     private fun customFile(context: Context): File =
         File(File(context.filesDir, "librarymusic").apply { mkdirs() }, "track")
 
+    /** A playlist playing (the XMB's Music column): its songs in order, and which one is on.
+     *  Empty while one track plays on a loop. */
+    val queue = mutableStateOf<List<File>>(emptyList())
+    val queueIndex = androidx.compose.runtime.mutableIntStateOf(0)
+
     private var player: MediaPlayer? = null
     private var focusRequest: AudioFocusRequest? = null
     /** True when we stopped for something temporary (a call, another app ducking us)
@@ -86,12 +93,53 @@ object LibraryMusic {
         enabled.value = MainActivityRuntime.prefs.getBoolean(EnabledKey, true)
         volumePercent.value = MainActivityRuntime.prefs.getInt(VolumeKey, DefaultVolumePercent)
         customName.value = MainActivityRuntime.prefs.getString(CustomNameKey, null)
+        queue.value = runCatching {
+            val list = org.json.JSONArray(MainActivityRuntime.prefs.getString(QueueKey, "[]"))
+            (0 until list.length()).map { File(list.getString(it)) }.filter { it.isFile }
+        }.getOrDefault(emptyList())
+        queueIndex.intValue = MainActivityRuntime.prefs.getInt(QueueIndexKey, 0).coerceIn(0, (queue.value.size - 1).coerceAtLeast(0))
+    }
+
+    /** Play [files] in order from [start], round again after the last: a playlist. */
+    fun playQueue(context: Context, files: List<File>, start: Int) {
+        if (files.isEmpty()) return
+        queue.value = files
+        queueIndex.intValue = start.coerceIn(0, files.lastIndex)
+        customName.value = files[queueIndex.intValue].name
+        MainActivityRuntime.prefs.edit {
+            putString(QueueKey, org.json.JSONArray(files.map { it.absolutePath }).toString())
+            putInt(QueueIndexKey, queueIndex.intValue)
+            putString(CustomNameKey, customName.value)
+        }
+        if (enabled.value) restart(context) else set(context, true)
+    }
+
+    /** The next song of the playlist, when one ends. */
+    private fun next(context: Context) {
+        val list = queue.value
+        if (list.isEmpty()) return
+        queueIndex.intValue = (queueIndex.intValue + 1) % list.size
+        customName.value = list[queueIndex.intValue].name
+        MainActivityRuntime.prefs.edit {
+            putInt(QueueIndexKey, queueIndex.intValue)
+            putString(CustomNameKey, customName.value)
+        }
+        restart(context)
+    }
+
+    private fun clearQueue() {
+        queue.value = emptyList()
+        MainActivityRuntime.prefs.edit {
+            remove(QueueKey)
+            remove(QueueIndexKey)
+        }
     }
 
     /** Import a user-picked audio file as the library track, replacing the default. Copies it
      *  into app-private storage and restarts playback so the change is heard immediately.
      *  Returns true on success. */
     fun setCustomTrack(context: Context, uri: android.net.Uri, displayName: String): Boolean {
+        clearQueue()
         val ok = runCatching {
             context.contentResolver.openInputStream(uri)?.use { ins ->
                 customFile(context).outputStream().use { ins.copyTo(it) }
@@ -109,6 +157,7 @@ object LibraryMusic {
 
     /** Drop the user track and go back to the bundled default. */
     fun clearCustomTrack(context: Context) {
+        clearQueue()
         customFile(context).delete()
         customName.value = null
         MainActivityRuntime.prefs.edit { remove(CustomNameKey) }
@@ -215,7 +264,10 @@ object LibraryMusic {
                         .build()
                 )
                 val custom = customFile(context)
-                if (customName.value != null && custom.length() > 0L) {
+                val list = queue.value
+                if (list.isNotEmpty()) {
+                    setDataSource(list[queueIndex.intValue.coerceIn(0, list.lastIndex)].absolutePath)
+                } else if (customName.value != null && custom.length() > 0L) {
                     setDataSource(custom.absolutePath)
                 } else {
                     setDataSource(
@@ -223,7 +275,9 @@ object LibraryMusic {
                         android.net.Uri.parse("android.resource://${context.packageName}/${R.raw.library_music}"),
                     )
                 }
-                isLooping = true
+                // A playlist goes on to its next song; a single track goes round.
+                isLooping = list.size <= 1
+                if (list.size > 1) setOnCompletionListener { next(context) }
                 setVolume(gain(), gain())
                 prepare()
                 // Handed over to another screen's music: ready, but quiet until it hands back

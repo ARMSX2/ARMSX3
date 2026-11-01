@@ -1479,5 +1479,15 @@
  "xmb.core.forgetAllAsk": "Zapomnieć wszystkie zapamiętane tu ustawienia? Każde wróci do wartości domyślnej.",
  "xmb.pad.turbo": "Turbo",
  "xmb.pad.resetAsk": "Przywrócić to przypisanie przycisków do stanu początkowego?",
- "xmb.update.storage": "Aktualizuj z nośnika pamięci"
+ "xmb.update.storage": "Aktualizuj z nośnika pamięci",
+ "xmb.playlist.add": "Dodaj do listy odtwarzania",
+ "xmb.playlist.new": "Nowa lista odtwarzania",
+ "xmb.playlist.name": "Nazwa listy odtwarzania",
+ "xmb.playlist.added": "Dodano do %s.",
+ "xmb.playlist.remove": "Usuń z listy odtwarzania",
+ "xmb.playlist.delete": "Usuń listę odtwarzania",
+ "xmb.playlist.playAll": "Odtwórz wszystko",
+ "xmb.playlist.slideshow": "Pokaz slajdów",
+ "xmb.playlist.tracks": "Utwory: %d",
+ "xmb.playlist.empty": "Ta lista odtwarzania jest pusta."
 }

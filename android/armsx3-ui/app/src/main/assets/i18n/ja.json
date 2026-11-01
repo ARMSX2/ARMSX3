@@ -1479,5 +1479,15 @@
  "xmb.core.forgetAllAsk": "ここに記憶されている設定をすべて忘れますか？それぞれ初期値に戻ります。",
  "xmb.pad.turbo": "連射",
  "xmb.pad.resetAsk": "このボタン割り当てを最初の状態に戻しますか？",
- "xmb.update.storage": "ストレージメディアを使ってアップデート"
+ "xmb.update.storage": "ストレージメディアを使ってアップデート",
+ "xmb.playlist.add": "プレイリストに追加",
+ "xmb.playlist.new": "新しいプレイリスト",
+ "xmb.playlist.name": "プレイリスト名",
+ "xmb.playlist.added": "%sに追加しました。",
+ "xmb.playlist.remove": "プレイリストから削除",
+ "xmb.playlist.delete": "プレイリストを削除",
+ "xmb.playlist.playAll": "すべて再生",
+ "xmb.playlist.slideshow": "スライドショー",
+ "xmb.playlist.tracks": "%d曲",
+ "xmb.playlist.empty": "このプレイリストは空です。"
 }
