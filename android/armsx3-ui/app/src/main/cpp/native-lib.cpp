@@ -1,4 +1,5 @@
 #include <EGL/egl.h>
+#include <cstdint>
 #include <EGL/eglext.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
@@ -92,6 +93,12 @@ struct CoreApi {
   std::string (*getUser)();
   std::string (*settingsGet)(std::string_view path);
   bool (*settingsSet)(std::string_view path, std::string_view valueString);
+  // XMB mode (src/xmb-media.cpp): the boot sound and a game's SND0 and ICON1.
+  bool (*xmbDecodeAudio)(std::string_view in, std::string_view out);
+  std::int64_t (*xmbPamOpen)(std::string_view path);
+  std::int32_t (*xmbPamSize)(std::int64_t handle);
+  std::int64_t (*xmbPamFrame)(std::int64_t handle, std::uint8_t *dst, std::int64_t capacity);
+  void (*xmbPamClose)(std::int64_t handle);
   int (*frameGenImportShaders)(std::string_view path);
   int (*frameGenShaderCount)();
   int (*getPlayCompileState)();
@@ -326,6 +333,11 @@ struct CoreLibrary : CoreApi {
     result.usbPassedThrough = reinterpret_cast<decltype(usbPassedThrough)>(dlsym(handle, "_armsx3_usbPassedThrough"));
     result.takeGameError = reinterpret_cast<decltype(takeGameError)>(dlsym(handle, "_armsx3_takeGameError"));
     result.settingsSet = reinterpret_cast<decltype(settingsSet)>(dlsym(handle, "_armsx3_settingsSet"));
+    result.xmbDecodeAudio = reinterpret_cast<decltype(xmbDecodeAudio)>(dlsym(handle, "_armsx3_xmbDecodeAudio"));
+    result.xmbPamOpen = reinterpret_cast<decltype(xmbPamOpen)>(dlsym(handle, "_armsx3_xmbPamOpen"));
+    result.xmbPamSize = reinterpret_cast<decltype(xmbPamSize)>(dlsym(handle, "_armsx3_xmbPamSize"));
+    result.xmbPamFrame = reinterpret_cast<decltype(xmbPamFrame)>(dlsym(handle, "_armsx3_xmbPamFrame"));
+    result.xmbPamClose = reinterpret_cast<decltype(xmbPamClose)>(dlsym(handle, "_armsx3_xmbPamClose"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
     // symbol, and refusing to load it over a missing optional feature would be worse than the
     // feature being absent. The Kotlin side treats a null here as "unsupported".
@@ -1142,6 +1154,52 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_settingsSet(
   }
 
   return coreLib.settingsSet(unwrap(env, jpath), unwrap(env, jvalue));
+}
+
+// XMB mode's media. Null-safe like the rest: before the core is up these decode nothing, and the
+// XMB plays without the boot sound or a game's music and animated icon.
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_xmbDecodeAudio(
+    JNIEnv *env, jobject, jstring jin, jstring jout) {
+  if (coreLib.xmbDecodeAudio == nullptr) {
+      return false;
+  }
+  return coreLib.xmbDecodeAudio(unwrap(env, jin), unwrap(env, jout));
+}
+
+extern "C" JNIEXPORT jlong JNICALL Java_com_armsx3_core_ARMSX3_xmbPamOpen(
+    JNIEnv *env, jobject, jstring jpath) {
+  if (coreLib.xmbPamOpen == nullptr) {
+      return 0;
+  }
+  return coreLib.xmbPamOpen(unwrap(env, jpath));
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_com_armsx3_core_ARMSX3_xmbPamSize(
+    JNIEnv *, jobject, jlong handle) {
+  if (coreLib.xmbPamSize == nullptr || handle == 0) {
+      return 0;
+  }
+  return coreLib.xmbPamSize(handle);
+}
+
+extern "C" JNIEXPORT jlong JNICALL Java_com_armsx3_core_ARMSX3_xmbPamFrame(
+    JNIEnv *env, jobject, jlong handle, jobject buffer) {
+  if (coreLib.xmbPamFrame == nullptr || handle == 0 || buffer == nullptr) {
+      return -1;
+  }
+  auto *dst = static_cast<std::uint8_t *>(env->GetDirectBufferAddress(buffer));
+  const jlong capacity = env->GetDirectBufferCapacity(buffer);
+  if (dst == nullptr || capacity <= 0) {
+      return -1;
+  }
+  return coreLib.xmbPamFrame(handle, dst, capacity);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_xmbPamClose(
+    JNIEnv *, jobject, jlong handle) {
+  if (coreLib.xmbPamClose != nullptr && handle != 0) {
+      coreLib.xmbPamClose(handle);
+  }
 }
 
 // Defer the config file write until endBatch. Null-safe like the rest: an older core

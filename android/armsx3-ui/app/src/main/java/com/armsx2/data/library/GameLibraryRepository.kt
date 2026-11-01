@@ -457,6 +457,7 @@ class GameLibraryRepository(private val context: Context) {
                 JSONArray(current).toString()
             )
         }
+        PlayTimes.record(uri)
         val snapshot = current.toList()
         exportScope.launch { exportRecentGamesPublic(snapshot, game) }
     }
@@ -1527,4 +1528,30 @@ internal object ParamSfo {
         }
         return null
     }
+}
+
+/**
+ * When each game was last started, by its uri: the date XMB mode shows under the focused game, as
+ * the console shows it. Recently Played itself keeps only the order (recentGameUris).
+ */
+object PlayTimes {
+    private const val Key = "recentGamePlayedAt"
+    private const val MaxEntries = 400
+
+    fun record(uri: String) {
+        val prefs = MainActivityRuntime.prefs
+        val times = runCatching { org.json.JSONObject(prefs.getString(Key, "{}") ?: "{}") }.getOrDefault(org.json.JSONObject())
+        times.put(uri, System.currentTimeMillis())
+        // Oldest out first, so a long-lived library cannot grow this without end.
+        if (times.length() > MaxEntries) {
+            val oldest = times.keys().asSequence().minByOrNull { times.optLong(it) }
+            if (oldest != null) times.remove(oldest)
+        }
+        prefs.edit { putString(Key, times.toString()) }
+    }
+
+    /** Milliseconds since the epoch, or null for a game never started since this was kept. */
+    fun of(uri: String): Long? = runCatching {
+        org.json.JSONObject(MainActivityRuntime.prefs.getString(Key, "{}") ?: "{}").optLong(uri, 0L).takeIf { it > 0L }
+    }.getOrNull()
 }

@@ -203,6 +203,8 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // Boot straight into the PS2 system BIOS with no disc — distinct from "BIOS Location"
         // below, which only points the emulator at your BIOS file.
         DrawerItem("bios.boot.title", "▶️", onAction = { MainActivityRuntime.startBios(); onDismiss() }),
+        // The app itself laid out as the console's XMB, coming up with its boot animation.
+        DrawerItem("xmb.mode", "🌊", onAction = { com.armsx2.ui.xmb.XmbMode.enter(); onDismiss() }),
         // ARMSX3: RetroAchievements removed - RA has no PS3 support at all, so
         // the screen could only ever be empty. PS3 TROPHIES take its slot: RPCS3
         // tracks the real ones the games unlock, and its own list is reachable only

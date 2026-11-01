@@ -72,6 +72,8 @@ COMPONENTS=(
 	--enable-demuxer=pcm_s8 --enable-demuxer=wav
 	--enable-parser=h264 --enable-parser=mpeg4video --enable-parser=mpegaudio --enable-parser=mpegvideo
 	--enable-parser=mjpeg --enable-parser=aac --enable-parser=aac_latm
+	# ARMSX3 XMB mode: the firmware's boot sound (coldboot_stereo.ac3) is a raw AC3 stream.
+	--enable-decoder=ac3 --enable-demuxer=ac3 --enable-parser=ac3
 	--enable-protocol=file
 	--enable-bsf=mjpeg2jpeg
 )

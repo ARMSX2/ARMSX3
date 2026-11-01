@@ -45,7 +45,9 @@ class BootSplashActivity : ComponentActivity() {
         preview = intent?.getBooleanExtra(BootIntro.EXTRA_PREVIEW, false) == true
         val prefs = getSharedPreferences("ARMSX2", MODE_PRIVATE)
         val bootLogoEnabled = prefs.getBoolean("ui.bootLogo", true)
-        if (!preview && (!bootLogoEnabled || playedThisProcess)) {
+        // XMB mode plays the console's own boot animation in the app instead of this video.
+        val xmbMode = prefs.getBoolean(com.armsx2.ui.xmb.XmbMode.PREF_KEY, false)
+        if (!preview && (!bootLogoEnabled || playedThisProcess || xmbMode)) {
             leave()
             return
         }

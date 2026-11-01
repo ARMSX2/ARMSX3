@@ -263,6 +263,20 @@ object LibraryBackgroundColorPreferences {
     @Volatile var rgbCycleGl = false
         private set
 
+    /** When on, the wave takes the PS3's "Original" colour: a gradient per month that dims from day
+     *  to night (see com.armsx2.ui.xmb.XmbOriginalColors). Overrides the fixed colour, like
+     *  [rgbCycle], and the two exclude each other. */
+    private const val MonthlyKey = "ui.library.bgMonthly"
+    val monthly = mutableStateOf(false)
+    @Volatile var monthlyGl = false
+        private set
+
+    /** XMB mode always shows the monthly colours, whatever the library uses. Set while it is up. */
+    @Volatile var xmbModeGl = false
+
+    /** What the GL wave should draw this frame: the monthly gradient, set by the user or by XMB mode. */
+    val useMonthlyGl: Boolean get() = monthlyGl || xmbModeGl
+
     fun load() {
         val stored = MainActivityRuntime.prefs.getInt(Key, 0)
         color.value = stored
@@ -270,6 +284,17 @@ object LibraryBackgroundColorPreferences {
         val rgb = MainActivityRuntime.prefs.getBoolean(RgbKey, false)
         rgbCycle.value = rgb
         rgbCycleGl = rgb
+        val month = MainActivityRuntime.prefs.getBoolean(MonthlyKey, false) && !rgb
+        monthly.value = month
+        monthlyGl = month
+    }
+
+    /** Toggle the monthly PS3 colours. Turning them on turns the RGB cycle off. */
+    fun setMonthly(on: Boolean) {
+        monthly.value = on
+        monthlyGl = on
+        MainActivityRuntime.prefs.edit { putBoolean(MonthlyKey, on) }
+        if (on && rgbCycle.value) setRgbCycle(false)
     }
 
     /** Set the wave color (packed ARGB; alpha forced opaque). Applies live on the next GL frame. */
@@ -292,6 +317,7 @@ object LibraryBackgroundColorPreferences {
         rgbCycle.value = on
         rgbCycleGl = on
         MainActivityRuntime.prefs.edit { putBoolean(RgbKey, on) }
+        if (on && monthly.value) setMonthly(false)
     }
 
     private fun apply(argb: Int) {

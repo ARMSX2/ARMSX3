@@ -38,6 +38,8 @@ fun LibraryWaveBackground(modifier: Modifier = Modifier) {
     // Colour picker + RGB toggle, read as Compose state so a live change recolours immediately.
     val colorArgb by LibraryBackgroundColorPreferences.color
     val rgbCycle by LibraryBackgroundColorPreferences.rgbCycle
+    val monthly by LibraryBackgroundColorPreferences.monthly
+    val xmbMode by com.armsx2.ui.xmb.XmbMode.active
 
     // Elapsed seconds, ticked once per frame. Driven off the animation clock (not a recomposition
     // loop) so only the Canvas draw re-runs each frame, not the whole tree.
@@ -54,33 +56,56 @@ fun LibraryWaveBackground(modifier: Modifier = Modifier) {
 
     Canvas(modifier) {
         val t = timeSec.floatValue
+        // The PS3's monthly colours (the setting, or XMB mode), as the GL wave draws them.
+        val month = if (monthly || xmbMode) com.armsx2.ui.xmb.XmbOriginalColors.now() else null
         // Base colour: the RGB cycle sweeps the hue wheel (~28s/turn, matching the GL peripheral
         // vibe); otherwise the picked colour, or the built-in royal blue when unset.
         val base: Color = when {
+            month != null -> Color(month.end[0], month.end[1], month.end[2])
             rgbCycle -> Color.hsv(((t / 28f) * 360f) % 360f, 0.72f, 0.96f)
             colorArgb == 0 -> DEFAULT_WAVE
             else -> Color(colorArgb)
         }
-        drawWaveScene(t, base)
+        drawWaveScene(t, base, month)
     }
 }
 
 /** The built-in wave colour — matches XmbGlView.BG_BOT / LibraryBackgroundColorPreferences default. */
 private val DEFAULT_WAVE = Color(0xFF2E75F5)
 
-private fun DrawScope.drawWaveScene(t: Float, base: Color) {
+private fun DrawScope.drawWaveScene(t: Float, base: Color, month: com.armsx2.ui.xmb.XmbOriginalColors.Gradient? = null) {
     val w = size.width
     val h = size.height
 
-    // 1) Vertical gradient — near-black anchor at the top (where the content/grid sits), deepening
-    //    to the chosen colour at the bottom. Same 0.20 top/bottom ratio the GL path uses.
-    drawRect(
-        Brush.verticalGradient(
-            0.0f to base.scaleRgb(0.10f),
-            0.55f to base.scaleRgb(0.35f),
-            1.0f to base.scaleRgb(0.85f),
-        ),
-    )
+    if (month != null) {
+        // 1) The month's own gradient at its own angle, end to end across the box like the CSS
+        //    gradients it was measured as (see XmbOriginalColors.shaderDirection).
+        val a = Math.toRadians(month.angleDeg.toDouble())
+        val dx = kotlin.math.sin(a).toFloat()
+        val dy = -kotlin.math.cos(a).toFloat()
+        val half = (kotlin.math.abs(w * dx) + kotlin.math.abs(h * dy)) / 2f
+        val c = Offset(w / 2f, h / 2f)
+        drawRect(
+            Brush.linearGradient(
+                colors = listOf(
+                    Color(month.start[0], month.start[1], month.start[2]),
+                    Color(month.end[0], month.end[1], month.end[2]),
+                ),
+                start = Offset(c.x - dx * half, c.y - dy * half),
+                end = Offset(c.x + dx * half, c.y + dy * half),
+            ),
+        )
+    } else {
+        // 1) Vertical gradient — near-black anchor at the top (where the content/grid sits), deepening
+        //    to the chosen colour at the bottom. Same 0.20 top/bottom ratio the GL path uses.
+        drawRect(
+            Brush.verticalGradient(
+                0.0f to base.scaleRgb(0.10f),
+                0.55f to base.scaleRgb(0.35f),
+                1.0f to base.scaleRgb(0.85f),
+            ),
+        )
+    }
 
     // 2) Soft flowing wave BANDS — filled translucent sheets that glow just under the crest and
     //    fade downward, layered back-to-front. Reads as flowing light, not thin squiggly lines.

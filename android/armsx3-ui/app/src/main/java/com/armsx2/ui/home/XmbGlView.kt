@@ -165,7 +165,23 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             // pref's @Volatile fields from this GL thread); else the built-in constants.
             val top: FloatArray
             val bot: FloatArray
-            if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.rgbCycleGl) {
+            // Straight down by default; the monthly gradient brings its own angle.
+            var dirX = 0f
+            var dirY = 1f
+            var tMin = 0f
+            var smooth = 1f
+            if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.useMonthlyGl) {
+                // The PS3's "Original" colour for this month and time of day (XMB mode, or the
+                // Monthly setting). Linear, as the CSS gradients it was measured into are.
+                val month = com.armsx2.ui.xmb.XmbOriginalColors.now()
+                top = month.start
+                bot = month.end
+                val d = com.armsx2.ui.xmb.XmbOriginalColors.shaderDirection(month.angleDeg, width, height)
+                dirX = d[0]
+                dirY = d[1]
+                tMin = d[2]
+                smooth = 0f
+            } else if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.rgbCycleGl) {
                 bot = hsvToRgb(((timeSec / RGB_CYCLE_SEC) % 1f) * 360f, 0.92f, 0.98f)
                 top = floatArrayOf(bot[0] * 0.20f, bot[1] * 0.20f, bot[2] * 0.20f)
             } else {
@@ -174,9 +190,10 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             }
             GLES30.glUniform3f(GLES30.glGetUniformLocation(bgProg, "uColorStart"), top[0], top[1], top[2])
             GLES30.glUniform3f(GLES30.glGetUniformLocation(bgProg, "uColorEnd"), bot[0], bot[1], bot[2])
-            GLES30.glUniform2f(GLES30.glGetUniformLocation(bgProg, "uDir"), 0f, 1f)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uTMin"), 0f)
+            GLES30.glUniform2f(GLES30.glGetUniformLocation(bgProg, "uDir"), dirX, dirY)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uTMin"), tMin)
             GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uTSpan"), 1f)
+            GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uSmooth"), smooth)
             GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
 
             // wave mesh, alpha-blended over the gradient
@@ -466,10 +483,11 @@ uniform vec3 uColorEnd;
 uniform vec2 uDir;
 uniform float uTMin;
 uniform float uTSpan;
+uniform float uSmooth;
 void main() {
   float t = dot(vUvYDown, uDir);
   float u = clamp((t - uTMin) / max(uTSpan, 1e-6), 0.0, 1.0);
-  float g = u * u * (3.0 - 2.0 * u);
+  float g = mix(u, u * u * (3.0 - 2.0 * u), uSmooth);
   // No gamma encode: pow(1/2.2) brightened but also washed the blue out to grey. The bottom
   // colour is boosted via linkev's own gradient multiplier instead (see BG_BOT), which keeps
   // the deep-blue saturation of the reference.

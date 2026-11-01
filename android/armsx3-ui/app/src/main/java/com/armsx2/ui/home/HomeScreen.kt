@@ -267,7 +267,8 @@ fun HomeScreen(
             // brightness, gets a dark scrim; the XMB is our own controlled backdrop (dark at the
             // top where the content sits) and a heavy scrim just muddied its blue into navy, so
             // it gets only a whisper of dimming.
-            val dimming = LibraryChromePreferences.backgroundDimming.value / 100f
+            // None in XMB mode: the console's XMB sits on its wave with no scrim.
+            val dimming = if (com.armsx2.ui.xmb.XmbMode.active.value) 0f else LibraryChromePreferences.backgroundDimming.value / 100f
             val scrimTop = (if (libraryBg == null) 0.06f else 0.55f) * dimming
             val scrimBottom = (if (libraryBg == null) 0.20f else 0.80f) * dimming
             Box(
@@ -283,6 +284,19 @@ fun HomeScreen(
         },
     ) {
         BoxWithConstraints(modifier.fillMaxSize()) {
+            // XMB mode: the XMB in place of the library. This screen's menus and dialogs stay, so a
+            // game's Triangle menu there is the same one the library opens.
+            if (com.armsx2.ui.xmb.XmbMode.active.value) {
+                com.armsx2.ui.xmb.XmbHome(
+                    state = state,
+                    viewModel = viewModel,
+                    onGameMenu = { game ->
+                        menuFromPad = com.armsx2.ui.common.PadInput.active.value
+                        menuGame = game
+                    },
+                )
+                return@BoxWithConstraints
+            }
             val compact = maxWidth < 600.dp
             // Adaptive cells alone give a tablet MORE columns rather than BIGGER art, so scale the
             // cell width. Bigger cells mean bigger covers and fewer, better-spaced columns. Opt-in:
@@ -2363,7 +2377,12 @@ object HomeInputController {
     }
 
     fun setColumnCount(value: Int) { columns = value.coerceAtLeast(1) }
-    fun active(): Boolean = owner != null
+
+    /** XMB mode: the XMB takes the pad, except while one of its panels shows an app screen, whose
+     *  rows then move with the same registry as everywhere else. */
+    private fun xmb(): Boolean = com.armsx2.ui.xmb.XmbMode.active.value && com.armsx2.ui.xmb.XmbInput.active()
+
+    fun active(): Boolean = owner != null && com.armsx2.ui.xmb.XmbInput.controller?.panel == null
 
     /** HomeScreen registers the toolbar button actions here, in visual left→right
      *  order (leading menu button first). */
@@ -2402,6 +2421,7 @@ object HomeInputController {
     }
 
     fun move(dx: Int, dy: Int): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.move(dx, dy)
         val viewModel = owner ?: return false
         userNavigated = true
         // The press that switched from touch to the pad shows where the selection is: nothing was
@@ -2471,6 +2491,7 @@ object HomeInputController {
     }
 
     fun confirm(): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.confirm()
         val viewModel = owner ?: return false
         // As in move(): a first press only shows the selection, so it cannot launch a game that
         // was never highlighted.
@@ -2489,6 +2510,7 @@ object HomeInputController {
     }
 
     fun openSelectedSettings(): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.square()
         val game = owner?.selectedGame() ?: return false
         com.armsx2.navigation.UiNavigator.navigate(com.armsx2.navigation.AppRoute.Settings(game = game))
         return true
@@ -2498,6 +2520,7 @@ object HomeInputController {
      *  clearing its caches...), which a controller had no way to open. The game is the one
      *  highlighted in the grid, or in the Recently Played row when that has the selector. */
     fun openSelectedMenu(): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.options()
         val viewModel = owner ?: return false
         val game = when (zone.value) {
             HomeZone.Grid -> viewModel.selectedGame()
@@ -2509,12 +2532,14 @@ object HomeInputController {
     }
 
     fun scroll(velocity: Float): Boolean {
+        if (xmb()) return true
         if (owner == null) return false
         scrollVelocity.floatValue = if (abs(velocity) > 0.08f) velocity.coerceIn(-1f, 1f) else 0f
         return true
     }
 
     fun back(): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.back()
         com.armsx2.MenuSfx.play(com.armsx2.MenuSfx.Event.BACK)
         // B in the Recents / Toolbar zone drops back to the grid; on the grid it
         // opens the nav drawer.
@@ -2530,6 +2555,8 @@ object HomeInputController {
      *  controller direct access to all three view modes without needing to reach
      *  the touch-only toolbar toggle. */
     fun cycleLayout(): Boolean {
+        // The XMB has no layouts to cycle; R1 pages down, as on the console.
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.page(1)
         val viewModel = owner ?: return false
         viewModel.toggleLayout()
         return true
@@ -2537,6 +2564,7 @@ object HomeInputController {
 
     /** Cycle the library sort order (bound to L1). */
     fun cycleSort(): Boolean {
+        if (xmb()) return com.armsx2.ui.xmb.XmbInput.page(-1)
         val viewModel = owner ?: return false
         val entries = HomeSort.entries
         val next = entries[(viewModel.state.value.sort.ordinal + 1) % entries.size]

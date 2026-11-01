@@ -2570,6 +2570,8 @@ open class MainActivityRuntime : ComponentActivity() {
         com.armsx2.ui.home.LibraryScreensaver.load()
         com.armsx2.ui.theme.LauncherOrientationPreferences.load()
         com.armsx2.ui.theme.LibraryBackgroundColorPreferences.load()
+        // After the colours: XMB mode forces the monthly ones while it is up.
+        com.armsx2.ui.xmb.XmbMode.load()
         com.armsx2.LibraryMusic.load()
         com.armsx2.PauseMusic.load()
         com.armsx2.MenuSfx.load(applicationContext)
@@ -4598,6 +4600,8 @@ open class MainActivityRuntime : ComponentActivity() {
             com.armsx2.ui.settings.RpcnAvatarPicker.open.value -> com.armsx2.ui.settings.RpcnAvatarPicker.open.value = false
             nav.drawerOpen.value -> nav.drawerOpen.value = false
             WindowImpl.inGameScreen.value != null -> WindowImpl.dismissInGameScreen()
+            // An app screen open in an XMB panel: B closes the panel, back to the XMB behind it.
+            com.armsx2.ui.xmb.XmbInput.controller?.panel != null -> com.armsx2.ui.xmb.XmbInput.controller?.back()
             WindowImpl.showLibrary.value && !onHome -> nav.back()
             WindowImpl.showLibrary.value -> WindowImpl.showLibrary.value = false
             !onHome -> nav.back()

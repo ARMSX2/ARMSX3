@@ -60,6 +60,8 @@ add_library(armsx3-core SHARED
     src/saf_device.cpp
     # Remote play capture: hands frames and audio from RPCS3's recording hook to the app.
     src/remote_play.cpp
+    # XMB mode: the boot sound and a game's SND0 and ICON1, decoded with the core's FFmpeg.
+    src/xmb-media.cpp
     # Remote play online hosting: a port opened on the router (UPnP) for the session.
     src/remote_play_upnp.cpp
     # Carried from an earlier Android fork; no upstream equivalent.

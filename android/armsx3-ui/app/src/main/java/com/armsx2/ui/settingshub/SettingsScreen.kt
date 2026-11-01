@@ -454,7 +454,7 @@ private fun settingsSections() = listOf(
 )
 
 @Composable
-private fun CategoryContent(category: SettingsCategory, viewModel: SettingsViewModel) {
+internal fun CategoryContent(category: SettingsCategory, viewModel: SettingsViewModel) {
     when (category) {
         SettingsCategory.General -> AppTab()
         SettingsCategory.Info -> com.armsx2.ui.settings.InfoTab(viewModel.uiState.value.game)

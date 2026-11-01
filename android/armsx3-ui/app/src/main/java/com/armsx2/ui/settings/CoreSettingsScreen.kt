@@ -57,10 +57,10 @@ import org.json.JSONObject
  */
 
 /** One firmware library Libraries Control can name, and how it runs when it is not named. */
-private data class FirmwareLibrary(val name: String, val defaultHle: Boolean)
+internal data class FirmwareLibrary(val name: String, val defaultHle: Boolean)
 
 /** One editable leaf of the core config tree. */
-private data class CoreSetting(
+internal data class CoreSetting(
     val path: String,
     val name: String,
     val section: String,
@@ -79,7 +79,7 @@ private data class CoreSetting(
 )
 
 /** Flatten the tree the core emits into a list of leaves, remembering each one's path. */
-private fun flatten(
+internal fun flatten(
     node: JSONObject,
     prefix: String,
     section: String,
@@ -132,13 +132,13 @@ private fun flatten(
 
 /** A value as settingsSet takes it (JSON) in the form the tree reports it: bools and numbers bare,
  *  strings unquoted, sets as their array. */
-private fun decodeJson(json: String): String =
+internal fun decodeJson(json: String): String =
     runCatching { JSONArray("[$json]").get(0).toString() }.getOrDefault(json)
 
 /** Whether two values of a node read the same. By number where both are one, since the curated
  *  push writes a float as "1.0" and the tree can report the same value as "1"; by membership for a
  *  set, which has no order. */
-private fun sameValue(type: String, a: String, b: String): Boolean {
+internal fun sameValue(type: String, a: String, b: String): Boolean {
     if (a == b) return true
     if (type == "set") {
         fun members(json: String) = runCatching {

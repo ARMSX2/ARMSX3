@@ -1,0 +1,826 @@
+package com.armsx2.ui.xmb
+
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlin.math.abs
+import kotlin.math.roundToInt
+
+/**
+ * Draws an [XmbController]'s columns the way the console does, and takes touch.
+ *
+ * The geometry is the console's own, measured off its XMB running in ARMSX3 at 1920x1080 and kept
+ * here in 1280x720 units scaled to the screen: the category bar at y 193 with icons 137 apart (80
+ * across when focused, 50 otherwise) and the focused one at x 376, its name 41 under it; the
+ * focused item's centre 140 under the bar, a game's icon 207x113 there and 97x53 everywhere else,
+ * the items 53 apart, the first after the focused one 120 down and the first before it 113 above
+ * the bar. Only the focused game shows its name, with its last played date and a PS3 badge; other
+ * items keep their names. The clock sits in a bar along the top right, and the button hint in the
+ * bottom right corner.
+ *
+ * Touch: swipe sideways to change category and up or down to move through items, tap an item to
+ * focus it and again to open it, long-press for its options, and tap outside a sub-list, picker or
+ * panel (or the corner hint) to back out.
+ */
+@Composable
+fun XmbView(
+    controller: XmbController,
+    columns: List<XmbColumn>,
+    modifier: Modifier = Modifier,
+    /** 0..1 while the XMB is coming up after the boot animation; 1 when it is fully there. */
+    reveal: Float = 1f,
+    /** Drawn behind the items for the focused top-level item: a game's PIC1, say. */
+    backdrop: @Composable (XmbNode?) -> Unit = {},
+    showClock: Boolean = true,
+    /** Registers [controller] as the pad's target while shown. */
+    takesPad: Boolean = true,
+) {
+    controller.attach(columns)
+    // The system back gesture closes what is open in the XMB before anything behind it hears it.
+    androidx.activity.compose.BackHandler(enabled = controller.busy || controller.levels.isNotEmpty()) {
+        controller.back()
+    }
+    if (takesPad) {
+        DisposableEffect(controller) {
+            XmbInput.controller = controller
+            onDispose { if (XmbInput.controller === controller) XmbInput.controller = null }
+        }
+    }
+    val font = rememberXmbFont()
+
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val w = maxWidth.value
+        val h = maxHeight.value
+        // dp per 720p unit. Landscape fits the 1280x720 frame to the screen; portrait goes by width,
+        // a little larger, so the bar still reads at a phone's width.
+        val u = if (w >= h) minOf(w / 1280f, h / 720f) else w / 900f
+        val m = remember(u, w, h) { Metrics(u, w, h) }
+        val px = LocalDensity.current.density
+
+        val colAnim = remember { Animatable(controller.column.toFloat()) }
+        LaunchedEffect(controller.column) {
+            colAnim.animateTo(controller.column.toFloat(), tween(220, easing = FastOutSlowInEasing))
+        }
+        val current = controller.currentColumn()
+        val rootFocus = current?.let { controller.focusOf(it) } ?: 0
+        val focusAnim = remember(current?.key) { Animatable(rootFocus.toFloat()) }
+        LaunchedEffect(current?.key, rootFocus) {
+            focusAnim.animateTo(rootFocus.toFloat(), tween(170, easing = FastOutSlowInEasing))
+        }
+        val depth = controller.levels.size
+        val levelFade by animateFloatAsState(if (depth == 0) 1f else 0f, tween(180), label = "xmb-level")
+
+        // The focused top-level item once it has stayed focused a moment: a game's background waits,
+        // as on the console, rather than flashing past while scrolling.
+        val focusedRoot = controller.rootNode()
+        var settledRoot by remember { mutableStateOf<XmbNode?>(null) }
+        LaunchedEffect(focusedRoot?.key) {
+            settledRoot = null
+            delay(650)
+            settledRoot = focusedRoot
+        }
+        Box(Modifier.fillMaxSize().graphicsLayer { alpha = reveal }) {
+            backdrop(if (depth == 0 && !controller.busy) settledRoot else null)
+        }
+
+        val gestures = rememberUpdatedState(Gestures(controller, m, columns, px))
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    alpha = reveal
+                    translationY = (1f - reveal) * 24f * px
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = { gestures.value.tap(it) },
+                        onLongPress = { gestures.value.longPress(it) },
+                    )
+                }
+                .pointerInput(Unit) {
+                    var ax = 0f
+                    var ay = 0f
+                    var axis = 0
+                    detectDragGestures(
+                        onDragStart = { ax = 0f; ay = 0f; axis = 0 },
+                        onDrag = { change, amount ->
+                            change.consume()
+                            ax += amount.x
+                            ay += amount.y
+                            if (axis == 0) axis = if (abs(ax) > abs(ay)) 1 else 2
+                            val g = gestures.value
+                            if (axis == 1) {
+                                val step = g.m.catSpacing * 0.8f * px
+                                while (ax <= -step) { g.controller.move(1, 0); ax += step }
+                                while (ax >= step) { g.controller.move(-1, 0); ax -= step }
+                            } else {
+                                val step = g.m.itemSpacing * 1.1f * px
+                                while (ay <= -step) { g.controller.move(0, 1); ay += step }
+                                while (ay >= step) { g.controller.move(0, -1); ay -= step }
+                            }
+                        },
+                    )
+                },
+        ) {
+            if (showClock) XmbClock(m, font)
+
+            columns.forEachIndexed { c, column ->
+                key(column.key) { CategoryIcon(column, c, colAnim, m, font, levelFade) }
+            }
+            // Items of the columns on screen: the focused one, and the one it is sliding to.
+            columns.forEachIndexed { c, column ->
+                if (abs(c - controller.column) <= 1) {
+                    key("items-" + column.key) { ColumnItems(controller, column, c, colAnim, focusAnim, m, font, levelFade) }
+                }
+            }
+            controller.levels.lastOrNull()?.let { level ->
+                key("level-$depth-${level.node.key}") { SubList(level, m, font) }
+            }
+            controller.editing?.let { e -> EditorBox(e, m, font) }
+            controller.options?.let { o -> OptionsPanel(o, m, font) }
+
+            // The corner hint: Back while something is open, the focused item's options otherwise.
+            val node = controller.focusedNode()
+            when {
+                controller.busy || depth > 0 -> CornerHint(m, font, "○", Color(0xFFE85C5C), com.armsx2.i18n.str("xmb.back")) { controller.back() }
+                node is XmbNode.Game || (node is XmbNode.Action && node.options.isNotEmpty()) ->
+                    CornerHint(m, font, "△", Color(0xFF5CD68A), com.armsx2.i18n.str("xmb.options")) { controller.openOptions() }
+            }
+        }
+
+        controller.panel?.let { panel -> PanelHost(controller, panel, m, font) }
+    }
+}
+
+/** The layout in dp, from the console's 720p units. */
+internal class Metrics(val u: Float, val width: Float, val height: Float) {
+    val catY = 193f * u
+    val catIcon = 80f * u
+    val catIconSmall = 50f * u
+    val catSpacing = 137f * u
+    val focusX = minOf(376f * u, width * 0.3f)
+    val labelY = catY + 41f * u
+    val labelSp = 17.5f * u
+    val focusedY = catY + 140f * u
+    val firstBelow = focusedY + 120f * u
+    val firstAbove = catY - 113f * u
+    val itemSpacing = 53f * u
+    val gameW = 207f * u
+    val gameH = 113f * u
+    val gameSmall = 97f / 207f
+    val square = 84f * u
+    val squareSmall = 52f / 84f
+    val titleSp = 23f * u
+    val subtitleSp = 14.5f * u
+    val smallTitleSp = 19f * u
+    val textGap = 28f * u
+    val badgeX = focusX + 411f * u
+
+    fun colX(c: Float, anim: Float) = focusX + (c - anim) * catSpacing
+
+    /** Centre y of the item [d] places from the focused one (fractional while moving). */
+    fun itemY(d: Float): Float = when {
+        d >= 1f -> firstBelow + (d - 1f) * itemSpacing
+        d >= 0f -> focusedY + d * (firstBelow - focusedY)
+        d >= -1f -> focusedY + d * (focusedY - firstAbove)
+        else -> firstAbove + (d + 1f) * itemSpacing
+    }
+}
+
+private class Gestures(val controller: XmbController, val m: Metrics, val columns: List<XmbColumn>, val px: Float) {
+    fun tap(p: Offset) {
+        val x = p.x / px
+        val y = p.y / px
+        if (inCorner(x, y)) {
+            if (controller.busy || controller.levels.isNotEmpty()) controller.back() else controller.openOptions()
+            return
+        }
+        controller.options?.let { o ->
+            val left = m.width * 0.62f
+            if (x < left) {
+                controller.back()
+                return
+            }
+            val row = ((y - optionsTop(m)) / OPTION_ROW(m)).toInt()
+            if (row in o.options.indices) {
+                o.focus = row
+                controller.confirm()
+            }
+            return
+        }
+        controller.editing?.let { e ->
+            val box = editorRect(e, m)
+            if (x < box[0] || x > box[2] || y < box[1] || y > box[3]) {
+                controller.back()
+                return
+            }
+            val ed = e.node.editor
+            if (ed is XmbEditor.Range) {
+                val f = ((x - box[0] - 24f * m.u) / (box[2] - box[0] - 48f * m.u)).coerceIn(0f, 1f)
+                val raw = ed.min + f * (ed.max - ed.min)
+                e.value = (Math.round(raw / ed.step) * ed.step).coerceIn(ed.min, ed.max)
+                ed.set(e.value)
+                return
+            }
+            val row = ((y - box[1] - 12f * m.u) / EDITOR_ROW(m)).toInt()
+            val count = if (ed is XmbEditor.Choice) ed.labels.size else 2
+            if (row in 0 until count) {
+                e.choice = row
+                controller.confirm()
+            }
+            return
+        }
+        if (controller.panel != null) return
+        // The category bar answers at any depth; tapping one closes what is open there.
+        if (abs(y - m.catY) < m.catIcon * 0.7f) {
+            val c = ((x - m.focusX) / m.catSpacing + controller.column).roundToInt()
+            if (c in columns.indices) {
+                if (controller.levels.isNotEmpty()) controller.closeAll()
+                controller.selectColumn(c)
+            }
+            return
+        }
+        val level = controller.levels.lastOrNull()
+        if (level != null) {
+            if (x < subListX(m) - 20f * m.u) {
+                controller.back()
+                return
+            }
+            val i = level.focus + ((y - m.focusedY) / SUB_ROW(m)).roundToInt()
+            if (i in level.children.indices) {
+                if (i == level.focus) controller.confirm() else controller.setFocus(i)
+            }
+            return
+        }
+        val column = controller.currentColumn() ?: return
+        val i = hitItem(y, controller.focusOf(column), column.items.size) ?: return
+        if (i == controller.focusOf(column)) controller.confirm() else controller.setFocus(i)
+    }
+
+    fun longPress(p: Offset) {
+        val y = p.y / px
+        if (controller.busy || controller.levels.isNotEmpty()) return
+        val column = controller.currentColumn() ?: return
+        val i = hitItem(y, controller.focusOf(column), column.items.size) ?: return
+        controller.setFocus(i)
+        controller.openOptions()
+    }
+
+    private fun inCorner(x: Float, y: Float) = x > m.width - 230f * m.u && y > m.height - 110f * m.u
+
+    private fun hitItem(y: Float, focus: Int, count: Int): Int? {
+        var best: Int? = null
+        var bestDist = Float.MAX_VALUE
+        for (i in 0 until count) {
+            val dist = abs(m.itemY((i - focus).toFloat()) - y)
+            if (dist < bestDist) {
+                bestDist = dist
+                best = i
+            }
+        }
+        return best?.takeIf { bestDist < (if (it == focus) m.gameH * 0.6f else m.itemSpacing * 0.55f) }
+    }
+}
+
+private fun SUB_ROW(m: Metrics) = 50f * m.u
+private fun EDITOR_ROW(m: Metrics) = 44f * m.u
+private fun OPTION_ROW(m: Metrics) = 46f * m.u
+private fun subListX(m: Metrics) = m.focusX + 120f * m.u
+private fun optionsTop(m: Metrics) = m.height * 0.3f
+
+/** Left, top, right, bottom of a setting's picker, in dp. */
+private fun editorRect(e: XmbController.Editing, m: Metrics): FloatArray {
+    val ed = e.node.editor
+    val rows = when (ed) {
+        is XmbEditor.Choice -> ed.labels.size
+        is XmbEditor.Toggle -> 2
+        is XmbEditor.Range -> 0
+    }
+    val left = m.width * 0.6f
+    val right = m.width - 40f * m.u
+    return if (ed is XmbEditor.Range) {
+        floatArrayOf(left, m.focusedY - 46f * m.u, right, m.focusedY + 46f * m.u)
+    } else {
+        val visible = minOf(rows, 9)
+        val height = 24f * m.u + visible * EDITOR_ROW(m)
+        val top = (m.focusedY - 34f * m.u).coerceAtMost(m.height - height - 20f * m.u).coerceAtLeast(20f * m.u)
+        floatArrayOf(left, top, right, top + height)
+    }
+}
+
+internal val XmbShadow = Shadow(color = Color.Black.copy(alpha = 0.6f), offset = Offset(0f, 2f), blurRadius = 6f)
+
+@Composable
+internal fun rememberXmbFont(): FontFamily {
+    val typeface by produceState<android.graphics.Typeface?>(null) {
+        value = withContext(Dispatchers.IO) { XmbFirmware.typeface() }
+    }
+    return remember(typeface) {
+        typeface?.let { FontFamily(androidx.compose.ui.text.font.Typeface(it)) } ?: FontFamily.SansSerif
+    }
+}
+
+internal fun xmbText(font: FontFamily, sizeSp: Float, alpha: Float = 1f): TextStyle =
+    TextStyle(fontFamily = font, fontSize = sizeSp.sp, color = Color.White.copy(alpha = alpha), shadow = XmbShadow)
+
+/** An icon at [size]: the firmware's, a file or model, or the glyph. */
+@Composable
+internal fun XmbIconView(icon: XmbIcon, size: Dp, modifier: Modifier = Modifier, width: Dp = size) {
+    val firmware by produceState<ImageBitmap?>(null, icon.rco, icon.name) {
+        val rco = icon.rco
+        val name = icon.name
+        value = if (rco != null && name != null) withContext(Dispatchers.IO) { XmbFirmware.image(rco, name) } else null
+    }
+    Box(modifier.width(width).height(size), contentAlignment = Alignment.Center) {
+        val fw = firmware
+        when {
+            fw != null -> Image(fw, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            icon.file != null || icon.model != null -> AsyncImage(
+                model = icon.file ?: icon.model,
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
+            icon.glyph.isNotEmpty() -> Text(
+                icon.glyph,
+                style = TextStyle(fontSize = (size.value * 0.5f).sp, color = Color.White, shadow = XmbShadow),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CategoryIcon(
+    column: XmbColumn,
+    index: Int,
+    colAnim: Animatable<Float, *>,
+    m: Metrics,
+    font: FontFamily,
+    levelFade: Float,
+) {
+    val box = m.catIcon
+    Box(
+        Modifier
+            .offset {
+                val x = m.colX(index.toFloat(), colAnim.value) - box / 2f
+                IntOffset((x * density).roundToInt(), ((m.catY - box / 2f) * density).roundToInt())
+            }
+            .size(box.dp)
+            .graphicsLayer {
+                val near = (1f - abs(index - colAnim.value)).coerceIn(0f, 1f)
+                val scale = (m.catIconSmall + (m.catIcon - m.catIconSmall) * near) / m.catIcon
+                scaleX = scale
+                scaleY = scale
+                alpha = 0.78f + 0.22f * near
+            },
+    ) {
+        XmbIconView(column.icon, box.dp)
+    }
+    Text(
+        column.title,
+        style = xmbText(font, m.labelSp),
+        maxLines = 1,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .offset {
+                val x = m.colX(index.toFloat(), colAnim.value) - 120f * m.u
+                IntOffset((x * density).roundToInt(), ((m.labelY - m.labelSp * 0.7f) * density).roundToInt())
+            }
+            .width((240f * m.u).dp)
+            .graphicsLayer { alpha = (1f - abs(index - colAnim.value) * 2f).coerceIn(0f, 1f) * levelFade },
+    )
+}
+
+@Composable
+private fun ColumnItems(
+    controller: XmbController,
+    column: XmbColumn,
+    index: Int,
+    colAnim: Animatable<Float, *>,
+    focusAnim: Animatable<Float, *>,
+    m: Metrics,
+    font: FontFamily,
+    levelFade: Float,
+) {
+    val isCurrent = index == controller.column
+    val focus = controller.focusOf(column)
+    val first = (focus - 4).coerceAtLeast(0)
+    val last = (focus + 12).coerceAtMost(column.items.size - 1)
+    for (i in first..last) {
+        val node = column.items[i]
+        key(node.key) {
+            val isGame = node is XmbNode.Game
+            val iconW = if (isGame) m.gameW else m.square
+            val iconH = if (isGame) m.gameH else m.square
+            val small = if (isGame) m.gameSmall else m.squareSmall
+            // How focused this item is, 0..1, as the cursor moves.
+            fun nearOf(f: Float) = (1f - abs(i - f)).coerceIn(0f, 1f)
+            fun scaleOf(near: Float) = small + (1f - small) * near
+            fun alphaOf(f: Float): Float {
+                val d = i - f
+                val columnAlpha = (1f - abs(index - colAnim.value)).coerceIn(0f, 1f)
+                val depthAlpha = if (i == focus) 1f else levelFade
+                // The ones before the focused item fade as they climb past the bar.
+                val far = if (d < -1f) (1f + (d + 1f) * 0.5f).coerceIn(0f, 1f) else 1f
+                return columnAlpha * depthAlpha * far
+            }
+
+            Box(
+                Modifier
+                    .offset {
+                        val f = if (isCurrent) focusAnim.value else focus.toFloat()
+                        val x = m.colX(index.toFloat(), colAnim.value) - iconW / 2f
+                        IntOffset((x * density).roundToInt(), ((m.itemY(i - f) - iconH / 2f) * density).roundToInt())
+                    }
+                    .size(iconW.dp, iconH.dp)
+                    .graphicsLayer {
+                        val f = if (isCurrent) focusAnim.value else focus.toFloat()
+                        val s = scaleOf(nearOf(f))
+                        scaleX = s
+                        scaleY = s
+                        alpha = alphaOf(f)
+                    },
+            ) {
+                // The focused game plays its ICON1, as on the console.
+                val pam = if (isGame && isCurrent && i == focus && controller.levels.isEmpty()) {
+                    remember(node.key) { XmbMedia.icon1((node as XmbNode.Game).mediaDir) }
+                } else {
+                    null
+                }
+                if (pam != null) {
+                    XmbAnimatedIcon(pam, Modifier.fillMaxSize()) { XmbIconView(node.icon, iconH.dp, width = iconW.dp) }
+                } else {
+                    XmbIconView(node.icon, iconH.dp, width = iconW.dp)
+                }
+            }
+
+            // The text: the focused item's name and second line; other items keep their names,
+            // except games, which show only the focused one's, as the console's Game column does.
+            val focused = i == focus
+            if (focused || !isGame) {
+                Column(
+                    verticalArrangement = Arrangement.Center,
+                    modifier = Modifier
+                        .offset {
+                            val f = if (isCurrent) focusAnim.value else focus.toFloat()
+                            val s = scaleOf(nearOf(f))
+                            val x = m.colX(index.toFloat(), colAnim.value) + iconW * s / 2f + m.textGap
+                            val lineH = if (focused) m.titleSp * 1.25f else m.smallTitleSp * 1.25f
+                            IntOffset((x * density).roundToInt(), ((m.itemY(i - f) - lineH * 0.6f) * density).roundToInt())
+                        }
+                        .widthIn(max = (m.width - m.focusX - 160f * m.u).coerceAtLeast(120f).dp)
+                        .graphicsLayer {
+                            val f = if (isCurrent) focusAnim.value else focus.toFloat()
+                            alpha = alphaOf(f) * (if (focused) levelFade else 0.82f)
+                        },
+                ) {
+                    Text(
+                        node.title,
+                        style = xmbText(font, if (focused) m.titleSp else m.smallTitleSp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val sub = node.subtitle
+                    if (focused && sub != null) {
+                        Text(sub, style = xmbText(font, m.subtitleSp, 0.92f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                // The format badge on the focused game's second line, as the console marks a PS3 title.
+                if (focused && isGame) {
+                    XmbIconView(
+                        XmbIcon("explore_category_game", "item_tex_ps3format"),
+                        (14f * m.u).dp,
+                        width = (52f * m.u).dp,
+                        modifier = Modifier
+                            .offset {
+                                IntOffset((m.badgeX * density).roundToInt(), ((m.focusedY + 6f * m.u) * density).roundToInt())
+                            }
+                            .graphicsLayer { alpha = levelFade * (1f - abs(index - colAnim.value)).coerceIn(0f, 1f) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SubList(level: XmbController.Level, m: Metrics, font: FontFamily) {
+    val anim = remember(level) { Animatable(level.focus.toFloat()) }
+    LaunchedEffect(level, level.focus) { anim.animateTo(level.focus.toFloat(), tween(150, easing = FastOutSlowInEasing)) }
+    val appear = remember(level) { Animatable(0f) }
+    LaunchedEffect(level) { appear.animateTo(1f, tween(200, easing = FastOutSlowInEasing)) }
+    val row = SUB_ROW(m)
+    val listX = subListX(m)
+    val first = (level.focus - 8).coerceAtLeast(0)
+    val last = (level.focus + 12).coerceAtMost(level.children.size - 1)
+    // The focused row's bar, as the console highlights a sub-list row.
+    Box(
+        Modifier
+            .offset { IntOffset(((listX - 14f * m.u) * density).roundToInt(), ((m.focusedY - row / 2f) * density).roundToInt()) }
+            .width((m.width - listX - 30f * m.u).dp)
+            .height(row.dp)
+            .graphicsLayer { alpha = appear.value }
+            .background(
+                Brush.horizontalGradient(listOf(Color.White.copy(alpha = 0.18f), Color.White.copy(alpha = 0.03f))),
+                RoundedCornerShape((6f * m.u).dp),
+            ),
+    )
+    Text(
+        level.node.title,
+        style = xmbText(font, m.subtitleSp, 0.75f),
+        maxLines = 1,
+        modifier = Modifier
+            .offset { IntOffset((listX * density).roundToInt(), ((m.catY + m.catIcon * 0.5f + 6f * m.u) * density).roundToInt()) }
+            .graphicsLayer { alpha = appear.value },
+    )
+    for (i in first..last) {
+        val node = level.children[i]
+        key(node.key) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .offset {
+                        val y = m.focusedY + (i - anim.value) * row - row / 2f
+                        IntOffset(((listX + (1f - appear.value) * 40f * m.u) * density).roundToInt(), (y * density).roundToInt())
+                    }
+                    .width((m.width - listX - 50f * m.u).dp)
+                    .height(row.dp)
+                    .graphicsLayer {
+                        val y = m.focusedY + (i - anim.value) * row
+                        // Rows pass under the bar's line rather than over the category icons.
+                        val visible = ((y - (m.catY + m.catIcon * 0.6f)) / row).coerceIn(0f, 1f)
+                        alpha = appear.value * visible * (if (abs(i - anim.value) < 0.5f) 1f else 0.62f)
+                    },
+            ) {
+                if (node.icon.rco != null || node.icon.file != null || node.icon.model != null || node.icon.glyph.isNotEmpty()) {
+                    XmbIconView(node.icon, (36f * m.u).dp)
+                    Spacer(Modifier.width((14f * m.u).dp))
+                }
+                Text(
+                    node.title,
+                    style = xmbText(font, m.smallTitleSp),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                val value = (node as? XmbNode.Setting)?.value?.invoke() ?: node.subtitle?.takeIf { node is XmbNode.Folder }
+                if (value != null) {
+                    Spacer(Modifier.width((16f * m.u).dp))
+                    Text(
+                        value,
+                        style = xmbText(font, m.smallTitleSp * 0.88f, 0.82f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.widthIn(max = (300f * m.u).dp),
+                    )
+                }
+            }
+        }
+    }
+    (level.children.getOrNull(level.focus) as? XmbNode.Setting)?.description?.let { text ->
+        Text(
+            text,
+            style = xmbText(font, m.subtitleSp, 0.8f),
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .offset { IntOffset((listX * density).roundToInt(), ((m.height - 120f * m.u) * density).roundToInt()) }
+                .width((m.width - listX - 260f * m.u).coerceAtLeast(120f).dp),
+        )
+    }
+}
+
+@Composable
+private fun EditorBox(e: XmbController.Editing, m: Metrics, font: FontFamily) {
+    val r = editorRect(e, m)
+    val shape = RoundedCornerShape((8f * m.u).dp)
+    Box(
+        Modifier
+            .offset { IntOffset((r[0] * density).roundToInt(), (r[1] * density).roundToInt()) }
+            .size((r[2] - r[0]).dp, (r[3] - r[1]).dp)
+            .background(Color(0xE60C0C12), shape)
+            .border(1.dp, Color.White.copy(alpha = 0.22f), shape),
+    ) {
+        when (val ed = e.node.editor) {
+            is XmbEditor.Range -> Column(
+                Modifier.fillMaxSize().padding(horizontal = (24f * m.u).dp),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(ed.format(e.value), style = xmbText(font, m.titleSp * 0.9f))
+                Spacer(Modifier.height((10f * m.u).dp))
+                Box(Modifier.fillMaxWidth().height((5f * m.u).dp).background(Color.White.copy(alpha = 0.25f), RoundedCornerShape(50))) {
+                    val f = if (ed.max > ed.min) (e.value - ed.min) / (ed.max - ed.min) else 0f
+                    Box(Modifier.fillMaxWidth(f.coerceIn(0f, 1f)).fillMaxHeight().background(Color.White, RoundedCornerShape(50)))
+                }
+            }
+            else -> {
+                val labels = if (ed is XmbEditor.Choice) ed.labels else listOf(com.armsx2.i18n.I18n.get("xmb.on"), com.armsx2.i18n.I18n.get("xmb.off"))
+                // A long list scrolls with the choice, nine rows at a time.
+                val firstRow = (e.choice - 4).coerceIn(0, (labels.size - 9).coerceAtLeast(0))
+                Column(Modifier.fillMaxSize().padding(vertical = (12f * m.u).dp)) {
+                    labels.drop(firstRow).take(9).forEachIndexed { k, label ->
+                        val focused = firstRow + k == e.choice
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(EDITOR_ROW(m).dp)
+                                .background(if (focused) Color.White.copy(alpha = 0.16f) else Color.Transparent)
+                                .padding(horizontal = (20f * m.u).dp),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            Text(label, style = xmbText(font, m.smallTitleSp, if (focused) 1f else 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OptionsPanel(o: XmbController.Options, m: Metrics, font: FontFamily) {
+    val slide = remember(o) { Animatable(1f) }
+    LaunchedEffect(o) { slide.animateTo(0f, tween(180, easing = FastOutSlowInEasing)) }
+    val left = m.width * 0.62f
+    Box(
+        Modifier
+            .offset { IntOffset(((left + slide.value * (m.width - left)) * density).roundToInt(), 0) }
+            .width((m.width - left).dp)
+            .fillMaxHeight()
+            .background(Brush.horizontalGradient(listOf(Color(0xC008080C), Color(0xF008080C)))),
+    ) {
+        Column(Modifier.padding(top = (optionsTop(m) - OPTION_ROW(m)).dp)) {
+            Text(
+                o.title,
+                style = xmbText(font, m.subtitleSp, 0.7f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = (28f * m.u).dp).height(OPTION_ROW(m).dp),
+            )
+            o.options.forEachIndexed { i, opt ->
+                val focused = i == o.focus
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(OPTION_ROW(m).dp)
+                        .background(if (focused) Color.White.copy(alpha = 0.16f) else Color.Transparent)
+                        .padding(horizontal = (28f * m.u).dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Text(opt.title, style = xmbText(font, m.smallTitleSp, if (focused) 1f else 0.72f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+    }
+}
+
+/** A full panel over the XMB, for an item whose screen is more than a list. */
+@Composable
+private fun PanelHost(controller: XmbController, panel: XmbNode.Panel, m: Metrics, font: FontFamily) {
+    val appear = remember(panel) { Animatable(0f) }
+    LaunchedEffect(panel) { appear.animateTo(1f, tween(200, easing = FastOutSlowInEasing)) }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer { alpha = appear.value }
+            .background(Color(0xB8040408)),
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(start = (40f * m.u).dp, end = (24f * m.u).dp, top = (18f * m.u).dp, bottom = (8f * m.u).dp),
+            ) {
+                XmbIconView(panel.icon, (44f * m.u).dp)
+                Spacer(Modifier.width((16f * m.u).dp))
+                Text(panel.title, style = xmbText(font, m.titleSp), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                HintChip(m, font, "○", Color(0xFFE85C5C), com.armsx2.i18n.str("xmb.back")) { controller.back() }
+            }
+            Box(Modifier.fillMaxSize().padding(horizontal = (24f * m.u).dp)) {
+                panel.content { controller.back() }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CornerHint(m: Metrics, font: FontFamily, glyph: String, glyphColor: Color, label: String, onTap: () -> Unit) {
+    Box(
+        Modifier.offset {
+            IntOffset(((m.width - 70f * m.u - 120f * m.u) * density).roundToInt(), ((m.height - 57f * m.u - 30f * m.u) * density).roundToInt())
+        },
+    ) {
+        HintChip(m, font, glyph, glyphColor, label, onTap)
+    }
+}
+
+@Composable
+private fun HintChip(m: Metrics, font: FontFamily, glyph: String, glyphColor: Color, label: String, onTap: () -> Unit) {
+    val shape = RoundedCornerShape((3f * m.u).dp)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .background(Color.Black.copy(alpha = 0.32f), shape)
+            .border(1.dp, Color.White.copy(alpha = 0.16f), shape)
+            .pointerInput(Unit) { detectTapGestures { onTap() } }
+            .padding(horizontal = (10f * m.u).dp, vertical = (4f * m.u).dp),
+    ) {
+        Text(glyph, style = xmbText(font, m.subtitleSp * 1.1f).copy(color = glyphColor))
+        Text(" : $label", style = xmbText(font, m.subtitleSp * 1.15f))
+    }
+}
+
+/** The clock in its bar along the top right, as the console shows it. */
+@Composable
+private fun XmbClock(m: Metrics, font: FontFamily) {
+    val context = LocalContext.current
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) {
+            value = System.currentTimeMillis()
+            delay(10_000)
+        }
+    }
+    val text = remember(now) {
+        val locale = java.util.Locale.getDefault()
+        val date = android.text.format.DateFormat.getBestDateTimePattern(locale, "dM")
+        val time = if (android.text.format.DateFormat.is24HourFormat(context)) "H:mm" else "h:mm a"
+        java.text.SimpleDateFormat("$date $time", locale).format(java.util.Date(now))
+    }
+    val barLeft = minOf(887f * m.u, m.width - 300f * m.u)
+    Box(
+        Modifier
+            .offset { IntOffset((barLeft * density).roundToInt(), ((50f * m.u) * density).roundToInt()) }
+            .width((m.width - barLeft).dp)
+            .height((37f * m.u).dp)
+            .background(
+                Brush.horizontalGradient(listOf(Color.White.copy(alpha = 0.10f), Color.White.copy(alpha = 0.16f))),
+                RoundedCornerShape(topStart = (4f * m.u).dp, bottomStart = (4f * m.u).dp),
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(topStart = (4f * m.u).dp, bottomStart = (4f * m.u).dp)),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.align(Alignment.CenterEnd).padding(end = (90f * m.u).dp),
+        ) {
+            Text(text, style = xmbText(font, m.labelSp * 1.2f), maxLines = 1)
+            Spacer(Modifier.width((10f * m.u).dp))
+            Text("◔", style = xmbText(font, m.labelSp * 1.15f))
+        }
+    }
+}

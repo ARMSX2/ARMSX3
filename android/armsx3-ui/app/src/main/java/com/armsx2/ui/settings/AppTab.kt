@@ -503,7 +503,15 @@ fun AppTab() {
                 description = str("app.bgColor.rgb.desc"),
                 onChange = { LibraryBackgroundColorPreferences.setRgbCycle(it) },
             )
-            if (!LibraryBackgroundColorPreferences.rgbCycle.value) {
+            // The PS3's "Original" colour: one gradient per month, dimming at night. Excludes the
+            // RGB cycle; XMB mode uses it whatever this is set to.
+            ToggleRow(
+                label = str("app.bgColor.monthly"),
+                value = LibraryBackgroundColorPreferences.monthly.value,
+                description = str("app.bgColor.monthly.desc"),
+                onChange = { LibraryBackgroundColorPreferences.setMonthly(it) },
+            )
+            if (!LibraryBackgroundColorPreferences.rgbCycle.value && !LibraryBackgroundColorPreferences.monthly.value) {
             val customized = LibraryBackgroundColorPreferences.color.value != 0
             val argb = if (customized) LibraryBackgroundColorPreferences.color.value
                        else LibraryBackgroundColorPreferences.DefaultDisplayColor
