@@ -402,10 +402,16 @@ internal fun xmbText(font: FontFamily, sizeSp: Float, alpha: Float = 1f): TextSt
 /** An icon at [size]: the firmware's, a file or model, or the glyph. */
 @Composable
 internal fun XmbIconView(icon: XmbIcon, size: Dp, modifier: Modifier = Modifier, width: Dp = size) {
-    val firmware by produceState<ImageBitmap?>(null, icon.rco, icon.name) {
+    // The XMB theme's picture for it when the theme has one, else the firmware's.
+    val theme = XmbTheme.revision.intValue
+    val firmware by produceState<ImageBitmap?>(null, icon.rco, icon.name, theme) {
         val rco = icon.rco
         val name = icon.name
-        value = if (rco != null && name != null) withContext(Dispatchers.IO) { XmbFirmware.image(rco, name) } else null
+        value = if (rco != null && name != null) {
+            withContext(Dispatchers.IO) { XmbTheme.image(rco, name) ?: XmbFirmware.image(rco, name) }
+        } else {
+            null
+        }
     }
     Box(modifier.width(width).height(size), contentAlignment = Alignment.Center) {
         val fw = firmware

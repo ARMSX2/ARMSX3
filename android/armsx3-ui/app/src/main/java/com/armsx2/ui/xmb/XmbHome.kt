@@ -89,10 +89,12 @@ fun XmbHome(
     val context = LocalContext.current
     val controller = XmbHomeState.controller
     LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) { XmbSounds.load(context.applicationContext) }
         // A search typed in the library would otherwise hide games here, with no search box to clear it.
         if (viewModel.state.value.query.isNotEmpty()) viewModel.setQuery("")
     }
+    // The theme's icons and sounds, or the firmware's, read again whenever the theme changes.
+    val theme = XmbTheme.entry()
+    LaunchedEffect(theme?.folder) { withContext(Dispatchers.IO) { XmbTheme.apply(context.applicationContext, theme) } }
     val language = I18n.current
     LaunchedEffect(language) { withContext(Dispatchers.IO) { XmbText.load(language) } }
     LaunchedEffect(controller) {

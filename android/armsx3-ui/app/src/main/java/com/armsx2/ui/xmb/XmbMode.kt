@@ -55,6 +55,7 @@ object XmbMode {
         gameBackgrounds.value = prefs.getBoolean(BackgroundsKey, true)
         animatedIcons.value = prefs.getBoolean(IconsKey, true)
         gameMusic.value = prefs.getBoolean(GameMusicKey, true)
+        XmbTheme.load()
     }
 
     fun setThemeColor(month: Int) {

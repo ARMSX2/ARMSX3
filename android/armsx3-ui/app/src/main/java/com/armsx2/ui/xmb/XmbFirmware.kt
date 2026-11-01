@@ -169,7 +169,11 @@ object XmbSounds {
     private val ready = HashSet<Int>()
     @Volatile private var loading = false
 
-    /** Decode the firmware's sounds into the cache and load them. Off the main thread. */
+    /**
+     * Decode the firmware's sounds into the cache and load them, the XMB theme's in place of any it
+     * has ([XmbTheme.sound]). Off the main thread.
+     */
+    @Synchronized
     fun load(context: Context) {
         if (pool != null || loading) return
         loading = true
@@ -185,6 +189,10 @@ object XmbSounds {
             .build()
         sp.setOnLoadCompleteListener { _, id, status -> if (status == 0) synchronized(ready) { ready.add(id) } }
         for (sfx in Sfx.entries) {
+            XmbTheme.sound(sfx.firmwareName)?.let {
+                ids[sfx] = sp.load(it.absolutePath, 1)
+                continue
+            }
             val wav = File(dir, "${sfx.firmwareName}.wav")
             if (!wav.isFile) {
                 val pcm = XmbFirmware.sound(sfx.firmwareName) ?: continue
@@ -194,6 +202,21 @@ object XmbSounds {
         }
         pool = sp
         loading = false
+    }
+
+    /** True once [load] has made a sound pool. */
+    fun loaded(): Boolean = pool != null
+
+    /** Load again, for a change of theme. Off the main thread. */
+    @Synchronized
+    fun reload(context: Context) {
+        val old = pool
+        pool = null
+        ids.clear()
+        synchronized(ready) { ready.clear() }
+        old?.release()
+        loading = false
+        load(context)
     }
 
     fun play(sfx: Sfx) {

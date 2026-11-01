@@ -1409,6 +1409,16 @@ private fun GameMenuAction(glyph: String, label: String, modifier: Modifier = Mo
 @Composable
 internal fun LibraryBackdrop() {
     val context = LocalContext.current
+    // XMB mode has a background of its own: the XMB theme's, or the console's wave in its colour.
+    if (com.armsx2.ui.xmb.XmbMode.active.value) {
+        val theme = com.armsx2.ui.xmb.XmbTheme.entry()
+        if (theme == null) {
+            if (LibraryBackground.animated2D.value) LibraryWaveBackground(Modifier.fillMaxSize()) else XmbWave()
+        } else {
+            SavedBackdrop(Uri.fromFile(theme.picture).toString(), theme.slideshow, theme.scene)
+        }
+        return
+    }
     val libraryBg = LibraryBackground.uri.value
     if (libraryBg == null) {
         // Default: the live PS3-XMB wave (XmbGlView — a GLES3 port of linkev's
@@ -1448,47 +1458,61 @@ internal fun LibraryBackdrop() {
             // backdrop GL-fail devices get; skip the GLES3 XmbGlView entirely.
             LibraryWaveBackground(Modifier.fillMaxSize())
         } else {
-            var xmbGlState by remember { mutableStateOf<Boolean?>(null) } // null=starting, true=up, false=failed
-            if (xmbGlState == false) {
-                LibraryWaveBackground(Modifier.fillMaxSize())
-            } else {
-                Image(
-                    painter = painterResource(R.drawable.library_bg_xmb),
-                    contentDescription = null,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-            AndroidView(
-                factory = { XmbGlView(it).apply { onGlStatus = { ok -> xmbGlState = ok } } },
-                modifier = Modifier.fillMaxSize(),
-            )
+            XmbWave()
         }
     } else {
-        // User-picked still image / GIF (Coil handles both), or a dynamic PS3 theme's slides.
-        val slides = LibraryBackground.slideshow.value
-        if (slides != null) {
-            ThemeSlideshow(slides, Modifier.fillMaxSize())
-        } else {
-            AsyncImage(
-                model = ImageRequest.Builder(context).data(libraryBg).crossfade(true).build(),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
-            // A dynamic theme played live, over its still: the still shows until the scene
-            // draws, and stays if it cannot. Keyed so a new theme gets a new view.
-            LibraryBackground.scene.value?.let { live ->
-                androidx.compose.runtime.key(live) {
-                    var sceneGl by remember { mutableStateOf<Boolean?>(null) }
-                    if (sceneGl != false) {
-                        AndroidView(
-                            factory = { ThemeSceneView(it, live).apply { onGlStatus = { ok -> sceneGl = ok } } },
-                            modifier = Modifier.fillMaxSize(),
-                            onRelease = { it.stop() },
-                        )
-                    }
-                }
+        SavedBackdrop(libraryBg, LibraryBackground.slideshow.value, LibraryBackground.scene.value)
+    }
+}
+
+/** The live XMB wave, over the bundled still while GL starts, or the 2D wave when GL cannot. */
+@Composable
+private fun XmbWave() {
+    var xmbGlState by remember { mutableStateOf<Boolean?>(null) } // null=starting, true=up, false=failed
+    if (xmbGlState == false) {
+        LibraryWaveBackground(Modifier.fillMaxSize())
+    } else {
+        Image(
+            painter = painterResource(R.drawable.library_bg_xmb),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.Crop,
+        )
+    }
+    AndroidView(
+        factory = { XmbGlView(it).apply { onGlStatus = { ok -> xmbGlState = ok } } },
+        modifier = Modifier.fillMaxSize(),
+    )
+}
+
+/**
+ * A saved background: a still picture or GIF (Coil handles both), a dynamic PS3 theme's [slides],
+ * or its scene played [live] over the still.
+ */
+@Composable
+private fun SavedBackdrop(picture: String, slides: LibraryBackground.Slideshow?, live: java.io.File?) {
+    val context = LocalContext.current
+    if (slides != null) {
+        ThemeSlideshow(slides, Modifier.fillMaxSize())
+        return
+    }
+    AsyncImage(
+        model = ImageRequest.Builder(context).data(picture).crossfade(true).build(),
+        contentDescription = null,
+        modifier = Modifier.fillMaxSize(),
+        contentScale = ContentScale.Crop,
+    )
+    // A dynamic theme played live, over its still: the still shows until the scene draws, and
+    // stays if it cannot. Keyed so a new theme gets a new view.
+    live?.let { scene ->
+        androidx.compose.runtime.key(scene) {
+            var sceneGl by remember { mutableStateOf<Boolean?>(null) }
+            if (sceneGl != false) {
+                AndroidView(
+                    factory = { ThemeSceneView(it, scene).apply { onGlStatus = { ok -> sceneGl = ok } } },
+                    modifier = Modifier.fillMaxSize(),
+                    onRelease = { it.stop() },
+                )
             }
         }
     }

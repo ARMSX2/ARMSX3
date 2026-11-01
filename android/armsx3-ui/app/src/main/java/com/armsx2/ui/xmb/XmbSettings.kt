@@ -35,8 +35,12 @@ import com.armsx2.ui.settings.flatten
 import com.armsx2.ui.settings.sameValue
 import com.armsx2.ui.settingshub.CategoryContent
 import com.armsx2.ui.settingshub.SettingsViewModel
+import com.armsx2.ui.home.LibraryBackground
 import com.armsx2.ui.settingshub.categoryTitle
 import com.armsx3.core.ARMSX3
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
@@ -198,11 +202,22 @@ private fun xmbMusicSettings(): XmbNode {
     }
 }
 
-/** Theme Settings: the XMB's colour, and how much of each game's own media it shows. */
+/**
+ * Theme Settings: the theme (Original, or a PS3 theme with its background, icons and sounds) and
+ * importing one, the XMB's colour, and how much of each game's own media it shows.
+ */
 @Composable
 private fun xmbThemeSettings(): XmbNode {
     val (on, off) = xmbOnOff()
     val icon = XmbIcon("explore_category_sysconf", "tex_thema", "\uD83C\uDFA8")
+    val themes = LibraryBackground.saved.value
+    val original = str("xmb.theme.original")
+    val themeLabels = listOf(original) + themes.map { it.name }
+    val themeTitle = str("xmb.theme.theme")
+    val themeDesc = str("xmb.theme.theme.desc")
+    val importTitle = str("xmb.theme.import")
+    val importDesc = str("xmb.theme.import.desc")
+    val importTheme = rememberXmbThemeImport()
     val colorTitle = str("xmb.theme.color")
     val colorDesc = str("xmb.theme.color.desc")
     val colorDefault = str("xmb.theme.color.default")
@@ -223,6 +238,18 @@ private fun xmbThemeSettings(): XmbNode {
     ) {
         listOf(
             XmbNode.Setting(
+                key = "theme.theme",
+                title = themeTitle,
+                icon = icon,
+                editor = XmbEditor.Choice(
+                    themeLabels,
+                    { themes.indexOfFirst { it.folder.name == XmbTheme.selected.value } + 1 },
+                ) { XmbTheme.select(themes.getOrNull(it - 1)) },
+                value = { XmbTheme.entry()?.name ?: original },
+                description = themeDesc,
+            ),
+            XmbNode.Action("theme.import", importTitle, icon, importDesc) { importTheme() },
+            XmbNode.Setting(
                 key = "theme.color",
                 title = colorTitle,
                 icon = icon,
@@ -233,6 +260,40 @@ private fun xmbThemeSettings(): XmbNode {
             toggle("theme.backgrounds", backgrounds, icon, on, off, backgroundsDesc, { XmbMode.gameBackgrounds.value }) { XmbMode.setGameBackgrounds(it) },
             toggle("theme.icons", icons, icon, on, off, iconsDesc, { XmbMode.animatedIcons.value }) { XmbMode.setAnimatedIcons(it) },
         )
+    }
+}
+
+/**
+ * Import Theme: the system picker, then the theme imported as the library imports one (its
+ * background, and now its XMB icons and sounds too), kept with the library's saved backgrounds
+ * and made the XMB's theme. The library's own background is left as it is.
+ */
+@Composable
+private fun rememberXmbThemeImport(): () -> Unit {
+    val context = LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val picker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { picked ->
+        if (picked == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val (message, kept) = withContext(Dispatchers.IO) {
+                if (!LibraryBackground.isTheme(context, picked)) return@withContext "xmb.theme.notTheme" to null
+                val outcome = LibraryBackground.importTheme(context, picked)
+                val name = outcome.name ?: LibraryBackground.displayName(context, picked)?.substringBeforeLast('.') ?: "PS3 theme"
+                outcome.messageKey to outcome.file?.let { LibraryBackground.keep(context, outcome, name) }
+            }
+            kept?.let {
+                LibraryBackground.add(it)
+                XmbTheme.select(it)
+            }
+            message?.let { android.widget.Toast.makeText(context, I18n.get(it), android.widget.Toast.LENGTH_LONG).show() }
+        }
+    }
+    return {
+        com.armsx2.ui.common.SystemPickers.launchWithFallback(picker, arrayOf("*/*")) {
+            android.widget.Toast.makeText(context, I18n.get("browse.noSystemPicker"), android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 }
 

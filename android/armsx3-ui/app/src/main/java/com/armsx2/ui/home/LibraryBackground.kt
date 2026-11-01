@@ -235,6 +235,11 @@ object LibraryBackground {
         return saved.value.firstOrNull { Uri.fromFile(it.picture).toString() == shown }
     }
 
+    /** Add [entry] to [saved] without showing it: an XMB theme imported in XMB mode. */
+    fun add(entry: Saved) {
+        if (saved.value.none { it.folder == entry.folder }) saved.value = saved.value + entry
+    }
+
     /** Show [entry], adding it to [saved] when it is new, or the default background for null. */
     fun select(entry: Saved?) {
         if (entry == null) return useDefault()
@@ -275,6 +280,8 @@ object LibraryBackground {
             } else if (!file.renameTo(File(folder, file.name))) {
                 throw IOException("could not move ${file.name}")
             }
+            // A theme's XMB icons and sounds go with it (see ThemeImport.xmb).
+            result.xmb?.let { if (!it.renameTo(File(folder, XMB_DIR))) it.deleteRecursively() }
             fun moved(f: File) = File(folder, f.name)
             val entry = Saved(
                 folder, name, moved(file),
@@ -393,6 +400,9 @@ object LibraryBackground {
     // kept as a saved background (see keep), in a folder of its own, until the user removes it.
 
     private const val IMPORTED_DIR = "library_backgrounds"
+
+    /** In a saved theme's folder: its XMB icons and sounds, for XMB mode (see XmbTheme). */
+    const val XMB_DIR = "xmb"
     private const val IMPORTED_PREFIX = "p3t_"
     private const val MAX_STREAMED_THEME_BYTES = 128 shl 20
     private const val MAX_SCENE_BYTES = 256L shl 20
@@ -414,6 +424,8 @@ object LibraryBackground {
         val scene: File? = null,
         /** The theme's own name, when it has one. */
         val name: String? = null,
+        /** A folder of the theme's XMB icons and sounds, moved into its saved folder by [keep]. */
+        val xmb: File? = null,
     )
 
     /** True when [source] starts with the PS3 theme magic. Reads four bytes. */
@@ -448,7 +460,7 @@ object LibraryBackground {
         // other theme.
         result.anim?.let { anim ->
             runCatching { importAnimation(theme, anim, dir) }.getOrNull()?.let {
-                return ThemeImport(it.file, it.messageKey, it.slideshow, it.scene, result.name)
+                return ThemeImport(it.file, it.messageKey, it.slideshow, it.scene, result.name, xmbAssets(theme, dir))
             }
         }
         val picture = result.picture ?: return ThemeImport(
@@ -487,7 +499,25 @@ object LibraryBackground {
         }.getOrNull() ?: return ThemeImport(null, "library.bg.readFailed")
         // A dynamic theme that is not a slideshow only gets its preview, which has the theme's own
         // icons drawn into it.
-        return ThemeImport(saved, if (picture.source == P3tTheme.Source.PREVIEW) "library.bg.themePreview" else null, name = result.name)
+        return ThemeImport(
+            saved,
+            if (picture.source == P3tTheme.Source.PREVIEW) "library.bg.themePreview" else null,
+            name = result.name,
+            xmb = xmbAssets(theme, dir),
+        )
+    }
+
+    /**
+     * The theme's XMB icons and sounds, taken out into a new folder for [keep] to move in with the
+     * rest. Null when it has none, or none that read.
+     */
+    private fun xmbAssets(theme: P3tTheme.Bytes, dir: File): File? {
+        val folder = File(dir, "${IMPORTED_PREFIX}xmb_${System.nanoTime().toString(16)}")
+        return try {
+            if (folder.mkdirs() && com.armsx2.ui.xmb.XmbThemeAssets.extract(theme, folder)) folder else null
+        } catch (_: Exception) {
+            null
+        }.also { if (it == null) folder.deleteRecursively() }
     }
 
     /**

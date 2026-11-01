@@ -26,6 +26,14 @@ import java.util.zip.Inflater
  *  - info holds "preview", a zlib-packed GIM image of the whole theme with its XMB icons drawn in.
  *    It is the only picture a dynamic theme has, so it is the fallback when the scene is not a
  *    slideshow.
+ *
+ * What a theme carries for the XMB itself, read by [assets] for XMB mode:
+ *  - icontable/icon: "id" (type 7, an offset into the id table, where a word precedes the name:
+ *    "icon_game", "icon_poweroff", "icon_display_setting") and "src", a zlib-packed GIM, 32-bit
+ *    RGBA (128x128 for most), with "size" (type 1) its unpacked size.
+ *  - setable/se: "id" ("se_cursor", "se_decide", "se_cancel", "se_optionmenu", "se_system_ok")
+ *    and "left" and "right", a VAG file each, as the firmware keeps its own system sounds.
+ *  - info's "icon": the theme's own icon, a zlib-packed GIM like the others.
  */
 object P3tTheme {
     /** Random access to the theme, so a large one never has to be read whole. */
@@ -53,6 +61,14 @@ object P3tTheme {
     class Anim(val offset: Long, val size: Long)
 
     /**
+     * An icon or system sound a theme carries for the XMB: [kind] "icon" or "se", its [id], and its
+     * data as (offset, size) in the file: one zlib-packed GIM for an icon, a VAG per channel (left,
+     * then right) for a sound. The theme's own icon is the icon "theme". [unpacked] is the size an
+     * icon says it inflates to, or 0.
+     */
+    class Asset(val kind: String, val id: String, val parts: List<Pair<Long, Int>>, val unpacked: Long)
+
+    /**
      * [picture] is null exactly when [failure] is set. [dynamic] marks an animated theme, and [anim]
      * is its scene when the reference to it is sound. [name] is the theme's own title, when it has
      * one ("Fallout NV Custom Dynamic").
@@ -63,8 +79,10 @@ object P3tTheme {
     private const val HEADER_BYTES = 56L
     private const val ELEMENT_BYTES = 28L
     private const val ATTRIBUTE_BYTES = 16L
+    private const val TYPE_INT = 1L
     private const val TYPE_STRING = 3L
     private const val TYPE_FILE = 6L
+    private const val TYPE_ID = 7L
 
     // Bounds on what a real theme holds, so a crafted size cannot make us allocate without limit.
     private const val MAX_TABLE_BYTES = 16 shl 20
@@ -74,6 +92,8 @@ object P3tTheme {
     private const val MAX_PREVIEW_SIDE = 4096
     private const val MAX_NAME_BYTES = 256
     private const val PROBE_BYTES = 256 shl 10
+    private const val MAX_ASSET_BYTES = 8 shl 20
+    private const val MAX_ICON_BYTES = 8 shl 20
 
     fun isTheme(head: ByteArray): Boolean = head.size >= 4 && be32(head, 0) == MAGIC
 
@@ -87,6 +107,90 @@ object P3tTheme {
         // Every read above is bounds-checked first. This is the backstop for a check that missed:
         // a bad theme is reported as damaged, never allowed to take the app down with it.
         Result(null, false, Failure.DAMAGED)
+    }
+
+    /** The icons and system sounds [src] carries for the XMB (see [Asset]); empty when it is damaged. */
+    fun assets(src: Bytes): List<Asset> = try {
+        parseAssets(src)
+    } catch (_: Damaged) {
+        emptyList()
+    } catch (_: IOException) {
+        emptyList()
+    } catch (_: RuntimeException) {
+        emptyList()
+    }
+
+    /** [asset]'s GIM, for an icon: inflated, and no larger than it says it is. Null when it will not. */
+    fun iconGim(src: Bytes, asset: Asset): ByteArray? = try {
+        val (offset, size) = asset.parts.first()
+        val cap = if (asset.unpacked in 1..MAX_ICON_BYTES.toLong()) asset.unpacked.toInt() else MAX_ICON_BYTES
+        inflate(src.read(offset, size), cap)
+    } catch (_: IOException) {
+        null
+    } catch (_: RuntimeException) {
+        null
+    }
+
+    private fun parseAssets(src: Bytes): List<Asset> {
+        if (src.size < HEADER_BYTES) return emptyList()
+        val header = src.read(0, HEADER_BYTES.toInt())
+        if (be32(header, 0) != MAGIC) return emptyList()
+        val tables = List(6) { i ->
+            val offset = be32(header, 8 + i * 8)
+            val size = be32(header, 12 + i * 8)
+            if (offset > src.size || size > src.size - offset) throw Damaged()
+            Table(offset, size)
+        }
+        val elementTable = tables[0]
+        val idTable = tables[1]
+        val stringTable = tables[2]
+        val fileTable = tables[5]
+        if (elementTable.size > MAX_TABLE_BYTES || idTable.size > MAX_TABLE_BYTES || stringTable.size > MAX_TABLE_BYTES) throw Damaged()
+        val elements = src.read(elementTable.offset, elementTable.size.toInt())
+        val ids = src.read(idTable.offset, idTable.size.toInt())
+        val strings = src.read(stringTable.offset, stringTable.size.toInt())
+
+        fun file(offset: Long, size: Long): Pair<Long, Int>? {
+            if (offset > fileTable.size || size > fileTable.size - offset || size > MAX_ASSET_BYTES || size < 4) return null
+            return (fileTable.offset + offset) to size.toInt()
+        }
+
+        val out = ArrayList<Asset>()
+        var pos = 0L
+        while (pos + ELEMENT_BYTES <= elements.size) {
+            val name = cString(strings, be32(elements, pos.toInt()))
+            val count = be32(elements, pos.toInt() + 4)
+            if (count > (elements.size - pos - ELEMENT_BYTES) / ATTRIBUTE_BYTES) throw Damaged()
+            if (name == "icon" || name == "se" || name == "info") {
+                var id: String? = null
+                var data: Pair<Long, Int>? = null
+                var left: Pair<Long, Int>? = null
+                var right: Pair<Long, Int>? = null
+                var unpacked = 0L
+                for (i in 0L until count) {
+                    val at = (pos + ELEMENT_BYTES + i * ATTRIBUTE_BYTES).toInt()
+                    val attribute = cString(strings, be32(elements, at))
+                    val type = be32(elements, at + 4)
+                    val a = be32(elements, at + 8)
+                    val b = be32(elements, at + 12)
+                    when {
+                        type == TYPE_ID && attribute == "id" -> id = cString(ids, a + 4)
+                        type == TYPE_FILE && attribute == "src" && name == "icon" -> data = file(a, b)
+                        type == TYPE_FILE && attribute == "icon" && name == "info" -> data = file(a, b)
+                        type == TYPE_FILE && attribute == "left" -> left = file(a, b)
+                        type == TYPE_FILE && attribute == "right" -> right = file(a, b)
+                        type == TYPE_INT && (attribute == "size" || attribute == "iconsize") -> unpacked = a
+                    }
+                }
+                when (name) {
+                    "icon" -> if (id != null && data != null) out.add(Asset("icon", id, listOf(data), unpacked))
+                    "info" -> data?.let { out.add(Asset("icon", "theme", listOf(it), unpacked)) }
+                    "se" -> if (id != null && left != null) out.add(Asset("se", id, listOfNotNull(left, right), 0L))
+                }
+            }
+            pos += ELEMENT_BYTES + count * ATTRIBUTE_BYTES
+        }
+        return out
     }
 
     /** Anything structurally wrong with the file. Thrown by every bounds check. */
