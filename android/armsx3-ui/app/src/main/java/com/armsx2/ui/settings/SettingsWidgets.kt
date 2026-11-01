@@ -585,8 +585,8 @@ internal fun Modifier.controllerFocusable(
                 // under controller nav, which is what sets `selected`; touch never does).
                 // Borders render identically on every driver.
                 Modifier
-                    .border(3.dp, focusBlue.copy(alpha = 0.30f), shape)
-                    .border(1.5.dp, focusBlue, shape)
+                    .border(3.dp, ringColor().copy(alpha = 0.30f), shape)
+                    .border(1.5.dp, ringColor(), shape)
             } else {
                 Modifier
             }
@@ -1458,3 +1458,6 @@ private fun xmbChoice(
         ),
     )
 }
+
+/** The selection ring: the app's blue, or white in XMB mode as the console marks what is selected. */
+private fun ringColor(): Color = if (com.armsx2.ui.xmb.XmbMode.active.value) Color.White else focusBlue

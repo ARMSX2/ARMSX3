@@ -1473,5 +1473,8 @@
  "xmb.saves.loadAsk": "هل تريد تحميل حالة الحفظ هذه؟",
  "xmb.avatar.use": "استخدام هذه الصورة الرمزية",
  "xmb.avatar.favorite": "إضافة إلى المفضلة",
- "xmb.avatar.unfavorite": "إزالة من المفضلة"
+ "xmb.avatar.unfavorite": "إزالة من المفضلة",
+ "xmb.settings.search.desc": "ابحث عن إعداد في هذه القائمة",
+ "xmb.core.rememberedNone": "لا يوجد شيء محفوظ هنا.",
+ "xmb.core.forgetAllAsk": "هل تريد نسيان كل الإعدادات المحفوظة هنا؟ سيعود كل إعداد إلى قيمته الافتراضية."
 }

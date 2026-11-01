@@ -65,6 +65,7 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
     // One collector per tab for as long as this list is up: the column is rebuilt as it recomposes,
     // and a tab's rows must keep landing in the collector its open list reads.
     val collectors = remember(game?.uri, inGame, on, off) { HashMap<SettingsCategory, XmbCollector>() }
+    val systemIcons = xmbSystemIcons()
     fun tab(category: SettingsCategory, title: String, icon: String, sub: String? = null): XmbNode {
         val i = XmbIcon("explore_category_sysconf", icon, "\u2699")
         // The patch and mod lists, and a game's details, are pictures and lists of their own, not rows
@@ -73,6 +74,7 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
             return XmbNode.Panel("settings.tab.${category.name}", title, i, sub) { _ -> XmbSettingsTabPanel(category, game) }
         }
         val collector = collectors.getOrPut(category) { XmbCollector(on, off, i) }
+        val search = xmbSearchNode("settings.tab.${category.name}") { collector.nodes }
         return XmbNode.Folder(
             key = "settings.tab.${category.name}",
             title = title,
@@ -84,7 +86,7 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
                     XmbSettingsTabHost(category, game)
                 }
             },
-        ) { collector.nodes }
+        ) { collector.nodes.let { rows -> if (rows.isEmpty()) rows else listOf(search) + rows } }
     }
 
     val performance = categoryTitle(SettingsCategory.Performance)
@@ -148,6 +150,7 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
         explanation("msg_update_explanation"),
     ) { UiNavigator.navigate(AppRoute.BiosManager) }
     val system = tab(SettingsCategory.General, sysconf("msg_console_setting", "xmb.set.system"), "tex_console", explanation("msg_console_setting_explanation"))
+    collectors[SettingsCategory.General]?.iconFor = systemIcons
     return listOf(
         update,
         gameSettings,
@@ -161,6 +164,93 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
         network,
         debug,
     )
+}
+
+/**
+ * Search, for a list of settings: typed on the pad keyboard, and what matches (in the list or the
+ * lists inside it, by name or by its line of explanation) opens as a list of its own.
+ */
+internal fun xmbSearchNode(key: String, rows: () -> List<XmbNode>): XmbNode.Action {
+    val title = I18n.get("xmb.core.search")
+    val icon = XmbIcon("explore_category_sysconf", "tex_sett", "\uD83D\uDD0D")
+    return XmbNode.Action("$key.search", title, icon, I18n.get("xmb.settings.search.desc")) {
+        XmbKeyboard.ask(title) { typed ->
+            val query = typed.trim()
+            if (query.isEmpty()) return@ask
+            val words = query.lowercase().split(' ').filter { it.isNotBlank() }
+            fun every(list: List<XmbNode>): List<XmbNode> = list.flatMap { n ->
+                if (n is XmbNode.Folder) every(n.children()) else listOf(n)
+            }
+            val hits = every(rows()).filter { n ->
+                if (n.key.endsWith(".search")) return@filter false
+                val hay = listOfNotNull(n.title, (n as? XmbNode.Setting)?.description, (n as? XmbNode.Action)?.subtitle).joinToString(" ").lowercase()
+                words.all { it in hay }
+            }
+            val c = XmbDialogs.target() ?: return@ask
+            if (hits.isEmpty()) {
+                c.tell(I18n.get("xmb.core.noResults").format(query), I18n.get("xmb.ok"))
+            } else {
+                val results = XmbNode.Folder("$key.results", "\u201C$query\u201D", icon, "${hits.size}") { hits }
+                XmbSounds.play(XmbSounds.Sfx.DECIDE)
+                c.levels.add(XmbController.Level(results, hits, 0))
+            }
+        }
+    }
+}
+
+/**
+ * System Settings' rows each with an icon for what they are (music, trophies, saved data, the
+ * theme...), not all the console's: by the row's name, or by its key where the name changes.
+ */
+@Composable
+private fun xmbSystemIcons(): (XmbNode) -> XmbIcon? {
+    val language = I18n.current
+    return remember(language) {
+        fun sys(name: String) = XmbIcon("explore_category_sysconf", name, "\u2699")
+        val theme = sys("tex_thema")
+        val music = sys("tex_music")
+        val sound = sys("tex_sound")
+        val power = sys("tex_power")
+        val display = sys("tex_display")
+        val security = sys("tex_security")
+        val update = sys("tex_update")
+        val words = sys("tex_chat")
+        val library = sys("tex_game")
+        val trophy = XmbIcon("explore_category_psn", "item_tex_trophy", "\uD83C\uDFC6")
+        val saved = XmbIcon("explore_category_photo", "ps3sd_tex_default", "\uD83D\uDCBE")
+        val folder = XmbIcon("explore_category_game", "item_tex_plain_folder", "\uD83D\uDCC2")
+        val export = XmbIcon("explore_category_video", "item_tex_upload", "\u2B06")
+        val logo = XmbIcon("explore_category_game", "item_tex_ps3logo", "\u25B6")
+        val byTitle = HashMap<String, XmbIcon>()
+        fun put(icon: XmbIcon, vararg keys: String) = keys.forEach { byTitle[I18n.get(it)] = icon }
+        put(theme, "app.theme", "app.bg.simple", "app.bg.flurry", "app.bg.saver", "app.bg.flurry.preset", "app.bg.flux.preset",
+            "app.barOpacity", "app.barColor", "app.bgDimming", "app.bgColor", "app.bgColor.rgb", "app.bgColor.monthly")
+        put(music, "app.libraryMusic", "app.libraryMusic.volume", "app.libraryMusic.choose", "app.libraryMusic.reset",
+            "app.pauseMusic", "app.pauseMusic.volume", "app.pauseMusic.choose", "app.pauseMusic.reset", "xmb.music.import")
+        put(sound, "app.menuSfx", "app.menuSfx.volume", "app.menuSfx.choose", "app.menuSfx.reset")
+        put(trophy, "app.trophySound", "app.trophySound.volume", "app.trophySound.choose", "app.trophySound.clear", "app.trophySound.test")
+        put(power, "app.batteryWarnings")
+        put(display, "secondScreen.label", "secondScreen.moveOsd", "app.launcherRotation")
+        put(security, "app.blockHome", "app.resetAll", "app.reset")
+        put(logo, "app.bootLogo", "app.bootLogo.choose", "app.bootLogo.reset")
+        put(words, "app.language", "app.keyboard.systemIme")
+        put(library, "app.library.search", "app.library.recents", "app.library.autoPlaylists", "games.overflow.gridNames",
+            "app.library.coverSize", "app.library.opacity", "app.toolbarPosition", "app.shareInstalled", "app.clearCache")
+        put(saved, "app.backup.export", "app.backup.import", "app.savedata.import", "app.savedata.importFolder", "app.savedata.manage")
+        put(folder, "app.gameFolders")
+        put(export, "app.frontendExport")
+        put(update, "perf.configDb.label", "perf.configDb.apply", "perf.configDb.remove")
+        val byKey = mapOf(
+            "xmb.language" to words,
+            "xmb.gameFolders" to folder,
+            "xmb.frontendExport" to export,
+            "xmb.configDb.download" to update,
+            "xmb.configDb.apply" to update,
+            "xmb.configDb.remove" to update,
+        )
+        val fn: (XmbNode) -> XmbIcon? = { n -> byKey[n.key] ?: byTitle[n.title] }
+        fn
+    }
 }
 
 /** Tabs that are not rows of settings, shown as the app's own screens in a panel. */
@@ -437,6 +527,28 @@ object XmbCoreSettings {
     /** What each node holds now, by path, so a picker's result shows at once. */
     private val values = mutableStateMapOf<String, String>()
 
+    /** What this list's tier remembers (CoreSettingOverrides), by path: the nodes Forget is for. */
+    private val remembered = mutableStateOf<Map<String, String>>(emptyMap())
+
+    /**
+     * What each node holds on a stock install, as the All Core Settings screen works it out (the
+     * curated push's value where a curated field owns the node, the core's default elsewhere), so
+     * both mark the same rows Not default. Null, and nothing marked, until it has been worked out.
+     */
+    private val stock = mutableStateOf<Map<String, String>?>(null)
+    private var stockAsked = false
+
+    private fun askStock() {
+        if (stockAsked) return
+        stockAsked = true
+        kotlin.concurrent.thread(name = "xmb-core-stock", isDaemon = true) {
+            val found = runCatching {
+                com.armsx2.ui.settings.StockSettings.coreWrites().mapValues { com.armsx2.ui.settings.decodeJson(it.value) }
+            }.getOrDefault(emptyMap())
+            android.os.Handler(android.os.Looper.getMainLooper()).post { stock.value = found }
+        }
+    }
+
     private fun load(): List<CoreSetting> = runCatching {
         val raw = ARMSX3.instance.settingsGet("")
         if (raw.isBlank()) emptyList() else buildList { flatten(JSONObject(raw), "", "", this) }
@@ -445,6 +557,32 @@ object XmbCoreSettings {
     fun sections(scope: SettingsScope, serial: String?): List<XmbNode> {
         val all = load()
         all.forEach { values[it.path] = it.value }
+        askStock()
+        remembered.value = runCatching { CoreSettingOverrides.load(scope, serial) }.getOrDefault(emptyMap())
+        val icon = XmbIcon("explore_category_sysconf", "tex_sett", "\u2699")
+        // The remembered ones on their own, as the screen's "Show only these": each can be forgotten,
+        // or all of them at once.
+        val rememberedFolder = XmbNode.Folder(
+            "core.remembered",
+            I18n.get("core.settings.overrideCount"),
+            icon,
+            I18n.get(if (scope == SettingsScope.Game) "core.settings.scope.game" else "core.settings.scope.global"),
+            live = true,
+        ) {
+            val now = remembered.value
+            buildList {
+                if (now.isEmpty()) {
+                    add(XmbNode.Action("core.remembered.none", I18n.get("xmb.core.rememberedNone"), icon) {})
+                } else {
+                    add(XmbNode.Action("core.remembered.forgetAll", I18n.get("core.settings.reset"), icon, "${now.size}") {
+                        XmbDialogs.target()?.ask(I18n.get("xmb.core.forgetAllAsk"), I18n.get("core.settings.reset"), I18n.get("action.cancel"), focusNo = true) {
+                            forget(all.filter { it.path in now }, scope, serial, everything = true)
+                        }
+                    })
+                    all.filter { it.path in now }.forEach { s -> node(s, scope, serial)?.let(::add) }
+                }
+            }
+        }
         // Search first: typed on the pad keyboard, the matches open as a list of their own.
         val searchTitle = I18n.get("xmb.core.search")
         val search = XmbNode.Action("core.search", searchTitle, XmbIcon("explore_category_sysconf", "tex_sett", "\uD83D\uDD0D"), I18n.get("xmb.core.search.desc")) {
@@ -466,7 +604,7 @@ object XmbCoreSettings {
                 }
             }
         }
-        return listOf(search) + all.groupBy { it.section }.map { (section, settings) ->
+        return listOf(search, rememberedFolder) + all.groupBy { it.section }.map { (section, settings) ->
             XmbNode.Folder(
                 key = "core.$section",
                 title = section,
@@ -499,23 +637,55 @@ object XmbCoreSettings {
         runCatching { ARMSX3.instance.settingsSet(s.path, encoded) }
         runCatching { CoreSettingOverrides.record(scope, serial, s.path, encoded) }
         android.util.Log.i("ARMSX3-Override", "record [$scope ${serial.orEmpty()}] ${s.path} = $encoded (XMB)")
+        remembered.value = remembered.value + (s.path to encoded)
         // What the core actually kept (it can clamp), else what was sent.
         val reread = runCatching { ARMSX3.instance.settingsGet(s.path) }.getOrNull()
         val kept = reread?.let { raw2 -> runCatching { JSONObject(raw2).opt("value")?.toString() }.getOrNull() }
         values[s.path] = kept ?: raw
     }
 
+    /**
+     * Forget what this tier remembers for [settings] and put them back, as the screen's Forget and
+     * Forget all do: the record dropped, a curated field holding the node reset, the core's default
+     * written, and the curated settings pushed again over the nodes they own.
+     */
+    private fun forget(settings: List<CoreSetting>, scope: SettingsScope, serial: String?, everything: Boolean = false) {
+        val paths = settings.map { it.path }
+        runCatching {
+            if (everything) CoreSettingOverrides.clear(scope, serial) else CoreSettingOverrides.forget(scope, serial, *paths.toTypedArray())
+        }
+        val reset = runCatching { com.armsx2.config.ConfigStore.resetFieldsWriting(scope, serial, paths) }.getOrDefault(emptySet())
+        android.util.Log.i("ARMSX3-Override", "forget [$scope ${serial.orEmpty()}] $paths -> reset fields $reset (XMB)")
+        if (reset.isNotEmpty()) com.armsx2.ui.InGameOverlay.reloadSettings()
+        settings.forEach { runCatching { ARMSX3.instance.settingsSet(it.path, encode(it.type, it.default)) } }
+        runCatching {
+            com.armsx2.config.ConfigStore.resolveForGame(com.armsx2.runtime.MainActivityRuntime.currentGame.value?.settingsKey).applyTo()
+        }
+        settings.forEach { s ->
+            val reread = runCatching { ARMSX3.instance.settingsGet(s.path) }.getOrNull()
+            values[s.path] = reread?.let { r -> runCatching { JSONObject(r).opt("value")?.toString() }.getOrNull() } ?: s.default
+        }
+        remembered.value = runCatching { CoreSettingOverrides.load(scope, serial) }.getOrDefault(emptyMap())
+    }
+
     private fun node(s: CoreSetting, scope: SettingsScope, serial: String?): XmbNode? {
         val icon = XmbIcon()
-        val changed = { !sameValue(s.type, current(s), s.default) }
+        // Not default as the screen measures it (see stock), and Remembered here beside the value.
+        val changed = { stock.value?.let { st -> !sameValue(s.type, current(s), st[s.path] ?: s.default) } ?: false }
+        val rememberedWord = I18n.get("core.settings.overridden")
+        fun shown(text: String) = if (s.path in remembered.value) "$text   $rememberedWord" else text
+        // Forget, or for a node only a curated field holds off its default, the screen's Reset: both
+        // put the node back the same way.
+        val forgetOption = XmbOption(I18n.get("core.settings.clearOne")) { forget(listOf(s), scope, serial) }
         return when {
             s.type == "bool" -> XmbNode.Setting(
                 key = s.path,
                 title = s.label,
                 icon = icon,
                 editor = XmbEditor.Toggle(get = { current(s) == "true" }, set = { write(s, it.toString(), scope, serial) }),
-                value = { I18n.get(if (current(s) == "true") "xmb.on" else "xmb.off") },
+                value = { shown(I18n.get(if (current(s) == "true") "xmb.on" else "xmb.off")) },
                 changed = changed,
+                options = listOf(forgetOption),
             )
             s.variants.isNotEmpty() -> XmbNode.Setting(
                 key = s.path,
@@ -526,8 +696,9 @@ object XmbCoreSettings {
                     get = { s.variants.indexOf(current(s)).coerceAtLeast(0) },
                     set = { i -> s.variants.getOrNull(i)?.let { write(s, it, scope, serial) } },
                 ),
-                value = { current(s) },
+                value = { shown(current(s)) },
                 changed = changed,
+                options = listOf(forgetOption),
             )
             (s.type == "int" || s.type == "uint") && s.min != null && s.max != null && s.max > s.min -> {
                 val span = (s.max - s.min).toFloat()
@@ -545,8 +716,9 @@ object XmbCoreSettings {
                         set = { v -> write(s, v.toLong().toString(), scope, serial) },
                         format = { it.toLong().toString() },
                     ),
-                    value = { current(s) },
+                    value = { shown(current(s)) },
                     changed = changed,
+                    options = listOf(forgetOption),
                 )
             }
             // Text, sets and unbounded numbers: shown, and edited on the full screen.

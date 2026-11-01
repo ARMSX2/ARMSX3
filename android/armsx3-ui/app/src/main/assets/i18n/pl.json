@@ -1473,5 +1473,8 @@
  "xmb.saves.loadAsk": "Wczytać ten stan zapisu?",
  "xmb.avatar.use": "Użyj tego awatara",
  "xmb.avatar.favorite": "Dodaj do ulubionych",
- "xmb.avatar.unfavorite": "Usuń z ulubionych"
+ "xmb.avatar.unfavorite": "Usuń z ulubionych",
+ "xmb.settings.search.desc": "Znajdź ustawienie na tej liście",
+ "xmb.core.rememberedNone": "Nic tu nie zapamiętano.",
+ "xmb.core.forgetAllAsk": "Zapomnieć wszystkie zapamiętane tu ustawienia? Każde wróci do wartości domyślnej."
 }

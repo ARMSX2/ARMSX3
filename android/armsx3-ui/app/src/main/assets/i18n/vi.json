@@ -1473,5 +1473,8 @@
  "xmb.saves.loadAsk": "Tải trạng thái lưu này?",
  "xmb.avatar.use": "Dùng ảnh đại diện này",
  "xmb.avatar.favorite": "Thêm vào mục yêu thích",
- "xmb.avatar.unfavorite": "Xóa khỏi mục yêu thích"
+ "xmb.avatar.unfavorite": "Xóa khỏi mục yêu thích",
+ "xmb.settings.search.desc": "Tìm một cài đặt trong danh sách này",
+ "xmb.core.rememberedNone": "Không có gì được ghi nhớ ở đây.",
+ "xmb.core.forgetAllAsk": "Quên mọi cài đặt được ghi nhớ ở đây? Mỗi cài đặt sẽ trở về mặc định."
 }

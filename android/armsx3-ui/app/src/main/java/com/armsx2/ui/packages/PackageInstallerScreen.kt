@@ -446,8 +446,13 @@ fun PackageInstallerScreen(onBack: () -> Unit) {
     var tab by remember { mutableStateOf(0) }
     var showBrowser by remember { mutableStateOf(false) }
     var progressId by remember { mutableStateOf<Long?>(null) }
-    var installed by remember { mutableStateOf(readInstalled()) }
-    var licences by remember { mutableStateOf(readLicences()) }
+    // Read off the main thread: a stat and a PARAM.SFO per installed title is a stall on opening.
+    var installed by remember { mutableStateOf<List<InstalledTitle>>(emptyList()) }
+    var licences by remember { mutableStateOf<List<java.io.File>>(emptyList()) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        installed = withContext(Dispatchers.IO) { readInstalled() }
+        licences = withContext(Dispatchers.IO) { readLicences() }
+    }
     var confirmRemove by remember { mutableStateOf<InstalledTitle?>(null) }
     var confirmRemoveLicence by remember { mutableStateOf<java.io.File?>(null) }
 
@@ -1285,11 +1290,26 @@ private fun XmbPackageLists(
                     }
                 }
         }
+        // The title updates and add-ons are looked for once their list is opened, not on the way in:
+        // the updates ask Sony's server about every game in the library.
+        val open = com.armsx2.ui.xmb.XmbHomeState.controller.levels.map { it.node.key }
         XmbCollectedSection(collector, "pkg.updates", str("packages.tab.updates"), str("xmb.packages.updates.desc")) {
-            GameUpdatesTab(busy = busy, onInstall = onInstallUpdate)
+            if ("pkg.updates" in open) {
+                GameUpdatesTab(busy = busy, onInstall = onInstallUpdate)
+            } else {
+                LocalXmbCollector.current?.let { child ->
+                    XmbCollected(child, XmbNode.Action("pkg.updates.wait", str("packages.updates.checking"), packageIcon) {})
+                }
+            }
         }
         XmbCollectedSection(collector, "pkg.dlc", str("packages.tab.dlc"), str("xmb.packages.dlc.desc")) {
-            DlcTab()
+            if ("pkg.dlc" in open) {
+                DlcTab()
+            } else {
+                LocalXmbCollector.current?.let { child ->
+                    XmbCollected(child, XmbNode.Action("pkg.dlc.wait", "\u2026", packageIcon) {})
+                }
+            }
         }
     }
 }

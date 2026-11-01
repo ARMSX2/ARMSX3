@@ -1473,5 +1473,8 @@
  "xmb.saves.loadAsk": "โหลดเซฟสเตตนี้ไหม",
  "xmb.avatar.use": "ใช้อวตารนี้",
  "xmb.avatar.favorite": "เพิ่มในรายการโปรด",
- "xmb.avatar.unfavorite": "นำออกจากรายการโปรด"
+ "xmb.avatar.unfavorite": "นำออกจากรายการโปรด",
+ "xmb.settings.search.desc": "ค้นหาการตั้งค่าในรายการนี้",
+ "xmb.core.rememberedNone": "ไม่มีการตั้งค่าที่จดจำไว้ที่นี่",
+ "xmb.core.forgetAllAsk": "ลืมการตั้งค่าทั้งหมดที่จดจำไว้ที่นี่ไหม แต่ละรายการจะกลับเป็นค่าเริ่มต้น"
 }

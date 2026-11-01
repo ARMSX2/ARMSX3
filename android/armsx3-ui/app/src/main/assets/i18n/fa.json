@@ -1473,5 +1473,8 @@
  "xmb.saves.loadAsk": "این وضعیت ذخیره بارگذاری شود؟",
  "xmb.avatar.use": "استفاده از این آواتار",
  "xmb.avatar.favorite": "افزودن به برگزیده‌ها",
- "xmb.avatar.unfavorite": "حذف از برگزیده‌ها"
+ "xmb.avatar.unfavorite": "حذف از برگزیده‌ها",
+ "xmb.settings.search.desc": "یافتن یک تنظیم در این فهرست",
+ "xmb.core.rememberedNone": "چیزی این‌جا به خاطر سپرده نشده است.",
+ "xmb.core.forgetAllAsk": "همهٔ تنظیم‌هایی که این‌جا به خاطر سپرده شده‌اند فراموش شوند؟ هر کدام به پیش‌فرض خود برمی‌گردد."
 }

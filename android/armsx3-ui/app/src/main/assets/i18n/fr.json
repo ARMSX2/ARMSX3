@@ -1473,5 +1473,8 @@
  "xmb.saves.loadAsk": "Charger cette sauvegarde d'état ?",
  "xmb.avatar.use": "Utiliser cet avatar",
  "xmb.avatar.favorite": "Ajouter aux favoris",
- "xmb.avatar.unfavorite": "Retirer des favoris"
+ "xmb.avatar.unfavorite": "Retirer des favoris",
+ "xmb.settings.search.desc": "Trouver un réglage dans cette liste",
+ "xmb.core.rememberedNone": "Rien n'est mémorisé ici.",
+ "xmb.core.forgetAllAsk": "Oublier tous les réglages mémorisés ici ? Chacun reprend sa valeur par défaut."
 }

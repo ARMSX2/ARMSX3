@@ -119,25 +119,8 @@ fun UpdaterEntry() {
                     state = result
                     val xmb = com.armsx2.ui.xmb.XmbDialogs.target() ?: return@launch
                     when (result) {
-                        is UpdateState.Available -> com.armsx2.ui.xmb.XmbDialogs.ask(
-                            xmb,
-                            "$available  ${result.version}",
-                            result.notes.ifBlank { notesUnavailable }.take(600),
-                            install,
-                            cancel,
-                            onConfirm = {
-                                scope.launch {
-                                    try {
-                                        downloadAndInstall(context, result) { pct -> state = UpdateState.Downloading(pct) }
-                                        state = UpdateState.Idle
-                                    } catch (e: Exception) {
-                                        state = UpdateState.Error("$downloadFailedPrefix: ${e.message}")
-                                        xmb.tell((state as UpdateState.Error).msg, ok)
-                                    }
-                                }
-                            },
-                            onDismiss = { state = UpdateState.Idle },
-                        )
+                        // The new version as an XMB panel of its notes, pictures too (XmbUpdateOffer).
+                        is UpdateState.Available -> offerInXmb(scope, context, result, downloadFailedPrefix) { state = it }
                         is UpdateState.UpToDate -> xmb.tell("$upToDate\n$current", ok)
                         is UpdateState.Error -> xmb.tell(result.msg, ok)
                         else -> {}
@@ -278,6 +261,14 @@ fun AutoUpdateGate() {
     }
 
     val s = state
+    // In XMB mode the offer is an XMB panel of the notes, their pictures too, not this dialog.
+    if (com.armsx2.ui.xmb.XmbMode.active.value && s is UpdateState.Available) {
+        LaunchedEffect(s) {
+            offerInXmb(scope, context, s, str0("update.downloadFailed")) { }
+            state = UpdateState.Idle
+        }
+        return
+    }
     if (s is UpdateState.Available || s is UpdateState.Downloading) {
         val avail = s as? UpdateState.Available
         AlertDialog(
@@ -322,6 +313,42 @@ fun AutoUpdateGate() {
         )
     }
 }
+
+/**
+ * [offer] in the XMB (XmbUpdateOffer): its notes with their pictures, Download and Install with
+ * the download's progress under it, and Later. [onState] follows the download, for a caller that
+ * shows it too.
+ */
+private fun offerInXmb(
+    scope: kotlinx.coroutines.CoroutineScope,
+    context: Context,
+    offer: UpdateState.Available,
+    downloadFailedPrefix: String,
+    onState: (UpdateState) -> Unit,
+) {
+    com.armsx2.ui.xmb.XmbUpdateOffer.show(
+        com.armsx2.ui.xmb.XmbUpdateOffer.Offer(offer.version, offer.notes) {
+            scope.launch {
+                com.armsx2.ui.xmb.XmbUpdateOffer.error.value = null
+                try {
+                    downloadAndInstall(context, offer) { pct ->
+                        com.armsx2.ui.xmb.XmbUpdateOffer.progress.value = pct
+                        onState(UpdateState.Downloading(pct))
+                    }
+                    onState(UpdateState.Idle)
+                } catch (e: Exception) {
+                    val message = "$downloadFailedPrefix: ${e.message}"
+                    com.armsx2.ui.xmb.XmbUpdateOffer.error.value = message
+                    onState(UpdateState.Error(message))
+                } finally {
+                    com.armsx2.ui.xmb.XmbUpdateOffer.progress.value = null
+                }
+            }
+        },
+    )
+}
+
+private fun str0(key: String) = com.armsx2.i18n.I18n.get(key)
 
 private suspend fun checkForUpdate(checkFailedPrefix: String): UpdateState = withContext(Dispatchers.IO) {
     try {

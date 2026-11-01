@@ -1,6 +1,11 @@
 package com.armsx2.ui.xmb
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -76,7 +81,8 @@ fun xmbNewsNode(): XmbNode {
     val none = str("news.unavailable")
     val reader: @Composable () -> Unit = {
         LaunchedEffect(Unit) {
-            if (XmbNews.items.value == null) {
+            // Again each time it is opened while it has nothing: a failed fetch is not kept for the run.
+            if (XmbNews.items.value.isNullOrEmpty()) {
                 XmbNews.items.value = withContext(Dispatchers.IO) {
                     runCatching { News.fetch(context, false)?.items }.getOrNull().orEmpty()
                 }
@@ -91,8 +97,10 @@ fun xmbNewsNode(): XmbNode {
             else -> items.map { item ->
                 val heading = listOf(item.tag, item.title).filter { it.isNotBlank() }.distinct().joinToString("  ")
                 val text = item.blocks.filterIsInstance<News.Block.Text>().joinToString("\n\n") { it.text }.ifBlank { item.notes }
+                // The notes as written, their pictures too.
+                val blocks = item.blocks.ifEmpty { listOf(News.Block.Text(text)) }
                 XmbNode.Panel("news.${item.tag}", heading, icon, item.published.take(10)) { _ ->
-                    XmbTextPanel(paragraphsOf(text))
+                    XmbBlocksPanel(blocks)
                 }
             }
         }
@@ -144,5 +152,152 @@ fun xmbAboutNode(markIcon: XmbIcon): XmbNode {
             XmbNode.Action("about.rpcs3", rpcs3Title, info, rpcs3Desc) { openExternalUrl(context, "https://github.com/RPCS3/rpcs3") },
             XmbNode.Folder("about.licenses", licensesTitle, info, licensesDesc) { licenses },
         )
+    }
+}
+
+/**
+ * Notes to read in an XMB panel, text and pictures as written: paragraphs in the XMB's font, and
+ * each picture the width of the panel at its own shape. [top] comes before them (an offer's
+ * buttons), and the pad starts on [first]. Up and Down go a paragraph or a picture at a time.
+ */
+@Composable
+fun XmbBlocksPanel(blocks: List<News.Block>, first: String = "xmb.text.0", top: (@Composable () -> Unit)? = null) {
+    val font = rememberXmbFont()
+    val scroll = rememberScrollState()
+    com.armsx2.ui.settings.ControllerAutoScroll(scroll)
+    LaunchedEffect(blocks, first) {
+        var tries = 0
+        while (!com.armsx2.ui.settings.SettingsControllerNav.selectById(first) && tries++ < 10) {
+            androidx.compose.runtime.withFrameNanos {}
+        }
+    }
+    val style = TextStyle(fontFamily = font, fontSize = 17.sp, lineHeight = 24.sp, color = Color.White.copy(alpha = 0.92f))
+    Column(Modifier.fillMaxSize().verticalScroll(scroll).padding(horizontal = 24.dp, vertical = 8.dp)) {
+        top?.invoke()
+        var n = 0
+        blocks.forEach { block ->
+            when (block) {
+                is News.Block.Text -> paragraphsOf(block.text).forEach { p ->
+                    Text(
+                        p,
+                        style = style,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .controllerFocusable("xmb.text.${n++}", ring = false)
+                            .padding(vertical = 5.dp),
+                    )
+                }
+                is News.Block.Image -> coil.compose.AsyncImage(
+                    model = block.url,
+                    contentDescription = null,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp)
+                        .aspectRatio(block.aspectRatio)
+                        .controllerFocusable("xmb.text.${n++}", ring = false),
+                )
+            }
+        }
+        Spacer(Modifier.height(80.dp))
+    }
+}
+
+/**
+ * A new ARMSX3, offered in the XMB: a panel of its notes (their pictures too) under Download and
+ * Install and Later, with the download's progress. From the check on launch, or Check for Updates.
+ */
+object XmbUpdateOffer {
+    class Offer(val version: String, val notes: String, val install: () -> Unit)
+
+    val offer = mutableStateOf<Offer?>(null)
+
+    /** The download, 0 to 100, while it runs. */
+    val progress = mutableStateOf<Int?>(null)
+
+    /** Why the download stopped, when it did. */
+    val error = mutableStateOf<String?>(null)
+
+    /** Show [o] over the XMB that is up, at home or over a game. */
+    fun show(o: Offer) {
+        offer.value = o
+        progress.value = null
+        error.value = null
+        val c = XmbDialogs.target() ?: XmbHomeState.controller
+        c.dialog = null
+        c.panel = XmbNode.Panel(
+            "update.offer",
+            com.armsx2.i18n.I18n.get("update.available") + "  " + o.version,
+            XmbIcon("explore_category_sysconf", "tex_update", "\u27F3"),
+        ) { close -> XmbUpdatePanel(close) }
+    }
+}
+
+@Composable
+private fun XmbUpdatePanel(close: () -> Unit) {
+    val o = XmbUpdateOffer.offer.value ?: return
+    val pct = XmbUpdateOffer.progress.value
+    val failed = XmbUpdateOffer.error.value
+    val font = rememberXmbFont()
+    val none = str("update.notesUnavailable")
+    val blocks = androidx.compose.runtime.remember(o) { News.blocksFrom(o.notes).ifEmpty { listOf(News.Block.Text(none)) } }
+    val installLabel = str("update.install")
+    val downloading = str("update.downloading")
+    val later = str("update.later")
+    val installed = str("update.currentVersion")
+    XmbBlocksPanel(blocks, first = "update.install") {
+        Text(
+            "$installed: ${com.armsx2.BuildConfig.VERSION_NAME}   \u2192   ${o.version}",
+            style = TextStyle(fontFamily = font, fontSize = 18.sp, color = Color.White),
+            modifier = Modifier.padding(vertical = 6.dp),
+        )
+        androidx.compose.foundation.layout.Row(
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(vertical = 10.dp),
+        ) {
+            XmbPanelButton("update.install", if (pct != null) "$downloading $pct%" else installLabel, font) {
+                if (pct == null) o.install()
+            }
+            XmbPanelButton("update.later", later, font) { close() }
+        }
+        if (pct != null) {
+            androidx.compose.foundation.layout.Box(
+                Modifier
+                    .padding(vertical = 6.dp)
+                    .fillMaxWidth(0.6f)
+                    .height(6.dp)
+                    .background(Color.White.copy(alpha = 0.22f), androidx.compose.foundation.shape.RoundedCornerShape(50)),
+            ) {
+                androidx.compose.foundation.layout.Box(
+                    Modifier
+                        .fillMaxWidth(pct / 100f)
+                        .fillMaxHeight()
+                        .background(Color.White, androidx.compose.foundation.shape.RoundedCornerShape(50)),
+                )
+            }
+        }
+        failed?.let {
+            Text(it, style = TextStyle(fontFamily = font, fontSize = 15.sp, color = Color(0xFFFF8A80)), modifier = Modifier.padding(vertical = 6.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+/** A button in an XMB panel: glass with a light edge, in the XMB's font. */
+@Composable
+internal fun XmbPanelButton(id: String, label: String, font: androidx.compose.ui.text.font.FontFamily, onClick: () -> Unit) {
+    val shape = androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+    androidx.compose.foundation.layout.Box(
+        Modifier
+            .background(
+                androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.White.copy(alpha = 0.22f), Color.White.copy(alpha = 0.08f))),
+                shape,
+            )
+            .border(1.dp, Color.White.copy(alpha = 0.55f), shape)
+            .clickable(onClick = onClick)
+            .controllerFocusable(id, shape, onConfirm = onClick)
+            .padding(horizontal = 22.dp, vertical = 10.dp),
+    ) {
+        Text(label, style = TextStyle(fontFamily = font, fontSize = 17.sp, color = Color.White))
     }
 }

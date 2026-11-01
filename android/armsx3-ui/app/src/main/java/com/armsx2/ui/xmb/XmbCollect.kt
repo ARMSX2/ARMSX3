@@ -51,9 +51,13 @@ class XmbCollector(
     private val entries = mutableStateMapOf<Any, Entry>()
     private var next = 0L
 
+    /** An icon of its own for a row, where the list gives its rows one by what each is. */
+    var iconFor: ((XmbNode) -> XmbIcon?)? = null
+
     fun put(id: Any, node: XmbNode) {
         val old = entries[id]
-        entries[id] = Entry(node, old?.y ?: Float.MAX_VALUE, old?.order ?: next++)
+        val shown = iconFor?.invoke(node)?.let { node.withIcon(it) } ?: node
+        entries[id] = Entry(shown, old?.y ?: Float.MAX_VALUE, old?.order ?: next++)
     }
 
     fun place(id: Any, y: Float) {
@@ -66,14 +70,21 @@ class XmbCollector(
     }
 
     /** A collector for a section inside this one. */
-    fun child() = XmbCollector(on, off, icon)
+    fun child() = XmbCollector(on, off, icon).also { it.iconFor = iconFor }
 
-    /** The rows in the tab's order; a section with nothing in it is left out. */
-    val nodes: List<XmbNode>
-        get() = entries.values
+    /**
+     * The rows in the tab's order; a section with nothing in it is left out. Worked out again only
+     * when a row (or a section's rows) changes: the open lists read this on every redraw, and a
+     * sort through every section below on each read slowed the whole XMB down.
+     */
+    private val ordered = androidx.compose.runtime.derivedStateOf {
+        entries.values
             .sortedWith(compareBy<Entry>({ it.y }, { it.order }))
             .map { it.node }
             .filter { it !is XmbNode.Folder || !it.live || it.children().isNotEmpty() }
+    }
+
+    val nodes: List<XmbNode> get() = ordered.value
 }
 
 /** A row of a hidden tab: [node] handed to the XMB in this row's place. */

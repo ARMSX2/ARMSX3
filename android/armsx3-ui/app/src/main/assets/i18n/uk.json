@@ -1473,5 +1473,8 @@
  "xmb.saves.loadAsk": "Завантажити цей збережений стан?",
  "xmb.avatar.use": "Використати цей аватар",
  "xmb.avatar.favorite": "Додати до вибраного",
- "xmb.avatar.unfavorite": "Вилучити з вибраного"
+ "xmb.avatar.unfavorite": "Вилучити з вибраного",
+ "xmb.settings.search.desc": "Знайти налаштування в цьому списку",
+ "xmb.core.rememberedNone": "Тут нічого не запам'ятовано.",
+ "xmb.core.forgetAllAsk": "Забути всі запам'ятовані тут налаштування? Кожне повернеться до типового значення."
 }

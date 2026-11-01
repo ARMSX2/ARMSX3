@@ -766,10 +766,19 @@ private fun XmbUpdateList(
         } else null
     }
 
-    // Each game's own picture where it is installed; looked up once for the list, not on each redraw.
-    val icons = remember(rows.map { it.serial }.toSet()) {
-        rows.associate { row -> row.serial to Ps3Sfo.installDir(row.serial)?.let { File(it, "ICON0.PNG") }?.takeIf { it.isFile } }
+    // Each game's own picture where it is installed, and whether what is installed is an update
+    // (which can be taken off): read off the main thread, once for each change to what is installed.
+    val local by androidx.compose.runtime.produceState(
+        emptyMap<String, File?>() to emptySet<String>(),
+        rows.map { it.serial to it.installed },
+    ) {
+        value = withContext(Dispatchers.IO) {
+            rows.associate { row -> row.serial to Ps3Sfo.installDir(row.serial)?.let { File(it, "ICON0.PNG") }?.takeIf { it.isFile } } to
+                rows.filter { it.installed != null && Ps3Sfo.installedIsUpdate(it.serial) }.map { it.serial }.toSet()
+        }
     }
+    val icons = local.first
+    val updates = local.second
 
     Column {
         val wire = fetching
@@ -826,7 +835,7 @@ private fun XmbUpdateList(
                                 })
                             }
                         }
-                        if (row.installed != null && Ps3Sfo.installedIsUpdate(row.serial)) {
+                        if (row.installed != null && row.serial in updates) {
                             add(com.armsx2.ui.xmb.XmbOption(str("packages.updates.removeUpdate")) {
                                 ask(str("xmb.packages.removeUpdateAsk"), str("packages.updates.removeUpdate")) { onRemove(row) }
                             })

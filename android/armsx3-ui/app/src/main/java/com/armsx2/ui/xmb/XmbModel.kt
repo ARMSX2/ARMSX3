@@ -31,6 +31,8 @@ class XmbIcon(
     val shadow: Boolean = true,
     /** A second picture in the corner: the cover of the game a friend is playing, say. */
     val inset: Any? = null,
+    /** A picture read when the icon is drawn, for one that arrives later (an avatar being decoded). */
+    val picture: (() -> androidx.compose.ui.graphics.ImageBitmap?)? = null,
 )
 
 /** A pick in an options panel (Triangle) or a choice in a setting. */
@@ -133,6 +135,15 @@ sealed class XmbNode(val key: String, val title: String, val icon: XmbIcon) {
     ) : XmbNode(game.uri.toString(), title, icon) {
         override val subtitle: String? get() = sub
     }
+}
+
+/** The same item under another icon. */
+internal fun XmbNode.withIcon(icon: XmbIcon): XmbNode = when (this) {
+    is XmbNode.Action -> XmbNode.Action(key, title, icon, subtitle, options, meter, onConfirm)
+    is XmbNode.Folder -> XmbNode.Folder(key, title, icon, subtitle, live, host, aside, children)
+    is XmbNode.Panel -> XmbNode.Panel(key, title, icon, subtitle, content)
+    is XmbNode.Setting -> XmbNode.Setting(key, title, icon, editor, value, description, changed, options)
+    is XmbNode.Game -> this
 }
 
 class XmbColumn(

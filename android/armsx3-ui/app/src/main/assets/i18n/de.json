@@ -1473,5 +1473,8 @@
  "xmb.saves.loadAsk": "Diesen Speicherstand laden?",
  "xmb.avatar.use": "Diesen Avatar verwenden",
  "xmb.avatar.favorite": "Zu Favoriten hinzufügen",
- "xmb.avatar.unfavorite": "Aus Favoriten entfernen"
+ "xmb.avatar.unfavorite": "Aus Favoriten entfernen",
+ "xmb.settings.search.desc": "Eine Einstellung in dieser Liste finden",
+ "xmb.core.rememberedNone": "Hier ist nichts gespeichert.",
+ "xmb.core.forgetAllAsk": "Alle hier gespeicherten Einstellungen vergessen? Jede kehrt zu ihrem Standard zurück."
 }

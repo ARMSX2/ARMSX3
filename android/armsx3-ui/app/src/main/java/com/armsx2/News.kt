@@ -162,7 +162,7 @@ object News {
     private fun attribute(tag: String, name: String): String? =
         Regex("\\b$name\\s*=\\s*[\"']([^\"']*)[\"']", RegexOption.IGNORE_CASE).find(tag)?.groupValues?.get(1)
 
-    private fun blocksFrom(raw: String): List<Block> {
+    internal fun blocksFrom(raw: String): List<Block> {
         val images = (HTML_IMAGE.findAll(raw) + MD_IMAGE.findAll(raw)).sortedBy { it.range.first }
         val blocks = mutableListOf<Block>()
         var pos = 0

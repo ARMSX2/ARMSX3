@@ -1472,5 +1472,8 @@
  "xmb.saves.loadAsk": "Загрузить это сохранённое состояние?",
  "xmb.avatar.use": "Использовать этот аватар",
  "xmb.avatar.favorite": "Добавить в избранное",
- "xmb.avatar.unfavorite": "Удалить из избранного"
+ "xmb.avatar.unfavorite": "Удалить из избранного",
+ "xmb.settings.search.desc": "Найти настройку в этом списке",
+ "xmb.core.rememberedNone": "Здесь ничего не запомнено.",
+ "xmb.core.forgetAllAsk": "Забыть все запомненные здесь настройки? Каждая вернётся к значению по умолчанию."
 }

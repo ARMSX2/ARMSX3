@@ -1473,5 +1473,8 @@
  "xmb.saves.loadAsk": "このステートセーブをロードしますか？",
  "xmb.avatar.use": "このアバターを使う",
  "xmb.avatar.favorite": "お気に入りに追加",
- "xmb.avatar.unfavorite": "お気に入りから削除"
+ "xmb.avatar.unfavorite": "お気に入りから削除",
+ "xmb.settings.search.desc": "この一覧から設定を探す",
+ "xmb.core.rememberedNone": "ここに記憶されている設定はありません。",
+ "xmb.core.forgetAllAsk": "ここに記憶されている設定をすべて忘れますか？それぞれ初期値に戻ります。"
 }

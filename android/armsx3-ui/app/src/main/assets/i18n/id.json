@@ -1473,5 +1473,8 @@
  "xmb.saves.loadAsk": "Muat save state ini?",
  "xmb.avatar.use": "Gunakan avatar ini",
  "xmb.avatar.favorite": "Tambahkan ke Favorit",
- "xmb.avatar.unfavorite": "Hapus dari Favorit"
+ "xmb.avatar.unfavorite": "Hapus dari Favorit",
+ "xmb.settings.search.desc": "Cari pengaturan di daftar ini",
+ "xmb.core.rememberedNone": "Tidak ada yang diingat di sini.",
+ "xmb.core.forgetAllAsk": "Lupakan semua pengaturan yang diingat di sini? Masing-masing kembali ke bawaannya."
 }

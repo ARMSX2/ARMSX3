@@ -53,6 +53,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -430,7 +431,7 @@ internal fun XmbIconView(icon: XmbIcon, size: Dp, modifier: Modifier = Modifier,
         }
     }
     Box(modifier.width(width).height(size), contentAlignment = Alignment.Center) {
-        val fw = firmware ?: icon.bitmap
+        val fw = firmware ?: icon.bitmap ?: icon.picture?.invoke()
         when {
             fw != null -> Image(fw, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             icon.file != null || icon.model != null -> AsyncImage(
@@ -643,6 +644,7 @@ private fun ColumnItems(
  */
 @Composable
 private fun SubList(level: XmbController.Level, m: Metrics, font: FontFamily, quiet: Boolean) {
+    val notDefault = com.armsx2.i18n.str("settings.notDefault")
     val anim = remember(level) { Animatable(level.focus.toFloat()) }
     LaunchedEffect(level, level.focus) { anim.animateTo(level.focus.toFloat(), tween(150, easing = FastOutSlowInEasing)) }
     val appear = remember(level) { Animatable(0f) }
@@ -701,12 +703,23 @@ private fun SubList(level: XmbController.Level, m: Metrics, font: FontFamily, qu
                         .widthIn(max = (m.panelLeft - textX - 20f * m.u).coerceAtLeast(120f).dp)
                         .graphicsLayer { alpha = alpha() * (if (focused) 1f else 0.75f * others) },
                 ) {
-                    Text(
-                        node.title,
-                        style = xmbText(font, if (focused) m.titleSp else m.smallTitleSp),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            node.title,
+                            style = xmbText(font, if (focused) m.titleSp else m.smallTitleSp),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        // Changed from its default, marked as the settings screens mark it.
+                        if ((node as? XmbNode.Setting)?.changed?.invoke() == true) {
+                            Text(
+                                "  " + notDefault,
+                                style = xmbText(font, m.subtitleSp * 0.85f).copy(color = NotDefaultRed, fontWeight = FontWeight.Bold),
+                                maxLines = 1,
+                            )
+                        }
+                    }
                     if (focused) {
                         val setting = node as? XmbNode.Setting
                         val line = setting?.let { listOfNotNull(it.value(), it.description).joinToString("   ") } ?: node.subtitle
@@ -1076,3 +1089,6 @@ private fun readBattery(context: android.content.Context): Pair<Int, Boolean> {
     val charging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
     return (if (level >= 0 && scale > 0) level * 100 / scale else -1) to charging
 }
+
+/** The Not default tag: the settings screens' red, lightened to read on the XMB's colours. */
+private val NotDefaultRed = Color(0xFFFF8A80)

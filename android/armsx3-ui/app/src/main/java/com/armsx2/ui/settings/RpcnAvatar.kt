@@ -939,12 +939,12 @@ internal fun xmbAvatarNode(title: String, sub: String?, icon: com.armsx2.ui.xmb.
             com.armsx2.ui.xmb.XmbSounds.play(com.armsx2.ui.xmb.XmbSounds.Sfx.DECIDE)
             Unit
         }
-        val picture = pictures[path]
         val selected = list.value?.current == path
         return com.armsx2.ui.xmb.XmbNode.Action(
             "$key.$path",
             path.substringAfterLast('/').substringBeforeLast('.'),
-            if (picture != null) com.armsx2.ui.xmb.XmbIcon(bitmap = picture, shadow = false) else pictureIcon,
+            // The picture is read where the icon is drawn, so the list is not rebuilt as each arrives.
+            com.armsx2.ui.xmb.XmbIcon(glyph = "\uD83D\uDDBC", shadow = false, picture = { pictures[path] }),
             listOfNotNull(if (selected) useThis else null, if (starred) "\u2605" else null).joinToString("   ").ifBlank { null },
             options = listOf(
                 com.armsx2.ui.xmb.XmbOption(useThis) { choose(path) },
@@ -969,9 +969,19 @@ internal fun xmbAvatarNode(title: String, sub: String?, icon: com.armsx2.ui.xmb.
                 val path = shown.getOrNull(i) ?: continue
                 if (path !in pictures) AvatarImages.load(path, CellPixels)?.let { pictures[path] = it }
             }
+            // Only the pictures near the list's place are kept: thousands of avatars would not fit.
+            if (pictures.size > 160) {
+                val keep = (focus - 40..focus + 60).mapNotNull { shown.getOrNull(it) }.toSet()
+                pictures.keys.filter { it !in keep }.forEach { pictures.remove(it) }
+            }
         }
     }
 
+    // Built again only when the avatars or the favourites change, not on every redraw: thousands.
+    val allNodes = remember { androidx.compose.runtime.derivedStateOf { list.value?.choices.orEmpty().map { avatarNode("rpcn.avatar.one", it) } } }
+    val favoriteNodes = remember {
+        androidx.compose.runtime.derivedStateOf { list.value?.choices.orEmpty().filter { AvatarFavorites.contains(it) }.map { avatarNode("rpcn.avatar.fav", it) } }
+    }
     val current = list.value?.current
     val currentPicture = current?.let { pictures[it] }
     return com.armsx2.ui.xmb.XmbNode.Folder(
@@ -983,7 +993,7 @@ internal fun xmbAvatarNode(title: String, sub: String?, icon: com.armsx2.ui.xmb.
         host = host,
     ) {
         val all = list.value?.choices.orEmpty()
-        val favorites = all.filter { AvatarFavorites.contains(it) }
+        val favorites = favoriteNodes.value
         buildList {
             add(com.armsx2.ui.xmb.XmbNode.Action("rpcn.avatar.default", useDefault, icon) { choose("") })
             if (canBrowse()) {
@@ -1013,14 +1023,12 @@ internal fun xmbAvatarNode(title: String, sub: String?, icon: com.armsx2.ui.xmb.
             }
             add(
                 com.armsx2.ui.xmb.XmbNode.Folder("rpcn.avatar.favorites", favoritesTitle.format(favorites.size), icon, live = true) {
-                    val now = list.value?.choices.orEmpty().filter { AvatarFavorites.contains(it) }
-                    if (now.isEmpty()) listOf(com.armsx2.ui.xmb.XmbNode.Action("rpcn.avatar.favorites.none", favoritesEmpty, icon) {})
-                    else now.map { avatarNode("rpcn.avatar.fav", it) }
+                    favoriteNodes.value.ifEmpty { listOf(com.armsx2.ui.xmb.XmbNode.Action("rpcn.avatar.favorites.none", favoritesEmpty, icon) {}) }
                 },
             )
             add(
                 com.armsx2.ui.xmb.XmbNode.Folder("rpcn.avatar.all", allTitle.format(all.size), icon, if (all.isEmpty()) none else null, live = true) {
-                    list.value?.choices.orEmpty().map { avatarNode("rpcn.avatar.one", it) }
+                    allNodes.value
                 },
             )
         }

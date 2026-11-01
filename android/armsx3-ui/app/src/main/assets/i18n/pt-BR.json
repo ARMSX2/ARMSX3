@@ -1474,5 +1474,8 @@
  "xmb.saves.loadAsk": "Carregar este estado salvo?",
  "xmb.avatar.use": "Usar este avatar",
  "xmb.avatar.favorite": "Adicionar aos favoritos",
- "xmb.avatar.unfavorite": "Remover dos favoritos"
+ "xmb.avatar.unfavorite": "Remover dos favoritos",
+ "xmb.settings.search.desc": "Encontrar uma configuração nesta lista",
+ "xmb.core.rememberedNone": "Nada está memorizado aqui.",
+ "xmb.core.forgetAllAsk": "Esquecer todas as configurações memorizadas aqui? Cada uma volta ao padrão."
 }

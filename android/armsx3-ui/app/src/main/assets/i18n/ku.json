@@ -1473,5 +1473,8 @@
  "xmb.saves.loadAsk": "Vê rewşa tomarkirî bar bike?",
  "xmb.avatar.use": "Vê avatarê bi kar bîne",
  "xmb.avatar.favorite": "Li bijarteyan zêde bike",
- "xmb.avatar.unfavorite": "Ji bijarteyan rake"
+ "xmb.avatar.unfavorite": "Ji bijarteyan rake",
+ "xmb.settings.search.desc": "Di vê lîsteyê de mîhengekê bibîne",
+ "xmb.core.rememberedNone": "Li vir tiştek nehatiye bîranîn.",
+ "xmb.core.forgetAllAsk": "Hemû mîhengên li vir hatine bîranîn ji bîr bike? Her yek vedigere nirxa xwe ya destpêkê."
 }
