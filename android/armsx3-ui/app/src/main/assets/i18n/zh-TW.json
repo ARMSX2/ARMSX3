@@ -1476,5 +1476,8 @@
  "xmb.avatar.unfavorite": "取消收藏",
  "xmb.settings.search.desc": "在此清單中尋找設定",
  "xmb.core.rememberedNone": "這裡沒有記住的設定。",
- "xmb.core.forgetAllAsk": "要忘記這裡記住的所有設定嗎？每項都會恢復為預設值。"
+ "xmb.core.forgetAllAsk": "要忘記這裡記住的所有設定嗎？每項都會恢復為預設值。",
+ "xmb.pad.turbo": "連發",
+ "xmb.pad.resetAsk": "要將這些按鍵對應恢復為初始狀態嗎？",
+ "xmb.update.storage": "透過儲存媒體更新"
 }

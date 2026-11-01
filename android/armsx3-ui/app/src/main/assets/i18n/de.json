@@ -1476,5 +1476,8 @@
  "xmb.avatar.unfavorite": "Aus Favoriten entfernen",
  "xmb.settings.search.desc": "Eine Einstellung in dieser Liste finden",
  "xmb.core.rememberedNone": "Hier ist nichts gespeichert.",
- "xmb.core.forgetAllAsk": "Alle hier gespeicherten Einstellungen vergessen? Jede kehrt zu ihrem Standard zurück."
+ "xmb.core.forgetAllAsk": "Alle hier gespeicherten Einstellungen vergessen? Jede kehrt zu ihrem Standard zurück.",
+ "xmb.pad.turbo": "Turbo",
+ "xmb.pad.resetAsk": "Diese Tastenbelegung auf den Ausgangszustand zurücksetzen?",
+ "xmb.update.storage": "Über Speichermedium aktualisieren"
 }

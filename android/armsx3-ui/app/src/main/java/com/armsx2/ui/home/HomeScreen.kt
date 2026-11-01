@@ -1414,11 +1414,14 @@ internal fun LibraryBackdrop() {
         // The boot animation is the console's own, on its wave, whatever the theme.
         val theme = com.armsx2.ui.xmb.XmbTheme.entry()?.takeUnless { com.armsx2.ui.xmb.XmbMode.booting.value }
         if (theme == null) {
+            // The boot animation is the console's, on its wave, whatever the background. One call
+            // for the wave, booting or not: two had the boot's wave view thrown away as the boot
+            // ended and a new one started, which showed the still behind it (a blue flash) and
+            // began the wave again.
+            val booting = com.armsx2.ui.xmb.XmbMode.booting.value
             when {
-                // The boot animation is the console's, on its wave, whatever the background.
-                com.armsx2.ui.xmb.XmbMode.booting.value -> XmbWave()
-                LibraryBackground.flurry.value -> SaverBackdrop()
-                LibraryBackground.animated2D.value -> LibraryWaveBackground(Modifier.fillMaxSize())
+                !booting && LibraryBackground.flurry.value -> SaverBackdrop()
+                !booting && LibraryBackground.animated2D.value -> LibraryWaveBackground(Modifier.fillMaxSize())
                 else -> XmbWave()
             }
         } else {

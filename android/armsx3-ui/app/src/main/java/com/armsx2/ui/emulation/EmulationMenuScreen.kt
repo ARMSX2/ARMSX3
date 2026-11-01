@@ -1493,7 +1493,9 @@ private fun ControlsPane(state: EmulationMenuUiState, viewModel: EmulationMenuVi
         onSelect = { com.armsx2.PadDeviceClass.set(0, it) },
     )
     Spacer(Modifier.height(6.dp))
-    CompactAction(str("pad.controllerMapping"), "⌁", Modifier.fillMaxWidth(), viewModel::openControlsManager)
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.xmbControllerMappingNode())
+    } ?: CompactAction(str("pad.controllerMapping"), "⌁", Modifier.fillMaxWidth(), viewModel::openControlsManager)
     Spacer(Modifier.height(6.dp))
     CompactAction(str("pad.editTouchLayout"), "✥", Modifier.fillMaxWidth(), viewModel::editTouchControls)
     Spacer(Modifier.height(6.dp))

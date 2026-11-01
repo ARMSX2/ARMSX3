@@ -30,7 +30,7 @@ import com.armsx2.ui.common.ArmsTopBar
 import com.armsx2.ui.common.RoundAction
 import com.armsx2.ui.settings.controllerFocusable
 
-private const val CLUSTERTUNE_URL = "https://github.com/AurelioB/ClusterTune"
+internal const val CLUSTERTUNE_URL = "https://github.com/AurelioB/ClusterTune"
 
 /**
  * A pointer to ClusterTune, not a clock control of our own.

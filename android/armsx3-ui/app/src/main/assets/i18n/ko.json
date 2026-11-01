@@ -1476,5 +1476,8 @@
  "xmb.avatar.unfavorite": "즐겨찾기에서 삭제",
  "xmb.settings.search.desc": "이 목록에서 설정 찾기",
  "xmb.core.rememberedNone": "여기에 기억된 설정이 없습니다.",
- "xmb.core.forgetAllAsk": "여기에 기억된 설정을 모두 잊으시겠습니까? 각 설정이 기본값으로 돌아갑니다."
+ "xmb.core.forgetAllAsk": "여기에 기억된 설정을 모두 잊으시겠습니까? 각 설정이 기본값으로 돌아갑니다.",
+ "xmb.pad.turbo": "연사",
+ "xmb.pad.resetAsk": "이 버튼 매핑을 처음 상태로 되돌리시겠습니까?",
+ "xmb.update.storage": "저장 미디어로 업데이트"
 }

@@ -1476,5 +1476,8 @@
  "xmb.avatar.unfavorite": "お気に入りから削除",
  "xmb.settings.search.desc": "この一覧から設定を探す",
  "xmb.core.rememberedNone": "ここに記憶されている設定はありません。",
- "xmb.core.forgetAllAsk": "ここに記憶されている設定をすべて忘れますか？それぞれ初期値に戻ります。"
+ "xmb.core.forgetAllAsk": "ここに記憶されている設定をすべて忘れますか？それぞれ初期値に戻ります。",
+ "xmb.pad.turbo": "連射",
+ "xmb.pad.resetAsk": "このボタン割り当てを最初の状態に戻しますか？",
+ "xmb.update.storage": "ストレージメディアを使ってアップデート"
 }

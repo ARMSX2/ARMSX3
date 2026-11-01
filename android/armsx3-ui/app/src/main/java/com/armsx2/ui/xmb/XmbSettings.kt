@@ -65,6 +65,13 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
     // One collector per tab for as long as this list is up: the column is rebuilt as it recomposes,
     // and a tab's rows must keep landing in the collector its open list reads.
     val collectors = remember(game?.uri, inGame, on, off) { HashMap<SettingsCategory, XmbCollector>() }
+    val updateIcon = XmbIcon("explore_category_sysconf", "tex_update", "\u2699")
+    val updateCollector = remember(on, off) { XmbCollector(on, off, updateIcon) }
+    val context = LocalContext.current
+    val underclockBody = str("underclock.body")
+    val underclockNote = str("underclock.note")
+    val underclockOpen = str("underclock.open")
+    val controllerMapping = xmbControllerMappingNode()
     val systemIcons = xmbSystemIcons()
     fun tab(category: SettingsCategory, title: String, icon: String, sub: String? = null): XmbNode {
         val i = XmbIcon("explore_category_sysconf", icon, "\u2699")
@@ -107,8 +114,15 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
             if (forGame) {
                 add(tab(SettingsCategory.Mods, mods, "tex_edyviewer"))
             } else if (!inGame) {
-                add(XmbNode.Action("settings.underclock", underclock, XmbIcon("explore_category_sysconf", "tex_power", "\u2699")) {
-                    UiNavigator.navigate(AppRoute.Underclocking)
+                // Underclocking: what ClusterTune does and the way to it, as the screen has them.
+                val power = XmbIcon("explore_category_sysconf", "tex_power", "\u2699")
+                add(XmbNode.Folder("settings.underclock", underclock, power, underclockBody.substringBefore(". ") + ".") {
+                    listOf(
+                        XmbNode.Panel("underclock.about", underclock, power) { _ -> XmbTextPanel(paragraphsOf("$underclockBody\n\n$underclockNote")) },
+                        XmbNode.Action("underclock.open", underclockOpen, power) {
+                            com.armsx2.navigation.openExternalUrl(context, com.armsx2.ui.underclock.CLUSTERTUNE_URL)
+                        },
+                    )
                 })
             }
         }
@@ -125,6 +139,8 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
         sub = explanation("msg_pd_setting_explanation"),
     ) {
         buildList {
+            // Controller Mapping first, as its own lists: every button, motion, profile and hotkey.
+            add(controllerMapping)
             add(tab(SettingsCategory.Controls, controls, "tex_pd"))
             add(tab(SettingsCategory.Hotkeys, hotkeys, "tex_remote"))
             add(tab(SettingsCategory.OnScreen, onScreen, "tex_display"))
@@ -143,12 +159,18 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
     // In a game, the running title's settings: the app's own and the firmware are for the library.
     if (forGame || inGame) return listOf(gameSettings, core, display, sound, accessory, music, network, debug)
 
-    val update = XmbNode.Action(
+    val update = XmbNode.Folder(
         "settings.update",
         sysconf("msg_update", "xmb.set.update"),
-        XmbIcon("explore_category_sysconf", "tex_update", "\u2699"),
+        updateIcon,
         explanation("msg_update_explanation"),
-    ) { UiNavigator.navigate(AppRoute.BiosManager) }
+        live = true,
+        host = {
+            androidx.compose.runtime.CompositionLocalProvider(LocalXmbCollector provides updateCollector) {
+                com.armsx2.ui.bios.BiosManagerScreen(onBack = {})
+            }
+        },
+    ) { updateCollector.nodes }
     val system = tab(SettingsCategory.General, sysconf("msg_console_setting", "xmb.set.system"), "tex_console", explanation("msg_console_setting_explanation"))
     collectors[SettingsCategory.General]?.iconFor = systemIcons
     return listOf(

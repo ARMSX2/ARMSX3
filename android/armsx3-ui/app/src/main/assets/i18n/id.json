@@ -1476,5 +1476,8 @@
  "xmb.avatar.unfavorite": "Hapus dari Favorit",
  "xmb.settings.search.desc": "Cari pengaturan di daftar ini",
  "xmb.core.rememberedNone": "Tidak ada yang diingat di sini.",
- "xmb.core.forgetAllAsk": "Lupakan semua pengaturan yang diingat di sini? Masing-masing kembali ke bawaannya."
+ "xmb.core.forgetAllAsk": "Lupakan semua pengaturan yang diingat di sini? Masing-masing kembali ke bawaannya.",
+ "xmb.pad.turbo": "Turbo",
+ "xmb.pad.resetAsk": "Kembalikan pemetaan tombol ini ke awal?",
+ "xmb.update.storage": "Perbarui melalui Media Penyimpanan"
 }

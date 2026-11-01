@@ -62,6 +62,23 @@ fun HotkeysTab(@Suppress("UNUSED_PARAMETER") state: MutableState<Settings>) {
             val capturing = ControllerMappings.captureHotkey.value == hk
             val binding = ControllerMappings.hotkeyLabel(hk)
             val unset = binding.isEmpty()
+            com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+                com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action(
+                    "hotkey.${hk.name}",
+                    hk.label,
+                    c.icon,
+                    when {
+                        capturing -> str("hotkeys.capturePrompt")
+                        unset -> str("hotkeys.notSet")
+                        else -> binding
+                    },
+                    options = if (unset) emptyList() else listOf(com.armsx2.ui.xmb.XmbOption(str("hotkeys.clear")) {
+                        ControllerMappings.clearHotkey(hk)
+                        ControllerMappings.hotkeyBindTick.value++
+                    }),
+                ) { ControllerMappings.beginHotkeyCapture(hk) })
+                return@forEach
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

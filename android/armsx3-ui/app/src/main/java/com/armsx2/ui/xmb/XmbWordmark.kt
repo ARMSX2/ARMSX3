@@ -9,8 +9,8 @@ import android.graphics.RectF
 import android.graphics.Shader
 
 /**
- * The ARMSX3 boot logo, laid out as the console's: the ARMSX3 mark where the PlayStation symbol
- * stood and the word ARMSX3 where "PS3" stood.
+ * The ARMSX3 boot logo, laid out as the console's: the word ARMSX3 where "PS3" stood. (The mark
+ * that once stood before it, a 3, only said again what the word ends with.)
  *
  * The letters follow RPCS3's wordmark, itself drawn after the PS3 logo: one stroke weight throughout
  * (0.21 of the letter height), letters half again as wide as they are high and set well apart,
@@ -265,12 +265,10 @@ object XmbWordmark {
     fun render(letterPx: Float): Layers {
         val word = "ARMSX3"
         val wordW = word.sumOf { (glyphs[it]?.width ?: 1f).toDouble() }.toFloat() + GAP * (word.length - 1)
-        val markW = mark.width * MARK_SCALE
-        val markTop = PAD
-        val wordTop = markTop + (MARK_SCALE - 1f) / 2f
-        val wordLeft = PAD + markW + MARK_GAP
+        val wordTop = PAD
+        val wordLeft = PAD
         val unitsWide = wordLeft + wordW + PAD
-        val unitsHigh = markTop + MARK_SCALE + PAD + 0.08f
+        val unitsHigh = wordTop + 1f + PAD + 0.08f
         val w = (unitsWide * letterPx).toInt().coerceAtLeast(1)
         val h = (unitsHigh * letterPx).toInt().coerceAtLeast(1)
 
@@ -278,7 +276,7 @@ object XmbWordmark {
         val canvas = Canvas(logo)
         val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             shader = LinearGradient(
-                0f, markTop * letterPx, 0f, (markTop + MARK_SCALE) * letterPx,
+                0f, wordTop * letterPx, 0f, (wordTop + 1f) * letterPx,
                 android.graphics.Color.WHITE, android.graphics.Color.rgb(0xD2, 0xD2, 0xD2), Shader.TileMode.CLAMP,
             )
             setShadowLayer(letterPx * 0.012f, letterPx * 0.045f, letterPx * 0.06f, android.graphics.Color.argb(0x73, 0, 0, 0))
@@ -289,8 +287,6 @@ object XmbWordmark {
             glyph.build(Shape(path, x, top, px))
             canvas.drawPath(path, fill)
         }
-        // The mark is drawn at its own scale: units of its own height.
-        draw(mark, PAD / MARK_SCALE, markTop / MARK_SCALE, letterPx * MARK_SCALE)
         var x = wordLeft
         for (ch in word) {
             val g = glyphs[ch] ?: continue

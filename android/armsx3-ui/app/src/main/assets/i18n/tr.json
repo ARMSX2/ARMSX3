@@ -1476,5 +1476,8 @@
  "xmb.avatar.unfavorite": "Favorilerden kaldır",
  "xmb.settings.search.desc": "Bu listede bir ayar bul",
  "xmb.core.rememberedNone": "Burada hatırlanan bir şey yok.",
- "xmb.core.forgetAllAsk": "Burada hatırlanan tüm ayarlar unutulsun mu? Her biri varsayılanına döner."
+ "xmb.core.forgetAllAsk": "Burada hatırlanan tüm ayarlar unutulsun mu? Her biri varsayılanına döner.",
+ "xmb.pad.turbo": "Turbo",
+ "xmb.pad.resetAsk": "Bu tuş atamaları başlangıçtaki hâline döndürülsün mü?",
+ "xmb.update.storage": "Depolama ortamıyla güncelle"
 }

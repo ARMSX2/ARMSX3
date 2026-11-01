@@ -1476,5 +1476,8 @@
  "xmb.avatar.unfavorite": "Xóa khỏi mục yêu thích",
  "xmb.settings.search.desc": "Tìm một cài đặt trong danh sách này",
  "xmb.core.rememberedNone": "Không có gì được ghi nhớ ở đây.",
- "xmb.core.forgetAllAsk": "Quên mọi cài đặt được ghi nhớ ở đây? Mỗi cài đặt sẽ trở về mặc định."
+ "xmb.core.forgetAllAsk": "Quên mọi cài đặt được ghi nhớ ở đây? Mỗi cài đặt sẽ trở về mặc định.",
+ "xmb.pad.turbo": "Bắn liên tục",
+ "xmb.pad.resetAsk": "Đưa cách gán nút này về như ban đầu?",
+ "xmb.update.storage": "Cập nhật qua phương tiện lưu trữ"
 }

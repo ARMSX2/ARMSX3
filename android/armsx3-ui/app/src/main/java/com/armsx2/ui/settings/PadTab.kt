@@ -188,7 +188,11 @@ fun PadTab(state: MutableState<Settings>) {
         // Open the on-screen touch-layout editor straight from here (no need to be
         // in-game). Closes the settings overlay and drops into edit mode over the
         // game/library. With no game running it edits the Global Default layout.
-        Box(
+        com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+            com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action("pad.editTouch", str("pad.editTouchLayout"), c.icon) {
+                com.armsx2.ui.InGameOverlay.editTouchLayout()
+            })
+        } ?: Box(
             Modifier
                 .fillMaxWidth()
                 .height(56.dp)
@@ -382,7 +386,14 @@ fun PadTab(state: MutableState<Settings>) {
             // Buzz the selected player's controller and report whether Android can drive
             // its rumble — separates a routing problem from a pad whose haptics simply
             // aren't exposed to Android (common for DualSense/DS4 over Bluetooth).
-            Box(
+            com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+                val ok = str("action.ok")
+                val title = if (editPlayer.intValue == 0) str("pad.testRumble.player1") else str("pad.testRumble.player2")
+                com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action("pad.testRumble", title, c.icon) {
+                    NativeApp.testRumble(editPlayer.intValue)
+                    com.armsx2.ui.xmb.XmbDialogs.target()?.tell(NativeApp.rumbleStatusForPort(editPlayer.intValue), ok, error = false)
+                })
+            } ?: Box(
                 Modifier
                     .fillMaxWidth()
                     .height(56.dp)
@@ -574,7 +585,12 @@ fun PadTab(state: MutableState<Settings>) {
                     val turbo = remember(action.id, editPlayer.intValue, refreshToken.intValue) {
                         mutableStateOf(ControllerMappings.isTurboAction(action, editPlayer.intValue))
                     }
-                    Row(
+                    if (com.armsx2.ui.xmb.LocalXmbCollector.current != null) {
+                        ToggleRow("${action.label}: ${str("xmb.pad.turbo")}", turbo.value, notDefault = turbo.value) { nv ->
+                            turbo.value = nv
+                            ControllerMappings.setTurboAction(action, editPlayer.intValue, nv)
+                        }
+                    } else Row(
                         Modifier
                             .fillMaxWidth()
                             .clickable {
@@ -611,7 +627,15 @@ fun PadTab(state: MutableState<Settings>) {
                 capture.value = null
                 refreshToken.intValue++
             }
-            Box(
+            com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+                val who = str("pad.player${editPlayer.intValue + 1}")
+                val title = "${str("action.reset")} · $who${if (editSerial != null) " · ${str("scope.game")}" else ""}"
+                val ask = str("xmb.pad.resetAsk")
+                val cancel = str("action.cancel")
+                com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action("pad.reset", title, c.icon) {
+                    com.armsx2.ui.xmb.XmbDialogs.target()?.ask(ask, str0("action.reset"), cancel, focusNo = true) { resetMappings() }
+                })
+            } ?: Box(
                 Modifier
                     .fillMaxWidth()
                     .height(56.dp)
@@ -685,6 +709,13 @@ fun PadTab(state: MutableState<Settings>) {
                     // the applied map once this bumps.
                     refreshToken.intValue++
                 }
+                com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+                    com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action(
+                        "pad.profile.$name", name, c.icon,
+                        options = listOf(com.armsx2.ui.xmb.XmbOption(str("action.delete")) { ControllerMappings.deleteProfile(name) }),
+                    ) { apply() })
+                    return@forEach
+                }
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -718,6 +749,16 @@ fun PadTab(state: MutableState<Settings>) {
                     )
                 }
                 Spacer(Modifier.height(6.dp))
+            }
+            // In the XMB: the new profile's name typed on the pad keyboard.
+            com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+                val label = str("pad.padProfiles.namePlaceholder")
+                com.armsx2.ui.xmb.XmbCollected(c, com.armsx2.ui.xmb.XmbNode.Action("pad.profile.save", str("pad.padProfiles.saveAs"), c.icon, str("pad.padProfiles.saveNewLabel")) {
+                    com.armsx2.ui.xmb.XmbKeyboard.ask(label) { typed ->
+                        if (typed.isNotBlank()) ControllerMappings.saveProfile(typed.trim(), editPlayer.intValue, liveEditSerial())
+                    }
+                })
+                return@CollapsibleSection
             }
             Spacer(Modifier.height(4.dp))
             Text(str("pad.padProfiles.saveNewLabel"), color = Color(0xFFAAAAAA), fontSize = 12.sp)
@@ -868,6 +909,27 @@ private fun UsbDeviceSection(refreshToken: MutableState<Int>) {
         for (port in 0..1) {
             SettingsDivider()
             val current = com.armsx2.input.UsbDevices.portType[port].value
+            // In the XMB: the port's device picked from a list, as a setting.
+            if (com.armsx2.ui.xmb.LocalXmbCollector.current != null) {
+                val types = listOf(com.armsx2.input.UsbDevices.NONE) + devices.map { it.type }
+                SegmentedRow(
+                    label = "${str("pad.usb.port")} ${port + 1}",
+                    options = listOf(str("pad.usb.none")) + devices.map { it.display },
+                    selectedIndex = types.indexOf(current).coerceAtLeast(0),
+                    notDefault = current != com.armsx2.input.UsbDevices.NONE,
+                    onChange = { com.armsx2.input.UsbDevices.setType(port, types[it]); refreshToken.value++ },
+                )
+                val subs = devices.firstOrNull { it.type == current }?.subtypes.orEmpty()
+                if (subs.size > 1) {
+                    SegmentedRow(
+                        label = str("pad.usb.subtype"),
+                        options = subs,
+                        selectedIndex = com.armsx2.input.UsbDevices.portSubtype[port].value.coerceIn(0, subs.lastIndex),
+                        onChange = { com.armsx2.input.UsbDevices.setSubtype(port, it); refreshToken.value++ },
+                    )
+                }
+                continue
+            }
             // A plain list of rows rather than a segmented strip: 19 entries would be unusable as
             // chips, and this mirrors the radio list other emulators use for the same choice.
             Text(
@@ -1113,6 +1175,37 @@ private fun StickDirPickerRow(
     fun clear() {
         ControllerMappings.resetStickCode(leftStick, dir, player, serial)
         onChanged()
+    }
+    // In the XMB: the direction as a setting, picked from the same targets as the dialog's.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        val targets = buildList<Pair<String, Int?>> {
+            add(str("pad.stickTarget.analogDefault") to null)
+            ControllerMappings.stickTargets.forEach { add(it.label to it.code) }
+            ControllerMappings.hotkeysInDisplayOrder.filter { it.supported }.forEach { h ->
+                add("${str("tab.hotkeys")}: ${h.label}" to ControllerMappings.stickCodeForHotkey(h))
+            }
+        }
+        val stick = str(if (leftStick) "pad.leftStick.label" else "pad.rightStick.label")
+        com.armsx2.ui.xmb.XmbCollected(
+            c,
+            com.armsx2.ui.xmb.XmbNode.Setting(
+                "pad.stick.${if (leftStick) "l" else "r"}.${dir.id}",
+                "$stick: ${dir.id.replaceFirstChar { it.uppercase() }}",
+                c.icon,
+                com.armsx2.ui.xmb.XmbEditor.Choice(
+                    targets.map { it.first },
+                    { if (code in 110..123) 0 else targets.indexOfFirst { it.second == code }.coerceAtLeast(0) },
+                ) { i ->
+                    val picked = targets.getOrNull(i)?.second
+                    if (picked == null) ControllerMappings.resetStickCode(leftStick, dir, player, serial)
+                    else ControllerMappings.setCustomStickCode(leftStick, dir, picked, player, serial)
+                    onChanged()
+                },
+                { ControllerMappings.stickTargetLabel(code) },
+                changed = { code !in 110..123 },
+            ),
+        )
+        return
     }
     Row(
         modifier = Modifier
@@ -1438,6 +1531,63 @@ internal fun MacrosSection(
             else buttons.joinToString(if (inOrder) " → " else " + ") { TouchControls.macroTargetFor(it)?.label ?: "?" }
             val physCode = TouchControls.macroPhysicalCode(mid)
             val capturingThis = macroCapture?.value == mid
+            // In the XMB: the macro's buttons as switches, its controller button (Cross listens for
+            // it, Triangle clears it), and its timing below.
+            com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+                com.armsx2.ui.xmb.XmbCollectedSection(c, "pad.macro.${mid.name}", mid.label, summary) {
+                    val inner = com.armsx2.ui.xmb.LocalXmbCollector.current ?: return@XmbCollectedSection
+                    if (physicalSupported) {
+                        com.armsx2.ui.xmb.XmbCollected(inner, com.armsx2.ui.xmb.XmbNode.Action(
+                            "pad.macro.${mid.name}.bind",
+                            str("pad.action.bind"),
+                            inner.icon,
+                            when {
+                                capturingThis -> str("pad.pressControllerButton")
+                                physCode != android.view.KeyEvent.KEYCODE_UNKNOWN -> ControllerMappings.labelForKey(physCode)
+                                else -> str("pad.controller.notBound")
+                            },
+                            options = if (physCode != android.view.KeyEvent.KEYCODE_UNKNOWN) listOf(com.armsx2.ui.xmb.XmbOption(str("pad.action.clear")) { TouchControls.clearMacroPhysicalCode(mid) }) else emptyList(),
+                        ) { onArmCapture?.invoke(mid) })
+                    }
+                    TouchControls.macroAssignableTargets.forEach { t ->
+                        ToggleRow(t.label, t.code in buttons) { on ->
+                            val now = TouchControls.macroCodes(mid)
+                            TouchControls.setMacroCodes(mid, if (on) now + t.code else now - t.code)
+                        }
+                    }
+                    if (buttons.isNotEmpty()) {
+                        val freq = TouchControls.macroFrequency(mid)
+                        val holdLabel = str("pad.macro.frequency.hold")
+                        val everyLabel = str("pad.macro.frequency.every")
+                        IntSliderRow(
+                            label = str("pad.macro.frequency.label"),
+                            value = freq,
+                            min = 0,
+                            max = TouchControls.MACRO_FREQ_MAX,
+                            description = str("pad.macro.frequency.description"),
+                            valueFormatter = { if (it == 0) holdLabel else everyLabel.format(it) },
+                            onChange = { TouchControls.setMacroFrequency(mid, it) },
+                        )
+                        val pressure = TouchControls.macroPressure(mid)
+                        val fullLabel = str("pad.macro.pressure.full")
+                        IntSliderRow(
+                            label = str("pad.macro.pressure.label"),
+                            value = pressure,
+                            min = TouchControls.MACRO_PRESSURE_MIN,
+                            max = 100,
+                            description = str("pad.macro.pressure.description"),
+                            valueFormatter = { if (it >= 100) fullLabel else "$it%" },
+                            onChange = { TouchControls.setMacroPressure(mid, it) },
+                        )
+                    }
+                    if (canOrder) {
+                        ToggleRow(str("pad.macro.inOrder.label"), inOrder, description = str("pad.macro.inOrder.description")) {
+                            TouchControls.setMacroInOrder(mid, it)
+                        }
+                    }
+                }
+                return@forEach
+            }
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -1625,6 +1775,21 @@ private fun PadBindingRow(
     onClick: () -> Unit,
     onClear: () -> Unit,
 ) {
+    // In the XMB: the button, with what it is bound to under it. Cross listens for the button to
+    // use (the next press anywhere binds), Triangle clears it.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        com.armsx2.ui.xmb.XmbCollected(
+            c,
+            com.armsx2.ui.xmb.XmbNode.Action(
+                "pad.bind.${action.id}",
+                action.label,
+                c.icon,
+                if (capturing) str("pad.pressButton") else ControllerMappings.labelForKey(physical),
+                options = if (physical != android.view.KeyEvent.KEYCODE_UNKNOWN) listOf(com.armsx2.ui.xmb.XmbOption(str("pad.action.clear")) { onClear() }) else emptyList(),
+            ) { onClick() },
+        )
+        return
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1662,3 +1827,5 @@ private fun PadBindingRow(
         )
     }
 }
+
+private fun str0(key: String) = com.armsx2.i18n.I18n.get(key)

@@ -1477,5 +1477,8 @@
  "xmb.avatar.unfavorite": "Remover dos favoritos",
  "xmb.settings.search.desc": "Encontrar uma configuração nesta lista",
  "xmb.core.rememberedNone": "Nada está memorizado aqui.",
- "xmb.core.forgetAllAsk": "Esquecer todas as configurações memorizadas aqui? Cada uma volta ao padrão."
+ "xmb.core.forgetAllAsk": "Esquecer todas as configurações memorizadas aqui? Cada uma volta ao padrão.",
+ "xmb.pad.turbo": "Turbo",
+ "xmb.pad.resetAsk": "Voltar este mapeamento de botões ao estado inicial?",
+ "xmb.update.storage": "Atualizar via mídia de armazenamento"
 }

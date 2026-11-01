@@ -1476,5 +1476,8 @@
  "xmb.avatar.unfavorite": "Retirer des favoris",
  "xmb.settings.search.desc": "Trouver un réglage dans cette liste",
  "xmb.core.rememberedNone": "Rien n'est mémorisé ici.",
- "xmb.core.forgetAllAsk": "Oublier tous les réglages mémorisés ici ? Chacun reprend sa valeur par défaut."
+ "xmb.core.forgetAllAsk": "Oublier tous les réglages mémorisés ici ? Chacun reprend sa valeur par défaut.",
+ "xmb.pad.turbo": "Turbo",
+ "xmb.pad.resetAsk": "Remettre ces attributions de boutons à leur état d'origine ?",
+ "xmb.update.storage": "Mettre à jour via un support de stockage"
 }
