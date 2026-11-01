@@ -17,14 +17,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.armsx2.GameInfo
+import com.armsx2.LibraryMusic
+import com.armsx2.MenuSfx
 import com.armsx2.config.CoreSettingOverrides
 import com.armsx2.config.SettingsScope
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
+import com.armsx2.navigation.AppRoute
 import com.armsx2.navigation.SettingsCategory
+import com.armsx2.navigation.UiNavigator
 import com.armsx2.ui.settings.CoreSetting
 import com.armsx2.ui.settings.flatten
 import com.armsx2.ui.settings.sameValue
@@ -33,49 +38,229 @@ import com.armsx2.ui.settingshub.SettingsViewModel
 import com.armsx2.ui.settingshub.categoryTitle
 import com.armsx3.core.ARMSX3
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 /**
- * ARMSX3's settings in the XMB's Settings column: every tab of App Settings, each opening as a panel
- * over the XMB with the tab itself in it (so it behaves exactly as it does elsewhere: the same
- * scope, the same saving, the same per-game overrides), and All Core Settings as XMB lists, section
- * by section, edited with the XMB's own pickers.
+ * The XMB's Settings column with ARMSX3's settings behind it: the console's own entries, in its
+ * order and with its words, each opening what ARMSX3 has for it. Display Settings is the renderer
+ * tab, Sound Settings the audio tab, Accessory Settings the controls, hotkeys, on-screen controls
+ * and skins, Network Settings RPCN, Game Settings how games run, System Settings the app's own,
+ * and System Update the firmware. Music Settings and Theme Settings are XMB lists of their own,
+ * and the Debug Settings a debug console has hold the advanced tab and All Core Settings.
  *
- * [scope] and [serial] are where edits are remembered: global from the library, the running title
- * from the in-game menu.
+ * A tab opens as a panel over the XMB with the tab itself in it, so it behaves exactly as it does
+ * elsewhere: the same scope, the same saving, the same per-game overrides. [scope] and [serial]
+ * are where edits are remembered: global from the library, the running title in game.
  */
 @Composable
 fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = null): List<XmbNode> {
     val forGame = game != null
-    val tabs = buildList {
-        if (!forGame) add(SettingsCategory.General to "tex_console")
-        if (forGame) add(SettingsCategory.Info to "tex_bddvd")
-        add(SettingsCategory.Performance to "tex_game")
-        add(SettingsCategory.Graphics to "tex_display")
-        add(SettingsCategory.Audio to "tex_sound")
-        add(SettingsCategory.Controls to "tex_pd")
-        add(SettingsCategory.Hotkeys to "tex_remote")
-        add(SettingsCategory.Network to "tex_network")
-        add(SettingsCategory.OnScreen to "tex_datetime")
-        add(SettingsCategory.Skins to "tex_thema")
-        add(SettingsCategory.Advanced to "tex_security")
-        add(SettingsCategory.Patches to "tex_update")
-        if (forGame) add(SettingsCategory.Mods to "tex_edyviewer")
+    fun tab(category: SettingsCategory, title: String, icon: String) = XmbNode.Panel(
+        key = "settings.tab.${category.name}",
+        title = title,
+        icon = XmbIcon("explore_category_sysconf", icon, "\u2699"),
+    ) { _ -> XmbSettingsTabPanel(category, game) }
+
+    val performance = categoryTitle(SettingsCategory.Performance)
+    val patches = categoryTitle(SettingsCategory.Patches)
+    val mods = categoryTitle(SettingsCategory.Mods)
+    val info = categoryTitle(SettingsCategory.Info)
+    val underclock = str("underclock.title")
+    val gameSettings = XmbNode.Folder(
+        key = "settings.game",
+        title = sysconf("msg_game_setting", "xmb.set.game"),
+        icon = XmbIcon("explore_category_sysconf", "tex_game", "\u2699"),
+        sub = explanation("msg_game_setting_explanation"),
+    ) {
+        buildList {
+            if (forGame) add(tab(SettingsCategory.Info, info, "tex_bddvd"))
+            add(tab(SettingsCategory.Performance, performance, "tex_game"))
+            add(tab(SettingsCategory.Patches, patches, "tex_update"))
+            if (forGame) {
+                add(tab(SettingsCategory.Mods, mods, "tex_edyviewer"))
+            } else {
+                add(XmbNode.Action("settings.underclock", underclock, XmbIcon("explore_category_sysconf", "tex_power", "\u2699")) {
+                    UiNavigator.navigate(AppRoute.Underclocking)
+                })
+            }
+        }
     }
-    val items = tabs.map { (category, icon) ->
-        XmbNode.Panel(
-            key = "settings.tab.${category.name}",
-            title = categoryTitle(category),
-            icon = XmbIcon("explore_category_sysconf", icon, "⚙"),
-        ) { _ -> XmbSettingsTabPanel(category, game) }
+
+    val controls = categoryTitle(SettingsCategory.Controls)
+    val hotkeys = categoryTitle(SettingsCategory.Hotkeys)
+    val onScreen = categoryTitle(SettingsCategory.OnScreen)
+    val skins = categoryTitle(SettingsCategory.Skins)
+    val accessory = XmbNode.Folder(
+        key = "settings.accessory",
+        title = sysconf("msg_pd_setting", "xmb.set.accessory"),
+        icon = XmbIcon("explore_category_sysconf", "tex_pd", "\u2699"),
+        sub = explanation("msg_pd_setting_explanation"),
+    ) {
+        buildList {
+            add(tab(SettingsCategory.Controls, controls, "tex_pd"))
+            add(tab(SettingsCategory.Hotkeys, hotkeys, "tex_remote"))
+            add(tab(SettingsCategory.OnScreen, onScreen, "tex_display"))
+            add(tab(SettingsCategory.Skins, skins, "tex_thema"))
+        }
     }
-    val core = XmbNode.Folder(
-        key = "settings.core",
-        title = str("core.settings.title"),
-        icon = XmbIcon("explore_category_sysconf", "tex_sett", "🧩"),
-        sub = str("xmb.core.desc"),
-    ) { XmbCoreSettings.sections(scope, serial) }
-    return items + core
+
+    val display = tab(SettingsCategory.Graphics, sysconf("msg_display_setting", "xmb.set.display"), "tex_display")
+        .withSub(explanation("msg_display_setting_explanation"))
+    val sound = tab(SettingsCategory.Audio, sysconf("msg_sound_setting", "xmb.set.sound"), "tex_sound")
+        .withSub(explanation("msg_sound_setting_explanation"))
+    val network = tab(SettingsCategory.Network, sysconf("msg_net_setting", "xmb.set.network"), "tex_network")
+        .withSub(explanation("msg_net_setting_explanation"))
+
+    val advanced = categoryTitle(SettingsCategory.Advanced)
+    val coreTitle = str("core.settings.title")
+    val coreSub = str("xmb.core.desc")
+    val debug = XmbNode.Folder(
+        key = "settings.debug",
+        title = sysconf("msg_tool_debug_settings", "xmb.set.debug"),
+        icon = XmbIcon("explore_category_sysconf", "tex_sett", "\u2699"),
+    ) {
+        listOf(
+            tab(SettingsCategory.Advanced, advanced, "tex_security"),
+            XmbNode.Folder(
+                key = "settings.core",
+                title = coreTitle,
+                icon = XmbIcon("explore_category_sysconf", "tex_sett", "\uD83E\uDDE9"),
+                sub = coreSub,
+            ) { XmbCoreSettings.sections(scope, serial) },
+        )
+    }
+
+    if (forGame) return listOf(gameSettings, display, sound, accessory, network, debug)
+
+    val update = XmbNode.Action(
+        "settings.update",
+        sysconf("msg_update", "xmb.set.update"),
+        XmbIcon("explore_category_sysconf", "tex_update", "\u2699"),
+        explanation("msg_update_explanation"),
+    ) { UiNavigator.navigate(AppRoute.BiosManager) }
+    val system = tab(SettingsCategory.General, sysconf("msg_console_setting", "xmb.set.system"), "tex_console")
+        .withSub(explanation("msg_console_setting_explanation"))
+    return listOf(
+        update,
+        gameSettings,
+        xmbMusicSettings(),
+        system,
+        xmbThemeSettings(),
+        accessory,
+        display,
+        sound,
+        network,
+        debug,
+    )
 }
+
+/** The Settings column's own words, from the firmware or the app. */
+@Composable
+private fun sysconf(id: String, key: String): String = fw("explore_category_sysconf", id, key)
+
+/** The line the console shows under a focused setting, when the firmware has it in this language. */
+@Composable
+private fun explanation(id: String): String? = XmbText.find("explore_category_sysconf", id)
+
+private fun XmbNode.Panel.withSub(sub: String?): XmbNode.Panel =
+    if (sub == null) this else XmbNode.Panel(key, title, icon, sub, content)
+
+/** On and Off as the console words them. */
+@Composable
+internal fun xmbOnOff(): Pair<String, String> =
+    fw("explore_plugin_full", "msg_on", "xmb.on") to fw("explore_plugin_full", "msg_off", "xmb.off")
+
+/** Music Settings: the game previews, the library's music and the menu's sounds. */
+@Composable
+private fun xmbMusicSettings(): XmbNode {
+    val context = LocalContext.current.applicationContext
+    val (on, off) = xmbOnOff()
+    val icon = XmbIcon("explore_category_sysconf", "tex_music", "\u266A")
+    val gameMusic = str("xmb.music.game")
+    val gameMusicDesc = str("xmb.music.game.desc")
+    val library = str("app.libraryMusic")
+    val libraryVolume = str("app.libraryMusic.volume")
+    val sounds = str("app.menuSfx")
+    val soundsVolume = str("app.menuSfx.volume")
+    return XmbNode.Folder(
+        key = "settings.music",
+        title = sysconf("msg_music_setting", "xmb.set.music"),
+        icon = icon,
+        sub = explanation("msg_music_setting_explanation"),
+    ) {
+        listOf(
+            toggle("music.game", gameMusic, icon, on, off, gameMusicDesc, { XmbMode.gameMusic.value }) { XmbMode.setGameMusic(it) },
+            toggle("music.library", library, icon, on, off, null, { LibraryMusic.enabled.value }) { LibraryMusic.set(context, it) },
+            percent("music.library.volume", libraryVolume, icon, { LibraryMusic.volumePercent.value }) { LibraryMusic.setVolume(it) },
+            toggle("music.sfx", sounds, icon, on, off, null, { MenuSfx.enabled.value }) { MenuSfx.set(context, it) },
+            percent("music.sfx.volume", soundsVolume, icon, { MenuSfx.volumePercent.value }) { MenuSfx.setVolume(it) },
+        )
+    }
+}
+
+/** Theme Settings: the XMB's colour, and how much of each game's own media it shows. */
+@Composable
+private fun xmbThemeSettings(): XmbNode {
+    val (on, off) = xmbOnOff()
+    val icon = XmbIcon("explore_category_sysconf", "tex_thema", "\uD83C\uDFA8")
+    val colorTitle = str("xmb.theme.color")
+    val colorDesc = str("xmb.theme.color.desc")
+    val colorDefault = str("xmb.theme.color.default")
+    val locale = remember(I18n.current) { java.util.Locale.forLanguageTag(I18n.current) }
+    val months = remember(locale) {
+        java.text.DateFormatSymbols.getInstance(locale).months.take(12).map { m -> m.replaceFirstChar { it.titlecase(locale) } }
+    }
+    val colorLabels = listOf(colorDefault) + months
+    val backgrounds = str("xmb.theme.backgrounds")
+    val backgroundsDesc = str("xmb.theme.backgrounds.desc")
+    val icons = str("xmb.theme.icons")
+    val iconsDesc = str("xmb.theme.icons.desc")
+    return XmbNode.Folder(
+        key = "settings.theme",
+        title = sysconf("msg_theme_settings", "xmb.set.theme"),
+        icon = icon,
+        sub = explanation("msg_theme_settings_explanation"),
+    ) {
+        listOf(
+            XmbNode.Setting(
+                key = "theme.color",
+                title = colorTitle,
+                icon = icon,
+                editor = XmbEditor.Choice(colorLabels, { XmbMode.themeColor.value + 1 }) { XmbMode.setThemeColor(it - 1) },
+                value = { colorLabels.getOrElse(XmbMode.themeColor.value + 1) { colorDefault } },
+                description = colorDesc,
+            ),
+            toggle("theme.backgrounds", backgrounds, icon, on, off, backgroundsDesc, { XmbMode.gameBackgrounds.value }) { XmbMode.setGameBackgrounds(it) },
+            toggle("theme.icons", icons, icon, on, off, iconsDesc, { XmbMode.animatedIcons.value }) { XmbMode.setAnimatedIcons(it) },
+        )
+    }
+}
+
+private fun toggle(
+    key: String,
+    title: String,
+    icon: XmbIcon,
+    on: String,
+    off: String,
+    description: String?,
+    get: () -> Boolean,
+    set: (Boolean) -> Unit,
+) = XmbNode.Setting(
+    key = key,
+    title = title,
+    icon = icon,
+    editor = XmbEditor.Toggle(get, set),
+    value = { if (get()) on else off },
+    description = description,
+)
+
+private fun percent(key: String, title: String, icon: XmbIcon, get: () -> Int, set: (Int) -> Unit) = XmbNode.Setting(
+    key = key,
+    title = title,
+    icon = icon,
+    editor = XmbEditor.Range(0f, 100f, 5f, { get().toFloat() }, { set(it.roundToInt()) }) { "${it.roundToInt()}%" },
+    value = { "${get()}%" },
+)
 
 /** One settings tab, as the settings screen shows it, in the XMB's panel. */
 @Composable

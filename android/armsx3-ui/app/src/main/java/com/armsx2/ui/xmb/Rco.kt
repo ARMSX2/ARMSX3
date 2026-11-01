@@ -7,7 +7,7 @@ import java.util.zip.Inflater
 
 /**
  * A PS3 resource container (.rco) from the installed firmware, read far enough to take named
- * images and sounds out of it: the XMB's own icons and system sounds.
+ * images, sounds and text out of it: the XMB's own icons, system sounds and words.
  *
  * Layout, big-endian, worked out from the firmware's own files (xmb_ingame.rco,
  * explore_category_*.rco, system_plugin.rco) with the PSP's RCO format as the guide:
@@ -15,19 +15,28 @@ import java.util.zip.Inflater
  *    tables after the 0xA4-byte header are one zlib stream: three words at 0xA4 (packed size,
  *    unpacked size, longest text), the stream at 0xB0. Every table offset in the header then
  *    points into the header followed by the inflated block.
- *  - Header words used here: 0x1C the sound table, 0x24 the image table, 0x40 the names (labels),
- *    and the data areas 0x80 (images) and 0x88 (sounds). Those two are offsets in the FILE.
+ *  - Header words used here: 0x18 the text table, 0x1C the sound table, 0x24 the image table,
+ *    0x40 the names (labels), and the data areas 0x38 (text, with its length at 0x3C), 0x80
+ *    (images) and 0x88 (sounds). The data areas are offsets in the FILE.
  *  - A table entry is a 0x28-byte header (label offset at +4, child count at +0x10, distance to
  *    the next sibling at +0x14) followed by its own fields:
  *      image: u16 format (5 = GIM), u16 compression (1 = zlib), u32 packed size, u32 offset into
  *             the image data, and the unpacked size when compressed;
  *      sound: u16 format (1 = VAG), u8 channel count, a pad byte, u32 total, u32 offset, then a
- *             (size, offset) pair per channel, each channel a whole VAG file.
+ *             (size, offset) pair per channel, each channel a whole VAG file;
+ *      text:  one entry per language: u16 language, u16 encoding (1 = UTF-16), u32 count, then
+ *             per string a label offset, a length in bytes and an offset into that language's text.
+ *  - The text data holds each language's text as its own zlib block: u16 language, u16, u32
+ *    distance to the next block (0 after the last), u32 packed and u32 unpacked size, the stream.
+ *    Languages are the console's numbering: 0 Japanese, 1 English, 2 French, 3 Spanish, 4 German,
+ *    5 Italian, 6 Dutch, 7 Portuguese, 8 Russian, 9 Korean, 10 and 11 Chinese (Traditional,
+ *    Simplified), 12 Finnish, 13 Swedish, 14 Danish, 15 Norwegian, 16 Polish, 17 Portuguese
+ *    (Brazil), 18 English (UK), 19 Turkish.
  *
  * The firmware is the user's own install, but it is still read defensively: every offset and size
  * is checked against what it points into, and anything that does not fit counts as absent.
  */
-class Rco private constructor(private val file: ByteArray, private val table: ByteArray) {
+class Rco private constructor(private val file: ByteArray, private val table: ByteArray, private val compressed: Boolean) {
     private class ImageEntry(val compression: Int, val packed: Int, val offset: Long, val size: Int)
     private class SoundEntry(val format: Int, val channels: List<Pair<Long, Int>>)
 
@@ -126,6 +135,65 @@ class Rco private constructor(private val file: ByteArray, private val table: By
         }
     }
 
+    /** Every string in [language] (the console's numbering, above) by name; empty when there are none. */
+    fun strings(language: Int): Map<String, String> {
+        val textTable = try {
+            be32(file, 0x18)
+        } catch (_: Damaged) {
+            return emptyMap()
+        }
+        if (textTable == NONE || !compressed) return emptyMap()
+        return try {
+            readStrings(textTable, language)
+        } catch (_: Damaged) {
+            emptyMap()
+        } catch (_: RuntimeException) {
+            emptyMap()
+        }
+    }
+
+    private fun readStrings(textTable: Long, language: Int): Map<String, String> {
+        val dataStart = be32(file, 0x38)
+        val dataEnd = dataStart + be32(file, 0x3C)
+        if (dataStart == NONE || dataEnd > file.size) return emptyMap()
+        var at = dataStart
+        var text: ByteArray? = null
+        while (at + 16 <= dataEnd) {
+            val next = be32(file, at + 4)
+            if (be16(file, at) == language) {
+                val packed = be32(file, at + 8)
+                val unpacked = be32(file, at + 12)
+                if (packed <= 0 || at + 16 + packed > dataEnd || unpacked <= 0 || unpacked > MAX_TEXT) return emptyMap()
+                text = inflate(file.copyOfRange((at + 16).toInt(), (at + 16 + packed).toInt()), unpacked.toInt())
+                break
+            }
+            if (next <= 0) break
+            at += next
+        }
+        val blob = text ?: return emptyMap()
+        val labels = be32(file, 0x40)
+        val out = HashMap<String, String>()
+        walk(textTable) { entry, _ ->
+            if (be16(table, entry + 0x28) != language) return@walk
+            val charset = when (be16(table, entry + 0x2A)) {
+                0 -> Charsets.UTF_8
+                2 -> Charsets.UTF_32BE
+                else -> Charsets.UTF_16BE
+            }
+            val count = be32(table, entry + 0x2C)
+            if (count > MAX_STRINGS) throw Damaged()
+            for (k in 0 until count) {
+                val index = entry + 0x30 + 12L * k
+                val name = be32(table, index)
+                val length = be32(table, index + 4)
+                val offset = be32(table, index + 8)
+                if (name == NONE || offset + length > blob.size) continue
+                out[label(labels, name)] = String(blob, offset.toInt(), length.toInt(), charset).trimEnd('\u0000')
+            }
+        }
+        return out
+    }
+
     private class Damaged : Exception() {
         override fun fillInStackTrace(): Throwable = this
     }
@@ -138,6 +206,8 @@ class Rco private constructor(private val file: ByteArray, private val table: By
         private const val MAX_TABLE = 16 shl 20
         private const val MAX_IMAGE = 8L shl 20
         private const val MAX_SOUND = 4 shl 20
+        private const val MAX_TEXT = 4 shl 20
+        private const val MAX_STRINGS = 8192L
         private const val MAX_ENTRIES = 4096L
         private const val MAX_NAME = 256
 
@@ -155,7 +225,8 @@ class Rco private constructor(private val file: ByteArray, private val table: By
                 ((bytes[at + 2].toLong() and 0xFF) shl 8) or (bytes[at + 3].toLong() and 0xFF)
             if (bytes.size < 0xB0 || word(0) != MAGIC) return null
             return try {
-                val table = if ((word(0x0C) and 0xF0L) == 0x10L) {
+                val compressed = (word(0x0C) and 0xF0L) == 0x10L
+                val table = if (compressed) {
                     val packed = word(0xA4)
                     val unpacked = word(0xA8)
                     if (packed <= 0 || packed > bytes.size - 0xB0L || unpacked <= 0 || unpacked > MAX_TABLE) return null
@@ -164,7 +235,7 @@ class Rco private constructor(private val file: ByteArray, private val table: By
                 } else {
                     bytes
                 }
-                Rco(bytes, table).also { it.parse() }
+                Rco(bytes, table, compressed).also { it.parse() }
             } catch (_: Damaged) {
                 null
             } catch (_: RuntimeException) {

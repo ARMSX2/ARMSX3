@@ -91,6 +91,8 @@ fun XmbView(
     showClock: Boolean = true,
     /** Registers [controller] as the pad's target while shown. */
     takesPad: Boolean = true,
+    /** Circle with nothing open goes back to a game, as the in-game XMB's does; hinted in the corner. */
+    backToGame: Boolean = false,
 ) {
     controller.attach(columns)
     // The system back gesture closes what is open in the XMB before anything behind it hears it.
@@ -198,16 +200,33 @@ fun XmbView(
 
             // The corner hint: Back while something is open, the focused item's options otherwise.
             val node = controller.focusedNode()
+            val back = XmbText.get("xmb_ingame", "msg_help_back", ": " + com.armsx2.i18n.str("xmb.back"))
             when {
-                controller.busy || depth > 0 -> CornerHint(m, font, "○", Color(0xFFE85C5C), com.armsx2.i18n.str("xmb.back")) { controller.back() }
-                node is XmbNode.Game || (node is XmbNode.Action && node.options.isNotEmpty()) ->
-                    CornerHint(m, font, "△", Color(0xFF5CD68A), com.armsx2.i18n.str("xmb.options")) { controller.openOptions() }
+                controller.busy || depth > 0 -> CornerHint(m, font, "\u25CB", CircleRed, back) { controller.back() }
+                node is XmbNode.Game || (node is XmbNode.Action && node.options.isNotEmpty()) -> CornerHint(
+                    m,
+                    font,
+                    "\u25B3",
+                    TriangleGreen,
+                    XmbText.get("explore_plugin_full", "msg_option_with_icon", ": " + com.armsx2.i18n.str("xmb.options")),
+                ) { controller.openOptions() }
+                backToGame -> CornerHint(
+                    m,
+                    font,
+                    "\u25CB",
+                    CircleRed,
+                    XmbText.get("xmb_ingame", "msg_help_back_to_game", ": " + com.armsx2.i18n.str("xmb.backToGame")),
+                ) { controller.back() }
             }
         }
 
         controller.panel?.let { panel -> PanelHost(controller, panel, m, font) }
+        controller.dialog?.let { d -> key(d) { DialogBox(controller, d, m, font) } }
     }
 }
+
+private val CircleRed = Color(0xFFE85C5C)
+private val TriangleGreen = Color(0xFF5CD68A)
 
 /** The layout in dp, from the console's 720p units. */
 internal class Metrics(val u: Float, val width: Float, val height: Float) {
@@ -499,7 +518,7 @@ private fun ColumnItems(
                     },
             ) {
                 // The focused game plays its ICON1, as on the console.
-                val pam = if (isGame && isCurrent && i == focus && controller.levels.isEmpty()) {
+                val pam = if (isGame && isCurrent && i == focus && controller.levels.isEmpty() && XmbMode.animatedIcons.value) {
                     remember(node.key) { XmbMedia.icon1((node as XmbNode.Game).mediaDir) }
                 } else {
                     null
@@ -750,7 +769,13 @@ private fun PanelHost(controller: XmbController, panel: XmbNode.Panel, m: Metric
                 XmbIconView(panel.icon, (44f * m.u).dp)
                 Spacer(Modifier.width((16f * m.u).dp))
                 Text(panel.title, style = xmbText(font, m.titleSp), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                HintChip(m, font, "○", Color(0xFFE85C5C), com.armsx2.i18n.str("xmb.back")) { controller.back() }
+                HintChip(
+                    m,
+                    font,
+                    "\u25CB",
+                    CircleRed,
+                    XmbText.get("xmb_ingame", "msg_help_back", ": " + com.armsx2.i18n.str("xmb.back")),
+                ) { controller.back() }
             }
             Box(Modifier.fillMaxSize().padding(horizontal = (24f * m.u).dp)) {
                 panel.content { controller.back() }
@@ -759,14 +784,72 @@ private fun PanelHost(controller: XmbController, panel: XmbNode.Panel, m: Metric
     }
 }
 
+/** A button hint in the bottom right corner, its right edge where the console's sits. */
 @Composable
 private fun CornerHint(m: Metrics, font: FontFamily, glyph: String, glyphColor: Color, label: String, onTap: () -> Unit) {
     Box(
-        Modifier.offset {
-            IntOffset(((m.width - 70f * m.u - 120f * m.u) * density).roundToInt(), ((m.height - 57f * m.u - 30f * m.u) * density).roundToInt())
-        },
+        Modifier.fillMaxSize().padding(end = (70f * m.u).dp, bottom = (44f * m.u).dp),
+        contentAlignment = Alignment.BottomEnd,
     ) {
         HintChip(m, font, glyph, glyphColor, label, onTap)
+    }
+}
+
+/**
+ * The console's dialog: a dark band across the middle with the question, and its buttons under
+ * it. Tapping a button picks it; tapping outside the band is Circle.
+ */
+@Composable
+private fun DialogBox(controller: XmbController, d: XmbController.Dialog, m: Metrics, font: FontFamily) {
+    val appear = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { appear.animateTo(1f, tween(160, easing = FastOutSlowInEasing)) }
+    val edge = Color.White.copy(alpha = 0.32f)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .graphicsLayer { alpha = appear.value }
+            .background(Color.Black.copy(alpha = 0.3f))
+            .pointerInput(Unit) { detectTapGestures { controller.back() } },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(Color(0xE6101016), Color(0xF2060609), Color(0xE6101016))))
+                .pointerInput(Unit) { detectTapGestures { } },
+        ) {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(edge))
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth().padding(vertical = (34f * m.u).dp, horizontal = (80f * m.u).dp),
+            ) {
+                Text(d.message, style = xmbText(font, m.titleSp * 0.82f), textAlign = TextAlign.Center)
+                Spacer(Modifier.height((30f * m.u).dp))
+                Row(horizontalArrangement = Arrangement.spacedBy((36f * m.u).dp)) {
+                    d.buttons.forEachIndexed { i, button ->
+                        val focused = i == d.focus
+                        val shape = RoundedCornerShape((4f * m.u).dp)
+                        Box(
+                            Modifier
+                                .widthIn(min = (160f * m.u).dp)
+                                .background(Color.White.copy(alpha = if (focused) 0.24f else 0.05f), shape)
+                                .border(1.dp, Color.White.copy(alpha = if (focused) 0.7f else 0.18f), shape)
+                                .pointerInput(i) {
+                                    detectTapGestures {
+                                        d.focus = i
+                                        controller.confirm()
+                                    }
+                                }
+                                .padding(horizontal = (26f * m.u).dp, vertical = (9f * m.u).dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(button.title, style = xmbText(font, m.smallTitleSp, if (focused) 1f else 0.75f), maxLines = 1)
+                        }
+                    }
+                }
+            }
+            Box(Modifier.fillMaxWidth().height(1.dp).background(edge))
+        }
     }
 }
 
@@ -782,7 +865,7 @@ private fun HintChip(m: Metrics, font: FontFamily, glyph: String, glyphColor: Co
             .padding(horizontal = (10f * m.u).dp, vertical = (4f * m.u).dp),
     ) {
         Text(glyph, style = xmbText(font, m.subtitleSp * 1.1f).copy(color = glyphColor))
-        Text(" : $label", style = xmbText(font, m.subtitleSp * 1.15f))
+        Text(" $label", style = xmbText(font, m.subtitleSp * 1.15f), maxLines = 1)
     }
 }
 

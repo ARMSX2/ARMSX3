@@ -76,9 +76,9 @@ private val ExitRed = Color(0xFFE60012)
 // Community/project links for the drawer's About section. Plain https on purpose: Android App
 // Links hand these to the Discord/GitHub apps when they're installed and fall back to the
 // browser when they aren't, so there's no app-specific scheme to special-case.
-private const val DiscordUrl = "https://discord.gg/2Tynvwhc4A"
-private const val GithubUrl = "https://github.com/ARMSX2/ARMSX3"
-private const val WebsiteUrl = "https://armsx2.net/"
+internal const val DiscordUrl = "https://discord.gg/2Tynvwhc4A"
+internal const val GithubUrl = "https://github.com/ARMSX2/ARMSX3"
+internal const val WebsiteUrl = "https://armsx2.net/"
 
 /**
  * Opens an external link, telling the user when nothing on the device can handle it.
@@ -93,7 +93,7 @@ private const val WebsiteUrl = "https://armsx2.net/"
  * handle this?" guard can read null for a link that would in fact open — turning a working row
  * into a silent no-op. startActivity() is NOT filtered, so launch it and catch the real miss.
  */
-private fun openExternalUrl(context: Context, url: String) {
+internal fun openExternalUrl(context: Context, url: String) {
     try {
         context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
     } catch (_: ActivityNotFoundException) {

@@ -88,13 +88,23 @@ object XmbOriginalColors {
     @Volatile private var cached: Gradient? = null
     @Volatile private var cachedAt = 0L
 
-    /** The gradient for the current local month and time. */
+    /** Drop the cached gradient, for a change of Theme Settings > Color to show at once. */
+    fun invalidate() {
+        cachedAt = 0L
+    }
+
+    /**
+     * The gradient for the current local month and time; in XMB mode, the month Theme Settings
+     * keeps instead, when it keeps one.
+     */
     fun now(): Gradient {
         val nowMs = System.currentTimeMillis()
         cached?.let { if (nowMs - cachedAt < 60_000L) return it }
         val cal = Calendar.getInstance()
         val hour = cal.get(Calendar.HOUR_OF_DAY) + cal.get(Calendar.MINUTE) / 60f
-        return at(cal.get(Calendar.MONTH), hour).also {
+        val pinned = XmbMode.pinnedMonth
+        val month = if (pinned in 0..11 && com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl) pinned else cal.get(Calendar.MONTH)
+        return at(month, hour).also {
             cached = it
             cachedAt = nowMs
         }

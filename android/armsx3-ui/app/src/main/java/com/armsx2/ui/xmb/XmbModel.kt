@@ -137,6 +137,11 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
         var focus by mutableIntStateOf(0)
     }
 
+    /** A question in the console's dialog: [message] over [buttons] side by side (Yes, No). */
+    class Dialog(val message: String, val buttons: List<XmbOption>, focus: Int = 0) {
+        var focus by mutableIntStateOf(focus)
+    }
+
     /** Set by the view each frame: the columns as they are now. */
     internal var columns: List<XmbColumn> = emptyList()
 
@@ -147,6 +152,7 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
     var editing by mutableStateOf<Editing?>(null)
     var options by mutableStateOf<Options?>(null)
     var panel by mutableStateOf<XmbNode.Panel?>(null)
+    var dialog by mutableStateOf<Dialog?>(null)
 
     /** Circle with nothing open: the library ignores it, the in-game menu closes. */
     var onBackAtRoot: () -> Unit = {}
@@ -171,7 +177,19 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
     /** The item the cursor is on, at whatever depth. */
     fun focusedNode(): XmbNode? = levels.lastOrNull()?.let { it.children.getOrNull(it.focus) } ?: rootNode()
 
-    val busy: Boolean get() = editing != null || options != null || panel != null
+    val busy: Boolean get() = editing != null || options != null || panel != null || dialog != null
+
+    /** Ask [message] with [yes] and [no], as the console asks before turning off or quitting. */
+    fun ask(message: String, yes: String, no: String, focusNo: Boolean = false, onYes: () -> Unit) {
+        XmbSounds.play(XmbSounds.Sfx.OPTION)
+        dialog = Dialog(message, listOf(XmbOption(yes, onYes), XmbOption(no) {}), if (focusNo) 1 else 0)
+    }
+
+    /** Tell [message] with a single [ok]. */
+    fun tell(message: String, ok: String) {
+        XmbSounds.play(XmbSounds.Sfx.ERROR)
+        dialog = Dialog(message, listOf(XmbOption(ok) {}))
+    }
 
     fun selectColumn(index: Int) {
         if (index == column || index !in columns.indices) return
@@ -199,6 +217,15 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
     }
 
     fun move(dx: Int, dy: Int) {
+        dialog?.let { d ->
+            val step = if (dx != 0) dx else dy
+            val next = (d.focus + step).coerceIn(0, (d.buttons.size - 1).coerceAtLeast(0))
+            if (next != d.focus) {
+                d.focus = next
+                XmbSounds.play(XmbSounds.Sfx.CURSOR)
+            }
+            return
+        }
         options?.let { o ->
             if (dy != 0) {
                 val next = (o.focus + dy).coerceIn(0, (o.options.size - 1).coerceAtLeast(0))
@@ -252,6 +279,13 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
     }
 
     fun confirm() {
+        dialog?.let { d ->
+            val pick = d.buttons.getOrNull(d.focus)
+            dialog = null
+            XmbSounds.play(XmbSounds.Sfx.DECIDE)
+            pick?.action?.invoke()
+            return
+        }
         options?.let { o ->
             val pick = o.options.getOrNull(o.focus)
             options = null
@@ -310,6 +344,7 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
 
     fun back() {
         when {
+            dialog != null -> dialog = null
             options != null -> options = null
             editing != null -> {
                 // A range applies as it moves, so backing out keeps where it was left; a list
@@ -355,6 +390,7 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
     }
 
     fun closeAll() {
+        dialog = null
         options = null
         editing = null
         panel = null

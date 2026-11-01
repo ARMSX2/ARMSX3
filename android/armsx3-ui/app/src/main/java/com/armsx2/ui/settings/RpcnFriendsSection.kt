@@ -124,8 +124,8 @@ internal fun parseRpcnInvites(json: String): List<RpcnInvite> = runCatching {
  * also keeps a close from overtaking a sign-in that is still in flight when the screen goes away:
  * the native side counts opens, and a close that ran first would leave the session held for good.
  */
-private val sessionExecutor = Executors.newSingleThreadExecutor { Thread(it, "rpcn-friends") }
-private val sessionDispatcher = sessionExecutor.asCoroutineDispatcher()
+internal val rpcnSessionExecutor = Executors.newSingleThreadExecutor { Thread(it, "rpcn-friends") }
+internal val rpcnSessionDispatcher = rpcnSessionExecutor.asCoroutineDispatcher()
 
 /**
  * The RPCN friend list with its requests, shared by the RPCN settings and the Friends tabs.
@@ -201,7 +201,7 @@ internal fun RpcnFriendsList(
 
     DisposableEffect(Unit) {
         onDispose {
-            repeat(opened) { sessionExecutor.execute { Rpcs3Bridge.rpcnFriendsSession(false) } }
+            repeat(opened) { rpcnSessionExecutor.execute { Rpcs3Bridge.rpcnFriendsSession(false) } }
         }
     }
 
@@ -225,7 +225,7 @@ internal fun RpcnFriendsList(
         connectTried = true
         opened++
         scope.launch {
-            val result = withContext(sessionDispatcher) { Rpcs3Bridge.rpcnFriendsSession(true) }
+            val result = withContext(rpcnSessionDispatcher) { Rpcs3Bridge.rpcnFriendsSession(true) }
             status = result
             busy = false
             read()

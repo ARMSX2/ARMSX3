@@ -24,6 +24,10 @@ import java.io.File
  *    tex_premo, item_tex_trophy, item_tex_ps3util and the rest).
  *  - system_plugin.rco: snd_cursor, snd_decide, snd_cancel, snd_category_decide, snd_option and
  *    others, stereo VAG at 48 kHz.
+ *  - Every one of these also holds the words it shows, in each of the console's languages: the
+ *    category names in xmb_ingame.rco (msg_user, msg_setting ... msg_friend), each column's items
+ *    in its explore_category_<category>.rco (msg_update, msg_game_setting, msg_gamedata_utility,
+ *    msg_power_off_console2), and the shared ones in explore_plugin_full.rco (msg_info, msg_del).
  * The fonts are dev_flash/data/font/SCE-PS3-*.TTF.
  *
  * Everything here reads files, so call it off the main thread; results are cached for the run.
@@ -54,6 +58,36 @@ object XmbFirmware {
         return channels.map { Vag.decode(it) ?: return null }
     }
 
+    private val texts = HashMap<String, Map<String, String>>()
+
+    /**
+     * Every string in [rco] in the console's [language] (see [Rco]), or empty. A container opened
+     * only for its words is not kept: explore_plugin_full.rco alone is 2.4 MB.
+     */
+    @Synchronized
+    fun strings(rco: String, language: Int): Map<String, String> = texts.getOrPut("$rco/$language") {
+        val container = rcos[rco] ?: devFlash()?.let { Rco.open(File(it, "vsh/resource/$rco.rco")) }
+        container?.strings(language) ?: emptyMap()
+    }
+
+    /** The console's number for the app's language [code], or null for one the console never had. */
+    fun consoleLanguage(code: String): Int? = when (code) {
+        "ja" -> 0
+        "en" -> 1
+        "fr" -> 2
+        "es" -> 3
+        "de" -> 4
+        "it" -> 5
+        "ru" -> 8
+        "ko" -> 9
+        "zh-TW" -> 10
+        "zh-CN" -> 11
+        "pl" -> 16
+        "pt-BR" -> 17
+        "tr" -> 19
+        else -> null
+    }
+
     /** A file under dev_flash, or null. */
     fun file(relative: String): File? = devFlash()?.let { File(it, relative) }?.takeIf { it.isFile }
 
@@ -82,6 +116,41 @@ object XmbFirmware {
         return made
     }
 }
+
+/**
+ * The XMB's words: the firmware's own, in the app's language, wherever the console said the same
+ * thing (the category names, Turn Off System, Game Data Utility, Information and the rest). In a
+ * language the console never had, without firmware, or before [load] has read it, the app's own
+ * string stands in. ARMSX3's own items (RPCN, Exit XMB Mode) are always the app's.
+ */
+object XmbText {
+    /**
+     * The containers the XMB takes words from: the category names and button hints, nearly every
+     * item and question, the Settings column, and the in-game menu's.
+     */
+    private val SOURCES = listOf("xmb_ingame", "explore_plugin_full", "explore_category_sysconf", "impose_plugin")
+
+    private val table = androidx.compose.runtime.mutableStateOf<Map<String, Map<String, String>>>(emptyMap())
+    @Volatile private var loadedFor: String? = null
+
+    /** Read the firmware's words for the app's language [code]. Off the main thread. */
+    fun load(code: String) {
+        if (loadedFor == code) return
+        val language = XmbFirmware.consoleLanguage(code)
+        table.value = if (language == null) emptyMap() else SOURCES.associateWith { XmbFirmware.strings(it, language) }
+        loadedFor = code
+    }
+
+    /** The firmware's [id] from [rco], or [fallback]. Reading it in composition follows [load]. */
+    fun get(rco: String, id: String, fallback: String): String = find(rco, id) ?: fallback
+
+    /** The firmware's [id] from [rco], or null. */
+    fun find(rco: String, id: String): String? = table.value[rco]?.get(id)?.takeIf { it.isNotBlank() }
+}
+
+/** The firmware's words for [id] in [rco], or the app's string [key]. */
+@androidx.compose.runtime.Composable
+fun fw(rco: String, id: String, key: String): String = XmbText.get(rco, id, com.armsx2.i18n.str(key))
 
 /** The XMB's system sounds, from the firmware when it has them, else the app's own menu sounds. */
 object XmbSounds {

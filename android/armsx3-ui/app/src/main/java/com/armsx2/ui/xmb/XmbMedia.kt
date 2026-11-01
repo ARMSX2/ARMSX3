@@ -80,7 +80,7 @@ object XmbMediaCache {
 /** The focused game's PIC1 behind the XMB, faded in after it has stayed focused a moment. */
 @Composable
 fun XmbGameBackdrop(node: XmbNode?) {
-    val game = node as? XmbNode.Game
+    val game = (node as? XmbNode.Game)?.takeIf { XmbMode.gameBackgrounds.value }
     val pic1 by produceState<File?>(null, game?.key) {
         value = withContext(Dispatchers.IO) { XmbMedia.pic1(game?.mediaDir) }
     }
@@ -110,7 +110,7 @@ fun XmbSnd0Preview(controller: XmbController) {
     val lifecycleState by lifecycle.currentStateAsState()
     val resumed = lifecycleState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
     val node = controller.rootNode() as? XmbNode.Game
-    val quiet = controller.busy || controller.levels.isNotEmpty() || XmbMode.booting.value || !resumed
+    val quiet = controller.busy || controller.levels.isNotEmpty() || XmbMode.booting.value || !resumed || !XmbMode.gameMusic.value
     androidx.compose.runtime.LaunchedEffect(node?.key, quiet) {
         if (node == null || quiet) return@LaunchedEffect
         kotlinx.coroutines.delay(1200)
