@@ -83,5 +83,5 @@ object Screenshots {
     }
 
     private const val POLL_MS = 100
-    private const val PUBLISH_TIMEOUT_MS = 5_000
+    private const val PUBLISH_TIMEOUT_MS = 10_000
 }

@@ -62,6 +62,9 @@ import kotlin.math.roundToInt
 fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = null, inGame: Boolean = false): List<XmbNode> {
     val forGame = game != null
     val (on, off) = xmbOnOff()
+    // One collector per tab for as long as this list is up: the column is rebuilt as it recomposes,
+    // and a tab's rows must keep landing in the collector its open list reads.
+    val collectors = remember(game?.uri, inGame, on, off) { HashMap<SettingsCategory, XmbCollector>() }
     fun tab(category: SettingsCategory, title: String, icon: String, sub: String? = null): XmbNode {
         val i = XmbIcon("explore_category_sysconf", icon, "\u2699")
         // The patch and mod lists, and a game's details, are pictures and lists of their own, not rows
@@ -69,7 +72,7 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
         if (category in PANEL_TABS) {
             return XmbNode.Panel("settings.tab.${category.name}", title, i, sub) { _ -> XmbSettingsTabPanel(category, game) }
         }
-        val collector = XmbCollector(on, off, i)
+        val collector = collectors.getOrPut(category) { XmbCollector(on, off, i) }
         return XmbNode.Folder(
             key = "settings.tab.${category.name}",
             title = title,

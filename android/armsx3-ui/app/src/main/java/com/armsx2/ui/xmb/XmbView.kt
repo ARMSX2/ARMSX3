@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -972,6 +973,7 @@ private fun XmbClock(m: Metrics, font: FontFamily) {
         }
     }
     val avatar = com.armsx2.ui.settings.rememberCurrentAvatar()
+    val discord = com.armsx2.DiscordPresence.self.value?.avatarUrl?.takeIf { it.isNotBlank() }
     val text = remember(now) {
         val locale = java.util.Locale.getDefault()
         val date = android.text.format.DateFormat.getBestDateTimePattern(locale, "dM")
@@ -995,7 +997,17 @@ private fun XmbClock(m: Metrics, font: FontFamily) {
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.align(Alignment.CenterEnd).padding(end = (60f * m.u).dp),
         ) {
-            // The player's RPCN avatar before the date, as the console shows its user.
+            // The player's Discord picture first, when an account is linked, then the RPCN avatar
+            // before the date, as the console shows its user.
+            discord?.let { url ->
+                AsyncImage(
+                    model = url,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size((27f * m.u).dp).clip(CircleShape).border(1.dp, Color.White.copy(alpha = 0.6f), CircleShape),
+                )
+                Spacer(Modifier.width((9f * m.u).dp))
+            }
             avatar?.let {
                 Image(
                     it,

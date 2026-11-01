@@ -591,8 +591,32 @@ public final class NativeApp {
     /** [MAPPED] -> _armsx3_changeDisc. Use Rpcs3Bridge.changeDisc for the reason it failed. */
     public static boolean changeDisc(String path) { return Rpcs3Bridge.changeDisc(path) == 0; }
 
-    /** [TODO] */
-    public static void saveScreenshot(String pngPath) { Unsupported.note("saveScreenshot"); }
+    /**
+     * [MAPPED] -> _armsx3_saveScreenshot. The core hands over the frame's pixels and the PNG is made
+     * here, off the caller's thread: the core waits for a frame, and compressing one takes a moment.
+     * The PNG appears at [pngPath] whole, renamed into place once written.
+     */
+    public static void saveScreenshot(String pngPath) {
+        new Thread(() -> {
+            java.io.File png = new java.io.File(pngPath);
+            java.io.File raw = new java.io.File(pngPath + ".ax3t");
+            java.io.File part = new java.io.File(pngPath + ".part");
+            try {
+                if (!Rpcs3Bridge.saveScreenshot(raw.getAbsolutePath())) return;
+                android.graphics.Bitmap frame = Rpcs3Bridge.thumbnailBitmap(raw);
+                if (frame == null) return;
+                try (java.io.FileOutputStream out = new java.io.FileOutputStream(part)) {
+                    frame.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out);
+                }
+                frame.recycle();
+                if (!part.renameTo(png)) part.delete();
+            } catch (Exception e) {
+                part.delete();
+            } finally {
+                raw.delete();
+            }
+        }, "screenshot").start();
+    }
     public static void captureGsDump(int frames) { Unsupported.note("captureGsDump"); }
     public static void flushShaderCache() { Unsupported.note("flushShaderCache"); }
     public static void dumpPgoProfile() { Unsupported.note("dumpPgoProfile"); }

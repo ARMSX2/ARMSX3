@@ -444,6 +444,68 @@ static bool armsx3_write_thumbnail(const std::string &path) {
   return true;
 }
 
+// The last frame handed over, at its own size, for a screenshot: the slot preview above is cut
+// down to tile size. Moved in rather than copied, and only turned into RGBA when written out.
+static shared_mutex g_frame_mutex;
+static std::vector<u8> g_frame_pixels;
+static u32 g_frame_width = 0;
+static u32 g_frame_height = 0;
+static bool g_frame_bgra = false;
+static atomic_t<u64> g_frame_generation{0};
+
+// How long a screenshot waits for a running game's next frame. Nothing is waiting on the picture
+// but the user, so this can be generous next to the save path's wait.
+static constexpr int kShotWaitMs = 1000;
+
+static void armsx3_keep_frame(std::vector<u8> &&src, u32 width, u32 height, bool is_bgra) {
+  if (width == 0 || height == 0 || src.size() < static_cast<usz>(width) * height * 4) {
+    return;
+  }
+
+  {
+    std::lock_guard lock(g_frame_mutex);
+    g_frame_pixels = std::move(src);
+    g_frame_width = width;
+    g_frame_height = height;
+    g_frame_bgra = is_bgra;
+  }
+
+  g_frame_generation++;
+}
+
+// The kept frame as "AX3T" like a slot preview, at full size, for the app to make a PNG of.
+static bool armsx3_write_frame(const std::string &path) {
+  std::lock_guard lock(g_frame_mutex);
+
+  if (g_frame_pixels.empty()) {
+    return false;
+  }
+
+  const usz count = static_cast<usz>(g_frame_width) * g_frame_height;
+  std::vector<u8> rgba(count * 4);
+  const u8 *src = g_frame_pixels.data();
+  u8 *dst = rgba.data();
+
+  for (usz i = 0; i < count; i++, src += 4, dst += 4) {
+    dst[0] = g_frame_bgra ? src[2] : src[0];
+    dst[1] = src[1];
+    dst[2] = g_frame_bgra ? src[0] : src[2];
+    dst[3] = 0xff;
+  }
+
+  fs::file out(path, fs::rewrite);
+
+  if (!out) {
+    return false;
+  }
+
+  const u32 header[2] = {g_frame_width, g_frame_height};
+  out.write("AX3T", 4);
+  out.write(header, sizeof(header));
+  out.write(rgba.data(), rgba.size());
+  return true;
+}
+
 struct GraphicsFrame : GSFrameBase {
   mutable ANativeWindow *activeNativeWindow = nullptr;
   mutable int width = 0;
@@ -703,6 +765,7 @@ public:
   void take_screenshot(std::vector<u8> &&sshot_data, u32 sshot_width,
                        u32 sshot_height, bool is_bgra) override {
     armsx3_store_thumbnail(sshot_data, sshot_width, sshot_height, is_bgra);
+    armsx3_keep_frame(std::move(sshot_data), sshot_width, sshot_height, is_bgra);
   }
   // Added upstream after the earlier fork split off. Never called here: the only caller is the Qt
   // gs_frame, and rpcs3qt is not built for Android. Framerate is counted in flip() instead.
@@ -5295,6 +5358,30 @@ extern "C" void _armsx3_pause() {
   }
 
   Emu.Pause();
+}
+
+// A screenshot: the frame at its own size, written for the app to turn into a PNG. A running
+// game is asked for its next frame. A paused one has none to give, so the frame kept on the way
+// into the pause (the game as it was when paused) is the one written.
+extern "C" bool _armsx3_saveScreenshot(const char *path) {
+  if (path == nullptr || *path == '\0') {
+    return false;
+  }
+
+  if (Emu.IsRunning()) {
+    const u64 before = g_frame_generation;
+    g_user_asked_for_screenshot = true;
+
+    for (int waited = 0; waited < kShotWaitMs && g_frame_generation == before; waited += 10) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    if (g_frame_generation == before) {
+      armsx3_android.warning("saveScreenshot: no frame arrived in %dms", kShotWaitMs);
+    }
+  }
+
+  return armsx3_write_frame(path);
 }
 
 extern "C" void _armsx3_openHomeMenu() { open_home_menu_async(); }

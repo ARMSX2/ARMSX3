@@ -170,6 +170,9 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
 
         internal fun adopt(fresh: XmbNode) {
             if (fresh === node) return
+            // A list with a hidden host is filled by that host, which stays the one composed for
+            // this list: a fresh copy of the folder may be reading another collector, never filled.
+            if ((node as? XmbNode.Folder)?.host != null) return
             node = fresh
             if (fresh is XmbNode.Folder) {
                 if (fresh.live) live = fresh.children else { live = null; fixed = fresh.children() }

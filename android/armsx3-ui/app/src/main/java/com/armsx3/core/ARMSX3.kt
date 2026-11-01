@@ -334,6 +334,10 @@ class ARMSX3 {
     /** Arm a frame dump of the next frame (1 = final image, 2 = every render pass), saved as PNGs to
      *  config/captures/. False when the renderer cannot dump frames. */
     external fun dumpFrame(mode: Int): Boolean
+
+    /** Write the game's frame at its own size to [path] ("AX3T" + u32 width + u32 height + RGBA8):
+     *  a running game's next frame, or a paused game's frame from when it was paused. */
+    external fun saveScreenshot(path: String): Boolean
     external fun loginUser(userId: String)
     external fun getUser(): String
     external fun getTitleId(): String

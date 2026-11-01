@@ -62,6 +62,7 @@ struct CoreApi {
   void (*openHomeMenu)();
   void (*captureFrame)();
   bool (*dumpFrame)(int mode);
+  bool (*saveScreenshot)(const char *path);
   std::string (*getTitleId)();
   std::string (*getTitle)();
   unsigned long long (*getFramePeriodNs)();
@@ -249,6 +250,7 @@ struct CoreLibrary : CoreApi {
     result.setAppBackgrounded = reinterpret_cast<decltype(setAppBackgrounded)>(dlsym(handle, "_armsx3_setAppBackgrounded"));
     result.captureFrame = reinterpret_cast<decltype(captureFrame)>(dlsym(handle, "_armsx3_captureFrame"));
     result.dumpFrame = reinterpret_cast<decltype(dumpFrame)>(dlsym(handle, "_armsx3_dumpFrame"));
+    result.saveScreenshot = reinterpret_cast<decltype(saveScreenshot)>(dlsym(handle, "_armsx3_saveScreenshot"));
     result.openHomeMenu = reinterpret_cast<decltype(openHomeMenu)>(dlsym(handle, "_armsx3_openHomeMenu"));
     result.getTitleId = reinterpret_cast<decltype(getTitleId)>(dlsym(handle, "_armsx3_getTitleId"));
     result.getTitle = reinterpret_cast<decltype(getTitle)>(dlsym(handle, "_armsx3_getTitle"));
@@ -841,6 +843,15 @@ extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_captureFrame(JNIEn
   }
 
   return coreLib.captureFrame();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_saveScreenshot(JNIEnv *env,
+                                                                    jobject, jstring path) {
+  if (coreLib.saveScreenshot == nullptr || path == nullptr) {
+      return false;
+  }
+
+  return coreLib.saveScreenshot(unwrap(env, path).c_str());
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_dumpFrame(JNIEnv *env,

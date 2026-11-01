@@ -1450,6 +1450,12 @@ object Rpcs3Bridge {
     fun dumpFrame(mode: Int): Boolean =
         runCatching { ARMSX3.instance.dumpFrame(mode) }.getOrDefault(false)
 
+    /** The game's frame at its own size, as raw pixels in [rawPath] (read with [thumbnailBitmap]).
+     *  Waits up to a second for a running game's next frame. False without a frame to give. */
+    @JvmStatic
+    fun saveScreenshot(rawPath: String): Boolean =
+        runCatching { ARMSX3.instance.saveScreenshot(rawPath) }.getOrDefault(false)
+
     @JvmStatic
     fun rpcnDeleteTrophies(): String =
         runCatching { ARMSX3.instance.rpcnDeleteTrophies() }
