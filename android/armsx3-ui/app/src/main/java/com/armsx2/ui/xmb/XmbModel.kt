@@ -114,6 +114,8 @@ sealed class XmbNode(val key: String, val title: String, val icon: XmbIcon) {
         val value: () -> String,
         val description: String? = null,
         val changed: () -> Boolean = { false },
+        /** What Triangle offers on it, beside changing it. */
+        val options: List<XmbOption> = emptyList(),
     ) : XmbNode(key, title, icon) {
         override val subtitle: String? get() = value()
     }
@@ -257,9 +259,9 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
         dialog = Dialog(message, listOf(XmbOption(yes, onYes), XmbOption(no) {}), if (focusNo) 1 else 0)
     }
 
-    /** Tell [message] with a single [ok]. */
-    fun tell(message: String, ok: String) {
-        XmbSounds.play(XmbSounds.Sfx.ERROR)
+    /** Tell [message] with a single [ok]: with the error sound, or the system's OK one for news that is good. */
+    fun tell(message: String, ok: String, error: Boolean = true) {
+        XmbSounds.play(if (error) XmbSounds.Sfx.ERROR else XmbSounds.Sfx.SYSTEM_OK)
         dialog = Dialog(message, listOf(XmbOption(ok) {}))
     }
 
@@ -453,6 +455,12 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
                 node.onOptions()
             }
             is XmbNode.Action -> if (node.options.isNotEmpty()) {
+                XmbSounds.play(XmbSounds.Sfx.OPTION)
+                options = Options(node.title, node.options)
+            } else {
+                XmbSounds.play(XmbSounds.Sfx.ERROR)
+            }
+            is XmbNode.Setting -> if (node.options.isNotEmpty()) {
                 XmbSounds.play(XmbSounds.Sfx.OPTION)
                 options = Options(node.title, node.options)
             } else {

@@ -1459,5 +1459,19 @@
  "xmb.later": "나중에",
  "xmb.cat.tools": "유틸리티",
  "xmb.game.none": "아직 게임이 없습니다",
- "xmb.game.none.desc": "시스템 설정에서 게임 폴더를 추가하거나 유틸리티에서 패키지를 설치하세요."
+ "xmb.game.none.desc": "시스템 설정에서 게임 폴더를 추가하거나 유틸리티에서 패키지를 설치하세요.",
+ "xmb.packages.install": "패키지 파일 설치",
+ "xmb.packages.install.desc": "이 기기 저장소에 있는 패키지와 라이선스",
+ "xmb.packages.installAsk": "%s을(를) 설치하시겠습니까?",
+ "xmb.packages.installAll": "여기 있는 패키지 %d개 모두",
+ "xmb.packages.updates.desc": "라이브러리 게임에 배포된 업데이트",
+ "xmb.packages.dlc.desc": "게임에 설치된 추가 콘텐츠",
+ "xmb.packages.left.min": "약 %d분 남음",
+ "xmb.packages.left.sec": "약 %d초 남음",
+ "xmb.packages.removeUpdateAsk": "이 게임의 업데이트를 삭제하고 디스크 버전으로 되돌리시겠습니까?",
+ "xmb.removeAsk": "%s을(를) 삭제하시겠습니까?",
+ "xmb.saves.loadAsk": "이 세이브 스테이트를 불러오시겠습니까?",
+ "xmb.avatar.use": "이 아바타 사용",
+ "xmb.avatar.favorite": "즐겨찾기에 추가",
+ "xmb.avatar.unfavorite": "즐겨찾기에서 삭제"
 }

@@ -1459,5 +1459,19 @@
  "xmb.later": "Paşê",
  "xmb.cat.tools": "Amûr",
  "xmb.game.none": "Hêj lîstik tune ne",
- "xmb.game.none.desc": "Di Mîhengên Pergalê de peldankek lîstikan zêde bike, an ji Amûran pakêtekê saz bike."
+ "xmb.game.none.desc": "Di Mîhengên Pergalê de peldankek lîstikan zêde bike, an ji Amûran pakêtekê saz bike.",
+ "xmb.packages.install": "Pelên pakêtê saz bike",
+ "xmb.packages.install.desc": "Pakêt û lîsans li ser bîra vê amûrê",
+ "xmb.packages.installAsk": "%s saz bike?",
+ "xmb.packages.installAll": "Hemû %d pakêtên li vir",
+ "xmb.packages.updates.desc": "Nûkirinên ku ji bo lîstikên pirtûkxaneya te hatine weşandin",
+ "xmb.packages.dlc.desc": "Pêvekên ku ji bo lîstikên te hatine sazkirin",
+ "xmb.packages.left.min": "Nêzîkî %d deqe maye",
+ "xmb.packages.left.sec": "Nêzîkî %d çirke maye",
+ "xmb.packages.removeUpdateAsk": "Nûkirina vê lîstikê rake û vegere guhertoya dîskê?",
+ "xmb.removeAsk": "%s rake?",
+ "xmb.saves.loadAsk": "Vê rewşa tomarkirî bar bike?",
+ "xmb.avatar.use": "Vê avatarê bi kar bîne",
+ "xmb.avatar.favorite": "Li bijarteyan zêde bike",
+ "xmb.avatar.unfavorite": "Ji bijarteyan rake"
 }

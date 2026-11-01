@@ -1459,5 +1459,19 @@
  "xmb.later": "Später",
  "xmb.cat.tools": "Dienstprogramme",
  "xmb.game.none": "Noch keine Spiele",
- "xmb.game.none.desc": "Füge in den Systemeinstellungen einen Spieleordner hinzu oder installiere ein Paket unter Dienstprogramme."
+ "xmb.game.none.desc": "Füge in den Systemeinstellungen einen Spieleordner hinzu oder installiere ein Paket unter Dienstprogramme.",
+ "xmb.packages.install": "Paketdateien installieren",
+ "xmb.packages.install.desc": "Pakete und Lizenzen im Speicher dieses Geräts",
+ "xmb.packages.installAsk": "%s installieren?",
+ "xmb.packages.installAll": "Alle %d Pakete hier",
+ "xmb.packages.updates.desc": "Veröffentlichte Updates für die Spiele in deiner Bibliothek",
+ "xmb.packages.dlc.desc": "Für deine Spiele installierte Zusatzinhalte",
+ "xmb.packages.left.min": "Noch etwa %d Min.",
+ "xmb.packages.left.sec": "Noch etwa %d Sek.",
+ "xmb.packages.removeUpdateAsk": "Das Update dieses Spiels entfernen und zur Disc-Version zurückkehren?",
+ "xmb.removeAsk": "%s entfernen?",
+ "xmb.saves.loadAsk": "Diesen Speicherstand laden?",
+ "xmb.avatar.use": "Diesen Avatar verwenden",
+ "xmb.avatar.favorite": "Zu Favoriten hinzufügen",
+ "xmb.avatar.unfavorite": "Aus Favoriten entfernen"
 }

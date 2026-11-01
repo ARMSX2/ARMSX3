@@ -108,6 +108,9 @@ import org.json.JSONObject
 object RpcnAvatarPicker {
     /** Whether the picker is up. B closes it, through MainActivityRuntime.handleFrontendBack. */
     val open = mutableStateOf(false)
+
+    /** Bumped when the XMB's avatar list gives games another one, so its pictures are read again. */
+    val changed = mutableIntStateOf(0)
 }
 
 /** The size a game asks for at most (SCE_NP_AVATAR_SIZE_LARGE). sceNp scales down from it. */
@@ -413,7 +416,7 @@ internal fun RpcnAvatarImage(modifier: Modifier) {
 @Composable
 internal fun rememberCurrentAvatar(): ImageBitmap? {
     val fallback = rememberDefaultAvatar()
-    val image by produceState<ImageBitmap?>(null, RpcnAvatarPicker.open.value) {
+    val image by produceState<ImageBitmap?>(null, RpcnAvatarPicker.open.value, RpcnAvatarPicker.changed.intValue) {
         if (!RpcnAvatarPicker.open.value) {
             val path = withContext(Dispatchers.IO) { Rpcs3Bridge.avatarCurrent().ifBlank { null } }
             value = path?.let { withContext(Dispatchers.IO) { AvatarImages.load(it, AvatarPixels) } }
@@ -852,3 +855,176 @@ private fun PickerButton(id: String, label: String, enabled: Boolean = true, onC
         modifier = Modifier.controllerFocusable(id, onConfirm = { if (enabled) onClick() }),
     ) { Text(label) }
 }
+
+/**
+ * The avatar in XMB mode, as XMB lists rather than the picker's grid: Use Default, a picture from
+ * storage, avatar packages from storage, the favourites, and every avatar there is, each shown as
+ * itself (read as the list reaches it). Cross gives one to games; Triangle also marks a favourite.
+ */
+@Composable
+internal fun xmbAvatarNode(title: String, sub: String?, icon: com.armsx2.ui.xmb.XmbIcon): com.armsx2.ui.xmb.XmbNode {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val list = remember { mutableStateOf<AvatarList?>(null) }
+    val pictures = remember { androidx.compose.runtime.mutableStateMapOf<String, ImageBitmap>() }
+    val ok = str("action.ok")
+    val cancel = str("action.cancel")
+    val failed = str("rpcn.avatar.failed")
+    val unreadable = str("rpcn.avatar.imageFailed")
+    val installWord = str("rpcn.avatar.install")
+    val installingText = str("rpcn.avatar.installing")
+    val installedText = str("rpcn.avatar.installed")
+    val installFailedText = str("rpcn.avatar.installFailed")
+    val installAsk = str("xmb.packages.installAsk")
+    val useImage = str("rpcn.avatar.useImage")
+    val useDefault = str("rpcn.avatar.useDefault")
+    val allTitle = str("rpcn.avatar.all")
+    val favoritesTitle = str("rpcn.avatar.favorites")
+    val favoritesEmpty = str("rpcn.avatar.favoritesEmpty")
+    val useThis = str("xmb.avatar.use")
+    val favorite = str("xmb.avatar.favorite")
+    val unfavorite = str("xmb.avatar.unfavorite")
+    val none = str("rpcn.avatar.none")
+    val folderIcon = com.armsx2.ui.xmb.XmbIcon("explore_category_game", "item_tex_plain_folder", "\uD83D\uDCC2")
+    val driveIcon = com.armsx2.ui.xmb.XmbIcon("explore_category_photo", "item_tex_usb_connection", "\uD83D\uDCBE")
+    val pictureIcon = com.armsx2.ui.xmb.XmbIcon("explore_category_photo", "photo_tex_default", "\uD83D\uDDBC")
+    val packageIcon = com.armsx2.ui.xmb.XmbIcon("explore_category_game", "item_tex_disc_install", "\uD83D\uDCE6")
+    LaunchedEffect(Unit) { AvatarFavorites.load(context) }
+    val roots = remember { com.armsx2.ui.xmb.XmbFiles.roots(context) }
+
+    fun tell(message: String, error: Boolean) {
+        com.armsx2.ui.xmb.XmbDialogs.target()?.tell(message, ok, error)
+    }
+    fun reload() {
+        scope.launch { list.value = withContext(Dispatchers.IO) { readAvatarList() } }
+    }
+    fun choose(path: String) {
+        scope.launch {
+            val done = withContext(Dispatchers.IO) { Rpcs3Bridge.avatarSelect(path) }
+            if (!done) tell(failed, true)
+            list.value = withContext(Dispatchers.IO) { readAvatarList() }
+            RpcnAvatarPicker.changed.intValue++
+        }
+    }
+    fun usePicture(file: File) {
+        scope.launch {
+            val done = withContext(Dispatchers.IO) {
+                val png = runCatching { file.takeIf { it.length() <= MaxPictureBytes }?.readBytes()?.let(::squareAvatarPng) }.getOrNull()
+                png != null && Rpcs3Bridge.avatarUseImage(png)
+            }
+            if (!done) tell(unreadable, true)
+            list.value = withContext(Dispatchers.IO) { readAvatarList() }
+            RpcnAvatarPicker.changed.intValue++
+        }
+    }
+    fun install(files: List<File>) {
+        MainActivityRuntime.invoke {
+            val failures = mutableListOf<String>()
+            for (file in files.sortedBy { isLicenceName(it.name) }) {
+                val done = withContext(Dispatchers.IO) { runCatching { installOne(context, pickedFile(file)) }.getOrDefault(false) }
+                if (!done) failures += file.name
+            }
+            tell(if (failures.isEmpty()) installedText else installFailedText.format(failures.joinToString()), failures.isNotEmpty())
+            list.value = withContext(Dispatchers.IO) { readAvatarList() }
+        }
+    }
+    fun ask(question: String, confirm: String, onYes: () -> Unit) {
+        com.armsx2.ui.xmb.XmbDialogs.target()?.ask(question, confirm, cancel, focusNo = true, onYes = onYes)
+    }
+
+    fun avatarNode(key: String, path: String): com.armsx2.ui.xmb.XmbNode {
+        val starred = AvatarFavorites.contains(path)
+        val toggle = {
+            AvatarFavorites.toggle(context, path)
+            com.armsx2.ui.xmb.XmbSounds.play(com.armsx2.ui.xmb.XmbSounds.Sfx.DECIDE)
+            Unit
+        }
+        val picture = pictures[path]
+        val selected = list.value?.current == path
+        return com.armsx2.ui.xmb.XmbNode.Action(
+            "$key.$path",
+            path.substringAfterLast('/').substringBeforeLast('.'),
+            if (picture != null) com.armsx2.ui.xmb.XmbIcon(bitmap = picture, shadow = false) else pictureIcon,
+            listOfNotNull(if (selected) useThis else null, if (starred) "\u2605" else null).joinToString("   ").ifBlank { null },
+            options = listOf(
+                com.armsx2.ui.xmb.XmbOption(useThis) { choose(path) },
+                com.armsx2.ui.xmb.XmbOption(if (starred) unfavorite else favorite) { toggle() },
+            ),
+        ) { choose(path) }
+    }
+
+    // The avatars near the one focused, read as the list reaches them: there can be thousands.
+    val host: @Composable () -> Unit = {
+        LaunchedEffect(Unit) { reload() }
+        val level = com.armsx2.ui.xmb.XmbDialogs.target()?.levels?.lastOrNull()
+        val focus = level?.focus ?: 0
+        val key = level?.node?.key.orEmpty()
+        val shown = when {
+            key == "rpcn.avatar.all" -> list.value?.choices.orEmpty()
+            key == "rpcn.avatar.favorites" -> list.value?.choices.orEmpty().filter { AvatarFavorites.contains(it) }
+            else -> list.value?.current?.let(::listOf).orEmpty()
+        }
+        LaunchedEffect(shown, focus) {
+            for (i in (focus - 8).coerceAtLeast(0)..(focus + 12)) {
+                val path = shown.getOrNull(i) ?: continue
+                if (path !in pictures) AvatarImages.load(path, CellPixels)?.let { pictures[path] = it }
+            }
+        }
+    }
+
+    val current = list.value?.current
+    val currentPicture = current?.let { pictures[it] }
+    return com.armsx2.ui.xmb.XmbNode.Folder(
+        "rpcn.account.avatar",
+        title,
+        if (currentPicture != null) com.armsx2.ui.xmb.XmbIcon(bitmap = currentPicture, shadow = false) else icon,
+        sub,
+        live = true,
+        host = host,
+    ) {
+        val all = list.value?.choices.orEmpty()
+        val favorites = all.filter { AvatarFavorites.contains(it) }
+        buildList {
+            add(com.armsx2.ui.xmb.XmbNode.Action("rpcn.avatar.default", useDefault, icon) { choose("") })
+            if (canBrowse()) {
+                add(
+                    com.armsx2.ui.xmb.XmbNode.Folder("rpcn.avatar.picture", useImage, pictureIcon) {
+                        roots.map { (label, dir) ->
+                            com.armsx2.ui.xmb.XmbFiles.folder(
+                                "rpcn.avatar.picture.${dir.absolutePath}", label, dir, driveIcon, folderIcon,
+                                setOf("png", "jpg", "jpeg", "webp"), { f -> com.armsx2.ui.xmb.XmbIcon(file = f, glyph = "\uD83D\uDDBC") },
+                            ) { f -> usePicture(f) }
+                        }
+                    },
+                )
+                if (MainActivityRuntime.isVmIdle()) add(
+                    com.armsx2.ui.xmb.XmbNode.Folder("rpcn.avatar.install", installWord, packageIcon) {
+                        roots.map { (label, dir) ->
+                            com.armsx2.ui.xmb.XmbFiles.folder(
+                                "rpcn.avatar.install.${dir.absolutePath}", label, dir, driveIcon, folderIcon,
+                                setOf("pkg", "rap", "edat"), { packageIcon },
+                                together = setOf("pkg", "rap", "edat"),
+                                allTitle = { n -> str0("xmb.packages.installAll").format(n) },
+                                onPickAll = { files -> ask(installAsk.format(str0("xmb.packages.installAll").format(files.size)), installWord) { install(files) } },
+                            ) { f -> ask(installAsk.format(f.name), installWord) { install(listOf(f)) } }
+                        }
+                    },
+                )
+            }
+            add(
+                com.armsx2.ui.xmb.XmbNode.Folder("rpcn.avatar.favorites", favoritesTitle.format(favorites.size), icon, live = true) {
+                    val now = list.value?.choices.orEmpty().filter { AvatarFavorites.contains(it) }
+                    if (now.isEmpty()) listOf(com.armsx2.ui.xmb.XmbNode.Action("rpcn.avatar.favorites.none", favoritesEmpty, icon) {})
+                    else now.map { avatarNode("rpcn.avatar.fav", it) }
+                },
+            )
+            add(
+                com.armsx2.ui.xmb.XmbNode.Folder("rpcn.avatar.all", allTitle.format(all.size), icon, if (all.isEmpty()) none else null, live = true) {
+                    list.value?.choices.orEmpty().map { avatarNode("rpcn.avatar.one", it) }
+                },
+            )
+        }
+    }
+}
+
+private fun str0(key: String) = com.armsx2.i18n.I18n.get(key)

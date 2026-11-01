@@ -1459,5 +1459,19 @@
  "xmb.later": "稍後",
  "xmb.cat.tools": "公用程式",
  "xmb.game.none": "還沒有遊戲",
- "xmb.game.none.desc": "在系統設定中新增遊戲資料夾，或從公用程式安裝套件。"
+ "xmb.game.none.desc": "在系統設定中新增遊戲資料夾，或從公用程式安裝套件。",
+ "xmb.packages.install": "安裝套件檔案",
+ "xmb.packages.install.desc": "此裝置儲存空間中的套件與授權",
+ "xmb.packages.installAsk": "要安裝%s嗎？",
+ "xmb.packages.installAll": "此處的全部 %d 個套件",
+ "xmb.packages.updates.desc": "為你遊戲庫中遊戲發布的更新",
+ "xmb.packages.dlc.desc": "為你的遊戲安裝的附加內容",
+ "xmb.packages.left.min": "大約還剩 %d 分鐘",
+ "xmb.packages.left.sec": "大約還剩 %d 秒",
+ "xmb.packages.removeUpdateAsk": "要移除此遊戲的更新並恢復為光碟版本嗎？",
+ "xmb.removeAsk": "要移除%s嗎？",
+ "xmb.saves.loadAsk": "要讀取此即時存檔嗎？",
+ "xmb.avatar.use": "使用此頭像",
+ "xmb.avatar.favorite": "加入收藏",
+ "xmb.avatar.unfavorite": "取消收藏"
 }

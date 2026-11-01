@@ -1459,5 +1459,19 @@
  "xmb.later": "Nanti",
  "xmb.cat.tools": "Utilitas",
  "xmb.game.none": "Belum ada game",
- "xmb.game.none.desc": "Tambahkan folder game di Pengaturan Sistem, atau pasang paket dari Utilitas."
+ "xmb.game.none.desc": "Tambahkan folder game di Pengaturan Sistem, atau pasang paket dari Utilitas.",
+ "xmb.packages.install": "Instal File Paket",
+ "xmb.packages.install.desc": "Paket dan lisensi di penyimpanan perangkat ini",
+ "xmb.packages.installAsk": "Instal %s?",
+ "xmb.packages.installAll": "Semua %d paket di sini",
+ "xmb.packages.updates.desc": "Pembaruan yang dirilis untuk game di pustaka Anda",
+ "xmb.packages.dlc.desc": "Add-on yang terpasang untuk game Anda",
+ "xmb.packages.left.min": "Sekitar %d menit lagi",
+ "xmb.packages.left.sec": "Sekitar %d detik lagi",
+ "xmb.packages.removeUpdateAsk": "Hapus pembaruan game ini dan kembali ke versi disk?",
+ "xmb.removeAsk": "Hapus %s?",
+ "xmb.saves.loadAsk": "Muat save state ini?",
+ "xmb.avatar.use": "Gunakan avatar ini",
+ "xmb.avatar.favorite": "Tambahkan ke Favorit",
+ "xmb.avatar.unfavorite": "Hapus dari Favorit"
 }

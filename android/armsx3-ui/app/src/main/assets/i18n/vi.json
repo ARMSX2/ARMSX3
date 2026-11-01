@@ -1459,5 +1459,19 @@
  "xmb.later": "Để sau",
  "xmb.cat.tools": "Tiện ích",
  "xmb.game.none": "Chưa có trò chơi",
- "xmb.game.none.desc": "Thêm thư mục trò chơi trong Cài đặt hệ thống, hoặc cài gói từ Tiện ích."
+ "xmb.game.none.desc": "Thêm thư mục trò chơi trong Cài đặt hệ thống, hoặc cài gói từ Tiện ích.",
+ "xmb.packages.install": "Cài đặt tệp gói",
+ "xmb.packages.install.desc": "Gói và giấy phép trong bộ nhớ của thiết bị này",
+ "xmb.packages.installAsk": "Cài đặt %s?",
+ "xmb.packages.installAll": "Tất cả %d gói ở đây",
+ "xmb.packages.updates.desc": "Bản cập nhật đã phát hành cho các trò chơi trong thư viện",
+ "xmb.packages.dlc.desc": "Nội dung bổ sung đã cài cho trò chơi của bạn",
+ "xmb.packages.left.min": "Còn khoảng %d phút",
+ "xmb.packages.left.sec": "Còn khoảng %d giây",
+ "xmb.packages.removeUpdateAsk": "Gỡ bản cập nhật của trò chơi này và quay về phiên bản trên đĩa?",
+ "xmb.removeAsk": "Gỡ %s?",
+ "xmb.saves.loadAsk": "Tải trạng thái lưu này?",
+ "xmb.avatar.use": "Dùng ảnh đại diện này",
+ "xmb.avatar.favorite": "Thêm vào mục yêu thích",
+ "xmb.avatar.unfavorite": "Xóa khỏi mục yêu thích"
 }

@@ -233,7 +233,8 @@ fun XmbView(
             val back = XmbText.get("xmb_ingame", "msg_help_back", ": " + com.armsx2.i18n.str("xmb.back"))
             when {
                 controller.busy || depth > 0 -> CornerHint(m, font, "\u25CB", CircleRed, back) { controller.back() }
-                node is XmbNode.Game || (node is XmbNode.Action && node.options.isNotEmpty()) -> CornerHint(
+                node is XmbNode.Game || (node is XmbNode.Action && node.options.isNotEmpty()) ||
+                    (node is XmbNode.Setting && node.options.isNotEmpty()) -> CornerHint(
                     m,
                     font,
                     "\u25B3",

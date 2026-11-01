@@ -1459,5 +1459,19 @@
  "xmb.later": "لاحقا",
  "xmb.cat.tools": "الأدوات",
  "xmb.game.none": "لا توجد ألعاب بعد",
- "xmb.game.none.desc": "أضف مجلد ألعاب من إعدادات النظام، أو ثبّت حزمة من الأدوات."
+ "xmb.game.none.desc": "أضف مجلد ألعاب من إعدادات النظام، أو ثبّت حزمة من الأدوات.",
+ "xmb.packages.install": "تثبيت ملفات الحزم",
+ "xmb.packages.install.desc": "الحزم والتراخيص الموجودة في مساحة تخزين هذا الجهاز",
+ "xmb.packages.installAsk": "هل تريد تثبيت %s؟",
+ "xmb.packages.installAll": "كل الحزم هنا (%d)",
+ "xmb.packages.updates.desc": "التحديثات المنشورة للألعاب في مكتبتك",
+ "xmb.packages.dlc.desc": "الإضافات المثبتة لألعابك",
+ "xmb.packages.left.min": "تبقّى نحو %d دقيقة",
+ "xmb.packages.left.sec": "تبقّى نحو %d ثانية",
+ "xmb.packages.removeUpdateAsk": "هل تريد إزالة تحديث هذه اللعبة والعودة إلى إصدار القرص؟",
+ "xmb.removeAsk": "هل تريد إزالة %s؟",
+ "xmb.saves.loadAsk": "هل تريد تحميل حالة الحفظ هذه؟",
+ "xmb.avatar.use": "استخدام هذه الصورة الرمزية",
+ "xmb.avatar.favorite": "إضافة إلى المفضلة",
+ "xmb.avatar.unfavorite": "إزالة من المفضلة"
 }

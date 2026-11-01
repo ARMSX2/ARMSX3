@@ -24,7 +24,7 @@ object Screenshots {
         val dir = File(MainActivityRuntime.assetCopyRoot(context), "snaps")
         dir.mkdirs()
         // Filename must be unique and must end in .png for the core to accept it as a full path.
-        val name = "ARMSX2_${System.currentTimeMillis()}.png"
+        val name = "ARMSX3_${System.currentTimeMillis()}.png"
         val target = File(dir, name)
         runCatching { NativeApp.saveScreenshot(target.absolutePath) }.onFailure { return }
 
@@ -50,7 +50,7 @@ object Screenshots {
         }
     }
 
-    /** Copy [png] into Pictures/ARMSX2 so it shows up in the gallery. */
+    /** Copy [png] into Pictures/ARMSX3 so it shows up in the gallery. */
     private fun publish(context: Context, png: File) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // MediaStore owns the file; no storage permission needed on Q+.

@@ -129,6 +129,85 @@ fun ModsTab(serial: String) {
         mods = withContext(Dispatchers.IO) { ModManager.list(serial) }
     }
 
+    // XMB mode: the mods as XMB items. Import from a file or a folder, then each mod: Cross switches
+    // it on or off, Triangle removes it. A lone file asks where it goes in the XMB's own options.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { collector ->
+        val ok = str("action.ok")
+        val cancel = str("action.cancel")
+        val removeWord = str("mods.remove")
+        val removeBody = str("mods.remove.body")
+        val where = str("mods.where.label")
+        val fileCount = str("mods.fileCount")
+        val icon = collector.icon
+        LaunchedEffect(message) {
+            val m = message ?: return@LaunchedEffect
+            com.armsx2.ui.xmb.XmbDialogs.target()?.tell(m, ok, error = false)
+            message = null
+        }
+        // A single file: where it goes in the game, from the files it could replace or typed.
+        LaunchedEffect(pendingFile) {
+            val uri = pendingFile ?: return@LaunchedEffect
+            val x = com.armsx2.ui.xmb.XmbDialogs.target() ?: return@LaunchedEffect
+            fun import(path: String) {
+                pendingFile = null
+                busy = true
+                scope.launch { handle(withContext(Dispatchers.IO) { ModImporter.importFile(context, serial, uri, path) }) }
+            }
+            x.options = com.armsx2.ui.xmb.XmbController.Options(
+                where,
+                pendingMatches.map { path -> com.armsx2.ui.xmb.XmbOption(path) { import(path) } } +
+                    com.armsx2.ui.xmb.XmbOption(where) {
+                        com.armsx2.ui.xmb.XmbKeyboard.ask(where, pendingPath) { typed -> if (typed.isNotBlank()) { import(typed) } else { pendingFile = null } }
+                    },
+            )
+        }
+        fun setEnabled(mod: ModManager.Mod, wanted: Boolean) {
+            if (busy) return
+            busy = true
+            scope.launch {
+                val result = withContext(Dispatchers.IO) { ModManager.setEnabled(serial, mod.name, wanted) }
+                if (result is ModManager.Result.Failed) message = result.reason
+                busy = false
+                refreshToken++
+            }
+        }
+        fun remove(mod: ModManager.Mod) {
+            com.armsx2.ui.xmb.XmbDialogs.target()?.ask(removeBody.format(mod.name), removeWord, cancel, focusNo = true) {
+                busy = true
+                scope.launch {
+                    val result = withContext(Dispatchers.IO) { ModManager.delete(serial, mod.name) }
+                    if (result is ModManager.Result.Failed) message = result.reason
+                    busy = false
+                    refreshToken++
+                }
+            }
+        }
+        Column {
+            com.armsx2.ui.xmb.XmbCollected(
+                collector,
+                com.armsx2.ui.xmb.XmbNode.Action("mods.import.file", str("mods.import.file"), icon) { if (!busy) filePicker.launch(arrayOf("*/*")) },
+            )
+            com.armsx2.ui.xmb.XmbCollected(
+                collector,
+                com.armsx2.ui.xmb.XmbNode.Action("mods.import.folder", str("mods.import.folder"), icon) { if (!busy) folderPicker.launch(null) },
+            )
+            mods.forEach { mod ->
+                com.armsx2.ui.xmb.XmbCollected(
+                    collector,
+                    com.armsx2.ui.xmb.XmbNode.Setting(
+                        "mods.mod.${mod.name}",
+                        mod.name,
+                        icon,
+                        com.armsx2.ui.xmb.XmbEditor.Toggle({ mod.enabled }) { wanted -> setEnabled(mod, wanted) },
+                        value = { (if (mod.enabled) collector.on else collector.off) + "   " + fileCount.format(mod.fileCount) },
+                        options = listOf(com.armsx2.ui.xmb.XmbOption(removeWord) { remove(mod) }),
+                    ),
+                )
+            }
+        }
+        return
+    }
+
     Column(Modifier.fillMaxWidth()) {
         if (serial.isBlank()) {
             InfoCard(str("mods.noGame"))

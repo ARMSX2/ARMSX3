@@ -1459,5 +1459,19 @@
  "xmb.later": "Пізніше",
  "xmb.cat.tools": "Утиліти",
  "xmb.game.none": "Ігор поки немає",
- "xmb.game.none.desc": "Додайте теку з іграми в системних налаштуваннях або встановіть пакет в Утилітах."
+ "xmb.game.none.desc": "Додайте теку з іграми в системних налаштуваннях або встановіть пакет в Утилітах.",
+ "xmb.packages.install": "Встановити файли пакетів",
+ "xmb.packages.install.desc": "Пакети й ліцензії в пам'яті цього пристрою",
+ "xmb.packages.installAsk": "Встановити %s?",
+ "xmb.packages.installAll": "Усі пакети тут (%d)",
+ "xmb.packages.updates.desc": "Оновлення, випущені для ігор у вашій бібліотеці",
+ "xmb.packages.dlc.desc": "Доповнення, встановлені для ваших ігор",
+ "xmb.packages.left.min": "Залишилося близько %d хв",
+ "xmb.packages.left.sec": "Залишилося близько %d с",
+ "xmb.packages.removeUpdateAsk": "Видалити оновлення цієї гри й повернутися до версії з диска?",
+ "xmb.removeAsk": "Видалити %s?",
+ "xmb.saves.loadAsk": "Завантажити цей збережений стан?",
+ "xmb.avatar.use": "Використати цей аватар",
+ "xmb.avatar.favorite": "Додати до вибраного",
+ "xmb.avatar.unfavorite": "Вилучити з вибраного"
 }

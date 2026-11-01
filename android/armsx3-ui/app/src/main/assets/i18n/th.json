@@ -1459,5 +1459,19 @@
  "xmb.later": "ภายหลัง",
  "xmb.cat.tools": "ยูทิลิตี้",
  "xmb.game.none": "ยังไม่มีเกม",
- "xmb.game.none.desc": "เพิ่มโฟลเดอร์เกมในการตั้งค่าระบบ หรือติดตั้งแพ็กเกจจากยูทิลิตี้"
+ "xmb.game.none.desc": "เพิ่มโฟลเดอร์เกมในการตั้งค่าระบบ หรือติดตั้งแพ็กเกจจากยูทิลิตี้",
+ "xmb.packages.install": "ติดตั้งไฟล์แพ็กเกจ",
+ "xmb.packages.install.desc": "แพ็กเกจและไลเซนส์ในที่เก็บข้อมูลของอุปกรณ์นี้",
+ "xmb.packages.installAsk": "ติดตั้ง %s ไหม",
+ "xmb.packages.installAll": "แพ็กเกจทั้ง %d รายการที่นี่",
+ "xmb.packages.updates.desc": "อัปเดตที่เผยแพร่สำหรับเกมในคลังของคุณ",
+ "xmb.packages.dlc.desc": "ส่วนเสริมที่ติดตั้งไว้สำหรับเกมของคุณ",
+ "xmb.packages.left.min": "เหลืออีกประมาณ %d นาที",
+ "xmb.packages.left.sec": "เหลืออีกประมาณ %d วินาที",
+ "xmb.packages.removeUpdateAsk": "ลบอัปเดตของเกมนี้และกลับไปใช้เวอร์ชันจากแผ่นไหม",
+ "xmb.removeAsk": "ลบ %s ไหม",
+ "xmb.saves.loadAsk": "โหลดเซฟสเตตนี้ไหม",
+ "xmb.avatar.use": "ใช้อวตารนี้",
+ "xmb.avatar.favorite": "เพิ่มในรายการโปรด",
+ "xmb.avatar.unfavorite": "นำออกจากรายการโปรด"
 }

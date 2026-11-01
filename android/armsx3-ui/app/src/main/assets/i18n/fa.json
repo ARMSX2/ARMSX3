@@ -1459,5 +1459,19 @@
  "xmb.later": "بعدا",
  "xmb.cat.tools": "ابزارها",
  "xmb.game.none": "هنوز بازی‌ای نیست",
- "xmb.game.none.desc": "در تنظیمات سیستم یک پوشه بازی اضافه کنید یا از ابزارها یک بسته نصب کنید."
+ "xmb.game.none.desc": "در تنظیمات سیستم یک پوشه بازی اضافه کنید یا از ابزارها یک بسته نصب کنید.",
+ "xmb.packages.install": "نصب فایل‌های بسته",
+ "xmb.packages.install.desc": "بسته‌ها و مجوزهای موجود در حافظهٔ این دستگاه",
+ "xmb.packages.installAsk": "%s نصب شود؟",
+ "xmb.packages.installAll": "همهٔ %d بستهٔ این‌جا",
+ "xmb.packages.updates.desc": "به‌روزرسانی‌های منتشرشده برای بازی‌های کتابخانهٔ شما",
+ "xmb.packages.dlc.desc": "افزونه‌های نصب‌شده برای بازی‌های شما",
+ "xmb.packages.left.min": "حدود %d دقیقه مانده",
+ "xmb.packages.left.sec": "حدود %d ثانیه مانده",
+ "xmb.packages.removeUpdateAsk": "به‌روزرسانی این بازی حذف شود و به نسخهٔ دیسک برگردد؟",
+ "xmb.removeAsk": "%s حذف شود؟",
+ "xmb.saves.loadAsk": "این وضعیت ذخیره بارگذاری شود؟",
+ "xmb.avatar.use": "استفاده از این آواتار",
+ "xmb.avatar.favorite": "افزودن به برگزیده‌ها",
+ "xmb.avatar.unfavorite": "حذف از برگزیده‌ها"
 }

@@ -380,6 +380,30 @@ fun GameUpdatesTab(
         }
     }
 
+    // XMB mode: the same list as XMB items (see XmbUpdateList).
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { collector ->
+        XmbUpdateList(
+            collector = collector,
+            rows = rows,
+            scanning = scanning,
+            status = status,
+            downloading = downloading,
+            fetching = fetching,
+            installing = installing,
+            busy = busy,
+            onRefresh = { refreshToken++ },
+            onInstall = { row, target -> installUpTo(row, target) },
+            onRemove = { row ->
+                status = if (Ps3Sfo.removeInstalledUpdate(row.serial)) str("packages.updates.removed")
+                else str("packages.updates.removeFailed")
+                refreshInstalledOnly()
+            },
+            onManual = { id -> checkManual(id) },
+            onStatusShown = { status = null },
+        )
+        return
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Surface(
             shape = RoundedCornerShape(16.dp),
@@ -685,5 +709,155 @@ fun GameUpdatesTab(
                 ),
             ) { Text(str("packages.updates.check")) }
         }
+    }
+}
+
+/**
+ * The updates in XMB mode: each game with what it has and what is published, Cross to bring it up
+ * to date and Triangle for a particular version or to take the update off. What is coming down
+ * shows as a bar under it, with the time left worked out from how fast it has been coming.
+ */
+@Composable
+private fun XmbUpdateList(
+    collector: com.armsx2.ui.xmb.XmbCollector,
+    rows: List<UpdateRow>,
+    scanning: Boolean,
+    status: String?,
+    downloading: String?,
+    fetching: Pair<String, Float>?,
+    installing: String?,
+    busy: Boolean,
+    onRefresh: () -> Unit,
+    onInstall: (UpdateRow, Ps3UpdateService.Ps3Update?) -> Unit,
+    onRemove: (UpdateRow) -> Unit,
+    onManual: (String) -> Unit,
+    onStatusShown: () -> Unit,
+) {
+    val ok = str("action.ok")
+    val cancel = str("action.cancel")
+    val installWord = str("packages.updates.install")
+    val askInstall = str("xmb.packages.installAsk")
+    val versionWord = str("packages.updates.version")
+    val updateIcon = com.armsx2.ui.xmb.XmbIcon("explore_category_sysconf", "tex_update", "\u27F3")
+    val free = downloading == null && !busy
+
+    LaunchedEffect(status) {
+        val s = status ?: return@LaunchedEffect
+        com.armsx2.ui.xmb.XmbDialogs.target()?.tell(s, ok, error = false)
+        onStatusShown()
+    }
+    fun ask(question: String, confirm: String, onYes: () -> Unit) {
+        com.armsx2.ui.xmb.XmbDialogs.target()?.ask(question, confirm, cancel, focusNo = true, onYes = onYes)
+    }
+
+    // The time left on what is downloading: how far it got over the last few seconds, carried on.
+    val samples = remember(fetching?.first) { ArrayDeque<Pair<Long, Float>>() }
+    val left = fetching?.let { (_, fraction) ->
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (samples.isEmpty() || samples.last().second != fraction) samples.addLast(now to fraction)
+        while (samples.size > 2 && now - samples.first().first > 20_000) samples.removeFirst()
+        val (t0, f0) = samples.first()
+        val seconds = (now - t0) / 1000f
+        val rate = if (seconds > 2f) (fraction - f0) / seconds else 0f
+        if (rate > 0f) {
+            val remaining = ((1f - fraction) / rate).toInt()
+            if (remaining >= 60) str("xmb.packages.left.min").format((remaining + 30) / 60)
+            else str("xmb.packages.left.sec").format(remaining.coerceAtLeast(1))
+        } else null
+    }
+
+    // Each game's own picture where it is installed; looked up once for the list, not on each redraw.
+    val icons = remember(rows.map { it.serial }.toSet()) {
+        rows.associate { row -> row.serial to Ps3Sfo.installDir(row.serial)?.let { File(it, "ICON0.PNG") }?.takeIf { it.isFile } }
+    }
+
+    Column {
+        val wire = fetching
+        if (downloading != null) {
+            val title = if (wire != null) str("packages.updates.downloading").format(wire.first, (wire.second * 100).toInt())
+            else str("packages.updates.installingOne").format(installing ?: downloading)
+            com.armsx2.ui.xmb.XmbCollected(
+                collector,
+                com.armsx2.ui.xmb.XmbNode.Action(
+                    "updates.progress",
+                    title,
+                    updateIcon,
+                    listOfNotNull(downloading, left).joinToString("   "),
+                    meter = wire?.let { w -> { w.second } },
+                ) {},
+            )
+        }
+        com.armsx2.ui.xmb.XmbCollected(
+            collector,
+            com.armsx2.ui.xmb.XmbNode.Action(
+                "updates.refresh",
+                str("packages.updates.refresh"),
+                updateIcon,
+                if (scanning) str("packages.updates.scanning").format(rows.count { it.stage != Stage.Pending }, rows.size) else null,
+            ) { if (!scanning && free) onRefresh() },
+        )
+        rows.sortedWith(compareBy<UpdateRow> { if (it.stage == Stage.Available) 0 else 1 }.thenBy { it.title.lowercase() })
+            .forEach { row ->
+                val sub = when (row.stage) {
+                    Stage.Pending, Stage.Checking -> str("packages.updates.checking")
+                    Stage.Failed -> str("packages.updates.rowFailed")
+                    Stage.NonePublished -> str("packages.updates.none")
+                    Stage.UpToDate -> str("packages.updates.rowUpToDate").format(row.installed.orEmpty())
+                    Stage.Available -> {
+                        val v = row.newest!!
+                        val chain = row.pending
+                        val size = formatSize(chain.sumOf { it.sizeBytes }.takeIf { it > 0 } ?: v.sizeBytes)
+                        when {
+                            chain.size > 1 && row.installed == null -> str("packages.updates.rowChainFromDisc").format(v.version, chain.size, size)
+                            chain.size > 1 -> str("packages.updates.rowChain").format(row.installed, v.version, chain.size, size)
+                            row.installed == null -> str("packages.updates.rowAvailable").format(v.version, size)
+                            else -> str("packages.updates.rowUpgrade").format(row.installed, v.version, size)
+                        }
+                    }
+                }
+                // Triangle: any one version (an older one takes the current update off first), or the update off.
+                val options = buildList {
+                    if (free) {
+                        row.published.forEach { pkg ->
+                            val current = row.installed != null && compareVersions(row.installed, pkg.version) == 0
+                            if (!current) {
+                                add(com.armsx2.ui.xmb.XmbOption("${versionWord.format(pkg.version)}  ${formatSize(pkg.sizeBytes)}") {
+                                    ask(askInstall.format(versionWord.format(pkg.version)), installWord) { onInstall(row, pkg) }
+                                })
+                            }
+                        }
+                        if (row.installed != null && Ps3Sfo.installedIsUpdate(row.serial)) {
+                            add(com.armsx2.ui.xmb.XmbOption(str("packages.updates.removeUpdate")) {
+                                ask(str("xmb.packages.removeUpdateAsk"), str("packages.updates.removeUpdate")) { onRemove(row) }
+                            })
+                        }
+                    }
+                }
+                val file = icons[row.serial]
+                com.armsx2.ui.xmb.XmbCollected(
+                    collector,
+                    com.armsx2.ui.xmb.XmbNode.Action(
+                        "updates.row.${row.serial}",
+                        row.title,
+                        if (file != null) com.armsx2.ui.xmb.XmbIcon(file = file, glyph = "\uD83C\uDFAE") else updateIcon,
+                        "${row.serial}   $sub",
+                        options = options,
+                    ) {
+                        when {
+                            !free -> Unit
+                            row.stage == Stage.Available ->
+                                ask(askInstall.format(versionWord.format(row.newest!!.version)), installWord) { onInstall(row, null) }
+                            row.stage == Stage.UpToDate && row.newest != null ->
+                                ask(askInstall.format(versionWord.format(row.newest.version)), str("packages.updates.reinstall")) { onInstall(row.copy(installed = null), null) }
+                        }
+                    },
+                )
+            }
+        com.armsx2.ui.xmb.XmbCollected(
+            collector,
+            com.armsx2.ui.xmb.XmbNode.Action("updates.manual", str("packages.updates.manual"), updateIcon, str("packages.updates.titleId")) {
+                com.armsx2.ui.xmb.XmbKeyboard.ask(str("packages.updates.titleId")) { typed -> if (typed.isNotBlank()) onManual(typed) }
+            },
+        )
     }
 }

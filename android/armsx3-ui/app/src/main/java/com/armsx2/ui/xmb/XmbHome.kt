@@ -169,10 +169,8 @@ private fun xmbHomeColumns(
     val music = xmbMusicColumn(controller)
 
     val utilities = listOf(
-        // The PKG/Data Manager: packages and licences, game updates and DLC, over the XMB.
-        XmbNode.Panel("game.install", str("packages.title"), XmbIcon("explore_category_game", "item_tex_disc_install", "📦"), str("xmb.packages.desc")) { close ->
-            XmbPanelTheme { com.armsx2.ui.packages.PackageInstallerScreen(onBack = close) }
-        },
+        // The PKG/Data Manager as XMB lists: packages and licences from storage, game updates and DLC.
+        xmbPackagesNode(),
         XmbNode.Action("game.file", str("action.launchGame"), XmbIcon("explore_category_game", "item_tex_plain_folder", "📂")) {
             MainActivityRuntime.promptLaunchGame()
         },
@@ -180,12 +178,8 @@ private fun xmbHomeColumns(
             MainActivityRuntime.startBios()
         },
         xmbTrophiesNode(inGame = false),
-        XmbNode.Action("game.saves", str("savestate.title.loadManage"), XmbIcon("explore_category_game", "item_tex_ps3util", "💾")) {
-            go(AppRoute.SaveManager())
-        },
-        XmbNode.Action("game.mods", str("mods.library.title"), XmbIcon("explore_category_game", "item_tex_ps3game_folder", "🛠")) {
-            go(AppRoute.ModLibrary)
-        },
+        xmbSavesNode(),
+        xmbModsNode(),
     )
     // Where each game's media is, worked out off the main thread: a stat or three per game adds up
     // over a whole library on an SD card.
@@ -196,6 +190,70 @@ private fun xmbHomeColumns(
     }
     val locale = remember(I18n.current) { java.util.Locale.forLanguageTag(I18n.current) }
     val lastPlayed = remember(locale) { lastPlayedFormat(context, locale) }
+
+    // A game's own settings as the Settings column has them, from its options or with Square, and
+    // composed only once one is asked for.
+    var settingsGame by remember { mutableStateOf<GameInfo?>(null) }
+    val gameSettings = settingsGame?.let { g -> xmbSettingsItems(com.armsx2.config.SettingsScope.Game, g.serial, game = g) }
+    val gameSettingsList = remember { mutableStateOf<List<XmbNode>>(emptyList()) }
+    androidx.compose.runtime.SideEffect { gameSettingsList.value = gameSettings.orEmpty() }
+    val settingsIcon = XmbIcon("explore_category_sysconf", "tex_sett", "\u2699")
+    fun openSettings(game: GameInfo) {
+        settingsGame = game
+        controller.open(
+            XmbNode.Folder("game.settings.${game.uri}", game.displayTitle(forceEn), settingsIcon, live = true) { gameSettingsList.value },
+        )
+    }
+
+    // The console's options for a game (Triangle), as its side menu: play it, its settings, clear
+    // what it has compiled, or pin it to the home screen.
+    val playWord = str("action.play")
+    val settingsWord = str("action.settings")
+    val clearCacheWord = str("games.clearCache")
+    val clearCacheAsk = str("perf.clearPpuCache.confirmGame")
+    val cacheStopFirst = str("perf.clearCache.stopFirst")
+    val cacheNoSerial = str("games.clearCache.noSerial")
+    val cacheEmpty = str("games.clearCache.empty")
+    val cacheDone = str("perf.clearCache.done")
+    val deleteWord = str("action.delete")
+    val cancel = str("action.cancel")
+    val ok = str("action.ok")
+    val addHome = str("games.addToHome")
+    val addHomeFailed = str("games.addToHome.unsupported")
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    fun clearCache(game: GameInfo) {
+        if (MainActivityRuntime.eState.value != com.armsx2.EmuState.STOPPED) {
+            controller.tell(cacheStopFirst, ok)
+            return
+        }
+        controller.ask(clearCacheAsk, deleteWord, cancel, focusNo = true) {
+            val dir = com.armsx2.cache.titleCacheDir(context, game.serial)
+            val message = when {
+                MainActivityRuntime.eState.value != com.armsx2.EmuState.STOPPED -> cacheStopFirst
+                dir == null -> cacheNoSerial
+                !dir.isDirectory -> cacheEmpty
+                else -> {
+                    val (count, bytes) = com.armsx2.cache.clearRecompilerCache(dir, spuOnly = false)
+                    if (count > 0) cacheDone.format(count, com.armsx2.cache.formatBytes(bytes)) else cacheEmpty
+                }
+            }
+            controller.tell(message, ok, error = false)
+        }
+    }
+    fun gameOptions(game: GameInfo, title: String) {
+        controller.options = XmbController.Options(
+            title,
+            listOf(
+                XmbOption(playWord) { viewModel.launch(game) },
+                XmbOption(settingsWord) { openSettings(game) },
+                XmbOption(clearCacheWord) { clearCache(game) },
+                XmbOption(addHome) {
+                    scope.launch { if (!com.armsx2.HomeShortcuts.pin(context, game)) controller.tell(addHomeFailed, ok) }
+                },
+            ),
+        )
+    }
+
     val games = state.visibleGames.map { game ->
         val dir = dirs[game.uri.toString()]
         // Under the focused game, when it was last played, as the console shows it.
@@ -206,8 +264,8 @@ private fun xmbHomeColumns(
             icon = XmbIcon(model = XmbMedia.icon0(game, dir), glyph = "🎮"),
             sub = if (played > 0L) lastPlayed.format(java.util.Date(played)) else game.serial?.takeIf { it.isNotBlank() },
             onLaunch = { viewModel.launch(game) },
-            onOptions = { onGameMenu(game) },
-            onSettings = { go(AppRoute.Settings(game = game, returnTo = AppRoute.Home)) },
+            onOptions = { gameOptions(game, game.displayTitle(forceEn)) },
+            onSettings = { openSettings(game) },
             mediaDir = dir,
         )
     }

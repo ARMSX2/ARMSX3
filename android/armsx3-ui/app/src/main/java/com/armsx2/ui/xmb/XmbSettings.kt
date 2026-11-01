@@ -164,7 +164,7 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
 }
 
 /** Tabs that are not rows of settings, shown as the app's own screens in a panel. */
-private val PANEL_TABS = setOf(SettingsCategory.Info, SettingsCategory.Patches, SettingsCategory.Mods)
+private val PANEL_TABS = setOf(SettingsCategory.Info, SettingsCategory.Patches)
 
 /** All Core Settings: every setting the core has, by section, from its own config tree. */
 @Composable

@@ -1459,5 +1459,19 @@
  "xmb.later": "あとで",
  "xmb.cat.tools": "ユーティリティ",
  "xmb.game.none": "ゲームがまだありません",
- "xmb.game.none.desc": "本体設定でゲームのフォルダーを追加するか、ユーティリティからパッケージをインストールしてください。"
+ "xmb.game.none.desc": "本体設定でゲームのフォルダーを追加するか、ユーティリティからパッケージをインストールしてください。",
+ "xmb.packages.install": "パッケージファイルのインストール",
+ "xmb.packages.install.desc": "この端末のストレージにあるパッケージとライセンス",
+ "xmb.packages.installAsk": "%sをインストールしますか？",
+ "xmb.packages.installAll": "ここにある%d個のパッケージすべて",
+ "xmb.packages.updates.desc": "ライブラリのゲーム向けに公開されているアップデート",
+ "xmb.packages.dlc.desc": "ゲームにインストールされている追加コンテンツ",
+ "xmb.packages.left.min": "残り約%d分",
+ "xmb.packages.left.sec": "残り約%d秒",
+ "xmb.packages.removeUpdateAsk": "このゲームのアップデートを削除して、ディスクのバージョンに戻しますか？",
+ "xmb.removeAsk": "%sを削除しますか？",
+ "xmb.saves.loadAsk": "このステートセーブをロードしますか？",
+ "xmb.avatar.use": "このアバターを使う",
+ "xmb.avatar.favorite": "お気に入りに追加",
+ "xmb.avatar.unfavorite": "お気に入りから削除"
 }

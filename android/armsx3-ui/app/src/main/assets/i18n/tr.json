@@ -1459,5 +1459,19 @@
  "xmb.later": "Sonra",
  "xmb.cat.tools": "Araçlar",
  "xmb.game.none": "Henüz oyun yok",
- "xmb.game.none.desc": "Sistem Ayarları'ndan bir oyun klasörü ekle veya Araçlar'dan bir paket yükle."
+ "xmb.game.none.desc": "Sistem Ayarları'ndan bir oyun klasörü ekle veya Araçlar'dan bir paket yükle.",
+ "xmb.packages.install": "Paket dosyalarını yükle",
+ "xmb.packages.install.desc": "Bu cihazın depolamasındaki paketler ve lisanslar",
+ "xmb.packages.installAsk": "%s yüklensin mi?",
+ "xmb.packages.installAll": "Buradaki %d paketin tümü",
+ "xmb.packages.updates.desc": "Kitaplığındaki oyunlar için yayımlanan güncellemeler",
+ "xmb.packages.dlc.desc": "Oyunların için yüklü eklentiler",
+ "xmb.packages.left.min": "Yaklaşık %d dk kaldı",
+ "xmb.packages.left.sec": "Yaklaşık %d sn kaldı",
+ "xmb.packages.removeUpdateAsk": "Bu oyunun güncellemesi kaldırılıp disk sürümüne dönülsün mü?",
+ "xmb.removeAsk": "%s kaldırılsın mı?",
+ "xmb.saves.loadAsk": "Bu kayıt durumu yüklensin mi?",
+ "xmb.avatar.use": "Bu avatarı kullan",
+ "xmb.avatar.favorite": "Favorilere ekle",
+ "xmb.avatar.unfavorite": "Favorilerden kaldır"
 }

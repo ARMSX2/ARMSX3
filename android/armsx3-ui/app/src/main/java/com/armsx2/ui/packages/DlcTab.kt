@@ -52,6 +52,49 @@ fun DlcTab() {
         value = withContext(Dispatchers.IO) { readDlcGroups() }
     }
 
+    // XMB mode: each game's add-ons as a list of its own, Cross or Triangle to remove one.
+    com.armsx2.ui.xmb.LocalXmbCollector.current?.let { collector ->
+        val scope = rememberCoroutineScope()
+        val found = groups ?: return
+        val ok = str("action.ok")
+        val cancel = str("action.cancel")
+        val remove = str("info.dlc.remove")
+        val removeAsk = str("xmb.removeAsk")
+        val icon = com.armsx2.ui.xmb.XmbIcon("explore_category_game", "item_tex_ps3util", "\uD83E\uDDE9")
+        Column {
+            if (found.isEmpty()) {
+                com.armsx2.ui.xmb.XmbCollected(collector, com.armsx2.ui.xmb.XmbNode.Action("dlc.none", str("packages.dlc.none"), icon) {})
+            }
+            found.forEach { group ->
+                com.armsx2.ui.xmb.XmbCollectedSection(collector, "dlc.${group.titleId}", group.name, str("info.dlc.count").format(group.items.size)) {
+                    val child = com.armsx2.ui.xmb.LocalXmbCollector.current ?: return@XmbCollectedSection
+                    group.items.forEach { item ->
+                        val ask = {
+                            com.armsx2.ui.xmb.XmbDialogs.target()?.ask(removeAsk.format(item.name), remove, cancel, focusNo = true) {
+                                scope.launch {
+                                    withContext(Dispatchers.IO) { Ps3Sfo.removeDlc(item) }
+                                    revision++
+                                }
+                            }
+                            Unit
+                        }
+                        com.armsx2.ui.xmb.XmbCollected(
+                            child,
+                            com.armsx2.ui.xmb.XmbNode.Action(
+                                "dlc.${item.file.absolutePath}",
+                                item.name,
+                                icon,
+                                str(if (item.isLicence) "info.dlc.licence" else "info.dlc.content"),
+                                options = listOf(com.armsx2.ui.xmb.XmbOption(remove) { ask() }),
+                            ) { ask() },
+                        )
+                    }
+                }
+            }
+        }
+        return
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
             str("packages.dlc.description"),

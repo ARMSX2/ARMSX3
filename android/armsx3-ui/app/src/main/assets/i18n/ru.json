@@ -1458,5 +1458,19 @@
  "xmb.later": "Позже",
  "xmb.cat.tools": "Утилиты",
  "xmb.game.none": "Игр пока нет",
- "xmb.game.none.desc": "Добавьте папку с играми в системных настройках или установите пакет в Утилитах."
+ "xmb.game.none.desc": "Добавьте папку с играми в системных настройках или установите пакет в Утилитах.",
+ "xmb.packages.install": "Установить файлы пакетов",
+ "xmb.packages.install.desc": "Пакеты и лицензии в памяти этого устройства",
+ "xmb.packages.installAsk": "Установить %s?",
+ "xmb.packages.installAll": "Все пакеты здесь (%d)",
+ "xmb.packages.updates.desc": "Обновления, выпущенные для игр из вашей библиотеки",
+ "xmb.packages.dlc.desc": "Дополнения, установленные для ваших игр",
+ "xmb.packages.left.min": "Осталось около %d мин",
+ "xmb.packages.left.sec": "Осталось около %d с",
+ "xmb.packages.removeUpdateAsk": "Удалить обновление этой игры и вернуться к версии с диска?",
+ "xmb.removeAsk": "Удалить %s?",
+ "xmb.saves.loadAsk": "Загрузить это сохранённое состояние?",
+ "xmb.avatar.use": "Использовать этот аватар",
+ "xmb.avatar.favorite": "Добавить в избранное",
+ "xmb.avatar.unfavorite": "Удалить из избранного"
 }

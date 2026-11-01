@@ -66,6 +66,7 @@ internal object XmbRpcn {
     val signedInAs = mutableStateOf("")
     val savedName = mutableStateOf("")
     val host = mutableStateOf("np.rpcs3.net")
+    val ipv6 = mutableStateOf(false)
 
     /** The saved servers, as (name, address). */
     val hosts = mutableStateOf<List<Pair<String, String>>>(emptyList())
@@ -80,6 +81,7 @@ internal object XmbRpcn {
         runCatching {
             val o = JSONObject(Rpcs3Bridge.rpcnGetConfig())
             host.value = o.optString("host").ifBlank { "np.rpcs3.net" }
+            ipv6.value = o.optBoolean("ipv6", false)
             savedName.value = o.optString("npid", "")
             val list = o.optJSONArray("hosts")
             hosts.value = (0 until (list?.length() ?: 0)).mapNotNull { i ->
@@ -261,12 +263,34 @@ private fun xmbRpcnAccount(controller: XmbController): XmbNode {
     val removed = str("rpcn.hosts.removed")
     val moreTitle = str("xmb.rpcn.more")
     val moreDesc = str("xmb.rpcn.more.desc")
+    val (on, off) = xmbOnOff()
+    val createTitle = str("rpcn.action.create")
+    val createNote = str("rpcn.username.rules")
+    val emailLabel = str("rpcn.email")
+    val created = str("rpcn.created")
+    val haveCode = str("rpcn.signIn.haveCode")
+    val tokenLabel = str("rpcn.token")
+    val resend = str("rpcn.token.resend")
+    val tokenSent = str("rpcn.token.sent")
+    val forgot = str("rpcn.signIn.forgot")
+    val resetSent = str("rpcn.reset.sent")
+    val newPassword = str("rpcn.reset.codeTitle")
+    val resetCode = str("rpcn.reset.code")
+    val newPassLabel = str("rpcn.reset.newPassword")
+    val ipv6Label = str("rpcn.ipv6.label")
+    val ipv6Desc = str("rpcn.ipv6.description")
+    val trophiesTitle = str("rpcn.trophies.title")
+    val trophiesDesc = str("rpcn.trophies.description")
+    val trophiesConfirm = str("rpcn.trophies.confirm")
+    val trophiesDeleted = str("rpcn.trophies.deleted")
+    val deleteWord = str("action.delete")
+    val cancelWord = str("action.cancel")
 
     fun perform(done: String, call: () -> String) {
         scope.launch {
             val result = withContext(Dispatchers.IO) { runCatching(call).getOrElse { it.message.orEmpty() } }
             withContext(Dispatchers.IO) { XmbRpcn.readAccount() }
-            controller.tell(result.ifBlank { done }, ok)
+            controller.tell(result.ifBlank { done }, ok, error = result.isNotBlank())
         }
     }
 
@@ -280,9 +304,81 @@ private fun xmbRpcnAccount(controller: XmbController): XmbNode {
         }
     }
 
+    // The rest of the account, each step typed on the pad keyboard: a new account, its code from
+    // the email, a forgotten password and the code for a new one.
+    fun account(onDone: (String, String) -> Unit) {
+        XmbKeyboard.ask(userLabel, XmbRpcn.savedName.value) { user ->
+            if (user.isBlank()) return@ask
+            XmbKeyboard.ask(passLabel, masked = true) { pass -> if (pass.isNotEmpty()) onDone(user.trim(), pass) }
+        }
+    }
+
+    fun create() {
+        XmbKeyboard.ask(userLabel) { user ->
+            if (user.isBlank()) return@ask
+            XmbKeyboard.ask(passLabel, masked = true) { pass ->
+                if (pass.isEmpty()) return@ask
+                XmbKeyboard.ask(emailLabel) { email ->
+                    if (email.isBlank()) return@ask
+                    perform(created) {
+                        Rpcs3Bridge.rpcnSetConfig(XmbRpcn.host.value.trim(), "", "", "")
+                        Rpcs3Bridge.rpcnCreateAccount(user.trim(), pass, user.trim(), email.trim())
+                    }
+                }
+            }
+        }
+    }
+
+    fun activate() = account { user, pass ->
+        XmbKeyboard.ask(tokenLabel) { code ->
+            if (code.isBlank()) return@ask
+            perform(signedIn) { Rpcs3Bridge.rpcnSignIn(XmbRpcn.host.value.trim(), user, pass, code.trim()) }
+        }
+    }
+
+    fun resendCode() = account { user, pass ->
+        perform(tokenSent) {
+            Rpcs3Bridge.rpcnSetConfig(XmbRpcn.host.value.trim(), "", "", "")
+            Rpcs3Bridge.rpcnResendToken(user, pass)
+        }
+    }
+
+    fun forgotPassword() {
+        XmbKeyboard.ask(userLabel, XmbRpcn.savedName.value) { user ->
+            if (user.isBlank()) return@ask
+            XmbKeyboard.ask(emailLabel) { email ->
+                if (email.isBlank()) return@ask
+                perform(resetSent) {
+                    Rpcs3Bridge.rpcnSetConfig(XmbRpcn.host.value.trim(), "", "", "")
+                    Rpcs3Bridge.rpcnSendResetToken(user.trim(), email.trim())
+                }
+            }
+        }
+    }
+
+    fun resetPassword() {
+        XmbKeyboard.ask(userLabel, XmbRpcn.savedName.value) { user ->
+            if (user.isBlank()) return@ask
+            XmbKeyboard.ask(resetCode) { code ->
+                if (code.isBlank()) return@ask
+                XmbKeyboard.ask(newPassLabel, masked = true) { pass ->
+                    if (pass.isEmpty()) return@ask
+                    perform(signedIn) {
+                        Rpcs3Bridge.rpcnSetConfig(XmbRpcn.host.value.trim(), "", "", "")
+                        Rpcs3Bridge.rpcnResetPassword(user.trim(), code.trim(), pass).ifBlank {
+                            Rpcs3Bridge.rpcnSignIn(XmbRpcn.host.value.trim(), user.trim(), pass, "")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     val reader: @Composable () -> Unit = {
         LaunchedEffect(Unit) { withContext(Dispatchers.IO) { XmbRpcn.readAccount() } }
     }
+    // The avatar as XMB lists of its own (see xmbAvatarNode), not the app's picker.
+    val avatarNode = com.armsx2.ui.settings.xmbAvatarNode(avatarTitle, avatarDesc, icon)
     // The player's own avatar and name on it, as the console's column leads with its user.
     val who = XmbRpcn.signedInAs.value.ifBlank { XmbRpcn.savedName.value }
     val itemIcon = avatar?.let { XmbIcon(bitmap = it, glyph = icon.glyph, shadow = false) } ?: icon
@@ -306,7 +402,7 @@ private fun xmbRpcnAccount(controller: XmbController): XmbNode {
                 if (XmbRpcn.configured.value) perform(signedIn) { Rpcs3Bridge.rpcnTestLogin() } else signIn()
             }.withOptions(if (XmbRpcn.configured.value) listOf(XmbOption(check) { perform(signedIn) { Rpcs3Bridge.rpcnTestLogin() } }) else emptyList()),
             XmbNode.Action("rpcn.account.signIn", if (XmbRpcn.configured.value) switchTitle else signInTitle, icon) { signIn() },
-            XmbNode.Action("rpcn.account.avatar", avatarTitle, icon, avatarDesc) { RpcnAvatarPicker.open.value = true },
+            avatarNode,
             // The server, from the saved ones; adding one is typed on the pad keyboard.
             run {
                 val hosts = XmbRpcn.hosts.value
@@ -344,8 +440,28 @@ private fun xmbRpcnAccount(controller: XmbController): XmbNode {
                     }
                 }
             },
-            XmbNode.Panel("rpcn.account.more", moreTitle, icon, moreDesc) { close ->
-                XmbPanelTheme { com.armsx2.ui.settings.RpcnScreen(onBack = close) }
+            XmbNode.Folder("rpcn.account.more", moreTitle, icon, moreDesc) {
+                listOf(
+                    XmbNode.Action("rpcn.more.create", createTitle, icon, createNote) { create() },
+                    XmbNode.Action("rpcn.more.activate", haveCode, icon) { activate() },
+                    XmbNode.Action("rpcn.more.resend", resend, icon) { resendCode() },
+                    XmbNode.Action("rpcn.more.forgot", forgot, icon) { forgotPassword() },
+                    XmbNode.Action("rpcn.more.reset", newPassword, icon) { resetPassword() },
+                    XmbNode.Setting(
+                        "rpcn.more.ipv6", ipv6Label, icon,
+                        XmbEditor.Toggle({ XmbRpcn.ipv6.value }) { wanted ->
+                            XmbRpcn.ipv6.value = wanted
+                            scope.launch { withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnSetIpv6(wanted) } }
+                        },
+                        { if (XmbRpcn.ipv6.value) on else off },
+                        description = ipv6Desc,
+                    ),
+                    XmbNode.Action("rpcn.more.trophies", trophiesTitle, icon, trophiesDesc) {
+                        controller.ask(trophiesConfirm, deleteWord, cancelWord, focusNo = true) {
+                            perform(trophiesDeleted) { Rpcs3Bridge.rpcnDeleteTrophies() }
+                        }
+                    },
+                )
             },
         )
     }

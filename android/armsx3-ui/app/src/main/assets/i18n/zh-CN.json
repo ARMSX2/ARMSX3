@@ -1459,5 +1459,19 @@
  "xmb.later": "稍后",
  "xmb.cat.tools": "实用工具",
  "xmb.game.none": "还没有游戏",
- "xmb.game.none.desc": "在系统设置中添加游戏文件夹，或在实用工具中安装软件包。"
+ "xmb.game.none.desc": "在系统设置中添加游戏文件夹，或在实用工具中安装软件包。",
+ "xmb.packages.install": "安装软件包文件",
+ "xmb.packages.install.desc": "此设备存储中的软件包和许可证",
+ "xmb.packages.installAsk": "要安装%s吗？",
+ "xmb.packages.installAll": "此处的全部 %d 个软件包",
+ "xmb.packages.updates.desc": "为你库中游戏发布的更新",
+ "xmb.packages.dlc.desc": "为你的游戏安装的附加内容",
+ "xmb.packages.left.min": "大约还剩 %d 分钟",
+ "xmb.packages.left.sec": "大约还剩 %d 秒",
+ "xmb.packages.removeUpdateAsk": "要移除此游戏的更新并恢复为光盘版本吗？",
+ "xmb.removeAsk": "要移除%s吗？",
+ "xmb.saves.loadAsk": "要读取此即时存档吗？",
+ "xmb.avatar.use": "使用此头像",
+ "xmb.avatar.favorite": "加入收藏",
+ "xmb.avatar.unfavorite": "取消收藏"
 }
