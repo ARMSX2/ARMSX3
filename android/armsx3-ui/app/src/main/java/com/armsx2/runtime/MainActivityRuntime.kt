@@ -5664,8 +5664,11 @@ open class MainActivityRuntime : ComponentActivity() {
         runCatching { NativeApp.dumpPgoProfile() }
         // Library music must not keep playing out of a backgrounded app — it would sound
         // like the emulator ignoring the home button. Paused, not stopped, so returning
-        // to the library picks it back up.
-        com.armsx2.LibraryMusic.pause()
+        // to the library picks it back up, and held paused until onResume: XMB mode's music
+        // hands the track back as it stops, which is exactly when the app is leaving.
+        com.armsx2.LibraryMusic.setForeground(false)
+        // The XMB's boot sound plays its ten seconds out past the animation; leaving fades it.
+        com.armsx2.ui.xmb.XmbBootMusic.skip()
         // Pause-menu track was already paused by setForeground(false) at the top of onPause.
         super.onPause()
     }
@@ -5745,6 +5748,7 @@ open class MainActivityRuntime : ComponentActivity() {
         // full app restart (#398-adjacent report). start() rebuilds a released player — and
         // still just un-pauses a merely-paused one — while its own guards keep it a no-op
         // when the setting is off, a VM is running, or that other app is still playing.
+        com.armsx2.LibraryMusic.setForeground(true)
         com.armsx2.LibraryMusic.start(this)
         // Back in the foreground: clear the background guard first, THEN restart the pause track if a
         // menu is still up. The LaunchedEffect won't do it — the overlay states didn't change while

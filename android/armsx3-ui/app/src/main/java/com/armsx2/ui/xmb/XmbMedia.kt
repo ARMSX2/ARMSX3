@@ -17,6 +17,8 @@ import coil.compose.AsyncImage
 import com.armsx2.GameInfo
 import com.armsx2.Ps3Sfo
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -212,34 +214,47 @@ fun XmbSnd0Preview(controller: XmbController) {
         val audio = withContext(Dispatchers.IO) {
             snd0?.let { XmbMedia.decodedAudio(context, it) } ?: pam?.let { XmbMedia.decodedPamAudio(context, it) }
         } ?: return@LaunchedEffect
-        val player = runCatching {
-            android.media.MediaPlayer().apply {
-                setAudioAttributes(
-                    android.media.AudioAttributes.Builder()
-                        .setUsage(android.media.AudioAttributes.USAGE_GAME)
-                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build(),
-                )
-                setDataSource(audio.absolutePath)
-                isLooping = true
-                setVolume(0f, 0f)
-                prepare()
+        // Plays only while the app is in front, watching the lifecycle itself: Compose stops
+        // recomposing once the activity stops, and the screen going off pauses and stops it at
+        // once, so `quiet` never hears of it and the loop played on with the screen off. Back in
+        // front, the game's music starts over.
+        while (true) {
+            lifecycle.currentStateFlow.first { it.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) }
+            val player = runCatching {
+                android.media.MediaPlayer().apply {
+                    setAudioAttributes(
+                        android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_GAME)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build(),
+                    )
+                    setDataSource(audio.absolutePath)
+                    isLooping = true
+                    setVolume(0f, 0f)
+                    prepare()
+                }
+            }.getOrNull() ?: return@LaunchedEffect
+            com.armsx2.LibraryMusic.pause()
+            try {
+                player.start()
+                kotlinx.coroutines.coroutineScope {
+                    val fade = launch {
+                        var v = 0f
+                        while (v < 0.85f) {
+                            v = minOf(0.85f, v + 0.05f)
+                            player.setVolume(v, v)
+                            kotlinx.coroutines.delay(60)
+                        }
+                    }
+                    lifecycle.currentStateFlow.first { !it.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) }
+                    fade.cancel()
+                }
+            } finally {
+                runCatching { player.stop() }
+                player.release()
+                // Nothing while the app is away: LibraryMusic waits for onResume.
+                com.armsx2.LibraryMusic.resume()
             }
-        }.getOrNull() ?: return@LaunchedEffect
-        com.armsx2.LibraryMusic.pause()
-        try {
-            player.start()
-            var v = 0f
-            while (v < 0.85f) {
-                v = minOf(0.85f, v + 0.05f)
-                player.setVolume(v, v)
-                kotlinx.coroutines.delay(60)
-            }
-            kotlinx.coroutines.awaitCancellation()
-        } finally {
-            runCatching { player.stop() }
-            player.release()
-            com.armsx2.LibraryMusic.resume()
         }
     }
 }

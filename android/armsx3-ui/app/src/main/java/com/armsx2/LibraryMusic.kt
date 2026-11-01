@@ -60,12 +60,25 @@ object LibraryMusic {
             p.setVolume(gain(), gain())
             if (share <= 0f) {
                 if (p.isPlaying) p.pause()
-            } else if (!p.isPlaying && !pausedForFocus && enabled.value &&
+            } else if (foreground && !p.isPlaying && !pausedForFocus && enabled.value &&
                 MainActivityRuntime.eState.value == EmuState.STOPPED
             ) {
                 p.start()
             }
         }
+    }
+
+    // True only while the activity is in the foreground, from its onResume and onPause. Screens
+    // with music of their own hand the track back as they go, and they go as the app leaves: the
+    // XMB's SND0 preview ends with resume(), and its boot music fades in with setShare(). Each of
+    // those started the track again out of a backgrounded app, on the OS home screen or with the
+    // screen off, so start(), resume() and setShare() all wait for this instead.
+    @Volatile private var foreground = true
+
+    /** The activity's foreground state. Leaving pauses the track; onResume's start() brings it back. */
+    fun setForeground(fg: Boolean) {
+        foreground = fg
+        if (!fg) pause()
     }
 
     /** Display name of the user's own track, or null when playing the bundled default.
@@ -239,6 +252,7 @@ object LibraryMusic {
      */
     fun start(context: Context, force: Boolean = false) {
         if (!enabled.value) return
+        if (!foreground) return
         if (MainActivityRuntime.eState.value != EmuState.STOPPED) return
         if (player != null) { resume(); return }
         val am = audioManager(context)
@@ -305,6 +319,7 @@ object LibraryMusic {
 
     fun resume() {
         if (!enabled.value) return
+        if (!foreground) return
         if (MainActivityRuntime.eState.value != EmuState.STOPPED) return
         if (share <= 0f) return
         runCatching { player?.takeIf { !it.isPlaying }?.start() }
