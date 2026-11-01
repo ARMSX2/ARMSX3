@@ -45,8 +45,8 @@ import kotlin.math.sqrt
  *
  * The order and timing are the console's, measured off a recording of a real PS3 starting (less the
  * two and a half seconds of black from power-on): the wave comes up on its own over black, the
- * logo is lit from left to right at the right of the screen, the small line comes in under it, the
- * colour rises behind them from black to the month's own, the logo goes, and the XMB's icons come
+ * logo is lit from left to right at the right of the screen, the
+ * colour rises behind it from black to the month's own, the logo goes, and the XMB's icons come
  * in as the colour arrives. The light that sweeps the logo uses the falloff of the firmware's own
  * coldboot script (coldboot.jsx), so the logo lights from the side the light comes from.
  *
@@ -59,8 +59,6 @@ object XmbBootTimeline {
     const val WAVE_TIME = 1.5f
     const val LIGHT_START = 2.0f
     const val LIGHT_TIME = 0.75f
-    const val CAPTION_START = 2.7f
-    const val CAPTION_TIME = 0.35f
     const val COLOR_START = 2.5f
     const val COLOR_TIME = 4.0f
     const val FADE_START = 4.75f
@@ -93,7 +91,7 @@ fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
     val ready by produceState<BootReady?>(null) {
         value = withContext(Dispatchers.IO) {
             XmbFirmwareReady.awaitFirmware(FIRMWARE_WAIT_MS)
-            val layers = runCatching { XmbWordmark.render(LOGO_LETTER_PX, XmbFirmware.typeface()) }.getOrNull()
+            val layers = runCatching { XmbWordmark.render(LOGO_LETTER_PX) }.getOrNull()
             BootReady(layers, if (layers != null) XmbBootSound.prepare(context) else null)
         }
     }
@@ -162,17 +160,16 @@ fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
         Box(Modifier.fillMaxSize().graphicsLayer { alpha = XmbBootTimeline.black(t) }.background(Color.Black))
         val l = layers ?: return@BoxWithConstraints
         val logo = remember(l) { l.logo.asImageBitmap() }
-        val caption = remember(l) { l.caption.asImageBitmap() }
         val w = constraints.maxWidth.toFloat()
         val h = constraints.maxHeight.toFloat()
         // Where the console puts its logo, in a 16:9 frame fitted to the screen: the word's letters
-        // 0.066 of the frame high (the PS3 letters were 0.078; ARMSX3 has twice as many), its middle
-        // 0.495 down, the whole ending 0.925 across.
+        // 0.058 of the frame high (the PS3 letters were 0.078; ARMSX3 has twice as many, set wide),
+        // its middle 0.495 down, the whole ending 0.925 across.
         val frameW = minOf(w, h * 16f / 9f)
         val frameH = frameW * 9f / 16f
         val frameLeft = (w - frameW) / 2f
         val frameTop = (h - frameH) / 2f
-        val unit = 0.066f * frameH
+        val unit = 0.058f * frameH
         val boxW = l.unitsWide * unit
         val boxH = l.unitsHigh * unit
         val left = frameLeft + 0.925f * frameW - boxW
@@ -195,10 +192,6 @@ fun XmbBoot(onProgress: (Float) -> Unit, onFinished: () -> Unit) {
                 ),
                 blendMode = BlendMode.DstIn,
             )
-        }
-        Canvas(Modifier.fillMaxSize()) {
-            val captionAlpha = XmbBootTimeline.ease((t - XmbBootTimeline.CAPTION_START) / XmbBootTimeline.CAPTION_TIME) * (1f - fade(t))
-            if (captionAlpha > 0f) drawLayer(caption, left, top, boxW, boxH, captionAlpha)
         }
     }
 }

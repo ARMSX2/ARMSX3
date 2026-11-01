@@ -117,6 +117,8 @@ private data class DrawerItem(
     val friendsBadge: Boolean = false,
     // RPCN shows the firmware's own avatar for this user in place of its glyph, once it is read
     val rpcnAvatar: Boolean = false,
+    // XMB Mode shows the ARMSX3 logo's wave in place of a glyph
+    val xmbWave: Boolean = false,
 )
 
 @Composable
@@ -204,7 +206,7 @@ private fun DrawerContent(selected: AppRoute, onNavigate: (AppRoute) -> Unit, on
         // below, which only points the emulator at your BIOS file.
         DrawerItem("bios.boot.title", "▶️", onAction = { MainActivityRuntime.startBios(); onDismiss() }),
         // The app itself laid out as the console's XMB, coming up with its boot animation.
-        DrawerItem("xmb.mode", "🌊", onAction = { com.armsx2.ui.xmb.XmbMode.enter(); onDismiss() }),
+        DrawerItem("xmb.mode", "", onAction = { com.armsx2.ui.xmb.XmbMode.enter(); onDismiss() }, xmbWave = true),
         // ARMSX3: RetroAchievements removed - RA has no PS3 support at all, so
         // the screen could only ever be empty. PS3 TROPHIES take its slot: RPCS3
         // tracks the real ones the games unlock, and its own list is reachable only
@@ -336,6 +338,7 @@ private fun DrawerSection(
             iconTint = item.iconTint,
             friendsBadge = item.friendsBadge,
             rpcnAvatar = item.rpcnAvatar,
+            xmbWave = item.xmbWave,
             selected = item.destination != null && sameDestination(selected, item.destination),
             onClick = { item.onAction?.invoke() ?: item.destination?.let(onNavigate) },
         )
@@ -353,6 +356,7 @@ private fun DrawerRow(
     iconTint: Color? = null,
     friendsBadge: Boolean = false,
     rpcnAvatar: Boolean = false,
+    xmbWave: Boolean = false,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
@@ -375,6 +379,10 @@ private fun DrawerRow(
             if (iconRes != null) {
                 Box(Modifier.width(32.dp), contentAlignment = Alignment.Center) {
                     Icon(painterResource(iconRes), contentDescription = null, tint = iconTint ?: contentColor, modifier = Modifier.size(24.dp))
+                }
+            } else if (xmbWave) {
+                Box(Modifier.width(32.dp), contentAlignment = Alignment.CenterStart) {
+                    com.armsx2.ui.xmb.XmbWaveIcon(Modifier.size(26.dp))
                 }
             } else if (rpcnAvatar) {
                 // The glyph until the picture is read, and for good without the firmware

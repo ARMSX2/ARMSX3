@@ -7,22 +7,20 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Shader
-import android.graphics.Typeface
 
 /**
  * The ARMSX3 boot logo, laid out as the console's: the ARMSX3 mark where the PlayStation symbol
- * stood, the word ARMSX3 where "PS3" stood, and a small ARMSX3 under the word where "PlayStation 3"
- * was.
+ * stood and the word ARMSX3 where "PS3" stood.
  *
- * The letters follow the construction of the "PS3" wordmark rather than copying it, measured off
- * a capture of the console's boot (letters 87 px high at 1080p): uprights 0.22 of the letter height,
- * bars 0.105, large rounded outer corners, small rounded inner ones, square ends. Its P, S and 3
- * are the models for the R, S and 3 here; A, M and X are built on the same rules. The mark is the
- * ARMSX3 logo's "3", heavier, as the symbol is heavier than the word.
+ * The letters follow RPCS3's wordmark, itself drawn after the PS3 logo: one stroke weight throughout
+ * (0.21 of the letter height), letters half again as wide as they are high and set well apart,
+ * large rounded outer corners with the inner corners inside them drawn round to match, square
+ * ends, and the PS3 logo's S, a single stroke with a bar out to the right at its head and to the
+ * left at its foot. A, M and X are built on the same rules. The mark is the ARMSX3 logo's "3",
+ * heavier, as the symbol is heavier than the word.
  *
- * Everything is in letter heights, drawn white over a light grey at the foot as the console's logo
- * is. [Layers.logo] holds the mark and the word, [Layers.caption] the line under it, both the same
- * size so they sit together.
+ * Everything is in letter heights, drawn white over a light grey at the foot with a short hard
+ * shadow down and to the right, as RPCS3's is.
  */
 object XmbWordmark {
     /**
@@ -31,24 +29,22 @@ object XmbWordmark {
      */
     class Layers(
         val logo: Bitmap,
-        val caption: Bitmap,
         val unitsWide: Float,
         val unitsHigh: Float,
         val wordTop: Float,
         val wordCentreX: Float,
     )
 
-    private const val V = 0.22f   // upright
-    private const val B = 0.105f  // bar
-    private const val RO = 0.30f  // outer corner
-    private const val RM = 0.20f  // the smaller outer corners where a bowl meets a bar
-    private const val RI = 0.05f  // inner corner
-    private const val MID_TOP = 0.425f
-    private const val MID_BOTTOM = 0.53f
-    private const val GAP = 0.21f
+    private const val T = 0.21f   // the stroke
+    private const val RO = 0.34f  // outer corner
+    private const val RC = RO - T // an inner corner inside an outer one, so the stroke keeps its weight round it
+    private const val RI = 0.035f // any other inner corner
+    private const val MID_TOP = 0.5f - T / 2f
+    private const val MID_BOTTOM = 0.5f + T / 2f
+    private const val GAP = 0.42f
     private const val MARK_SCALE = 1.12f
-    private const val MARK_GAP = 1.0f
-    private const val PAD = 0.1f
+    private const val MARK_GAP = 0.9f
+    private const val PAD = 0.15f
 
     /** A glyph's outline at [x], one letter high, with its width. */
     private class Glyph(val width: Float, val evenOdd: Boolean = false, val build: Shape.() -> Unit)
@@ -65,14 +61,17 @@ object XmbWordmark {
 
         fun close() = path.close()
 
-        fun hole(l: Float, t: Float, r: Float, b: Float, top: Float, bottom: Float) {
-            val radii = floatArrayOf(top * px, top * px, top * px, top * px, bottom * px, bottom * px, bottom * px, bottom * px)
+        /** A counter, with its corners' radii clockwise from the top left. */
+        fun hole(l: Float, t: Float, r: Float, b: Float, tl: Float, tr: Float, br: Float, bl: Float) {
+            val radii = floatArrayOf(tl, tl, tr, tr, br, br, bl, bl).map { it * px }.toFloatArray()
             path.addRoundRect(RectF((x0 + l) * px, (y0 + t) * px, (x0 + r) * px, (y0 + b) * px), radii, Path.Direction.CCW)
         }
     }
 
-    /** The 3: three bars into an upright with two rounded bowls, a notch where they meet. */
-    private fun three(w: Float, v: Float, b: Float, ro: Float, notch: Float) = Glyph(w) {
+    /** The 3: three bars into an upright [t] thick with two rounded bowls, a notch where they meet. */
+    private fun three(w: Float, t: Float, ro: Float, notch: Float) = Glyph(w) {
+        // The counters' corners under the outer ones, no rounder than a counter leaves room for.
+        val rc = minOf(ro - t, 0.5f - 1.5f * t - RI)
         move(0f, 0f)
         line(w - ro, 0f)
         arc(w - ro, ro, ro, 270f, 90f)
@@ -82,65 +81,66 @@ object XmbWordmark {
         line(w, 1f - ro)
         arc(w - ro, 1f - ro, ro, 0f, 90f)
         line(0f, 1f)
-        line(0f, 1f - b)
-        line(w - v - RI, 1f - b)
-        arc(w - v - RI, 1f - b - RI, RI, 90f, -90f)
-        line(w - v, 0.5f + b / 2f + RI)
-        arc(w - v - RI, 0.5f + b / 2f + RI, RI, 0f, -90f)
-        line(0f, 0.5f + b / 2f)
-        line(0f, 0.5f - b / 2f)
-        line(w - v - RI, 0.5f - b / 2f)
-        arc(w - v - RI, 0.5f - b / 2f - RI, RI, 90f, -90f)
-        line(w - v, b + RI)
-        arc(w - v - RI, b + RI, RI, 0f, -90f)
-        line(0f, b)
+        line(0f, 1f - t)
+        line(w - t - rc, 1f - t)
+        arc(w - t - rc, 1f - t - rc, rc, 90f, -90f)
+        line(w - t, 0.5f + t / 2f + RI)
+        arc(w - t - RI, 0.5f + t / 2f + RI, RI, 0f, -90f)
+        line(0f, 0.5f + t / 2f)
+        line(0f, 0.5f - t / 2f)
+        line(w - t - RI, 0.5f - t / 2f)
+        arc(w - t - RI, 0.5f - t / 2f - RI, RI, 90f, -90f)
+        line(w - t, t + rc)
+        arc(w - t - rc, t + rc, rc, 0f, -90f)
+        line(0f, t)
         close()
     }
 
     private val glyphs: Map<Char, Glyph> = mapOf(
         // An arch with a bar across its middle.
-        'A' to Glyph(1.40f, evenOdd = true) {
-            val w = 1.40f
+        'A' to Glyph(1.50f, evenOdd = true) {
+            val w = 1.50f
             move(0f, 1f)
             line(0f, RO)
             arc(RO, RO, RO, 180f, 90f)
             line(w - RO, 0f)
             arc(w - RO, RO, RO, 270f, 90f)
             line(w, 1f)
-            line(w - V, 1f)
-            line(w - V, 0.5f + B / 2f + RI)
-            arc(w - V - RI, 0.5f + B / 2f + RI, RI, 0f, -90f)
-            line(V + RI, 0.5f + B / 2f)
-            arc(V + RI, 0.5f + B / 2f + RI, RI, 270f, -90f)
-            line(V, 1f)
+            line(w - T, 1f)
+            line(w - T, MID_BOTTOM + RI)
+            arc(w - T - RI, MID_BOTTOM + RI, RI, 0f, -90f)
+            line(T + RI, MID_BOTTOM)
+            arc(T + RI, MID_BOTTOM + RI, RI, 270f, -90f)
+            line(T, 1f)
             close()
-            hole(V, B, w - V, 0.5f - B / 2f, RO - B, RI)
+            hole(T, T, w - T, MID_TOP, RC, RC, RI, RI)
         },
-        // The PS3 P's bowl over a full upright, and a leg out from under the bowl.
-        'R' to Glyph(1.40f, evenOdd = true) {
-            val w = 1.40f
-            val legW = 0.32f
-            val legX = 0.56f
+        // A bowl over a full upright, and a leg out from under the bowl.
+        'R' to Glyph(1.50f, evenOdd = true) {
+            val w = 1.50f
+            val rm = 0.26f
+            val legW = 0.34f
+            val legX = 0.62f
             move(0f, 1f)
             line(0f, RO)
             arc(RO, RO, RO, 180f, 90f)
             line(w - RO, 0f)
             arc(w - RO, RO, RO, 270f, 90f)
-            line(w, MID_BOTTOM - RM)
-            arc(w - RM, MID_BOTTOM - RM, RM, 0f, 90f)
+            line(w, MID_BOTTOM - rm)
+            arc(w - rm, MID_BOTTOM - rm, rm, 0f, 90f)
             line(legX + legW, MID_BOTTOM)
             line(w, 1f)
             line(w - legW, 1f)
             line(legX, MID_BOTTOM)
-            line(V + RI, MID_BOTTOM)
-            arc(V + RI, MID_BOTTOM + RI, RI, 270f, -90f)
-            line(V, 1f)
+            line(T + RI, MID_BOTTOM)
+            arc(T + RI, MID_BOTTOM + RI, RI, 270f, -90f)
+            line(T, 1f)
             close()
-            hole(V, B, w - V, MID_TOP, RO - B, RI)
+            hole(T, T, w - T, MID_TOP, RC, RC, maxOf(rm - T, RI), RI)
         },
         // Two arches side by side.
-        'M' to Glyph(1.62f) {
-            val w = 1.62f
+        'M' to Glyph(1.80f) {
+            val w = 1.80f
             val cx = w / 2f
             move(0f, 1f)
             line(0f, RO)
@@ -148,59 +148,62 @@ object XmbWordmark {
             line(w - RO, 0f)
             arc(w - RO, RO, RO, 270f, 90f)
             line(w, 1f)
-            line(w - V, 1f)
-            line(w - V, B + RI)
-            arc(w - V - RI, B + RI, RI, 0f, -90f)
-            line(cx + V / 2f + RI, B)
-            arc(cx + V / 2f + RI, B + RI, RI, 270f, -90f)
-            line(cx + V / 2f, 1f)
-            line(cx - V / 2f, 1f)
-            line(cx - V / 2f, B + RI)
-            arc(cx - V / 2f - RI, B + RI, RI, 0f, -90f)
-            line(V + RI, B)
-            arc(V + RI, B + RI, RI, 270f, -90f)
-            line(V, 1f)
+            line(w - T, 1f)
+            line(w - T, T + RC)
+            arc(w - T - RC, T + RC, RC, 0f, -90f)
+            line(cx + T / 2f + RI, T)
+            arc(cx + T / 2f + RI, T + RI, RI, 270f, -90f)
+            line(cx + T / 2f, 1f)
+            line(cx - T / 2f, 1f)
+            line(cx - T / 2f, T + RI)
+            arc(cx - T / 2f - RI, T + RI, RI, 0f, -90f)
+            line(T + RC, T)
+            arc(T + RC, T + RC, RC, 270f, -90f)
+            line(T, 1f)
             close()
         },
-        // The PS3 S: an upright with a bar out to the right at its head and to the left at its foot.
-        'S' to Glyph(1.58f) {
-            val w = 1.58f
-            val sx = 0.69f
+        // The PS3 S: an upright down the middle with a bar out to the right at its head and to the
+        // left at its foot.
+        'S' to Glyph(1.55f) {
+            val w = 1.55f
+            val sx = (w - T) / 2f
             move(sx, RO)
             arc(sx + RO, RO, RO, 180f, 90f)
             line(w, 0f)
-            line(w, B)
-            line(sx + V + RI, B)
-            arc(sx + V + RI, B + RI, RI, 270f, -90f)
-            line(sx + V, 1f - RO)
-            arc(sx + V - RO, 1f - RO, RO, 0f, 90f)
+            line(w, T)
+            line(sx + T + RC, T)
+            arc(sx + T + RC, T + RC, RC, 270f, -90f)
+            line(sx + T, 1f - RO)
+            arc(sx + T - RO, 1f - RO, RO, 0f, 90f)
             line(0f, 1f)
-            line(0f, 1f - B)
-            line(sx - RI, 1f - B)
-            arc(sx - RI, 1f - B - RI, RI, 90f, -90f)
+            line(0f, 1f - T)
+            line(sx - RC, 1f - T)
+            arc(sx - RC, 1f - T - RC, RC, 90f, -90f)
             line(sx, RO)
             close()
         },
-        // Two strokes crossing, cut flat at the top and the foot.
-        'X' to Glyph(1.40f) {
-            val w = 1.40f
-            val s = 0.32f
+        // Two strokes crossing corner to corner, cut flat at the top and the foot.
+        'X' to Glyph(1.50f) {
+            val w = 1.50f
+            // How wide a stroke T thick is, measured across, at this slant.
+            var k = T
+            repeat(20) { k = T * kotlin.math.sqrt((w - k) * (w - k) + 1f) }
             move(0f, 0f)
-            line(s, 0f)
+            line(k, 0f)
             line(w, 1f)
-            line(w - s, 1f)
+            line(w - k, 1f)
             close()
-            move(w - s, 0f)
+            move(w - k, 0f)
             line(w, 0f)
-            line(s, 1f)
+            line(k, 1f)
             line(0f, 1f)
             close()
         },
-        '3' to three(1.46f, V, B, RO, 0.10f),
+        '3' to three(1.50f, T, RO, 0.09f),
     )
 
     /** The mark: the ARMSX3 logo's 3, heavier. */
-    private val mark = three(1.46f, 0.28f, 0.20f, 0.32f, 0.12f)
+    private val mark = three(1.50f, 0.25f, 0.38f, 0.10f)
 
     /**
      * The ARMSX3 mark on its own, white, for an item in the XMB ([sizePx] square), as the console's
@@ -258,8 +261,8 @@ object XmbWordmark {
         })
     }
 
-    /** The layers with a letter [letterPx] pixels high; [font] for the caption, when there is one. */
-    fun render(letterPx: Float, font: Typeface?): Layers {
+    /** The logo with a letter [letterPx] pixels high. */
+    fun render(letterPx: Float): Layers {
         val word = "ARMSX3"
         val wordW = word.sumOf { (glyphs[it]?.width ?: 1f).toDouble() }.toFloat() + GAP * (word.length - 1)
         val markW = mark.width * MARK_SCALE
@@ -267,9 +270,7 @@ object XmbWordmark {
         val wordTop = markTop + (MARK_SCALE - 1f) / 2f
         val wordLeft = PAD + markW + MARK_GAP
         val unitsWide = wordLeft + wordW + PAD
-        val captionSize = 0.42f
-        val captionBaseline = wordTop + 1f + 0.36f + captionSize * 0.72f
-        val unitsHigh = captionBaseline + 0.12f + PAD
+        val unitsHigh = markTop + MARK_SCALE + PAD + 0.08f
         val w = (unitsWide * letterPx).toInt().coerceAtLeast(1)
         val h = (unitsHigh * letterPx).toInt().coerceAtLeast(1)
 
@@ -280,6 +281,7 @@ object XmbWordmark {
                 0f, markTop * letterPx, 0f, (markTop + MARK_SCALE) * letterPx,
                 android.graphics.Color.WHITE, android.graphics.Color.rgb(0xD2, 0xD2, 0xD2), Shader.TileMode.CLAMP,
             )
+            setShadowLayer(letterPx * 0.012f, letterPx * 0.045f, letterPx * 0.06f, android.graphics.Color.argb(0x73, 0, 0, 0))
         }
         fun draw(glyph: Glyph, x: Float, top: Float, px: Float) {
             val path = Path()
@@ -295,19 +297,6 @@ object XmbWordmark {
             draw(g, x, wordTop, letterPx)
             x += g.width + GAP
         }
-
-        val caption = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        Canvas(caption).drawText(
-            word,
-            (wordLeft + wordW / 2f) * letterPx,
-            captionBaseline * letterPx,
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = android.graphics.Color.rgb(0xEC, 0xEC, 0xEC)
-                textSize = captionSize * letterPx
-                textAlign = Paint.Align.CENTER
-                typeface = font ?: Typeface.create("sans-serif", Typeface.NORMAL)
-            },
-        )
-        return Layers(logo, caption, unitsWide, unitsHigh, wordTop, wordLeft + wordW / 2f)
+        return Layers(logo, unitsWide, unitsHigh, wordTop, wordLeft + wordW / 2f)
     }
 }
