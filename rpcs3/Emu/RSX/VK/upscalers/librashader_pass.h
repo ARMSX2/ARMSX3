@@ -49,7 +49,12 @@ namespace vk
 		libra_vk_filter_chain_t m_chain = nullptr;
 		std::string m_loaded_preset;
 		u64 m_frame_count = 0;
-		bool m_failed = false;
+		// A preset that would not load, build or run, so it costs one attempt rather than one per
+		// frame. Only that preset: picking another one tries it, where a single latch for the whole
+		// pass left every preset picked after one bad one doing nothing until the scaling changed.
+		std::string m_failed_preset;
+		// librashader.so is not there at all: nothing can load, whatever is picked.
+		bool m_no_runtime = false;
 
 		/**
 		 * The dlopen()ed entry points.
@@ -81,8 +86,8 @@ namespace vk
 			m_loaded_preset.clear();
 		}
 
-		// Build the chain for `preset_path`. Returns false and latches m_failed
-		// on any error, so a broken preset costs one attempt, not one per frame.
+		// Build the chain for `preset_path`. Returns false and remembers the preset
+		// as failed on any error, so a broken preset costs one attempt, not one per frame.
 		bool ensure_chain(const std::string& preset_path)
 		{
 			if (m_chain && m_loaded_preset == preset_path)
@@ -92,7 +97,7 @@ namespace vk
 
 			destroy_chain();
 
-			if (preset_path.empty() || m_failed)
+			if (preset_path.empty() || m_no_runtime || preset_path == m_failed_preset)
 			{
 				return false;
 			}
@@ -102,7 +107,7 @@ namespace vk
 				// librashader.so is not installed. Expected, not an error: the
 				// caller falls back to a plain blit.
 				rsx_log.notice("librashader: runtime not present, shader preset ignored");
-				m_failed = true;
+				m_no_runtime = true;
 				return false;
 			}
 
@@ -110,7 +115,7 @@ namespace vk
 			if (api().preset_create(preset_path.c_str(), &preset) || !preset)
 			{
 				rsx_log.error("librashader: failed to load preset '%s'", preset_path);
-				m_failed = true;
+				m_failed_preset = preset_path;
 				return false;
 			}
 
@@ -140,7 +145,7 @@ namespace vk
 			{
 				rsx_log.error("librashader: failed to build filter chain for '%s'", preset_path);
 				api().preset_free(&preset);
-				m_failed = true;
+				m_failed_preset = preset_path;
 				return false;
 			}
 
@@ -224,7 +229,7 @@ namespace vk
 					&viewport, nullptr, nullptr))
 			{
 				rsx_log.error("librashader: frame failed; disabling shader chain");
-				m_failed = true;
+				m_failed_preset = m_loaded_preset;
 				destroy_chain();
 			}
 

@@ -89,6 +89,12 @@ object InGameOverlay {
             MainActivityRuntime.eState.value != EmuState.STOPPED
         ) runCatching { ConfigStore.resolveForGame(currentSerial.value) }.getOrNull() else null
         settingsState.value = updated
+        if (previous.shaderChainEnabled != updated.shaderChainEnabled || previous.shaderChainPreset != updated.shaderChainPreset) {
+            android.util.Log.i(
+                "ARMSX3-Shader",
+                "save scope=${settingsScope.value} serial=${currentSerial.value} enabled=${updated.shaderChainEnabled} preset='${updated.shaderChainPreset}'",
+            )
+        }
         // `previous` matters: it's how ConfigStore tells a field the user just changed in
         // Game scope from one they never touched, so setting a per-game value that happens
         // to equal global still pins it instead of vanishing.

@@ -306,6 +306,21 @@ private fun ShaderPresetPicker(preset: String, onPresetChange: (String) -> Unit)
 
     // In the XMB: the presets as a tree of lists, None first, scanned as the list opens.
     com.armsx2.ui.xmb.LocalXmbCollector.current?.let { c ->
+        // The list stays open while settings change around it, so a pick goes through the save as
+        // it is now, never one from when the list was opened (which could put other changes back).
+        val change = androidx.compose.runtime.rememberUpdatedState(onPresetChange)
+        fun pick(path: String) {
+            android.util.Log.i(
+                "ARMSX3-Shader",
+                "xmb pick '$path' scope=${com.armsx2.ui.InGameOverlay.settingsScope.value} serial=${com.armsx2.ui.InGameOverlay.currentSerial.value}",
+            )
+            change.value(path)
+            // Back to the list the presets hang from, where Shader Preset now reads the one picked.
+            com.armsx2.ui.xmb.XmbDialogs.target()?.let { x ->
+                val at = x.levels.indexOfLast { it.node.key == "xmb.shader.presets" }
+                if (at >= 0) while (x.levels.size > at) x.levels.removeAt(x.levels.lastIndex)
+            }
+        }
         val title = str("renderer.shaderChain.preset.label")
         val noneLabel = str("renderer.shaderChain.preset.none")
         val emptyLabel = str("renderer.shaderChain.empty")
@@ -313,7 +328,7 @@ private fun ShaderPresetPicker(preset: String, onPresetChange: (String) -> Unit)
             "xmb.shader.dir.${dir.key}", dir.label, c.icon, "${dir.count}",
         ) {
             dir.folders.map { folderNode(it) } + dir.presets.map { p ->
-                com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.preset.${p.path}", p.label, c.icon, p.passes?.let { "$it" }) { onPresetChange(p.path) }
+                com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.preset.${p.path}", p.label, c.icon, p.passes?.let { "$it" }) { pick(p.path) }
             }
         }
         com.armsx2.ui.xmb.XmbCollected(
@@ -333,13 +348,13 @@ private fun ShaderPresetPicker(preset: String, onPresetChange: (String) -> Unit)
                     r == null || (scanning.value && r.folders.isEmpty() && r.presets.isEmpty()) ->
                         listOf(com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.scanning", "...", c.icon) {})
                     r.folders.isEmpty() && r.presets.isEmpty() -> listOf(
-                        com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.none", noneLabel, c.icon) { onPresetChange("") },
+                        com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.none", noneLabel, c.icon) { pick("") },
                         com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.empty", emptyLabel, c.icon, scan.value?.dir) {},
                     )
                     else -> listOf<com.armsx2.ui.xmb.XmbNode>(
-                        com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.none", noneLabel, c.icon) { onPresetChange("") },
+                        com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.none", noneLabel, c.icon) { pick("") },
                     ) + r.folders.map { folderNode(it) } + r.presets.map { p ->
-                        com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.preset.${p.path}", p.label, c.icon) { onPresetChange(p.path) }
+                        com.armsx2.ui.xmb.XmbNode.Action("xmb.shader.preset.${p.path}", p.label, c.icon) { pick(p.path) }
                     }
                 }
             },
