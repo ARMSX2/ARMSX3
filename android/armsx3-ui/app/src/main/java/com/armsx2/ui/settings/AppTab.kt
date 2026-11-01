@@ -1006,7 +1006,10 @@ private fun AppTabRest() {
             }
         }
 
-        SegmentedRow(
+        // The library's own toolbar, search box, recents shelf and grid: XMB mode has none of them,
+        // so their rows are left out of its System Settings rather than offered to do nothing.
+        val library = com.armsx2.ui.xmb.LocalXmbCollector.current == null
+        if (library) SegmentedRow(
             label = str("app.toolbarPosition"),
             options = listOf(str("app.toolbarPosition.top"), str("app.toolbarPosition.bottom")),
             selectedIndex = if (ToolbarPositionPreferences.atBottom.value) 1 else 0,
@@ -1030,7 +1033,7 @@ private fun AppTabRest() {
             },
         )
 
-        ToggleRow(
+        if (library) ToggleRow(
             label = str("app.library.search"),
             value = LibraryChromePreferences.showSearch.value,
             description = str("app.library.search.desc"),
@@ -1050,7 +1053,7 @@ private fun AppTabRest() {
             )
         }
 
-        ToggleRow(
+        if (library) ToggleRow(
             label = str("app.library.recents"),
             value = LibraryChromePreferences.showRecents.value,
             description = str("app.library.recents.desc"),
@@ -1066,14 +1069,14 @@ private fun AppTabRest() {
 
         // Moved off the library overflow menu, where it was the odd one out: every other
         // library-appearance preference already lives here beside cover size and opacity.
-        ToggleRow(
+        if (library) ToggleRow(
             label = str("games.overflow.gridNames"),
             value = com.armsx2.GridLabels.show.value,
             description = str("app.library.gridNames.desc"),
             onChange = { com.armsx2.GridLabels.set(it) },
         )
 
-        IntSliderRow(
+        if (library) IntSliderRow(
             label = str("app.library.coverSize"),
             value = (com.armsx2.ui.UiScale.coverScale.value * 100f).toInt().coerceIn(75, 250),
             min = 75,
@@ -1082,7 +1085,7 @@ private fun AppTabRest() {
             onChange = { com.armsx2.ui.UiScale.setCoverScale(it / 100f) },
         )
 
-        IntSliderRow(
+        if (library) IntSliderRow(
             label = str("app.library.opacity"),
             value = LibraryChromePreferences.libraryOpacity.value,
             min = 20,
