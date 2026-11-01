@@ -202,7 +202,15 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
 
             // wave mesh, alpha-blended over the gradient
             GLES30.glEnable(GLES30.GL_BLEND)
-            GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+            val xmb = com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl
+            if (xmb) {
+                // The view is not opaque, and a plain blend lowers the surface's alpha under the wave,
+                // which let the still picture behind the view tint it blue (seen over the black at the
+                // start of XMB mode's boot). XMB mode keeps the surface opaque.
+                GLES30.glBlendFuncSeparate(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA, GLES30.GL_ZERO, GLES30.GL_ONE)
+            } else {
+                GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+            }
             GLES30.glUseProgram(waveProg)
             GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, splineTex)
@@ -241,7 +249,7 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
 
             // XMB mode: the console's sparkles, specks of light drifting and twinkling about the wave.
             if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl) {
-                GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE)
+                GLES30.glBlendFuncSeparate(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE, GLES30.GL_ZERO, GLES30.GL_ONE)
                 GLES30.glUseProgram(sparkProg)
                 GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uTime"), timeSec)
                 GLES30.glUniform1f(GLES30.glGetUniformLocation(sparkProg, "uSize"), height / 360f)
