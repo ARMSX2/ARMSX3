@@ -30,7 +30,7 @@ public:
 
 	bool try_lock_shared()
 	{
-		const u32 value = m_value.load();
+		const u32 value = m_value.observe();
 
 		// Conditional increment
 		return value < c_one - 1 && m_value.compare_and_swap_test(value, value + 1);
@@ -38,7 +38,7 @@ public:
 
 	void lock_shared()
 	{
-		const u32 value = m_value.load();
+		const u32 value = m_value.observe();
 
 		if (value >= c_one - 1 || !m_value.compare_and_swap_test(value, value + 1)) [[unlikely]]
 		{
@@ -48,7 +48,7 @@ public:
 
 	void lock_shared_hle()
 	{
-		const u32 value = m_value.load();
+		const u32 value = m_value.observe();
 
 		if (value < c_one - 1) [[likely]]
 		{
@@ -154,7 +154,9 @@ public:
 	// Optimized wait for lockability without locking, relaxed
 	void lock_unlock()
 	{
-		if (m_value != 0) [[unlikely]]
+		// Use seq_cst ordering because this method is supposed to behave exactly lock(); and then unlock();
+		// Both methods enforce full memory ordering
+		if (m_value.fetch_add(0) != 0) [[unlikely]]
 		{
 			imp_lock_unlock();
 		}
