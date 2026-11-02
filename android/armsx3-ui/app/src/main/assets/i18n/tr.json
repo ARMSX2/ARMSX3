@@ -1207,13 +1207,12 @@
  "savestate.title.save": "Durumu Kaydet",
  "scope.game": "Oyun",
  "scope.global": "Global",
- "secondScreen.desc": "İkinci ekranı olan cihazlarda (Ayn Thor, Retroid çift ekran ve benzeri), canlı FPS, pil ve saatin yanı sıra kaydetme durumu, yükleme durumu, hızlı ileri sarma, duraklatma ve ekran görüntüsü düğmelerinin bulunduğu bir panel gösterin. İkinci bir ekran takılmadığında hiçbir şey yapmaz.",
+ "secondScreen.desc": "İkinci ekranı olan cihazlarda (Ayn Thor, Retroid çift ekran ve benzeri), oynanan oyunun, canlı FPS'nin, pil ve saatin yanı sıra duraklatma ve ekran görüntüsü düğmelerinin bulunduğu bir panel gösterin. İkinci bir ekran takılmadığında hiçbir şey yapmaz.",
  "secondScreen.fastForward": "Hızlı ileri sar",
  "secondScreen.label": "İkinci ekran paneli",
  "secondScreen.moveOsd": "OSD'yi ikinci ekrana taşıyın",
  "secondScreen.moveOsd.desc": "İkinci ekran paneli gösterilirken oyundaki performans katmanını gizleyin ve bunun yerine istatistikleri orada gösterin. Kendi OSD seçiminize dokunulmaz ve panel dokunulmadığında geri gelir.",
- "secondScreen.noGame": "Oyun çalışmıyor; kaydetme durumlarını, hızlı ileri sarmayı ve makroları burada kullanmak için bir tane başlatın.",
- "secondScreen.pause": "Duraklat / Devam Et",
+ "secondScreen.pause": "Duraklat",
  "settings.notDefault": "Varsayılan değil",
  "settings.scope.label": "Yapılandırma",
  "settings.search.noResults": "Eşleşen ayar yok",
@@ -1500,5 +1499,7 @@
  "xmb.configDb.none": "RPCS3 veritabanında bu oyun için ayar yok.",
  "renderer.shaderChain.scale.label": "Gölgelendirici Çözünürlüğü",
  "renderer.shaderChain.scale.description": "Gölgelendiriciyi daha düşük çözünürlükte çalıştırır, ardından görüntüsünü ekrana büyütür. Düşük değer ağır ön ayarlarda çok daha hızlıdır ve biraz daha yumuşak görünür.",
- "rpcn.request.banner": "%s size arkadaşlık isteği gönderdi"
+ "rpcn.request.banner": "%s size arkadaşlık isteği gönderdi",
+ "secondScreen.idle": "Oyun çalışmıyor",
+ "secondScreen.screenshot": "Ekran Görüntüsü"
 }

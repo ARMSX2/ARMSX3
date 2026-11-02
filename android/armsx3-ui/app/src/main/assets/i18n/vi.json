@@ -1207,13 +1207,12 @@
  "savestate.title.save": "Lưu trạng thái",
  "scope.game": "Trò chơi",
  "scope.global": "Chung",
- "secondScreen.desc": "Trên các thiết bị có màn hình thứ hai (Ayn Thor, màn hình kép Retroid và tương tự), hãy hiển thị bảng điều khiển ở đó với FPS trực tiếp, pin và đồng hồ cũng như các nút để lưu trạng thái, trạng thái tải, tua đi nhanh, tạm dừng và chụp màn hình. Không có gì khi không có màn hình thứ hai được đính kèm.",
+ "secondScreen.desc": "Trên các thiết bị có màn hình thứ hai (Ayn Thor, màn hình kép Retroid và tương tự), hãy hiển thị bảng điều khiển ở đó với trò chơi đang chơi, FPS trực tiếp, pin và đồng hồ cũng như các nút tạm dừng và chụp màn hình. Không có gì khi không có màn hình thứ hai được đính kèm.",
  "secondScreen.fastForward": "Chuyển tiếp nhanh",
  "secondScreen.label": "Bảng điều khiển màn hình thứ hai",
  "secondScreen.moveOsd": "Di chuyển OSD sang màn hình thứ hai",
  "secondScreen.moveOsd.desc": "Trong khi bảng điều khiển màn hình thứ hai đang hiển thị, hãy ẩn lớp phủ hiệu suất trên trò chơi và thay vào đó hiển thị số liệu thống kê ở dưới đó. Lựa chọn OSD của riêng bạn không bị ảnh hưởng và quay trở lại khi bảng điều khiển không hoạt động.",
- "secondScreen.noGame": "Không có trò chơi nào đang chạy. Hãy bắt đầu một trò chơi để sử dụng trạng thái lưu, tua nhanh và macro tại đây.",
- "secondScreen.pause": "Tạm dừng / Tiếp tục",
+ "secondScreen.pause": "Tạm dừng",
  "settings.notDefault": "Không mặc định",
  "settings.scope.label": "Đang cấu hình",
  "settings.search.noResults": "Không có cài đặt phù hợp",
@@ -1500,5 +1499,7 @@
  "xmb.configDb.none": "Cơ sở dữ liệu của RPCS3 không có cài đặt cho trò chơi này.",
  "renderer.shaderChain.scale.label": "Độ phân giải shader",
  "renderer.shaderChain.scale.description": "Chạy shader ở độ phân giải thấp hơn rồi phóng to hình ảnh ra màn hình. Thấp hơn nhanh hơn nhiều với các preset nặng và trông mềm hơn một chút.",
- "rpcn.request.banner": "%s đã gửi cho bạn lời mời kết bạn"
+ "rpcn.request.banner": "%s đã gửi cho bạn lời mời kết bạn",
+ "secondScreen.idle": "Không có trò chơi nào đang chạy",
+ "secondScreen.screenshot": "Chụp màn hình"
 }

@@ -1207,13 +1207,12 @@
  "savestate.title.save": "Guardar estado",
  "scope.game": "juego",
  "scope.global": "Global",
- "secondScreen.desc": "En dispositivos con una segunda pantalla (Ayn Thor, Retroid de pantalla dual y similares), muestra un panel con FPS en vivo, la batería y el reloj, y botones para guardar estado, estado de carga, avance rápido, pausa y captura de pantalla. No hace nada cuando no hay una segunda pantalla conectada.",
+ "secondScreen.desc": "En dispositivos con una segunda pantalla (Ayn Thor, Retroid de pantalla dual y similares), muestra un panel con el juego en curso, FPS en vivo, la batería y el reloj, y botones de pausa y captura de pantalla. No hace nada cuando no hay una segunda pantalla conectada.",
  "secondScreen.fastForward": "Avance rápido",
  "secondScreen.label": "Panel de segunda pantalla",
  "secondScreen.moveOsd": "Mover el OSD a la segunda pantalla",
  "secondScreen.moveOsd.desc": "Mientras se muestra el panel de la segunda pantalla, oculta la superposición de rendimiento en el juego y muestra las estadísticas allí abajo. Su propia selección de OSD no se modifica y regresa cuando el panel no lo hace.",
- "secondScreen.noGame": "No hay ningún juego en ejecución: inicia uno para usar estados de guardado, avance rápido y macros aquí.",
- "secondScreen.pause": "Pausar / Reanudar",
+ "secondScreen.pause": "Pausar",
  "settings.notDefault": "No predeterminado",
  "settings.scope.label": "Configurando",
  "settings.search.noResults": "No hay configuraciones coincidentes",
@@ -1500,5 +1499,7 @@
  "xmb.configDb.none": "La base de datos de RPCS3 no tiene ajustes para este juego.",
  "renderer.shaderChain.scale.label": "Resolución del shader",
  "renderer.shaderChain.scale.description": "Ejecuta el shader a menor resolución y luego escala su imagen a la pantalla. Más bajo es mucho más rápido con preajustes pesados y se ve algo más suave.",
- "rpcn.request.banner": "%s te envió una solicitud de amistad"
+ "rpcn.request.banner": "%s te envió una solicitud de amistad",
+ "secondScreen.idle": "No hay ningún juego en ejecución",
+ "secondScreen.screenshot": "Captura"
 }

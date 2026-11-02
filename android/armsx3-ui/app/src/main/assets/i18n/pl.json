@@ -1207,13 +1207,12 @@
  "savestate.title.save": "Zapisz stan",
  "scope.game": "Gra",
  "scope.global": "Globalny",
- "secondScreen.desc": "Na urządzeniach z drugim wyświetlaczem (Ayn Thor, podwójny ekran Retroid i podobne) pokaż tam panel z FPS na żywo, baterią i zegarem oraz przyciskami do zapisywania stanu, stanu ładowania, przewijania do przodu, pauzy i zrzutu ekranu. Nie robi nic, jeśli nie jest podłączony drugi wyświetlacz.",
+ "secondScreen.desc": "Na urządzeniach z drugim wyświetlaczem (Ayn Thor, podwójny ekran Retroid i podobne) pokaż tam panel z uruchomioną grą, FPS na żywo, baterią i zegarem oraz przyciskami pauzy i zrzutu ekranu. Nie robi nic, jeśli nie jest podłączony drugi wyświetlacz.",
  "secondScreen.fastForward": "Szybkie przewijanie do przodu",
  "secondScreen.label": "Drugi panel ekranowy",
  "secondScreen.moveOsd": "Przesuń OSD na drugi ekran",
  "secondScreen.moveOsd.desc": "Gdy widoczny jest panel drugiego ekranu, ukryj nakładkę wydajności w grze i zamiast tego pokaż statystyki. Twój własny wybór OSD pozostanie niezmieniony i powróci, gdy panel tego nie zrobi.",
- "secondScreen.noGame": "Żadna gra nie jest uruchomiona. Uruchom jakąś, aby korzystać tutaj z zapisów stanu, przewijania do przodu i makr.",
- "secondScreen.pause": "Wstrzymaj / Wznów",
+ "secondScreen.pause": "Wstrzymaj",
  "settings.notDefault": "Niedomyślne",
  "settings.scope.label": "Konfigurowanie",
  "settings.search.noResults": "Brak pasujących ustawień",
@@ -1500,5 +1499,7 @@
  "xmb.configDb.none": "Baza danych RPCS3 nie ma ustawień dla tej gry.",
  "renderer.shaderChain.scale.label": "Rozdzielczość shadera",
  "renderer.shaderChain.scale.description": "Uruchamia shader w niższej rozdzielczości, a potem skaluje jego obraz do ekranu. Niższa jest dużo szybsza przy ciężkich ustawieniach i wygląda nieco łagodniej.",
- "rpcn.request.banner": "%s chce dodać cię do znajomych"
+ "rpcn.request.banner": "%s chce dodać cię do znajomych",
+ "secondScreen.idle": "Żadna gra nie jest uruchomiona",
+ "secondScreen.screenshot": "Zrzut ekranu"
 }

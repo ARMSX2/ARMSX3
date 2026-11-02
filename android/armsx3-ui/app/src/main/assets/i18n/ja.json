@@ -1207,13 +1207,12 @@
  "savestate.title.save": "ステートを保存",
  "scope.game": "ゲーム",
  "scope.global": "グローバル",
- "secondScreen.desc": "セカンド ディスプレイ (Ayn Thor、Retroid デュアル スクリーンなど) を備えたデバイスでは、ライブ FPS、バッテリーと時計、ステートの保存、ステートのロード、早送り、一時停止、スクリーンショットのボタンを含むパネルを表示します。セカンドディスプレイが接続されていない場合は何もしません。",
+ "secondScreen.desc": "セカンド ディスプレイ (Ayn Thor、Retroid デュアル スクリーンなど) を備えたデバイスでは、プレイ中のゲーム、ライブ FPS、バッテリーと時計、一時停止とスクリーンショットのボタンを含むパネルを表示します。セカンドディスプレイが接続されていない場合は何もしません。",
  "secondScreen.fastForward": "早送り",
  "secondScreen.label": "セカンドスクリーンパネル",
  "secondScreen.moveOsd": "OSDを2番目の画面に移動します",
  "secondScreen.moveOsd.desc": "セカンド スクリーン パネルが表示されている間は、ゲーム上のパフォーマンス オーバーレイを非表示にし、代わりにそこに統計情報を表示します。独自の OSD 選択は変更されずに残され、パネルが変更されなくなると元に戻ります。",
- "secondScreen.noGame": "ゲームは実行されていません。ここでセーブステート、早送り、マクロを使用するにはゲームを開始してください。",
- "secondScreen.pause": "一時停止/再開",
+ "secondScreen.pause": "一時停止",
  "settings.notDefault": "デフォルト以外",
  "settings.scope.label": "設定中",
  "settings.search.noResults": "一致する設定がありません",
@@ -1500,5 +1499,7 @@
  "xmb.configDb.none": "RPCS3のデータベースにこのゲームの設定はありません。",
  "renderer.shaderChain.scale.label": "シェーダー解像度",
  "renderer.shaderChain.scale.description": "シェーダーを低い解像度で動かし、その画像を画面サイズへ拡大します。低いほど重いプリセットで大幅に速くなり、少し柔らかい見た目になります。",
- "rpcn.request.banner": "%s さんからフレンドリクエストが届きました"
+ "rpcn.request.banner": "%s さんからフレンドリクエストが届きました",
+ "secondScreen.idle": "ゲームは実行されていません",
+ "secondScreen.screenshot": "スクリーンショット"
 }

@@ -1207,13 +1207,12 @@
  "savestate.title.save": "Rewşê tomar bike",
  "scope.game": "Lîstik",
  "scope.global": "Giştî",
- "secondScreen.desc": "Li ser cîhazên bi dîmendera duyemîn (Ayn Thor, Retroid du-screen û mîna wan), panelek li wir bi FPS-ya zindî, pîlê û demjimêr, û bişkokên ji bo rewşa tomarkirinê, rewşa barkirinê, zû-pêşveçûn, sekinandin û dîmenê nîşan bidin. Dema ku dîmenderek duyemîn neyê girêdan tiştek nake.",
+ "secondScreen.desc": "Li ser cîhazên bi dîmendera duyemîn (Ayn Thor, Retroid du-screen û mîna wan), panelek li wir bi lîstika ku tê lîstin, FPS-ya zindî, pîlê û demjimêr, û bişkokên ji bo sekinandin û dîmenê nîşan bidin. Dema ku dîmenderek duyemîn neyê girêdan tiştek nake.",
  "secondScreen.fastForward": "Bilez pêşve",
  "secondScreen.label": "Panela ekrana duyemîn",
  "secondScreen.moveOsd": "OSD-ê veguhezînin ekrana duyemîn",
  "secondScreen.moveOsd.desc": "Dema ku panela-ekrana duyemîn tê xuyang kirin, serpêhatiya performansê li ser lîstikê veşêre û li şûna wê statîstîkan nîşan bide. Hilbijartina OSD-ya we bêdestpêk dimîne û dema ku panel nekeve vedigere.",
- "secondScreen.noGame": "Tu lîstik nayê xebitandin. Yekê dest pê bikin da ku li vir rewşên tomarkirinê, bilez-pêşveçûn û makroyan bikar bînin.",
- "secondScreen.pause": "Rawestandin / Vegerandin",
+ "secondScreen.pause": "Rawestandin",
  "settings.notDefault": "Ne standard",
  "settings.scope.label": "Veavakirin",
  "settings.search.noResults": "Mîhengên lihevhatî tune",
@@ -1500,5 +1499,7 @@
  "xmb.configDb.none": "Danegeha RPCS3 ji bo vê lîstikê ti mîhengan nîne.",
  "renderer.shaderChain.scale.label": "Rezolûsyona shader",
  "renderer.shaderChain.scale.description": "Shader bi rezolûsyoneke kêmtir dimeşîne, paşê wêneya wê li ser dîmenderê mezin dike. Kêmtir bi presetên giran pir zûtir e û hinekî nermtir xuya dike.",
- "rpcn.request.banner": "%s daxwaza hevaltiyê ji te re şand"
+ "rpcn.request.banner": "%s daxwaza hevaltiyê ji te re şand",
+ "secondScreen.idle": "Tu lîstik nayê xebitandin",
+ "secondScreen.screenshot": "Wêneyê Ekranê"
 }

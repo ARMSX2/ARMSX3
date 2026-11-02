@@ -1207,13 +1207,12 @@
  "savestate.title.save": "Salva stato",
  "scope.game": "Gioco",
  "scope.global": "Globale",
- "secondScreen.desc": "Sui dispositivi con un secondo display (Ayn Thor, Retroid dual-screen e simili), mostra un pannello con FPS live, batteria e orologio e pulsanti per lo stato di salvataggio, lo stato di caricamento, l'avanzamento veloce, la pausa e lo screenshot. Non fa nulla quando non è collegato un secondo display.",
+ "secondScreen.desc": "Sui dispositivi con un secondo display (Ayn Thor, Retroid dual-screen e simili), mostra un pannello con il gioco in corso, FPS live, batteria e orologio e pulsanti per la pausa e lo screenshot. Non fa nulla quando non è collegato un secondo display.",
  "secondScreen.fastForward": "Avanti veloce",
  "secondScreen.label": "Pannello del secondo schermo",
  "secondScreen.moveOsd": "Sposta l'OSD sul secondo schermo",
  "secondScreen.moveOsd.desc": "Mentre viene visualizzato il pannello del secondo schermo, nascondi la sovrapposizione delle prestazioni sul gioco e mostra invece le statistiche laggiù. La tua selezione OSD rimane intatta e ritorna quando il pannello non lo fa.",
- "secondScreen.noGame": "Nessun gioco in esecuzione: avviane uno per utilizzare gli stati di salvataggio, l'avanzamento veloce e le macro qui.",
- "secondScreen.pause": "Pausa/Riprendi",
+ "secondScreen.pause": "Pausa",
  "settings.notDefault": "Non predefinito",
  "settings.scope.label": "Configurazione",
  "settings.search.noResults": "Nessuna impostazione corrispondente",
@@ -1500,5 +1499,7 @@
  "xmb.configDb.none": "Il database di RPCS3 non ha impostazioni per questo gioco.",
  "renderer.shaderChain.scale.label": "Risoluzione shader",
  "renderer.shaderChain.scale.description": "Esegue lo shader a una risoluzione più bassa, poi scala la sua immagine sullo schermo. Più bassa è molto più veloce con le preimpostazioni pesanti e appena più morbida.",
- "rpcn.request.banner": "%s ti ha inviato una richiesta di amicizia"
+ "rpcn.request.banner": "%s ti ha inviato una richiesta di amicizia",
+ "secondScreen.idle": "Nessun gioco in esecuzione",
+ "secondScreen.screenshot": "Screenshot"
 }

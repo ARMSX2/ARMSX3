@@ -1208,13 +1208,12 @@
  "savestate.title.save": "Salvar estado",
  "scope.game": "Jogo",
  "scope.global": "Globais",
- "secondScreen.desc": "Em dispositivos com segundo monitor (Ayn Thor, Retroid dual-screen e similares), mostre um painel com FPS ao vivo, bateria e relógio, e botões para salvar e carregar estado, avanço rápido, pausa e captura de tela. Não faz nada quando nenhum segundo monitor está conectado.",
+ "secondScreen.desc": "Em dispositivos com segundo monitor (Ayn Thor, Retroid dual-screen e similares), mostre um painel com o jogo em execução, FPS ao vivo, bateria e relógio, e botões de pausa e captura de tela. Não faz nada quando nenhum segundo monitor está conectado.",
  "secondScreen.fastForward": "Avanço rápido",
  "secondScreen.label": "Painel da segunda tela",
  "secondScreen.moveOsd": "Mova o OSD para a segunda tela",
  "secondScreen.moveOsd.desc": "Enquanto o painel da segunda tela estiver sendo exibido, oculte a sobreposição de desempenho no jogo e mostre as estatísticas lá embaixo. Sua própria seleção OSD permanece intacta e volta quando o painel não o faz.",
- "secondScreen.noGame": "Nenhum jogo em execução. Inicie um para usar estados salvos, avanço rápido e macros aqui.",
- "secondScreen.pause": "Pausar/Retomar",
+ "secondScreen.pause": "Pausar",
  "settings.notDefault": "Não padrão",
  "settings.scope.label": "Configurando",
  "settings.search.noResults": "Nenhuma configuração correspondente",
@@ -1501,5 +1500,7 @@
  "xmb.configDb.none": "O banco de dados do RPCS3 não tem configurações para este jogo.",
  "renderer.shaderChain.scale.label": "Resolução do shader",
  "renderer.shaderChain.scale.description": "Executa o shader em uma resolução menor e depois amplia a imagem para a tela. Menor é muito mais rápido com predefinições pesadas e fica um pouco mais suave.",
- "rpcn.request.banner": "%s enviou uma solicitação de amizade para você"
+ "rpcn.request.banner": "%s enviou uma solicitação de amizade para você",
+ "secondScreen.idle": "Nenhum jogo em execução",
+ "secondScreen.screenshot": "Captura de tela"
 }

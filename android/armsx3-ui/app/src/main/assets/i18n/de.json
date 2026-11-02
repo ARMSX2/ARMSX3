@@ -1207,13 +1207,12 @@
  "savestate.title.save": "Speicherstand speichern",
  "scope.game": "Spiel",
  "scope.global": "Global",
- "secondScreen.desc": "Auf Geräten mit einem zweiten Display (Ayn Thor, Retroid Dual-Screen und ähnliches) wird dort ein Panel mit Live-FPS, Akku und Uhr sowie Schaltflächen zum Speichern und Laden von Speicherständen, für Schnellvorlauf, Pause und Screenshot angezeigt. Bewirkt nichts, wenn kein zweites Display angeschlossen ist.",
+ "secondScreen.desc": "Auf Geräten mit einem zweiten Display (Ayn Thor, Retroid Dual-Screen und ähnliches) wird dort ein Panel mit dem laufenden Spiel, Live-FPS, Akku und Uhr sowie Schaltflächen für Pause und Screenshot angezeigt. Bewirkt nichts, wenn kein zweites Display angeschlossen ist.",
  "secondScreen.fastForward": "Schneller Vorlauf",
  "secondScreen.label": "Zweites Bildschirmpanel",
  "secondScreen.moveOsd": "OSD auf den zweiten Bildschirm verschieben",
  "secondScreen.moveOsd.desc": "Während das zweite Bildschirmfenster angezeigt wird, blenden Sie die Leistungseinblendung des Spiels aus und zeigen Sie stattdessen unten die Statistiken an. Ihre eigene OSD-Auswahl bleibt unberührt und wird wieder angezeigt, wenn das Panel dies nicht tut.",
- "secondScreen.noGame": "Es läuft kein Spiel. Starten Sie eines, um hier Speicherstände, Schnellvorlauf und Makros zu verwenden.",
- "secondScreen.pause": "Pause / Fortsetzen",
+ "secondScreen.pause": "Pause",
  "settings.notDefault": "Nicht Standard",
  "settings.scope.label": "Konfigurieren",
  "settings.search.noResults": "Keine passenden Einstellungen",
@@ -1500,5 +1499,7 @@
  "xmb.configDb.none": "Die RPCS3-Datenbank hat keine Einstellungen für dieses Spiel.",
  "renderer.shaderChain.scale.label": "Shader-Auflösung",
  "renderer.shaderChain.scale.description": "Lässt den Shader in geringerer Auflösung laufen und skaliert sein Bild dann auf den Bildschirm hoch. Niedriger ist bei aufwendigen Voreinstellungen viel schneller und wirkt etwas weicher.",
- "rpcn.request.banner": "%s hat Ihnen eine Freundschaftsanfrage gesendet"
+ "rpcn.request.banner": "%s hat Ihnen eine Freundschaftsanfrage gesendet",
+ "secondScreen.idle": "Es läuft kein Spiel",
+ "secondScreen.screenshot": "Screenshot"
 }

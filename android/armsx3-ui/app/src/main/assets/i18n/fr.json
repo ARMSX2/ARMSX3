@@ -1207,13 +1207,12 @@
  "savestate.title.save": "Enregistrer l'état",
  "scope.game": "Jeu",
  "scope.global": "Global",
- "secondScreen.desc": "Sur les appareils dotés d'un deuxième écran (Ayn Thor, Retroid double écran et similaire), affichez un panneau avec le FPS en direct, la batterie et l'horloge, ainsi que des boutons pour l'état de sauvegarde, l'état de chargement, l'avance rapide, la pause et la capture d'écran. Ne fait rien lorsqu'aucun deuxième écran n'est connecté.",
+ "secondScreen.desc": "Sur les appareils dotés d'un deuxième écran (Ayn Thor, Retroid double écran et similaire), affichez un panneau avec le jeu en cours, le FPS en direct, la batterie et l'horloge, ainsi que des boutons pour la pause et la capture d'écran. Ne fait rien lorsqu'aucun deuxième écran n'est connecté.",
  "secondScreen.fastForward": "Avance rapide",
  "secondScreen.label": "Panneau du second écran",
  "secondScreen.moveOsd": "Déplacez l'OSD vers le deuxième écran",
  "secondScreen.moveOsd.desc": "Pendant que le panneau du deuxième écran s'affiche, masquez la superposition de performances sur le jeu et affichez les statistiques à la place. Votre propre sélection OSD reste intacte et revient lorsque le panneau ne le fait pas.",
- "secondScreen.noGame": "Aucun jeu en cours d'exécution. Démarrez-en un pour utiliser les états de sauvegarde, l'avance rapide et les macros ici.",
- "secondScreen.pause": "Pause/Reprise",
+ "secondScreen.pause": "Pause",
  "settings.notDefault": "Non par défaut",
  "settings.scope.label": "Configuration",
  "settings.search.noResults": "Aucun paramètre correspondant",
@@ -1500,5 +1499,7 @@
  "xmb.configDb.none": "La base de données de RPCS3 n'a aucun réglage pour ce jeu.",
  "renderer.shaderChain.scale.label": "Résolution du shader",
  "renderer.shaderChain.scale.description": "Fait tourner le shader à une résolution plus basse, puis agrandit son image à l'écran. Plus bas est bien plus rapide avec les préréglages lourds et un peu plus doux.",
- "rpcn.request.banner": "%s vous a envoyé une demande d'ami"
+ "rpcn.request.banner": "%s vous a envoyé une demande d'ami",
+ "secondScreen.idle": "Aucun jeu en cours d'exécution",
+ "secondScreen.screenshot": "Capture"
 }

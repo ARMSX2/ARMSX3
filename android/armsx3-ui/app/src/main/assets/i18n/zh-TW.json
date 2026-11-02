@@ -1207,13 +1207,12 @@
  "savestate.title.save": "儲存狀態",
  "scope.game": "遊戲",
  "scope.global": "全域",
- "secondScreen.desc": "在具有第二個顯示器的裝置（Ayn Thor、Retroid 雙螢幕和類似裝置）上，顯示一個帶有即時 FPS、電池和時鐘的面板，以及用於儲存狀態、載入狀態、快轉、暫停和螢幕截圖的按鈕。未連接第二個顯示器時不執行任何操作。",
+ "secondScreen.desc": "在具有第二個顯示器的裝置（Ayn Thor、Retroid 雙螢幕和類似裝置）上，顯示一個帶有正在玩的遊戲、即時 FPS、電池和時鐘的面板，以及用於暫停和螢幕截圖的按鈕。未連接第二個顯示器時不執行任何操作。",
  "secondScreen.fastForward": "快轉",
  "secondScreen.label": "第二螢幕面板",
  "secondScreen.moveOsd": "將 OSD 移至第二個螢幕",
  "secondScreen.moveOsd.desc": "當第二個螢幕面板顯示時，隱藏遊戲上的效能疊加層並在下面顯示統計資料。您自己的 OSD 選擇保持不變，並且當面板不受影響時返回。",
- "secondScreen.noGame": "沒有正在執行的遊戲。啟動一個遊戲後，即可在這裡使用儲存狀態、快轉和巨集。",
- "secondScreen.pause": "暫停/恢復",
+ "secondScreen.pause": "暫停",
  "settings.notDefault": "非預設",
  "settings.scope.label": "配置",
  "settings.search.noResults": "沒有匹配的設置",
@@ -1500,5 +1499,7 @@
  "xmb.configDb.none": "RPCS3 資料庫中沒有此遊戲的設定。",
  "renderer.shaderChain.scale.label": "著色器解析度",
  "renderer.shaderChain.scale.description": "以較低的解析度執行著色器，再將畫面放大到螢幕。越低在重型預設下執行越快，畫面會稍微柔和一些。",
- "rpcn.request.banner": "%s 向你發送了好友邀請"
+ "rpcn.request.banner": "%s 向你發送了好友邀請",
+ "secondScreen.idle": "沒有正在執行的遊戲",
+ "secondScreen.screenshot": "截圖"
 }

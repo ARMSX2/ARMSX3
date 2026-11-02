@@ -1207,13 +1207,12 @@
  "savestate.title.save": "Simpan Status",
  "scope.game": "Permainan",
  "scope.global": "Global",
- "secondScreen.desc": "Pada perangkat dengan tampilan kedua (Ayn Thor, Retroid layar ganda, dan sejenisnya), tampilkan panel di sana dengan FPS langsung, baterai dan jam, serta tombol untuk menyimpan status, memuat status, maju cepat, jeda, dan tangkapan layar. Tidak melakukan apa pun saat tidak ada layar kedua yang terpasang.",
+ "secondScreen.desc": "Pada perangkat dengan tampilan kedua (Ayn Thor, Retroid layar ganda, dan sejenisnya), tampilkan panel di sana dengan game yang sedang dimainkan, FPS langsung, baterai dan jam, serta tombol untuk jeda dan tangkapan layar. Tidak melakukan apa pun saat tidak ada layar kedua yang terpasang.",
  "secondScreen.fastForward": "Maju cepat",
  "secondScreen.label": "Panel layar kedua",
  "secondScreen.moveOsd": "Pindahkan OSD ke layar kedua",
  "secondScreen.moveOsd.desc": "Saat panel layar kedua ditampilkan, sembunyikan overlay performa pada game dan tampilkan statistik di bawah sana. Pilihan OSD Anda tidak tersentuh dan muncul kembali ketika panel tidak tersentuh.",
- "secondScreen.noGame": "Tidak ada game yang berjalan. Mulai salah satu untuk menggunakan status penyimpanan, maju cepat, dan makro di sini.",
- "secondScreen.pause": "Jeda / Lanjutkan",
+ "secondScreen.pause": "Jeda",
  "settings.notDefault": "Bukan bawaan",
  "settings.scope.label": "Konfigurasi",
  "settings.search.noResults": "Tidak ada pengaturan yang cocok",
@@ -1500,5 +1499,7 @@
  "xmb.configDb.none": "Basis data RPCS3 tidak punya pengaturan untuk game ini.",
  "renderer.shaderChain.scale.label": "Resolusi Shader",
  "renderer.shaderChain.scale.description": "Menjalankan shader pada resolusi lebih rendah, lalu memperbesar gambarnya ke layar. Lebih rendah jauh lebih cepat untuk preset berat dan sedikit lebih lembut.",
- "rpcn.request.banner": "%s mengirimi Anda permintaan pertemanan"
+ "rpcn.request.banner": "%s mengirimi Anda permintaan pertemanan",
+ "secondScreen.idle": "Tidak ada game yang berjalan",
+ "secondScreen.screenshot": "Tangkapan Layar"
 }
