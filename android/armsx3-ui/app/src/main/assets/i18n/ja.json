@@ -1499,5 +1499,6 @@
  "xmb.playlist.addPictures": "画像を追加",
  "xmb.configDb.none": "RPCS3のデータベースにこのゲームの設定はありません。",
  "renderer.shaderChain.scale.label": "シェーダー解像度",
- "renderer.shaderChain.scale.description": "シェーダーを低い解像度で動かし、その画像を画面サイズへ拡大します。低いほど重いプリセットで大幅に速くなり、少し柔らかい見た目になります。"
+ "renderer.shaderChain.scale.description": "シェーダーを低い解像度で動かし、その画像を画面サイズへ拡大します。低いほど重いプリセットで大幅に速くなり、少し柔らかい見た目になります。",
+ "rpcn.request.banner": "%s さんからフレンドリクエストが届きました"
 }

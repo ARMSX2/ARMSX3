@@ -1499,5 +1499,6 @@
  "xmb.playlist.addPictures": "사진 추가",
  "xmb.configDb.none": "RPCS3 데이터베이스에 이 게임의 설정이 없습니다.",
  "renderer.shaderChain.scale.label": "셰이더 해상도",
- "renderer.shaderChain.scale.description": "셰이더를 더 낮은 해상도로 실행한 뒤 그 화면을 디스플레이 크기로 확대합니다. 낮을수록 무거운 프리셋에서 훨씬 빠르고 약간 부드러워 보입니다."
+ "renderer.shaderChain.scale.description": "셰이더를 더 낮은 해상도로 실행한 뒤 그 화면을 디스플레이 크기로 확대합니다. 낮을수록 무거운 프리셋에서 훨씬 빠르고 약간 부드러워 보입니다.",
+ "rpcn.request.banner": "%s 님이 친구 요청을 보냈습니다"
 }

@@ -67,6 +67,35 @@ object RpcnInviteNotice {
     }
 }
 
+/**
+ * "<name> sent you a friend request", told in XMB mode as the console tells it (XmbNotices). Fed with
+ * the friend list wherever it is read while signed in: the in-game check (MainActivityRuntime.onStart)
+ * and the XMB's RPCN column. RPCN holds no session outside those, so a request sent meanwhile is told
+ * at the next read. Each is told once: the names told are kept, and dropped once the request is
+ * answered, so one sent again later is told again.
+ */
+object RpcnRequestNotice {
+    /** The sender of the request being shown, or null. */
+    val from = mutableStateOf<String?>(null)
+
+    private const val ToldKey = "rpcn.requests.told"
+
+    /** With the requests waiting on this account, from a read made while signed in. On the main thread. */
+    internal fun update(received: List<String>) {
+        if (!com.armsx2.ui.xmb.XmbMode.active.value) return
+        val prefs = com.armsx2.runtime.MainActivityRuntime.prefs
+        val told = prefs.getStringSet(ToldKey, emptySet()).orEmpty()
+        val fresh = received.filter { it !in told }
+        val keep = told.filterTo(HashSet()) { it in received }
+        if (fresh.isNotEmpty()) {
+            keep.addAll(fresh)
+            from.value = fresh.last()
+            MenuSfx.play(MenuSfx.Event.POPUP_OPEN)
+        }
+        if (keep != told) prefs.edit().putStringSet(ToldKey, keep).apply()
+    }
+}
+
 @Composable
 fun RpcnInviteBanner() {
     val sender by RpcnInviteNotice.from

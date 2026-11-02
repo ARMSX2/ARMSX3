@@ -60,6 +60,7 @@ import kotlinx.coroutines.delay
  * - Compiling during play (CompileBanner), with its progress.
  * - A Discord friend coming online, with their picture, as the console says a friend signed in.
  * - An RPCN invite for the running game, with the console's invitation icon.
+ * - An RPCN friend request, with the console's new friend icon (RpcnRequestNotice, told only here).
  * - Remote play: a friend joining or leaving.
  */
 @Composable
@@ -81,6 +82,7 @@ fun XmbNotices() {
             CompileNote(u, m, font)
             FriendOnlineNote(u, m, font)
             InviteNote(u, m, font)
+            RequestNote(u, m, font)
             RemotePlayNote(u, m, font)
         }
     }
@@ -219,6 +221,25 @@ private fun InviteNote(u: Float, m: Metrics, font: FontFamily) {
             Text(invited, style = xmbText(font, m.labelSp * 1.2f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(howTo, style = xmbText(font, m.subtitleSp * 1.05f, alpha = 0.8f))
         }
+    }
+}
+
+@Composable
+private fun RequestNote(u: Float, m: Metrics, font: FontFamily) {
+    val current = com.armsx2.ui.friends.RpcnRequestNotice.from.value
+    // Its clock is here: no banner of the library's tells a request.
+    LaunchedEffect(current) {
+        if (current == null) return@LaunchedEffect
+        delay(6000)
+        com.armsx2.ui.friends.RpcnRequestNotice.from.value = null
+    }
+    val (from, shown) = fading(current)
+    from ?: return
+    val text = str("rpcn.request.banner").format(from)
+    XmbNoticeBox(u, shown) {
+        XmbIconView(XmbIcon("explore_category_friend", "item_tex_NewFriend", "➕"), (40f * u).dp)
+        Spacer(Modifier.width((14f * u).dp))
+        Text(text, style = xmbText(font, m.labelSp * 1.2f), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

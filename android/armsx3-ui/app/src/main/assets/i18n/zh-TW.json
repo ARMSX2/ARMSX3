@@ -1499,5 +1499,6 @@
  "xmb.playlist.addPictures": "加入圖片",
  "xmb.configDb.none": "RPCS3 資料庫中沒有此遊戲的設定。",
  "renderer.shaderChain.scale.label": "著色器解析度",
- "renderer.shaderChain.scale.description": "以較低的解析度執行著色器，再將畫面放大到螢幕。越低在重型預設下執行越快，畫面會稍微柔和一些。"
+ "renderer.shaderChain.scale.description": "以較低的解析度執行著色器，再將畫面放大到螢幕。越低在重型預設下執行越快，畫面會稍微柔和一些。",
+ "rpcn.request.banner": "%s 向你發送了好友邀請"
 }

@@ -489,7 +489,9 @@ private fun rememberRpcnPolling(shown: Boolean, inGame: Boolean) {
             // has an open to match.
             withContext(NonCancellable + rpcnSessionDispatcher) { Rpcs3Bridge.rpcnFriendsSession(true) }
             while (true) {
-                XmbRpcn.friends.value = parseRpcnFriends(withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetFriends() })
+                val read = parseRpcnFriends(withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetFriends() })
+                XmbRpcn.friends.value = read
+                if (read.signedIn) com.armsx2.ui.friends.RpcnRequestNotice.update(read.received)
                 if (inGame) XmbRpcn.invites.value = parseRpcnInvites(withContext(Dispatchers.IO) { Rpcs3Bridge.rpcnGetInvites() })
                 delay(2_000)
             }

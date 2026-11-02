@@ -1499,5 +1499,6 @@
  "xmb.playlist.addPictures": "Tambah Gambar",
  "xmb.configDb.none": "Basis data RPCS3 tidak punya pengaturan untuk game ini.",
  "renderer.shaderChain.scale.label": "Resolusi Shader",
- "renderer.shaderChain.scale.description": "Menjalankan shader pada resolusi lebih rendah, lalu memperbesar gambarnya ke layar. Lebih rendah jauh lebih cepat untuk preset berat dan sedikit lebih lembut."
+ "renderer.shaderChain.scale.description": "Menjalankan shader pada resolusi lebih rendah, lalu memperbesar gambarnya ke layar. Lebih rendah jauh lebih cepat untuk preset berat dan sedikit lebih lembut.",
+ "rpcn.request.banner": "%s mengirimi Anda permintaan pertemanan"
 }

@@ -5707,6 +5707,14 @@ open class MainActivityRuntime : ComponentActivity() {
                         val parsed = com.armsx2.ui.settings.parseRpcnInvites(invites)
                         com.armsx2.ui.friends.RpcnInviteNotice.update(parsed)
                         com.armsx2.ui.xmb.XmbRpcn.invites.value = parsed
+
+                        // A friend request, told in XMB mode as the console tells it (XmbNotices)
+                        if (com.armsx2.ui.xmb.XmbMode.active.value) {
+                            val friends = com.armsx2.ui.settings.parseRpcnFriends(
+                                withContext(Dispatchers.IO) { com.armsx3.Rpcs3Bridge.rpcnGetFriends() },
+                            )
+                            if (friends.signedIn) com.armsx2.ui.friends.RpcnRequestNotice.update(friends.received)
+                        }
                     }
                 } else {
                     com.armsx2.ui.friends.RpcnInviteNotice.reset()

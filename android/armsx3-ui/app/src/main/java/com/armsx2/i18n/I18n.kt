@@ -1396,6 +1396,7 @@ val EN: Map<String, String> = mapOf(
     "rpcn.invites.declined" to "Declined the invite from %s.",
     // The banner over the game when an invite for it arrives (RpcnInviteBanner)
     "rpcn.invite.banner" to "%s invited you to play",
+    "rpcn.request.banner" to "%s sent you a friend request",
     "rpcn.invite.banner.howTo" to "Open the in-game menu, then Friends, to join.",
     // The emulated Skylanders portal in the in-game menu (SkylanderPortalPanel)
     "portal.button" to "Portal",

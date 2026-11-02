@@ -1499,5 +1499,6 @@
  "xmb.playlist.addPictures": "إضافة صور",
  "xmb.configDb.none": "لا تحتوي قاعدة بيانات RPCS3 على إعدادات لهذه اللعبة.",
  "renderer.shaderChain.scale.label": "دقة التظليل",
- "renderer.shaderChain.scale.description": "يشغّل التظليل بدقة أقل ثم يكبّر صورته إلى الشاشة. القيمة الأقل أسرع بكثير مع الإعدادات المسبقة الثقيلة وتبدو أنعم قليلا."
+ "renderer.shaderChain.scale.description": "يشغّل التظليل بدقة أقل ثم يكبّر صورته إلى الشاشة. القيمة الأقل أسرع بكثير مع الإعدادات المسبقة الثقيلة وتبدو أنعم قليلا.",
+ "rpcn.request.banner": "%s أرسل إليك طلب صداقة"
 }

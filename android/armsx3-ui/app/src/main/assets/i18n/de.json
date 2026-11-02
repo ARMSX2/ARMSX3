@@ -1499,5 +1499,6 @@
  "xmb.playlist.addPictures": "Bilder hinzufügen",
  "xmb.configDb.none": "Die RPCS3-Datenbank hat keine Einstellungen für dieses Spiel.",
  "renderer.shaderChain.scale.label": "Shader-Auflösung",
- "renderer.shaderChain.scale.description": "Lässt den Shader in geringerer Auflösung laufen und skaliert sein Bild dann auf den Bildschirm hoch. Niedriger ist bei aufwendigen Voreinstellungen viel schneller und wirkt etwas weicher."
+ "renderer.shaderChain.scale.description": "Lässt den Shader in geringerer Auflösung laufen und skaliert sein Bild dann auf den Bildschirm hoch. Niedriger ist bei aufwendigen Voreinstellungen viel schneller und wirkt etwas weicher.",
+ "rpcn.request.banner": "%s hat Ihnen eine Freundschaftsanfrage gesendet"
 }

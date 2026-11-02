@@ -1499,5 +1499,6 @@
  "xmb.playlist.addPictures": "Thêm hình ảnh",
  "xmb.configDb.none": "Cơ sở dữ liệu của RPCS3 không có cài đặt cho trò chơi này.",
  "renderer.shaderChain.scale.label": "Độ phân giải shader",
- "renderer.shaderChain.scale.description": "Chạy shader ở độ phân giải thấp hơn rồi phóng to hình ảnh ra màn hình. Thấp hơn nhanh hơn nhiều với các preset nặng và trông mềm hơn một chút."
+ "renderer.shaderChain.scale.description": "Chạy shader ở độ phân giải thấp hơn rồi phóng to hình ảnh ra màn hình. Thấp hơn nhanh hơn nhiều với các preset nặng và trông mềm hơn một chút.",
+ "rpcn.request.banner": "%s đã gửi cho bạn lời mời kết bạn"
 }

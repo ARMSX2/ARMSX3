@@ -1499,5 +1499,6 @@
  "xmb.playlist.addPictures": "Wêne zêde bike",
  "xmb.configDb.none": "Danegeha RPCS3 ji bo vê lîstikê ti mîhengan nîne.",
  "renderer.shaderChain.scale.label": "Rezolûsyona shader",
- "renderer.shaderChain.scale.description": "Shader bi rezolûsyoneke kêmtir dimeşîne, paşê wêneya wê li ser dîmenderê mezin dike. Kêmtir bi presetên giran pir zûtir e û hinekî nermtir xuya dike."
+ "renderer.shaderChain.scale.description": "Shader bi rezolûsyoneke kêmtir dimeşîne, paşê wêneya wê li ser dîmenderê mezin dike. Kêmtir bi presetên giran pir zûtir e û hinekî nermtir xuya dike.",
+ "rpcn.request.banner": "%s daxwaza hevaltiyê ji te re şand"
 }
