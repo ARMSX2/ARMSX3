@@ -60,7 +60,7 @@ object LibraryMusic {
             p.setVolume(gain(), gain())
             if (share <= 0f) {
                 if (p.isPlaying) p.pause()
-            } else if (foreground && !p.isPlaying && !pausedForFocus && enabled.value &&
+            } else if (foreground && !previewing && !p.isPlaying && !pausedForFocus && enabled.value &&
                 MainActivityRuntime.eState.value == EmuState.STOPPED
             ) {
                 p.start()
@@ -70,10 +70,28 @@ object LibraryMusic {
 
     // True only while the activity is in the foreground, from its onResume and onPause. Screens
     // with music of their own hand the track back as they go, and they go as the app leaves: the
-    // XMB's SND0 preview ends with resume(), and its boot music fades in with setShare(). Each of
-    // those started the track again out of a backgrounded app, on the OS home screen or with the
-    // screen off, so start(), resume() and setShare() all wait for this instead.
+    // XMB's SND0 preview ends with endPreview(), and its boot music fades in with setShare(). Each
+    // of those started the track again out of a backgrounded app, on the OS home screen or with
+    // the screen off, so start(), resume() and setShare() all wait for this instead.
     @Volatile private var foreground = true
+
+    // True while a game's own music (the XMB's SND0 preview) plays in the track's place. The boot
+    // music's fade-in, onResume and the start-up retry all start the track, and each of them did so
+    // under the game's music when XMB mode opened on a game: so start(), resume() and setShare()
+    // leave it paused until the preview ends.
+    @Volatile private var previewing = false
+
+    /** A game's music starts in the track's place: the track pauses where it is until [endPreview]. */
+    fun startPreview() {
+        previewing = true
+        pause()
+    }
+
+    /** The game's music has stopped: the track goes on, if nothing else holds it. */
+    fun endPreview() {
+        previewing = false
+        resume()
+    }
 
     /** The activity's foreground state. Leaving pauses the track; onResume's start() brings it back. */
     fun setForeground(fg: Boolean) {
@@ -295,7 +313,7 @@ object LibraryMusic {
                 setVolume(gain(), gain())
                 prepare()
                 // Handed over to another screen's music: ready, but quiet until it hands back
-                if (share > 0f) start()
+                if (share > 0f && !previewing) start()
                 player = this
             }
         }.onFailure { Log.w(TAG, "start failed", it) }
@@ -321,7 +339,7 @@ object LibraryMusic {
         if (!enabled.value) return
         if (!foreground) return
         if (MainActivityRuntime.eState.value != EmuState.STOPPED) return
-        if (share <= 0f) return
+        if (share <= 0f || previewing) return
         runCatching { player?.takeIf { !it.isPlaying }?.start() }
     }
 

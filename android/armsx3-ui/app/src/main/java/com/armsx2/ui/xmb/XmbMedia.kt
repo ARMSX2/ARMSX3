@@ -234,7 +234,8 @@ fun XmbSnd0Preview(controller: XmbController) {
                     prepare()
                 }
             }.getOrNull() ?: return@LaunchedEffect
-            com.armsx2.LibraryMusic.pause()
+            // Held, not just paused: the boot music's fade-in and onResume would start it again.
+            com.armsx2.LibraryMusic.startPreview()
             try {
                 player.start()
                 kotlinx.coroutines.coroutineScope {
@@ -253,7 +254,7 @@ fun XmbSnd0Preview(controller: XmbController) {
                 runCatching { player.stop() }
                 player.release()
                 // Nothing while the app is away: LibraryMusic waits for onResume.
-                com.armsx2.LibraryMusic.resume()
+                com.armsx2.LibraryMusic.endPreview()
             }
         }
     }
