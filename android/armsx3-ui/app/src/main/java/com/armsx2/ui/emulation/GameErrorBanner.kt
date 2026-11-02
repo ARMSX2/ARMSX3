@@ -49,7 +49,8 @@ object GameErrorNotice {
     /** With what the core gave (Rpcs3Bridge.takeGameError). On the main thread. */
     fun show(error: String) {
         val line = error.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: return
-        if (reason.value == null) MenuSfx.play(MenuSfx.Event.POPUP_OPEN)
+        // XMB mode tells it in the console's dialog, which plays the console's error sound itself.
+        if (reason.value == null && !com.armsx2.ui.xmb.XmbMode.active.value) MenuSfx.play(MenuSfx.Event.POPUP_OPEN)
         reason.value = line
     }
 
@@ -61,6 +62,9 @@ object GameErrorNotice {
 @Composable
 fun GameErrorBanner() {
     val reason by GameErrorNotice.reason
+
+    // XMB mode: the console's error dialog in the XMB instead, unless no XMB could take it.
+    if (com.armsx2.ui.xmb.XmbMode.active.value && com.armsx2.ui.xmb.xmbGameError(reason)) return
 
     AnimatedVisibility(
         visible = reason != null,

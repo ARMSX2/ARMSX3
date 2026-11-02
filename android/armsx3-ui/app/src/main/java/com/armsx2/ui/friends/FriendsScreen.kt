@@ -403,6 +403,9 @@ fun FriendOnlineBanner() {
         }
     }
 
+    // XMB mode shows it as the console's notice (XmbNotices); the clock above still runs it.
+    if (com.armsx2.ui.xmb.XmbMode.active.value) return
+
     AnimatedVisibility(
         visible = friend != null,
         enter = fadeIn(tween(180)) + slideInVertically(tween(240)) { -it },

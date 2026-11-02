@@ -692,6 +692,9 @@ fun RemotePlayNoticeBanner() {
         RemotePlayHost.clearNotice(shown)
     }
 
+    // XMB mode shows it as the console's notice (XmbNotices); the clock above still runs it.
+    if (com.armsx2.ui.xmb.XmbMode.active.value) return
+
     // The last notice, for the exit animation, which still draws after the state clears. Not state:
     // keeping it must not compose again.
     val last = remember { arrayOfNulls<RemotePlayHost.Notice>(1) }

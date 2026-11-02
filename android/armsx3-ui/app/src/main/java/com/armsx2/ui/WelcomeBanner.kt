@@ -25,7 +25,7 @@ import kotlinx.coroutines.delay
  * A small transient banner in the TOP-LEFT — currently the "Welcome Back!" note shown on wake.
  * Android Toasts can't be reliably positioned on API 30+ (setGravity is ignored), so this is a
  * Compose overlay mounted once in [WindowImpl] so it floats above any screen (in-game or library).
- * In XMB mode the same note shows as the console's notice instead (XmbNotice).
+ * In XMB mode the same note shows as the console's notice instead (XmbNotices).
  */
 object WelcomeBanner {
     val text = mutableStateOf<String?>(null)

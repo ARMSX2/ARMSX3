@@ -18,10 +18,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -32,6 +29,11 @@ import com.armsx2.i18n.I18n
 import com.armsx2.runtime.MainActivityRuntime
 import kotlinx.coroutines.delay
 import com.armsx3.core.ARMSX3
+
+/** The core's play-compile state as last polled (_armsx3_getPlayCompileState); 0 when there is none. */
+object PlayCompile {
+    val state = mutableIntStateOf(0)
+}
 
 /**
  * "Compiling PPU modules" while a game compiles PPU code during play.
@@ -50,21 +52,23 @@ import com.armsx3.core.ARMSX3
 @Composable
 fun CompileBannerOverlay(scope: BoxScope) {
     val running = MainActivityRuntime.eState.value == EmuState.RUNNING
-    var state by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(running) {
-        state = 0
+        PlayCompile.state.intValue = 0
         if (!running) return@LaunchedEffect
 
         while (true) {
             delay(500)
-            state = runCatching { ARMSX3.instance.getPlayCompileState() }.getOrDefault(0)
+            PlayCompile.state.intValue = runCatching { ARMSX3.instance.getPlayCompileState() }.getOrDefault(0)
         }
     }
 
     // 0 = nothing to show. Otherwise the low 16 bits are 1 + the modules done, and bits 16 to 30
     // how many there are when the core knows (_armsx3_getPlayCompileState).
+    val state = PlayCompile.state.intValue
     if (state <= 0) return
+    // XMB mode shows it as the console's notice (XmbNotices).
+    if (com.armsx2.ui.xmb.XmbMode.active.value) return
     val done = (state and 0xffff) - 1
     val total = (state ushr 16) and 0x7fff
 
