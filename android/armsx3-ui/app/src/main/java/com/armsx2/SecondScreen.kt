@@ -2,7 +2,16 @@ package com.armsx2
 
 import android.app.Presentation
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ColorFilter
+import android.graphics.LinearGradient
+import android.graphics.Paint
+import android.graphics.PixelFormat
+import android.graphics.Shader
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.StateListDrawable
 import android.hardware.display.DisplayManager
 import android.os.Bundle
 import android.os.Handler
@@ -158,20 +167,95 @@ object SecondScreen {
         }
     }
 
+    /**
+     * The XMB's colour for now, for the panel in XMB mode: the month's gradient at its angle, dimmed
+     * at night, as the XMB's background draws it (XmbOriginalColors). Read again at every draw, so
+     * the panel's tick keeps it with the XMB's, Theme Settings' Cycle included.
+     */
+    private class XmbBackdrop : Drawable() {
+        private val paint = Paint()
+
+        override fun draw(canvas: Canvas) {
+            val g = com.armsx2.ui.xmb.XmbOriginalColors.now()
+            val w = bounds.width().toFloat()
+            val h = bounds.height().toFloat()
+            // A CSS angle, as the XMB's: 0 points up, turning clockwise, spanning the projection of
+            // the whole panel onto that direction.
+            val a = Math.toRadians(g.angleDeg.toDouble())
+            val dx = Math.sin(a).toFloat()
+            val dy = -Math.cos(a).toFloat()
+            val half = (Math.abs(w * dx) + Math.abs(h * dy)) / 2f
+            fun color(c: FloatArray) = Color.rgb(
+                (c[0].coerceIn(0f, 1f) * 255).toInt(),
+                (c[1].coerceIn(0f, 1f) * 255).toInt(),
+                (c[2].coerceIn(0f, 1f) * 255).toInt(),
+            )
+            paint.shader = LinearGradient(
+                bounds.exactCenterX() - dx * half, bounds.exactCenterY() - dy * half,
+                bounds.exactCenterX() + dx * half, bounds.exactCenterY() + dy * half,
+                color(g.start), color(g.end), Shader.TileMode.CLAMP,
+            )
+            canvas.drawRect(bounds, paint)
+        }
+
+        override fun setAlpha(alpha: Int) = Unit
+        override fun setColorFilter(colorFilter: ColorFilter?) = Unit
+        @Deprecated("Drawable.getOpacity", ReplaceWith(""))
+        override fun getOpacity(): Int = PixelFormat.OPAQUE
+    }
+
     /** The panel itself. */
     private class Panel(context: Context, display: Display) : Presentation(context, display) {
 
         private lateinit var stats: TextView
         private lateinit var idleLabel: TextView
+        private lateinit var rootView: LinearLayout
         /** Rows that only make sense with a game running; hidden in the library. */
         private val gameRows = mutableListOf<View>()
         private var ticking = false
+
+        /** In XMB mode the panel takes the XMB's look: its colour, the system font, glass buttons. */
+        private val xmb = com.armsx2.ui.xmb.XmbMode.active.value
+        private val face: android.graphics.Typeface? = if (xmb) com.armsx2.ui.xmb.XmbFirmware.typeface() else null
+        private val dp = context.resources.displayMetrics.density
+
         private val tick = object : Runnable {
             override fun run() {
                 if (!ticking) return
+                if (com.armsx2.ui.xmb.XmbMode.active.value != xmb) {
+                    // XMB mode switched while it was up: built again in the other look.
+                    ticking = false
+                    handler.post { MainActivityRuntime.instance?.let { activity -> detach(); attach(activity) } }
+                    return
+                }
                 updateStats()
+                if (xmb) rootView.background?.invalidateSelf()
                 handler.postDelayed(this, TICK_MS)
             }
+        }
+
+        /** White words in the XMB's font and shadow, at [sizeSp] and [alpha]. */
+        private fun TextView.asXmbText(sizeSp: Float, alpha: Float = 1f) {
+            face?.let { typeface = it }
+            textSize = sizeSp
+            setTextColor(Color.argb((alpha * 255).toInt(), 255, 255, 255))
+            setShadowLayer(6f, 0f, 2f, Color.argb(153, 0, 0, 0))
+        }
+
+        /** The XMB's glass button: a faint fill and a light edge, brighter while held. */
+        private fun Button.asXmbButton() {
+            fun glass(fill: Int) = GradientDrawable().apply {
+                cornerRadius = 6 * dp
+                setColor(fill)
+                setStroke(maxOf(1, dp.toInt()), Color.argb(87, 255, 255, 255))
+            }
+            background = StateListDrawable().apply {
+                addState(intArrayOf(android.R.attr.state_pressed), glass(Color.argb(56, 255, 255, 255)))
+                addState(intArrayOf(), glass(Color.argb(20, 255, 255, 255)))
+            }
+            stateListAnimator = null
+            minHeight = (52 * dp).toInt()
+            asXmbText(17f)
         }
 
         override fun onCreate(savedInstanceState: Bundle?) {
@@ -184,9 +268,9 @@ object SecondScreen {
             setCancelable(false)
             setCanceledOnTouchOutside(false)
             val pad = (resources.displayMetrics.density * 12).toInt()
-            val rootView = LinearLayout(context).apply {
+            rootView = LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
-                setBackgroundColor(Color.BLACK)
+                if (xmb) background = XmbBackdrop() else setBackgroundColor(Color.BLACK)
                 setPadding(pad, pad, pad, pad)
             }
 
@@ -194,6 +278,7 @@ object SecondScreen {
                 setTextColor(Color.WHITE)
                 textSize = 16f
                 gravity = Gravity.CENTER_HORIZONTAL
+                if (xmb) asXmbText(20f)
             }
             rootView.addView(stats, lp())
 
@@ -204,6 +289,7 @@ object SecondScreen {
                 textSize = 14f
                 gravity = Gravity.CENTER_HORIZONTAL
                 setPadding(0, pad, 0, 0)
+                if (xmb) asXmbText(16f, 0.75f)
             }
             rootView.addView(idleLabel, lp())
 
@@ -266,6 +352,7 @@ object SecondScreen {
             Button(context).apply {
                 text = id.label
                 isAllCaps = false
+                if (xmb) asXmbButton()
                 setOnTouchListener { v, ev ->
                     when (ev.actionMasked) {
                         android.view.MotionEvent.ACTION_DOWN -> {
@@ -297,12 +384,16 @@ object SecondScreen {
 
         private fun rowLp() = LinearLayout.LayoutParams(
             0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f,
-        )
+        ).apply {
+            // Glass buttons need air between them; the stock ones bring their own inset.
+            if (xmb) (6 * dp).toInt().let { setMargins(it, it, it, it) }
+        }
 
         private fun action(label: String, onClick: () -> Unit): View =
             Button(context).apply {
                 text = label
                 isAllCaps = false
+                if (xmb) asXmbButton()
                 setOnClickListener { runCatching { onClick() } }
             }
 
