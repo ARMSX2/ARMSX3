@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive, so launchers cut the art to their own shape. The square PNGs alone got shrunk onto a
+     white circle. The whole picture is the background layer: the "3" is part of the art, scaled to
+     sit inside the 66 dp circle every launcher shows (mipmap-*/ic_launcher_background.png). -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_background" />
+    <foreground android:drawable="@android:color/transparent" />
+</adaptive-icon>
