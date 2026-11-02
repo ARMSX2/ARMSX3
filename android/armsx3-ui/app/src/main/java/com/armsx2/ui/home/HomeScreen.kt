@@ -1496,12 +1496,31 @@ private fun SaverBackdrop() {
     }
 }
 
-/** The live XMB wave, over the bundled still while GL starts, or the 2D wave when GL cannot. */
+/** The live XMB wave, over the colours of its first frame while GL starts, or the 2D wave when GL cannot. */
 @Composable
 private fun XmbWave() {
     var xmbGlState by remember { mutableStateOf<Boolean?>(null) } // null=starting, true=up, false=failed
+    val floor = waveFloor()
     if (xmbGlState == false) {
         LibraryWaveBackground(Modifier.fillMaxSize())
+    } else if (floor != null) {
+        // The bundled still is the built-in blue wave, and under a wave in other colours it flashed
+        // up each time a wave view started again: XMB mode back from a game, the screensaver coming
+        // and going. A CSS angle, 0 up and clockwise, over the screen's projection onto it, as
+        // XmbOriginalColors.shaderDirection gives the wave.
+        Canvas(Modifier.fillMaxSize()) {
+            val a = Math.toRadians(floor.angleDeg.toDouble())
+            val dx = kotlin.math.sin(a).toFloat()
+            val dy = -kotlin.math.cos(a).toFloat()
+            val half = (kotlin.math.abs(size.width * dx) + kotlin.math.abs(size.height * dy)) / 2f
+            drawRect(
+                Brush.linearGradient(
+                    listOf(floor.top, floor.bottom),
+                    start = androidx.compose.ui.geometry.Offset(center.x - dx * half, center.y - dy * half),
+                    end = androidx.compose.ui.geometry.Offset(center.x + dx * half, center.y + dy * half),
+                ),
+            )
+        }
     } else {
         Image(
             painter = painterResource(R.drawable.library_bg_xmb),
@@ -1514,6 +1533,37 @@ private fun XmbWave() {
         factory = { XmbGlView(it).apply { onGlStatus = { ok -> xmbGlState = ok } } },
         modifier = Modifier.fillMaxSize(),
     )
+}
+
+private class WaveFloor(val top: Color, val bottom: Color, val angleDeg: Float)
+
+/**
+ * What XmbGlView's background draws in its first frame, chosen as it chooses: the month's gradient
+ * at its angle (XMB mode or the Monthly setting; from black while XMB mode's boot brings the colour
+ * up), the RGB cycle at its first hue (each view's clock starts at 0), or the picked colour straight
+ * down. Null for the built-in colours, which the bundled still shows.
+ */
+private fun waveFloor(): WaveFloor? {
+    val colors = com.armsx2.ui.theme.LibraryBackgroundColorPreferences
+    fun rgb(c: FloatArray, scale: Float = 1f) =
+        Color((c[0] * scale).coerceIn(0f, 1f), (c[1] * scale).coerceIn(0f, 1f), (c[2] * scale).coerceIn(0f, 1f))
+    return when {
+        colors.monthly.value || com.armsx2.ui.xmb.XmbMode.active.value -> {
+            val month = com.armsx2.ui.xmb.XmbOriginalColors.now()
+            val level = com.armsx2.ui.xmb.XmbOriginalColors.bootColor
+            WaveFloor(rgb(month.start, level), rgb(month.end, level), month.angleDeg)
+        }
+        colors.rgbCycle.value -> {
+            val bottom = Color.hsv(0f, 0.92f, 0.98f)
+            WaveFloor(Color(bottom.red * 0.2f, bottom.green * 0.2f, bottom.blue * 0.2f), bottom, 180f)
+        }
+        colors.color.value != 0 -> {
+            val top = colors.glTop ?: return null
+            val bottom = colors.glBottom ?: return null
+            WaveFloor(rgb(top), rgb(bottom), 180f)
+        }
+        else -> null
+    }
 }
 
 /**
