@@ -134,7 +134,7 @@ internal fun xmbRpcnColumn(controller: XmbController, shown: Boolean, inGame: Bo
     val msgInviteDeclined = str("rpcn.invites.declined")
     val friendIcon = XmbIcon("explore_category_friend", "tex_Avatar_Default", "🙂")
     val requestIcon = XmbIcon("explore_category_friend", "item_tex_NewFriend", "➕")
-    val inviteIcon = XmbIcon("explore_category_friend", "item_tex_Invitation", "✉")
+    val inviteIcon = XmbIcon("explore_category_friend", "item_tex_Messages", "✉")
 
     // "" from the core is success; anything else is its own message, which says more than ours would.
     fun act(done: String, call: () -> String) {

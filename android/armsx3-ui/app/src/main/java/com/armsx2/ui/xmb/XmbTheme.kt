@@ -171,7 +171,7 @@ object XmbTheme {
         "icon_addfriend" to listOf("explore_category_friend/item_tex_NewFriend"),
         "icon_playermet" to listOf("explore_category_friend/item_tex_Players"),
         "icon_photo_default" to listOf("explore_category_photo/photo_tex_default"),
-        "icon_photo_album_default" to listOf("explore_category_photo/photo_tex_folder"),
+        "icon_photo_album_default" to listOf("explore_category_photo/photo_tex_album_default"),
         "icon_music_default" to listOf("explore_category_music/music_tex_default"),
         "icon_music_album_default" to listOf("explore_category_music/music_tex_album_default"),
         "icon_video_default" to listOf("explore_category_video/video_tex_default"),

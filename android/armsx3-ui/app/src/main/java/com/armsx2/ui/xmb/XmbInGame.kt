@@ -265,7 +265,7 @@ private fun xmbDiscNode(swap: Boolean): XmbNode {
     val discN = str("disc.swap.discN")
     val pick = str("disc.swap.pickFile")
     val pickDesc = str("disc.swap.pickFile.desc")
-    val icon = XmbIcon("explore_category_game", "item_tex_disc_icon", "⏏")
+    val icon = XmbIcon("explore_category_game", "item_tex_disc_bd", "⏏")
     return XmbNode.Folder(if (swap) "ingame.swapDisc" else "ingame.changeDisc", title, icon, sub) {
         val playlist = com.armsx3.Rpcs3Bridge.discPlaylist()
         buildList {

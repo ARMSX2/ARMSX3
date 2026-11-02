@@ -215,7 +215,7 @@ private fun InviteNote(u: Float, m: Metrics, font: FontFamily) {
     val invited = str("rpcn.invite.banner").format(from)
     val howTo = str("xmb.invite.howTo")
     XmbNoticeBox(u, shown) {
-        XmbIconView(XmbIcon("explore_category_friend", "item_tex_Invitation", "✉"), (40f * u).dp)
+        XmbIconView(XmbIcon("explore_category_friend", "item_tex_Messages", "✉"), (40f * u).dp)
         Spacer(Modifier.width((14f * u).dp))
         Column {
             Text(invited, style = xmbText(font, m.labelSp * 1.2f), maxLines = 1, overflow = TextOverflow.Ellipsis)

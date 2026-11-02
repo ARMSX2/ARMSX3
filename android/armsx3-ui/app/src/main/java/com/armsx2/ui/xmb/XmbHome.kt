@@ -367,7 +367,7 @@ internal fun xmbPhotoColumn(controller: XmbController): XmbColumn {
     val taken = remember(locale) { lastPlayedFormat(context, locale) }
     val screenshots = str("xmb.photo.screenshots")
     val count = str("xmb.photo.count")
-    val folderIcon = XmbIcon("explore_category_photo", "photo_tex_folder", "🖼")
+    val folderIcon = XmbIcon("explore_category_photo", "photo_tex_album_default", "🖼")
     val listIcon = XmbIcon("explore_category_photo", "tex_playlist", "🖼")
     val addToList = str("xmb.playlist.add")
     val removeFromList = str("xmb.playlist.remove")
