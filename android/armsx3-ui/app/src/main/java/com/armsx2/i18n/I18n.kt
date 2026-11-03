@@ -2028,6 +2028,8 @@ val EN: Map<String, String> = mapOf(
     "xmb.music.nowPlaying" to "Now Playing",
     "xmb.music.importAlbum" to "Import Album",
     "xmb.music.importAlbum.desc" to "Add a folder of songs, covers and all",
+    "xmb.music.addFolder.desc" to "Play the songs in a folder on this device or a drive, without copying them",
+    "xmb.music.removeFolder" to "Remove from Music",
     "xmb.music.variousArtists" to "Various Artists",
     "xmb.music.tracks" to "%1 Tracks",
     "xmb.music.noTrack" to "There is no track available.",

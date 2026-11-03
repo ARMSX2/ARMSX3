@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "続きから再生",
  "xmb.video.playBegin": "最初から再生",
  "xmb.video.zoom": "ズーム",
- "xmb.media.unsupported": "このデータの種類には対応していません。"
+ "xmb.media.unsupported": "このデータの種類には対応していません。",
+ "xmb.music.addFolder.desc": "この端末やドライブにあるフォルダーの曲を、コピーせずにそのまま再生します",
+ "xmb.music.removeFolder": "ミュージックから外す"
 }

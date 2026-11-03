@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "เล่นต่อ",
  "xmb.video.playBegin": "เล่นตั้งแต่ต้น",
  "xmb.video.zoom": "ซูม",
- "xmb.media.unsupported": "ไม่รองรับข้อมูลประเภทนี้"
+ "xmb.media.unsupported": "ไม่รองรับข้อมูลประเภทนี้",
+ "xmb.music.addFolder.desc": "เล่นเพลงในโฟลเดอร์บนอุปกรณ์นี้หรือบนไดรฟ์ได้เลยโดยไม่ต้องคัดลอก",
+ "xmb.music.removeFolder": "นำออกจากเพลง"
 }

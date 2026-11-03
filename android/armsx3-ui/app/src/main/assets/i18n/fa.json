@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "ادامه پخش",
  "xmb.video.playBegin": "پخش از ابتدا",
  "xmb.video.zoom": "بزرگنمایی",
- "xmb.media.unsupported": "این نوع داده پشتیبانی نمی‌شود."
+ "xmb.media.unsupported": "این نوع داده پشتیبانی نمی‌شود.",
+ "xmb.music.addFolder.desc": "پخش آهنگ‌های یک پوشه در این دستگاه یا یک درایو، بدون کپی کردن آن‌ها",
+ "xmb.music.removeFolder": "حذف از موسیقی"
 }

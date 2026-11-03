@@ -143,8 +143,9 @@ object LibraryMusic {
         File(File(context.filesDir, "librarymusic").apply { mkdirs() }, "track")
 
     /** A playlist playing (the XMB's Music column): its songs in order, and which one is on.
-     *  Empty while one track plays on a loop. */
-    val queue = mutableStateOf<List<File>>(emptyList())
+     *  Empty while one track plays on a loop. A song is its path, or its content Uri when it is
+     *  played where it is from a folder added with Add Folder. */
+    val queue = mutableStateOf<List<String>>(emptyList())
     val queueIndex = androidx.compose.runtime.mutableIntStateOf(0)
 
     private var player: MediaPlayer? = null
@@ -159,7 +160,7 @@ object LibraryMusic {
         customName.value = MainActivityRuntime.prefs.getString(CustomNameKey, null)
         queue.value = runCatching {
             val list = org.json.JSONArray(MainActivityRuntime.prefs.getString(QueueKey, "[]"))
-            (0 until list.length()).map { File(list.getString(it)) }.filter { it.isFile }
+            (0 until list.length()).map { list.getString(it) }.filter { isDocument(it) || File(it).isFile }
         }.getOrDefault(emptyList())
         queueIndex.intValue = MainActivityRuntime.prefs.getInt(QueueIndexKey, 0).coerceIn(0, (queue.value.size - 1).coerceAtLeast(0))
         repeat.value = Repeat.entries.getOrNull(MainActivityRuntime.prefs.getInt(RepeatKey, Repeat.All.ordinal)) ?: Repeat.All
@@ -168,17 +169,17 @@ object LibraryMusic {
         reorder()
     }
 
-    /** Play [files] in order from [start], round again after the last: a playlist. */
-    fun playQueue(context: Context, files: List<File>, start: Int) {
-        if (files.isEmpty()) return
-        queue.value = files
-        queueIndex.intValue = start.coerceIn(0, files.lastIndex)
-        customName.value = files[queueIndex.intValue].name
+    /** Play [songs] (paths or content Uris) in order from [start], round again after the last: a playlist. */
+    fun playQueue(context: Context, songs: List<String>, start: Int) {
+        if (songs.isEmpty()) return
+        queue.value = songs
+        queueIndex.intValue = start.coerceIn(0, songs.lastIndex)
+        customName.value = songName(songs[queueIndex.intValue])
         chosen.value = true
         userPaused.value = false
         reorder()
         MainActivityRuntime.prefs.edit {
-            putString(QueueKey, org.json.JSONArray(files.map { it.absolutePath }).toString())
+            putString(QueueKey, org.json.JSONArray(songs).toString())
             putInt(QueueIndexKey, queueIndex.intValue)
             putString(CustomNameKey, customName.value)
         }
@@ -230,7 +231,7 @@ object LibraryMusic {
     private fun go(context: Context, index: Int) {
         val list = queue.value
         queueIndex.intValue = index.coerceIn(0, list.lastIndex)
-        customName.value = list[queueIndex.intValue].name
+        customName.value = songName(list[queueIndex.intValue])
         MainActivityRuntime.prefs.edit {
             putInt(QueueIndexKey, queueIndex.intValue)
             putString(CustomNameKey, customName.value)
@@ -240,7 +241,54 @@ object LibraryMusic {
     }
 
     /** The song playing from the playlist, or null for the bundled track or a single imported one. */
-    fun current(): File? = queue.value.getOrNull(queueIndex.intValue)
+    fun current(): String? = queue.value.getOrNull(queueIndex.intValue)
+
+    /** A song played where it is (Add Folder), by its content Uri, rather than a file's path. */
+    fun isDocument(song: String): Boolean = song.startsWith("content:")
+
+    /** A song's file name: the path's last part, or for a document the end of its id (primary:Music/a.mp3). */
+    fun songName(song: String): String =
+        if (!isDocument(song)) File(song).name
+        else runCatching { android.provider.DocumentsContract.getDocumentId(android.net.Uri.parse(song)) }
+            .getOrNull()?.substringAfterLast('/')?.substringAfterLast(':')?.takeIf { it.isNotEmpty() } ?: song.substringAfterLast("%2F")
+
+    private fun MediaPlayer.setSong(context: Context, song: String) {
+        if (isDocument(song)) setDataSource(context, android.net.Uri.parse(song)) else setDataSource(song)
+    }
+
+    // Songs Android cannot play are decoded by the core's FFmpeg (XmbDecodedSongs) and played from
+    // the WAV: straight away for a container it cannot read (AIFF, WMA), after Android's own player
+    // fails for one it reads but cannot decode (ALAC in an M4A). One neither can play is skipped.
+    private val decoding = java.util.Collections.synchronizedSet(HashSet<String>())
+    private val unplayable = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    private fun decodeThenPlay(context: Context, song: String) {
+        val app = context.applicationContext
+        if (song in unplayable) {
+            skipUnplayable(app)
+            return
+        }
+        if (!decoding.add(song)) return
+        Thread({
+            val ok = com.armsx2.ui.xmb.XmbDecodedSongs.decode(app, song) != null
+            decoding.remove(song)
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                if (!ok) unplayable += song
+                if (current() != song) return@post
+                if (ok) {
+                    trackSerial.intValue++
+                    restart(app)
+                } else {
+                    skipUnplayable(app)
+                }
+            }
+        }, "music-decode").start()
+    }
+
+    // On to the next song that can play; with none, quiet.
+    private fun skipUnplayable(context: Context) {
+        if (queue.value.any { it !in unplayable }) skip(context, 1) else stop(context)
+    }
 
     /** True while the user's own music plays (or is paused) in the player. */
     fun listening(): Boolean = chosen.value && enabled.value && queue.value.isNotEmpty()
@@ -428,6 +476,13 @@ object LibraryMusic {
         if (!foreground) return
         if (MainActivityRuntime.eState.value != EmuState.STOPPED) return
         if (player != null) { resume(); return }
+        val list = queue.value
+        val song = list.getOrNull(queueIndex.intValue.coerceIn(0, (list.size - 1).coerceAtLeast(0)))
+        val decoded = song?.let { com.armsx2.ui.xmb.XmbDecodedSongs.decoded(context, it) }
+        if (song != null && decoded == null && com.armsx2.ui.xmb.XmbMediaFormats.ffmpegOnly(songName(song))) {
+            decodeThenPlay(context, song)
+            return
+        }
         val am = audioManager(context)
         // Skip the "someone else is playing" deference when forced — a user-initiated track
         // change is an explicit request to hear our music now (see restart()).
@@ -451,9 +506,14 @@ object LibraryMusic {
                         .build()
                 )
                 val custom = customFile(context)
-                val list = queue.value
-                if (list.isNotEmpty()) {
-                    setDataSource(list[queueIndex.intValue.coerceIn(0, list.lastIndex)].absolutePath)
+                if (song != null) {
+                    if (decoded != null) setDataSource(decoded.path) else setSong(context, song)
+                    // Read but not decodable here (ALAC in an M4A): FFmpeg's turn.
+                    if (decoded == null) setOnErrorListener { _, _, _ ->
+                        stop(context)
+                        decodeThenPlay(context, song)
+                        true
+                    }
                 } else if (customName.value != null && custom.length() > 0L) {
                     setDataSource(custom.absolutePath)
                 } else {
@@ -470,7 +530,10 @@ object LibraryMusic {
                 if (share > 0f && !previewing && !userPaused.value) start()
                 player = this
             }
-        }.onFailure { Log.w(TAG, "start failed", it) }
+        }.onFailure {
+            Log.w(TAG, "start failed", it)
+            if (song != null && decoded == null) decodeThenPlay(context, song)
+        }
     }
 
     /** Stop and release. Called when a game boots and when the toggle goes off. */

@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "Devam Et",
  "xmb.video.playBegin": "Baştan Oynat",
  "xmb.video.zoom": "Yakınlaştır",
- "xmb.media.unsupported": "Bu veri türü desteklenmiyor."
+ "xmb.media.unsupported": "Bu veri türü desteklenmiyor.",
+ "xmb.music.addFolder.desc": "Bu cihazdaki veya bir sürücüdeki bir klasörün şarkılarını kopyalamadan çal",
+ "xmb.music.removeFolder": "Müzik'ten Kaldır"
 }

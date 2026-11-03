@@ -74,6 +74,20 @@ COMPONENTS=(
 	--enable-parser=mjpeg --enable-parser=aac --enable-parser=aac_latm
 	# ARMSX3 XMB mode: the firmware's boot sound (coldboot_stereo.ac3) is a raw AC3 stream.
 	--enable-decoder=ac3 --enable-demuxer=ac3 --enable-parser=ac3
+	# ARMSX3 XMB mode: the music and video players' formats that Android cannot play itself.
+	# Songs: ALAC (in .m4a, through the mov demuxer), AIFF and AIFF-C, WMA.
+	--enable-decoder=alac --enable-demuxer=aiff --enable-demuxer=asf --enable-decoder=wmav1 --enable-decoder=wmav2
+	--enable-decoder=pcm_s16be --enable-decoder=pcm_s24be --enable-decoder=pcm_s32be --enable-decoder=pcm_f32be
+	--enable-decoder=pcm_f64be --enable-decoder=pcm_s24le --enable-decoder=pcm_s32le --enable-decoder=pcm_f32le
+	--enable-decoder=pcm_u8 --enable-decoder=pcm_alaw --enable-decoder=pcm_mulaw
+	--enable-decoder=adpcm_ima_qt --enable-decoder=adpcm_ima_wav --enable-decoder=adpcm_ms
+	# Videos: AVI's DivX 3 and H.263 pictures, MPEG-1, transport streams and Matroska, and the sound
+	# films carry that most devices have no decoder for (E-AC3, DTS, MPEG layer II).
+	--enable-decoder=msmpeg4v1 --enable-decoder=msmpeg4v2 --enable-decoder=msmpeg4v3 --enable-decoder=h263
+	--enable-decoder=mpeg1video --enable-decoder=mp2 --enable-decoder=eac3 --enable-decoder=dca
+	--enable-decoder=flac --enable-decoder=vorbis --enable-decoder=opus
+	--enable-demuxer=matroska --enable-demuxer=mpegts
+	--enable-parser=dca --enable-parser=flac --enable-parser=vorbis --enable-parser=opus --enable-parser=h263
 	--enable-protocol=file
 	--enable-bsf=mjpeg2jpeg
 )

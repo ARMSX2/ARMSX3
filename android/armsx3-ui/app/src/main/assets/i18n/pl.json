@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "Wznów",
  "xmb.video.playBegin": "Odtwórz od początku",
  "xmb.video.zoom": "Powiększenie",
- "xmb.media.unsupported": "Ten typ danych nie jest obsługiwany."
+ "xmb.media.unsupported": "Ten typ danych nie jest obsługiwany.",
+ "xmb.music.addFolder.desc": "Odtwarzaj utwory z folderu na tym urządzeniu lub na dysku bez kopiowania ich",
+ "xmb.music.removeFolder": "Usuń z Muzyki"
 }

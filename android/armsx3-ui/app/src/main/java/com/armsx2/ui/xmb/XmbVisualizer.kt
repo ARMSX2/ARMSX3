@@ -62,12 +62,18 @@ object XmbVisualizer {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Levels>?) = size > 3
     }
 
-    /** [file]'s levels: from memory, the cache, or worked out now. Null for what cannot be decoded (MIDI). */
-    suspend fun levels(context: Context, file: File): Levels? = withContext(Dispatchers.Default) {
-        val key = sha1("${file.absolutePath}|${file.length()}|${file.lastModified()}")
+    /**
+     * [song]'s levels (its path, or its content Uri in an added folder): from memory, the cache, or
+     * worked out now. Null for what cannot be decoded (MIDI).
+     */
+    suspend fun levels(context: Context, song: String): Levels? = withContext(Dispatchers.Default) {
+        val key = sha1("$song|${XmbDecodedSongs.stamp(context, song)}")
         synchronized(memory) { memory[key] }?.let { return@withContext it }
         val cached = File(File(context.cacheDir, "xmb-music/vis").apply { mkdirs() }, "$key.vis")
-        val levels = read(cached) ?: analyze(file)?.also { write(cached, it) } ?: return@withContext null
+        // A song only FFmpeg plays is read from the WAV it was decoded to.
+        val levels = read(cached)
+            ?: (analyze(context, song) ?: XmbDecodedSongs.decoded(context, song)?.let { analyze(context, it.path) })?.also { write(cached, it) }
+            ?: return@withContext null
         synchronized(memory) { memory[key] = levels }
         levels
     }
@@ -97,11 +103,12 @@ object XmbVisualizer {
         }
     }
 
-    private suspend fun analyze(file: File): Levels? {
+    private suspend fun analyze(context: Context, song: String): Levels? {
         val extractor = MediaExtractor()
         var codec: MediaCodec? = null
         try {
-            extractor.setDataSource(file.absolutePath)
+            if (com.armsx2.LibraryMusic.isDocument(song)) extractor.setDataSource(context, android.net.Uri.parse(song), null)
+            else extractor.setDataSource(song)
             val track = (0 until extractor.trackCount).firstOrNull {
                 extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
             } ?: return null

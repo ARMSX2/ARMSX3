@@ -1524,5 +1524,7 @@
  "xmb.video.resume": "Retomar",
  "xmb.video.playBegin": "Reproduzir do início",
  "xmb.video.zoom": "Zoom",
- "xmb.media.unsupported": "Este tipo de dado não é compatível."
+ "xmb.media.unsupported": "Este tipo de dado não é compatível.",
+ "xmb.music.addFolder.desc": "Tocar as músicas de uma pasta deste aparelho ou de uma unidade, sem copiá-las",
+ "xmb.music.removeFolder": "Remover de Música"
 }

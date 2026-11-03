@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "Riprendi",
  "xmb.video.playBegin": "Riproduci dall'inizio",
  "xmb.video.zoom": "Zoom",
- "xmb.media.unsupported": "Questo tipo di dati non è supportato."
+ "xmb.media.unsupported": "Questo tipo di dati non è supportato.",
+ "xmb.music.addFolder.desc": "Riproduci i brani di una cartella su questo dispositivo o su un'unità, senza copiarli",
+ "xmb.music.removeFolder": "Rimuovi da Musica"
 }

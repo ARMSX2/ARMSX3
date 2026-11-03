@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "Lanjutkan",
  "xmb.video.playBegin": "Putar dari Awal",
  "xmb.video.zoom": "Perbesar",
- "xmb.media.unsupported": "Jenis data ini tidak didukung."
+ "xmb.media.unsupported": "Jenis data ini tidak didukung.",
+ "xmb.music.addFolder.desc": "Putar lagu di folder pada perangkat ini atau di drive tanpa menyalinnya",
+ "xmb.music.removeFolder": "Hapus dari Musik"
 }

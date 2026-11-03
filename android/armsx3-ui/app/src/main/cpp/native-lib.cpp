@@ -8,6 +8,7 @@
 #include <android/dlext.h>
 #include <android/hardware_buffer.h>
 #include <android/log.h>
+#include <android/native_window_jni.h>
 #include <cstdio>
 #include <cstring>
 #include <dlfcn.h>
@@ -101,6 +102,11 @@ struct CoreApi {
   std::int32_t (*xmbPamSize)(std::int64_t handle);
   std::int64_t (*xmbPamFrame)(std::int64_t handle, std::uint8_t *dst, std::int64_t capacity);
   void (*xmbPamClose)(std::int64_t handle);
+  // XMB mode's players (src/xmb-media.cpp, src/xmb-player.cpp): songs and videos Android cannot play.
+  bool (*xmbDecodeSong)(std::string_view in, std::string_view out);
+  std::int64_t (*xmbPlayerOpen)(std::string_view path, ANativeWindow *window, std::int64_t startMs);
+  std::int64_t (*xmbPlayer)(std::int64_t handle, std::int32_t command, std::int64_t arg);
+  void (*xmbPlayerClose)(std::int64_t handle);
   int (*frameGenImportShaders)(std::string_view path);
   int (*frameGenShaderCount)();
   int (*getPlayCompileState)();
@@ -343,6 +349,10 @@ struct CoreLibrary : CoreApi {
     result.xmbPamSize = reinterpret_cast<decltype(xmbPamSize)>(dlsym(handle, "_armsx3_xmbPamSize"));
     result.xmbPamFrame = reinterpret_cast<decltype(xmbPamFrame)>(dlsym(handle, "_armsx3_xmbPamFrame"));
     result.xmbPamClose = reinterpret_cast<decltype(xmbPamClose)>(dlsym(handle, "_armsx3_xmbPamClose"));
+    result.xmbDecodeSong = reinterpret_cast<decltype(xmbDecodeSong)>(dlsym(handle, "_armsx3_xmbDecodeSong"));
+    result.xmbPlayerOpen = reinterpret_cast<decltype(xmbPlayerOpen)>(dlsym(handle, "_armsx3_xmbPlayerOpen"));
+    result.xmbPlayer = reinterpret_cast<decltype(xmbPlayer)>(dlsym(handle, "_armsx3_xmbPlayer"));
+    result.xmbPlayerClose = reinterpret_cast<decltype(xmbPlayerClose)>(dlsym(handle, "_armsx3_xmbPlayerClose"));
     // Resolved without ensure(): a core built before frame generation existed simply has no such
     // symbol, and refusing to load it over a missing optional feature would be worse than the
     // feature being absent. The Kotlin side treats a null here as "unsupported".
@@ -1179,6 +1189,43 @@ extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_xmbDecodeAudio
       return false;
   }
   return coreLib.xmbDecodeAudio(unwrap(env, jin), unwrap(env, jout));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_xmbDecodeSong(
+    JNIEnv *env, jobject, jstring jin, jstring jout) {
+  if (coreLib.xmbDecodeSong == nullptr) {
+      return false;
+  }
+  return coreLib.xmbDecodeSong(unwrap(env, jin), unwrap(env, jout));
+}
+
+// The video player takes the surface's window and releases it when it is closed, or at once when it
+// cannot open the file.
+extern "C" JNIEXPORT jlong JNICALL Java_com_armsx3_core_ARMSX3_xmbPlayerOpen(
+    JNIEnv *env, jobject, jstring jpath, jobject surface, jlong startMs) {
+  if (coreLib.xmbPlayerOpen == nullptr || surface == nullptr) {
+      return 0;
+  }
+  ANativeWindow *window = ANativeWindow_fromSurface(env, surface);
+  if (window == nullptr) {
+      return 0;
+  }
+  return coreLib.xmbPlayerOpen(unwrap(env, jpath), window, startMs);
+}
+
+extern "C" JNIEXPORT jlong JNICALL Java_com_armsx3_core_ARMSX3_xmbPlayer(
+    JNIEnv *, jobject, jlong handle, jint command, jlong arg) {
+  if (coreLib.xmbPlayer == nullptr || handle == 0) {
+      return -1;
+  }
+  return coreLib.xmbPlayer(handle, command, arg);
+}
+
+extern "C" JNIEXPORT void JNICALL Java_com_armsx3_core_ARMSX3_xmbPlayerClose(
+    JNIEnv *, jobject, jlong handle) {
+  if (coreLib.xmbPlayerClose != nullptr && handle != 0) {
+      coreLib.xmbPlayerClose(handle);
+  }
 }
 
 extern "C" JNIEXPORT jboolean JNICALL Java_com_armsx3_core_ARMSX3_xmbDecodePamAudio(

@@ -26,7 +26,9 @@ if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64")
 endif()
 
 # Keyed on the build script, so changing how ffmpeg is built builds it again instead of reusing
-# what the old recipe produced.
+# what the old recipe produced. CMake runs again by itself when the script changes: without that a
+# configured build directory kept linking the old recipe's libraries.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/android/build-ffmpeg.sh")
 file(SHA1 "${CMAKE_SOURCE_DIR}/android/build-ffmpeg.sh" FFMPEG_RECIPE_HASH)
 string(SUBSTRING "${FFMPEG_RECIPE_HASH}" 0 10 FFMPEG_RECIPE_HASH)
 set(FFMPEG_PATH "${CMAKE_SOURCE_DIR}/build-ffmpeg/${FFMPEG_VERSION}-arm64-v8a-${FFMPEG_RECIPE_HASH}")

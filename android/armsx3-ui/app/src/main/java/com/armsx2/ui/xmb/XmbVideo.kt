@@ -78,19 +78,57 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
- * What the XMB's players play: the files each one lists, by extension. These are what Android's own
- * player plays (MediaPlayer and the device's decoders); a file the device still cannot decode (an
- * unusual codec inside a familiar container) gets the console's own "The data type is not supported."
+ * What the XMB's players play: the files each one lists, by extension. Android's own player
+ * (MediaPlayer and the device's decoders) plays what it can; the rest goes to the core's FFmpeg: a
+ * song is decoded once to a WAV the player plays (ALAC, AIFF, WMA; XmbDecodedSongs), a video plays
+ * in src/xmb-player.cpp (AVI, MPEG, films with AC3 or DTS sound). A file neither can decode gets the
+ * console's own "The data type is not supported."
  */
 object XmbMediaFormats {
     val AUDIO = setOf(
         "mp3", "m4a", "m4b", "aac", "3gp", "flac", "ogg", "oga", "opus", "wav", "amr", "awb",
         "mka", "weba", "mid", "midi", "xmf", "mxmf", "rtttl", "rtx", "ota", "imy",
+        "aif", "aiff", "aifc", "wma",
     )
-    val VIDEO = setOf("mp4", "m4v", "mov", "mkv", "webm", "3gp", "3g2", "ts", "m2ts", "mts", "mpg", "mpeg")
+    val VIDEO = setOf("mp4", "m4v", "mov", "mkv", "webm", "3gp", "3g2", "ts", "m2ts", "mts", "mpg", "mpeg", "avi", "divx", "xvid", "vob")
+
+    /** Containers Android cannot read at all: straight to FFmpeg. */
+    private val FFMPEG_ONLY = setOf("aif", "aiff", "aifc", "wma", "avi", "divx", "xvid", "vob")
 
     fun isAudio(name: String) = name.substringAfterLast('.', "").lowercase() in AUDIO
     fun isVideo(name: String) = name.substringAfterLast('.', "").lowercase() in VIDEO
+    fun ffmpegOnly(name: String) = name.substringAfterLast('.', "").lowercase() in FFMPEG_ONLY
+
+    /**
+     * Whether Android's own player can play [uri] ([name] its file name): it reads the container and
+     * has a decoder for the picture's format and the first sound's. An MKV of a film with DTS sound,
+     * or an M4A of ALAC, reads but does not decode. Blocking: IO thread.
+     */
+    fun native(context: Context, uri: Uri, name: String): Boolean {
+        if (ffmpegOnly(name)) return false
+        val extractor = android.media.MediaExtractor()
+        return try {
+            extractor.setDataSource(context, uri, null)
+            val decoders = android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS).codecInfos
+                .filter { !it.isEncoder }.flatMap { it.supportedTypes.map(String::lowercase) }.toSet()
+            var video = false
+            var audio = false
+            for (i in 0 until extractor.trackCount) {
+                val mime = extractor.getTrackFormat(i).getString(android.media.MediaFormat.KEY_MIME)?.lowercase() ?: continue
+                val isVideo = mime.startsWith("video/")
+                val isAudio = mime.startsWith("audio/")
+                if ((isVideo && !video) || (isAudio && !audio)) {
+                    if (mime !in decoders) return false
+                    if (isVideo) video = true else audio = true
+                }
+            }
+            video || audio
+        } catch (_: Exception) {
+            false
+        } finally {
+            runCatching { extractor.release() }
+        }
+    }
 }
 
 /**
@@ -154,7 +192,11 @@ object XmbVideos {
     }
 
     fun removeFolder(context: Context, uri: Uri) {
-        runCatching { context.contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        // The grant stays while Music plays from the same folder.
+        XmbMusicLibrary.loadFolders()
+        if (XmbMusicLibrary.folders.value.none { it.uri == uri }) {
+            runCatching { context.contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        }
         folders.value = folders.value.filter { it.uri != uri }
         saveFolders()
         listings.remove("tree:$uri")
@@ -507,17 +549,30 @@ internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginni
         shown = android.os.SystemClock.uptimeMillis()
     }
 
-    val player = remember(entry.key) { MediaPlayer() }
     val holder = remember { mutableStateOf<android.view.Surface?>(null) }
+    // Which player: Android's for what the device decodes, else the core's FFmpeg (src/xmb-player.cpp)
+    // for AVI, MPEG and films with sound the device has no decoder for. Decided off the main thread
+    // for each video; Android's failing on one hands it to FFmpeg too.
+    var ffmpeg by remember(entry.key) { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(entry.key) {
+        if (ffmpeg == null) ffmpeg = withContext(Dispatchers.IO) { !XmbMediaFormats.native(context, entry.uri, entry.name) }
+    }
+    val player = remember(entry.key) { MediaPlayer() }
+    // Released last: the effects below are let go of first and still read where it was.
+    DisposableEffect(entry.key) { onDispose { player.release() } }
     // The player of the video on now, for the surface's callbacks, made once for the first video.
     val active = remember { arrayOfNulls<MediaPlayer>(1) }
-    active[0] = player
+    active[0] = player.takeIf { ffmpeg == false }
+    // The FFmpeg player's handle while it has one, 0 otherwise.
+    val ff = remember { longArrayOf(0L) }
+    fun core() = com.armsx3.core.ARMSX3.instance
     // The music behind the XMB waits while a video plays, as a game's music does.
     DisposableEffect(Unit) {
         LibraryMusic.startPreview()
         onDispose { LibraryMusic.endPreview() }
     }
-    DisposableEffect(entry.key) {
+    DisposableEffect(entry.key, ffmpeg) {
+        if (ffmpeg != false) return@DisposableEffect onDispose {}
         error = null
         position = 0L
         duration = 0L
@@ -531,8 +586,9 @@ internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginni
             player.setDataSource(context, entry.uri)
             player.setOnVideoSizeChangedListener { _, w, h -> if (w > 0 && h > 0) { videoW = w; videoH = h } }
             player.setOnErrorListener { _, _, _ ->
-                error = unsupported
+                // Android's own player could not after all: FFmpeg's turn.
                 playing = false
+                ffmpeg = true
                 true
             }
             player.setOnCompletionListener {
@@ -551,30 +607,106 @@ internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginni
                 poke()
             }
             player.prepareAsync()
-        }.onFailure { error = unsupported }
+        }.onFailure { ffmpeg = true }
         onDispose {
-            runCatching { if (duration > 0) XmbVideos.saveResume(entry.key, player.currentPosition.toLong(), duration) }
+            runCatching { if (duration > 0 && ffmpeg == false) XmbVideos.saveResume(entry.key, player.currentPosition.toLong(), duration) }
             runCatching { player.stop() }
-            player.release()
+            runCatching { player.setSurface(null) }
         }
     }
-    // The position for the time bar, and, while it plays, no screensaver over the film.
+    // FFmpeg's player, once the picture has its surface: from where the video was left, or the start.
+    // Opened off the main thread (it reads the file's index); closed before the surface goes.
+    val surface = holder.value
+    LaunchedEffect(entry.key, ffmpeg, surface) {
+        if (ffmpeg != true || surface == null) return@LaunchedEffect
+        error = null
+        position = 0L
+        duration = 0L
+        var handle = 0L
+        var pfd: android.os.ParcelFileDescriptor? = null
+        try {
+            val at = if (first) 0L else XmbVideos.resumeAt(entry)
+            first = false
+            // Not cancellable: a player opened as the video is left must still come back to be closed.
+            handle = withContext(Dispatchers.IO + kotlinx.coroutines.NonCancellable) {
+                // A document reaches FFmpeg as the descriptor its provider opens, which FFmpeg reads as a file.
+                pfd = if (entry.file == null) runCatching { context.contentResolver.openFileDescriptor(entry.uri, "r") }.getOrNull() else null
+                val path = entry.file?.absolutePath ?: pfd?.let { "/proc/self/fd/${it.fd}" }
+                path?.let { runCatching { core().xmbPlayerOpen(it, surface, at) }.getOrDefault(0L) } ?: 0L
+            }
+            ff[0] = handle
+            android.util.Log.i("XmbVideo", "FFmpeg player $handle for ${entry.name} on surface ${System.identityHashCode(surface)}")
+            if (handle == 0L) {
+                error = unsupported
+                return@LaunchedEffect
+            }
+            duration = core().xmbPlayer(handle, 5, 0).coerceAtLeast(0)
+            val w = core().xmbPlayer(handle, 7, 0).toInt()
+            val h = core().xmbPlayer(handle, 8, 0).toInt()
+            if (w > 0 && h > 0) { videoW = w; videoH = h }
+            position = at
+            playing = true
+            poke()
+            kotlinx.coroutines.awaitCancellation()
+        } finally {
+            ff[0] = 0L
+            android.util.Log.i("XmbVideo", "FFmpeg player $handle closed")
+            if (handle != 0L) {
+                runCatching {
+                    val now = core().xmbPlayer(handle, 4, 0)
+                    if (core().xmbPlayer(handle, 6, 0) != 2L && duration > 0) XmbVideos.saveResume(entry.key, now, duration)
+                }
+                core().xmbPlayerClose(handle)
+            }
+            runCatching { pfd?.close() }
+        }
+    }
+    // The position for the time bar, the end of a video FFmpeg plays, and, while it plays, no
+    // screensaver over the film.
     LaunchedEffect(entry.key) {
         var n = 0
         while (true) {
-            runCatching { if (playing) position = player.currentPosition.toLong() }
+            val h = ff[0]
+            if (h != 0L) {
+                position = core().xmbPlayer(h, 4, 0).coerceAtLeast(0)
+                if (playing && core().xmbPlayer(h, 6, 0) == 2L) {
+                    playing = false
+                    XmbVideos.saveResume(entry.key, 0, 0)
+                    poke()
+                }
+            } else {
+                runCatching { if (playing) position = player.currentPosition.toLong() }
+            }
             if (playing && ++n % 4 == 0) com.armsx2.ui.home.LibraryScreensaver.reset()
             delay(250)
         }
+    }
+    fun pauseNow() {
+        val h = ff[0]
+        if (h != 0L) core().xmbPlayer(h, 2, 0) else runCatching { player.pause() }
+        playing = false
+    }
+    fun playNow() {
+        val h = ff[0]
+        if (h != 0L) {
+            // At the end, Cross plays it again from the start.
+            if (core().xmbPlayer(h, 6, 0) == 2L) core().xmbPlayer(h, 3, 0)
+            core().xmbPlayer(h, 1, 0)
+        } else {
+            runCatching { player.start() }
+        }
+        playing = true
+    }
+    fun seekNow(to: Long) {
+        val h = ff[0]
+        if (h != 0L) core().xmbPlayer(h, 3, to) else runCatching { player.seekTo(to, MediaPlayer.SEEK_CLOSEST_SYNC) }
+        position = to
     }
     // Leaving the app pauses it; coming back, it stays paused until Cross.
     val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
     DisposableEffect(lifecycle, entry.key) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE && playing) {
-                runCatching { player.pause() }
-                playing = false
-            }
+            if (event == Lifecycle.Event.ON_PAUSE && playing) pauseNow()
         }
         lifecycle.addObserver(observer)
         onDispose { lifecycle.removeObserver(observer) }
@@ -589,29 +721,17 @@ internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginni
     fun toggle() {
         poke()
         if (error != null || duration <= 0) return
-        runCatching {
-            if (player.isPlaying) {
-                player.pause()
-                playing = false
-            } else {
-                player.start()
-                playing = true
-            }
-        }
+        if (playing) pauseNow() else playNow()
     }
     fun seekBy(ms: Long) {
         poke()
         if (duration <= 0) return
-        val to = (runCatching { player.currentPosition.toLong() }.getOrDefault(position) + ms).coerceIn(0, duration - 500)
-        runCatching { player.seekTo(to, MediaPlayer.SEEK_CLOSEST_SYNC) }
-        position = to
+        seekNow((position + ms).coerceIn(0, duration - 500))
     }
     fun seekTo(fraction: Float) {
         poke()
         if (duration <= 0) return
-        val to = (duration * fraction.coerceIn(0f, 1f)).toLong().coerceAtMost(duration - 500)
-        runCatching { player.seekTo(to, MediaPlayer.SEEK_CLOSEST_SYNC) }
-        position = to
+        seekNow((duration * fraction.coerceIn(0f, 1f)).toLong().coerceAtMost(duration - 500))
     }
     fun go(step: Int) {
         val next = index + step
@@ -668,7 +788,8 @@ internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginni
         val fitByWidth = (aspect >= screen) != zoom
         // A TextureView rather than a SurfaceView: a SurfaceView's picture is a window of its own,
         // placed apart from Compose's layout, and inside the panel's fade it sat at the screen's left
-        // edge. The decoding is the device's hardware either way, 4K included.
+        // edge. Android's player decodes on the device's hardware, 4K included; FFmpeg's, for AVI and
+        // the like, in software into the same surface.
         AndroidView(
             factory = { ctx ->
                 android.view.TextureView(ctx).apply {

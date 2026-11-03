@@ -33,7 +33,9 @@ import kotlin.math.roundToInt
  * its album or list after it, as the music behind the XMB; on the song playing it opens Now Playing,
  * the player with its controls and visualizer, which also heads the column while a song is on.
  * Triangle adds a song to a playlist, makes it the pause menu's music, or deletes it. Import Music
- * copies songs in with the system picker, Import Album a whole folder, covers and all. Playing goes
+ * copies songs in with the system picker, Import Album a whole folder, covers and all; Add Folder
+ * plays a folder's songs where they are, on the device or a drive, without copying them (its songs
+ * join the albums, and the folder is listed with Remove from Music at its end). Playing goes
  * through LibraryMusic, as the library's music always has, so the choice holds across the app.
  *
  * Over a game the column is the pause menu's music instead: the song picked there is the one the
@@ -62,10 +64,12 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
     fun enabledNow() = if (inGame) PauseMusic.enabled.value else LibraryMusic.enabled.value
     fun playingNow() = enabledNow() && (inGame || !LibraryMusic.userPaused.value)
     fun currentName() = if (inGame) PauseMusic.customName.value else LibraryMusic.customName.value
-    fun currentFile() = if (inGame) null else LibraryMusic.current()
+    fun currentSong() = if (inGame) null else LibraryMusic.current()
     // At home the song playing is the playlist's; over a game, the pause menu's one track.
-    fun isCurrent(file: File) =
-        if (inGame) currentName() == file.name else enabledNow() && currentFile()?.absolutePath == file.absolutePath
+    fun isCurrent(song: String, name: String) =
+        if (inGame) currentName() == name else enabledNow() && currentSong() == song
+    fun uriOf(song: String): Uri = if (LibraryMusic.isDocument(song)) Uri.parse(song) else Uri.fromFile(File(song))
+    fun nameOf(song: String) = library?.byId?.get(song)?.name ?: LibraryMusic.songName(song)
     val nowPlaying = fw(full, "msg_play", "action.play")
     val paused = fw(full, "msg_pause", "xmb.music.paused")
     val builtin = str("xmb.music.builtin")
@@ -74,6 +78,11 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
     val imported = str("xmb.music.imported")
     val importAlbumTitle = str("xmb.music.importAlbum")
     val importAlbumDesc = str("xmb.music.importAlbum.desc")
+    val addFolderTitle = str("xmb.video.addFolder")
+    val addFolderDesc = str("xmb.music.addFolder.desc")
+    val removeFolderTitle = str("xmb.music.removeFolder")
+    val noTitles = fw(full, "msg_error_no_title", "xmb.video.none")
+    val folderIcon = XmbIcon("explore_category_video", "item_tex_plain_folder", "📁")
     val nowPlayingTitle = str("xmb.music.nowPlaying")
     val variousArtists = fw(full, "msg_various_artists", "xmb.music.variousArtists")
     val tracksCount = fw(full, "msg_tracks_count_value", "xmb.music.tracks")
@@ -105,15 +114,16 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
     }
 
     // Over a game a song is the pause menu's one track; at home a list plays on from the song picked.
-    fun playList(files: List<File>, start: Int) {
-        val file = files.getOrNull(start) ?: return
+    fun playList(songs: List<String>, start: Int) {
+        val song = songs.getOrNull(start) ?: return
         if (inGame) {
+            val name = nameOf(song)
             scope.launch {
-                withContext(Dispatchers.IO) { PauseMusic.setCustomTrack(context, Uri.fromFile(file), file.name) }
+                withContext(Dispatchers.IO) { PauseMusic.setCustomTrack(context, uriOf(song), name) }
                 if (!enabledNow()) play(true)
             }
         } else {
-            LibraryMusic.playQueue(context, files, start)
+            LibraryMusic.playQueue(context, songs, start)
         }
     }
 
@@ -133,6 +143,18 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
             controller.tell(imported.format(n), ok, error = n == 0)
         }
     }
+    // Add Folder: the folder is kept and read where it is; one with no songs says so.
+    val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val songs = withContext(Dispatchers.IO) {
+                XmbMusicLibrary.addFolder(context, uri)
+                XmbMusicLibrary.scan(context).inFolder(uri).size
+            }
+            refresh++
+            if (songs == 0) controller.tell(noTitles, ok, error = true)
+        }
+    }
 
     fun status(isCurrent: Boolean) = when {
         !isCurrent -> null
@@ -140,37 +162,39 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
         else -> paused
     }
 
-    fun songIcon(file: File, current: Boolean): XmbIcon =
-        library?.coverOf(file)?.let { XmbIcon(file = it, glyph = "♪") }
-            ?: if (current && playingNow()) trackIcon else XmbIcon("explore_category_music", XmbMusicLibrary.formatIcon(file), "♪")
+    fun songIcon(song: String, name: String, current: Boolean): XmbIcon =
+        library?.coverOf(song)?.let { XmbIcon(file = it, glyph = "♪") }
+            ?: if (current && playingNow()) trackIcon else XmbIcon("explore_category_music", XmbMusicLibrary.formatIcon(name), "♪")
 
-    // A song: Cross plays it and on through [list] from it (or opens Now Playing on the one playing),
-    // Triangle has its playlist, pause-menu and delete options.
-    fun songNode(prefix: String, title: String, sub: String?, file: File, list: List<File>, i: Int, extra: List<XmbOption> = emptyList()): XmbNode.Action {
-        val current = isCurrent(file)
-        val options = extra + listOf(
-            XmbOption(addToList) { XmbPlaylists.offer(controller, XmbPlaylists.Kind.Music, file.absolutePath) },
+    // A song (its path, or its content Uri in an added folder): Cross plays it and on through [list]
+    // from it (or opens Now Playing on the one playing), Triangle has its playlist and pause-menu
+    // options, and Delete for a song in the music folder (an added folder's songs are the player's own).
+    fun songNode(prefix: String, title: String, sub: String?, song: String, list: List<String>, i: Int, extra: List<XmbOption> = emptyList()): XmbNode.Action {
+        val name = nameOf(song)
+        val current = isCurrent(song, name)
+        val options = extra + listOfNotNull(
+            XmbOption(addToList) { XmbPlaylists.offer(controller, XmbPlaylists.Kind.Music, song) },
             XmbOption(asOther) {
                 scope.launch(Dispatchers.IO) {
                     if (inGame) {
-                        LibraryMusic.setCustomTrack(context, Uri.fromFile(file), file.name)
+                        LibraryMusic.setCustomTrack(context, uriOf(song), name)
                     } else {
-                        PauseMusic.setCustomTrack(context, Uri.fromFile(file), file.name)
+                        PauseMusic.setCustomTrack(context, uriOf(song), name)
                         if (!PauseMusic.enabled.value) withContext(Dispatchers.Main) { PauseMusic.set(context, true) }
                     }
                 }
             },
-            XmbOption(deleteTitle) {
+            if (LibraryMusic.isDocument(song)) null else XmbOption(deleteTitle) {
                 controller.ask(deleteAsk.format(title), yes, no, focusNo = true) {
                     scope.launch {
-                        withContext(Dispatchers.IO) { file.delete() }
+                        withContext(Dispatchers.IO) { File(song).delete() }
                         if (current) useBuiltin()
                         refresh++
                     }
                 }
             },
         )
-        return XmbNode.Action("$prefix.$i.${file.name}", title, songIcon(file, current), status(current) ?: sub, options) {
+        return XmbNode.Action("$prefix.$i.$name", title, songIcon(song, name, current), status(current) ?: sub, options) {
             when {
                 inGame && current -> play(!playingNow())
                 !inGame && current -> openNowPlaying()
@@ -183,14 +207,14 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
 
     val items = buildList {
         // Now Playing heads the column while a song of the player's is on, as the console's does.
-        val nowFile = currentFile()?.takeIf { enabledNow() }
-        if (nowFile != null) {
-            val t = library?.byPath?.get(nowFile.absolutePath)
+        val nowSong = currentSong()?.takeIf { enabledNow() }
+        if (nowSong != null) {
+            val t = library?.byId?.get(nowSong)
             add(
                 XmbNode.Action(
                     "music.now",
-                    t?.title ?: nowFile.nameWithoutExtension,
-                    library?.coverOf(nowFile)?.let { XmbIcon(file = it, glyph = "▶") } ?: nowIcon,
+                    t?.title ?: nameOf(nowSong).substringBeforeLast('.'),
+                    library?.coverOf(nowSong)?.let { XmbIcon(file = it, glyph = "▶") } ?: nowIcon,
                     listOfNotNull(nowPlayingTitle, t?.artist, if (playingNow()) null else paused).joinToString("   "),
                 ) { openNowPlaying() },
             )
@@ -198,6 +222,7 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
         add(xmbMusicSettings())
         add(XmbNode.Action("music.import", importTitle, trackIcon, importDesc) { importer.launch(arrayOf("audio/*")) })
         add(XmbNode.Action("music.importAlbum", importAlbumTitle, albumIcon, importAlbumDesc) { albumImporter.launch(null) })
+        if (!inGame) add(XmbNode.Action("music.addFolder", addFolderTitle, folderIcon, addFolderDesc) { folderPicker.launch(null) })
         val builtinCurrent = currentName() == null && (inGame || LibraryMusic.queue.value.isEmpty())
         add(
             XmbNode.Action("music.builtin", builtin, if (builtinCurrent && playingNow()) trackIcon else pausedIcon, status(builtinCurrent)) {
@@ -216,32 +241,32 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
         // with a switch), its songs, and Delete Playlist.
         fun playlist(name: String) =
                 XmbNode.Folder("music.playlist.$name", name, listIcon, trackCount.format(XmbPlaylists.music.value[name].orEmpty().size), live = true) {
-                    val files = XmbPlaylists.files(XmbPlaylists.Kind.Music, name)
+                    val songs = XmbPlaylists.songs(name) { library?.byId?.containsKey(it) == true }
                     buildList {
-                        if (files.isEmpty()) add(XmbNode.Action("music.playlist.$name.none", emptyList, listIcon) {})
-                        else add(XmbNode.Action("music.playlist.$name.all", playAll, trackIcon) { playList(files, 0) })
+                        if (songs.isEmpty()) add(XmbNode.Action("music.playlist.$name.none", emptyList, listIcon) {})
+                        else add(XmbNode.Action("music.playlist.$name.all", playAll, trackIcon) { playList(songs, 0) })
                         add(
                             XmbNode.Folder("music.playlist.$name.add", addSongs, listIcon, live = true) {
-                                XmbMusicLibrary.tracks().map { f ->
-                                    val inList = { f.absolutePath in XmbPlaylists.music.value[name].orEmpty() }
+                                library?.all.orEmpty().map { t ->
+                                    val inList = { t.id in XmbPlaylists.music.value[name].orEmpty() }
                                     XmbNode.Setting(
-                                        "music.playlist.$name.add.${f.absolutePath}", library?.byPath?.get(f.absolutePath)?.title ?: f.nameWithoutExtension,
-                                        library?.coverOf(f)?.let { XmbIcon(file = it, glyph = "♪") } ?: pausedIcon,
+                                        "music.playlist.$name.add.${t.id}", t.title,
+                                        library?.coverOf(t.id)?.let { XmbIcon(file = it, glyph = "♪") } ?: pausedIcon,
                                         XmbEditor.Toggle(inList) { on ->
-                                            if (on) XmbPlaylists.add(XmbPlaylists.Kind.Music, name, f.absolutePath)
-                                            else XmbPlaylists.remove(XmbPlaylists.Kind.Music, name, f.absolutePath)
+                                            if (on) XmbPlaylists.add(XmbPlaylists.Kind.Music, name, t.id)
+                                            else XmbPlaylists.remove(XmbPlaylists.Kind.Music, name, t.id)
                                         },
                                         { if (inList()) onWord else offWord },
                                     )
                                 }
                             },
                         )
-                        files.forEachIndexed { i, f ->
-                            val t = library?.byPath?.get(f.absolutePath)
+                        songs.forEachIndexed { i, song ->
+                            val t = library?.byId?.get(song)
                             add(
                                 songNode(
-                                    "music.playlist.$name", t?.title ?: f.nameWithoutExtension, t?.let(::trackSub), f, files, i,
-                                    listOf(XmbOption(removeFromList) { XmbPlaylists.remove(XmbPlaylists.Kind.Music, name, f.absolutePath) }),
+                                    "music.playlist.$name", t?.title ?: nameOf(song).substringBeforeLast('.'), t?.let(::trackSub), song, songs, i,
+                                    listOf(XmbOption(removeFromList) { XmbPlaylists.remove(XmbPlaylists.Kind.Music, name, song) }),
                                 ),
                             )
                         }
@@ -260,9 +285,24 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
             },
         )
         val lib = library
+        // Each added folder: its songs where they are, album by album, then Remove from Music.
+        if (!inGame) XmbMusicLibrary.folders.value.forEach { f ->
+            val inFolder = lib?.inFolder(f.uri).orEmpty()
+            add(
+                XmbNode.Folder("music.folder.${f.uri}", f.name, folderIcon, tracksCount.replace("%1", inFolder.size.toString()), live = true) {
+                    val songs = inFolder.map { it.id }
+                    inFolder.mapIndexed { i, t -> songNode("music.folder.${f.uri}", t.title, trackSub(t), t.id, songs, i) } +
+                        XmbNode.Action("music.folder.${f.uri}.remove", removeFolderTitle, folderIcon) {
+                            XmbMusicLibrary.removeFolder(context, f.uri)
+                            controller.back()
+                            refresh++
+                        }
+                },
+            )
+        }
         // Each album a folder under its cover: its songs in disc and track order.
         lib?.albums?.forEach { a ->
-            val files = a.tracks.map { it.file }
+            val songs = a.tracks.map { it.id }
             add(
                 XmbNode.Folder(
                     "music.album.${a.key}",
@@ -274,14 +314,14 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
                     a.tracks.mapIndexed { i, t ->
                         // An album of one artist names the length; of several, whose song it is too.
                         val sub = if (a.artist != null) xmbLength(t.durationMs).ifEmpty { null } else trackSub(t)
-                        songNode("music.album.${a.key}", t.title, sub, t.file, files, i)
+                        songNode("music.album.${a.key}", t.title, sub, t.id, songs, i)
                     }
                 },
             )
         }
         val loose = lib?.loose.orEmpty()
-        val looseFiles = loose.map { it.file }
-        loose.forEachIndexed { i, t -> add(songNode("music.track", t.title, trackSub(t), t.file, looseFiles, i)) }
+        val looseSongs = loose.map { it.id }
+        loose.forEachIndexed { i, t -> add(songNode("music.track", t.title, trackSub(t), t.id, looseSongs, i)) }
     }
     return XmbColumn(
         key = "music",

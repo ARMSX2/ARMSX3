@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "Fortsetzen",
  "xmb.video.playBegin": "Von Anfang an abspielen",
  "xmb.video.zoom": "Zoom",
- "xmb.media.unsupported": "Dieser Datentyp wird nicht unterstützt."
+ "xmb.media.unsupported": "Dieser Datentyp wird nicht unterstützt.",
+ "xmb.music.addFolder.desc": "Die Lieder eines Ordners auf diesem Gerät oder einem Laufwerk abspielen, ohne sie zu kopieren",
+ "xmb.music.removeFolder": "Aus Musik entfernen"
 }

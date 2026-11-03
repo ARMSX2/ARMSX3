@@ -1,22 +1,33 @@
 package com.armsx2.ui.xmb
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.compose.runtime.mutableStateOf
+import androidx.core.content.edit
+import com.armsx2.LibraryMusic
+import com.armsx2.runtime.MainActivityRuntime
 import com.armsx3.core.ARMSX3
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
 
 /**
- * The music folder (ARMSX3's data folder, music/) as the console's Music column sees it: its songs
- * with their tags (title, artist, album, track number), gathered into albums, and each album's cover.
+ * The music the console's Music column sees: the music folder (ARMSX3's data folder, music/) and
+ * the folders added with Add Folder, whose songs are played where they are rather than copied in.
+ * Its songs with their tags (title, artist, album, track number), gathered into albums, and each
+ * album's cover.
+ *
+ * A song is known everywhere (the player's queue, the playlists, the index) by one string: its
+ * path in the music folder, or its content Uri in an added folder.
  *
  * Tags are read once per song with MediaMetadataRetriever and kept in an index in the cache, keyed
- * by path, size and time, since reading a whole library again on every visit takes seconds.
+ * by song, size and time, since reading a whole library again on every visit takes seconds.
  *
  * A cover is, in order: an image beside the songs in their folder (cover.jpg, folder.jpg and the
  * like, as ripped albums come, else the folder's biggest picture of any name), then the picture
@@ -35,17 +46,26 @@ object XmbMusicLibrary {
     /** The names a cover goes by beside the songs, best first. */
     private val COVERS = listOf("cover", "folder", "front", "album", "albumart", "albumartsmall")
 
+    private const val FoldersKey = "xmb.music.folders"
+
     fun folder(): File = File(ARMSX3.rootDirectory, "music").apply { mkdirs() }
 
-    /** Every song in the music folder, its subfolders' too. */
-    fun tracks(): List<File> =
-        folder().walkTopDown().maxDepth(4)
-            .filter { it.isFile && it.length() > 0 && it.extension.lowercase() in AUDIO }
-            .sortedBy { it.path.lowercase() }
-            .toList()
+    /** A folder added with Add Folder, by its tree Uri. */
+    class Folder(val uri: Uri, val name: String)
+
+    /** The folders added with Add Folder. */
+    val folders = mutableStateOf<List<Folder>>(emptyList())
+    private var foldersLoaded = false
 
     class Track(
-        val file: File,
+        /** Where the song is: its path, or its content Uri in an added folder. */
+        val id: String,
+        /** Its file name. */
+        val name: String,
+        /** The folder it is in (a path or a content Uri); null loose in the music folder itself. */
+        val folder: String?,
+        val size: Long,
+        val modified: Long,
         val title: String,
         val artist: String?,
         val album: String?,
@@ -57,42 +77,147 @@ object XmbMusicLibrary {
         val durationMs: Long,
         /** A picture inside the file. */
         val picture: Boolean,
-    )
+    ) {
+        /** Played where it is, from an added folder: not the app's to delete. */
+        val inPlace: Boolean get() = LibraryMusic.isDocument(id)
+    }
 
     /** [artist] is null for an album of several artists' songs (the console's Various Artists). */
     class Album(val key: String, val title: String, val artist: String?, val tracks: List<Track>, val cover: File?)
 
-    /** [looseCovers]: the pictures inside the loose songs that have one, by path. */
+    /** [looseCovers]: the pictures inside the loose songs that have one, by song. */
     class Library(val albums: List<Album>, val loose: List<Track>, private val looseCovers: Map<String, File>) {
-        val byPath: Map<String, Track> = (albums.flatMap { it.tracks } + loose).associateBy { it.file.absolutePath }
-        private val albumOf: Map<String, Album> = albums.flatMap { a -> a.tracks.map { it.file.absolutePath to a } }.toMap()
-        fun albumOf(file: File): Album? = albumOf[file.absolutePath]
+        val all: List<Track> = albums.flatMap { it.tracks } + loose
+        val byId: Map<String, Track> = all.associateBy { it.id }
+        private val albumOf: Map<String, Album> = albums.flatMap { a -> a.tracks.map { it.id to a } }.toMap()
+        fun albumOf(id: String): Album? = albumOf[id]
 
         /** The cover to show for a song: its album's, else its own picture. */
-        fun coverOf(file: File): File? = albumOf(file)?.cover ?: looseCovers[file.absolutePath]
+        fun coverOf(id: String): File? = albumOf(id)?.cover ?: looseCovers[id]
+
+        /** The songs of the added folder [tree], album by album. */
+        fun inFolder(tree: Uri): List<Track> {
+            val prefix = "$tree/document/"
+            return all.filter { it.id.startsWith(prefix) }
+        }
     }
 
     /** The last scan, for a screen that only looks a song up (Now Playing). */
     val library = mutableStateOf<Library?>(null)
 
-    /** Read the music folder: tags from the index where a song has not changed, the rest afresh. IO thread. */
+    /** A song or picture as a folder lists it, before its tags are read. */
+    private class Found(val id: String, val name: String, val folder: String?, val size: Long, val modified: Long)
+
+    /** Every song in the music folder, its subfolders' too. */
+    private fun localSongs(root: File): List<Found> =
+        root.walkTopDown().maxDepth(4)
+            .filter { it.isFile && it.length() > 0 && it.extension.lowercase() in AUDIO }
+            .sortedBy { it.path.lowercase() }
+            .map { f ->
+                val dir = f.parentFile?.takeIf { it.absolutePath != root.absolutePath }
+                Found(f.absolutePath, f.name, dir?.absolutePath, f.length(), f.lastModified())
+            }
+            .toList()
+
+    /**
+     * An added folder's songs, and its pictures by folder, four folders deep: one query of the
+     * document provider a folder, as the system picker lists them.
+     */
+    private fun documents(context: Context, tree: Uri, docId: String, depth: Int, songs: MutableList<Found>, images: MutableMap<String, MutableList<Found>>) {
+        if (depth > 4) return
+        val folder = DocumentsContract.buildDocumentUriUsingTree(tree, docId).toString()
+        val columns = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+            DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+        )
+        val dirs = ArrayList<String>()
+        runCatching {
+            context.contentResolver.query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId), columns, null, null, null)?.use { c ->
+                while (c.moveToNext()) {
+                    val id = c.getString(0) ?: continue
+                    val name = c.getString(1) ?: continue
+                    if (name.startsWith(".")) continue
+                    if (c.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR) {
+                        dirs += id
+                        continue
+                    }
+                    val size = c.getLong(3)
+                    if (size <= 0) continue
+                    val ext = name.substringAfterLast('.', "").lowercase()
+                    val found = Found(DocumentsContract.buildDocumentUriUsingTree(tree, id).toString(), name, folder, size, c.getLong(4))
+                    when (ext) {
+                        in AUDIO -> songs += found
+                        in IMAGES -> images.getOrPut(folder) { ArrayList() } += found
+                    }
+                }
+            }
+        }
+        dirs.forEach { documents(context, tree, it, depth + 1, songs, images) }
+    }
+
+    fun loadFolders() {
+        if (foldersLoaded) return
+        foldersLoaded = true
+        folders.value = runCatching {
+            val a = JSONArray(MainActivityRuntime.prefs.getString(FoldersKey, "[]"))
+            (0 until a.length()).map { a.getJSONObject(it).let { o -> Folder(Uri.parse(o.getString("uri")), o.optString("name")) } }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun saveFolders() {
+        MainActivityRuntime.prefs.edit {
+            putString(FoldersKey, JSONArray(folders.value.map { JSONObject().put("uri", it.uri.toString()).put("name", it.name) }).toString())
+        }
+    }
+
+    /** Keep the grant for a picked folder and play its songs from where they are. */
+    fun addFolder(context: Context, uri: Uri) {
+        loadFolders()
+        runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        if (folders.value.any { it.uri == uri }) return
+        val name = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)?.name ?: uri.lastPathSegment.orEmpty()
+        folders.value = folders.value + Folder(uri, name)
+        saveFolders()
+    }
+
+    /** Stop listing a folder; its songs stay where they are. The grant goes unless Video still uses it. */
+    fun removeFolder(context: Context, uri: Uri) {
+        if (XmbVideos.folders.value.none { it.uri == uri }) {
+            runCatching { context.contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        }
+        folders.value = folders.value.filter { it.uri != uri }
+        saveFolders()
+    }
+
+    /** Read the music: tags from the index where a song has not changed, the rest afresh. IO thread. */
     @Synchronized
     fun scan(context: Context): Library {
+        loadFolders()
         val root = folder()
+        val found = ArrayList(localSongs(root))
+        val images = HashMap<String, MutableList<Found>>()
+        for (f in folders.value) {
+            val top = runCatching { DocumentsContract.getTreeDocumentId(f.uri) }.getOrNull() ?: continue
+            val songs = ArrayList<Found>()
+            documents(context, f.uri, top, 0, songs, images)
+            found += songs.sortedBy { it.id.lowercase() }
+        }
         val index = loadIndex(context)
         var changed = false
-        val tracks = tracks().map { file ->
-            val key = file.absolutePath
-            val known = index.optJSONObject(key)
-            if (known != null && known.optLong("s") == file.length() && known.optLong("m") == file.lastModified()) {
-                fromJson(file, known)
+        val tracks = found.map { f ->
+            val known = index.optJSONObject(f.id)
+            if (known != null && known.optLong("s") == f.size && known.optLong("m") == f.modified) {
+                fromJson(f, known)
             } else {
                 changed = true
-                read(file).also { index.put(key, toJson(it)) }
+                read(context, f).also { index.put(f.id, toJson(it)) }
             }
         }
         // Songs that have gone leave the index too.
-        val present = tracks.mapTo(HashSet()) { it.file.absolutePath }
+        val present = tracks.mapTo(HashSet()) { it.id }
         index.keys().asSequence().toList().filter { it !in present }.forEach {
             index.remove(it)
             changed = true
@@ -102,36 +227,49 @@ object XmbMusicLibrary {
         val groups = LinkedHashMap<String, MutableList<Track>>()
         val loose = ArrayList<Track>()
         for (t in tracks) {
-            val dir = t.file.parentFile
-            val inFolder = dir != null && dir.absolutePath != root.absolutePath
             val key = when {
-                !t.album.isNullOrBlank() ->
-                    "tag:" + t.album.lowercase() + "\u0000" + (t.albumArtist?.lowercase() ?: dir?.absolutePath.orEmpty())
-                inFolder -> "dir:" + dir!!.absolutePath
+                !t.album.isNullOrBlank() -> "tag:" + t.album.lowercase() + "\u0000" + (t.albumArtist?.lowercase() ?: t.folder.orEmpty())
+                t.folder != null -> "dir:" + t.folder
                 else -> null
             }
             if (key == null) loose += t else groups.getOrPut(key) { ArrayList() } += t
         }
         val albums = groups.map { (key, list) ->
             val songs = list.sortedWith(compareBy<Track>({ it.disc }, { it.number }, { it.title.lowercase() }))
-            val title = songs.firstNotNullOfOrNull { it.album } ?: songs.first().file.parentFile?.name.orEmpty()
+            val title = songs.firstNotNullOfOrNull { it.album } ?: folderName(songs.first())
             val artists = songs.mapNotNull { it.artist }.distinct()
             val artist = songs.firstNotNullOfOrNull { it.albumArtist } ?: artists.singleOrNull()
-            Album(sha1(key), title, artist, songs, coverFor(context, songs, root))
+            Album(sha1(key), title, artist, songs, coverFor(context, songs, images))
         }.sortedBy { it.title.lowercase() }
-        val looseCovers = loose.filter { it.picture }.mapNotNull { t -> picture(context, t.file)?.let { t.file.absolutePath to it } }.toMap()
+        val looseCovers = loose.filter { it.picture }.mapNotNull { t -> picture(context, t)?.let { t.id to it } }.toMap()
         return Library(albums, loose.sortedBy { it.title.lowercase() }, looseCovers).also { library.value = it }
     }
 
-    private fun read(file: File): Track {
-        val r = MediaMetadataRetriever()
+    /** An untagged album's name: its folder's. */
+    private fun folderName(t: Track): String {
+        val folder = t.folder ?: return t.title
+        if (!LibraryMusic.isDocument(folder)) return File(folder).name
+        val id = runCatching { DocumentsContract.getDocumentId(Uri.parse(folder)) }.getOrNull() ?: return t.title
+        return id.substringAfterLast('/').substringAfterLast(':').ifEmpty { t.title }
+    }
+
+    private fun retriever(context: Context, id: String) = MediaMetadataRetriever().apply {
+        if (LibraryMusic.isDocument(id)) setDataSource(context, Uri.parse(id)) else setDataSource(id)
+    }
+
+    private fun read(context: Context, f: Found): Track {
+        var r: MediaMetadataRetriever? = null
         return try {
-            r.setDataSource(file.absolutePath)
-            fun s(key: Int) = r.extractMetadata(key)?.trim()?.takeIf { it.isNotEmpty() }
+            val m = retriever(context, f.id).also { r = it }
+            fun s(key: Int) = m.extractMetadata(key)?.trim()?.takeIf { it.isNotEmpty() }
             fun number(key: Int) = s(key)?.substringBefore('/')?.trim()?.toIntOrNull() ?: 0
             Track(
-                file = file,
-                title = s(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: file.nameWithoutExtension,
+                id = f.id,
+                name = f.name,
+                folder = f.folder,
+                size = f.size,
+                modified = f.modified,
+                title = s(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: f.name.substringBeforeLast('.'),
                 artist = s(MediaMetadataRetriever.METADATA_KEY_ARTIST),
                 album = s(MediaMetadataRetriever.METADATA_KEY_ALBUM),
                 albumArtist = s(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST),
@@ -140,19 +278,19 @@ object XmbMusicLibrary {
                 year = s(MediaMetadataRetriever.METADATA_KEY_YEAR),
                 genre = s(MediaMetadataRetriever.METADATA_KEY_GENRE),
                 durationMs = s(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L,
-                picture = runCatching { r.embeddedPicture != null }.getOrDefault(false),
+                picture = runCatching { m.embeddedPicture != null }.getOrDefault(false),
             )
         } catch (_: Exception) {
             // Not readable as audio here (a MIDI file, a damaged one): its name, and nothing else.
-            Track(file, file.nameWithoutExtension, null, null, null, 0, 0, null, null, 0L, false)
+            Track(f.id, f.name, f.folder, f.size, f.modified, f.name.substringBeforeLast('.'), null, null, null, 0, 0, null, null, 0L, false)
         } finally {
-            runCatching { r.release() }
+            runCatching { r?.release() }
         }
     }
 
     private fun toJson(t: Track) = JSONObject().apply {
-        put("s", t.file.length())
-        put("m", t.file.lastModified())
+        put("s", t.size)
+        put("m", t.modified)
         put("t", t.title)
         t.artist?.let { put("a", it) }
         t.album?.let { put("al", it) }
@@ -165,9 +303,13 @@ object XmbMusicLibrary {
         put("p", t.picture)
     }
 
-    private fun fromJson(file: File, o: JSONObject) = Track(
-        file = file,
-        title = o.optString("t").ifEmpty { file.nameWithoutExtension },
+    private fun fromJson(f: Found, o: JSONObject) = Track(
+        id = f.id,
+        name = f.name,
+        folder = f.folder,
+        size = f.size,
+        modified = f.modified,
+        title = o.optString("t").ifEmpty { f.name.substringBeforeLast('.') },
         artist = o.optString("a").ifEmpty { null },
         album = o.optString("al").ifEmpty { null },
         albumArtist = o.optString("aa").ifEmpty { null },
@@ -194,40 +336,57 @@ object XmbMusicLibrary {
     }
 
     /** An album's cover: an image beside its songs (not loose in the music folder itself), else one inside a song. */
-    private fun coverFor(context: Context, songs: List<Track>, root: File): File? {
-        songs.mapNotNull { it.file.parentFile }.distinct().filter { it.absolutePath != root.absolutePath }.forEach { dir ->
-            folderImage(dir)?.let { return it }
+    private fun coverFor(context: Context, songs: List<Track>, images: Map<String, List<Found>>): File? {
+        songs.mapNotNull { it.folder }.distinct().forEach { folder ->
+            if (LibraryMusic.isDocument(folder)) {
+                pick(images[folder].orEmpty(), { it.name }, { it.size })?.let { doc -> small(context, doc)?.let { return it } }
+            } else {
+                File(folder).listFiles()?.filter { it.isFile && it.extension.lowercase() in IMAGES && it.length() > 0 }
+                    ?.let { files -> pick(files, { it.name }, { it.length() }) }?.let { return it }
+            }
         }
-        return songs.firstOrNull { it.picture }?.let { picture(context, it.file) }
+        return songs.firstOrNull { it.picture }?.let { picture(context, it) }
     }
 
-    private fun folderImage(dir: File): File? {
-        val images = dir.listFiles()?.filter { it.isFile && it.extension.lowercase() in IMAGES && it.length() > 0 } ?: return null
-        for (name in COVERS) {
-            images.firstOrNull { it.nameWithoutExtension.lowercase() == name }?.let { return it }
-        }
-        // Windows Media Player's AlbumArt_{GUID}_Large.jpg, else the folder's biggest picture: any
-        // name will do, and of a cover, a booklet page and a disc scan, the front is the likeliest.
-        return images.firstOrNull { it.nameWithoutExtension.lowercase().startsWith("albumart") } ?: images.maxByOrNull { it.length() }
+    /** The cover among a folder's pictures: by name, then Windows Media Player's AlbumArt_{GUID}_Large, then the biggest. */
+    private fun <T> pick(images: List<T>, name: (T) -> String, size: (T) -> Long): T? {
+        if (images.isEmpty()) return null
+        fun base(t: T) = name(t).substringBeforeLast('.').lowercase()
+        for (cover in COVERS) images.firstOrNull { base(it) == cover }?.let { return it }
+        // Any name will do: of a cover, a booklet page and a disc scan, the front is the likeliest.
+        return images.firstOrNull { base(it).startsWith("albumart") } ?: images.maxByOrNull(size)
     }
+
+    /** A picture in an added folder, saved small in the cache to be drawn from. IO thread. */
+    private fun small(context: Context, doc: Found): File? {
+        val out = art(context, "${doc.id}|${doc.size}|${doc.modified}")
+        if (out.length() > 0) return out
+        val bytes = runCatching { context.contentResolver.openInputStream(Uri.parse(doc.id))?.use { it.readBytes() } }.getOrNull() ?: return null
+        return save(bytes, out)
+    }
+
+    private fun art(context: Context, key: String) = File(File(cacheDir(context), "art").apply { mkdirs() }, sha1(key) + ".jpg")
 
     /**
-     * The picture inside [file], saved once in the cache no larger than 640 px and returned from
+     * The picture inside [track], saved once in the cache no larger than 640 px and returned from
      * there afterwards; null when it has none. IO thread.
      */
-    fun picture(context: Context, file: File): File? {
-        val out = File(File(cacheDir(context), "art").apply { mkdirs() }, sha1("${file.absolutePath}|${file.length()}|${file.lastModified()}") + ".jpg")
+    fun picture(context: Context, track: Track): File? {
+        val out = art(context, "${track.id}|${track.size}|${track.modified}")
         if (out.length() > 0) return out
         val bytes = runCatching {
-            MediaMetadataRetriever().let { r ->
+            retriever(context, track.id).let { r ->
                 try {
-                    r.setDataSource(file.absolutePath)
                     r.embeddedPicture
                 } finally {
                     runCatching { r.release() }
                 }
             }
         }.getOrNull() ?: return null
+        return save(bytes, out)
+    }
+
+    private fun save(bytes: ByteArray, out: File): File? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1
@@ -297,7 +456,7 @@ object XmbMusicLibrary {
     }
 
     /** The console's icon for a song with no cover, by its format. */
-    fun formatIcon(file: File): String = when (file.extension.lowercase()) {
+    fun formatIcon(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
         "mp3" -> "music_tex_mp3"
         "m4a", "aac", "3gp" -> "music_tex_aac"
         "wav" -> "music_tex_wav"
@@ -306,6 +465,62 @@ object XmbMusicLibrary {
 
     private fun sha1(s: String): String =
         MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }.take(24)
+}
+
+/**
+ * Songs Android cannot play itself (ALAC, AIFF, WMA), decoded once by the core's FFmpeg to a WAV in
+ * the cache, which the player plays in their place. The last few are kept and the rest deleted: a
+ * WAV is ten megabytes a minute.
+ */
+object XmbDecodedSongs {
+    private const val KEEP = 3
+
+    private fun dir(context: Context) = File(context.cacheDir, "xmb-music/decoded").apply { mkdirs() }
+
+    /** A song's size and time, so a changed file is decoded again: from the file, or for a document its provider. */
+    fun stamp(context: Context, song: String): String =
+        if (!LibraryMusic.isDocument(song)) File(song).let { "${it.length()}|${it.lastModified()}" }
+        else runCatching {
+            val columns = arrayOf(DocumentsContract.Document.COLUMN_SIZE, DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            context.contentResolver.query(Uri.parse(song), columns, null, null, null)?.use { c ->
+                if (c.moveToFirst()) "${c.getLong(0)}|${c.getLong(1)}" else null
+            }
+        }.getOrNull().orEmpty()
+
+    private fun file(context: Context, song: String): File {
+        val key = MessageDigest.getInstance("SHA-1").digest("$song|${stamp(context, song)}".toByteArray())
+            .joinToString("") { "%02x".format(it) }.take(24)
+        return File(dir(context), "$key.wav")
+    }
+
+    /** [song]'s WAV, when it has been decoded. */
+    fun decoded(context: Context, song: String): File? = file(context, song).takeIf { it.length() > 44 }
+
+    /** Decode [song] now; its WAV, or null when FFmpeg cannot play it either. Slow: IO thread. */
+    fun decode(context: Context, song: String): File? {
+        val out = file(context, song)
+        if (out.length() > 44) {
+            out.setLastModified(System.currentTimeMillis())
+            return out
+        }
+        val tmp = File(out.path + ".tmp")
+        // A document reaches FFmpeg as the descriptor its provider opens, which FFmpeg reads as a file.
+        val pfd = if (LibraryMusic.isDocument(song)) runCatching { context.contentResolver.openFileDescriptor(Uri.parse(song), "r") }.getOrNull() else null
+        if (LibraryMusic.isDocument(song) && pfd == null) return null
+        val ok = try {
+            runCatching { ARMSX3.instance.xmbDecodeSong(pfd?.let { "/proc/self/fd/${it.fd}" } ?: song, tmp.path) }
+                .onFailure { android.util.Log.w("XmbDecodedSongs", "decode call failed", it) }.getOrDefault(false)
+        } finally {
+            runCatching { pfd?.close() }
+        }
+        if (!ok || !tmp.renameTo(out)) {
+            android.util.Log.w("XmbDecodedSongs", "could not decode ${LibraryMusic.songName(song)}")
+            tmp.delete()
+            return null
+        }
+        dir(context).listFiles()?.filter { it.extension == "wav" }?.sortedByDescending { it.lastModified() }?.drop(KEEP)?.forEach { it.delete() }
+        return out
+    }
 }
 
 /**

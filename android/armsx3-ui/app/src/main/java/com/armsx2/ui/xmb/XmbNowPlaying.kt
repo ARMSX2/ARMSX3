@@ -77,13 +77,13 @@ internal fun XmbNowPlaying(close: () -> Unit) {
     val font = rememberXmbFont()
     val full = "explore_plugin_full"
     val music = "explore_category_music"
-    val file = LibraryMusic.current()
+    val song = LibraryMusic.current()
     LibraryMusic.trackSerial.intValue
     val lib = XmbMusicLibrary.library.value
-    val track = file?.let { lib?.byPath?.get(it.absolutePath) }
-    val album = file?.let { lib?.albumOf(it) }
-    val cover = file?.let { lib?.coverOf(it) }
-    val title = track?.title ?: file?.nameWithoutExtension ?: str("xmb.music.builtin")
+    val track = song?.let { lib?.byId?.get(it) }
+    val album = song?.let { lib?.albumOf(it) }
+    val cover = song?.let { lib?.coverOf(it) }
+    val title = track?.title ?: song?.let { LibraryMusic.songName(it).substringBeforeLast('.') } ?: str("xmb.music.builtin")
     val artist = track?.artist ?: album?.artist
     val albumTitle = track?.album ?: album?.title
     val queue = LibraryMusic.queue.value
@@ -143,9 +143,9 @@ internal fun XmbNowPlaying(close: () -> Unit) {
             delay(1_000)
         }
     }
-    val levels by produceState<XmbVisualizer.Levels?>(null, file) {
+    val levels by produceState<XmbVisualizer.Levels?>(null, song, LibraryMusic.trackSerial.intValue) {
         value = null
-        value = file?.let { XmbVisualizer.levels(context, it) }
+        value = song?.let { XmbVisualizer.levels(context, it) }
     }
     val month = XmbOriginalColors.now()
     val accent = remember(month) {

@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "이어서 재생",
  "xmb.video.playBegin": "처음부터 재생",
  "xmb.video.zoom": "확대",
- "xmb.media.unsupported": "지원하지 않는 데이터 형식입니다."
+ "xmb.media.unsupported": "지원하지 않는 데이터 형식입니다.",
+ "xmb.music.addFolder.desc": "이 기기나 드라이브에 있는 폴더의 노래를 복사하지 않고 그대로 재생합니다",
+ "xmb.music.removeFolder": "음악에서 제거"
 }

@@ -62,6 +62,8 @@ add_library(armsx3-core SHARED
     src/remote_play.cpp
     # XMB mode: the boot sound and a game's SND0 and ICON1, decoded with the core's FFmpeg.
     src/xmb-media.cpp
+    # XMB mode: videos Android cannot play (AVI, WMV, MPEG), FFmpeg to the surface and AAudio.
+    src/xmb-player.cpp
     # Remote play online hosting: a port opened on the router (UPnP) for the session.
     src/remote_play_upnp.cpp
     # Carried from an earlier Android fork; no upstream equivalent.
@@ -118,6 +120,8 @@ target_link_libraries(armsx3-core
     3rdparty::libusb
     android
     log
+    # xmb-player.cpp's sound.
+    aaudio
 )
 
 # ---------------------------------------------------------------------------

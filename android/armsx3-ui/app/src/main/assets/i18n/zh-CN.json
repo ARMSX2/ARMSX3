@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "继续播放",
  "xmb.video.playBegin": "从头播放",
  "xmb.video.zoom": "缩放",
- "xmb.media.unsupported": "不支持此数据类型。"
+ "xmb.media.unsupported": "不支持此数据类型。",
+ "xmb.music.addFolder.desc": "直接播放此设备或驱动器上某个文件夹中的歌曲，无需复制",
+ "xmb.music.removeFolder": "从音乐中移除"
 }

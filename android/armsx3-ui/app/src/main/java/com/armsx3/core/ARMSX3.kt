@@ -203,6 +203,20 @@ class ARMSX3 {
     external fun xmbPamFrame(handle: Long, dst: java.nio.ByteBuffer): Long
 
     external fun xmbPamClose(handle: Long)
+
+    /** XMB mode's music player: a whole song Android cannot play (ALAC, AIFF, WMA) as a 16-bit
+     *  stereo WAV at [outPath]. [inPath] may be /proc/self/fd/N for a document. Slow: IO thread. */
+    external fun xmbDecodeSong(inPath: String, outPath: String): Boolean
+
+    /** XMB mode's video player for what Android cannot play (AVI, WMV, MPEG, AC3 and DTS sound):
+     *  [path] decoded by FFmpeg onto [surface] from [startMs]; a handle, or 0. */
+    external fun xmbPlayerOpen(path: String, surface: android.view.Surface, startMs: Long): Long
+
+    /** A command to an open player: 1 play, 2 pause, 3 seek to [arg] ms; or a question: 4 position,
+     *  5 duration (ms), 6 state (0 playing, 1 paused, 2 ended, 3 failed), 7 and 8 the picture's shape. */
+    external fun xmbPlayer(handle: Long, command: Int, arg: Long): Long
+
+    external fun xmbPlayerClose(handle: Long)
     // ---- RPCN ----
     //
     // All of these block on the network. Call them off the main thread.

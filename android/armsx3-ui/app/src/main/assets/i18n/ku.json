@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "Bidomîne",
  "xmb.video.playBegin": "Ji Destpêkê Bilîze",
  "xmb.video.zoom": "Mezinkirin",
- "xmb.media.unsupported": "Ev cureyê daneyê nayê piştgirîkirin."
+ "xmb.media.unsupported": "Ev cureyê daneyê nayê piştgirîkirin.",
+ "xmb.music.addFolder.desc": "Stranên peldankekê li ser vê amûrê an li ser ajokarekê lê bide, bêyî ku wan kopî bikî",
+ "xmb.music.removeFolder": "Ji Muzîkê Rake"
 }

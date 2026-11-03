@@ -1523,5 +1523,7 @@
  "xmb.video.resume": "استئناف",
  "xmb.video.playBegin": "التشغيل من البداية",
  "xmb.video.zoom": "تكبير",
- "xmb.media.unsupported": "نوع البيانات هذا غير مدعوم."
+ "xmb.media.unsupported": "نوع البيانات هذا غير مدعوم.",
+ "xmb.music.addFolder.desc": "تشغيل أغاني مجلد على هذا الجهاز أو على محرك أقراص من مكانها دون نسخها",
+ "xmb.music.removeFolder": "إزالة من الموسيقى"
 }

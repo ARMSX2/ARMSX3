@@ -10,7 +10,8 @@ import java.io.File
 /**
  * Playlists, as the console's Music and Photo columns keep them: named lists of songs or pictures,
  * in the order they were added. Kept in ARMSX3's data folder (xmb/), so they go where the music
- * and the screenshots go. Paths are stored whole; one whose file has gone is left out when read.
+ * and the screenshots go. Paths are stored whole (a song in an added folder by its content Uri);
+ * one whose file has gone is left out when read.
  */
 object XmbPlaylists {
     enum class Kind(val file: String) { Music("music-playlists.json"), Photo("photo-playlists.json") }
@@ -52,6 +53,13 @@ object XmbPlaylists {
     /** The files of [name] that are still there, in order. */
     fun files(kind: Kind, name: String): List<File> =
         state(kind).value[name].orEmpty().map(::File).filter { it.isFile }
+
+    /**
+     * The songs of [name] that are still there, in order: paths whose file is, and the songs of
+     * added folders (content Uris) that [present] still lists.
+     */
+    fun songs(name: String, present: (String) -> Boolean): List<String> =
+        music.value[name].orEmpty().filter { if (it.startsWith("content:")) present(it) else File(it).isFile }
 
     /** Add [path] to [name], making the playlist when it is new; true when it was not in it already. */
     fun add(kind: Kind, name: String, path: String): Boolean {

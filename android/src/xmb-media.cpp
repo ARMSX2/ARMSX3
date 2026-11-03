@@ -1,7 +1,10 @@
-// XMB mode's media: the console's boot sound from the user's firmware (AC3), and a game's own
-// music (SND0.AT3, ATRAC3 in a RIFF WAVE) and animated icon (ICON1.PAM, H.264 and ATRAC3plus in PAMF), decoded with
-// the FFmpeg the core already carries. Android itself has no ATRAC3 decoder and no PAMF demuxer, and
-// AC3 only on some devices.
+// XMB mode's media: the console's boot sound from the user's firmware (AC3), a game's own
+// music (SND0.AT3, ATRAC3 in a RIFF WAVE) and animated icon (ICON1.PAM, H.264 and ATRAC3plus in PAMF),
+// and the music player's songs in formats Android cannot play (ALAC, AIFF, WMA), decoded with the
+// FFmpeg the core already carries. Android itself has no ATRAC3 decoder and no PAMF demuxer, and
+// AC3 only on some devices. Video in such formats is xmb-player.cpp's.
+
+#include <android/log.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -19,6 +22,8 @@ extern "C" {
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
+
+#include "xmb-io.h"
 
 namespace {
 // Four minutes of 48 kHz stereo: far past any SND0 or the boot sound, short of a runaway file.
@@ -115,6 +120,110 @@ extern "C" bool _armsx3_xmbDecodeAudio(std::string_view in_path, std::string_vie
   av_frame_free(&frame);
   av_packet_free(&pkt);
   avformat_close_input(&fmt);
+  return ok;
+}
+
+// A whole song for the music player, in a format Android cannot play itself (ALAC, AIFF, WMA and the
+// like), as a 16-bit stereo WAV at out_path at its own sample rate. Written as it decodes, so a long
+// one never sits in memory; the sizes go into the header at the end.
+extern "C" bool _armsx3_xmbDecodeSong(std::string_view in_path, std::string_view out_path) {
+  const std::string in(in_path);
+  const std::string out(out_path);
+  AVFormatContext* fmt = nullptr;
+  const int opened = xmb_io::open_input(&fmt, in);
+  if (opened < 0) {
+    char why[128];
+    av_strerror(opened, why, sizeof(why));
+    __android_log_print(ANDROID_LOG_WARN, "ARMSX3-Xmb", "song: cannot open %s: %s", in.c_str(), why);
+    return false;
+  }
+  AVCodecContext* ctx = nullptr;
+  SwrContext* swr = nullptr;
+  AVPacket* pkt = av_packet_alloc();
+  AVFrame* frame = av_frame_alloc();
+  FILE* f = nullptr;
+  std::uint64_t bytes = 0;
+  bool ok = false;
+
+  do {
+    if (!pkt || !frame || avformat_find_stream_info(fmt, nullptr) < 0) break;
+    const int index = av_find_best_stream(fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    if (index < 0) break;
+    const AVCodec* codec = avcodec_find_decoder(fmt->streams[index]->codecpar->codec_id);
+    if (!codec) {
+      __android_log_print(ANDROID_LOG_WARN, "ARMSX3-Xmb", "song: no decoder for %s", avcodec_get_name(fmt->streams[index]->codecpar->codec_id));
+      break;
+    }
+    ctx = avcodec_alloc_context3(codec);
+    if (!ctx || avcodec_parameters_to_context(ctx, fmt->streams[index]->codecpar) < 0 ||
+        avcodec_open2(ctx, codec, nullptr) < 0) {
+      break;
+    }
+    const int rate = ctx->sample_rate;
+    if (rate <= 0 || ctx->ch_layout.nb_channels <= 0) break;
+    AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
+    if (swr_alloc_set_opts2(&swr, &stereo, AV_SAMPLE_FMT_S16, rate, &ctx->ch_layout, ctx->sample_fmt, rate, 0, nullptr) < 0 ||
+        swr_init(swr) < 0) {
+      break;
+    }
+    f = std::fopen(out.c_str(), "wb");
+    if (!f) break;
+    // The header, its two sizes filled in once the song is out.
+    const unsigned char header[44] = {'R', 'I', 'F', 'F', 0, 0, 0, 0, 'W', 'A', 'V', 'E', 'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 2, 0,
+                                      static_cast<unsigned char>(rate), static_cast<unsigned char>(rate >> 8),
+                                      static_cast<unsigned char>(rate >> 16), static_cast<unsigned char>(rate >> 24),
+                                      static_cast<unsigned char>(rate * 4), static_cast<unsigned char>((rate * 4) >> 8),
+                                      static_cast<unsigned char>((rate * 4) >> 16), static_cast<unsigned char>((rate * 4) >> 24),
+                                      4, 0, 16, 0, 'd', 'a', 't', 'a', 0, 0, 0, 0};
+    if (std::fwrite(header, 1, sizeof(header), f) != sizeof(header)) break;
+    std::vector<std::int16_t> pcm;
+    bool write_failed = false;
+    // A WAV holds under 4 GB: over six hours of CD sound, far past any song.
+    constexpr std::uint64_t kMaxBytes = 0xFFFFFFFFull - 64;
+    auto drain = [&]() {
+      while (avcodec_receive_frame(ctx, frame) == 0) {
+        const int room = swr_get_out_samples(swr, frame->nb_samples);
+        if (room > 0 && !write_failed) {
+          pcm.resize(static_cast<std::size_t>(room) * 2);
+          std::uint8_t* dst[1] = {reinterpret_cast<std::uint8_t*>(pcm.data())};
+          const int got = swr_convert(swr, dst, room, const_cast<const std::uint8_t**>(frame->extended_data), frame->nb_samples);
+          const std::size_t n = static_cast<std::size_t>(std::max(got, 0)) * 2 * sizeof(std::int16_t);
+          if (n > 0 && bytes + n < kMaxBytes) {
+            write_failed = std::fwrite(pcm.data(), 1, n, f) != n;
+            bytes += n;
+          }
+        }
+        av_frame_unref(frame);
+      }
+    };
+    while (!write_failed && av_read_frame(fmt, pkt) >= 0) {
+      if (pkt->stream_index == index) {
+        if (avcodec_send_packet(ctx, pkt) == AVERROR(EAGAIN)) {
+          drain();
+          avcodec_send_packet(ctx, pkt);
+        }
+        drain();
+      }
+      av_packet_unref(pkt);
+    }
+    avcodec_send_packet(ctx, nullptr);
+    drain();
+    if (write_failed || bytes == 0) break;
+    auto put32 = [&](long at, std::uint32_t v) {
+      const unsigned char b[4] = {static_cast<unsigned char>(v), static_cast<unsigned char>(v >> 8),
+                                  static_cast<unsigned char>(v >> 16), static_cast<unsigned char>(v >> 24)};
+      return std::fseek(f, at, SEEK_SET) == 0 && std::fwrite(b, 1, 4, f) == 4;
+    };
+    ok = put32(4, static_cast<std::uint32_t>(36 + bytes)) && put32(40, static_cast<std::uint32_t>(bytes));
+  } while (false);
+
+  if (f && std::fclose(f) != 0) ok = false;
+  if (!ok && f) std::remove(out.c_str());
+  swr_free(&swr);
+  avcodec_free_context(&ctx);
+  av_frame_free(&frame);
+  av_packet_free(&pkt);
+  xmb_io::close_input(&fmt);
   return ok;
 }
 
