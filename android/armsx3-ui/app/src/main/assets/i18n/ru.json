@@ -1524,5 +1524,10 @@
  "xmb.video.zoom": "Масштаб",
  "xmb.media.unsupported": "Этот тип данных не поддерживается.",
  "xmb.music.addFolder.desc": "Воспроизводить песни из папки на этом устройстве или на накопителе, не копируя их",
- "xmb.music.removeFolder": "Убрать из «Музыки»"
+ "xmb.music.removeFolder": "Убрать из «Музыки»",
+ "xmb.video.screenMode": "Режим экрана",
+ "xmb.video.normal": "Обычный",
+ "xmb.video.fullScreen": "Во весь экран",
+ "xmb.video.original": "Исходный",
+ "xmb.video.aspect": "Соотношение сторон"
 }

@@ -239,6 +239,9 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
     var panel by mutableStateOf<XmbNode.Panel?>(null)
     var dialog by mutableStateOf<Dialog?>(null)
 
+    /** Set by an open panel with a layer of its own: Circle goes to it first; true when it took it. */
+    var panelBack: (() -> Boolean)? = null
+
     /** Circle with nothing open: the library ignores it, the in-game menu closes. */
     var onBackAtRoot: () -> Unit = {}
 
@@ -469,7 +472,8 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
                 // applies only on Cross, so backing out is a cancel.
                 editing = null
             }
-            panel != null -> panel = null
+            // A panel with something of its own open (the video player's options) closes that first.
+            panel != null -> if (panelBack?.invoke() != true) panel = null
             levels.isNotEmpty() -> levels.removeAt(levels.lastIndex)
             else -> {
                 XmbSounds.play(XmbSounds.Sfx.CANCEL)

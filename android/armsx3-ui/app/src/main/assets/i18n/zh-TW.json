@@ -1525,5 +1525,10 @@
  "xmb.video.zoom": "縮放",
  "xmb.media.unsupported": "不支援此資料類型。",
  "xmb.music.addFolder.desc": "直接播放此裝置或磁碟機上某個資料夾中的歌曲，無需複製",
- "xmb.music.removeFolder": "從音樂中移除"
+ "xmb.music.removeFolder": "從音樂中移除",
+ "xmb.video.screenMode": "畫面模式",
+ "xmb.video.normal": "一般",
+ "xmb.video.fullScreen": "全螢幕",
+ "xmb.video.original": "原始",
+ "xmb.video.aspect": "長寬比"
 }

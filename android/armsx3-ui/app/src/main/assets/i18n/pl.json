@@ -1525,5 +1525,10 @@
  "xmb.video.zoom": "Powiększenie",
  "xmb.media.unsupported": "Ten typ danych nie jest obsługiwany.",
  "xmb.music.addFolder.desc": "Odtwarzaj utwory z folderu na tym urządzeniu lub na dysku bez kopiowania ich",
- "xmb.music.removeFolder": "Usuń z Muzyki"
+ "xmb.music.removeFolder": "Usuń z Muzyki",
+ "xmb.video.screenMode": "Tryb ekranu",
+ "xmb.video.normal": "Normalny",
+ "xmb.video.fullScreen": "Pełny ekran",
+ "xmb.video.original": "Oryginalny",
+ "xmb.video.aspect": "Proporcje obrazu"
 }

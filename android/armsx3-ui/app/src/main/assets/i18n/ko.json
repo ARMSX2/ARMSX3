@@ -1525,5 +1525,10 @@
  "xmb.video.zoom": "확대",
  "xmb.media.unsupported": "지원하지 않는 데이터 형식입니다.",
  "xmb.music.addFolder.desc": "이 기기나 드라이브에 있는 폴더의 노래를 복사하지 않고 그대로 재생합니다",
- "xmb.music.removeFolder": "음악에서 제거"
+ "xmb.music.removeFolder": "음악에서 제거",
+ "xmb.video.screenMode": "화면 모드",
+ "xmb.video.normal": "일반",
+ "xmb.video.fullScreen": "전체 화면",
+ "xmb.video.original": "원본",
+ "xmb.video.aspect": "화면 비율"
 }

@@ -1525,5 +1525,10 @@
  "xmb.video.zoom": "Zoom",
  "xmb.media.unsupported": "Dieser Datentyp wird nicht unterstützt.",
  "xmb.music.addFolder.desc": "Die Lieder eines Ordners auf diesem Gerät oder einem Laufwerk abspielen, ohne sie zu kopieren",
- "xmb.music.removeFolder": "Aus Musik entfernen"
+ "xmb.music.removeFolder": "Aus Musik entfernen",
+ "xmb.video.screenMode": "Bildschirmmodus",
+ "xmb.video.normal": "Normal",
+ "xmb.video.fullScreen": "Vollbild",
+ "xmb.video.original": "Original",
+ "xmb.video.aspect": "Seitenverhältnis"
 }

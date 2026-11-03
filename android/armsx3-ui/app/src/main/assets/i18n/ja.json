@@ -1525,5 +1525,10 @@
  "xmb.video.zoom": "ズーム",
  "xmb.media.unsupported": "このデータの種類には対応していません。",
  "xmb.music.addFolder.desc": "この端末やドライブにあるフォルダーの曲を、コピーせずにそのまま再生します",
- "xmb.music.removeFolder": "ミュージックから外す"
+ "xmb.music.removeFolder": "ミュージックから外す",
+ "xmb.video.screenMode": "画面モード",
+ "xmb.video.normal": "ノーマル",
+ "xmb.video.fullScreen": "フルスクリーン",
+ "xmb.video.original": "オリジナル",
+ "xmb.video.aspect": "アスペクト比"
 }

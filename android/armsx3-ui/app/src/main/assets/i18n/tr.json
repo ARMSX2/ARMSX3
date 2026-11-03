@@ -1525,5 +1525,10 @@
  "xmb.video.zoom": "Yakınlaştır",
  "xmb.media.unsupported": "Bu veri türü desteklenmiyor.",
  "xmb.music.addFolder.desc": "Bu cihazdaki veya bir sürücüdeki bir klasörün şarkılarını kopyalamadan çal",
- "xmb.music.removeFolder": "Müzik'ten Kaldır"
+ "xmb.music.removeFolder": "Müzik'ten Kaldır",
+ "xmb.video.screenMode": "Ekran Modu",
+ "xmb.video.normal": "Normal",
+ "xmb.video.fullScreen": "Tam Ekran",
+ "xmb.video.original": "Orijinal",
+ "xmb.video.aspect": "En Boy Oranı"
 }

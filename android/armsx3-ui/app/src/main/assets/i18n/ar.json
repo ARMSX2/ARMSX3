@@ -1525,5 +1525,10 @@
  "xmb.video.zoom": "تكبير",
  "xmb.media.unsupported": "نوع البيانات هذا غير مدعوم.",
  "xmb.music.addFolder.desc": "تشغيل أغاني مجلد على هذا الجهاز أو على محرك أقراص من مكانها دون نسخها",
- "xmb.music.removeFolder": "إزالة من الموسيقى"
+ "xmb.music.removeFolder": "إزالة من الموسيقى",
+ "xmb.video.screenMode": "وضع الشاشة",
+ "xmb.video.normal": "عادي",
+ "xmb.video.fullScreen": "ملء الشاشة",
+ "xmb.video.original": "الأصلي",
+ "xmb.video.aspect": "نسبة العرض إلى الارتفاع"
 }

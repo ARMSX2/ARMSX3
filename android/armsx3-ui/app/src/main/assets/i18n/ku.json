@@ -1525,5 +1525,10 @@
  "xmb.video.zoom": "Mezinkirin",
  "xmb.media.unsupported": "Ev cureyê daneyê nayê piştgirîkirin.",
  "xmb.music.addFolder.desc": "Stranên peldankekê li ser vê amûrê an li ser ajokarekê lê bide, bêyî ku wan kopî bikî",
- "xmb.music.removeFolder": "Ji Muzîkê Rake"
+ "xmb.music.removeFolder": "Ji Muzîkê Rake",
+ "xmb.video.screenMode": "Moda Ekranê",
+ "xmb.video.normal": "Normal",
+ "xmb.video.fullScreen": "Ekrana Tijî",
+ "xmb.video.original": "Orîjînal",
+ "xmb.video.aspect": "Rêjeya Dîmenê"
 }

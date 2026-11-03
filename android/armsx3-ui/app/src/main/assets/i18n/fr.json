@@ -1525,5 +1525,10 @@
  "xmb.video.zoom": "Zoom",
  "xmb.media.unsupported": "Ce type de données n'est pas pris en charge.",
  "xmb.music.addFolder.desc": "Lire les morceaux d'un dossier de cet appareil ou d'un lecteur, sans les copier",
- "xmb.music.removeFolder": "Retirer de Musique"
+ "xmb.music.removeFolder": "Retirer de Musique",
+ "xmb.video.screenMode": "Mode d'écran",
+ "xmb.video.normal": "Normal",
+ "xmb.video.fullScreen": "Plein écran",
+ "xmb.video.original": "Original",
+ "xmb.video.aspect": "Format d'image"
 }

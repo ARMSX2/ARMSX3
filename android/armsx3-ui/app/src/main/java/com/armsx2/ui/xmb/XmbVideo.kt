@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -54,6 +56,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.edit
@@ -143,6 +146,8 @@ object XmbMediaFormats {
 object XmbVideos {
     private const val FoldersKey = "xmb.video.folders"
     private const val ResumeKey = "xmb.video.resume"
+    private const val ScreenModeKey = "xmb.video.screenMode"
+    private const val AspectKey = "xmb.video.aspect"
 
     /**
      * A file or a folder: on disk ([file]), or in a granted folder ([tree] and its [docId]). [key]
@@ -322,6 +327,21 @@ object XmbVideos {
         MainActivityRuntime.prefs.edit { putString(ResumeKey, o.toString()) }
     }
 
+    /** The console's Screen Mode, kept for every video: 0 Normal, 1 Full Screen, 2 Zoom, 3 Original. */
+    fun screenMode(): Int = MainActivityRuntime.prefs.getInt(ScreenModeKey, 0).coerceIn(0, 3)
+
+    fun setScreenMode(mode: Int) = MainActivityRuntime.prefs.edit { putInt(ScreenModeKey, mode) }
+
+    /** A video's own Aspect Ratio: 0 its own (Auto), 1 4:3, 2 16:9, 3 21:9. */
+    fun aspectMode(key: String): Int =
+        runCatching { JSONObject(MainActivityRuntime.prefs.getString(AspectKey, "{}")).optInt(key) }.getOrDefault(0).coerceIn(0, 3)
+
+    fun setAspectMode(key: String, mode: Int) {
+        val o = runCatching { JSONObject(MainActivityRuntime.prefs.getString(AspectKey, "{}")) }.getOrDefault(JSONObject())
+        if (mode == 0) o.remove(key) else o.put(key, mode)
+        MainActivityRuntime.prefs.edit { putString(AspectKey, o.toString()) }
+    }
+
     /** Copy picked videos into the video folder; how many came in. IO thread. */
     fun import(context: Context, uris: List<Uri>): Int = uris.count { uri ->
         runCatching {
@@ -399,7 +419,7 @@ fun xmbVideoColumn(controller: XmbController, shown: Boolean = false): XmbColumn
     fun play(list: List<XmbVideos.Entry>, i: Int, fromBeginning: Boolean) {
         val e = list[i]
         controller.panel = XmbNode.Panel("video.play.${e.key}", e.title, videoIcon, fullscreen = true) { close ->
-            XmbVideoPlayer(list, i, fromBeginning, close)
+            XmbVideoPlayer(controller, list, i, fromBeginning, close)
         }
     }
 
@@ -526,13 +546,30 @@ fun xmbVideoColumn(controller: XmbController, shown: Boolean = false): XmbColumn
  * on any press and go after three seconds of playing. The music behind the XMB waits meanwhile.
  */
 @Composable
-internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginning: Boolean, @Suppress("UNUSED_PARAMETER") close: () -> Unit) {
+internal fun XmbVideoPlayer(
+    controller: XmbController,
+    list: List<XmbVideos.Entry>,
+    start: Int,
+    fromBeginning: Boolean,
+    @Suppress("UNUSED_PARAMETER") close: () -> Unit,
+) {
     val context = LocalContext.current
     val font = rememberXmbFont()
     val full = "explore_plugin_full"
     val unsupported = fw(full, "msg_error_unsupported_data", "xmb.media.unsupported")
     val noTitle = fw(full, "msg_error_no_title", "xmb.video.none")
-    val zoomWord = str("xmb.video.zoom")
+    // The console's video player's own words for its Screen Mode, and its four modes.
+    val vp = "videoplayer_plugin"
+    val screenModeWord = fw(vp, "msg_viewmode", "xmb.video.screenMode")
+    val screenModes = listOf(
+        fw(vp, "msg_normal", "xmb.video.normal"),
+        fw(vp, "msg_full_screen", "xmb.video.fullScreen"),
+        fw(vp, "msg_zoom", "xmb.video.zoom"),
+        fw(vp, "msg_original", "xmb.video.original"),
+    )
+    val aspectWord = str("xmb.video.aspect")
+    val aspects = listOf(str("common.auto"), "4:3", "16:9", "21:9")
+    val optionsWord = str("xmb.options")
     var index by remember { mutableIntStateOf(start) }
     var first by remember { mutableStateOf(fromBeginning) }
     val entry = list[index]
@@ -540,7 +577,11 @@ internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginni
     var videoH by remember { mutableIntStateOf(9) }
     var playing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var zoom by remember { mutableStateOf(false) }
+    // Screen Mode, kept for every video as the console keeps it; Aspect Ratio, kept for each video.
+    var screenMode by remember { mutableIntStateOf(XmbVideos.screenMode()) }
+    var aspectMode by remember(entry.key) { mutableIntStateOf(XmbVideos.aspectMode(entry.key)) }
+    // Triangle's options: Screen Mode and Aspect Ratio, Left and Right to change them.
+    var options by remember { mutableStateOf(false) }
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var shown by remember { mutableLongStateOf(android.os.SystemClock.uptimeMillis()) }
@@ -749,16 +790,40 @@ internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginni
         when (key) {
             XmbPanelKeys.Key.L1 -> go(-1)
             XmbPanelKeys.Key.R1 -> go(1)
+            // Square: the next Screen Mode, named for a moment as it changes.
             XmbPanelKeys.Key.Square -> {
-                zoom = !zoom
+                screenMode = (screenMode + 1) % screenModes.size
+                XmbVideos.setScreenMode(screenMode)
+                message = "$screenModeWord  ${screenModes[screenMode]}"
                 poke()
             }
         }
         true
     }
-    LaunchedEffect(Unit) {
+    fun changeScreenMode(step: Int) {
+        XmbSounds.play(XmbSounds.Sfx.CURSOR)
+        screenMode = (screenMode + step + screenModes.size) % screenModes.size
+        XmbVideos.setScreenMode(screenMode)
+    }
+    fun changeAspect(step: Int) {
+        XmbSounds.play(XmbSounds.Sfx.CURSOR)
+        aspectMode = (aspectMode + step + aspects.size) % aspects.size
+        XmbVideos.setAspectMode(entry.key, aspectMode)
+    }
+    fun openOptions(open: Boolean) {
+        XmbSounds.play(if (open) XmbSounds.Sfx.OPTION else XmbSounds.Sfx.CANCEL)
+        options = open
+        poke()
+    }
+    // Circle closes the options before it closes the video.
+    DisposableEffect(controller) {
+        controller.panelBack = { if (options) { options = false; poke(); true } else false }
+        onDispose { controller.panelBack = null }
+    }
+    LaunchedEffect(options) {
+        val id = if (options) "xmb.video.opt.screen" else "xmb.video.player"
         var tries = 0
-        while (!SettingsControllerNav.selectById("xmb.video.player") && tries++ < 10) withFrameNanos {}
+        while (!SettingsControllerNav.selectById(id) && tries++ < 10) withFrameNanos {}
     }
     // The bar hides three seconds into playing without a press; paused, it stays.
     val now by produceState(0L) { while (true) { value = android.os.SystemClock.uptimeMillis(); delay(250) } }
@@ -774,18 +839,33 @@ internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginni
                 onConfirm = ::toggle,
                 onLeft = { seekBy(-10_000) },
                 onRight = { seekBy(10_000) },
-                onSecondary = { poke() },
+                onSecondary = { openOptions(true) },
             )
+            .clipToBounds()
             .pointerInput(entry.key) {
-                detectTapGestures(onTap = { if (barShown) toggle() else poke() })
+                detectTapGestures(onTap = { if (options) openOptions(false) else if (barShown) toggle() else poke() })
             },
         contentAlignment = Alignment.Center,
     ) {
         val u = minOf(maxWidth.value / 1280f, maxHeight.value / 720f)
-        val aspect = videoW.toFloat() / videoH
+        // The picture's shape: its own, or the Aspect Ratio set for it.
+        val aspect = when (aspectMode) {
+            1 -> 4f / 3f
+            2 -> 16f / 9f
+            3 -> 21f / 9f
+            else -> videoW.toFloat() / videoH
+        }
         val screen = maxWidth.value / maxHeight.value
-        // Fit: the whole picture, bars where it is narrower or wider. Zoom: the screen filled.
-        val fitByWidth = (aspect >= screen) != zoom
+        // Normal: the whole picture, bars where it is narrower or wider. Full Screen: stretched to
+        // the screen. Zoom: the screen filled, its shape kept, the rest cut off. Original: its own
+        // pixels, one to one, in the middle.
+        val density = androidx.compose.ui.platform.LocalDensity.current.density
+        val (pictureW, pictureH) = when (screenMode) {
+            1 -> maxWidth.value to maxHeight.value
+            2 -> if (aspect >= screen) maxHeight.value * aspect to maxHeight.value else maxWidth.value to maxWidth.value / aspect
+            3 -> (videoH / density) * aspect to videoH / density
+            else -> if (aspect >= screen) maxWidth.value to maxWidth.value / aspect else maxHeight.value * aspect to maxHeight.value
+        }
         // A TextureView rather than a SurfaceView: a SurfaceView's picture is a window of its own,
         // placed apart from Compose's layout, and inside the panel's fade it sat at the screen's left
         // edge. Android's player decodes on the device's hardware, 4K included; FFmpeg's, for AVI and
@@ -811,7 +891,7 @@ internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginni
                     }
                 }
             },
-            modifier = if (fitByWidth) Modifier.fillMaxWidth().aspectRatio(aspect) else Modifier.fillMaxHeight().aspectRatio(aspect),
+            modifier = Modifier.requiredSize(pictureW.dp, pictureH.dp),
         )
 
         error?.let {
@@ -868,8 +948,51 @@ internal fun XmbVideoPlayer(list: List<XmbVideos.Entry>, start: Int, fromBeginni
                         if (list.size > 1) Text("${index + 1} / ${list.size}", style = xmbText(font, 15f * u, 0.7f), modifier = Modifier.weight(1f))
                         else Box(Modifier.weight(1f))
                         Text("□", style = xmbText(font, 15f * u).copy(color = Color(0xFFE48BD6)))
-                        Text(" $zoomWord", style = xmbText(font, 15f * u, 0.9f))
+                        Text(" $screenModeWord", style = xmbText(font, 15f * u, 0.9f))
+                        Text("    △", style = xmbText(font, 15f * u).copy(color = Color(0xFF6FD3A0)))
+                        Text(" $optionsWord", style = xmbText(font, 15f * u, 0.9f))
                     }
+                }
+            }
+        }
+
+        // Triangle's options, at the right as the console's are: each one's name over its setting,
+        // Left and Right (or Cross) to change it, Circle or Triangle to close.
+        AnimatedVisibility(options, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
+            Box(
+                Modifier.fillMaxSize().background(
+                    Brush.horizontalGradient(0.45f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.8f)),
+                ),
+            ) {
+                Column(
+                    Modifier.align(Alignment.CenterEnd).width((440f * u).dp).padding(end = (48f * u).dp),
+                    verticalArrangement = Arrangement.spacedBy((14f * u).dp),
+                ) {
+                    @Composable
+                    fun row(id: String, title: String, value: String, change: (Int) -> Unit) {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .controllerFocusable(
+                                    id,
+                                    onConfirm = { change(1) },
+                                    onLeft = { change(-1) },
+                                    onRight = { change(1) },
+                                    onSecondary = { openOptions(false) },
+                                )
+                                .pointerInput(id) { detectTapGestures { change(1) } }
+                                .padding(horizontal = (18f * u).dp, vertical = (10f * u).dp),
+                        ) {
+                            Text(title, style = xmbText(font, 16f * u, 0.75f))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("◀", style = xmbText(font, 15f * u, 0.6f))
+                                Text(value, style = xmbText(font, 22f * u), modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
+                                Text("▶", style = xmbText(font, 15f * u, 0.6f))
+                            }
+                        }
+                    }
+                    row("xmb.video.opt.screen", screenModeWord, screenModes[screenMode], ::changeScreenMode)
+                    row("xmb.video.opt.aspect", aspectWord, aspects[aspectMode], ::changeAspect)
                 }
             }
         }

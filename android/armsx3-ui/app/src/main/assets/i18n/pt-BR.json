@@ -1526,5 +1526,10 @@
  "xmb.video.zoom": "Zoom",
  "xmb.media.unsupported": "Este tipo de dado não é compatível.",
  "xmb.music.addFolder.desc": "Tocar as músicas de uma pasta deste aparelho ou de uma unidade, sem copiá-las",
- "xmb.music.removeFolder": "Remover de Música"
+ "xmb.music.removeFolder": "Remover de Música",
+ "xmb.video.screenMode": "Modo de tela",
+ "xmb.video.normal": "Normal",
+ "xmb.video.fullScreen": "Tela cheia",
+ "xmb.video.original": "Original",
+ "xmb.video.aspect": "Proporção da tela"
 }

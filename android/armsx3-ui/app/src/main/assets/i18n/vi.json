@@ -1525,5 +1525,10 @@
  "xmb.video.zoom": "Thu phóng",
  "xmb.media.unsupported": "Loại dữ liệu này không được hỗ trợ.",
  "xmb.music.addFolder.desc": "Phát các bài hát trong một thư mục trên thiết bị này hoặc trên ổ đĩa mà không cần sao chép",
- "xmb.music.removeFolder": "Gỡ khỏi Nhạc"
+ "xmb.music.removeFolder": "Gỡ khỏi Nhạc",
+ "xmb.video.screenMode": "Chế độ màn hình",
+ "xmb.video.normal": "Bình thường",
+ "xmb.video.fullScreen": "Toàn màn hình",
+ "xmb.video.original": "Gốc",
+ "xmb.video.aspect": "Tỷ lệ khung hình"
 }
