@@ -235,7 +235,8 @@ fun XmbView(
             when {
                 controller.busy || depth > 0 -> CornerHint(m, font, "\u25CB", CircleRed, back) { controller.back() }
                 node is XmbNode.Game || (node is XmbNode.Action && node.options.isNotEmpty()) ||
-                    (node is XmbNode.Setting && node.options.isNotEmpty()) -> CornerHint(
+                    (node is XmbNode.Setting && node.options.isNotEmpty()) ||
+                    (node is XmbNode.Folder && node.options.isNotEmpty()) -> CornerHint(
                     m,
                     font,
                     "\u25B3",

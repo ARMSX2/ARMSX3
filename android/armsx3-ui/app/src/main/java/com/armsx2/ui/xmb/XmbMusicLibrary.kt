@@ -79,14 +79,20 @@ object XmbMusicLibrary {
         val picture: Boolean,
     ) {
         /** Played where it is, from an added folder: not the app's to delete. */
-        val inPlace: Boolean get() = LibraryMusic.isDocument(id)
+        val inPlace: Boolean get() = !owns(id)
     }
+
+    /** A song in the music folder itself, the app's own copy, rather than one played where it is. */
+    fun owns(id: String): Boolean = !LibraryMusic.isDocument(id) && id.startsWith(folder().absolutePath + File.separator)
 
     /** [artist] is null for an album of several artists' songs (the console's Various Artists). */
     class Album(val key: String, val title: String, val artist: String?, val tracks: List<Track>, val cover: File?)
 
-    /** [looseCovers]: the pictures inside the loose songs that have one, by song. */
-    class Library(val albums: List<Album>, val loose: List<Track>, private val looseCovers: Map<String, File>) {
+    /**
+     * [looseCovers]: the covers of the loose songs that have one, by song. [chosen]: the covers
+     * given with Change Cover, by [coverKey].
+     */
+    class Library(val albums: List<Album>, val loose: List<Track>, private val looseCovers: Map<String, File>, private val chosen: Set<String>) {
         val all: List<Track> = albums.flatMap { it.tracks } + loose
         val byId: Map<String, Track> = all.associateBy { it.id }
         private val albumOf: Map<String, Album> = albums.flatMap { a -> a.tracks.map { it.id to a } }.toMap()
@@ -95,12 +101,20 @@ object XmbMusicLibrary {
         /** The cover to show for a song: its album's, else its own picture. */
         fun coverOf(id: String): File? = albumOf(id)?.cover ?: looseCovers[id]
 
+        /** Whose cover Change Cover changes for a song: its album's, all its songs', else the song's own. */
+        fun coverKey(id: String): String = albumOf(id)?.let(::albumCoverKey) ?: "song:$id"
+
+        /** Whether [key]'s cover is one given with Change Cover. */
+        fun chosen(key: String): Boolean = key in chosen
+
         /** The songs of the added folder [tree], album by album. */
         fun inFolder(tree: Uri): List<Track> {
-            val prefix = "$tree/document/"
+            val prefix = if (tree.scheme == "file") tree.path.orEmpty().trimEnd('/') + "/" else "$tree/document/"
             return all.filter { it.id.startsWith(prefix) }
         }
     }
+
+    fun albumCoverKey(a: Album) = "album:${a.key}"
 
     /** The last scan, for a screen that only looks a song up (Now Playing). */
     val library = mutableStateOf<Library?>(null)
@@ -117,6 +131,14 @@ object XmbMusicLibrary {
                 val dir = f.parentFile?.takeIf { it.absolutePath != root.absolutePath }
                 Found(f.absolutePath, f.name, dir?.absolutePath, f.length(), f.lastModified())
             }
+            .toList()
+
+    /** A folder added from ARMSX3's own browser, read directly, four folders deep. Every song keeps its folder. */
+    private fun pathSongs(dir: File): List<Found> =
+        dir.walkTopDown().maxDepth(5).onEnter { it == dir || !it.name.startsWith(".") }
+            .filter { it.isFile && it.length() > 0 && it.extension.lowercase() in AUDIO }
+            .sortedBy { it.path.lowercase() }
+            .map { f -> Found(f.absolutePath, f.name, f.parentFile?.absolutePath, f.length(), f.lastModified()) }
             .toList()
 
     /**
@@ -173,12 +195,17 @@ object XmbMusicLibrary {
         }
     }
 
-    /** Keep the grant for a picked folder and play its songs from where they are. */
+    /**
+     * Keep a picked folder and play its songs from where they are: the system picker's, by its grant,
+     * or one from ARMSX3's own browser, by its path (a file:// Uri).
+     */
     fun addFolder(context: Context, uri: Uri) {
         loadFolders()
-        runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        val path = uri.takeIf { it.scheme == "file" }?.path
+        if (path == null) runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         if (folders.value.any { it.uri == uri }) return
-        val name = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)?.name ?: uri.lastPathSegment.orEmpty()
+        val name = path?.let { File(it).name }
+            ?: androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)?.name ?: uri.lastPathSegment.orEmpty()
         folders.value = folders.value + Folder(uri, name)
         saveFolders()
     }
@@ -200,6 +227,10 @@ object XmbMusicLibrary {
         val found = ArrayList(localSongs(root))
         val images = HashMap<String, MutableList<Found>>()
         for (f in folders.value) {
+            if (f.uri.scheme == "file") {
+                f.uri.path?.let { found += pathSongs(File(it)) }
+                continue
+            }
             val top = runCatching { DocumentsContract.getTreeDocumentId(f.uri) }.getOrNull() ?: continue
             val songs = ArrayList<Found>()
             documents(context, f.uri, top, 0, songs, images)
@@ -207,7 +238,8 @@ object XmbMusicLibrary {
         }
         val index = loadIndex(context)
         var changed = false
-        val tracks = found.map { f ->
+        // A folder added inside another, or inside the music folder, lists its songs once.
+        val tracks = found.distinctBy { it.id }.map { f ->
             val known = index.optJSONObject(f.id)
             if (known != null && known.optLong("s") == f.size && known.optLong("m") == f.modified) {
                 fromJson(f, known)
@@ -234,15 +266,20 @@ object XmbMusicLibrary {
             }
             if (key == null) loose += t else groups.getOrPut(key) { ArrayList() } += t
         }
+        val chosen = chosenCovers(context)
         val albums = groups.map { (key, list) ->
             val songs = list.sortedWith(compareBy<Track>({ it.disc }, { it.number }, { it.title.lowercase() }))
             val title = songs.firstNotNullOfOrNull { it.album } ?: folderName(songs.first())
             val artists = songs.mapNotNull { it.artist }.distinct()
             val artist = songs.firstNotNullOfOrNull { it.albumArtist } ?: artists.singleOrNull()
-            Album(sha1(key), title, artist, songs, coverFor(context, songs, images))
+            val albumKey = sha1(key)
+            Album(albumKey, title, artist, songs, chosen[sha1("album:$albumKey")] ?: coverFor(context, songs, images))
         }.sortedBy { it.title.lowercase() }
-        val looseCovers = loose.filter { it.picture }.mapNotNull { t -> picture(context, t)?.let { t.id to it } }.toMap()
-        return Library(albums, loose.sortedBy { it.title.lowercase() }, looseCovers).also { library.value = it }
+        val looseCovers = loose.mapNotNull { t ->
+            (chosen[sha1("song:${t.id}")] ?: t.takeIf { it.picture }?.let { picture(context, it) })?.let { t.id to it }
+        }.toMap()
+        val chosenKeys = (albums.map(::albumCoverKey) + loose.map { "song:${it.id}" }).filterTo(HashSet()) { sha1(it) in chosen }
+        return Library(albums, loose.sortedBy { it.title.lowercase() }, looseCovers, chosenKeys).also { library.value = it }
     }
 
     /** An untagged album's name: its folder's. */
@@ -386,11 +423,38 @@ object XmbMusicLibrary {
         return save(bytes, out)
     }
 
-    private fun save(bytes: ByteArray, out: File): File? {
+    /** Covers given with Change Cover, kept with the app rather than in the cache: <key's hash>-<time>.jpg. */
+    private fun chosenDir(context: Context) = File(context.filesDir, "xmb-music-covers").apply { mkdirs() }
+
+    /** The covers given with Change Cover, by their key's hash, the newest of each. */
+    private fun chosenCovers(context: Context): Map<String, File> =
+        chosenDir(context).listFiles().orEmpty().filter { it.name.endsWith(".jpg") }
+            .groupBy { it.name.substringBefore('-') }
+            .mapValues { (_, files) -> files.maxBy { it.lastModified() } }
+
+    /**
+     * Make a picture the cover for [key] (see [Library.coverKey]: an album's, so all its songs'), kept
+     * no larger than 1024 px. Each is a file of its own, so nothing goes on showing the one before. IO thread.
+     */
+    fun setCover(context: Context, key: String, bytes: ByteArray): Boolean {
+        val id = sha1(key)
+        val dir = chosenDir(context)
+        val out = save(bytes, File(dir, "$id-${System.currentTimeMillis()}.jpg"), 1024) ?: return false
+        dir.listFiles().orEmpty().filter { it.name.startsWith("$id-") && it != out }.forEach { it.delete() }
+        return true
+    }
+
+    /** Back to the cover the songs come with. */
+    fun clearCover(context: Context, key: String) {
+        val id = sha1(key)
+        chosenDir(context).listFiles().orEmpty().filter { it.name.startsWith("$id-") }.forEach { it.delete() }
+    }
+
+    private fun save(bytes: ByteArray, out: File, largest: Int = 640): File? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         var sample = 1
-        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 640) sample *= 2
+        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= largest) sample *= 2
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
             ?: return null
         return runCatching {
@@ -401,17 +465,134 @@ object XmbMusicLibrary {
         }.getOrNull().also { bitmap.recycle() }
     }
 
-    /** Copy picked files into the folder; how many came in. IO thread. */
-    fun import(context: Context, uris: List<Uri>): Int = uris.count { uri ->
-        runCatching {
-            val name = androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)?.name
-                ?.replace('/', '_')?.takeIf { it.isNotBlank() } ?: "track-${System.currentTimeMillis()}.mp3"
+    /** Copy picked songs into the folder, and unpack a picked .zip there as an album; how many songs came in. IO thread. */
+    fun import(context: Context, uris: List<Uri>): Int = uris.sumOf { uri ->
+        val picked = runCatching { androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)?.name }.getOrNull()
+        if (picked != null && picked.endsWith(".zip", ignoreCase = true)) {
+            return@sumOf importZip(picked, null) { context.contentResolver.openInputStream(uri) }
+        }
+        val copied = runCatching {
+            val name = picked?.replace('/', '_')?.takeIf { it.isNotBlank() } ?: "track-${System.currentTimeMillis()}.mp3"
             var target = File(folder(), name)
             var n = 1
             while (target.exists()) target = File(folder(), "${name.substringBeforeLast('.')} (${n++}).${name.substringAfterLast('.', "mp3")}")
             context.contentResolver.openInputStream(uri)?.use { ins -> target.outputStream().use { ins.copyTo(it) } } != null &&
                 target.length() > 0
         }.getOrDefault(false)
+        if (copied) 1 else 0
+    }
+
+    /**
+     * Unpack a .zip of an album (or a few) into the music folder, under the zip's name: its songs and
+     * pictures in their folders, a folder the whole zip sits in opened out. Names are read as UTF-8,
+     * and again as the old DOS code page when that cannot read them. [file] is read through its
+     * index, a picked document as a stream from [open]. How many songs came in. IO thread.
+     */
+    fun importZip(name: String, file: File?, open: () -> java.io.InputStream?): Int {
+        val base = name.substringBeforeLast('.').replace('/', '_').trim().ifEmpty { "Album" }
+        val dos = runCatching { java.nio.charset.Charset.forName("IBM437") }.getOrDefault(Charsets.ISO_8859_1)
+        for (charset in listOf(Charsets.UTF_8, dos)) {
+            var target = File(folder(), base)
+            var n = 1
+            while (target.exists()) target = File(folder(), "$base (${n++})")
+            var songs = 0
+            val read = runCatching {
+                eachInZip(file, open, charset) { entry, ins ->
+                    val parts = zipPath(entry) ?: return@eachInZip
+                    val out = File(target, parts.joinToString(File.separator))
+                    out.parentFile?.mkdirs()
+                    try {
+                        out.outputStream().use { ins.copyTo(it) }
+                    } catch (e: java.io.IOException) {
+                        out.delete()
+                        throw e
+                    }
+                    if (out.length() == 0L) out.delete() else if (out.extension.lowercase() in AUDIO) songs++
+                }
+            }
+            // A name UTF-8 cannot read stops it (ZipFile reports it as a bad entry): all of it again in the other.
+            if (charset == Charsets.UTF_8 && read.isFailure) {
+                target.deleteRecursively()
+                continue
+            }
+            if (songs == 0) {
+                target.deleteRecursively()
+                return 0
+            }
+            openOut(target)
+            return songs
+        }
+        return 0
+    }
+
+    /** A zip entry's folders and name under the album; null for one left out: outside it, hidden, or neither a song nor a picture. */
+    private fun zipPath(entry: String): List<String>? {
+        val parts = entry.replace('\\', '/').split('/').filter { it.isNotEmpty() && it != "." }
+        if (parts.isEmpty() || parts.size > 5 || parts.any { it == ".." || it.startsWith(".") || it == "__MACOSX" }) return null
+        val ext = parts.last().substringAfterLast('.', "").lowercase()
+        return parts.takeIf { ext in AUDIO || ext in IMAGES }
+    }
+
+    private fun eachInZip(file: File?, open: () -> java.io.InputStream?, charset: java.nio.charset.Charset, each: (String, java.io.InputStream) -> Unit) {
+        if (file != null) {
+            java.util.zip.ZipFile(file, charset).use { zip ->
+                for (e in zip.entries()) if (!e.isDirectory) zip.getInputStream(e).use { each(e.name, it) }
+            }
+            return
+        }
+        java.util.zip.ZipInputStream((open() ?: throw java.io.FileNotFoundException()).buffered(), charset).use { zip ->
+            while (true) {
+                val e = zip.nextEntry ?: break
+                if (!e.isDirectory) each(e.name, zip)
+            }
+        }
+    }
+
+    /** An album unpacked into [dir] that sits in one folder of its own: that folder's contents moved up into [dir]. */
+    private fun openOut(dir: File) {
+        val only = dir.listFiles()?.singleOrNull()?.takeIf { it.isDirectory } ?: return
+        val moved = File(dir, ".unpacking")
+        if (!only.renameTo(moved)) return
+        moved.listFiles().orEmpty().forEach { it.renameTo(File(dir, it.name)) }
+        moved.delete()
+    }
+
+    /** Copy a folder from ARMSX3's own browser in, as [importFolder] does a picked one. How many songs came in. IO thread. */
+    fun importDir(dir: File): Int {
+        val root = folder()
+        // Not the music folder into itself.
+        if (root.canonicalPath == dir.canonicalPath || root.canonicalPath.startsWith(dir.canonicalPath + File.separator)) return 0
+        val name = dir.name.ifBlank { "Album" }
+        var target = File(root, name)
+        var n = 1
+        while (target.exists()) target = File(root, "$name (${n++})")
+        val songs = copyDir(dir, target, 0)
+        if (songs == 0) target.deleteRecursively()
+        return songs
+    }
+
+    private fun copyDir(dir: File, target: File, depth: Int): Int {
+        if (depth > 3) return 0
+        var songs = 0
+        for (f in dir.listFiles().orEmpty()) {
+            if (f.name.startsWith(".")) continue
+            if (f.isDirectory) {
+                songs += copyDir(f, File(target, f.name), depth + 1)
+                continue
+            }
+            val ext = f.extension.lowercase()
+            val song = ext in AUDIO
+            if (!song && ext !in IMAGES) continue
+            target.mkdirs()
+            val out = File(target, f.name)
+            val ok = runCatching { f.inputStream().use { ins -> out.outputStream().use { ins.copyTo(it) } } }.isSuccess
+            if (ok && out.length() > 0) {
+                if (song) songs++
+            } else {
+                out.delete()
+            }
+        }
+        return songs
     }
 
     /**

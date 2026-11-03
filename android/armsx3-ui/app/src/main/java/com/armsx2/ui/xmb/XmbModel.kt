@@ -92,6 +92,8 @@ sealed class XmbNode(val key: String, val title: String, val icon: XmbIcon) {
          * preview: given the keys of the focused item and of the open lists, innermost first.
          */
         val aside: (@Composable (keys: List<String>) -> Unit)? = null,
+        /** What Triangle offers on it (an album's Change Cover). */
+        val options: List<XmbOption> = emptyList(),
         val children: () -> List<XmbNode>,
     ) : XmbNode(key, title, icon) {
         override val subtitle: String? get() = sub
@@ -144,7 +146,7 @@ sealed class XmbNode(val key: String, val title: String, val icon: XmbIcon) {
 /** The same item under another icon. */
 internal fun XmbNode.withIcon(icon: XmbIcon): XmbNode = when (this) {
     is XmbNode.Action -> XmbNode.Action(key, title, icon, subtitle, options, meter, onConfirm)
-    is XmbNode.Folder -> XmbNode.Folder(key, title, icon, subtitle, live, host, aside, children)
+    is XmbNode.Folder -> XmbNode.Folder(key, title, icon, subtitle, live, host, aside, options, children)
     is XmbNode.Panel -> XmbNode.Panel(key, title, icon, subtitle, fullscreen, content)
     is XmbNode.Setting -> XmbNode.Setting(key, title, icon, editor, value, description, changed, options)
     is XmbNode.Game -> this
@@ -499,6 +501,12 @@ class XmbController(initialColumn: String? = null, initialFocus: Map<String, Int
                 XmbSounds.play(XmbSounds.Sfx.ERROR)
             }
             is XmbNode.Setting -> if (node.options.isNotEmpty()) {
+                XmbSounds.play(XmbSounds.Sfx.OPTION)
+                options = Options(node.title, node.options)
+            } else {
+                XmbSounds.play(XmbSounds.Sfx.ERROR)
+            }
+            is XmbNode.Folder -> if (node.options.isNotEmpty()) {
                 XmbSounds.play(XmbSounds.Sfx.OPTION)
                 options = Options(node.title, node.options)
             } else {
