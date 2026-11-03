@@ -35,8 +35,10 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 
-// Pictures decoded ahead of the one showing.
+// Pictures decoded ahead of the one showing, and how many while the sound runs low: then the
+// decoder reads on to sound stored behind the pictures in the file.
 constexpr std::size_t kMaxFrames = 4;
+constexpr std::size_t kMaxFramesLowSound = 24;
 // Pictures bigger than this are scaled down to it: software decoding is for the formats the
 // device cannot play itself, which come no bigger than DVDs and 1080p.
 constexpr int kMaxWidth = 1920;
@@ -120,33 +122,42 @@ struct Player {
   std::atomic<bool> quit{false};
   std::atomic<bool> paused{false};
   std::atomic<bool> eof{false};
-  std::atomic<bool> failed{false};
+  std::atomic<bool> failed{false};  // the file stopped being readable partway (its drive taken out)
   std::atomic<std::int64_t> seek_to{-1};
   std::atomic<std::int64_t> shown{0};  // the last picture's time, ms
 
-  // The sound's clock: frame `base_frame` of the ring is at `base_pts` ms.
-  std::atomic<bool> base_set{false};
-  std::atomic<std::uint64_t> base_frame{0};
-  std::atomic<std::int64_t> base_pts{0};
-  std::int64_t latency = 0;  // ms of sound queued in AAudio past the ring
-  // The sound has run out before the picture (a soundtrack a little short): the wall clock goes on.
-  std::atomic<bool> sound_done{false};
+  // The sound stream: started and paused by the app, and opened again by the decoder when the
+  // device it played on goes (headphones out, a Bluetooth headset in). One of them at a time.
+  std::mutex audio_m;
+  std::atomic<bool> audio_lost{false};
+  std::atomic<bool> sound{false};        // a stream is playing the ring
+  std::atomic<std::int64_t> latency{0};  // ms of sound queued in AAudio past the ring
 
-  // The wall clock, with no sound: `wall_pts` ms at `wall_at`, or held at `wall_pts` while paused.
+  // The sound's clock: frame `base_frame` of the ring is at `base_pts` ms. Set by the first sound
+  // after a start or a seek, and again by the first after the ring ran dry.
+  std::mutex base_m;
+  bool base_set = false;
+  std::uint64_t base_frame = 0;
+  std::int64_t base_pts = 0;
+
+  // The wall clock: `wall_pts` ms at `wall_at`, or held at `wall_pts` while paused.
   std::mutex wall_m;
   Clock::time_point wall_at = Clock::now();
   std::int64_t wall_pts = 0;
 
+  // The time, ms: the sound's while sound is coming out, else the wall clock's, which follows the
+  // sound and goes on from it. So the picture moves before the sound starts, through a gap in it
+  // and past its end, rather than waiting on a clock that has stopped.
   std::int64_t clock() {
-    if (stream != nullptr && !sound_done.load()) {
-      if (!base_set.load()) return shown.load();
-      const std::uint64_t consumed = ring.tail.load() - base_frame.load();
-      const std::int64_t t = base_pts.load() + static_cast<std::int64_t>(consumed * 1000 / static_cast<std::uint64_t>(rate)) - latency;
-      if (eof.load() && ring.used() == 0) {
-        set_wall(t + latency);
-        sound_done.store(true);
+    {
+      std::unique_lock lock(base_m);
+      if (base_set && ring.used() > 0) {
+        const auto consumed = static_cast<std::int64_t>(ring.tail.load() - base_frame);
+        const std::int64_t t = base_pts + std::max<std::int64_t>(consumed, 0) * 1000 / rate - latency.load();
+        lock.unlock();
+        set_wall(t);
+        return t;
       }
-      return t;
     }
     std::lock_guard lock(wall_m);
     if (paused.load()) return wall_pts;
@@ -157,6 +168,11 @@ struct Player {
     std::lock_guard lock(wall_m);
     wall_pts = pts;
     wall_at = Clock::now();
+  }
+
+  // How many pictures the decoder may hold ahead: more while under half a second of sound waits.
+  std::size_t room() const {
+    return sound.load() && ring.used() < static_cast<std::uint64_t>(rate) / 2 ? kMaxFramesLowSound : kMaxFrames;
   }
 };
 
@@ -174,13 +190,22 @@ std::int64_t frame_ms(const Player* p, const AVFrame* f, int index) {
 aaudio_data_callback_result_t on_audio(AAudioStream*, void* user, void* data, int32_t frames) {
   auto* p = static_cast<Player*>(user);
   auto* out = static_cast<std::int16_t*>(data);
-  const std::uint64_t got = p->paused.load() ? 0 : p->ring.read(out, static_cast<std::uint64_t>(frames));
+  const std::uint64_t got = p->paused.load() || p->quit.load() ? 0 : p->ring.read(out, static_cast<std::uint64_t>(frames));
   if (got < static_cast<std::uint64_t>(frames)) {
     std::memset(out + got * 2, 0, (static_cast<std::uint64_t>(frames) - got) * 2 * sizeof(std::int16_t));
   }
   return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
+// The device the sound played on went (headphones out, a Bluetooth headset in or out) and the stream
+// with it. AAudio's thread may not open it again: the decoder does (revive_audio).
+void on_audio_error(AAudioStream*, void* user, aaudio_result_t) {
+  auto* p = static_cast<Player*>(user);
+  p->audio_lost.store(true);
+  p->cv.notify_all();
+}
+
+// With audio_m held, or before the threads start.
 void close_audio(Player* p) {
   if (p->stream == nullptr) return;
   AAudioStream_requestStop(p->stream);
@@ -188,25 +213,44 @@ void close_audio(Player* p) {
   p->stream = nullptr;
 }
 
-bool open_audio(Player* p) {
+// A stream asked for `rate`: the rate AAudio gave it, 0 for none. With audio_m held, or before the
+// threads start.
+int open_audio(Player* p, int rate) {
   AAudioStreamBuilder* b = nullptr;
-  if (AAudio_createStreamBuilder(&b) != AAUDIO_OK) return false;
+  if (AAudio_createStreamBuilder(&b) != AAUDIO_OK) return 0;
   AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_I16);
   AAudioStreamBuilder_setChannelCount(b, 2);
-  AAudioStreamBuilder_setSampleRate(b, p->rate);
+  AAudioStreamBuilder_setSampleRate(b, rate);
   AAudioStreamBuilder_setUsage(b, AAUDIO_USAGE_MEDIA);
   AAudioStreamBuilder_setContentType(b, AAUDIO_CONTENT_TYPE_MOVIE);
   AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_POWER_SAVING);
   AAudioStreamBuilder_setDataCallback(b, on_audio, p);
+  AAudioStreamBuilder_setErrorCallback(b, on_audio_error, p);
   const bool ok = AAudioStreamBuilder_openStream(b, &p->stream) == AAUDIO_OK;
   AAudioStreamBuilder_delete(b);
   if (!ok) {
     p->stream = nullptr;
-    return false;
+    return 0;
   }
-  p->rate = AAudioStream_getSampleRate(p->stream);
-  p->latency = static_cast<std::int64_t>(AAudioStream_getBufferSizeInFrames(p->stream)) * 1000 / std::max(p->rate, 1);
-  return true;
+  const int got = AAudioStream_getSampleRate(p->stream);
+  p->latency.store(static_cast<std::int64_t>(AAudioStream_getBufferSizeInFrames(p->stream)) * 1000 / std::max(got, 1));
+  return got;
+}
+
+// A lost stream opened again on whatever plays now, by the decoder (never AAudio's own thread). One
+// that will not open at the same rate is given up: the picture goes on alone, on the wall clock.
+void revive_audio(Player* p) {
+  if (!p->audio_lost.exchange(false)) return;
+  std::lock_guard lock(p->audio_m);
+  if (p->stream == nullptr || p->quit.load()) return;
+  close_audio(p);
+  if (open_audio(p, p->rate) == p->rate) {
+    if (!p->paused.load()) AAudioStream_requestStart(p->stream);
+    return;
+  }
+  close_audio(p);
+  p->sound.store(false);
+  p->ring.tail.store(p->ring.head.load());
 }
 
 // The picture onto the surface, scaled and converted to RGBA.
@@ -264,6 +308,7 @@ void present(Player* p) {
 
 // Sound for the ring, at the stream's rate, 16-bit stereo; frames before `skip` ms dropped.
 void push_audio(Player* p, AVFrame* f, std::int64_t skip) {
+  if (!p->sound.load()) return;
   const std::int64_t pts = frame_ms(p, f, p->audio_index);
   const int room = swr_get_out_samples(p->swr, f->nb_samples);
   if (room <= 0) return;
@@ -279,17 +324,27 @@ void push_audio(Player* p, AVFrame* f, std::int64_t skip) {
     first = cut;
     count -= cut;
   }
-  if (!p->base_set.load()) {
-    p->base_frame.store(p->ring.head.load());
-    p->base_pts.store(pts == AV_NOPTS_VALUE ? skip : pts + static_cast<std::int64_t>(first * 1000 / static_cast<std::uint64_t>(p->rate)));
-    p->base_set.store(true);
+  {
+    // The first sound after a start or a seek sets the clock, and so does the first after the ring
+    // ran dry, at its own time: a gap in the sound, or sound stored late in the file, does not
+    // leave the clock behind.
+    std::lock_guard lock(p->base_m);
+    if (!p->base_set || (p->ring.used() == 0 && pts != AV_NOPTS_VALUE)) {
+      p->base_frame = p->ring.head.load();
+      p->base_pts = pts == AV_NOPTS_VALUE ? skip : pts + static_cast<std::int64_t>(first * 1000 / static_cast<std::uint64_t>(p->rate));
+      p->base_set = true;
+    }
   }
   const std::int16_t* src = pcm.data() + first * 2;
-  while (count > 0 && !p->quit.load() && p->seek_to.load() < 0) {
+  while (count > 0 && !p->quit.load() && p->seek_to.load() < 0 && p->sound.load()) {
     const std::uint64_t wrote = p->ring.write(src, count);
     src += wrote * 2;
     count -= wrote;
-    if (count > 0) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    if (count > 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      // A full ring waits on a stream that may have gone.
+      revive_audio(p);
+    }
   }
 }
 
@@ -300,7 +355,18 @@ void push_picture(Player* p, AVFrame* f, std::int64_t skip) {
   AVFrame* keep = av_frame_clone(f);
   if (keep == nullptr) return;
   std::unique_lock lock(p->m);
-  p->cv.wait(lock, [&] { return p->quit.load() || p->seek_to.load() >= 0 || p->pictures.size() < kMaxFrames; });
+  while (!p->quit.load() && p->seek_to.load() < 0 && p->pictures.size() >= p->room()) {
+    if (p->audio_lost.load()) {
+      // The clock may be waiting on a stream that has gone: opened again here too.
+      lock.unlock();
+      revive_audio(p);
+      lock.lock();
+      continue;
+    }
+    // Woken by a picture shown, a seek or the end, and looked at again now and then: room()
+    // changes with the sound's level, which says nothing when it does.
+    p->cv.wait_for(lock, std::chrono::milliseconds(20));
+  }
   if (p->quit.load() || p->seek_to.load() >= 0) {
     av_frame_free(&keep);
     return;
@@ -322,23 +388,28 @@ void decode(Player* p) {
   AVFrame* f = av_frame_alloc();
   std::int64_t skip = 0;
   while (!p->quit.load()) {
+    revive_audio(p);
     const std::int64_t target = p->seek_to.exchange(-1);
     if (target >= 0) {
       // Silence and empty everything, go to the key frame before, and decode on to the time.
-      const bool was_paused = p->paused.load();
-      if (p->stream != nullptr) {
-        AAudioStream_requestPause(p->stream);
-        aaudio_stream_state_t next = AAUDIO_STREAM_STATE_UNINITIALIZED;
-        AAudioStream_waitForStateChange(p->stream, AAUDIO_STREAM_STATE_PAUSING, &next, 200'000'000);
-        AAudioStream_requestFlush(p->stream);
+      {
+        std::lock_guard lock(p->audio_m);
+        if (p->stream != nullptr) {
+          AAudioStream_requestPause(p->stream);
+          aaudio_stream_state_t next = AAUDIO_STREAM_STATE_UNINITIALIZED;
+          AAudioStream_waitForStateChange(p->stream, AAUDIO_STREAM_STATE_PAUSING, &next, 200'000'000);
+          AAudioStream_requestFlush(p->stream);
+        }
       }
       {
         std::lock_guard lock(p->m);
         clear_pictures(p);
       }
       p->ring.tail.store(p->ring.head.load());
-      p->base_set.store(false);
-      p->sound_done.store(false);
+      {
+        std::lock_guard lock(p->base_m);
+        p->base_set = false;
+      }
       av_seek_frame(p->fmt, -1, av_rescale(target + p->start, AV_TIME_BASE, 1000), AVSEEK_FLAG_BACKWARD);
       if (p->video) avcodec_flush_buffers(p->video);
       if (p->audio) avcodec_flush_buffers(p->audio);
@@ -346,7 +417,11 @@ void decode(Player* p) {
       p->shown.store(target);
       p->set_wall(target);
       p->eof.store(false);
-      if (p->stream != nullptr && !was_paused) AAudioStream_requestStart(p->stream);
+      p->failed.store(false);
+      {
+        std::lock_guard lock(p->audio_m);
+        if (p->stream != nullptr && !p->paused.load()) AAudioStream_requestStart(p->stream);
+      }
       p->cv.notify_all();
     }
     if (p->eof.load()) {
@@ -355,6 +430,17 @@ void decode(Player* p) {
       continue;
     }
     const int read = av_read_frame(p->fmt, pkt);
+    if (read == AVERROR(EAGAIN)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      continue;
+    }
+    if (read < 0 && p->fmt->pb != nullptr && p->fmt->pb->error < 0) {
+      // Not the end: the file stopped being readable (its drive taken out, its provider gone). The
+      // app hears it as failed and keeps the film's place.
+      p->failed.store(true);
+      p->eof.store(true);
+      continue;
+    }
     if (read < 0) {
       // The end: what the decoders still hold comes out, then nothing more.
       for (AVCodecContext* ctx : {p->video, p->audio}) {
@@ -398,9 +484,17 @@ AVCodecContext* open_codec(AVStream* s, bool threads) {
 void destroy(Player* p) {
   p->quit.store(true);
   p->cv.notify_all();
-  if (p->decoder.joinable()) p->decoder.join();
+  {
+    // Quiet at once: the decoder can take a moment to stop (a read from a slow drive).
+    std::lock_guard lock(p->audio_m);
+    if (p->stream != nullptr) AAudioStream_requestStop(p->stream);
+  }
   if (p->presenter.joinable()) p->presenter.join();
-  close_audio(p);
+  if (p->decoder.joinable()) p->decoder.join();
+  {
+    std::lock_guard lock(p->audio_m);
+    close_audio(p);
+  }
   clear_pictures(p);
   sws_freeContext(p->sws);
   swr_free(&p->swr);
@@ -454,7 +548,9 @@ extern "C" std::int64_t _armsx3_xmbPlayerOpen(std::string_view path, ANativeWind
     const int source = p->audio->sample_rate;
     p->rate = source >= 8000 && source <= 48000 ? source : 48000;
     AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
-    const bool ok = open_audio(p) &&
+    const int given = open_audio(p, p->rate);
+    if (given > 0) p->rate = given;
+    const bool ok = given > 0 &&
                     swr_alloc_set_opts2(&p->swr, &stereo, AV_SAMPLE_FMT_S16, p->rate, &p->audio->ch_layout, p->audio->sample_fmt, source, 0, nullptr) >= 0 &&
                     swr_init(p->swr) >= 0;
     if (!ok) {
@@ -467,6 +563,7 @@ extern "C" std::int64_t _armsx3_xmbPlayerOpen(std::string_view path, ANativeWind
   }
   if (p->stream != nullptr) {
     p->ring.data.assign(static_cast<std::size_t>(p->rate) * 2, 0);  // a second of sound
+    p->sound.store(true);
     AAudioStream_requestStart(p->stream);
   }
   if (start_ms > 0) p->seek_to.store(start_ms);
@@ -485,7 +582,10 @@ extern "C" std::int64_t _armsx3_xmbPlayer(std::int64_t handle, std::int32_t comm
         // The time held while paused, going on from now.
         p->set_wall(p->clock());
         p->paused.store(false);
-        if (p->stream != nullptr) AAudioStream_requestStart(p->stream);
+        {
+          std::lock_guard lock(p->audio_m);
+          if (p->stream != nullptr) AAudioStream_requestStart(p->stream);
+        }
         p->cv.notify_all();
       }
       return 0;
@@ -493,6 +593,7 @@ extern "C" std::int64_t _armsx3_xmbPlayer(std::int64_t handle, std::int32_t comm
       if (!p->paused.load()) {
         p->set_wall(p->clock());
         p->paused.store(true);
+        std::lock_guard lock(p->audio_m);
         if (p->stream != nullptr) AAudioStream_requestPause(p->stream);
       }
       return 0;

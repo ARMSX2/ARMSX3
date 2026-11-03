@@ -935,7 +935,10 @@ internal fun XmbVideoPlayer(
                     val now = core().xmbPlayer(handle, 4, 0)
                     if (core().xmbPlayer(handle, 6, 0) != 2L && duration > 0) XmbVideos.saveResume(entry.key, now, duration)
                 }
-                core().xmbPlayerClose(handle)
+                // Closed off the main thread: it waits for the decoder, which can be inside a read
+                // from a slow drive. Its sound goes quiet at once.
+                val closing = handle
+                Thread({ core().xmbPlayerClose(closing) }, "xmb-video-close").start()
             }
             runCatching { pfd?.close() }
         }
@@ -948,9 +951,16 @@ internal fun XmbVideoPlayer(
             val h = ff[0]
             if (h != 0L) {
                 position = core().xmbPlayer(h, 4, 0).coerceAtLeast(0)
-                if (playing && core().xmbPlayer(h, 6, 0) == 2L) {
+                val state = core().xmbPlayer(h, 6, 0)
+                if (playing && state == 2L) {
                     playing = false
                     XmbVideos.saveResume(entry.key, 0, 0)
+                    poke()
+                } else if (playing && state == 3L) {
+                    // The file stopped being readable partway (its drive taken out): held where it
+                    // was, and the place kept.
+                    playing = false
+                    if (duration > 0) XmbVideos.saveResume(entry.key, position, duration)
                     poke()
                 }
             } else {
@@ -976,8 +986,12 @@ internal fun XmbVideoPlayer(
     fun playNow() {
         val h = ff[0]
         if (h != 0L) {
-            // At the end, Cross plays it again from the start.
-            if (core().xmbPlayer(h, 6, 0) == 2L) core().xmbPlayer(h, 3, 0)
+            // At the end, Cross plays it again from the start; after a failed read, from where it
+            // stopped, reading again.
+            when (core().xmbPlayer(h, 6, 0)) {
+                2L -> core().xmbPlayer(h, 3, 0)
+                3L -> core().xmbPlayer(h, 3, position)
+            }
             core().xmbPlayer(h, 1, 0)
         } else {
             runCatching { player.start() }

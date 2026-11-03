@@ -313,7 +313,7 @@ internal class XmbGaiaView(context: Context) : TextureView(context), TextureView
         fun finish() { running = false; LockSupport.unpark(this); runCatching { join(500) } }
 
         override fun run() {
-            if (!initEgl()) return
+            if (!initEgl()) { teardown(); return }
             val ok = runCatching { initGl() }.onFailure { Log.w(TAG, "GL init failed", it) }.isSuccess
             if (!ok) { teardown(); return }
             var last = System.nanoTime()

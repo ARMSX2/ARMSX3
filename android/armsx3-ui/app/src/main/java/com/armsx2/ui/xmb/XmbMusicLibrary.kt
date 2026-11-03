@@ -457,12 +457,13 @@ object XmbMusicLibrary {
         while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= largest) sample *= 2
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
             ?: return null
-        return runCatching {
-            val tmp = File(out.path + ".tmp")
-            tmp.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 88, it) }
-            tmp.renameTo(out)
-            out
-        }.getOrNull().also { bitmap.recycle() }
+        val tmp = File(out.path + ".tmp")
+        val saved = runCatching {
+            tmp.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 88, it) } && tmp.renameTo(out)
+        }.getOrDefault(false)
+        bitmap.recycle()
+        if (!saved) tmp.delete()
+        return out.takeIf { saved }
     }
 
     /** Copy picked songs into the folder, and unpack a picked .zip there as an album; how many songs came in. IO thread. */
@@ -522,10 +523,14 @@ object XmbMusicLibrary {
                     if (out.length() == 0L) out.delete() else if (out.extension.lowercase() in AUDIO) songs++
                 }
             }
-            // A name UTF-8 cannot read stops it (ZipFile reports it as a bad entry): all of it again in the other.
-            if (charset == Charsets.UTF_8 && read.isFailure) {
+            if (read.isFailure) {
                 target.deleteRecursively()
-                continue
+                // A name UTF-8 cannot read stops it (ZipFile refuses the index, ZipInputStream the
+                // entry): all of it again in the other. Anything else (storage full, a zip cut short)
+                // fails the import whole, rather than leaving half an album.
+                val e = read.exceptionOrNull()
+                if (charset == Charsets.UTF_8 && (e is IllegalArgumentException || e is java.util.zip.ZipException)) continue
+                return 0
             }
             if (songs == 0) {
                 target.deleteRecursively()

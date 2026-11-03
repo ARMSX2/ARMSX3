@@ -260,6 +260,9 @@ object LibraryMusic {
     // the WAV: straight away for a container it cannot read (AIFF, WMA), after Android's own player
     // fails for one it reads but cannot decode (ALAC in an M4A). One neither can play is skipped.
     private val decoding = java.util.Collections.synchronizedSet(HashSet<String>())
+    // Each song's WAV once decodeThenPlay has it, for start() to find without asking the song's
+    // provider (a document's size and date) on the main thread.
+    private val decodedWavs = java.util.concurrent.ConcurrentHashMap<String, File>()
     private val unplayable = java.util.Collections.synchronizedSet(HashSet<String>())
 
     private fun decodeThenPlay(context: Context, song: String) {
@@ -270,7 +273,9 @@ object LibraryMusic {
         }
         if (!decoding.add(song)) return
         Thread({
-            val ok = com.armsx2.ui.xmb.XmbDecodedSongs.decode(app, song) != null
+            val wav = com.armsx2.ui.xmb.XmbDecodedSongs.decode(app, song)
+            if (wav != null) decodedWavs[song] = wav
+            val ok = wav != null
             decoding.remove(song)
             android.os.Handler(android.os.Looper.getMainLooper()).post {
                 if (!ok) unplayable += song
@@ -478,7 +483,7 @@ object LibraryMusic {
         if (player != null) { resume(); return }
         val list = queue.value
         val song = list.getOrNull(queueIndex.intValue.coerceIn(0, (list.size - 1).coerceAtLeast(0)))
-        val decoded = song?.let { com.armsx2.ui.xmb.XmbDecodedSongs.decoded(context, it) }
+        val decoded = song?.let { s -> decodedWavs[s]?.takeIf { it.isFile } }
         if (song != null && decoded == null && com.armsx2.ui.xmb.XmbMediaFormats.ffmpegOnly(songName(song))) {
             decodeThenPlay(context, song)
             return
