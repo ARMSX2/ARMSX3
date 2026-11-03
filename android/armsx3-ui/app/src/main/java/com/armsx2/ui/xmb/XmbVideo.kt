@@ -1138,6 +1138,10 @@ internal fun XmbVideoPlayer(
             factory = { ctx ->
                 android.view.TextureView(ctx).apply {
                     keepScreenOn = true
+                    // Drawn over the player's black rather than copied in: a shader's last pass may
+                    // leave its alpha unwritten (koko-aio's does), and a copied alpha of 0 shows on
+                    // the screen but comes out black in a screenshot of a wide-colour display.
+                    isOpaque = false
                     surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
                         override fun onSurfaceTextureAvailable(texture: android.graphics.SurfaceTexture, width: Int, height: Int) {
                             val s = android.view.Surface(texture)
