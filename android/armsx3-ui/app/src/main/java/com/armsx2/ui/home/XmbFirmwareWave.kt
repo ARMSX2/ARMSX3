@@ -7,15 +7,27 @@ import com.armsx2.ui.xmb.XmbWaveModel
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import java.util.TimeZone
+import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.floor
+import kotlin.math.max
 
 /**
  * XMB mode's wave on the GPU: XmbWaveModel's 19x19 control points tessellated into the console's
  * 128x128 grid and lit as its lines shader lights them (spurs/moyou/spline.elf, lib/moyou/lines1),
  * the light added up off screen and then laid over the background in the line colour, as
  * LinesController does. Lives on XmbGlView's render thread, in its GL context.
+ *
+ * With a [mood] (lines.qrc override/<name>, the music player's "music_1") it draws the whole
+ * picture the way that mood does: its own sky (lib/moyou/back_colours1 under BACKGROUND colours
+ * 1 and 2), the lines in colours 3 and 4, the HDR.mnu exposure, and the console's glare: the
+ * bright part taken down to 128x64 and five smaller sizes, each blurred by a gaussian per colour
+ * and added back up by GLARE SUM POW (the passes and their weights as an RSX capture of the
+ * console's XMB showed them, glutils GlareSource, Gaussian, AccGlare and ToneApplyDisplay).
  */
-internal class XmbFirmwareWave(context: Context) {
-    private val model = XmbWaveModel(loadState(context))
+internal class XmbFirmwareWave(context: Context, private val mood: XmbWaveFirmware.Mood? = null) {
+    private val model = XmbWaveModel(loadState(context), mood?.line ?: XmbWaveFirmware.line)
     private val ctrl = FloatArray(XmbWaveModel.N * 4)
     private val ctrlBuf: FloatBuffer = ByteBuffer.allocateDirect(ctrl.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
 
@@ -33,16 +45,46 @@ internal class XmbFirmwareWave(context: Context) {
     private var floatTarget = false
     private var lastSec = -1f
 
+    // ---- a mood's picture: the scene, then the glare at 128x64 and five smaller sizes ----
+    private class Target(val w: Int, val h: Int, val fbo: Int, val tex: Int)
+    private var sceneProg = 0
+    private var sourceProg = 0
+    private var copyProg = 0
+    private var blurProg = 0
+    private var outProg = 0
+    private var scene: Target? = null
+    private val levels = arrayOfNulls<Target>(GLARE_LEVELS)
+    private val blurred = arrayOfNulls<Target>(GLARE_LEVELS)
+    private var glare: Target? = null
+    private val blurWeights = FloatArray(8 * 3)
+    private val levelWeights = FloatArray(GLARE_LEVELS)
+
     /** How hard the music pushes the wave (the Waves visualizer); 0 for the XMB's own. */
     var drive: Float
         get() = model.drive
         set(value) { model.drive = value }
+
+    /** Whether [draw] covers the whole screen itself (a mood brings its own sky). */
+    val paintsBackground: Boolean get() = mood != null
 
     fun init() {
         lineProg = link(LINE_VS, LINE_FS)
         compProg = link(COMP_VS, COMP_FS)
         makeGrid()
         makeQuad()
+        if (mood != null) {
+            sceneProg = link(COMP_VS, SCENE_FS)
+            sourceProg = link(COMP_VS, SOURCE_FS)
+            copyProg = link(COMP_VS, COPY_FS)
+            blurProg = link(COMP_VS, BLUR_FS)
+            outProg = link(COMP_VS, OUT_FS)
+            gaussian(mood.hdr.radius)
+            // glutils 0x7b19c: pow(GLARE SUM POW, n) over all of them, times GLARE LEVEL; n = 0 the largest.
+            val sum = (0 until GLARE_LEVELS).sumOf { Math.pow(mood.hdr.glareSumPow.toDouble(), it.toDouble()) }
+            for (n in 0 until GLARE_LEVELS) {
+                levelWeights[n] = (Math.pow(mood.hdr.glareSumPow.toDouble(), n.toDouble()) / sum * mood.hdr.glareLevel).toFloat()
+            }
+        }
         ctrlTex = texture(GLES30.GL_NEAREST)
         GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA32F, XmbWaveModel.R, XmbWaveModel.R, 0, GLES30.GL_RGBA, GLES30.GL_FLOAT, null)
         strandTex = texture(GLES30.GL_LINEAR)
@@ -95,6 +137,11 @@ internal class XmbFirmwareWave(context: Context) {
         GLES30.glDisable(GLES30.GL_PRIMITIVE_RESTART_FIXED_INDEX)
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
 
+        if (mood != null) {
+            drawMood(mood, width, height, level)
+            return
+        }
+
         // Over the background in the line colour, across the screen from colour 3 to colour 4.
         GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
         GLES30.glViewport(0, 0, width, height)
@@ -111,6 +158,140 @@ internal class XmbFirmwareWave(context: Context) {
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         GLES30.glBindVertexArray(0)
         GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+    }
+
+    /** A mood's picture over the lines' light in [fbo]: the scene, its glare, and both on the screen. */
+    private fun drawMood(mood: XmbWaveFirmware.Mood, width: Int, height: Int, level: Float) {
+        val sc = target(scene, width, height).also { scene = it }
+        val sum = target(glare, GLARE_W, GLARE_H).also { glare = it }
+        for (n in 0 until GLARE_LEVELS) {
+            levels[n] = target(levels[n], max(1, GLARE_W shr n), max(1, GLARE_H shr n))
+            blurred[n] = target(blurred[n], max(1, GLARE_W shr n), max(1, GLARE_H shr n))
+        }
+        GLES30.glDisable(GLES30.GL_BLEND)
+        GLES30.glBindVertexArray(quadVao)
+
+        // The sky (back_colours1) under colours 1 at the bottom to 2 at the top, the lines in
+        // colours 3 at the left to 4 at the right, and the exposure (glutils ToneMap).
+        bind(sc)
+        GLES30.glUseProgram(sceneProg)
+        sample(0, fboTex, sceneProg, "uLines")
+        val c = mood.colours
+        for (n in 0 until 4) GLES30.glUniform3f(GLES30.glGetUniformLocation(sceneProg, "uCol${n + 1}"), c[n][0], c[n][1], c[n][2])
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(sceneProg, "uSky"), if (mood.colourShader == 1) 1f else 0f)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(sceneProg, "uDayCos"), dayCos())
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(sceneProg, "uGain"), LINE_LIGHT * level)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(sceneProg, "uExposure"), mood.hdr.exposure)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(sceneProg, "uWhiteSqrRcp"), 1f / (mood.hdr.white * mood.hdr.white))
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+
+        // What is brighter than GLARE THRESH, at 128x64 (glutils GlareSourceMRT), then five
+        // smaller sizes, each half the last.
+        bind(levels[0]!!)
+        GLES30.glUseProgram(sourceProg)
+        sample(0, sc.tex, sourceProg, "uScene")
+        GLES30.glUniform2f(GLES30.glGetUniformLocation(sourceProg, "uFoot"), 1f / GLARE_W, 1f / GLARE_H)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(sourceProg, "uThreshold"), mood.hdr.glareThreshold)
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+        GLES30.glUseProgram(copyProg)
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(copyProg, "uWeight"), 1f)
+        for (n in 1 until GLARE_LEVELS) {
+            bind(levels[n]!!)
+            sample(0, levels[n - 1]!!.tex, copyProg, "uTex")
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+        }
+
+        // Each size blurred across and then down, a gaussian of GAUSSIAN RAD texels for each colour.
+        GLES30.glUseProgram(blurProg)
+        GLES30.glUniform3fv(GLES30.glGetUniformLocation(blurProg, "uW"), 8, blurWeights, 0)
+        val step = GLES30.glGetUniformLocation(blurProg, "uStep")
+        for (n in 0 until GLARE_LEVELS) {
+            val l = levels[n]!!
+            val b = blurred[n]!!
+            bind(b)
+            sample(0, l.tex, blurProg, "uTex")
+            GLES30.glUniform2f(step, 1f / l.w, 0f)
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+            bind(l)
+            sample(0, b.tex, blurProg, "uTex")
+            GLES30.glUniform2f(step, 0f, 1f / l.h)
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+        }
+
+        // Added up at 128x64, the largest the most (glutils AccGlare).
+        bind(sum)
+        GLES30.glClearColor(0f, 0f, 0f, 0f)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
+        GLES30.glUseProgram(copyProg)
+        val weight = GLES30.glGetUniformLocation(copyProg, "uWeight")
+        for (n in GLARE_LEVELS - 1 downTo 0) {
+            sample(0, levels[n]!!.tex, copyProg, "uTex")
+            GLES30.glUniform1f(weight, levelWeights[n])
+            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+        }
+        GLES30.glDisable(GLES30.GL_BLEND)
+
+        // The scene and its glare, over the whole screen (glutils ToneApplyDisplay).
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, 0)
+        GLES30.glViewport(0, 0, width, height)
+        GLES30.glUseProgram(outProg)
+        sample(0, sc.tex, outProg, "uScene")
+        sample(1, sum.tex, outProg, "uGlare")
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindVertexArray(0)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+    }
+
+    /** glutils 0x71260: a gaussian of [radius] texels for each colour, floor(3 radius) - 1 texels to a side. */
+    private fun gaussian(radius: FloatArray) {
+        for (ch in 0 until 3) {
+            val r = radius[ch].coerceAtLeast(0.01f)
+            val side = (floor(3f * r).toInt() - 1).coerceIn(0, 7)
+            val g = FloatArray(8) { k -> if (k <= side) exp(-(k * k) / (2f * r * r)) else 0f }
+            val total = g[0] + 2f * (1..7).sumOf { g[it].toDouble() }.toFloat()
+            for (k in 0 until 8) blurWeights[k * 3 + ch] = g[k] / total
+        }
+    }
+
+    /** back_colours1's _DayTime: the hour of the day, times 100. */
+    private fun dayCos(): Float {
+        val now = System.currentTimeMillis()
+        val local = now + TimeZone.getDefault().getOffset(now)
+        val hours = Math.floorMod(local, 86_400_000L) / 3_600_000.0
+        return cos(hours * 100.0).toFloat()
+    }
+
+    private fun target(old: Target?, w: Int, h: Int): Target {
+        if (old != null && old.w == w && old.h == h) return old
+        if (old != null) {
+            GLES30.glDeleteFramebuffers(1, intArrayOf(old.fbo), 0)
+            GLES30.glDeleteTextures(1, intArrayOf(old.tex), 0)
+        }
+        val tex = texture(GLES30.GL_LINEAR)
+        if (floatTarget) {
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA16F, w, h, 0, GLES30.GL_RGBA, GLES30.GL_HALF_FLOAT, null)
+        } else {
+            GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RGBA8, w, h, 0, GLES30.GL_RGBA, GLES30.GL_UNSIGNED_BYTE, null)
+        }
+        val f = IntArray(1); GLES30.glGenFramebuffers(1, f, 0)
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, f[0])
+        GLES30.glFramebufferTexture2D(GLES30.GL_FRAMEBUFFER, GLES30.GL_COLOR_ATTACHMENT0, GLES30.GL_TEXTURE_2D, tex, 0)
+        return Target(w, h, f[0], tex)
+    }
+
+    private fun bind(t: Target) {
+        GLES30.glBindFramebuffer(GLES30.GL_FRAMEBUFFER, t.fbo)
+        GLES30.glViewport(0, 0, t.w, t.h)
+    }
+
+    private fun sample(unit: Int, tex: Int, prog: Int, name: String) {
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(prog, name), unit)
     }
 
     private fun ensureTarget(w: Int, h: Int) {
@@ -229,6 +410,17 @@ internal class XmbFirmwareWave(context: Context) {
         /** The line light's strength over the background (the console's exposure and glare). */
         private const val GAIN = 1.6f
 
+        /**
+         * The same light before a mood's own exposure: GAIN is the XMB's look after its exposure,
+         * which (HDR.mnu 1.05, white 0.899) brightens the light's range by about a tenth.
+         */
+        private const val LINE_LIGHT = GAIN / 1.1f
+
+        /** The console's glare: from 128x64 down to 4x2. */
+        private const val GLARE_W = 128
+        private const val GLARE_H = 64
+        private const val GLARE_LEVELS = 6
+
         private fun loadState(context: Context): FloatArray? = runCatching {
             context.assets.open("xmb/wave_state.bin").use { s ->
                 val b = s.readBytes()
@@ -310,7 +502,7 @@ void main() {
 
         private const val COMP_VS = """#version 300 es
 precision highp float;
-in vec2 aPos;
+layout(location = 0) in vec2 aPos;
 out vec2 vUv;
 void main() {
   vUv = aPos * 0.5 + 0.5;
@@ -331,6 +523,104 @@ out vec4 oColor;
 void main() {
   float light = min(texture(uLines, vUv).r, 0.53);
   oColor = vec4(mix(uCol3, uCol4, vUv.x) * light * uGain, 0.0);
+}"""
+
+        // A mood's scene: lib/moyou/back_colours1 (its sky, brighter toward the top, a glow low on
+        // the left that swells with _DayTime), times BACKGROUND colours 1 to 2 from the bottom up;
+        // the lines in colours 3 to 4 (LinesController); then glutils ToneMap's exposure.
+        private const val SCENE_FS = """#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vUv;
+uniform sampler2D uLines;
+uniform vec3 uCol1;
+uniform vec3 uCol2;
+uniform vec3 uCol3;
+uniform vec3 uCol4;
+uniform float uSky;
+uniform float uDayCos;
+uniform float uGain;
+uniform float uExposure;
+uniform float uWhiteSqrRcp;
+out vec4 oColor;
+vec3 sky(vec2 uv) {
+  float d1 = dot(uv - 1.5, uv - 1.5);
+  vec2 q = uv - vec2(0.4, 0.1);
+  float e2 = q.x * q.x / 6.0 + q.y * q.y;
+  float r = 0.4 * exp(0.4 * (uv.y - 1.0)) + 0.6 * exp(-16.0 * (uDayCos + 1.0) * e2) + 0.375 * exp(-d1);
+  float g = 0.3 * exp(0.2 * (uv.y - 1.0)) + 0.3 * exp(-d1) + exp(-12.0 * e2);
+  float b = 0.45 * exp(-e2) + 0.6 * exp(-d1) + exp(0.1 * (uv.y - 1.0));
+  float s = clamp(2.5 * (uv.y - 0.2 * uv.x - 0.4), -10.0, 10.0);
+  return vec3(r, g, b) * (0.4 + 0.4 * tanh(s * 0.5));
+}
+void main() {
+  vec3 back = uSky > 0.5 ? sky(vUv) : vec3(1.0);
+  vec3 c = back * mix(uCol1, uCol2, vUv.y);
+  c += min(texture(uLines, vUv).r, 0.53) * uGain * mix(uCol3, uCol4, vUv.x);
+  vec3 y = c * uExposure;
+  oColor = vec4(y * (1.0 + y * uWhiteSqrRcp) / (1.0 + y), 1.0);
+}"""
+
+        // glutils GlareSourceMRT: what is past the threshold, here averaged over the 128x64 texel.
+        private const val SOURCE_FS = """#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vUv;
+uniform sampler2D uScene;
+uniform vec2 uFoot;
+uniform float uThreshold;
+out vec4 oColor;
+void main() {
+  vec3 s = vec3(0.0);
+  for (int j = 0; j < 4; j++) {
+    for (int i = 0; i < 4; i++) {
+      vec2 o = (vec2(float(i), float(j)) - 1.5) * 0.25 * uFoot;
+      s += max(texture(uScene, vUv + o).rgb - uThreshold, 0.0);
+    }
+  }
+  oColor = vec4(s / 16.0, 0.0);
+}"""
+
+        // glutils GlareSource and AccGlare: a copy, at a weight.
+        private const val COPY_FS = """#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform float uWeight;
+out vec4 oColor;
+void main() {
+  oColor = vec4(texture(uTex, vUv).rgb * uWeight, 0.0);
+}"""
+
+        // glutils Gaussian: the middle and seven texels to each side, a weight for each colour.
+        private const val BLUR_FS = """#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec2 uStep;
+uniform vec3 uW[8];
+out vec4 oColor;
+void main() {
+  vec3 s = texture(uTex, vUv).rgb * uW[0];
+  for (int k = 1; k < 8; k++) {
+    vec2 o = uStep * float(k);
+    s += (texture(uTex, vUv + o).rgb + texture(uTex, vUv - o).rgb) * uW[k];
+  }
+  oColor = vec4(s, 0.0);
+}"""
+
+        // glutils ToneApplyDisplay: the glare added to the scene.
+        private const val OUT_FS = """#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vUv;
+uniform sampler2D uScene;
+uniform sampler2D uGlare;
+out vec4 oColor;
+void main() {
+  oColor = vec4(texture(uScene, vUv).rgb + texture(uGlare, vUv).rgb, 1.0);
 }"""
     }
 }

@@ -328,8 +328,10 @@ internal enum class XmbVisualizerKind(val id: String, val title: String) {
 }
 
 /**
- * Waves, as the console's: XMB mode's own wave and background (XmbGlView, the firmware's wave),
- * pushed by the song through [MusicDrive], so it billows on the loud parts and settles on the quiet.
+ * Waves, as the console's: XMB mode's own wave (XmbGlView, the firmware's wave) in the mood the
+ * console's music player gives it (lines.qrc override/music_1: its sky, colours, placement and
+ * glare), pushed by the song through [MusicDrive], so it billows on the loud parts and settles on
+ * the quiet.
  */
 @Composable
 internal fun XmbWavesVisualizer(levels: XmbVisualizer.Levels?, positionMs: () -> Long, playing: () -> Boolean, modifier: Modifier = Modifier) {
@@ -340,6 +342,7 @@ internal fun XmbWavesVisualizer(levels: XmbVisualizer.Levels?, positionMs: () ->
     androidx.compose.ui.viewinterop.AndroidView(
         factory = { ctx ->
             com.armsx2.ui.home.XmbGlView(ctx).apply {
+                mood = "music_1"
                 this.drive = { drive.next(current.value, position.value(), on.value()) }
             }
         },

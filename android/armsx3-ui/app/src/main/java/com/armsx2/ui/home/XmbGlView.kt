@@ -50,6 +50,12 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
      */
     @Volatile var drive: (() -> Float)? = null
 
+    /**
+     * A lines.qrc mood to draw XMB mode's wave in ("music_1" for the Waves visualizer): its own
+     * sky, colours, placement and glare. Set before the view is shown; null for the XMB's own.
+     */
+    @Volatile var mood: String? = null
+
     init {
         surfaceTextureListener = this
         // Non-opaque so that if EGL/GLES3 init ever fails and nothing renders, the layer behind
@@ -59,7 +65,7 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
     }
 
     override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
-        thread = RenderThread(st, w, h, context.applicationContext, drive = { drive?.invoke() ?: 0f }) { ok -> post { onGlStatus?.invoke(ok) } }.also {
+        thread = RenderThread(st, w, h, context.applicationContext, drive = { drive?.invoke() ?: 0f }, mood = mood) { ok -> post { onGlStatus?.invoke(ok) } }.also {
             it.paused = windowVisibility != VISIBLE
             it.start()
         }
@@ -93,6 +99,7 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
         private var height: Int,
         private val appContext: Context,
         private val drive: () -> Float,
+        private val mood: String?,
         private val onStatus: (Boolean) -> Unit,
     ) : Thread("xmb-gl") {
         @Volatile private var running = true
@@ -174,51 +181,55 @@ class XmbGlView(context: Context) : TextureView(context), TextureView.SurfaceTex
             GLES30.glDisable(GLES30.GL_DEPTH_TEST)
             GLES30.glDisable(GLES30.GL_BLEND)
 
-            // background gradient (full-screen quad)
-            GLES30.glUseProgram(bgProg)
-            GLES30.glBindVertexArray(bgVao)
-            // Gradient stops: a continuous RGB hue-cycle when enabled (peripheral style, a 14s wheel
-            // to match the theme's RGB mode); else the user-picked wave color when set (read off the
-            // pref's @Volatile fields from this GL thread); else the built-in constants.
-            val top: FloatArray
-            val bot: FloatArray
-            // Straight down by default; the monthly gradient brings its own angle.
-            var dirX = 0f
-            var dirY = 1f
-            var tMin = 0f
-            var smooth = 1f
-            if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.useMonthlyGl) {
-                // The PS3's "Original" colour for this month and time of day (XMB mode, or the
-                // Monthly setting). Linear, as the CSS gradients it was measured into are.
-                val month = com.armsx2.ui.xmb.XmbOriginalColors.now()
-                // From black while XMB mode's boot animation brings the colour up (1 otherwise).
-                val level = com.armsx2.ui.xmb.XmbOriginalColors.bootColor
-                top = FloatArray(3) { month.start[it] * level }
-                bot = FloatArray(3) { month.end[it] * level }
-                val d = com.armsx2.ui.xmb.XmbOriginalColors.shaderDirection(month.angleDeg, width, height)
-                dirX = d[0]
-                dirY = d[1]
-                tMin = d[2]
-                smooth = 0f
-            } else if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.rgbCycleGl) {
-                bot = hsvToRgb(((timeSec / RGB_CYCLE_SEC) % 1f) * 360f, 0.92f, 0.98f)
-                top = floatArrayOf(bot[0] * 0.20f, bot[1] * 0.20f, bot[2] * 0.20f)
-            } else {
-                top = com.armsx2.ui.theme.LibraryBackgroundColorPreferences.glTop ?: BG_TOP
-                bot = com.armsx2.ui.theme.LibraryBackgroundColorPreferences.glBottom ?: BG_BOT
+            // background gradient (full-screen quad); a mood's wave draws its own sky instead
+            if (firmwareWave?.paintsBackground != true) {
+                GLES30.glUseProgram(bgProg)
+                GLES30.glBindVertexArray(bgVao)
+                // Gradient stops: a continuous RGB hue-cycle when enabled (peripheral style, a 14s wheel
+                // to match the theme's RGB mode); else the user-picked wave color when set (read off the
+                // pref's @Volatile fields from this GL thread); else the built-in constants.
+                val top: FloatArray
+                val bot: FloatArray
+                // Straight down by default; the monthly gradient brings its own angle.
+                var dirX = 0f
+                var dirY = 1f
+                var tMin = 0f
+                var smooth = 1f
+                if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.useMonthlyGl) {
+                    // The PS3's "Original" colour for this month and time of day (XMB mode, or the
+                    // Monthly setting). Linear, as the CSS gradients it was measured into are.
+                    val month = com.armsx2.ui.xmb.XmbOriginalColors.now()
+                    // From black while XMB mode's boot animation brings the colour up (1 otherwise).
+                    val level = com.armsx2.ui.xmb.XmbOriginalColors.bootColor
+                    top = FloatArray(3) { month.start[it] * level }
+                    bot = FloatArray(3) { month.end[it] * level }
+                    val d = com.armsx2.ui.xmb.XmbOriginalColors.shaderDirection(month.angleDeg, width, height)
+                    dirX = d[0]
+                    dirY = d[1]
+                    tMin = d[2]
+                    smooth = 0f
+                } else if (com.armsx2.ui.theme.LibraryBackgroundColorPreferences.rgbCycleGl) {
+                    bot = hsvToRgb(((timeSec / RGB_CYCLE_SEC) % 1f) * 360f, 0.92f, 0.98f)
+                    top = floatArrayOf(bot[0] * 0.20f, bot[1] * 0.20f, bot[2] * 0.20f)
+                } else {
+                    top = com.armsx2.ui.theme.LibraryBackgroundColorPreferences.glTop ?: BG_TOP
+                    bot = com.armsx2.ui.theme.LibraryBackgroundColorPreferences.glBottom ?: BG_BOT
+                }
+                GLES30.glUniform3f(GLES30.glGetUniformLocation(bgProg, "uColorStart"), top[0], top[1], top[2])
+                GLES30.glUniform3f(GLES30.glGetUniformLocation(bgProg, "uColorEnd"), bot[0], bot[1], bot[2])
+                GLES30.glUniform2f(GLES30.glGetUniformLocation(bgProg, "uDir"), dirX, dirY)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uTMin"), tMin)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uTSpan"), 1f)
+                GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uSmooth"), smooth)
+                GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
             }
-            GLES30.glUniform3f(GLES30.glGetUniformLocation(bgProg, "uColorStart"), top[0], top[1], top[2])
-            GLES30.glUniform3f(GLES30.glGetUniformLocation(bgProg, "uColorEnd"), bot[0], bot[1], bot[2])
-            GLES30.glUniform2f(GLES30.glGetUniformLocation(bgProg, "uDir"), dirX, dirY)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uTMin"), tMin)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uTSpan"), 1f)
-            GLES30.glUniform1f(GLES30.glGetUniformLocation(bgProg, "uSmooth"), smooth)
-            GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
 
             // XMB mode: the console's own wave (XmbFirmwareWave), in place of the library's.
             val xmb = com.armsx2.ui.theme.LibraryBackgroundColorPreferences.xmbModeGl
             if (xmb && !firmwareWaveFailed) {
-                val wave = firmwareWave ?: runCatching { XmbFirmwareWave(appContext).also { it.init() } }
+                val wave = firmwareWave ?: runCatching {
+                    XmbFirmwareWave(appContext, mood?.let { com.armsx2.ui.xmb.XmbWaveFirmware.mood(it) }).also { it.init() }
+                }
                     .onFailure { Log.w(TAG, "XMB wave init failed", it); firmwareWaveFailed = true }
                     .getOrNull()?.also { firmwareWave = it }
                 if (wave != null) {

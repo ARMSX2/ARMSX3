@@ -30,7 +30,7 @@ import kotlin.math.tanh
  * there. Two gains (the lattice's lengthwise stretch and the strength of its twist across the
  * band) and the camera were measured from an RSX capture of the console's XMB.
  */
-class XmbWaveModel(initialState: FloatArray?) {
+class XmbWaveModel(initialState: FloatArray?, val line: Line = XmbWaveFirmware.line) {
 
     /** LINE1.mnu, with the firmware's own defaults. */
     class Line(
@@ -51,8 +51,6 @@ class XmbWaveModel(initialState: FloatArray?) {
         val offset: FloatArray = floatArrayOf(0f, -0.469999f, 0f),
         val param1: Float = -1.33509f,
     )
-
-    val line: Line = XmbWaveFirmware.line
 
     /**
      * Set by the music player's Waves visualizer: how hard the song pushes the wave now, 0 at rest
@@ -284,15 +282,62 @@ object XmbWaveFirmware {
     @Volatile var colour3 = floatArrayOf(0.847347f, 0.846155f, 0.846448f)
     @Volatile var colour4 = floatArrayOf(0.92487f, 0.922603f, 0.922933f)
 
+    /**
+     * One of lines.qrc's moods (override/<name>): the console's own changes to the wave for a scene,
+     * over the base settings. "music_1" is the music player's visualizer.
+     */
+    class Mood(
+        val line: XmbWaveModel.Line,
+        /** BACKGROUND.mnu: 1 at the bottom of the screen to 2 at the top, 3 at the left to 4 at the right. */
+        val colours: Array<FloatArray>,
+        /** BACKGROUND.mnu COLOUR SHADER: which lib/moyou/back_coloursN draws the sky. */
+        val colourShader: Int,
+        val hdr: Hdr,
+    )
+
+    /** HDR.mnu: the exposure and the glare around what is bright. */
+    class Hdr(
+        val exposure: Float = 1.05f,
+        val white: Float = 0.899181f,
+        val glareLevel: Float = 1.10245f,
+        val glareThreshold: Float = 0.738857f,
+        val radius: FloatArray = floatArrayOf(1.23888f, 1.43176f, 1.55787f),
+        val glareSumPow: Float = 0.557478f,
+    )
+
+    private val moods = HashMap<String, Mood?>()
+
+    /** [name]'s mood, read once; null without the firmware. */
     @Synchronized
-    private fun load(): Pair<XmbWaveModel.Line, FloatArray> {
-        loaded?.let { return it }
-        val files = XmbFirmware.devFlash()?.let { XmbQrc.open(File(it, "vsh/resource/qgl/lines.qrc")) }
-        val mnu = files?.get("LINE1.mnu")?.let(::parseMnu).orEmpty()
-        val bg = files?.get("BACKGROUND.mnu")?.let(::parseMnu).orEmpty()
+    fun mood(name: String): Mood? {
+        if (moods.containsKey(name)) return moods[name]
+        val files = XmbFirmware.devFlash()?.let { XmbQrc.open(File(it, "vsh/resource/qgl/lines.qrc")) } ?: return null
+        fun mnu(file: String) = (files[file]?.let(::parseMnu).orEmpty()) + (files["override/$name/$file"]?.let(::parseMnu).orEmpty())
+        val bg = mnu("BACKGROUND.mnu")
+        val hdr = mnu("HDR.mnu")
+        val dh = Hdr()
+        fun h(key: String, d: Float) = hdr[key] ?: d
+        val mood = Mood(
+            line = lineFrom(mnu("LINE1.mnu")),
+            colours = Array(4) { n -> floatArrayOf(bg["${n + 1} RED"] ?: 1f, bg["${n + 1} GREEN"] ?: 1f, bg["${n + 1} BLUE"] ?: 1f) },
+            colourShader = (bg["COLOUR SHADER"] ?: 0f).toInt(),
+            hdr = Hdr(
+                exposure = h("EXPOSURE", dh.exposure),
+                white = h("WHITE LEVEL", dh.white),
+                glareLevel = h("GLARE LEVEL", dh.glareLevel),
+                glareThreshold = h("GLARE THRESH", dh.glareThreshold),
+                radius = floatArrayOf(h("GAUSSIAN RAD R", dh.radius[0]), h("GAUSSIAN RAD G", dh.radius[1]), h("GAUSSIAN RAD B", dh.radius[2])),
+                glareSumPow = h("GLARE SUM POW", dh.glareSumPow),
+            ),
+        )
+        moods[name] = mood
+        return mood
+    }
+
+    private fun lineFrom(mnu: Map<String, Float>): XmbWaveModel.Line {
         fun f(key: String, d: Float) = mnu[key] ?: d
         val d = XmbWaveModel.Line()
-        val line = XmbWaveModel.Line(
+        return XmbWaveModel.Line(
             damping = f("DAMPING", d.damping),
             length = f("LENGTH", d.length),
             tension = f("TENSION", d.tension),
@@ -310,6 +355,14 @@ object XmbWaveFirmware {
             offset = floatArrayOf(f("FFD OFFSET X", d.offset[0]), f("FFD OFFSET Y", d.offset[1]), f("FFD OFFSET Z", d.offset[2])),
             param1 = f("FFD PARAM 1", d.param1),
         )
+    }
+
+    @Synchronized
+    private fun load(): Pair<XmbWaveModel.Line, FloatArray> {
+        loaded?.let { return it }
+        val files = XmbFirmware.devFlash()?.let { XmbQrc.open(File(it, "vsh/resource/qgl/lines.qrc")) }
+        val bg = files?.get("BACKGROUND.mnu")?.let(::parseMnu).orEmpty()
+        val line = lineFrom(files?.get("LINE1.mnu")?.let(::parseMnu).orEmpty())
         if (bg.isNotEmpty()) {
             colour3 = floatArrayOf(bg["3 RED"] ?: colour3[0], bg["3 GREEN"] ?: colour3[1], bg["3 BLUE"] ?: colour3[2])
             colour4 = floatArrayOf(bg["4 RED"] ?: colour4[0], bg["4 GREEN"] ?: colour4[1], bg["4 BLUE"] ?: colour4[2])
