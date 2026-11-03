@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -297,18 +300,36 @@ object LibraryKeyboard {
     private fun XmbPanel(scope: BoxScope) {
         val font = com.armsx2.ui.xmb.rememberXmbFont()
         val ime = LocalSoftwareKeyboardController.current
+        val view = androidx.compose.ui.platform.LocalView.current
         val focus = remember { FocusRequester() }
         // The field holds the caret from the start, without the phone's keyboard: a touch on the
         // field brings that up.
         LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
         DisposableEffect(Unit) {
             fieldShown.value = true
+            // Android brings its keyboard up by itself for a window with a field in focus on some
+            // screens (the larger ones, in landscape); while this is up, only when asked for.
+            val window = generateSequence(view.context) { (it as? android.content.ContextWrapper)?.baseContext }
+                .filterIsInstance<android.app.Activity>().firstOrNull()?.window
+            val mode = window?.attributes?.softInputMode
+            if (window != null && mode != null) {
+                window.setSoftInputMode(
+                    (mode and android.view.WindowManager.LayoutParams.SOFT_INPUT_MASK_STATE.inv()) or
+                        android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN,
+                )
+            }
             onDispose {
+                if (window != null && mode != null) window.setSoftInputMode(mode)
                 if (typing.value) ime?.hide()
                 typing.value = false
                 fieldShown.value = false
             }
         }
+        // And should it come up anyway with nobody typing (no touch on the field, no keyboard keys),
+        // it goes again.
+        @OptIn(ExperimentalLayoutApi::class)
+        val imeShown = WindowInsets.isImeVisible
+        LaunchedEffect(imeShown) { if (imeShown && !typing.value) ime?.hide() }
         with(scope) {
             Box(Modifier.matchParentSize().background(Color.Black.copy(alpha = 0.55f)).clickable(enabled = false) {})
             Column(

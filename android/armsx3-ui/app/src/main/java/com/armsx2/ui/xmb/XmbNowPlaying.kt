@@ -70,8 +70,8 @@ import kotlinx.coroutines.delay
  * control panel, its buttons the firmware's own (Previous, Pause, Next, Stop, Repeat, Shuffle and
  * Volume). On the pad: Left and Right along the buttons and Cross to press one; Up to the time bar,
  * where Left and Right go back and on ten seconds; L1 and R1 the previous and next song; Square the
- * visualizer on its own, full size, and back. Every button and the time bar take a touch too.
- * Circle closes it and the music plays on behind the XMB.
+ * visualizer on its own, full size, and back. Every button and the time bar take a touch too, and
+ * a touch on the cover opens the visualizer. Circle closes it and the music plays on behind the XMB.
  */
 @Composable
 internal fun XmbNowPlaying(close: () -> Unit) {
@@ -110,7 +110,7 @@ internal fun XmbNowPlaying(close: () -> Unit) {
     LaunchedEffect(visualizerOnly, kindChanged) {
         kindNameShown = visualizerOnly
         if (visualizerOnly) {
-            delay(2_500)
+            delay(3_500)
             kindNameShown = false
         }
     }
@@ -251,14 +251,16 @@ internal fun XmbNowPlaying(close: () -> Unit) {
         // The title row, as the XMB's panels have it: the player's icon and name, and Back. The
         // visualizer has the screen to itself, as the console's does.
         if (!visualizerOnly) Row(
-            Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(start = d(40f), end = d(30f), top = d(18f)),
+            Modifier.fillMaxWidth().align(Alignment.TopCenter).padding(start = d(40f), end = d(10f), top = d(18f)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             XmbIconView(XmbIcon(music, "tex_now_playing", "▶"), d(40f))
             Spacer(Modifier.width(d(14f)))
             Text(str("xmb.music.nowPlaying"), style = xmbText(font, 23f * u), modifier = Modifier.weight(1f))
+            // Back, a finger's worth round the words.
             Row(
-                Modifier.clickable(remember { MutableInteractionSource() }, indication = null, onClick = close),
+                Modifier.clickable(remember { MutableInteractionSource() }, indication = null, onClick = close)
+                    .padding(horizontal = d(20f), vertical = d(14f)),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text("○", style = xmbText(font, 16f * u).copy(color = CircleRed))
@@ -305,7 +307,7 @@ internal fun XmbNowPlaying(close: () -> Unit) {
                         Modifier.weight(1f).fillMaxWidth().padding(horizontal = d(40f)),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Cover(cover, d(300f)) { LibraryMusic.playPause(context) }
+                        Cover(cover, d(300f)) { visualizerOnly = true }
                         Spacer(Modifier.width(d(44f)))
                         info(Modifier.weight(1f))
                     }
@@ -315,7 +317,7 @@ internal fun XmbNowPlaying(close: () -> Unit) {
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.Center,
                     ) {
-                        Cover(cover, d(420f)) { LibraryMusic.playPause(context) }
+                        Cover(cover, d(420f)) { visualizerOnly = true }
                         Spacer(Modifier.height(d(30f)))
                         info(Modifier.fillMaxWidth())
                     }
@@ -326,7 +328,8 @@ internal fun XmbNowPlaying(close: () -> Unit) {
 
         // Over the visualizer, the song as the console labels it there: bottom left, its icon, the
         // title, and "artist / album" under it. The pad's one control is the visualizer itself:
-        // Left and Right change it, Cross plays and pauses; a touch goes back to the player.
+        // Left and Right change it, Cross plays and pauses. By touch, a tap brings its name up with
+        // arrows either side (and Back): the arrows change it, and a tap anywhere else goes back.
         if (visualizerOnly) {
             Box(
                 Modifier
@@ -338,13 +341,15 @@ internal fun XmbNowPlaying(close: () -> Unit) {
                         onLeft = { switchVisualizer(-1) },
                         onRight = { switchVisualizer(1) },
                     )
-                    // A touch goes back to the player; a swipe moves Valley's and Gaia's presets on,
-                    // as the right stick does (for Valley: across another of the group, up or down
-                    // another group). Told apart by how far the touch went, so a slow frame that
-                    // brings only its start and its end is still a swipe.
+                    // A tap with the name up goes back to the player, without it brings the name
+                    // up; a swipe moves Valley's and Gaia's presets on, as the right stick does (for
+                    // Valley: across another of the group, up or down another group). Told apart by
+                    // how far the touch went, so a slow frame that brings only its start and its end
+                    // is still a swipe.
                     .pointerInput(kind) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
+                            val nameUp = kindNameShown
                             var end = down.position
                             while (true) {
                                 val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
@@ -357,7 +362,7 @@ internal fun XmbNowPlaying(close: () -> Unit) {
                             val across = kotlin.math.abs(dx) >= kotlin.math.abs(dy) && kotlin.math.abs(dx) > far
                             val upDown = !across && kotlin.math.abs(dy) > far
                             when {
-                                !across && !upDown -> visualizerOnly = false
+                                !across && !upDown -> if (nameUp) visualizerOnly = false else kindChanged++
                                 kind == XmbVisualizerKind.Gaia -> XmbGaiaPresets.flick()
                                 kind == XmbVisualizerKind.Valley && across -> XmbValleyPresets.flick(if (dx < 0) -1 else 1, 0)
                                 kind == XmbVisualizerKind.Valley -> XmbValleyPresets.flick(0, if (dy < 0) -1 else 1)
@@ -365,8 +370,32 @@ internal fun XmbNowPlaying(close: () -> Unit) {
                         }
                     },
             )
-            AnimatedVisibility(kindNameShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter).padding(top = d(30f))) {
-                Text("◀  ${kind.title}  ▶", style = xmbText(font, 22f * u, 0.95f))
+            AnimatedVisibility(kindNameShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter).padding(top = d(12f))) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "◀",
+                        style = xmbText(font, 22f * u, 0.95f),
+                        modifier = Modifier.clickable(remember { MutableInteractionSource() }, indication = null) { switchVisualizer(-1) }
+                            .padding(horizontal = d(22f), vertical = d(18f)),
+                    )
+                    Text(kind.title, style = xmbText(font, 22f * u, 0.95f))
+                    Text(
+                        "▶",
+                        style = xmbText(font, 22f * u, 0.95f),
+                        modifier = Modifier.clickable(remember { MutableInteractionSource() }, indication = null) { switchVisualizer(1) }
+                            .padding(horizontal = d(22f), vertical = d(18f)),
+                    )
+                }
+            }
+            AnimatedVisibility(kindNameShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopEnd).padding(top = d(12f), end = d(12f))) {
+                Row(
+                    Modifier.clickable(remember { MutableInteractionSource() }, indication = null) { visualizerOnly = false }
+                        .padding(horizontal = d(18f), vertical = d(18f)),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("○", style = xmbText(font, 16f * u).copy(color = CircleRed))
+                    Text(XmbText.get("xmb_ingame", "msg_help_back", ": " + str("xmb.back")), style = xmbText(font, 16f * u, 0.9f))
+                }
             }
             Row(
                 Modifier.align(Alignment.BottomStart).padding(start = d(70f), bottom = d(40f)),
@@ -384,8 +413,9 @@ internal fun XmbNowPlaying(close: () -> Unit) {
         }
         // Square's hint, bottom right, where the XMB's own hints sit.
         if (!visualizerOnly) Row(
-            Modifier.align(Alignment.BottomEnd).padding(end = d(30f), bottom = d(10f))
-                .clickable(remember { MutableInteractionSource() }, indication = null) { visualizerOnly = !visualizerOnly },
+            Modifier.align(Alignment.BottomEnd).padding(end = d(10f))
+                .clickable(remember { MutableInteractionSource() }, indication = null) { visualizerOnly = !visualizerOnly }
+                .padding(start = d(20f), end = d(20f), top = d(14f), bottom = d(10f)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("□", style = xmbText(font, 16f * u).copy(color = SquarePink))

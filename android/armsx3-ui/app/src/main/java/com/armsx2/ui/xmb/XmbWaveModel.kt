@@ -54,8 +54,10 @@ class XmbWaveModel(initialState: FloatArray?, val line: Line = XmbWaveFirmware.l
 
     /**
      * Set by the music player's Waves visualizer: how hard the song pushes the wave now, 0 at rest
-     * (the XMB itself) and about 1 at its loudest. The springs are shaken harder and stepped faster,
-     * so the wave billows with the music and settles as it goes quiet.
+     * (the XMB itself) and about 1 at its loudest. It moves the lattice, quicker and higher, so the
+     * wave billows with the music and settles as soon as it goes quiet. The springs are left as the
+     * console keeps them: shaken harder they heat up, and a hot chain draws in toward its roots,
+     * taking the wave off the left of the screen for a minute after every loud part.
      */
     @Volatile var drive = 0f
 
@@ -64,6 +66,8 @@ class XmbWaveModel(initialState: FloatArray?, val line: Line = XmbWaveFirmware.l
     private val vel = FloatArray(N * 3)
     private val prev = FloatArray(N * 3)
     private var clock = 0f // the noise clock; the lattice's time is ten times it
+    private var latticeTime = 0f // ten times the clock at rest, quicker while the song pushes
+    private var billow = 0f // the song's push, eased in and out
     private var smooth = 0f // the roots' ring follows this, eased toward the clock
     private var counter = 0 // the noise sequence
     private var acc = 0f // fraction of a 60 Hz step not taken yet
@@ -85,6 +89,7 @@ class XmbWaveModel(initialState: FloatArray?, val line: Line = XmbWaveFirmware.l
         }
         System.arraycopy(pos, 0, prev, 0, pos.size)
         counter = (System.nanoTime() and 0xffffff).toInt()
+        latticeTime = clock * 10f
     }
 
     /** One 60 Hz step of the springs (custom_render_plugin 0x4bed0, then 0x4bce0 for the roots). */
@@ -101,7 +106,7 @@ class XmbWaveModel(initialState: FloatArray?, val line: Line = XmbWaveFirmware.l
             if (c > 1) spring(i, i - 2, 2f * l, k * 10f)
             if (r > 0) spring(i, i - R, l, k)
             if (r > 1) spring(i, i - 2 * R, 2f * l, k * 10f)
-            val p = line.perturbation * (1f + drive * 7f)
+            val p = line.perturbation
             vel[i * 3] += noise(++counter) * p
             vel[i * 3 + 1] += noise(++counter) * p
             vel[i * 3 + 2] += noise(++counter) * p
@@ -138,9 +143,9 @@ class XmbWaveModel(initialState: FloatArray?, val line: Line = XmbWaveFirmware.l
     // ---- the lattice (ffd_shader1 at its 8x4x4 texels, edged out to 11x7x7) ----
     private val lattice = FloatArray(LZ * LY * LX * 2)
 
-    private fun fillLattice(t: Float) {
+    private fun fillLattice(t: Float, push: Float) {
         val c = (sin(0.1f * t) + 0.2f) / 1.2f
-        val amp = (sin(2f * t) + 3f) * exp(-1e-4f * t)
+        val amp = (sin(2f * t) + 3f) * exp(-1e-4f * t) * (1f + push * 0.6f)
         val bob = sin(0.25f * t)
         for (kk in 0 until LZ) for (jj in 0 until LY) for (ii in 0 until LX) {
             val u = (ii - 1).coerceIn(0, 7) / 8f
@@ -183,11 +188,19 @@ class XmbWaveModel(initialState: FloatArray?, val line: Line = XmbWaveFirmware.l
      * shows more or less to the sides.
      */
     fun update(dtSec: Float, aspect: Float, out: FloatArray) {
-        acc += dtSec.coerceIn(0f, 0.25f) * 60f * (1f + drive * 1.6f)
+        acc += dtSec.coerceIn(0f, 0.25f) * 60f
         var steps = 0
         while (acc > 1f && steps < 8) { step(); acc -= 1f; steps++ }
         if (acc > 1f) acc = 1f
-        fillLattice(clock * 10f)
+        // The lattice keeps no state, so the song can push it and let it go at once. It moves on with
+        // time itself rather than a 60 Hz step at a time, so it glides at any refresh rate (stepped,
+        // a 120 Hz screen saw it move every other frame), and the push is eased over a third of a
+        // second, so the wave swells with the song instead of jumping on each beat.
+        val dt = dtSec.coerceIn(0f, 0.25f)
+        billow += (drive - billow) * min(1f, dt * 3f)
+        latticeTime += dt * 60f * line.timestep * 1e-3f * (1f + billow * 1.5f)
+        if (latticeTime > 100f) latticeTime = 0f
+        fillLattice(latticeTime, billow)
         val sy = SY
         val sx = SY / aspect
         for (i in 0 until N) {

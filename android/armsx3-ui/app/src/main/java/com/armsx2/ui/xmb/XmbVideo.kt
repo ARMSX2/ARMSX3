@@ -14,8 +14,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -650,7 +652,7 @@ internal fun XmbVideoPlayer(
     list: List<XmbVideos.Entry>,
     start: Int,
     fromBeginning: Boolean,
-    @Suppress("UNUSED_PARAMETER") close: () -> Unit,
+    close: () -> Unit,
 ) {
     val context = LocalContext.current
     val font = rememberXmbFont()
@@ -703,6 +705,19 @@ internal fun XmbVideoPlayer(
     }
 
     val holder = remember { mutableStateOf<android.view.Surface?>(null) }
+    // The picture's SurfaceTexture, for a fresh Surface on it. FFmpeg's player writes with the CPU,
+    // and a Surface written that way stays tied to it until the Surface itself goes: Android's
+    // player or a shader stage could not draw onto it after. So once FFmpeg has had it, anything
+    // else gets a new one.
+    val pictureTexture = remember { arrayOfNulls<android.graphics.SurfaceTexture>(1) }
+    val cpuUsed = remember { booleanArrayOf(false) }
+    fun freshPicture() {
+        val t = pictureTexture[0] ?: return
+        cpuUsed[0] = false
+        val old = holder.value
+        holder.value = android.view.Surface(t)
+        old?.release()
+    }
     // Which player: Android's for what the device decodes, else the core's FFmpeg (src/xmb-player.cpp)
     // for AVI, MPEG and films with sound the device has no decoder for. Decided off the main thread
     // for each video; Android's failing on one hands it to FFmpeg too.
@@ -756,6 +771,11 @@ internal fun XmbVideoPlayer(
         val rgba = ffmpeg == true
         if (out == null || !wantShader || ffmpeg == null) {
             closeStage()
+            return@LaunchedEffect
+        }
+        if (cpuUsed[0] && stage[0]?.output !== out) {
+            // Back here with the new Surface.
+            freshPicture()
             return@LaunchedEffect
         }
         // The preset's settings as the game settings tune it.
@@ -830,7 +850,12 @@ internal fun XmbVideoPlayer(
     // Android's player draws where the decoder is routed: onto the shader stage's input as it opens,
     // back onto the picture's surface once it has closed.
     LaunchedEffect(decoderSurface, ffmpeg) {
-        if (ffmpeg == false) runCatching { player.setSurface(decoderSurface) }
+        if (ffmpeg != false) return@LaunchedEffect
+        if (decoderSurface != null && decoderSurface === holder.value && cpuUsed[0]) {
+            freshPicture()
+            return@LaunchedEffect
+        }
+        runCatching { player.setSurface(decoderSurface) }
     }
     // FFmpeg's player, once it has somewhere to draw (the picture's surface, or the shader stage's
     // input): from where the video was left, or the start. Opened off the main thread (it reads the
@@ -854,6 +879,7 @@ internal fun XmbVideoPlayer(
                 path?.let { runCatching { core().xmbPlayerOpen(it, surface, at) }.getOrDefault(0L) } ?: 0L
             }
             ff[0] = handle
+            if (handle != 0L && surface === holder.value) cpuUsed[0] = true
             android.util.Log.i("XmbVideo", "FFmpeg player $handle for ${entry.name} on surface ${System.identityHashCode(surface)}")
             if (handle == 0L) {
                 error = unsupported
@@ -972,17 +998,18 @@ internal fun XmbVideoPlayer(
         playing = false
     }
 
+    // Square (or its hint, touched): the next Screen Mode, named for a moment as it changes.
+    fun nextScreenMode() {
+        screenMode = (screenMode + 1) % screenModes.size
+        XmbVideos.setScreenMode(screenMode)
+        message = "$screenModeWord  ${screenModes[screenMode]}"
+        poke()
+    }
     XmbPanelKeysEffect { key ->
         when (key) {
             XmbPanelKeys.Key.L1 -> go(-1)
             XmbPanelKeys.Key.R1 -> go(1)
-            // Square: the next Screen Mode, named for a moment as it changes.
-            XmbPanelKeys.Key.Square -> {
-                screenMode = (screenMode + 1) % screenModes.size
-                XmbVideos.setScreenMode(screenMode)
-                message = "$screenModeWord  ${screenModes[screenMode]}"
-                poke()
-            }
+            XmbPanelKeys.Key.Square -> nextScreenMode()
         }
         true
     }
@@ -1110,6 +1137,8 @@ internal fun XmbVideoPlayer(
                     surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
                         override fun onSurfaceTextureAvailable(texture: android.graphics.SurfaceTexture, width: Int, height: Int) {
                             val s = android.view.Surface(texture)
+                            pictureTexture[0] = texture
+                            cpuUsed[0] = false
                             holder.value = s
                             // Straight on unless a shader is wanted; its stage routes the player then.
                             if (!wantShaderNow[0]) runCatching { active[0]?.setSurface(s) }
@@ -1123,6 +1152,7 @@ internal fun XmbVideoPlayer(
                             runCatching { active[0]?.setSurface(null) }
                             holder.value?.release()
                             holder.value = null
+                            pictureTexture[0] = null
                             return true
                         }
                         override fun onSurfaceTextureUpdated(texture: android.graphics.SurfaceTexture) {}
@@ -1140,8 +1170,9 @@ internal fun XmbVideoPlayer(
         }
         AnimatedVisibility(barShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize()) {
-                // The title over a shade at the top, the time bar over one at the bottom.
-                Box(
+                // The title over a shade at the top, with Back for a touch; the time bar over one at
+                // the bottom, its hints taking a touch as their buttons do.
+                Row(
                     Modifier.fillMaxWidth().height((110f * u).dp).align(Alignment.TopCenter)
                         .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.65f), Color.Transparent))),
                 ) {
@@ -1150,8 +1181,17 @@ internal fun XmbVideoPlayer(
                         style = xmbText(font, 24f * u),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(start = (40f * u).dp, top = (22f * u).dp, end = (40f * u).dp),
+                        modifier = Modifier.weight(1f).padding(start = (40f * u).dp, top = (22f * u).dp, end = (20f * u).dp),
                     )
+                    Row(
+                        Modifier.padding(end = (20f * u).dp)
+                            .clickable(remember { MutableInteractionSource() }, indication = null, onClick = close)
+                            .padding(horizontal = (20f * u).dp, vertical = (20f * u).dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("○", style = xmbText(font, 15f * u).copy(color = Color(0xFFE85C5C)))
+                        Text(XmbText.get("xmb_ingame", "msg_help_back", ": " + str("xmb.back")), style = xmbText(font, 15f * u, 0.9f))
+                    }
                 }
                 Column(
                     Modifier.fillMaxWidth().align(Alignment.BottomCenter)
@@ -1185,10 +1225,19 @@ internal fun XmbVideoPlayer(
                     Row(Modifier.padding(top = (10f * u).dp), verticalAlignment = Alignment.CenterVertically) {
                         if (list.size > 1) Text("${index + 1} / ${list.size}", style = xmbText(font, 15f * u, 0.7f), modifier = Modifier.weight(1f))
                         else Box(Modifier.weight(1f))
-                        Text("□", style = xmbText(font, 15f * u).copy(color = Color(0xFFE48BD6)))
-                        Text(" $screenModeWord", style = xmbText(font, 15f * u, 0.9f))
-                        Text("    △", style = xmbText(font, 15f * u).copy(color = Color(0xFF6FD3A0)))
-                        Text(" $optionsWord", style = xmbText(font, 15f * u, 0.9f))
+                        @Composable
+                        fun hint(mark: String, markColor: Color, word: String, onTap: () -> Unit) {
+                            Row(
+                                Modifier.clickable(remember { MutableInteractionSource() }, indication = null, onClick = onTap)
+                                    .padding(horizontal = (12f * u).dp, vertical = (10f * u).dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(mark, style = xmbText(font, 15f * u).copy(color = markColor))
+                                Text(" $word", style = xmbText(font, 15f * u, 0.9f))
+                            }
+                        }
+                        hint("□", Color(0xFFE48BD6), screenModeWord, ::nextScreenMode)
+                        hint("△", Color(0xFF6FD3A0), optionsWord) { openOptions(true) }
                     }
                 }
             }

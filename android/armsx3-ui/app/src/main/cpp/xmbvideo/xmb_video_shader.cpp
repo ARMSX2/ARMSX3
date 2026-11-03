@@ -234,9 +234,25 @@ class Stage {
     ici.ppEnabledExtensionNames = instExt;
     if (!check(vkCreateInstance(&ici, nullptr, &instance_), "vkCreateInstance")) return false;
 
+    // The surface is the decoder's until it lets go of it, a moment after it is handed the stage's
+    // input: tried again for a while before giving up.
     VkAndroidSurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR};
     sci.window = output_;
-    if (!check(vkCreateAndroidSurfaceKHR(instance_, &sci, nullptr, &surface_), "vkCreateAndroidSurfaceKHR")) return false;
+    for (int tries = 0;; tries++) {
+      const VkResult r = vkCreateAndroidSurfaceKHR(instance_, &sci, nullptr, &surface_);
+      if (r == VK_SUCCESS) break;
+      surface_ = VK_NULL_HANDLE;
+      bool stopping;
+      {
+        std::lock_guard lock(m_);
+        stopping = stop_;
+      }
+      if (r != VK_ERROR_NATIVE_WINDOW_IN_USE_KHR || tries >= 100 || stopping) {
+        LOGW("vkCreateAndroidSurfaceKHR failed (%d)", r);
+        return false;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    }
 
     uint32_t n = 0;
     vkEnumeratePhysicalDevices(instance_, &n, nullptr);
