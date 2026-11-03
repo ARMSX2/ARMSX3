@@ -171,7 +171,7 @@ private fun xmbInGameColumns(controller: XmbController, game: GameInfo?): List<X
         key = "settings",
         title = fw("xmb_ingame", "msg_setting", "xmb.cat.settings"),
         icon = XmbIcon("xmb_ingame", "tex_sysconf", "⚙"),
-        items = xmbSettingsItems(InGameOverlay.settingsScope.value, InGameOverlay.currentSerial.value, game, inGame = true),
+        items = xmbSettingsItems(controller, InGameOverlay.settingsScope.value, InGameOverlay.currentSerial.value, game, inGame = true),
     )
 
     val resume = str("action.resume")

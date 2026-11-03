@@ -130,6 +130,13 @@ object MenuSfx {
      */
     fun importFromTree(context: Context, treeUri: Uri): Int {
         val tree = DocumentFile.fromTreeUri(context, treeUri) ?: return 0
+        return importFrom(context, tree)
+    }
+
+    /** A folder taken in the XMB's own browser, which ARMSX3 reads itself, imported as [importFromTree] imports a picked one. */
+    fun importFromDir(context: Context, dir: File): Int = importFrom(context, DocumentFile.fromFile(dir))
+
+    private fun importFrom(context: Context, tree: DocumentFile): Int {
         var copied = 0
         val dir = sfxDir(context)
         tree.listFiles().forEach { doc ->

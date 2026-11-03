@@ -122,8 +122,8 @@ object TrophySound {
      */
     fun import(context: Context, uri: Uri): Boolean {
         val dir = soundsDir() ?: return false
-        val doc = DocumentFile.fromSingleUri(context, uri)
-        val name = doc?.name ?: "trophy.wav"
+        // A file taken in the XMB's own browser has no provider to ask its name.
+        val name = (if (uri.scheme == "file") uri.lastPathSegment else DocumentFile.fromSingleUri(context, uri)?.name) ?: "trophy.wav"
         val ext = name.substringAfterLast('.', "").lowercase().takeIf { it in ACCEPTED } ?: "wav"
 
         val ok = runCatching {

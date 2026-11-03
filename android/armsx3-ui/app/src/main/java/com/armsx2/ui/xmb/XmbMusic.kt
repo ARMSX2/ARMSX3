@@ -1,8 +1,6 @@
 package com.armsx2.ui.xmb
 
-import android.content.Intent
 import android.net.Uri
-import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
@@ -16,7 +14,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import com.armsx2.BuildConfig
 import com.armsx2.LibraryMusic
 import com.armsx2.MenuSfx
 import com.armsx2.PauseMusic
@@ -24,7 +21,6 @@ import com.armsx2.TrophySound
 import com.armsx2.i18n.I18n
 import com.armsx2.i18n.str
 import com.armsx2.ui.common.SystemPickers
-import com.armsx2.ui.common.canBrowse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -44,8 +40,8 @@ import kotlin.math.roundToInt
  * the system picker, a .zip unpacked as an album; Import Album a whole folder, covers and all, or a
  * .zip; Add Folder plays a folder's songs where they are, on the device or a drive, without copying
  * them (its songs join the albums, and the folder is listed with Remove from Music at its end).
- * Where ARMSX3 reads the storage itself, Import Album and Add Folder use its own browser
- * ([XmbFileBrowser]), which reaches internal storage and its Download folder. Playing goes
+ * Where ARMSX3 reads the storage itself, every pick here goes through the XMB's own browser
+ * ([XmbPicker]), which reaches internal storage and its Download folder. Playing goes
  * through LibraryMusic, as the library's music always has, so the choice holds across the app.
  *
  * Over a game the column is the pause menu's music instead: the song picked there is the one the
@@ -168,73 +164,53 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
         }
     }
 
-    // Import Album and Add Folder go through ARMSX3's own browser where it may read the storage
-    // itself (All files access, which the GitHub build asks for here): the system's folder picker
-    // cannot open internal storage's own folder or its Download folder, nor pick a .zip.
-    var afterAccess by remember { mutableStateOf<Pair<() -> Unit, () -> Unit>?>(null) }
-    val allFiles = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        val (open, otherwise) = afterAccess ?: return@rememberLauncherForActivityResult
-        afterAccess = null
-        if (canBrowse()) open() else otherwise()
-    }
-    fun withStorage(open: () -> Unit, otherwise: () -> Unit) = when {
-        canBrowse() -> open()
-        BuildConfig.STORAGE_ALL_FILES -> {
-            afterAccess = open to otherwise
-            SystemPickers.launchWithFallback(
-                allFiles,
-                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:${context.packageName}")),
-            ) {
-                afterAccess = null
-                otherwise()
-            }
-        }
-        else -> otherwise()
-    }
-    fun browse(key: String, title: String, icon: XmbIcon, extensions: Set<String>, folders: Boolean, fileIcon: XmbIcon, onPick: (File) -> Unit) {
-        controller.panel = XmbNode.Panel(key, title, icon) { _ ->
-            XmbFileBrowser(controller, extensions, folders, fileIcon) { f ->
-                controller.panel = null
-                onPick(f)
-            }
+    // The XMB's own browser for every pick here, the system's pickers where it cannot be used.
+    val picker = rememberXmbPicker(controller)
+    val zipTypes = arrayOf("application/zip", "application/x-zip-compressed")
+    // Import Music: songs, and a .zip unpacked as an album, as many as are ticked.
+    fun importMusic() = picker.pick(
+        "music.import.browse", importTitle, trackIcon, XmbMediaFormats.AUDIO + "zip", trackIcon, multiple = true,
+        system = { importer.launch(arrayOf("audio/*") + zipTypes) },
+    ) { files ->
+        scope.launch {
+            val n = withContext(Dispatchers.IO) { XmbMusicLibrary.importFiles(files) }
+            refresh++
+            controller.tell(imported.format(n), ok, error = n == 0)
         }
     }
     // Import Album: a folder, copied in as it is, or a .zip, unpacked.
-    fun importAlbum() = withStorage(
-        open = {
-            browse("music.importAlbum.browse", importAlbumTitle, albumIcon, setOf("zip"), folders = true, fileIcon = albumIcon) { f ->
-                scope.launch {
-                    val n = withContext(Dispatchers.IO) {
-                        if (f.isDirectory) XmbMusicLibrary.importDir(f) else XmbMusicLibrary.importZip(f.name, f) { f.inputStream() }
-                    }
-                    refresh++
-                    controller.tell(imported.format(n), ok, error = n == 0)
-                }
+    fun importAlbum() = picker.pick(
+        "music.importAlbum.browse", importAlbumTitle, albumIcon, setOf("zip"), albumIcon, folders = true,
+        system = { albumImporter.launch(null) },
+    ) { files ->
+        val f = files.firstOrNull() ?: return@pick
+        scope.launch {
+            val n = withContext(Dispatchers.IO) {
+                if (f.isDirectory) XmbMusicLibrary.importDir(f) else XmbMusicLibrary.importZip(f.name, f) { f.inputStream() }
             }
-        },
-        otherwise = { albumImporter.launch(null) },
-    )
-    // Add Folder: the folder shown, or the one a song tapped is in.
-    fun addFolder() = withStorage(
-        open = {
-            browse("music.addFolder.browse", addFolderTitle, folderIcon, XmbMediaFormats.AUDIO, folders = true, fileIcon = trackIcon) { f ->
-                val dir = if (f.isDirectory) f else f.parentFile ?: return@browse
-                scope.launch {
-                    val uri = Uri.fromFile(dir)
-                    val songs = withContext(Dispatchers.IO) {
-                        XmbMusicLibrary.addFolder(context, uri)
-                        XmbMusicLibrary.scan(context).inFolder(uri).size
-                    }
-                    refresh++
-                    if (songs == 0) controller.tell(noTitles, ok, error = true)
-                }
+            refresh++
+            controller.tell(imported.format(n), ok, error = n == 0)
+        }
+    }
+    // Add Folder: the folder shown, or the one a song taken is in.
+    fun addFolder() = picker.pick(
+        "music.addFolder.browse", addFolderTitle, folderIcon, XmbMediaFormats.AUDIO, trackIcon, folders = true,
+        system = { folderPicker.launch(null) },
+    ) { files ->
+        val f = files.firstOrNull() ?: return@pick
+        val dir = if (f.isDirectory) f else f.parentFile ?: return@pick
+        scope.launch {
+            val uri = Uri.fromFile(dir)
+            val songs = withContext(Dispatchers.IO) {
+                XmbMusicLibrary.addFolder(context, uri)
+                XmbMusicLibrary.scan(context).inFolder(uri).size
             }
-        },
-        otherwise = { folderPicker.launch(null) },
-    )
+            refresh++
+            if (songs == 0) controller.tell(noTitles, ok, error = true)
+        }
+    }
 
-    // Change Cover: a picture from the system's picker, which shows them, else from ARMSX3's browser.
-    // It is the album's, so every song of the album shows it.
+    // Change Cover: the album's, so every song of the album shows it.
     var coverFor by rememberSaveable { mutableStateOf<String?>(null) }
     fun setCover(key: String, read: () -> ByteArray?) {
         scope.launch {
@@ -247,19 +223,14 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
         coverFor = null
         if (uri != null) setCover(key) { context.contentResolver.openInputStream(uri)?.use { it.readBytes() } }
     }
-    fun chooseCover(key: String) {
-        coverFor = key
-        SystemPickers.launchWithFallback(coverPicker, arrayOf("image/*")) {
-            coverFor = null
-            withStorage(
-                open = {
-                    browse("music.cover.browse", changeCover, albumIcon, setOf("jpg", "jpeg", "png", "webp"), folders = false,
-                        fileIcon = XmbIcon("explore_category_photo", "photo_tex_default", "🖼")) { f -> setCover(key) { f.readBytes() } }
-                },
-                otherwise = { android.widget.Toast.makeText(context, I18n.get("browse.noSystemPicker"), android.widget.Toast.LENGTH_LONG).show() },
-            )
-        }
-    }
+    fun chooseCover(key: String) = picker.pick(
+        "music.cover.browse", changeCover, albumIcon, setOf("jpg", "jpeg", "png", "webp"),
+        XmbIcon("explore_category_photo", "photo_tex_default", "🖼"),
+        system = {
+            coverFor = key
+            SystemPickers.launchWithFallback(coverPicker, arrayOf("image/*")) { coverFor = null }
+        },
+    ) { files -> files.firstOrNull()?.let { f -> setCover(key) { f.readBytes() } } }
     fun coverOptions(key: String): List<XmbOption> = listOfNotNull(
         XmbOption(changeCover) { chooseCover(key) },
         if (library?.chosen(key) == true) {
@@ -337,8 +308,8 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
                 ) { openNowPlaying() },
             )
         }
-        add(xmbMusicSettings())
-        add(XmbNode.Action("music.import", importTitle, trackIcon, importDesc) { importer.launch(arrayOf("audio/*", "application/zip", "application/x-zip-compressed")) })
+        add(xmbMusicSettings(controller))
+        add(XmbNode.Action("music.import", importTitle, trackIcon, importDesc) { importMusic() })
         add(XmbNode.Action("music.importAlbum", importAlbumTitle, albumIcon, importAlbumDesc) { importAlbum() })
         if (!inGame) add(XmbNode.Action("music.addFolder", addFolderTitle, folderIcon, addFolderDesc) { addFolder() })
         val builtinCurrent = currentName() == null && (inGame || LibraryMusic.queue.value.isEmpty())
@@ -458,7 +429,7 @@ fun xmbMusicColumn(controller: XmbController, inGame: Boolean = false, shown: Bo
  * settings screen has them.
  */
 @Composable
-fun xmbMusicSettings(): XmbNode {
+fun xmbMusicSettings(controller: XmbController): XmbNode {
     val context = LocalContext.current.applicationContext
     val (on, off) = xmbOnOff()
     val icon = XmbIcon("explore_category_sysconf", "tex_music", "♪")
@@ -493,25 +464,38 @@ fun xmbMusicSettings(): XmbNode {
     val trophyCurrent = str("app.trophySound.current")
     val trophyNone = str("app.trophySound.none")
 
-    fun named(uri: Uri) = androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)?.name ?: "Custom track"
+    fun named(uri: Uri) = pickedName(context, uri) ?: "Custom track"
     val libraryPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) LibraryMusic.setCustomTrack(context, uri, named(uri))
     }
     val pausePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) PauseMusic.setCustomTrack(context, uri, named(uri))
     }
+    fun soundsImported(n: Int) = android.widget.Toast.makeText(
+        context,
+        if (n > 0) I18n.get("app.menuSfx.imported").format(n) else I18n.get("app.menuSfx.importNone"),
+        android.widget.Toast.LENGTH_LONG,
+    ).show()
     val soundsPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        if (uri != null) {
-            val n = MenuSfx.importFromTree(context, uri)
-            android.widget.Toast.makeText(
-                context,
-                if (n > 0) I18n.get("app.menuSfx.imported").format(n) else I18n.get("app.menuSfx.importNone"),
-                android.widget.Toast.LENGTH_LONG,
-            ).show()
-        }
+        if (uri != null) soundsImported(MenuSfx.importFromTree(context, uri))
     }
     val trophyPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && TrophySound.import(context, uri)) TrophySound.preview()
+    }
+    // The XMB's own browser for each, the system's pickers where it cannot be used.
+    val picker = rememberXmbPicker(controller)
+    val songIcon = XmbIcon("explore_category_music", "music_tex_default", "♪")
+    fun chooseTrack(key: String, title: String, system: () -> Unit, take: (Uri) -> Unit) =
+        picker.pick(key, title, icon, XmbMediaFormats.AUDIO, songIcon, system = system) { files ->
+            files.firstOrNull()?.let { take(Uri.fromFile(it)) }
+        }
+    // A pack is a folder of sounds named for what they play on.
+    fun chooseSounds() = picker.pick(
+        "music.sfx.browse", soundsChoose, icon, XmbMediaFormats.AUDIO, songIcon, folders = true,
+        system = { soundsPicker.launch(null) },
+    ) { files ->
+        val f = files.firstOrNull() ?: return@pick
+        soundsImported(MenuSfx.importFromDir(context, if (f.isDirectory) f else f.parentFile ?: return@pick))
     }
 
     return XmbNode.Folder(
@@ -528,7 +512,9 @@ fun xmbMusicSettings(): XmbNode {
                 add(volume("music.library.volume", libraryVolume, icon, { LibraryMusic.volumePercent.value }) { LibraryMusic.setVolume(it) })
                 val name = LibraryMusic.customName.value
                 add(XmbNode.Action("music.library.choose", libraryChoose, icon, name?.let { libraryCurrent.format(it) } ?: libraryDefault) {
-                    libraryPicker.launch(arrayOf("audio/*"))
+                    chooseTrack("music.library.browse", libraryChoose, { libraryPicker.launch(arrayOf("audio/*")) }) { uri ->
+                        LibraryMusic.setCustomTrack(context, uri, named(uri))
+                    }
                 })
                 if (name != null) add(XmbNode.Action("music.library.reset", libraryReset, icon) { LibraryMusic.clearCustomTrack(context) })
             }
@@ -537,19 +523,23 @@ fun xmbMusicSettings(): XmbNode {
                 add(volume("music.pause.volume", pauseVolume, icon, { PauseMusic.volumePercent.value }) { PauseMusic.setVolume(it) })
                 val name = PauseMusic.customName.value
                 add(XmbNode.Action("music.pause.choose", pauseChoose, icon, name?.let { pauseCurrent.format(it) } ?: pauseDefault) {
-                    pausePicker.launch(arrayOf("audio/*"))
+                    chooseTrack("music.pause.browse", pauseChoose, { pausePicker.launch(arrayOf("audio/*")) }) { uri ->
+                        PauseMusic.setCustomTrack(context, uri, named(uri))
+                    }
                 })
                 if (name != null) add(XmbNode.Action("music.pause.reset", pauseReset, icon) { PauseMusic.clearCustomTrack(context) })
             }
             add(onOff("music.sfx", sounds, icon, on, off, soundsDesc, { MenuSfx.enabled.value }) { MenuSfx.set(context, it) })
             if (MenuSfx.enabled.value) {
                 add(volume("music.sfx.volume", soundsVolume, icon, { MenuSfx.volumePercent.value }) { MenuSfx.setVolume(it) })
-                add(XmbNode.Action("music.sfx.choose", soundsChoose, icon, soundsHint) { soundsPicker.launch(null) })
+                add(XmbNode.Action("music.sfx.choose", soundsChoose, icon, soundsHint) { chooseSounds() })
                 if (MenuSfx.packName.value != null) add(XmbNode.Action("music.sfx.reset", soundsReset, icon) { MenuSfx.clear(context) })
             }
             val chosen = TrophySound.fileName.value
             add(XmbNode.Action("music.trophy.choose", "$trophy: $trophyChoose", icon, chosen?.let { trophyCurrent.format(it) } ?: trophyNone) {
-                trophyPicker.launch(arrayOf("audio/*"))
+                chooseTrack("music.trophy.browse", "$trophy: $trophyChoose", { trophyPicker.launch(arrayOf("audio/*")) }) { uri ->
+                    if (TrophySound.import(context, uri)) TrophySound.preview()
+                }
             })
             if (chosen != null) {
                 add(volume("music.trophy.volume", trophyVolume, icon, { TrophySound.volumePercent.value }) { TrophySound.setVolume(it) })

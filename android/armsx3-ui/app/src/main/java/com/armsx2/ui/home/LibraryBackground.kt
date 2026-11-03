@@ -352,6 +352,8 @@ object LibraryBackground {
 
     /** The picked file's name without its extension, to name what it becomes. */
     fun displayName(context: Context, source: Uri): String? = runCatching {
+        // A file taken in the XMB's own browser has no provider to ask.
+        if (source.scheme == "file") return@runCatching source.lastPathSegment
         context.contentResolver.query(source, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             if (c.moveToFirst()) c.getString(0) else null
         }

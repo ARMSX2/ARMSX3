@@ -120,10 +120,8 @@ fun xmbStateNodes(controller: XmbController): List<XmbNode> {
     fun slotIcon(s: XmbStates.Slot, fallback: XmbIcon) =
         s.picture?.let { XmbIcon(bitmap = it, glyph = fallback.glyph, shadow = false) } ?: fallback
 
-    val importer = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-    ) { uri ->
-        if (uri != null) scope.launch {
+    fun import(uri: android.net.Uri) {
+        scope.launch {
             val slot = withContext(Dispatchers.IO) { com.armsx2.ui.saves.importSaveStateToNextFreeSlot(context, uri) }
             if (slot >= 0) {
                 refresh()
@@ -133,6 +131,11 @@ fun xmbStateNodes(controller: XmbController): List<XmbNode> {
             }
         }
     }
+    val importer = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri -> if (uri != null) import(uri) }
+    // A save state from the XMB's own browser; the system picker where it cannot be used.
+    val picker = rememberXmbPicker(controller)
 
     // Read while either list is open, so what was saved shows straight away.
     val reader: @Composable () -> Unit = { LaunchedEffect(Unit) { withContext(Dispatchers.IO) { XmbStates.read() } } }
@@ -182,7 +185,13 @@ fun xmbStateNodes(controller: XmbController): List<XmbNode> {
             if (none.isNotEmpty() && slots.none { it.used } && !XmbStates.autosave.value) {
                 add(XmbNode.Action("load.none", none, loadIcon) {})
             }
-            add(XmbNode.Action("load.import", importTitle, loadIcon) { importer.launch(arrayOf("*/*")) })
+            add(
+                XmbNode.Action("load.import", importTitle, loadIcon) {
+                    picker.pick("load.import.browse", importTitle, loadIcon, emptySet(), loadIcon, system = { importer.launch(arrayOf("*/*")) }) { files ->
+                        files.firstOrNull()?.let { import(android.net.Uri.fromFile(it)) }
+                    }
+                },
+            )
         }
     }
     return listOf(save, load)

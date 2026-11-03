@@ -162,7 +162,7 @@ private fun xmbHomeColumns(
         key = "settings",
         title = fw("xmb_ingame", "msg_setting", "xmb.cat.settings"),
         icon = XmbIcon("xmb_ingame", "tex_sysconf", "⚙"),
-        items = xmbSettingsItems(scope = com.armsx2.config.SettingsScope.Global, serial = null),
+        items = xmbSettingsItems(controller, scope = com.armsx2.config.SettingsScope.Global, serial = null),
     )
 
     val photo = xmbPhotoColumn(controller)
@@ -214,7 +214,7 @@ private fun xmbHomeColumns(
     // A game's own settings as the Settings column has them, from its options or with Square, and
     // composed only once one is asked for.
     var settingsGame by remember { mutableStateOf<GameInfo?>(null) }
-    val gameSettings = settingsGame?.let { g -> xmbSettingsItems(com.armsx2.config.SettingsScope.Game, g.serial, game = g) }
+    val gameSettings = settingsGame?.let { g -> xmbSettingsItems(controller, com.armsx2.config.SettingsScope.Game, g.serial, game = g) }
     val gameSettingsList = remember { mutableStateOf<List<XmbNode>>(emptyList()) }
     androidx.compose.runtime.SideEffect { gameSettingsList.value = gameSettings.orEmpty() }
     val settingsIcon = XmbIcon("explore_category_sysconf", "tex_sett", "\u2699")

@@ -59,7 +59,7 @@ import kotlin.math.roundToInt
  * remembered: global from the library, the running title in game.
  */
 @Composable
-fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = null, inGame: Boolean = false): List<XmbNode> {
+fun xmbSettingsItems(controller: XmbController, scope: SettingsScope, serial: String?, game: GameInfo? = null, inGame: Boolean = false): List<XmbNode> {
     val forGame = game != null
     val (on, off) = xmbOnOff()
     // One collector per tab for as long as this list is up: the column is rebuilt as it recomposes,
@@ -154,7 +154,7 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
     // The advanced tab is what a debug console's Debug Settings would hold.
     val debug = tab(SettingsCategory.Advanced, sysconf("msg_tool_debug_settings", "xmb.set.debug"), "tex_security", categoryTitle(SettingsCategory.Advanced))
     val core = xmbCoreSettingsNode(scope, serial)
-    val music = xmbMusicSettings()
+    val music = xmbMusicSettings(controller)
 
     // In a game, the running title's settings: the app's own and the firmware are for the library.
     if (forGame || inGame) return listOf(gameSettings, core, display, sound, accessory, music, network, debug)
@@ -179,7 +179,7 @@ fun xmbSettingsItems(scope: SettingsScope, serial: String?, game: GameInfo? = nu
         core,
         music,
         system,
-        xmbThemeSettings(),
+        xmbThemeSettings(controller),
         accessory,
         display,
         sound,
@@ -317,7 +317,7 @@ internal fun xmbOnOff(): Pair<String, String> =
  * importing one, the XMB's colour, and how much of each game's own media it shows.
  */
 @Composable
-private fun xmbThemeSettings(): XmbNode {
+private fun xmbThemeSettings(controller: XmbController): XmbNode {
     val (on, off) = xmbOnOff()
     val icon = XmbIcon("explore_category_sysconf", "tex_thema", "\uD83C\uDFA8")
     val themes = LibraryBackground.saved.value
@@ -327,7 +327,7 @@ private fun xmbThemeSettings(): XmbNode {
     val themeDesc = str("xmb.theme.theme.desc")
     val importTitle = str("xmb.theme.import")
     val importDesc = str("xmb.theme.import.desc")
-    val importTheme = rememberXmbThemeImport()
+    val importTheme = rememberXmbThemeImport(controller, importTitle, icon)
     // What the theme in use brought for the XMB: its icons and its sounds, counted, or word that a
     // theme added before ARMSX3 read them, whose .p3t was not found at startup to read them from
     // (LibraryBackground.restoreXmbAssets), has only its picture until it is installed again.
@@ -454,18 +454,16 @@ private fun xmbThemeSettings(): XmbNode {
 }
 
 /**
- * Import Theme: the system picker, then the theme imported as the library imports one (its
- * background, and now its XMB icons and sounds too), kept with the library's saved backgrounds
- * and made the XMB's theme. The library's own background is left as it is.
+ * Import Theme: a .p3t from the XMB's own browser (the system picker where it cannot be used), then
+ * the theme imported as the library imports one (its background, and now its XMB icons and sounds
+ * too), kept with the library's saved backgrounds and made the XMB's theme. The library's own
+ * background is left as it is.
  */
 @Composable
-private fun rememberXmbThemeImport(): () -> Unit {
+private fun rememberXmbThemeImport(controller: XmbController, title: String, icon: XmbIcon): () -> Unit {
     val context = LocalContext.current
     val scope = androidx.compose.runtime.rememberCoroutineScope()
-    val picker = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-    ) { picked ->
-        if (picked == null) return@rememberLauncherForActivityResult
+    fun import(picked: android.net.Uri) {
         scope.launch {
             val (message, kept) = withContext(Dispatchers.IO) {
                 if (!LibraryBackground.isTheme(context, picked)) return@withContext "xmb.theme.notTheme" to null
@@ -482,10 +480,19 @@ private fun rememberXmbThemeImport(): () -> Unit {
             message?.let { android.widget.Toast.makeText(context, I18n.get(it), android.widget.Toast.LENGTH_LONG).show() }
         }
     }
+    val picker = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { picked -> if (picked != null) import(picked) }
+    val xmbPicker = rememberXmbPicker(controller)
     return {
-        com.armsx2.ui.common.SystemPickers.launchWithFallback(picker, arrayOf("*/*")) {
-            android.widget.Toast.makeText(context, I18n.get("browse.noSystemPicker"), android.widget.Toast.LENGTH_LONG).show()
-        }
+        xmbPicker.pick(
+            "settings.theme.browse", title, icon, setOf("p3t"), icon,
+            system = {
+                com.armsx2.ui.common.SystemPickers.launchWithFallback(picker, arrayOf("*/*")) {
+                    android.widget.Toast.makeText(context, I18n.get("browse.noSystemPicker"), android.widget.Toast.LENGTH_LONG).show()
+                }
+            },
+        ) { files -> files.firstOrNull()?.let { import(android.net.Uri.fromFile(it)) } }
     }
 }
 

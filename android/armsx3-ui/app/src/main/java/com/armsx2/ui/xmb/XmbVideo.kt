@@ -197,11 +197,12 @@ object XmbVideos {
         }
     }
 
-    /** Keep the grant for a picked folder and list it. */
+    /** Keep a picked folder and list it: the system picker's, by its grant, or one from the XMB's own browser, by its path (a file:// Uri). */
     fun addFolder(context: Context, uri: Uri) {
-        runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+        val path = uri.takeIf { it.scheme == "file" }?.path
+        if (path == null) runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
         if (folders.value.any { it.uri == uri }) return
-        val name = DocumentFile.fromTreeUri(context, uri)?.name ?: uri.lastPathSegment.orEmpty()
+        val name = path?.let { File(it).name } ?: DocumentFile.fromTreeUri(context, uri)?.name ?: uri.lastPathSegment.orEmpty()
         folders.value = folders.value + Folder(uri, name)
         saveFolders()
     }
@@ -359,15 +360,20 @@ object XmbVideos {
 
     /** Copy picked videos into the video folder; how many came in. IO thread. */
     fun import(context: Context, uris: List<Uri>): Int = uris.count { uri ->
-        runCatching {
-            val name = DocumentFile.fromSingleUri(context, uri)?.name?.replace('/', '_')?.takeIf { it.isNotBlank() }
-                ?: "video-${System.currentTimeMillis()}.mp4"
-            var target = File(folder(), name)
-            var n = 1
-            while (target.exists()) target = File(folder(), "${name.substringBeforeLast('.')} (${n++}).${name.substringAfterLast('.', "mp4")}")
-            context.contentResolver.openInputStream(uri)?.use { ins -> target.outputStream().use { ins.copyTo(it) } } != null &&
-                target.length() > 0
-        }.getOrDefault(false)
+        copyIn(pickedName(context, uri)) { context.contentResolver.openInputStream(uri) }
+    }
+
+    /** Copy videos taken in the XMB's own browser into the video folder; how many came in. IO thread. */
+    fun importFiles(files: List<File>): Int = files.count { f -> copyIn(f.name) { f.inputStream() } }
+
+    private fun copyIn(picked: String?, open: () -> java.io.InputStream?): Boolean {
+        val name = picked?.replace('/', '_')?.takeIf { it.isNotBlank() } ?: "video-${System.currentTimeMillis()}.mp4"
+        var target = File(folder(), name)
+        var n = 1
+        while (target.exists()) target = File(folder(), "${name.substringBeforeLast('.')} (${n++}).${name.substringAfterLast('.', "mp4")}")
+        val copied = runCatching { open()?.use { ins -> target.outputStream().use { ins.copyTo(it) } } != null }.getOrDefault(false) && target.length() > 0
+        if (!copied) target.delete()
+        return copied
     }
 
     private fun sha1(s: String): String =
@@ -506,13 +512,35 @@ fun xmbVideoColumn(controller: XmbController, shown: Boolean = false): XmbColumn
             refresh++
         }
     }
+    // Import Video and Add Folder through the XMB's own browser, the system's pickers where it cannot be used.
+    val picker = rememberXmbPicker(controller)
+    fun importVideos() = picker.pick(
+        "video.import.browse", importTitle, videoIcon, XmbMediaFormats.VIDEO, videoIcon, multiple = true,
+        system = { importer.launch(arrayOf("video/*")) },
+    ) { files ->
+        scope.launch {
+            val n = withContext(Dispatchers.IO) { XmbVideos.importFiles(files) }
+            XmbVideos.forget("file:" + XmbVideos.folder().absolutePath)
+            refresh++
+            controller.tell(imported.format(n), ok, error = n == 0)
+        }
+    }
+    // The folder shown, or the one a video taken is in.
+    fun addFolder() = picker.pick(
+        "video.addFolder.browse", addTitle, folderIcon, XmbMediaFormats.VIDEO, videoIcon, folders = true,
+        system = { folderPicker.launch(null) },
+    ) { files ->
+        val f = files.firstOrNull() ?: return@pick
+        XmbVideos.addFolder(context, Uri.fromFile(if (f.isDirectory) f else f.parentFile ?: return@pick))
+        refresh++
+    }
 
     val own = XmbVideos.folder()
     val ownEntries = XmbVideos.listing(context, "file:" + own.absolutePath) { XmbVideos.localEntries(own) }
     val ownVideos = ownEntries.orEmpty().filter { !it.dir }
     val items = buildList {
-        add(XmbNode.Action("video.import", importTitle, videoIcon, importDesc) { importer.launch(arrayOf("video/*")) })
-        add(XmbNode.Action("video.addFolder", addTitle, folderIcon, addDesc) { folderPicker.launch(null) })
+        add(XmbNode.Action("video.import", importTitle, videoIcon, importDesc) { importVideos() })
+        add(XmbNode.Action("video.addFolder", addTitle, folderIcon, addDesc) { addFolder() })
         // The devices that are in, as the console lists a USB device.
         volumes.forEach { v ->
             val icon = if (v.usb) usbIcon else sdIcon
@@ -530,7 +558,12 @@ fun xmbVideoColumn(controller: XmbController, shown: Boolean = false): XmbColumn
                 controller.back()
                 refresh++
             }
-            add(folderNode("tree:" + f.uri, f.name, albumIcon, null, deletable = false, extra = listOf(remove)) { XmbVideos.treeEntries(context, f.uri) })
+            val path = f.uri.takeIf { it.scheme == "file" }?.path
+            if (path != null) {
+                add(folderNode("file:$path", f.name, albumIcon, null, deletable = false, extra = listOf(remove)) { XmbVideos.localEntries(File(path)) })
+            } else {
+                add(folderNode("tree:" + f.uri, f.name, albumIcon, null, deletable = false, extra = listOf(remove)) { XmbVideos.treeEntries(context, f.uri) })
+            }
         }
         // ARMSX3's own folder: its folders, then its videos, straight in the column.
         ownEntries.orEmpty().forEach { e ->

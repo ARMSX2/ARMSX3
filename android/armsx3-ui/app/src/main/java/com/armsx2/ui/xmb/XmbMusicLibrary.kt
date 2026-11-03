@@ -467,7 +467,7 @@ object XmbMusicLibrary {
 
     /** Copy picked songs into the folder, and unpack a picked .zip there as an album; how many songs came in. IO thread. */
     fun import(context: Context, uris: List<Uri>): Int = uris.sumOf { uri ->
-        val picked = runCatching { androidx.documentfile.provider.DocumentFile.fromSingleUri(context, uri)?.name }.getOrNull()
+        val picked = pickedName(context, uri)
         if (picked != null && picked.endsWith(".zip", ignoreCase = true)) {
             return@sumOf importZip(picked, null) { context.contentResolver.openInputStream(uri) }
         }
@@ -479,6 +479,18 @@ object XmbMusicLibrary {
             context.contentResolver.openInputStream(uri)?.use { ins -> target.outputStream().use { ins.copyTo(it) } } != null &&
                 target.length() > 0
         }.getOrDefault(false)
+        if (copied) 1 else 0
+    }
+
+    /** Copy songs taken in ARMSX3's own browser into the folder, and unpack a .zip there as an album; how many songs came in. IO thread. */
+    fun importFiles(files: List<File>): Int = files.sumOf { f ->
+        if (f.extension.equals("zip", ignoreCase = true)) return@sumOf importZip(f.name, f) { f.inputStream() }
+        val name = f.name
+        var target = File(folder(), name)
+        var n = 1
+        while (target.exists()) target = File(folder(), "${name.substringBeforeLast('.')} (${n++}).${name.substringAfterLast('.', "mp3")}")
+        val copied = runCatching { f.inputStream().use { ins -> target.outputStream().use { ins.copyTo(it) } } }.isSuccess && target.length() > 0
+        if (!copied) target.delete()
         if (copied) 1 else 0
     }
 

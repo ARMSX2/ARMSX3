@@ -49,11 +49,9 @@ fun xmbPortalNode(controller: XmbController): XmbNode {
     // Add figure files: the system picker, any number at once, copied into the portal's folder.
     // Which portal's folder the picked files go to, kept across the recomposition the picker causes.
     val addTo = remember { java.util.concurrent.atomic.AtomicReference<((List<ToyPortals.Offered>) -> ToyPortals.Added)?>(null) }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
-        val add = addTo.get() ?: return@rememberLauncherForActivityResult
-        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+    fun offer(add: (List<ToyPortals.Offered>) -> ToyPortals.Added, offered: () -> List<ToyPortals.Offered>) {
         scope.launch {
-            val added = withContext(Dispatchers.IO) { add(uris.map { ToyPortals.offered(context, it) }) }
+            val added = withContext(Dispatchers.IO) { add(offered()) }
             val lines = buildList {
                 if (added.count > 0) add(addedText.format(added.count))
                 if (added.notFigures.isNotEmpty()) add(notAddedText.format(added.notFigures.joinToString()))
@@ -62,9 +60,18 @@ fun xmbPortalNode(controller: XmbController): XmbNode {
             if (lines.isNotEmpty()) controller.tell(lines.joinToString("\n"), ok)
         }
     }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        val add = addTo.get() ?: return@rememberLauncherForActivityResult
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        offer(add) { uris.map { ToyPortals.offered(context, it) } }
+    }
+    // The XMB's own browser, any number of files ticked; the system picker where it cannot be used.
+    val xmbPicker = rememberXmbPicker(controller)
     fun adder(key: String, add: (List<ToyPortals.Offered>) -> ToyPortals.Added) = XmbNode.Action(key, addTitle, icon) {
         addTo.set(add)
-        picker.launch(arrayOf("*/*"))
+        xmbPicker.pick("$key.browse", addTitle, icon, emptySet(), figureIcon, multiple = true, system = { picker.launch(arrayOf("*/*")) }) { files ->
+            offer(add) { files.map { ToyPortals.offered(it) } }
+        }
     }
 
     fun name(file: String) = file.substringBeforeLast('.')
