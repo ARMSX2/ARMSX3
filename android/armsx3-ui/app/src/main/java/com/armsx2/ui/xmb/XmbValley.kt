@@ -114,8 +114,12 @@ internal object XmbValleyFirmware {
 
     private val MENUS = listOf("CANYON_LINE.mnu", "CANYON_TERRAIN.mnu", "CANYON_BLUR.mnu", "CANYON_CAMERA.mnu", "CANYON_COLOUR.mnu", "CANYON_FOG.mnu")
 
-    // The player's groups, in its order, and how many seconds each preset of them stays.
-    private val GROUPS = listOf("Bir_A" to 20f, "Bir_B" to 20f, "Bir_C" to 20f, "Voyage" to 16f, "Volcano" to 20f, "Volvic" to 20f, "Blue" to 20f)
+    // The player's groups, in its order: how many presets it tours of each (the pack also holds a
+    // Voyage11 it never shows) and how many seconds each one stays.
+    private val GROUPS = listOf(
+        Triple("Bir_A", 4, 20f), Triple("Bir_B", 4, 20f), Triple("Bir_C", 4, 20f), Triple("Voyage", 10, 16f),
+        Triple("Volcano", 4, 20f), Triple("Volvic", 5, 20f), Triple("Blue", 4, 20f),
+    )
 
     /** The group the player starts on. */
     const val FIRST_GROUP = 6
@@ -128,8 +132,8 @@ internal object XmbValleyFirmware {
         val names = files.keys.mapNotNull { k ->
             k.removePrefix("override/").substringBefore('/', "").takeIf { k.startsWith("override/") && it.isNotEmpty() }
         }.toSortedSet()
-        val groups = GROUPS.mapNotNull { (prefix, stay) ->
-            val list = names.filter { it.startsWith(prefix) && it.substring(prefix.length).all(Char::isDigit) }
+        val groups = GROUPS.mapNotNull { (prefix, count, stay) ->
+            val list = (1..count).map { prefix + it.toString().padStart(2, '0') }.filter { it in names }
             if (list.isEmpty()) null else Group(prefix, list, stay)
         }
         if (groups.isEmpty()) return null
