@@ -4317,6 +4317,13 @@ open class MainActivityRuntime : ComponentActivity() {
             handleMemcardControllerMotion(ev)
             return true
         }
+        // A visualizer that reads the right stick (Valley's presets) gets it as well.
+        com.armsx2.ui.xmb.XmbVisualizerStick.handler?.let { stick ->
+            if (ev.isFromSource(InputDevice.SOURCE_JOYSTICK) || ev.isFromSource(InputDevice.SOURCE_GAMEPAD)) {
+                val (rx, ry) = rightStickAxes(ev.deviceId)
+                stick(ev.getAxisValue(rx), ev.getAxisValue(ry))
+            }
+        }
         if (controllerDrivesFrontend() && handleControllerUiMotion(ev)) {
             return true
         }

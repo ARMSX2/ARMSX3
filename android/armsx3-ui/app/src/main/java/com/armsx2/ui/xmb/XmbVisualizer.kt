@@ -30,9 +30,12 @@ import java.security.MessageDigest
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.floor
+import kotlin.math.ln
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * The music player's visualizer: how loud a song is, band by band, thirty times a second, worked
@@ -42,20 +45,42 @@ import kotlin.math.sin
  * for a four-minute song), the last 1024 samples at each thirtieth of a second go through an FFT
  * into [BANDS] bands from 50 Hz up, and the result (about 115 KB for four minutes) is kept in the
  * cache for the next time. The drawing follows the player's position through it.
+ *
+ * The same pass works out the console's own spectrum too ([ConsoleSpectrum]), sixty times a
+ * second, for the visualizers that read it as the console's do (Valley).
  */
 object XmbVisualizer {
     const val FPS = 30
     const val BANDS = 16
+    /** The console's spectrum, frames a second: one a frame, as its music player hands it over. */
+    const val SPECTRUM_FPS = 60
+    /** Its points a frame: the 64 of each channel that make one of Valley's rows. */
+    const val COLUMNS = 128
     private const val N = 1024
     private const val MAGIC = 0x58564953 // "XVIS"
-    private const val VERSION = 1
+    private const val VERSION = 2
 
-    /** A song's bands, 0..1, frame by frame. */
-    class Levels(val frames: Int, private val data: ByteArray) {
+    /** A song's bands, 0..1, frame by frame, and the console's spectrum ([column]). */
+    class Levels(
+        val frames: Int,
+        private val data: ByteArray,
+        val spectrumFrames: Int = 0,
+        private val spectrum: ByteArray? = null,
+    ) {
         fun band(frame: Int, band: Int): Float =
             if (frame !in 0 until frames) 0f else (data[frame * BANDS + band].toInt() and 0xFF) / 255f
 
+        /**
+         * The console's spectrum at [frame] ([SPECTRUM_FPS] a second), point [c] of [COLUMNS]: 0..3,
+         * as its music player gives it. Points 0..63 are the left channel from the lows up, 64..127
+         * the right from the highs down.
+         */
+        fun column(frame: Int, c: Int): Float =
+            if (spectrum == null || frame !in 0 until spectrumFrames) 0f
+            else (spectrum[frame * COLUMNS + c].toInt() and 0xFF) * (3f / 255f)
+
         internal fun bytes() = data
+        internal fun spectrumBytes() = spectrum
     }
 
     private val memory = object : LinkedHashMap<String, Levels>(4, 0.75f, true) {
@@ -85,7 +110,12 @@ object XmbVisualizer {
             if (frames <= 0 || frames > FPS * 60 * 120) return null
             val data = ByteArray(frames * BANDS)
             ins.readFully(data)
-            Levels(frames, data)
+            if (ins.readInt() != SPECTRUM_FPS || ins.readInt() != COLUMNS) return null
+            val spectrumFrames = ins.readInt()
+            if (spectrumFrames < 0 || spectrumFrames > ConsoleSpectrum.MAX_FRAMES) return null
+            val spectrum = ByteArray(spectrumFrames * COLUMNS)
+            ins.readFully(spectrum)
+            Levels(frames, data, spectrumFrames, spectrum)
         }
     }.getOrNull()
 
@@ -98,6 +128,10 @@ object XmbVisualizer {
                 out.writeInt(BANDS)
                 out.writeInt(levels.frames)
                 out.write(levels.bytes())
+                out.writeInt(SPECTRUM_FPS)
+                out.writeInt(COLUMNS)
+                out.writeInt(levels.spectrumFrames)
+                levels.spectrumBytes()?.let { out.write(it, 0, levels.spectrumFrames * COLUMNS) }
             }
             tmp.renameTo(file)
         }
@@ -188,6 +222,7 @@ object XmbVisualizer {
         private val sinT = FloatArray(N / 2) { sin(2 * PI * it / N).toFloat() }
         private val rev = IntArray(N) { Integer.reverse(it) ushr (32 - 10) }
         private var edges = bandEdges()
+        private val console = ConsoleSpectrum(rate)
 
         fun reformat(rate: Int, channels: Int, encoding: Int) {
             this.rate = rate
@@ -195,6 +230,7 @@ object XmbVisualizer {
             this.encoding = encoding
             hop = (rate / FPS).coerceAtLeast(1)
             edges = bandEdges()
+            console.reformat(rate)
         }
 
         // FFT bins bounding each band, log-spaced from 50 Hz to 16 kHz (or half the rate).
@@ -212,15 +248,31 @@ object XmbVisualizer {
                 val f = pcm.asFloatBuffer()
                 while (f.remaining() >= c) {
                     var s = 0f
-                    repeat(c) { s += f.get() }
+                    var l = 0f
+                    var r = 0f
+                    for (i in 0 until c) {
+                        val v = f.get()
+                        s += v
+                        if (i == 0) l = v
+                        if (i == 1) r = v
+                    }
                     push(s / c)
+                    console.push(l, if (c > 1) r else l)
                 }
             } else {
                 val sh = pcm.asShortBuffer()
                 while (sh.remaining() >= c) {
                     var s = 0f
-                    repeat(c) { s += sh.get() / 32768f }
+                    var l = 0f
+                    var r = 0f
+                    for (i in 0 until c) {
+                        val v = sh.get() / 32768f
+                        s += v
+                        if (i == 0) l = v
+                        if (i == 1) r = v
+                    }
                     push(s / c)
+                    console.push(l, if (c > 1) r else l)
                 }
             }
         }
@@ -292,7 +344,144 @@ object XmbVisualizer {
                     data[f * BANDS + b] = (v * 255).toInt().toByte()
                 }
             }
-            return Levels(frames, data)
+            return Levels(frames, data, console.frames, console.bytes())
+        }
+    }
+
+    /**
+     * The console's own spectrum, worked out as its music player does for the visualizers
+     * (soundvisualizer_plugin): each channel's last 512 samples through a Gaussian window and an
+     * FFT, the magnitudes smoothed across 17 bins, read along a log-frequency scale of 64 steps an
+     * octave, and pressed into 3 ln(1 + 512 m) / ln 513. The console runs at 48 kHz, so the scale
+     * is read at the same frequencies for a song at any other rate. Kept are the points of each
+     * channel that make one of Valley's rows ([COLUMNS]), [SPECTRUM_FPS] times a second.
+     */
+    private class ConsoleSpectrum(private var rate: Int) {
+        private val ringL = FloatArray(SIZE)
+        private val ringR = FloatArray(SIZE)
+        private var at = 0
+        private var count = 0L
+        private var due = SIZE / 2L
+        var frames = 0
+            private set
+        private var out = ByteArray(COLUMNS * 1024)
+        private val re = FloatArray(SIZE)
+        private val im = FloatArray(SIZE)
+        private val smooth = FloatArray(SIZE / 2)
+        private val position = FloatArray(COLUMNS)
+
+        init { positions() }
+
+        fun reformat(rate: Int) {
+            this.rate = rate.coerceAtLeast(1)
+            positions()
+        }
+
+        // Where each point reads the spectrum, in this song's bins: the console's log scale (64 steps
+        // an octave over its 256 bins) at the console's 48 kHz.
+        private fun positions() {
+            val top = 2.0.pow(255.015625 / 64) - 1
+            fun at(j: Int) = (255 * (2.0.pow((j + 1.0 / 64) / 64) - 1) / top * 48_000.0 / rate).toFloat().coerceAtMost(255f)
+            for (i in 0 until 64) {
+                val j = i * 255 / 64
+                position[i] = at(j)
+                position[64 + i] = at(255 - j)
+            }
+        }
+
+        fun push(l: Float, r: Float) {
+            ringL[at] = l
+            ringR[at] = r
+            at = (at + 1) and (SIZE - 1)
+            if (++count < due) return
+            // Centred on its moment: frame f covers the samples either side of f / SPECTRUM_FPS s.
+            if (frames < MAX_FRAMES) frame()
+            due = SIZE / 2L + ((frames.toLong() * rate) / SPECTRUM_FPS)
+        }
+
+        fun bytes(): ByteArray = out.copyOf(frames * COLUMNS)
+
+        private fun frame() {
+            if ((frames + 1) * COLUMNS > out.size) out = out.copyOf(out.size * 2)
+            val base = frames * COLUMNS
+            channel(ringL)
+            for (i in 0 until 64) out[base + i] = level(position[i])
+            channel(ringR)
+            for (i in 64 until COLUMNS) out[base + i] = level(position[i])
+            frames++
+        }
+
+        private fun channel(ring: FloatArray) {
+            for (i in 0 until SIZE) {
+                val v = ring[(at + i) and (SIZE - 1)] * WINDOW[i]
+                re[REV[i]] = v
+                im[REV[i]] = 0f
+            }
+            var size = 2
+            while (size <= SIZE) {
+                val half = size / 2
+                val step = SIZE / size
+                var start = 0
+                while (start < SIZE) {
+                    for (k in 0 until half) {
+                        val wr = COS[k * step]
+                        val wi = -SIN[k * step]
+                        val a = start + k
+                        val b = a + half
+                        val tr = re[b] * wr - im[b] * wi
+                        val ti = re[b] * wi + im[b] * wr
+                        re[b] = re[a] - tr
+                        im[b] = im[a] - ti
+                        re[a] += tr
+                        im[a] += ti
+                    }
+                    start += size
+                }
+                size *= 2
+            }
+            // Magnitudes over N, then spread across the kernel's 17 bins.
+            smooth.fill(0f)
+            for (j in 0 until SIZE / 2) {
+                val m = sqrt(re[j] * re[j] + im[j] * im[j]) / SIZE / KERNEL_SUM
+                for (t in 0 until KERNEL.size) {
+                    val idx = j - 8 + t
+                    if (idx in 0 until SIZE / 2) smooth[idx] += m * KERNEL[t]
+                }
+            }
+        }
+
+        private fun level(p: Float): Byte {
+            val i0 = floor(p).toInt()
+            val f = p - i0
+            val m = if (f > 0f && i0 + 1 < SIZE / 2) smooth[i0] * (1 - f) + smooth[i0 + 1] * f else smooth[i0]
+            val s = 3f * ln(1f + 512f * m) / LN513
+            return (s / 3f * 255f + 0.5f).toInt().coerceIn(0, 255).toByte()
+        }
+
+        companion object {
+            private const val SIZE = 512
+            /** Twenty minutes a song; past that, Valley rests. */
+            const val MAX_FRAMES = SPECTRUM_FPS * 60 * 20
+            private val LN513 = ln(513f)
+
+            // The console's window: a Gaussian across 2n + 1 points, x from -2.355 to 2.355. Its
+            // first point ends up 0: the firmware subtracts the first point from each in turn,
+            // starting with itself.
+            private fun gaussian(n: Int): FloatArray {
+                val w = FloatArray(2 * n + 1) { i ->
+                    val x = (2.355 * (i - n) / n).toFloat()
+                    (2.7.pow((-(x * x) / 0.56f).toDouble()) * 2.5 / sqrt(6.36159f)).toFloat()
+                }
+                w[0] = 0f
+                return w
+            }
+
+            private val WINDOW = gaussian(SIZE / 2)
+            private val KERNEL = gaussian(8)
+            private val KERNEL_SUM = KERNEL.sum()
+            private val COS = FloatArray(SIZE / 2) { cos(2 * PI * it / SIZE).toFloat() }
+            private val SIN = FloatArray(SIZE / 2) { sin(2 * PI * it / SIZE).toFloat() }
+            private val REV = IntArray(SIZE) { Integer.reverse(it) ushr (32 - 9) }
         }
     }
 
@@ -331,7 +520,67 @@ internal class MusicDrive {
 /** The visualizers to choose between in Now Playing: the console's, then the PSP's lines. */
 internal enum class XmbVisualizerKind(val id: String, val title: String) {
     Waves("waves", "Waves"),
+    Valley("valley", "Valley"),
     Lines("lines", "Lines"),
+}
+
+/**
+ * The right stick, for a visualizer that reads it as the console's player does (Valley's presets):
+ * set while one shows; MainActivityRuntime hands it the stick, -1..1, up negative.
+ */
+internal object XmbVisualizerStick {
+    @Volatile var handler: ((Float, Float) -> Unit)? = null
+}
+
+/**
+ * Valley, the console's canyon ([XmbValleyView]), on the song's own spectrum as the console works
+ * it out. The right stick and a swipe change its presets: left and right another of the group, up
+ * and down another group. Each direction goes once a push, as the console's player reads the
+ * stick: past 70 of 128 to go, back under 66 to go again.
+ */
+@Composable
+internal fun XmbValleyVisualizer(levels: XmbVisualizer.Levels?, positionMs: () -> Long, playing: () -> Boolean, modifier: Modifier = Modifier) {
+    val current = androidx.compose.runtime.rememberUpdatedState(levels)
+    val position = androidx.compose.runtime.rememberUpdatedState(positionMs)
+    val on = androidx.compose.runtime.rememberUpdatedState(playing)
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        val held = BooleanArray(4)
+        val h: (Float, Float) -> Unit = { x, y ->
+            val push = floatArrayOf(-x, x, -y, y)
+            for (d in 0 until 4) {
+                val v = push[d] * 128f
+                if (!held[d] && v > 70f) {
+                    held[d] = true
+                    when (d) {
+                        0 -> XmbValleyPresets.flick(-1, 0)
+                        1 -> XmbValleyPresets.flick(1, 0)
+                        2 -> XmbValleyPresets.flick(0, -1)
+                        else -> XmbValleyPresets.flick(0, 1)
+                    }
+                } else if (held[d] && v < 66f) {
+                    held[d] = false
+                }
+            }
+        }
+        XmbVisualizerStick.handler = h
+        onDispose { if (XmbVisualizerStick.handler === h) XmbVisualizerStick.handler = null }
+    }
+    androidx.compose.ui.viewinterop.AndroidView(
+        factory = { ctx ->
+            XmbValleyView(ctx).apply {
+                source = { out ->
+                    val lv = current.value
+                    if (lv == null || !on.value()) {
+                        out.fill(0f)
+                    } else {
+                        val frame = (position.value() * XmbVisualizer.SPECTRUM_FPS / 1000).toInt()
+                        for (c in out.indices) out[c] = lv.column(frame, c)
+                    }
+                }
+            }
+        },
+        modifier = modifier,
+    )
 }
 
 /**

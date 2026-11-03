@@ -7,6 +7,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -147,6 +148,10 @@ internal fun XmbNowPlaying(close: () -> Unit) {
         value = null
         value = song?.let { XmbVisualizer.levels(context, it) }
     }
+    // Valley is drawn from the firmware's canyon pack; without it, Valley shows the lines.
+    val valleyReady by produceState(false) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { XmbValleyFirmware.load() != null }
+    }
     val month = XmbOriginalColors.now()
     val accent = remember(month) {
         val c = Color(month.end[0], month.end[1], month.end[2])
@@ -220,6 +225,8 @@ internal fun XmbNowPlaying(close: () -> Unit) {
 
         if (visualizerOnly && kind == XmbVisualizerKind.Waves) {
             XmbWavesVisualizer(levels, positionMs = { clock.now() }, playing = { !paused && clock.playing }, modifier = Modifier.fillMaxSize())
+        } else if (visualizerOnly && kind == XmbVisualizerKind.Valley && valleyReady) {
+            XmbValleyVisualizer(levels, positionMs = { clock.now() }, playing = { !paused && clock.playing }, modifier = Modifier.fillMaxSize())
         } else {
             XmbVisualizerView(
                 levels = levels,
@@ -325,7 +332,23 @@ internal fun XmbNowPlaying(close: () -> Unit) {
                         onLeft = { switchVisualizer(-1) },
                         onRight = { switchVisualizer(1) },
                     )
-                    .clickable(remember { MutableInteractionSource() }, indication = null) { visualizerOnly = false },
+                    .clickable(remember { MutableInteractionSource() }, indication = null) { visualizerOnly = false }
+                    // Valley's presets by swipe, as the right stick turns them: across another of
+                    // the group, up or down another group.
+                    .pointerInput(kind) {
+                        if (kind != XmbVisualizerKind.Valley) return@pointerInput
+                        var dx = 0f
+                        var dy = 0f
+                        detectDragGestures(
+                            onDragStart = { dx = 0f; dy = 0f },
+                            onDrag = { change, amount -> change.consume(); dx += amount.x; dy += amount.y },
+                            onDragEnd = {
+                                val far = 60.dp.toPx()
+                                if (kotlin.math.abs(dx) >= kotlin.math.abs(dy) && kotlin.math.abs(dx) > far) XmbValleyPresets.flick(if (dx < 0) -1 else 1, 0)
+                                else if (kotlin.math.abs(dy) > far) XmbValleyPresets.flick(0, if (dy < 0) -1 else 1)
+                            },
+                        )
+                    },
             )
             AnimatedVisibility(kindNameShown, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.TopCenter).padding(top = d(30f))) {
                 Text("◀  ${kind.title}  ▶", style = xmbText(font, 22f * u, 0.95f))
